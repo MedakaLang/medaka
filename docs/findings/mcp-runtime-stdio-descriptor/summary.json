@@ -428,20 +428,36 @@
     }
   },
   "census": {
-    "sha256": "e8d15fecf746d1e997038fe8ca7f81156fc0fcd1173a6925fce04e0e303d27d2",
-    "carrier_count": 11761,
-    "candidate_counts": {
-      "C1": 3138,
-      "C2": 23,
-      "C3": 323,
-      "C4": 3553,
-      "C5": 36858,
-      "C6": 987,
-      "C7": 1539
+    "inventory": {
+      "checked_at_census_sha256": "28067a8553cdeff46233c6651ae46a9b172a68b2e2baaae433b2d03d54c7412b",
+      "carrier_count": 11761,
+      "candidate_counts": {
+        "C1": 3138,
+        "C2": 23,
+        "C3": 323,
+        "C4": 3553,
+        "C5": 36858,
+        "C6": 987,
+        "C7": 1539
+      },
+      "receipt_exclusions": [
+        "docs/findings/mcp-runtime-stdio-descriptor/REPORT.md",
+        "docs/findings/mcp-runtime-stdio-descriptor/summary.json"
+      ],
+      "unknowns": [
+        "Uninspected lexical hits, including comments and strings, require semantic inspection; unknown dynamic uses have no defensible count.",
+        "Indirect calls, imported aliases, generated programs, dynamic paths and external native code are not resolved by lexical scanning.",
+        "Every native main may print automatically or flush on abort, including programs without a matching token.",
+        "No count proves compatibility or route enforcement; resolver/NSS and descriptor history require executable controls."
+      ],
+      "candidate_source_pins": {
+        "runtime/medaka_rt.c": "58f181d69091a7722bc845329035f9389cd02767c9db4aab3dc0402e7b4558bd",
+        "runtime/medaka_process.c": "63f394aabd70597d8a343620b80da1731ad91d382061fec541f07647b1558242",
+        "scripts/mcp_bench/prototypes/stdio_descriptor_fixture.c": "5ca6b373abe6c864eaba8eb1ac2a585743cb154160ba169b676037abe1ec609d",
+        "scripts/mcp_bench/prototypes/stdio_descriptor_probe.py": "522ff9ff1ed3827f11f69a35f2236e578924afeb341946d6e1dd929fd1d2f13e",
+        "scripts/mcp_bench/prototypes/stdio_descriptor_census.py": "a462ef03e8026cb80873da3a3885fe9f620cc6299fae3b87647ac5217dc5959d"
+      }
     },
-    "receipt_exclusions": [
-      "docs/findings/mcp-runtime-stdio-descriptor/REPORT.md",
-      "docs/findings/mcp-runtime-stdio-descriptor/summary.json"
-    ]
+    "inventory_sha256": "d1f6b69a1fed9ae916e7673bf277ad5246788bf4a5aa50409c0eee295ce2dc1f"
   }
 }

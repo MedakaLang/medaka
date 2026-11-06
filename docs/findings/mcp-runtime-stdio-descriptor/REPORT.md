@@ -116,7 +116,7 @@ proposed as an accepted implementation.
 the separate 03a broad-seal and ownership receipts. It requires the independently specified endpoint/alias/operation identity set
 without duplicates, the Null blocker, the Piped control, and both identity and type
 mutation effects. It exercises non-Linux refusal and rejects an empty matrix.
-These controls do not fill the unsupported rows above. The census receipt in the summary pins the fresh lexical inventory and its C1–C7 counts; these are not semantic compatibility counts. Dynamic uses remain unknown. The report and summary are excluded from the inventory to avoid a self-referential receipt; all other Git-visible carriers are scanned. The gate compares the complete fresh census digest, including unknown classifications, with that receipt.
+These controls do not fill the unsupported rows above. The census receipt in the summary pins the fresh lexical inventory and its C1–C7 counts; these are not semantic compatibility counts. Dynamic uses remain unknown. The report and summary are excluded from the inventory to avoid a self-referential receipt; all other Git-visible carriers are scanned. The receipt records the checked-at census digest and counts as historical evidence. The gate validates the receipt metadata and candidate source pins; it does not rescan later unrelated tree changes. Later additions and edits are not covered by the historic inventory and require a new survey before any compatibility claim.
 
 A future production cut must define acquisition and release, aliases, and errors
 that retain ownership; share the existing Async, Deadline and CancelToken types
