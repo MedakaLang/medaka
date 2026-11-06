@@ -66,7 +66,7 @@ runtime hooks rather than advisory policy checking. It is still a C entry:
 The type mutation leaves endpoint identity checks enabled. It demonstrates the
 cause of the compatibility failure, not a complete security mutation suite.
 The observer does not infer effects from `Ok` alone: it reads original pipe
-endpoints and external marker/content files. The launch-error report identifies
+endpoints and external marker/content files. The non-UTF-8 input was fully queued before launch; this does not demonstrate fragmented arrival. The launch-error report identifies
 the failing runtime operation. Failed Null construction creates no child; the
 owner's failed ticket leaves zero roots. Successful workers exit 0, are disposed
 and leave zero roots; their recorded PIDs are absent after the fixture exits.
@@ -93,6 +93,7 @@ the identity receipt is not an ordinary-user deployment claim.
 | Resolver/NSS, HOSTALIASES on Err and resolver races | All four routes remain uninterlocked |
 | Legacy launch and buffered/raw/automatic/abort/stash/flush output | Remain uninterlocked |
 | Parent-fd reopen and dumpability | No enforcement or disabling control |
+| Fragmented arrival across consumer reads | Input was queued before process launch; staggered arrival is unqualified |
 | Backpressure, blocking/no-progress, deadline/cancellation, prefix/no replay | No transport implementation/control |
 | Compiled Medaka entry; whole-tree semantic compatibility | Unqualified; survey lexical candidates remain unknown |
 
@@ -112,12 +113,10 @@ proposed as an accepted implementation.
 ## Durable replay and handoff
 
 `test/process_authority_test.mdk` runs the independent descriptor observer alongside
-the separate 03a broad-seal and ownership receipts. It requires the 72 observed
-alias rows, the Null blocker, the Piped control, and both identity and type
+the separate 03a broad-seal and ownership receipts. It requires the independently specified endpoint/alias/operation identity set
+without duplicates, the Null blocker, the Piped control, and both identity and type
 mutation effects. It exercises non-Linux refusal and rejects an empty matrix.
-These controls do not fill the unsupported rows above. The survey C1–C7 lexical
-candidate counts are 3134, 21, 322, 3553, 36838, 987 and 1531; they are not
-semantic compatibility counts. Dynamic uses remain unknown.
+These controls do not fill the unsupported rows above. The census receipt in the summary pins the fresh lexical inventory and its C1–C7 counts; these are not semantic compatibility counts. Dynamic uses remain unknown. The report and summary are excluded from the inventory to avoid a self-referential receipt; all other Git-visible carriers are scanned. The gate compares the complete fresh census digest, including unknown classifications, with that receipt.
 
 A future production cut must define acquisition and release, aliases, and errors
 that retain ownership; share the existing Async, Deadline and CancelToken types
