@@ -220,28 +220,29 @@ variable, or which host: `readFile "cfg/app.toml"` performs
 `<FileRead "cfg/app.toml">`, not merely `<FileRead>`. That is
 [chapter 4](effects-4-authority.md). Until then, read a bare label as "any of it".
 
-## Values have rows too
+## Values are pure
 
-A top-level binding with no parameters is a value, and a value can still have a
-row: the row of computing it. The syntax puts the row in front of the type, where
-there is no arrow to hang it on:
+A top-level binding with no parameters is a value, and a value is computed once,
+when the program starts, before `main` runs. So the computation must not touch the
+world: a value's row is empty, and looking one up costs nothing. Code that has an
+effect is a function. Give it a unit parameter and call it from `main`:
 
 ```medaka
-banner : <IO> Unit
-banner = println "== banner =="
+banner : Unit -> <IO> Unit
+banner () = println "== banner =="
 
 greeting : String
 greeting = "hello"
 
-count : <Stdout> Int
-count =
+count : Unit -> <Stdout> Int
+count () =
   putStrLn "counting"
   3
 
 main =
-  banner
+  banner ()
   println greeting
-  println count
+  println (count ())
 ```
 
 ```medaka-expect
@@ -251,22 +252,18 @@ counting
 3
 ```
 
-A top-level value is computed the first time it is used, not when the program
-starts, and the result is kept. So `count` prints `counting` once even if it is
-read twice. Statically, though, every use is charged: a function that mentions
-`count` performs `<Stdout>` whether or not it happens to be the first to force it,
-because the compiler cannot know which use comes first.
+The effect happens at the call, so `count ()` prints `counting` each time it is
+called, and a function that calls it performs `<Stdout>` in its own row like any
+other function.
 
-> ⚠️ **A row-less signature on a value is not a promise of purity.** `count : Int`
-> says what type the value has and nothing about computing it; the compiler infers
-> the row on its own, and `check` prints `count : <Stdout> Int`. To promise a value
-> is computed purely, write the empty row: `count : <> Int`. That is checked, and a
-> `putStrLn` in the body is then an error.
+> ⚠️ **A row-less signature on a value is a promise of purity.** `greeting : String`
+> says the value is computed without reaching the world, and `check` rejects a value
+> whose initialiser performs `<Stdout>`, `<IO>` or any other label. The rewrite is
+> always the same: `name () = ...`, called from `main`. Mutating a `Ref` has no label,
+> so it is allowed in a value's initialiser, but prefer a function when the result
+> depends on mutable state.
 
-This is different from function signatures, where a missing row means `<>`.
-The asymmetry exists because a value signature such as `greeting : String` has no
-arrow to carry a row, and reading every such signature as a purity promise would
-make most existing code a type error.
+Function signatures and value signatures now read alike: a missing row means `<>`.
 
 ## Statements and discarded values
 

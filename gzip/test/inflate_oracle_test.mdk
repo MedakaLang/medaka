@@ -31,10 +31,10 @@ build dir name = match boundedVerbSeconds 600 "sh" [
   "-c",
   "MEDAKA_EMITTER=\"$1\" MEDAKA_ROOT=\"$2\" exec \"$3\" build \"$4\" -o \"$5\"",
   "sh",
-  "\{medakaRoot}/medaka_emitter",
-  medakaRoot,
-  medakaBin,
-  "\{medakaRoot}/gzip/\{name}.mdk",
+  "\{medakaRoot ()}/medaka_emitter",
+  medakaRoot (),
+  medakaBin (),
+  "\{medakaRoot ()}/gzip/\{name}.mdk",
   "\{dir}/\{name}",
 ]
   Err e => Err "could not run medaka build on gzip/\{name}.mdk: \{e}"
@@ -45,14 +45,14 @@ build dir name = match boundedVerbSeconds 600 "sh" [
     else
       Ok "\{dir}/\{name}"
 
-gzipPresent : <Exec> Expectation
-gzipPresent = match boundedVerbSeconds 10 "gzip" ["--version"]
+gzipPresent : Unit -> <Exec> Expectation
+gzipPresent () = match boundedVerbSeconds 10 "gzip" ["--version"]
   Err _ => fail "gzip not found (this gate's oracle)"
   Ok (code, _, _) =>
     if code /= 0 then fail "gzip --version exited \{intToString code}" else pass
 
-pythonPresent : <Exec> Expectation
-pythonPresent = match boundedVerbSeconds 10 "python3" ["--version"]
+pythonPresent : Unit -> <Exec> Expectation
+pythonPresent () = match boundedVerbSeconds 10 "python3" ["--version"]
   Err _ => fail "python3 not found (needed for the BTYPE probe)"
   Ok (code, _, _) =>
     if code /= 0 then
@@ -457,7 +457,7 @@ zeroDistGroup dir inflateBin =
   let desc =
     "dynamic Huffman with zero used distance codes (numUsed==0, all-literal block)"
   match boundedVerbSeconds 60 "python3" [
-    "\{medakaRoot}/gzip/test/gen_zerodist_fixture.py",
+    "\{medakaRoot ()}/gzip/test/gen_zerodist_fixture.py",
     gz,
     expected,
   ]
@@ -494,7 +494,7 @@ dynamicGroup dir inflateBin = expectAll [
     inflateBin
     "parser"
     "real .mdk source file"
-    "\{medakaRoot}/compiler/frontend/parser.mdk"
+    "\{medakaRoot ()}/compiler/frontend/parser.mdk"
     6
     "2",
   withFixture (pyFixture dir "allbytes" allbytesProg) (src =>
@@ -519,7 +519,7 @@ dynamicGroup dir inflateBin = expectAll [
       src
       6
       "2"),
-  seedGroup dir inflateBin "\{medakaRoot}/compiler/seed/emitter.ll.gz",
+  seedGroup dir inflateBin "\{medakaRoot ()}/compiler/seed/emitter.ll.gz",
 ]
 
 -- The error paths (checks 27-34): truncation, bad magic, trailer CRC and ISIZE
@@ -554,7 +554,7 @@ errorGroup dir inflateBin = expectAll [
   withFixture (gzipOf
     dir
     6
-    "\{medakaRoot}/compiler/frontend/parser.mdk"
+    "\{medakaRoot ()}/compiler/frontend/parser.mdk"
     "dyn") (dynGz =>
     btypeThen
       "dynamic Huffman error-path setup"
@@ -589,8 +589,8 @@ test "inflate_oracle: stored, fixed, dynamic round trips and error paths (checks
   (dir => match build dir "inflate_demo"
     Err e => fail e
     Ok inflateBin => expectAll [
-      gzipPresent,
-      pythonPresent,
+      gzipPresent (),
+      pythonPresent (),
       storedGroup dir inflateBin,
       fixedGroup dir inflateBin,
       dynamicGroup dir inflateBin,

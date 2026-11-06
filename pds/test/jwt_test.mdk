@@ -156,12 +156,12 @@ expectedClaims = Claims {
 check : String -> Result JwtError Claims
 check token = verifyToken rfcSessionKey subject audience 1500 token
 
-goodToken : String
-goodToken =
+goodToken : Unit -> <Mint "access"> String
+goodToken () =
   mintAccessToken rfcSessionKey subject audience tokenId issuedAt expiresAt
 
 test "a freshly minted token verifies inside its window" =
-  expectEqual (check goodToken) (Ok expectedClaims)
+  expectEqual (check (goodToken ())) (Ok expectedClaims)
 
 test "the forge helper agrees with mintAccessToken on the honest header" =
   expectEqual
@@ -183,13 +183,16 @@ test "a header with no alg at all is rejected" =
 
 test "a truncated signature is rejected" =
   expectEqual
-    (check (stringSlice 0 (stringLength goodToken - 4) goodToken))
+    (check (stringSlice 0 (stringLength (goodToken ()) - 4) (goodToken ())))
     (Err JwtBadSignature)
 
 test "a signature with its last character changed is rejected" =
-  let head = stringSlice 0 (stringLength goodToken - 1) goodToken
+  let head = stringSlice 0 (stringLength (goodToken ()) - 1) (goodToken ())
   let last =
-    stringSlice (stringLength goodToken - 1) (stringLength goodToken) goodToken
+    stringSlice
+      (stringLength (goodToken ()) - 1)
+      (stringLength (goodToken ()))
+      (goodToken ())
   let flipped = if last == "A" then "B" else "A"
   expectEqual (check "\{head}\{flipped}") (Err JwtBadSignature)
 
@@ -219,39 +222,49 @@ test "a token signed under a different secret is rejected" =
 
 test "an expired token is rejected" =
   expectEqual
-    (verifyToken rfcSessionKey subject audience expiresAt goodToken)
+    (verifyToken rfcSessionKey subject audience expiresAt (goodToken ()))
     (Err JwtExpired)
 
 test "exp is exclusive: the last second before it still verifies" =
   expectEqual
-    (verifyToken rfcSessionKey subject audience (expiresAt - 1) goodToken)
+    (verifyToken rfcSessionKey subject audience (expiresAt - 1) (goodToken ()))
     (Ok expectedClaims)
 
 test "a not-yet-valid token is rejected" =
   expectEqual
-    (verifyToken rfcSessionKey subject audience (issuedAt - 1) goodToken)
+    (verifyToken rfcSessionKey subject audience (issuedAt - 1) (goodToken ()))
     (Err JwtNotYetValid)
 
 test "nbf is inclusive: the issuing second itself verifies" =
   expectEqual
-    (verifyToken rfcSessionKey subject audience issuedAt goodToken)
+    (verifyToken rfcSessionKey subject audience issuedAt (goodToken ()))
     (Ok expectedClaims)
 
 test "a token for another subject is rejected" =
   expectEqual
-    (verifyToken rfcSessionKey "did:plc:somebody-else" audience 1500 goodToken)
+    (verifyToken
+      rfcSessionKey
+      "did:plc:somebody-else"
+      audience
+      1500
+      (goodToken ()))
     (Err JwtWrongSubject)
 
 test "a token for another audience is rejected" =
   expectEqual
-    (verifyToken rfcSessionKey subject "did:web:other.example" 1500 goodToken)
+    (verifyToken
+      rfcSessionKey
+      subject
+      "did:web:other.example"
+      1500
+      (goodToken ()))
     (Err JwtWrongAudience)
 
 test "a two-segment token is rejected as malformed" =
   expectEqual (check "aaaa.bbbb") (Err JwtMalformed)
 
 test "a four-segment token is rejected as malformed" =
-  expectEqual (check "\{goodToken}.extra") (Err JwtMalformed)
+  expectEqual (check "\{goodToken ()}.extra") (Err JwtMalformed)
 
 test "a header segment that is not base64url is rejected" =
   expectEqual (check (tokenOf "!!!!" (b64uSeg claimsText))) (Err JwtMalformed)
@@ -305,8 +318,8 @@ test "two tokens minted a second apart differ only if their jti does" =
 
 test "verification reads no clock: the same token verifies at any instant in its window" =
   expectEqual
-    (verifyToken rfcSessionKey subject audience 1001 goodToken)
-    (verifyToken rfcSessionKey subject audience 1999 goodToken)
+    (verifyToken rfcSessionKey subject audience 1001 (goodToken ()))
+    (verifyToken rfcSessionKey subject audience 1999 (goodToken ()))
 
 -- ── service auth (S-service-jwt, #2608) ─────────────────────────────────────
 --
@@ -366,16 +379,16 @@ serviceToken request =
   resultOrPanic "jwt_test" (mintServiceToken serviceKey request)
 
 -- The audience as an `atproto-proxy` header spells it: a service OF a DID.
-withLxmToken : String
-withLxmToken =
+withLxmToken : Unit -> <Sign "service-auth"> String
+withLxmToken () =
   serviceToken
     (serviceRequest
       "\{serviceAudience}#bsky_appview"
       (Some serviceMethod)
       serviceJti)
 
-withoutLxmToken : String
-withoutLxmToken =
+withoutLxmToken : Unit -> <Sign "service-auth"> String
+withoutLxmToken () =
   serviceToken
     (serviceRequest serviceAudience None "fedcba9876543210fedcba9876543210")
 
@@ -404,11 +417,11 @@ segmentText segment =
     (decodeUtf8 (segmentBytes segment))
 
 test "the service-auth header is the corpus's ES256K header, byte for byte" =
-  let (headerSeg, _, _) = segmentsOf withLxmToken
+  let (headerSeg, _, _) = segmentsOf (withLxmToken ())
   expectEqual headerSeg "eyJ0eXAiOiJKV1QiLCJhbGciOiJFUzI1NksifQ"
 
 test "the service-auth claim set serializes in the corpus's order" =
-  let (_, claimsSeg, _) = segmentsOf withLxmToken
+  let (_, claimsSeg, _) = segmentsOf (withLxmToken ())
   expectEqual
     (segmentText claimsSeg)
     ("{\"iat\":1700000000,\"iss\":\"did:plc:s-service-jwt-account\","
@@ -420,7 +433,7 @@ test "the service-auth claim set serializes in the corpus's order" =
 -- order: a `"lxm":null` member would satisfy neither a peer's lxm check nor
 -- this assertion.
 test "an absent lxm drops the claim instead of nulling it" =
-  let (_, claimsSeg, _) = segmentsOf withoutLxmToken
+  let (_, claimsSeg, _) = segmentsOf (withoutLxmToken ())
   expectEqual
     (segmentText claimsSeg)
     ("{\"iat\":1700000000,\"iss\":\"did:plc:s-service-jwt-account\","
@@ -448,7 +461,7 @@ test "an explicit exp replaces the default lifetime in its own position" =
 -- that the fragment never reached the signature.
 test "a #serviceId fragment is stripped before aud is signed" =
   expectEqual
-    withLxmToken
+    (withLxmToken ())
     (serviceToken
       (serviceRequest serviceAudience (Some serviceMethod) serviceJti))
 
@@ -457,7 +470,7 @@ test "a #serviceId fragment is stripped before aud is signed" =
 -- deliberate — a second low-S predicate written here could disagree with the
 -- one the signer canonicalizes against.
 test "the emitted signature is canonical nonzero low-S P1363 r||s" =
-  let (_, _, sigSeg) = segmentsOf withLxmToken
+  let (_, _, sigSeg) = segmentsOf (withLxmToken ())
   let raw = segmentBytes sigSeg
   let canonical = match signatureFromCompact raw
     Ok _ => True
@@ -470,7 +483,7 @@ test "the emitted signature is canonical nonzero low-S P1363 r||s" =
 -- The signature covers the first two segments and nothing else: recomputing it
 -- from them alone must reproduce the third.
 test "the signing input is exactly the header and claims segments" =
-  let (headerSeg, claimsSeg, sigSeg) = segmentsOf withLxmToken
+  let (headerSeg, claimsSeg, sigSeg) = segmentsOf (withLxmToken ())
   expectEqual
     (es256kSignature serviceKey "\{headerSeg}.\{claimsSeg}")
     (Ok sigSeg)

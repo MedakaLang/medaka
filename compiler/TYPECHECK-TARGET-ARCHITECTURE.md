@@ -2222,7 +2222,7 @@ once) is the architecture, the file boundary is not.
   named coordination point (§8), and D-3 must not outlaw the arc's canonical
   join signature (its `e₂` argument occurrence is justified by the index
   fidelity + eliminator obligation pair, not by call-time coverage).
-- **No catchable panics; IO not a monad; lazy top-level nullary; hot helpers
+- **No catchable panics; IO not a monad; strict pure top-level values (I1 to I3); hot helpers
   monomorphic and short-circuiting** (+56% self-compile measured; L5's
   conformance machinery must not delegate hot scans to Foldable).
 - **The interpreter stays** — as a refinement consuming the one elaboration.

@@ -80,37 +80,48 @@ parseCorpus text =
     rows = filterMap rowOf corpusLines,
   }
 
-corpus : <FileRead, Exec, Env "MEDAKA_ROOT"> Corpus
-corpus = match filesForConsumer medakaRoot "S-verify-answer-key"
-  Ok [path] => match readFile (underRoot path)
-    Ok text => parseCorpus text
-    Err message => panic "service_jwt_verify_test: \{message}"
-  Ok paths =>
-    panic
-      "service_jwt_verify_test: expected one ledgered corpus, got \{debug paths}"
-  Err message => panic "service_jwt_verify_test: \{message}"
+corpusCell : Ref (Option Corpus)
+corpusCell = Ref None
 
-corpusKey : <FileRead, Exec, Env "MEDAKA_ROOT"> PublicKey
-corpusKey =
+corpus : Unit -> <FileRead, Exec, Env "MEDAKA_ROOT"> Corpus
+corpus () = match !corpusCell
+  Some v => v
+  None =>
+    let v = match filesForConsumer (medakaRoot ()) "S-verify-answer-key"
+      Ok [path] => match readFile (underRoot path)
+        Ok text => parseCorpus text
+        Err message => panic "service_jwt_verify_test: \{message}"
+      Ok paths =>
+        panic
+          "service_jwt_verify_test: expected one ledgered corpus, got \{debug paths}"
+      Err message => panic "service_jwt_verify_test: \{message}"
+    corpusCell := Some v
+    v
+
+corpusKey : Unit -> <FileRead, Exec, Env "MEDAKA_ROOT"> PublicKey
+corpusKey () =
   let compressed =
-    resultOrPanic "service_jwt_verify_test: corpus key hex" (decode corpus.key)
+    resultOrPanic
+      "service_jwt_verify_test: corpus key hex"
+      (decode (corpus ()).key)
   resultOrPanic
     "service_jwt_verify_test: corpus key"
     (publicKeyFromCompressed compressed)
 
-corpusExpectation : <FileRead, Exec, Env "MEDAKA_ROOT"> ServiceJwtExpectation
-corpusExpectation = ServiceJwtExpectation {
-  issuerKey = corpusKey,
-  issuer = corpus.issuer,
-  audience = corpus.server,
-  method = corpus.method,
-  nowSeconds = corpus.now,
+corpusExpectation : Unit ->
+  <FileRead, Exec, Env "MEDAKA_ROOT"> ServiceJwtExpectation
+corpusExpectation () = ServiceJwtExpectation {
+  issuerKey = corpusKey (),
+  issuer = (corpus ()).issuer,
+  audience = (corpus ()).server,
+  method = (corpus ()).method,
+  nowSeconds = (corpus ()).now,
 }
 
 -- Our verdict on one token, under the corpus's own expectation.
 verifyCorpusToken : String ->
   <FileRead, Exec, Env "MEDAKA_ROOT"> Result ServiceJwtRefusal ServiceJwtClaims
-verifyCorpusToken token = verifyServiceJwt corpusExpectation token
+verifyCorpusToken token = verifyServiceJwt (corpusExpectation ()) token
 
 verdictOf : Result ServiceJwtRefusal ServiceJwtClaims -> String
 verdictOf (Ok _) = "accept"
@@ -120,7 +131,7 @@ oursOn : Row -> <FileRead, Exec, Env "MEDAKA_ROOT"> String
 oursOn row = verdictOf (verifyCorpusToken row.token)
 
 rowNamed : String -> <FileRead, Exec, Env "MEDAKA_ROOT"> Row
-rowNamed wanted = match find (row => row.name == wanted) corpus.rows
+rowNamed wanted = match find (row => row.name == wanted) (corpus ()).rows
   Some row => row
   None => panic "service_jwt_verify_test: corpus has no row `\{wanted}`"
 
@@ -161,12 +172,12 @@ requiredOn row = match lookup row.name licensedNarrowings
   Some _ => "reject"
   None => row.official
 
-test "the answer key has its 39 rows" = expectEqual 39 (length corpus.rows)
+test "the answer key has its 39 rows" = expectEqual 39 (length (corpus ()).rows)
 
 test "every corpus row gets the verdict it is owed" =
   expectEqual
-    (map (row => (row.name, requiredOn row)) corpus.rows)
-    (map (row => (row.name, oursOn row)) corpus.rows)
+    (map (row => (row.name, requiredOn row)) (corpus ()).rows)
+    (map (row => (row.name, oursOn row)) (corpus ()).rows)
 
 test "no row is accepted by ours and refused by the official verifier" =
   expectEqual
@@ -175,7 +186,7 @@ test "no row is accepted by ours and refused by the official verifier" =
       (row => row.name)
       (filter
         (row => oursOn row == "accept" && row.official == "reject")
-        corpus.rows))
+        (corpus ()).rows))
 
 test "every row refused by ours and accepted by the official verifier is a licensed narrowing" =
   expectEqual
@@ -184,21 +195,21 @@ test "every row refused by ours and accepted by the official verifier is a licen
         (row => row.name)
         (filter
           (row => oursOn row == "reject" && row.official == "accept")
-          corpus.rows)
+          (corpus ()).rows)
       |> sort)
 
 test "the genuine token and the one expiring at this very second are accepted" =
   let claimsAt exp = Ok ServiceJwtClaims {
-    iss = corpus.issuer,
-    aud = corpus.server,
-    lxm = corpus.method,
+    iss = (corpus ()).issuer,
+    aud = (corpus ()).server,
+    lxm = (corpus ()).method,
     exp = exp,
   }
   expectEach [
     ("genuine", expectEqual (claimsAt 1700001800) (verifyRow "genuine")),
     (
       "exp_equals_now",
-      expectEqual (claimsAt corpus.now) (verifyRow "exp_equals_now"),
+      expectEqual (claimsAt (corpus ()).now) (verifyRow "exp_equals_now"),
     ),
   ]
 
@@ -314,8 +325,8 @@ signingKey =
 
 -- A store holding a repository signed by `signingKey`: the key the seam
 -- verifies a service token against is this repository's.
-repoStore : Store
-repoStore =
+repoStore : Unit -> <Sign "commit"> Store
+repoStore () =
   let rev =
     resultOrPanic "service_jwt_verify_test: revision" (tidParse "3ke6kg3wk222b")
   storeFromRepo
@@ -323,22 +334,22 @@ repoStore =
       "service_jwt_verify_test: repository"
       (repoInitFromKeyBytes ownDid keyBytes rev))
 
-storeKey : PublicKey
-storeKey = match storeRepo repoStore
+storeKey : Unit -> <Sign "commit"> PublicKey
+storeKey () = match storeRepo (repoStore ())
   Some repo => repoPublicKey repo
   None => panic "service_jwt_verify_test: the store has no repository"
 
 ownExpectation : Int -> <Sign "commit"> ServiceJwtExpectation
 ownExpectation now = ServiceJwtExpectation {
-  issuerKey = storeKey,
+  issuerKey = storeKey (),
   issuer = accountDid account,
   audience = serverDid account,
   method = uploadBlobNsid,
   nowSeconds = now,
 }
 
-mintedToken : <Sign "service-auth"> String
-mintedToken =
+mintedToken : Unit -> <Sign "service-auth"> String
+mintedToken () =
   resultOrPanic
     "service_jwt_verify_test: mint"
     (mintServiceToken signingKey ServiceAuthRequest {
@@ -364,25 +375,25 @@ test "a token this server mints for its own DID and uploadBlob verifies against 
       "at the instant it was minted",
       expectEqual
         (Ok minted)
-        (verifyServiceJwt (ownExpectation testInstant) mintedToken),
+        (verifyServiceJwt (ownExpectation testInstant) (mintedToken ())),
     ),
     (
       "at the second it expires",
       expectEqual
         (Ok minted)
-        (verifyServiceJwt (ownExpectation (testInstant + 60)) mintedToken),
+        (verifyServiceJwt (ownExpectation (testInstant + 60)) (mintedToken ())),
     ),
     (
       "one second later",
       expectEqual
         (Err ServiceJwtExpired)
-        (verifyServiceJwt (ownExpectation (testInstant + 61)) mintedToken),
+        (verifyServiceJwt (ownExpectation (testInstant + 61)) (mintedToken ())),
     ),
     (
       "presented to another route",
       expectEqual
         (Err ServiceJwtWrongMethod)
-        (verifyServiceJwt otherRoute mintedToken),
+        (verifyServiceJwt otherRoute (mintedToken ())),
     ),
   ]
 
@@ -565,20 +576,28 @@ selectiveImport clause = match S.indexOf ".{" clause
           filter (/= "") (map S.trim (S.split "," (S.take close inner)))
         Some (target, names)
 
-verifierImports : <FileRead, Env "MEDAKA_ROOT"> List String
-verifierImports = match readFile (underRoot "pds/lib/service_jwt_verify.mdk")
-  Ok text => importClauses (S.lines text)
-  Err message => panic "service_jwt_verify_test: \{message}"
+verifierImportsCell : Ref (Option (List String))
+verifierImportsCell = Ref None
+
+verifierImports : Unit -> <FileRead, Env "MEDAKA_ROOT"> List String
+verifierImports () = match !verifierImportsCell
+  Some v => v
+  None =>
+    let v = match readFile (underRoot "pds/lib/service_jwt_verify.mdk")
+      Ok text => importClauses (S.lines text)
+      Err message => panic "service_jwt_verify_test: \{message}"
+    verifierImportsCell := Some v
+    v
 
 test "the verifier imports only the modules its contract allows, selectively" =
   let disallowed clause = match selectiveImport clause
     None => True
     Some (target, _) => not (elem target allowedImports)
   expectEach [
-    ("the source's imports were read", expectNotEqual [] verifierImports),
+    ("the source's imports were read", expectNotEqual [] (verifierImports ())),
     (
       "no clause outside the allowlist",
-      expectEqual [] (filter disallowed verifierImports),
+      expectEqual [] (filter disallowed (verifierImports ())),
     ),
   ]
 
@@ -586,7 +605,7 @@ test "the verifier takes from lib.sign the public key and the verifier, nothing 
   let signNames =
     match (find
       (clause => S.startsWith "import lib.sign." clause)
-      verifierImports)
+      (verifierImports ()))
       None => []
       Some clause => match selectiveImport clause
         Some (_, names) => names

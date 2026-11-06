@@ -129,16 +129,24 @@ roundTrips (name, p) =
 -- ── the rows ────────────────────────────────────────────────────────────────
 
 -- The prelude as a drive reads it.
+preludeCell : Ref (Option (Result String (List Decl, List Decl)))
+preludeCell = Ref None
+
 export
-prelude : <IO, FileRead> Result String (List Decl, List Decl)
-prelude = do
-  rsrc <- readFile (underRoot "stdlib/runtime.mdk")
-  csrc <- readFile (underRoot "stdlib/core.mdk")
-  Ok (desugar (parse rsrc), desugar (parse csrc))
+prelude : Unit -> <IO, FileRead> Result String (List Decl, List Decl)
+prelude () = match !preludeCell
+  Some v => v
+  None =>
+    let v = do
+      rsrc <- readFile (underRoot "stdlib/runtime.mdk")
+      csrc <- readFile (underRoot "stdlib/core.mdk")
+      Ok (desugar (parse rsrc), desugar (parse csrc))
+    preludeCell := Some v
+    v
 
 -- Every stdlib module but the prelude's two, as an import path.
-stdlibModules : <IO, FileRead> Result String (List String)
-stdlibModules = do
+stdlibModules : Unit -> <IO, FileRead> Result String (List String)
+stdlibModules () = do
   top <- listDir (underRoot "stdlib")
   crypto <- listDir (underRoot "stdlib/crypto")
   let ids = moduleIds "" top ++ moduleIds "crypto." crypto
@@ -176,8 +184,8 @@ importLine (i, m) = "import \{m} as M\{i}"
 stdlibRows : String ->
   <IO, FileRead, FileWrite> Result String (List (String, PubScheme))
 stdlibRows dir = do
-  (runtimeDecls, coreDecls) <- prelude
-  mods <- stdlibModules
+  (runtimeDecls, coreDecls) <- prelude ()
+  mods <- stdlibModules ()
   let entry = "\{dir}/all_stdlib.mdk"
   _ <- writeFile entry (S.join "\n" (map importLine (indexed mods)) ++ "\n")
   let roots = [dir, underRoot "stdlib"]
@@ -207,7 +215,7 @@ flatRows : DriveInputs ->
   String ->
   <IO, FileRead> Result String (List (String, PubScheme))
 flatRows inputs src = do
-  (runtimeDecls, coreDecls) <- prelude
+  (runtimeDecls, coreDecls) <- prelude ()
   let (report, _) = checkModulesEntryFullReportK
     inputs
     False
@@ -622,18 +630,26 @@ test "together the rows carry every node kind" = withScratchDir
 
 -- A drive under a prelude key no earlier drive used misses, checks core and
 -- leaves the prelude's interface as the cache's one section.
-preludeInterface : <IO, FileRead> Result String PreludeInterface
-preludeInterface = do
-  (runtimeDecls, coreDecls) <- prelude
-  let _ = checkModulesChainReportFor defaultDriveInputs False (Some (
-    4364,
-    3,
-  )) "" [] runtimeDecls coreDecls [
-    ("m", desugarIn "m" (parseLocated "x = 1")),
-  ]
-  match currentPreludeInterface ()
-    [(_, pi)] => Ok pi
-    sections => Err "expected one section, got \{length sections}"
+preludeInterfaceCell : Ref (Option (Result String PreludeInterface))
+preludeInterfaceCell = Ref None
+
+preludeInterface : Unit -> <IO, FileRead> Result String PreludeInterface
+preludeInterface () = match !preludeInterfaceCell
+  Some v => v
+  None =>
+    let v = do
+      (runtimeDecls, coreDecls) <- prelude ()
+      let _ = checkModulesChainReportFor defaultDriveInputs False (Some (
+        4364,
+        3,
+      )) "" [] runtimeDecls coreDecls [
+        ("m", desugarIn "m" (parseLocated "x = 1")),
+      ]
+      match currentPreludeInterface ()
+        [(_, pi)] => Ok pi
+        sections => Err "expected one section, got \{length sections}"
+    preludeInterfaceCell := Some v
+    v
 
 -- [x] encoded, rendered, parsed and decoded at [path]: the re-encoded text is
 -- the encoded text, and the view of the decoded value is the original's.  A
@@ -957,7 +973,7 @@ unfilledFields : List String
 unfilledFields = ["piFunNames", "piCtorExistentials"]
 
 test "every field of the prelude's interface round-trips" =
-  match preludeInterface
+  match preludeInterface ()
     Err e => fail e
     Ok pi =>
       let laws = fieldLaws pi
@@ -1260,7 +1276,7 @@ missingHeads laws =
   filter (h => not (S.contains h text)) componentHeads
 
 test "the prelude's value and the fixtures carry every node kind" =
-  match preludeInterface
+  match preludeInterface ()
     Err e => fail e
     Ok pi => expectEqual [] (missingHeads (fieldLaws pi ++ fixtureLaws))
 
@@ -1641,7 +1657,7 @@ withSection field = "\{headerOnly}(section (joins ()) (interface \{field}))\n"
 -- The digest is the SHA-256 of the bytes after the header line, read as they
 -- stand, so a byte added after the last section changes it.
 test "the digest hashes the file's bytes after the header line" =
-  match preludeInterface
+  match preludeInterface ()
     Err e => fail e
     Ok pi =>
       let good = encodeInterface (fileOf [([[ioUnit]], pi)])
@@ -1673,7 +1689,7 @@ corrupted text = match parseSExp ("(" ++ text ++ ")")
     stringJoin "\n" (map renderSExp (header :: first :: rest))
   _ => text
 
-test "a malformed file is refused" = match preludeInterface
+test "a malformed file is refused" = match preludeInterface ()
   Err e => fail e
   Ok pi =>
     let good = encodeInterface (fileOf [([[ioUnit]], pi)])
@@ -1771,7 +1787,7 @@ test "a malformed file is refused" = match preludeInterface
 -- The header's key goes to the gate before any section is decoded or the digest
 -- compared, so a stale file with a garbage body names the key.
 test "a stale key is named before the sections are read" =
-  match preludeInterface
+  match preludeInterface ()
     Err e => fail e
     Ok pi =>
       let good = encodeInterface (fileOf [([[ioUnit]], pi)])
@@ -1803,7 +1819,7 @@ test "a stale key is named before the sections are read" =
       ]
 
 test "the prelude's file round-trips with its key, joins and every row" =
-  match preludeInterface
+  match preludeInterface ()
     Err e => fail e
     Ok pi =>
       let cache = [([[ioUnit]], pi), ([[ioSet, ioUnit], []], pi)]
@@ -1837,7 +1853,7 @@ test "the prelude's file round-trips with its key, joins and every row" =
         ]
 
 test "a missing or malformed owning declaration basis refuses the interface" =
-  match preludeInterface
+  match preludeInterface ()
     Err e => fail e
     Ok pi =>
       let good = encodeInterface (fileOf [([[]], pi)])

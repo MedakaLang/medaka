@@ -37,8 +37,8 @@ reShout : Regex
 reShout = mustCompile "([A-Z][A-Z]+[,.:;)]? ){2,}[A-Z][A-Z]+"
 
 -- Assertion 1: tree-wide comment-register baseline ratchet.
-baselineCheck : <Exec, IO> Expectation
-baselineCheck = match boundedVerb "sh" [
+baselineCheck : Unit -> <Exec, IO> Expectation
+baselineCheck () = match boundedVerb "sh" [
   underRoot "test/comment_register_census.sh",
   "--check",
   underRoot "test/comment_register_baseline.toml",
@@ -113,7 +113,7 @@ findingsOf added scope = sigilHits added ++ shoutHits added scope
 -- Merge-base of HEAD with the given ref, or "" when it cannot be resolved.
 mergeBaseWith : String -> <Exec, IO> String
 mergeBaseWith ref =
-  match boundedVerb "git" ["-C", medakaRoot, "merge-base", ref, "HEAD"]
+  match boundedVerb "git" ["-C", medakaRoot (), "merge-base", ref, "HEAD"]
     Err _ => ""
     Ok (code, out, _) => if code == 0 then trim out else ""
 
@@ -121,20 +121,20 @@ mergeBaseWith ref =
 -- (the script's `2>/dev/null` and unchecked fetch status).
 fetchQuiet : List String -> <Exec, IO> Bool
 fetchQuiet args =
-  match runCommand "git" (["-C", medakaRoot, "fetch", "--quiet"] ++ args)
+  match runCommand "git" (["-C", medakaRoot (), "fetch", "--quiet"] ++ args)
     Ok (0, _, _) => True
     _ => False
 
 -- HEAD's commit sha, or "" when it cannot be resolved.
-headSha : <Exec, IO> String
-headSha = match runCommand "git" ["-C", medakaRoot, "rev-parse", "HEAD"]
+headSha : Unit -> <Exec, IO> String
+headSha () = match runCommand "git" ["-C", medakaRoot (), "rev-parse", "HEAD"]
   Ok (0, out, _) => trim out
   _ => ""
 
-originMainResolves : <Exec, IO> Bool
-originMainResolves = match runCommand "git" [
+originMainResolves : Unit -> <Exec, IO> Bool
+originMainResolves () = match runCommand "git" [
   "-C",
-  medakaRoot,
+  medakaRoot (),
   "rev-parse",
   "--verify",
   "--quiet",
@@ -147,50 +147,62 @@ originMainResolves = match runCommand "git" [
 -- checkout is depth=1 of the triggering ref: origin/main is unresolvable and HEAD has
 -- no parent history, so both fetches are needed there. Locally they never run.
 -- Each step is sequenced by `let`; the Bool result is only for ordering.
-recoverShallow : <Exec, IO> Bool
-recoverShallow =
+recoverShallow : Unit -> <Exec, IO> Bool
+recoverShallow () =
   let originOk =
-    originMainResolves
+    originMainResolves ()
       || fetchQuiet [
         "--depth=50", "origin", "refs/heads/main:refs/remotes/origin/main"
       ]
   let historyOk =
     mergeBaseWith "origin/main" /= ""
-      || fetchQuiet ["--depth=50", "origin", headSha]
+      || fetchQuiet ["--depth=50", "origin", headSha ()]
   originOk && historyOk
 
 -- origin/main first, then local main (the script's fallback order).
-baseOf : <Exec, IO> String
-baseOf =
-  let _recovered = recoverShallow
+baseOf : Unit -> <Exec, IO> String
+baseOf () =
+  let _recovered = recoverShallow ()
   let b = mergeBaseWith "origin/main"
   if b /= "" then b else mergeBaseWith "main"
 
 mdkFiles : String -> <Exec, IO> Result String (List String)
-mdkFiles base =
-  match (boundedVerb "git" [
-    "-C", medakaRoot, "diff", "--name-only", "--diff-filter=ACM", base, "HEAD",
-    "--", "*.mdk", ":(exclude)test/**"
-  ])
-    Err e => Err e
-    Ok (code, out, err) =>
-      if code /= 0 then
-        Err "exit \{intToString code}: \{err}"
-      else
-        Ok (filter (/= "") (lines out))
+mdkFiles base = match boundedVerb "git" [
+  "-C",
+  medakaRoot (),
+  "diff",
+  "--name-only",
+  "--diff-filter=ACM",
+  base,
+  "HEAD",
+  "--",
+  "*.mdk",
+  ":(exclude)test/**",
+]
+  Err e => Err e
+  Ok (code, out, err) =>
+    if code /= 0 then
+      Err "exit \{intToString code}: \{err}"
+    else
+      Ok (filter (/= "") (lines out))
 
 fileDiff : String -> String -> <Exec, IO> Result String String
-fileDiff base f =
-  match (boundedVerb "git" [
-    "-C", medakaRoot, "diff", "-U0", base, "HEAD", "--", f
-  ])
-    Err e => Err e
-    Ok (code, out, err) =>
-      if code /= 0 then
-        Err
-          "git diff -U0 \{base} HEAD -- \{f} exited \{intToString code}: \{err}"
-      else
-        Ok out
+fileDiff base f = match boundedVerb "git" [
+  "-C",
+  medakaRoot (),
+  "diff",
+  "-U0",
+  base,
+  "HEAD",
+  "--",
+  f,
+]
+  Err e => Err e
+  Ok (code, out, err) =>
+    if code /= 0 then
+      Err "git diff -U0 \{base} HEAD -- \{f} exited \{intToString code}: \{err}"
+    else
+      Ok out
 
 -- The post-image's comment-scope lines; a failing census run is an error, not
 -- an empty scope.
@@ -201,7 +213,7 @@ postScope f = match boundedVerb "sh" [
   "medaka",
   underRoot "test/comment_register_census.sh",
   "HEAD:" ++ f,
-  medakaRoot,
+  medakaRoot (),
 ]
   Err e => Err e
   Ok (code, out, err) =>
@@ -239,9 +251,9 @@ diffCheckFrom base = match mdkFiles base
       "new shout comment line(s) added (🚨/⚠️/🔒 or sigil-free ALL-CAPS) in .mdk outside test/ -- see AGENTS.md [T-COMMENT-REGISTER]: no new shout comments"
       (diffFindings base files)
 
-diffCheck : <Exec, IO> Expectation
-diffCheck =
-  let base = baseOf
+diffCheck : Unit -> <Exec, IO> Expectation
+diffCheck () =
+  let base = baseOf ()
   if base == "" then
     fail "could not determine a merge-base with main -- pass a base explicitly"
   else
@@ -299,10 +311,10 @@ test "diff_compiler_comment_shout_diff.sh: re_emoji/re_shout literals agree with
   ]
 
 test "diff_compiler_comment_shout_diff.sh: comment-register baseline ratchet (tree-wide)" =
-  baselineCheck
+  baselineCheck ()
 
 test "diff_compiler_comment_shout_diff.sh: no new shout line in .mdk outside test/ (PR diff)" =
-  diffCheck
+  diffCheck ()
 
 test "diff_compiler_comment_shout_diff.sh: detector catches planted shouts on synthetic diff text" =
   detectorSelfCheck

@@ -205,11 +205,11 @@ secretOnlyStore = storeWithServerSecret testKey storeEmpty
 
 -- The same store with `goodToken`/`goodRefreshToken`'s session open, which is
 -- what makes those two credentials rather than merely well-formed tokens.
-configuredStore : Store
-configuredStore =
+configuredStore : Unit -> <Mint {"access", "refresh"}> Store
+configuredStore () =
   storeSessionOpen
-    (sessionFingerprint goodToken)
-    (sessionFingerprint goodRefreshToken)
+    (sessionFingerprint (goodToken ()))
+    (sessionFingerprint (goodRefreshToken ()))
     (testInstant + 3600)
     secretOnlyStore
 
@@ -225,8 +225,8 @@ tokenFor : SessionKey ->
 tokenFor key sub aud tokenId from until =
   mintAccessToken key sub aud tokenId from until
 
-goodToken : String
-goodToken =
+goodToken : Unit -> <Mint "access"> String
+goodToken () =
   tokenFor
     testKey
     accountDidText
@@ -237,8 +237,8 @@ goodToken =
 
 {- | The refresh half of `goodToken`'s session. It differs from `goodToken` in
    audience, which is what stops each being presented as the other. -}
-goodRefreshToken : String
-goodRefreshToken =
+goodRefreshToken : Unit -> <Mint "refresh"> String
+goodRefreshToken () =
   mintRefreshToken
     testKey
     accountDidText
@@ -247,8 +247,8 @@ goodRefreshToken =
     (testInstant - 60)
     (testInstant + 3600)
 
-expiredToken : String
-expiredToken =
+expiredToken : Unit -> <Mint "access"> String
+expiredToken () =
   tokenFor
     testKey
     accountDidText
@@ -257,8 +257,8 @@ expiredToken =
     (testInstant - 3600)
     (testInstant - 1)
 
-futureToken : String
-futureToken =
+futureToken : Unit -> <Mint "access"> String
+futureToken () =
   tokenFor
     testKey
     accountDidText
@@ -267,8 +267,8 @@ futureToken =
     (testInstant + 60)
     (testInstant + 3600)
 
-wrongSecretToken : String
-wrongSecretToken =
+wrongSecretToken : Unit -> <Mint "access"> String
+wrongSecretToken () =
   tokenFor
     otherKey
     accountDidText
@@ -277,8 +277,8 @@ wrongSecretToken =
     (testInstant - 60)
     (testInstant + 3600)
 
-wrongSubjectToken : String
-wrongSubjectToken =
+wrongSubjectToken : Unit -> <Mint "access"> String
+wrongSubjectToken () =
   tokenFor
     testKey
     "did:plc:somebodyelseentirely"
@@ -287,8 +287,8 @@ wrongSubjectToken =
     (testInstant - 60)
     (testInstant + 3600)
 
-wrongAudienceToken : String
-wrongAudienceToken =
+wrongAudienceToken : Unit -> <Mint "access"> String
+wrongAudienceToken () =
   tokenFor
     testKey
     accountDidText
@@ -358,7 +358,7 @@ gatedWith auth =
     handleBytes
       syntheticServer
       testContext
-      configuredStore
+      (configuredStore ())
       (postRequest auth gatedNsid)
   refusal bytes
 
@@ -368,7 +368,7 @@ gatedBody auth =
     handleBytes
       syntheticServer
       testContext
-      configuredStore
+      (configuredStore ())
       (postRequest auth gatedNsid)
   bodyText bytes
 
@@ -378,7 +378,7 @@ openWith auth =
     handleBytes
       syntheticServer
       testContext
-      configuredStore
+      (configuredStore ())
       (getRequest auth "/xrpc/\{openNsid}")
   bodyText bytes
 
@@ -388,7 +388,7 @@ openStatusWith auth =
     handleBytes
       syntheticServer
       testContext
-      configuredStore
+      (configuredStore ())
       (getRequest auth "/xrpc/\{openNsid}")
   statusOf bytes
 
@@ -396,10 +396,10 @@ test "a gated route with no Authorization header is refused 401" =
   expectEqual (gatedWith "") "401 AuthenticationRequired"
 
 test "a gated route with a well-formed token reaches its handler" =
-  expectEqual (gatedBody (bearer goodToken)) accountDidText
+  expectEqual (gatedBody (bearer (goodToken ()))) accountDidText
 
 test "an expired token is refused as expired, not as absent" =
-  expectEqual (gatedWith (bearer expiredToken)) "401 ExpiredToken"
+  expectEqual (gatedWith (bearer (expiredToken ()))) "401 ExpiredToken"
 
 {- A credential that is not UTF-8 is malformed, and is refused before any of
    it is read: its expiry included. The expired token with its first
@@ -408,7 +408,7 @@ test "an expired token is refused as expired, not as absent" =
    `ExpiredToken`, a claim read out of a token that could not have been
    verified. -}
 test "an expired token whose first character is an overlong is an invalid token" =
-  let token = encodeUtf8 expiredToken
+  let token = encodeUtf8 (expiredToken ())
   let first = optionOrPanic "auth_seam: empty token" (B.get 0 token)
   let firstByte = U8.toInt first
   let overlong = fromU8Array [|
@@ -424,21 +424,21 @@ test "an expired token whose first character is an overlong is an invalid token"
     handleBytes
       syntheticServer
       testContext
-      configuredStore
+      (configuredStore ())
       (postRequestBytes auth gatedNsid)
   expectEqual "401 InvalidToken" (refusal bytes)
 
 test "a not-yet-valid token is refused" =
-  expectEqual (gatedWith (bearer futureToken)) "401 InvalidToken"
+  expectEqual (gatedWith (bearer (futureToken ()))) "401 InvalidToken"
 
 test "a token signed with another secret is refused" =
-  expectEqual (gatedWith (bearer wrongSecretToken)) "401 InvalidToken"
+  expectEqual (gatedWith (bearer (wrongSecretToken ()))) "401 InvalidToken"
 
 test "a token for another subject is refused" =
-  expectEqual (gatedWith (bearer wrongSubjectToken)) "401 InvalidToken"
+  expectEqual (gatedWith (bearer (wrongSubjectToken ()))) "401 InvalidToken"
 
 test "a token for another audience is refused" =
-  expectEqual (gatedWith (bearer wrongAudienceToken)) "401 InvalidToken"
+  expectEqual (gatedWith (bearer (wrongAudienceToken ()))) "401 InvalidToken"
 
 test "the access audience is this PDS's hostname" =
   expectEqual (accessAudience account) accountHostText
@@ -447,21 +447,23 @@ test "the refresh audience is not the access audience" =
   expectNotEqual (refreshAudience account) (accessAudience account)
 
 test "a token presented without the Bearer scheme is refused" =
-  expectEqual (gatedWith "Authorization: \{goodToken}\r\n") "401 InvalidToken"
+  expectEqual
+    (gatedWith "Authorization: \{goodToken ()}\r\n")
+    "401 InvalidToken"
 
 test "a token presented under another scheme is refused" =
   expectEqual
-    (gatedWith "Authorization: Basic \{goodToken}\r\n")
+    (gatedWith "Authorization: Basic \{goodToken ()}\r\n")
     "401 InvalidToken"
 
 test "two Authorization headers are an ambiguous credential, not a credential" =
   expectEqual
-    (gatedWith "\{bearer goodToken}\{bearer goodToken}")
+    (gatedWith "\{bearer (goodToken ())}\{bearer (goodToken ())}")
     "401 InvalidToken"
 
 test "the Bearer scheme is matched case-insensitively" =
   expectEqual
-    (gatedBody "Authorization: bEaReR \{goodToken}\r\n")
+    (gatedBody "Authorization: bEaReR \{goodToken ()}\r\n")
     accountDidText
 
 refreshWith : String -> <Mint {"access", "refresh"}> String
@@ -470,7 +472,7 @@ refreshWith auth =
     handleBytes
       syntheticServer
       testContext
-      configuredStore
+      (configuredStore ())
       (postNoInputRequest auth refreshNsid)
   refusal bytes
 
@@ -480,7 +482,7 @@ refreshBody auth =
     handleBytes
       syntheticServer
       testContext
-      configuredStore
+      (configuredStore ())
       (postNoInputRequest auth refreshNsid)
   bodyText bytes
 
@@ -494,17 +496,17 @@ test "a token whose session is not open is refused, signature notwithstanding" =
       syntheticServer
       testContext
       secretOnlyStore
-      (postRequest (bearer goodToken) gatedNsid)
+      (postRequest (bearer (goodToken ())) gatedNsid)
   expectEqual "401 InvalidToken" (refusal bytes)
 
 test "a refresh route reached with the session's refresh token runs" =
-  expectEqual (refreshBody (bearer goodRefreshToken)) accountDidText
+  expectEqual (refreshBody (bearer (goodRefreshToken ()))) accountDidText
 
 test "an access token is refused on a refresh route" =
-  expectEqual (refreshWith (bearer goodToken)) "401 InvalidToken"
+  expectEqual (refreshWith (bearer (goodToken ()))) "401 InvalidToken"
 
 test "a refresh token is refused on an ordinary gated route" =
-  expectEqual (gatedWith (bearer goodRefreshToken)) "401 InvalidToken"
+  expectEqual (gatedWith (bearer (goodRefreshToken ()))) "401 InvalidToken"
 
 test "a refresh route with no Authorization header is refused 401" =
   expectEqual (refreshWith "") "401 AuthenticationRequired"
@@ -515,7 +517,7 @@ test "a gated route on a store with no session secret is refused" =
       syntheticServer
       testContext
       storeEmpty
-      (postRequest (bearer goodToken) gatedNsid)
+      (postRequest (bearer (goodToken ())) gatedNsid)
   expectEqual "401 InvalidToken" (refusal bytes)
 
 test "a public route answers with no credential at all" = expectEach [
@@ -524,16 +526,16 @@ test "a public route answers with no credential at all" = expectEach [
 ]
 
 test "a public route still answers when a good token IS presented" =
-  expectEqual (openWith (bearer goodToken)) accountDidText
+  expectEqual (openWith (bearer (goodToken ()))) accountDidText
 
 test "a public route is not closed by an unusable token" = expectEach [
   (
     "the public route still answers 200",
-    expectEqual "200" (openStatusWith (bearer expiredToken)),
+    expectEqual "200" (openStatusWith (bearer (expiredToken ()))),
   ),
   (
     "the caller is seen as anonymous rather than authenticated",
-    expectEqual "anonymous" (openWith (bearer expiredToken)),
+    expectEqual "anonymous" (openWith (bearer (expiredToken ()))),
   ),
 ]
 
@@ -770,8 +772,8 @@ lxmSessionToken =
 
 -- `configuredStore` with the account's repository, so a service token has a
 -- key to verify against, and with `lxmSessionToken`'s session open.
-serviceStore : Store
-serviceStore =
+serviceStore : Unit -> <Mint {"access", "refresh"}, Sign "commit"> Store
+serviceStore () =
   let rev =
     resultOrPanic "auth_seam_test: initial revision" (tidParse "3ke6kg3wk222b")
   let repo =
@@ -782,7 +784,7 @@ serviceStore =
     (sessionFingerprint lxmSessionToken)
     (sessionFingerprint "auth_seam_test-lxm-refresh")
     (testInstant + 3600)
-    (storeWithRepo repo configuredStore)
+    (storeWithRepo repo (configuredStore ()))
 
 -- A valid service token for the account, addressed to this server and
 -- limited to `nsid`.
@@ -826,7 +828,8 @@ admittedRequest auth endpoint =
 
 serviceWire : Bytes -> <Mint {"access", "refresh"}, Sign "commit"> Bytes
 serviceWire bytes =
-  let (_, response) = handleBytes pdsServerValue testContext serviceStore bytes
+  let (_, response) =
+    handleBytes pdsServerValue testContext (serviceStore ()) bytes
   response
 
 -- Every gated route in the real registry, by NSID.
@@ -838,8 +841,9 @@ gatedEndpoints =
 
 {- | Every gated route, presented a valid service token whose `lxm` is that
    route's own NSID, and what it answered. -}
-serviceSweep : <Mint {"access", "refresh"}, Sign {"commit", "service-auth"}> List (String, String)
-serviceSweep =
+serviceSweep : Unit ->
+  <Mint {"access", "refresh"}, Sign {"commit", "service-auth"}> List (String, String)
+serviceSweep () =
   map
     (endpoint =>
       let nsid = endpointNsid endpoint
@@ -848,9 +852,12 @@ serviceSweep =
     gatedEndpoints
 
 -- The swept routes that answered something other than `401 InvalidToken`.
-sweptPastTheSeam : <Mint {"access", "refresh"}, Sign {"commit", "service-auth"}> List String
-sweptPastTheSeam =
-  map fst (filter ((_, answer) => answer /= "401 InvalidToken") serviceSweep)
+sweptPastTheSeam : Unit ->
+  <Mint {"access", "refresh"}, Sign {"commit", "service-auth"}> List String
+sweptPastTheSeam () =
+  map
+    fst
+    (filter ((_, answer) => answer /= "401 InvalidToken") (serviceSweep ()))
 
 {- | The sweep's verdict is written down, not derived from the registry: a
    route re-registered `AccessOrServiceRoute` passes the seam with its own
@@ -860,11 +867,11 @@ test "a service token for its own route passes the seam on uploadBlob alone" = e
   [
     (
       "the routes that did not answer 401 InvalidToken",
-      expectEqual [uploadBlobNsid] sweptPastTheSeam,
+      expectEqual [uploadBlobNsid] (sweptPastTheSeam ()),
     ),
     (
       "they are the registry's service-auth routes",
-      expectEqual (serviceAuthRouteNsids realRegistry) sweptPastTheSeam,
+      expectEqual (serviceAuthRouteNsids realRegistry) (sweptPastTheSeam ()),
     ),
     (
       "every other gated route was swept and refused",
@@ -875,12 +882,14 @@ test "a service token for its own route passes the seam on uploadBlob alone" = e
             fst
             (filter
               ((_, answer) => answer == "401 InvalidToken")
-              serviceSweep))),
+              (serviceSweep ())))),
     ),
   ]
 
 test "uploadBlob runs its handler for a service token" =
-  expectEqual (Some "200 <no-error-field>") (lookup uploadBlobNsid serviceSweep)
+  expectEqual
+    (Some "200 <no-error-field>")
+    (lookup uploadBlobNsid (serviceSweep ()))
 
 test "a service token cannot reach getSession, refreshSession or deleteSession" =
   let sessionRoutes = [
@@ -890,12 +899,13 @@ test "a service token cannot reach getSession, refreshSession or deleteSession" 
   ]
   expectEqual
     (map (nsid => (nsid, "401 InvalidToken")) sessionRoutes)
-    (sort (filter ((nsid, _) => elem nsid sessionRoutes) serviceSweep))
+    (sort (filter ((nsid, _) => elem nsid sessionRoutes) (serviceSweep ())))
 
 test "a session token still works on uploadBlob" =
   expectEqual
     "200 <no-error-field>"
-    (refusal (serviceWire (postRawRequest (bearer goodToken) uploadBlobNsid)))
+    (refusal
+      (serviceWire (postRawRequest (bearer (goodToken ())) uploadBlobNsid)))
 
 test "an HS256 access token carrying an lxm claim is refused on uploadBlob" = expectEach
   [
@@ -942,7 +952,7 @@ mintWith auth =
       pdsServerValue
       testContext
       None
-      serviceStore
+      (serviceStore ())
       (parsedRequest (getRequest auth target)))
 
 test "a service token cannot mint a service token" = expectEach [
@@ -950,7 +960,7 @@ test "a service token cannot mint a service token" = expectEach [
     "control: a session token mints",
     expectEqual
       "minted lxm=Some \"com.atproto.repo.uploadBlob\""
-      (mintWith (bearer goodToken)),
+      (mintWith (bearer (goodToken ()))),
   ),
   (
     "a service token for getServiceAuth itself",
@@ -988,13 +998,13 @@ proxyWith auth =
       pdsServerValue
       testContext
       appviewTable
-      serviceStore
+      (serviceStore ())
       (parsedRequest (getRequest headers "/xrpc/\{timelineNsid}")))
 
 test "a service token cannot be proxied" = expectEach [
   (
     "control: a session token is proxied",
-    expectEqual "admitted \{timelineNsid}" (proxyWith (bearer goodToken)),
+    expectEqual "admitted \{timelineNsid}" (proxyWith (bearer (goodToken ()))),
   ),
   (
     "a service token for the proxied method",

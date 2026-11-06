@@ -22,20 +22,20 @@ import test.{
   Expectation, expectAll, expectAtLeast, expectEach, expectGolden, fail, pass
 }
 
-corpus : <IO> String
-corpus = "\{medakaRoot}/test/net_fixtures"
+corpus : Unit -> <IO> String
+corpus () = "\{medakaRoot ()}/test/net_fixtures"
 
-emitter : <IO> String
-emitter = "\{medakaRoot}/medaka_emitter"
+emitter : Unit -> <IO> String
+emitter () = "\{medakaRoot ()}/medaka_emitter"
 
 -- Builds fixture `name` into `scratch`, runs it once, and compares its stdout
 -- with `<name>.expected`. The run's exit code is graded too: the shell gate
 -- compared stdout alone, so this is strictly stricter.
 fixtureCheck : String -> String -> <Exec, IO> Expectation
 fixtureCheck scratch name =
-  let src = "\{corpus}/\{name}.mdk"
+  let src = "\{corpus ()}/\{name}.mdk"
   let bin = "\{scratch}/\{name}.bin"
-  match boundedInTree 120 medakaBin ["build", src, "-o", bin]
+  match boundedInTree 120 (medakaBin ()) ["build", src, "-o", bin]
     Err e => fail "\{name}: build spawn: \{e}"
     Ok (buildCode, bo, be) =>
       if buildCode /= 0 then
@@ -47,7 +47,7 @@ fixtureCheck scratch name =
           if runCode /= 0 then
             fail "\{name}: run exited \{intToString runCode}"
           else
-            expectGolden "\{corpus}/\{name}.expected" ro
+            expectGolden "\{corpus ()}/\{name}.expected" ro
 
 -- `medaka build --target wasm` with the native emitter and the wasm emitter
 -- oracle pinned through `env`, so the build sees the same tree the gate reads.
@@ -57,18 +57,18 @@ wasmBuild scratch =
     120
     "env"
     ([
-        "MEDAKA_ROOT=\{medakaRoot}",
-        "MEDAKA_EMITTER=\{emitter}",
+        "MEDAKA_ROOT=\{medakaRoot ()}",
+        "MEDAKA_EMITTER=\{emitter ()}",
       ]
       ++ wasmBuildArgv
-        "\{corpus}/net_loopback.mdk"
+        "\{corpus ()}/net_loopback.mdk"
         "\{scratch}/net_loopback_wasm")
 
 wasmReject : String -> <Exec, IO> Expectation
 wasmReject scratch =
   match boundedVerb "sh" ["-c", "command -v wasm-tools >/dev/null 2>&1"]
     Err e => fail "wasm-tools probe: \{e}"
-    Ok (tc, _, _) => match boundedVerb "test" ["-x", wasmEmitter]
+    Ok (tc, _, _) => match boundedVerb "test" ["-x", wasmEmitter ()]
       Err e => fail "wasm emitter probe: \{e}"
       Ok (ec, _, _) =>
         if tc /= 0 || ec /= 0 then
@@ -86,8 +86,8 @@ wasmReject scratch =
               pass
 
 test "net: every fixture builds, runs, and matches its .expected" =
-  match fixtureStems corpus
-    Err e => fail "\{corpus}: \{e}"
+  match fixtureStems (corpus ())
+    Err e => fail "\{corpus ()}: \{e}"
     Ok stems => withScratchDir (scratch => expectAll [
       expectAtLeast 3 (length stems),
       expectEach (map (n => (n, fixtureCheck scratch n)) stems),

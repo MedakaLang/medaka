@@ -52,8 +52,8 @@ corpus = [
   "pds/test/vectors/wycheproof_secp256k1_sha256_bitcoin.txt",
 ]
 
-deep : <IO> Bool
-deep = getEnvOr "SIGNING_DEEP" "0" == "1"
+deep : Unit -> <IO> Bool
+deep () = getEnvOr "SIGNING_DEEP" "0" == "1"
 
 -- # Spawning
 
@@ -63,7 +63,7 @@ interpretedSeconds : Int
 interpretedSeconds = 2400
 
 under : String -> <IO> String
-under rel = "\{medakaRoot}/\{rel}"
+under rel = "\{medakaRoot ()}/\{rel}"
 
 -- # Grading
 
@@ -111,7 +111,7 @@ sameAs label native (out, [])
 sampleFindings : String -> <Exec, IO> List String
 sampleFindings scratch = match nativeSample scratch
   (native, []) =>
-    wasmSample scratch native ++ (if deep then evalSample native else [])
+    wasmSample scratch native ++ (if deep () then evalSample native else [])
   (_, fs) => fs
 
 nativeSample : String -> <Exec, IO> (String, List String)
@@ -122,7 +122,7 @@ nativeSample scratch =
   match (spawnFindings
     label
     "medaka build"
-    (spawn buildSeconds medakaEnv medakaBin args))
+    (spawn buildSeconds (medakaEnv ()) (medakaBin ()) args))
     (_, []) =>
       gradedSpawn
         label
@@ -138,7 +138,7 @@ wasmSample scratch native =
   match (spawnFindings
     label
     "medaka build --target wasm"
-    (spawn buildSeconds wasmBuildEnv medakaBin args))
+    (spawn buildSeconds (wasmBuildEnv ()) (medakaBin ()) args))
     (_, []) =>
       sameAs
         label
@@ -165,13 +165,13 @@ evalSample native =
       (spawnFindings
         label
         "medaka run"
-        (spawn interpretedSeconds medakaEnv medakaBin args)))
+        (spawn interpretedSeconds (medakaEnv ()) (medakaBin ()) args)))
 
 -- # The full corpus
 
 corpusFindings : String -> <Exec, IO> List String
 corpusFindings scratch = match nativeCorpus scratch
-  (native, []) => if deep then wasmCorpus scratch native else []
+  (native, []) => if deep () then wasmCorpus scratch native else []
   (_, fs) => fs
 
 nativeCorpus : String -> <Exec, IO> (String, List String)
@@ -197,7 +197,7 @@ wasmCorpus scratch native =
   match (spawnFindings
     label
     "medaka build --target wasm"
-    (spawn buildSeconds wasmBuildEnv medakaBin args))
+    (spawn buildSeconds (wasmBuildEnv ()) (medakaBin ()) args))
     (_, []) =>
       sameAs
         label

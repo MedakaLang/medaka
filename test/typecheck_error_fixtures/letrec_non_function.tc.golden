@@ -1,1 +1,2 @@
 TYPE ERROR: `f` is bound by `let rec` but its right-hand side is not a function
+TYPE ERROR: top-level value `f` evaluates itself while it is initialised, through `f -> f`; a top-level value is initialised once, in dependency order, so it cannot depend on itself. Make it a function, `f () = ...`, or move the recursive reference under a `defer` block or a lambda that initialisation does not call

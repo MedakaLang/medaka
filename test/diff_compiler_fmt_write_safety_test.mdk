@@ -37,7 +37,7 @@ writeText path text =
         Ok path
 
 fmtRun : List String -> <Exec, IO, FileRead> Result String (Int, String, String)
-fmtRun args = boundedVerb medakaBin (["fmt"] ++ args)
+fmtRun args = boundedVerb (medakaBin ()) (["fmt"] ++ args)
 
 bothChanged : List String -> List String -> Bool
 bothChanged [b1, b2] [a1, a2] = b1 /= a1 && b2 /= a2
@@ -123,9 +123,9 @@ secondWrite path formatted = match fmtRun ["--write", path]
 
 -- 5: `<sub> --help` and `<sub> -h` exit 0 and mention their own subcommand name.
 helpCheck : String -> <Exec, IO, FileRead> Expectation
-helpCheck sub = match boundedVerb medakaBin [sub, "--help"]
+helpCheck sub = match boundedVerb (medakaBin ()) [sub, "--help"]
   Err e => fail "\{sub} --help: could not spawn: \{e}"
-  Ok (code, out, _) => match boundedVerb medakaBin [sub, "-h"]
+  Ok (code, out, _) => match boundedVerb (medakaBin ()) [sub, "-h"]
     Err e => fail "\{sub} -h: could not spawn: \{e}"
     Ok (code2, out2, _) =>
       if code /= 0 then

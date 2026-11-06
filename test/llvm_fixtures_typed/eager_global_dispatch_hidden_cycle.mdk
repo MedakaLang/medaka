@@ -1,3 +1,8 @@
+-- Since top-level initialisation rule I3, `medaka check`, `run` and `build` refuse this
+-- program with T-CYCLIC-VALUE before any engine runs (test/rejection_parity_fixtures.txt
+-- pins that on native and wasm). The prelude-free llvm probe runs no typechecker, so it
+-- still emits the runtime E-CYCLIC-VALUE below and keeps the empty golden.
+--
 -- #561 (PR-A native + PR-B wasm, both SHIPPED) — strictness-parity regression
 -- coverage for a value cycle whose back edge is HIDDEN behind interface-method
 -- dispatch, the cyclic sibling to eager_global_dispatch_hidden.mdk (which pins

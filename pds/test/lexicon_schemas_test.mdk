@@ -171,18 +171,19 @@ defOf (name, value) = match stringAt "type" value
     Ok (name, LexRecordDef keyType shape)
   _ => map (fieldType => (name, LexTypeDef fieldType)) (typeOf value)
 
-decodedDefs : <IO> Result String (List (String, LexDef))
-decodedDefs = match readFile schemasPath
+decodedDefs : Unit -> <IO> Result String (List (String, LexDef))
+decodedDefs () = match readFile schemasPath
   Err message => Err "cannot read \{schemasPath}: \{message}"
   Ok text => match parse text
     Err message => Err "not JSON: \{message}"
     Ok (JObject pairs) => traverse defOf (toList pairs)
     Ok _ => Err "not an object"
 
-test "the schemas file decodes with no key left over" = expectOk decodedDefs
+test "the schemas file decodes with no key left over" =
+  expectOk (decodedDefs ())
 
 test "lib.lexicon_schemas equals the schemas file, definition for definition" =
-  expectEqual decodedDefs (Ok lexiconDefs)
+  expectEqual (decodedDefs ()) (Ok lexiconDefs)
 
 test "the data has 53 definitions, 20 of them records" =
   expectEqual (53, 20) (length lexiconDefs, count isRecordDef lexiconDefs)

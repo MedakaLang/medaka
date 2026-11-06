@@ -179,7 +179,7 @@ data Leg = Leg {
    sees them one process at a time or all at once.
 
    `oracle` and `prelude` are spelled repo-relative and interpolated onto
-   `medakaRoot` at spawn time. The `test/bin/<name>` spelling is load-bearing
+   `medakaRoot ()` at spawn time. The `test/bin/<name>` spelling is load-bearing
    beyond readability: `test/build_oracles.sh --for` derives which oracles a
    gate needs by grepping the gate's own source for that literal, so an
    oracle assembled from fragments would be invisible to it and the gate
@@ -341,7 +341,7 @@ rows = [
 -- file names for a directory-shaped one.
 entriesOf : Leg -> <FileRead, IO> Result String (List String)
 entriesOf leg =
-  let dir = "\{medakaRoot}/\{leg.corpus}"
+  let dir = "\{medakaRoot ()}/\{leg.corpus}"
   match leg.shape
     DirFixture => dirEntries dir
     OrderedModules => orderedEntries dir
@@ -410,7 +410,7 @@ goldenOf leg path = match leg.golden
   SiblingExpected =>
     map chompNewlines (readFile "\{dirname path}/\{stem path}.expected")
   TypesUserSnapshot dir =>
-    map typesUserSection (readFile "\{medakaRoot}/\{dir}/\{stem path}.md")
+    map typesUserSection (readFile "\{medakaRoot ()}/\{dir}/\{stem path}.md")
   InFixtureDir name => map chompNewlines (readFile "\{dirname path}/\{name}")
 
 {- | The `# TYPES_USER` section of a snapshot: the lines after that banner, up
@@ -512,7 +512,7 @@ countFailure u =
    driver takes the files directly and never consults the loader. -}
 argsFor : Row -> Leg -> String -> <FileRead, IO> List String
 argsFor r leg path =
-  let prefix = map (p => "\{medakaRoot}/\{p}") r.prelude
+  let prefix = map (p => "\{medakaRoot ()}/\{p}") r.prelude
   match leg.shape
     DirFixture => prefix ++ [path, dirname path]
     OrderedModules => prefix ++ orderedModuleFiles path
@@ -538,7 +538,7 @@ sweepLeg r u = somes (map (oneFixture r u.leg) u.entries)
 
 oneFixture : Row -> Leg -> String -> <Exec, FileRead, IO> Option String
 oneFixture r leg path =
-  match boundedVerb "\{medakaRoot}/\{r.oracle}" (argsFor r leg path)
+  match boundedVerb "\{medakaRoot ()}/\{r.oracle}" (argsFor r leg path)
     Err e => Some "\{labelOf leg path}: could not spawn \{r.oracle}: \{e}"
     Ok (code, out, err) =>
       match processFailure r.oracle (labelOf leg path) code err
@@ -550,9 +550,9 @@ oneFixture r leg path =
    since a leak between two fixtures needs both of them in one heap. -}
 batchedRow : Row -> List LegFixtures -> <Exec, FileRead, IO> List String
 batchedRow r units =
-  let prefix = map (p => "\{medakaRoot}/\{p}") r.prelude
+  let prefix = map (p => "\{medakaRoot ()}/\{p}") r.prelude
   match (boundedVerb
-    "\{medakaRoot}/\{r.oracle}"
+    "\{medakaRoot ()}/\{r.oracle}"
     (prefix ++ flatMap unitEntries units))
     Err e => ["\{r.label}: could not spawn \{r.oracle}: \{e}"]
     Ok (code, out, err) =>
@@ -620,23 +620,30 @@ writeAll dir ((name, src) :: rest) = match writeFile "\{dir}/\{name}" src
 
 {- | A directory of this test's own, under the process's scratch root.
 
-   `test_process.scratchDir` is a top-level nullary, so it is evaluated ONCE
-   per process and every test in this module is handed the same path. Nothing
-   in this module removes the root; `mkdirAll` keeps each test independent of
-   it. -}
-cycleScratch : <Exec, FileWrite> Result String String
-cycleScratch = match scratchDir
-  Err e => Err e
-  Ok root =>
-    let dir = "\{root}/cycle"
-    map (() => dir) (mkdirAll dir)
+   `scratchDir ()` makes one root per call; the once-cell below makes it
+   once per process. Nothing in this module removes the root;
+   `mkdirAll` keeps each test independent of it. -}
+cycleScratchCell : Ref (Option (Result String String))
+cycleScratchCell = Ref None
+
+cycleScratch : Unit -> <Exec, FileWrite> Result String String
+cycleScratch () = match !cycleScratchCell
+  Some v => v
+  None =>
+    let v = match scratchDir ()
+      Err e => Err e
+      Ok root =>
+        let dir = "\{root}/cycle"
+        map (() => dir) (mkdirAll dir)
+    cycleScratchCell := Some v
+    v
 
 cycleVerdict : String -> <Exec, IO> Option String
 cycleVerdict dir =
-  let oracle = "\{medakaRoot}/test/bin/check_modules_main"
+  let oracle = "\{medakaRoot ()}/test/bin/check_modules_main"
   let args = [
-    "\{medakaRoot}/\{runtimeMod}",
-    "\{medakaRoot}/\{coreMod}",
+    "\{medakaRoot ()}/\{runtimeMod}",
+    "\{medakaRoot ()}/\{coreMod}",
     "\{dir}/a.mdk",
     dir,
   ]
@@ -650,8 +657,8 @@ cycleVerdict dir =
         Some
           "expected exit 0 reporting \{debug cycleChain}, got exit \{intToString code} reporting \{debug said}"
 
-cycleChainReported : <Exec, FileWrite, IO> Expectation
-cycleChainReported = match cycleScratch
+cycleChainReported : Unit -> <Exec, FileWrite, IO> Expectation
+cycleChainReported () = match cycleScratch ()
   Err e => fail "could not make a scratch directory: \{e}"
   Ok dir => match writeAll dir cycleModules
     Err e => fail "could not write the cycle modules: \{e}"
@@ -663,27 +670,27 @@ cycleChainReported = match cycleScratch
         Some m => fail m
 
 test "a two-module import cycle is reported as the whole chain" =
-  cycleChainReported
+  cycleChainReported ()
 
 {- | The composed `medaka check` locates the same cycle at the `import` that
    closes it, in the module holding that import (`b.mdk`, not the entry), with
    the caret line under it (#2473). -}
-cycleSiteScratch : <Exec, FileWrite> Result String String
-cycleSiteScratch = match scratchDir
+cycleSiteScratch : Unit -> <Exec, FileWrite> Result String String
+cycleSiteScratch () = match scratchDir ()
   Err e => Err e
   Ok root =>
     let dir = "\{root}/cycle_site"
     map (() => dir) (mkdirAll dir)
 
-cycleSiteRun : <Exec, FileWrite, IO> Expectation
-cycleSiteRun = match cycleSiteScratch
+cycleSiteRun : Unit -> <Exec, FileWrite, IO> Expectation
+cycleSiteRun () = match cycleSiteScratch ()
   Err e => fail "could not make a scratch directory: \{e}"
   Ok dir => match writeAll dir cycleModules
     Err e => fail "could not write the cycle modules: \{e}"
     Ok () =>
       let result =
         expectSpawnFailsAll
-          medakaBin
+          (medakaBin ())
           ["check", "\{dir}/a.mdk"]
           [
             "b.mdk:1:0: cyclic dependency: a → b → a",
@@ -693,7 +700,7 @@ cycleSiteRun = match cycleSiteScratch
       result
 
 test "a two-module import cycle is located at the import that closes it" =
-  cycleSiteRun
+  cycleSiteRun ()
 
 {- | Write `files` (relative path, source) under a fresh directory named `tag`
    in the scratch root, creating the parent directories, run `medaka` with
@@ -714,7 +721,7 @@ cycleTreeRun : String ->
   List String ->
   List String ->
   <Exec, FileWrite, IO> Expectation
-cycleTreeRun tag files args needles = match scratchDir
+cycleTreeRun tag files args needles = match scratchDir ()
   Err e => fail "could not make a scratch directory: \{e}"
   Ok root =>
     let dir = "\{root}/\{tag}"
@@ -723,7 +730,7 @@ cycleTreeRun tag files args needles = match scratchDir
       Ok () =>
         let result =
           expectSpawnFailsAll
-            medakaBin
+            (medakaBin ())
             (map
               (a => if startsWith "@" a then "\{dir}/\{drop 1 a}" else a)
               args)
@@ -905,8 +912,8 @@ validModules = [
   ),
 ]
 
-validModulesScratch : <Exec, FileWrite> Result String String
-validModulesScratch = match scratchDir
+validModulesScratch : Unit -> <Exec, FileWrite> Result String String
+validModulesScratch () = match scratchDir ()
   Err e => Err e
   Ok root =>
     let dir = "\{root}/resolve_modules_valid"
@@ -914,10 +921,10 @@ validModulesScratch = match scratchDir
 
 validModulesVerdict : String -> <Exec, IO> Option String
 validModulesVerdict dir =
-  let oracle = "\{medakaRoot}/test/bin/resolve_modules_main"
+  let oracle = "\{medakaRoot ()}/test/bin/resolve_modules_main"
   let args = [
-    "\{medakaRoot}/\{runtimeMod}",
-    "\{medakaRoot}/\{coreMod}",
+    "\{medakaRoot ()}/\{runtimeMod}",
+    "\{medakaRoot ()}/\{coreMod}",
     "\{dir}/shapes.mdk",
     "\{dir}/areas.mdk",
   ]
@@ -932,8 +939,8 @@ validModulesVerdict dir =
             Some
               "compiler reports errors on a valid program: \{debug (joinLines got)}"
 
-validModulesRun : <Exec, FileWrite, IO> Expectation
-validModulesRun = match validModulesScratch
+validModulesRun : Unit -> <Exec, FileWrite, IO> Expectation
+validModulesRun () = match validModulesScratch ()
   Err e => fail "could not make a scratch directory: \{e}"
   Ok dir => match writeAll dir validModules
     Err e => fail "could not write the probe modules: \{e}"
@@ -945,7 +952,7 @@ validModulesRun = match validModulesScratch
         Some m => fail m
 
 test "a valid multi-module program resolves with no false positives" =
-  validModulesRun
+  validModulesRun ()
 
 -- # A self-named newtype: the type imports, the ctor spelling stays out
 
@@ -964,15 +971,15 @@ selfNamedModules = [
   ("use_nt.mdk", "import nt.{NT}\n\nbuild : Int -> NT\nbuild x = NT x\n"),
 ]
 
-selfNamedScratch : <Exec, FileWrite> Result String String
-selfNamedScratch = match scratchDir
+selfNamedScratch : Unit -> <Exec, FileWrite> Result String String
+selfNamedScratch () = match scratchDir ()
   Err e => Err e
   Ok root =>
     let dir = "\{root}/newtype_self_named_ctor"
     map (() => dir) (mkdirAll dir)
 
-selfNamedRun : <Exec, FileWrite, IO> Expectation
-selfNamedRun = match selfNamedScratch
+selfNamedRun : Unit -> <Exec, FileWrite, IO> Expectation
+selfNamedRun () = match selfNamedScratch ()
   Err e => fail "could not make a scratch directory: \{e}"
   Ok dir => match writeAll dir selfNamedModules
     Err e => fail "could not write the probe modules: \{e}"
@@ -982,14 +989,14 @@ selfNamedRun = match selfNamedScratch
       -- (`expectSpawnFailsAll`'s contract) still finds the needle.
       let result =
         expectSpawnFailsAll
-          medakaBin
+          (medakaBin ())
           ["check", "\{dir}/use_nt.mdk"]
           ["unbound variable `NT`"]
       let _ = cleanupScratchBestEffort dir
       result
 
 test "a self-named newtype imports as a type and its ctor spelling stays unbound" =
-  selfNamedRun
+  selfNamedRun ()
 
 -- # parse_main — the panicking rejection path
 
@@ -998,9 +1005,9 @@ test "a self-named newtype imports as a type and its ctor spelling stays unbound
    table (see the module header): `parse_main`'s pass condition is a NON-zero
    exit, the reverse of every `Row`'s `processFailure`, and its graded value
    is normalized STDERR rather than stdout. -}
-parseErrorFixtures : <FileRead, IO> Result String (List String)
-parseErrorFixtures =
-  let dir = "\{medakaRoot}/test/parse_error_fixtures"
+parseErrorFixtures : Unit -> <FileRead, IO> Result String (List String)
+parseErrorFixtures () =
+  let dir = "\{medakaRoot ()}/test/parse_error_fixtures"
   match fixtureFiles dir
     Err e => Err e
     Ok paths =>
@@ -1053,7 +1060,7 @@ parseErrorVerdict path =
     -- resolveLeg's corpus.
     Err e => Some "\{name}: no readable golden: \{e}"
     Ok golden =>
-      let oracle = "\{medakaRoot}/test/bin/parse_main"
+      let oracle = "\{medakaRoot ()}/test/bin/parse_main"
       match boundedVerb oracle [path]
         Err e => Some "\{name}: could not spawn \{oracle}: \{e}"
         Ok (code, _, err) =>
@@ -1066,8 +1073,8 @@ parseErrorVerdict path =
             else
               Some "\{name}: expected \{debug golden}, got \{debug got}"
 
-parseErrorsRun : <Exec, FileRead, IO> Expectation
-parseErrorsRun = match parseErrorFixtures
+parseErrorsRun : Unit -> <Exec, FileRead, IO> Expectation
+parseErrorsRun () = match parseErrorFixtures ()
   Err e => fail "test/parse_error_fixtures: \{e}"
   Ok paths =>
     let expected = 42
@@ -1081,7 +1088,7 @@ parseErrorsRun = match parseErrorFixtures
           "\{intToString (length fs)} of \{intToString (length paths)} fixtures failed:\n\{unlines fs}"
 
 test "parse_main rejects every malformed fixture with the expected message" =
-  parseErrorsRun
+  parseErrorsRun ()
 
 -- # parse_result_main — the non-panicking, structured-error path
 
@@ -1090,8 +1097,8 @@ test "parse_main rejects every malformed fixture with the expected message" =
    lexer) rejection and can therefore round-trip through `parseResult`.
    Derived, not hand-listed (#595: a hand-maintained list silently drifted).
    An empty result is an `Err`, never a silent pass over nothing. -}
-parseResultFixtures : <FileRead, IO> Result String (List String)
-parseResultFixtures = match parseErrorFixtures
+parseResultFixtures : Unit -> <FileRead, IO> Result String (List String)
+parseResultFixtures () = match parseErrorFixtures ()
   Err e => Err e
   Ok paths => derivedParseResultFixtures paths []
 
@@ -1170,7 +1177,7 @@ parseResultVerdict path = match oracleLocatedOrAbsent path
   Some m => Some m
   None =>
     let name = stem path
-    let oracle = "\{medakaRoot}/test/bin/parse_result_main"
+    let oracle = "\{medakaRoot ()}/test/bin/parse_result_main"
     match boundedVerb oracle [path]
       Err e => Some "\{name}: could not spawn \{oracle}: \{e}"
       Ok (code, out, err) =>
@@ -1196,8 +1203,8 @@ parseResultVerdict path = match oracleLocatedOrAbsent path
                 else
                   None
 
-parseResultRun : <Exec, FileRead, IO> Expectation
-parseResultRun = match parseResultFixtures
+parseResultRun : Unit -> <Exec, FileRead, IO> Expectation
+parseResultRun () = match parseResultFixtures ()
   Err e => fail "test/parse_error_fixtures: \{e}"
   Ok paths => match somes (map parseResultVerdict paths)
     [] => pass
@@ -1206,7 +1213,7 @@ parseResultRun = match parseResultFixtures
         "\{intToString (length fs)} of \{intToString (length paths)} fixtures failed:\n\{unlines fs}"
 
 test "parseResult reports a located parse error within the source, never a panic" =
-  parseResultRun
+  parseResultRun ()
 
 -- | A well-formed program's `main`-free body — sanity that `parseResult`
 -- returns `Ok` rather than only ever exercising the error arm.
@@ -1215,7 +1222,7 @@ validParseResultSrc = "f = 1\ng x = x + 1\n"
 
 parseResultValidProgramVerdict : String -> <Exec, IO> Option String
 parseResultValidProgramVerdict path =
-  let oracle = "\{medakaRoot}/test/bin/parse_result_main"
+  let oracle = "\{medakaRoot ()}/test/bin/parse_result_main"
   match boundedVerb oracle [path]
     Err e => Some "could not spawn \{oracle}: \{e}"
     Ok (code, out, _) =>
@@ -1226,15 +1233,15 @@ parseResultValidProgramVerdict path =
         Some
           "expected exit 0 reporting \"ok\", got exit \{intToString code} reporting \{debug got}"
 
-parseResultValidProgramScratch : <Exec, FileWrite> Result String String
-parseResultValidProgramScratch = match scratchDir
+parseResultValidProgramScratch : Unit -> <Exec, FileWrite> Result String String
+parseResultValidProgramScratch () = match scratchDir ()
   Err e => Err e
   Ok root =>
     let dir = "\{root}/parse_result_valid"
     map (() => dir) (mkdirAll dir)
 
-parseResultValidProgramRun : <Exec, FileWrite, IO> Expectation
-parseResultValidProgramRun = match parseResultValidProgramScratch
+parseResultValidProgramRun : Unit -> <Exec, FileWrite, IO> Expectation
+parseResultValidProgramRun () = match parseResultValidProgramScratch ()
   Err e => fail "could not make a scratch directory: \{e}"
   Ok dir =>
     let path = "\{dir}/valid.mdk"
@@ -1247,7 +1254,7 @@ parseResultValidProgramRun = match parseResultValidProgramScratch
           None => pass
           Some m => fail m
 
-test "parseResult accepts a well-formed program" = parseResultValidProgramRun
+test "parseResult accepts a well-formed program" = parseResultValidProgramRun ()
 
 -- # `run` with a path that names no file
 
@@ -1257,7 +1264,7 @@ runInDir : String -> String -> <Exec, IO> Result String (Int, String, String)
 runInDir dir target = runVerb "sh" [
   "-c",
   "bin=$(cd \"$(dirname \"$0\")\" && pwd)/$(basename \"$0\"); cd \"$1\" && exec \"$bin\" run \"$2\"",
-  medakaBin,
+  medakaBin (),
   dir,
   target,
 ]
@@ -1265,7 +1272,7 @@ runInDir dir target = runVerb "sh" [
 runScratch : String ->
   List (String, String) ->
   <Exec, FileWrite> Result String String
-runScratch name files = match scratchDir
+runScratch name files = match scratchDir ()
   Err e => Err e
   Ok root => populate "\{root}/\{name}" files
 
@@ -1363,8 +1370,8 @@ cleanupScratchBestEffort dir =
   let _ = runVerb "rm" ["-rf", dir]
   ()
 
-stringEofRun : <Exec, FileWrite, IO> Expectation
-stringEofRun = match scratchDir
+stringEofRun : Unit -> <Exec, FileWrite, IO> Expectation
+stringEofRun () = match scratchDir ()
   Err e => fail "could not make scratch directory: \{e}"
   Ok dir => match writeAll dir stringEofCases
     Err e => fail "could not write string EOF cases: \{e}"
@@ -1376,7 +1383,7 @@ stringEofRun = match scratchDir
               map
                 ((verb, args) => (
                   name ++ verb,
-                  expectSpawnFailsAll medakaBin (verb
+                  expectSpawnFailsAll (medakaBin ()) (verb
                     :: args ++ ["\{dir}/\{name}"]) [
                     "unterminated string literal",
                   ],
@@ -1386,10 +1393,10 @@ stringEofRun = match scratchDir
       let _ = cleanupScratchBestEffort dir
       result
 
-test "unterminated string EOF fails strict CLI verbs" = stringEofRun
+test "unterminated string EOF fails strict CLI verbs" = stringEofRun ()
 
-recoveryStrictRun : <Exec, FileWrite, IO> Expectation
-recoveryStrictRun = match scratchDir
+recoveryStrictRun : Unit -> <Exec, FileWrite, IO> Expectation
+recoveryStrictRun () = match scratchDir ()
   Err e => fail "could not make scratch directory: \{e}"
   Ok dir =>
     let _ = runVerb "mkdir" ["-p", dir]
@@ -1402,7 +1409,7 @@ recoveryStrictRun = match scratchDir
               (verb => (
                 verb,
                 expectSpawnFailsAll
-                  medakaBin
+                  (medakaBin ())
                   [verb, "\{dir}/broken.mdk"]
                   ["expected an expression"],
               ))
@@ -1410,4 +1417,5 @@ recoveryStrictRun = match scratchDir
         let _ = cleanupScratchBestEffort dir
         result
 
-test "recovered declarations never enter strict CLI verbs" = recoveryStrictRun
+test "recovered declarations never enter strict CLI verbs" =
+  recoveryStrictRun ()

@@ -19,8 +19,8 @@ import test.{
 
 -- # Shared helpers (the continuation sections reuse these)
 
-fixDir : <IO> String
-fixDir = underRoot "test/ffi_fixtures"
+fixDir : Unit -> <IO> String
+fixDir () = underRoot "test/ffi_fixtures"
 
 -- The stdout of ffi_abi_probe, hand-computed from its C source (see the
 -- fixture's header). Not captured from a run.
@@ -32,12 +32,12 @@ medakaEnv : List String ->
   List String ->
   <Exec, IO> Result String (Int, String, String)
 medakaEnv envs args =
-  match boundedInTree 600 "env" (envs ++ [medakaBin] ++ args)
+  match boundedInTree 600 "env" (envs ++ [medakaBin ()] ++ args)
     Err e => Err e
     Ok (code, out, err) =>
       if code == 127 then
         Err
-          "`env` could not run \{medakaBin} (exit 127): a missing binary would read as a failed build\n\{err}"
+          "`env` could not run \{medakaBin ()} (exit 127): a missing binary would read as a failed build\n\{err}"
       else
         Ok (code, out, err)
 
@@ -70,7 +70,7 @@ buildCombined w = do
     (boundedVerb "clang" [
       "-O2",
       "-c",
-      "\{fixDir}/ffi_abi_probe.c",
+      "\{fixDir ()}/ffi_abi_probe.c",
       "-o",
       "\{w}/probe.o",
     ])
@@ -94,7 +94,7 @@ cell1 w combined = graded (okOutput
     ["MEDAKA_RT_OBJ=\{combined}"]
     [
       "build",
-      "\{fixDir}/ffi_abi_probe.mdk",
+      "\{fixDir ()}/ffi_abi_probe.mdk",
       "-o",
       "\{w}/probe.bin",
     ])) (_ => graded (okOutput
@@ -137,7 +137,7 @@ manifestWithLibrary =
 linkProject : String -> <Exec, IO, FileRead, FileWrite> Result String String
 linkProject p = do
   _ <- mkdirAll "\{p}/vendor"
-  src <- readFile "\{fixDir}/ffi_abi_probe.mdk"
+  src <- readFile "\{fixDir ()}/ffi_abi_probe.mdk"
   _ <- writeFile "\{p}/main.mdk" src
   _ <- writeFile "\{p}/medaka.toml" manifestWithLibrary
   Ok "\{p}/main.mdk"
@@ -148,7 +148,7 @@ cell3 w = graded (linkProject "\{w}/proj") (mainPath => graded (okOutput
   (boundedVerb "clang" [
     "-O2",
     "-c",
-    "\{fixDir}/ffi_abi_probe.c",
+    "\{fixDir ()}/ffi_abi_probe.c",
     "-o",
     "\{w}/probe_lib.o",
   ])) (_ => graded (okOutput
@@ -179,7 +179,7 @@ absentManifest =
 absentProject : String -> <Exec, IO, FileRead, FileWrite> Result String String
 absentProject b = do
   _ <- mkdirAll b
-  src <- readFile "\{fixDir}/ffi_abi_probe.mdk"
+  src <- readFile "\{fixDir ()}/ffi_abi_probe.mdk"
   _ <- writeFile "\{b}/main.mdk" src
   _ <- writeFile "\{b}/medaka.toml" absentManifest
   Ok "\{b}/main.mdk"
@@ -215,7 +215,7 @@ test "diff_compiler_llvm_ffi cells 1-4: crossable shapes, builtin-name exemption
   ]))
 
 test "diff_compiler_llvm_ffi fixture corpus: the ffi_fixtures directory is still enumerated" =
-  match fixtureFiles fixDir
+  match fixtureFiles (fixDir ())
     Err e => fail "could not list the fixture directory: \{e}"
     Ok files => expectAtLeast 1 (length (filter (endsWith ".mdk") files))
 
@@ -933,8 +933,8 @@ rawConstantRun w emitter libraries (name, source, expected) = graded (writeFile
     expectEqualText "" err,
   ]))))
 
-constantGcFlags : <Exec, IO> Result String (List String)
-constantGcFlags = match boundedVerb "pkg-config" ["--libs", "bdw-gc"]
+constantGcFlags : Unit -> <Exec, IO> Result String (List String)
+constantGcFlags () = match boundedVerb "pkg-config" ["--libs", "bdw-gc"]
   Ok (0, out, _) => Ok (words out)
   _ => match boundedVerb "brew" ["--prefix", "bdw-gc"]
     Ok (0, out, _) => Ok ["-L" ++ trimRight out ++ "/lib", "-lgc"]
@@ -999,7 +999,7 @@ test "raw constant globals and lexical shadows win; unshadowed builtins retain t
         "build",
         "--emit-rt-obj",
         "\{w}/rt.o",
-      ])) (_ => graded constantGcFlags (flags =>
+      ])) (_ => graded (constantGcFlags ()) (flags =>
     expectEach
       (map
         ((name, source, expected) => (

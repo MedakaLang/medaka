@@ -32,9 +32,9 @@ typechecker or make dictionary selection depend on effects.
 Inference computes a value type and an immediate evaluation effect. Function
 arrows carry latent effects; indexed containers carry deferred effects. A binding
 also records whether looking it up forces a computation. Strict local variables
-and function values cost nothing to look up. A lazy top-level value incurs its
-initializer's effect at every potential force, even if a runtime implementation
-memoizes it. A capability is a may-effect, not an execution count. This closes the
+and function values cost nothing to look up. A top-level value is initialised once
+at startup and must have an empty effect row (language-design I2), so looking one
+up costs nothing either; an effectful initialiser is a function. A capability is a may-effect, not an execution count. This closes the
 representation gap behind #3328 without changing evaluation order.
 
 Three variable sorts remain distinct:

@@ -1,5 +1,9 @@
--- An unreferenced top-level value with an effect never runs, including when
--- the prelude is linked as a separate object and source DCE is off.
+-- Since top-level initialisation rule I2, `medaka check`, `run` and `build` refuse this
+-- program with T-TOPLEVEL-EFFECT before any engine runs: `side` is a top-level value
+-- whose initialiser performs <Stdout> (test/rejection_parity_fixtures.txt pins that on
+-- native and wasm). The prelude-free llvm probe runs no typechecker, so it still emits
+-- the program with `side` unreferenced and never run, and keeps the "ok" golden,
+-- including when the prelude is linked as a separate object and source DCE is off.
 main = putStrLn "ok"
 
 side = putStrLn "BOOM"

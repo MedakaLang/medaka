@@ -62,17 +62,18 @@ import list.{reverse}
 probe : String ->
   List String ->
   <Exec, IO, FileRead, FileWrite> (Int, String, String)
-probe dir argv =
-  match (boundedVerb
-    "sh"
-    ([
-        "-c",
-        "cd \"$1\" && shift && export MEDAKA_STRICT=1 && exec \"$@\" </dev/null",
-        "medaka", dir, medakaBin
-      ]
-      ++ argv))
-    Err e => (-1, "", "spawn failed: \{e}")
-    Ok r => r
+probe dir argv = match (boundedVerb
+  "sh"
+  ([
+      "-c",
+      "cd \"$1\" && shift && export MEDAKA_STRICT=1 && exec \"$@\" </dev/null",
+      "medaka",
+      dir,
+      medakaBin (),
+    ]
+    ++ argv))
+  Err e => (-1, "", "spawn failed: \{e}")
+  Ok r => r
 
 outOf : String -> List String -> <Exec, IO, FileRead, FileWrite> String
 outOf dir argv = match probe dir argv

@@ -64,7 +64,7 @@ corpus = "test/cross_project_fixtures"
 -- ~7 independent `strip_paths`/`strip_unit` variants in the tree, not
 -- consolidated here.
 stripRootPaths : String -> <IO> String
-stripRootPaths s = replaceAll medakaRoot "<ROOT>" s
+stripRootPaths s = replaceAll (medakaRoot ()) "<ROOT>" s
 
 -- | `expectGolden`, with both sides chomped of trailing newlines first.
 --
@@ -93,15 +93,13 @@ checkOrRunGolden verb entry goldenPath = match runMedaka [verb, entry]
     else
       compareGolden goldenPath (stripRootPaths out)
 
--- | `test_process.scratchDir` is a top-level nullary, so it is evaluated
--- ONCE per process, and both builds this module makes (one per corpus) are
--- handed the same root. `binName` keeps the two binaries apart inside that
--- root. Nothing in this module removes the root.
+-- | Each call makes its own root with `scratchDir ()`, and `binName` names
+-- the binary inside it. Nothing in this module removes the root.
 buildAndRunGolden : String ->
   String ->
   String ->
   <Exec, FileRead, IO> Expectation
-buildAndRunGolden binName entry goldenPath = match scratchDir
+buildAndRunGolden binName entry goldenPath = match scratchDir ()
   Err e => fail "could not make a scratch directory: \{e}"
   Ok scratch =>
     let outBin = "\{scratch}/\{binName}"
@@ -183,15 +181,15 @@ evalProbeScript = "cd \"$1\" && exec \"$2\" test \"$3\" 2>&1"
 relativeProbeRun : String -> <Exec, IO> Result String (Int, String)
 relativeProbeRun script =
   let args = [
-    "MEDAKA_ROOT=\{medakaRoot}",
-    "MEDAKA_EMITTER=\{emitterBin}",
+    "MEDAKA_ROOT=\{medakaRoot ()}",
+    "MEDAKA_EMITTER=\{emitterBin ()}",
     "MEDAKA_STRICT=1",
     "sh",
     "-c",
     script,
     "sh",
-    medakaRoot,
-    medakaBin,
+    medakaRoot (),
+    medakaBin (),
     probeRelPath,
   ]
   map

@@ -190,10 +190,10 @@ split        : Regex -> String -> List String
 
 Notes:
 
-- **`mustCompile` and lazy top-level bindings.** Top-level nullary bindings
-  are lazy and evaluated once, so `isoRe = mustCompile "^(\\d{4})-…"` is the
+- **`mustCompile` and top-level bindings.** Top-level nullary bindings
+  are initialised once, at startup, so `isoRe = mustCompile "^(\\d{4})-…"` is the
   compile-once constant every migration site wants, with no new syntax. A
-  bad literal panics on first use, which is the same contract as Go's
+  bad literal panics at startup (I5), which is the same contract as Go's
   `MustCompile`. Panics are not catchable by design; a pattern that comes
   from data must go through `compile`.
 - **Byte subjects.** Half of the strongest sites outside the compiler
@@ -363,8 +363,8 @@ genuine gap.
 
 1. **The two things a literal buys are already available.** A literal
    syntax gives (a) a compile-once constant and (b) compile-time validation
-   of the pattern. Lazy top-level nullary bindings already give (a): a
-   `mustCompile` binding at top level runs once on first use. For (b), the
+   of the pattern. Top-level nullary bindings already give (a): a
+   `mustCompile` binding at top level runs once, at startup. For (b), the
    pattern parser is pure Medaka, so `medaka lint` can run it on any string
    literal passed directly to `compile` or `mustCompile` and report a
    located error without a type environment (lint runs on the raw AST and

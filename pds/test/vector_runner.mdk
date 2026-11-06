@@ -210,17 +210,17 @@ spawn secs envs cmd args = boundedVerbSeconds secs "env" (envs ++ (cmd :: args))
    of a parity row share one compiler tree, so asserting freshness on each
    of them is consistent rather than self-contradictory. -}
 export
-medakaEnv : <IO> List String
-medakaEnv = [
-  "MEDAKA_ROOT=\{medakaRoot}",
-  "MEDAKA_EMITTER=\{medakaRoot}/medaka_emitter",
+medakaEnv : Unit -> <IO> List String
+medakaEnv () = [
+  "MEDAKA_ROOT=\{medakaRoot ()}",
+  "MEDAKA_EMITTER=\{medakaRoot ()}/medaka_emitter",
   "MEDAKA_STRICT=1",
 ]
 
 -- `medakaEnv` plus the Wasm emitter, which only a `--target wasm` build reads.
 export
-wasmBuildEnv : <IO> List String
-wasmBuildEnv = medakaEnv ++ ["MEDAKA_WASM_EMITTER=\{wasmEmitter}"]
+wasmBuildEnv : Unit -> <IO> List String
+wasmBuildEnv () = medakaEnv () ++ ["MEDAKA_WASM_EMITTER=\{wasmEmitter ()}"]
 
 -- Whether `name` resolves to something runnable. A missing command makes
 -- `env` exit 127 without running anything, which is the one code that
@@ -425,7 +425,7 @@ runArm : Row ->
   <Exec, FileRead, IO> ArmResult
 runArm r corpusPaths scratch extraNeeds a =
   let label = "\{r.gate} \{engineLabel a.engine}"
-  let driver = "\{medakaRoot}/\{r.driver}"
+  let driver = "\{medakaRoot ()}/\{r.driver}"
   match armStdout r a label driver corpusPaths scratch
     (out, []) => ArmResult {
       label = label,
@@ -459,7 +459,10 @@ evalStdout : Arm ->
   <Exec, IO> (String, List String)
 evalStdout a label driver corpusPaths =
   let args = ["run", driver] ++ a.driverArgs ++ corpusPaths
-  spawnFindings label "medaka run" (spawn runSeconds medakaEnv medakaBin args)
+  spawnFindings
+    label
+    "medaka run"
+    (spawn runSeconds (medakaEnv ()) (medakaBin ()) args)
 
 nativeStdout : Row ->
   Arm ->
@@ -488,16 +491,18 @@ buildNative label driver bin =
     (spawnFindings
       label
       "medaka build"
-      (spawn buildSeconds medakaEnv medakaBin ["build", driver, "-o", bin]))
+      (spawn buildSeconds (medakaEnv ()) (medakaBin ()) [
+        "build", driver, "-o", bin
+      ]))
 
 {- | `buildNative` for every `(label, driver, bin)` row, the builds run side
-   by side (at most `testJobs` at once). The findings are those of each
+   by side (at most `testJobs ()` at once). The findings are those of each
    `buildNative` in row order. The rows must write distinct `bin` paths. -}
 export
 buildNativeBatch : List (String, String, String) -> <Exec, IO> List String
 buildNativeBatch rows =
-  let envs = medakaEnv
-  let bin = medakaBin
+  let envs = medakaEnv ()
+  let bin = medakaBin ()
   let spawned =
     spawnBatch
       (map
@@ -525,7 +530,7 @@ wasmStdout r a label driver corpusPaths scratch =
     spawnFindings
       label
       "medaka build --target wasm"
-      (spawn buildSeconds wasmBuildEnv medakaBin args)
+      (spawn buildSeconds (wasmBuildEnv ()) (medakaBin ()) args)
   match built
     (_, []) =>
       spawnFindings
@@ -541,13 +546,15 @@ runWasm : Int ->
   List String ->
   <Exec, IO> Result String (Int, String, String)
 runWasm secs wasm args =
-  spawn secs [mdkArgs args] "node" ["\{medakaRoot}/test/wasm/run.js", wasm]
+  spawn secs [mdkArgs args] "node" ["\{medakaRoot ()}/test/wasm/run.js", wasm]
 
 -- The Wasm emitter this host would use. It is not built by `make medaka`, so
 -- `wasmUnavailable` grades its presence rather than assuming it.
-wasmEmitter : <IO> String
-wasmEmitter =
-  getEnvOr "MEDAKA_WASM_EMITTER" "\{medakaRoot}/test/bin/wasm_emit_modules_main"
+wasmEmitter : Unit -> <IO> String
+wasmEmitter () =
+  getEnvOr
+    "MEDAKA_WASM_EMITTER"
+    "\{medakaRoot ()}/test/bin/wasm_emit_modules_main"
 
 -- The Wasm runner takes the program's argument vector as one environment
 -- variable, space-separated. A corpus path holding a space would arrive as
@@ -564,10 +571,10 @@ spaceStr = " "
    The three prerequisites are the ones the retired script checked, in the
    same order. Each absence is named, so the finding says what to install or
    build rather than only that the arm did not run. -}
-wasmUnavailable : <Exec, FileRead, IO> Option String
-wasmUnavailable =
-  if not (fileExists wasmEmitter) then
-    Some "the Wasm emitter \{wasmEmitter} is not built"
+wasmUnavailable : Unit -> <Exec, FileRead, IO> Option String
+wasmUnavailable () =
+  if not (fileExists (wasmEmitter ())) then
+    Some "the Wasm emitter \{wasmEmitter ()} is not built"
   else if not (commandPresent "node") then
     Some "node is not installed"
   else if not (commandPresent "wasm-tools") then
@@ -592,7 +599,7 @@ oneArm : Row ->
 oneArm r corpusPaths scratch extraNeeds a =
   let label = "\{r.gate} \{engineLabel a.engine}"
   match a.engine
-    WasmEngine => match wasmUnavailable
+    WasmEngine => match wasmUnavailable ()
       None => runArm r corpusPaths scratch extraNeeds a
       Some why => failedArm label ["\{label}: Wasm is required but \{why}"]
     _ => runArm r corpusPaths scratch extraNeeds a
@@ -745,14 +752,14 @@ runOracle r o scratch corpusPaths =
    engine pair. -}
 gradeRow : Row -> <Exec, FileRead, FileWrite, IO> List String
 gradeRow r =
-  let shapeFindings = sourceShapeFindings medakaRoot r.sourceShapes
+  let shapeFindings = sourceShapeFindings (medakaRoot ()) r.sourceShapes
   match shapeFindings
     _ :: _ => shapeFindings
-    [] => match corpusPathsOf medakaRoot r.corpus
+    [] => match corpusPathsOf (medakaRoot ()) r.corpus
       Err e => ["\{r.gate}: \{e}"]
       Ok rels => match boundFinding r.corpusCount (length rels)
         Some m => ["\{r.gate}: \{m}"]
-        None => runRow r (map (p => "\{medakaRoot}/\{p}") rels)
+        None => runRow r (map (p => "\{medakaRoot ()}/\{p}") rels)
 
 runRow : Row -> List String -> <Exec, FileRead, FileWrite, IO> List String
 runRow r corpusPaths = match freshScratch ()
@@ -774,9 +781,9 @@ armFindings (a :: rest) = a.findings ++ armFindings rest
 {- | A directory nothing else holds, for one row or one check to write in.
    The caller removes it with `reap`.
 
-   Not `test_process.scratchDir`: that is a top-level value, which a native
-   test process computes once, so every read after the first returns the
-   directory an earlier row has already removed. -}
+   Not `test_process.scratchDir`: a binding that wraps it as a value is
+   computed once, so every read after the first returns the directory an
+   earlier row has already removed. -}
 export
 freshScratch : Unit -> <Exec> Result String String
 freshScratch _ = match spawn 60 [] "mktemp" ["-d"]
@@ -873,7 +880,7 @@ labelOf t m = "\{t.gate} (mutation \{m.name})"
 mutantText : MutationTest ->
   Mutation ->
   <FileRead, IO> Result (List String) String
-mutantText t m = match readFile "\{medakaRoot}/\{m.file}"
+mutantText t m = match readFile "\{medakaRoot ()}/\{m.file}"
   Err e => Err ["\{labelOf t m}: could not read \{m.file}: \{e}"]
   Ok original =>
     let anchors = countOccurrences m.anchor original
@@ -939,7 +946,7 @@ spawnBatch : List (Int, List String, String, List String) ->
 spawnBatch rows =
   runCommandBatch
     "perl"
-    testJobs
+    (testJobs ())
     (map ((secs, envs, cmd, args) => spawnArgv secs envs cmd args) rows)
 
 -- The `perl` arguments that `spawn secs envs cmd args` runs.
@@ -994,7 +1001,7 @@ unmodifiedFindings t tree pristine =
     (flatMap
       ((rel, text) => [
         unmodifiedFinding t "the scratch tree's copy" "\{tree}/\{rel}" rel text,
-        unmodifiedFinding t "the live copy" "\{medakaRoot}/\{rel}" rel text,
+        unmodifiedFinding t "the live copy" "\{medakaRoot ()}/\{rel}" rel text,
       ])
       pristine)
 
@@ -1017,20 +1024,20 @@ unmodifiedFinding t what path rel text = match readFile path
 
 pristineOf : List String -> <FileRead, IO> Result String (List (String, String))
 pristineOf [] = Ok []
-pristineOf (rel :: rest) = match readFile "\{medakaRoot}/\{rel}"
+pristineOf (rel :: rest) = match readFile "\{medakaRoot ()}/\{rel}"
   Err e => Err "could not read \{rel}: \{e}"
   Ok text => map ((rel, text) :: _) (pristineOf rest)
 
 {- | The findings against every mutation of `t`, in mutation order. Each
    mutation gets its own copy of the pristine tree `tree` (see
    `stageMutation`); the copies are staged one at a time, then all their
-   builds run `testJobs` at a time, then all their runs. -}
+   builds run `testJobs ()` at a time, then all their runs. -}
 mutationsFindings : MutationTest ->
   String ->
   <Exec, FileRead, FileWrite, IO> List String
 mutationsFindings t tree =
-  let bin = medakaBin
-  let envs = medakaEnv
+  let bin = medakaBin ()
+  let envs = medakaEnv ()
   let staged = map ((i, m) => stageMutation t tree i m) (indexed 0 t.mutations)
   let buildRows =
     map
@@ -1056,13 +1063,16 @@ mutationSelfTestFindings : MutationTest ->
 mutationSelfTestFindings t tree =
   match pristineOf (nub (map (m => m.file) t.mutations))
     Err e => ["\{t.gate}: \{e}"]
-    Ok pristine =>
-      match spawn runSeconds [] "cp" ["-R", "\{medakaRoot}/pds", "\{tree}/pds"]
-        Ok (0, _, _) =>
-          mutationsFindings t tree ++ unmodifiedFindings t tree pristine
-        Ok (code, _, err) =>
-          ["\{t.gate}: copying pds/ exited \{intToString code}: \{err}"]
-        Err e => ["\{t.gate}: could not copy pds/: \{e}"]
+    Ok pristine => match spawn runSeconds [] "cp" [
+      "-R",
+      "\{medakaRoot ()}/pds",
+      "\{tree}/pds",
+    ]
+      Ok (0, _, _) =>
+        mutationsFindings t tree ++ unmodifiedFindings t tree pristine
+      Ok (code, _, err) =>
+        ["\{t.gate}: copying pds/ exited \{intToString code}: \{err}"]
+      Err e => ["\{t.gate}: could not copy pds/: \{e}"]
 
 -- | The mutation self-test's verdict, for a `test "…"` block in its own
 -- module, in a scratch directory it makes and removes.

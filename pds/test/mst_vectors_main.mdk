@@ -191,8 +191,8 @@ accepts label (Err message) =
   let () = println "MST CONTROL \{label} FAIL rejected=\{message}"
   0
 
-runHostile : <IO> Int
-runHostile =
+runHostile : Unit -> <IO> Int
+runHostile () =
   let keyA =
     mustHex "6170702e62736b792e666565642e706f73742f7072656669782d612d31"
   let keyB =
@@ -301,8 +301,8 @@ runHostile =
       (mstValidateNodeBytes 1 True invalidTop),
   ]
 
-runControls : <IO> Int
-runControls =
+runControls : Unit -> <IO> Int
+runControls () =
   let rootLow = encodeUtf8 "app.bsky.feed.post/range-2"
   let rootHigh = encodeUtf8 "app.bsky.feed.post/range-3"
   let leftKey = encodeUtf8 "app.bsky.feed.post/range-1"
@@ -502,8 +502,8 @@ main = match args ()
       let (external, total) = runCorpus rows None 0 0
       let (proofs, proofTotal, narrower) =
         runProofCorpus proofRows None (0, 0, 0)
-      let hostile = runHostile
-      let controls = runControls
+      let hostile = runHostile ()
+      let controls = runControls ()
       let () =
         println
           "external: \{intToString external}/\{intToString total} official-reference cases"

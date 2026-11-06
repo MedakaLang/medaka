@@ -33,8 +33,8 @@ import json.{Json(..), jObject, jArray, stringify, parse, get, asString}
 import string.{split, endsWith, join, contains, repeat}
 import list.{reverse}
 
-corpus : <IO> String
-corpus = "\{medakaRoot}/test/mcp_fixtures"
+corpus : Unit -> <IO> String
+corpus () = "\{medakaRoot ()}/test/mcp_fixtures"
 
 -- Positional args: $1 repo root (cwd and MEDAKA_ROOT), $2 binary, $3 stdin
 -- source, $4 MEDAKA_MCP_LOG path ("" = unset); the rest are argv for `mcp`.
@@ -51,7 +51,8 @@ mcpRun secs input logPath args =
   boundedVerbSeconds
     secs
     "sh"
-    (["-c", mcpScript, "sh", medakaRoot, medakaBin, input, logPath] ++ args)
+    (["-c", mcpScript, "sh", medakaRoot (), medakaBin (), input, logPath]
+      ++ args)
 
 -- #299: --help/-h print usage on stdout and exit 0 without reading the loop.
 usageRow : String -> List String -> <Exec, IO, FileRead> Expectation
@@ -81,23 +82,23 @@ test "mcp argv: --help/-h print usage and exit 0; bogus flags rejected on stderr
     ("--zzz", rejectRow "--zzz"),
   ]
 
-fixtureStems : <Exec, IO, FileRead> Result String (List String)
-fixtureStems =
+fixtureStems : Unit -> <Exec, IO, FileRead> Result String (List String)
+fixtureStems () =
   map
     (paths => map stem (filter (endsWith ".jsonl") paths))
-    (fixtureFiles corpus)
+    (fixtureFiles (corpus ()))
 
 fixtureRow : String -> <Exec, IO, FileRead> Expectation
-fixtureRow name = match mcpRun 30 "\{corpus}/\{name}.jsonl" "" []
+fixtureRow name = match mcpRun 30 "\{corpus ()}/\{name}.jsonl" "" []
   Err e => fail "\{name}: could not spawn: \{e}"
   Ok (code, out, _) =>
     if code /= 0 then
       fail "\{name}: medaka mcp exited \{intToString code}"
     else
-      expectGolden "\{corpus}/\{name}.golden" out
+      expectGolden "\{corpus ()}/\{name}.golden" out
 
 test "mcp fixtures: each request stream exits 0 and its stdout equals its golden" =
-  match fixtureStems
+  match fixtureStems ()
     Err e => fail "list fixtures: \{e}"
     Ok names => expectAll [
       expectAtLeast 32 (length names),
@@ -139,14 +140,14 @@ logRecordsCheck logfile = match readFile logfile
   Ok text => expectLogRecords (dropLastEmpty (split "\n" text))
 
 loggingRun : String -> <Exec, IO, FileRead> Expectation
-loggingRun logfile = match mcpRun 30 "\{corpus}/logging.jsonl" logfile []
+loggingRun logfile = match mcpRun 30 "\{corpus ()}/logging.jsonl" logfile []
   Err e => fail "logging-on(stdout): could not spawn: \{e}"
   Ok (code, out, _) =>
     if code /= 0 then
       fail "logging-on(stdout): medaka mcp exited \{intToString code}"
     else
       expectAll [
-        expectGolden "\{corpus}/logging.golden" out,
+        expectGolden "\{corpus ()}/logging.golden" out,
         logRecordsCheck logfile,
       ]
 
@@ -1036,53 +1037,57 @@ telemetryCase dir =
   let trace = "\{dir}/events"
   match writeFile input telemetryTranscript
     Err e => fail e
-    Ok _ =>
-      match (boundedVerbSeconds 30 "sh" [
-        "-c",
-        "MEDAKA_MCP_TRACE=\"$1\" MEDAKA_MCP_TRACE_SESSION=test MEDAKA_MCP_TRACE_CLASS=probe MEDAKA_ROOT=\"$2\" \"$3\" mcp < \"$4\"",
-        "sh", trace, medakaRoot, medakaBin, input
-      ])
-        Err e => fail e
-        Ok (code, out, _) =>
-          if code /= 0 then
-            fail "telemetry server failed"
-          else match readFile trace
-            Err e => fail e
-            Ok events => expectAll [
-              expectTextContainsAll
-                ["P-PARSE", "missing argument", "Method not found"]
-                out,
-              expectTextContainsAll
-                [
-                  "\"outcome\":\"success\"", "\"outcome\":\"tool_error\"",
-                  "\"outcome\":\"protocol_error\"",
-                  "\"event\":\"cancel_requested\"",
-                  "\"classification\":\"probe\""
-                ]
-                events,
-              expectEqual 3 (telemetryEventCount "start" events),
-              expectEqual 3 (telemetryEventCount "finish" events),
-              expectFalse (contains "main = 1" events),
-              expectFalse (contains "unknown_secret" events),
-              expectFalse (contains "\"cancelled\"" events),
-            ]
+    Ok _ => match boundedVerbSeconds 30 "sh" [
+      "-c",
+      "MEDAKA_MCP_TRACE=\"$1\" MEDAKA_MCP_TRACE_SESSION=test MEDAKA_MCP_TRACE_CLASS=probe MEDAKA_ROOT=\"$2\" \"$3\" mcp < \"$4\"",
+      "sh",
+      trace,
+      medakaRoot (),
+      medakaBin (),
+      input,
+    ]
+      Err e => fail e
+      Ok (code, out, _) =>
+        if code /= 0 then
+          fail "telemetry server failed"
+        else match readFile trace
+          Err e => fail e
+          Ok events => expectAll [
+            expectTextContainsAll
+              ["P-PARSE", "missing argument", "Method not found"]
+              out,
+            expectTextContainsAll
+              [
+                "\"outcome\":\"success\"", "\"outcome\":\"tool_error\"",
+                "\"outcome\":\"protocol_error\"",
+                "\"event\":\"cancel_requested\"", "\"classification\":\"probe\""
+              ]
+              events,
+            expectEqual 3 (telemetryEventCount "start" events),
+            expectEqual 3 (telemetryEventCount "finish" events),
+            expectFalse (contains "main = 1" events),
+            expectFalse (contains "unknown_secret" events),
+            expectFalse (contains "\"cancelled\"" events),
+          ]
 
 test "mcp telemetry records completion and cancellation requests without payloads" =
   withScratchDir telemetryCase
 
 wrapperDefaultCase : String -> <Exec, IO, FileRead> Expectation
-wrapperDefaultCase dir =
-  match (boundedVerbSeconds 30 "sh" [
-    "-c",
-    "ln -s \"$2\" \"$1/medaka\"; ln -s \"$3/stdlib\" \"$1/stdlib\"; unset MEDAKA_MCP_LOG; CLAUDE_PROJECT_DIR=\"$1\" \"$3/scripts/medaka-mcp-wrapper.sh\" < /dev/null; test ! -e \"$1/.medaka-mcp.log\"",
-    "sh", dir, medakaBin, medakaRoot
-  ])
-    Err e => fail e
-    Ok (code, _, err) =>
-      if code == 0 then
-        expectEqual False (contains "no built binary" err)
-      else
-        fail "wrapper failed or created a default log: \{err}"
+wrapperDefaultCase dir = match boundedVerbSeconds 30 "sh" [
+  "-c",
+  "ln -s \"$2\" \"$1/medaka\"; ln -s \"$3/stdlib\" \"$1/stdlib\"; unset MEDAKA_MCP_LOG; CLAUDE_PROJECT_DIR=\"$1\" \"$3/scripts/medaka-mcp-wrapper.sh\" < /dev/null; test ! -e \"$1/.medaka-mcp.log\"",
+  "sh",
+  dir,
+  medakaBin (),
+  medakaRoot (),
+]
+  Err e => fail e
+  Ok (code, _, err) =>
+    if code == 0 then
+      expectEqual False (contains "no built binary" err)
+    else
+      fail "wrapper failed or created a default log: \{err}"
 
 test "wrapper does not enable raw logging by default" =
   withScratchDir wrapperDefaultCase
@@ -1105,22 +1110,25 @@ interruptedCase dir =
   ]
   match writeFile input (stringify request ++ "\n")
     Err e => fail e
-    Ok _ =>
-      match (boundedVerbSeconds 30 "sh" [
-        "-c",
-        "MEDAKA_MCP_TRACE=\"$1\" MEDAKA_ROOT=\"$2\" \"$3\" mcp < \"$4\" > /dev/null 2>/dev/null & p=$!; i=0; while [ ! -s \"$1\" ] && kill -0 $p 2>/dev/null && [ $i -lt 500 ]; do i=$((i+1)); sleep .01; done; kill -9 $p 2>/dev/null || exit 1; wait $p 2>/dev/null; exit 0",
-        "sh", trace, medakaRoot, medakaBin, input
-      ])
-        Err e => fail e
-        Ok (code, _, err) =>
-          if code /= 0 then
-            fail "interruption failed: \{err}"
-          else match readFile trace
-            Err e => fail e
-            Ok events => expectAll [
-              expectTextContainsAll ["\"event\":\"start\""] events,
-              expectFalse (contains "\"event\":\"finish\"" events),
-            ]
+    Ok _ => match boundedVerbSeconds 30 "sh" [
+      "-c",
+      "MEDAKA_MCP_TRACE=\"$1\" MEDAKA_ROOT=\"$2\" \"$3\" mcp < \"$4\" > /dev/null 2>/dev/null & p=$!; i=0; while [ ! -s \"$1\" ] && kill -0 $p 2>/dev/null && [ $i -lt 500 ]; do i=$((i+1)); sleep .01; done; kill -9 $p 2>/dev/null || exit 1; wait $p 2>/dev/null; exit 0",
+      "sh",
+      trace,
+      medakaRoot (),
+      medakaBin (),
+      input,
+    ]
+      Err e => fail e
+      Ok (code, _, err) =>
+        if code /= 0 then
+          fail "interruption failed: \{err}"
+        else match readFile trace
+          Err e => fail e
+          Ok events => expectAll [
+            expectTextContainsAll ["\"event\":\"start\""] events,
+            expectFalse (contains "\"event\":\"finish\"" events),
+          ]
 
 test "interrupted call leaves an unmatched start" =
   withScratchDir interruptedCase
@@ -1162,8 +1170,8 @@ traceSafetyRow dir expected mode = match boundedVerbSeconds 30 "sh" [
   "-c",
   traceSafetyScript,
   "sh",
-  medakaRoot,
-  medakaBin,
+  medakaRoot (),
+  medakaBin (),
   "\{dir}/input",
   dir,
   mode,
@@ -1182,23 +1190,28 @@ test "trace files and stdout aliases preserve exact JSON-RPC frames" = withScrat
       "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"medaka_fmt\",\"arguments\":{\"source\":\"main=1\"}}}\n"
     match writeFile input (repeat 32 transcript)
       Err e => fail e
-      Ok _ =>
-        match (boundedVerbSeconds 30 "sh" [
-          "-c", traceSafetyScript, "sh", medakaRoot, medakaBin, input, dir,
-          "off"
-        ])
-          Err e => fail e
-          Ok (0, expected, err) => expectAll [
-            expectEqual "[mcp] medaka mcp server start\n" err,
-            expectEqual 32 (count (/= "") (split "\n" expected)),
-            expectTextContainsAll ["\"jsonrpc\":\"2.0\"", "\"id\":1"] expected,
-            expectEach
-              (map
-                (mode => (mode, traceSafetyRow dir expected mode))
-                [
-                  "file", "stdout", "hardlink", "symlink", "race",
-                  "missing-parent", "directory"
-                ]),
-          ]
-          Ok (code, _, err) =>
-            fail "trace off: exited \{intToString code}: \{err}")
+      Ok _ => match boundedVerbSeconds 30 "sh" [
+        "-c",
+        traceSafetyScript,
+        "sh",
+        medakaRoot (),
+        medakaBin (),
+        input,
+        dir,
+        "off",
+      ]
+        Err e => fail e
+        Ok (0, expected, err) => expectAll [
+          expectEqual "[mcp] medaka mcp server start\n" err,
+          expectEqual 32 (count (/= "") (split "\n" expected)),
+          expectTextContainsAll ["\"jsonrpc\":\"2.0\"", "\"id\":1"] expected,
+          expectEach
+            (map
+              (mode => (mode, traceSafetyRow dir expected mode))
+              [
+                "file", "stdout", "hardlink", "symlink", "race",
+                "missing-parent", "directory"
+              ]),
+        ]
+        Ok (code, _, err) =>
+          fail "trace off: exited \{intToString code}: \{err}")

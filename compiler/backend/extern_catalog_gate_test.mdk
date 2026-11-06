@@ -211,8 +211,8 @@ sliceFinding region (ext, key) =
       "`\{ext}` imports `\{key}`, which no SLICES keys list in playground/medaka_host.mjs names",
     ]
 
-hostText : <IO, FileRead> Result String String
-hostText = readFile (underRoot "playground/medaka_host.mjs")
+hostText : Unit -> <IO, FileRead> Result String String
+hostText () = readFile (underRoot "playground/medaka_host.mjs")
 
 test "every host key a wasm lowering calls has an import signature" =
   expectNoFindings
@@ -228,11 +228,11 @@ test "red: a host key with no import signature is named" =
 
 test "every host key a wasm lowering calls is in a host slice" = expectNoFindings
   "host key slices"
-  (match hostText
+  (match hostText ()
     Err e => Err "cannot read playground/medaka_host.mjs: \{e}"
     Ok src => Ok (sliceFindings src (hostKeyUses catalogRows)))
 
-test "red: a host key no slice lists is named" = match hostText
+test "red: a host key no slice lists is named" = match hostText ()
   Err e => expectEqual "read medaka_host.mjs" "failed: \{e}"
   Ok src =>
     expectEqual
@@ -432,11 +432,19 @@ domainFindings root runtimeSrc ledgerSrc =
 
 -- # Inputs
 
-runtimeText : <IO, FileRead> Result String String
-runtimeText = readFile (underRoot "stdlib/runtime.mdk")
+runtimeTextCell : Ref (Option (Result String String))
+runtimeTextCell = Ref None
 
-ledgerText : <IO, FileRead> Result String String
-ledgerText = readFile (underRoot "test/EXTERN-DOMAIN-LEDGER.txt")
+runtimeText : Unit -> <IO, FileRead> Result String String
+runtimeText () = match !runtimeTextCell
+  Some v => v
+  None =>
+    let v = readFile (underRoot "stdlib/runtime.mdk")
+    runtimeTextCell := Some v
+    v
+
+ledgerText : Unit -> <IO, FileRead> Result String String
+ledgerText () = readFile (underRoot "test/EXTERN-DOMAIN-LEDGER.txt")
 
 -- A row for an extern no backend lowers yet.
 unprovidedRow : String -> ExternRow
@@ -450,7 +458,7 @@ unprovidedRow n =
 -- # Catalog coverage
 
 test "every stdlib/runtime.mdk extern has a catalog row and no row is orphaned" =
-  match runtimeText
+  match runtimeText ()
     Err e => expectEqual "read runtime.mdk" "failed: \{e}"
     Ok src => expectAll [
       labelFail
@@ -461,19 +469,20 @@ test "every stdlib/runtime.mdk extern has a catalog row and no row is orphaned" 
         (Ok (coverageFindings src catalogRows)),
     ]
 
-test "red: an extern declared with no catalog row is named" = match runtimeText
-  Err e => expectEqual "read runtime.mdk" "failed: \{e}"
-  Ok src =>
-    expectEqual
-      [
-        "extern `zzNoRowExtern` is declared in runtime.mdk and has no catalog row",
-      ]
-      (coverageFindings
-        (src ++ "\nextern zzNoRowExtern : Int -> Int\n")
-        catalogRows)
+test "red: an extern declared with no catalog row is named" =
+  match runtimeText ()
+    Err e => expectEqual "read runtime.mdk" "failed: \{e}"
+    Ok src =>
+      expectEqual
+        [
+          "extern `zzNoRowExtern` is declared in runtime.mdk and has no catalog row",
+        ]
+        (coverageFindings
+          (src ++ "\nextern zzNoRowExtern : Int -> Int\n")
+          catalogRows)
 
 test "red: a row for an extern runtime.mdk does not declare is named" =
-  match runtimeText
+  match runtimeText ()
     Err e => expectEqual "read runtime.mdk" "failed: \{e}"
     Ok src =>
       expectEqual
@@ -481,7 +490,7 @@ test "red: a row for an extern runtime.mdk does not declare is named" =
         (coverageFindings src (catalogRows ++ [unprovidedRow "zzGhostExtern"]))
 
 test "green: a NotProvided row for a newly declared extern needs no other edit" =
-  match runtimeText
+  match runtimeText ()
     Err e => expectEqual "read runtime.mdk" "failed: \{e}"
     Ok src => expectAll [
       expectNoFindings
@@ -552,7 +561,7 @@ test "osEntropyBytes: wasm is an Inline row, not a gap" =
 -- # The domain ledger
 
 test "domain ledger: every pure extern has exactly one well-formed row" =
-  match (runtimeText, ledgerText)
+  match (runtimeText (), ledgerText ())
     (Ok src, Ok ledger) =>
       let pure = pureExterns src
       expectAll [
@@ -562,7 +571,7 @@ test "domain ledger: every pure extern has exactly one well-formed row" =
           (expectAtLeast 100 (length (ledgerRows ledger))),
         expectNoFindings
           "domain ledger"
-          (Ok (domainFindings medakaRoot src ledger)),
+          (Ok (domainFindings (medakaRoot ()) src ledger)),
       ]
     (Err e, _) => expectEqual "read runtime.mdk" "failed: \{e}"
     (_, Err e) => expectEqual "read EXTERN-DOMAIN-LEDGER.txt" "failed: \{e}"
@@ -574,7 +583,7 @@ domainRed : String ->
   String ->
   List String ->
   <IO, FileRead> Expectation
-domainRed label dropped extra expected = match (runtimeText, ledgerText)
+domainRed label dropped extra expected = match (runtimeText (), ledgerText ())
   (Ok src, Ok ledger) =>
     let kept =
       filter
@@ -584,7 +593,7 @@ domainRed label dropped extra expected = match (runtimeText, ledgerText)
       label
       (expectEqual
         expected
-        (domainFindings medakaRoot src "\{join "\n" kept}\n\{extra}\n"))
+        (domainFindings (medakaRoot ()) src "\{join "\n" kept}\n\{extra}\n"))
   (Err e, _) => expectEqual "read runtime.mdk" "failed: \{e}"
   (_, Err e) => expectEqual "read EXTERN-DOMAIN-LEDGER.txt" "failed: \{e}"
 
@@ -792,7 +801,7 @@ okOpt (Ok x) = Some x
 okOpt (Err _) = None
 
 test "profiles: the target check's predicate reads every granted gap cell on the profile's own column" =
-  match runtimeText
+  match runtimeText ()
     Err e => expectEqual "read runtime.mdk" "failed: \{e}"
     Ok src => expectAll [
       labelFail
@@ -827,7 +836,7 @@ test "red: a gap row under a granted label that the target check cannot see is n
 -- change.
 -- A passing run reports the owed rows as the actual value (`medaka test
 -- --json` carries it), so the list #3666 owes is visible while the ceiling holds.
-test "profiles: the owed ratchet rows are at most 32" = match runtimeText
+test "profiles: the owed ratchet rows are at most 32" = match runtimeText ()
   Err e => expectEqual "read runtime.mdk" "failed: \{e}"
   Ok src =>
     let owed =

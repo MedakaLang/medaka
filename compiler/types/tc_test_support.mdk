@@ -81,11 +81,23 @@ import types.tc_types.{
   ModuleMarking(..),
   OblProjection(..),
   Predicate(..),
+  PreludeMarkFacts(..),
   Provenance(..),
   StandaloneOrigin(..),
   TcEnv,
   UObligation(..),
   ValueScheme(..),
+}
+
+-- The mark sets of a graph with no prelude facts: the driver preamble a module check reads.
+export
+noPreludeFacts : PreludeMarkFacts
+noPreludeFacts = PreludeMarkFacts {
+  pmfReturnPos = [],
+  pmfMethodConstraints = [],
+  pmfArgDispatch = [],
+  pmfArgDispatchById = [],
+  pmfConstrainedNames = [],
 }
 
 -- The tag a route carries, as text: a route has no `Show`, and the tests compare these.

@@ -346,9 +346,9 @@ This costs nothing at runtime, because of two facts about how Medaka runs:
 - **On `build`**, the native path shells out to **clang `-O2`**, which constant-
   folds literal-operand arithmetic. `shiftLeft 1 56` becomes an immediate — there
   is no shift at runtime.
-- **On `run`**, the interpreter doesn't fold, but a **top-level binding is a lazy
-  nullary** (§ lazy-toplevel-nullary): it is evaluated **once** on first use and
-  cached, not recomputed per call.
+- **On `run`**, the interpreter doesn't fold, but a **top-level value is initialised
+  once, at startup** (language-design § Top-level initialisation), not recomputed
+  per call.
 
 The one rule that makes this safe: **the operands must be literals.** Folding
 applies to `shiftLeft 1 56`, not to `pow2 n` where `n` is a runtime parameter —

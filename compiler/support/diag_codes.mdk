@@ -150,6 +150,7 @@ public export data DiagCode =
   | TBindOutsideDo
   | TConflictingImpl
   | TCyclicSuperinterface
+  | TCyclicValue
   | TDiscardedValue
   | TDoNotMonad
   | TEffectArgUncovered
@@ -208,6 +209,7 @@ public export data DiagCode =
   | TTargetCapability
   | TTargetNoBinding
   | TTargetNotProvided
+  | TToplevelEffect
   | TTypeMismatch
   | TTypeTooGeneral
   | TUnbound
@@ -355,6 +357,7 @@ codeText TBangOnBool = "T-BANG-ON-BOOL"
 codeText TBindOutsideDo = "T-BIND-OUTSIDE-DO"
 codeText TConflictingImpl = "T-CONFLICTING-IMPL"
 codeText TCyclicSuperinterface = "T-CYCLIC-SUPERINTERFACE"
+codeText TCyclicValue = "T-CYCLIC-VALUE"
 codeText TDiscardedValue = "T-DISCARDED-VALUE"
 codeText TDoNotMonad = "T-DO-NOT-MONAD"
 codeText TEffectArgUncovered = "T-EFFECT-ARG-UNCOVERED"
@@ -413,6 +416,7 @@ codeText TSigOverExpansive = "T-SIG-OVER-EXPANSIVE"
 codeText TTargetCapability = "T-TARGET-CAPABILITY"
 codeText TTargetNoBinding = "T-TARGET-NO-BINDING"
 codeText TTargetNotProvided = "T-TARGET-NOT-PROVIDED"
+codeText TToplevelEffect = "T-TOPLEVEL-EFFECT"
 codeText TTypeMismatch = "T-TYPE-MISMATCH"
 codeText TTypeTooGeneral = "T-TYPE-TOO-GENERAL"
 codeText TUnbound = "T-UNBOUND"
@@ -491,26 +495,26 @@ allDiagCodes = [
   TAuthorityDomain, TAuthorityEscape, TAuthorityExistentialScope,
   TAuthorityIndexMismatch, TAuthorityKind, TAuthorityPattern,
   TAuthorityPhantomExport, TBangOnBool, TBindOutsideDo, TConflictingImpl,
-  TCyclicSuperinterface, TDiscardedValue, TDoNotMonad, TEffectArgUncovered,
-  TEffectIndexEager, TEffectIndexMismatch, TEffectKindMismatch, TEffectLaunder,
-  TEffectLeak, TEffectParam, TEffectParamVariance, TEffectUndetermined,
-  TExportUnsolvedAuthority, TFfiBuiltinBind, TFfiBuiltinShadow,
-  TFfiCatalogNarrow, TFfiCSymbol, TFfiDuplicateHost, TFfiJsName, TFfiNoHost,
-  TFfiNoncrossable, TFfiNullary, TFfiReservedName, TFfiUnboundHost,
-  TFfiUnknownHost, TFfiUnlabelled, TFieldNotInAllCtors, TFieldPositionDiffers,
-  TFieldTypeDiffers, TFileBoundValue, TImplKindMismatch, TImplMissingRequires,
-  TImplTooSpecific, TIncompleteImpl, TInfiniteType, TInternalOrdinal, TMainUsed,
-  TManifestEntry, TManifestInvalid, TManifestWrapper, TMethodMismatch,
-  TMissingConstraint, TMissingField, TMissingSuperImpl, TNoImpl,
-  TNonrecValueLet, TNotAFunction, TOrPatternBinderTypes, TOrPatternTooMany,
-  TPhantomMethod, TRecursiveAlias, TRequiresCycle, TRequiresDepth,
-  TRequiresUnrouted, TResidual, TSigOverExpansive, TTargetCapability,
-  TTargetNoBinding, TTargetNotProvided, TTypeMismatch, TTypeTooGeneral,
-  TUnbound, TUnknownCtor, TUnknownField, TUnknownRecord, TUnroutedDispatch,
-  TUpdateMultiCtor, TWrittenKindMismatch, WGuardInexhaustive,
-  WImportMethodShadow, WIncomparableImpls, WKeepIrFailed, WMainMissing,
-  WMainShape, WNonexhaustive, WNonexhaustiveClauses, WPreludeMethodShadow,
-  WUnreachableAlt, WUnreachableArm
+  TCyclicSuperinterface, TCyclicValue, TDiscardedValue, TDoNotMonad,
+  TEffectArgUncovered, TEffectIndexEager, TEffectIndexMismatch,
+  TEffectKindMismatch, TEffectLaunder, TEffectLeak, TEffectParam,
+  TEffectParamVariance, TEffectUndetermined, TExportUnsolvedAuthority,
+  TFfiBuiltinBind, TFfiBuiltinShadow, TFfiCatalogNarrow, TFfiCSymbol,
+  TFfiDuplicateHost, TFfiJsName, TFfiNoHost, TFfiNoncrossable, TFfiNullary,
+  TFfiReservedName, TFfiUnboundHost, TFfiUnknownHost, TFfiUnlabelled,
+  TFieldNotInAllCtors, TFieldPositionDiffers, TFieldTypeDiffers,
+  TFileBoundValue, TImplKindMismatch, TImplMissingRequires, TImplTooSpecific,
+  TIncompleteImpl, TInfiniteType, TInternalOrdinal, TMainUsed, TManifestEntry,
+  TManifestInvalid, TManifestWrapper, TMethodMismatch, TMissingConstraint,
+  TMissingField, TMissingSuperImpl, TNoImpl, TNonrecValueLet, TNotAFunction,
+  TOrPatternBinderTypes, TOrPatternTooMany, TPhantomMethod, TRecursiveAlias,
+  TRequiresCycle, TRequiresDepth, TRequiresUnrouted, TResidual,
+  TSigOverExpansive, TTargetCapability, TTargetNoBinding, TTargetNotProvided,
+  TToplevelEffect, TTypeMismatch, TTypeTooGeneral, TUnbound, TUnknownCtor,
+  TUnknownField, TUnknownRecord, TUnroutedDispatch, TUpdateMultiCtor,
+  TWrittenKindMismatch, WGuardInexhaustive, WImportMethodShadow,
+  WIncomparableImpls, WKeepIrFailed, WMainMissing, WMainShape, WNonexhaustive,
+  WNonexhaustiveClauses, WPreludeMethodShadow, WUnreachableAlt, WUnreachableArm
 ]
 
 -- The code whose text is [t], or `None` when [t] is no live code.

@@ -5,7 +5,7 @@ import string.{countOccurrences}
 test "persisted package identities execute on both targets" =
   match boundedVerbSeconds 300 "env" [
     "MEDAKA_STRICT=1",
-    medakaBin,
+    medakaBin (),
     "test",
     underRoot "compiler/backend/package_identity_sexp_test.mdk",
   ]

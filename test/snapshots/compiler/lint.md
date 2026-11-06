@@ -150,7 +150,7 @@ export
 indexForRules : List String -> <IO> Result String StdlibIndex
 indexForRules only =
   if stdlibIndexNeeded only []
-    || wildIndexNeeded only [] then match buildStdlibIndexResult
+    || wildIndexNeeded only [] then match buildStdlibIndexResult ()
     Ok idx => Ok idx
     Err _ => Err "cannot build the stdlib index"
   else
@@ -212,7 +212,7 @@ editFindings idx rules localMods path src (decls, pos) =
 (DTypeSig false "parseFailure" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "ParseError") (TyCon "String")))))
 (DFunDef false "parseFailure" ((PVar "src") (PVar "path") (PVar "e")) (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "src")) (EVar "path")) (EApp (EApp (EVar "parseErrDiag") (EVar "path")) (EVar "e"))))
 (DTypeSig true "indexForRules" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "StdlibIndex")))))
-(DFunDef false "indexForRules" ((PVar "only")) (EIf (EBinOp "||" (EApp (EApp (EVar "stdlibIndexNeeded") (EVar "only")) (EListLit)) (EApp (EApp (EVar "wildIndexNeeded") (EVar "only")) (EListLit))) (EMatch (EVar "buildStdlibIndexResult") (arm (PCon "Ok" (PVar "idx")) () (EApp (EVar "Ok") (EVar "idx"))) (arm (PCon "Err" PWild) () (EApp (EVar "Err") (ELit (LString "cannot build the stdlib index"))))) (EApp (EVar "Ok") (EVar "emptyStdlibIndex"))))
+(DFunDef false "indexForRules" ((PVar "only")) (EIf (EBinOp "||" (EApp (EApp (EVar "stdlibIndexNeeded") (EVar "only")) (EListLit)) (EApp (EApp (EVar "wildIndexNeeded") (EVar "only")) (EListLit))) (EMatch (EApp (EVar "buildStdlibIndexResult") (ELit LUnit)) (arm (PCon "Ok" (PVar "idx")) () (EApp (EVar "Ok") (EVar "idx"))) (arm (PCon "Err" PWild) () (EApp (EVar "Err") (ELit (LString "cannot build the stdlib index"))))) (EApp (EVar "Ok") (EVar "emptyStdlibIndex"))))
 (DTypeSig false "emitsEdits" (TyFun (TyCon "Rule") (TyCon "Bool")))
 (DFunDef false "emitsEdits" ((PVar "r")) (EMatch (EFieldAccess (EFieldAccess (EVar "r") "meta") "fixability") (arm (PCon "Fixable") () (EApp (EVar "isNone") (EFieldAccess (EVar "r") "fix"))) (arm (PCon "NotFixable") () (EVar "False")) (arm PWild () (EVar "True"))))
 (DTypeSig false "editLinter" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyCon "Rule")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Positions")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Finding")))))))))))
@@ -238,7 +238,7 @@ editFindings idx rules localMods path src (decls, pos) =
 (DTypeSig false "parseFailure" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "ParseError") (TyCon "String")))))
 (DFunDef false "parseFailure" ((PVar "src") (PVar "path") (PVar "e")) (EApp (EApp (EApp (EVar "ppDiagCliSrc") (EVar "src")) (EVar "path")) (EApp (EApp (EVar "parseErrDiag") (EVar "path")) (EVar "e"))))
 (DTypeSig true "indexForRules" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "StdlibIndex")))))
-(DFunDef false "indexForRules" ((PVar "only")) (EIf (EBinOp "||" (EApp (EApp (EVar "stdlibIndexNeeded") (EVar "only")) (EListLit)) (EApp (EApp (EVar "wildIndexNeeded") (EVar "only")) (EListLit))) (EMatch (EVar "buildStdlibIndexResult") (arm (PCon "Ok" (PVar "idx")) () (EApp (EVar "Ok") (EVar "idx"))) (arm (PCon "Err" PWild) () (EApp (EVar "Err") (ELit (LString "cannot build the stdlib index"))))) (EApp (EVar "Ok") (EVar "emptyStdlibIndex"))))
+(DFunDef false "indexForRules" ((PVar "only")) (EIf (EBinOp "||" (EApp (EApp (EVar "stdlibIndexNeeded") (EVar "only")) (EListLit)) (EApp (EApp (EVar "wildIndexNeeded") (EVar "only")) (EListLit))) (EMatch (EApp (EVar "buildStdlibIndexResult") (ELit LUnit)) (arm (PCon "Ok" (PVar "idx")) () (EApp (EVar "Ok") (EVar "idx"))) (arm (PCon "Err" PWild) () (EApp (EVar "Err") (ELit (LString "cannot build the stdlib index"))))) (EApp (EVar "Ok") (EVar "emptyStdlibIndex"))))
 (DTypeSig false "emitsEdits" (TyFun (TyCon "Rule") (TyCon "Bool")))
 (DFunDef false "emitsEdits" ((PVar "r")) (EMatch (EFieldAccess (EFieldAccess (EVar "r") "meta") "fixability") (arm (PCon "Fixable") () (EApp (EVar "isNone") (EFieldAccess (EVar "r") "fix"))) (arm (PCon "NotFixable") () (EVar "False")) (arm PWild () (EVar "True"))))
 (DTypeSig false "editLinter" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyCon "Rule")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Positions")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Finding")))))))))))

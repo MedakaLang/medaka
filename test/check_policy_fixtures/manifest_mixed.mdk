@@ -13,10 +13,10 @@
 writeOut : String -> <Stdout> Unit
 writeOut s = putStr s
 
-tick : <Clock> Float
-tick = wallTimeSec ()
+tick : Unit -> <Clock> Float
+tick () = wallTimeSec ()
 
 entry : String -> <Clock, Stdout> Unit
 entry s =
-  let _ = tick
+  let _ = tick ()
   writeOut s
