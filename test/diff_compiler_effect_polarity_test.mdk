@@ -70,8 +70,8 @@ checkArgv name = [
   "-c",
   "export MEDAKA_ROOT=\"$1\"; export MEDAKA_STRICT=1; exec \"$2\" check \"$3\"",
   "medaka",
-  medakaRoot,
-  medakaBin,
+  medakaRoot (),
+  medakaBin (),
   "\{corpus}/\{name}/main.mdk",
 ]
 

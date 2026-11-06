@@ -26,7 +26,7 @@ policyCase : String ->
   <Exec, IO, FileRead> Expectation
 policyCase label file allow fn stem =
   let mdk = underRoot file
-  match (boundedVerb medakaBin [
+  match (boundedVerb (medakaBin ()) [
     "check-policy", mdk, "--allow", allow, "--fn", fn
   ])
     Err e => fail "\{label}: could not spawn: \{e}"
@@ -50,7 +50,7 @@ paramCase : String ->
   Int ->
   String ->
   <Exec, IO> Expectation
-paramCase label file allow want sub = match boundedVerb medakaBin [
+paramCase label file allow want sub = match boundedVerb (medakaBin ()) [
   "check-policy",
   underRoot file,
   "--allow",
@@ -75,7 +75,7 @@ refuseCase : String ->
   String ->
   String ->
   <Exec, IO> Expectation
-refuseCase label file allow fn sub sub2 = match boundedVerb medakaBin [
+refuseCase label file allow fn sub sub2 = match boundedVerb (medakaBin ()) [
   "check-policy",
   underRoot file,
   "--allow",
@@ -367,7 +367,7 @@ test "diff_compiler_check_policy: fail-closed analysis and entry" = expectEach [
 -- Verdict first: the accepted line is printed before the sample run, so a
 -- panicking sample leaves `accepted.` on stdout, then panics, exit 1.
 test "diff_compiler_check_policy: evaluation panic keeps the verdict" =
-  match boundedVerb medakaBin [
+  match boundedVerb (medakaBin ()) [
     "check-policy",
     underRoot "test/check_policy_fixtures/panic_plugin.mdk",
     "--allow",
@@ -387,7 +387,7 @@ test "diff_compiler_check_policy: evaluation panic keeps the verdict" =
 
 -- The #2047 control flips only entry presence and must still accept.
 test "diff_compiler_check_policy: missing-entry control accepts" =
-  match boundedVerb medakaBin [
+  match boundedVerb (medakaBin ()) [
     "check-policy",
     underRoot "test/check_policy_fixtures/missing_entry_plugin.mdk",
     "--allow",
@@ -406,7 +406,7 @@ test "diff_compiler_check_policy: missing-entry control accepts" =
 -- `counter.mdk` is analysed with that subject's private names, a module beside
 -- it with the exported view.
 test "diff_compiler_check_policy: a test sibling sees its subject's private names" =
-  match boundedVerb medakaBin [
+  match boundedVerb (medakaBin ()) [
     "check-policy",
     underRoot "test/sibling_view_fixtures/counter_test.mdk",
     "--allow",

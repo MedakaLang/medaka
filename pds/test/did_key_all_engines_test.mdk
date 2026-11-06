@@ -113,7 +113,7 @@ mutationTest : MutationTest
 mutationTest = MutationTest {
   gate = gate,
   driver = driver,
-  args = ["\{medakaRoot}/\{corpusFile}"],
+  args = ["\{medakaRoot ()}/\{corpusFile}"],
   mutations = mutations,
 }
 

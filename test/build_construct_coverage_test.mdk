@@ -123,21 +123,24 @@ check dir = match fixtureFiles fixDir
   Ok entries =>
     let labels =
       sort (filter (/= "") (map stem (filter (endsWith ".mdk") entries)))
-    let medaka = medakaBin
+    let medaka = medakaBin ()
     let envs = [
-      "MEDAKA_ROOT=\{medakaRoot}",
-      "MEDAKA_EMITTER=\{medakaRoot}/medaka_emitter",
+      "MEDAKA_ROOT=\{medakaRoot ()}",
+      "MEDAKA_EMITTER=\{medakaRoot ()}/medaka_emitter",
     ]
     let allEnvs = envs ++ precompile envs medaka dir
     let builds =
       runCommandBatch
         "env"
-        testJobs
+        (testJobs ())
         (map
           (l => buildArgv allEnvs medaka "\{fixDir}/\{l}.mdk" (binOf dir l))
           labels)
     let runs =
-      runCommandBatch "sh" testJobs (map (l => runArgv (binOf dir l)) labels)
+      runCommandBatch
+        "sh"
+        (testJobs ())
+        (map (l => runArgv (binOf dir l)) labels)
     let table = rows fixDir labels builds runs
     let failures = filter (/= "") table
     let what =

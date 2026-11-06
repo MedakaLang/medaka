@@ -69,7 +69,7 @@ present (Err _) = False
 withDoc : String ->
   (String -> <Exec, IO, FileRead> Expectation) ->
   <Exec, IO, FileRead> Expectation
-withDoc path k = match boundedVerb medakaBin ["doc", path]
+withDoc path k = match boundedVerb (medakaBin ()) ["doc", path]
   Err e => fail "could not spawn medaka doc on \{path}: \{e}"
   Ok (code, out, _) =>
     if code /= 0 then
@@ -80,13 +80,14 @@ withDoc path k = match boundedVerb medakaBin ["doc", path]
 -- ── single-file goldens ────────────────────────────────────────────────────
 
 singleRow : String -> <Exec, IO, FileRead> Expectation
-singleRow name = match boundedVerb medakaBin ["doc", "\{fixDir}/\{name}.mdk"]
-  Err e => fail "could not spawn medaka doc on \{name}: \{e}"
-  Ok (code, out, _) =>
-    if code /= 0 then
-      fail "\{name}: medaka doc exited \{intToString code}"
-    else
-      expectGolden "\{goldenDir}/\{name}.doc.golden" out
+singleRow name =
+  match boundedVerb (medakaBin ()) ["doc", "\{fixDir}/\{name}.mdk"]
+    Err e => fail "could not spawn medaka doc on \{name}: \{e}"
+    Ok (code, out, _) =>
+      if code /= 0 then
+        fail "\{name}: medaka doc exited \{intToString code}"
+      else
+        expectGolden "\{goldenDir}/\{name}.doc.golden" out
 
 test "medaka doc: every single-file fixture matches its golden" =
   match fixtureStems fixDir
@@ -106,7 +107,7 @@ mdkPaths = map (ps => L.filter (endsWith ".mdk") ps) (walkDir libFix)
 libPages : String -> <Exec, IO, FileRead> Result String String
 libPages tmp = do
   mdks <- mdkPaths
-  res <- boundedVerb medakaBin (["doc", "--out", tmp] ++ mdks)
+  res <- boundedVerb (medakaBin ()) (["doc", "--out", tmp] ++ mdks)
   libExit tmp res
 
 libExit : String -> (Int, String, String) -> Result String String
@@ -202,7 +203,7 @@ dupRun base = do
   _ <- mkdirAll "\{base}/out"
   _ <- writeFile "\{base}/a/samename.mdk" a
   _ <- writeFile "\{base}/b/samename.mdk" b
-  res <- boundedVerb medakaBin [
+  res <- boundedVerb (medakaBin ()) [
     "doc",
     "--out",
     "\{base}/out",
@@ -231,19 +232,21 @@ test "medaka doc: library mode refuses a duplicate module basename" = withScratc
 doctestAgree : <Exec, IO, FileRead> Expectation
 doctestAgree = withDoc
   "\{fixDir}/doctest_marker.mdk"
-  (out => match boundedVerb medakaBin ["test", "\{fixDir}/doctest_marker.mdk"]
-    Err e => fail "could not spawn medaka test on doctest_marker: \{e}"
-    Ok (code, testOut, _) =>
-      if code /= 0 then
-        fail "medaka test exited \{intToString code} on doctest_marker"
-      else
-        let fences = length (L.filter (== "```medaka") (lines out))
-        let ran = length (L.filter (l => startsWith "  ok  " l) (lines testOut))
-        if fences == 1 && ran == 1 then
-          pass
+  (out =>
+    match boundedVerb (medakaBin ()) ["test", "\{fixDir}/doctest_marker.mdk"]
+      Err e => fail "could not spawn medaka test on doctest_marker: \{e}"
+      Ok (code, testOut, _) =>
+        if code /= 0 then
+          fail "medaka test exited \{intToString code} on doctest_marker"
         else
-          fail
-            "rendered examples disagree with medaka test (\{intToString fences} fenced example(s), \{intToString ran} doctest(s) actually run)")
+          let fences = length (L.filter (== "```medaka") (lines out))
+          let ran =
+            length (L.filter (l => startsWith "  ok  " l) (lines testOut))
+          if fences == 1 && ran == 1 then
+            pass
+          else
+            fail
+              "rendered examples disagree with medaka test (\{intToString fences} fenced example(s), \{intToString ran} doctest(s) actually run)")
 
 test "medaka doc: rendered examples agree with medaka test and escape the decoy" = expectAll
   [
@@ -290,7 +293,7 @@ malformedDocIn dir =
   let path = "\{dir}/bad.mdk"
   match writeFile path "f x = = 1\n"
     Err e => fail "could not write malformed input: \{e}"
-    Ok () => match boundedVerb medakaBin ["doc", path]
+    Ok () => match boundedVerb (medakaBin ()) ["doc", path]
       Err e => fail "could not spawn medaka doc: \{e}"
       Ok (1, _, err) => expectAll [
         expectSatisfies

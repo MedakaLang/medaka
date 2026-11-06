@@ -33,16 +33,16 @@ harnessRun dir =
   let bin = "\{dir}/lsp_harness"
   let src = underRoot "compiler/entries/lsp_harness_main.mdk"
   let buildArgs = [
-    "MEDAKA_ROOT=\{medakaRoot}",
-    "MEDAKA_EMITTER=\{medakaRoot}/medaka_emitter",
-    medakaBin,
+    "MEDAKA_ROOT=\{medakaRoot ()}",
+    "MEDAKA_EMITTER=\{medakaRoot ()}/medaka_emitter",
+    medakaBin (),
     "build",
     "--allow-internal",
     src,
     "-o",
     bin,
   ]
-  let runArgs = ["MEDAKA=\{medakaBin}", "MEDAKA_ROOT=\{medakaRoot}", bin]
+  let runArgs = ["MEDAKA=\{medakaBin ()}", "MEDAKA_ROOT=\{medakaRoot ()}", bin]
   match boundedVerbSeconds 600 "env" buildArgs
     Err e => fail "could not spawn the harness build: \{e}"
     Ok (bcode, _, _) =>

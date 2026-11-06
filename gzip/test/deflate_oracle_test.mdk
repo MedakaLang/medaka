@@ -110,7 +110,7 @@ builds dir names =
   zipWith
     (name run => gradeBuild dir name run)
     names
-    (runCommandBatch "perl" testJobs argvs)
+    (runCommandBatch "perl" (testJobs ()) argvs)
 
 -- The argv `boundedVerbSeconds 600 "sh" [...]` runs for one build: that
 -- wrapper's `perl` alarm around `env sh`, then the `sh` script itself.
@@ -123,10 +123,10 @@ buildShArgs dir name = [
   "-c",
   "MEDAKA_EMITTER=\"$1\" MEDAKA_ROOT=\"$2\" exec \"$3\" build \"$4\" -o \"$5\"",
   "sh",
-  "\{medakaRoot}/medaka_emitter",
-  medakaRoot,
-  medakaBin,
-  "\{medakaRoot}/gzip/\{name}.mdk",
+  "\{medakaRoot ()}/medaka_emitter",
+  medakaRoot (),
+  medakaBin (),
+  "\{medakaRoot ()}/gzip/\{name}.mdk",
   "\{dir}/\{name}",
 ]
 
@@ -158,7 +158,7 @@ seedPlain dir = match boundedVerbSeconds 120 "sh" [
   "-c",
   "gunzip -c \"$1\" > \"$2\"",
   "sh",
-  "\{medakaRoot}/compiler/seed/emitter.ll.gz",
+  "\{medakaRoot ()}/compiler/seed/emitter.ll.gz",
   "\{dir}/seed_plain.bin",
 ]
   Err e => Err "could not gunzip the seed: \{e}"
@@ -181,7 +181,7 @@ realize dir slug (ByteIn n f) =
   thenPath
     (writeFileBytes "\{dir}/\{slug}.bin" (A.makeWith n f))
     "\{dir}/\{slug}.bin"
-realize _dir _slug (RealIn rel) = Ok "\{medakaRoot}/\{rel}"
+realize _dir _slug (RealIn rel) = Ok "\{medakaRoot ()}/\{rel}"
 realize dir _slug SeedGz = seedPlain dir
 
 -- Shared failure shape for a spawn: a spawn error, a nonzero exit, or the

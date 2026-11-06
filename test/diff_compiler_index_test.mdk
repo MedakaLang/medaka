@@ -29,15 +29,15 @@ import test.{
 }
 
 corpus : <IO> String
-corpus = "\{medakaRoot}/test/index_fixtures"
+corpus = "\{medakaRoot ()}/test/index_fixtures"
 
 goldenFor : String -> <IO> String
-goldenFor name = "\{medakaRoot}/test/index_goldens/\{name}.index.golden"
+goldenFor name = "\{medakaRoot ()}/test/index_goldens/\{name}.index.golden"
 
 -- The stdout of `medaka run --allow-internal` on one fixture, graded against
 -- its golden. A missing golden is a failure, reported by `expectGolden`.
 indexRow : String -> <Exec, IO, FileRead> Expectation
-indexRow name = match boundedVerb medakaBin [
+indexRow name = match boundedVerb (medakaBin ()) [
   "run",
   "--allow-internal",
   "\{corpus}/\{name}.mdk",

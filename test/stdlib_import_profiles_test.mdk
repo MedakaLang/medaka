@@ -5,7 +5,7 @@
    `IO` is the join of a profile's grants, so a module definition typed
    `<IO>` that performs a label the profile lacks fails the whole import.
    Each module is checked in its own `medaka check --target <profile>` child
-   over a generated one-line program; the children run `testJobs` at a time.
+   over a generated one-line program; the children run `testJobs ()` at a time.
 
    Runs under `medaka test --native`: it spawns subprocesses and writes
    scratch files. -}
@@ -73,7 +73,7 @@ sweep dir =
     boundedVerbsSeconds
       300
       (map
-        ((p, m) => (medakaBin, ["check", "--target", p, probeFile dir m]))
+        ((p, m) => (medakaBin (), ["check", "--target", p, probeFile dir m]))
         cells)
   writeErrs ++ flatMap (r => r) (zipWith verdict cells results)
 

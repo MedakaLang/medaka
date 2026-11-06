@@ -1516,7 +1516,8 @@ sessionTimeoutSeconds = 180
 drive : List Json -> <Exec, IO> (List String, String)
 drive msgs =
   let stream = join "" (map frame msgs)
-  let args = ["-c", "printf '%s' \"$1\" | \"$2\" lsp", "sh", stream, medakaBin]
+  let args =
+    ["-c", "printf '%s' \"$1\" | \"$2\" lsp", "sh", stream, medakaBin ()]
   match boundedInTree sessionTimeoutSeconds "sh" args
     Err e => (["could not spawn medaka lsp: \{e}"], "")
     Ok (code, out, err) =>
@@ -1941,7 +1942,7 @@ readOracle (Frames name) = match goldenText name
     Ok objs => Ok (objs, text)
 
 goldenText : String -> <FileRead, IO> Result String String
-goldenText name = match readFile "\{medakaRoot}/test/lsp_goldens/\{name}"
+goldenText name = match readFile "\{medakaRoot ()}/test/lsp_goldens/\{name}"
   Err e => Err "could not read test/lsp_goldens/\{name}: \{e}"
   Ok text => Ok text
 
@@ -1980,7 +1981,7 @@ warmSessionScript = "test/lsp_warm_session.sh"
    and a name in front of the list hides it. -}
 runWarmSession : <Exec, IO> Result String (Int, String, String)
 runWarmSession = boundedInTree sessionTimeoutSeconds "sh" [
-  "\{medakaRoot}/\{warmSessionScript}",
+  "\{medakaRoot ()}/\{warmSessionScript}",
 ]
 
 test "a warm multi-module session publishes what a cold check --json reports" =
@@ -2015,7 +2016,7 @@ toolTableEnd : String
 toolTableEnd = "# ── GOLDEN TABLE END"
 
 toolGoldens : <FileRead, IO> Result String (List String)
-toolGoldens = match readFile "\{medakaRoot}/test/lsp_bless.sh"
+toolGoldens = match readFile "\{medakaRoot ()}/test/lsp_bless.sh"
   Err e => Err "cannot read test/lsp_bless.sh: \{e}"
   Ok src => match between toolTableStart toolTableEnd (lines src)
     [] => Err "test/lsp_bless.sh has no GOLDEN TABLE block"

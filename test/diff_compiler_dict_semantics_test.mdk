@@ -86,7 +86,7 @@ import test_process.{
 -- directory: `medaka gate run` exports it and inherits whatever cwd the
 -- caller had.
 corpus : <IO> String
-corpus = "\{medakaRoot}/test/dict_fixtures"
+corpus = "\{medakaRoot ()}/test/dict_fixtures"
 
 {- | What a row asserts about the stdout of a fixture that runs.
 
@@ -6045,7 +6045,7 @@ hasCodes r = match r.codes
   _ => True
 
 {- | The `check --json` spawn for every row that asks for a code, keyed by
-   the entry path `gradeOne` looks it up under. The spawns go `testJobs` at
+   the entry path `gradeOne` looks it up under. The spawns go `testJobs ()` at
    a time, and each one's result is what `runMedaka` returns for it. A row
    with no code assertion spawns nothing. -}
 codeOutputs : List Row -> <Exec, IO> List (String, Result String (Int, String))
@@ -6055,7 +6055,7 @@ codeOutputs rows =
   let outs =
     map
       (map ((code, out, err) => (code, out ++ err)))
-      (runCommandBatch medakaBin testJobs argvs)
+      (runCommandBatch (medakaBin ()) (testJobs ()) argvs)
   zip (map entryPath coded) outs
 
 codeOutput : List (String, Result String (Int, String)) ->
@@ -7666,7 +7666,7 @@ simpleFailure g =
 
 -- The one spawn every Section 2 and Section 6 row grades.
 checkSpawn : String -> <IO> (String, List String)
-checkSpawn entry = (medakaBin, ["check", "\{corpus}/\{entry}"])
+checkSpawn entry = (medakaBin (), ["check", "\{corpus}/\{entry}"])
 
 schemeSpawn : String -> SchemeRow -> <IO> (String, List String)
 schemeSpawn _ r = checkSpawn r.entry
@@ -7718,12 +7718,12 @@ verbSpawns : String -> (Int, VerbRow) -> <IO> List (String, List String)
 verbSpawns scratch (i, r) =
   let entrypath = "\{corpus}/\{r.ventry}"
   match r.verb
-    "check" => [(medakaBin, ["check", entrypath])]
-    "run" => [(medakaBin, ["run", entrypath])]
-    "run-json" => [(medakaBin, ["run", "--json", entrypath])]
+    "check" => [(medakaBin (), ["check", entrypath])]
+    "run" => [(medakaBin (), ["run", entrypath])]
+    "run-json" => [(medakaBin (), ["run", "--json", entrypath])]
     "build" => [
       (
-        medakaBin,
+        medakaBin (),
         ["build", entrypath, "-o", "\{scratch}/\{intToString i}.vbin"],
       ),
     ]

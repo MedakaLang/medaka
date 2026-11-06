@@ -37,7 +37,7 @@ targetCase stem verb flags fixture =
   (stem, runCase stem ([verb] ++ flags ++ ["\{fixtureDir}/\{fixture}"]))
 
 runCase : String -> List String -> <Exec, IO, FileRead> Expectation
-runCase stem argv = spawnCase stem medakaBin argv
+runCase stem argv = spawnCase stem (medakaBin ()) argv
 
 spawnCase : String -> String -> List String -> <Exec, IO, FileRead> Expectation
 spawnCase stem cmd argv = match boundedVerb cmd argv
@@ -59,7 +59,7 @@ inDirCase stem verb dir entry = (
     "cd \"$1\" && exec \"$2\" \"$3\" \"$4\"",
     "sh",
     "\{fixtureDir}/\{dir}",
-    medakaBin,
+    medakaBin (),
     verb,
     entry,
   ],
@@ -74,7 +74,7 @@ emitterCase : String ->
   String ->
   <Exec, IO, FileRead> (String, Expectation)
 emitterCase stem profile fixture =
-  let emitter = getEnvOr "MEDAKA_EMITTER" "\{medakaRoot}/medaka_emitter"
+  let emitter = getEnvOr "MEDAKA_EMITTER" "\{medakaRoot ()}/medaka_emitter"
   let stdlib = underRoot "stdlib"
   (
     stem,
@@ -488,7 +488,7 @@ buildOrderCase stem first second fixture = (
     "-c",
     "out=$(mktemp) && \"$1\" build --target \"$2\" --target \"$3\" \"$4\" -o \"$out\" >\"$out.log\" 2>&1; code=$?; if [ $code -ne 0 ]; then cat \"$out.log\"; fi; rm -f \"$out\" \"$out.log\"; echo \"build=$code\"",
     "sh",
-    medakaBin,
+    medakaBin (),
     first,
     second,
     "\{fixtureDir}/\{fixture}",

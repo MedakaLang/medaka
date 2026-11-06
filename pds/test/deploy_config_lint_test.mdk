@@ -29,7 +29,7 @@
    pass the rosters' own shape and match nothing in three files.
 
    The mutation controls derive their copies as line transforms here and
-   write them under `scratchDir`, so no control rewrites a file in the source
+   write them under `scratchDir ()`, so no control rewrites a file in the source
    tree — the property the retired script had to assert with `cmp` against a
    baseline rather than have by construction.
 
@@ -397,7 +397,7 @@ presentForbidden file ((label, pattern) :: rest) =
    native gate a `TMPDIR` under a scratch root it reaps itself, so the
    directory is left in place. -}
 scratch : <Exec> Result String String
-scratch = scratchDir
+scratch = scratchDir ()
 
 -- | `content` written to `name` under `scratch`, and the path it landed at.
 scratchFile : String -> String -> <Exec, FileWrite> Result String String

@@ -35,7 +35,7 @@
    import-order entries. Fewer means the derivation (enumeration or
    qualifying-interface scan) broke; the floor catches that, not a change in
    which rows exist. Rows are graded in
-   groups of `testJobs`: each group's spawns run as one batch, and each row
+   groups of `testJobs ()`: each group's spawns run as one batch, and each row
    works in a scratch directory of its own, removed once its group is graded.
    Under MEDAKA_TEST_JOBS=1 a group is one row, so its spawns run in the order
    they are listed. Needs clang (build).
@@ -621,7 +621,7 @@ groupedRows : String ->
   List Pair ->
   <Exec, IO, FileRead, FileWrite> List (String, Expectation)
 groupedRows bin fixDir pairs =
-  flatMap (groupRows bin fixDir) (chunks testJobs pairs)
+  flatMap (groupRows bin fixDir) (chunks (testJobs ()) pairs)
 
 -- `prepRow` over every pair, each with its own directory result. A pair with
 -- no directory, or a directory with no pair, is a failure row rather than a
@@ -640,7 +640,7 @@ prepAll fixDir [] (_ :: ds) =
     :: prepAll fixDir [] ds
 
 check : <Exec, IO, FileRead, FileWrite> Expectation
-check = checkIn medakaBin (underRoot "test/dict_fixtures")
+check = checkIn (medakaBin ()) (underRoot "test/dict_fixtures")
 
 -- The script globbed `*.mdk` directly in the fixture dir (no recursion). The
 -- enumerator returns full paths, recursive; keep top-level `.mdk` leaves only.

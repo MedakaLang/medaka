@@ -39,7 +39,8 @@ withProjectFixtures manifest files inspect = match makeTempDir ()
     result
 
 runNative : String -> <Exec, IO> Result String (Int, String, String)
-runNative target = boundedVerbSeconds 120 medakaBin ["test", "--native", target]
+runNative target =
+  boundedVerbSeconds 120 (medakaBin ()) ["test", "--native", target]
 
 shadowSource : String
 shadowSource =

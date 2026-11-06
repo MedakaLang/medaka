@@ -202,7 +202,7 @@ irSkews ir = skewLines (defsOf (S.lines ir)) (S.lines ir) 1
 
 -- Build one fixture with its kept IR, and return the IR text.
 buildIR : String -> String -> <Exec, IO, FileRead> Result String String
-buildIR work stem = match boundedInTree 600 medakaBin [
+buildIR work stem = match boundedInTree 600 (medakaBin ()) [
   "build",
   "\{fixtures}/\{stem}.mdk",
   "-o",

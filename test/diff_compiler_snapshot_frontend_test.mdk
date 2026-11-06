@@ -252,8 +252,8 @@ families = [
    a pass. -}
 filesOf : Family -> <FileRead, IO> Result String (List String)
 filesOf f = match f.corpus
-  OneFile rel => Ok ["\{medakaRoot}/\{rel}"]
-  Dir rel => flatMdk "\{medakaRoot}/\{rel}"
+  OneFile rel => Ok ["\{medakaRoot ()}/\{rel}"]
+  Dir rel => flatMdk "\{medakaRoot ()}/\{rel}"
   CompilerSources => compilerFiles compilerDirs []
 
 {- | The `.mdk` files directly under `dir`.
@@ -278,7 +278,7 @@ compilerFiles : List String ->
   <FileRead, IO> Result String (List String)
 compilerFiles [] [] = Err "no compiler sources found"
 compilerFiles [] acc = Ok (sort acc)
-compilerFiles (d :: rest) acc = match flatMdk "\{medakaRoot}/compiler/\{d}"
+compilerFiles (d :: rest) acc = match flatMdk "\{medakaRoot ()}/compiler/\{d}"
   Err e => Err e
   Ok fs => compilerFiles rest (acc ++ filter (p => not (isTestSibling p)) fs)
 
@@ -351,7 +351,7 @@ badLines ls = filter (l => contains ": FAIL" l || contains ": ERROR" l) ls
    lost hint on an already-failing row, never a wrong verdict: `staleNote`
    appends nothing when the marker is `""`. -}
 staleMarker : <FileRead, IO> String
-staleMarker = match readFile "\{medakaRoot}/compiler/driver/medaka_cli.mdk"
+staleMarker = match readFile "\{medakaRoot ()}/compiler/driver/medaka_cli.mdk"
   Err _ => ""
   Ok src => markerBefore "" (lines src)
 
@@ -448,7 +448,7 @@ gradeFamily _ f = match filesOf f
 
 runFamily : Family -> List String -> <Exec, FileRead, IO> Outcome
 runFamily f paths =
-  match boundedInTree familyTimeoutSeconds medakaBin (checkArgs f paths)
+  match boundedInTree familyTimeoutSeconds (medakaBin ()) (checkArgs f paths)
     Err e => Outcome {
       sub = f.sub,
       graded = 0,
@@ -483,9 +483,9 @@ checkArgs f paths =
       "snapshot",
       "--check",
       "--root",
-      medakaRoot,
+      medakaRoot (),
       "--out",
-      "\{medakaRoot}/test/snapshots/\{f.sub}",
+      "\{medakaRoot ()}/test/snapshots/\{f.sub}",
       "--stages",
       f.stages,
     ]
@@ -554,7 +554,7 @@ toolTableEnd : String
 toolTableEnd = "# ── FAMILY TABLE END"
 
 toolRows : <FileRead, IO> Result String (List String)
-toolRows = match readFile "\{medakaRoot}/test/snapshot_bless.sh"
+toolRows = match readFile "\{medakaRoot ()}/test/snapshot_bless.sh"
   Err e => Err "cannot read test/snapshot_bless.sh: \{e}"
   Ok src => match between toolTableStart toolTableEnd (lines src)
     [] => Err "test/snapshot_bless.sh has no FAMILY TABLE block"

@@ -113,7 +113,7 @@ dupFiles fs = filter (f => length (filter (== f) fs) > 1) (nub fs)
 
 -- Repo-relative path of a file under the repo root.
 relPath : String -> <IO> String
-relPath path = replaceAll (medakaRoot ++ "/") "" path
+relPath path = replaceAll (medakaRoot () ++ "/") "" path
 
 -- A caller file: its relative path and the wrapper names it imports.
 scanOne : String -> <IO, FileRead> Result String (String, List String)

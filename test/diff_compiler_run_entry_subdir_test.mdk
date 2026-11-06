@@ -114,7 +114,8 @@ onFixtures body = withScratchDir (t => match fixtures t
 -- `medaka <args>` run with its working directory set to `dir`.
 inDirArgs : String -> List String -> <IO> List String
 inDirArgs dir args =
-  ["-c", "cd \"$1\" && shift && exec \"$@\"", "medaka", dir, medakaBin] ++ args
+  ["-c", "cd \"$1\" && shift && exec \"$@\"", "medaka", dir, medakaBin ()]
+    ++ args
 
 -- Exit 0, and the output (stdout and stderr together) contains `needle`. For a
 -- verb whose success text is not a whole line of its own.

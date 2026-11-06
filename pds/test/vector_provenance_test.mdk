@@ -285,13 +285,14 @@ secondaryImpl secondary root =
 -- # The real tree
 
 realTree : Unit -> <Exec, FileRead, IO> List String
-realTree _ = (checkCorpus medakaRoot).findings
+realTree _ = (checkCorpus (medakaRoot ())).findings
 
 -- A corpus checker under `pds/tools/`, run over the real tree.
 toolFindings : String -> <Exec, IO> List String
 toolFindings script =
   let label = "\{gate} (\{script})"
-  let args = ["\{medakaRoot}/pds/tools/\{script}", medakaRoot, "--provenance"]
+  let args =
+    ["\{medakaRoot ()}/pds/tools/\{script}", medakaRoot (), "--provenance"]
   snd (spawnFindings label "python3" (spawn runSeconds [] "python3" args))
 
 test "the checker reports a file with no row" =

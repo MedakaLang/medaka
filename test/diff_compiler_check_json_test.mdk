@@ -48,7 +48,7 @@ runGolden : String ->
   (String -> String) ->
   String ->
   <Exec, IO, FileRead> Expectation
-runGolden label args place golden = match boundedVerb medakaBin args
+runGolden label args place golden = match boundedVerb (medakaBin ()) args
   Err e => fail "could not spawn \{label}: \{e}"
   Ok (code, out, err) =>
     if code /= 0 && code /= 1 then
@@ -133,8 +133,8 @@ test "check --json: agreement-corpus reject fixtures pin their code and range" =
 
 -- #333: a nonexistent path reports file-not-found, not R-MODULE-LOAD.
 test "333/nonexistent-path: reports R-FILE-NOT-FOUND with exit 1, not R-MODULE-LOAD" =
-  let missing = "\{medakaRoot}/no-such-file-here-333.mdk"
-  match boundedVerb medakaBin ["check", "--json", missing]
+  let missing = "\{medakaRoot ()}/no-such-file-here-333.mdk"
+  match boundedVerb (medakaBin ()) ["check", "--json", missing]
     Err e => fail "could not spawn medaka check --json: \{e}"
     Ok (code, out, err) =>
       let text = out ++ err
@@ -164,7 +164,7 @@ test "1078/build-json-agrees-with-check-json: type_mismatch matches check's gold
 cleanBuild : String -> <Exec, IO, FileRead, FileWrite> Expectation
 cleanBuild dir =
   let bin = "\{dir}/clean.bin"
-  match boundedVerb medakaBin [
+  match boundedVerb (medakaBin ()) [
     "build",
     "--json",
     "\{corpus}/clean.mdk",
@@ -193,7 +193,7 @@ test "1078/build-json-clean-emits-and-succeeds: exit 0, binary, empty diagnostic
 -- #1078: `--json` is a flag, not a second positional input. A bare
 -- `build --json` reports through the R-BUILD-FAILED envelope.
 test "1078/build-json-flag-not-consumed-as-input: bare build --json reports R-BUILD-FAILED" =
-  match boundedVerb medakaBin ["build", "--json"]
+  match boundedVerb (medakaBin ()) ["build", "--json"]
     Err e => fail "could not spawn medaka build --json: \{e}"
     Ok (code, out, err) =>
       let text = out ++ err
@@ -223,7 +223,7 @@ physicalJsonRow dir backend missing =
         "PHYSICAL_NO_ORIGIN=\{missing}",
         "MEDAKA_EMITTER=\{dir}/child",
         "MEDAKA_WASM_EMITTER=\{dir}/child",
-        medakaBin,
+        medakaBin (),
         "build",
         "--json",
       ]
@@ -276,33 +276,37 @@ physicalJsonBuildTool dir =
 physicalJsonBuildChild : String ->
   String ->
   <Exec, IO, FileRead, FileWrite> Expectation
-physicalJsonBuildChild dir child =
-  match boundedVerbSeconds 300 medakaBin ["build", child, "-o", "\{dir}/child"]
-    Err e => fail "physical child build: \{e}"
-    Ok (code, out, err) =>
-      if code /= 0 then
-        fail "physical child build exited \{intToString code}: \{out ++ err}"
-      else
-        expectAll [
-          physicalJsonRow dir "llvm" "0",
-          physicalJsonRow dir "llvm" "1",
-          physicalJsonRow dir "wasm" "0",
-          physicalJsonRow dir "wasm" "1",
-          textPhysicalRow dir "llvm",
-          textPhysicalRow dir "wasm",
-          expectSpawnFailsAll
-            "env"
-            [
-              "CC=/bin/false",
-              medakaBin,
-              "build",
-              "--json",
-              "\{dir}/input.mdk",
-              "-o",
-              "\{dir}/bad-clang",
-            ]
-            ["R-BUILD-FAILED"],
-        ]
+physicalJsonBuildChild dir child = match boundedVerbSeconds 300 (medakaBin ()) [
+  "build",
+  child,
+  "-o",
+  "\{dir}/child",
+]
+  Err e => fail "physical child build: \{e}"
+  Ok (code, out, err) =>
+    if code /= 0 then
+      fail "physical child build exited \{intToString code}: \{out ++ err}"
+    else
+      expectAll [
+        physicalJsonRow dir "llvm" "0",
+        physicalJsonRow dir "llvm" "1",
+        physicalJsonRow dir "wasm" "0",
+        physicalJsonRow dir "wasm" "1",
+        textPhysicalRow dir "llvm",
+        textPhysicalRow dir "wasm",
+        expectSpawnFailsAll
+          "env"
+          [
+            "CC=/bin/false",
+            medakaBin (),
+            "build",
+            "--json",
+            "\{dir}/input.mdk",
+            "-o",
+            "\{dir}/bad-clang",
+          ]
+          ["R-BUILD-FAILED"],
+      ]
 
 test "physical refusals replace the clean build JSON envelope" =
   withScratchDir physicalJsonBuild

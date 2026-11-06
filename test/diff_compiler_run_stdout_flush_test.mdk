@@ -62,7 +62,7 @@ import test.{Expectation, expectAll, expectEach, expectEqual, fail}
 import test_process.{medakaRoot}
 
 corpus : <IO> String
-corpus = "\{medakaRoot}/test/run_stdout_flush_fixtures"
+corpus = "\{medakaRoot ()}/test/run_stdout_flush_fixtures"
 
 -- The bytes every fixture prints before dying, and the only thing any of
 -- them prints. The trailing newline is part of the pin.
@@ -176,9 +176,9 @@ orderExpectations dir = match somes (map (orderWriteFailure dir) orderRows)
       (checkRunBuildAll (map (orderPaths dir) orderRows))
   unwritten => unwritten
 
--- A directory of this test's own.  Not `test_process.scratchDir`: that is one
--- value for the whole process, and a sweep that reads it removes it when it
--- finishes.
+-- A directory of this test's own.  Not a value wrapping `test_process.scratchDir`:
+-- that would be one directory for the whole process, which a sweep removes when
+-- it finishes.
 orderDir : Unit -> <Exec> Result String String
 orderDir _ = match runVerb "mktemp" ["-d"]
   Err e => Err e

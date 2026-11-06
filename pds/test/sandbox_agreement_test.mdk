@@ -68,11 +68,11 @@ boundedArgv bin args =
 -- arguments. Both run side by side, once, in one batch.
 manifestRuns : <Exec, IO> List (List String, Result String (Int, String, String))
 manifestRuns =
-  let bin = medakaBin
+  let bin = medakaBin ()
   let src = serveSource
   let extras = [[], ["--fn", "serve"]]
   let argvs = map (extra => boundedArgv bin (["manifest", src] ++ extra)) extras
-  zip extras (runCommandBatch "perl" testJobs argvs)
+  zip extras (runCommandBatch "perl" (testJobs ()) argvs)
 
 -- | What `medaka manifest pds/serve.mdk` prints on stdout with `extra`
 -- arguments, or why it printed nothing.
@@ -215,10 +215,10 @@ everyReadPolicy : <FileRead, IO> Result String (List String)
 everyReadPolicy = everyReadAllowed servePolicy
 
 {- | The verdict of every `policyRuns` row, in order, each as `verdictOf`
-   would report it. The checks run side by side, at most `testJobs` at once. -}
+   would report it. The checks run side by side, at most `testJobs ()` at once. -}
 policyVerdicts : <Exec, FileRead, IO> List (String, Result String (Int, String))
 policyVerdicts =
-  let bin = medakaBin
+  let bin = medakaBin ()
   let src = serveSource
   let argvs =
     map
@@ -228,7 +228,7 @@ policyVerdicts =
   zipWith
     ((name, (_, policy)) run => (name, verdictGraded policy run))
     policyRuns
-    (runCommandBatch "perl" testJobs argvs)
+    (runCommandBatch "perl" (testJobs ()) argvs)
 
 -- The `check-policy` arguments for `entry` under `policy`.
 checkPolicyArgs : String -> String -> Result String (List String) -> List String

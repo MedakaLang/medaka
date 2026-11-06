@@ -60,7 +60,7 @@ import test_process.{
 }
 
 corpus : <IO> String
-corpus = "\{medakaRoot}/test/error_quality_fixtures/eval"
+corpus = "\{medakaRoot ()}/test/error_quality_fixtures/eval"
 
 declaredFixtureCount : Int
 declaredFixtureCount = 11
@@ -72,7 +72,7 @@ declaredFixtureCount = 11
    that source no longer has this shape, in which case `staleNote` appends
    nothing (never a guess either way). -}
 staleMarker : <FileRead, IO> String
-staleMarker = match readFile "\{medakaRoot}/compiler/driver/medaka_cli.mdk"
+staleMarker = match readFile "\{medakaRoot ()}/compiler/driver/medaka_cli.mdk"
   Err _ => ""
   Ok src => markerBefore "" (lines src)
 
@@ -110,10 +110,10 @@ gradeOne : String -> String -> <Exec, FileRead, IO> Option String
 gradeOne marker name =
   let entry = "\{corpus}/\{name}.mdk"
   let golden = "\{corpus}/\{name}.json.out"
-  match boundedVerb medakaBin ["run", "--json", entry]
+  match boundedVerb (medakaBin ()) ["run", "--json", entry]
     Err e => Some "  \{name}: could not run `medaka run --json`: \{e}"
     Ok (code, _, err) =>
-      let actual = chompNewlines (replaceAll "\{medakaRoot}/" "" err)
+      let actual = chompNewlines (replaceAll "\{medakaRoot ()}/" "" err)
       match readFile golden
         Err e => Some "  \{name}: missing golden \{golden}: \{e}"
         Ok goldenRaw =>
@@ -146,7 +146,7 @@ test "eval_json: `medaka run --json` agrees with the committed goldens, byte for
             "\{intToString (length failures)} of \{intToString (length names)} fixtures under \{corpus} disagreed with their committed golden:\n\{unlines failures}"
 
 trapSites : <IO> String
-trapSites = "\{medakaRoot}/test/trap_site_fixtures"
+trapSites = "\{medakaRoot ()}/test/trap_site_fixtures"
 
 -- (fixture stem, `line:col` of the trapping expression's start, the rest of
 -- the runtime-error line). Columns are 0-based.
@@ -236,7 +236,7 @@ trapSiteImportedRow : (String, String, String, String) ->
 trapSiteImportedRow (name, raiser, site, rest) = (
   name,
   expectSpawnFails
-    medakaBin
+    (medakaBin ())
     ["run", "\{trapSites}/\{name}.mdk"]
     "\{trapSites}/\{raiser}:\{site}: runtime error \{rest}",
 )
@@ -269,10 +269,10 @@ nativeUnlocatedStems = ["index_through_dictionary", "do_bind_pattern_refuted"]
 nativeAgreement : String -> String -> String -> String -> <Exec, IO> Expectation
 nativeAgreement scratch name entry line =
   let bin = "\{scratch}/\{name}"
-  match boundedVerb medakaBin ["run", entry]
+  match boundedVerb (medakaBin ()) ["run", entry]
     Err e => fail "could not run `medaka run`: \{e}"
     Ok (runCode, runOut, _) =>
-      match boundedVerbSeconds 120 medakaBin ["build", entry, "-o", bin]
+      match boundedVerbSeconds 120 (medakaBin ()) ["build", entry, "-o", bin]
         Err e => fail "could not run `medaka build`: \{e}"
         Ok (0, _, _) => match boundedVerb bin []
           Err e => fail "could not run the built binary: \{e}"
@@ -293,12 +293,12 @@ nativeTrapSiteRow scratch (name, raiser, site, rest) = (
 )
 
 -- [grade] run against a fresh directory [tag] under the scratch directory,
--- removed afterwards.  `scratchDir` is one value for the whole run, so each
--- test takes its own subdirectory and the last one out removes the root.
+-- removed afterwards.  Each call gets its own scratch root, so the `rmdir`
+-- removes the root once the subdirectory is gone.
 inScratch : String ->
   (String -> <Exec, IO> Expectation) ->
   <Exec, IO> Expectation
-inScratch tag grade = match scratchDir
+inScratch tag grade = match scratchDir ()
   Err e => fail "could not make a scratch directory: \{e}"
   Ok scratch =>
     let dir = "\{scratch}/\{tag}"
@@ -346,13 +346,13 @@ test "trap_site: a parameter named `panic` shadows the extern in a built binary"
     expectEach [
       (
         "run",
-        match boundedVerb medakaBin ["run", entry]
+        match boundedVerb (medakaBin ()) ["run", entry]
           Err e => fail "could not run `medaka run`: \{e}"
           Ok got => expectEqual want got,
       ),
       (
         "built",
-        match boundedVerbSeconds 120 medakaBin ["build", entry, "-o", bin]
+        match boundedVerbSeconds 120 (medakaBin ()) ["build", entry, "-o", bin]
           Err e => fail "could not run `medaka build`: \{e}"
           Ok (0, _, _) => match boundedVerb bin []
             Err e => fail "could not run the built binary: \{e}"

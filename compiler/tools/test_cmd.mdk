@@ -5239,7 +5239,7 @@ testFilesGo _ _ _ _ _ _ _ [] acc = acc
 testFilesGo engines _ _ _ cases filterOpt seedOpt files acc =
   let medaka = envOr "MEDAKA" (executablePath ())
   let childArgvs = map (testChildArgs engines cases filterOpt seedOpt) files
-  let jobs = testJobs
+  let jobs = testJobs ()
   let prefix =
     childJobsPrefix (min jobs (length files)) jobs
       ++ childGcMarkersPrefix (envOr "GC_MARKERS" "") jobs

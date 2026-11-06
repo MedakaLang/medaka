@@ -51,7 +51,7 @@ import compiler_cli_test_support.{
 import test_process.{medakaRoot}
 
 corpus : <IO> String
-corpus = "\{medakaRoot}/test/slice_oob_fixtures"
+corpus = "\{medakaRoot ()}/test/slice_oob_fixtures"
 
 -- The guard's own wording: the abort formats the range it refused. Pinning
 -- the numbers and not just the code is what catches an off-by-one — a check

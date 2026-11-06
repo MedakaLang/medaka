@@ -23,10 +23,10 @@ import test.{
 }
 
 corpus : <IO> String
-corpus = "\{medakaRoot}/test/net_fixtures"
+corpus = "\{medakaRoot ()}/test/net_fixtures"
 
 emitter : <IO> String
-emitter = "\{medakaRoot}/medaka_emitter"
+emitter = "\{medakaRoot ()}/medaka_emitter"
 
 -- Builds fixture `name` into `scratch`, runs it once, and compares its stdout
 -- with `<name>.expected`. The run's exit code is graded too: the shell gate
@@ -35,7 +35,7 @@ fixtureCheck : String -> String -> <Exec, IO> Expectation
 fixtureCheck scratch name =
   let src = "\{corpus}/\{name}.mdk"
   let bin = "\{scratch}/\{name}.bin"
-  match boundedInTree 120 medakaBin ["build", src, "-o", bin]
+  match boundedInTree 120 (medakaBin ()) ["build", src, "-o", bin]
     Err e => fail "\{name}: build spawn: \{e}"
     Ok (buildCode, bo, be) =>
       if buildCode /= 0 then
@@ -57,7 +57,7 @@ wasmBuild scratch =
     120
     "env"
     ([
-        "MEDAKA_ROOT=\{medakaRoot}",
+        "MEDAKA_ROOT=\{medakaRoot ()}",
         "MEDAKA_EMITTER=\{emitter}",
       ]
       ++ wasmBuildArgv

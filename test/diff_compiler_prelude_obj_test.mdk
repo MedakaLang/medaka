@@ -103,10 +103,16 @@ abiRow w =
     underRoot
       "test/prelude_obj_fixtures/default_empty_constraint/main_empty_constraint.mdk"
   let abi = "\{w}/default_empty_constraint.abi"
-  match (boundedInTree 900 "env" [
-    "MEDAKA_STRICT=1", medakaBin, "build", "--allow-internal", "--keep-ir", src,
-    "-o", abi
-  ])
+  match boundedInTree 900 "env" [
+    "MEDAKA_STRICT=1",
+    medakaBin (),
+    "build",
+    "--allow-internal",
+    "--keep-ir",
+    src,
+    "-o",
+    abi,
+  ]
     Err e => fail "could not inspect selected-interface impl ABI: \{e}"
     Ok (code, _, _) =>
       if code /= 0 then
@@ -124,12 +130,12 @@ abiRow w =
 
 -- Dynamic-arity fixtures: each must typecheck, and its run must print its pin.
 dynRow : String -> <Exec, IO, FileRead> Expectation
-dynRow src = match boundedInTree 900 medakaBin ["check", src]
+dynRow src = match boundedInTree 900 (medakaBin ()) ["check", src]
   Err e => fail "\{stem src}: check could not run: \{e}"
   Ok (checkCode, _, _) =>
     if checkCode /= 0 then
       fail "\{stem src}: dynamic-arity semantic probe did not typecheck"
-    else match boundedInTree 900 medakaBin ["run", src]
+    else match boundedInTree 900 (medakaBin ()) ["run", src]
       Err e => fail "\{stem src}: run could not run: \{e}"
       Ok (runCode, out, _) =>
         if runCode /= 0 then
@@ -164,7 +170,7 @@ sampleRow w opt pobj src =
   let prebuilt = "\{w}/\{label}\{opt}.prebuilt"
   match buildExit [
     "MEDAKA_CLANG_OPT=\{opt}",
-    medakaBin,
+    medakaBin (),
     "build",
     "--allow-internal",
     src,
@@ -178,7 +184,7 @@ sampleRow w opt pobj src =
       else match buildExit [
         "MEDAKA_PRELUDE_OBJ=\{pobj}",
         "MEDAKA_CLANG_OPT=\{opt}",
-        medakaBin,
+        medakaBin (),
         "build",
         "--allow-internal",
         src,
@@ -209,7 +215,7 @@ optRow w opt =
   let pobj = "\{w}/prelude\{opt}.o"
   match buildExit [
     "MEDAKA_CLANG_OPT=\{opt}",
-    medakaBin,
+    medakaBin (),
     "build",
     "--emit-prelude-obj",
     pobj,
@@ -248,7 +254,7 @@ data AAA = Alpha | Payload Int
 main = foldUntil (acc x => if x > 2 then Break acc else Continue (acc + x)) 0 [1, 2, 3, 4]
 """)
     Err e => fail "could not write identity probe: \{e}"
-    Ok _ => match buildExit [medakaBin, "build", "--emit-prelude-obj", pobj]
+    Ok _ => match buildExit [medakaBin (), "build", "--emit-prelude-obj", pobj]
       Err e => fail "could not build identity prelude: \{e}"
       Ok code =>
         if code == 0 then

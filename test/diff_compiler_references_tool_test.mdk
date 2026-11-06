@@ -29,7 +29,12 @@ transcript name =
   map
     ((code, out, _) => (code, out))
     (boundedInTree 30 "sh" [
-      "-c", script, "medaka", medakaRoot, medakaBin, stream
+      "-c",
+      script,
+      "medaka",
+      medakaRoot (),
+      medakaBin (),
+      stream,
     ])
 
 row : String -> <Exec, IO, FileRead> Expectation

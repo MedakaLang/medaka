@@ -30,7 +30,7 @@ import compiler_cli_test_support.{
 import test_process.{medakaRoot}
 
 corpus : <IO> String
-corpus = "\{medakaRoot}/test/let_refute_fixtures"
+corpus = "\{medakaRoot ()}/test/let_refute_fixtures"
 
 refutes : RuntimeOutcome
 refutes = AbortsLocated "E-LET-REFUTE" "let pattern match failed"

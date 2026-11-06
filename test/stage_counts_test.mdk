@@ -64,7 +64,7 @@ spawnCountedEnv setting args =
     boundedVerbSeconds
       (spawnTimeoutSeconds * 3)
       "env"
-      (["MEDAKA_STAGE_COUNTS=1"] ++ setting ++ [medakaBin] ++ args)
+      (["MEDAKA_STAGE_COUNTS=1"] ++ setting ++ [medakaBin ()] ++ args)
   spawnResult spawned
 
 -- A spawn error becomes exit -1 with the error as stderr.
@@ -209,7 +209,7 @@ lspRows dir name want msgs =
   let _ = writeFile req (stringConcat (map frame msgs))
   let spawned = boundedVerbSeconds (spawnTimeoutSeconds * 3) "sh" [
     "-c",
-    "MEDAKA_STAGE_COUNTS=1 \{medakaBin} lsp < \{req}",
+    "MEDAKA_STAGE_COUNTS=1 \{medakaBin ()} lsp < \{req}",
   ]
   let (code, out, err) = spawnResult spawned
   let rows = rowsOf "lsp.\{name}" code err
@@ -297,7 +297,7 @@ replRows dir =
   let _ = writeFile inp "1 + 2\n"
   let spawned = boundedVerbSeconds (spawnTimeoutSeconds * 3) "sh" [
     "-c",
-    "MEDAKA_STAGE_COUNTS=1 \{medakaBin} repl < \{inp}",
+    "MEDAKA_STAGE_COUNTS=1 \{medakaBin ()} repl < \{inp}",
   ]
   let (code, out, err) = spawnResult spawned
   let rows = rowsOf "repl_one_line" code err
@@ -520,7 +520,7 @@ spawnPlain extraEnv args =
     (boundedVerbSeconds
       (spawnTimeoutSeconds * 3)
       "env"
-      (extraEnv ++ [medakaBin] ++ args))
+      (extraEnv ++ [medakaBin ()] ++ args))
 
 -- `build` refuses a compiler-private import in the emitter child's gate; the
 -- diagnostic reaches the user on both routes, and a `MEDAKA_DIAG_JSON` inherited

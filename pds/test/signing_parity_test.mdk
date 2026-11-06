@@ -63,7 +63,7 @@ interpretedSeconds : Int
 interpretedSeconds = 2400
 
 under : String -> <IO> String
-under rel = "\{medakaRoot}/\{rel}"
+under rel = "\{medakaRoot ()}/\{rel}"
 
 -- # Grading
 
@@ -122,7 +122,7 @@ nativeSample scratch =
   match (spawnFindings
     label
     "medaka build"
-    (spawn buildSeconds medakaEnv medakaBin args))
+    (spawn buildSeconds medakaEnv (medakaBin ()) args))
     (_, []) =>
       gradedSpawn
         label
@@ -138,7 +138,7 @@ wasmSample scratch native =
   match (spawnFindings
     label
     "medaka build --target wasm"
-    (spawn buildSeconds wasmBuildEnv medakaBin args))
+    (spawn buildSeconds wasmBuildEnv (medakaBin ()) args))
     (_, []) =>
       sameAs
         label
@@ -165,7 +165,7 @@ evalSample native =
       (spawnFindings
         label
         "medaka run"
-        (spawn interpretedSeconds medakaEnv medakaBin args)))
+        (spawn interpretedSeconds medakaEnv (medakaBin ()) args)))
 
 -- # The full corpus
 
@@ -197,7 +197,7 @@ wasmCorpus scratch native =
   match (spawnFindings
     label
     "medaka build --target wasm"
-    (spawn buildSeconds wasmBuildEnv medakaBin args))
+    (spawn buildSeconds wasmBuildEnv (medakaBin ()) args))
     (_, []) =>
       sameAs
         label

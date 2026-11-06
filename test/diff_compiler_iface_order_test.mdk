@@ -385,12 +385,12 @@ sigFor : String ->
 sigFor work entry = do
   let file = "\{work}/\{entry}"
   let bin = "\{work}/.bin"
-  (checkCode, co, ce) <- boundedVerbSeconds 120 medakaBin [
+  (checkCode, co, ce) <- boundedVerbSeconds 120 (medakaBin ()) [
     "check", "--json", file
   ]
-  (_, plain, _) <- boundedVerbSeconds 120 medakaBin ["check", file]
-  (runCode, ro, _) <- boundedVerbSeconds 120 medakaBin ["run", file]
-  (buildCode, _, _) <- boundedVerbSeconds 120 medakaBin [
+  (_, plain, _) <- boundedVerbSeconds 120 (medakaBin ()) ["check", file]
+  (runCode, ro, _) <- boundedVerbSeconds 120 (medakaBin ()) ["run", file]
+  (buildCode, _, _) <- boundedVerbSeconds 120 (medakaBin ()) [
     "build", file, "-o", bin
   ]
   (execCode, xo) <- if buildCode == 0 then execOf bin else Ok ("-", "")

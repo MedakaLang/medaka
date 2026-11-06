@@ -29,7 +29,7 @@
      - anything else is red.
 
    Runs under `medaka test --native`: it spawns the compiler, clang's output
-   and node. The sweep is computed once per process, in batches `testJobs`
+   and node. The sweep is computed once per process, in batches `testJobs ()`
    wide. -}
 
 import compiler_cli_test_support.{
@@ -54,7 +54,7 @@ flatCorpus : String ->
   String ->
   <FileRead, IO> Result String (List (String, String))
 flatCorpus prefix dir =
-  let root = "\{medakaRoot}/\{dir}"
+  let root = "\{medakaRoot ()}/\{dir}"
   let keyed =
     paths =>
       sort
@@ -68,7 +68,7 @@ moduleCorpus : <FileRead, IO> Result String (List (String, String))
 moduleCorpus =
   let keyed =
     dirs => sort (map (d => ("llvmM/\{basename d}", "\{d}/entry.mdk")) dirs)
-  map keyed (fixtureDirs "\{medakaRoot}/test/llvm_fixtures_modules")
+  map keyed (fixtureDirs "\{medakaRoot ()}/test/llvm_fixtures_modules")
 
 corpus : <FileRead, IO> Result String (List (String, String))
 corpus =
@@ -153,11 +153,11 @@ slugOf key = join "__" (split "/" key)
 -- it still finds this tree's emitters, and a stale binary fails loudly.
 envBase : <IO> List String
 envBase = [
-  "MEDAKA_ROOT=\{medakaRoot}",
+  "MEDAKA_ROOT=\{medakaRoot ()}",
   "MEDAKA_EMITTER=\{emitterBin}",
   "MEDAKA_STRICT=1",
   "MEDAKA_WASM_EMITTER=\{wasmEmitter}",
-  medakaBin,
+  medakaBin (),
 ]
 
 checkSpawns : List String -> (String, String) -> List (String, List String)
@@ -235,7 +235,7 @@ buildSpawns env scratch p = [
 ]
 
 runJs : <IO> String
-runJs = "\{medakaRoot}/test/wasm/run.js"
+runJs = "\{medakaRoot ()}/test/wasm/run.js"
 
 runSpawns : String -> String -> Probe -> List (String, List String)
 runSpawns js scratch p = [
@@ -543,7 +543,7 @@ ledgered rows key =
     rows
 
 test "wasm edge corpus: a program whose wasm output is wrong off the edge too has its engine-divergence ledger row" = withSweep
-  (sweep => match readFile "\{medakaRoot}/test/engine_divergence.txt"
+  (sweep => match readFile "\{medakaRoot ()}/test/engine_divergence.txt"
     Err e => fail "test/engine_divergence.txt: \{e}"
     Ok text =>
       let rows = filter (l => not (startsWith "#" l)) (lines text)

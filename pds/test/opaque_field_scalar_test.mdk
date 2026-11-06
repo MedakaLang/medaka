@@ -310,7 +310,7 @@ dedupe (x :: rest) = x :: dedupe (filter (/= x) rest)
 -- # Part A — the real tree
 
 root : <IO> String
-root = medakaRoot
+root = medakaRoot ()
 
 production : <FileRead, IO> Result String (List Src)
 production = loadSrcs root "pds/lib"
@@ -519,11 +519,11 @@ test "mutation control: the real pds/lib/sign.mdk holds no injected import" =
    together, which is the assertion this half wants. -}
 expectCellRejected : String -> String -> <Exec, IO> Expectation
 expectCellRejected rel needle =
-  expectSpawnFails medakaBin ["check", underRoot rel] needle
+  expectSpawnFails (medakaBin ()) ["check", underRoot rel] needle
 
 -- | Passes when `medaka check <rel>` exits 0.
 expectCellChecks : String -> <Exec, IO> Expectation
-expectCellChecks rel = expectSpawnOk medakaBin ["check", underRoot rel]
+expectCellChecks rel = expectSpawnOk (medakaBin ()) ["check", underRoot rel]
 
 {- | Passes when `medaka check <rel>` fails and BOTH `first` and `second`
    appear in its output.
@@ -535,7 +535,7 @@ expectCellRejectedBoth : String -> String -> String -> <Exec, IO> Expectation
 expectCellRejectedBoth rel first second =
   let want =
     "nonzero exit, output containing \{debug first} and \{debug second}"
-  match runVerb medakaBin ["check", underRoot rel]
+  match runVerb (medakaBin ()) ["check", underRoot rel]
     Err e => Fail "could not run `medaka check \{rel}`: \{e}" want "no spawn"
     Ok (code, out, err) =>
       let text = out ++ err

@@ -44,30 +44,34 @@ locatedRow dir name source expected =
   let wasm = "\{dir}/\{name}.wasm"
   match writeFile path source
     Err e => fail "cannot write \{path}: \{e}"
-    Ok _ =>
-      match (boundedVerbSeconds 120 "env" [
-        "MEDAKA_STRICT=1", medakaBin, "build", path, "-o", native
-      ])
-        Err e => fail "native build: \{e}"
-        Ok (nativeCode, _, nativeErr) =>
-          if nativeCode /= 0 then
-            fail "native build failed: \{nativeErr}"
-          else match boundedVerbSeconds 120 "env" (wasmBuildArgv path wasm)
-            Err e => fail "wasm build: \{e}"
-            Ok (wasmCode, _, wasmErr) =>
-              if wasmCode /= 0 then
-                fail "wasm build failed: \{wasmErr}"
-              else match boundedVerbSeconds 120 native []
-                Err e => fail "native run: \{e}"
-                Ok nativeResult => match boundedVerbSeconds 120 "node" [
-                  underRoot "test/wasm/run.js",
-                  wasm,
+    Ok _ => match boundedVerbSeconds 120 "env" [
+      "MEDAKA_STRICT=1",
+      medakaBin (),
+      "build",
+      path,
+      "-o",
+      native,
+    ]
+      Err e => fail "native build: \{e}"
+      Ok (nativeCode, _, nativeErr) =>
+        if nativeCode /= 0 then
+          fail "native build failed: \{nativeErr}"
+        else match boundedVerbSeconds 120 "env" (wasmBuildArgv path wasm)
+          Err e => fail "wasm build: \{e}"
+          Ok (wasmCode, _, wasmErr) =>
+            if wasmCode /= 0 then
+              fail "wasm build failed: \{wasmErr}"
+            else match boundedVerbSeconds 120 native []
+              Err e => fail "native run: \{e}"
+              Ok nativeResult => match boundedVerbSeconds 120 "node" [
+                underRoot "test/wasm/run.js",
+                wasm,
+              ]
+                Err e => fail "wasm run: \{e}"
+                Ok wasmResult => expectAll [
+                  expectEqual (1, "", expected) nativeResult,
+                  expectEqual (1, "", expected) wasmResult,
                 ]
-                  Err e => fail "wasm run: \{e}"
-                  Ok wasmResult => expectAll [
-                    expectEqual (1, "", expected) nativeResult,
-                    expectEqual (1, "", expected) wasmResult,
-                  ]
 
 locatedSites : String -> <IO, Exec, FileRead, FileWrite> Expectation
 locatedSites dir =

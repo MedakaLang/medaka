@@ -39,7 +39,7 @@ runOf cmd args = map ((code, out, _) => (code, out)) (boundedVerb cmd args)
 buildAndRun : String -> <Exec, IO, FileRead, FileWrite> Expectation
 buildAndRun dir =
   let bin = "\{dir}/exit_codes.bin"
-  match boundedVerbSeconds 600 medakaBin ["build", fixture, "-o", bin]
+  match boundedVerbSeconds 600 (medakaBin ()) ["build", fixture, "-o", bin]
     Err e => fail "could not spawn medaka build: \{e}"
     Ok (code, out, err) =>
       if code /= 0 then
