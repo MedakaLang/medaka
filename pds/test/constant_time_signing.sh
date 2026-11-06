@@ -773,7 +773,15 @@ closure_grade=$(cksum "$WORK/full-closure.lst" | awk '{print $1 " " $2}')
 # callers now load the static global. The five thunks left
 # (`expPMinus2`, `expNMinus2`, `generatorX`, `generatorY`, `pointGenerator`)
 # are constants too, with public initializers. 119 definitions.
-[ "$closure_grade" = '2864391331 3447' ] || fail "emitted transitive closure drifted ($closure_grade)"
+# Re-derived 2026-11-06 for the Core IR unfolding of trivial definitions
+# (`inline-trivial-calls`), symbol by symbol against the 119 above. Out, and
+# nothing in: `mdk_array__make`, `mdk_bytes__adoptByteBlockUnsafe`,
+# `mdk_impl_Int_display`, `mdk_impl_String_display`, `mdk_u32__toInt__rw` and
+# `mdk_u8__toInt`. Each forwards its parameters to an extern or a constructor
+# (or returns its one parameter), so every caller now reaches that head
+# directly: `arrayMake`, the `Bytes` constructor, `intToString`, the argument
+# itself, `u32ToInt`, `u8ToInt`. None of the six had a branch. 113 definitions.
+[ "$closure_grade" = '3690762057 3321' ] || fail "emitted transitive closure drifted ($closure_grade)"
 # Two of the modules live in stdlib/crypto/, which mangles as `crypto_` rather
 # than `lib_`, and one is stdlib/u32.mdk, so the prefixes are spelled out
 # rather than built from a module name.
@@ -926,7 +934,20 @@ control_grade=$(cksum "$WORK/control.manifest" | awk '{print $1 " " $2}')
 # `i * 4` and `i * 4 + k` on the public counter, and its ten calls are the four
 # `__mdk_apply` slow paths, three `mdk_shift_left` by a literal amount and
 # three `mdk_bit_or`. The bytes reach only the shifts and ors. No other row moved.
-[ "$control_grade" = '932988870 5382' ] || fail "emitted control/index/allocation manifest drifted ($control_grade)"
+# Re-derived 2026-11-06 for the unfolding at the closure grade, row by row
+# against the 119 rows above. The six rows that left were all branch-free
+# (`array.make` 1 make and 1 call, `Int_display` 1 call, the rest zero). No
+# surviving row's branch, comparison, index, write, copy or trap column moved.
+# Nine rows lost one call, the unfolded wrapper: keyPad 5 -> 4, digestBytes
+# 10 -> 9 and MutBytes.freeze 3 -> 2 (`adoptByteBlockUnsafe`, now the `Bytes`
+# constructor's allocation, which the call column does not count),
+# digestWord__rw 8 -> 7 (`u32.toInt`), both expBit rows 8 -> 7 and
+# scalarLadder 10 -> 9 (`u8.toInt`), feFromBytesReduce and scFromBytesReduce
+# 7 -> 6 (`String` display in their public length-panic message). One row
+# moved in the make column only: buildSchedule's `array.make` call is now the
+# `arrayMake` extern, which the make column counts (0 -> 1), its call count
+# unchanged at 3.
+[ "$control_grade" = '4152268280 5158' ] || fail "emitted control/index/allocation manifest drifted ($control_grade)"
 pass 'emitted helper bodies retain the audited branch/index/allocation shape; only fixed public controls remain'
 
 for symbol in \
@@ -1225,7 +1246,10 @@ public_control_grade=$(cksum "$WORK/public-control.manifest" | awk '{print $1 " 
 # public consumer reaches, each losing the feOne/feZero forces and moving in
 # no other column: affineToPoint 1 -> 0 calls and pointIsCanonicalInfinity
 # 7 -> 5.
-if [ "$public_closure_grade" != '1872915056 3802' ] || [ "$public_control_grade" != '3090551942 5934' ]; then
+# Re-derived 2026-11-06 for the unfolding: the same six definitions leave
+# (131 -> 125, nothing enters) and the same nine one-call drops and
+# buildSchedule make move as the internal grade above; no other row moved.
+if [ "$public_closure_grade" != '250216018 3676' ] || [ "$public_control_grade" != '427649443 5710' ]; then
   fail "public union exact grades drifted (closure=$public_closure_grade control=$public_control_grade)"
 fi
 pass "public-root LLVM union excludes ForTest and retains the audited signing/key topology ($(wc -l < "$WORK/full-closure.lst") definitions)"
