@@ -20,7 +20,7 @@ import frontend.ast_walk.{childExprs}
 import frontend.parser.{Positions(..)}
 import list.{findMap, get, init, last, takeWhile, dropWhile}
 import support.util.{
-  anyList, allList, filterList, isEmptyL, isNonEmptyL, joinWith, listLen,
+  anyList, allList, filterList, initList, isNonEmptyL, joinWith, listLen,
   startsWith
 }
 import tools.lint_calls.{lastSegment}
@@ -155,10 +155,12 @@ letClauseFindings env name site (FunClause _ body) =
 -- ── the clause form ──────────────────────────────────────────────────────────
 
 -- A function whose clauses name constructors in one parameter position and
--- whose last clause matches anything there and answers without recursing.
+-- whose last clause matches anything there and answers without recursing.  Two
+-- constructor clauses before the last are the least a finding needs, so a
+-- shorter function is not read further.
 groupFindings : Env -> String -> List FunClause -> Option Loc -> List Finding
 groupFindings env name clauses loc = match (init clauses, last clauses)
-  (Some initCs, Some (FunClause pats body)) =>
+  (Some (initCs@(_ :: _ :: _)), Some (FunClause pats body)) =>
     if allList irrefutable pats && not (mentionsVar name body) then
       firstPosition env name loc initCs pats body
     else
@@ -247,18 +249,15 @@ matchFindings env name loc (EMatch scrut arms) =
   matchArms env name loc scrut arms
 matchFindings _ _ _ _ = []
 
+-- The last arm is read first: the arms before it are read only behind an
+-- unguarded catch-all that answers without recursing, which few matches end in.
 matchArms : Env -> String -> Option Loc -> Expr -> List Arm -> List Finding
-matchArms env name loc scrut arms = match (
-  init arms,
-  last arms,
-)
-  (Some initArms, Some (Arm p guards body)) =>
-    let ctorArms = filterList armHasCtor initArms
-    let working = filterList (armWorks name) ctorArms
-    if isEmptyL guards then
-      if listLen working >= 2
-        && wildAt p body (scrutVar scrut ++ varOfPat p)
-        && anyList (armRecurses name) working then
+matchArms env name loc scrut arms = match last arms
+  Some (Arm p [] body) =>
+    if wildAt p body (scrutVar scrut ++ varOfPat p) then
+      let ctorArms = filterList armHasCtor (initList arms)
+      let working = filterList (armWorks name) ctorArms
+      if listLen working >= 2 && anyList (armRecurses name) working then
         report
           env
           name

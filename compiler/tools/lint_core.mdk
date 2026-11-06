@@ -77,15 +77,17 @@ fixToDiagFix fx =
     (map (e => (e.feSpan, e.feText)) fx.fixEdits)
 
 -- A write-once cell holding a derived value, forced on first demand.  Rules run
--- under a pure `check`, and the cell is private to one file's `FileFacts`, so
--- two rules asking for the same derived value share one computation without any
--- table keyed by source text.
+-- under a pure `check`, and a cell is private to one file's run (its
+-- `FileFacts`, or the state a rule builds for that file's visitors), so two
+-- readers of the same derived value share one computation without any table
+-- keyed by source text.
 export data Memo a = Memo (Ref (Option a)) (Unit -> a)
 
 export
 memoNew : (Unit -> a) -> Memo a
 memoNew f = Memo (Ref None) f
 
+export
 memoGet : Memo a -> a
 memoGet (Memo cell f) = match !cell
   Some v => v

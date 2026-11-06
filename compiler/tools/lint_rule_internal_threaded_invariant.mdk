@@ -17,7 +17,6 @@ import frontend.ast.{
 import frontend.ast_walk.{childExprs}
 import frontend.marker.{localBoundNames}
 import frontend.parser.{Positions(..)}
-import array.{get as arrayGet}
 import list.{dropWhile, findMap, get, last, lookup, reverse, sortBy, zip}
 import string.{contains, repeat, startsWith, trim, trimLeft, trimRight}
 import support.char.{isIdentChar}
@@ -52,6 +51,7 @@ import tools.lint_shared.{
   isEVarNamed,
   mentionsVar,
   ruleNameThreadedInvariant,
+  sourceLine,
   unwrapLoc,
   varSite,
 }
@@ -269,9 +269,8 @@ threadFix : FileFacts ->
   Option Fix
 threadFix facts prog (Group name _ clauses next) shared names calls = do
   first <- clauseHead clauses
-  let ls = factLines facts
   let plan = Plan {
-    plLines = ls,
+    plFacts = facts,
     plName = name,
     plArity = listLen (clausePats first),
     plShared = shared,
@@ -279,13 +278,14 @@ threadFix facts prog (Group name _ clauses next) shared names calls = do
     plCalls = calls,
     plBound = localBoundNames (filterList (definesName name) prog),
   }
-  spans <- traverse (clauseSpan plan) (withBounds (lineCount ls next) clauses)
-  guard (allList (spanFits plan) spans)
-  guard (allList (usedBeyondCalls plan spans) names)
-  guard (not (anyList (sp => buildsModuloCons plan sp.spBody) spans))
-  guard (allList (sp => recordTargetsFit plan sp.spBody) spans)
-  guard (not (anyList (sp => armGuardReadsInvariant plan sp.spBody) spans))
+  let bodies = map clauseBody clauses
+  guard (allList (usedBeyondCalls plan bodies) names)
+  guard (not (anyList (buildsModuloCons plan) bodies))
+  guard (allList (recordTargetsFit plan) bodies)
+  guard (not (anyList (armGuardReadsInvariant plan) bodies))
   guard (signatureFits plan prog)
+  spans <- traverse (clauseSpan plan) (withBounds (lineCount plan next) clauses)
+  guard (allList (spanFits plan) spans)
   merge <- whereMerge plan spans
   edits <- rewriteEdits plan spans merge
   Some Fix {
@@ -301,15 +301,20 @@ clauseHead [] = None
 clausePats : Clause -> List Pat
 clausePats (Clause _ ps _) = ps
 
+clauseBody : Clause -> Expr
+clauseBody (Clause _ _ body) = body
+
 definesName : String -> Decl -> Bool
 definesName name (DFunDef _ n _ _ _ _) = n == name
 definesName _ _ = False
 
--- What the rewrite of one function reads: the file's lines, the function's
--- name and arity, its invariant positions with their names, every self-call
--- it makes, and every name its clauses bind (parameters included).
+-- What the rewrite of one function reads: the file (its lines, split on the
+-- first read of one), the function's name and arity, its invariant positions
+-- with their names, every self-call it makes, and every name its clauses bind
+-- (parameters included).  The conditions that read only the syntax tree come
+-- first, so a function that fails one never splits its file into lines.
 data Plan = Plan {
-  plLines : Array String,
+  plFacts : FileFacts,
   plName : String,
   plArity : Int,
   plShared : List Int,
@@ -329,8 +334,9 @@ data Span = Span {
 }
 
 -- The line after the last of the file, for a function that ends it.
-lineCount : Array String -> Int -> Int
-lineCount ls next = if next > 0 then next else arrayLength ls + 1
+lineCount : Plan -> Int -> Int
+lineCount plan next =
+  if next > 0 then next else arrayLength (factLines plan.plFacts) + 1
 
 -- Each clause with the line its successor starts on.
 withBounds : Int -> List Clause -> List (Clause, Int)
@@ -343,33 +349,33 @@ withBounds bound cs0 = go cs0
 clauseSpan : Plan -> (Clause, Int) -> Option Span
 clauseSpan plan (Clause l ps body, bound) = do
   guard (l > 0)
-  let text = lineText plan.plLines l
+  let text = lineText plan l
   guard (startsWith (plan.plName ++ " ") text)
   atoms <- headAtoms text (stringLength plan.plName)
   guard (listLen atoms == listLen ps && listLen ps == plan.plArity)
   Some Span {
     spFirst = l,
-    spLast = lastCode plan.plLines l (bound - 1),
+    spLast = lastCode plan l (bound - 1),
     spPats = ps,
     spBody = body,
     spAtoms = atoms,
   }
 
-lineText : Array String -> Int -> String
-lineText ls n = optionOr "" (arrayGet (n - 1) ls)
+lineText : Plan -> Int -> String
+lineText plan n = optionOr "" (sourceLine plan.plFacts n)
 
-indentAt : Array String -> Int -> Int
-indentAt ls n =
-  let s = lineText ls n
+indentAt : Plan -> Int -> Int
+indentAt plan n =
+  let s = lineText plan n
   indentWidth s
 
 -- The last code line from `lo` up to `hi`, `lo` itself when there is none.
-lastCode : Array String -> Int -> Int -> Int
-lastCode ls lo hi0 = go hi0
+lastCode : Plan -> Int -> Int -> Int
+lastCode plan lo hi0 = go hi0
   where
     go hi
       | hi <= lo = lo
-      | isCodeText (lineText ls hi) = hi
+      | isCodeText (lineText plan hi) = hi
       | otherwise = go (hi - 1)
 
 -- The columns of the parameter patterns of a head line, from `start` (just
@@ -436,7 +442,7 @@ opened from i = if from >= 0 then from else i
 
 atomText : Plan -> Span -> Int -> String
 atomText plan sp i = match get i sp.spAtoms
-  Some (a, b) => stringSlice a b (lineText plan.plLines sp.spFirst)
+  Some (a, b) => stringSlice a b (lineText plan sp.spFirst)
   None => ""
 
 headEnd : Span -> Int
@@ -466,15 +472,15 @@ invariantFits plan sp (i, v) = match get i sp.spPats
 
 lineFits : Plan -> Span -> Int -> Bool
 lineFits plan sp l =
-  let s = lineText plan.plLines l
+  let s = lineText plan l
   not (contains "\"\"\"" s || contains "\t" s)
-    && (l == sp.spFirst || not (isCodeText s) || indentAt plan.plLines l > 0)
+    && (l == sp.spFirst || not (isCodeText s) || indentAt plan l > 0)
 
 -- An invariant parameter that the clauses mention only as the arguments of the
 -- self-calls is dead.
-usedBeyondCalls : Plan -> List Span -> String -> Bool
-usedBeyondCalls plan spans v =
-  sum (map (sp => countVar v sp.spBody) spans) > listLen plan.plCalls
+usedBeyondCalls : Plan -> List Expr -> String -> Bool
+usedBeyondCalls plan bodies v =
+  sum (map (countVar v) bodies) > listLen plan.plCalls
 
 countVar : String -> Expr -> Int
 countVar x e = match unwrapLoc e
@@ -611,8 +617,8 @@ whereMerge plan spans =
     [] => Some None
     [w] => match spans
       [sp] =>
-        if trim (lineText plan.plLines w) == "where"
-          && indentAt plan.plLines w == 2
+        if trim (lineText plan w) == "where"
+          && indentAt plan w == 2
           && bindingsFit plan sp w then
           Some (Some w)
         else
@@ -621,7 +627,7 @@ whereMerge plan spans =
     _ => None
 
 hasWhere : Plan -> Int -> Bool
-hasWhere plan l = anyList (== "where") (identifiersIn (lineText plan.plLines l))
+hasWhere plan l = anyList (== "where") (identifiersIn (lineText plan l))
 
 bindingsFit : Plan -> Span -> Int -> Bool
 bindingsFit plan sp w = match unwrapLoc sp.spBody
@@ -629,9 +635,7 @@ bindingsFit plan sp w = match unwrapLoc sp.spBody
     let changing = flatMap patBoundNames (restPats plan sp)
     allList (b => not (anyList (n => bindMentions n b) changing)) binds
       && allList
-        (l =>
-          not (isCodeText (lineText plan.plLines l))
-            || indentAt plan.plLines l >= 4)
+        (l => not (isCodeText (lineText plan l)) || indentAt plan l >= 4)
         [w + 1..=sp.spLast]
   _ => False
 
@@ -680,9 +684,7 @@ indexedSpans spans = zip [0..=listLen spans - 1] spans
 -- Every identifier-like word of a clause's lines, comments and strings too.
 regionWords : Plan -> Span -> List String
 regionWords plan sp =
-  flatMap
-    (l => identifiersIn (lineText plan.plLines l))
-    [sp.spFirst..=sp.spLast]
+  flatMap (l => identifiersIn (lineText plan l)) [sp.spFirst..=sp.spLast]
 
 identifiersIn : String -> List String
 identifiersIn s = go 0 (0 - 1) []
@@ -745,7 +747,7 @@ callPieces : Plan -> String -> SelfCall -> Option (List Cut, List Int)
 callPieces plan callHead (SelfCall _ e _) = match spineOf e []
   (hd, args) => do
     (Loc _ hl hc _ hec) <- varSite hd
-    guard (stringSlice hc hec (lineText plan.plLines hl) == plan.plName)
+    guard (stringSlice hc hec (lineText plan hl) == plan.plName)
     pieces <- traverse (argPiece plan args) (zip plan.plShared plan.plNames)
     Some (Cut hl hc hec callHead :: flatMap fst pieces, flatMap snd pieces)
 
@@ -753,7 +755,7 @@ argPiece : Plan -> List Expr -> (Int, String) -> Option (List Cut, List Int)
 argPiece plan args (i, v) = do
   a <- get i args
   (Loc _ al ac el aec) <- varSite a
-  let s = lineText plan.plLines al
+  let s = lineText plan al
   guard (el == al && stringSlice ac aec s == v)
   if trim s == v then
     Some ([], [al])
@@ -799,7 +801,7 @@ lineEdits plan spans dropped merge (l, cs) = do
   sp <- findMap
     (s => if l >= s.spFirst && l <= s.spLast then Some s else None)
     spans
-  let s = lineText plan.plLines l
+  let s = lineText plan l
   let start = match cs
     c :: _ => cutStart c
     [] => 0
@@ -810,7 +812,7 @@ lineEdits plan spans dropped merge (l, cs) = do
     else
       movesTokens s cs
         && (match below
-          Some b => indentAt plan.plLines b >= start
+          Some b => indentAt plan b >= start
           None => False)
   traverse (cutEdit pad) cs
 
@@ -845,7 +847,7 @@ nextCodeLine plan dropped l0 limit = go (l0 + 1)
   where
     go l
       | l > limit = None
-      | anyList (== l) dropped || not (isCodeText (lineText plan.plLines l)) =
+      | anyList (== l) dropped || not (isCodeText (lineText plan l)) =
         go (l + 1)
       | otherwise = Some l
 
@@ -858,7 +860,7 @@ headEdit : Plan ->
   (Int, Span) ->
   Option FixEdit
 headEdit plan dropped merge goName fresh (k, sp) = do
-  let s = lineText plan.plLines sp.spFirst
+  let s = lineText plan sp.spFirst
   let he = headEnd sp
   let changing = map (i => " " ++ atomText plan sp i) (restOf plan)
   let goHead =
@@ -874,7 +876,7 @@ headEdit plan dropped merge goName fresh (k, sp) = do
     lead /= ""
       && lead /= "="
       && (match below
-        Some b => indentAt plan.plLines b + 4 > at + d
+        Some b => indentAt plan b + 4 > at + d
         None => False)
   let padding = if pad then repeat (4 - d) " " else ""
   let prefix =
@@ -912,7 +914,7 @@ shiftEdits plan dropped merge sp =
 shifted : Plan -> List Int -> Option Int -> Int -> Bool
 shifted plan dropped merge l =
   not (anyList (== l) dropped)
-    && trim (lineText plan.plLines l) /= ""
+    && trim (lineText plan l) /= ""
     && (match merge
       Some w => l < w
       None => True)
@@ -924,7 +926,7 @@ dropLine plan l =
     (Loc
       ""
       (l - 1)
-      (stringLength (lineText plan.plLines (l - 1)))
+      (stringLength (lineText plan (l - 1)))
       l
-      (stringLength (lineText plan.plLines l)))
+      (stringLength (lineText plan l)))
     ""

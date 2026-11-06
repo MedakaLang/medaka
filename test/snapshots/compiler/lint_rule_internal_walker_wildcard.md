@@ -1,5 +1,5 @@
 # META
-source_lines=428
+source_lines=427
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-walker-wildcard: a self-recursive function over constructor patterns whose final wildcard returns a constant or its input without recursing.
@@ -24,7 +24,7 @@ import frontend.ast_walk.{childExprs}
 import frontend.parser.{Positions(..)}
 import list.{findMap, get, init, last, takeWhile, dropWhile}
 import support.util.{
-  anyList, allList, filterList, isEmptyL, isNonEmptyL, joinWith, listLen,
+  anyList, allList, filterList, initList, isNonEmptyL, joinWith, listLen,
   startsWith
 }
 import tools.lint_calls.{lastSegment}
@@ -159,10 +159,12 @@ letClauseFindings env name site (FunClause _ body) =
 -- ── the clause form ──────────────────────────────────────────────────────────
 
 -- A function whose clauses name constructors in one parameter position and
--- whose last clause matches anything there and answers without recursing.
+-- whose last clause matches anything there and answers without recursing.  Two
+-- constructor clauses before the last are the least a finding needs, so a
+-- shorter function is not read further.
 groupFindings : Env -> String -> List FunClause -> Option Loc -> List Finding
 groupFindings env name clauses loc = match (init clauses, last clauses)
-  (Some initCs, Some (FunClause pats body)) =>
+  (Some (initCs@(_ :: _ :: _)), Some (FunClause pats body)) =>
     if allList irrefutable pats && not (mentionsVar name body) then
       firstPosition env name loc initCs pats body
     else
@@ -251,18 +253,15 @@ matchFindings env name loc (EMatch scrut arms) =
   matchArms env name loc scrut arms
 matchFindings _ _ _ _ = []
 
+-- The last arm is read first: the arms before it are read only behind an
+-- unguarded catch-all that answers without recursing, which few matches end in.
 matchArms : Env -> String -> Option Loc -> Expr -> List Arm -> List Finding
-matchArms env name loc scrut arms = match (
-  init arms,
-  last arms,
-)
-  (Some initArms, Some (Arm p guards body)) =>
-    let ctorArms = filterList armHasCtor initArms
-    let working = filterList (armWorks name) ctorArms
-    if isEmptyL guards then
-      if listLen working >= 2
-        && wildAt p body (scrutVar scrut ++ varOfPat p)
-        && anyList (armRecurses name) working then
+matchArms env name loc scrut arms = match last arms
+  Some (Arm p [] body) =>
+    if wildAt p body (scrutVar scrut ++ varOfPat p) then
+      let ctorArms = filterList armHasCtor (initList arms)
+      let working = filterList (armWorks name) ctorArms
+      if listLen working >= 2 && anyList (armRecurses name) working then
         report
           env
           name
@@ -436,7 +435,7 @@ siblingOf r x =
 (DUse false (UseGroup ("frontend" "ast_walk") ((mem "childExprs" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
 (DUse false (UseGroup ("list") ((mem "findMap" false) (mem "get" false) (mem "init" false) (mem "last" false) (mem "takeWhile" false) (mem "dropWhile" false))))
-(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "allList" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "joinWith" false) (mem "listLen" false) (mem "startsWith" false))))
+(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "allList" false) (mem "filterList" false) (mem "initList" false) (mem "isNonEmptyL" false) (mem "joinWith" false) (mem "listLen" false) (mem "startsWith" false))))
 (DUse false (UseGroup ("tools" "lint_calls") ((mem "lastSegment" false))))
 (DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" false) (mem "Finding" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "mkRule" false) (mem "projectIndexOf" false))))
 (DUse false (UseGroup ("tools" "lint_index") ((mem "IndexRow" false) (mem "Ns" true) (mem "ProjectIndex" false) (mem "RowKind" true) (mem "projectRows" false) (mem "projectRowsNamed" false) (mem "stdlibRows" false) (mem "stdlibRowsNamed" false))))
@@ -474,7 +473,7 @@ siblingOf r x =
 (DTypeSig false "letClauseFindings" (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyFun (TyCon "FunClause") (TyApp (TyCon "List") (TyCon "Finding")))))))
 (DFunDef false "letClauseFindings" ((PVar "env") (PVar "name") (PVar "site") (PCon "FunClause" PWild (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "walkBody") (EVar "env")) (EVar "name")) (EApp (EVar "Some") (EVar "site"))) (EVar "body")))
 (DTypeSig false "groupFindings" (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "FunClause")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "List") (TyCon "Finding")))))))
-(DFunDef false "groupFindings" ((PVar "env") (PVar "name") (PVar "clauses") (PVar "loc")) (EMatch (ETuple (EApp (EVar "init") (EVar "clauses")) (EApp (EVar "last") (EVar "clauses"))) (arm (PTuple (PCon "Some" (PVar "initCs")) (PCon "Some" (PCon "FunClause" (PVar "pats") (PVar "body")))) () (EIf (EBinOp "&&" (EApp (EApp (EVar "allList") (EVar "irrefutable")) (EVar "pats")) (EApp (EVar "not") (EApp (EApp (EVar "mentionsVar") (EVar "name")) (EVar "body")))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "firstPosition") (EVar "env")) (EVar "name")) (EVar "loc")) (EVar "initCs")) (EVar "pats")) (EVar "body")) (EListLit))) (arm PWild () (EListLit))))
+(DFunDef false "groupFindings" ((PVar "env") (PVar "name") (PVar "clauses") (PVar "loc")) (EMatch (ETuple (EApp (EVar "init") (EVar "clauses")) (EApp (EVar "last") (EVar "clauses"))) (arm (PTuple (PCon "Some" (PAs "initCs" (PCons PWild (PCons PWild PWild)))) (PCon "Some" (PCon "FunClause" (PVar "pats") (PVar "body")))) () (EIf (EBinOp "&&" (EApp (EApp (EVar "allList") (EVar "irrefutable")) (EVar "pats")) (EApp (EVar "not") (EApp (EApp (EVar "mentionsVar") (EVar "name")) (EVar "body")))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "firstPosition") (EVar "env")) (EVar "name")) (EVar "loc")) (EVar "initCs")) (EVar "pats")) (EVar "body")) (EListLit))) (arm PWild () (EListLit))))
 (DTypeSig false "firstPosition" (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyCon "FunClause")) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding")))))))))
 (DFunDef false "firstPosition" ((PVar "env") (PVar "name") (PVar "loc") (PVar "initCs") (PVar "pats") (PVar "body")) (EBlock (DoLet false false (PVar "found") (EApp (EApp (EVar "findMap") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "positionFinding") (EVar "env")) (EVar "name")) (EVar "loc")) (EVar "initCs")) (EVar "pats")) (EVar "body"))) (EApp (EVar "positionsOf") (EVar "pats")))) (DoExpr (EApp (EApp (EVar "optionOr") (EListLit)) (EVar "found")))))
 (DTypeSig false "positionsOf" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "List") (TyCon "Int"))))
@@ -506,7 +505,7 @@ siblingOf r x =
 (DFunDef false "matchFindings" ((PVar "env") (PVar "name") (PVar "loc") (PCon "EMatch" (PVar "scrut") (PVar "arms"))) (EApp (EApp (EApp (EApp (EApp (EVar "matchArms") (EVar "env")) (EVar "name")) (EVar "loc")) (EVar "scrut")) (EVar "arms")))
 (DFunDef false "matchFindings" (PWild PWild PWild PWild) (EListLit))
 (DTypeSig false "matchArms" (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "matchArms" ((PVar "env") (PVar "name") (PVar "loc") (PVar "scrut") (PVar "arms")) (EMatch (ETuple (EApp (EVar "init") (EVar "arms")) (EApp (EVar "last") (EVar "arms"))) (arm (PTuple (PCon "Some" (PVar "initArms")) (PCon "Some" (PCon "Arm" (PVar "p") (PVar "guards") (PVar "body")))) () (EBlock (DoLet false false (PVar "ctorArms") (EApp (EApp (EVar "filterList") (EVar "armHasCtor")) (EVar "initArms"))) (DoLet false false (PVar "working") (EApp (EApp (EVar "filterList") (EApp (EVar "armWorks") (EVar "name"))) (EVar "ctorArms"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "guards")) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EApp (EVar "listLen") (EVar "working")) (ELit (LInt 2))) (EApp (EApp (EApp (EVar "wildAt") (EVar "p")) (EVar "body")) (EBinOp "++" (EApp (EVar "scrutVar") (EVar "scrut")) (EApp (EVar "varOfPat") (EVar "p"))))) (EApp (EApp (EVar "anyList") (EApp (EVar "armRecurses") (EVar "name"))) (EVar "working"))) (EApp (EApp (EApp (EApp (EVar "report") (EVar "env")) (EVar "name")) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstLoc") (EVar "body"))) (EVar "loc"))) (EApp (EApp (EVar "flatMap") (EVar "armCtors")) (EVar "ctorArms"))) (EListLit)) (EListLit))))) (arm PWild () (EListLit))))
+(DFunDef false "matchArms" ((PVar "env") (PVar "name") (PVar "loc") (PVar "scrut") (PVar "arms")) (EMatch (EApp (EVar "last") (EVar "arms")) (arm (PCon "Some" (PCon "Arm" (PVar "p") (PList) (PVar "body"))) () (EIf (EApp (EApp (EApp (EVar "wildAt") (EVar "p")) (EVar "body")) (EBinOp "++" (EApp (EVar "scrutVar") (EVar "scrut")) (EApp (EVar "varOfPat") (EVar "p")))) (EBlock (DoLet false false (PVar "ctorArms") (EApp (EApp (EVar "filterList") (EVar "armHasCtor")) (EApp (EVar "initList") (EVar "arms")))) (DoLet false false (PVar "working") (EApp (EApp (EVar "filterList") (EApp (EVar "armWorks") (EVar "name"))) (EVar "ctorArms"))) (DoExpr (EIf (EBinOp "&&" (EBinOp ">=" (EApp (EVar "listLen") (EVar "working")) (ELit (LInt 2))) (EApp (EApp (EVar "anyList") (EApp (EVar "armRecurses") (EVar "name"))) (EVar "working"))) (EApp (EApp (EApp (EApp (EVar "report") (EVar "env")) (EVar "name")) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstLoc") (EVar "body"))) (EVar "loc"))) (EApp (EApp (EVar "flatMap") (EVar "armCtors")) (EVar "ctorArms"))) (EListLit)))) (EListLit))) (arm PWild () (EListLit))))
 (DTypeSig false "armHasCtor" (TyFun (TyCon "Arm") (TyCon "Bool")))
 (DFunDef false "armHasCtor" ((PVar "arm")) (EApp (EVar "isNonEmptyL") (EApp (EVar "armCtors") (EVar "arm"))))
 (DTypeSig false "armCtors" (TyFun (TyCon "Arm") (TyApp (TyCon "List") (TyCon "String"))))
@@ -570,7 +569,7 @@ siblingOf r x =
 (DUse false (UseGroup ("frontend" "ast_walk") ((mem "childExprs" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
 (DUse false (UseGroup ("list") ((mem "findMap" false) (mem "get" false) (mem "init" false) (mem "last" false) (mem "takeWhile" false) (mem "dropWhile" false))))
-(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "allList" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "joinWith" false) (mem "listLen" false) (mem "startsWith" false))))
+(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "allList" false) (mem "filterList" false) (mem "initList" false) (mem "isNonEmptyL" false) (mem "joinWith" false) (mem "listLen" false) (mem "startsWith" false))))
 (DUse false (UseGroup ("tools" "lint_calls") ((mem "lastSegment" false))))
 (DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" false) (mem "Finding" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "mkRule" false) (mem "projectIndexOf" false))))
 (DUse false (UseGroup ("tools" "lint_index") ((mem "IndexRow" false) (mem "Ns" true) (mem "ProjectIndex" false) (mem "RowKind" true) (mem "projectRows" false) (mem "projectRowsNamed" false) (mem "stdlibRows" false) (mem "stdlibRowsNamed" false))))
@@ -608,7 +607,7 @@ siblingOf r x =
 (DTypeSig false "letClauseFindings" (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyFun (TyCon "FunClause") (TyApp (TyCon "List") (TyCon "Finding")))))))
 (DFunDef false "letClauseFindings" ((PVar "env") (PVar "name") (PVar "site") (PCon "FunClause" PWild (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "walkBody") (EVar "env")) (EVar "name")) (EApp (EVar "Some") (EVar "site"))) (EVar "body")))
 (DTypeSig false "groupFindings" (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "FunClause")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "List") (TyCon "Finding")))))))
-(DFunDef false "groupFindings" ((PVar "env") (PVar "name") (PVar "clauses") (PVar "loc")) (EMatch (ETuple (EApp (EVar "init") (EVar "clauses")) (EApp (EVar "last") (EVar "clauses"))) (arm (PTuple (PCon "Some" (PVar "initCs")) (PCon "Some" (PCon "FunClause" (PVar "pats") (PVar "body")))) () (EIf (EBinOp "&&" (EApp (EApp (EVar "allList") (EVar "irrefutable")) (EVar "pats")) (EApp (EVar "not") (EApp (EApp (EVar "mentionsVar") (EVar "name")) (EVar "body")))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "firstPosition") (EVar "env")) (EVar "name")) (EVar "loc")) (EVar "initCs")) (EVar "pats")) (EVar "body")) (EListLit))) (arm PWild () (EListLit))))
+(DFunDef false "groupFindings" ((PVar "env") (PVar "name") (PVar "clauses") (PVar "loc")) (EMatch (ETuple (EApp (EVar "init") (EVar "clauses")) (EApp (EVar "last") (EVar "clauses"))) (arm (PTuple (PCon "Some" (PAs "initCs" (PCons PWild (PCons PWild PWild)))) (PCon "Some" (PCon "FunClause" (PVar "pats") (PVar "body")))) () (EIf (EBinOp "&&" (EApp (EApp (EVar "allList") (EVar "irrefutable")) (EVar "pats")) (EApp (EVar "not") (EApp (EApp (EVar "mentionsVar") (EVar "name")) (EVar "body")))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "firstPosition") (EVar "env")) (EVar "name")) (EVar "loc")) (EVar "initCs")) (EVar "pats")) (EVar "body")) (EListLit))) (arm PWild () (EListLit))))
 (DTypeSig false "firstPosition" (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyCon "FunClause")) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding")))))))))
 (DFunDef false "firstPosition" ((PVar "env") (PVar "name") (PVar "loc") (PVar "initCs") (PVar "pats") (PVar "body")) (EBlock (DoLet false false (PVar "found") (EApp (EApp (EVar "findMap") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "positionFinding") (EVar "env")) (EVar "name")) (EVar "loc")) (EVar "initCs")) (EVar "pats")) (EVar "body"))) (EApp (EVar "positionsOf") (EVar "pats")))) (DoExpr (EApp (EApp (EVar "optionOr") (EListLit)) (EVar "found")))))
 (DTypeSig false "positionsOf" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "List") (TyCon "Int"))))
@@ -640,7 +639,7 @@ siblingOf r x =
 (DFunDef false "matchFindings" ((PVar "env") (PVar "name") (PVar "loc") (PCon "EMatch" (PVar "scrut") (PVar "arms"))) (EApp (EApp (EApp (EApp (EApp (EVar "matchArms") (EVar "env")) (EVar "name")) (EVar "loc")) (EVar "scrut")) (EVar "arms")))
 (DFunDef false "matchFindings" (PWild PWild PWild PWild) (EListLit))
 (DTypeSig false "matchArms" (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "matchArms" ((PVar "env") (PVar "name") (PVar "loc") (PVar "scrut") (PVar "arms")) (EMatch (ETuple (EApp (EVar "init") (EVar "arms")) (EApp (EVar "last") (EVar "arms"))) (arm (PTuple (PCon "Some" (PVar "initArms")) (PCon "Some" (PCon "Arm" (PVar "p") (PVar "guards") (PVar "body")))) () (EBlock (DoLet false false (PVar "ctorArms") (EApp (EApp (EVar "filterList") (EVar "armHasCtor")) (EVar "initArms"))) (DoLet false false (PVar "working") (EApp (EApp (EVar "filterList") (EApp (EVar "armWorks") (EVar "name"))) (EVar "ctorArms"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "guards")) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EApp (EVar "listLen") (EVar "working")) (ELit (LInt 2))) (EApp (EApp (EApp (EVar "wildAt") (EVar "p")) (EVar "body")) (EBinOp "++" (EApp (EVar "scrutVar") (EVar "scrut")) (EApp (EVar "varOfPat") (EVar "p"))))) (EApp (EApp (EVar "anyList") (EApp (EVar "armRecurses") (EVar "name"))) (EVar "working"))) (EApp (EApp (EApp (EApp (EVar "report") (EVar "env")) (EVar "name")) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstLoc") (EVar "body"))) (EVar "loc"))) (EApp (EApp (EDictApp "flatMap") (EVar "armCtors")) (EVar "ctorArms"))) (EListLit)) (EListLit))))) (arm PWild () (EListLit))))
+(DFunDef false "matchArms" ((PVar "env") (PVar "name") (PVar "loc") (PVar "scrut") (PVar "arms")) (EMatch (EApp (EVar "last") (EVar "arms")) (arm (PCon "Some" (PCon "Arm" (PVar "p") (PList) (PVar "body"))) () (EIf (EApp (EApp (EApp (EVar "wildAt") (EVar "p")) (EVar "body")) (EBinOp "++" (EApp (EVar "scrutVar") (EVar "scrut")) (EApp (EVar "varOfPat") (EVar "p")))) (EBlock (DoLet false false (PVar "ctorArms") (EApp (EApp (EVar "filterList") (EVar "armHasCtor")) (EApp (EVar "initList") (EVar "arms")))) (DoLet false false (PVar "working") (EApp (EApp (EVar "filterList") (EApp (EVar "armWorks") (EVar "name"))) (EVar "ctorArms"))) (DoExpr (EIf (EBinOp "&&" (EBinOp ">=" (EApp (EVar "listLen") (EVar "working")) (ELit (LInt 2))) (EApp (EApp (EVar "anyList") (EApp (EVar "armRecurses") (EVar "name"))) (EVar "working"))) (EApp (EApp (EApp (EApp (EVar "report") (EVar "env")) (EVar "name")) (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstLoc") (EVar "body"))) (EVar "loc"))) (EApp (EApp (EDictApp "flatMap") (EVar "armCtors")) (EVar "ctorArms"))) (EListLit)))) (EListLit))) (arm PWild () (EListLit))))
 (DTypeSig false "armHasCtor" (TyFun (TyCon "Arm") (TyCon "Bool")))
 (DFunDef false "armHasCtor" ((PVar "arm")) (EApp (EVar "isNonEmptyL") (EApp (EVar "armCtors") (EVar "arm"))))
 (DTypeSig false "armCtors" (TyFun (TyCon "Arm") (TyApp (TyCon "List") (TyCon "String"))))
