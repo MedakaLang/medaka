@@ -269,6 +269,19 @@ export
 desugarPair : (String, List Decl) -> (String, List Decl)
 desugarPair (mid, p) = (mid, desugarIn mid p)
 
+-- [entry]'s module graph parsed with real spans, as `medaka run` loads it.  An
+-- interpreter oracle needs them: the import frame tells a synthesized alias
+-- method import from a written one by its location (`writtenImportsOf`), and
+-- the plain loader's placeholder spans make every import share one.
+export
+loadModulesLocated : String ->
+  List String ->
+  <IO> Result String (List (String, List Decl))
+loadModulesLocated entry roots =
+  match loadProgramFilesLocatedE (_ => None) entry roots
+    Err e => Err (loadErrorMessage e)
+    Ok mods => Ok (map dropPathTriple mods)
+
 -- The loader is the LOCATED one (`parseLocatedResult`, real spans + each
 -- module's path), not `loadProgram`: this driver renders the build's type
 -- diagnostics itself, and placeholder 1:0 spans with no path render them as

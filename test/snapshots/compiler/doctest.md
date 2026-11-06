@@ -1,5 +1,5 @@
 # META
-source_lines=520
+source_lines=523
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted doctest extraction + running.
@@ -23,7 +23,7 @@ stages=DESUGAR,MARK
 -- compiler/tools/test_cmd.mdk.
 
 import frontend.lexer.{Comment, commentLine, commentText}
-import frontend.ast.{Decl(..)}
+import frontend.ast.{Decl(..), UsePath(..), preludeAlias}
 import frontend.parser.{parseLocatedResult, parseErrorMessage}
 import frontend.desugar.{desugar, moduleAliases, qualifyAliasRefsWith}
 import support.util.{listLen, reverseL, joinNl, startsWith, splitNl, isEmptyL}
@@ -519,13 +519,16 @@ anyUse : List Decl -> Bool
 anyUse [] = False
 anyUse (d :: rest) = isUse d || anyUse rest
 
+-- Desugar's `import core as $core` binds the prelude every program already
+-- has, so it brings no module graph; only an import the source wrote does.
 isUse : Decl -> Bool
+isUse (DUse _ (UseAlias _ alias) _) = alias /= preludeAlias
 isUse (DUse _ _ _) = True
 isUse _ = False
 # DESUGAR
 (DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "commentLine" false) (mem "commentText" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "UsePath" true) (mem "preludeAlias" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseLocatedResult" false) (mem "parseErrorMessage" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false) (mem "moduleAliases" false) (mem "qualifyAliasRefsWith" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "reverseL" false) (mem "joinNl" false) (mem "startsWith" false) (mem "splitNl" false) (mem "isEmptyL" false))))
@@ -675,12 +678,13 @@ isUse _ = False
 (DFunDef false "anyUse" ((PList)) (EVar "False"))
 (DFunDef false "anyUse" ((PCons (PVar "d") (PVar "rest"))) (EBinOp "||" (EApp (EVar "isUse") (EVar "d")) (EApp (EVar "anyUse") (EVar "rest"))))
 (DTypeSig false "isUse" (TyFun (TyCon "Decl") (TyCon "Bool")))
+(DFunDef false "isUse" ((PCon "DUse" PWild (PCon "UseAlias" PWild (PVar "alias")) PWild)) (EBinOp "/=" (EVar "alias") (EVar "preludeAlias")))
 (DFunDef false "isUse" ((PCon "DUse" PWild PWild PWild)) (EVar "True"))
 (DFunDef false "isUse" (PWild) (EVar "False"))
 # MARK
 (DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "commentLine" false) (mem "commentText" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "UsePath" true) (mem "preludeAlias" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseLocatedResult" false) (mem "parseErrorMessage" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false) (mem "moduleAliases" false) (mem "qualifyAliasRefsWith" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "reverseL" false) (mem "joinNl" false) (mem "startsWith" false) (mem "splitNl" false) (mem "isEmptyL" false))))
@@ -830,5 +834,6 @@ isUse _ = False
 (DFunDef false "anyUse" ((PList)) (EVar "False"))
 (DFunDef false "anyUse" ((PCons (PVar "d") (PVar "rest"))) (EBinOp "||" (EApp (EVar "isUse") (EVar "d")) (EApp (EVar "anyUse") (EVar "rest"))))
 (DTypeSig false "isUse" (TyFun (TyCon "Decl") (TyCon "Bool")))
+(DFunDef false "isUse" ((PCon "DUse" PWild (PCon "UseAlias" PWild (PVar "alias")) PWild)) (EBinOp "/=" (EVar "alias") (EVar "preludeAlias")))
 (DFunDef false "isUse" ((PCon "DUse" PWild PWild PWild)) (EVar "True"))
 (DFunDef false "isUse" (PWild) (EVar "False"))

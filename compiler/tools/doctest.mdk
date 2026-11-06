@@ -19,7 +19,7 @@
 -- compiler/tools/test_cmd.mdk.
 
 import frontend.lexer.{Comment, commentLine, commentText}
-import frontend.ast.{Decl(..)}
+import frontend.ast.{Decl(..), UsePath(..), preludeAlias}
 import frontend.parser.{parseLocatedResult, parseErrorMessage}
 import frontend.desugar.{desugar, moduleAliases, qualifyAliasRefsWith}
 import support.util.{listLen, reverseL, joinNl, startsWith, splitNl, isEmptyL}
@@ -515,6 +515,9 @@ anyUse : List Decl -> Bool
 anyUse [] = False
 anyUse (d :: rest) = isUse d || anyUse rest
 
+-- Desugar's `import core as $core` binds the prelude every program already
+-- has, so it brings no module graph; only an import the source wrote does.
 isUse : Decl -> Bool
+isUse (DUse _ (UseAlias _ alias) _) = alias /= preludeAlias
 isUse (DUse _ _ _) = True
 isUse _ = False
