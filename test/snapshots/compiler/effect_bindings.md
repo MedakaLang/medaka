@@ -41,16 +41,16 @@ newBindingSummary arity freshType freshSummary =
 -- recursive uses may constrain their assumption without claiming ownership of
 -- the envelope that will be published after all producers have been inferred.
 freshBodyValues : Int -> (Unit -> Mono) -> EffRow -> (Mono, Mono)
-freshBodyValues arity0 freshType body = go arity0
-  where
-    go arity =
-      if arity <= 0 then
-        (freshType (), freshType ())
-      else
-        let domain = freshType ()
-        let row = if arity == 1 then body else pureRow
-        let (published, recursive) = go (arity - 1)
-        (TFun domain row published, TFun domain row recursive)
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
+freshBodyValues arity freshType body =
+  if arity <= 0 then
+    (freshType (), freshType ())
+  else
+    let domain = freshType ()
+    let row = if arity == 1 then body else pureRow
+    let (published, recursive) = freshBodyValues (arity - 1) freshType body
+    (TFun domain row published, TFun domain row recursive)
 
 -- Only source applications belong to the binding; a function-valued result
 -- starts a new invocation protocol. An arity mismatch is diagnosed by typing.
@@ -68,7 +68,7 @@ bodyRowAt arity value = match normalize value
 (DTypeSig true "newBindingSummary" (TyFun (TyCon "Int") (TyFun (TyFun (TyCon "Unit") (TyCon "Mono")) (TyFun (TyFun (TyCon "Unit") (TyCon "EffRow")) (TyCon "BindingSummary")))))
 (DFunDef false "newBindingSummary" ((PVar "arity") (PVar "freshType") (PVar "freshSummary")) (EBlock (DoLet false false (PVar "body") (EApp (EVar "freshSummary") (ELit LUnit))) (DoLet false false (PTuple (PVar "published") (PVar "recursive")) (EApp (EApp (EApp (EVar "freshBodyValues") (EVar "arity")) (EVar "freshType")) (EVar "body"))) (DoExpr (ERecordCreate "BindingSummary" ((fa "bsArity" (EVar "arity")) (fa "bsValue" (EVar "published")) (fa "bsRecursiveValue" (EVar "recursive")) (fa "bsBody" (EVar "body")) (fa "bsForce" (EIf (EBinOp "==" (EVar "arity") (ELit (LInt 0))) (EVar "body") (EVar "pureRow"))))))))
 (DTypeSig false "freshBodyValues" (TyFun (TyCon "Int") (TyFun (TyFun (TyCon "Unit") (TyCon "Mono")) (TyFun (TyCon "EffRow") (TyTuple (TyCon "Mono") (TyCon "Mono"))))))
-(DFunDef false "freshBodyValues" ((PVar "arity0") (PVar "freshType") (PVar "body")) (ELetGroup ((lgb "go" (clause ((PVar "arity")) (EIf (EBinOp "<=" (EVar "arity") (ELit (LInt 0))) (ETuple (EApp (EVar "freshType") (ELit LUnit)) (EApp (EVar "freshType") (ELit LUnit))) (EBlock (DoLet false false (PVar "domain") (EApp (EVar "freshType") (ELit LUnit))) (DoLet false false (PVar "row") (EIf (EBinOp "==" (EVar "arity") (ELit (LInt 1))) (EVar "body") (EVar "pureRow"))) (DoLet false false (PTuple (PVar "published") (PVar "recursive")) (EApp (EVar "go") (EBinOp "-" (EVar "arity") (ELit (LInt 1))))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "TFun") (EVar "domain")) (EVar "row")) (EVar "published")) (EApp (EApp (EApp (EVar "TFun") (EVar "domain")) (EVar "row")) (EVar "recursive"))))))))) (EApp (EVar "go") (EVar "arity0"))))
+(DFunDef false "freshBodyValues" ((PVar "arity") (PVar "freshType") (PVar "body")) (EIf (EBinOp "<=" (EVar "arity") (ELit (LInt 0))) (ETuple (EApp (EVar "freshType") (ELit LUnit)) (EApp (EVar "freshType") (ELit LUnit))) (EBlock (DoLet false false (PVar "domain") (EApp (EVar "freshType") (ELit LUnit))) (DoLet false false (PVar "row") (EIf (EBinOp "==" (EVar "arity") (ELit (LInt 1))) (EVar "body") (EVar "pureRow"))) (DoLet false false (PTuple (PVar "published") (PVar "recursive")) (EApp (EApp (EApp (EVar "freshBodyValues") (EBinOp "-" (EVar "arity") (ELit (LInt 1)))) (EVar "freshType")) (EVar "body"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "TFun") (EVar "domain")) (EVar "row")) (EVar "published")) (EApp (EApp (EApp (EVar "TFun") (EVar "domain")) (EVar "row")) (EVar "recursive")))))))
 (DTypeSig true "bodyRowAt" (TyFun (TyCon "Int") (TyFun (TyCon "Mono") (TyCon "EffRow"))))
 (DFunDef false "bodyRowAt" ((PVar "arity") (PVar "value")) (EMatch (EApp (EVar "normalize") (EVar "value")) (arm (PCon "TFun" PWild (PVar "row") (PVar "result")) () (EIf (EBinOp "==" (EVar "arity") (ELit (LInt 1))) (EVar "row") (EApp (EApp (EVar "bodyRowAt") (EBinOp "-" (EVar "arity") (ELit (LInt 1)))) (EVar "result")))) (arm PWild () (EVar "pureRow"))))
 # MARK
@@ -80,6 +80,6 @@ bodyRowAt arity value = match normalize value
 (DTypeSig true "newBindingSummary" (TyFun (TyCon "Int") (TyFun (TyFun (TyCon "Unit") (TyCon "Mono")) (TyFun (TyFun (TyCon "Unit") (TyCon "EffRow")) (TyCon "BindingSummary")))))
 (DFunDef false "newBindingSummary" ((PVar "arity") (PVar "freshType") (PVar "freshSummary")) (EBlock (DoLet false false (PVar "body") (EApp (EVar "freshSummary") (ELit LUnit))) (DoLet false false (PTuple (PVar "published") (PVar "recursive")) (EApp (EApp (EApp (EVar "freshBodyValues") (EVar "arity")) (EVar "freshType")) (EVar "body"))) (DoExpr (ERecordCreate "BindingSummary" ((fa "bsArity" (EVar "arity")) (fa "bsValue" (EVar "published")) (fa "bsRecursiveValue" (EVar "recursive")) (fa "bsBody" (EVar "body")) (fa "bsForce" (EIf (EBinOp "==" (EVar "arity") (ELit (LInt 0))) (EVar "body") (EVar "pureRow"))))))))
 (DTypeSig false "freshBodyValues" (TyFun (TyCon "Int") (TyFun (TyFun (TyCon "Unit") (TyCon "Mono")) (TyFun (TyCon "EffRow") (TyTuple (TyCon "Mono") (TyCon "Mono"))))))
-(DFunDef false "freshBodyValues" ((PVar "arity0") (PVar "freshType") (PVar "body")) (ELetGroup ((lgb "go" (clause ((PVar "arity")) (EIf (EBinOp "<=" (EVar "arity") (ELit (LInt 0))) (ETuple (EApp (EVar "freshType") (ELit LUnit)) (EApp (EVar "freshType") (ELit LUnit))) (EBlock (DoLet false false (PVar "domain") (EApp (EVar "freshType") (ELit LUnit))) (DoLet false false (PVar "row") (EIf (EBinOp "==" (EVar "arity") (ELit (LInt 1))) (EVar "body") (EVar "pureRow"))) (DoLet false false (PTuple (PVar "published") (PVar "recursive")) (EApp (EVar "go") (EBinOp "-" (EVar "arity") (ELit (LInt 1))))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "TFun") (EVar "domain")) (EVar "row")) (EVar "published")) (EApp (EApp (EApp (EVar "TFun") (EVar "domain")) (EVar "row")) (EVar "recursive"))))))))) (EApp (EVar "go") (EVar "arity0"))))
+(DFunDef false "freshBodyValues" ((PVar "arity") (PVar "freshType") (PVar "body")) (EIf (EBinOp "<=" (EVar "arity") (ELit (LInt 0))) (ETuple (EApp (EVar "freshType") (ELit LUnit)) (EApp (EVar "freshType") (ELit LUnit))) (EBlock (DoLet false false (PVar "domain") (EApp (EVar "freshType") (ELit LUnit))) (DoLet false false (PVar "row") (EIf (EBinOp "==" (EVar "arity") (ELit (LInt 1))) (EVar "body") (EVar "pureRow"))) (DoLet false false (PTuple (PVar "published") (PVar "recursive")) (EApp (EApp (EApp (EVar "freshBodyValues") (EBinOp "-" (EVar "arity") (ELit (LInt 1)))) (EVar "freshType")) (EVar "body"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "TFun") (EVar "domain")) (EVar "row")) (EVar "published")) (EApp (EApp (EApp (EVar "TFun") (EVar "domain")) (EVar "row")) (EVar "recursive")))))))
 (DTypeSig true "bodyRowAt" (TyFun (TyCon "Int") (TyFun (TyCon "Mono") (TyCon "EffRow"))))
 (DFunDef false "bodyRowAt" ((PVar "arity") (PVar "value")) (EMatch (EApp (EVar "normalize") (EVar "value")) (arm (PCon "TFun" PWild (PVar "row") (PVar "result")) () (EIf (EBinOp "==" (EVar "arity") (ELit (LInt 1))) (EVar "row") (EApp (EApp (EVar "bodyRowAt") (EBinOp "-" (EVar "arity") (ELit (LInt 1)))) (EVar "result")))) (arm PWild () (EVar "pureRow"))))

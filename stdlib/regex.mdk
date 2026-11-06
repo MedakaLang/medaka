@@ -474,16 +474,21 @@ expandRepeat greedy node lo hi =
     catRepeat node lo (optChain greedy node (hi - lo))
 
 catRepeat : Node -> Int -> Node -> Node
-catRepeat node n0 rest = go n0
-  where
-    go n = if n <= 0 then rest else NCat node (go (n - 1))
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
+catRepeat node n rest =
+  if n <= 0 then rest else NCat node (catRepeat node (n - 1) rest)
 
 -- `a{2,4}` is `a a (a (a)?)?`, nested rather than a flat run of options, so
 -- a greedy bound takes as many copies as it can and a lazy one as few.
 optChain : Bool -> Node -> Int -> Node
-optChain greedy node k0 = go k0
-  where
-    go k = if k <= 0 then NEmpty else NOpt greedy (NCat node (go (k - 1)))
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
+optChain greedy node k =
+  if k <= 0 then
+    NEmpty
+  else
+    NOpt greedy (NCat node (optChain greedy node (k - 1)))
 
 parseAtom : PState -> Node
 parseAtom st =
@@ -1023,16 +1028,19 @@ vmLoop : Vm ->
   ThreadList ->
   ThreadList ->
   Option (Array Int)
-vmLoop vm startAt anchorStart pos0 clist0 nlist0 = go pos0 clist0 nlist0
-  where
-    go pos clist nlist =
-      seedThread vm clist pos startAt anchorStart
-      if !clist.live == 0 && (foundYet vm || anchorStart) then
-        !vm.found
-      else
-        resetThreads nlist
-        stepThreads vm clist nlist pos 0
-        if pos >= vm.subjEnd then !vm.found else go (pos + 1) nlist clist
+-- Bound: inlined hot path (hot-list): the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
+vmLoop vm startAt anchorStart pos clist nlist =
+  seedThread vm clist pos startAt anchorStart
+  if !clist.live == 0 && (foundYet vm || anchorStart) then
+    !vm.found
+  else
+    resetThreads nlist
+    stepThreads vm clist nlist pos 0
+    if pos >= vm.subjEnd then
+      !vm.found
+    else
+      vmLoop vm startAt anchorStart (pos + 1) nlist clist
 
 codesOf : String -> Array Int
 codesOf s =

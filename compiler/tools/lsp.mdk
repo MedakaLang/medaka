@@ -1105,13 +1105,13 @@ columnAfterName index arr line =
 
 -- Length of the leading identifier run starting at byte `i` (stops at EOL/EOF).
 identRunLen : Array Char -> Int -> Int -> Int -> Int
-identRunLen arr len i0 acc0 = go i0 acc0
-  where
-    go i acc
-      | i >= len = acc
-      | arrayGetUnsafe i arr == '\n' = acc
-      | isIdentChar (arrayGetUnsafe i arr) = go (i + 1) (acc + 1)
-      | otherwise = acc
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
+identRunLen arr len i acc
+  | i >= len = acc
+  | arrayGetUnsafe i arr == '\n' = acc
+  | isIdentChar (arrayGetUnsafe i arr) = identRunLen arr len (i + 1) (acc + 1)
+  | otherwise = acc
 
 -- inlay hints for a buffer: zip parse decls with positions, filter to
 -- unsignatured value bindings present in the env, place one hint each.  The

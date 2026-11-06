@@ -2598,12 +2598,12 @@ positionsByName : String ->
   String ->
   List ((String, String, String), List Int) ->
   List Int
-positionsByName iface mname xs0 = go xs0
-  where
-    go [] = [0]
-    go (((_, i, m), p) :: rest)
-      | iface == i && mname == m = p
-      | otherwise = go rest
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
+positionsByName _ _ [] = [0]
+positionsByName iface mname (((_, i, m), p) :: rest)
+  | iface == i && mname == m = p
+  | otherwise = positionsByName iface mname rest
 
 -- A point-free (no-param) impl/default body: if the method is return-position
 -- (no discriminating arg) defer it as a memoising VThunk; otherwise eta-expand so
@@ -4162,14 +4162,14 @@ pArrayFill _ _ = panic "arrayFill: not an Array"
 -- Copies len elements from src[srcOff..] into dst[dstOff..] in place.
 -- Mirrors OCaml Array.blit semantics (memmove; handles overlapping regions).
 blitGo : Array (Value e) -> Int -> Array (Value e) -> Int -> Int -> <e> Unit
-blitGo src srcOff0 dst dstOff0 len0 = go srcOff0 dstOff0 len0
-  where
-    go srcOff dstOff len
-      | len <= 0 = ()
-      | otherwise =
-        let v = arrayGetUnsafe srcOff src
-        arraySetUnsafe dstOff v dst
-        go (srcOff + 1) (dstOff + 1) (len - 1)
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
+blitGo src srcOff dst dstOff len
+  | len <= 0 = ()
+  | otherwise =
+    let v = arrayGetUnsafe srcOff src
+    arraySetUnsafe dstOff v dst
+    blitGo src (srcOff + 1) dst (dstOff + 1) (len - 1)
 
 pArrayBlit : Value e -> Value e -> Value e -> Value e -> Value e -> <e> Value e
 pArrayBlit (VArray src) (VInt srcOff) (VArray dst) (VInt dstOff) (VInt len) =
@@ -6493,7 +6493,8 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "positionsById" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Int")))))))
 (DFunDef false "positionsById" ((PVar "ifaceId") (PVar "mname") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EVar "None")) (clause ((PCons (PTuple (PTuple (PVar "i") PWild (PVar "m")) (PVar "p")) (PVar "rest"))) (EIf (EBinOp "&&" (EApp (EApp (EVar "ifaceIdMatches") (EVar "ifaceId")) (EVar "i")) (EBinOp "==" (EVar "mname") (EVar "m"))) (EApp (EVar "Some") (EVar "p")) (EIf (EVar "otherwise") (EApp (EVar "go") (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "positionsByName" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))) (TyApp (TyCon "List") (TyCon "Int"))))))
-(DFunDef false "positionsByName" ((PVar "iface") (PVar "mname") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EListLit (ELit (LInt 0)))) (clause ((PCons (PTuple (PTuple PWild (PVar "i") (PVar "m")) (PVar "p")) (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "iface") (EVar "i")) (EBinOp "==" (EVar "mname") (EVar "m"))) (EVar "p") (EIf (EVar "otherwise") (EApp (EVar "go") (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EVar "go") (EVar "xs0"))))
+(DFunDef false "positionsByName" (PWild PWild (PList)) (EListLit (ELit (LInt 0))))
+(DFunDef false "positionsByName" ((PVar "iface") (PVar "mname") (PCons (PTuple (PTuple PWild (PVar "i") (PVar "m")) (PVar "p")) (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "iface") (EVar "i")) (EBinOp "==" (EVar "mname") (EVar "m"))) (EVar "p") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "positionsByName") (EVar "iface")) (EVar "mname")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "implMethodValue" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Expr") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "implMethodValue" ((PVar "env") (PVar "positions") (PList) (PVar "body")) (EIf (EApp (EVar "isEmptyL") (EVar "positions")) (EApp (EApp (EVar "memoThunk") (EVar "env")) (EVar "body")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "VClosure") (EVar "env")) (EListLit (EApp (EApp (EApp (EVar "PVar") (ELit (LString "$eta"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")))) (EApp (EApp (EVar "EApp") (EVar "body")) (EApp (EVar "EVar") (ELit (LString "$eta"))))) (EVar "noTrapLoc")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "implMethodValue" ((PVar "env") PWild (PVar "pats") (PVar "body")) (EApp (EApp (EApp (EApp (EVar "VClosure") (EVar "env")) (EVar "pats")) (EVar "body")) (EVar "noTrapLoc")))
@@ -7036,7 +7037,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "pArrayFill" ((PVar "v") (PCon "VArray" (PVar "a"))) (EBlock (DoExpr (EApp (EApp (EVar "arrayFill") (EVar "v")) (EVar "a"))) (DoExpr (EVar "VUnit"))))
 (DFunDef false "pArrayFill" (PWild PWild) (EApp (EVar "panic") (ELit (LString "arrayFill: not an Array"))))
 (DTypeSig false "blitGo" (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyCon "Unit"))))))))
-(DFunDef false "blitGo" ((PVar "src") (PVar "srcOff0") (PVar "dst") (PVar "dstOff0") (PVar "len0")) (ELetGroup ((lgb "go" (clause ((PVar "srcOff") (PVar "dstOff") (PVar "len")) (EIf (EBinOp "<=" (EVar "len") (ELit (LInt 0))) (ELit LUnit) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "v") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "srcOff")) (EVar "src"))) (DoExpr (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "dstOff")) (EVar "v")) (EVar "dst"))) (DoExpr (EApp (EApp (EApp (EVar "go") (EBinOp "+" (EVar "srcOff") (ELit (LInt 1)))) (EBinOp "+" (EVar "dstOff") (ELit (LInt 1)))) (EBinOp "-" (EVar "len") (ELit (LInt 1)))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EApp (EApp (EVar "go") (EVar "srcOff0")) (EVar "dstOff0")) (EVar "len0"))))
+(DFunDef false "blitGo" ((PVar "src") (PVar "srcOff") (PVar "dst") (PVar "dstOff") (PVar "len")) (EIf (EBinOp "<=" (EVar "len") (ELit (LInt 0))) (ELit LUnit) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "v") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "srcOff")) (EVar "src"))) (DoExpr (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "dstOff")) (EVar "v")) (EVar "dst"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "blitGo") (EVar "src")) (EBinOp "+" (EVar "srcOff") (ELit (LInt 1)))) (EVar "dst")) (EBinOp "+" (EVar "dstOff") (ELit (LInt 1)))) (EBinOp "-" (EVar "len") (ELit (LInt 1)))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "pArrayBlit" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))))
 (DFunDef false "pArrayBlit" ((PCon "VArray" (PVar "src")) (PCon "VInt" (PVar "srcOff")) (PCon "VArray" (PVar "dst")) (PCon "VInt" (PVar "dstOff")) (PCon "VInt" (PVar "len"))) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "blitGo") (EVar "src")) (EVar "srcOff")) (EVar "dst")) (EVar "dstOff")) (EVar "len"))) (DoExpr (EVar "VUnit"))))
 (DFunDef false "pArrayBlit" (PWild PWild PWild PWild PWild) (EApp (EVar "panic") (ELit (LString "arrayBlit: bad operands"))))
@@ -8298,7 +8299,8 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "positionsById" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Int")))))))
 (DFunDef false "positionsById" ((PVar "ifaceId") (PVar "mname") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EVar "None")) (clause ((PCons (PTuple (PTuple (PVar "i") PWild (PVar "m")) (PVar "p")) (PVar "rest"))) (EIf (EBinOp "&&" (EApp (EApp (EVar "ifaceIdMatches") (EVar "ifaceId")) (EVar "i")) (EBinOp "==" (EVar "mname") (EVar "m"))) (EApp (EVar "Some") (EVar "p")) (EIf (EVar "otherwise") (EApp (EVar "go") (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "positionsByName" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))) (TyApp (TyCon "List") (TyCon "Int"))))))
-(DFunDef false "positionsByName" ((PVar "iface") (PVar "mname") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EListLit (ELit (LInt 0)))) (clause ((PCons (PTuple (PTuple PWild (PVar "i") (PVar "m")) (PVar "p")) (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "iface") (EVar "i")) (EBinOp "==" (EVar "mname") (EVar "m"))) (EVar "p") (EIf (EVar "otherwise") (EApp (EVar "go") (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EVar "go") (EVar "xs0"))))
+(DFunDef false "positionsByName" (PWild PWild (PList)) (EListLit (ELit (LInt 0))))
+(DFunDef false "positionsByName" ((PVar "iface") (PVar "mname") (PCons (PTuple (PTuple PWild (PVar "i") (PVar "m")) (PVar "p")) (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "iface") (EVar "i")) (EBinOp "==" (EVar "mname") (EVar "m"))) (EVar "p") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "positionsByName") (EVar "iface")) (EVar "mname")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "implMethodValue" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Expr") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "implMethodValue" ((PVar "env") (PVar "positions") (PList) (PVar "body")) (EIf (EApp (EVar "isEmptyL") (EVar "positions")) (EApp (EApp (EVar "memoThunk") (EVar "env")) (EVar "body")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "VClosure") (EVar "env")) (EListLit (EApp (EApp (EApp (EVar "PVar") (ELit (LString "$eta"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")))) (EApp (EApp (EVar "EApp") (EVar "body")) (EApp (EVar "EVar") (ELit (LString "$eta"))))) (EVar "noTrapLoc")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "implMethodValue" ((PVar "env") PWild (PVar "pats") (PVar "body")) (EApp (EApp (EApp (EApp (EVar "VClosure") (EVar "env")) (EVar "pats")) (EVar "body")) (EVar "noTrapLoc")))
@@ -8841,7 +8843,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "pArrayFill" ((PVar "v") (PCon "VArray" (PVar "a"))) (EBlock (DoExpr (EApp (EApp (EVar "arrayFill") (EVar "v")) (EVar "a"))) (DoExpr (EVar "VUnit"))))
 (DFunDef false "pArrayFill" (PWild PWild) (EApp (EVar "panic") (ELit (LString "arrayFill: not an Array"))))
 (DTypeSig false "blitGo" (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyCon "Unit"))))))))
-(DFunDef false "blitGo" ((PVar "src") (PVar "srcOff0") (PVar "dst") (PVar "dstOff0") (PVar "len0")) (ELetGroup ((lgb "go" (clause ((PVar "srcOff") (PVar "dstOff") (PVar "len")) (EIf (EBinOp "<=" (EVar "len") (ELit (LInt 0))) (ELit LUnit) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "v") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "srcOff")) (EVar "src"))) (DoExpr (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "dstOff")) (EVar "v")) (EVar "dst"))) (DoExpr (EApp (EApp (EApp (EVar "go") (EBinOp "+" (EVar "srcOff") (ELit (LInt 1)))) (EBinOp "+" (EVar "dstOff") (ELit (LInt 1)))) (EBinOp "-" (EVar "len") (ELit (LInt 1)))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EApp (EApp (EVar "go") (EVar "srcOff0")) (EVar "dstOff0")) (EVar "len0"))))
+(DFunDef false "blitGo" ((PVar "src") (PVar "srcOff") (PVar "dst") (PVar "dstOff") (PVar "len")) (EIf (EBinOp "<=" (EVar "len") (ELit (LInt 0))) (ELit LUnit) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "v") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "srcOff")) (EVar "src"))) (DoExpr (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "dstOff")) (EVar "v")) (EVar "dst"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "blitGo") (EVar "src")) (EBinOp "+" (EVar "srcOff") (ELit (LInt 1)))) (EVar "dst")) (EBinOp "+" (EVar "dstOff") (ELit (LInt 1)))) (EBinOp "-" (EVar "len") (ELit (LInt 1)))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "pArrayBlit" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))))
 (DFunDef false "pArrayBlit" ((PCon "VArray" (PVar "src")) (PCon "VInt" (PVar "srcOff")) (PCon "VArray" (PVar "dst")) (PCon "VInt" (PVar "dstOff")) (PCon "VInt" (PVar "len"))) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "blitGo") (EVar "src")) (EVar "srcOff")) (EVar "dst")) (EVar "dstOff")) (EVar "len"))) (DoExpr (EVar "VUnit"))))
 (DFunDef false "pArrayBlit" (PWild PWild PWild PWild PWild) (EApp (EVar "panic") (ELit (LString "arrayBlit: bad operands"))))

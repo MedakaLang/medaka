@@ -580,14 +580,14 @@ balScrapeEach root (g :: gs)
 -- MISSING is not stale — the gate's own "oracle not built" exit-2 owns that
 -- case and says so in its own words.
 staleOf : String -> Float -> List String -> <IO> List String
-staleOf root newest xs0 = go xs0
-  where
-    go [] = []
-    go (o :: os) =
-      let rest = go os
-      match statFile "\{root}/test/bin/\{o}"
-        Err _ => rest
-        Ok (_, _, _, mt) => if mt < newest then o :: rest else rest
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
+staleOf _ _ [] = []
+staleOf root newest (o :: os) =
+  let rest = staleOf root newest os
+  match statFile "\{root}/test/bin/\{o}"
+    Err _ => rest
+    Ok (_, _, _, mt) => if mt < newest then o :: rest else rest
 
 indentedNames : List String -> List String
 indentedNames [] = []
@@ -848,13 +848,13 @@ runGatesLoop env (g :: gs) acc =
 -- dropped off the head of `splitNl`'s list and rejoined: one pass over the
 -- string, no intermediate list, for a 200-line output bound.
 afterNewlines : Array Char -> Int -> Int -> Int -> Int
-afterNewlines cs i0 len want0 = go i0 want0
-  where
-    go i want
-      | i >= len = len
-      | want <= 0 = i
-      | arrayGetUnsafe i cs == '\n' = go (i + 1) (want - 1)
-      | otherwise = go (i + 1) want
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
+afterNewlines cs i len want
+  | i >= len = len
+  | want <= 0 = i
+  | arrayGetUnsafe i cs == '\n' = afterNewlines cs (i + 1) len (want - 1)
+  | otherwise = afterNewlines cs (i + 1) len want
 
 tailLines : Int -> String -> String
 tailLines n s =
@@ -1893,15 +1893,15 @@ arrowAt cs n i = charAtOr cs n i == '=' && charAtOr cs n (i + 1) == '>'
 -- stepped over, so `Ok (127, _, Some (e)) =>` and `Ok (0, ")", "")` both
 -- close where the eye says they do. `n` when the text runs out first.
 closeParen : Array Char -> Int -> Int -> Int -> Int
-closeParen cs n i0 depth0 = go i0 depth0
-  where
-    go i depth
-      | i >= n = n
-      | arrayGetUnsafe i cs == '"' = go (skipStrLit cs n (i + 1)) depth
-      | arrayGetUnsafe i cs == '(' = go (i + 1) (depth + 1)
-      | arrayGetUnsafe i cs /= ')' = go (i + 1) depth
-      | depth == 0 = i + 1
-      | otherwise = go (i + 1) (depth - 1)
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
+closeParen cs n i depth
+  | i >= n = n
+  | arrayGetUnsafe i cs == '"' = closeParen cs n (skipStrLit cs n (i + 1)) depth
+  | arrayGetUnsafe i cs == '(' = closeParen cs n (i + 1) (depth + 1)
+  | arrayGetUnsafe i cs /= ')' = closeParen cs n (i + 1) depth
+  | depth == 0 = i + 1
+  | otherwise = closeParen cs n (i + 1) (depth - 1)
 
 -- Index just past the closing `"` of a string literal whose opening quote
 -- has already been consumed; a backslashed character never closes it.
@@ -3085,13 +3085,13 @@ closeGo : Int ->
   List (String, List String) ->
   List String ->
   List String
-closeGo fuel0 deps ces sel0 = go fuel0 sel0
-  where
-    go fuel sel
-      | fuel <= 0 = sel
-      | otherwise =
-        let nxt = sortUniqS (sel ++ edgeAdds deps sel ++ edgeAdds ces sel)
-        if listLen nxt == listLen sel then sel else go (fuel - 1) nxt
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
+closeGo fuel deps ces sel
+  | fuel <= 0 = sel
+  | otherwise =
+    let nxt = sortUniqS (sel ++ edgeAdds deps sel ++ edgeAdds ces sel)
+    if listLen nxt == listLen sel then sel else closeGo (fuel - 1) deps ces nxt
 
 {- | The projects a queue entry touching `paths` must run gates for: `univ` is
    the project universe (every `project` value in the registry), `deps` the
@@ -3890,7 +3890,8 @@ budgetCmdBody argv = match parseBudgetArgs argv
 (DFunDef false "balScrapeEach" (PWild (PList)) (EListLit))
 (DFunDef false "balScrapeEach" ((PVar "root") (PCons (PVar "g") (PVar "gs"))) (EIf (EBinOp "==" (EFieldAccess (EVar "g") "shard") (EVar "balOtherJob")) (EApp (EApp (EVar "balScrapeEach") (EVar "root")) (EVar "gs")) (EIf (EVar "otherwise") (EBinOp "::" (ETuple (EFieldAccess (EVar "g") "name") (EApp (EVar "sortUniqS") (EApp (EVar "scrapedOraclesIn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "root"))) (ELit (LString "/"))) (EApp (EVar "display") (EFieldAccess (EVar "g") "run"))) (ELit (LString "")))))) (EApp (EApp (EVar "balScrapeEach") (EVar "root")) (EVar "gs"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "staleOf" (TyFun (TyCon "String") (TyFun (TyCon "Float") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "staleOf" ((PVar "root") (PVar "newest") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EListLit)) (clause ((PCons (PVar "o") (PVar "os"))) (EBlock (DoLet false false (PVar "rest") (EApp (EVar "go") (EVar "os"))) (DoExpr (EMatch (EApp (EVar "statFile") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "root"))) (ELit (LString "/test/bin/"))) (EApp (EVar "display") (EVar "o"))) (ELit (LString "")))) (arm (PCon "Err" PWild) () (EVar "rest")) (arm (PCon "Ok" (PTuple PWild PWild PWild (PVar "mt"))) () (EIf (EBinOp "<" (EVar "mt") (EVar "newest")) (EBinOp "::" (EVar "o") (EVar "rest")) (EVar "rest"))))))))) (EApp (EVar "go") (EVar "xs0"))))
+(DFunDef false "staleOf" (PWild PWild (PList)) (EListLit))
+(DFunDef false "staleOf" ((PVar "root") (PVar "newest") (PCons (PVar "o") (PVar "os"))) (EBlock (DoLet false false (PVar "rest") (EApp (EApp (EApp (EVar "staleOf") (EVar "root")) (EVar "newest")) (EVar "os"))) (DoExpr (EMatch (EApp (EVar "statFile") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "root"))) (ELit (LString "/test/bin/"))) (EApp (EVar "display") (EVar "o"))) (ELit (LString "")))) (arm (PCon "Err" PWild) () (EVar "rest")) (arm (PCon "Ok" (PTuple PWild PWild PWild (PVar "mt"))) () (EIf (EBinOp "<" (EVar "mt") (EVar "newest")) (EBinOp "::" (EVar "o") (EVar "rest")) (EVar "rest")))))))
 (DTypeSig false "indentedNames" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "indentedNames" ((PList)) (EListLit))
 (DFunDef false "indentedNames" ((PCons (PVar "o") (PVar "os"))) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EVar "o"))) (ELit (LString ""))) (EApp (EVar "indentedNames") (EVar "os"))))
@@ -3934,7 +3935,7 @@ budgetCmdBody argv = match parseBudgetArgs argv
 (DFunDef false "runGatesLoop" (PWild (PList) (PVar "acc")) (EApp (EVar "reverseL") (EVar "acc")))
 (DFunDef false "runGatesLoop" ((PVar "env") (PCons (PVar "g") (PVar "gs")) (PVar "acc")) (EBlock (DoLet false false (PVar "r") (EApp (EApp (EVar "runOneGate") (EVar "env")) (EVar "g"))) (DoExpr (EApp (EVar "putStr") (EApp (EVar "resultLine") (EVar "r")))) (DoExpr (EApp (EVar "flushStdout") (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EVar "runGatesLoop") (EVar "env")) (EVar "gs")) (EBinOp "::" (EVar "r") (EVar "acc"))))))
 (DTypeSig false "afterNewlines" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
-(DFunDef false "afterNewlines" ((PVar "cs") (PVar "i0") (PVar "len") (PVar "want0")) (ELetGroup ((lgb "go" (clause ((PVar "i") (PVar "want")) (EIf (EBinOp ">=" (EVar "i") (EVar "len")) (EVar "len") (EIf (EBinOp "<=" (EVar "want") (ELit (LInt 0))) (EVar "i") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar "\n"))) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "want") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "want")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))) (EApp (EApp (EVar "go") (EVar "i0")) (EVar "want0"))))
+(DFunDef false "afterNewlines" ((PVar "cs") (PVar "i") (PVar "len") (PVar "want")) (EIf (EBinOp ">=" (EVar "i") (EVar "len")) (EVar "len") (EIf (EBinOp "<=" (EVar "want") (ELit (LInt 0))) (EVar "i") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar "\n"))) (EApp (EApp (EApp (EApp (EVar "afterNewlines") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "len")) (EBinOp "-" (EVar "want") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "afterNewlines") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "len")) (EVar "want")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DTypeSig false "tailLines" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "tailLines" ((PVar "n") (PVar "s")) (EBlock (DoLet false false (PVar "k") (EApp (EVar "listLen") (EApp (EVar "splitNl") (EVar "s")))) (DoExpr (EIf (EBinOp "<=" (EVar "k") (EVar "n")) (EVar "s") (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "s"))) (DoExpr (EApp (EApp (EApp (EVar "stringSlice") (EApp (EApp (EApp (EApp (EVar "afterNewlines") (EVar "cs")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "cs"))) (EBinOp "-" (EVar "k") (EVar "n")))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s"))))))))
 (DTypeSig false "failureDetail" (TyFun (TyCon "GateResult") (TyCon "String")))
@@ -4165,7 +4166,7 @@ budgetCmdBody argv = match parseBudgetArgs argv
 (DTypeSig false "arrowAt" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
 (DFunDef false "arrowAt" ((PVar "cs") (PVar "n") (PVar "i")) (EBinOp "&&" (EBinOp "==" (EApp (EApp (EApp (EVar "charAtOr") (EVar "cs")) (EVar "n")) (EVar "i")) (ELit (LChar "="))) (EBinOp "==" (EApp (EApp (EApp (EVar "charAtOr") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (ELit (LChar ">")))))
 (DTypeSig false "closeParen" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
-(DFunDef false "closeParen" ((PVar "cs") (PVar "n") (PVar "i0") (PVar "depth0")) (ELetGroup ((lgb "go" (clause ((PVar "i") (PVar "depth")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "n") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar "\""))) (EApp (EApp (EVar "go") (EApp (EApp (EApp (EVar "skipStrLit") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EVar "depth")) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar "("))) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EVar "depth") (ELit (LInt 1)))) (EIf (EBinOp "/=" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar ")"))) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "depth")) (EIf (EBinOp "==" (EVar "depth") (ELit (LInt 0))) (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EIf (EVar "otherwise") (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "depth") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))) (EApp (EApp (EVar "go") (EVar "i0")) (EVar "depth0"))))
+(DFunDef false "closeParen" ((PVar "cs") (PVar "n") (PVar "i") (PVar "depth")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "n") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar "\""))) (EApp (EApp (EApp (EApp (EVar "closeParen") (EVar "cs")) (EVar "n")) (EApp (EApp (EApp (EVar "skipStrLit") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EVar "depth")) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar "("))) (EApp (EApp (EApp (EApp (EVar "closeParen") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EVar "depth") (ELit (LInt 1)))) (EIf (EBinOp "/=" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar ")"))) (EApp (EApp (EApp (EApp (EVar "closeParen") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "depth")) (EIf (EBinOp "==" (EVar "depth") (ELit (LInt 0))) (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "closeParen") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "depth") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))
 (DTypeSig false "skipStrLit" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
 (DFunDef false "skipStrLit" ((PVar "cs") (PVar "n") (PVar "i0")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "n") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar "\\"))) (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar "\""))) (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EIf (EVar "otherwise") (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))) (EApp (EVar "go") (EVar "i0"))))
 (DTypeSig false "intLiteralThenComma" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
@@ -4418,7 +4419,7 @@ budgetCmdBody argv = match parseBudgetArgs argv
 (DFunDef false "edgeAdds" ((PList) PWild) (EListLit))
 (DFunDef false "edgeAdds" ((PCons (PTuple (PVar "lhs") (PVar "rhs")) (PVar "rest")) (PVar "sel")) (EIf (EApp (EApp (EVar "anyIn") (EVar "rhs")) (EVar "sel")) (EBinOp "::" (EVar "lhs") (EApp (EApp (EVar "edgeAdds") (EVar "rest")) (EVar "sel"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "edgeAdds") (EVar "rest")) (EVar "sel")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "closeGo" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "closeGo" ((PVar "fuel0") (PVar "deps") (PVar "ces") (PVar "sel0")) (ELetGroup ((lgb "go" (clause ((PVar "fuel") (PVar "sel")) (EIf (EBinOp "<=" (EVar "fuel") (ELit (LInt 0))) (EVar "sel") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "nxt") (EApp (EVar "sortUniqS") (EBinOp "++" (EBinOp "++" (EVar "sel") (EApp (EApp (EVar "edgeAdds") (EVar "deps")) (EVar "sel"))) (EApp (EApp (EVar "edgeAdds") (EVar "ces")) (EVar "sel"))))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "nxt")) (EApp (EVar "listLen") (EVar "sel"))) (EVar "sel") (EApp (EApp (EVar "go") (EBinOp "-" (EVar "fuel") (ELit (LInt 1)))) (EVar "nxt"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EApp (EVar "go") (EVar "fuel0")) (EVar "sel0"))))
+(DFunDef false "closeGo" ((PVar "fuel") (PVar "deps") (PVar "ces") (PVar "sel")) (EIf (EBinOp "<=" (EVar "fuel") (ELit (LInt 0))) (EVar "sel") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "nxt") (EApp (EVar "sortUniqS") (EBinOp "++" (EBinOp "++" (EVar "sel") (EApp (EApp (EVar "edgeAdds") (EVar "deps")) (EVar "sel"))) (EApp (EApp (EVar "edgeAdds") (EVar "ces")) (EVar "sel"))))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "nxt")) (EApp (EVar "listLen") (EVar "sel"))) (EVar "sel") (EApp (EApp (EApp (EApp (EVar "closeGo") (EBinOp "-" (EVar "fuel") (ELit (LInt 1)))) (EVar "deps")) (EVar "ces")) (EVar "nxt"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "reachProjects" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "reachProjects" ((PVar "univ") (PVar "deps") (PVar "ces") (PVar "paths")) (EBlock (DoLet false false (PVar "all") (EApp (EVar "sortUniqS") (EVar "univ"))) (DoExpr (EIf (EApp (EApp (EVar "reachIsFailOpen") (EVar "all")) (EVar "paths")) (EVar "all") (EApp (EApp (EApp (EApp (EVar "closeGo") (EBinOp "+" (EApp (EVar "listLen") (EVar "all")) (ELit (LInt 1)))) (EVar "deps")) (EVar "ces")) (EApp (EVar "sortUniqS") (EApp (EApp (EVar "concatHits") (EVar "all")) (EVar "paths"))))))))
 (DTypeSig true "projectUniverse" (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyApp (TyCon "List") (TyCon "String"))))
@@ -4657,7 +4658,8 @@ budgetCmdBody argv = match parseBudgetArgs argv
 (DFunDef false "balScrapeEach" (PWild (PList)) (EListLit))
 (DFunDef false "balScrapeEach" ((PVar "root") (PCons (PVar "g") (PVar "gs"))) (EIf (EBinOp "==" (EFieldAccess (EVar "g") "shard") (EVar "balOtherJob")) (EApp (EApp (EVar "balScrapeEach") (EVar "root")) (EVar "gs")) (EIf (EVar "otherwise") (EBinOp "::" (ETuple (EFieldAccess (EVar "g") "name") (EApp (EVar "sortUniqS") (EApp (EVar "scrapedOraclesIn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "root"))) (ELit (LString "/"))) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "run"))) (ELit (LString "")))))) (EApp (EApp (EVar "balScrapeEach") (EVar "root")) (EVar "gs"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "staleOf" (TyFun (TyCon "String") (TyFun (TyCon "Float") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "staleOf" ((PVar "root") (PVar "newest") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EListLit)) (clause ((PCons (PVar "o") (PVar "os"))) (EBlock (DoLet false false (PVar "rest") (EApp (EVar "go") (EVar "os"))) (DoExpr (EMatch (EApp (EVar "statFile") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "root"))) (ELit (LString "/test/bin/"))) (EApp (EMethodRef "display") (EVar "o"))) (ELit (LString "")))) (arm (PCon "Err" PWild) () (EVar "rest")) (arm (PCon "Ok" (PTuple PWild PWild PWild (PVar "mt"))) () (EIf (EBinOp "<" (EVar "mt") (EVar "newest")) (EBinOp "::" (EVar "o") (EVar "rest")) (EVar "rest"))))))))) (EApp (EVar "go") (EVar "xs0"))))
+(DFunDef false "staleOf" (PWild PWild (PList)) (EListLit))
+(DFunDef false "staleOf" ((PVar "root") (PVar "newest") (PCons (PVar "o") (PVar "os"))) (EBlock (DoLet false false (PVar "rest") (EApp (EApp (EApp (EVar "staleOf") (EVar "root")) (EVar "newest")) (EVar "os"))) (DoExpr (EMatch (EApp (EVar "statFile") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "root"))) (ELit (LString "/test/bin/"))) (EApp (EMethodRef "display") (EVar "o"))) (ELit (LString "")))) (arm (PCon "Err" PWild) () (EVar "rest")) (arm (PCon "Ok" (PTuple PWild PWild PWild (PVar "mt"))) () (EIf (EBinOp "<" (EVar "mt") (EVar "newest")) (EBinOp "::" (EVar "o") (EVar "rest")) (EVar "rest")))))))
 (DTypeSig false "indentedNames" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "indentedNames" ((PList)) (EListLit))
 (DFunDef false "indentedNames" ((PCons (PVar "o") (PVar "os"))) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EVar "o"))) (ELit (LString ""))) (EApp (EVar "indentedNames") (EVar "os"))))
@@ -4701,7 +4703,7 @@ budgetCmdBody argv = match parseBudgetArgs argv
 (DFunDef false "runGatesLoop" (PWild (PList) (PVar "acc")) (EApp (EVar "reverseL") (EVar "acc")))
 (DFunDef false "runGatesLoop" ((PVar "env") (PCons (PVar "g") (PVar "gs")) (PVar "acc")) (EBlock (DoLet false false (PVar "r") (EApp (EApp (EVar "runOneGate") (EVar "env")) (EVar "g"))) (DoExpr (EApp (EVar "putStr") (EApp (EVar "resultLine") (EVar "r")))) (DoExpr (EApp (EVar "flushStdout") (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EVar "runGatesLoop") (EVar "env")) (EVar "gs")) (EBinOp "::" (EVar "r") (EVar "acc"))))))
 (DTypeSig false "afterNewlines" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
-(DFunDef false "afterNewlines" ((PVar "cs") (PVar "i0") (PVar "len") (PVar "want0")) (ELetGroup ((lgb "go" (clause ((PVar "i") (PVar "want")) (EIf (EBinOp ">=" (EVar "i") (EVar "len")) (EVar "len") (EIf (EBinOp "<=" (EVar "want") (ELit (LInt 0))) (EVar "i") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar "\n"))) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "want") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "want")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))) (EApp (EApp (EVar "go") (EVar "i0")) (EVar "want0"))))
+(DFunDef false "afterNewlines" ((PVar "cs") (PVar "i") (PVar "len") (PVar "want")) (EIf (EBinOp ">=" (EVar "i") (EVar "len")) (EVar "len") (EIf (EBinOp "<=" (EVar "want") (ELit (LInt 0))) (EVar "i") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar "\n"))) (EApp (EApp (EApp (EApp (EVar "afterNewlines") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "len")) (EBinOp "-" (EVar "want") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "afterNewlines") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "len")) (EVar "want")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DTypeSig false "tailLines" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "tailLines" ((PVar "n") (PVar "s")) (EBlock (DoLet false false (PVar "k") (EApp (EVar "listLen") (EApp (EVar "splitNl") (EVar "s")))) (DoExpr (EIf (EBinOp "<=" (EVar "k") (EVar "n")) (EVar "s") (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "s"))) (DoExpr (EApp (EApp (EApp (EVar "stringSlice") (EApp (EApp (EApp (EApp (EVar "afterNewlines") (EVar "cs")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "cs"))) (EBinOp "-" (EVar "k") (EVar "n")))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s"))))))))
 (DTypeSig false "failureDetail" (TyFun (TyCon "GateResult") (TyCon "String")))
@@ -4932,7 +4934,7 @@ budgetCmdBody argv = match parseBudgetArgs argv
 (DTypeSig false "arrowAt" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
 (DFunDef false "arrowAt" ((PVar "cs") (PVar "n") (PVar "i")) (EBinOp "&&" (EBinOp "==" (EApp (EApp (EApp (EVar "charAtOr") (EVar "cs")) (EVar "n")) (EVar "i")) (ELit (LChar "="))) (EBinOp "==" (EApp (EApp (EApp (EVar "charAtOr") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (ELit (LChar ">")))))
 (DTypeSig false "closeParen" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
-(DFunDef false "closeParen" ((PVar "cs") (PVar "n") (PVar "i0") (PVar "depth0")) (ELetGroup ((lgb "go" (clause ((PVar "i") (PVar "depth")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "n") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar "\""))) (EApp (EApp (EVar "go") (EApp (EApp (EApp (EVar "skipStrLit") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EVar "depth")) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar "("))) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EVar "depth") (ELit (LInt 1)))) (EIf (EBinOp "/=" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar ")"))) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "depth")) (EIf (EBinOp "==" (EVar "depth") (ELit (LInt 0))) (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EIf (EVar "otherwise") (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "depth") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))) (EApp (EApp (EVar "go") (EVar "i0")) (EVar "depth0"))))
+(DFunDef false "closeParen" ((PVar "cs") (PVar "n") (PVar "i") (PVar "depth")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "n") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar "\""))) (EApp (EApp (EApp (EApp (EVar "closeParen") (EVar "cs")) (EVar "n")) (EApp (EApp (EApp (EVar "skipStrLit") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EVar "depth")) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar "("))) (EApp (EApp (EApp (EApp (EVar "closeParen") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EVar "depth") (ELit (LInt 1)))) (EIf (EBinOp "/=" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar ")"))) (EApp (EApp (EApp (EApp (EVar "closeParen") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "depth")) (EIf (EBinOp "==" (EVar "depth") (ELit (LInt 0))) (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "closeParen") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "depth") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))
 (DTypeSig false "skipStrLit" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
 (DFunDef false "skipStrLit" ((PVar "cs") (PVar "n") (PVar "i0")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "n") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar "\\"))) (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar "\""))) (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EIf (EVar "otherwise") (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))) (EApp (EVar "go") (EVar "i0"))))
 (DTypeSig false "intLiteralThenComma" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
@@ -5185,7 +5187,7 @@ budgetCmdBody argv = match parseBudgetArgs argv
 (DFunDef false "edgeAdds" ((PList) PWild) (EListLit))
 (DFunDef false "edgeAdds" ((PCons (PTuple (PVar "lhs") (PVar "rhs")) (PVar "rest")) (PVar "sel")) (EIf (EApp (EApp (EVar "anyIn") (EVar "rhs")) (EVar "sel")) (EBinOp "::" (EVar "lhs") (EApp (EApp (EVar "edgeAdds") (EVar "rest")) (EVar "sel"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "edgeAdds") (EVar "rest")) (EVar "sel")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "closeGo" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "closeGo" ((PVar "fuel0") (PVar "deps") (PVar "ces") (PVar "sel0")) (ELetGroup ((lgb "go" (clause ((PVar "fuel") (PVar "sel")) (EIf (EBinOp "<=" (EVar "fuel") (ELit (LInt 0))) (EVar "sel") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "nxt") (EApp (EVar "sortUniqS") (EBinOp "++" (EBinOp "++" (EVar "sel") (EApp (EApp (EVar "edgeAdds") (EVar "deps")) (EVar "sel"))) (EApp (EApp (EVar "edgeAdds") (EVar "ces")) (EVar "sel"))))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "nxt")) (EApp (EVar "listLen") (EVar "sel"))) (EVar "sel") (EApp (EApp (EVar "go") (EBinOp "-" (EVar "fuel") (ELit (LInt 1)))) (EVar "nxt"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EApp (EVar "go") (EVar "fuel0")) (EVar "sel0"))))
+(DFunDef false "closeGo" ((PVar "fuel") (PVar "deps") (PVar "ces") (PVar "sel")) (EIf (EBinOp "<=" (EVar "fuel") (ELit (LInt 0))) (EVar "sel") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "nxt") (EApp (EVar "sortUniqS") (EBinOp "++" (EBinOp "++" (EVar "sel") (EApp (EApp (EVar "edgeAdds") (EVar "deps")) (EVar "sel"))) (EApp (EApp (EVar "edgeAdds") (EVar "ces")) (EVar "sel"))))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "nxt")) (EApp (EVar "listLen") (EVar "sel"))) (EVar "sel") (EApp (EApp (EApp (EApp (EVar "closeGo") (EBinOp "-" (EVar "fuel") (ELit (LInt 1)))) (EVar "deps")) (EVar "ces")) (EVar "nxt"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "reachProjects" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "reachProjects" ((PVar "univ") (PVar "deps") (PVar "ces") (PVar "paths")) (EBlock (DoLet false false (PVar "all") (EApp (EVar "sortUniqS") (EVar "univ"))) (DoExpr (EIf (EApp (EApp (EVar "reachIsFailOpen") (EDictApp "all")) (EVar "paths")) (EDictApp "all") (EApp (EApp (EApp (EApp (EVar "closeGo") (EBinOp "+" (EApp (EVar "listLen") (EDictApp "all")) (ELit (LInt 1)))) (EVar "deps")) (EVar "ces")) (EApp (EVar "sortUniqS") (EApp (EApp (EVar "concatHits") (EDictApp "all")) (EVar "paths"))))))))
 (DTypeSig true "projectUniverse" (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyApp (TyCon "List") (TyCon "String"))))

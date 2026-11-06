@@ -982,19 +982,19 @@ takeRun : String ->
   Int ->
   List String ->
   <IO> (List String, List String)
-takeRun root outDir forceIsolate cli sel n0 xs0 = go n0 xs0
-  where
-    go _ [] = ([], [])
-    go n (f :: rest) =
-      if n <= 0 then
-        ([], f :: rest)
-      else
-        let meta = metaOf root outDir f
-        if forceIsolate || isIsolatedIn meta || stagesIn cli meta /= sel then
-          ([], f :: rest)
-        else
-          let (grp, tail2) = go (n - 1) rest
-          (f :: grp, tail2)
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
+takeRun _ _ _ _ _ _ [] = ([], [])
+takeRun root outDir forceIsolate cli sel n (f :: rest) =
+  if n <= 0 then
+    ([], f :: rest)
+  else
+    let meta = metaOf root outDir f
+    if forceIsolate || isIsolatedIn meta || stagesIn cli meta /= sel then
+      ([], f :: rest)
+    else
+      let (grp, tail2) = takeRun root outDir forceIsolate cli sel (n - 1) rest
+      (f :: grp, tail2)
 
 -- The fixture's EXISTING snapshot's `# META` lines.  Must consult the same --out
 -- directory the run will write to, or a corpus kept out-of-tree would silently never

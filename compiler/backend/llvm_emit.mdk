@@ -7889,14 +7889,14 @@ emitApplyRuntime e cw argOps =
 
 -- store each arg word into the argv alloca at index `i` (getelementptr i64 stride).
 storeArgv : Emit -> String -> List String -> Int -> Unit
-storeArgv e arr xs0 i0 = go xs0 i0
-  where
-    go [] _ = ()
-    go (a :: rest) i =
-      let p = freshReg e
-      emit e "  \{p} = getelementptr i64, ptr \{arr}, i64 \{intToString i}"
-      emit e "  store i64 \{a}, ptr \{p}"
-      go rest (i + 1)
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
+storeArgv _ _ [] _ = ()
+storeArgv e arr (a :: rest) i =
+  let p = freshReg e
+  emit e "  \{p} = getelementptr i64, ptr \{arr}, i64 \{intToString i}"
+  emit e "  store i64 \{a}, ptr \{p}"
+  storeArgv e arr rest (i + 1)
 
 -- load the header word (field 0, offset 0 — the closure arity) of a boxed cell.
 loadHeader : Emit -> String -> String
@@ -10484,16 +10484,16 @@ emitCtorAlloc e name fields =
 
 -- store each field at offset 8*(i+1) (field 0 follows the one-word header).
 storeFields : Emit -> String -> List String -> Int -> Unit
-storeFields e p xs0 i0 = go xs0 i0
-  where
-    go [] _ = ()
-    go (f :: rest) i =
-      let fp = freshReg e
-      emit
-        e
-        "  \{fp} = getelementptr i8, ptr \{p}, i64 \{intToString (8 * (i + 1))}"
-      emit e "  store i64 \{f}, ptr \{fp}"
-      go rest (i + 1)
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
+storeFields _ _ [] _ = ()
+storeFields e p (f :: rest) i =
+  let fp = freshReg e
+  emit
+    e
+    "  \{fp} = getelementptr i8, ptr \{p}, i64 \{intToString (8 * (i + 1))}"
+  emit e "  store i64 \{f}, ptr \{fp}"
+  storeFields e p rest (i + 1)
 
 -- load a cell's tag (header word at offset 0) given the cell's pointer word.
 loadTag : Emit -> String -> String
@@ -13110,16 +13110,16 @@ collectRawWorkers e binds =
   refineRawWorkers e binds (rawWorkerKey first) 20
 
 refineRawWorkers : Emit -> List CBind -> String -> Int -> OrdMap RawWorker
-refineRawWorkers e binds prevKey0 fuel0 = go prevKey0 fuel0
-  where
-    go prevKey fuel =
-      let next = collectRawWorkersPass e True binds
-      let key = rawWorkerKey next
-      if key == prevKey || fuel <= 0 then
-        next
-      else
-        e.rawWorkers := next
-        go key (fuel - 1)
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
+refineRawWorkers e binds prevKey fuel =
+  let next = collectRawWorkersPass e True binds
+  let key = rawWorkerKey next
+  if key == prevKey || fuel <= 0 then
+    next
+  else
+    e.rawWorkers := next
+    refineRawWorkers e binds key (fuel - 1)
 
 -- a textual key of a worker map, to see a pass change nothing.
 rawWorkerKey : OrdMap RawWorker -> String

@@ -489,13 +489,13 @@ indexOfPredGo : Int ->
   PredicateRequest ->
   List PredicateSlot ->
   Option Int
-indexOfPredGo x00 target request xs0 = go x00 xs0
-  where
-    go _ [] = None
-    go i (sp :: rest)
-      | containsI target sp.psBoundIds
-        && predicateRequestMatchesSlot request sp = Some i
-      | otherwise = go (i + 1) rest
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
+indexOfPredGo _ _ _ [] = None
+indexOfPredGo i target request (sp :: rest)
+  | containsI target sp.psBoundIds && predicateRequestMatchesSlot request sp =
+    Some i
+  | otherwise = indexOfPredGo (i + 1) target request rest
 
 -- The single request/slot routing relation.  Declaration identity is complete and
 -- fail-closed.  Known vectors compare recursively at every position; interface-only

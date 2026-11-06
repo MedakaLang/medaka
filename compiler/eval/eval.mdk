@@ -2594,12 +2594,12 @@ positionsByName : String ->
   String ->
   List ((String, String, String), List Int) ->
   List Int
-positionsByName iface mname xs0 = go xs0
-  where
-    go [] = [0]
-    go (((_, i, m), p) :: rest)
-      | iface == i && mname == m = p
-      | otherwise = go rest
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
+positionsByName _ _ [] = [0]
+positionsByName iface mname (((_, i, m), p) :: rest)
+  | iface == i && mname == m = p
+  | otherwise = positionsByName iface mname rest
 
 -- A point-free (no-param) impl/default body: if the method is return-position
 -- (no discriminating arg) defer it as a memoising VThunk; otherwise eta-expand so
@@ -4158,14 +4158,14 @@ pArrayFill _ _ = panic "arrayFill: not an Array"
 -- Copies len elements from src[srcOff..] into dst[dstOff..] in place.
 -- Mirrors OCaml Array.blit semantics (memmove; handles overlapping regions).
 blitGo : Array (Value e) -> Int -> Array (Value e) -> Int -> Int -> <e> Unit
-blitGo src srcOff0 dst dstOff0 len0 = go srcOff0 dstOff0 len0
-  where
-    go srcOff dstOff len
-      | len <= 0 = ()
-      | otherwise =
-        let v = arrayGetUnsafe srcOff src
-        arraySetUnsafe dstOff v dst
-        go (srcOff + 1) (dstOff + 1) (len - 1)
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
+blitGo src srcOff dst dstOff len
+  | len <= 0 = ()
+  | otherwise =
+    let v = arrayGetUnsafe srcOff src
+    arraySetUnsafe dstOff v dst
+    blitGo src (srcOff + 1) dst (dstOff + 1) (len - 1)
 
 pArrayBlit : Value e -> Value e -> Value e -> Value e -> Value e -> <e> Value e
 pArrayBlit (VArray src) (VInt srcOff) (VArray dst) (VInt dstOff) (VInt len) =

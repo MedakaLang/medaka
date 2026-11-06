@@ -102,12 +102,12 @@ countNl : String -> Int
 countNl s = countNlChars (stringToChars s) 0 (arrayLength (stringToChars s)) 0
 
 countNlChars : Array Char -> Int -> Int -> Int -> Int
-countNlChars src i0 n acc0 = go i0 acc0
-  where
-    go i acc
-      | i >= n = acc
-      | charAt src i == '\n' = go (i + 1) (acc + 1)
-      | otherwise = go (i + 1) acc
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
+countNlChars src i n acc
+  | i >= n = acc
+  | charAt src i == '\n' = countNlChars src (i + 1) n (acc + 1)
+  | otherwise = countNlChars src (i + 1) n acc
 
 charAt : Array Char -> Int -> Char
 charAt src i = arrayGetUnsafe i src

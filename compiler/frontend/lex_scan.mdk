@@ -1068,16 +1068,17 @@ handleNewline ctx src len pos depth id =
   afterNl ctx src len np depth id indent pos
 
 consumeNl : Array Char -> Int -> Int -> Int -> (Int, Int)
-consumeNl src len p0 indent0 = go p0 indent0
-  where
-    go p indent
-      | p >= len = (indent, p)
-      | isCR (at src p) && p + 1 < len && isNL (at src (p + 1)) = go (p + 2) 0
-      | isNL (at src p) = go (p + 1) 0
-      | isCR (at src p) = go (p + 1) 0
-      | isSp (at src p) = go (p + 1) (indent + 1)
-      | isTab (at src p) = go (p + 1) ((indent / 8 + 1) * 8)
-      | otherwise = (indent, p)
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
+consumeNl src len p indent
+  | p >= len = (indent, p)
+  | isCR (at src p) && p + 1 < len && isNL (at src (p + 1)) =
+    consumeNl src len (p + 2) 0
+  | isNL (at src p) = consumeNl src len (p + 1) 0
+  | isCR (at src p) = consumeNl src len (p + 1) 0
+  | isSp (at src p) = consumeNl src len (p + 1) (indent + 1)
+  | isTab (at src p) = consumeNl src len (p + 1) ((indent / 8 + 1) * 8)
+  | otherwise = (indent, p)
 
 afterNl : ScanCursor ->
   Array Char ->

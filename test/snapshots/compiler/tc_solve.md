@@ -1550,17 +1550,17 @@ determineByUniqueInstance mctx rigidIds obls =
 -- The fuel only bounds the loop: every sweep but the last changes some goal's
 -- shape.
 determineSweeps : ModuleCtx -> OrdMap Unit -> GoalWindow -> Int -> Unit
-determineSweeps mctx rigidIds window fuel0 = go fuel0
-  where
-    go fuel =
-      if fuel > 0
-        && determineByUniqueInstanceGo
-          mctx
-          rigidIds
-          window
-          False
-          window.gwGoals then
-        go (fuel - 1)
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
+determineSweeps mctx rigidIds window fuel =
+  if fuel > 0
+    && determineByUniqueInstanceGo
+      mctx
+      rigidIds
+      window
+      False
+      window.gwGoals then
+    determineSweeps mctx rigidIds window (fuel - 1)
 
 -- One sweep over the window; True when some goal took its instance's shape.
 determineByUniqueInstanceGo : ModuleCtx ->
@@ -2534,7 +2534,7 @@ methodReturnProbeOblIfaces (obl :: rest) =
 (DTypeSig true "determineByUniqueInstance" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "UObligation")) (TyCon "Unit")))))
 (DFunDef false "determineByUniqueInstance" ((PVar "mctx") (PVar "rigidIds") (PVar "obls")) (EIf (EApp (EVar "isNonEmptyL") (EVar "obls")) (EApp (EApp (EApp (EApp (EVar "determineSweeps") (EVar "mctx")) (EVar "rigidIds")) (EApp (EApp (EVar "goalWindowOf") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "obls"))) (EBinOp "+" (EApp (EVar "listLen") (EVar "obls")) (ELit (LInt 1)))) (ELit LUnit)))
 (DTypeSig false "determineSweeps" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "GoalWindow") (TyFun (TyCon "Int") (TyCon "Unit"))))))
-(DFunDef false "determineSweeps" ((PVar "mctx") (PVar "rigidIds") (PVar "window") (PVar "fuel0")) (ELetGroup ((lgb "go" (clause ((PVar "fuel")) (EIf (EBinOp "&&" (EBinOp ">" (EVar "fuel") (ELit (LInt 0))) (EApp (EApp (EApp (EApp (EApp (EVar "determineByUniqueInstanceGo") (EVar "mctx")) (EVar "rigidIds")) (EVar "window")) (EVar "False")) (EFieldAccess (EVar "window") "gwGoals"))) (EApp (EVar "go") (EBinOp "-" (EVar "fuel") (ELit (LInt 1)))) (ELit LUnit))))) (EApp (EVar "go") (EVar "fuel0"))))
+(DFunDef false "determineSweeps" ((PVar "mctx") (PVar "rigidIds") (PVar "window") (PVar "fuel")) (EIf (EBinOp "&&" (EBinOp ">" (EVar "fuel") (ELit (LInt 0))) (EApp (EApp (EApp (EApp (EApp (EVar "determineByUniqueInstanceGo") (EVar "mctx")) (EVar "rigidIds")) (EVar "window")) (EVar "False")) (EFieldAccess (EVar "window") "gwGoals"))) (EApp (EApp (EApp (EApp (EVar "determineSweeps") (EVar "mctx")) (EVar "rigidIds")) (EVar "window")) (EBinOp "-" (EVar "fuel") (ELit (LInt 1)))) (ELit LUnit)))
 (DTypeSig false "determineByUniqueInstanceGo" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "GoalWindow") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "UObligation"))) (TyCon "Bool")))))))
 (DFunDef false "determineByUniqueInstanceGo" ((PVar "mctx") (PVar "rigidIds") (PVar "window") (PVar "changed0") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PVar "changed") (PList)) (EVar "changed")) (clause ((PVar "changed") (PCons (PTuple PWild (PVar "o")) (PVar "rest"))) (EBlock (DoLet false false (PVar "args") (EApp (EApp (EVar "map") (EVar "normalize")) (EApp (EApp (EVar "uOblArgs") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "o")))) (DoLet false false (PVar "now") (EApp (EApp (EApp (EApp (EApp (EVar "determineGoal") (EVar "mctx")) (EVar "rigidIds")) (EVar "window")) (EVar "o")) (EVar "args"))) (DoExpr (EApp (EApp (EVar "go") (EBinOp "||" (EVar "now") (EVar "changed"))) (EVar "rest"))))))) (EApp (EApp (EVar "go") (EVar "changed0")) (EVar "xs0"))))
 (DTypeSig false "determineGoal" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "GoalWindow") (TyFun (TyCon "UObligation") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool")))))))
@@ -2943,7 +2943,7 @@ methodReturnProbeOblIfaces (obl :: rest) =
 (DTypeSig true "determineByUniqueInstance" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "UObligation")) (TyCon "Unit")))))
 (DFunDef false "determineByUniqueInstance" ((PVar "mctx") (PVar "rigidIds") (PVar "obls")) (EIf (EApp (EVar "isNonEmptyL") (EVar "obls")) (EApp (EApp (EApp (EApp (EVar "determineSweeps") (EVar "mctx")) (EVar "rigidIds")) (EApp (EApp (EVar "goalWindowOf") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "obls"))) (EBinOp "+" (EApp (EVar "listLen") (EVar "obls")) (ELit (LInt 1)))) (ELit LUnit)))
 (DTypeSig false "determineSweeps" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "GoalWindow") (TyFun (TyCon "Int") (TyCon "Unit"))))))
-(DFunDef false "determineSweeps" ((PVar "mctx") (PVar "rigidIds") (PVar "window") (PVar "fuel0")) (ELetGroup ((lgb "go" (clause ((PVar "fuel")) (EIf (EBinOp "&&" (EBinOp ">" (EVar "fuel") (ELit (LInt 0))) (EApp (EApp (EApp (EApp (EApp (EVar "determineByUniqueInstanceGo") (EVar "mctx")) (EVar "rigidIds")) (EVar "window")) (EVar "False")) (EFieldAccess (EVar "window") "gwGoals"))) (EApp (EVar "go") (EBinOp "-" (EVar "fuel") (ELit (LInt 1)))) (ELit LUnit))))) (EApp (EVar "go") (EVar "fuel0"))))
+(DFunDef false "determineSweeps" ((PVar "mctx") (PVar "rigidIds") (PVar "window") (PVar "fuel")) (EIf (EBinOp "&&" (EBinOp ">" (EVar "fuel") (ELit (LInt 0))) (EApp (EApp (EApp (EApp (EApp (EVar "determineByUniqueInstanceGo") (EVar "mctx")) (EVar "rigidIds")) (EVar "window")) (EVar "False")) (EFieldAccess (EVar "window") "gwGoals"))) (EApp (EApp (EApp (EApp (EVar "determineSweeps") (EVar "mctx")) (EVar "rigidIds")) (EVar "window")) (EBinOp "-" (EVar "fuel") (ELit (LInt 1)))) (ELit LUnit)))
 (DTypeSig false "determineByUniqueInstanceGo" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "GoalWindow") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "UObligation"))) (TyCon "Bool")))))))
 (DFunDef false "determineByUniqueInstanceGo" ((PVar "mctx") (PVar "rigidIds") (PVar "window") (PVar "changed0") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PVar "changed") (PList)) (EVar "changed")) (clause ((PVar "changed") (PCons (PTuple PWild (PVar "o")) (PVar "rest"))) (EBlock (DoLet false false (PVar "args") (EApp (EApp (EMethodRef "map") (EVar "normalize")) (EApp (EApp (EVar "uOblArgs") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "o")))) (DoLet false false (PVar "now") (EApp (EApp (EApp (EApp (EApp (EVar "determineGoal") (EVar "mctx")) (EVar "rigidIds")) (EVar "window")) (EVar "o")) (EVar "args"))) (DoExpr (EApp (EApp (EVar "go") (EBinOp "||" (EVar "now") (EVar "changed"))) (EVar "rest"))))))) (EApp (EApp (EVar "go") (EVar "changed0")) (EVar "xs0"))))
 (DTypeSig false "determineGoal" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "GoalWindow") (TyFun (TyCon "UObligation") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool")))))))

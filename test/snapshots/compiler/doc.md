@@ -1704,11 +1704,11 @@ assignAnchors used ((name, line, tag) :: rest) =
   (name, line, tag, a) :: assignAnchors (a :: used) rest
 
 freshAnchor : List String -> String -> Int -> String
-freshAnchor used base n0 = go n0
-  where
-    go n =
-      let cand = if n == 0 then base else "\{base}-\{n}"
-      if anyDoc (== cand) used then go (n + 1) else cand
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
+freshAnchor used base n =
+  let cand = if n == 0 then base else "\{base}-\{n}"
+  if anyDoc (== cand) used then freshAnchor used base (n + 1) else cand
 
 anchorOf : AnchorTable -> DocEntry -> String
 anchorOf tbl e = match e
@@ -2267,7 +2267,7 @@ docSchemesFor runtimeSrc coreSrc filename roots _rawUser =
 (DFunDef false "assignAnchors" (PWild (PList)) (EListLit))
 (DFunDef false "assignAnchors" ((PVar "used") (PCons (PTuple (PVar "name") (PVar "line") (PVar "tag")) (PVar "rest"))) (EBlock (DoLet false false (PVar "a") (EApp (EApp (EApp (EVar "freshAnchor") (EVar "used")) (EApp (EVar "slugifyAnchor") (EVar "name"))) (ELit (LInt 0)))) (DoExpr (EBinOp "::" (ETuple (EVar "name") (EVar "line") (EVar "tag") (EVar "a")) (EApp (EApp (EVar "assignAnchors") (EBinOp "::" (EVar "a") (EVar "used"))) (EVar "rest"))))))
 (DTypeSig false "freshAnchor" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String")))))
-(DFunDef false "freshAnchor" ((PVar "used") (PVar "base") (PVar "n0")) (ELetGroup ((lgb "go" (clause ((PVar "n")) (EBlock (DoLet false false (PVar "cand") (EIf (EBinOp "==" (EVar "n") (ELit (LInt 0))) (EVar "base") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "base"))) (ELit (LString "-"))) (EApp (EVar "display") (EVar "n"))) (ELit (LString ""))))) (DoExpr (EIf (EApp (EApp (EVar "anyDoc") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "cand")))) (EVar "used")) (EApp (EVar "go") (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EVar "cand"))))))) (EApp (EVar "go") (EVar "n0"))))
+(DFunDef false "freshAnchor" ((PVar "used") (PVar "base") (PVar "n")) (EBlock (DoLet false false (PVar "cand") (EIf (EBinOp "==" (EVar "n") (ELit (LInt 0))) (EVar "base") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "base"))) (ELit (LString "-"))) (EApp (EVar "display") (EVar "n"))) (ELit (LString ""))))) (DoExpr (EIf (EApp (EApp (EVar "anyDoc") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "cand")))) (EVar "used")) (EApp (EApp (EApp (EVar "freshAnchor") (EVar "used")) (EVar "base")) (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EVar "cand")))))
 (DTypeSig false "anchorOf" (TyFun (TyCon "AnchorTable") (TyFun (TyCon "DocEntry") (TyCon "String"))))
 (DFunDef false "anchorOf" ((PVar "tbl") (PVar "e")) (EMatch (EVar "e") (arm (PCon "DocEntry" (PVar "name") PWild PWild PWild PWild (PVar "line")) () (EApp (EApp (EApp (EApp (EVar "lookupAnchor") (EVar "tbl")) (EVar "name")) (EVar "line")) (EApp (EVar "entryTag") (EVar "e"))))))
 (DTypeSig false "lookupAnchor" (TyFun (TyCon "AnchorTable") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String"))))))
@@ -2719,7 +2719,7 @@ docSchemesFor runtimeSrc coreSrc filename roots _rawUser =
 (DFunDef false "assignAnchors" (PWild (PList)) (EListLit))
 (DFunDef false "assignAnchors" ((PVar "used") (PCons (PTuple (PVar "name") (PVar "line") (PVar "tag")) (PVar "rest"))) (EBlock (DoLet false false (PVar "a") (EApp (EApp (EApp (EVar "freshAnchor") (EVar "used")) (EApp (EVar "slugifyAnchor") (EVar "name"))) (ELit (LInt 0)))) (DoExpr (EBinOp "::" (ETuple (EVar "name") (EVar "line") (EVar "tag") (EVar "a")) (EApp (EApp (EVar "assignAnchors") (EBinOp "::" (EVar "a") (EVar "used"))) (EVar "rest"))))))
 (DTypeSig false "freshAnchor" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String")))))
-(DFunDef false "freshAnchor" ((PVar "used") (PVar "base") (PVar "n0")) (ELetGroup ((lgb "go" (clause ((PVar "n")) (EBlock (DoLet false false (PVar "cand") (EIf (EBinOp "==" (EVar "n") (ELit (LInt 0))) (EVar "base") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "base"))) (ELit (LString "-"))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString ""))))) (DoExpr (EIf (EApp (EApp (EVar "anyDoc") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "cand")))) (EVar "used")) (EApp (EVar "go") (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EVar "cand"))))))) (EApp (EVar "go") (EVar "n0"))))
+(DFunDef false "freshAnchor" ((PVar "used") (PVar "base") (PVar "n")) (EBlock (DoLet false false (PVar "cand") (EIf (EBinOp "==" (EVar "n") (ELit (LInt 0))) (EVar "base") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "base"))) (ELit (LString "-"))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString ""))))) (DoExpr (EIf (EApp (EApp (EVar "anyDoc") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "cand")))) (EVar "used")) (EApp (EApp (EApp (EVar "freshAnchor") (EVar "used")) (EVar "base")) (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EVar "cand")))))
 (DTypeSig false "anchorOf" (TyFun (TyCon "AnchorTable") (TyFun (TyCon "DocEntry") (TyCon "String"))))
 (DFunDef false "anchorOf" ((PVar "tbl") (PVar "e")) (EMatch (EVar "e") (arm (PCon "DocEntry" (PVar "name") PWild PWild PWild PWild (PVar "line")) () (EApp (EApp (EApp (EApp (EVar "lookupAnchor") (EVar "tbl")) (EVar "name")) (EVar "line")) (EApp (EVar "entryTag") (EVar "e"))))))
 (DTypeSig false "lookupAnchor" (TyFun (TyCon "AnchorTable") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String"))))))

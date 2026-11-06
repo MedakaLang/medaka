@@ -1,5 +1,5 @@
 # META
-source_lines=575
+source_lines=578
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_decls_variance: polarity and variance of declared types: occurrence polarity, polarity joins
@@ -261,14 +261,17 @@ declEnvPolarityFixGo : List (TabKey, List Polarity) ->
   Int ->
   List (TabKey, List Polarity) ->
   List (TabKey, List Polarity)
-declEnvPolarityFixGo base ds fuel0 prev0 = go fuel0 prev0
-  where
-    go fuel prev =
-      if fuel <= 0 then
-        map (e => (fst e, map (_ => PInv) (snd e))) prev
-      else
-        let next = declEnvPolarityEntries (prev ++ base) ds
-        if polarityEntriesEq prev next then prev else go (fuel - 1) next
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
+declEnvPolarityFixGo base ds fuel prev =
+  if fuel <= 0 then
+    map (e => (fst e, map (_ => PInv) (snd e))) prev
+  else
+    let next = declEnvPolarityEntries (prev ++ base) ds
+    if polarityEntriesEq prev next then
+      prev
+    else
+      declEnvPolarityFixGo base ds (fuel - 1) next
 
 -- A parameter with no occurrence is phantom: nothing about it can be
 -- laundered, so the published verdict is the lenient one.
@@ -630,7 +633,7 @@ declPolarityKeys (_ :: rest) = declPolarityKeys rest
 (DFunDef false "polarityTyConNames" ((PCon "TyQual" (PVar "t") PWild PWild) (PVar "acc")) (EApp (EApp (EVar "polarityTyConNames") (EVar "t")) (EVar "acc")))
 (DFunDef false "polarityTyConNames" ((POr (PCon "TyVar" PWild) (PCon "TyRow" PWild PWild PWild) (PCon "TyAuth" PWild PWild)) (PVar "acc")) (EVar "acc"))
 (DTypeSig false "declEnvPolarityFixGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))) (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))))))))
-(DFunDef false "declEnvPolarityFixGo" ((PVar "base") (PVar "ds") (PVar "fuel0") (PVar "prev0")) (ELetGroup ((lgb "go" (clause ((PVar "fuel") (PVar "prev")) (EIf (EBinOp "<=" (EVar "fuel") (ELit (LInt 0))) (EApp (EApp (EVar "map") (ELam ((PVar "e")) (ETuple (EApp (EVar "fst") (EVar "e")) (EApp (EApp (EVar "map") (ELam (PWild) (EVar "PInv"))) (EApp (EVar "snd") (EVar "e")))))) (EVar "prev")) (EBlock (DoLet false false (PVar "next") (EApp (EApp (EVar "declEnvPolarityEntries") (EBinOp "++" (EVar "prev") (EVar "base"))) (EVar "ds"))) (DoExpr (EIf (EApp (EApp (EVar "polarityEntriesEq") (EVar "prev")) (EVar "next")) (EVar "prev") (EApp (EApp (EVar "go") (EBinOp "-" (EVar "fuel") (ELit (LInt 1)))) (EVar "next"))))))))) (EApp (EApp (EVar "go") (EVar "fuel0")) (EVar "prev0"))))
+(DFunDef false "declEnvPolarityFixGo" ((PVar "base") (PVar "ds") (PVar "fuel") (PVar "prev")) (EIf (EBinOp "<=" (EVar "fuel") (ELit (LInt 0))) (EApp (EApp (EVar "map") (ELam ((PVar "e")) (ETuple (EApp (EVar "fst") (EVar "e")) (EApp (EApp (EVar "map") (ELam (PWild) (EVar "PInv"))) (EApp (EVar "snd") (EVar "e")))))) (EVar "prev")) (EBlock (DoLet false false (PVar "next") (EApp (EApp (EVar "declEnvPolarityEntries") (EBinOp "++" (EVar "prev") (EVar "base"))) (EVar "ds"))) (DoExpr (EIf (EApp (EApp (EVar "polarityEntriesEq") (EVar "prev")) (EVar "next")) (EVar "prev") (EApp (EApp (EApp (EApp (EVar "declEnvPolarityFixGo") (EVar "base")) (EVar "ds")) (EBinOp "-" (EVar "fuel") (ELit (LInt 1)))) (EVar "next")))))))
 (DTypeSig false "publishedPolarity" (TyFun (TyCon "Polarity") (TyCon "Polarity")))
 (DFunDef false "publishedPolarity" ((PCon "PPhantom")) (EVar "PCo"))
 (DFunDef false "publishedPolarity" ((PVar "q")) (EVar "q"))
@@ -758,7 +761,7 @@ declPolarityKeys (_ :: rest) = declPolarityKeys rest
 (DFunDef false "polarityTyConNames" ((PCon "TyQual" (PVar "t") PWild PWild) (PVar "acc")) (EApp (EApp (EVar "polarityTyConNames") (EVar "t")) (EVar "acc")))
 (DFunDef false "polarityTyConNames" ((POr (PCon "TyVar" PWild) (PCon "TyRow" PWild PWild PWild) (PCon "TyAuth" PWild PWild)) (PVar "acc")) (EVar "acc"))
 (DTypeSig false "declEnvPolarityFixGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))) (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))))))))
-(DFunDef false "declEnvPolarityFixGo" ((PVar "base") (PVar "ds") (PVar "fuel0") (PVar "prev0")) (ELetGroup ((lgb "go" (clause ((PVar "fuel") (PVar "prev")) (EIf (EBinOp "<=" (EVar "fuel") (ELit (LInt 0))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "e")) (ETuple (EApp (EVar "fst") (EVar "e")) (EApp (EApp (EMethodRef "map") (ELam (PWild) (EVar "PInv"))) (EApp (EVar "snd") (EVar "e")))))) (EVar "prev")) (EBlock (DoLet false false (PVar "next") (EApp (EApp (EVar "declEnvPolarityEntries") (EBinOp "++" (EVar "prev") (EVar "base"))) (EVar "ds"))) (DoExpr (EIf (EApp (EApp (EVar "polarityEntriesEq") (EVar "prev")) (EVar "next")) (EVar "prev") (EApp (EApp (EVar "go") (EBinOp "-" (EVar "fuel") (ELit (LInt 1)))) (EVar "next"))))))))) (EApp (EApp (EVar "go") (EVar "fuel0")) (EVar "prev0"))))
+(DFunDef false "declEnvPolarityFixGo" ((PVar "base") (PVar "ds") (PVar "fuel") (PVar "prev")) (EIf (EBinOp "<=" (EVar "fuel") (ELit (LInt 0))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "e")) (ETuple (EApp (EVar "fst") (EVar "e")) (EApp (EApp (EMethodRef "map") (ELam (PWild) (EVar "PInv"))) (EApp (EVar "snd") (EVar "e")))))) (EVar "prev")) (EBlock (DoLet false false (PVar "next") (EApp (EApp (EVar "declEnvPolarityEntries") (EBinOp "++" (EVar "prev") (EVar "base"))) (EVar "ds"))) (DoExpr (EIf (EApp (EApp (EVar "polarityEntriesEq") (EVar "prev")) (EVar "next")) (EVar "prev") (EApp (EApp (EApp (EApp (EVar "declEnvPolarityFixGo") (EVar "base")) (EVar "ds")) (EBinOp "-" (EVar "fuel") (ELit (LInt 1)))) (EVar "next")))))))
 (DTypeSig false "publishedPolarity" (TyFun (TyCon "Polarity") (TyCon "Polarity")))
 (DFunDef false "publishedPolarity" ((PCon "PPhantom")) (EVar "PCo"))
 (DFunDef false "publishedPolarity" ((PVar "q")) (EVar "q"))

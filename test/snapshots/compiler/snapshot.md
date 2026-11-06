@@ -986,19 +986,19 @@ takeRun : String ->
   Int ->
   List String ->
   <IO> (List String, List String)
-takeRun root outDir forceIsolate cli sel n0 xs0 = go n0 xs0
-  where
-    go _ [] = ([], [])
-    go n (f :: rest) =
-      if n <= 0 then
-        ([], f :: rest)
-      else
-        let meta = metaOf root outDir f
-        if forceIsolate || isIsolatedIn meta || stagesIn cli meta /= sel then
-          ([], f :: rest)
-        else
-          let (grp, tail2) = go (n - 1) rest
-          (f :: grp, tail2)
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
+takeRun _ _ _ _ _ _ [] = ([], [])
+takeRun root outDir forceIsolate cli sel n (f :: rest) =
+  if n <= 0 then
+    ([], f :: rest)
+  else
+    let meta = metaOf root outDir f
+    if forceIsolate || isIsolatedIn meta || stagesIn cli meta /= sel then
+      ([], f :: rest)
+    else
+      let (grp, tail2) = takeRun root outDir forceIsolate cli sel (n - 1) rest
+      (f :: grp, tail2)
 
 -- The fixture's EXISTING snapshot's `# META` lines.  Must consult the same --out
 -- directory the run will write to, or a corpus kept out-of-tree would silently never
@@ -1710,7 +1710,8 @@ mapUnit f (x :: rest) =
 (DFunDef false "chunksOf" (PWild PWild PWild PWild (PList)) (EListLit))
 (DFunDef false "chunksOf" ((PVar "root") (PVar "outDir") (PVar "forceIsolate") (PVar "cli") (PCons (PVar "f") (PVar "rest"))) (EBlock (DoLet false false (PVar "meta") (EApp (EApp (EApp (EVar "metaOf") (EVar "root")) (EVar "outDir")) (EVar "f"))) (DoLet false false (PVar "sel") (EApp (EApp (EVar "stagesIn") (EVar "cli")) (EVar "meta"))) (DoExpr (EIf (EBinOp "||" (EVar "forceIsolate") (EApp (EVar "isIsolatedIn") (EVar "meta"))) (EBinOp "::" (ETuple (EVar "sel") (EListLit (EVar "f"))) (EApp (EApp (EApp (EApp (EApp (EVar "chunksOf") (EVar "root")) (EVar "outDir")) (EVar "forceIsolate")) (EVar "cli")) (EVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "grp") (PVar "tail2")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "takeRun") (EVar "root")) (EVar "outDir")) (EVar "forceIsolate")) (EVar "cli")) (EVar "sel")) (EBinOp "-" (EVar "chunkSize") (ELit (LInt 1)))) (EVar "rest"))) (DoExpr (EBinOp "::" (ETuple (EVar "sel") (EBinOp "::" (EVar "f") (EVar "grp"))) (EApp (EApp (EApp (EApp (EApp (EVar "chunksOf") (EVar "root")) (EVar "outDir")) (EVar "forceIsolate")) (EVar "cli")) (EVar "tail2")))))))))
 (DTypeSig false "takeRun" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))))))
-(DFunDef false "takeRun" ((PVar "root") (PVar "outDir") (PVar "forceIsolate") (PVar "cli") (PVar "sel") (PVar "n0") (PVar "xs0")) (ELetGroup ((lgb "go" (clause (PWild (PList)) (ETuple (EListLit) (EListLit))) (clause ((PVar "n") (PCons (PVar "f") (PVar "rest"))) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (ETuple (EListLit) (EBinOp "::" (EVar "f") (EVar "rest"))) (EBlock (DoLet false false (PVar "meta") (EApp (EApp (EApp (EVar "metaOf") (EVar "root")) (EVar "outDir")) (EVar "f"))) (DoExpr (EIf (EBinOp "||" (EBinOp "||" (EVar "forceIsolate") (EApp (EVar "isIsolatedIn") (EVar "meta"))) (EBinOp "/=" (EApp (EApp (EVar "stagesIn") (EVar "cli")) (EVar "meta")) (EVar "sel"))) (ETuple (EListLit) (EBinOp "::" (EVar "f") (EVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "grp") (PVar "tail2")) (EApp (EApp (EVar "go") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EVar "f") (EVar "grp")) (EVar "tail2"))))))))))) (EApp (EApp (EVar "go") (EVar "n0")) (EVar "xs0"))))
+(DFunDef false "takeRun" (PWild PWild PWild PWild PWild PWild (PList)) (ETuple (EListLit) (EListLit)))
+(DFunDef false "takeRun" ((PVar "root") (PVar "outDir") (PVar "forceIsolate") (PVar "cli") (PVar "sel") (PVar "n") (PCons (PVar "f") (PVar "rest"))) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (ETuple (EListLit) (EBinOp "::" (EVar "f") (EVar "rest"))) (EBlock (DoLet false false (PVar "meta") (EApp (EApp (EApp (EVar "metaOf") (EVar "root")) (EVar "outDir")) (EVar "f"))) (DoExpr (EIf (EBinOp "||" (EBinOp "||" (EVar "forceIsolate") (EApp (EVar "isIsolatedIn") (EVar "meta"))) (EBinOp "/=" (EApp (EApp (EVar "stagesIn") (EVar "cli")) (EVar "meta")) (EVar "sel"))) (ETuple (EListLit) (EBinOp "::" (EVar "f") (EVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "grp") (PVar "tail2")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "takeRun") (EVar "root")) (EVar "outDir")) (EVar "forceIsolate")) (EVar "cli")) (EVar "sel")) (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EVar "f") (EVar "grp")) (EVar "tail2")))))))))
 (DTypeSig false "metaOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "metaOf" ((PVar "root") (PVar "outDir") (PVar "f")) (EMatch (EApp (EVar "readFile") (EApp (EApp (EApp (EVar "snapPathOf") (EVar "root")) (EVar "outDir")) (EVar "f"))) (arm (PCon "Err" PWild) () (EListLit)) (arm (PCon "Ok" (PVar "text")) () (EApp (EVar "contentLines") (EApp (EApp (EVar "sectionOf") (ELit (LString "META"))) (EApp (EVar "parseSnapshot") (EVar "text")))))))
 (DTypeSig false "isIsolatedIn" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool")))
@@ -2048,7 +2049,8 @@ mapUnit f (x :: rest) =
 (DFunDef false "chunksOf" (PWild PWild PWild PWild (PList)) (EListLit))
 (DFunDef false "chunksOf" ((PVar "root") (PVar "outDir") (PVar "forceIsolate") (PVar "cli") (PCons (PVar "f") (PVar "rest"))) (EBlock (DoLet false false (PVar "meta") (EApp (EApp (EApp (EVar "metaOf") (EVar "root")) (EVar "outDir")) (EVar "f"))) (DoLet false false (PVar "sel") (EApp (EApp (EVar "stagesIn") (EVar "cli")) (EVar "meta"))) (DoExpr (EIf (EBinOp "||" (EVar "forceIsolate") (EApp (EVar "isIsolatedIn") (EVar "meta"))) (EBinOp "::" (ETuple (EVar "sel") (EListLit (EVar "f"))) (EApp (EApp (EApp (EApp (EApp (EVar "chunksOf") (EVar "root")) (EVar "outDir")) (EVar "forceIsolate")) (EVar "cli")) (EVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "grp") (PVar "tail2")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "takeRun") (EVar "root")) (EVar "outDir")) (EVar "forceIsolate")) (EVar "cli")) (EVar "sel")) (EBinOp "-" (EVar "chunkSize") (ELit (LInt 1)))) (EVar "rest"))) (DoExpr (EBinOp "::" (ETuple (EVar "sel") (EBinOp "::" (EVar "f") (EVar "grp"))) (EApp (EApp (EApp (EApp (EApp (EVar "chunksOf") (EVar "root")) (EVar "outDir")) (EVar "forceIsolate")) (EVar "cli")) (EVar "tail2")))))))))
 (DTypeSig false "takeRun" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))))))
-(DFunDef false "takeRun" ((PVar "root") (PVar "outDir") (PVar "forceIsolate") (PVar "cli") (PVar "sel") (PVar "n0") (PVar "xs0")) (ELetGroup ((lgb "go" (clause (PWild (PList)) (ETuple (EListLit) (EListLit))) (clause ((PVar "n") (PCons (PVar "f") (PVar "rest"))) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (ETuple (EListLit) (EBinOp "::" (EVar "f") (EVar "rest"))) (EBlock (DoLet false false (PVar "meta") (EApp (EApp (EApp (EVar "metaOf") (EVar "root")) (EVar "outDir")) (EVar "f"))) (DoExpr (EIf (EBinOp "||" (EBinOp "||" (EVar "forceIsolate") (EApp (EVar "isIsolatedIn") (EVar "meta"))) (EBinOp "/=" (EApp (EApp (EVar "stagesIn") (EVar "cli")) (EVar "meta")) (EVar "sel"))) (ETuple (EListLit) (EBinOp "::" (EVar "f") (EVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "grp") (PVar "tail2")) (EApp (EApp (EVar "go") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EVar "f") (EVar "grp")) (EVar "tail2"))))))))))) (EApp (EApp (EVar "go") (EVar "n0")) (EVar "xs0"))))
+(DFunDef false "takeRun" (PWild PWild PWild PWild PWild PWild (PList)) (ETuple (EListLit) (EListLit)))
+(DFunDef false "takeRun" ((PVar "root") (PVar "outDir") (PVar "forceIsolate") (PVar "cli") (PVar "sel") (PVar "n") (PCons (PVar "f") (PVar "rest"))) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (ETuple (EListLit) (EBinOp "::" (EVar "f") (EVar "rest"))) (EBlock (DoLet false false (PVar "meta") (EApp (EApp (EApp (EVar "metaOf") (EVar "root")) (EVar "outDir")) (EVar "f"))) (DoExpr (EIf (EBinOp "||" (EBinOp "||" (EVar "forceIsolate") (EApp (EVar "isIsolatedIn") (EVar "meta"))) (EBinOp "/=" (EApp (EApp (EVar "stagesIn") (EVar "cli")) (EVar "meta")) (EVar "sel"))) (ETuple (EListLit) (EBinOp "::" (EVar "f") (EVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "grp") (PVar "tail2")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "takeRun") (EVar "root")) (EVar "outDir")) (EVar "forceIsolate")) (EVar "cli")) (EVar "sel")) (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EVar "f") (EVar "grp")) (EVar "tail2")))))))))
 (DTypeSig false "metaOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "metaOf" ((PVar "root") (PVar "outDir") (PVar "f")) (EMatch (EApp (EVar "readFile") (EApp (EApp (EApp (EVar "snapPathOf") (EVar "root")) (EVar "outDir")) (EVar "f"))) (arm (PCon "Err" PWild) () (EListLit)) (arm (PCon "Ok" (PVar "text")) () (EApp (EVar "contentLines") (EApp (EApp (EVar "sectionOf") (ELit (LString "META"))) (EApp (EVar "parseSnapshot") (EVar "text")))))))
 (DTypeSig false "isIsolatedIn" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool")))

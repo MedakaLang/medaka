@@ -1,5 +1,5 @@
 # META
-source_lines=4482
+source_lines=4485
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_env: construction of `ImplEnv`, `ClassEnv`, `MethodEnv` and lookup in every declaration
@@ -2230,11 +2230,14 @@ varKindsFix : KindReads ->
   Int ->
   List (String, Kind) ->
   List (String, Kind)
-varKindsFix reads declared items fuel0 cur0 = go fuel0 cur0
-  where
-    go fuel cur =
-      let next = varKindsRound reads declared items cur
-      if fuel <= 0 || sameVarKinds cur next then next else go (fuel - 1) next
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
+varKindsFix reads declared items fuel cur =
+  let next = varKindsRound reads declared items cur
+  if fuel <= 0 || sameVarKinds cur next then
+    next
+  else
+    varKindsFix reads declared items (fuel - 1) next
 
 varKindsRound : KindReads ->
   List (String, Kind) ->
@@ -4875,7 +4878,7 @@ methodRowSameNameView rows =
 (DTypeSig false "takesConstructor" (TyFun (TyCon "Kind") (TyCon "Bool")))
 (DFunDef false "takesConstructor" ((PVar "k")) (EApp (EApp (EVar "anyList") (EVar "kindHasArrow")) (EApp (EVar "kindParams") (EVar "k"))))
 (DTypeSig false "varKindsFix" (TyFun (TyCon "KindReads") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Kind"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Option") (TyCon "Kind")) (TyCon "Ty"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Kind"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Kind")))))))))
-(DFunDef false "varKindsFix" ((PVar "reads") (PVar "declared") (PVar "items") (PVar "fuel0") (PVar "cur0")) (ELetGroup ((lgb "go" (clause ((PVar "fuel") (PVar "cur")) (EBlock (DoLet false false (PVar "next") (EApp (EApp (EApp (EApp (EVar "varKindsRound") (EVar "reads")) (EVar "declared")) (EVar "items")) (EVar "cur"))) (DoExpr (EIf (EBinOp "||" (EBinOp "<=" (EVar "fuel") (ELit (LInt 0))) (EApp (EApp (EVar "sameVarKinds") (EVar "cur")) (EVar "next"))) (EVar "next") (EApp (EApp (EVar "go") (EBinOp "-" (EVar "fuel") (ELit (LInt 1)))) (EVar "next")))))))) (EApp (EApp (EVar "go") (EVar "fuel0")) (EVar "cur0"))))
+(DFunDef false "varKindsFix" ((PVar "reads") (PVar "declared") (PVar "items") (PVar "fuel") (PVar "cur")) (EBlock (DoLet false false (PVar "next") (EApp (EApp (EApp (EApp (EVar "varKindsRound") (EVar "reads")) (EVar "declared")) (EVar "items")) (EVar "cur"))) (DoExpr (EIf (EBinOp "||" (EBinOp "<=" (EVar "fuel") (ELit (LInt 0))) (EApp (EApp (EVar "sameVarKinds") (EVar "cur")) (EVar "next"))) (EVar "next") (EApp (EApp (EApp (EApp (EApp (EVar "varKindsFix") (EVar "reads")) (EVar "declared")) (EVar "items")) (EBinOp "-" (EVar "fuel") (ELit (LInt 1)))) (EVar "next"))))))
 (DTypeSig false "varKindsRound" (TyFun (TyCon "KindReads") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Kind"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Option") (TyCon "Kind")) (TyCon "Ty"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Kind"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Kind"))))))))
 (DFunDef false "varKindsRound" ((PVar "reads") (PVar "declared") (PVar "items") (PVar "vars")) (EBlock (DoLet false false (PVar "used") (EApp (EApp (EVar "flatMap") (ELam ((PVar "it")) (EApp (EApp (EApp (EApp (EVar "kindUses") (EVar "reads")) (EVar "vars")) (EApp (EVar "fst") (EVar "it"))) (EApp (EVar "snd") (EVar "it"))))) (EVar "items"))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "declared") (EApp (EApp (EVar "filterList") (ELam ((PVar "u")) (EApp (EVar "not") (EApp (EVar "kindTypeOnly") (EApp (EVar "snd") (EVar "u")))))) (EVar "used"))) (EApp (EVar "joinedKinds") (EApp (EApp (EVar "filterList") (ELam ((PVar "u")) (EApp (EVar "kindTypeOnly") (EApp (EVar "snd") (EVar "u"))))) (EVar "used")))))))
 (DTypeSig false "joinedKinds" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Kind"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Kind")))))
@@ -5716,7 +5719,7 @@ methodRowSameNameView rows =
 (DTypeSig false "takesConstructor" (TyFun (TyCon "Kind") (TyCon "Bool")))
 (DFunDef false "takesConstructor" ((PVar "k")) (EApp (EApp (EVar "anyList") (EVar "kindHasArrow")) (EApp (EVar "kindParams") (EVar "k"))))
 (DTypeSig false "varKindsFix" (TyFun (TyCon "KindReads") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Kind"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Option") (TyCon "Kind")) (TyCon "Ty"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Kind"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Kind")))))))))
-(DFunDef false "varKindsFix" ((PVar "reads") (PVar "declared") (PVar "items") (PVar "fuel0") (PVar "cur0")) (ELetGroup ((lgb "go" (clause ((PVar "fuel") (PVar "cur")) (EBlock (DoLet false false (PVar "next") (EApp (EApp (EApp (EApp (EVar "varKindsRound") (EVar "reads")) (EVar "declared")) (EVar "items")) (EVar "cur"))) (DoExpr (EIf (EBinOp "||" (EBinOp "<=" (EVar "fuel") (ELit (LInt 0))) (EApp (EApp (EVar "sameVarKinds") (EVar "cur")) (EVar "next"))) (EVar "next") (EApp (EApp (EVar "go") (EBinOp "-" (EVar "fuel") (ELit (LInt 1)))) (EVar "next")))))))) (EApp (EApp (EVar "go") (EVar "fuel0")) (EVar "cur0"))))
+(DFunDef false "varKindsFix" ((PVar "reads") (PVar "declared") (PVar "items") (PVar "fuel") (PVar "cur")) (EBlock (DoLet false false (PVar "next") (EApp (EApp (EApp (EApp (EVar "varKindsRound") (EVar "reads")) (EVar "declared")) (EVar "items")) (EVar "cur"))) (DoExpr (EIf (EBinOp "||" (EBinOp "<=" (EVar "fuel") (ELit (LInt 0))) (EApp (EApp (EVar "sameVarKinds") (EVar "cur")) (EVar "next"))) (EVar "next") (EApp (EApp (EApp (EApp (EApp (EVar "varKindsFix") (EVar "reads")) (EVar "declared")) (EVar "items")) (EBinOp "-" (EVar "fuel") (ELit (LInt 1)))) (EVar "next"))))))
 (DTypeSig false "varKindsRound" (TyFun (TyCon "KindReads") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Kind"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Option") (TyCon "Kind")) (TyCon "Ty"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Kind"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Kind"))))))))
 (DFunDef false "varKindsRound" ((PVar "reads") (PVar "declared") (PVar "items") (PVar "vars")) (EBlock (DoLet false false (PVar "used") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "it")) (EApp (EApp (EApp (EApp (EVar "kindUses") (EVar "reads")) (EVar "vars")) (EApp (EVar "fst") (EVar "it"))) (EApp (EVar "snd") (EVar "it"))))) (EVar "items"))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "declared") (EApp (EApp (EVar "filterList") (ELam ((PVar "u")) (EApp (EVar "not") (EApp (EVar "kindTypeOnly") (EApp (EVar "snd") (EVar "u")))))) (EVar "used"))) (EApp (EVar "joinedKinds") (EApp (EApp (EVar "filterList") (ELam ((PVar "u")) (EApp (EVar "kindTypeOnly") (EApp (EVar "snd") (EVar "u"))))) (EVar "used")))))))
 (DTypeSig false "joinedKinds" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Kind"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Kind")))))

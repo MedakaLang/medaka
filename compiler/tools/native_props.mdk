@@ -991,18 +991,18 @@ graphCtorChildren : PlanEnv ->
   Int ->
   NativeGraph ->
   NativeGraph
-graphCtorChildren env plan xs0 xs1 depth graph0 = go xs0 xs1 graph0
-  where
-    go [] _ graph = graph
-    go (ctor :: rest) (weight :: weights) graph =
-      let next =
-        if weight <= 0 then
-          graph
-        else match instantiateCtor env plan ctor
-          Err _ => graph
-          Ok fields => graphExploreMany env (map snd fields) (depth + 1) graph
-      go rest weights next
-    go _ _ graph = graph
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
+graphCtorChildren _ _ [] _ _ graph = graph
+graphCtorChildren env plan (ctor :: rest) (weight :: weights) depth graph =
+  let next =
+    if weight <= 0 then
+      graph
+    else match instantiateCtor env plan ctor
+      Err _ => graph
+      Ok fields => graphExploreMany env (map snd fields) (depth + 1) graph
+  graphCtorChildren env plan rest weights depth next
+graphCtorChildren _ _ _ _ _ graph = graph
 
 graphDisplayCtorChildren : PlanEnv ->
   GenPlan ->
@@ -1943,12 +1943,12 @@ graphNamedDisplaysTail : NativeGraph ->
   List (Option String, GenPlan) ->
   List String ->
   String
-graphNamedDisplaysTail graph prefix xs0 xs1 = go xs0 xs1
-  where
-    go [] _ = ""
-    go ((Some field, plan) :: rest) (value :: values) =
-      " ++ \", \" ++ \"\{field} = \" ++ \{graphDisplayRef graph prefix plan value}\{go rest values}"
-    go _ _ = ""
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
+graphNamedDisplaysTail _ _ [] _ = ""
+graphNamedDisplaysTail graph prefix ((Some field, plan) :: rest) (value :: values) =
+  " ++ \", \" ++ \"\{field} = \" ++ \{graphDisplayRef graph prefix plan value}\{graphNamedDisplaysTail graph prefix rest values}"
+graphNamedDisplaysTail _ _ _ _ = ""
 
 plannedRunLines : String ->
   List PlanModule ->

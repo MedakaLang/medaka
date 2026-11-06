@@ -2226,11 +2226,14 @@ varKindsFix : KindReads ->
   Int ->
   List (String, Kind) ->
   List (String, Kind)
-varKindsFix reads declared items fuel0 cur0 = go fuel0 cur0
-  where
-    go fuel cur =
-      let next = varKindsRound reads declared items cur
-      if fuel <= 0 || sameVarKinds cur next then next else go (fuel - 1) next
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
+varKindsFix reads declared items fuel cur =
+  let next = varKindsRound reads declared items cur
+  if fuel <= 0 || sameVarKinds cur next then
+    next
+  else
+    varKindsFix reads declared items (fuel - 1) next
 
 varKindsRound : KindReads ->
   List (String, Kind) ->

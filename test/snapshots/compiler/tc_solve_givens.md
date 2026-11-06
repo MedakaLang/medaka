@@ -493,13 +493,13 @@ indexOfPredGo : Int ->
   PredicateRequest ->
   List PredicateSlot ->
   Option Int
-indexOfPredGo x00 target request xs0 = go x00 xs0
-  where
-    go _ [] = None
-    go i (sp :: rest)
-      | containsI target sp.psBoundIds
-        && predicateRequestMatchesSlot request sp = Some i
-      | otherwise = go (i + 1) rest
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
+indexOfPredGo _ _ _ [] = None
+indexOfPredGo i target request (sp :: rest)
+  | containsI target sp.psBoundIds && predicateRequestMatchesSlot request sp =
+    Some i
+  | otherwise = indexOfPredGo (i + 1) target request rest
 
 -- The single request/slot routing relation.  Declaration identity is complete and
 -- fail-closed.  Known vectors compare recursively at every position; interface-only
@@ -1171,7 +1171,8 @@ registerActiveDictVars gctx scope x20 xs0 = go x20 xs0
 (DTypeSig false "indexOfPred" (TyFun (TyCon "Int") (TyFun (TyCon "PredicateRequest") (TyFun (TyApp (TyCon "List") (TyCon "PredicateSlot")) (TyApp (TyCon "Option") (TyCon "Int"))))))
 (DFunDef false "indexOfPred" ((PVar "target") (PVar "request") (PVar "preds")) (EApp (EApp (EApp (EApp (EVar "indexOfPredGo") (ELit (LInt 0))) (EVar "target")) (EVar "request")) (EVar "preds")))
 (DTypeSig false "indexOfPredGo" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "PredicateRequest") (TyFun (TyApp (TyCon "List") (TyCon "PredicateSlot")) (TyApp (TyCon "Option") (TyCon "Int")))))))
-(DFunDef false "indexOfPredGo" ((PVar "x00") (PVar "target") (PVar "request") (PVar "xs0")) (ELetGroup ((lgb "go" (clause (PWild (PList)) (EVar "None")) (clause ((PVar "i") (PCons (PVar "sp") (PVar "rest"))) (EIf (EBinOp "&&" (EApp (EApp (EVar "containsI") (EVar "target")) (EFieldAccess (EVar "sp") "psBoundIds")) (EApp (EApp (EVar "predicateRequestMatchesSlot") (EVar "request")) (EVar "sp"))) (EApp (EVar "Some") (EVar "i")) (EIf (EVar "otherwise") (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EApp (EVar "go") (EVar "x00")) (EVar "xs0"))))
+(DFunDef false "indexOfPredGo" (PWild PWild PWild (PList)) (EVar "None"))
+(DFunDef false "indexOfPredGo" ((PVar "i") (PVar "target") (PVar "request") (PCons (PVar "sp") (PVar "rest"))) (EIf (EBinOp "&&" (EApp (EApp (EVar "containsI") (EVar "target")) (EFieldAccess (EVar "sp") "psBoundIds")) (EApp (EApp (EVar "predicateRequestMatchesSlot") (EVar "request")) (EVar "sp"))) (EApp (EVar "Some") (EVar "i")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "indexOfPredGo") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "target")) (EVar "request")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "predicateRequestMatchesSlot" (TyFun (TyCon "PredicateRequest") (TyFun (TyCon "PredicateSlot") (TyCon "Bool"))))
 (DFunDef false "predicateRequestMatchesSlot" ((PVar "request") (PVar "slot")) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "/=" (EFieldAccess (EFieldAccess (EVar "request") "prIface") "irName") (ELit (LString ""))) (EBinOp "/=" (EFieldAccess (EFieldAccess (EVar "slot") "psIface") "irName") (ELit (LString "")))) (EApp (EApp (EVar "sameIfaceDecl") (EFieldAccess (EVar "request") "prIface")) (EFieldAccess (EVar "slot") "psIface"))) (EApp (EApp (EVar "predicateRequestArgsMatch") (EFieldAccess (EVar "request") "prArgs")) (EFieldAccess (EVar "slot") "psArgs"))))
 (DTypeSig false "predicateRequestArgsMatch" (TyFun (TyCon "PredicateSlotArgs") (TyFun (TyCon "PredicateSlotArgs") (TyCon "Bool"))))
@@ -1350,7 +1351,8 @@ registerActiveDictVars gctx scope x20 xs0 = go x20 xs0
 (DTypeSig false "indexOfPred" (TyFun (TyCon "Int") (TyFun (TyCon "PredicateRequest") (TyFun (TyApp (TyCon "List") (TyCon "PredicateSlot")) (TyApp (TyCon "Option") (TyCon "Int"))))))
 (DFunDef false "indexOfPred" ((PVar "target") (PVar "request") (PVar "preds")) (EApp (EApp (EApp (EApp (EVar "indexOfPredGo") (ELit (LInt 0))) (EVar "target")) (EVar "request")) (EVar "preds")))
 (DTypeSig false "indexOfPredGo" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "PredicateRequest") (TyFun (TyApp (TyCon "List") (TyCon "PredicateSlot")) (TyApp (TyCon "Option") (TyCon "Int")))))))
-(DFunDef false "indexOfPredGo" ((PVar "x00") (PVar "target") (PVar "request") (PVar "xs0")) (ELetGroup ((lgb "go" (clause (PWild (PList)) (EVar "None")) (clause ((PVar "i") (PCons (PVar "sp") (PVar "rest"))) (EIf (EBinOp "&&" (EApp (EApp (EVar "containsI") (EVar "target")) (EFieldAccess (EVar "sp") "psBoundIds")) (EApp (EApp (EVar "predicateRequestMatchesSlot") (EVar "request")) (EVar "sp"))) (EApp (EVar "Some") (EVar "i")) (EIf (EVar "otherwise") (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EApp (EVar "go") (EVar "x00")) (EVar "xs0"))))
+(DFunDef false "indexOfPredGo" (PWild PWild PWild (PList)) (EVar "None"))
+(DFunDef false "indexOfPredGo" ((PVar "i") (PVar "target") (PVar "request") (PCons (PVar "sp") (PVar "rest"))) (EIf (EBinOp "&&" (EApp (EApp (EVar "containsI") (EVar "target")) (EFieldAccess (EVar "sp") "psBoundIds")) (EApp (EApp (EVar "predicateRequestMatchesSlot") (EVar "request")) (EVar "sp"))) (EApp (EVar "Some") (EVar "i")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "indexOfPredGo") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "target")) (EVar "request")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "predicateRequestMatchesSlot" (TyFun (TyCon "PredicateRequest") (TyFun (TyCon "PredicateSlot") (TyCon "Bool"))))
 (DFunDef false "predicateRequestMatchesSlot" ((PVar "request") (PVar "slot")) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "/=" (EFieldAccess (EFieldAccess (EVar "request") "prIface") "irName") (ELit (LString ""))) (EBinOp "/=" (EFieldAccess (EFieldAccess (EVar "slot") "psIface") "irName") (ELit (LString "")))) (EApp (EApp (EVar "sameIfaceDecl") (EFieldAccess (EVar "request") "prIface")) (EFieldAccess (EVar "slot") "psIface"))) (EApp (EApp (EVar "predicateRequestArgsMatch") (EFieldAccess (EVar "request") "prArgs")) (EFieldAccess (EVar "slot") "psArgs"))))
 (DTypeSig false "predicateRequestArgsMatch" (TyFun (TyCon "PredicateSlotArgs") (TyFun (TyCon "PredicateSlotArgs") (TyCon "Bool"))))

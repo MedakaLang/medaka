@@ -1546,17 +1546,17 @@ determineByUniqueInstance mctx rigidIds obls =
 -- The fuel only bounds the loop: every sweep but the last changes some goal's
 -- shape.
 determineSweeps : ModuleCtx -> OrdMap Unit -> GoalWindow -> Int -> Unit
-determineSweeps mctx rigidIds window fuel0 = go fuel0
-  where
-    go fuel =
-      if fuel > 0
-        && determineByUniqueInstanceGo
-          mctx
-          rigidIds
-          window
-          False
-          window.gwGoals then
-        go (fuel - 1)
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
+determineSweeps mctx rigidIds window fuel =
+  if fuel > 0
+    && determineByUniqueInstanceGo
+      mctx
+      rigidIds
+      window
+      False
+      window.gwGoals then
+    determineSweeps mctx rigidIds window (fuel - 1)
 
 -- One sweep over the window; True when some goal took its instance's shape.
 determineByUniqueInstanceGo : ModuleCtx ->
