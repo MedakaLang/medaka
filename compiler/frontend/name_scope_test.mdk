@@ -3,7 +3,7 @@
 -- Each row builds the export surfaces of a few small modules, scopes a main
 -- module against them and reads `bareBinding` or `scopeCollisions`.  The
 -- expected answers are the ladder's clauses (docs/spec/SHADOW-SEMANTICS.md,
--- L2 to L5) and the census classes C3, C4 and C8.
+-- L2 to L5) and the classes of its decision table, section 3.
 
 import test.{expectEach, expectEqual}
 import frontend.ast.{Decl(..), Loc(..)}
@@ -17,6 +17,7 @@ import frontend.name_scope.{
   NameTarget(..),
   bareBinding,
   bindingImporters,
+  importedSurfaces,
   nameScopeOf,
   scopeCollisions,
 }
@@ -27,7 +28,6 @@ import frontend.visibility.{
   coreExports,
   findExports,
   pubIfaceMethodSets,
-  useModId,
 }
 import support.ordmap.{OrdMap, omEmpty, omInsert}
 
@@ -62,17 +62,11 @@ knownOf mods =
     mods
 
 surfacesOf : OrdMap ModuleExports -> List Decl -> List ImportedSurface
-surfacesOf known prog =
-  flatMap
-    (d => match d
-      DUse _ path _ =>
-        if useModId path == "core" then
-          [ImportedSurface d prelude]
-        else match findExports (useModId path) known
-          Some exp => [ImportedSurface d exp]
-          None => []
-      _ => [])
-    prog
+surfacesOf known prog = flatMap (importedSurfaces surfaceOfModule) prog
+  where
+    surfaceOfModule mid
+      | mid == "core" = Some prelude
+      | otherwise = findExports mid known
 
 scopeOf : List (String, String) -> String -> NameScope
 scopeOf mods src =
@@ -82,25 +76,46 @@ scopeOf mods src =
 -- A collision as (name, rungs, line of its span).
 collisionRows : NameScope -> List (String, (NameRung, NameRung), Int)
 collisionRows scope =
-  map (c => (c.ncName, c.ncRungs, locLine c.ncLoc)) (scopeCollisions scope)
+  map
+    (c => (c.ncName, c.ncRungs, optionOr 0 (map locLine c.ncLoc)))
+    (scopeCollisions scope)
 
 locLine : Loc -> Int
 locLine (Loc _ line _ _ _) = line
 
 valueA : String
-valueA = "export\nfoo : Int\nfoo = 1\n"
+valueA = """
+export
+foo : Int
+foo = 1
+"""
 
 valueB : String
-valueB = "export\nfoo : Int\nfoo = 2\nexport\nbar : Int\nbar = 3\n"
+valueB = """
+export
+foo : Int
+foo = 2
+export
+bar : Int
+bar = 3
+"""
 
 sizedIfc : String
-sizedIfc = "export interface Sized a where\n  sz : a -> Int\n"
+sizedIfc = """
+export interface Sized a where
+  sz : a -> Int
+"""
 
 test "L2: own beats explicit beats wildcard beats prelude" =
   let scope =
     scopeOf
       [("a", valueA), ("b", valueB)]
-      "import a.{foo}\nimport b.*\nbaz = 0\nmain = baz\n"
+      """
+import a.{foo}
+import b.*
+baz = 0
+main = baz
+"""
   expectEach [
     (
       "own",
@@ -136,7 +151,10 @@ test "L2: an interface member import and a module alias bind no bare method name
       expectEqual
         None
         (bareBinding
-          (scopeOf [("m", sizedIfc)] "import m.{Sized}\nmain = 0\n")
+          (scopeOf [("m", sizedIfc)] """
+import m.{Sized}
+main = 0
+""")
           "sz"),
     ),
     (
@@ -144,22 +162,42 @@ test "L2: an interface member import and a module alias bind no bare method name
       expectEqual
         None
         (bareBinding
-          (scopeOf [("m", sizedIfc)] "import m as A\nmain = 0\n")
+          (scopeOf [("m", sizedIfc)] """
+import m as A
+main = 0
+""")
           "sz"),
     ),
     (
       "import m.* binds the method",
       expectEqual
         (Some (Bound RungWild (TargetMethod "m" "Sized" "sz")))
-        (bareBinding (scopeOf [("m", sizedIfc)] "import m.*\nmain = 0\n") "sz"),
+        (bareBinding (scopeOf [("m", sizedIfc)] """
+import m.*
+main = 0
+""") "sz"),
     ),
   ]
 
 test "L3: two declarations at one rung are ambiguous, one declaration by two paths is one binding" =
-  let mods = [("a", valueA), ("b", valueB), ("ra", "export import a.*\n")]
-  let two = scopeOf mods "import a.*\nimport b.*\nmain = 0\n"
-  let one = scopeOf mods "import a.*\nimport ra.*\nmain = 0\n"
-  let explicitTwo = scopeOf mods "import a.{foo}\nimport b.{foo}\nmain = 0\n"
+  let mods = [("a", valueA), ("b", valueB), ("ra", """
+export import a.*
+""")]
+  let two = scopeOf mods """
+import a.*
+import b.*
+main = 0
+"""
+  let one = scopeOf mods """
+import a.*
+import ra.*
+main = 0
+"""
+  let explicitTwo = scopeOf mods """
+import a.{foo}
+import b.{foo}
+main = 0
+"""
   expectEach [
     (
       "two wildcards",
@@ -192,8 +230,20 @@ test "L3: two declarations at one rung are ambiguous, one declaration by two pat
 
 test "L4: an explicit import of an own name collides at the member, a wildcard one is silent" =
   let explicit =
-    scopeOf [("lib", valueA)] "import lib.{foo}\n\nfoo = 2\n\nmain = foo\n"
-  let wild = scopeOf [("lib", valueA)] "import lib.*\n\nfoo = 2\n\nmain = foo\n"
+    scopeOf [("lib", valueA)] """
+import lib.{foo}
+
+foo = 2
+
+main = foo
+"""
+  let wild = scopeOf [("lib", valueA)] """
+import lib.*
+
+foo = 2
+
+main = foo
+"""
   expectEach [
     (
       "explicit answer",
@@ -219,8 +269,15 @@ test "L4: an explicit import of an own name collides at the member, a wildcard o
   ]
 
 test "L5: a name bound to an interface method is a method target, any other a value" =
-  let mods = [("m", sizedIfc ++ "export\nhelper : Int -> Int\nhelper n = n\n")]
-  let scope = scopeOf mods "import m.{sz, helper}\nmain = 0\n"
+  let mods = [("m", sizedIfc ++ """
+export
+helper : Int -> Int
+helper n = n
+""")]
+  let scope = scopeOf mods """
+import m.{sz, helper}
+main = 0
+"""
   expectEach [
     (
       "method",
@@ -238,7 +295,13 @@ test "L5: a name bound to an interface method is a method target, any other a va
 
 test "C3: a member alias binding an own name collides at the member" =
   let scope =
-    scopeOf [("lib", valueB)] "import lib.{\n  bar as foo,\n}\n\nfoo = 2\n"
+    scopeOf [("lib", valueB)] """
+import lib.{
+  bar as foo,
+}
+
+foo = 2
+"""
   expectEach [
     (
       "collision",
@@ -256,7 +319,14 @@ test "C4: an interface method and a function of one module collide at the later 
   let scope =
     scopeOf
       []
-      "interface Sized a where\n  size : a -> Int\nimpl Sized Int where\n  size _ = 7\nsize : Int -> Int\nsize n = n\n"
+      """
+interface Sized a where
+  size : a -> Int
+impl Sized Int where
+  size _ = 7
+size : Int -> Int
+size n = n
+"""
   expectEach [
     (
       "collision",
@@ -276,8 +346,16 @@ test "C4: an interface method and a function of one module collide at the later 
 
 test "C8: an explicit import beats a wildcard of a different declaration, in either order" =
   let mods = [("a", valueA), ("b", valueB)]
-  let first = scopeOf mods "import a.{foo}\nimport b.*\nmain = 0\n"
-  let second = scopeOf mods "import b.*\nimport a.{foo}\nmain = 0\n"
+  let first = scopeOf mods """
+import a.{foo}
+import b.*
+main = 0
+"""
+  let second = scopeOf mods """
+import b.*
+import a.{foo}
+main = 0
+"""
   expectEach [
     (
       "explicit first",
@@ -299,14 +377,30 @@ test "C8: an explicit import beats a wildcard of a different declaration, in eit
 
 test "#2017: a hub re-exporting two declarations under one name is ambiguous at the import rung" =
   let pa =
-    "export interface IA a where\n  mth : a -> Int\nimpl IA Int where\n  mth n = n + 1\n"
+    """
+export interface IA a where
+  mth : a -> Int
+impl IA Int where
+  mth n = n + 1
+"""
   let pb =
-    "export interface IB a where\n  mth : a -> Int\nimpl IB Int where\n  mth n = n * 10\n"
-  let hub = "export import lib.pa.{IA, mth}\nexport import lib.pb.{IB, mth}\n"
+    """
+export interface IB a where
+  mth : a -> Int
+impl IB Int where
+  mth n = n * 10
+"""
+  let hub = """
+export import lib.pa.{IA, mth}
+export import lib.pb.{IB, mth}
+"""
   let scope =
     scopeOf
       [("lib.pa", pa), ("lib.pb", pb), ("lib.hub", hub)]
-      "import lib.hub.{IA, IB, mth}\nmain = 0\n"
+      """
+import lib.hub.{IA, IB, mth}
+main = 0
+"""
   expectEach [
     (
       "binding",
@@ -327,12 +421,22 @@ test "#2017: a hub re-exporting two declarations under one name is ambiguous at 
 test "a prelude method re-exported by another module stays a method of its declaring module" =
   let withIface =
     scopeOf
-      [("list", "export import core.{Filterable, filter, filterMap}\n")]
-      "import list.*\nmain = 0\n"
+      [("list", """
+export import core.{Filterable, filter, filterMap}
+""")]
+      """
+import list.*
+main = 0
+"""
   let bare =
     scopeOf
-      [("list", "export import core.{filterMap}\n")]
-      "import list.*\nmain = 0\n"
+      [("list", """
+export import core.{filterMap}
+""")]
+      """
+import list.*
+main = 0
+"""
   expectEach [
     (
       "with its interface",

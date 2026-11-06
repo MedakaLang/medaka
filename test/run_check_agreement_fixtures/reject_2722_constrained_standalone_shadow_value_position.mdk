@@ -1,4 +1,4 @@
--- C3, L4 (F-R3): lib/shadow2722_value.mdk imports `size` explicitly and declares its own
+-- L4 (F-R3): lib/shadow2722_value.mdk imports `size` explicitly and declares its own
 -- `size`: a located error at its import member.
 import lib.shadow2722_value.{useIt}
 

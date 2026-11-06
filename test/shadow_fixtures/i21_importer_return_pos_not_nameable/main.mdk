@@ -1,4 +1,4 @@
--- C6, L2 rung 3: the explicit `fmod.zed` answers; the interface `Zed` is not imported
+-- L2 rung 3: the explicit `fmod.zed` answers; the interface `Zed` is not imported
 import fmod.{zed}
 import smod.{sf}
 

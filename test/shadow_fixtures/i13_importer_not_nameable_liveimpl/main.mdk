@@ -1,4 +1,4 @@
--- C6, L2 rung 3: `size` is prov's `Int -> Int` although an impl exists for Box elsewhere;
+-- L2 rung 3: `size` is prov's `Int -> Int` although an impl exists for Box elsewhere;
 -- `size (Box 3)` is a located type mismatch
 import boxmod.{Box(..)}
 import prov.{size}

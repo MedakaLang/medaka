@@ -1,9 +1,8 @@
 # Name Resolution Semantics (the lexical ladder)
 
 **Status:** specification, ruled by Val 2026-11-04 (option A, the lexical ladder),
-implemented by sprint `shadow-ladder-1` (#4890, shadow ladder sprint). Until that
-sprint's `S-ladder` slice lands, the compiler still implements the older S1-S9 regime;
-this document is the target and the compiler is audited against it. The earlier
+implemented by sprint `shadow-ladder-1` (#4890, shadow ladder sprint): the compiler
+implements this ladder, and the older S1-S9 regime is gone. The earlier
 2,469-line text (clauses S1-S9, the decision matrix, the per-stage table) is archived at
 [`archive/design/SHADOW-SEMANTICS-S1-S9.md`](../../archive/design/SHADOW-SEMANTICS-S1-S9.md).
 
@@ -45,9 +44,13 @@ are out of scope (they have their own scoped ladder and ambiguity error,
   ordinary reference. Nothing after the ladder re-decides which. An unannotated recursive
   definer is covered: its own name inside its own group is rung 2, never the method.
 - **L6 (generated names).** A name the desugarer generates (`slice`, `sliceInclusiveEnd`,
-  `display` in interpolation, `andThen` and `pure` in `do`, `fromEntries` in map and set
-  literals, `hash`, `derivedHashStep`, `derivedShowWrap`, `to_rep` in `deriving`) denotes
-  the prelude declaration, whatever the module binds.
+  `index`, `setIndex`, `display` in interpolation, `andThen` and `pure` in `do`,
+  `deferThen` and `deferPure` in `defer`, `fromEntries` in map and set literals, `hash`,
+  `eq`, `compare`, `debug`, `derivedHashStep`, `derivedShowWrap`, `to_rep` in
+  `deriving`) denotes the prelude declaration, whatever the module binds. `setRef` (the
+  desugaring of `r := v`) is NOT yet routed through `$core`: a user or imported `setRef`
+  with a fitting type still captures `r := v`. That is an open S0 issue, and this clause
+  does not yet hold for that one name.
 - **L7 (operators).** An operator denotes its prelude method; no bare binding changes it.
 - **L8 (reaching a hidden method).** A method hidden by rungs 1-4 is reached through a
   module alias (`import core as C`, then `C.m`) or a member alias
@@ -78,8 +81,8 @@ are out of scope (they have their own scoped ladder and ambiguity error,
 
 ## 3. Decision table (census classes)
 
-Rows are the S-census classes (`census/census.tsv`, 225 rows at base `217afb473`: C1 41,
-C2 1, C3 34, C4 55, C5 9, C6 48, C7 37, C8 0). Each moved program falls in exactly one.
+Rows are the classes of programs whose answer the ladder moved, taken over a whole-tree
+census at base `217afb473` (225 programs). Each moved program falls in exactly one.
 Examples are `file:line` rows of that census.
 
 | class | what moves | deciding clause | example |

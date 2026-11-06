@@ -1,4 +1,4 @@
--- C6, L2 rung 3: the explicit `fmod.size` answers; `import ifc.{tag}` binds only `tag`
+-- L2 rung 3: the explicit `fmod.size` answers; `import ifc.{tag}` binds only `tag`
 import fmod.{size}
 import ifc.{tag}
 

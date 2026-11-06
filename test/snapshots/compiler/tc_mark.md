@@ -1,5 +1,5 @@
 # META
-source_lines=1401
+source_lines=1403
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_mark: the mark pass: rewrite a binding group's method references into marked occurrences
@@ -135,6 +135,7 @@ import frontend.name_scope.{
   NameScope,
   NameTarget(..),
   bareBinding,
+  importedSurfaces,
   nameScopeOf,
 }
 import types.tc_foreign.{
@@ -728,36 +729,37 @@ markSetsOf gctx pmf coreDecls modules allDecls =
 -- for rung 5 without its values, so a name only the prelude binds answers
 -- `ScopeOther` and keeps its marking; its interfaces stay, so a prelude method a
 -- module re-exports without its interface is still a method.  Core itself has
--- no scope here: its own names are marked as they always were.
+-- no scope here: it marks its own names without a scope class.
 scopeClassesOf : List (String, List Decl) -> String -> String -> ScopeClass
 scopeClassesOf units =
   let surfaces = unitSurfaces units
   let byMid = omFromPairs surfaces omEmpty
-  let prelude = match lookupAssoc "core" surfaces
-    Some exp => exp
-    None => coreExports []
+  let prelude = optionOrElse (_ => coreExports []) (lookupAssoc "core" surfaces)
   let outer = { prelude | expValueOrigins = [] }
   let scopes =
     omFromPairs
-      (map
-        (unit => (fst unit, unitScope byMid outer (snd unit)))
-        (filterList (unit => fst unit /= "core") units))
+      (map (scopeOfUnit byMid outer) (filterList (not << isCoreUnit) units))
       omEmpty
   mid n => match omLookup mid scopes
     Some scope => scopeClassOf (bareBinding scope n)
     None => ScopeOther
 
+isCoreUnit : (String, List Decl) -> Bool
+isCoreUnit (mid, _) = mid == "core"
+
+scopeOfUnit : OrdMap ModuleExports ->
+  ModuleExports ->
+  (String, List Decl) ->
+  (String, NameScope)
+scopeOfUnit byMid outer (mid, decls) = (mid, unitScope byMid outer decls)
+
 unitScope : OrdMap ModuleExports -> ModuleExports -> List Decl -> NameScope
 unitScope byMid prelude decls =
   let written = writtenImportsOf decls
-  nameScopeOf written (flatMap (importedSurface byMid) written) prelude
-
-importedSurface : OrdMap ModuleExports -> Decl -> List ImportedSurface
-importedSurface byMid (DAttrib _ d) = importedSurface byMid d
-importedSurface byMid (d@(DUse _ path _)) = match omLookup (useModId path) byMid
-  Some exp => [ImportedSurface d exp]
-  None => []
-importedSurface _ _ = []
+  nameScopeOf
+    written
+    (flatMap (importedSurfaces (mid => omLookup mid byMid)) written)
+    prelude
 
 scopeClassOf : Option NameBinding -> ScopeClass
 scopeClassOf (Some (Bound RungPrelude _)) = ScopeOther
@@ -1422,7 +1424,7 @@ finishModuleMarking mm env grouped prog =
 (DUse false (UseAlias ("map") "IdMap"))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "mangledName" false) (mem "unitSurfaces" false))))
 (DUse false (UseGroup ("frontend" "visibility") ((mem "ModuleExports" true) (mem "coreExports" false) (mem "useModId" false) (mem "writtenImportsOf" false))))
-(DUse false (UseGroup ("frontend" "name_scope") ((mem "ImportedSurface" true) (mem "NameBinding" true) (mem "NameRung" true) (mem "NameScope" false) (mem "NameTarget" true) (mem "bareBinding" false) (mem "nameScopeOf" false))))
+(DUse false (UseGroup ("frontend" "name_scope") ((mem "ImportedSurface" true) (mem "NameBinding" true) (mem "NameRung" true) (mem "NameScope" false) (mem "NameTarget" true) (mem "bareBinding" false) (mem "importedSurfaces" false) (mem "nameScopeOf" false))))
 (DUse false (UseGroup ("types" "tc_foreign") ((mem "declExternNames" false))))
 (DUse false (UseGroup ("types" "tc_occurrence") ((mem "argDispatchIndicesById" false) (mem "argDispatchIndices" false) (mem "ctorHeadShaped" false) (mem "freshEvId" false) (mem "indexWithSlot" false) (mem "isGrantOnlyEv" false) (mem "methodConstraintNames" false) (mem "mintMethodCellRaw" false) (mem "pushRecDictAppGoal" false))))
 (DTypeSig false "mintMethodCell" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyCon "EvId"))))
@@ -1589,13 +1591,13 @@ finishModuleMarking mm env grouped prog =
 (DTypeSig true "markSetsOf" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "PreludeMarkFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "MarkSets")))))))
 (DFunDef false "markSetsOf" ((PVar "gctx") (PVar "pmf") (PVar "coreDecls") (PVar "modules") (PVar "allDecls")) (EBlock (DoLet false false (PVar "units") (EBinOp "::" (ETuple (ELit (LString "core")) (EVar "coreDecls")) (EVar "modules"))) (DoLet false false (PVar "userDecls") (EApp (EApp (EVar "flatMap") (EVar "snd")) (EVar "modules"))) (DoLet false false (PVar "shadowMap") (EApp (EApp (EVar "computeMangledShadowMap") (EVar "allDecls")) (EVar "units"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "gctx") "mangledShadowMapRef")) (EVar "shadowMap"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "gctx") "argDispatchIdxByIdRef")) (EBinOp "++" (EFieldAccess (EVar "pmf") "pmfArgDispatchById") (EApp (EVar "argDispatchIndicesById") (EVar "userDecls"))))) (DoLet false false (PVar "rpNames") (EBinOp "++" (EFieldAccess (EVar "pmf") "pmfReturnPos") (EApp (EVar "returnPosMethodNames") (EVar "userDecls")))) (DoLet false false (PVar "markSharedNames") (EApp (EVar "dedup") (EBinOp "++" (EBinOp "++" (EVar "rpNames") (EFieldAccess (EVar "pmf") "pmfMethodConstraints")) (EApp (EVar "methodConstraintNames") (EVar "userDecls"))))) (DoLet false false (PVar "graphShadowNames") (EApp (EApp (EApp (EVar "buildStandaloneShadowsGraph") (EVar "shadowMap")) (EVar "allDecls")) (EVar "userDecls"))) (DoLet false false (PVar "ms") (ERecordCreate "MarkSets" ((fa "msMarkRpNames" (EApp (EVar "dedup") (EBinOp "++" (EVar "markSharedNames") (EVar "graphShadowNames")))) (fa "msMarkSharedNames" (EVar "markSharedNames")) (fa "msGraphShadowNames" (EVar "graphShadowNames")) (fa "msArgNames" (EApp (EApp (EVar "map") (EVar "fst")) (EBinOp "++" (EFieldAccess (EVar "pmf") "pmfArgDispatch") (EApp (EVar "argDispatchIndices") (EVar "userDecls"))))) (fa "msCoreShadowMap" (EApp (EApp (EApp (EVar "coreShadowMapFor") (EVar "gctx")) (EVar "coreDecls")) (EVar "shadowMap"))) (fa "msBareDictNames" (EApp (EVar "dedup") (EApp (EApp (EVar "moduleDictNames") (EFieldAccess (EVar "pmf") "pmfConstrainedNames")) (EVar "modules")))) (fa "msUnits" (EVar "units")) (fa "msScopeClass" (EApp (EVar "scopeClassesOf") (EVar "units")))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "gctx") "markSetsRef")) (EApp (EVar "Some") (EVar "ms")))) (DoExpr (EVar "ms"))))
 (DTypeSig false "scopeClassesOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "ScopeClass")))))
-(DFunDef false "scopeClassesOf" ((PVar "units")) (EBlock (DoLet false false (PVar "surfaces") (EApp (EVar "unitSurfaces") (EVar "units"))) (DoLet false false (PVar "byMid") (EApp (EApp (EVar "omFromPairs") (EVar "surfaces")) (EVar "omEmpty"))) (DoLet false false (PVar "prelude") (EMatch (EApp (EApp (EVar "lookupAssoc") (ELit (LString "core"))) (EVar "surfaces")) (arm (PCon "Some" (PVar "exp")) () (EVar "exp")) (arm (PCon "None") () (EApp (EVar "coreExports") (EListLit))))) (DoLet false false (PVar "outer") (ERecordUpdate (EVar "prelude") ((fa "expValueOrigins" (EListLit))))) (DoLet false false (PVar "scopes") (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EVar "map") (ELam ((PVar "unit")) (ETuple (EApp (EVar "fst") (EVar "unit")) (EApp (EApp (EApp (EVar "unitScope") (EVar "byMid")) (EVar "outer")) (EApp (EVar "snd") (EVar "unit")))))) (EApp (EApp (EVar "filterList") (ELam ((PVar "unit")) (EBinOp "/=" (EApp (EVar "fst") (EVar "unit")) (ELit (LString "core"))))) (EVar "units")))) (EVar "omEmpty"))) (DoExpr (ELam ((PVar "mid") (PVar "n")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "mid")) (EVar "scopes")) (arm (PCon "Some" (PVar "scope")) () (EApp (EVar "scopeClassOf") (EApp (EApp (EVar "bareBinding") (EVar "scope")) (EVar "n")))) (arm (PCon "None") () (EVar "ScopeOther")))))))
+(DFunDef false "scopeClassesOf" ((PVar "units")) (EBlock (DoLet false false (PVar "surfaces") (EApp (EVar "unitSurfaces") (EVar "units"))) (DoLet false false (PVar "byMid") (EApp (EApp (EVar "omFromPairs") (EVar "surfaces")) (EVar "omEmpty"))) (DoLet false false (PVar "prelude") (EApp (EApp (EVar "optionOrElse") (ELam (PWild) (EApp (EVar "coreExports") (EListLit)))) (EApp (EApp (EVar "lookupAssoc") (ELit (LString "core"))) (EVar "surfaces")))) (DoLet false false (PVar "outer") (ERecordUpdate (EVar "prelude") ((fa "expValueOrigins" (EListLit))))) (DoLet false false (PVar "scopes") (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EVar "map") (EApp (EApp (EVar "scopeOfUnit") (EVar "byMid")) (EVar "outer"))) (EApp (EApp (EVar "filterList") (EBinOp "<<" (EVar "not") (EVar "isCoreUnit"))) (EVar "units")))) (EVar "omEmpty"))) (DoExpr (ELam ((PVar "mid") (PVar "n")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "mid")) (EVar "scopes")) (arm (PCon "Some" (PVar "scope")) () (EApp (EVar "scopeClassOf") (EApp (EApp (EVar "bareBinding") (EVar "scope")) (EVar "n")))) (arm (PCon "None") () (EVar "ScopeOther")))))))
+(DTypeSig false "isCoreUnit" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyCon "Bool")))
+(DFunDef false "isCoreUnit" ((PTuple (PVar "mid") PWild)) (EBinOp "==" (EVar "mid") (ELit (LString "core"))))
+(DTypeSig false "scopeOfUnit" (TyFun (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyFun (TyCon "ModuleExports") (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyCon "NameScope"))))))
+(DFunDef false "scopeOfUnit" ((PVar "byMid") (PVar "outer") (PTuple (PVar "mid") (PVar "decls"))) (ETuple (EVar "mid") (EApp (EApp (EApp (EVar "unitScope") (EVar "byMid")) (EVar "outer")) (EVar "decls"))))
 (DTypeSig false "unitScope" (TyFun (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyFun (TyCon "ModuleExports") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "NameScope")))))
-(DFunDef false "unitScope" ((PVar "byMid") (PVar "prelude") (PVar "decls")) (EBlock (DoLet false false (PVar "written") (EApp (EVar "writtenImportsOf") (EVar "decls"))) (DoExpr (EApp (EApp (EApp (EVar "nameScopeOf") (EVar "written")) (EApp (EApp (EVar "flatMap") (EApp (EVar "importedSurface") (EVar "byMid"))) (EVar "written"))) (EVar "prelude")))))
-(DTypeSig false "importedSurface" (TyFun (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "ImportedSurface")))))
-(DFunDef false "importedSurface" ((PVar "byMid") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "importedSurface") (EVar "byMid")) (EVar "d")))
-(DFunDef false "importedSurface" ((PVar "byMid") (PAs "d" (PCon "DUse" PWild (PVar "path") PWild))) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "useModId") (EVar "path"))) (EVar "byMid")) (arm (PCon "Some" (PVar "exp")) () (EListLit (EApp (EApp (EVar "ImportedSurface") (EVar "d")) (EVar "exp")))) (arm (PCon "None") () (EListLit))))
-(DFunDef false "importedSurface" (PWild PWild) (EListLit))
+(DFunDef false "unitScope" ((PVar "byMid") (PVar "prelude") (PVar "decls")) (EBlock (DoLet false false (PVar "written") (EApp (EVar "writtenImportsOf") (EVar "decls"))) (DoExpr (EApp (EApp (EApp (EVar "nameScopeOf") (EVar "written")) (EApp (EApp (EVar "flatMap") (EApp (EVar "importedSurfaces") (ELam ((PVar "mid")) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EVar "byMid"))))) (EVar "written"))) (EVar "prelude")))))
 (DTypeSig false "scopeClassOf" (TyFun (TyApp (TyCon "Option") (TyCon "NameBinding")) (TyCon "ScopeClass")))
 (DFunDef false "scopeClassOf" ((PCon "Some" (PCon "Bound" (PCon "RungPrelude") PWild))) (EVar "ScopeOther"))
 (DFunDef false "scopeClassOf" ((PCon "Some" (PCon "Bound" PWild (PCon "TargetValue" PWild PWild)))) (EVar "ScopeValue"))
@@ -1688,7 +1690,7 @@ finishModuleMarking mm env grouped prog =
 (DUse false (UseAlias ("map") "IdMap"))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "mangledName" false) (mem "unitSurfaces" false))))
 (DUse false (UseGroup ("frontend" "visibility") ((mem "ModuleExports" true) (mem "coreExports" false) (mem "useModId" false) (mem "writtenImportsOf" false))))
-(DUse false (UseGroup ("frontend" "name_scope") ((mem "ImportedSurface" true) (mem "NameBinding" true) (mem "NameRung" true) (mem "NameScope" false) (mem "NameTarget" true) (mem "bareBinding" false) (mem "nameScopeOf" false))))
+(DUse false (UseGroup ("frontend" "name_scope") ((mem "ImportedSurface" true) (mem "NameBinding" true) (mem "NameRung" true) (mem "NameScope" false) (mem "NameTarget" true) (mem "bareBinding" false) (mem "importedSurfaces" false) (mem "nameScopeOf" false))))
 (DUse false (UseGroup ("types" "tc_foreign") ((mem "declExternNames" false))))
 (DUse false (UseGroup ("types" "tc_occurrence") ((mem "argDispatchIndicesById" false) (mem "argDispatchIndices" false) (mem "ctorHeadShaped" false) (mem "freshEvId" false) (mem "indexWithSlot" false) (mem "isGrantOnlyEv" false) (mem "methodConstraintNames" false) (mem "mintMethodCellRaw" false) (mem "pushRecDictAppGoal" false))))
 (DTypeSig false "mintMethodCell" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyCon "EvId"))))
@@ -1855,13 +1857,13 @@ finishModuleMarking mm env grouped prog =
 (DTypeSig true "markSetsOf" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "PreludeMarkFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "MarkSets")))))))
 (DFunDef false "markSetsOf" ((PVar "gctx") (PVar "pmf") (PVar "coreDecls") (PVar "modules") (PVar "allDecls")) (EBlock (DoLet false false (PVar "units") (EBinOp "::" (ETuple (ELit (LString "core")) (EVar "coreDecls")) (EVar "modules"))) (DoLet false false (PVar "userDecls") (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EVar "modules"))) (DoLet false false (PVar "shadowMap") (EApp (EApp (EVar "computeMangledShadowMap") (EVar "allDecls")) (EVar "units"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "gctx") "mangledShadowMapRef")) (EVar "shadowMap"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "gctx") "argDispatchIdxByIdRef")) (EBinOp "++" (EFieldAccess (EVar "pmf") "pmfArgDispatchById") (EApp (EVar "argDispatchIndicesById") (EVar "userDecls"))))) (DoLet false false (PVar "rpNames") (EBinOp "++" (EFieldAccess (EVar "pmf") "pmfReturnPos") (EApp (EVar "returnPosMethodNames") (EVar "userDecls")))) (DoLet false false (PVar "markSharedNames") (EApp (EVar "dedup") (EBinOp "++" (EBinOp "++" (EVar "rpNames") (EFieldAccess (EVar "pmf") "pmfMethodConstraints")) (EApp (EVar "methodConstraintNames") (EVar "userDecls"))))) (DoLet false false (PVar "graphShadowNames") (EApp (EApp (EApp (EVar "buildStandaloneShadowsGraph") (EVar "shadowMap")) (EVar "allDecls")) (EVar "userDecls"))) (DoLet false false (PVar "ms") (ERecordCreate "MarkSets" ((fa "msMarkRpNames" (EApp (EVar "dedup") (EBinOp "++" (EVar "markSharedNames") (EVar "graphShadowNames")))) (fa "msMarkSharedNames" (EVar "markSharedNames")) (fa "msGraphShadowNames" (EVar "graphShadowNames")) (fa "msArgNames" (EApp (EApp (EMethodRef "map") (EVar "fst")) (EBinOp "++" (EFieldAccess (EVar "pmf") "pmfArgDispatch") (EApp (EVar "argDispatchIndices") (EVar "userDecls"))))) (fa "msCoreShadowMap" (EApp (EApp (EApp (EVar "coreShadowMapFor") (EVar "gctx")) (EVar "coreDecls")) (EVar "shadowMap"))) (fa "msBareDictNames" (EApp (EVar "dedup") (EApp (EApp (EVar "moduleDictNames") (EFieldAccess (EVar "pmf") "pmfConstrainedNames")) (EVar "modules")))) (fa "msUnits" (EVar "units")) (fa "msScopeClass" (EApp (EVar "scopeClassesOf") (EVar "units")))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "gctx") "markSetsRef")) (EApp (EVar "Some") (EVar "ms")))) (DoExpr (EVar "ms"))))
 (DTypeSig false "scopeClassesOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "ScopeClass")))))
-(DFunDef false "scopeClassesOf" ((PVar "units")) (EBlock (DoLet false false (PVar "surfaces") (EApp (EVar "unitSurfaces") (EVar "units"))) (DoLet false false (PVar "byMid") (EApp (EApp (EVar "omFromPairs") (EVar "surfaces")) (EVar "omEmpty"))) (DoLet false false (PVar "prelude") (EMatch (EApp (EApp (EVar "lookupAssoc") (ELit (LString "core"))) (EVar "surfaces")) (arm (PCon "Some" (PVar "exp")) () (EVar "exp")) (arm (PCon "None") () (EApp (EVar "coreExports") (EListLit))))) (DoLet false false (PVar "outer") (ERecordUpdate (EVar "prelude") ((fa "expValueOrigins" (EListLit))))) (DoLet false false (PVar "scopes") (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EMethodRef "map") (ELam ((PVar "unit")) (ETuple (EApp (EVar "fst") (EVar "unit")) (EApp (EApp (EApp (EVar "unitScope") (EVar "byMid")) (EVar "outer")) (EApp (EVar "snd") (EVar "unit")))))) (EApp (EApp (EVar "filterList") (ELam ((PVar "unit")) (EBinOp "/=" (EApp (EVar "fst") (EVar "unit")) (ELit (LString "core"))))) (EVar "units")))) (EVar "omEmpty"))) (DoExpr (ELam ((PVar "mid") (PVar "n")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "mid")) (EVar "scopes")) (arm (PCon "Some" (PVar "scope")) () (EApp (EVar "scopeClassOf") (EApp (EApp (EVar "bareBinding") (EVar "scope")) (EVar "n")))) (arm (PCon "None") () (EVar "ScopeOther")))))))
+(DFunDef false "scopeClassesOf" ((PVar "units")) (EBlock (DoLet false false (PVar "surfaces") (EApp (EVar "unitSurfaces") (EVar "units"))) (DoLet false false (PVar "byMid") (EApp (EApp (EVar "omFromPairs") (EVar "surfaces")) (EVar "omEmpty"))) (DoLet false false (PVar "prelude") (EApp (EApp (EVar "optionOrElse") (ELam (PWild) (EApp (EVar "coreExports") (EListLit)))) (EApp (EApp (EVar "lookupAssoc") (ELit (LString "core"))) (EVar "surfaces")))) (DoLet false false (PVar "outer") (ERecordUpdate (EVar "prelude") ((fa "expValueOrigins" (EListLit))))) (DoLet false false (PVar "scopes") (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "scopeOfUnit") (EVar "byMid")) (EVar "outer"))) (EApp (EApp (EVar "filterList") (EBinOp "<<" (EVar "not") (EVar "isCoreUnit"))) (EVar "units")))) (EVar "omEmpty"))) (DoExpr (ELam ((PVar "mid") (PVar "n")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "mid")) (EVar "scopes")) (arm (PCon "Some" (PVar "scope")) () (EApp (EVar "scopeClassOf") (EApp (EApp (EVar "bareBinding") (EVar "scope")) (EVar "n")))) (arm (PCon "None") () (EVar "ScopeOther")))))))
+(DTypeSig false "isCoreUnit" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyCon "Bool")))
+(DFunDef false "isCoreUnit" ((PTuple (PVar "mid") PWild)) (EBinOp "==" (EVar "mid") (ELit (LString "core"))))
+(DTypeSig false "scopeOfUnit" (TyFun (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyFun (TyCon "ModuleExports") (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyCon "NameScope"))))))
+(DFunDef false "scopeOfUnit" ((PVar "byMid") (PVar "outer") (PTuple (PVar "mid") (PVar "decls"))) (ETuple (EVar "mid") (EApp (EApp (EApp (EVar "unitScope") (EVar "byMid")) (EVar "outer")) (EVar "decls"))))
 (DTypeSig false "unitScope" (TyFun (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyFun (TyCon "ModuleExports") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "NameScope")))))
-(DFunDef false "unitScope" ((PVar "byMid") (PVar "prelude") (PVar "decls")) (EBlock (DoLet false false (PVar "written") (EApp (EVar "writtenImportsOf") (EVar "decls"))) (DoExpr (EApp (EApp (EApp (EVar "nameScopeOf") (EVar "written")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "importedSurface") (EVar "byMid"))) (EVar "written"))) (EVar "prelude")))))
-(DTypeSig false "importedSurface" (TyFun (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "ImportedSurface")))))
-(DFunDef false "importedSurface" ((PVar "byMid") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "importedSurface") (EVar "byMid")) (EVar "d")))
-(DFunDef false "importedSurface" ((PVar "byMid") (PAs "d" (PCon "DUse" PWild (PVar "path") PWild))) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "useModId") (EVar "path"))) (EVar "byMid")) (arm (PCon "Some" (PVar "exp")) () (EListLit (EApp (EApp (EVar "ImportedSurface") (EVar "d")) (EVar "exp")))) (arm (PCon "None") () (EListLit))))
-(DFunDef false "importedSurface" (PWild PWild) (EListLit))
+(DFunDef false "unitScope" ((PVar "byMid") (PVar "prelude") (PVar "decls")) (EBlock (DoLet false false (PVar "written") (EApp (EVar "writtenImportsOf") (EVar "decls"))) (DoExpr (EApp (EApp (EApp (EVar "nameScopeOf") (EVar "written")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "importedSurfaces") (ELam ((PVar "mid")) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EVar "byMid"))))) (EVar "written"))) (EVar "prelude")))))
 (DTypeSig false "scopeClassOf" (TyFun (TyApp (TyCon "Option") (TyCon "NameBinding")) (TyCon "ScopeClass")))
 (DFunDef false "scopeClassOf" ((PCon "Some" (PCon "Bound" (PCon "RungPrelude") PWild))) (EVar "ScopeOther"))
 (DFunDef false "scopeClassOf" ((PCon "Some" (PCon "Bound" PWild (PCon "TargetValue" PWild PWild)))) (EVar "ScopeValue"))

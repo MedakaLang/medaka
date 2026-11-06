@@ -1,4 +1,4 @@
--- C7, L3: `peek` imported through a re-export hop is one declaration, so `box.peek` answers
+-- L3: `peek` imported through a re-export hop is one declaration, so `box.peek` answers
 import box.{Box(..)}
 import mid.{peek}
 import peekable.{Peekable}

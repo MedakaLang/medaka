@@ -1,4 +1,4 @@
--- C6, L2 rung 3: the same graph without the re-export hop; the two must agree
+-- L2 rung 3: the same graph without the re-export hop; the two must agree
 import ifc.{Sizeable}
 import fmod.{size}
 

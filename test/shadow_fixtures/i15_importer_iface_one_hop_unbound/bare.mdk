@@ -1,4 +1,4 @@
--- C6, L2 rung 3: a bare `import smod` binds no names, so the explicitly imported `size`
+-- L2 rung 3: a bare `import smod` binds no names, so the explicitly imported `size`
 -- answers
 import fmod.{size}
 import smod

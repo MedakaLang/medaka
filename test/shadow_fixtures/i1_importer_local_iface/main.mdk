@@ -1,4 +1,4 @@
--- C3, L4 (F-R3): explicit `import prov.{size}` plus the module's own interface method `size`
+-- L4 (F-R3): explicit `import prov.{size}` plus the module's own interface method `size`
 -- is a located error at the import member
 import prov.{size}
 

@@ -5,7 +5,6 @@
      HAS      -- at least one line matches the pattern
      LACKS    -- no line matches the pattern
      COUNT=n  -- exactly n lines match the pattern
-   The table is the 92 rows the shell gate carried, less the two shadow-arity rows retired with the shadow regime.
    Patterns are POSIX-ERE-equivalent; a pattern that does not compile is a
    failure, never a vacuous pass.
 

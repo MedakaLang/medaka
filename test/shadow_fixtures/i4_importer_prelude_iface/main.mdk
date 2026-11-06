@@ -1,4 +1,4 @@
--- C1, L2 rung 3 over rung 5: the explicitly imported `isEmpty : Tok -> Bool` beats the
+-- L2 rung 3 over rung 5: the explicitly imported `isEmpty : Tok -> Bool` beats the
 -- prelude method, so `isEmpty [1, 2]` is a located type mismatch
 import prov.{Tok(..), isEmpty}
 

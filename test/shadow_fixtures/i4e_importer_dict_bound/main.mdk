@@ -1,4 +1,4 @@
--- C1, L8: a `Foldable t =>` constraint does not make the bare `length` the prelude method;
+-- L8: a `Foldable t =>` constraint does not make the bare `length` the prelude method;
 -- the wildcard-imported `bytes.length` answers, so the receiver mistypes
 import bytes.*
 count : Foldable t => t a -> Int

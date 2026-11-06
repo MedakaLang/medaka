@@ -1,4 +1,4 @@
--- C6, L1: the explicit `fmodI.mth` answers 99 in value position (`pointfree_az`); position
+-- L1: the explicit `fmodI.mth` answers 99 in value position (`pointfree_az`); position
 -- and import order take no part
 import fmodI.{mth}
 import amodI.{IA, af}

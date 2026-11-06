@@ -1,4 +1,4 @@
--- C1, L2 rung 3: the explicit `prov.tagOf` answers; `import ifc.{Taggable, Box(..)}` binds
+-- L2 rung 3: the explicit `prov.tagOf` answers; `import ifc.{Taggable, Box(..)}` binds
 -- no method `tagOf`
 import ifc.{Taggable, Box(..)}
 import prov.{tagOf}

@@ -1675,7 +1675,12 @@ test "a pattern-ranging binder admits a right extension" = expectAll
 -- that part stays the whole domain.
 test "an interpolated binder is read through the prelude's display only" =
   let coreDisplay =
-    "export interface Display a where\n  display : a -> String\nexport impl Display String where\n  display s = s\n"
+    """
+export interface Display a where
+  display : a -> String
+export impl Display String where
+  display s = s
+"""
   let ownDisplay = "display : String -> String\ndisplay s = \"../\" ++ s\n"
   let under = "under : (d : String @Store*) -> String -> <Store d> Int\n"
   expectAll [

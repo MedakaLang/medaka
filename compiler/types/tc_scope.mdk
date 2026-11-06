@@ -115,6 +115,7 @@ import types.disposition.{MethodDisposition(..)}
 import types.route_key.{ifaceWordOf}
 import types.solver_contract.{Wanted(..)}
 import frontend.visibility.{
+  AliasSite(..),
   aliasImportSites,
   explicitOverWild,
   useModId,
@@ -290,12 +291,12 @@ methodNameDeclaredAt cur env n = isNonEmptyL (methodCandsAt n cur env)
 -- METHOD-BOUND: resolve bound a bare occurrence of it through this module's own
 -- interface, a use-path naming the method (rung 1), or the prelude, and through
 -- nothing else, since `import m.{I}` and `import m as A` bind no bare method name.
--- That declaration answers the occurrence (docs/spec/SHADOW-SEMANTICS.md S2-DECL,
--- "a method-bound occurrence"), so a prelude row outranks rung 2 there.  Rung 2 still
+-- That declaration answers the occurrence (docs/spec/SHADOW-SEMANTICS.md L2, L3),
+-- so a prelude row outranks rung 2 there.  Rung 2 still
 -- answers a method-bound spelling with no prelude row: resolve rejects every bare
 -- occurrence of it, so only readers that answer no occurrence (an `impl` this module
 -- writes, say) see that answer.  A standalone-bound spelling keeps the whole ladder,
--- which is S2-DECL (c)'s admitted set.
+-- which L2 and L3 leave to the ladder's rungs.
 methodScopeAt : GraphCtx ->
   Bool ->
   List Decl ->
@@ -441,15 +442,11 @@ methodAliasedScope gctx prog n cs =
     [only] => MsOne only
     aliased => MsMany (sortIfaceRefs (map methodRowIface aliased))
 
-aliasWitnessesMethod : GraphCtx ->
-  List (List String, Loc) ->
-  String ->
-  Ident ->
-  Bool
+aliasWitnessesMethod : GraphCtx -> List AliasSite -> String -> Ident -> Bool
 aliasWitnessesMethod gctx sites n ident =
   anyList
     (s =>
-      let dep = joinDot (fst s)
+      let dep = joinDot s.asQuals
       dep /= "core" && depExportsMethodIdent gctx dep n ident)
     sites
 

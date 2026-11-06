@@ -367,7 +367,12 @@ test "a do-bound function passed to a closed slot inside a let is proved at its 
   let monad =
     "public export data Opt a = Nothing | Just a\n"
       ++ "export interface Monad m where\n  andThen : m a -> (a -> <e> m b) -> <e> m b\n"
-      ++ "export impl Monad Opt where\n  andThen o k = match o\n    Just x => k x\n    Nothing => Nothing\n"
+      ++ """
+export impl Monad Opt where
+  andThen o k = match o
+    Just x => k x
+    Nothing => Nothing
+"""
   let source = "useFn : (Int -> Int) -> Int\nuseFn f = f 0\n"
   expectAll [
     expectEqual
@@ -390,7 +395,10 @@ test "repeated top-prefix writes inside a continuation stay within a bare contra
     "public export data Res a = Ok a | Err String\n"
       ++ "export interface Monad m where\n  andThen : m a -> (a -> <e> m b) -> <e> m b\n"
       ++ "export impl Monad Res where\n  andThen r k = match r\n    Ok x => k x\n    Err e => Err e\n"
-  let source = "fsync : String -> <FileWrite> Res Unit\nfsync _ = Ok ()\n"
+  let source = """
+fsync : String -> <FileWrite> Res Unit
+fsync _ = Ok ()
+"""
   expectAll [
     expectEqual
       []
@@ -909,9 +917,16 @@ test "written force contracts charge honest methods at their occurrences" =
 
 test "a dict-bound receiver does not reach the wildcard-imported method (L8)" =
   let provider =
-    "export interface Sizeable a where\n  size : <Audit> (Bool -> a -> Bool)\n"
+    """
+export interface Sizeable a where
+  size : <Audit> (Bool -> a -> Bool)
+"""
   let entry =
-    "import provider.*\nsize : Bool -> Bool -> Bool\nsize _ _ = False\n"
+    """
+import provider.*
+size : Bool -> Bool -> Bool
+size _ _ = False
+"""
   expectAll [
     expectEqual
       ["T-TYPE-TOO-GENERAL"]

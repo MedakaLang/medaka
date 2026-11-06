@@ -1,4 +1,4 @@
--- C1, L2 rung 3 over rung 5: the imported `display : Tok -> String` beats the prelude
+-- L2 rung 3 over rung 5: the imported `display : Tok -> String` beats the prelude
 -- `display`, so `display (3 : Int)` is a located type mismatch
 import prov.{Tok(..), display}
 

@@ -1,4 +1,4 @@
--- C6, L2 rung 3: a bare `import ifc` binds no names, so the explicit `fmod.size` answers
+-- L2 rung 3: a bare `import ifc` binds no names, so the explicit `fmod.size` answers
 import fmod.{size}
 import ifc
 

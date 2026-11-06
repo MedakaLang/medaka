@@ -1958,6 +1958,11 @@ export
 useMemberAlias : UseMember -> Option String
 useMemberAlias (UseMember _ _ _ alias) = alias
 
+-- the source span of a UseGroup member.
+export
+useMemberLoc : UseMember -> Loc
+useMemberLoc (UseMember _ _ loc _) = loc
+
 -- the name a UseGroup member binds HERE: its alias if it has one, else its own name.
 export
 useMemberLocal : UseMember -> String

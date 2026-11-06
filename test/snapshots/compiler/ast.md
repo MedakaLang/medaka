@@ -1,5 +1,5 @@
 # META
-source_lines=3067
+source_lines=3072
 stages=DESUGAR,MARK
 # SOURCE
 -- Medaka AST — the surface (pre-desugar) nodes,
@@ -1962,6 +1962,11 @@ export
 useMemberAlias : UseMember -> Option String
 useMemberAlias (UseMember _ _ _ alias) = alias
 
+-- the source span of a UseGroup member.
+export
+useMemberLoc : UseMember -> Loc
+useMemberLoc (UseMember _ _ loc _) = loc
+
 -- the name a UseGroup member binds HERE: its alias if it has one, else its own name.
 export
 useMemberLocal : UseMember -> String
@@ -3446,6 +3451,8 @@ public export data SiblingPair = SiblingPair {
 (DFunDef false "useMemberOrigin" ((PCon "UseMember" (PVar "n") PWild PWild PWild)) (EVar "n"))
 (DTypeSig true "useMemberAlias" (TyFun (TyCon "UseMember") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "useMemberAlias" ((PCon "UseMember" PWild PWild PWild (PVar "alias"))) (EVar "alias"))
+(DTypeSig true "useMemberLoc" (TyFun (TyCon "UseMember") (TyCon "Loc")))
+(DFunDef false "useMemberLoc" ((PCon "UseMember" PWild PWild (PVar "loc") PWild)) (EVar "loc"))
 (DTypeSig true "useMemberLocal" (TyFun (TyCon "UseMember") (TyCon "String")))
 (DFunDef false "useMemberLocal" ((PCon "UseMember" (PVar "n") PWild PWild (PVar "alias"))) (EApp (EApp (EVar "optionOr") (EVar "n")) (EVar "alias")))
 (DTypeSig true "qualifiedLocal" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
@@ -4071,6 +4078,8 @@ public export data SiblingPair = SiblingPair {
 (DFunDef false "useMemberOrigin" ((PCon "UseMember" (PVar "n") PWild PWild PWild)) (EVar "n"))
 (DTypeSig true "useMemberAlias" (TyFun (TyCon "UseMember") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "useMemberAlias" ((PCon "UseMember" PWild PWild PWild (PVar "alias"))) (EVar "alias"))
+(DTypeSig true "useMemberLoc" (TyFun (TyCon "UseMember") (TyCon "Loc")))
+(DFunDef false "useMemberLoc" ((PCon "UseMember" PWild PWild (PVar "loc") PWild)) (EVar "loc"))
 (DTypeSig true "useMemberLocal" (TyFun (TyCon "UseMember") (TyCon "String")))
 (DFunDef false "useMemberLocal" ((PCon "UseMember" (PVar "n") PWild PWild (PVar "alias"))) (EApp (EApp (EVar "optionOr") (EVar "n")) (EVar "alias")))
 (DTypeSig true "qualifiedLocal" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))

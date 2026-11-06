@@ -2,7 +2,7 @@
    `test/shadow_fixtures`.
 
    One fixture per question the lexical ladder answers; every row's `label`
-   names its census class (C1-C7) and the spec clause (L1-L9) that decides it.
+   names the spec clause (L1-L9) that decides it.
    The spec's clause L9 says `check`, `run` and `build` agree on every cell and
    that agreement is not evidence: a name that resolves to the wrong
    declaration resolves the same wrong way on all three paths. Every cell that
@@ -10,16 +10,13 @@
    the clause and never captured from a binary.
 
    A cell that rejects pins its verdict on every verb and, through `diag`, the
-   message class each rejecting verb owes. No cell carries the retired
-   import-shadow warning (`retiredWarning`).
+   message class each rejecting verb owes. No cell carries an import-shadow
+   warning (`retiredWarning`).
 
-   Interface-method-plus-function collisions in one module (C4) are one
+   An interface method and a function declared in one module are one
    duplicate-declaration error whatever the receiver, arity, position or
-   constraint, so the former definer cells that differed only on those axes
-   were deleted; `d1` and `d11` stand for them. The importer cells that
-   differed only on those axes under an explicit import of a name the module
-   also declares (C3) are likewise stood for by `i1` and `i7`. Cells that keep
-   a distinct shape are re-graded in place.
+   constraint; `d1` and `d11` stand for every such cell, and `i1` and `i7` for
+   the explicit import of a name the module also declares.
 
    When adding a fixture, vary the shape the ladder reads (which rung binds
    the name, how the name arrived), not the receiver's type or position: those
@@ -27,12 +24,9 @@
    fixture that is present in the corpus but absent from the table.
 
    Two value modes are live. A future row needing a different one adds a
-   `Mode` constructor and an arm in `gradeValue`: the shell gate this replaced
-   also carried `BUILD_CRASH` (build exits 0 and the shipped binary dies with a
-   pinned signature) and `BUILD_NOTEQ_INT` (build's stdout is a bare integer
-   that is not the pinned value); both are re-expressible here unchanged,
-   because `Agreement` keeps the built binary's exit code, stdout and stderr
-   apart. No row pins a known-wrong answer.
+   `Mode` constructor and an arm in `gradeValue`; `Agreement` keeps the built
+   binary's exit code, stdout and stderr apart, so a mode can pin a crash
+   signature or a wrong integer. No row pins a known-wrong answer.
 
    The per-cell verdict table is rendered into the failure message rather
    than printed: `medaka test --native` runs a test body inside a probe whose
@@ -97,7 +91,7 @@ table = [
   Row {
     entry = "d1_definer_noimpl.mdk",
     label =
-      "C4, L3 (F-R4): an interface method and a top-level function of one name in one module is a located duplicate-declaration error, with or without impls, receivers or signatures",
+      "L3 (F-R4): an interface method and a top-level function of one name in one module is a located duplicate-declaration error, with or without impls, receivers or signatures",
     expCheck = "REJECT",
     expRun = "REJECT",
     expBuild = "REJECT",
@@ -108,7 +102,7 @@ table = [
   Row {
     entry = "d11_definer_multityparam_iface.mdk",
     label =
-      "C4, L3 (F-R4): the duplicate-declaration error holds for a multi-type-parameter interface; arity takes no part (L1)",
+      "L3 (F-R4): the duplicate-declaration error holds for a multi-type-parameter interface; arity takes no part (L1)",
     expCheck = "REJECT",
     expRun = "REJECT",
     expBuild = "REJECT",
@@ -119,7 +113,7 @@ table = [
   Row {
     entry = "d8_definer_imported_impl/main.mdk",
     label =
-      "C6, L2 rung 2: the module's own `size : Int -> Int` is the bare name; `import prov.{Sizeable, Box(..)}` binds no bare method name, so `size (Box 3)` is a located type mismatch",
+      "L2 rung 2: the module's own `size : Int -> Int` is the bare name; `import prov.{Sizeable, Box(..)}` binds no bare method name, so `size (Box 3)` is a located type mismatch",
     expCheck = "REJECT",
     expRun = "REJECT",
     expBuild = "REJECT",
@@ -163,7 +157,7 @@ table = [
   Row {
     entry = "d25_definer_return_pos_nameable/main.mdk",
     label =
-      "C6, L2 rung 2: `import smod.{Zed, sf}` binds no bare method name, so the own `zed` answers",
+      "L2 rung 2: `import smod.{Zed, sf}` binds no bare method name, so the own `zed` answers",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
@@ -185,7 +179,7 @@ table = [
   Row {
     entry = "d28_definer_constrained_receiver_own_wins/main.mdk",
     label =
-      "C2, L8 (F-R2): an `Ix a i =>` constraint does not make the bare name `get` the imported method; the own `get : Int -> Int -> Int` answers, so the polymorphic receiver mistypes",
+      "L8 (F-R2): an `Ix a i =>` constraint does not make the bare name `get` the imported method; the own `get : Int -> Int -> Int` answers, so the polymorphic receiver mistypes",
     expCheck = "REJECT",
     expRun = "REJECT",
     expBuild = "REJECT",
@@ -196,7 +190,7 @@ table = [
   Row {
     entry = "i1_importer_local_iface/main.mdk",
     label =
-      "C3, L4 (F-R3): explicit `import prov.{size}` plus the module's own interface method `size` is a located error at the import member",
+      "L4 (F-R3): explicit `import prov.{size}` plus the module's own interface method `size` is a located error at the import member",
     expCheck = "REJECT",
     expRun = "REJECT",
     expBuild = "REJECT",
@@ -207,7 +201,7 @@ table = [
   Row {
     entry = "i7_importer_value_pos_liveimpl/main.mdk",
     label =
-      "C3, L4 (F-R3): the same located error when `size` is written in value position; position takes no part (L1)",
+      "L4 (F-R3): the same located error when `size` is written in value position; position takes no part (L1)",
     expCheck = "REJECT",
     expRun = "REJECT",
     expBuild = "REJECT",
@@ -218,7 +212,7 @@ table = [
   Row {
     entry = "i3_importer_imported_iface/main.mdk",
     label =
-      "C1, L2 rung 3: `import ifc.{Sizeable, Box(..)}` binds no bare method name; `size` is prov's `Int -> Int`, so `size (Box 3)` is a located type mismatch",
+      "L2 rung 3: `import ifc.{Sizeable, Box(..)}` binds no bare method name; `size` is prov's `Int -> Int`, so `size (Box 3)` is a located type mismatch",
     expCheck = "REJECT",
     expRun = "REJECT",
     expBuild = "REJECT",
@@ -229,7 +223,7 @@ table = [
   Row {
     entry = "i4_importer_prelude_iface/main.mdk",
     label =
-      "C1, L2 rung 3 over rung 5: the explicitly imported `isEmpty : Tok -> Bool` beats the prelude method, so `isEmpty [1, 2]` is a located type mismatch",
+      "L2 rung 3 over rung 5: the explicitly imported `isEmpty : Tok -> Bool` beats the prelude method, so `isEmpty [1, 2]` is a located type mismatch",
     expCheck = "REJECT",
     expRun = "REJECT",
     expBuild = "REJECT",
@@ -240,7 +234,7 @@ table = [
   Row {
     entry = "i4b_importer_option_default/main.mdk",
     label =
-      "C1, L2 rung 4 over rung 5: `import bytes.*` binds `length : Bytes -> Int`, which beats the prelude method; `length (Some 7)` is a located type mismatch",
+      "L2 rung 4 over rung 5: `import bytes.*` binds `length : Bytes -> Int`, which beats the prelude method; `length (Some 7)` is a located type mismatch",
     expCheck = "REJECT",
     expRun = "REJECT",
     expBuild = "REJECT",
@@ -251,7 +245,7 @@ table = [
   Row {
     entry = "i4d_importer_selective_default/main.mdk",
     label =
-      "C1, L2 rung 3 over rung 5: `import bytes.{length}` binds `bytes.length`; the type mismatch names it and no shadow warning is emitted",
+      "L2 rung 3 over rung 5: `import bytes.{length}` binds `bytes.length`; the type mismatch names it and no shadow warning is emitted",
     expCheck = "REJECT",
     expRun = "REJECT",
     expBuild = "REJECT",
@@ -262,7 +256,7 @@ table = [
   Row {
     entry = "i4e_importer_dict_bound/main.mdk",
     label =
-      "C1, L8: a `Foldable t =>` constraint does not make the bare `length` the prelude method; the wildcard-imported `bytes.length` answers, so the receiver mistypes",
+      "L8: a `Foldable t =>` constraint does not make the bare `length` the prelude method; the wildcard-imported `bytes.length` answers, so the receiver mistypes",
     expCheck = "REJECT",
     expRun = "REJECT",
     expBuild = "REJECT",
@@ -273,7 +267,7 @@ table = [
   Row {
     entry = "i4f_importer_value_position_reject/main.mdk",
     label =
-      "C1, L1: value position takes no part; `map length` uses `bytes.length` and is a located type mismatch",
+      "L1: value position takes no part; `map length` uses `bytes.length` and is a located type mismatch",
     expCheck = "REJECT",
     expRun = "REJECT",
     expBuild = "REJECT",
@@ -284,7 +278,7 @@ table = [
   Row {
     entry = "i4g_importer_map_option_default/main.mdk",
     label =
-      "C1, L2 rung 4 over rung 5: `import map.*` binds `isEmpty` for maps, which beats the prelude method; `isEmpty (Some 7)` is a located type mismatch",
+      "L2 rung 4 over rung 5: `import map.*` binds `isEmpty` for maps, which beats the prelude method; `isEmpty (Some 7)` is a located type mismatch",
     expCheck = "REJECT",
     expRun = "REJECT",
     expBuild = "REJECT",
@@ -295,7 +289,7 @@ table = [
   Row {
     entry = "i5_importer_ungrounded_literal/main.mdk",
     label =
-      "C1, L2 rung 3 over rung 5: the imported `isEmpty : Int -> Bool` beats the prelude method; `isEmpty [1, 2]` is a located type mismatch",
+      "L2 rung 3 over rung 5: the imported `isEmpty : Int -> Bool` beats the prelude method; `isEmpty [1, 2]` is a located type mismatch",
     expCheck = "REJECT",
     expRun = "REJECT",
     expBuild = "REJECT",
@@ -306,7 +300,7 @@ table = [
   Row {
     entry = "i11_importer_extern_receiver/main.mdk",
     label =
-      "C1, L2 rung 3 over rung 5: the imported `display : Tok -> String` beats the prelude `display`, so `display (3 : Int)` is a located type mismatch",
+      "L2 rung 3 over rung 5: the imported `display : Tok -> String` beats the prelude `display`, so `display (3 : Int)` is a located type mismatch",
     expCheck = "REJECT",
     expRun = "REJECT",
     expBuild = "REJECT",
@@ -317,7 +311,7 @@ table = [
   Row {
     entry = "i12_importer_iface_not_nameable/main.mdk",
     label =
-      "C6, L2 rung 3: the explicitly imported standalone `size` answers; the interface is not imported",
+      "L2 rung 3: the explicitly imported standalone `size` answers; the interface is not imported",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
@@ -328,7 +322,7 @@ table = [
   Row {
     entry = "i13_importer_not_nameable_liveimpl/main.mdk",
     label =
-      "C6, L2 rung 3: `size` is prov's `Int -> Int` although an impl exists for Box elsewhere; `size (Box 3)` is a located type mismatch",
+      "L2 rung 3: `size` is prov's `Int -> Int` although an impl exists for Box elsewhere; `size (Box 3)` is a located type mismatch",
     expCheck = "REJECT",
     expRun = "REJECT",
     expBuild = "REJECT",
@@ -339,7 +333,7 @@ table = [
   Row {
     entry = "i14_importer_iface_via_reexport_chain/main.mdk",
     label =
-      "C6, L2 rung 3: `import reexp.{Sizeable}` binds no bare method name through a re-export hop; `size` is fmod's `Int -> Int`, so `size (Box 3)` mistypes",
+      "L2 rung 3: `import reexp.{Sizeable}` binds no bare method name through a re-export hop; `size` is fmod's `Int -> Int`, so `size (Box 3)` mistypes",
     expCheck = "REJECT",
     expRun = "REJECT",
     expBuild = "REJECT",
@@ -350,7 +344,7 @@ table = [
   Row {
     entry = "i14_importer_iface_via_reexport_chain/direct.mdk",
     label =
-      "C6, L2 rung 3: the same graph without the re-export hop gives the same located type mismatch",
+      "L2 rung 3: the same graph without the re-export hop gives the same located type mismatch",
     expCheck = "REJECT",
     expRun = "REJECT",
     expBuild = "REJECT",
@@ -361,7 +355,7 @@ table = [
   Row {
     entry = "i15_importer_iface_one_hop_unbound/main.mdk",
     label =
-      "C6, L2 rung 3: the explicitly imported standalone `size` answers; `import smod.{sf}` binds no method",
+      "L2 rung 3: the explicitly imported standalone `size` answers; `import smod.{sf}` binds no method",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
@@ -372,7 +366,7 @@ table = [
   Row {
     entry = "i15_importer_iface_one_hop_unbound/bare.mdk",
     label =
-      "C6, L2 rung 3: a bare `import smod` binds no names, so the explicitly imported `size` answers",
+      "L2 rung 3: a bare `import smod` binds no names, so the explicitly imported `size` answers",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
@@ -383,7 +377,7 @@ table = [
   Row {
     entry = "i16_importer_iface_via_chain_silent/main.mdk",
     label =
-      "C6, L2 rung 3: `import reexp.{Sizeable}` binds no bare method name through a re-export hop, so the explicit `fmod.size` answers 99, not the impl's 7",
+      "L2 rung 3: `import reexp.{Sizeable}` binds no bare method name through a re-export hop, so the explicit `fmod.size` answers 99, not the impl's 7",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
@@ -394,7 +388,7 @@ table = [
   Row {
     entry = "i16_importer_iface_via_chain_silent/direct.mdk",
     label =
-      "C6, L2 rung 3: the same graph without the re-export hop; the two must agree",
+      "L2 rung 3: the same graph without the re-export hop; the two must agree",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
@@ -405,7 +399,7 @@ table = [
   Row {
     entry = "i17_importer_two_ifaces_neither_nameable/main.mdk",
     label =
-      "C6, L2 rung 3: two interfaces declaring `mth` are both unimported; the explicit `fmodI.mth` answers",
+      "L2 rung 3: two interfaces declaring `mth` are both unimported; the explicit `fmodI.mth` answers",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
@@ -427,7 +421,7 @@ table = [
   Row {
     entry = "i18_importer_alias_not_nameable/main.mdk",
     label =
-      "C6, L2 rung 3: `import smod as S` binds no bare name, so the explicit `fmod.size` answers 99",
+      "L2 rung 3: `import smod as S` binds no bare name, so the explicit `fmod.size` answers 99",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
@@ -471,7 +465,7 @@ table = [
   Row {
     entry = "i19_importer_sibling_method_silent/main.mdk",
     label =
-      "C6, L2 rung 3: the explicit `fmod.size` answers; `import ifc.{tag}` binds only `tag`",
+      "L2 rung 3: the explicit `fmod.size` answers; `import ifc.{tag}` binds only `tag`",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
@@ -482,7 +476,7 @@ table = [
   Row {
     entry = "i21_importer_return_pos_not_nameable/main.mdk",
     label =
-      "C6, L2 rung 3: the explicit `fmod.zed` answers; the interface `Zed` is not imported",
+      "L2 rung 3: the explicit `fmod.zed` answers; the interface `Zed` is not imported",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
@@ -504,7 +498,7 @@ table = [
   Row {
     entry = "i22_importer_member_alias_not_nameable/bare.mdk",
     label =
-      "C6, L2 rung 3: a bare `import ifc` binds no names, so the explicit `fmod.size` answers",
+      "L2 rung 3: a bare `import ifc` binds no names, so the explicit `fmod.size` answers",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
@@ -515,7 +509,7 @@ table = [
   Row {
     entry = "i23_importer_admitted_iface_holds_impl/main.mdk",
     label =
-      "C6, L2 rung 3: `import amodI.{IA, af}` binds no bare method name even though IA holds an impl at String, so the explicit `fmodI.mth` answers (99, not 55)",
+      "L2 rung 3: `import amodI.{IA, af}` binds no bare method name even though IA holds an impl at String, so the explicit `fmodI.mth` answers (99, not 55)",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
@@ -526,7 +520,7 @@ table = [
   Row {
     entry = "i24_importer_samespelled_ifaces_admitted_holds_impl/main.mdk",
     label =
-      "C6, L2 rung 3: the same with two interfaces of one name; the explicit `fmodI2.mth` answers (99, not 55)",
+      "L2 rung 3: the same with two interfaces of one name; the explicit `fmodI2.mth` answers (99, not 55)",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
@@ -568,7 +562,7 @@ table = [
   Row {
     entry = "i27_importer_two_admitted_disagree/main.mdk",
     label =
-      "C6, L2 rung 3: `import amodI.{IA, af}` and `import zmodI.{IZ, zf}` bind no method `mth`, so the explicit `fmodI.mth` answers",
+      "L2 rung 3: `import amodI.{IA, af}` and `import zmodI.{IZ, zf}` bind no method `mth`, so the explicit `fmodI.mth` answers",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
@@ -590,7 +584,7 @@ table = [
   Row {
     entry = "i29_importer_selective_import_displaced/main.mdk",
     label =
-      "C6, L2 rung 3: the explicit `box.peek` answers; `import peekable.{Peekable}` binds no method `peek`",
+      "L2 rung 3: the explicit `box.peek` answers; `import peekable.{Peekable}` binds no method `peek`",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
@@ -601,7 +595,7 @@ table = [
   Row {
     entry = "i30_importer_selective_import_same_scheme/main.mdk",
     label =
-      "C1, L2 rung 3: the explicit `prov.tagOf` answers; `import ifc.{Taggable, Box(..)}` binds no method `tagOf`",
+      "L2 rung 3: the explicit `prov.tagOf` answers; `import ifc.{Taggable, Box(..)}` binds no method `tagOf`",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
@@ -612,7 +606,7 @@ table = [
   Row {
     entry = "i31_importer_standalone_via_reexport_hop/main.mdk",
     label =
-      "C7, L3: `peek` imported through a re-export hop is one declaration, so `box.peek` answers",
+      "L3: `peek` imported through a re-export hop is one declaration, so `box.peek` answers",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
@@ -623,7 +617,7 @@ table = [
   Row {
     entry = "i32_importer_constraints_differ/main.mdk",
     label =
-      "C1, L2 rung 3: the explicit `prov.tagOf` answers although the interface method's constraints differ",
+      "L2 rung 3: the explicit `prov.tagOf` answers although the interface method's constraints differ",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
@@ -634,7 +628,7 @@ table = [
   Row {
     entry = "i33_importer_constraints_reordered/main.mdk",
     label =
-      "C1, L2 rung 3: the explicit `prov.tagOf` answers; constraint order is irrelevant",
+      "L2 rung 3: the explicit `prov.tagOf` answers; constraint order is irrelevant",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
@@ -678,7 +672,7 @@ table = [
   Row {
     entry = "i37_importer_two_admitted_value_occurrence/main.mdk",
     label =
-      "C6, L1: the explicit `fmodI.mth` answers 99 in value position (`main`); position and import order take no part",
+      "L1: the explicit `fmodI.mth` answers 99 in value position (`main`); position and import order take no part",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
@@ -689,7 +683,7 @@ table = [
   Row {
     entry = "i37_importer_two_admitted_value_occurrence/value_za.mdk",
     label =
-      "C6, L1: the explicit `fmodI.mth` answers 99 in value position (`value_za`); position and import order take no part",
+      "L1: the explicit `fmodI.mth` answers 99 in value position (`value_za`); position and import order take no part",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
@@ -700,7 +694,7 @@ table = [
   Row {
     entry = "i37_importer_two_admitted_value_occurrence/pointfree_az.mdk",
     label =
-      "C6, L1: the explicit `fmodI.mth` answers 99 in value position (`pointfree_az`); position and import order take no part",
+      "L1: the explicit `fmodI.mth` answers 99 in value position (`pointfree_az`); position and import order take no part",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
@@ -711,7 +705,7 @@ table = [
   Row {
     entry = "i37_importer_two_admitted_value_occurrence/pointfree_za.mdk",
     label =
-      "C6, L1: the explicit `fmodI.mth` answers 99 in value position (`pointfree_za`); position and import order take no part",
+      "L1: the explicit `fmodI.mth` answers 99 in value position (`pointfree_za`); position and import order take no part",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
@@ -722,7 +716,7 @@ table = [
   Row {
     entry = "i37_importer_two_admitted_value_occurrence/let_az.mdk",
     label =
-      "C6, L1: the explicit `fmodI.mth` answers 99 in value position (`let_az`); position and import order take no part",
+      "L1: the explicit `fmodI.mth` answers 99 in value position (`let_az`); position and import order take no part",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
@@ -733,7 +727,7 @@ table = [
   Row {
     entry = "i37_importer_two_admitted_value_occurrence/let_za.mdk",
     label =
-      "C6, L1: the explicit `fmodI.mth` answers 99 in value position (`let_za`); position and import order take no part",
+      "L1: the explicit `fmodI.mth` answers 99 in value position (`let_za`); position and import order take no part",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
@@ -744,7 +738,7 @@ table = [
   Row {
     entry = "i37_importer_two_admitted_value_occurrence/flip_az.mdk",
     label =
-      "C6, L1: the explicit `fmodI.mth` answers 99 in value position (`flip_az`); position and import order take no part",
+      "L1: the explicit `fmodI.mth` answers 99 in value position (`flip_az`); position and import order take no part",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
@@ -755,7 +749,7 @@ table = [
   Row {
     entry = "i37_importer_two_admitted_value_occurrence/flip_za.mdk",
     label =
-      "C6, L1: the explicit `fmodI.mth` answers 99 in value position (`flip_za`); position and import order take no part",
+      "L1: the explicit `fmodI.mth` answers 99 in value position (`flip_za`); position and import order take no part",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
@@ -766,7 +760,7 @@ table = [
   Row {
     entry = "i38_importer_extern_over_method/main.mdk",
     label =
-      "C1, L2 rung 3 (#4250): the explicitly imported extern `add` is called, not the prelude method `add`; check accepts, run refuses the reached FFI extern and build fails to link `c_add`",
+      "L2 rung 3 (#4250): the explicitly imported extern `add` is called, not the prelude method `add`; check accepts, run refuses the reached FFI extern and build fails to link `c_add`",
     expCheck = "ACCEPT",
     expRun = "REJECT",
     expBuild = "REJECT",
@@ -788,7 +782,7 @@ table = [
   Row {
     entry = "i39_importer_reexport_hub_collision/main.mdk",
     label =
-      "C7, L3 (#2017): a re-export hub exporting two distinct declarations of `mth` is a located ambiguity at the occurrence on every verb, whatever order the hub lists them",
+      "L3 (#2017): a re-export hub exporting two distinct declarations of `mth` is a located ambiguity at the occurrence on every verb, whatever order the hub lists them",
     expCheck = "REJECT",
     expRun = "REJECT",
     expBuild = "REJECT",
@@ -799,7 +793,7 @@ table = [
   Row {
     entry = "i39_importer_reexport_hub_collision/control.mdk",
     label =
-      "C7, L3: the control; a hub re-exporting one declaration is one binding, so `mth 1` is 2",
+      "L3: the control; a hub re-exporting one declaration is one binding, so `mth 1` is 2",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",

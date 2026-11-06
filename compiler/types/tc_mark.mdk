@@ -131,6 +131,7 @@ import frontend.name_scope.{
   NameScope,
   NameTarget(..),
   bareBinding,
+  importedSurfaces,
   nameScopeOf,
 }
 import types.tc_foreign.{
@@ -724,36 +725,37 @@ markSetsOf gctx pmf coreDecls modules allDecls =
 -- for rung 5 without its values, so a name only the prelude binds answers
 -- `ScopeOther` and keeps its marking; its interfaces stay, so a prelude method a
 -- module re-exports without its interface is still a method.  Core itself has
--- no scope here: its own names are marked as they always were.
+-- no scope here: it marks its own names without a scope class.
 scopeClassesOf : List (String, List Decl) -> String -> String -> ScopeClass
 scopeClassesOf units =
   let surfaces = unitSurfaces units
   let byMid = omFromPairs surfaces omEmpty
-  let prelude = match lookupAssoc "core" surfaces
-    Some exp => exp
-    None => coreExports []
+  let prelude = optionOrElse (_ => coreExports []) (lookupAssoc "core" surfaces)
   let outer = { prelude | expValueOrigins = [] }
   let scopes =
     omFromPairs
-      (map
-        (unit => (fst unit, unitScope byMid outer (snd unit)))
-        (filterList (unit => fst unit /= "core") units))
+      (map (scopeOfUnit byMid outer) (filterList (not << isCoreUnit) units))
       omEmpty
   mid n => match omLookup mid scopes
     Some scope => scopeClassOf (bareBinding scope n)
     None => ScopeOther
 
+isCoreUnit : (String, List Decl) -> Bool
+isCoreUnit (mid, _) = mid == "core"
+
+scopeOfUnit : OrdMap ModuleExports ->
+  ModuleExports ->
+  (String, List Decl) ->
+  (String, NameScope)
+scopeOfUnit byMid outer (mid, decls) = (mid, unitScope byMid outer decls)
+
 unitScope : OrdMap ModuleExports -> ModuleExports -> List Decl -> NameScope
 unitScope byMid prelude decls =
   let written = writtenImportsOf decls
-  nameScopeOf written (flatMap (importedSurface byMid) written) prelude
-
-importedSurface : OrdMap ModuleExports -> Decl -> List ImportedSurface
-importedSurface byMid (DAttrib _ d) = importedSurface byMid d
-importedSurface byMid (d@(DUse _ path _)) = match omLookup (useModId path) byMid
-  Some exp => [ImportedSurface d exp]
-  None => []
-importedSurface _ _ = []
+  nameScopeOf
+    written
+    (flatMap (importedSurfaces (mid => omLookup mid byMid)) written)
+    prelude
 
 scopeClassOf : Option NameBinding -> ScopeClass
 scopeClassOf (Some (Bound RungPrelude _)) = ScopeOther

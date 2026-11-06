@@ -148,6 +148,7 @@ tyParamSource : String -> Option KindAnn -> String
 tyParamSources : List String -> List (Option KindAnn) -> List String
 unminted : EvId
 useMemberAlias : UseMember -> Option String
+useMemberLoc : UseMember -> Loc
 useMemberLocal : UseMember -> String
 useMemberOrigin : UseMember -> String
 variantFieldTys : Variant -> List Ty

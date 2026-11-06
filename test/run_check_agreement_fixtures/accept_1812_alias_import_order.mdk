@@ -1,4 +1,4 @@
--- C7, L2 rung 3, L3: the explicit `mth` is fmod's function and the alias `Z` binds no bare
+-- L2 rung 3, L3: the explicit `mth` is fmod's function and the alias `Z` binds no bare
 -- name, so the import order never decides: 99.
 import lib.order1812_amod.{af}
 import lib.order1812_fmod.{mth}

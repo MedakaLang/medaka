@@ -223,7 +223,7 @@ importFormsOf decls =
   let sites = aliasImportSites decls
   d => importFormIn sites d
 
-importFormIn : List (List String, Loc) -> Decl -> ImportForm
+importFormIn : List AliasSite -> Decl -> ImportForm
 importFormIn sites (DAttrib _ d) = importFormIn sites d
 importFormIn _ (DUse _ (UseWild _) _) = WildImport
 importFormIn _ (DUse _ (UseAlias _ _) _) = NoBareImport
@@ -243,22 +243,25 @@ writtenImportsOf prog = match aliasImportSites prog
   [] => prog
   sites => filterList (d => not (isAliasMethodImport sites d)) prog
 
+-- The module path and location of one `import m as A`.
+public export data AliasSite = AliasSite { asQuals : List String, asLoc : Loc }
+
 -- The module path and location of each `import m as A` in [prog].
 export
-aliasImportSites : List Decl -> List (List String, Loc)
+aliasImportSites : List Decl -> List AliasSite
 aliasImportSites [] = []
 aliasImportSites ((DAttrib _ d) :: rest) =
   aliasImportSites [d] ++ aliasImportSites rest
 aliasImportSites ((DUse _ (UseAlias quals _) loc) :: rest) =
-  (quals, loc) :: aliasImportSites rest
+  AliasSite quals loc :: aliasImportSites rest
 aliasImportSites (_ :: rest) = aliasImportSites rest
 
 -- Only a `UseGroup` import is ever synthesized, so the final catch-all answering False
 -- for every other declaration is exhaustive by construction.
-isAliasMethodImport : List (List String, Loc) -> Decl -> Bool
+isAliasMethodImport : List AliasSite -> Decl -> Bool
 isAliasMethodImport sites (DAttrib _ d) = isAliasMethodImport sites d
 isAliasMethodImport sites (DUse _ (UseGroup quals _) loc) =
-  anyList (s => fst s == quals && snd s == loc) sites
+  anyList (s => s.asQuals == quals && s.asLoc == loc) sites
 isAliasMethodImport _ _ = False
 
 -- The public interface of a resolved module

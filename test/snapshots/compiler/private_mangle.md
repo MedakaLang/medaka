@@ -1,5 +1,5 @@
 # META
-source_lines=2032
+source_lines=2031
 stages=DESUGAR,MARK
 # SOURCE
 import frontend.runtime_constructors.{namedRuntimeCtor}
@@ -714,8 +714,7 @@ surfaceMethods (mid, exp) =
 
 -- The functions a unit defines under a name its own decls export.  This reads
 -- the module's direct value exports, not its surface, so a private standalone
--- beside a public interface method of the same name is not offered
--- (`test/llvm_fixtures_modules/method_private_standalone_visibility`).  It keeps
+-- beside a public interface method of the same name is not offered.  It keeps
 -- core to what core marks exported, too: core's surface is every binding (#2640).
 unitFnSyms : (String -> ExportView) ->
   (String, List Decl) ->
