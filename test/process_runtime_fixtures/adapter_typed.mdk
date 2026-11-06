@@ -1,0 +1,55 @@
+import async.{runAsync}
+import process.{
+  SpawnOptions(..), PipeChoice(..), ExitStatus(..), ProcessError(..), dispose
+}
+import process_async.{
+  newCancelToken, after, startUntil, waitUntil, StartResult(..), LaunchStop(..),
+  WaitResult(..)
+}
+import time.{millis}
+
+options : SpawnOptions
+options = SpawnOptions {
+  argv = [],
+  cwd = "/tmp",
+  env = [],
+  stdin = Null,
+  stdout = Null,
+  stderr = Null,
+}
+
+inspect : LaunchStop Int -> Int
+inspect LaunchStopped = 1
+inspect (LaunchCleanupPending n None) = n
+inspect (LaunchCleanupPending n (Some _)) = n + 1
+inspect (LaunchCleanupFailed _) = 4
+
+inspectResult : StartResult Int Int -> Int
+inspectResult (Started n) = n
+inspectResult (StartTimedOut stop) = inspect stop
+inspectResult (StartCancelled stop) = inspect stop
+
+launch : <Clock, Exec "/bin/true"> Bool
+launch =
+  let deadline = runAsync (after (millis 5000))
+  match runAsync (startUntil "/bin/true" options deadline (newCancelToken ()))
+    Ok (Started p) =>
+      let status = runAsync (waitUntil p deadline (newCancelToken ()))
+      let closed = dispose p
+      match (status, closed)
+        (Ok (ChildExited (Exited 0)), Ok _) => True
+        _ => False
+    _ => False
+
+main =
+  if launch
+    && inspect LaunchStopped == 1
+    && inspect (LaunchCleanupPending 2 None) == 2
+    && inspectResult
+        (StartTimedOut (LaunchCleanupPending 2 (Some (Unsupported "x"))))
+      == 3
+    && inspectResult (StartCancelled (LaunchCleanupFailed (Unsupported "x")))
+      == 4 then
+    println "adapter native passed"
+  else
+    println "adapter failed"

@@ -159,6 +159,7 @@ declare i64 @mdk_executable_path(i64)
 declare i64 @mdk_build_fingerprint(i64)
 declare i64 @mdk_build_commit(i64)
 declare i64 @mdk_build_date(i64)
+declare i64 @mdk_process_submit(i64, i64, i64, i64, i64, i64, i64)
 declare i64 @mdk_process_start(i64, i64, i64, i64, i64, i64, i64)
 declare i64 @mdk_process_retry_start(i64)
 declare i64 @mdk_process_check_start(i64)
@@ -166,6 +167,9 @@ declare i64 @mdk_process_abort_start(i64)
 declare i64 @mdk_process_poll_exit(i64)
 declare i64 @mdk_process_close_stdin(i64)
 declare i64 @mdk_process_dispose(i64)
+declare i64 @mdk_process_try_read(i64, i64, i64)
+declare i64 @mdk_process_try_write(i64, i64, i64, i64)
+declare i64 @mdk_process_stream_fd(i64, i64)
 declare i64 @mdk_net_resolve(i64)
 declare i64 @mdk_net_tcp_connect(i64, i64)
 declare i64 @mdk_net_tcp_listen(i64, i64)
@@ -227,7 +231,7 @@ declare void @mdk_enable_run_stdout_flush(i64)
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
-  %t0 = call i64 @mdk.default.7a5a5f35665f5f35665f757365725f35665f5f35665f5f33615f5f33615f4f7264.6c74.7a5a5f35665f5f35665f757365725f35665f5f35665f5f33615f5f33615f4f72645f37635f5f35665f5f35665f757365725f35665f5f35665f5f32655f436f6c6f725f37635f(i64 ptrtoint (ptr @mdk.gen.dictcell.70726f6772616d..0 to i64), i64 8589934593, i64 8589934595)
+  %t0 = call i64 @mdk.default.7a5a5f35665f5f35665f757365725f35665f5f35665f5f33615f5f33615f4f7264.6c74.7a5a5f35665f5f35665f757365725f35665f5f35665f5f33615f5f33615f4f72645f37635f5f35665f5f35665f757365725f35665f5f35665f5f32655f436f6c6f725f37635f(i64 ptrtoint (ptr @mdk.gen.dictcell.70726f6772616d..0 to i64), i64 17179869185, i64 17179869187)
   %t1 = alloca i64
   %t3 = icmp eq i64 %t0, 3
   br i1 %t3, label %conyes4, label %connext4
@@ -254,7 +258,7 @@ define internal i64 @mdk.default.7a5a5f35665f5f35665f757365725f35665f5f35665f5f3
 entry:
   %t0 = call i64 @mdk.impl.496e74.636f6d70617265(i64 %arg1, i64 %arg2)
   %t1 = alloca i64
-  %t3 = icmp eq i64 %t0, 1
+  %t3 = icmp eq i64 %t0, 8589934593
   br i1 %t3, label %conyes4, label %connext4
 conyes4:
   store i64 3, ptr %t1
@@ -272,7 +276,7 @@ define internal i64 @mdk.default.7a5a5f35665f5f35665f757365725f35665f5f35665f5f3
 entry:
   %t0 = call i64 @mdk.impl.7a5a5f35665f5f35665f757365725f35665f5f35665f5f32655f436f6c6f72.636f6d70617265(i64 %arg1, i64 %arg2)
   %t1 = alloca i64
-  %t3 = icmp eq i64 %t0, 1
+  %t3 = icmp eq i64 %t0, 8589934593
   br i1 %t3, label %conyes4, label %connext4
 conyes4:
   store i64 3, ptr %t1
@@ -296,7 +300,7 @@ entry:
   %t5 = icmp ne i64 %t4, 0
   br i1 %t5, label %then6, label %else6
 then6:
-  ret i64 1
+  ret i64 8589934593
 else6:
   %t7 = icmp sgt i64 %arg0, %arg1
   %t8 = zext i1 %t7 to i64
@@ -306,61 +310,61 @@ else6:
   %t12 = icmp ne i64 %t11, 0
   br i1 %t12, label %then13, label %else13
 then13:
-  ret i64 5
+  ret i64 8589934597
 else13:
-  ret i64 3
+  ret i64 8589934595
 }
 
 ; mdk-module impl.5f5f757365725f5f3a3a4f72647c5f5f757365725f5f2e436f6c6f727c.636f6d70617265
 define internal i64 @mdk.impl.7a5a5f35665f5f35665f757365725f35665f5f35665f5f32655f436f6c6f72.636f6d70617265(i64 %arg0, i64 %arg1) {
 entry:
   %t0 = alloca i64
-  %t3 = icmp eq i64 %arg0, 8589934593
+  %t3 = icmp eq i64 %arg0, 17179869185
   br i1 %t3, label %conyes4, label %connext4
 conyes4:
-  %t5 = icmp eq i64 %arg1, 8589934593
+  %t5 = icmp eq i64 %arg1, 17179869185
   br i1 %t5, label %conyes6, label %connext6
 conyes6:
-  store i64 3, ptr %t0
+  store i64 8589934595, ptr %t0
   br label %decend1
 connext6:
   br label %clause2
 connext4:
   br label %clause2
 clause2:
-  %t8 = icmp eq i64 %arg0, 8589934593
+  %t8 = icmp eq i64 %arg0, 17179869185
   br i1 %t8, label %conyes9, label %connext9
 conyes9:
-  %t10 = icmp eq i64 %arg1, 8589934595
+  %t10 = icmp eq i64 %arg1, 17179869187
   br i1 %t10, label %conyes11, label %connext11
 conyes11:
-  store i64 1, ptr %t0
+  store i64 8589934593, ptr %t0
   br label %decend1
 connext11:
   br label %clause7
 connext9:
   br label %clause7
 clause7:
-  %t13 = icmp eq i64 %arg0, 8589934595
+  %t13 = icmp eq i64 %arg0, 17179869187
   br i1 %t13, label %conyes14, label %connext14
 conyes14:
-  %t15 = icmp eq i64 %arg1, 8589934593
+  %t15 = icmp eq i64 %arg1, 17179869185
   br i1 %t15, label %conyes16, label %connext16
 conyes16:
-  store i64 5, ptr %t0
+  store i64 8589934597, ptr %t0
   br label %decend1
 connext16:
   br label %clause12
 connext14:
   br label %clause12
 clause12:
-  %t17 = icmp eq i64 %arg0, 8589934595
+  %t17 = icmp eq i64 %arg0, 17179869187
   br i1 %t17, label %conyes18, label %connext18
 conyes18:
-  %t19 = icmp eq i64 %arg1, 8589934595
+  %t19 = icmp eq i64 %arg1, 17179869187
   br i1 %t19, label %conyes20, label %connext20
 conyes20:
-  store i64 3, ptr %t0
+  store i64 8589934595, ptr %t0
   br label %decend1
 connext20:
   call void @mdk_nonexhaustive_match()

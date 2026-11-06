@@ -143,12 +143,14 @@ recursion depth.
 Three ABI facts are per-program today and must become per-package for interpreted code
 and precompiled code to share them. Each is a fact with one producer (law A4).
 
-1. **Type ids** are assigned in program-wide declaration order (`installTypeIds` in
-   `llvm_emit.mdk`; `compiler/ir/constructor_facts.mdk`). A cell header is
-   `typeId << 32 | ordinal`. The package's types get ids fixed at package build and
-   recorded in its interface; a program's own types are numbered above the package
-   range. The site-file table (`core_ir.mdk`, `(file+1) << 44` in a trap word) gets the
-   same treatment.
+1. **Type ids and trap files** are planned by `compiler/backend/package_identity.mdk`.
+   Package assignments and their high-water marks are preserved in versioned package ABI
+   metadata; consuming programs allocate their own identities above those marks. The
+   codec in `compiler/backend/package_identity_sexp.mdk` checks the fingerprint, format,
+   ABI version, digest and identity ranges before returning a package. Native cell headers
+   use `typeId << 32 | ordinal`; WasmGC uses named types and ordinal discriminants instead.
+   Both targets use the planned file table for trap sites. V1 owns automatic package
+   construction and loading and will compose this metadata with the semantic interface.
 2. **Dictionaries** are instance witnesses, `[hash(instance key) | supers… | requires…]`,
    and a method call through a runtime dictionary is an if-chain over the whole
    program's impl table (`mdk.dispatch.*` in `llvm_emit.mdk`). Precompiled stdlib code

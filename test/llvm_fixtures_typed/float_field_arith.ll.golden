@@ -159,6 +159,7 @@ declare i64 @mdk_executable_path(i64)
 declare i64 @mdk_build_fingerprint(i64)
 declare i64 @mdk_build_commit(i64)
 declare i64 @mdk_build_date(i64)
+declare i64 @mdk_process_submit(i64, i64, i64, i64, i64, i64, i64)
 declare i64 @mdk_process_start(i64, i64, i64, i64, i64, i64, i64)
 declare i64 @mdk_process_retry_start(i64)
 declare i64 @mdk_process_check_start(i64)
@@ -166,6 +167,9 @@ declare i64 @mdk_process_abort_start(i64)
 declare i64 @mdk_process_poll_exit(i64)
 declare i64 @mdk_process_close_stdin(i64)
 declare i64 @mdk_process_dispose(i64)
+declare i64 @mdk_process_try_read(i64, i64, i64)
+declare i64 @mdk_process_try_write(i64, i64, i64, i64)
+declare i64 @mdk_process_stream_fd(i64, i64)
 declare i64 @mdk_net_resolve(i64)
 declare i64 @mdk_net_tcp_connect(i64, i64)
 declare i64 @mdk_net_tcp_listen(i64, i64)
@@ -238,7 +242,7 @@ entry:
   store double 4.0, ptr %t4
   %t5 = ptrtoint ptr %t3 to i64
   %t6 = call ptr @mdk_alloc(i64 24)
-  store i64 0, ptr %t6
+  store i64 4294967296, ptr %t6
   %t7 = getelementptr i8, ptr %t6, i64 8
   store i64 %t2, ptr %t7
   %t8 = getelementptr i8, ptr %t6, i64 16
@@ -256,7 +260,7 @@ entry:
   store double 2.0, ptr %t15
   %t16 = ptrtoint ptr %t14 to i64
   %t17 = call ptr @mdk_alloc(i64 24)
-  store i64 0, ptr %t17
+  store i64 4294967296, ptr %t17
   %t18 = getelementptr i8, ptr %t17, i64 8
   store i64 %t13, ptr %t18
   %t19 = getelementptr i8, ptr %t17, i64 16

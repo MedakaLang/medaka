@@ -78,6 +78,13 @@
  * pthread_create would NOT have its stack registered as a GC root, so Boehm would
  * collect still-live objects and corrupt the heap.  GC_pthread_create registers
  * the worker's stack, keeping conservative scanning correct on it. */
+#include "medaka_process.h"
+/* A process API reference extracts its archive member; this weak hook alone must not. */
+#ifdef __APPLE__
+extern void mdk_process_submission_init(void) __attribute__((weak_import));
+#else
+extern void mdk_process_submission_init(void) __attribute__((weak));
+#endif
 #define GC_THREADS
 #include <gc.h>
 /* gc_inline.h asserts each allocation's size with GC_size, a call per cell, unless
@@ -4795,6 +4802,7 @@ static void *mdk_main_thread(void *p) {
 }
 
 int main(int argc, char **argv) {
+  if (mdk_process_submission_init) mdk_process_submission_init();
   struct mdk_main_args a;
   a.argc = argc;
   a.argv = argv;

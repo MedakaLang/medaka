@@ -87,6 +87,7 @@ Operations on `Array a`.
 - [`waitFlag`](async.md#waitflag)
 - [`deadlineAfter`](async.md#deadlineafter)
 - [`expired`](async.md#expired)
+- [`expiredNow`](async.md#expirednow)
 - [`await`](async.md#await)
 - [`concurrent`](async.md#concurrent)
 - [`runAsync`](async.md#runasync)
@@ -831,13 +832,17 @@ Manipulation of `/`-separated paths as text.
 
 ## [`process`](process.md)
 
+Submit a bounded native launch without waiting for creation or exec.
+
 - [`PipeChoice`](process.md#pipechoice)
 - [`SpawnOptions`](process.md#spawnoptions)
 - [`ProcessOperation`](process.md#processoperation)
 - [`ProcessError`](process.md#processerror)
+- [`OutputStream`](process.md#outputstream)
 - [`ExitStatus`](process.md#exitstatus)
 - [`StartError`](process.md#starterror)
 - [`LaunchProgress`](process.md#launchprogress)
+- [`submit`](process.md#submit)
 - [`start`](process.md#start)
 - [`retryStart`](process.md#retrystart)
 - [`checkStart`](process.md#checkstart)
@@ -845,6 +850,30 @@ Manipulation of `/`-separated paths as text.
 - [`pollExit`](process.md#pollexit)
 - [`closeStdin`](process.md#closestdin)
 - [`dispose`](process.md#dispose)
+- [`outputStreamCode`](process.md#outputstreamcode)
+- [`tryRead`](process.md#tryread)
+- [`tryWrite`](process.md#trywrite)
+- [`streamFd`](process.md#streamfd)
+
+## [`process_async`](process_async.md)
+
+- [`Deadline`](process_async.md#deadline)
+- [`CancelToken`](process_async.md#canceltoken)
+- [`ReadResult`](process_async.md#readresult)
+- [`WriteResult`](process_async.md#writeresult)
+- [`WaitResult`](process_async.md#waitresult)
+- [`newCancelToken`](process_async.md#newcanceltoken)
+- [`cancel`](process_async.md#cancel)
+- [`cancelled`](process_async.md#cancelled)
+- [`cancelWait`](process_async.md#cancelwait)
+- [`after`](process_async.md#after)
+- [`deadlineWait`](process_async.md#deadlinewait)
+- [`readUntil`](process_async.md#readuntil)
+- [`writeUntil`](process_async.md#writeuntil)
+- [`waitUntil`](process_async.md#waituntil)
+- [`LaunchStop`](process_async.md#launchstop)
+- [`StartResult`](process_async.md#startresult)
+- [`startUntil`](process_async.md#startuntil)
 
 ## [`regex`](regex.md)
 
@@ -1037,6 +1066,7 @@ The host primitives.
 - [`charToLower`](runtime.md#chartolower)
 - [`stringToUpper`](runtime.md#stringtoupper)
 - [`stringToLower`](runtime.md#stringtolower)
+- [`processSubmitRaw`](runtime.md#processsubmitraw)
 - [`processStartRaw`](runtime.md#processstartraw)
 - [`processRetryStartRaw`](runtime.md#processretrystartraw)
 - [`processCheckStartRaw`](runtime.md#processcheckstartraw)
@@ -1044,6 +1074,9 @@ The host primitives.
 - [`processPollExitRaw`](runtime.md#processpollexitraw)
 - [`processCloseStdinRaw`](runtime.md#processclosestdinraw)
 - [`processDisposeRaw`](runtime.md#processdisposeraw)
+- [`processTryReadRaw`](runtime.md#processtryreadraw)
+- [`processTryWriteRaw`](runtime.md#processtrywriteraw)
+- [`processStreamFdRaw`](runtime.md#processstreamfdraw)
 
 ## [`set`](set.md)
 

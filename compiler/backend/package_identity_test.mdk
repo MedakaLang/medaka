@@ -1,0 +1,326 @@
+import ir.core_ir.{
+  CArm(..), CGuard(..), CTree(..), CTBranch(..), CHead(..), FailSite(..),
+  CImplEntry(..), CImplBody(..), noImplSym, CallSite(..), CallMode(..)
+}
+import frontend.ast.{Pat(..), Addr(..)}
+import backend.package_identity.{
+  PackageIdentity(..), IdentityPlan(..), emptyPackage, planPackageIdentity,
+  planProgramIdentity, validateIdentityPlan, renderIdentityDefect,
+  IdentityDefect(..), IdentityKind(..), packSite
+}
+import backend.runtime_layout.{abiVersion, reservedTypeBase}
+import ir.core_ir.{CProgram(..), CBind(..), CClause(..), CExpr(..), noDeclFacts}
+import frontend.ast.{Loc(..), Lit(..), noBinderId}
+import frontend.parser.{parse}
+import frontend.desugar.{desugar}
+import frontend.resolve.{stampGraphTyOrigins}
+import types.private_mangle.{mangleUnits}
+import types.dispatch_keys.{buildCtorToType}
+import support.ordmap.{omEmpty, omInsert, omLookup}
+import test.{
+  expectAll, expectEqual, expectOkThen, expectTrue, expectTextContainsAll
+}
+
+program : List (String, String) -> List (String, Int, Int) -> CProgram
+program types sites =
+  CProgram
+    (map
+      (site =>
+        let (file, line, col) = site
+        CBind
+          "f"
+          [
+            CClause
+              []
+              (CBinPrim
+                "+"
+                (CLit (LInt 1))
+                (CLit (LInt 2))
+                "Int"
+                (Loc file line col line (col + 1))),
+          ]
+          (Loc "" 1 0 1 0)
+          noBinderId)
+      sites)
+    []
+    types
+    []
+    []
+    noDeclFacts
+
+packageProgram : CProgram
+packageProgram = program [("A", "a.T"), ("B", "b.T")] [("pkg.mdk", 2, 3)]
+
+test "package identities survive unrelated additions and declaration reorder" =
+  expectOkThen
+    (pkg =>
+      let user1 =
+        program
+          [("B", "b.T"), ("A", "a.T"), ("C", "c.U")]
+          [("local.mdk", 8, 4), ("pkg.mdk", 2, 3)]
+      let user2 =
+        program
+          [("Z", "z.V"), ("A", "a.T"), ("C", "c.U"), ("B", "b.T")]
+          [("pkg.mdk", 2, 3), ("other.mdk", 9, 1), ("local.mdk", 8, 4)]
+      expectOkThen
+        (p1 =>
+          expectOkThen
+            (p2 => expectAll [
+              expectEqual
+                (omLookup "a.T" (pkg : PackageIdentity).types)
+                (omLookup "a.T" (p1 : IdentityPlan).types),
+              expectEqual
+                (omLookup "b.T" (pkg : PackageIdentity).types)
+                (omLookup "b.T" (p2 : IdentityPlan).types),
+              expectEqual
+                (omLookup "pkg.mdk" (pkg : PackageIdentity).files)
+                (omLookup "pkg.mdk" (p1 : IdentityPlan).files),
+              expectEqual
+                (packSite p1 (Loc "pkg.mdk" 2 3 2 4))
+                (packSite p2 (Loc "pkg.mdk" 2 3 2 4)),
+              expectEqual [] (validateIdentityPlan user1 p1),
+              expectEqual [] (validateIdentityPlan user2 p2),
+            ])
+            (planProgramIdentity pkg user2))
+        (planProgramIdentity pkg user1))
+    (planPackageIdentity "pkg" packageProgram)
+
+test "stamped module types have distinct owners" =
+  let units = [
+    ("a", desugar (parse "public export data T = A\n")),
+    ("b", desugar (parse "public export data T = B\n")),
+    ("app", desugar (parse "main = 1\n")),
+  ]
+  let (_, stamped) = stampGraphTyOrigins [] [] units
+  let (_, renamed) = mangleUnits [] stamped
+  expectOkThen
+    (plan => expectAll [
+      expectEqual (Some 1) (omLookup "a.T" (plan : IdentityPlan).types),
+      expectEqual (Some 2) (omLookup "b.T" (plan : IdentityPlan).types),
+    ])
+    (planProgramIdentity
+      emptyPackage
+      (program (buildCtorToType (flatMap snd renamed)) []))
+
+test "sparse imported IDs preserve holes and detect corruptions" =
+  let pkg = PackageIdentity {
+    fingerprint = "sparse",
+    abi = abiVersion,
+    types = omInsert "pkg.T" 4 omEmpty,
+    files = omInsert "pkg.mdk" 2 omEmpty,
+    typeHigh = 7,
+    fileHigh = 4,
+  }
+  let cp = program [("A", "pkg.T"), ("B", "new.T")] [("new.mdk", 3, 5)]
+  expectOkThen
+    (plan => expectAll [
+      expectEqual (Some 8) (omLookup "new.T" (plan : IdentityPlan).types),
+      expectEqual (Some 5) (omLookup "new.mdk" (plan : IdentityPlan).files),
+      expectEqual ["", "pkg.mdk", "", "", "new.mdk"] plan.orderedFiles,
+      expectTextContainsAll
+        ["missing type", "imported type changed"]
+        (stringConcat
+          (map
+            renderIdentityDefect
+            (validateIdentityPlan cp { plan | types = omEmpty }))),
+      expectTextContainsAll
+        ["missing file"]
+        (stringConcat
+          (map
+            renderIdentityDefect
+            (validateIdentityPlan cp { plan | files = omEmpty }))),
+      expectTextContainsAll
+        ["file table disagrees"]
+        (stringConcat
+          (map
+            renderIdentityDefect
+            (validateIdentityPlan cp { plan | orderedFiles = [] }))),
+    ])
+    (planProgramIdentity pkg cp)
+
+test "exhaustion and invalid imported identities refuse" =
+  let cp = program [("A", "new.T")] [("x", 2, 1)]
+  expectAll [
+    expectTextContainsAll
+      ["type IDs exhausted"]
+      (identityErrors
+        (planProgramIdentity
+          { emptyPackage | typeHigh = reservedTypeBase - 1 }
+          cp)),
+    expectTextContainsAll
+      ["file IDs exhausted"]
+      (identityErrors
+        (planProgramIdentity { emptyPackage | fileHigh = 65535 } cp)),
+    expectTextContainsAll
+      ["invalid type assignment bad"]
+      (identityErrors
+        (planProgramIdentity
+          { emptyPackage | types = omInsert "bad" 0 omEmpty }
+          cp)),
+  ]
+
+test "unpackable and placeholder sites remain zero" =
+  expectOkThen
+    (plan => expectAll [
+      expectEqual 0 (packSite plan (Loc "" 2 3 2 4)),
+      expectEqual 0 (packSite plan (Loc "x" 1 0 1 0)),
+      expectEqual 0 (packSite plan (Loc "x" 16777216 0 16777216 1)),
+      expectEqual 0 (packSite plan (Loc "x" 2 1048576 2 1048577)),
+    ])
+    (planProgramIdentity emptyPackage (program [] []))
+
+siteExpr : String -> CExpr
+siteExpr file =
+  CBinPrim "+" (CLit (LInt 1)) (CLit (LInt 2)) "Int" (Loc file 2 3 2 4)
+
+test "inventory visits nested sites and explicit literals" =
+  let literal =
+    CApp
+      (CVar "__site__" AGlobal)
+      [CLit (LString "literal"), CLit (LInt 2), CLit (LInt 3)]
+      (CallSite CallExact False)
+  let tree =
+    CTSwitch
+      [CTBranch HUnit (CTGuard 0 (CTFail (NoArm (Loc "branch" 2 3 2 4))))]
+      (CTDrop (CTFail (LetRefuted (Loc "fallback" 2 3 2 4))))
+  let body =
+    CDecision
+      (siteExpr "scrutinee")
+      [
+        CArm PWild [CGBool (siteExpr "guard")] literal,
+        CArmAlt PWild [CGBool (siteExpr "alt")] 0,
+      ]
+      tree
+  let binds =
+    [CBind "main" [CClause [] body] (Loc "binding" 2 3 2 4) noBinderId]
+  let impls = [
+    CImplEntry
+      "x"
+      0
+      0
+      (CImplTagged "T" "K" "I" noImplSym [] [] (siteExpr "impl")),
+    CImplEntry
+      "y"
+      0
+      0
+      (CImplDefault "I" "T" "K" noImplSym [] [] (siteExpr "default")),
+  ]
+  let cp = CProgram binds [] [] impls [] noDeclFacts
+  expectOkThen
+    (plan => expectAll [
+      expectEqual
+        [
+          "alt", "binding", "branch", "default", "fallback", "guard", "impl",
+          "literal", "scrutinee"
+        ]
+        plan.orderedFiles,
+      expectEqual [] (validateIdentityPlan cp plan),
+      expectTextContainsAll
+        ["missing file"]
+        (stringConcat
+          (map
+            renderIdentityDefect
+            (validateIdentityPlan cp { plan | files = omEmpty }))),
+    ])
+    (planProgramIdentity emptyPackage cp)
+
+identityErrors : Result (List IdentityDefect) IdentityPlan -> String
+identityErrors (Err errors) = stringConcat (map renderIdentityDefect errors)
+identityErrors (Ok _) = "accepted"
+
+test "corrupt local numbering is detected" =
+  let cp = program [("A", "a.T"), ("B", "b.T")] [("a", 2, 3), ("b", 2, 3)]
+  expectOkThen
+    (plan =>
+      let typed : IdentityPlan = plan
+      expectAll [
+        expectTextContainsAll
+          ["type allocation disagrees"]
+          (stringConcat
+            (map
+              renderIdentityDefect
+              (validateIdentityPlan cp { typed |
+                types = omInsert "a.T" 2 (omInsert "b.T" 1 omEmpty),
+              }))),
+        expectTextContainsAll
+          ["file allocation disagrees"]
+          (stringConcat
+            (map
+              renderIdentityDefect
+              (validateIdentityPlan cp { typed |
+                files = omInsert "a" 2 (omInsert "b" 1 omEmpty),
+                orderedFiles = ["b", "a"],
+              }))),
+      ])
+    (planProgramIdentity emptyPackage cp)
+
+test "exact allocation ceilings and conflicting imports" =
+  let cp = program [("A", "new.T")] [("last.mdk", 2, 3)]
+  let near = { emptyPackage | typeHigh = 65534, fileHigh = 65534 }
+  let duplicate = { emptyPackage |
+    types = omInsert "a.T" 3 (omInsert "b.T" 3 omEmpty),
+    typeHigh = 3,
+  }
+  expectAll [
+    expectOkThen
+      (plan => expectAll [
+        expectEqual (Some 65535) (omLookup "new.T" (plan : IdentityPlan).types),
+        expectEqual
+          (Some 65535)
+          (omLookup "last.mdk" (plan : IdentityPlan).files),
+      ])
+      (planProgramIdentity near cp),
+    expectTextContainsAll
+      ["duplicate type number"]
+      (identityErrors (planProgramIdentity duplicate cp)),
+    expectTextContainsAll
+      ["incompatible ABI"]
+      (identityErrors
+        (planProgramIdentity { emptyPackage | abi = abiVersion + 1 } cp)),
+  ]
+
+test "identity planning returns structured defects" =
+  let cp = program [("A", "new.T")] []
+  expectEqual
+    (Err [IdentityIncompatibleAbi])
+    (map
+      (_ => ())
+      (planProgramIdentity { emptyPackage | abi = abiVersion + 1 } cp))
+
+perfChain : Int -> CExpr
+perfChain n =
+  if n <= 0 then
+    CLit (LInt 0)
+  else
+    CBinPrim
+      "+"
+      (perfChain (n - 1))
+      (CLit (LInt 1))
+      "Int"
+      (Loc "perf.mdk" 2 3 2 4)
+
+perfProgram : Int -> CProgram
+perfProgram n =
+  CProgram
+    [CBind "main" [CClause [] (perfChain n)] (Loc "" 1 0 1 0) noBinderId]
+    []
+    []
+    []
+    []
+    noDeclFacts
+
+identityAllocation : Int -> <IO> Float
+identityAllocation n =
+  let cp = perfProgram n
+  let before = allocBytes ()
+  let planned = planProgramIdentity emptyPackage cp
+  let _ = match planned
+    Ok p => length p.orderedFiles
+    Err es => length es
+  allocBytes () - before
+
+test "identity inventory allocation scales linearly" =
+  let a = identityAllocation 1000
+  let b = identityAllocation 2000
+  let c = identityAllocation 4000
+  expectAll [expectTrue (b < a * 3.0), expectTrue (c < b * 3.0)]

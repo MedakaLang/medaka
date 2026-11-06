@@ -705,6 +705,12 @@ test "arch_boundaries: backend.runtime_c_abi closure matches its golden" =
 test "arch_boundaries: backend.runtime_layout closure matches its golden" =
   closurePin "backend.runtime_layout"
 
+test "arch_boundaries: backend.package_identity closure matches its golden" =
+  closurePin "backend.package_identity"
+
+test "arch_boundaries: backend.package_identity_sexp closure matches its golden" =
+  closurePin "backend.package_identity_sexp"
+
 test "arch_boundaries: backend.emit_plan closure matches its golden" =
   closurePin "backend.emit_plan"
 

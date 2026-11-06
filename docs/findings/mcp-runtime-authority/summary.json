@@ -1,0 +1,7 @@
+{
+  "schema": 1,
+  "replay_base": "9a0ccbda624ee198616b965247a33eaaf303560e",
+  "ownership": {"status": "UNAVAILABLE", "qualified": false, "exit_code": 77, "receipt": "ownership-summary.json", "details": "OWNERSHIP.md"},
+  "stdio": {"status": "BLOCKED", "qualified": false, "exit_code": 77, "receipt": "stdio-summary.json", "details": "STDIO.md"},
+  "positive_deployment_receipt_required": true
+}

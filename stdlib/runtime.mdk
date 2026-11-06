@@ -1104,6 +1104,14 @@ extern stringToUpper : String -> String
 -- | A string with every ASCII letter in lowercase.
 extern stringToLower : String -> String
 
+extern processSubmitRaw : (program : String) ->
+  List String ->
+  String ->
+  List (String, String) ->
+  Int ->
+  Int ->
+  Int ->
+  <Exec program> Result (Int, Int, String) (LaunchTicket program)
 extern processStartRaw : (program : String) ->
   List String ->
   String ->
@@ -1123,3 +1131,16 @@ extern processPollExitRaw : Process p ->
 extern processCloseStdinRaw : Process p ->
   <Exec p> Result (Int, Int, String) Unit
 extern processDisposeRaw : Process p -> <Exec p> Result (Int, Int, String) Unit
+
+extern processTryReadRaw : Process p ->
+  Int ->
+  Int ->
+  <Exec p> Result (Int, Int, String) (Option ByteBlock)
+extern processTryWriteRaw : Process p ->
+  ByteBlock ->
+  Int ->
+  Int ->
+  <Exec p> Result (Int, Int, String) (Option Int)
+extern processStreamFdRaw : Process p ->
+  Int ->
+  <Exec p> Result (Int, Int, String) Int

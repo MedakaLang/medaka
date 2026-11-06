@@ -25,7 +25,7 @@ extern int mdk_process_test_pid(long long);
 extern long long mdk_process_test_begin(int, int);
 extern void mdk_process_test_faults(int, int, int);
 extern int mdk_process_test_calls(int);
-static int checks;
+static int checks, fast_failure;
 #define CHECK(x) do { __atomic_add_fetch(&checks,1,__ATOMIC_RELAXED); if (!(x)) { dprintf(2,"FAIL line %d: %s\n",__LINE__,#x); _exit(1); } } while (0)
 static long long field(long long v, int i) { return ((long long *)v)[i]; }
 static long long none(void) { return (MDK_TAG_NONE<<1)|1; }
@@ -217,7 +217,7 @@ static void *denial_thread(void *arg) {
     CHECK(mdk_process_test_roots()==1);
   } else {
     long long r=start("/not-a-medaka-program"); CHECK(field(r,0)==MDK_TAG_ERR);
-    if (field(field(r,1),4)==none()) { CHECK(d->signal); rejected(r,4,ENOENT); }
+    if (field(field(r,1),4)==none()) { fast_failure=1; CHECK(d->signal); rejected(r,4,ENOENT); }
     else {
       error_is(r,5,EPERM); d->ticket=ticket_in(r); CHECK(mdk_process_test_roots()==1);
       for (int i=0;i<16;++i) {
@@ -251,5 +251,5 @@ int mdk_program_main(int argc, char **argv) {
   alarm(30);
   if (argc>1) persistent_denial(argv[1]);
   else { wait_denial(); abort_denial(); lost_wait(); readiness_failure(); blocking_wait(); }
-  CHECK(checks>20); printf("launch ticket checks: %d passed\n",checks); return 0;
+  CHECK(checks >= (fast_failure ? 13 : 21)); printf("launch ticket checks: %d passed (%s)\n",checks,fast_failure ? "fast" : "retained"); return 0;
 }

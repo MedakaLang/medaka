@@ -1,0 +1,41 @@
+import async.{runAsync}
+import process.{
+  SpawnOptions(..), PipeChoice(..), ProcessError(..), LaunchProgress(..),
+  abortStart
+}
+import process_async.{
+  newCancelToken, after, startUntil, StartResult(..), LaunchStop(..)
+}
+import time.{millis}
+
+options : SpawnOptions
+options = SpawnOptions {
+  argv = [],
+  cwd = "/tmp",
+  env = [],
+  stdin = Null,
+  stdout = Null,
+  stderr = Null,
+}
+
+drain : LaunchTicket p -> Int -> <Exec p, Clock> Bool
+drain _ 0 = False
+drain ticket n = match abortStart ticket
+  Ok LaunchAborted => True
+  Ok LaunchPending =>
+    sleepMs 5
+    drain ticket (n - 1)
+  _ => False
+
+main =
+  let deadline = runAsync (after (millis 200))
+  let result =
+    runAsync (startUntil "/bin/true" options deadline (newCancelToken ()))
+  let passed = match result
+    Ok (StartTimedOut (LaunchCleanupPending ticket (Some (WaitFailed 13 _)))) =>
+      drain ticket 400
+    _ => False
+  if passed then
+    println "adapter cleanup error passed"
+  else
+    println "adapter cleanup error failed"

@@ -14,3 +14,11 @@ Run it after `make medaka`, with `--out` outside the checkout; the output direct
 contains generated fixtures, binaries and the command transcript. It implements
 no production process primitive. The [process contract](../../../docs/design/PROCESS-SUPERVISION.md)
 records its measured controls, remaining VM ABI work and containment limits.
+
+### Authority experiments
+
+The independent `ownership_probe.py` and `stdio_authority_probe.py` require an
+absolute `--root` and a fresh external `--out` directory. See the
+[combined authority report](../../../docs/findings/mcp-runtime-authority/REPORT.md)
+for replay requirements, measured blockers and the separate protected-host
+qualification. Exit 77 means unavailable or blocked, not successful containment.

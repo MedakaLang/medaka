@@ -1,0 +1,46 @@
+import async.{runAsync, spawn, sleep, liftIO}
+import process.{SpawnOptions(..), PipeChoice(..), ExitStatus(..), dispose}
+import process_async.{
+  after, newCancelToken, cancel, startUntil, waitUntil, StartResult(..),
+  LaunchStop(..), WaitResult(..)
+}
+import time.{millis}
+
+options : SpawnOptions
+options = SpawnOptions {
+  argv = [],
+  cwd = "/tmp",
+  env = [],
+  stdin = Null,
+  stdout = Null,
+  stderr = Null,
+}
+
+main =
+  let mode = getEnv "CONTENTION_MODE"
+  let token = newCancelToken ()
+  let deadline =
+    runAsync (after (millis (if mode == Some "expiry" then 100 else 3000)))
+  let task =
+    if mode == Some "cancel" then
+      deferThen (spawn
+        (deferThen (sleep (millis 50)) (_ => liftIO (_ => cancel token)))) (_ =>
+        startUntil "/bin/true" options deadline token)
+    else
+      startUntil "/bin/true" options deadline token
+  let result = runAsync task
+  let passed = match result
+    Ok (Started p) =>
+      let status = runAsync (waitUntil p deadline (newCancelToken ()))
+      let closed = dispose p
+      mode == Some "eventual"
+        && (match (status, closed)
+          (Ok (ChildExited (Exited 0)), Ok _) => True
+          _ => False)
+    Ok (StartTimedOut LaunchStopped) => mode == Some "expiry"
+    Ok (StartCancelled LaunchStopped) => mode == Some "cancel"
+    _ => False
+  if passed then
+    println "contention outcome passed"
+  else
+    println "contention outcome failed"
