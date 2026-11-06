@@ -1,0 +1,6 @@
+-- C8, L2 rung 3 over rung 4: the explicit `string.{startsWith}` beats the wildcard `list.*`
+-- binding of the same spelling, so the program is accepted.
+import list.*
+import string.{startsWith}
+
+main = println (startsWith "a" "ab")

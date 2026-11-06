@@ -1,0 +1,8 @@
+-- C7, L2 rung 3, L8: the explicit import binds `mth` to fmod's function; `import ... as Z`
+-- binds no bare name and reaches the method only as `Z.mth`, so `mth 1 "x"` is a located
+-- type mismatch.
+import lib.order1812_amod.{af}
+import lib.order1812_fmod.{mth}
+import lib.order1812_zmod as Z
+
+main = println (mth 1 "x" + af 0 + Z.zf 0)

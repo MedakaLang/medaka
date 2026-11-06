@@ -1,0 +1,6 @@
+-- C3, L4 (F-R3): lib/shadow2722_shadow.mdk imports `size` explicitly and declares its own
+-- `size`: a located error at its import member.
+import lib.shadow2722_iface.{Sizeable, size, Box(..)}
+import lib.shadow2722_shadow.{useIt}
+
+main = println (useIt (size (Box 3)))

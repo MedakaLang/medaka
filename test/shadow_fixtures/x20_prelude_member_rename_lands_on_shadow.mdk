@@ -1,18 +1,4 @@
--- X20 (SHADOW-SEMANTICS S1-PRELUDE (b)) -- x19's member-RENAME twin; since #3708 the same value.
---
--- Both recovery spellings reach the prelude's method past the module's own `eq`.
---
---   PINNED: `(False, True)` -- the first component is the module's own `eq`, the second is
---     the prelude's `Eq` method reached through the rename `eqM`.
---   x19's `(False, True)` is the same program with `import core as C` / `C.eq` in place of
---     the rename.
---
--- WHY the rename escapes: an import member `x as y` binds the local name `y` and nothing
--- else, so `eqM` is the import's method and a bare `eq` is whatever this module's scope
--- says it is, which here is the standalone.  The member alias keeps a distinct spelling
--- through inference and is restored to its origin name after it
--- (`compiler/types/typecheck.mdk`, `resolveAliasMethodSpellings`), the way a module alias is.
--- VALUES HAND-DERIVED FROM THE RULE ABOVE, NOT CAPTURED.
+-- L8: `import core.{eq as eqM}` reaches the prelude method past the own `eq`
 import core.{eq as eqM}
 
 eq : Int -> Int -> Bool

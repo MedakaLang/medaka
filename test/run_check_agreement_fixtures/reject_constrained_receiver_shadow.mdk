@@ -1,0 +1,16 @@
+-- C4, L3 (F-R4): an interface method and a top-level function of one name in one module is a
+-- located duplicate-declaration error; the `=>` constraint on the receiver changes nothing
+-- (L8).
+interface Sz a where
+  sz : a -> Int
+
+impl Sz Bool where
+  sz _ = 7
+
+sz : Int -> Int
+sz n = n + 1
+
+twice : Sz a => a -> Int
+twice x = sz x + sz x
+
+main = println (twice True)

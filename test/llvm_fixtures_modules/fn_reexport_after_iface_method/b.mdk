@@ -1,3 +1,0 @@
-export
-rendr : Int -> Int
-rendr n = n + 1

@@ -1,0 +1,10 @@
+-- C3, L4 (F-R3): the member alias `display as dsp` binds `dsp`, and the module also declares
+-- `dsp`: a located error at the import member.
+import lib.disp3677.{display as dsp}
+
+dsp : Int -> String
+dsp n = "local"
+
+main =
+  println (dsp 6)
+  println (display (6 : Int))

@@ -1,0 +1,5 @@
+-- C1, L2 rung 3 (#4250): the explicitly imported extern `add` is called, not the prelude
+-- method `add`; check accepts, run refuses the reached FFI extern and build fails to link
+-- `c_add`
+import moda.{add}
+main = println (add 20 22)

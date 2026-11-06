@@ -1,7 +1,6 @@
--- S-1: the call sits inside a CONSTRAINED caller, so the standalone's dict slot is an
--- RDict -- the enclosing fn's own dict param, forwarded.  This is the closure-capture
--- case for an RLocal route's dictionaries, whose givens (`core_ir.givenNames`) both
--- emitters' closure capture must include.  Prints 4.
+-- C4, L3 (F-R4): an interface method and a top-level function of one name in one module is a
+-- located duplicate-declaration error; the `=>` constraint on the receiver changes nothing
+-- (L8).
 interface Sz a where
   size : a -> String
 

@@ -1,11 +1,5 @@
--- X9 (#2157): a user interface whose method is spelled `fromInt` — the PRELUDE
--- `Num`'s own method name — with a live impl, and numeric literals both INSIDE
--- that impl's body and outside it.  Every literal here must be an ordinary `Num`
--- literal: `n + 1000` at Int inside the impl body, `1 + 2` at Int in main.
---
--- The user method is also CALLED (`fromInt 5` at an annotated `Tag`), so the row
--- pins both denotations at once: the annotated occurrence takes `Buildable`, and
--- the bare literals take `Num`.  1005 = Tag (5 + 1000) unwrapped; 3 = 1 + 2.
+-- L2 rung 2: the own method `fromInt` types the annotated binding (1005); the literal sum `1
+-- + 2` is 3
 interface Buildable c where
   fromInt : Int -> c
 
