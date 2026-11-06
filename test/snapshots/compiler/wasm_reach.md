@@ -1,5 +1,5 @@
 # META
-source_lines=263
+source_lines=257
 stages=DESUGAR,MARK
 # SOURCE
 import support.symbol_encoding.{encodePair}
@@ -214,12 +214,6 @@ refsE (CVariantUpdate _ base updates) = refsE base ++ flatMap refsField updates
 refsE (CArray es) = flatMap refsE es
 refsE (CRangeList lo hi _) = refsE lo ++ refsE hi
 refsE (CRangeArray lo hi _) = refsE lo ++ refsE hi
-refsE (CIndex a i) = refsE a ++ refsE i
-refsE (CSlice a lo hi _) = refsE a ++ refsE lo ++ refsE hi
-refsE (CStringIndex a i) = refsE a ++ refsE i
-refsE (CStringSlice a lo hi _) = refsE a ++ refsE lo ++ refsE hi
-refsE (CListIndex a i) = refsE a ++ refsE i
-refsE (CListSlice a lo hi _) = refsE a ++ refsE lo ++ refsE hi
 refsE (CBlock stmts) = flatMap refsStmt stmts
 -- a method occurrence names its METHOD KEY; its routes can additionally name a
 -- shadowing standalone (RLocal).
@@ -316,12 +310,6 @@ refsImplBody (CImplDefault _ _ _ _ _ _ body) = refsE body
 (DFunDef false "refsE" ((PCon "CArray" (PVar "es"))) (EApp (EApp (EVar "flatMap") (EVar "refsE")) (EVar "es")))
 (DFunDef false "refsE" ((PCon "CRangeList" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EVar "refsE") (EVar "lo")) (EApp (EVar "refsE") (EVar "hi"))))
 (DFunDef false "refsE" ((PCon "CRangeArray" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EVar "refsE") (EVar "lo")) (EApp (EVar "refsE") (EVar "hi"))))
-(DFunDef false "refsE" ((PCon "CIndex" (PVar "a") (PVar "i"))) (EBinOp "++" (EApp (EVar "refsE") (EVar "a")) (EApp (EVar "refsE") (EVar "i"))))
-(DFunDef false "refsE" ((PCon "CSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EVar "refsE") (EVar "a")) (EApp (EVar "refsE") (EVar "lo"))) (EApp (EVar "refsE") (EVar "hi"))))
-(DFunDef false "refsE" ((PCon "CStringIndex" (PVar "a") (PVar "i"))) (EBinOp "++" (EApp (EVar "refsE") (EVar "a")) (EApp (EVar "refsE") (EVar "i"))))
-(DFunDef false "refsE" ((PCon "CStringSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EVar "refsE") (EVar "a")) (EApp (EVar "refsE") (EVar "lo"))) (EApp (EVar "refsE") (EVar "hi"))))
-(DFunDef false "refsE" ((PCon "CListIndex" (PVar "a") (PVar "i"))) (EBinOp "++" (EApp (EVar "refsE") (EVar "a")) (EApp (EVar "refsE") (EVar "i"))))
-(DFunDef false "refsE" ((PCon "CListSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EVar "refsE") (EVar "a")) (EApp (EVar "refsE") (EVar "lo"))) (EApp (EVar "refsE") (EVar "hi"))))
 (DFunDef false "refsE" ((PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EVar "flatMap") (EVar "refsStmt")) (EVar "stmts")))
 (DFunDef false "refsE" ((PCon "CMethod" (PVar "name") (PCon "MethodEvidence" PWild PWild (PVar "route") (PVar "implRoutes") (PVar "methRoutes")))) (EBinOp "::" (EVar "name") (EApp (EApp (EVar "flatMap") (EVar "refsRoute")) (EBinOp "::" (EVar "route") (EBinOp "++" (EVar "implRoutes") (EVar "methRoutes"))))))
 (DFunDef false "refsE" ((PCon "CDict" (PVar "name") (PVar "routes"))) (EBinOp "::" (EVar "name") (EApp (EApp (EVar "flatMap") (EVar "refsRoute")) (EVar "routes"))))
@@ -403,12 +391,6 @@ refsImplBody (CImplDefault _ _ _ _ _ _ body) = refsE body
 (DFunDef false "refsE" ((PCon "CArray" (PVar "es"))) (EApp (EApp (EDictApp "flatMap") (EVar "refsE")) (EVar "es")))
 (DFunDef false "refsE" ((PCon "CRangeList" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EVar "refsE") (EVar "lo")) (EApp (EVar "refsE") (EVar "hi"))))
 (DFunDef false "refsE" ((PCon "CRangeArray" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EVar "refsE") (EVar "lo")) (EApp (EVar "refsE") (EVar "hi"))))
-(DFunDef false "refsE" ((PCon "CIndex" (PVar "a") (PVar "i"))) (EBinOp "++" (EApp (EVar "refsE") (EVar "a")) (EApp (EVar "refsE") (EVar "i"))))
-(DFunDef false "refsE" ((PCon "CSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EVar "refsE") (EVar "a")) (EApp (EVar "refsE") (EVar "lo"))) (EApp (EVar "refsE") (EVar "hi"))))
-(DFunDef false "refsE" ((PCon "CStringIndex" (PVar "a") (PVar "i"))) (EBinOp "++" (EApp (EVar "refsE") (EVar "a")) (EApp (EVar "refsE") (EVar "i"))))
-(DFunDef false "refsE" ((PCon "CStringSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EVar "refsE") (EVar "a")) (EApp (EVar "refsE") (EVar "lo"))) (EApp (EVar "refsE") (EVar "hi"))))
-(DFunDef false "refsE" ((PCon "CListIndex" (PVar "a") (PVar "i"))) (EBinOp "++" (EApp (EVar "refsE") (EVar "a")) (EApp (EVar "refsE") (EVar "i"))))
-(DFunDef false "refsE" ((PCon "CListSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EVar "refsE") (EVar "a")) (EApp (EVar "refsE") (EVar "lo"))) (EApp (EVar "refsE") (EVar "hi"))))
 (DFunDef false "refsE" ((PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EDictApp "flatMap") (EVar "refsStmt")) (EVar "stmts")))
 (DFunDef false "refsE" ((PCon "CMethod" (PVar "name") (PCon "MethodEvidence" PWild PWild (PVar "route") (PVar "implRoutes") (PVar "methRoutes")))) (EBinOp "::" (EVar "name") (EApp (EApp (EDictApp "flatMap") (EVar "refsRoute")) (EBinOp "::" (EVar "route") (EBinOp "++" (EVar "implRoutes") (EVar "methRoutes"))))))
 (DFunDef false "refsE" ((PCon "CDict" (PVar "name") (PVar "routes"))) (EBinOp "::" (EVar "name") (EApp (EApp (EDictApp "flatMap") (EVar "refsRoute")) (EVar "routes"))))
