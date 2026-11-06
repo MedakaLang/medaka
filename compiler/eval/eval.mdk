@@ -344,27 +344,6 @@ intSeqIncl lo hi
   | lo == hi = [lo]
   | otherwise = lo :: intSeqIncl (lo + 1) hi
 
--- Retained for the Core-IR interpreter's CIndex/CStringIndex/CListIndex arms
--- (core_ir_eval.ceval).  Those Core-IR nodes are now unreachable — EIndex is
--- desugared to an `index` method call before lowering (Phase #16b) — but kept in
--- place (tier ii) to shrink the diff, so their eval helper stays too.
-listNthAt : List (Value e) -> Int -> Int -> Value e
-listNthAt [] orig _ =
-  runtimePanic EIndexOob ("index " ++ intToString orig ++ " out of bounds")
-listNthAt (x :: xs) orig i
-  | i <= 0 = x
-  | otherwise = listNthAt xs orig (i - 1)
-
-listSliceV : List (Value e) -> Int -> Int -> List (Value e)
-listSliceV xs lo hi = listSliceGo xs 0 lo hi
-
-listSliceGo : List (Value e) -> Int -> Int -> Int -> List (Value e)
-listSliceGo [] _ _ _ = []
-listSliceGo (x :: xs) i lo hi
-  | i >= hi = []
-  | i >= lo = x :: listSliceGo xs (i + 1) lo hi
-  | otherwise = listSliceGo xs (i + 1) lo hi
-
 export
 startsWithAt : String -> Bool
 startsWithAt s = startsWith "@" s
@@ -1853,53 +1832,6 @@ implDictRoutes : Option Int -> List Route -> List Route -> List Route
 implDictRoutes (Some reqCount) methodRoutes implRoutes =
   takeN (subClampZero reqCount (listLen methodRoutes)) implRoutes
 implDictRoutes None _ implRoutes = implRoutes
-
--- Retained for the Core-IR interpreter's CIndex/CStringIndex/CListIndex arms
--- (see the note on listNthAt above): the EIndex eval arm is gone (desugared to
--- `index`), so this is only reachable via the now-unreachable Core-IR nodes.
-export
-evalIndex : Value e -> Value e -> Value e
-evalIndex container (VInt i) = evalIndexInt container i
-evalIndex _ _ = panic "index is not an Int"
-
-evalIndexInt : Value e -> Int -> Value e
-evalIndexInt (VArray a) i
-  | i < 0 || i >= arrayLength a =
-    runtimePanic EIndexOob ("index " ++ intToString i ++ " out of bounds")
-  | otherwise = arrayGetUnsafe i a
-evalIndexInt (VList vs) i = listNthAt vs i i
-evalIndexInt (VString s) i = stringIndexCp s i
-evalIndexInt _ _ = panic "index on non-array/list/string"
-
--- codepoint-indexed Char (Phase 77)
-stringIndexCp : String -> Int -> Value e
-stringIndexCp s i
-  | i < 0 || i >= stringLength s =
-    runtimePanic EIndexOob ("index " ++ intToString i ++ " out of bounds")
-  | otherwise = VChar (charToStr (arrayGetUnsafe i (stringToChars s)))
-
-export
-evalSlice : Value e -> Value e -> Value e -> Bool -> Value e
-evalSlice container (VInt lo) (VInt hi) incl = evalSliceInt container lo hi incl
-evalSlice _ _ _ _ = panic "slice index must be Int"
-
-evalSliceInt : Value e -> Int -> Int -> Bool -> Value e
-evalSliceInt (VArray a) lo hi incl =
-  sliceArray a lo (if incl then hi + 1 else hi)
-evalSliceInt (VList vs) lo hi incl =
-  VList (listSliceV vs lo (if incl then hi + 1 else hi))
-evalSliceInt (VString s) lo hi incl =
-  VString (stringSlice lo (if incl then hi + 1 else hi) s)
-evalSliceInt _ _ _ _ = panic "slice on non-array/list/string"
-
-sliceArray : Array (Value e) -> Int -> Int -> Value e
-sliceArray a lo hiX
-  | lo < 0 || hiX > arrayLength a || hiX - lo < 0 =
-    runtimePanic
-      ESliceOob
-      "slice [\{intToString lo}..\{intToString (hiX - 1)}] out of bounds"
-  | otherwise =
-    VArray (arrayMakeWith (hiX - lo) (i => arrayGetUnsafe (lo + i) a))
 
 export
 evalRange : Value e -> Value e -> Bool -> (List Int -> Value e) -> Value e
@@ -4053,7 +3985,7 @@ pPanicAt : Value e -> Value e -> <e> a
 pPanicAt _ v = pPanic v
 
 -- sliceError (lo, hiIncl): the coded E-SLICE-OOB abort the Slice impl raises;
--- prints `slice [lo..hiIncl] out of bounds`, byte-identical to sliceArray's abort.
+-- prints `slice [lo..hiIncl] out of bounds`, byte-identical to the array-slice abort.
 pSliceError : Value e -> Value e -> <e> Value e
 pSliceError (VInt lo) (VInt hi) =
   runtimePanic

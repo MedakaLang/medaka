@@ -231,53 +231,73 @@ declare void @mdk_enable_run_stdout_flush(i64)
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
-  %t0 = ashr i64 11, 1
-  %t1 = add i64 %t0, 1
-  %t2 = mul i64 %t1, 8
-  %t3 = call ptr @mdk_alloc(i64 %t2)
-  store i64 %t0, ptr %t3
-  %t5 = alloca i64
-  store i64 0, ptr %t5
-  br label %mw_cond4
-mw_cond4:
+  %t0 = call i64 @mdk.force.6d356635663735373336353732356635665f5f61()
+  %t1 = ashr i64 7, 1
+  %t2 = inttoptr i64 %t0 to ptr
+  %t3 = add i64 %t1, 1
+  %t4 = mul i64 %t3, 8
+  %t5 = getelementptr i8, ptr %t2, i64 %t4
   %t6 = load i64, ptr %t5
-  %t7 = icmp sge i64 %t6, %t0
-  br i1 %t7, label %mw_done4, label %mw_body4
-mw_body4:
-  %t8 = shl i64 %t6, 1
-  %t9 = or i64 %t8, 1
-  %t10 = inttoptr i64 ptrtoint (ptr @mdk.gen.ctorcell.70726f6772616d..1 to i64) to ptr
-  %t11 = getelementptr i8, ptr %t10, i64 8
-  %t12 = load i64, ptr %t11
-  %t13 = inttoptr i64 %t12 to ptr
-  %t14 = call i64 %t13(i64 ptrtoint (ptr @mdk.gen.ctorcell.70726f6772616d..1 to i64), i64 %t9)
-  %t15 = add i64 %t6, 1
-  %t16 = mul i64 %t15, 8
-  %t17 = getelementptr i8, ptr %t3, i64 %t16
-  store i64 %t14, ptr %t17
-  %t18 = add i64 %t6, 1
-  store i64 %t18, ptr %t5
-  br label %mw_cond4
-mw_done4:
-  %t19 = ptrtoint ptr %t3 to i64
-  store i64 %t19, ptr @mdk.global.6d356635663735373336353732356635665f5f61
-  %t20 = load i64, ptr @mdk.global.6d356635663735373336353732356635665f5f61
-  %t21 = ashr i64 7, 1
-  %t22 = inttoptr i64 %t20 to ptr
-  %t23 = add i64 %t21, 1
-  %t24 = mul i64 %t23, 8
-  %t25 = getelementptr i8, ptr %t22, i64 %t24
-  %t26 = load i64, ptr %t25
-  %t27 = ashr i64 %t26, 1
-  call void @mdk_print_int(i64 %t27)
+  %t7 = ashr i64 %t6, 1
+  call void @mdk_print_int(i64 %t7)
   ret i32 0
+}
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.force.6d356635663735373336353732356635665f5f61() {
+entry:
+  %t0 = load i8, ptr @mdk.state.6d356635663735373336353732356635665f5f61
+  switch i8 %t0, label %lz_unforced [ i8 2, label %lz_forced i8 1, label %lz_forcing ]
+lz_forced:
+  %t1 = load i64, ptr @mdk.global.6d356635663735373336353732356635665f5f61
+  ret i64 %t1
+lz_forcing:
+  call void @mdk_cyclic_value(ptr @mdk.gen.globalname.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f61.0)
+  unreachable
+lz_unforced:
+  store i8 1, ptr @mdk.state.6d356635663735373336353732356635665f5f61
+  %t2 = ashr i64 11, 1
+  %t3 = add i64 %t2, 1
+  %t4 = mul i64 %t3, 8
+  %t5 = call ptr @mdk_alloc(i64 %t4)
+  store i64 %t2, ptr %t5
+  %t7 = alloca i64
+  store i64 0, ptr %t7
+  br label %mw_cond6
+mw_cond6:
+  %t8 = load i64, ptr %t7
+  %t9 = icmp sge i64 %t8, %t2
+  br i1 %t9, label %mw_done6, label %mw_body6
+mw_body6:
+  %t10 = shl i64 %t8, 1
+  %t11 = or i64 %t10, 1
+  %t12 = inttoptr i64 ptrtoint (ptr @mdk.gen.ctorcell.6d6f64756c652e35663566373537333635373235663566..2 to i64) to ptr
+  %t13 = getelementptr i8, ptr %t12, i64 8
+  %t14 = load i64, ptr %t13
+  %t15 = inttoptr i64 %t14 to ptr
+  %t16 = call i64 %t15(i64 ptrtoint (ptr @mdk.gen.ctorcell.6d6f64756c652e35663566373537333635373235663566..2 to i64), i64 %t11)
+  %t17 = add i64 %t8, 1
+  %t18 = mul i64 %t17, 8
+  %t19 = getelementptr i8, ptr %t5, i64 %t18
+  store i64 %t16, ptr %t19
+  %t20 = add i64 %t8, 1
+  store i64 %t20, ptr %t7
+  br label %mw_cond6
+mw_done6:
+  %t21 = ptrtoint ptr %t5 to i64
+  store i64 %t21, ptr @mdk.global.6d356635663735373336353732356635665f5f61
+  store i8 2, ptr @mdk.state.6d356635663735373336353732356635665f5f61
+  ret i64 %t21
 }
 ; mdk-module program
 @mdk_disc_none = private unnamed_addr constant i64 -1
 ; mdk-module module.5f5f757365725f5f
 @mdk.global.6d356635663735373336353732356635665f5f61 = global i64 0
-; mdk-module program
-define internal i64 @mdk.gen.lambda.70726f6772616d..0(i64 %clos, i64 %arg0) {
+; mdk-module module.5f5f757365725f5f
+@mdk.state.6d356635663735373336353732356635665f5f61 = global i8 0
+; mdk-module module.5f5f757365725f5f
+@mdk.gen.globalname.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f61.0 = private unnamed_addr constant [21 x i8] c"\6D\35\66\35\66\37\35\37\33\36\35\37\32\35\66\35\66\5F\5F\61\00"
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.gen.lambda.6d6f64756c652e35663566373537333635373235663566..1(i64 %clos, i64 %arg0) {
 entry:
   %t0 = sub i64 %arg0, 1
   %t1 = ashr i64 %arg0, 1
@@ -295,5 +315,5 @@ intok5:
   ret i64 %t8
 }
 
-; mdk-module program
-@mdk.gen.ctorcell.70726f6772616d..1 = internal constant [2 x i64] [i64 1, i64 ptrtoint (ptr @mdk.gen.lambda.70726f6772616d..0 to i64)]
+; mdk-module module.5f5f757365725f5f
+@mdk.gen.ctorcell.6d6f64756c652e35663566373537333635373235663566..2 = internal constant [2 x i64] [i64 1, i64 ptrtoint (ptr @mdk.gen.lambda.6d6f64756c652e35663566373537333635373235663566..1 to i64)]

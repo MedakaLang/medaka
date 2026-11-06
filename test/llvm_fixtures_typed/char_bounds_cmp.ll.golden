@@ -231,72 +231,104 @@ declare void @mdk_enable_run_stdout_flush(i64)
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
-  %t0 = call i64 @mdk_char_from_code(i64 1)
-  %t1 = call i64 @mdk.user.6d356635663735373336353732356635665f5f756e77726170(i64 %t0)
-  store i64 %t1, ptr @mdk.global.6d356635663735373336353732356635665f5f6c6f
+  %t0 = call i64 @mdk.force.6d356635663735373336353732356635665f5f6c6f()
+  %t1 = icmp sle i64 1, %t0
+  %t2 = zext i1 %t1 to i64
+  %t3 = shl i64 %t2, 1
+  %t4 = or i64 %t3, 1
+  %t5 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 3, i64 %t4)
+  %t6 = call i64 @mdk.force.6d356635663735373336353732356635665f5f6c6f()
+  %t7 = icmp eq i64 1, %t6
+  %t8 = zext i1 %t7 to i64
+  %t9 = shl i64 %t8, 1
+  %t10 = or i64 %t9, 1
+  %t11 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 5, i64 %t10)
+  %t12 = sub i64 %t11, 1
+  %t13 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t5, i64 %t12)
+  %t14 = extractvalue { i64, i1 } %t13, 0
+  %t15 = extractvalue { i64, i1 } %t13, 1
+  br i1 %t15, label %intovf16, label %intok16
+intovf16:
+  %t17 = ashr i64 %t5, 1
+  %t18 = ashr i64 %t11, 1
+  call void @mdk_int_overflow(i64 0, i64 %t17, i64 %t18)
+  unreachable
+intok16:
+  %t19 = call i64 @mdk.force.6d356635663735373336353732356635665f5f6869()
+  %t20 = icmp eq i64 2228223, %t19
+  %t21 = zext i1 %t20 to i64
+  %t22 = shl i64 %t21, 1
+  %t23 = or i64 %t22, 1
+  %t24 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 9, i64 %t23)
+  %t25 = sub i64 %t24, 1
+  %t26 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t14, i64 %t25)
+  %t27 = extractvalue { i64, i1 } %t26, 0
+  %t28 = extractvalue { i64, i1 } %t26, 1
+  br i1 %t28, label %intovf29, label %intok29
+intovf29:
+  %t30 = ashr i64 %t14, 1
+  %t31 = ashr i64 %t24, 1
+  call void @mdk_int_overflow(i64 0, i64 %t30, i64 %t31)
+  unreachable
+intok29:
+  %t32 = call i64 @mdk.force.6d356635663735373336353732356635665f5f6869()
+  %t33 = icmp sle i64 %t32, 2228223
+  %t34 = zext i1 %t33 to i64
+  %t35 = shl i64 %t34, 1
+  %t36 = or i64 %t35, 1
+  %t37 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 17, i64 %t36)
+  %t38 = sub i64 %t37, 1
+  %t39 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t27, i64 %t38)
+  %t40 = extractvalue { i64, i1 } %t39, 0
+  %t41 = extractvalue { i64, i1 } %t39, 1
+  br i1 %t41, label %intovf42, label %intok42
+intovf42:
+  %t43 = ashr i64 %t27, 1
+  %t44 = ashr i64 %t37, 1
+  call void @mdk_int_overflow(i64 0, i64 %t43, i64 %t44)
+  unreachable
+intok42:
+  %t45 = ashr i64 %t40, 1
+  call void @mdk_print_int(i64 %t45)
+  ret i32 0
+}
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.force.6d356635663735373336353732356635665f5f6c6f() {
+entry:
+  %t0 = load i8, ptr @mdk.state.6d356635663735373336353732356635665f5f6c6f
+  switch i8 %t0, label %lz_unforced [ i8 2, label %lz_forced i8 1, label %lz_forcing ]
+lz_forced:
+  %t1 = load i64, ptr @mdk.global.6d356635663735373336353732356635665f5f6c6f
+  ret i64 %t1
+lz_forcing:
+  call void @mdk_cyclic_value(ptr @mdk.gen.globalname.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f6c6f.0)
+  unreachable
+lz_unforced:
+  store i8 1, ptr @mdk.state.6d356635663735373336353732356635665f5f6c6f
+  %t2 = call i64 @mdk_char_from_code(i64 1)
+  %t3 = call i64 @mdk.user.6d356635663735373336353732356635665f5f756e77726170(i64 %t2)
+  store i64 %t3, ptr @mdk.global.6d356635663735373336353732356635665f5f6c6f
+  store i8 2, ptr @mdk.state.6d356635663735373336353732356635665f5f6c6f
+  ret i64 %t3
+}
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.force.6d356635663735373336353732356635665f5f6869() {
+entry:
+  %t0 = load i8, ptr @mdk.state.6d356635663735373336353732356635665f5f6869
+  switch i8 %t0, label %lz_unforced [ i8 2, label %lz_forced i8 1, label %lz_forcing ]
+lz_forced:
+  %t1 = load i64, ptr @mdk.global.6d356635663735373336353732356635665f5f6869
+  ret i64 %t1
+lz_forcing:
+  call void @mdk_cyclic_value(ptr @mdk.gen.globalname.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f6869.1)
+  unreachable
+lz_unforced:
+  store i8 1, ptr @mdk.state.6d356635663735373336353732356635665f5f6869
   %t2 = call i64 @mdk_char_from_code(i64 2228223)
   %t3 = call i64 @mdk.user.6d356635663735373336353732356635665f5f756e77726170(i64 %t2)
   store i64 %t3, ptr @mdk.global.6d356635663735373336353732356635665f5f6869
-  %t4 = load i64, ptr @mdk.global.6d356635663735373336353732356635665f5f6c6f
-  %t5 = icmp sle i64 1, %t4
-  %t6 = zext i1 %t5 to i64
-  %t7 = shl i64 %t6, 1
-  %t8 = or i64 %t7, 1
-  %t9 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 3, i64 %t8)
-  %t10 = load i64, ptr @mdk.global.6d356635663735373336353732356635665f5f6c6f
-  %t11 = icmp eq i64 1, %t10
-  %t12 = zext i1 %t11 to i64
-  %t13 = shl i64 %t12, 1
-  %t14 = or i64 %t13, 1
-  %t15 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 5, i64 %t14)
-  %t16 = sub i64 %t15, 1
-  %t17 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t9, i64 %t16)
-  %t18 = extractvalue { i64, i1 } %t17, 0
-  %t19 = extractvalue { i64, i1 } %t17, 1
-  br i1 %t19, label %intovf20, label %intok20
-intovf20:
-  %t21 = ashr i64 %t9, 1
-  %t22 = ashr i64 %t15, 1
-  call void @mdk_int_overflow(i64 0, i64 %t21, i64 %t22)
-  unreachable
-intok20:
-  %t23 = load i64, ptr @mdk.global.6d356635663735373336353732356635665f5f6869
-  %t24 = icmp eq i64 2228223, %t23
-  %t25 = zext i1 %t24 to i64
-  %t26 = shl i64 %t25, 1
-  %t27 = or i64 %t26, 1
-  %t28 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 9, i64 %t27)
-  %t29 = sub i64 %t28, 1
-  %t30 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t18, i64 %t29)
-  %t31 = extractvalue { i64, i1 } %t30, 0
-  %t32 = extractvalue { i64, i1 } %t30, 1
-  br i1 %t32, label %intovf33, label %intok33
-intovf33:
-  %t34 = ashr i64 %t18, 1
-  %t35 = ashr i64 %t28, 1
-  call void @mdk_int_overflow(i64 0, i64 %t34, i64 %t35)
-  unreachable
-intok33:
-  %t36 = load i64, ptr @mdk.global.6d356635663735373336353732356635665f5f6869
-  %t37 = icmp sle i64 %t36, 2228223
-  %t38 = zext i1 %t37 to i64
-  %t39 = shl i64 %t38, 1
-  %t40 = or i64 %t39, 1
-  %t41 = call i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 17, i64 %t40)
-  %t42 = sub i64 %t41, 1
-  %t43 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t31, i64 %t42)
-  %t44 = extractvalue { i64, i1 } %t43, 0
-  %t45 = extractvalue { i64, i1 } %t43, 1
-  br i1 %t45, label %intovf46, label %intok46
-intovf46:
-  %t47 = ashr i64 %t31, 1
-  %t48 = ashr i64 %t41, 1
-  call void @mdk_int_overflow(i64 0, i64 %t47, i64 %t48)
-  unreachable
-intok46:
-  %t49 = ashr i64 %t44, 1
-  call void @mdk_print_int(i64 %t49)
-  ret i32 0
+  store i8 2, ptr @mdk.state.6d356635663735373336353732356635665f5f6869
+  ret i64 %t3
 }
 ; mdk-module module.5f5f757365725f5f
 define internal i64 @mdk.user.6d356635663735373336353732356635665f5f626974(i64 %arg0, i64 %arg1) {
@@ -360,4 +392,12 @@ decend1:
 ; mdk-module module.5f5f757365725f5f
 @mdk.global.6d356635663735373336353732356635665f5f6c6f = global i64 0
 ; mdk-module module.5f5f757365725f5f
+@mdk.state.6d356635663735373336353732356635665f5f6c6f = global i8 0
+; mdk-module module.5f5f757365725f5f
 @mdk.global.6d356635663735373336353732356635665f5f6869 = global i64 0
+; mdk-module module.5f5f757365725f5f
+@mdk.state.6d356635663735373336353732356635665f5f6869 = global i8 0
+; mdk-module module.5f5f757365725f5f
+@mdk.gen.globalname.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f6c6f.0 = private unnamed_addr constant [22 x i8] c"\6D\35\66\35\66\37\35\37\33\36\35\37\32\35\66\35\66\5F\5F\6C\6F\00"
+; mdk-module module.5f5f757365725f5f
+@mdk.gen.globalname.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f6869.1 = private unnamed_addr constant [22 x i8] c"\6D\35\66\35\66\37\35\37\33\36\35\37\32\35\66\35\66\5F\5F\68\69\00"

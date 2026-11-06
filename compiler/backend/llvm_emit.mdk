@@ -15,6 +15,7 @@ import types.symbol_origins as SO
 import backend.llvm_symbol_names as LN
 import support.symbol_encoding.{encodeComponent}
 import support.symbol_encoding.{encodePair}
+import ir.core_walk.{patBinders}
 import backend.trmc_analysis.{TrmcVerdicts, isTrmcFn, isTrmcImpl}
 -- Core IR -> textual LLVM IR — Stage 2.4 NATIVE BACKEND (slices 1–8+).
 --
@@ -113,10 +114,10 @@ import backend.trmc_analysis.{TrmcVerdicts, isTrmcFn, isTrmcImpl}
 --   • slice 8 — ARRAYS + RANGES.  CArray allocates a length-prefixed boxed cell
 --     (layout: [ i64 raw_len | elem0 | elem1 … ], reusing the slice-3 cell shape
 --     but with the header word = raw element count rather than a constructor hash).
---     CIndex loads the length, bounds-checks (calls @mdk_oob() on failure), then
---     GEPs to field (idx+1) dynamically.  CRangeArray and CSlice both emit an
+--     Array index loads the length, bounds-checks (calls @mdk_oob() on failure), then
+--     GEPs to field (idx+1) dynamically.  CRangeArray and the array slice both emit an
 --     alloca-counter loop (the spike's first non-recursion loop): CRangeArray fills
---     i ↦ lo+i (tagged Int word); CSlice copies elements from the source array —
+--     i ↦ lo+i (tagged Int word); the array slice copies elements from the source array —
 --     after its own bounds check (@mdk_slice_oob; #550, see emitArraySlice).
 --   • slice 9 — LISTS (CList + CRangeList).  CList [e0…en] right-folds inline into
 --     Cons/Nil boxed cells (the same cells the slice-5b HCons/HNil match heads test,
@@ -322,8 +323,6 @@ import backend.trmc_analysis.{
   freeVars,
   bindName,
   bindNames,
-  patVars,
-  patVarNames,
   isCtorTail,
   isSelfSatApp,
   consTailArgs,
@@ -340,7 +339,6 @@ import backend.trmc_analysis.{
   lastStmtExpr,
 }
 import types.private_mangle.{hashName}
-import types.route_key.{numIntWord}
 import backend.impl_groups.{ImplClauseGroup(..)}
 import backend.emit_plan.{
   EmitPlan(..),
@@ -905,7 +903,7 @@ data Emit = Emit {
   curImplTag : Ref String,
   curSelfFnParams : Ref (List String),
   knownFnMap : Ref (Option (OrdMap Unit)),
-  lazyGlobalMap : Ref (Option (OrdMap Unit)),
+  lazyGlobalMap : Ref (Option (OrdMap (Option CExpr))),
   constructorFacts : ConstructorFacts,
   sigMap : Ref (Option (OrdMap FnSig)),
   implsByMethod : Ref (Option (OrdMap (List CImplEntry))),
@@ -1261,18 +1259,24 @@ installKnownFnMap : Emit -> List String -> Unit
 installKnownFnMap e fns = e.knownFnMap := Some (omFromNames fns omEmpty)
 
 -- ── #561 PR-A: lazy value-global set (installed once per program) ────────────
--- The value globals emit_support.lazyGlobalNames classifies as LAZY (reaching an
--- eager dispatch or a value cycle — no static init order): their reads lower to
+-- The value globals emit_support.lazyGlobalNames classifies as LAZY (an initializer
+-- not safe to speculate, an eager dispatch, or a value cycle): their reads lower to
 -- `call @mdk_force_<x>()` instead of a plain `load @mdk_g_<x>`, and each gets a
 -- `@mdk_force_<x>` define + an `@mdk_gs_<x>` state flag (0 UNFORCED / 1 FORCING /
 -- 2 FORCED).  Everything else stays on the byte-identical eager prologue.  Installed
 -- (even empty) at EVERY emitProgram entry so a prior program's set can never leak
 -- across a same-process re-emit — the same discipline as installKnownFnMap.
-installLazyGlobalMap : Emit -> List String -> Unit
--- Intentional cross-file duplicate of installLazyGlobalMapW in wasm_emit.mdk (#561 PR-B); not consolidating (tiny install helper over a backend-local Ref / divergent-by-design backend pair).
--- lint-disable-next-line rule-duplicate-body
-installLazyGlobalMap e names =
-  e.lazyGlobalMap := Some (omFromNames names omEmpty)
+-- Each name maps to its initializer when this program half defines it, so that a
+-- read can state the forced word's type (`lazyGlobalTy`).
+installLazyGlobalMap : Emit -> List String -> List CBind -> Unit
+installLazyGlobalMap e names binds =
+  let bodies = omFromPairs (filterMap valueBindBody binds) omEmpty
+  e.lazyGlobalMap :=
+    Some (omFromPairs (map (n => (n, omLookup n bodies)) names) omEmpty)
+
+valueBindBody : CBind -> Option (String, CExpr)
+valueBindBody (CBind name [CClause [] body] _ _) = Some (name, body)
+valueBindBody _ = None
 
 export
 isLazyGlobal : Emit -> String -> Bool
@@ -1280,6 +1284,17 @@ isLazyGlobal : Emit -> String -> Bool
 -- lint-disable-next-line rule-duplicate-body
 isLazyGlobal e x = match !e.lazyGlobalMap
   Some m => omHasKey x m
+  None => panic "llvm: lazyGlobalMap read before install (internal error)"
+
+-- The static type of a lazy global's forced word.  The eager prologue records the
+-- type its rhs emitted to (`markGlobalInit`); a lazy rhs is emitted later, in its
+-- force define, so a read takes the type `typeOf` reads off the same rhs.  A global
+-- this half only declares has no rhs here and reads its typecheck stamp.
+lazyGlobalTy : Emit -> String -> LTy
+lazyGlobalTy e x = match !e.lazyGlobalMap
+  Some m => match omLookup x m
+    Some (Some body) => typeOf e omEmpty body
+    _ => globalStampTy e x
   None => panic "llvm: lazyGlobalMap read before install (internal error)"
 
 -- the signature index, read by `sigLookup`; `reverseL` makes the FIRST entry win
@@ -1821,12 +1836,6 @@ emitExpr e env (CMethod name (MethodEvidence iface arity route implRoutes methRo
 emitExpr e env (CDict name routes) = emitDictValue e env name routes
 emitExpr e env (CArray es) = emitArrayCreate e env es
 emitExpr e env (CRangeArray lo hi incl) = emitRangeArray e env lo hi incl
-emitExpr e env (CIndex a i) = emitArrayIndex e env a i
-emitExpr e env (CSlice a lo hi incl) = emitArraySlice e env a lo hi incl
-emitExpr e env (CStringIndex a i) = emitStringIndex e env a i
-emitExpr e env (CStringSlice a lo hi incl) = emitStringSlice e env a lo hi incl
-emitExpr e env (CListIndex a i) = emitListIndex e env a i
-emitExpr e env (CListSlice a lo hi incl) = emitListSlice e env a lo hi incl
 emitExpr e env (CList es) = emitList e env es
 emitExpr e env (CRangeList lo hi incl) = emitRangeList e env lo hi incl
 emitExpr e _ other = gapE e ("unsupported Core IR node " ++ ctag other)
@@ -1901,27 +1910,22 @@ lookupVarG e env x = match omLookup x env
   Some (reg, LTU32U) => (tagU32 e reg, LTInt)
   Some (reg, LTI32U) => (tagI32 e reg, LTInt)
   Some vt => vt
-  -- #561 PR-A: a LAZY value global (dispatch-reaching or cyclic) is forced on first
-  -- use — its read is `call @mdk_force_<x>()`, which memoises into @mdk_g_<x> and
-  -- black-holes a re-entrant force into E-CYCLIC-VALUE.  A LOCAL of the same name
-  -- still shadows (the env is checked first, above).
+  -- #561 PR-A: a LAZY value global (`emit_support.lazyGlobalNames`: it reaches an
+  -- initializer not safe to speculate, a cycle or an eager dispatch) is forced on
+  -- first use: `call @mdk_force_<x>()` memoises into @mdk_g_<x> and black-holes a
+  -- re-entrant force into E-CYCLIC-VALUE.  A LOCAL of the same name still shadows.
   --
-  -- ⚠️ The returned LTy `LTInt` is a PLACEHOLDER, not a type claim: the forced word is a
-  -- uniform i64 (Int immediate / Bool immediate / boxed-Float-ptr-as-i64), and this call
-  -- site does not carry the global's real static type.  That is SOUND because no
-  -- type-sensitive consumer trusts THIS LTy — each recovers the real type from its OWN
-  -- typecheck-stamped tag: a Float arithmetic/print op from the CBinPrim/scalar tag
-  -- (scalarTagIsFloat), a bare value-main's print from main's inferred `mty`, a Bool
-  -- `if`/print from the scrutinee/return type.  Verified: LAZY Bool/Float/String globals
-  -- all print & compute == eval (fixtures eager_global_lazy_{bool,float,string}).  If a
-  -- future consumer WERE to key off this returned LTy, those fixtures would fail the gate.
+  -- The read carries the global's static type (`lazyGlobalTy`), as an eager read
+  -- carries its registry entry's: an unstamped program (`llvm_emit_main`) has no
+  -- other source for it, and a value `main` that reads a lazy global prints and
+  -- detects Unit from this LTy (eager_global_guard, lazy_global_string_read).
   None =>
     if isLazyGlobal e x then
       let r = freshReg e
       let forcer = LN.llvmName (LN.LGlobalForcer x)
       let call = wordCall e forcer []
       emit e "  \{r} = \{call}"
-      (r, LTInt)
+      (r, lazyGlobalTy e x)
     else match lookupAssoc x (globalsRegRef e).value
       Some (True, ty) =>
         let r = freshReg e
@@ -2467,7 +2471,7 @@ emitAbortExtern e env name args = match emitArgs e env args
 -- array intrinsics (native extern catalog slice 6).
 -- pure-inline: no C helper; all three reuse loadTag/loadFieldDyn/storeFieldDyn.
 -- arrayLength: header word = raw element count; tag it as a Medaka Int.
--- arrayGetUnsafe: CIndex path minus bounds-check.
+-- arrayGetUnsafe: array-index path minus bounds-check.
 -- arraySetUnsafe: store to element slot; returns Unit.
 emitArrIntrinsic : Emit ->
   OrdMap (String, LTy) ->
@@ -2494,7 +2498,7 @@ emitArrIntrinsic e _ name _ = gapE e ("unsupported array intrinsic " ++ name)
 -- C helpers in runtime/medaka_rt.c; array cell = [i64 count | elem@8 | ...].
 -- arrayMake/arrayCopy/arrayFromList return Array (LTCon); arrayBlit/arrayFill return Unit.
 -- Do NOT end a fixture with an array-returning call: emitPrint LTCon panics.
--- Project to scalar via .[i] (CIndex) in every fixture.
+-- Project to scalar via .[i] (array index) in every fixture.
 emitArrLeafExtern : Emit ->
   OrdMap (String, LTy) ->
   String ->
@@ -4160,7 +4164,6 @@ coreChildren (CUnOp _ x) = Some [x]
 coreChildren (CIf c t f) = Some [c, t, f]
 coreChildren (CLet _ _ e1 e2) = Some [e1, e2]
 coreChildren (CBlock stmts) = Some (stmtExprs stmts)
-coreChildren (CIndex a i) = Some [a, i]
 coreChildren (CTuple es) = Some es
 coreChildren (CMethod _ _) = Some []
 coreChildren (CDict _ _) = Some []
@@ -4194,14 +4197,13 @@ u64Escapes e x raw (CLet False (PVar y a bid) e1 e2) = match e1
       + (if y == x then 0 else u64Escapes e x raw e2)
 u64Escapes e x raw (CLet False pat e1 e2) =
   u64EscapesBound e x pat e1
-    + (if contains x (patVars pat) then 0 else u64Escapes e x raw e2)
+    + (if contains x (patBinders pat) then 0 else u64Escapes e x raw e2)
 u64Escapes e x raw (CBlock stmts) = u64EscapesBlock e x raw stmts
 -- a container literal or an access binds nothing, so its parts are read as
 -- words (`U64.toIntTruncating x` inside one reads `x` as a payload).
 u64Escapes e x _ (CArray es) = u64EscapesWords e x es
 u64Escapes e x _ (CTuple es) = u64EscapesWords e x es
 u64Escapes e x _ (CList es) = u64EscapesWords e x es
-u64Escapes e x _ (CIndex a i) = u64EscapesWords e x [a, i]
 u64Escapes e x _ (CUnOp _ a) = u64Escapes e x False a
 u64Escapes e x _raw ex = match flattenApp ex []
   (CVar f _, args) =>
@@ -4222,7 +4224,7 @@ u64EscapesBlock e x raw ((CSLet _ (PVar y a bid) ex) :: rest) = match ex
       + (if y == x then 0 else u64EscapesBlock e x raw rest)
 u64EscapesBlock e x raw ((CSLet _ pat ex) :: rest) =
   u64EscapesBound e x pat ex
-    + (if contains x (patVars pat) then 0 else u64EscapesBlock e x raw rest)
+    + (if contains x (patBinders pat) then 0 else u64EscapesBlock e x raw rest)
 u64EscapesBlock e x raw ((CSAssign y ex) :: rest) =
   u64Escapes e x False ex + (if y == x then 0 else u64EscapesBlock e x raw rest)
 u64EscapesBlock _ _ _ [] = 0
@@ -4424,12 +4426,9 @@ u64AliasBody e ps body _ = match u64KernelApplied e ps body
   Some kern => if isU64ShiftKernel kern then None else Some kern
   None => None
 
--- The value of an Int literal as the emitter receives it: bare, or still the
--- `fromInt` application the typechecker routed to `Num Int`.
+-- The value of a bare Int literal as the emitter receives it.
 intLitOf : CExpr -> Option Int
 intLitOf (CLit (LInt n)) = Some n
-intLitOf (CApp (CMethod "fromInt" (MethodEvidence _ _ (RKey word _ _) _ _)) [CLit (LInt n)] _)
-  | word == numIntWord = Some n
 intLitOf _ = None
 
 -- a guard's `| otherwise = e` arm, which lowers to `if otherwise then e else …`.
@@ -4677,11 +4676,6 @@ isAnyExtern e name = match llvmFamily (runtimeName e name)
 
 -- Is `name` an extern of exactly this family?  Used where a caller needs one
 -- family's membership rather than the dispatch.
-inIoFamily : String -> Bool
-inIoFamily name = match llvmFamily name
-  Some LlvmIo => True
-  _ => False
-
 inU64Family : String -> Bool
 inU64Family name = match llvmFamily name
   Some LlvmU64 => True
@@ -5558,25 +5552,6 @@ floatFromIntArg e env ex = match flattenApp ex []
   (h, a :: []) =>
     if headNameIs h "intToFloat" || headNameIs h "fromInt" then Some a else None
   _ => None
-
--- #2729 item 3: `Num Int`'s own `fromInt` IS the identity — `stdlib/core.mdk` defines
--- it `fromInt x = x`, on a word that is already a tagged Int — so a SATURATED
--- occurrence routed to that impl emits its argument and nothing else.  The witness is
--- the route's own word, `Num Int`'s (`numIntWord`, the instance emitMethod would
--- call as `@mdk_impl_Int_fromInt`), never the argument's shape: `fromInt` at any other
--- head (`Float`'s intToFloat, a user `impl Num`) is a real conversion and keeps its
--- call.  Empty impl/method dict routes are required rather than assumed — `Num` has no
--- element `requires`, so a non-empty route vector here is some other shape and is left
--- alone.
-intFromIntIdentityArg : String ->
-  Route ->
-  List Route ->
-  List Route ->
-  List CExpr ->
-  Option CExpr
-intFromIntIdentityArg "fromInt" (RKey word [] _) [] [] (a :: [])
-  | word == numIntWord = Some a
-intFromIntIdentityArg _ _ _ _ _ = None
 
 headNameIs : CExpr -> String -> Bool
 headNameIs (CVar n _) name = n == name
@@ -6541,7 +6516,7 @@ refsLater name clauses laterNames =
 clausesFreeVars : String -> List CClause -> List String
 clausesFreeVars _ [] = []
 clausesFreeVars self ((CClause pats body) :: rest) =
-  freeVars (self :: patVarNames pats) body ++ clausesFreeVars self rest
+  freeVars (self :: flatMap patBinders pats) body ++ clausesFreeVars self rest
 
 anyInList : List String -> List String -> Bool
 anyInList [] _ = False
@@ -6606,9 +6581,9 @@ satOnlyUses name arity (app@(CApp _ _ _)) =
         satOnlyList name arity args
     _ => satOnlyUses name arity hd && satOnlyList name arity args
 satOnlyUses name arity (CLam ps b) =
-  contains name (patVarNames ps) || satOnlyUses name arity b
+  contains name (flatMap patBinders ps) || satOnlyUses name arity b
 satOnlyUses name arity (CLet recF pat e1 e2) =
-  let shadow = contains name (patVars pat)
+  let shadow = contains name (patBinders pat)
   let ok1 =
     if recF then
       shadow || satOnlyUses name arity e1
@@ -6642,24 +6617,6 @@ satOnlyUses name arity (CRecordUpdate _ base updates) =
   satOnlyUses name arity base && satOnlyFields name arity updates
 satOnlyUses name arity (CVariantUpdate _ base updates) =
   satOnlyUses name arity base && satOnlyFields name arity updates
-satOnlyUses name arity (CIndex a i) =
-  satOnlyUses name arity a && satOnlyUses name arity i
-satOnlyUses name arity (CStringIndex a i) =
-  satOnlyUses name arity a && satOnlyUses name arity i
-satOnlyUses name arity (CListIndex a i) =
-  satOnlyUses name arity a && satOnlyUses name arity i
-satOnlyUses name arity (CSlice a lo hi _) =
-  satOnlyUses name arity a
-    && satOnlyUses name arity lo
-    && satOnlyUses name arity hi
-satOnlyUses name arity (CStringSlice a lo hi _) =
-  satOnlyUses name arity a
-    && satOnlyUses name arity lo
-    && satOnlyUses name arity hi
-satOnlyUses name arity (CListSlice a lo hi _) =
-  satOnlyUses name arity a
-    && satOnlyUses name arity lo
-    && satOnlyUses name arity hi
 satOnlyUses name arity (CBlock stmts) = satOnlyStmts name arity stmts
 -- a dict/method occurrence names its captured dict PARAMS, never a local
 -- function binding — but read them anyway rather than assume it.
@@ -6682,7 +6639,7 @@ satOnlyFields name arity ((CField _ _ ex) :: rest) =
 satOnlyArms : String -> Int -> List CArm -> Bool
 satOnlyArms _ _ [] = True
 satOnlyArms name arity ((CArm pat guards b) :: rest) =
-  let shadow = contains name (patVars pat)
+  let shadow = contains name (patBinders pat)
   satOnlyGuards name arity guards
     && (shadow || satOnlyUses name arity b)
     && satOnlyArms name arity rest
@@ -6702,7 +6659,7 @@ satOnlyStmts name arity ((CSExpr ex) :: rest) =
   satOnlyUses name arity ex && satOnlyStmts name arity rest
 satOnlyStmts name arity ((CSLet _ pat ex) :: rest) =
   satOnlyUses name arity ex
-    && (contains name (patVars pat) || satOnlyStmts name arity rest)
+    && (contains name (patBinders pat) || satOnlyStmts name arity rest)
 -- an assignment TO the name would replace the value its call sites resolve to.
 satOnlyStmts name arity ((CSAssign target ex) :: rest) =
   target /= name && satOnlyUses name arity ex && satOnlyStmts name arity rest
@@ -6717,7 +6674,7 @@ satOnlyBinds name arity ((CBind _ clauses _ _) :: rest) =
 satOnlyClauses : String -> Int -> List CClause -> Bool
 satOnlyClauses _ _ [] = True
 satOnlyClauses name arity ((CClause pats b) :: rest) =
-  (contains name (patVarNames pats) || satOnlyUses name arity b)
+  (contains name (flatMap patBinders pats) || satOnlyUses name arity b)
     && satOnlyClauses name arity rest
 
 -- emit the lifted multi-clause `define` for a let-group local function into the
@@ -7111,21 +7068,8 @@ emitApp e env app =
         else
           emitIndirect e env hd args mode
     CMethod name (MethodEvidence iface arity route implRoutes methRoutes) =>
-      match intFromIntIdentityArg name route implRoutes methRoutes args
-        Some a => emitExpr e env a
-        None =>
-          let argOps = emitArgs e env args
-          emitMethod
-            e
-            env
-            name
-            iface
-            arity
-            route
-            implRoutes
-            methRoutes
-            argOps
-            mode
+      let argOps = emitArgs e env args
+      emitMethod e env name iface arity route implRoutes methRoutes argOps mode
     CDict name routes =>
       let argOps = emitArgs e env args
       emitDictApp e env name routes argOps mode
@@ -9736,7 +9680,7 @@ emitConstClosure e lamName arity =
 -- destructuring lambda) routes through `emitLamPatDefine`: the SAME lifted-frame
 -- machinery as `emitLamGo`, but the patterned params are bound by a single-clause
 -- decision tree (`emitClauseTree`) over the `%argK` words instead of a verbatim
--- `paramEnv`.  Capture computation is identical — `patVarNames` already collects
+-- `paramEnv`.  Capture computation is identical — `patBinders` already collects
 -- nested pattern vars, so the patterned param vars are correctly excluded from the
 -- captured set.  Closes the lambda half of EMITTER-GAPS #5.
 emitLam : Emit -> OrdMap (String, LTy) -> List Pat -> CExpr -> (String, LTy)
@@ -9746,7 +9690,7 @@ emitLam e env pats body =
 emitLamGo : Emit -> OrdMap (String, LTy) -> List Pat -> CExpr -> (String, LTy)
 emitLamGo e env pats body =
   let lamName = generatedName e LN.GenLambda ""
-  let pnames = patVarNames pats
+  let pnames = flatMap patBinders pats
   let captured = keepInEnv env (dedupS (freeVars pnames body))
   let captureWords = capWords e env captured
   emitLamDefine e env lamName pats captured body
@@ -9763,7 +9707,7 @@ emitLamGo e env pats body =
 emitLamPat : Emit -> OrdMap (String, LTy) -> List Pat -> CExpr -> (String, LTy)
 emitLamPat e env pats body =
   let lamName = generatedName e LN.GenLambda ""
-  let pnames = patVarNames pats
+  let pnames = flatMap patBinders pats
   let captured = keepInEnv env (dedupS (freeVars pnames body))
   let captureWords = capWords e env captured
   emitPatLamDefine e env lamName omEmpty pats captured body
@@ -9798,7 +9742,7 @@ emitRecLamGo : Emit ->
   (String, LTy)
 emitRecLamGo e env f pats body =
   let lamName = generatedName e LN.GenLambda ""
-  let pnames = patVarNames pats
+  let pnames = flatMap patBinders pats
   let captured = keepInEnv env (removeStr f (dedupS (freeVars pnames body)))
   let captureWords = capWords e env captured
   emitRecLamDefine e env lamName f pats captured body
@@ -9818,7 +9762,7 @@ emitRecLamPat : Emit ->
   (String, LTy)
 emitRecLamPat e env f pats body =
   let lamName = generatedName e LN.GenLambda ""
-  let pnames = patVarNames pats
+  let pnames = flatMap patBinders pats
   let captured = keepInEnv env (removeStr f (dedupS (freeVars pnames body)))
   let captureWords = capWords e env captured
   emitPatLamDefine
@@ -10895,7 +10839,7 @@ orBound e env x = match omLookup x env
 -- The variables arm [owner]'s pattern and guards bind, in binding order.
 orOwnerVars : List CArm -> Int -> List String
 orOwnerVars arms owner = match nthArm arms owner
-  Some (CArm pat guards _) => patVars pat ++ flatMap guardVars guards
+  Some (CArm pat guards _) => patBinders pat ++ flatMap guardVars guards
   _ => []
 
 -- [joins] with the edge added to [owner]'s block, opening the block on its first
@@ -13509,8 +13453,7 @@ emitTailLeaf e env self ex orValue =
 -- statically known: a top-level function (one with no raw worker or `u64`
 -- kernel for this call, which `emitApp` emits instead), a constrained one (its
 -- dictionary words lead), or the impl entry an `RKey` route selects
--- (`emitMethod`'s choice, not the `fromInt` identity it folds away).  None for
--- any other application, emitting nothing.
+-- (`emitMethod`'s choice).  None for any other application, emitting nothing.
 --
 -- #1101: only an application stamped `CallExact` passes every argument to the
 -- define; an over- or under-application goes through `emitApp` in its own mode.
@@ -13542,9 +13485,7 @@ directCallOperands e env ex =
       else
         None
     CMethod name (MethodEvidence iface siteArity (route@(RKey tag _ _)) implRoutes methRoutes) =>
-      let folded = intFromIntIdentityArg name route implRoutes methRoutes args
-      if hasArgs args
-        && isNone folded then match implForSite e name iface tag siteArity
+      if hasArgs args then match implForSite e name iface tag siteArity
         Some ent =>
           let argOps = emitArgs e env args
           let dictRoutes =
@@ -13917,7 +13858,7 @@ typeOf _ _ (CList _) = LTCon
 typeOf _ _ (CRangeList _ _ _) = LTCon
 typeOf e env (CVar x _) = match omLookup x env
   Some (_, t) => valueLTy t
-  None => optionOrElse (_ => runtimeLTy RTValue) (omLookup x e.globalTys)
+  None => globalStampTy e x
 typeOf e env (CBinPrim op l _ tag _)
   | isCmpOp op = LTBool
   | op == "::" = LTCon
@@ -13956,6 +13897,11 @@ typeOf e env app =
     CMethod fname _ => callRetTy e fname
     _ => runtimeLTy RTValue
 
+-- a top-level value's type from its typecheck stamp, a bare word when unstamped
+globalStampTy : Emit -> String -> LTy
+globalStampTy e x =
+  optionOrElse (_ => runtimeLTy RTValue) (omLookup x e.globalTys)
+
 -- the type a local's recorded LTy reads as, its raw register kinds as the word
 valueLTy : LTy -> LTy
 valueLTy LTFloatU = LTFloat
@@ -13970,11 +13916,14 @@ bindGroupStamp e env (CBind name _ _ bid) =
   omInsert name ("", binderLTy e bid) env
 
 -- The return type of a known function, from its return stamp.  IO output externs
--- (putStr/putStrLn/…) return Unit but are not functions of the program, so they
--- resolve to LTUnit up front, matching the real emit path (`emitIoExtern`).
+-- (putStr/putStrLn/…) and abort externs (exit/panic/…) are not functions of the
+-- program and resolve to LTUnit up front, matching the real emit paths
+-- (`emitIoExtern`, `emitAbortExtern`).
 callRetTy : Emit -> String -> LTy
-callRetTy e fname =
-  if inIoFamily (runtimeName e fname) then LTUnit else fnRetTy e fname
+callRetTy e fname = match llvmFamily (runtimeName e fname)
+  Some LlvmIo => LTUnit
+  Some LlvmAbort => LTUnit
+  _ => fnRetTy e fname
 
 -- a block's value is its last statement's; a trailing `let` yields Unit
 blockTy : Emit -> OrdMap (String, LTy) -> List CStmt -> LTy
@@ -14176,10 +14125,10 @@ lookupOrdinal i ((o, w) :: rest) =
 -- (at offset 8*(i+1)), exactly the ADT field convention.  Allocation reuses
 -- @mdk_alloc; element words are uniform i64 (tagged Ints for range elements).
 -- BOUNDS CHECKS: an OOB index calls @mdk_oob(), an OOB slice @mdk_slice_oob(lo, hi)
--- (both noreturn; print + exit, matching eval's panic).  CSlice's check is #550 — it
--- was missing entirely, which made an over-range slice an out-of-bounds HEAP READ
--- rather than a diagnostic; see emitArraySlice.
--- LOOPS: CRangeArray and CSlice use an alloca-counter loop (the first non-recursion
+-- (both noreturn; print + exit, matching eval's panic).  The array slice must keep its
+-- check: without it an over-range slice is an out-of-bounds HEAP READ rather than a
+-- diagnostic; see emitArraySlice.
+-- LOOPS: CRangeArray and the array slice use an alloca-counter loop (the first non-recursion
 -- loop in the spike — avoids phi instructions and matches the alloca/store/load
 -- pattern the rest of the emitter uses for multi-path merges).
 -- SCOPE: CList and CRangeList are covered by slice 9 ("lists" section below).
@@ -14228,8 +14177,8 @@ emitArrayCreate e env es =
   let words = emitArgs e env es
   emitArrayAlloc e (lengthS words) words
 
--- load a cell field at a DYNAMIC index (offset = (idxRaw+1)*8).  Used for CIndex
--- and the CSlice copy loop.
+-- load a cell field at a DYNAMIC index (offset = (idxRaw+1)*8).  Used for array index
+-- and the array slice copy loop.
 loadFieldDyn : Emit -> String -> String -> String
 loadFieldDyn e ptrWord idxRaw =
   let p = freshReg e
@@ -14258,30 +14207,6 @@ storeFieldDyn e ptrWord idxRaw val =
   emit e "  \{fp} = getelementptr i8, ptr \{p}, i64 \{off}"
   emit e "  store i64 \{val}, ptr \{fp}"
   ()
-
--- CIndex arr i: bounds-check, then load element at dynamic offset.
-emitArrayIndex : Emit -> OrdMap (String, LTy) -> CExpr -> CExpr -> (String, LTy)
-emitArrayIndex e env a i =
-  let (arr_w, _) = emitExpr e env a
-  let (idx_w, _) = emitExpr e env i
-  let idx_raw = untagInt e idx_w
-  let arr_len = loadTag e arr_w
-  let c1 = freshReg e
-  emit e "  \{c1} = icmp slt i64 \{idx_raw}, 0"
-  let c2 = freshReg e
-  emit e "  \{c2} = icmp sge i64 \{idx_raw}, \{arr_len}"
-  let oob = freshReg e
-  emit e "  \{oob} = or i1 \{c1}, \{c2}"
-  let n = intToString (freshLocal e)
-  let oobL = "oob" ++ n
-  let okL = "idx_ok" ++ n
-  emit e "  br i1 \{oob}, label %\{oobL}, label %\{okL}"
-  emit e (oobL ++ ":")
-  emit e (rtLine e "" "void" "mdk_oob" [])
-  emit e "  unreachable"
-  emit e (okL ++ ":")
-  let r = loadFieldDyn e arr_w idx_raw
-  (r, LTInt)
 
 -- CRangeArray lo hi incl: compute count, alloc, fill with alloca-counter loop.
 emitRangeArray : Emit ->
@@ -14338,209 +14263,6 @@ emitRangeArray e env lo hi incl =
   let w = freshReg e
   emit e "  \{w} = ptrtoint ptr \{p} to i64"
   (w, LTCon)
-
--- CSlice arr lo hi incl: bounds-check, then compute new_len, alloc, copy with a loop.
---
--- #550: the bounds check is NOT optional and NOT a clamp.  Without it this emitted
--- `new_len = end - lo` slots and copied `a[lo + i]` unchecked, so `[|1,2,3,4,5|].[2..99]`
--- allocated 97 slots and READ 94 words PAST THE ARRAY, publishing raw heap words (live
--- pointers among them) as ordinary Ints at exit 0 — while `run` raised E-SLICE-OOB.  The
--- guard mirrors sliceArray (compiler/eval/eval.mdk): `lo < 0 || end > len || end - lo < 0`.
--- All three disjuncts are load-bearing: `lo < 0` catches a read BEFORE the array, `end >
--- len` a read past it, and `end - lo < 0` an inverted range (whose negative new_len would
--- otherwise reach emitArrayDynAlloc).
---
--- Deliberately NOT a clamp: `arr.[lo..hi]` panicking is the documented contract that
--- distinguishes it from stdlib `array.slice`, which clamps (stdlib/array.mdk).  Clamping
--- here would silently merge the two and destroy the only bounds-checked slice in the
--- language.
---
--- The check is `end` (exclusive) vs the length, so the INCLUSIVE form is guarded on its
--- already-adjusted end_raw = hi+1 — i.e. the +1 happens BEFORE the compare, not after, so
--- `[|1,2,3|].[0..=2]` (end 3 == len 3) is legal while `.[0..=3]` (end 4 > 3) aborts.
--- mdk_slice_oob wants the INCLUSIVE upper bound for its message, so it is handed
--- `end_raw - 1`, matching the interpreter's `hiX - 1` text in both forms.
-emitArraySlice : Emit ->
-  OrdMap (String, LTy) ->
-  CExpr ->
-  CExpr ->
-  CExpr ->
-  Bool ->
-  (String, LTy)
-emitArraySlice e env a lo hi incl =
-  let (arr_w, _) = emitExpr e env a
-  let (lo_w, _) = emitExpr e env lo
-  let (hi_w, _) = emitExpr e env hi
-  let lo_raw = untagInt e lo_w
-  let hi_raw = untagInt e hi_w
-  let end_raw =
-    if incl then
-      let r = freshReg e
-      emit e "  \{r} = add i64 \{hi_raw}, 1"
-      r
-    else
-      hi_raw
-  let new_len = freshReg e
-  emit e "  \{new_len} = sub i64 \{end_raw}, \{lo_raw}"
-  let arr_len = loadTag e arr_w
-  let s1 = freshReg e
-  emit e "  \{s1} = icmp slt i64 \{lo_raw}, 0"
-  let s2 = freshReg e
-  emit e "  \{s2} = icmp sgt i64 \{end_raw}, \{arr_len}"
-  let s3 = freshReg e
-  emit e "  \{s3} = icmp slt i64 \{new_len}, 0"
-  let s12 = freshReg e
-  emit e "  \{s12} = or i1 \{s1}, \{s2}"
-  let sbad = freshReg e
-  emit e "  \{sbad} = or i1 \{s12}, \{s3}"
-  let sn = intToString (freshLocal e)
-  let sBadL = "sloob" ++ sn
-  let sOkL = "sl_ok" ++ sn
-  emit e "  br i1 \{sbad}, label %\{sBadL}, label %\{sOkL}"
-  emit e (sBadL ++ ":")
-  let hi_incl = freshReg e
-  emit e "  \{hi_incl} = sub i64 \{end_raw}, 1"
-  emit e (rtLine e "" "void" "mdk_slice_oob" (i64Ops [lo_raw, hi_incl]))
-  emit e "  unreachable"
-  emit e (sOkL ++ ":")
-  let p = emitArrayDynAlloc e new_len
-  let n = intToString (freshLocal e)
-  let condL = "sl_cond" ++ n
-  let bodyL = "sl_body" ++ n
-  let doneL = "sl_done" ++ n
-  let ic = freshReg e
-  emit e ("  " ++ ic ++ " = alloca i64")
-  emit e ("  store i64 0, ptr " ++ ic)
-  emit e ("  br label %" ++ condL)
-  emit e (condL ++ ":")
-  let iv = freshReg e
-  emit e "  \{iv} = load i64, ptr \{ic}"
-  let cmp = freshReg e
-  emit e "  \{cmp} = icmp sge i64 \{iv}, \{new_len}"
-  emit e "  br i1 \{cmp}, label %\{doneL}, label %\{bodyL}"
-  emit e (bodyL ++ ":")
-  let src_idx = freshReg e
-  emit e "  \{src_idx} = add i64 \{lo_raw}, \{iv}"
-  let elem = loadFieldDyn e arr_w src_idx
-  let dst_off1 = freshReg e
-  emit e "  \{dst_off1} = add i64 \{iv}, 1"
-  let dst_off = freshReg e
-  emit e "  \{dst_off} = mul i64 \{dst_off1}, 8"
-  let dst_fp = freshReg e
-  emit e "  \{dst_fp} = getelementptr i8, ptr \{p}, i64 \{dst_off}"
-  emit e "  store i64 \{elem}, ptr \{dst_fp}"
-  let iv2 = freshReg e
-  emit e "  \{iv2} = add i64 \{iv}, 1"
-  emit e "  store i64 \{iv2}, ptr \{ic}"
-  emit e ("  br label %" ++ condL)
-  emit e (doneL ++ ":")
-  let w = freshReg e
-  emit e "  \{w} = ptrtoint ptr \{p} to i64"
-  (w, LTCon)
-
--- CStringIndex s i: codepoint-indexed Char.  The String runtime rep is a packed
--- UTF-8 cell (NOT an i64-element array), so we mirror the interpreter's
--- stringIndexCp: convert to a Char array via @mdk_string_to_chars (each element
--- already a Char immediate (cp<<1)|1, header = codepoint count), bounds-check the
--- codepoint index against that count, then load element i.  Result LTy = LTChar.
--- Bounds violation calls @mdk_oob (matching the interpreter's index-OOB panic).
-emitStringIndex : Emit ->
-  OrdMap (String, LTy) ->
-  CExpr ->
-  CExpr ->
-  (String, LTy)
-emitStringIndex e env a i =
-  let (str_w, _) = emitExpr e env a
-  let (idx_w, _) = emitExpr e env i
-  let chars = freshReg e
-  emit e (rtLine e chars "i64" "mdk_string_to_chars" (i64Ops [str_w]))
-  let idx_raw = untagInt e idx_w
-  let arr_len = loadTag e chars
-  let c1 = freshReg e
-  emit e "  \{c1} = icmp slt i64 \{idx_raw}, 0"
-  let c2 = freshReg e
-  emit e "  \{c2} = icmp sge i64 \{idx_raw}, \{arr_len}"
-  let oob = freshReg e
-  emit e "  \{oob} = or i1 \{c1}, \{c2}"
-  let n = intToString (freshLocal e)
-  let oobL = "soob" ++ n
-  let okL = "sidx_ok" ++ n
-  emit e "  br i1 \{oob}, label %\{oobL}, label %\{okL}"
-  emit e (oobL ++ ":")
-  emit e (rtLine e "" "void" "mdk_oob" [])
-  emit e "  unreachable"
-  emit e (okL ++ ":")
-  let r = loadFieldDyn e chars idx_raw
-  (r, LTChar)
-
--- CStringSlice s lo hi incl: codepoint substring.  Mirror the interpreter's
--- evalSliceInt VString = stringSlice lo (incl ? hi+1 : hi) s — which CLAMPS lo/hi
--- to [0, cp_count] (no OOB panic, unlike the array slice).  Reuse the
--- @mdk_string_slice extern (it >>1-untags the tagged Int bounds internally); for
--- the inclusive form hi+1 in value space is +2 on the tagged word (tag = n*2+1).
-emitStringSlice : Emit ->
-  OrdMap (String, LTy) ->
-  CExpr ->
-  CExpr ->
-  CExpr ->
-  Bool ->
-  (String, LTy)
-emitStringSlice e env a lo hi incl =
-  let (str_w, _) = emitExpr e env a
-  let (lo_w, _) = emitExpr e env lo
-  let (hi_w, _) = emitExpr e env hi
-  let hi_adj =
-    if incl then
-      let r = freshReg e
-      emit e "  \{r} = add i64 \{hi_w}, 2"
-      r
-    else
-      hi_w
-  let r = freshReg e
-  emit e (rtLine e r "i64" "mdk_string_slice" (i64Ops [lo_w, hi_adj, str_w]))
-  (r, LTStr)
-
--- CListIndex xs i: walk the Cons chain to the i-th element.  A List is a chain of
--- Cons cells ([tag|head@8|tail@16], Nil = odd immediate), NOT an i64-element
--- array, so we can't array-GEP it.  Mirror the interpreter's listNthAt: walk
--- (i decrementing) returning the head once i<=0, panic (@mdk_oob) on running off
--- the end.  @mdk_list_index does the walk in C (>>1-untags the tagged index).
--- Result word is the stored head (same shape as an array load → LTInt).
-emitListIndex : Emit -> OrdMap (String, LTy) -> CExpr -> CExpr -> (String, LTy)
-emitListIndex e env a i =
-  let (lst_w, _) = emitExpr e env a
-  let (idx_w, _) = emitExpr e env i
-  let r = freshReg e
-  emit e (rtLine e r "i64" "mdk_list_index" (i64Ops [lst_w, idx_w]))
-  (r, LTInt)
-
--- CListSlice xs lo hi incl: collect elements at indices [lo, hi) into a NEW list.
--- Mirror the interpreter's listSliceV/listSliceGo — which CLAMPS (no OOB panic):
--- walks the chain with a running index, keeps heads in [lo, hi), stops at hi or
--- end-of-list.  @mdk_list_slice does the walk + rebuild in C (>>1-untags lo/hi);
--- for the inclusive form hi+1 in value space is +2 on the tagged word (tag n*2+1).
--- Result is a boxed Cons/Nil list → LTCon (same as the array slice).
-emitListSlice : Emit ->
-  OrdMap (String, LTy) ->
-  CExpr ->
-  CExpr ->
-  CExpr ->
-  Bool ->
-  (String, LTy)
-emitListSlice e env a lo hi incl =
-  let (lst_w, _) = emitExpr e env a
-  let (lo_w, _) = emitExpr e env lo
-  let (hi_w, _) = emitExpr e env hi
-  let hi_adj =
-    if incl then
-      let r = freshReg e
-      emit e "  \{r} = add i64 \{hi_w}, 2"
-      r
-    else
-      hi_w
-  let r = freshReg e
-  emit e (rtLine e r "i64" "mdk_list_slice" (i64Ops [lst_w, lo_w, hi_adj]))
-  (r, LTCon)
 
 -- arrayMakeWith n f: INLINE INTRINSIC.  Allocates a dynamic array of `n` elements;
 -- fills element i by calling the Medaka closure `f` with the tagged index `i`.
@@ -15027,10 +14749,10 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries facts =
   e.dictConstCache := []
   e.closConstCache := []
   installKnownFnMap e (collectFns groups)
-  -- #561 PR-A: classify LAZY value globals (dispatch-reaching / cyclic) once per
-  -- program.  Reads of these lower to `call @mdk_force_<x>()`; every other global
-  -- stays on the byte-identical eager prologue.
-  installLazyGlobalMap e cfg.lazyNames
+  -- Install the LAZY value globals (emit_support.lazyGlobalNames) once
+  -- per program.  Reads of these lower to `call @mdk_force_<x>()`; every other
+  -- global stays on the eager prologue.
+  installLazyGlobalMap e cfg.lazyNames (valBinds groups)
   installSigMap e (programSigs e (fnBinds groups))
   -- #990: group the flat impl-entry list by interface method ONCE, so every per-site
   -- dispatch scan (implsOf) is O(bucket) not
@@ -15137,9 +14859,9 @@ emitProgramMain e plan groups =
   -- prelude-double-load note on emitTopGlobals below for why such a global can
   -- appear at all.
   let mainRhs = mainBody e groups
-  -- #561 PR-A: only SAFE (statically-orderable) value globals are eager-initialised
-  -- in this prologue — byte-identical to the pre-#561 emitter whenever no global is
-  -- lazy (the compiler's own case).  A SAFE global's whole eager reach is SAFE (the
+  -- Only value globals whose initializer is safe to speculate (it calls nothing, so
+  -- running it before `main` cannot be observed; emit_support.speculationSafe) are
+  -- initialised in this prologue.  An eager global's whole eager reach is eager (the
   -- taint is downward-closed over reads), so this prologue never calls a force fn.
   -- LAZY globals are initialised on first use by their @mdk_force_<x> defines below.
   let eagerBinds =
@@ -15404,12 +15126,6 @@ ctag (CFieldAccess _ _ _ _) = "CFieldAccess"
 ctag (CRecordUpdate _ _ _) = "CRecordUpdate"
 ctag (CRangeList _ _ _) = "CRangeList"
 ctag (CRangeArray _ _ _) = "CRangeArray"
-ctag (CIndex _ _) = "CIndex"
-ctag (CSlice _ _ _ _) = "CSlice"
-ctag (CStringIndex _ _) = "CStringIndex"
-ctag (CStringSlice _ _ _ _) = "CStringSlice"
-ctag (CListIndex _ _) = "CListIndex"
-ctag (CListSlice _ _ _ _) = "CListSlice"
 ctag (CMethod _ _) = "CMethod (typeclass dispatch)"
 ctag (CDict _ _) = "CDict (dictionary)"
 ctag (CVariantUpdate _ _ _) = "CVariantUpdate (named-field variant update)"

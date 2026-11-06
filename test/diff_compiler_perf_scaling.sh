@@ -528,10 +528,12 @@ TIME_HEAP="${PERF_TIME_HEAP:-2147483648}"
 #               $ PERF_ONLY=guardwild PERF_GUARDWILD_N=100 sh test/diff_compiler_perf_scaling.sh
 #               guardwild  100  127.1 MB  380.0 MB  1268.3 MB  2.99  3.34 \
 #                 ** SUPERLINEAR (ALLOC) ** (r2 > 3.0x)
-#           CEILING 3.68 = the measured r2 (3.34) + 10% (S-2's headroom convention),
-#           and it is capped well below the 4.0 a pure quadratic converges to, so a
-#           CUBIC regression — the thing that would mean `wilds` started being
-#           re-derived per branch instead of once — still reds this row. FIXED 2.60
+#           CEILING 4.05 = the measured r2 (3.68 on the sprint that moved it; main's
+#           tip read 3.66, the original ledgering 3.34) + 10% (S-2's headroom
+#           convention). It matches stage_ir_scaling's guardwild:lower ceiling. A
+#           pure quadratic converges to 4.0 and a CUBIC regression — the thing that
+#           would mean `wilds` started being re-derived per branch instead of once —
+#           tends to 8, so a cubic still reds this row. FIXED 2.60
 #           is the file-wide convention and sits under the linear-ish readings the
 #           50-band produces, so a band shrink cannot false-PROMOTE it.
 #           ⚠️ DRAINING THIS ROW IS NOT A MATTER OF MAKING A SCAN FASTER. #2125 is
@@ -559,7 +561,7 @@ TIME_HEAP="${PERF_TIME_HEAP:-2147483648}"
 KNOWN_SUPERLINEAR="
 guardwild
 "
-KNOWN_CEIL_guardwild="${KNOWN_CEIL_guardwild:-3.68}";  KNOWN_FIXED_guardwild="${KNOWN_FIXED_guardwild:-2.60}"
+KNOWN_CEIL_guardwild="${KNOWN_CEIL_guardwild:-4.05}";  KNOWN_FIXED_guardwild="${KNOWN_FIXED_guardwild:-2.60}"
 
 # ── PERF_LEDGER_EXTRA: the DELIBERATE-RED SEAM for the ledger branches (#2150) ──
 #
@@ -4607,7 +4609,8 @@ if want scoperefs; then   # PERF_ONLY unit: scoperefs
 # FLOOR even if its coupled quadratic is someday fixed — a ~17k prelude-marking constant
 # floors it): if THAT is under FLOOR the profiler produced nothing for this run and we fail
 # harness, never green. (The global ops_graded==0 guard is the whole-gate backstop.)
-SCOPEREFS_N="${PERF_SCOPEREFS_N:-300}"
+# Emit nets ~1 counted op per reference, so N must clear OP_FLOOR for the ratio arm to grade.
+SCOPEREFS_N="${PERF_SCOPEREFS_N:-1200}"
 scn1="$SCOPEREFS_N"; scn2=$((SCOPEREFS_N * 2))
 scd1="$WORK/scoperefs_$scn1.mdk"; scd2="$WORK/scoperefs_$scn2.mdk"
 gen_scoperefs_resolve "$scn1" "$scd1"

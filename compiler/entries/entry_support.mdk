@@ -22,6 +22,9 @@ import types.program_facts.{
   ProgramFacts, factsOfChecked, withCheckedExternSources, factsWithEvidence
 }
 import frontend.parser.{parse}
+import ir.core_ir.{CProgram}
+import ir.core_pass.{PassConfig(..), PassRun(..), dumpSwitch, lintSwitch}
+import ir.core_ir_lower.{emitPassNames}
 import frontend.desugar.{desugar, desugarIn, mapProg}
 import frontend.desugar_cache.{desugaredPrelude, preludeGeneration}
 import driver.build_cmd.{
@@ -44,7 +47,7 @@ import driver.front_gate.{
   writeDiagJson,
 }
 export import support.util.{rootsOrDefault}
-import support.util.{anyList, splitLast, startsWith, joinNl}
+import support.util.{anyList, splitLast, startsWith, joinNl, filterList}
 import types.tc_types.{ElabResult, DriveInputs(..), DriveOutputs(..)}
 import types.typecheck.{
   defaultDriveInputs,
@@ -972,3 +975,51 @@ stampStmtFile _ s = s
 withSiteFile : String -> Loc -> Loc
 withSiteFile path (Loc "" sl sc el ec) = Loc path sl sc el ec
 withSiteFile _ l = l
+
+-- The pass configuration the two real emit entries run with, read once per
+-- process: `MEDAKA_CORE_LINT` (`1` on, `0` off; unset is on, unlike
+-- `defaultPassConfig`, which library callers use unlinted) and `MEDAKA_DUMP_CORE_AFTER`
+-- (comma-separated names of `emitPasses`, `input`, or `all`).  A value outside
+-- those is a usage error naming the valid ones.
+export
+passConfigOfEnv : <IO> PassConfig
+passConfigOfEnv =
+  let lintOn =
+    switchOrFail
+      "MEDAKA_CORE_LINT"
+      (lintSwitch (getEnv "MEDAKA_CORE_LINT"))
+      True
+  let dumps =
+    switchOrFail
+      "MEDAKA_DUMP_CORE_AFTER"
+      (dumpSwitch emitPassNames (getEnv "MEDAKA_DUMP_CORE_AFTER"))
+      []
+  PassConfig { lint = lintOn, dumpAfter = dumps }
+
+-- The switch's value, or a usage error naming [switch] that ends the process;
+-- [unused] only stands in for the value an exit never returns.
+switchOrFail : String -> Result String a -> a -> <IO> a
+switchOrFail _ (Ok value) _ = value
+switchOrFail switch (Err message) unused =
+  failWith "\{switch}: \{message}"
+  unused
+
+-- The program of a pass run, after writing each requested dump to stderr framed
+-- `[core-after <pass>]`.  A lint finding is an internal compiler error that
+-- names its pass and every finding of that pass.
+export
+programOfRun : PassRun -> <IO> CProgram
+programOfRun run =
+  each writeDumpFrame run.dumps
+  match run.faults
+    [] => run.program
+    fault :: _ =>
+      let same = filterList (f => f.faultPass == fault.faultPass) run.faults
+      panic
+        ("core lint after \{fault.faultPass}: "
+          ++ joinNl (map (f => f.faultMessage) same))
+
+writeDumpFrame : (String, String) -> <IO> Unit
+writeDumpFrame (passName, text) =
+  ePutStrLn "[core-after \{passName}]"
+  ePutStrLn text

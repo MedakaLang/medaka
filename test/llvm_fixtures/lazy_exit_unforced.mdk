@@ -1,0 +1,5 @@
+-- A top-level value whose initializer exits is never forced here, so the
+-- program prints "ok" and exits 0, as under `medaka run`.
+main = if False then side else putStrLn "ok"
+
+side = exit 3

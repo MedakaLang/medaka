@@ -1,5 +1,6 @@
 frontend.ast
 ir.core_ir
+ir.core_walk
 ir.extern_types
 support.opcount
 support.ordmap

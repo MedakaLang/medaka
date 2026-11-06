@@ -41,7 +41,7 @@ import types.typecheck.{
 }
 import types.tc_types.{DriveOutputs}
 import ir.core_ir_lower.{
-  lowerProgramEmitWith,
+  lowerProgramEmitConfigured,
   ctorFieldTypeNames,
   validateFfiExternTypeNames,
 }
@@ -53,6 +53,8 @@ import backend.wasm_emit.{
 import backend.emit_plan.{buildEmitPlanReached}
 import entries.entry_support.{
   driveEmitLocated,
+  passConfigOfEnv,
+  programOfRun,
   stampSiteFiles,
 }
 import support.timer.{statsEnabled, emitStats}
@@ -100,7 +102,9 @@ emitTail mods requirement _outputs facts runtimeDecls coreD modules1 =
       requirement
       (runtimeDomain (externDecls runtimeDecls))
       (ctorFieldTypeNames allDecls)
-  let lowered = lowerProgramEmitWith facts allDecls
+  let config = passConfigOfEnv
+  let lowered =
+    programOfRun (lowerProgramEmitConfigured config facts [] allDecls)
   let (plan, reached) =
     buildEmitPlanReached
       (runtimeDomain (externDecls runtimeDecls))

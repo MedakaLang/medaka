@@ -1,0 +1,5 @@
+-- `cell` names itself, so it is a lazy global; a value `main` that reads it
+-- prints the String "under", as under `medaka run`.
+cell = if True then "under" else cell
+
+main = cell
