@@ -1107,7 +1107,7 @@ freshGrantName st _ =
 -- Evaluate a function-valued expression once. Its bound becomes active on
 -- application, and the returned function (if any) retains its own arrow rows.
 fileBoundValue : GraphCtx -> List GrantBinder -> Mono -> Expr -> Expr
-fileBoundValue gctx chain ty0 e0 = go ty0 e0
+fileBoundValue gctx chain ty0 expr0 = go ty0 expr0
   where
     go ty e =
       if hasFileBoundValue ty then match normalize ty

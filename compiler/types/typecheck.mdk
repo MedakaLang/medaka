@@ -2591,7 +2591,7 @@ dispositionRowsOfMethods : InstId ->
   List String ->
   List String ->
   List MethodDisposition
--- Bound: typecheck.mdk may not grow (D1, #4200); the where-go form adds three code lines here.
+-- Bound: test/arch_ratchet.sh pins typecheck.mdk's code-line count; the where-go form adds three code lines here.
 -- lint-disable-next-line rule-threaded-invariant
 dispositionRowsOfMethods _ _ _ _ [] = []
 dispositionRowsOfMethods inst iface supplied required (m :: rest) =

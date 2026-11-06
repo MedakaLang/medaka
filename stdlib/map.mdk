@@ -277,7 +277,7 @@ has k (Bin _ k2 _ l r) = match compare k k2
    0 -}
 export
 findWithDefault : Ord k => v -> k -> Map k v -> v
-findWithDefault d k m0 = go m0
+findWithDefault d k m = go m
   where
     go Tip = d
     go (Bin _ k2 v l r) = match compare k k2
@@ -326,7 +326,7 @@ insertWith f k v (Bin s k2 v2 l r) = match compare k k2
    50 -}
 export
 adjust : Ord k => (v -> v) -> k -> Map k v -> Map k v
-adjust f k m0 = go m0
+adjust f k m = go m
   where
     go Tip = Tip
     go (Bin s k2 v2 l r) = match compare k k2

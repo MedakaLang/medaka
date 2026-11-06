@@ -3187,7 +3187,7 @@ emitClauseChainGo : Prog ->
   Int ->
   List String
 -- B5: the last clause fell through (non-exhaustive function) → coded trap.
-emitClauseChainGo prog baseEnv _name params arity cs0 i0 site = go cs0 i0
+emitClauseChainGo prog baseEnv _name params arity cls0 i0 site = go cls0 i0
   where
     go [] _ = wasmNonexhTrap (progEmit prog) site
     go ((CClause pats body) :: rest) i =

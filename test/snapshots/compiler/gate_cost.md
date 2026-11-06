@@ -528,7 +528,7 @@ gateNameHash s =
   gateNameHashGo a 0 (arrayLength a) 7
 
 gateNameHashGo : Array Char -> Int -> Int -> Int -> Int
-gateNameHashGo a i0 n h0 = go i0 h0
+gateNameHashGo a i0 n hash0 = go i0 hash0
   where
     go i h
       | i >= n = h
@@ -812,7 +812,7 @@ prop "gateSetDigest separates a same-size swap" (n : Int) =
 (DTypeSig true "gateNameHash" (TyFun (TyCon "String") (TyCon "Int")))
 (DFunDef false "gateNameHash" ((PVar "s")) (EBlock (DoLet false false (PVar "a") (EApp (EVar "stringToChars") (EVar "s"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "gateNameHashGo") (EVar "a")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "a"))) (ELit (LInt 7))))))
 (DTypeSig false "gateNameHashGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
-(DFunDef false "gateNameHashGo" ((PVar "a") (PVar "i0") (PVar "n") (PVar "h0")) (ELetGroup ((lgb "go" (clause ((PVar "i") (PVar "h")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "h") (EIf (EVar "otherwise") (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "%" (EBinOp "+" (EBinOp "*" (EVar "h") (ELit (LInt 131))) (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "a")))) (EVar "costHashMod"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EApp (EVar "go") (EVar "i0")) (EVar "h0"))))
+(DFunDef false "gateNameHashGo" ((PVar "a") (PVar "i0") (PVar "n") (PVar "hash0")) (ELetGroup ((lgb "go" (clause ((PVar "i") (PVar "h")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "h") (EIf (EVar "otherwise") (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "%" (EBinOp "+" (EBinOp "*" (EVar "h") (ELit (LInt 131))) (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "a")))) (EVar "costHashMod"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EApp (EVar "go") (EVar "i0")) (EVar "hash0"))))
 (DTypeSig false "costHashMod" (TyCon "Int"))
 (DFunDef false "costHashMod" () (ELit (LInt 2147483647)))
 (DData Public "RunRecord" () ((variant "RunRecord" (ConNamed (field "key" (TyCon "String")) (field "runId" (TyCon "String")) (field "shard" (TyCon "String")) (field "jobs" (TyApp (TyCon "Option") (TyCon "Int"))) (field "parallel" (TyApp (TyCon "Option") (TyCon "Bool"))) (field "rowElapsedMs" (TyApp (TyCon "Option") (TyCon "Int"))) (field "jobWallMs" (TyApp (TyCon "Option") (TyCon "Int"))) (field "gates" (TyApp (TyCon "Option") (TyCon "Int"))) (field "gatesDigest" (TyApp (TyCon "Option") (TyCon "Int")))))) ())
@@ -923,7 +923,7 @@ prop "gateSetDigest separates a same-size swap" (n : Int) =
 (DTypeSig true "gateNameHash" (TyFun (TyCon "String") (TyCon "Int")))
 (DFunDef false "gateNameHash" ((PVar "s")) (EBlock (DoLet false false (PVar "a") (EApp (EVar "stringToChars") (EVar "s"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "gateNameHashGo") (EVar "a")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "a"))) (ELit (LInt 7))))))
 (DTypeSig false "gateNameHashGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
-(DFunDef false "gateNameHashGo" ((PVar "a") (PVar "i0") (PVar "n") (PVar "h0")) (ELetGroup ((lgb "go" (clause ((PVar "i") (PVar "h")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "h") (EIf (EVar "otherwise") (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "%" (EBinOp "+" (EBinOp "*" (EVar "h") (ELit (LInt 131))) (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "a")))) (EVar "costHashMod"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EApp (EVar "go") (EVar "i0")) (EVar "h0"))))
+(DFunDef false "gateNameHashGo" ((PVar "a") (PVar "i0") (PVar "n") (PVar "hash0")) (ELetGroup ((lgb "go" (clause ((PVar "i") (PVar "h")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "h") (EIf (EVar "otherwise") (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "%" (EBinOp "+" (EBinOp "*" (EVar "h") (ELit (LInt 131))) (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "a")))) (EVar "costHashMod"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EApp (EVar "go") (EVar "i0")) (EVar "hash0"))))
 (DTypeSig false "costHashMod" (TyCon "Int"))
 (DFunDef false "costHashMod" () (ELit (LInt 2147483647)))
 (DData Public "RunRecord" () ((variant "RunRecord" (ConNamed (field "key" (TyCon "String")) (field "runId" (TyCon "String")) (field "shard" (TyCon "String")) (field "jobs" (TyApp (TyCon "Option") (TyCon "Int"))) (field "parallel" (TyApp (TyCon "Option") (TyCon "Bool"))) (field "rowElapsedMs" (TyApp (TyCon "Option") (TyCon "Int"))) (field "jobWallMs" (TyApp (TyCon "Option") (TyCon "Int"))) (field "gates" (TyApp (TyCon "Option") (TyCon "Int"))) (field "gatesDigest" (TyApp (TyCon "Option") (TyCon "Int")))))) ())

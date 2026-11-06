@@ -408,7 +408,7 @@ dispatchUntilStable : HashMap String Unit ->
   List String ->
   List (List String, List String) ->
   Unit
-dispatchUntilStable defined graph seen modules named0 pend0 = go named0 pend0
+dispatchUntilStable defined graph seen modules named0 queue0 = go named0 queue0
   where
     go named pending =
       let names = nameSet (flatMap (reachedRefs seen) modules ++ named)

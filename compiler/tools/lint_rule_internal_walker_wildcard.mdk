@@ -14,6 +14,7 @@ import frontend.ast.{
   Variant(..),
   orElseLoc,
   patBoundNames,
+  variantName,
 }
 import frontend.ast_walk.{childExprs}
 import frontend.parser.{Positions(..)}
@@ -73,8 +74,9 @@ rule =
     ruleWalkerWildcard
     None
 
--- What the rule reads of one file: the project index and the file's own declarations (their `data` resolves a constructor the index does
--- not yet hold).
+-- What the rule reads of one file: the project index and the file's own
+-- declarations (their `data` resolves a constructor the index does not yet
+-- hold).
 data Env = Env ProjectIndex (List Decl)
 
 -- One top-level clause with the declaration's start line.
@@ -98,7 +100,7 @@ topFindings env (dl :: rest) = match topClause dl
   Some (TopClause name ps body loc) =>
     let same = takeWhile (sameTop name) rest
     let group = TopClause name ps body loc :: flatMap clauseList same
-    groupFindings env name (map toClause group) (clauseLoc (lastOf group))
+    groupFindings env name (map toClause group) (clauseLoc (last group))
       ++ flatMap (topBodyFindings env) group
       ++ topFindings env (dropWhile (sameTop name) rest)
 
@@ -109,9 +111,6 @@ clauseList dl = match topClause dl
 
 toClause : TopClause -> FunClause
 toClause (TopClause _ ps body _) = FunClause ps body
-
-lastOf : List TopClause -> Option TopClause
-lastOf cs = last cs
 
 clauseLoc : Option TopClause -> Option Loc
 clauseLoc (Some (TopClause _ _ _ loc)) = loc
@@ -302,7 +301,7 @@ ctorsOfPat (PRec n _ _) = [lastSegment n]
 ctorsOfPat (PAs _ _ _ p) = ctorsOfPat p
 ctorsOfPat (PAnn p _) = ctorsOfPat p
 ctorsOfPat (POr ps) = flatMap ctorsOfPat ps
--- Every other pattern form (variable, wildcard, literal, list, tuple) names no constructor at its top.
+-- Bound: every other pattern form (variable, wildcard, literal, list, tuple) names no constructor at its top, so there is nothing to swallow.
 -- lint-disable-next-line rule-walker-wildcard
 ctorsOfPat _ = []
 
@@ -333,7 +332,7 @@ constantOrInput inputs e = match unwrapLoc e
   EUnOp "-" x _ => constantOrInput [] x
   EApp _ _ => match spineOf e []
     (hd, args) => ctorHead hd && allList (constantOrInput []) args
-  -- Only the forms above can be a constant; any other expression computes.
+  -- Bound: only the forms above can be a constant; any other expression computes, so the wildcard names no constructor.
   -- lint-disable-next-line rule-walker-wildcard
   _ => False
 
@@ -395,9 +394,6 @@ declSum c (DData { dataName = n, dataCtors = vs, ... }) =
     None
 declSum c (DAttrib _ d) = declSum c d
 declSum _ _ = None
-
-variantName : Variant -> String
-variantName (Variant n _) = n
 
 variantArity : Variant -> (String, Int)
 variantArity (Variant n (ConPos tys)) = (n, listLen tys)

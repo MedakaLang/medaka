@@ -471,13 +471,13 @@ NEWLINE
 IDENT "scan"
 IDENT "dl"
 IDENT "n"
-IDENT "fs0"
-IDENT "pend0"
+IDENT "fields0"
+IDENT "pending0"
 IDENT "xs0"
 EQUAL
 IDENT "go"
-IDENT "fs0"
-IDENT "pend0"
+IDENT "fields0"
+IDENT "pending0"
 IDENT "xs0"
 INDENT
 WHERE

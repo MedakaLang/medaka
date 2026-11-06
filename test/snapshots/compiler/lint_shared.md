@@ -1,5 +1,5 @@
 # META
-source_lines=1112
+source_lines=1122
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_shared.mdk — helpers used by more than one lint module:
@@ -18,7 +18,7 @@ import support.util.{
 }
 import list.{sortBy, last, reverse, findMap}
 import array.{get as arrayGet}
-import string.{split, isUpper, words, unwords}
+import string.{split, isUpper, words, unwords, trim, trimLeft}
 import support.path.{stripMdk}
 import regex.{Regex, mustCompile, find as reFind, escape, isMatch}
 import frontend.lexer.{Comment, commentLine, commentText, commentCol}
@@ -1114,13 +1114,23 @@ ruleNameThreadedInvariant = "rule-threaded-invariant"
 export
 ruleNamePassthroughArm : String
 ruleNamePassthroughArm = "rule-passthrough-arm"
+
+-- Columns of leading whitespace on a source line.
+export
+indentWidth : String -> Int
+indentWidth l = stringLength l - stringLength (trimLeft l)
+
+-- A line that is neither blank nor a `--` comment.
+export
+isCodeText : String -> Bool
+isCodeText l = not (trim l == "" || startsWith "--" (trim l))
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Expr" true) (mem "Decl" true) (mem "noBinderId" false) (mem "noDeclLoc" false) (mem "Ty" true) (mem "Pat" true) (mem "UseMember" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "joinWith" false) (mem "startsWith" false) (mem "listLen" false) (mem "anyList" false) (mem "joinNl" false) (mem "dedupBy" false))))
 (DUse false (UseGroup ("list") ((mem "sortBy" false) (mem "last" false) (mem "reverse" false) (mem "findMap" false))))
 (DUse false (UseGroup ("array") ((mem "get" false "arrayGet"))))
-(DUse false (UseGroup ("string") ((mem "split" false) (mem "isUpper" false) (mem "words" false) (mem "unwords" false))))
+(DUse false (UseGroup ("string") ((mem "split" false) (mem "isUpper" false) (mem "words" false) (mem "unwords" false) (mem "trim" false) (mem "trimLeft" false))))
 (DUse false (UseGroup ("support" "path") ((mem "stripMdk" false))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "mustCompile" false) (mem "find" false "reFind") (mem "escape" false) (mem "isMatch" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "commentLine" false) (mem "commentText" false) (mem "commentCol" false))))
@@ -1481,13 +1491,17 @@ ruleNamePassthroughArm = "rule-passthrough-arm"
 (DFunDef false "ruleNameThreadedInvariant" () (ELit (LString "rule-threaded-invariant")))
 (DTypeSig true "ruleNamePassthroughArm" (TyCon "String"))
 (DFunDef false "ruleNamePassthroughArm" () (ELit (LString "rule-passthrough-arm")))
+(DTypeSig true "indentWidth" (TyFun (TyCon "String") (TyCon "Int")))
+(DFunDef false "indentWidth" ((PVar "l")) (EBinOp "-" (EApp (EVar "stringLength") (EVar "l")) (EApp (EVar "stringLength") (EApp (EVar "trimLeft") (EVar "l")))))
+(DTypeSig true "isCodeText" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isCodeText" ((PVar "l")) (EApp (EVar "not") (EBinOp "||" (EBinOp "==" (EApp (EVar "trim") (EVar "l")) (ELit (LString ""))) (EApp (EApp (EVar "startsWith") (ELit (LString "--"))) (EApp (EVar "trim") (EVar "l"))))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Expr" true) (mem "Decl" true) (mem "noBinderId" false) (mem "noDeclLoc" false) (mem "Ty" true) (mem "Pat" true) (mem "UseMember" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "joinWith" false) (mem "startsWith" false) (mem "listLen" false) (mem "anyList" false) (mem "joinNl" false) (mem "dedupBy" false))))
 (DUse false (UseGroup ("list") ((mem "sortBy" false) (mem "last" false) (mem "reverse" false) (mem "findMap" false))))
 (DUse false (UseGroup ("array") ((mem "get" false "arrayGet"))))
-(DUse false (UseGroup ("string") ((mem "split" false) (mem "isUpper" false) (mem "words" false) (mem "unwords" false))))
+(DUse false (UseGroup ("string") ((mem "split" false) (mem "isUpper" false) (mem "words" false) (mem "unwords" false) (mem "trim" false) (mem "trimLeft" false))))
 (DUse false (UseGroup ("support" "path") ((mem "stripMdk" false))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "mustCompile" false) (mem "find" false "reFind") (mem "escape" false) (mem "isMatch" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "commentLine" false) (mem "commentText" false) (mem "commentCol" false))))
@@ -1848,3 +1862,7 @@ ruleNamePassthroughArm = "rule-passthrough-arm"
 (DFunDef false "ruleNameThreadedInvariant" () (ELit (LString "rule-threaded-invariant")))
 (DTypeSig true "ruleNamePassthroughArm" (TyCon "String"))
 (DFunDef false "ruleNamePassthroughArm" () (ELit (LString "rule-passthrough-arm")))
+(DTypeSig true "indentWidth" (TyFun (TyCon "String") (TyCon "Int")))
+(DFunDef false "indentWidth" ((PVar "l")) (EBinOp "-" (EApp (EVar "stringLength") (EVar "l")) (EApp (EVar "stringLength") (EApp (EVar "trimLeft") (EVar "l")))))
+(DTypeSig true "isCodeText" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isCodeText" ((PVar "l")) (EApp (EVar "not") (EBinOp "||" (EBinOp "==" (EApp (EVar "trim") (EVar "l")) (ELit (LString ""))) (EApp (EApp (EVar "startsWith") (ELit (LString "--"))) (EApp (EVar "trim") (EVar "l"))))))

@@ -1592,7 +1592,7 @@ visitModsF : (String -> String -> Result ParseError (List Decl)) ->
   String ->
   List String ->
   <IO> Result LoadError (List String, List (String, String, List Decl))
-visitModsF parseFn read deps roots stack v0 a0 importer xs0 = go v0 a0 xs0
+visitModsF parseFn read deps roots stack seen0 a0 importer xs0 = go seen0 a0 xs0
   where
     go visited acc [] = Ok (visited, acc)
     go visited acc (d :: ds) =

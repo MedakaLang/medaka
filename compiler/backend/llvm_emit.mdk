@@ -5262,7 +5262,7 @@ concatFoldEmit : Emit ->
   LTy ->
   List CExpr ->
   (String, LTy)
-concatFoldEmit e env v0 t0 xs0 = go v0 t0 xs0
+concatFoldEmit e env reg0 ty0 xs0 = go reg0 ty0 xs0
   where
     go v t [] = (v, t)
     go v t (x :: xs) =

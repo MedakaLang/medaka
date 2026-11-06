@@ -2659,7 +2659,7 @@ declImplEntries : Option DispositionTable ->
   List (String, (Int, Value e))
 declImplEntries dispositions env disp decl0 = go decl0
   where
-    -- #1037: an ATTRIBUTE IS METADATA — it must never change which impls exist.  A
+    -- #1037: an attribute is metadata: it must never change which impls exist.  A
     -- decl attribute parses to `DAttrib attrs <decl>`, and without this arm
     -- `@deprecated "…" impl Speak Cat where …` fell through to `_ => []`: the impl
     -- contributed no VTypedImpl at all, so `speak Cat` silently answered from the

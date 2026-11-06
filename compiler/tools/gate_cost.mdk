@@ -524,7 +524,7 @@ gateNameHash s =
   gateNameHashGo a 0 (arrayLength a) 7
 
 gateNameHashGo : Array Char -> Int -> Int -> Int -> Int
-gateNameHashGo a i0 n h0 = go i0 h0
+gateNameHashGo a i0 n hash0 = go i0 hash0
   where
     go i h
       | i >= n = h

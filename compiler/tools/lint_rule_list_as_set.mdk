@@ -423,7 +423,7 @@ grows (rd@(Reader scopes _)) lets param e = match unwrapLoc e
   _ => grownDirect rd param e
 
 grownDirect : Reader -> Param -> Expr -> Bool
-grownDirect (rd@(Reader scopes _)) param e0 = go e0
+grownDirect (rd@(Reader scopes _)) param expr0 = go expr0
   where
     go e = match unwrapLoc e
       EBinOp "::" _ t _ => isParam scopes param t || go t
@@ -597,7 +597,7 @@ accProbes (rd@(Reader scopes _)) acc body =
 
 -- Whether some tail position of `e` returns the accumulator grown.
 tailGrows : Reader -> Param -> Expr -> Bool
-tailGrows rd acc e0 = go e0
+tailGrows rd acc expr0 = go expr0
   where
     go e = match unwrapLoc e
       EBinOp "::" _ _ _ => grownDirect rd acc e

@@ -1,5 +1,5 @@
 # META
-source_lines=432
+source_lines=428
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-walker-wildcard: a self-recursive function over constructor patterns whose final wildcard returns a constant or its input without recursing.
@@ -18,6 +18,7 @@ import frontend.ast.{
   Variant(..),
   orElseLoc,
   patBoundNames,
+  variantName,
 }
 import frontend.ast_walk.{childExprs}
 import frontend.parser.{Positions(..)}
@@ -77,8 +78,9 @@ rule =
     ruleWalkerWildcard
     None
 
--- What the rule reads of one file: the project index and the file's own declarations (their `data` resolves a constructor the index does
--- not yet hold).
+-- What the rule reads of one file: the project index and the file's own
+-- declarations (their `data` resolves a constructor the index does not yet
+-- hold).
 data Env = Env ProjectIndex (List Decl)
 
 -- One top-level clause with the declaration's start line.
@@ -102,7 +104,7 @@ topFindings env (dl :: rest) = match topClause dl
   Some (TopClause name ps body loc) =>
     let same = takeWhile (sameTop name) rest
     let group = TopClause name ps body loc :: flatMap clauseList same
-    groupFindings env name (map toClause group) (clauseLoc (lastOf group))
+    groupFindings env name (map toClause group) (clauseLoc (last group))
       ++ flatMap (topBodyFindings env) group
       ++ topFindings env (dropWhile (sameTop name) rest)
 
@@ -113,9 +115,6 @@ clauseList dl = match topClause dl
 
 toClause : TopClause -> FunClause
 toClause (TopClause _ ps body _) = FunClause ps body
-
-lastOf : List TopClause -> Option TopClause
-lastOf cs = last cs
 
 clauseLoc : Option TopClause -> Option Loc
 clauseLoc (Some (TopClause _ _ _ loc)) = loc
@@ -306,7 +305,7 @@ ctorsOfPat (PRec n _ _) = [lastSegment n]
 ctorsOfPat (PAs _ _ _ p) = ctorsOfPat p
 ctorsOfPat (PAnn p _) = ctorsOfPat p
 ctorsOfPat (POr ps) = flatMap ctorsOfPat ps
--- Every other pattern form (variable, wildcard, literal, list, tuple) names no constructor at its top.
+-- Bound: every other pattern form (variable, wildcard, literal, list, tuple) names no constructor at its top, so there is nothing to swallow.
 -- lint-disable-next-line rule-walker-wildcard
 ctorsOfPat _ = []
 
@@ -337,7 +336,7 @@ constantOrInput inputs e = match unwrapLoc e
   EUnOp "-" x _ => constantOrInput [] x
   EApp _ _ => match spineOf e []
     (hd, args) => ctorHead hd && allList (constantOrInput []) args
-  -- Only the forms above can be a constant; any other expression computes.
+  -- Bound: only the forms above can be a constant; any other expression computes, so the wildcard names no constructor.
   -- lint-disable-next-line rule-walker-wildcard
   _ => False
 
@@ -400,9 +399,6 @@ declSum c (DData { dataName = n, dataCtors = vs, ... }) =
 declSum c (DAttrib _ d) = declSum c d
 declSum _ _ = None
 
-variantName : Variant -> String
-variantName (Variant n _) = n
-
 variantArity : Variant -> (String, Int)
 variantArity (Variant n (ConPos tys)) = (n, listLen tys)
 variantArity (Variant n (ConNamed fields _)) = (n, listLen fields)
@@ -436,7 +432,7 @@ siblingOf r x =
     && x.ixrParent == r.ixrParent
 # DESUGAR
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Arm" true) (mem "Decl" true) (mem "Expr" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Lit" true) (mem "Loc" false) (mem "Pat" true) (mem "ConPayload" true) (mem "Variant" true) (mem "orElseLoc" false) (mem "patBoundNames" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Arm" true) (mem "Decl" true) (mem "Expr" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Lit" true) (mem "Loc" false) (mem "Pat" true) (mem "ConPayload" true) (mem "Variant" true) (mem "orElseLoc" false) (mem "patBoundNames" false) (mem "variantName" false))))
 (DUse false (UseGroup ("frontend" "ast_walk") ((mem "childExprs" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
 (DUse false (UseGroup ("list") ((mem "findMap" false) (mem "get" false) (mem "init" false) (mem "last" false) (mem "takeWhile" false) (mem "dropWhile" false))))
@@ -454,13 +450,11 @@ siblingOf r x =
 (DFunDef false "ruleWalkerWildcard" ((PVar "idx") PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EVar "topFindings") (EApp (EApp (EVar "Env") (EApp (EVar "projectIndexOf") (EVar "idx"))) (EVar "prog"))) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))
 (DTypeSig false "topFindings" (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc")))) (TyApp (TyCon "List") (TyCon "Finding")))))
 (DFunDef false "topFindings" (PWild (PList)) (EListLit))
-(DFunDef false "topFindings" ((PVar "env") (PCons (PVar "dl") (PVar "rest"))) (EMatch (EApp (EVar "topClause") (EVar "dl")) (arm (PCon "None") () (EApp (EApp (EVar "topFindings") (EVar "env")) (EVar "rest"))) (arm (PCon "Some" (PCon "TopClause" (PVar "name") (PVar "ps") (PVar "body") (PVar "loc"))) () (EBlock (DoLet false false (PVar "same") (EApp (EApp (EVar "takeWhile") (EApp (EVar "sameTop") (EVar "name"))) (EVar "rest"))) (DoLet false false (PVar "group") (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "TopClause") (EVar "name")) (EVar "ps")) (EVar "body")) (EVar "loc")) (EApp (EApp (EVar "flatMap") (EVar "clauseList")) (EVar "same")))) (DoExpr (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "groupFindings") (EVar "env")) (EVar "name")) (EApp (EApp (EVar "map") (EVar "toClause")) (EVar "group"))) (EApp (EVar "clauseLoc") (EApp (EVar "lastOf") (EVar "group")))) (EApp (EApp (EVar "flatMap") (EApp (EVar "topBodyFindings") (EVar "env"))) (EVar "group"))) (EApp (EApp (EVar "topFindings") (EVar "env")) (EApp (EApp (EVar "dropWhile") (EApp (EVar "sameTop") (EVar "name"))) (EVar "rest")))))))))
+(DFunDef false "topFindings" ((PVar "env") (PCons (PVar "dl") (PVar "rest"))) (EMatch (EApp (EVar "topClause") (EVar "dl")) (arm (PCon "None") () (EApp (EApp (EVar "topFindings") (EVar "env")) (EVar "rest"))) (arm (PCon "Some" (PCon "TopClause" (PVar "name") (PVar "ps") (PVar "body") (PVar "loc"))) () (EBlock (DoLet false false (PVar "same") (EApp (EApp (EVar "takeWhile") (EApp (EVar "sameTop") (EVar "name"))) (EVar "rest"))) (DoLet false false (PVar "group") (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "TopClause") (EVar "name")) (EVar "ps")) (EVar "body")) (EVar "loc")) (EApp (EApp (EVar "flatMap") (EVar "clauseList")) (EVar "same")))) (DoExpr (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "groupFindings") (EVar "env")) (EVar "name")) (EApp (EApp (EVar "map") (EVar "toClause")) (EVar "group"))) (EApp (EVar "clauseLoc") (EApp (EVar "last") (EVar "group")))) (EApp (EApp (EVar "flatMap") (EApp (EVar "topBodyFindings") (EVar "env"))) (EVar "group"))) (EApp (EApp (EVar "topFindings") (EVar "env")) (EApp (EApp (EVar "dropWhile") (EApp (EVar "sameTop") (EVar "name"))) (EVar "rest")))))))))
 (DTypeSig false "clauseList" (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "TopClause"))))
 (DFunDef false "clauseList" ((PVar "dl")) (EMatch (EApp (EVar "topClause") (EVar "dl")) (arm (PCon "Some" (PVar "c")) () (EListLit (EVar "c"))) (arm (PCon "None") () (EListLit))))
 (DTypeSig false "toClause" (TyFun (TyCon "TopClause") (TyCon "FunClause")))
 (DFunDef false "toClause" ((PCon "TopClause" PWild (PVar "ps") (PVar "body") PWild)) (EApp (EApp (EVar "FunClause") (EVar "ps")) (EVar "body")))
-(DTypeSig false "lastOf" (TyFun (TyApp (TyCon "List") (TyCon "TopClause")) (TyApp (TyCon "Option") (TyCon "TopClause"))))
-(DFunDef false "lastOf" ((PVar "cs")) (EApp (EVar "last") (EVar "cs")))
 (DTypeSig false "clauseLoc" (TyFun (TyApp (TyCon "Option") (TyCon "TopClause")) (TyApp (TyCon "Option") (TyCon "Loc"))))
 (DFunDef false "clauseLoc" ((PCon "Some" (PCon "TopClause" PWild PWild PWild (PVar "loc")))) (EVar "loc"))
 (DFunDef false "clauseLoc" ((PCon "None")) (EVar "None"))
@@ -559,8 +553,6 @@ siblingOf r x =
 (DFunDef false "declSum" ((PVar "c") (PRec "DData" ((rf "dataName" (PVar "n")) (rf "dataCtors" (PVar "vs"))) true)) (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "v")) (EBinOp "==" (EApp (EVar "variantName") (EVar "v")) (EVar "c")))) (EVar "vs")) (EApp (EVar "Some") (ETuple (EVar "n") (EApp (EApp (EVar "map") (EVar "variantArity")) (EVar "vs")))) (EVar "None")))
 (DFunDef false "declSum" ((PVar "c") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "declSum") (EVar "c")) (EVar "d")))
 (DFunDef false "declSum" (PWild PWild) (EVar "None"))
-(DTypeSig false "variantName" (TyFun (TyCon "Variant") (TyCon "String")))
-(DFunDef false "variantName" ((PCon "Variant" (PVar "n") PWild)) (EVar "n"))
 (DTypeSig false "variantArity" (TyFun (TyCon "Variant") (TyTuple (TyCon "String") (TyCon "Int"))))
 (DFunDef false "variantArity" ((PCon "Variant" (PVar "n") (PCon "ConPos" (PVar "tys")))) (ETuple (EVar "n") (EApp (EVar "listLen") (EVar "tys"))))
 (DFunDef false "variantArity" ((PCon "Variant" (PVar "n") (PCon "ConNamed" (PVar "fields") PWild))) (ETuple (EVar "n") (EApp (EVar "listLen") (EVar "fields"))))
@@ -574,7 +566,7 @@ siblingOf r x =
 (DFunDef false "siblingOf" ((PVar "r") (PVar "x")) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "x") "ixrKind") (EVar "RkCtor")) (EBinOp "==" (EFieldAccess (EVar "x") "ixrModule") (EFieldAccess (EVar "r") "ixrModule"))) (EBinOp "==" (EFieldAccess (EVar "x") "ixrParent") (EFieldAccess (EVar "r") "ixrParent"))))
 # MARK
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Arm" true) (mem "Decl" true) (mem "Expr" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Lit" true) (mem "Loc" false) (mem "Pat" true) (mem "ConPayload" true) (mem "Variant" true) (mem "orElseLoc" false) (mem "patBoundNames" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Arm" true) (mem "Decl" true) (mem "Expr" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Lit" true) (mem "Loc" false) (mem "Pat" true) (mem "ConPayload" true) (mem "Variant" true) (mem "orElseLoc" false) (mem "patBoundNames" false) (mem "variantName" false))))
 (DUse false (UseGroup ("frontend" "ast_walk") ((mem "childExprs" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
 (DUse false (UseGroup ("list") ((mem "findMap" false) (mem "get" false) (mem "init" false) (mem "last" false) (mem "takeWhile" false) (mem "dropWhile" false))))
@@ -592,13 +584,11 @@ siblingOf r x =
 (DFunDef false "ruleWalkerWildcard" ((PVar "idx") PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EVar "topFindings") (EApp (EApp (EVar "Env") (EApp (EVar "projectIndexOf") (EVar "idx"))) (EVar "prog"))) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))
 (DTypeSig false "topFindings" (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc")))) (TyApp (TyCon "List") (TyCon "Finding")))))
 (DFunDef false "topFindings" (PWild (PList)) (EListLit))
-(DFunDef false "topFindings" ((PVar "env") (PCons (PVar "dl") (PVar "rest"))) (EMatch (EApp (EVar "topClause") (EVar "dl")) (arm (PCon "None") () (EApp (EApp (EVar "topFindings") (EVar "env")) (EVar "rest"))) (arm (PCon "Some" (PCon "TopClause" (PVar "name") (PVar "ps") (PVar "body") (PVar "loc"))) () (EBlock (DoLet false false (PVar "same") (EApp (EApp (EVar "takeWhile") (EApp (EVar "sameTop") (EVar "name"))) (EVar "rest"))) (DoLet false false (PVar "group") (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "TopClause") (EVar "name")) (EVar "ps")) (EVar "body")) (EVar "loc")) (EApp (EApp (EDictApp "flatMap") (EVar "clauseList")) (EVar "same")))) (DoExpr (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "groupFindings") (EVar "env")) (EVar "name")) (EApp (EApp (EMethodRef "map") (EVar "toClause")) (EVar "group"))) (EApp (EVar "clauseLoc") (EApp (EVar "lastOf") (EVar "group")))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "topBodyFindings") (EVar "env"))) (EVar "group"))) (EApp (EApp (EVar "topFindings") (EVar "env")) (EApp (EApp (EVar "dropWhile") (EApp (EVar "sameTop") (EVar "name"))) (EVar "rest")))))))))
+(DFunDef false "topFindings" ((PVar "env") (PCons (PVar "dl") (PVar "rest"))) (EMatch (EApp (EVar "topClause") (EVar "dl")) (arm (PCon "None") () (EApp (EApp (EVar "topFindings") (EVar "env")) (EVar "rest"))) (arm (PCon "Some" (PCon "TopClause" (PVar "name") (PVar "ps") (PVar "body") (PVar "loc"))) () (EBlock (DoLet false false (PVar "same") (EApp (EApp (EVar "takeWhile") (EApp (EVar "sameTop") (EVar "name"))) (EVar "rest"))) (DoLet false false (PVar "group") (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "TopClause") (EVar "name")) (EVar "ps")) (EVar "body")) (EVar "loc")) (EApp (EApp (EDictApp "flatMap") (EVar "clauseList")) (EVar "same")))) (DoExpr (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "groupFindings") (EVar "env")) (EVar "name")) (EApp (EApp (EMethodRef "map") (EVar "toClause")) (EVar "group"))) (EApp (EVar "clauseLoc") (EApp (EVar "last") (EVar "group")))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "topBodyFindings") (EVar "env"))) (EVar "group"))) (EApp (EApp (EVar "topFindings") (EVar "env")) (EApp (EApp (EVar "dropWhile") (EApp (EVar "sameTop") (EVar "name"))) (EVar "rest")))))))))
 (DTypeSig false "clauseList" (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "TopClause"))))
 (DFunDef false "clauseList" ((PVar "dl")) (EMatch (EApp (EVar "topClause") (EVar "dl")) (arm (PCon "Some" (PVar "c")) () (EListLit (EVar "c"))) (arm (PCon "None") () (EListLit))))
 (DTypeSig false "toClause" (TyFun (TyCon "TopClause") (TyCon "FunClause")))
 (DFunDef false "toClause" ((PCon "TopClause" PWild (PVar "ps") (PVar "body") PWild)) (EApp (EApp (EVar "FunClause") (EVar "ps")) (EVar "body")))
-(DTypeSig false "lastOf" (TyFun (TyApp (TyCon "List") (TyCon "TopClause")) (TyApp (TyCon "Option") (TyCon "TopClause"))))
-(DFunDef false "lastOf" ((PVar "cs")) (EApp (EVar "last") (EVar "cs")))
 (DTypeSig false "clauseLoc" (TyFun (TyApp (TyCon "Option") (TyCon "TopClause")) (TyApp (TyCon "Option") (TyCon "Loc"))))
 (DFunDef false "clauseLoc" ((PCon "Some" (PCon "TopClause" PWild PWild PWild (PVar "loc")))) (EVar "loc"))
 (DFunDef false "clauseLoc" ((PCon "None")) (EVar "None"))
@@ -697,8 +687,6 @@ siblingOf r x =
 (DFunDef false "declSum" ((PVar "c") (PRec "DData" ((rf "dataName" (PVar "n")) (rf "dataCtors" (PVar "vs"))) true)) (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "v")) (EBinOp "==" (EApp (EVar "variantName") (EVar "v")) (EVar "c")))) (EVar "vs")) (EApp (EVar "Some") (ETuple (EVar "n") (EApp (EApp (EMethodRef "map") (EVar "variantArity")) (EVar "vs")))) (EVar "None")))
 (DFunDef false "declSum" ((PVar "c") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "declSum") (EVar "c")) (EVar "d")))
 (DFunDef false "declSum" (PWild PWild) (EVar "None"))
-(DTypeSig false "variantName" (TyFun (TyCon "Variant") (TyCon "String")))
-(DFunDef false "variantName" ((PCon "Variant" (PVar "n") PWild)) (EVar "n"))
 (DTypeSig false "variantArity" (TyFun (TyCon "Variant") (TyTuple (TyCon "String") (TyCon "Int"))))
 (DFunDef false "variantArity" ((PCon "Variant" (PVar "n") (PCon "ConPos" (PVar "tys")))) (ETuple (EVar "n") (EApp (EVar "listLen") (EVar "tys"))))
 (DFunDef false "variantArity" ((PCon "Variant" (PVar "n") (PCon "ConNamed" (PVar "fields") PWild))) (ETuple (EVar "n") (EApp (EVar "listLen") (EVar "fields"))))

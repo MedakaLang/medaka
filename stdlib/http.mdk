@@ -453,15 +453,15 @@ validFieldValue input pos0 end = go pos0
 -- byte at or past `end` is read.
 export
 findByte : Bytes -> Int -> Int -> Int -> Option Int
-findByte value pos0 end wanted = go pos0
+findByte value pos end wanted = go pos
   where
-    go pos =
-      if pos >= end then
+    go at =
+      if at >= end then
         None
-      else if byteAt value pos == wanted then
-        Some pos
+      else if byteAt value at == wanted then
+        Some at
       else
-        go (pos + 1)
+        go (at + 1)
 
 -- `avail` is how many bytes of `input` the caller has actually received; the
 -- search runs out of input there, not at `B.length input`.
@@ -543,26 +543,26 @@ parseRequestLine input avail start cursor = do
 -- a tab, or `end` when they all are.
 export
 trimLeftOws : Bytes -> Int -> Int -> Int
-trimLeftOws value pos0 end = go pos0
+trimLeftOws value pos end = go pos
   where
-    go pos =
-      if pos < end && (byteAt value pos == 32 || byteAt value pos == 9) then
-        go (pos + 1)
+    go at =
+      if at < end && (byteAt value at == 32 || byteAt value at == 9) then
+        go (at + 1)
       else
-        pos
+        at
 
 -- | The index one past the last byte in `value[start, end)` that is not a
 -- space or a tab, or `start` when they all are.
 export
 trimRightOws : Bytes -> Int -> Int -> Int
-trimRightOws value start end0 = go end0
+trimRightOws value start end = go end
   where
-    go end =
-      if end > start
-        && (byteAt value (end - 1) == 32 || byteAt value (end - 1) == 9) then
-        go (end - 1)
+    go stop =
+      if stop > start
+        && (byteAt value (stop - 1) == 32 || byteAt value (stop - 1) == 9) then
+        go (stop - 1)
       else
-        end
+        stop
 
 parseHeaderLine : Bytes -> Int -> Int -> Result FrameError Header
 parseHeaderLine input start end =
@@ -644,7 +644,7 @@ parseFieldsChecked : Bytes ->
   Bool ->
   List Header ->
   Result FrameError HeaderBlock
-parseFieldsChecked inp p0 secBeg prior c0 trailer a0 = go p0 c0 a0
+parseFieldsChecked inp pos0 secBeg prior n0 trailer acc0 = go pos0 n0 acc0
   where
     go pos count acc = do
       step <- fieldStep inp (B.length inp) pos pos secBeg prior count trailer

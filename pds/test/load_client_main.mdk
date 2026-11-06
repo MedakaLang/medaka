@@ -664,7 +664,7 @@ loadLoop : Connection * ->
   Int ->
   Int ->
   <Clock, Net> (Int, Int, Int)
-loadLoop conn pend0 plan clientId t0 budget i0 non0 errors = go pend0 i0 non0
+loadLoop conn pend0 plan clientId t0 budget i0 bad0 errors = go pend0 i0 bad0
   where
     go pending i non200 =
       if elapsedSince t0 >= budget then

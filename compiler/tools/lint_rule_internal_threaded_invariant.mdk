@@ -46,6 +46,8 @@ import tools.lint_recursion.{
 import tools.lint_scope.{FileScopes}
 import tools.lint_shared.{
   declLocList,
+  indentWidth,
+  isCodeText,
   isCtorName,
   isEVarNamed,
   mentionsVar,
@@ -356,15 +358,10 @@ clauseSpan plan (Clause l ps body, bound) = do
 lineText : Array String -> Int -> String
 lineText ls n = optionOr "" (arrayGet (n - 1) ls)
 
-isCode : String -> Bool
-isCode s =
-  let t = trim s
-  t /= "" && not (startsWith "--" t)
-
 indentAt : Array String -> Int -> Int
 indentAt ls n =
   let s = lineText ls n
-  stringLength s - stringLength (trimLeft s)
+  indentWidth s
 
 -- The last code line from `lo` up to `hi`, `lo` itself when there is none.
 lastCode : Array String -> Int -> Int -> Int
@@ -372,7 +369,7 @@ lastCode ls lo hi0 = go hi0
   where
     go hi
       | hi <= lo = lo
-      | isCode (lineText ls hi) = hi
+      | isCodeText (lineText ls hi) = hi
       | otherwise = go (hi - 1)
 
 -- The columns of the parameter patterns of a head line, from `start` (just
@@ -471,7 +468,7 @@ lineFits : Plan -> Span -> Int -> Bool
 lineFits plan sp l =
   let s = lineText plan.plLines l
   not (contains "\"\"\"" s || contains "\t" s)
-    && (l == sp.spFirst || not (isCode s) || indentAt plan.plLines l > 0)
+    && (l == sp.spFirst || not (isCodeText s) || indentAt plan.plLines l > 0)
 
 -- An invariant parameter that the clauses mention only as the arguments of the
 -- self-calls is dead.
@@ -633,7 +630,7 @@ bindingsFit plan sp w = match unwrapLoc sp.spBody
     allList (b => not (anyList (n => bindMentions n b) changing)) binds
       && allList
         (l =>
-          not (isCode (lineText plan.plLines l))
+          not (isCodeText (lineText plan.plLines l))
             || indentAt plan.plLines l >= 4)
         [w + 1..=sp.spLast]
   _ => False
@@ -848,7 +845,7 @@ nextCodeLine plan dropped l0 limit = go (l0 + 1)
   where
     go l
       | l > limit = None
-      | anyList (== l) dropped || not (isCode (lineText plan.plLines l)) =
+      | anyList (== l) dropped || not (isCodeText (lineText plan.plLines l)) =
         go (l + 1)
       | otherwise = Some l
 

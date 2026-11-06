@@ -11,7 +11,7 @@ import frontend.parser.{Positions(..)}
 import list.{last, sort}
 import string.{endsWith, indexOf, repeat, startsWith, trim, trimLeft, trimRight}
 import support.char.{isAlnum}
-import support.util.{allList, anyList, isEmptyL}
+import support.util.{allList, anyList, initList, isEmptyL}
 import tools.lint_core.{
   Applicability(..),
   Category(..),
@@ -31,6 +31,8 @@ import tools.lint_core.{
 }
 import tools.lint_shared.{
   ctorVarPassthru,
+  indentWidth,
+  isCodeText,
   isEVarNamed,
   isNilPCon,
   matchScrutOf,
@@ -217,27 +219,27 @@ passthroughFix : FileFacts -> Ctx -> Expr -> Option Fix
 passthroughFix facts ctx e = do
   (Loc path sl sc el ec) <- ctx.ctxSpan
   (first, pass, succArm) <- passthroughArms e
-  ensure (ctx.ctxOwn == ctx.ctxSpan && statementParent ctx.ctxParent)
+  guard (ctx.ctxOwn == ctx.ctxSpan && statementParent ctx.ctxParent)
   scrutEnd <- tightSpan (matchScrutOf e)
-  ensure (spanEndLine scrutEnd == sl && matchTokenAt facts sl sc)
-  ensure (positionOk facts ctx sl sc (if ec == 0 then el - 1 else el))
+  guard (spanEndLine scrutEnd == sl && matchTokenAt facts sl sc)
+  guard (positionOk facts ctx sl sc (if ec == 0 then el - 1 else el))
   firstArm <- nextCode facts sl
-  let ac = indentOf (lineAt facts firstArm)
-  ensure (ac > indentOf (lineAt facts sl))
+  let ac = indentWidth (lineAt facts firstArm)
+  guard (ac > indentWidth (lineAt facts sl))
   passLine <- passthroughLine first pass firstArm
   succLine <- if first then nextCode facts passLine else Some firstArm
-  ensure (first || succLine < passLine)
-  ensure (indentOf (lineAt facts passLine) == ac)
-  ensure (isPassthroughText (lineAt facts passLine))
-  ensure (indentOf (lineAt facts succLine) == ac)
+  guard (first || succLine < passLine)
+  guard (indentWidth (lineAt facts passLine) == ac)
+  guard (isPassthroughText (lineAt facts passLine))
+  guard (indentWidth (lineAt facts succLine) == ac)
   (ctorName, inner) <- successParts succArm
-  ensure (not (hasBareStatement succArm))
+  guard (not (hasBareStatement succArm))
   let sline = lineAt facts succLine
   arrow <- indexOf "=>" sline
-  ensure
+  guard
     (stringSlice ac (ac + stringLength ctorName + 1) sline == ctorName ++ " ")
   let patText = trim (stringSlice (ac + stringLength ctorName) arrow sline)
-  ensure (patTextOk inner patText)
+  guard (patTextOk inner patText)
   (blockCol, deleted, extra) <- bodyPlan facts path ac succLine passLine arrow
   let header =
     FixEdit
@@ -264,16 +266,13 @@ bodyPlan facts path ac succLine passLine arrow = do
   let rest = stringSlice (arrow + 2) (stringLength sline) sline
   if trim rest == "" then do
     bodyLine <- nextCode facts succLine
-    let bi = indentOf (lineAt facts bodyLine)
-    ensure (bi > ac)
+    let bi = indentWidth (lineAt facts bodyLine)
+    guard (bi > ac)
     Some (bi, [passLine, succLine], [])
   else do
-    ensure (not (startsWith "--" (trim rest)))
+    guard (not (startsWith "--" (trim rest)))
     let bodyCol = arrow + 2 + stringLength rest - stringLength (trimLeft rest)
     Some (ac, [passLine], [FixEdit (Loc path succLine ac succLine bodyCol) ""])
-
-ensure : Bool -> Option Unit
-ensure c = if c then Some () else None
 
 -- `(passthrough listed first, passthrough arm, success arm)`.
 passthroughArms : Expr -> Option (Bool, Arm, Arm)
@@ -290,17 +289,12 @@ passthroughArms _ = None
 -- statement, as in `log x` then the result.
 hasBareStatement : Arm -> Bool
 hasBareStatement (Arm _ _ body) = match unwrapLoc body
-  EBlock stmts => anyList isBare (dropLast stmts)
+  EBlock stmts => anyList isBare (initList stmts)
   _ => False
 
 isBare : DoStmt -> Bool
 isBare (DoExpr _) = True
 isBare _ = False
-
-dropLast : List DoStmt -> List DoStmt
-dropLast [] = []
-dropLast [_] = []
-dropLast (s :: ss) = s :: dropLast ss
 
 -- The success arm's constructor and the pattern it wraps.
 successParts : Arm -> Option (String, Pat)
@@ -343,10 +337,10 @@ lastStatement facts ctx l c endLine =
   (ctx.ctxParent == Some KDo || ctx.ctxParent == Some KBlock)
     && trim (stringSlice 0 c (lineAt facts l)) == ""
     && (match prevCode facts l
-      Some p => indentOf (lineAt facts p) == indentOf (lineAt facts l)
+      Some p => indentWidth (lineAt facts p) == indentWidth (lineAt facts l)
       None => False)
     && (match nextCode facts endLine
-      Some n => indentOf (lineAt facts n) < indentOf (lineAt facts l)
+      Some n => indentWidth (lineAt facts n) < indentWidth (lineAt facts l)
       None => True)
 
 -- The match follows an `=` or `=>` on its line, or starts its line right after
@@ -370,21 +364,15 @@ endsAssign s =
 lineAt : FileFacts -> Int -> String
 lineAt facts n = optionOr "" (sourceLine facts n)
 
-indentOf : String -> Int
-indentOf l = stringLength l - stringLength (trimLeft l)
-
-isCodeLine : String -> Bool
-isCodeLine l = not (trim l == "" || startsWith "--" (trim l))
-
 nextCode : FileFacts -> Int -> Option Int
 nextCode facts n = match sourceLine facts (n + 1)
-  Some l => if isCodeLine l then Some (n + 1) else nextCode facts (n + 1)
+  Some l => if isCodeText l then Some (n + 1) else nextCode facts (n + 1)
   None => None
 
 prevCode : FileFacts -> Int -> Option Int
 prevCode facts n
   | n <= 1 = None
-  | isCodeLine (lineAt facts (n - 1)) = Some (n - 1)
+  | isCodeText (lineAt facts (n - 1)) = Some (n - 1)
   | otherwise = prevCode facts (n - 1)
 
 -- `None => None`, `Err e => Err e` on one line.
