@@ -378,10 +378,9 @@ userMainName : String
 userMainName = "__probe_user_main__"
 
 -- `src` with its top-level `main` turned into the unit function
--- `userMainName`: `main = e` becomes `userMainName () = e` and a one-line
--- `main : T` becomes `userMainName : Unit -> T`.  When any head has another
--- shape (a pattern argument, a guard, a signature continued on later lines)
--- every head is renamed in place and left a value.  `src` itself when it
+-- `userMainName`: a clause head `main ...` becomes `userMainName () ...`, and
+-- `main : T` becomes `userMainName : Unit -> T` with the `Unit ->` right after
+-- the colon wherever the signature's lines break.  `src` itself when it
 -- defines no top-level `main`.
 export
 renameUserMain : String -> String
@@ -391,8 +390,8 @@ renameUserMain src =
   match mainHeads starts toks spans
     [] => blankShebang src
     heads =>
-      let asFunction = all (h => not (isOtherHead h)) heads
-      blankShebang (joinNl (renameHeads asFunction 1 heads (splitNl src)))
+      blankShebang
+        (joinNl (applyEdits 1 (flatMap headEdits heads) (splitNl src)))
 
 -- A `#!` line is only valid at offset 0 of a file, and a probe puts its own
 -- lines in front of the target, so the line is emptied (its newline and every
@@ -407,18 +406,23 @@ blankShebang src
 -- A column-0 `main` head, by its 1-based line.
 data MainHead =
   | DefHead Int
-  -- The column of the signature's `:`.
-  | SigHead Int Int
-  | OtherHead Int
+  -- The line and column of the signature's `:`.
+  | SigHead Int Int Int
 
-headLine : MainHead -> Int
-headLine (DefHead line) = line
-headLine (SigHead line _) = line
-headLine (OtherHead line) = line
+-- One line's rewrite: the column-0 `main` renamed, followed by a suffix; or
+-- ` Unit ->` inserted after the colon at a column.
+data HeadEdit = RenameMain Int String | UnitArg Int Int
 
-isOtherHead : MainHead -> Bool
-isOtherHead (OtherHead _) = True
-isOtherHead _ = False
+editLine : HeadEdit -> Int
+editLine (RenameMain line _) = line
+editLine (UnitArg line _) = line
+
+-- On a line holding both, the insertion comes first, so its column still
+-- counts from the original `main`.
+headEdits : MainHead -> List HeadEdit
+headEdits (DefHead line) = [RenameMain line " ()"]
+headEdits (SigHead line colonLine col) =
+  [UnitArg colonLine col, RenameMain line ""]
 
 -- The heads, ascending, of every `main` identifier token that starts at
 -- column 0.
@@ -431,25 +435,16 @@ mainHeads starts ((TIdent "main") :: toks) ((off, _) :: spans) =
 mainHeads starts (_ :: toks) (_ :: spans) = mainHeads starts toks spans
 mainHeads _ _ _ = []
 
--- The head on `line`, from the tokens after its `main`.
+-- The head on `line`, from the first token after its `main` that is not
+-- layout: a colon starts a signature, anything else a clause.
 classifyHead : Array Int -> Int -> List Token -> List (Int, Int) -> MainHead
-classifyHead _ line (TEqual :: _) _ = DefHead line
-classifyHead starts line (TColon :: toks) ((off, _) :: spans) =
-  if endsOnLine starts line toks spans then
-    SigHead line (snd (offsetToLineColFast starts off))
-  else
-    OtherHead line
-classifyHead _ line _ _ = OtherHead line
-
--- Whether the first token after `line` (layout tokens skipped) starts a new
--- declaration at column 0, so the signature on `line` ends there.
-endsOnLine : Array Int -> Int -> List Token -> List (Int, Int) -> Bool
-endsOnLine starts line (tok :: toks) ((off, _) :: spans)
-  | isLayout tok = endsOnLine starts line toks spans
-  | otherwise = match offsetToLineColFast starts off
-    (l, col) =>
-      if l == line then endsOnLine starts line toks spans else col == 0
-endsOnLine _ _ _ _ = True
+classifyHead starts line (TColon :: _) ((off, _) :: _) =
+  match offsetToLineColFast starts off
+    (colonLine, col) => SigHead line colonLine col
+classifyHead starts line (tok :: toks) (_ :: spans)
+  | isLayout tok = classifyHead starts line toks spans
+  | otherwise = DefHead line
+classifyHead _ line _ _ = DefHead line
 
 isLayout : Token -> Bool
 isLayout TNewline = True
@@ -457,18 +452,17 @@ isLayout TIndent = True
 isLayout TDedent = True
 isLayout _ = False
 
-renameHeads : Bool -> Int -> List MainHead -> List String -> List String
-renameHeads _ _ [] lines = lines
-renameHeads _ _ _ [] = []
-renameHeads asFunction n (h :: hs) (l :: ls)
-  | n == headLine h =
-    renameHead asFunction h l :: renameHeads asFunction (n + 1) hs ls
-  | otherwise = l :: renameHeads asFunction (n + 1) (h :: hs) ls
+-- [lines] numbered from [n]; each line takes the edits on it in list order.
+applyEdits : Int -> List HeadEdit -> List String -> List String
+applyEdits _ [] lines = lines
+applyEdits _ _ [] = []
+applyEdits n edits (l :: ls) =
+  let edited =
+    fold (acc e => if editLine e == n then applyEdit e acc else acc) l edits
+  edited :: applyEdits (n + 1) (filter (e => editLine e > n) edits) ls
 
-renameHead : Bool -> MainHead -> String -> String
-renameHead True (DefHead _) l =
-  "\{userMainName} ()\{stringSlice 4 (stringLength l) l}"
-renameHead True (SigHead _ col) l =
-  let colonAndBefore = stringSlice 4 (col + 1) l
-  "\{userMainName}\{colonAndBefore} Unit ->\{stringSlice (col + 1) (stringLength l) l}"
-renameHead _ _ l = userMainName ++ stringSlice 4 (stringLength l) l
+applyEdit : HeadEdit -> String -> String
+applyEdit (RenameMain _ suffix) l =
+  "\{userMainName}\{suffix}\{stringSlice 4 (stringLength l) l}"
+applyEdit (UnitArg _ col) l =
+  "\{stringSlice 0 (col + 1) l} Unit ->\{stringSlice (col + 1) (stringLength l) l}"

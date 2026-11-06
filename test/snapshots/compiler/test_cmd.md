@@ -1,5 +1,5 @@
 # META
-source_lines=5312
+source_lines=5313
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/test_cmd.mdk — `medaka test` logic (doctests + property tests),
@@ -1617,9 +1617,10 @@ singlePhaseTrees engines runtimeDecls coreDecls target roots userDecls held =
 -- file is not the prelude, and its arms would otherwise build two probes or
 -- more.  The prelude keeps one probe per arm: its doctest arm is never built
 -- (`nativeSkipReason`) and its property arm drops the spliced source.  A file
--- with a smoke example also keeps them: the native backend forces the smoke
--- binding at startup, so in the merged binary its side effect would repeat in
--- every section.  Under a second engine the property plan would be made before the
+-- with a smoke example also keeps them.  A smoke example is a unit function its
+-- own section calls (`native_doctest.mdk` `valueLine`), so a merged binary would
+-- run it once; the split stands only because no gate measures the merged probe
+-- for such a file.  Under a second engine the property plan would be made before the
 -- interpreter's doctest elaboration, between it and the later reads of the
 -- pair, so those runs keep one probe per arm.
 mergesNativeArms : List Engine ->

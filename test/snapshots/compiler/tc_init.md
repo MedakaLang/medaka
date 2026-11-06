@@ -1,5 +1,5 @@
 # META
-source_lines=1435
+source_lines=1459
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_init: the initialisation graph of one module's top-level values, the two rules read off
@@ -9,7 +9,9 @@ stages=DESUGAR,MARK
 --
 -- Spec: language-design "Top-level initialisation (L1)", I1 (order), I2 (purity), I3 (value
 -- cycles), I6 (constrained nullary bindings).  The position split is OCaml `Rec_check`'s
--- Dereference/Guard/Delay modes lifted to the module graph.
+-- Dereference/Guard/Delay modes lifted to the module graph, with Guard split in two: a value
+-- has no pre-allocated block to backpatch, so a stored component is read at initialisation
+-- and only a guarded lambda body is not.
 --
 -- The walk over-approximates by construction: a missing mention becomes an uninitialised read
 -- once initialisation is strict, so every `Expr` and `Pat` arm is handled explicitly and an
@@ -97,12 +99,15 @@ public export data InitInputs = InitInputs {
 
 -- How a later rule may use a mention.  `AtDeref` is evaluated when the node runs (an
 -- application head or argument, a scrutinee, a `let` right-hand side, an operand);
--- `AtGuard` is only read (a constructor, tuple, list or record component, or anything inside
--- a lambda in such a position or as the whole right-hand side); `AtDelay` is inside a direct
--- lambda argument of a `Deferred*` call in guarded position, which the effect checker
+-- `AtStore` is stored when the node runs (a constructor, tuple, list or record component, or
+-- an argument of an under-saturated local call), so a value it names is read then and a
+-- function or impl it names is not run; `AtGuard` is inside a lambda in such a position or
+-- as the whole right-hand side, read only when the lambda is called; `AtDelay` is inside a
+-- direct lambda argument of a `Deferred*` call in guarded position, which the effect checker
 -- proves the call does not run.
 public export data InitPosition =
   | AtDeref
+  | AtStore
   | AtGuard
   | AtDelay
   deriving (Eq, Debug)
@@ -169,7 +174,13 @@ checkInitRules inputs g =
         n.inodeKind == ValueNode
           && not (omHasKey n.inodeName g.igraphNotInitialised))
       g.igraphNodes
-  let reach = valueReach g values
+  let valueNames =
+    fold
+      (acc n =>
+        if n.inodeKind == ValueNode then omInsert n.inodeName () acc else acc)
+      omEmpty
+      g.igraphNodes
+  let reach = valueReach g valueNames values
   let labels =
     fold
       (acc n =>
@@ -180,18 +191,28 @@ checkInitRules inputs g =
       omEmpty
       g.igraphNodes
   flatMap
-    (n => purityViolation inputs n ++ cycleViolation reach labels n)
+    (n => purityViolation inputs n ++ cycleViolation reach valueNames labels n)
     values
 
+-- Whether a mention reads its target while the node initialises: an evaluation, or a stored
+-- value.  [values] holds every value node's name.
+readsAtInit : OrdMap Unit -> InitMention -> Bool
+readsAtInit values m = match m.mentionPosition
+  AtDeref => True
+  AtStore => omHasKey m.mentionTarget values
+  AtGuard => False
+  AtDelay => False
+
 -- The may-reach components I3 reads, or `None` when every value is alone in its own.  A
--- value that evaluates no node, or that no other node mentions, is alone in its component,
--- so the components are computed only when some node mentions a value that evaluates one.
-valueReach : InitGraph -> List InitNode -> Option MayReach
-valueReach g values =
+-- value that reads no node at initialisation, or that no other node mentions, is alone in
+-- its component, so the components are computed only when some node mentions a value that
+-- reads one.
+valueReach : InitGraph -> OrdMap Unit -> List InitNode -> Option MayReach
+valueReach g valueNames values =
   let evaluating =
     fold
       (acc n =>
-        if any (m => m.mentionPosition == AtDeref) n.inodeMentions then
+        if any (readsAtInit valueNames) n.inodeMentions then
           omInsert n.inodeName () acc
         else
           acc)
@@ -219,15 +240,18 @@ purityViolation inputs n = match omLookup n.inodeName inputs.iiSchemes
     labels => [ImpureValue n.inodeName "<\{renderAtoms labels}>" n.inodeLoc]
   None => []
 
--- I3: the value is rejected when it evaluates (`AtDeref`) a node of its own may-reach
--- component, itself included.  `AtGuard` and `AtDelay` mentions only read.  The path is the
--- shortest one back to the value whose first hop is such an evaluation; a later hop is any
--- mention inside the component, since a function or impl node's body may run when called.
+-- I3: the value is rejected when it reads a node of its own may-reach component, itself
+-- included, while it initialises: it evaluates the node (`AtDeref`), or it stores the node
+-- and the node is a value (`AtStore`).  A stored function or impl is not run, and an
+-- `AtGuard` or `AtDelay` mention is not read until called.  The path is the shortest one
+-- back to the value whose first hop is such a read; a later hop is any mention inside the
+-- component, since a function or impl node's body may run when called.
 cycleViolation : Option MayReach ->
+  OrdMap Unit ->
   OrdMap String ->
   InitNode ->
   List InitViolation
-cycleViolation reach labels n =
+cycleViolation reach valueNames labels n =
   let c = match reach
     Some r => omLookup n.inodeName r.mrComp
     None => None
@@ -237,7 +261,7 @@ cycleViolation reach labels n =
   let starts =
     fold
       (acc m =>
-        if m.mentionPosition == AtDeref && inGroup m.mentionTarget then
+        if readsAtInit valueNames m && inGroup m.mentionTarget then
           m.mentionTarget :: acc
         else
           acc)
@@ -709,15 +733,15 @@ walkBodies w bodies acc =
 
 -- ── the walk ─────────────────────────────────────────────────────────────────
 
--- Where an expression sits: the whole right-hand side; a constructor component; anywhere
--- inside a guarded lambda; an evaluated position; a delayed lambda.  The last three absorb
+-- Where an expression sits: the whole right-hand side; a stored component; anywhere inside
+-- a guarded lambda; an evaluated position; a delayed lambda.  The last three absorb
 -- everything below them.
 data WalkCtx = CtxReturn | CtxGuard | CtxGuardBody | CtxDeref | CtxDelay
 
 -- The position of a name read at [ctx].
 namePos : WalkCtx -> InitPosition
 namePos CtxReturn = AtDeref
-namePos CtxGuard = AtGuard
+namePos CtxGuard = AtStore
 namePos CtxGuardBody = AtGuard
 namePos CtxDeref = AtDeref
 namePos CtxDelay = AtDelay
@@ -1450,9 +1474,9 @@ kahn g members dependents indegree ready out = match M.minView ready
 (DUse false (UseGroup ("types" "tc_env") ((mem "ceRowIface" false) (mem "ceRowMethods" false) (mem "ceRowSupers" false) (mem "ieRowTriple" false) (mem "ieRowsVisibleAt" false) (mem "methodRowIface" false))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "ClassEnv" true) (mem "DeclEnvs" true) (mem "MethodEnv" true) (mem "ModuleBindings" true) (mem "ModuleCtx" true) (mem "ModuleSeed" true))))
 (DData Public "InitInputs" () ((variant "InitInputs" (ConNamed (field "iiModule" (TyCon "String")) (field "iiDecls" (TyApp (TyCon "List") (TyCon "Decl"))) (field "iiSchemes" (TyApp (TyCon "OrdMap") (TyCon "Scheme"))) (field "iiMethodIfaces" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (field "iiDispatchClosure" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (field "iiCalleeIfaces" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (field "iiBinopMethod" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (field "iiUnopMethod" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (field "iiImportedValues" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "iiConstrained" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "iiExempt" (TyApp (TyCon "OrdMap") (TyCon "Unit")))))) ())
-(DData Public "InitPosition" () ((variant "AtDeref" (ConPos)) (variant "AtGuard" (ConPos)) (variant "AtDelay" (ConPos))) ())
-(DImpl true "Eq" ((TyCon "InitPosition")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "AtDeref") (PCon "AtDeref")) () (EVar "True")) (arm (PTuple (PCon "AtGuard") (PCon "AtGuard")) () (EVar "True")) (arm (PTuple (PCon "AtDelay") (PCon "AtDelay")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
-(DImpl true "Debug" ((TyCon "InitPosition")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "AtDeref") () (ELit (LString "AtDeref"))) (arm (PCon "AtGuard") () (ELit (LString "AtGuard"))) (arm (PCon "AtDelay") () (ELit (LString "AtDelay")))))))
+(DData Public "InitPosition" () ((variant "AtDeref" (ConPos)) (variant "AtStore" (ConPos)) (variant "AtGuard" (ConPos)) (variant "AtDelay" (ConPos))) ())
+(DImpl true "Eq" ((TyCon "InitPosition")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "AtDeref") (PCon "AtDeref")) () (EVar "True")) (arm (PTuple (PCon "AtStore") (PCon "AtStore")) () (EVar "True")) (arm (PTuple (PCon "AtGuard") (PCon "AtGuard")) () (EVar "True")) (arm (PTuple (PCon "AtDelay") (PCon "AtDelay")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
+(DImpl true "Debug" ((TyCon "InitPosition")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "AtDeref") () (ELit (LString "AtDeref"))) (arm (PCon "AtStore") () (ELit (LString "AtStore"))) (arm (PCon "AtGuard") () (ELit (LString "AtGuard"))) (arm (PCon "AtDelay") () (ELit (LString "AtDelay")))))))
 (DData Public "InitEdgeKind" () ((variant "ByName" (ConPos)) (variant "ByDispatch" (ConPos)) (variant "ByOperator" (ConPos)) (variant "ByOrphan" (ConPos)) (variant "ByClosure" (ConPos))) ())
 (DImpl true "Eq" ((TyCon "InitEdgeKind")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "ByName") (PCon "ByName")) () (EVar "True")) (arm (PTuple (PCon "ByDispatch") (PCon "ByDispatch")) () (EVar "True")) (arm (PTuple (PCon "ByOperator") (PCon "ByOperator")) () (EVar "True")) (arm (PTuple (PCon "ByOrphan") (PCon "ByOrphan")) () (EVar "True")) (arm (PTuple (PCon "ByClosure") (PCon "ByClosure")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DImpl true "Debug" ((TyCon "InitEdgeKind")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "ByName") () (ELit (LString "ByName"))) (arm (PCon "ByDispatch") () (ELit (LString "ByDispatch"))) (arm (PCon "ByOperator") () (ELit (LString "ByOperator"))) (arm (PCon "ByOrphan") () (ELit (LString "ByOrphan"))) (arm (PCon "ByClosure") () (ELit (LString "ByClosure")))))))
@@ -1466,13 +1490,15 @@ kahn g members dependents indegree ready out = match M.minView ready
 (DData Public "InitGraph" () ((variant "InitGraph" (ConNamed (field "igraphNodes" (TyApp (TyCon "List") (TyCon "InitNode"))) (field "igraphNotInitialised" (TyApp (TyCon "OrdMap") (TyCon "Unit")))))) ())
 (DData Public "InitViolation" () ((variant "ImpureValue" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "CyclicValue" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc"))))) ())
 (DTypeSig true "checkInitRules" (TyFun (TyCon "InitInputs") (TyFun (TyCon "InitGraph") (TyApp (TyCon "List") (TyCon "InitViolation")))))
-(DFunDef false "checkInitRules" ((PVar "inputs") (PVar "g")) (EBlock (DoLet false false (PVar "values") (EApp (EApp (EVar "filter") (ELam ((PVar "n")) (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "n") "inodeKind") (EVar "ValueNode")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EFieldAccess (EVar "n") "inodeName")) (EFieldAccess (EVar "g") "igraphNotInitialised")))))) (EFieldAccess (EVar "g") "igraphNodes"))) (DoLet false false (PVar "reach") (EApp (EApp (EVar "valueReach") (EVar "g")) (EVar "values"))) (DoLet false false (PVar "labels") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "n")) (EIf (EBinOp "==" (EFieldAccess (EVar "n") "inodeKind") (EVar "ImplNode")) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "n") "inodeName")) (EFieldAccess (EVar "n") "inodeLabel")) (EVar "acc")) (EVar "acc")))) (EVar "omEmpty")) (EFieldAccess (EVar "g") "igraphNodes"))) (DoExpr (EApp (EApp (EVar "flatMap") (ELam ((PVar "n")) (EBinOp "++" (EApp (EApp (EVar "purityViolation") (EVar "inputs")) (EVar "n")) (EApp (EApp (EApp (EVar "cycleViolation") (EVar "reach")) (EVar "labels")) (EVar "n"))))) (EVar "values")))))
-(DTypeSig false "valueReach" (TyFun (TyCon "InitGraph") (TyFun (TyApp (TyCon "List") (TyCon "InitNode")) (TyApp (TyCon "Option") (TyCon "MayReach")))))
-(DFunDef false "valueReach" ((PVar "g") (PVar "values")) (EBlock (DoLet false false (PVar "evaluating") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "n")) (EIf (EApp (EApp (EVar "any") (ELam ((PVar "m")) (EBinOp "==" (EFieldAccess (EVar "m") "mentionPosition") (EVar "AtDeref")))) (EFieldAccess (EVar "n") "inodeMentions")) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "n") "inodeName")) (ELit LUnit)) (EVar "acc")) (EVar "acc")))) (EVar "omEmpty")) (EVar "values"))) (DoLet false false (PVar "entered") (EBinOp "&&" (EApp (EVar "isNonEmptyL") (EVar "values")) (EApp (EApp (EVar "any") (ELam ((PVar "n")) (EApp (EApp (EVar "any") (ELam ((PVar "m")) (EBinOp "&&" (EBinOp "/=" (EFieldAccess (EVar "m") "mentionTarget") (EFieldAccess (EVar "n") "inodeName")) (EApp (EApp (EVar "omHasKey") (EFieldAccess (EVar "m") "mentionTarget")) (EVar "evaluating"))))) (EFieldAccess (EVar "n") "inodeMentions")))) (EFieldAccess (EVar "g") "igraphNodes")))) (DoExpr (EIf (EVar "entered") (EApp (EVar "Some") (EApp (EVar "mayReach") (EVar "g"))) (EVar "None")))))
+(DFunDef false "checkInitRules" ((PVar "inputs") (PVar "g")) (EBlock (DoLet false false (PVar "values") (EApp (EApp (EVar "filter") (ELam ((PVar "n")) (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "n") "inodeKind") (EVar "ValueNode")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EFieldAccess (EVar "n") "inodeName")) (EFieldAccess (EVar "g") "igraphNotInitialised")))))) (EFieldAccess (EVar "g") "igraphNodes"))) (DoLet false false (PVar "valueNames") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "n")) (EIf (EBinOp "==" (EFieldAccess (EVar "n") "inodeKind") (EVar "ValueNode")) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "n") "inodeName")) (ELit LUnit)) (EVar "acc")) (EVar "acc")))) (EVar "omEmpty")) (EFieldAccess (EVar "g") "igraphNodes"))) (DoLet false false (PVar "reach") (EApp (EApp (EApp (EVar "valueReach") (EVar "g")) (EVar "valueNames")) (EVar "values"))) (DoLet false false (PVar "labels") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "n")) (EIf (EBinOp "==" (EFieldAccess (EVar "n") "inodeKind") (EVar "ImplNode")) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "n") "inodeName")) (EFieldAccess (EVar "n") "inodeLabel")) (EVar "acc")) (EVar "acc")))) (EVar "omEmpty")) (EFieldAccess (EVar "g") "igraphNodes"))) (DoExpr (EApp (EApp (EVar "flatMap") (ELam ((PVar "n")) (EBinOp "++" (EApp (EApp (EVar "purityViolation") (EVar "inputs")) (EVar "n")) (EApp (EApp (EApp (EApp (EVar "cycleViolation") (EVar "reach")) (EVar "valueNames")) (EVar "labels")) (EVar "n"))))) (EVar "values")))))
+(DTypeSig false "readsAtInit" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "InitMention") (TyCon "Bool"))))
+(DFunDef false "readsAtInit" ((PVar "values") (PVar "m")) (EMatch (EFieldAccess (EVar "m") "mentionPosition") (arm (PCon "AtDeref") () (EVar "True")) (arm (PCon "AtStore") () (EApp (EApp (EVar "omHasKey") (EFieldAccess (EVar "m") "mentionTarget")) (EVar "values"))) (arm (PCon "AtGuard") () (EVar "False")) (arm (PCon "AtDelay") () (EVar "False"))))
+(DTypeSig false "valueReach" (TyFun (TyCon "InitGraph") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "InitNode")) (TyApp (TyCon "Option") (TyCon "MayReach"))))))
+(DFunDef false "valueReach" ((PVar "g") (PVar "valueNames") (PVar "values")) (EBlock (DoLet false false (PVar "evaluating") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "n")) (EIf (EApp (EApp (EVar "any") (EApp (EVar "readsAtInit") (EVar "valueNames"))) (EFieldAccess (EVar "n") "inodeMentions")) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "n") "inodeName")) (ELit LUnit)) (EVar "acc")) (EVar "acc")))) (EVar "omEmpty")) (EVar "values"))) (DoLet false false (PVar "entered") (EBinOp "&&" (EApp (EVar "isNonEmptyL") (EVar "values")) (EApp (EApp (EVar "any") (ELam ((PVar "n")) (EApp (EApp (EVar "any") (ELam ((PVar "m")) (EBinOp "&&" (EBinOp "/=" (EFieldAccess (EVar "m") "mentionTarget") (EFieldAccess (EVar "n") "inodeName")) (EApp (EApp (EVar "omHasKey") (EFieldAccess (EVar "m") "mentionTarget")) (EVar "evaluating"))))) (EFieldAccess (EVar "n") "inodeMentions")))) (EFieldAccess (EVar "g") "igraphNodes")))) (DoExpr (EIf (EVar "entered") (EApp (EVar "Some") (EApp (EVar "mayReach") (EVar "g"))) (EVar "None")))))
 (DTypeSig false "purityViolation" (TyFun (TyCon "InitInputs") (TyFun (TyCon "InitNode") (TyApp (TyCon "List") (TyCon "InitViolation")))))
 (DFunDef false "purityViolation" ((PVar "inputs") (PVar "n")) (EMatch (EApp (EApp (EVar "omLookup") (EFieldAccess (EVar "n") "inodeName")) (EFieldAccess (EVar "inputs") "iiSchemes")) (arm (PCon "Some" (PCon "Forall" PWild PWild PWild PWild (PVar "force") PWild)) () (EMatch (EApp (EVar "fst") (EApp (EVar "rowFlat") (EVar "force"))) (arm (PList) () (EListLit)) (arm (PVar "labels") () (EListLit (EApp (EApp (EApp (EVar "ImpureValue") (EFieldAccess (EVar "n") "inodeName")) (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EVar "display") (EApp (EVar "renderAtoms") (EVar "labels")))) (ELit (LString ">")))) (EFieldAccess (EVar "n") "inodeLoc")))))) (arm (PCon "None") () (EListLit))))
-(DTypeSig false "cycleViolation" (TyFun (TyApp (TyCon "Option") (TyCon "MayReach")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "InitNode") (TyApp (TyCon "List") (TyCon "InitViolation"))))))
-(DFunDef false "cycleViolation" ((PVar "reach") (PVar "labels") (PVar "n")) (EBlock (DoLet false false (PVar "c") (EMatch (EVar "reach") (arm (PCon "Some" (PVar "r")) () (EApp (EApp (EVar "omLookup") (EFieldAccess (EVar "n") "inodeName")) (EFieldAccess (EVar "r") "mrComp"))) (arm (PCon "None") () (EVar "None")))) (DoLet false true (PVar "inGroup") (ELam ((PVar "t")) (EMatch (EVar "reach") (arm (PCon "Some" (PVar "r")) () (EBinOp "==" (EApp (EApp (EVar "omLookup") (EVar "t")) (EFieldAccess (EVar "r") "mrComp")) (EVar "c"))) (arm (PCon "None") () (EBinOp "==" (EVar "t") (EFieldAccess (EVar "n") "inodeName")))))) (DoLet false false (PVar "starts") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "m")) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "m") "mentionPosition") (EVar "AtDeref")) (EApp (EVar "inGroup") (EFieldAccess (EVar "m") "mentionTarget"))) (EBinOp "::" (EFieldAccess (EVar "m") "mentionTarget") (EVar "acc")) (EVar "acc")))) (EListLit)) (EFieldAccess (EVar "n") "inodeMentions"))) (DoExpr (EMatch (EVar "starts") (arm (PList) () (EListLit)) (arm PWild () (EBlock (DoLet false false (PVar "path") (EMatch (EVar "reach") (arm (PCon "Some" (PVar "r")) () (EApp (EApp (EApp (EApp (EVar "pathBack") (EVar "r")) (EVar "c")) (EFieldAccess (EVar "n") "inodeName")) (EApp (EVar "reverseL") (EVar "starts")))) (arm (PCon "None") () (EListLit (EFieldAccess (EVar "n") "inodeName"))))) (DoExpr (EListLit (EApp (EApp (EApp (EVar "CyclicValue") (EFieldAccess (EVar "n") "inodeName")) (EApp (EApp (EVar "map") (ELam ((PVar "x")) (EApp (EApp (EVar "optionOr") (EVar "x")) (EApp (EApp (EVar "omLookup") (EVar "x")) (EVar "labels"))))) (EBinOp "::" (EFieldAccess (EVar "n") "inodeName") (EVar "path")))) (EFieldAccess (EVar "n") "inodeLoc"))))))))))
+(DTypeSig false "cycleViolation" (TyFun (TyApp (TyCon "Option") (TyCon "MayReach")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "InitNode") (TyApp (TyCon "List") (TyCon "InitViolation")))))))
+(DFunDef false "cycleViolation" ((PVar "reach") (PVar "valueNames") (PVar "labels") (PVar "n")) (EBlock (DoLet false false (PVar "c") (EMatch (EVar "reach") (arm (PCon "Some" (PVar "r")) () (EApp (EApp (EVar "omLookup") (EFieldAccess (EVar "n") "inodeName")) (EFieldAccess (EVar "r") "mrComp"))) (arm (PCon "None") () (EVar "None")))) (DoLet false true (PVar "inGroup") (ELam ((PVar "t")) (EMatch (EVar "reach") (arm (PCon "Some" (PVar "r")) () (EBinOp "==" (EApp (EApp (EVar "omLookup") (EVar "t")) (EFieldAccess (EVar "r") "mrComp")) (EVar "c"))) (arm (PCon "None") () (EBinOp "==" (EVar "t") (EFieldAccess (EVar "n") "inodeName")))))) (DoLet false false (PVar "starts") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "m")) (EIf (EBinOp "&&" (EApp (EApp (EVar "readsAtInit") (EVar "valueNames")) (EVar "m")) (EApp (EVar "inGroup") (EFieldAccess (EVar "m") "mentionTarget"))) (EBinOp "::" (EFieldAccess (EVar "m") "mentionTarget") (EVar "acc")) (EVar "acc")))) (EListLit)) (EFieldAccess (EVar "n") "inodeMentions"))) (DoExpr (EMatch (EVar "starts") (arm (PList) () (EListLit)) (arm PWild () (EBlock (DoLet false false (PVar "path") (EMatch (EVar "reach") (arm (PCon "Some" (PVar "r")) () (EApp (EApp (EApp (EApp (EVar "pathBack") (EVar "r")) (EVar "c")) (EFieldAccess (EVar "n") "inodeName")) (EApp (EVar "reverseL") (EVar "starts")))) (arm (PCon "None") () (EListLit (EFieldAccess (EVar "n") "inodeName"))))) (DoExpr (EListLit (EApp (EApp (EApp (EVar "CyclicValue") (EFieldAccess (EVar "n") "inodeName")) (EApp (EApp (EVar "map") (ELam ((PVar "x")) (EApp (EApp (EVar "optionOr") (EVar "x")) (EApp (EApp (EVar "omLookup") (EVar "x")) (EVar "labels"))))) (EBinOp "::" (EFieldAccess (EVar "n") "inodeName") (EVar "path")))) (EFieldAccess (EVar "n") "inodeLoc"))))))))))
 (DTypeSig false "pathBack" (TyFun (TyCon "MayReach") (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "pathBack" ((PVar "reach") (PVar "c") (PVar "goal") (PVar "starts")) (EIf (EApp (EApp (EVar "any") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "goal")))) (EVar "starts")) (EListLit (EVar "goal")) (EApp (EApp (EApp (EApp (EApp (EVar "searchBack") (EVar "reach")) (EVar "c")) (EVar "goal")) (EVar "starts")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "s")) (EApp (EApp (EApp (EVar "omInsert") (EVar "s")) (EVar "None")) (EVar "acc")))) (EVar "omEmpty")) (EVar "starts")))))
 (DTypeSig false "searchBack" (TyFun (TyCon "MayReach") (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "Option") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String"))))))))
@@ -1577,7 +1603,7 @@ kahn g members dependents indegree ready out = match M.minView ready
 (DData Private "WalkCtx" () ((variant "CtxReturn" (ConPos)) (variant "CtxGuard" (ConPos)) (variant "CtxGuardBody" (ConPos)) (variant "CtxDeref" (ConPos)) (variant "CtxDelay" (ConPos))) ())
 (DTypeSig false "namePos" (TyFun (TyCon "WalkCtx") (TyCon "InitPosition")))
 (DFunDef false "namePos" ((PCon "CtxReturn")) (EVar "AtDeref"))
-(DFunDef false "namePos" ((PCon "CtxGuard")) (EVar "AtGuard"))
+(DFunDef false "namePos" ((PCon "CtxGuard")) (EVar "AtStore"))
 (DFunDef false "namePos" ((PCon "CtxGuardBody")) (EVar "AtGuard"))
 (DFunDef false "namePos" ((PCon "CtxDeref")) (EVar "AtDeref"))
 (DFunDef false "namePos" ((PCon "CtxDelay")) (EVar "AtDelay"))
@@ -1785,9 +1811,9 @@ kahn g members dependents indegree ready out = match M.minView ready
 (DUse false (UseGroup ("types" "tc_env") ((mem "ceRowIface" false) (mem "ceRowMethods" false) (mem "ceRowSupers" false) (mem "ieRowTriple" false) (mem "ieRowsVisibleAt" false) (mem "methodRowIface" false))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "ClassEnv" true) (mem "DeclEnvs" true) (mem "MethodEnv" true) (mem "ModuleBindings" true) (mem "ModuleCtx" true) (mem "ModuleSeed" true))))
 (DData Public "InitInputs" () ((variant "InitInputs" (ConNamed (field "iiModule" (TyCon "String")) (field "iiDecls" (TyApp (TyCon "List") (TyCon "Decl"))) (field "iiSchemes" (TyApp (TyCon "OrdMap") (TyCon "Scheme"))) (field "iiMethodIfaces" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (field "iiDispatchClosure" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (field "iiCalleeIfaces" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (field "iiBinopMethod" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (field "iiUnopMethod" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (field "iiImportedValues" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "iiConstrained" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "iiExempt" (TyApp (TyCon "OrdMap") (TyCon "Unit")))))) ())
-(DData Public "InitPosition" () ((variant "AtDeref" (ConPos)) (variant "AtGuard" (ConPos)) (variant "AtDelay" (ConPos))) ())
-(DImpl true "Eq" ((TyCon "InitPosition")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "AtDeref") (PCon "AtDeref")) () (EVar "True")) (arm (PTuple (PCon "AtGuard") (PCon "AtGuard")) () (EVar "True")) (arm (PTuple (PCon "AtDelay") (PCon "AtDelay")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
-(DImpl true "Debug" ((TyCon "InitPosition")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "AtDeref") () (ELit (LString "AtDeref"))) (arm (PCon "AtGuard") () (ELit (LString "AtGuard"))) (arm (PCon "AtDelay") () (ELit (LString "AtDelay")))))))
+(DData Public "InitPosition" () ((variant "AtDeref" (ConPos)) (variant "AtStore" (ConPos)) (variant "AtGuard" (ConPos)) (variant "AtDelay" (ConPos))) ())
+(DImpl true "Eq" ((TyCon "InitPosition")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "AtDeref") (PCon "AtDeref")) () (EVar "True")) (arm (PTuple (PCon "AtStore") (PCon "AtStore")) () (EVar "True")) (arm (PTuple (PCon "AtGuard") (PCon "AtGuard")) () (EVar "True")) (arm (PTuple (PCon "AtDelay") (PCon "AtDelay")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
+(DImpl true "Debug" ((TyCon "InitPosition")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "AtDeref") () (ELit (LString "AtDeref"))) (arm (PCon "AtStore") () (ELit (LString "AtStore"))) (arm (PCon "AtGuard") () (ELit (LString "AtGuard"))) (arm (PCon "AtDelay") () (ELit (LString "AtDelay")))))))
 (DData Public "InitEdgeKind" () ((variant "ByName" (ConPos)) (variant "ByDispatch" (ConPos)) (variant "ByOperator" (ConPos)) (variant "ByOrphan" (ConPos)) (variant "ByClosure" (ConPos))) ())
 (DImpl true "Eq" ((TyCon "InitEdgeKind")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "ByName") (PCon "ByName")) () (EVar "True")) (arm (PTuple (PCon "ByDispatch") (PCon "ByDispatch")) () (EVar "True")) (arm (PTuple (PCon "ByOperator") (PCon "ByOperator")) () (EVar "True")) (arm (PTuple (PCon "ByOrphan") (PCon "ByOrphan")) () (EVar "True")) (arm (PTuple (PCon "ByClosure") (PCon "ByClosure")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DImpl true "Debug" ((TyCon "InitEdgeKind")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "ByName") () (ELit (LString "ByName"))) (arm (PCon "ByDispatch") () (ELit (LString "ByDispatch"))) (arm (PCon "ByOperator") () (ELit (LString "ByOperator"))) (arm (PCon "ByOrphan") () (ELit (LString "ByOrphan"))) (arm (PCon "ByClosure") () (ELit (LString "ByClosure")))))))
@@ -1801,13 +1827,15 @@ kahn g members dependents indegree ready out = match M.minView ready
 (DData Public "InitGraph" () ((variant "InitGraph" (ConNamed (field "igraphNodes" (TyApp (TyCon "List") (TyCon "InitNode"))) (field "igraphNotInitialised" (TyApp (TyCon "OrdMap") (TyCon "Unit")))))) ())
 (DData Public "InitViolation" () ((variant "ImpureValue" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "CyclicValue" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc"))))) ())
 (DTypeSig true "checkInitRules" (TyFun (TyCon "InitInputs") (TyFun (TyCon "InitGraph") (TyApp (TyCon "List") (TyCon "InitViolation")))))
-(DFunDef false "checkInitRules" ((PVar "inputs") (PVar "g")) (EBlock (DoLet false false (PVar "values") (EApp (EApp (EMethodRef "filter") (ELam ((PVar "n")) (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "n") "inodeKind") (EVar "ValueNode")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EFieldAccess (EVar "n") "inodeName")) (EFieldAccess (EVar "g") "igraphNotInitialised")))))) (EFieldAccess (EVar "g") "igraphNodes"))) (DoLet false false (PVar "reach") (EApp (EApp (EVar "valueReach") (EVar "g")) (EVar "values"))) (DoLet false false (PVar "labels") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "n")) (EIf (EBinOp "==" (EFieldAccess (EVar "n") "inodeKind") (EVar "ImplNode")) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "n") "inodeName")) (EFieldAccess (EVar "n") "inodeLabel")) (EVar "acc")) (EVar "acc")))) (EVar "omEmpty")) (EFieldAccess (EVar "g") "igraphNodes"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "n")) (EBinOp "++" (EApp (EApp (EVar "purityViolation") (EVar "inputs")) (EVar "n")) (EApp (EApp (EApp (EVar "cycleViolation") (EVar "reach")) (EVar "labels")) (EVar "n"))))) (EVar "values")))))
-(DTypeSig false "valueReach" (TyFun (TyCon "InitGraph") (TyFun (TyApp (TyCon "List") (TyCon "InitNode")) (TyApp (TyCon "Option") (TyCon "MayReach")))))
-(DFunDef false "valueReach" ((PVar "g") (PVar "values")) (EBlock (DoLet false false (PVar "evaluating") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "n")) (EIf (EApp (EApp (EDictApp "any") (ELam ((PVar "m")) (EBinOp "==" (EFieldAccess (EVar "m") "mentionPosition") (EVar "AtDeref")))) (EFieldAccess (EVar "n") "inodeMentions")) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "n") "inodeName")) (ELit LUnit)) (EVar "acc")) (EVar "acc")))) (EVar "omEmpty")) (EVar "values"))) (DoLet false false (PVar "entered") (EBinOp "&&" (EApp (EVar "isNonEmptyL") (EVar "values")) (EApp (EApp (EDictApp "any") (ELam ((PVar "n")) (EApp (EApp (EDictApp "any") (ELam ((PVar "m")) (EBinOp "&&" (EBinOp "/=" (EFieldAccess (EVar "m") "mentionTarget") (EFieldAccess (EVar "n") "inodeName")) (EApp (EApp (EVar "omHasKey") (EFieldAccess (EVar "m") "mentionTarget")) (EVar "evaluating"))))) (EFieldAccess (EVar "n") "inodeMentions")))) (EFieldAccess (EVar "g") "igraphNodes")))) (DoExpr (EIf (EVar "entered") (EApp (EVar "Some") (EApp (EVar "mayReach") (EVar "g"))) (EVar "None")))))
+(DFunDef false "checkInitRules" ((PVar "inputs") (PVar "g")) (EBlock (DoLet false false (PVar "values") (EApp (EApp (EMethodRef "filter") (ELam ((PVar "n")) (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "n") "inodeKind") (EVar "ValueNode")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EFieldAccess (EVar "n") "inodeName")) (EFieldAccess (EVar "g") "igraphNotInitialised")))))) (EFieldAccess (EVar "g") "igraphNodes"))) (DoLet false false (PVar "valueNames") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "n")) (EIf (EBinOp "==" (EFieldAccess (EVar "n") "inodeKind") (EVar "ValueNode")) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "n") "inodeName")) (ELit LUnit)) (EVar "acc")) (EVar "acc")))) (EVar "omEmpty")) (EFieldAccess (EVar "g") "igraphNodes"))) (DoLet false false (PVar "reach") (EApp (EApp (EApp (EVar "valueReach") (EVar "g")) (EVar "valueNames")) (EVar "values"))) (DoLet false false (PVar "labels") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "n")) (EIf (EBinOp "==" (EFieldAccess (EVar "n") "inodeKind") (EVar "ImplNode")) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "n") "inodeName")) (EFieldAccess (EVar "n") "inodeLabel")) (EVar "acc")) (EVar "acc")))) (EVar "omEmpty")) (EFieldAccess (EVar "g") "igraphNodes"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "n")) (EBinOp "++" (EApp (EApp (EVar "purityViolation") (EVar "inputs")) (EVar "n")) (EApp (EApp (EApp (EApp (EVar "cycleViolation") (EVar "reach")) (EVar "valueNames")) (EVar "labels")) (EVar "n"))))) (EVar "values")))))
+(DTypeSig false "readsAtInit" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "InitMention") (TyCon "Bool"))))
+(DFunDef false "readsAtInit" ((PVar "values") (PVar "m")) (EMatch (EFieldAccess (EVar "m") "mentionPosition") (arm (PCon "AtDeref") () (EVar "True")) (arm (PCon "AtStore") () (EApp (EApp (EVar "omHasKey") (EFieldAccess (EVar "m") "mentionTarget")) (EVar "values"))) (arm (PCon "AtGuard") () (EVar "False")) (arm (PCon "AtDelay") () (EVar "False"))))
+(DTypeSig false "valueReach" (TyFun (TyCon "InitGraph") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "InitNode")) (TyApp (TyCon "Option") (TyCon "MayReach"))))))
+(DFunDef false "valueReach" ((PVar "g") (PVar "valueNames") (PVar "values")) (EBlock (DoLet false false (PVar "evaluating") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "n")) (EIf (EApp (EApp (EDictApp "any") (EApp (EVar "readsAtInit") (EVar "valueNames"))) (EFieldAccess (EVar "n") "inodeMentions")) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "n") "inodeName")) (ELit LUnit)) (EVar "acc")) (EVar "acc")))) (EVar "omEmpty")) (EVar "values"))) (DoLet false false (PVar "entered") (EBinOp "&&" (EApp (EVar "isNonEmptyL") (EVar "values")) (EApp (EApp (EDictApp "any") (ELam ((PVar "n")) (EApp (EApp (EDictApp "any") (ELam ((PVar "m")) (EBinOp "&&" (EBinOp "/=" (EFieldAccess (EVar "m") "mentionTarget") (EFieldAccess (EVar "n") "inodeName")) (EApp (EApp (EVar "omHasKey") (EFieldAccess (EVar "m") "mentionTarget")) (EVar "evaluating"))))) (EFieldAccess (EVar "n") "inodeMentions")))) (EFieldAccess (EVar "g") "igraphNodes")))) (DoExpr (EIf (EVar "entered") (EApp (EVar "Some") (EApp (EVar "mayReach") (EVar "g"))) (EVar "None")))))
 (DTypeSig false "purityViolation" (TyFun (TyCon "InitInputs") (TyFun (TyCon "InitNode") (TyApp (TyCon "List") (TyCon "InitViolation")))))
 (DFunDef false "purityViolation" ((PVar "inputs") (PVar "n")) (EMatch (EApp (EApp (EVar "omLookup") (EFieldAccess (EVar "n") "inodeName")) (EFieldAccess (EVar "inputs") "iiSchemes")) (arm (PCon "Some" (PCon "Forall" PWild PWild PWild PWild (PVar "force") PWild)) () (EMatch (EApp (EVar "fst") (EApp (EVar "rowFlat") (EVar "force"))) (arm (PList) () (EListLit)) (arm (PVar "labels") () (EListLit (EApp (EApp (EApp (EVar "ImpureValue") (EFieldAccess (EVar "n") "inodeName")) (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EMethodRef "display") (EApp (EVar "renderAtoms") (EVar "labels")))) (ELit (LString ">")))) (EFieldAccess (EVar "n") "inodeLoc")))))) (arm (PCon "None") () (EListLit))))
-(DTypeSig false "cycleViolation" (TyFun (TyApp (TyCon "Option") (TyCon "MayReach")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "InitNode") (TyApp (TyCon "List") (TyCon "InitViolation"))))))
-(DFunDef false "cycleViolation" ((PVar "reach") (PVar "labels") (PVar "n")) (EBlock (DoLet false false (PVar "c") (EMatch (EVar "reach") (arm (PCon "Some" (PVar "r")) () (EApp (EApp (EVar "omLookup") (EFieldAccess (EVar "n") "inodeName")) (EFieldAccess (EVar "r") "mrComp"))) (arm (PCon "None") () (EVar "None")))) (DoLet false true (PVar "inGroup") (ELam ((PVar "t")) (EMatch (EVar "reach") (arm (PCon "Some" (PVar "r")) () (EBinOp "==" (EApp (EApp (EVar "omLookup") (EVar "t")) (EFieldAccess (EVar "r") "mrComp")) (EVar "c"))) (arm (PCon "None") () (EBinOp "==" (EVar "t") (EFieldAccess (EVar "n") "inodeName")))))) (DoLet false false (PVar "starts") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "m")) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "m") "mentionPosition") (EVar "AtDeref")) (EApp (EVar "inGroup") (EFieldAccess (EVar "m") "mentionTarget"))) (EBinOp "::" (EFieldAccess (EVar "m") "mentionTarget") (EVar "acc")) (EVar "acc")))) (EListLit)) (EFieldAccess (EVar "n") "inodeMentions"))) (DoExpr (EMatch (EVar "starts") (arm (PList) () (EListLit)) (arm PWild () (EBlock (DoLet false false (PVar "path") (EMatch (EVar "reach") (arm (PCon "Some" (PVar "r")) () (EApp (EApp (EApp (EApp (EVar "pathBack") (EVar "r")) (EVar "c")) (EFieldAccess (EVar "n") "inodeName")) (EApp (EVar "reverseL") (EVar "starts")))) (arm (PCon "None") () (EListLit (EFieldAccess (EVar "n") "inodeName"))))) (DoExpr (EListLit (EApp (EApp (EApp (EVar "CyclicValue") (EFieldAccess (EVar "n") "inodeName")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "x")) (EApp (EApp (EVar "optionOr") (EVar "x")) (EApp (EApp (EVar "omLookup") (EVar "x")) (EVar "labels"))))) (EBinOp "::" (EFieldAccess (EVar "n") "inodeName") (EVar "path")))) (EFieldAccess (EVar "n") "inodeLoc"))))))))))
+(DTypeSig false "cycleViolation" (TyFun (TyApp (TyCon "Option") (TyCon "MayReach")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "InitNode") (TyApp (TyCon "List") (TyCon "InitViolation")))))))
+(DFunDef false "cycleViolation" ((PVar "reach") (PVar "valueNames") (PVar "labels") (PVar "n")) (EBlock (DoLet false false (PVar "c") (EMatch (EVar "reach") (arm (PCon "Some" (PVar "r")) () (EApp (EApp (EVar "omLookup") (EFieldAccess (EVar "n") "inodeName")) (EFieldAccess (EVar "r") "mrComp"))) (arm (PCon "None") () (EVar "None")))) (DoLet false true (PVar "inGroup") (ELam ((PVar "t")) (EMatch (EVar "reach") (arm (PCon "Some" (PVar "r")) () (EBinOp "==" (EApp (EApp (EVar "omLookup") (EVar "t")) (EFieldAccess (EVar "r") "mrComp")) (EVar "c"))) (arm (PCon "None") () (EBinOp "==" (EVar "t") (EFieldAccess (EVar "n") "inodeName")))))) (DoLet false false (PVar "starts") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "m")) (EIf (EBinOp "&&" (EApp (EApp (EVar "readsAtInit") (EVar "valueNames")) (EVar "m")) (EApp (EVar "inGroup") (EFieldAccess (EVar "m") "mentionTarget"))) (EBinOp "::" (EFieldAccess (EVar "m") "mentionTarget") (EVar "acc")) (EVar "acc")))) (EListLit)) (EFieldAccess (EVar "n") "inodeMentions"))) (DoExpr (EMatch (EVar "starts") (arm (PList) () (EListLit)) (arm PWild () (EBlock (DoLet false false (PVar "path") (EMatch (EVar "reach") (arm (PCon "Some" (PVar "r")) () (EApp (EApp (EApp (EApp (EVar "pathBack") (EVar "r")) (EVar "c")) (EFieldAccess (EVar "n") "inodeName")) (EApp (EVar "reverseL") (EVar "starts")))) (arm (PCon "None") () (EListLit (EFieldAccess (EVar "n") "inodeName"))))) (DoExpr (EListLit (EApp (EApp (EApp (EVar "CyclicValue") (EFieldAccess (EVar "n") "inodeName")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "x")) (EApp (EApp (EVar "optionOr") (EVar "x")) (EApp (EApp (EVar "omLookup") (EVar "x")) (EVar "labels"))))) (EBinOp "::" (EFieldAccess (EVar "n") "inodeName") (EVar "path")))) (EFieldAccess (EVar "n") "inodeLoc"))))))))))
 (DTypeSig false "pathBack" (TyFun (TyCon "MayReach") (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "pathBack" ((PVar "reach") (PVar "c") (PVar "goal") (PVar "starts")) (EIf (EApp (EApp (EDictApp "any") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "goal")))) (EVar "starts")) (EListLit (EVar "goal")) (EApp (EApp (EApp (EApp (EApp (EVar "searchBack") (EVar "reach")) (EVar "c")) (EVar "goal")) (EVar "starts")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "s")) (EApp (EApp (EApp (EVar "omInsert") (EVar "s")) (EVar "None")) (EVar "acc")))) (EVar "omEmpty")) (EVar "starts")))))
 (DTypeSig false "searchBack" (TyFun (TyCon "MayReach") (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "Option") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String"))))))))
@@ -1912,7 +1940,7 @@ kahn g members dependents indegree ready out = match M.minView ready
 (DData Private "WalkCtx" () ((variant "CtxReturn" (ConPos)) (variant "CtxGuard" (ConPos)) (variant "CtxGuardBody" (ConPos)) (variant "CtxDeref" (ConPos)) (variant "CtxDelay" (ConPos))) ())
 (DTypeSig false "namePos" (TyFun (TyCon "WalkCtx") (TyCon "InitPosition")))
 (DFunDef false "namePos" ((PCon "CtxReturn")) (EVar "AtDeref"))
-(DFunDef false "namePos" ((PCon "CtxGuard")) (EVar "AtGuard"))
+(DFunDef false "namePos" ((PCon "CtxGuard")) (EVar "AtStore"))
 (DFunDef false "namePos" ((PCon "CtxGuardBody")) (EVar "AtGuard"))
 (DFunDef false "namePos" ((PCon "CtxDeref")) (EVar "AtDeref"))
 (DFunDef false "namePos" ((PCon "CtxDelay")) (EVar "AtDelay"))

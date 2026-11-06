@@ -5,7 +5,9 @@
 --
 -- Spec: language-design "Top-level initialisation (L1)", I1 (order), I2 (purity), I3 (value
 -- cycles), I6 (constrained nullary bindings).  The position split is OCaml `Rec_check`'s
--- Dereference/Guard/Delay modes lifted to the module graph.
+-- Dereference/Guard/Delay modes lifted to the module graph, with Guard split in two: a value
+-- has no pre-allocated block to backpatch, so a stored component is read at initialisation
+-- and only a guarded lambda body is not.
 --
 -- The walk over-approximates by construction: a missing mention becomes an uninitialised read
 -- once initialisation is strict, so every `Expr` and `Pat` arm is handled explicitly and an
@@ -93,12 +95,15 @@ public export data InitInputs = InitInputs {
 
 -- How a later rule may use a mention.  `AtDeref` is evaluated when the node runs (an
 -- application head or argument, a scrutinee, a `let` right-hand side, an operand);
--- `AtGuard` is only read (a constructor, tuple, list or record component, or anything inside
--- a lambda in such a position or as the whole right-hand side); `AtDelay` is inside a direct
--- lambda argument of a `Deferred*` call in guarded position, which the effect checker
+-- `AtStore` is stored when the node runs (a constructor, tuple, list or record component, or
+-- an argument of an under-saturated local call), so a value it names is read then and a
+-- function or impl it names is not run; `AtGuard` is inside a lambda in such a position or
+-- as the whole right-hand side, read only when the lambda is called; `AtDelay` is inside a
+-- direct lambda argument of a `Deferred*` call in guarded position, which the effect checker
 -- proves the call does not run.
 public export data InitPosition =
   | AtDeref
+  | AtStore
   | AtGuard
   | AtDelay
   deriving (Eq, Debug)
@@ -165,7 +170,13 @@ checkInitRules inputs g =
         n.inodeKind == ValueNode
           && not (omHasKey n.inodeName g.igraphNotInitialised))
       g.igraphNodes
-  let reach = valueReach g values
+  let valueNames =
+    fold
+      (acc n =>
+        if n.inodeKind == ValueNode then omInsert n.inodeName () acc else acc)
+      omEmpty
+      g.igraphNodes
+  let reach = valueReach g valueNames values
   let labels =
     fold
       (acc n =>
@@ -176,18 +187,28 @@ checkInitRules inputs g =
       omEmpty
       g.igraphNodes
   flatMap
-    (n => purityViolation inputs n ++ cycleViolation reach labels n)
+    (n => purityViolation inputs n ++ cycleViolation reach valueNames labels n)
     values
 
+-- Whether a mention reads its target while the node initialises: an evaluation, or a stored
+-- value.  [values] holds every value node's name.
+readsAtInit : OrdMap Unit -> InitMention -> Bool
+readsAtInit values m = match m.mentionPosition
+  AtDeref => True
+  AtStore => omHasKey m.mentionTarget values
+  AtGuard => False
+  AtDelay => False
+
 -- The may-reach components I3 reads, or `None` when every value is alone in its own.  A
--- value that evaluates no node, or that no other node mentions, is alone in its component,
--- so the components are computed only when some node mentions a value that evaluates one.
-valueReach : InitGraph -> List InitNode -> Option MayReach
-valueReach g values =
+-- value that reads no node at initialisation, or that no other node mentions, is alone in
+-- its component, so the components are computed only when some node mentions a value that
+-- reads one.
+valueReach : InitGraph -> OrdMap Unit -> List InitNode -> Option MayReach
+valueReach g valueNames values =
   let evaluating =
     fold
       (acc n =>
-        if any (m => m.mentionPosition == AtDeref) n.inodeMentions then
+        if any (readsAtInit valueNames) n.inodeMentions then
           omInsert n.inodeName () acc
         else
           acc)
@@ -215,15 +236,18 @@ purityViolation inputs n = match omLookup n.inodeName inputs.iiSchemes
     labels => [ImpureValue n.inodeName "<\{renderAtoms labels}>" n.inodeLoc]
   None => []
 
--- I3: the value is rejected when it evaluates (`AtDeref`) a node of its own may-reach
--- component, itself included.  `AtGuard` and `AtDelay` mentions only read.  The path is the
--- shortest one back to the value whose first hop is such an evaluation; a later hop is any
--- mention inside the component, since a function or impl node's body may run when called.
+-- I3: the value is rejected when it reads a node of its own may-reach component, itself
+-- included, while it initialises: it evaluates the node (`AtDeref`), or it stores the node
+-- and the node is a value (`AtStore`).  A stored function or impl is not run, and an
+-- `AtGuard` or `AtDelay` mention is not read until called.  The path is the shortest one
+-- back to the value whose first hop is such a read; a later hop is any mention inside the
+-- component, since a function or impl node's body may run when called.
 cycleViolation : Option MayReach ->
+  OrdMap Unit ->
   OrdMap String ->
   InitNode ->
   List InitViolation
-cycleViolation reach labels n =
+cycleViolation reach valueNames labels n =
   let c = match reach
     Some r => omLookup n.inodeName r.mrComp
     None => None
@@ -233,7 +257,7 @@ cycleViolation reach labels n =
   let starts =
     fold
       (acc m =>
-        if m.mentionPosition == AtDeref && inGroup m.mentionTarget then
+        if readsAtInit valueNames m && inGroup m.mentionTarget then
           m.mentionTarget :: acc
         else
           acc)
@@ -705,15 +729,15 @@ walkBodies w bodies acc =
 
 -- ── the walk ─────────────────────────────────────────────────────────────────
 
--- Where an expression sits: the whole right-hand side; a constructor component; anywhere
--- inside a guarded lambda; an evaluated position; a delayed lambda.  The last three absorb
+-- Where an expression sits: the whole right-hand side; a stored component; anywhere inside
+-- a guarded lambda; an evaluated position; a delayed lambda.  The last three absorb
 -- everything below them.
 data WalkCtx = CtxReturn | CtxGuard | CtxGuardBody | CtxDeref | CtxDelay
 
 -- The position of a name read at [ctx].
 namePos : WalkCtx -> InitPosition
 namePos CtxReturn = AtDeref
-namePos CtxGuard = AtGuard
+namePos CtxGuard = AtStore
 namePos CtxGuardBody = AtGuard
 namePos CtxDeref = AtDeref
 namePos CtxDelay = AtDelay
