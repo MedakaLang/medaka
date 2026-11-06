@@ -1,8 +1,8 @@
 # META
-source_lines=3034
+source_lines=3025
 stages=DESUGAR,MARK
 # SOURCE
-import backend.runtime_layout.{siteLineBits, siteColumnBits}
+import backend.package_identity.{sitePackable}
 import backend.wasm_symbols.{WasmSymbol(..)}
 import backend.wasm_fn_values.{fnValueUses}
 import ir.constructor_facts.{ConstructorFacts, declaredCtorArity}
@@ -1683,20 +1683,11 @@ hBranch refMode acc (CTBranch head tree) =
   hTree refMode acc tree
 
 locatedTrap : HelperAcc -> Loc -> HelperAcc
-locatedTrap acc loc = if hasLocation loc then needSite acc else needTrap acc
+locatedTrap acc loc = if sitePackable loc then needSite acc else needTrap acc
 
 locatedNonexh : HelperAcc -> Loc -> HelperAcc
 locatedNonexh acc loc =
-  if hasLocation loc then { needSite acc | nonexh = True } else needTrap acc
-
-hasLocation : Loc -> Bool
-hasLocation (Loc f sl sc el ec) =
-  f /= ""
-    && not (sl == 1 && sc == 0 && el == 1 && ec == 0)
-    && sl >= 0
-    && sl < shiftLeft 1 siteLineBits
-    && sc >= 0
-    && sc < shiftLeft 1 siteColumnBits
+  if sitePackable loc then { needSite acc | nonexh = True } else needTrap acc
 
 runtimeRoots : WasmTypeContext -> HelperAcc -> String -> List CExpr -> HelperAcc
 runtimeRoots ctx acc symbol args = match externRuntimeKey ctx.externFacts symbol
@@ -3038,7 +3029,7 @@ stmtHasFallthrough (CSLet _ _ e) = exprHasFallthrough e
 stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 # DESUGAR
 (DUse false (UseAlias ("core") "$core"))
-(DUse false (UseGroup ("backend" "runtime_layout") ((mem "siteLineBits" false) (mem "siteColumnBits" false))))
+(DUse false (UseGroup ("backend" "package_identity") ((mem "sitePackable" false))))
 (DUse false (UseGroup ("backend" "wasm_symbols") ((mem "WasmSymbol" true))))
 (DUse false (UseGroup ("backend" "wasm_fn_values") ((mem "fnValueUses" false))))
 (DUse false (UseGroup ("ir" "constructor_facts") ((mem "ConstructorFacts" false) (mem "declaredCtorArity" false))))
@@ -3499,11 +3490,9 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DTypeSig false "hBranch" (TyFun (TyCon "Bool") (TyFun (TyCon "HelperAcc") (TyFun (TyCon "CTBranch") (TyCon "HelperAcc")))))
 (DFunDef false "hBranch" ((PVar "refMode") (PVar "acc") (PCon "CTBranch" (PVar "head") (PVar "tree"))) (EBlock (DoLet false false (PVar "acc") (EMatch (EVar "head") (arm (PCon "HLit" (PVar "lit")) () (EApp (EApp (EApp (EVar "hPat") (EVar "refMode")) (EVar "acc")) (EApp (EVar "PLit") (EVar "lit")))) (arm (PCon "HCons") () (ERecordUpdate (EVar "acc") ((fa "patternList" (EVar "True"))))) (arm (PCon "HNil") () (ERecordUpdate (EVar "acc") ((fa "patternList" (EVar "True"))))) (arm (PCon "HTuple" (PVar "n")) () (ERecordUpdate (EVar "acc") ((fa "patternTuples" (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "intToString") (EVar "n"))) (EVar "n")) (EFieldAccess (EVar "acc") "patternTuples")))))) (arm PWild () (EVar "acc")))) (DoExpr (EApp (EApp (EApp (EVar "hTree") (EVar "refMode")) (EVar "acc")) (EVar "tree")))))
 (DTypeSig false "locatedTrap" (TyFun (TyCon "HelperAcc") (TyFun (TyCon "Loc") (TyCon "HelperAcc"))))
-(DFunDef false "locatedTrap" ((PVar "acc") (PVar "loc")) (EIf (EApp (EVar "hasLocation") (EVar "loc")) (EApp (EVar "needSite") (EVar "acc")) (EApp (EVar "needTrap") (EVar "acc"))))
+(DFunDef false "locatedTrap" ((PVar "acc") (PVar "loc")) (EIf (EApp (EVar "sitePackable") (EVar "loc")) (EApp (EVar "needSite") (EVar "acc")) (EApp (EVar "needTrap") (EVar "acc"))))
 (DTypeSig false "locatedNonexh" (TyFun (TyCon "HelperAcc") (TyFun (TyCon "Loc") (TyCon "HelperAcc"))))
-(DFunDef false "locatedNonexh" ((PVar "acc") (PVar "loc")) (EIf (EApp (EVar "hasLocation") (EVar "loc")) (ERecordUpdate (EApp (EVar "needSite") (EVar "acc")) ((fa "nonexh" (EVar "True")))) (EApp (EVar "needTrap") (EVar "acc"))))
-(DTypeSig false "hasLocation" (TyFun (TyCon "Loc") (TyCon "Bool")))
-(DFunDef false "hasLocation" ((PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec"))) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "/=" (EVar "f") (ELit (LString ""))) (EApp (EVar "not") (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "sl") (ELit (LInt 1))) (EBinOp "==" (EVar "sc") (ELit (LInt 0)))) (EBinOp "==" (EVar "el") (ELit (LInt 1)))) (EBinOp "==" (EVar "ec") (ELit (LInt 0)))))) (EBinOp ">=" (EVar "sl") (ELit (LInt 0)))) (EBinOp "<" (EVar "sl") (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EVar "siteLineBits")))) (EBinOp ">=" (EVar "sc") (ELit (LInt 0)))) (EBinOp "<" (EVar "sc") (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EVar "siteColumnBits")))))
+(DFunDef false "locatedNonexh" ((PVar "acc") (PVar "loc")) (EIf (EApp (EVar "sitePackable") (EVar "loc")) (ERecordUpdate (EApp (EVar "needSite") (EVar "acc")) ((fa "nonexh" (EVar "True")))) (EApp (EVar "needTrap") (EVar "acc"))))
 (DTypeSig false "runtimeRoots" (TyFun (TyCon "WasmTypeContext") (TyFun (TyCon "HelperAcc") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyCon "HelperAcc"))))))
 (DFunDef false "runtimeRoots" ((PVar "ctx") (PVar "acc") (PVar "symbol") (PVar "args")) (EMatch (EApp (EApp (EVar "externRuntimeKey") (EFieldAccess (EVar "ctx") "externFacts")) (EVar "symbol")) (arm (PCon "Some" (PVar "key")) ((GBool (EApp (EApp (EVar "contains") (EVar "key")) (EListLit (ELit (LString "shiftLeft")) (ELit (LString "intShiftLeft")))))) (EApp (EApp (EVar "needInt") (EVar "acc")) (ELit (LString "left")))) (arm (PCon "Some" (PVar "key")) ((GBool (EApp (EApp (EVar "contains") (EVar "key")) (EListLit (ELit (LString "shiftRight")) (ELit (LString "intShiftRight")))))) (EApp (EApp (EVar "needInt") (EVar "acc")) (ELit (LString "right")))) (arm (PCon "Some" (PVar "key")) ((GBool (EApp (EApp (EVar "contains") (EVar "key")) (EListLit (ELit (LString "panic")) (ELit (LString "indexError")) (ELit (LString "sliceError")))))) (EApp (EVar "needTrap") (EVar "acc"))) (arm (PCon "Some" (PLit (LString "indexErrorAt"))) () (EApp (EApp (EVar "need") (EApp (EVar "needTrap") (EVar "acc"))) (ELit (LString "trapIntRuntimeLines")))) (arm (PCon "Some" (PVar "key")) ((GBool (EBinOp "||" (EBinOp "==" (EVar "key") (ELit (LString "indexErrorAtSite"))) (EBinOp "==" (EVar "key") (ELit (LString "panicAt")))))) (EBlock (DoLet false false (PVar "acc") (EIf (EBinOp "==" (EVar "key") (ELit (LString "indexErrorAtSite"))) (EApp (EApp (EVar "need") (EApp (EVar "needTrap") (EVar "acc"))) (ELit (LString "trapIntRuntimeLines"))) (EApp (EVar "needTrap") (EVar "acc")))) (DoExpr (EMatch (EVar "args") (arm (PCons (PCon "CLit" (PCon "LInt" (PLit (LInt 0)))) PWild) () (EVar "acc")) (arm PWild () (EApp (EVar "needSite") (EVar "acc"))))))) (arm PWild () (EVar "acc"))))
 (DTypeSig false "intOpName" (TyFun (TyCon "String") (TyCon "String")))
@@ -3991,7 +3980,7 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DFunDef false "stmtHasFallthrough" ((PCon "CSAssign" PWild (PVar "e"))) (EApp (EVar "exprHasFallthrough") (EVar "e")))
 # MARK
 (DUse false (UseAlias ("core") "$core"))
-(DUse false (UseGroup ("backend" "runtime_layout") ((mem "siteLineBits" false) (mem "siteColumnBits" false))))
+(DUse false (UseGroup ("backend" "package_identity") ((mem "sitePackable" false))))
 (DUse false (UseGroup ("backend" "wasm_symbols") ((mem "WasmSymbol" true))))
 (DUse false (UseGroup ("backend" "wasm_fn_values") ((mem "fnValueUses" false))))
 (DUse false (UseGroup ("ir" "constructor_facts") ((mem "ConstructorFacts" false) (mem "declaredCtorArity" false))))
@@ -4452,11 +4441,9 @@ stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 (DTypeSig false "hBranch" (TyFun (TyCon "Bool") (TyFun (TyCon "HelperAcc") (TyFun (TyCon "CTBranch") (TyCon "HelperAcc")))))
 (DFunDef false "hBranch" ((PVar "refMode") (PVar "acc") (PCon "CTBranch" (PVar "head") (PVar "tree"))) (EBlock (DoLet false false (PVar "acc") (EMatch (EVar "head") (arm (PCon "HLit" (PVar "lit")) () (EApp (EApp (EApp (EVar "hPat") (EVar "refMode")) (EVar "acc")) (EApp (EVar "PLit") (EVar "lit")))) (arm (PCon "HCons") () (ERecordUpdate (EVar "acc") ((fa "patternList" (EVar "True"))))) (arm (PCon "HNil") () (ERecordUpdate (EVar "acc") ((fa "patternList" (EVar "True"))))) (arm (PCon "HTuple" (PVar "n")) () (ERecordUpdate (EVar "acc") ((fa "patternTuples" (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "intToString") (EVar "n"))) (EVar "n")) (EFieldAccess (EVar "acc") "patternTuples")))))) (arm PWild () (EVar "acc")))) (DoExpr (EApp (EApp (EApp (EVar "hTree") (EVar "refMode")) (EVar "acc")) (EVar "tree")))))
 (DTypeSig false "locatedTrap" (TyFun (TyCon "HelperAcc") (TyFun (TyCon "Loc") (TyCon "HelperAcc"))))
-(DFunDef false "locatedTrap" ((PVar "acc") (PVar "loc")) (EIf (EApp (EVar "hasLocation") (EVar "loc")) (EApp (EVar "needSite") (EVar "acc")) (EApp (EVar "needTrap") (EVar "acc"))))
+(DFunDef false "locatedTrap" ((PVar "acc") (PVar "loc")) (EIf (EApp (EVar "sitePackable") (EVar "loc")) (EApp (EVar "needSite") (EVar "acc")) (EApp (EVar "needTrap") (EVar "acc"))))
 (DTypeSig false "locatedNonexh" (TyFun (TyCon "HelperAcc") (TyFun (TyCon "Loc") (TyCon "HelperAcc"))))
-(DFunDef false "locatedNonexh" ((PVar "acc") (PVar "loc")) (EIf (EApp (EVar "hasLocation") (EVar "loc")) (ERecordUpdate (EApp (EVar "needSite") (EVar "acc")) ((fa "nonexh" (EVar "True")))) (EApp (EVar "needTrap") (EVar "acc"))))
-(DTypeSig false "hasLocation" (TyFun (TyCon "Loc") (TyCon "Bool")))
-(DFunDef false "hasLocation" ((PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec"))) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "/=" (EVar "f") (ELit (LString ""))) (EApp (EVar "not") (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "sl") (ELit (LInt 1))) (EBinOp "==" (EVar "sc") (ELit (LInt 0)))) (EBinOp "==" (EVar "el") (ELit (LInt 1)))) (EBinOp "==" (EVar "ec") (ELit (LInt 0)))))) (EBinOp ">=" (EVar "sl") (ELit (LInt 0)))) (EBinOp "<" (EVar "sl") (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EVar "siteLineBits")))) (EBinOp ">=" (EVar "sc") (ELit (LInt 0)))) (EBinOp "<" (EVar "sc") (EApp (EApp (EVar "shiftLeft") (ELit (LInt 1))) (EVar "siteColumnBits")))))
+(DFunDef false "locatedNonexh" ((PVar "acc") (PVar "loc")) (EIf (EApp (EVar "sitePackable") (EVar "loc")) (ERecordUpdate (EApp (EVar "needSite") (EVar "acc")) ((fa "nonexh" (EVar "True")))) (EApp (EVar "needTrap") (EVar "acc"))))
 (DTypeSig false "runtimeRoots" (TyFun (TyCon "WasmTypeContext") (TyFun (TyCon "HelperAcc") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyCon "HelperAcc"))))))
 (DFunDef false "runtimeRoots" ((PVar "ctx") (PVar "acc") (PVar "symbol") (PVar "args")) (EMatch (EApp (EApp (EVar "externRuntimeKey") (EFieldAccess (EVar "ctx") "externFacts")) (EVar "symbol")) (arm (PCon "Some" (PVar "key")) ((GBool (EApp (EApp (EVar "contains") (EVar "key")) (EListLit (ELit (LString "shiftLeft")) (ELit (LString "intShiftLeft")))))) (EApp (EApp (EVar "needInt") (EVar "acc")) (ELit (LString "left")))) (arm (PCon "Some" (PVar "key")) ((GBool (EApp (EApp (EVar "contains") (EVar "key")) (EListLit (ELit (LString "shiftRight")) (ELit (LString "intShiftRight")))))) (EApp (EApp (EVar "needInt") (EVar "acc")) (ELit (LString "right")))) (arm (PCon "Some" (PVar "key")) ((GBool (EApp (EApp (EVar "contains") (EVar "key")) (EListLit (ELit (LString "panic")) (ELit (LString "indexError")) (ELit (LString "sliceError")))))) (EApp (EVar "needTrap") (EVar "acc"))) (arm (PCon "Some" (PLit (LString "indexErrorAt"))) () (EApp (EApp (EVar "need") (EApp (EVar "needTrap") (EVar "acc"))) (ELit (LString "trapIntRuntimeLines")))) (arm (PCon "Some" (PVar "key")) ((GBool (EBinOp "||" (EBinOp "==" (EVar "key") (ELit (LString "indexErrorAtSite"))) (EBinOp "==" (EVar "key") (ELit (LString "panicAt")))))) (EBlock (DoLet false false (PVar "acc") (EIf (EBinOp "==" (EVar "key") (ELit (LString "indexErrorAtSite"))) (EApp (EApp (EVar "need") (EApp (EVar "needTrap") (EVar "acc"))) (ELit (LString "trapIntRuntimeLines"))) (EApp (EVar "needTrap") (EVar "acc")))) (DoExpr (EMatch (EVar "args") (arm (PCons (PCon "CLit" (PCon "LInt" (PLit (LInt 0)))) PWild) () (EVar "acc")) (arm PWild () (EApp (EVar "needSite") (EVar "acc"))))))) (arm PWild () (EVar "acc"))))
 (DTypeSig false "intOpName" (TyFun (TyCon "String") (TyCon "String")))
