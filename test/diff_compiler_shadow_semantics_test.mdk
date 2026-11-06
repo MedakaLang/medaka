@@ -447,6 +447,28 @@ table = [
     diag = "",
   },
   Row {
+    entry = "i18_importer_alias_not_nameable/alias-first.mdk",
+    label =
+      "L3: import order never decides; with the alias written first the explicit `fmod.size` still answers 99",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "99\n",
+    diag = "",
+  },
+  Row {
+    entry = "i18_importer_alias_not_nameable/alias-only.mdk",
+    label =
+      "L2: `import smod as S` binds no bare name, so a bare `size` nothing else binds is unbound",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    diag = "unbound variable",
+  },
+  Row {
     entry = "i19_importer_sibling_method_silent/main.mdk",
     label =
       "C6, L2 rung 3: the explicit `fmod.size` answers; `import ifc.{tag}` binds only `tag`",

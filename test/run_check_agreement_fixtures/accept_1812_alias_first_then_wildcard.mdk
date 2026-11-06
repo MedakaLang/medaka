@@ -1,0 +1,6 @@
+-- L2, L3: the alias `Z` binds no bare name, so the only bare `mth` is the wildcard's
+-- function (99), and `Z.mth` still reaches the method through the alias (7).
+import lib.order1812_zmod as Z
+import lib.order1812_fmod.*
+
+main = println (mth "abc" 5, Z.mth 1 "s")

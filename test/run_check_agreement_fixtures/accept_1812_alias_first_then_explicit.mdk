@@ -1,0 +1,8 @@
+-- C7, L2 rung 3, L3: `accept_1812_alias_import_order` with the alias written first.  The
+-- alias `Z` binds no bare name, so the explicit `mth` is fmod's function whichever import
+-- comes first: 99.
+import lib.order1812_zmod as Z
+import lib.order1812_fmod.{mth}
+import lib.order1812_amod.{af}
+
+main = println (mth "abc" 5 + af 0 + Z.zf 0)

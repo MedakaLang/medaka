@@ -1,5 +1,5 @@
 # META
-source_lines=1271
+source_lines=1273
 stages=DESUGAR,MARK
 # SOURCE
 -- A module's export surface, built from its declarations and the surfaces of
@@ -160,7 +160,8 @@ declUseIds _ = []
 -- explicit import answers over a wildcard (docs/spec/SHADOW-SEMANTICS.md L2,
 -- L3), whichever is written first.  [nameOf] is a row's bare name and [binds]
 -- says whether the row binds it.  Two declarations on one rung keep both rows,
--- and an alias's method import (`writtenImportsOf`) is no explicit import.
+-- and an alias's method import gives no row at all (`writtenImportsOf`): `import
+-- m as A` binds no bare name (L2), whichever import is written first.
 -- The checker's import seed, the interpreters' import frame and the emit
 -- path's rename entries all bind imports through this rule.
 export
@@ -169,7 +170,8 @@ explicitOverWild : (r -> String) ->
   (Decl -> List r) ->
   List Decl ->
   List r
-explicitOverWild nameOf binds rowsOf decls =
+explicitOverWild nameOf binds rowsOf prog =
+  let decls = writtenImportsOf prog
   let forms = importFormsOf decls
   let perUse = map (d => (forms d, rowsOf d)) decls
   let explicit =
@@ -1336,7 +1338,7 @@ overPubUse coreExp known f path =
 (DFunDef false "declUseIds" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "declUseIds") (EVar "d")))
 (DFunDef false "declUseIds" (PWild) (EListLit))
 (DTypeSig true "explicitOverWild" (TyFun (TyFun (TyVar "r") (TyCon "String")) (TyFun (TyFun (TyVar "r") (TyCon "Bool")) (TyFun (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyVar "r"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyVar "r")))))))
-(DFunDef false "explicitOverWild" ((PVar "nameOf") (PVar "binds") (PVar "rowsOf") (PVar "decls")) (EBlock (DoLet false false (PVar "forms") (EApp (EVar "importFormsOf") (EVar "decls"))) (DoLet false false (PVar "perUse") (EApp (EApp (EVar "map") (ELam ((PVar "d")) (ETuple (EApp (EVar "forms") (EVar "d")) (EApp (EVar "rowsOf") (EVar "d"))))) (EVar "decls"))) (DoLet false false (PVar "explicit") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PTuple (PVar "form") (PVar "rows"))) (EIf (EBinOp "==" (EVar "form") (EVar "ExplicitImport")) (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "map") (EVar "nameOf")) (EApp (EApp (EVar "filterList") (EVar "binds")) (EVar "rows")))) (EVar "acc")) (EVar "acc")))) (EVar "omEmpty")) (EVar "perUse"))) (DoExpr (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "dropShadowedWild") (EVar "explicit")) (EVar "nameOf"))) (EVar "perUse")))))
+(DFunDef false "explicitOverWild" ((PVar "nameOf") (PVar "binds") (PVar "rowsOf") (PVar "prog")) (EBlock (DoLet false false (PVar "decls") (EApp (EVar "writtenImportsOf") (EVar "prog"))) (DoLet false false (PVar "forms") (EApp (EVar "importFormsOf") (EVar "decls"))) (DoLet false false (PVar "perUse") (EApp (EApp (EVar "map") (ELam ((PVar "d")) (ETuple (EApp (EVar "forms") (EVar "d")) (EApp (EVar "rowsOf") (EVar "d"))))) (EVar "decls"))) (DoLet false false (PVar "explicit") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PTuple (PVar "form") (PVar "rows"))) (EIf (EBinOp "==" (EVar "form") (EVar "ExplicitImport")) (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "map") (EVar "nameOf")) (EApp (EApp (EVar "filterList") (EVar "binds")) (EVar "rows")))) (EVar "acc")) (EVar "acc")))) (EVar "omEmpty")) (EVar "perUse"))) (DoExpr (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "dropShadowedWild") (EVar "explicit")) (EVar "nameOf"))) (EVar "perUse")))))
 (DTypeSig true "explicitImportNames" (TyFun (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
 (DFunDef false "explicitImportNames" ((PVar "namesOf") (PVar "decls")) (EBlock (DoLet false false (PVar "forms") (EApp (EVar "importFormsOf") (EVar "decls"))) (DoExpr (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "d")) (EIf (EBinOp "==" (EApp (EVar "forms") (EVar "d")) (EVar "ExplicitImport")) (EApp (EApp (EVar "omFromNames") (EApp (EVar "namesOf") (EVar "d"))) (EVar "acc")) (EVar "acc")))) (EVar "omEmpty")) (EVar "decls")))))
 (DTypeSig true "withoutShadowedWild" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyFun (TyVar "r") (TyCon "String")) (TyFun (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyVar "r"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyVar "r")))))))
@@ -1598,7 +1600,7 @@ overPubUse coreExp known f path =
 (DFunDef false "declUseIds" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "declUseIds") (EVar "d")))
 (DFunDef false "declUseIds" (PWild) (EListLit))
 (DTypeSig true "explicitOverWild" (TyFun (TyFun (TyVar "r") (TyCon "String")) (TyFun (TyFun (TyVar "r") (TyCon "Bool")) (TyFun (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyVar "r"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyVar "r")))))))
-(DFunDef false "explicitOverWild" ((PVar "nameOf") (PVar "binds") (PVar "rowsOf") (PVar "decls")) (EBlock (DoLet false false (PVar "forms") (EApp (EVar "importFormsOf") (EVar "decls"))) (DoLet false false (PVar "perUse") (EApp (EApp (EMethodRef "map") (ELam ((PVar "d")) (ETuple (EApp (EVar "forms") (EVar "d")) (EApp (EVar "rowsOf") (EVar "d"))))) (EVar "decls"))) (DoLet false false (PVar "explicit") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PTuple (PVar "form") (PVar "rows"))) (EIf (EBinOp "==" (EVar "form") (EVar "ExplicitImport")) (EApp (EApp (EVar "omFromNames") (EApp (EApp (EMethodRef "map") (EVar "nameOf")) (EApp (EApp (EVar "filterList") (EVar "binds")) (EVar "rows")))) (EVar "acc")) (EVar "acc")))) (EVar "omEmpty")) (EVar "perUse"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "dropShadowedWild") (EVar "explicit")) (EVar "nameOf"))) (EVar "perUse")))))
+(DFunDef false "explicitOverWild" ((PVar "nameOf") (PVar "binds") (PVar "rowsOf") (PVar "prog")) (EBlock (DoLet false false (PVar "decls") (EApp (EVar "writtenImportsOf") (EVar "prog"))) (DoLet false false (PVar "forms") (EApp (EVar "importFormsOf") (EVar "decls"))) (DoLet false false (PVar "perUse") (EApp (EApp (EMethodRef "map") (ELam ((PVar "d")) (ETuple (EApp (EVar "forms") (EVar "d")) (EApp (EVar "rowsOf") (EVar "d"))))) (EVar "decls"))) (DoLet false false (PVar "explicit") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PTuple (PVar "form") (PVar "rows"))) (EIf (EBinOp "==" (EVar "form") (EVar "ExplicitImport")) (EApp (EApp (EVar "omFromNames") (EApp (EApp (EMethodRef "map") (EVar "nameOf")) (EApp (EApp (EVar "filterList") (EVar "binds")) (EVar "rows")))) (EVar "acc")) (EVar "acc")))) (EVar "omEmpty")) (EVar "perUse"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "dropShadowedWild") (EVar "explicit")) (EVar "nameOf"))) (EVar "perUse")))))
 (DTypeSig true "explicitImportNames" (TyFun (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
 (DFunDef false "explicitImportNames" ((PVar "namesOf") (PVar "decls")) (EBlock (DoLet false false (PVar "forms") (EApp (EVar "importFormsOf") (EVar "decls"))) (DoExpr (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "d")) (EIf (EBinOp "==" (EApp (EVar "forms") (EVar "d")) (EVar "ExplicitImport")) (EApp (EApp (EVar "omFromNames") (EApp (EVar "namesOf") (EVar "d"))) (EVar "acc")) (EVar "acc")))) (EVar "omEmpty")) (EVar "decls")))))
 (DTypeSig true "withoutShadowedWild" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyFun (TyVar "r") (TyCon "String")) (TyFun (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyVar "r"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyVar "r")))))))

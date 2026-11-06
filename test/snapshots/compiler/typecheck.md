@@ -1207,9 +1207,9 @@ admittedIn : GraphCtx -> String -> List (String, String)
 admittedIn gctx mid =
   optionOr [] (omLookup mid gctx.graphAdmittedMethodsRef.value)
 
--- The method names `deAliasMethodImports` admits WITHOUT a binding the resolver
--- counted: every method of an alias-imported module.  `importSeed` reads this so
--- such a row never makes a bare name look supplied twice.
+-- Every method of an alias-imported module, the names `deAliasMethodImports` admits.
+-- The seed never sees that synthetic import (`explicitOverWild`), so `importSeed` reads
+-- this only to leave a written import of one of those methods without a supplier.
 synthesizedAdmissions : List (String, List String) ->
   List Decl ->
   List (String, String)
@@ -2635,10 +2635,10 @@ driveGraphK sel (DriveArgs inputs valueMain executes preludeKey keyed runtimeDec
   -- alias of one is a second SPELLING, not a second binding.  A member alias and a
   -- module alias both keep their spelling through inference and are resolved at the
   -- end of the tree arm (`resolveAliasMethodSpellings`).  See
-  -- `renameAliasedMethods`.  BOTH selections rename: that rewrite makes
-  -- `import m as A` bind `m`'s methods under their ORIGIN name as well, which decides
-  -- WHICH declaration a bare occurrence of that name resolves to — a binding change,
-  -- not a spelling one, so a selection that skips it typechecks a different program.
+  -- `renameAliasedMethods`.  BOTH selections rename, so both check one tree: the
+  -- rewrite adds `import m.{…m's methods…}` beside `import m as A`, which binds no
+  -- bare name (`writtenImportsOf`, docs/spec/SHADOW-SEMANTICS.md L2) and only gives
+  -- the origin name the restore writes an import downstream.
   -- Only the RESTORE (`resolveAliasMethodSpellings`) is tree-arm-only: it rewrites
   -- occurrences in trees the diags arm does not emit.
   let (admitted, modulesAliased) = renameAliasedMethods coreDecls0 modulesIn

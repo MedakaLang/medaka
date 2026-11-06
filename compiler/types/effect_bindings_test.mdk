@@ -1,7 +1,7 @@
 -- Binding effects are observed through production group inference, not a
 -- synthetic row helper. No standard library is needed by these tiny programs.
 import support.diag_codes.{codeText}
-import test.{expectAll, expectEqual, expectNotEqual, expectTrue}
+import test.{expectAll, expectEach, expectEqual, expectNotEqual, expectTrue}
 import frontend.ast.{Loc(..)}
 import frontend.desugar.{desugar}
 import frontend.parser.{parse, parseLocated}
@@ -643,7 +643,7 @@ test "a re-export preserves a same-provider standalone forcing descriptor" =
         ])),
   ]
 
-test "an alias-admitted method and a standalone retain #1812 import precedence" =
+test "an alias import's method never outranks an explicit standalone, in either import order (L2)" =
   let method =
     "export interface AliasPick a where\n  pick : Int -> a -> Int\nimpl AliasPick String where\n  pick n _ = n\n"
   let standalone = "export pick : String -> Int -> Int\npick _ n = n\n"
@@ -663,20 +663,10 @@ test "an alias-admitted method and a standalone retain #1812 import precedence" 
       "import standalone.{pick}\nimport method as M\nmain : Int\nmain = pick \"x\" 1\n",
     ),
   ]
-  expectAll [
-    expectTrue (contains "T-TYPE-MISMATCH" methodFirst),
-    expectEqual [] standaloneFirst,
+  expectEach [
+    ("alias first", expectEqual [] methodFirst),
+    ("explicit first", expectEqual [] standaloneFirst),
   ]
-
-test "an alias import admits its synthetic bare method binding" =
-  let method =
-    "export interface AliasPick a where\n  pick : Int -> a -> Int\nimpl AliasPick String where\n  pick n _ = n\n"
-  expectEqual
-    []
-    (moduleErrorsChain [
-      ("method", method),
-      ("entry", "import method as M\nmain : Int\nmain = pick 1 \"x\"\n"),
-    ])
 
 test "a shadow-selected standalone application records its inferred interface obligation" =
   let provider =

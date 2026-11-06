@@ -410,9 +410,9 @@ import b.*
         (rowsOf (/= "a") wildThenExplicit),
     ),
     (
-      "the method import beside an alias binds no bare name, so it drops nothing",
+      "the method import beside an alias binds no bare name: no row, and it drops nothing (L2)",
       expectEqual
-        [("foo", "b"), ("bar", "b"), ("foo", "m")]
+        [("foo", "b"), ("bar", "b")]
         (explicitOverWild fst (_ => True) importRows withAliasMethodImport),
     ),
   ]

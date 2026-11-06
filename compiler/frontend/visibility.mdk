@@ -156,7 +156,8 @@ declUseIds _ = []
 -- explicit import answers over a wildcard (docs/spec/SHADOW-SEMANTICS.md L2,
 -- L3), whichever is written first.  [nameOf] is a row's bare name and [binds]
 -- says whether the row binds it.  Two declarations on one rung keep both rows,
--- and an alias's method import (`writtenImportsOf`) is no explicit import.
+-- and an alias's method import gives no row at all (`writtenImportsOf`): `import
+-- m as A` binds no bare name (L2), whichever import is written first.
 -- The checker's import seed, the interpreters' import frame and the emit
 -- path's rename entries all bind imports through this rule.
 export
@@ -165,7 +166,8 @@ explicitOverWild : (r -> String) ->
   (Decl -> List r) ->
   List Decl ->
   List r
-explicitOverWild nameOf binds rowsOf decls =
+explicitOverWild nameOf binds rowsOf prog =
+  let decls = writtenImportsOf prog
   let forms = importFormsOf decls
   let perUse = map (d => (forms d, rowsOf d)) decls
   let explicit =
