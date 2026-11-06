@@ -71,7 +71,7 @@ mutationTest : MutationTest
 mutationTest = MutationTest {
   gate = gate,
   driver = driver,
-  args = ["\{medakaRoot}/\{corpusFile}"],
+  args = ["\{medakaRoot ()}/\{corpusFile}"],
   mutations = [
     -- A document naming the wrong server must not satisfy the did:web cell.
     Mutation {

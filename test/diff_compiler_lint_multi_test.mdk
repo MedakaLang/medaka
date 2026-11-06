@@ -48,15 +48,15 @@ crossfileFixtures = underRoot "test/lint_crossfile_fixtures"
 -- working directory's absolute path is normalised too. Both become `ROOT/`, so
 -- goldens are machine-portable.
 rootNorm : String -> <IO> String
-rootNorm s = normRoot (getEnvOr "PWD" medakaRoot) s
+rootNorm s = normRoot (getEnvOr "PWD" (medakaRoot ())) s
 
 normRoot : String -> String -> <IO> String
 normRoot cwd s =
-  replaceAll "\{medakaRoot}/" "ROOT/" (replaceAll (cwd ++ "/") "ROOT/" s)
+  replaceAll "\{medakaRoot ()}/" "ROOT/" (replaceAll (cwd ++ "/") "ROOT/" s)
 
 -- Stdout of `medaka <args>`, graded against a golden file.
 lintGolden : List String -> String -> <Exec, IO> Expectation
-lintGolden args golden = match boundedInTree 120 medakaBin args
+lintGolden args golden = match boundedInTree 120 (medakaBin ()) args
   Err e => fail "could not run `medaka lint`: \{e}"
   Ok (code, out, _) =>
     if code /= 0 then
@@ -69,7 +69,7 @@ lintBoth : List String -> <Exec, IO> Result String (Int, String)
 lintBoth args =
   map
     ((code, out, err) => (code, out ++ err))
-    (boundedInTree 120 medakaBin args)
+    (boundedInTree 120 (medakaBin ()) args)
 
 test "diff_compiler_lint_multi: directory target matches its golden" =
   lintGolden
@@ -202,7 +202,7 @@ test "repl survives malformed input with session state intact" =
     "-c",
     "printf 'x = 41\\ntype x\\n1 +\\n:type 1 +\\nx\\n1 + 1\\n:quit\\n' | exec \"$1\" repl",
     "sh",
-    medakaBin,
+    medakaBin (),
   ]
     Err e => fail "could not run repl: \{e}"
     Ok (0, out, err) => expectAll [
@@ -224,7 +224,7 @@ malformedStdlibIn dir = match mkdirAll "\{dir}/stdlib"
     Err e => fail "could not write malformed stdlib: \{e}"
     Ok () => match boundedInTree 120 "env" [
       "MEDAKA_ROOT=\{dir}",
-      medakaBin,
+      medakaBin (),
       "lint",
       "--json",
       dirAProbe,

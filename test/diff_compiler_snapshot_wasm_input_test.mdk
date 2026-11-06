@@ -52,51 +52,51 @@ apiWitnessSource = join "\n" [
 ]
 
 typedApiCheck : <IO, Exec, FileWrite> Expectation
-typedApiCheck = withScratchDir
-  (dir =>
-    match (runVerb "sh" [
-      "-c",
-      "root=$(cd \"$1\" && pwd -P) || exit 1; for d in backend frontend types ir support driver eval tools; do ln -s \"$root/compiler/$d\" \"$2/$d\" || exit 1; done; cp \"$root/compiler/medaka.toml\" \"$2/medaka.toml\"",
-      "sh", medakaRoot, dir
-    ])
-      Err e => fail e
-      Ok (code, _, err) =>
-        if code /= 0 then
-          fail err
-        else match (
-          writeFile (dir ++ "/witness.mdk") apiWitnessSource,
-          writeFile
-            (dir ++ "/bad_argument.mdk")
-            (replace
-              "normalApiWitness input plan core"
-              "normalApiWitness 42 plan core"
-              apiWitnessSource),
-          writeFile
-            (dir ++ "/bad_payload.mdk")
-            (replace
-              "Result (List SymbolDefect) (List String)"
-              "Result (List SymbolDefect) Int"
-              apiWitnessSource),
-        )
-          (Ok _, Ok _, Ok _) => expectAll [
-            expectSpawnOk medakaBin ["check", dir ++ "/witness.mdk"],
-            expectSpawnOkLine medakaBin ["run", dir ++ "/witness.mdk"] "513",
-            expectSpawnFailsAll
-              medakaBin
-              ["check", dir ++ "/bad_argument.mdk"]
-              ["type"],
-            expectSpawnFailsAll
-              medakaBin
-              ["check", dir ++ "/bad_payload.mdk"]
-              ["type"],
-          ]
-          _ => fail "could not write typed API witnesses")
+typedApiCheck = withScratchDir (dir => match runVerb "sh" [
+  "-c",
+  "root=$(cd \"$1\" && pwd -P) || exit 1; for d in backend frontend types ir support driver eval tools; do ln -s \"$root/compiler/$d\" \"$2/$d\" || exit 1; done; cp \"$root/compiler/medaka.toml\" \"$2/medaka.toml\"",
+  "sh",
+  medakaRoot (),
+  dir,
+]
+  Err e => fail e
+  Ok (code, _, err) =>
+    if code /= 0 then
+      fail err
+    else match (
+      writeFile (dir ++ "/witness.mdk") apiWitnessSource,
+      writeFile
+        (dir ++ "/bad_argument.mdk")
+        (replace
+          "normalApiWitness input plan core"
+          "normalApiWitness 42 plan core"
+          apiWitnessSource),
+      writeFile
+        (dir ++ "/bad_payload.mdk")
+        (replace
+          "Result (List SymbolDefect) (List String)"
+          "Result (List SymbolDefect) Int"
+          apiWitnessSource),
+    )
+      (Ok _, Ok _, Ok _) => expectAll [
+        expectSpawnOk (medakaBin ()) ["check", dir ++ "/witness.mdk"],
+        expectSpawnOkLine (medakaBin ()) ["run", dir ++ "/witness.mdk"] "513",
+        expectSpawnFailsAll
+          (medakaBin ())
+          ["check", dir ++ "/bad_argument.mdk"]
+          ["type"],
+        expectSpawnFailsAll
+          (medakaBin ())
+          ["check", dir ++ "/bad_payload.mdk"]
+          ["type"],
+      ]
+      _ => fail "could not write typed API witnesses")
 
 wasmEmitPath : <IO> String
-wasmEmitPath = "\{medakaRoot}/compiler/backend/wasm_emit.mdk"
+wasmEmitPath = "\{medakaRoot ()}/compiler/backend/wasm_emit.mdk"
 
 emitSupportPath : <IO> String
-emitSupportPath = "\{medakaRoot}/compiler/backend/emit_support.mdk"
+emitSupportPath = "\{medakaRoot ()}/compiler/backend/emit_support.mdk"
 
 legacyNames : List String
 legacyNames = [
@@ -193,17 +193,23 @@ wasmSource =
 
 -- Runs `medaka snapshot` and grades its exit code.
 snapshotRun : String -> String -> String -> <Exec, IO> Result String String
-snapshotRun out stages src =
-  match (boundedVerb medakaBin [
-    "snapshot", "--new", "--root", medakaRoot, "--out", out, "--stages", stages,
-    src
-  ])
-    Err e => Err "could not spawn snapshot --stages \{stages}: \{e}"
-    Ok (code, _, _) =>
-      if code /= 0 then
-        Err "snapshot --stages \{stages} exited \{intToString code}"
-      else
-        Ok out
+snapshotRun out stages src = match boundedVerb (medakaBin ()) [
+  "snapshot",
+  "--new",
+  "--root",
+  medakaRoot (),
+  "--out",
+  out,
+  "--stages",
+  stages,
+  src,
+]
+  Err e => Err "could not spawn snapshot --stages \{stages}: \{e}"
+  Ok (code, _, _) =>
+    if code /= 0 then
+      Err "snapshot --stages \{stages} exited \{intToString code}"
+    else
+      Ok out
 
 -- Extract the WAT payload: lines after `# WASM` until the next `# ` header.
 wasmSection : List String -> List String

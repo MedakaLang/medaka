@@ -193,7 +193,7 @@ shapeOf ls1 ls2 = expectEach [
 irOf : String -> String -> <Exec, IO, FileRead, FileWrite> Result String String
 irOf dir name = match writeFile "\{dir}/\{name}.mdk" (probeText name)
   Err e => Err "could not write the \{name} probe: \{e}"
-  Ok _ => match boundedInTree 300 medakaBin [
+  Ok _ => match boundedInTree 300 (medakaBin ()) [
     "build",
     "--keep-ir",
     "\{dir}/\{name}.mdk",

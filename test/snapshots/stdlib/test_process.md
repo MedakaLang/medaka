@@ -1,13 +1,13 @@
 # META
-source_lines=661
+source_lines=658
 stages=DESUGAR,MARK
 # SOURCE
 {- | Assertions for a test that runs a program.
 
    A test whose subject is a whole program (a compiler verb, a script, any
    binary) spawns it and grades what came back. `expectSpawnOk`,
-   `expectSpawnFails` and `expectSpawnOkLine` grade a spawn. `medakaRoot`,
-   `underRoot` and `medakaBin` locate the tree and the binary under test.
+   `expectSpawnFails` and `expectSpawnOkLine` grade a spawn. `medakaRoot ()`,
+   `underRoot` and `medakaBin ()` locate the tree and the binary under test.
    `boundedVerb` puts a time limit on one spawn, and `withScratchDir` runs a
    test body in a directory of its own and removes it afterwards.
 
@@ -48,22 +48,22 @@ import test.{Expectation(..), expectAll}
    Files are located through this rather than through the working
    directory, which a test does not control. -}
 export
-medakaRoot : <Env "MEDAKA_ROOT"> String
-medakaRoot = getEnvOr "MEDAKA_ROOT" "."
+medakaRoot : Unit -> <Env "MEDAKA_ROOT"> String
+medakaRoot () = getEnvOr "MEDAKA_ROOT" "."
 
 -- | The path `rel`, relative to the tree root, resolved under `medakaRoot`.
 export
 underRoot : String -> <Env "MEDAKA_ROOT"> String
-underRoot rel = "\{medakaRoot}/\{rel}"
+underRoot rel = "\{medakaRoot ()}/\{rel}"
 
 {- | The Medaka binary to spawn: `MEDAKA`, or the binary named medaka in
-   `medakaRoot` when it is unset.
+   `medakaRoot ()` when it is unset.
 
    The default is a path, so an unset `MEDAKA` never resolves to another
    build on `PATH`. -}
 export
-medakaBin : <Env "MEDAKA_ROOT", Env "MEDAKA"> String
-medakaBin = getEnvOr "MEDAKA" "\{medakaRoot}/medaka"
+medakaBin : Unit -> <Env "MEDAKA_ROOT", Env "MEDAKA"> String
+medakaBin () = getEnvOr "MEDAKA" "\{medakaRoot ()}/medaka"
 
 -- # Spawning
 
@@ -118,26 +118,23 @@ boundedVerbSeconds secs cmd args =
 
 {- | A fresh, empty directory for a test that has to write files.
 
-   `scratchDir` is a value, so it is evaluated once per process: every use in
-   one test file, and so every `test` block of that file, is handed the SAME
-   directory. A block that removes it takes the next block's workspace with
-   it, and a block that leaves files behind leaks them into the next. Two
-   concurrent runs of the same test do not collide, because each process makes
-   its own. The caller owns the directory and removes it. Prefer
-   `withScratchDir`, which gives each call its own directory and removes it.
+   Each call makes a new directory, so a caller that wants one directory for
+   several uses binds `scratchDir ()` once and shares the result. Two
+   concurrent runs of the same test do not collide. The caller owns the
+   directory and removes it. Prefer `withScratchDir`, which removes it.
 
-   > map (startsWith "/") scratchDir
+   > map (startsWith "/") (scratchDir ())
    Ok True -}
 export
-scratchDir : <Exec "mktemp*"> Result String String
-scratchDir = match runVerb "mktemp" ["-d"]
+scratchDir : Unit -> <Exec "mktemp*"> Result String String
+scratchDir () = match runVerb "mktemp" ["-d"]
   Err e => Err e
   Ok (0, out, _) => Ok (trim out)
   Ok (code, _, err) => Err "mktemp -d exited \{intToString code}: \{err}"
 
 {- | Runs `body` with a fresh, empty directory of its own, then removes it.
 
-   Unlike `scratchDir`, each call makes a new directory, so the `test` blocks
+   Unlike `scratchDir ()`, each call makes a new directory, so the `test` blocks
    of one file cannot see each other's files and none can delete another's
    workspace. Removal is graded: a directory that cannot be removed fails the
    test rather than being left behind, and a failing `body` still has its
@@ -409,7 +406,7 @@ testAssertionCount : String ->
   List String ->
   <Exec, Env "MEDAKA_ROOT", Env "MEDAKA"> Result String Int
 testAssertionCount path extraArgs =
-  let bin = medakaBin
+  let bin = medakaBin ()
   let args = assertionCountArgs path extraArgs
   gradeAssertionCount bin path args (runVerb bin args)
 
@@ -427,9 +424,9 @@ export
 testAssertionCounts : List (String, List String) ->
   <Exec, Env "MEDAKA_ROOT", Env "MEDAKA", Env "MEDAKA_TEST_JOBS"> List (Result String Int)
 testAssertionCounts rows =
-  let bin = medakaBin
+  let bin = medakaBin ()
   let argvs = map ((path, extraArgs) => assertionCountArgs path extraArgs) rows
-  let spawned = runCommandBatch bin testJobs argvs
+  let spawned = runCommandBatch bin (testJobs ()) argvs
   zipWith3
     ((path, _) args run =>
       gradeAssertionCount bin path args (mapErr (e => "\{bin}: \{e}") run))
@@ -444,18 +441,18 @@ testAssertionCounts rows =
    processors available to the process (nproc, else getconf), or 4 when
    that cannot be read.
 
-   > testJobs > 0
+   > testJobs () > 0
    True -}
 export
-testJobs : <Exec, Env "MEDAKA_TEST_JOBS"> Int
-testJobs = match getEnv "MEDAKA_TEST_JOBS" |> flatMap toInt
+testJobs : Unit -> <Exec, Env "MEDAKA_TEST_JOBS"> Int
+testJobs () = match getEnv "MEDAKA_TEST_JOBS" |> flatMap toInt
   Some n if n > 0 => n
-  _ => onlineProcessors
+  _ => onlineProcessors ()
 
 -- The processors this process may run on (`nproc` honours affinity masks and
 -- cgroup quotas), else the online count, else 4.
-onlineProcessors : <Exec> Int
-onlineProcessors =
+onlineProcessors : Unit -> <Exec> Int
+onlineProcessors () =
   findMap
       ((cmd, args) => cpuCountFrom cmd args)
       [("nproc", []), ("getconf", ["_NPROCESSORS_ONLN"])]
@@ -669,20 +666,20 @@ disagreeingFloorBlocks titlePrefix callOpen sourceLines =
 (DUse false (UseGroup ("list") ((mem "findMap" false) (mem "zipWith3" false))))
 (DUse false (UseGroup ("string") ((mem "contains" false) (mem "drop" false) (mem "endsWith" false) (mem "indexOf" false) (mem "lines" false) (mem "startsWith" false) (mem "stripPrefix" false) (mem "stripSuffix" false) (mem "toInt" false) (mem "trim" false) (mem "unwords" false))))
 (DUse false (UseGroup ("test") ((mem "Expectation" true) (mem "expectAll" false))))
-(DTypeSig true "medakaRoot" (TyEffect ((atom "Env" "MEDAKA_ROOT")) None (TyCon "String")))
-(DFunDef false "medakaRoot" () (EApp (EApp (EVar "getEnvOr") (ELit (LString "MEDAKA_ROOT"))) (ELit (LString "."))))
+(DTypeSig true "medakaRoot" (TyFun (TyCon "Unit") (TyEffect ((atom "Env" "MEDAKA_ROOT")) None (TyCon "String"))))
+(DFunDef false "medakaRoot" ((PLit LUnit)) (EApp (EApp (EVar "getEnvOr") (ELit (LString "MEDAKA_ROOT"))) (ELit (LString "."))))
 (DTypeSig true "underRoot" (TyFun (TyCon "String") (TyEffect ((atom "Env" "MEDAKA_ROOT")) None (TyCon "String"))))
-(DFunDef false "underRoot" ((PVar "rel")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "medakaRoot"))) (ELit (LString "/"))) (EApp (EVar "display") (EVar "rel"))) (ELit (LString ""))))
-(DTypeSig true "medakaBin" (TyEffect ((atom "Env" "MEDAKA_ROOT") (atom "Env" "MEDAKA")) None (TyCon "String")))
-(DFunDef false "medakaBin" () (EApp (EApp (EVar "getEnvOr") (ELit (LString "MEDAKA"))) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "medakaRoot"))) (ELit (LString "/medaka")))))
+(DFunDef false "underRoot" ((PVar "rel")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "medakaRoot") (ELit LUnit)))) (ELit (LString "/"))) (EApp (EVar "display") (EVar "rel"))) (ELit (LString ""))))
+(DTypeSig true "medakaBin" (TyFun (TyCon "Unit") (TyEffect ((atom "Env" "MEDAKA_ROOT") (atom "Env" "MEDAKA")) None (TyCon "String"))))
+(DFunDef false "medakaBin" ((PLit LUnit)) (EApp (EApp (EVar "getEnvOr") (ELit (LString "MEDAKA"))) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "medakaRoot") (ELit LUnit)))) (ELit (LString "/medaka")))))
 (DTypeSig true "spawnTimeoutSeconds" (TyCon "Int"))
 (DFunDef false "spawnTimeoutSeconds" () (ELit (LInt 60)))
 (DTypeSig true "boundedVerb" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("Exec") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "Int") (TyCon "String") (TyCon "String")))))))
 (DFunDef false "boundedVerb" ((PVar "cmd") (PVar "args")) (EApp (EApp (EApp (EVar "boundedVerbSeconds") (EVar "spawnTimeoutSeconds")) (EVar "cmd")) (EVar "args")))
 (DTypeSig true "boundedVerbSeconds" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("Exec") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "Int") (TyCon "String") (TyCon "String"))))))))
 (DFunDef false "boundedVerbSeconds" ((PVar "secs") (PVar "cmd") (PVar "args")) (EApp (EApp (EVar "runVerb") (ELit (LString "perl"))) (EBinOp "++" (EListLit (ELit (LString "-e")) (EBinOp "++" (EBinOp "++" (ELit (LString "alarm ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "secs")))) (ELit (LString "; exec @ARGV or die qq(exec: $!)"))) (ELit (LString "env")) (EVar "cmd")) (EVar "args"))))
-(DTypeSig true "scratchDir" (TyEffect ((atom "Exec" "mktemp*")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String"))))
-(DFunDef false "scratchDir" () (EMatch (EApp (EApp (EVar "runVerb") (ELit (LString "mktemp"))) (EListLit (ELit (LString "-d")))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "out") PWild)) () (EApp (EVar "Ok") (EApp (EVar "trim") (EVar "out")))) (arm (PCon "Ok" (PTuple (PVar "code") PWild (PVar "err"))) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "mktemp -d exited ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "err"))) (ELit (LString "")))))))
+(DTypeSig true "scratchDir" (TyFun (TyCon "Unit") (TyEffect ((atom "Exec" "mktemp*")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
+(DFunDef false "scratchDir" ((PLit LUnit)) (EMatch (EApp (EApp (EVar "runVerb") (ELit (LString "mktemp"))) (EListLit (ELit (LString "-d")))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "out") PWild)) () (EApp (EVar "Ok") (EApp (EVar "trim") (EVar "out")))) (arm (PCon "Ok" (PTuple (PVar "code") PWild (PVar "err"))) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "mktemp -d exited ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "err"))) (ELit (LString "")))))))
 (DTypeSig true "withScratchDir" (TyFun (TyFun (TyCon "String") (TyEffect ("Exec" "IO" "FileRead" "FileWrite") None (TyCon "Expectation"))) (TyEffect ("Exec" "IO" "FileRead" "FileWrite") None (TyCon "Expectation"))))
 (DFunDef false "withScratchDir" ((PVar "body")) (EMatch (EApp (EApp (EVar "runVerb") (ELit (LString "mktemp"))) (EListLit (ELit (LString "-d")))) (arm (PCon "Err" (PVar "e")) () (EApp (EApp (EApp (EVar "Fail") (EBinOp "++" (EBinOp "++" (ELit (LString "could not make a scratch directory: ")) (EApp (EVar "display") (EVar "e"))) (ELit (LString "")))) (ELit (LString "a directory"))) (ELit (LString "none")))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "out") PWild)) () (EBlock (DoLet false false (PVar "dir") (EApp (EVar "trim") (EVar "out"))) (DoLet false false (PVar "result") (EApp (EVar "body") (EVar "dir"))) (DoExpr (EApp (EVar "expectAll") (EListLit (EVar "result") (EApp (EVar "removeScratch") (EVar "dir"))))))) (arm (PCon "Ok" (PTuple (PVar "code") PWild (PVar "err"))) () (EApp (EApp (EApp (EVar "Fail") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "mktemp -d exited ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "err"))) (ELit (LString "")))) (ELit (LString "a directory"))) (EBinOp "++" (EBinOp "++" (ELit (LString "exit ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString "")))))))
 (DTypeSig false "removeScratch" (TyFun (TyCon "String") (TyEffect ("Exec") None (TyCon "Expectation"))))
@@ -708,13 +705,13 @@ disagreeingFloorBlocks titlePrefix callOpen sourceLines =
 (DTypeSig false "outputTail" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "outputTail" ((PVar "text")) (EApp (EApp (EVar "outputTailOf") (EVar "failureOutputTailChars")) (EVar "text")))
 (DTypeSig true "testAssertionCount" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("Exec" (atom "Env" "MEDAKA_ROOT") (atom "Env" "MEDAKA")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))
-(DFunDef false "testAssertionCount" ((PVar "path") (PVar "extraArgs")) (EBlock (DoLet false false (PVar "bin") (EVar "medakaBin")) (DoLet false false (PVar "args") (EApp (EApp (EVar "assertionCountArgs") (EVar "path")) (EVar "extraArgs"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "gradeAssertionCount") (EVar "bin")) (EVar "path")) (EVar "args")) (EApp (EApp (EVar "runVerb") (EVar "bin")) (EVar "args"))))))
+(DFunDef false "testAssertionCount" ((PVar "path") (PVar "extraArgs")) (EBlock (DoLet false false (PVar "bin") (EApp (EVar "medakaBin") (ELit LUnit))) (DoLet false false (PVar "args") (EApp (EApp (EVar "assertionCountArgs") (EVar "path")) (EVar "extraArgs"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "gradeAssertionCount") (EVar "bin")) (EVar "path")) (EVar "args")) (EApp (EApp (EVar "runVerb") (EVar "bin")) (EVar "args"))))))
 (DTypeSig true "testAssertionCounts" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyEffect ("Exec" (atom "Env" "MEDAKA_ROOT") (atom "Env" "MEDAKA") (atom "Env" "MEDAKA_TEST_JOBS")) None (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))
-(DFunDef false "testAssertionCounts" ((PVar "rows")) (EBlock (DoLet false false (PVar "bin") (EVar "medakaBin")) (DoLet false false (PVar "argvs") (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "path") (PVar "extraArgs"))) (EApp (EApp (EVar "assertionCountArgs") (EVar "path")) (EVar "extraArgs")))) (EVar "rows"))) (DoLet false false (PVar "spawned") (EApp (EApp (EApp (EVar "runCommandBatch") (EVar "bin")) (EVar "testJobs")) (EVar "argvs"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "zipWith3") (ELam ((PTuple (PVar "path") PWild) (PVar "args") (PVar "run")) (EApp (EApp (EApp (EApp (EVar "gradeAssertionCount") (EVar "bin")) (EVar "path")) (EVar "args")) (EApp (EApp (EVar "mapErr") (ELam ((PVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "bin"))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (EVar "run"))))) (EVar "rows")) (EVar "argvs")) (EVar "spawned")))))
-(DTypeSig true "testJobs" (TyEffect ("Exec" (atom "Env" "MEDAKA_TEST_JOBS")) None (TyCon "Int")))
-(DFunDef false "testJobs" () (EMatch (EBinOp "|>" (EApp (EVar "getEnv") (ELit (LString "MEDAKA_TEST_JOBS"))) (EApp (EVar "flatMap") (EVar "toInt"))) (arm (PCon "Some" (PVar "n")) ((GBool (EBinOp ">" (EVar "n") (ELit (LInt 0))))) (EVar "n")) (arm PWild () (EVar "onlineProcessors"))))
-(DTypeSig false "onlineProcessors" (TyEffect ("Exec") None (TyCon "Int")))
-(DFunDef false "onlineProcessors" () (EBinOp "|>" (EApp (EApp (EVar "findMap") (ELam ((PTuple (PVar "cmd") (PVar "args"))) (EApp (EApp (EVar "cpuCountFrom") (EVar "cmd")) (EVar "args")))) (EListLit (ETuple (ELit (LString "nproc")) (EListLit)) (ETuple (ELit (LString "getconf")) (EListLit (ELit (LString "_NPROCESSORS_ONLN")))))) (EApp (EVar "optionOr") (ELit (LInt 4)))))
+(DFunDef false "testAssertionCounts" ((PVar "rows")) (EBlock (DoLet false false (PVar "bin") (EApp (EVar "medakaBin") (ELit LUnit))) (DoLet false false (PVar "argvs") (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "path") (PVar "extraArgs"))) (EApp (EApp (EVar "assertionCountArgs") (EVar "path")) (EVar "extraArgs")))) (EVar "rows"))) (DoLet false false (PVar "spawned") (EApp (EApp (EApp (EVar "runCommandBatch") (EVar "bin")) (EApp (EVar "testJobs") (ELit LUnit))) (EVar "argvs"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "zipWith3") (ELam ((PTuple (PVar "path") PWild) (PVar "args") (PVar "run")) (EApp (EApp (EApp (EApp (EVar "gradeAssertionCount") (EVar "bin")) (EVar "path")) (EVar "args")) (EApp (EApp (EVar "mapErr") (ELam ((PVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "bin"))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (EVar "run"))))) (EVar "rows")) (EVar "argvs")) (EVar "spawned")))))
+(DTypeSig true "testJobs" (TyFun (TyCon "Unit") (TyEffect ("Exec" (atom "Env" "MEDAKA_TEST_JOBS")) None (TyCon "Int"))))
+(DFunDef false "testJobs" ((PLit LUnit)) (EMatch (EBinOp "|>" (EApp (EVar "getEnv") (ELit (LString "MEDAKA_TEST_JOBS"))) (EApp (EVar "flatMap") (EVar "toInt"))) (arm (PCon "Some" (PVar "n")) ((GBool (EBinOp ">" (EVar "n") (ELit (LInt 0))))) (EVar "n")) (arm PWild () (EApp (EVar "onlineProcessors") (ELit LUnit)))))
+(DTypeSig false "onlineProcessors" (TyFun (TyCon "Unit") (TyEffect ("Exec") None (TyCon "Int"))))
+(DFunDef false "onlineProcessors" ((PLit LUnit)) (EBinOp "|>" (EApp (EApp (EVar "findMap") (ELam ((PTuple (PVar "cmd") (PVar "args"))) (EApp (EApp (EVar "cpuCountFrom") (EVar "cmd")) (EVar "args")))) (EListLit (ETuple (ELit (LString "nproc")) (EListLit)) (ETuple (ELit (LString "getconf")) (EListLit (ELit (LString "_NPROCESSORS_ONLN")))))) (EApp (EVar "optionOr") (ELit (LInt 4)))))
 (DTypeSig false "cpuCountFrom" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("Exec") None (TyApp (TyCon "Option") (TyCon "Int"))))))
 (DFunDef false "cpuCountFrom" ((PVar "cmd") (PVar "args")) (EMatch (EApp (EApp (EVar "runVerb") (EVar "cmd")) (EVar "args")) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "out") PWild)) () (EMatch (EApp (EVar "toInt") (EApp (EVar "trim") (EVar "out"))) (arm (PCon "Some" (PVar "n")) ((GBool (EBinOp ">" (EVar "n") (ELit (LInt 0))))) (EApp (EVar "Some") (EVar "n"))) (arm PWild () (EVar "None")))) (arm PWild () (EVar "None"))))
 (DTypeSig false "assertionCountArgs" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
@@ -759,20 +756,20 @@ disagreeingFloorBlocks titlePrefix callOpen sourceLines =
 (DUse false (UseGroup ("list") ((mem "findMap" false) (mem "zipWith3" false))))
 (DUse false (UseGroup ("string") ((mem "contains" false) (mem "drop" false) (mem "endsWith" false) (mem "indexOf" false) (mem "lines" false) (mem "startsWith" false) (mem "stripPrefix" false) (mem "stripSuffix" false) (mem "toInt" false) (mem "trim" false) (mem "unwords" false))))
 (DUse false (UseGroup ("test") ((mem "Expectation" true) (mem "expectAll" false))))
-(DTypeSig true "medakaRoot" (TyEffect ((atom "Env" "MEDAKA_ROOT")) None (TyCon "String")))
-(DFunDef false "medakaRoot" () (EApp (EApp (EVar "getEnvOr") (ELit (LString "MEDAKA_ROOT"))) (ELit (LString "."))))
+(DTypeSig true "medakaRoot" (TyFun (TyCon "Unit") (TyEffect ((atom "Env" "MEDAKA_ROOT")) None (TyCon "String"))))
+(DFunDef false "medakaRoot" ((PLit LUnit)) (EApp (EApp (EVar "getEnvOr") (ELit (LString "MEDAKA_ROOT"))) (ELit (LString "."))))
 (DTypeSig true "underRoot" (TyFun (TyCon "String") (TyEffect ((atom "Env" "MEDAKA_ROOT")) None (TyCon "String"))))
-(DFunDef false "underRoot" ((PVar "rel")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "medakaRoot"))) (ELit (LString "/"))) (EApp (EMethodRef "display") (EVar "rel"))) (ELit (LString ""))))
-(DTypeSig true "medakaBin" (TyEffect ((atom "Env" "MEDAKA_ROOT") (atom "Env" "MEDAKA")) None (TyCon "String")))
-(DFunDef false "medakaBin" () (EApp (EApp (EVar "getEnvOr") (ELit (LString "MEDAKA"))) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "medakaRoot"))) (ELit (LString "/medaka")))))
+(DFunDef false "underRoot" ((PVar "rel")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "medakaRoot") (ELit LUnit)))) (ELit (LString "/"))) (EApp (EMethodRef "display") (EVar "rel"))) (ELit (LString ""))))
+(DTypeSig true "medakaBin" (TyFun (TyCon "Unit") (TyEffect ((atom "Env" "MEDAKA_ROOT") (atom "Env" "MEDAKA")) None (TyCon "String"))))
+(DFunDef false "medakaBin" ((PLit LUnit)) (EApp (EApp (EVar "getEnvOr") (ELit (LString "MEDAKA"))) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "medakaRoot") (ELit LUnit)))) (ELit (LString "/medaka")))))
 (DTypeSig true "spawnTimeoutSeconds" (TyCon "Int"))
 (DFunDef false "spawnTimeoutSeconds" () (ELit (LInt 60)))
 (DTypeSig true "boundedVerb" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("Exec") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "Int") (TyCon "String") (TyCon "String")))))))
 (DFunDef false "boundedVerb" ((PVar "cmd") (PVar "args")) (EApp (EApp (EApp (EVar "boundedVerbSeconds") (EVar "spawnTimeoutSeconds")) (EVar "cmd")) (EVar "args")))
 (DTypeSig true "boundedVerbSeconds" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("Exec") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "Int") (TyCon "String") (TyCon "String"))))))))
 (DFunDef false "boundedVerbSeconds" ((PVar "secs") (PVar "cmd") (PVar "args")) (EApp (EApp (EVar "runVerb") (ELit (LString "perl"))) (EBinOp "++" (EListLit (ELit (LString "-e")) (EBinOp "++" (EBinOp "++" (ELit (LString "alarm ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "secs")))) (ELit (LString "; exec @ARGV or die qq(exec: $!)"))) (ELit (LString "env")) (EVar "cmd")) (EVar "args"))))
-(DTypeSig true "scratchDir" (TyEffect ((atom "Exec" "mktemp*")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String"))))
-(DFunDef false "scratchDir" () (EMatch (EApp (EApp (EVar "runVerb") (ELit (LString "mktemp"))) (EListLit (ELit (LString "-d")))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "out") PWild)) () (EApp (EVar "Ok") (EApp (EVar "trim") (EVar "out")))) (arm (PCon "Ok" (PTuple (PVar "code") PWild (PVar "err"))) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "mktemp -d exited ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "err"))) (ELit (LString "")))))))
+(DTypeSig true "scratchDir" (TyFun (TyCon "Unit") (TyEffect ((atom "Exec" "mktemp*")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
+(DFunDef false "scratchDir" ((PLit LUnit)) (EMatch (EApp (EApp (EVar "runVerb") (ELit (LString "mktemp"))) (EListLit (ELit (LString "-d")))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "out") PWild)) () (EApp (EVar "Ok") (EApp (EVar "trim") (EVar "out")))) (arm (PCon "Ok" (PTuple (PVar "code") PWild (PVar "err"))) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "mktemp -d exited ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "err"))) (ELit (LString "")))))))
 (DTypeSig true "withScratchDir" (TyFun (TyFun (TyCon "String") (TyEffect ("Exec" "IO" "FileRead" "FileWrite") None (TyCon "Expectation"))) (TyEffect ("Exec" "IO" "FileRead" "FileWrite") None (TyCon "Expectation"))))
 (DFunDef false "withScratchDir" ((PVar "body")) (EMatch (EApp (EApp (EVar "runVerb") (ELit (LString "mktemp"))) (EListLit (ELit (LString "-d")))) (arm (PCon "Err" (PVar "e")) () (EApp (EApp (EApp (EVar "Fail") (EBinOp "++" (EBinOp "++" (ELit (LString "could not make a scratch directory: ")) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString "")))) (ELit (LString "a directory"))) (ELit (LString "none")))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "out") PWild)) () (EBlock (DoLet false false (PVar "dir") (EApp (EVar "trim") (EVar "out"))) (DoLet false false (PVar "result") (EApp (EVar "body") (EVar "dir"))) (DoExpr (EApp (EVar "expectAll") (EListLit (EVar "result") (EApp (EVar "removeScratch") (EVar "dir"))))))) (arm (PCon "Ok" (PTuple (PVar "code") PWild (PVar "err"))) () (EApp (EApp (EApp (EVar "Fail") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "mktemp -d exited ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "err"))) (ELit (LString "")))) (ELit (LString "a directory"))) (EBinOp "++" (EBinOp "++" (ELit (LString "exit ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString "")))))))
 (DTypeSig false "removeScratch" (TyFun (TyCon "String") (TyEffect ("Exec") None (TyCon "Expectation"))))
@@ -798,13 +795,13 @@ disagreeingFloorBlocks titlePrefix callOpen sourceLines =
 (DTypeSig false "outputTail" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "outputTail" ((PVar "text")) (EApp (EApp (EVar "outputTailOf") (EVar "failureOutputTailChars")) (EVar "text")))
 (DTypeSig true "testAssertionCount" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("Exec" (atom "Env" "MEDAKA_ROOT") (atom "Env" "MEDAKA")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))
-(DFunDef false "testAssertionCount" ((PVar "path") (PVar "extraArgs")) (EBlock (DoLet false false (PVar "bin") (EVar "medakaBin")) (DoLet false false (PVar "args") (EApp (EApp (EVar "assertionCountArgs") (EVar "path")) (EVar "extraArgs"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "gradeAssertionCount") (EVar "bin")) (EVar "path")) (EVar "args")) (EApp (EApp (EVar "runVerb") (EVar "bin")) (EVar "args"))))))
+(DFunDef false "testAssertionCount" ((PVar "path") (PVar "extraArgs")) (EBlock (DoLet false false (PVar "bin") (EApp (EVar "medakaBin") (ELit LUnit))) (DoLet false false (PVar "args") (EApp (EApp (EVar "assertionCountArgs") (EVar "path")) (EVar "extraArgs"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "gradeAssertionCount") (EVar "bin")) (EVar "path")) (EVar "args")) (EApp (EApp (EVar "runVerb") (EVar "bin")) (EVar "args"))))))
 (DTypeSig true "testAssertionCounts" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyEffect ("Exec" (atom "Env" "MEDAKA_ROOT") (atom "Env" "MEDAKA") (atom "Env" "MEDAKA_TEST_JOBS")) None (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))
-(DFunDef false "testAssertionCounts" ((PVar "rows")) (EBlock (DoLet false false (PVar "bin") (EVar "medakaBin")) (DoLet false false (PVar "argvs") (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "path") (PVar "extraArgs"))) (EApp (EApp (EVar "assertionCountArgs") (EVar "path")) (EVar "extraArgs")))) (EVar "rows"))) (DoLet false false (PVar "spawned") (EApp (EApp (EApp (EVar "runCommandBatch") (EVar "bin")) (EVar "testJobs")) (EVar "argvs"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "zipWith3") (ELam ((PTuple (PVar "path") PWild) (PVar "args") (PVar "run")) (EApp (EApp (EApp (EApp (EVar "gradeAssertionCount") (EVar "bin")) (EVar "path")) (EVar "args")) (EApp (EApp (EVar "mapErr") (ELam ((PVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "bin"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (EVar "run"))))) (EVar "rows")) (EVar "argvs")) (EVar "spawned")))))
-(DTypeSig true "testJobs" (TyEffect ("Exec" (atom "Env" "MEDAKA_TEST_JOBS")) None (TyCon "Int")))
-(DFunDef false "testJobs" () (EMatch (EBinOp "|>" (EApp (EVar "getEnv") (ELit (LString "MEDAKA_TEST_JOBS"))) (EApp (EDictApp "flatMap") (EVar "toInt"))) (arm (PCon "Some" (PVar "n")) ((GBool (EBinOp ">" (EVar "n") (ELit (LInt 0))))) (EVar "n")) (arm PWild () (EVar "onlineProcessors"))))
-(DTypeSig false "onlineProcessors" (TyEffect ("Exec") None (TyCon "Int")))
-(DFunDef false "onlineProcessors" () (EBinOp "|>" (EApp (EApp (EVar "findMap") (ELam ((PTuple (PVar "cmd") (PVar "args"))) (EApp (EApp (EVar "cpuCountFrom") (EVar "cmd")) (EVar "args")))) (EListLit (ETuple (ELit (LString "nproc")) (EListLit)) (ETuple (ELit (LString "getconf")) (EListLit (ELit (LString "_NPROCESSORS_ONLN")))))) (EApp (EVar "optionOr") (ELit (LInt 4)))))
+(DFunDef false "testAssertionCounts" ((PVar "rows")) (EBlock (DoLet false false (PVar "bin") (EApp (EVar "medakaBin") (ELit LUnit))) (DoLet false false (PVar "argvs") (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "path") (PVar "extraArgs"))) (EApp (EApp (EVar "assertionCountArgs") (EVar "path")) (EVar "extraArgs")))) (EVar "rows"))) (DoLet false false (PVar "spawned") (EApp (EApp (EApp (EVar "runCommandBatch") (EVar "bin")) (EApp (EVar "testJobs") (ELit LUnit))) (EVar "argvs"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "zipWith3") (ELam ((PTuple (PVar "path") PWild) (PVar "args") (PVar "run")) (EApp (EApp (EApp (EApp (EVar "gradeAssertionCount") (EVar "bin")) (EVar "path")) (EVar "args")) (EApp (EApp (EVar "mapErr") (ELam ((PVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "bin"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (EVar "run"))))) (EVar "rows")) (EVar "argvs")) (EVar "spawned")))))
+(DTypeSig true "testJobs" (TyFun (TyCon "Unit") (TyEffect ("Exec" (atom "Env" "MEDAKA_TEST_JOBS")) None (TyCon "Int"))))
+(DFunDef false "testJobs" ((PLit LUnit)) (EMatch (EBinOp "|>" (EApp (EVar "getEnv") (ELit (LString "MEDAKA_TEST_JOBS"))) (EApp (EDictApp "flatMap") (EVar "toInt"))) (arm (PCon "Some" (PVar "n")) ((GBool (EBinOp ">" (EVar "n") (ELit (LInt 0))))) (EVar "n")) (arm PWild () (EApp (EVar "onlineProcessors") (ELit LUnit)))))
+(DTypeSig false "onlineProcessors" (TyFun (TyCon "Unit") (TyEffect ("Exec") None (TyCon "Int"))))
+(DFunDef false "onlineProcessors" ((PLit LUnit)) (EBinOp "|>" (EApp (EApp (EVar "findMap") (ELam ((PTuple (PVar "cmd") (PVar "args"))) (EApp (EApp (EVar "cpuCountFrom") (EVar "cmd")) (EVar "args")))) (EListLit (ETuple (ELit (LString "nproc")) (EListLit)) (ETuple (ELit (LString "getconf")) (EListLit (ELit (LString "_NPROCESSORS_ONLN")))))) (EApp (EVar "optionOr") (ELit (LInt 4)))))
 (DTypeSig false "cpuCountFrom" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("Exec") None (TyApp (TyCon "Option") (TyCon "Int"))))))
 (DFunDef false "cpuCountFrom" ((PVar "cmd") (PVar "args")) (EMatch (EApp (EApp (EVar "runVerb") (EVar "cmd")) (EVar "args")) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "out") PWild)) () (EMatch (EApp (EVar "toInt") (EApp (EVar "trim") (EVar "out"))) (arm (PCon "Some" (PVar "n")) ((GBool (EBinOp ">" (EVar "n") (ELit (LInt 0))))) (EApp (EVar "Some") (EVar "n"))) (arm PWild () (EVar "None")))) (arm PWild () (EVar "None"))))
 (DTypeSig false "assertionCountArgs" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))

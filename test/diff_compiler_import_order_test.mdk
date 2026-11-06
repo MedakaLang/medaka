@@ -138,13 +138,13 @@ import test_process.{medakaBin, medakaRoot, missingUnits, testJobs}
 -- directory: a gate runner exports it and inherits whatever cwd its caller
 -- happened to be in.
 corpus : <IO> String
-corpus = "\{medakaRoot}/test/import_order_fixtures"
+corpus = "\{medakaRoot ()}/test/import_order_fixtures"
 
 orderLedgerPath : <IO> String
-orderLedgerPath = "\{medakaRoot}/test/IMPORT-ORDER-LEDGER.txt"
+orderLedgerPath = "\{medakaRoot ()}/test/IMPORT-ORDER-LEDGER.txt"
 
 emitLedgerPath : <IO> String
-emitLedgerPath = "\{medakaRoot}/test/EMITTER-VERDICT-LEDGER.txt"
+emitLedgerPath = "\{medakaRoot ()}/test/EMITTER-VERDICT-LEDGER.txt"
 
 {- | The ceiling on one spawned invocation, in seconds, sized to cover a
    `medaka build` and the `clang` it drives.
@@ -428,8 +428,8 @@ gradeEmitted _ _ = Err "internal: an ordering had no emitter result"
 runWorks : List (Result String Work) ->
   <Exec, FileRead, IO> List (Result String Trial)
 runWorks works =
-  let bin = medakaBin
-  let root = medakaRoot
+  let bin = medakaBin ()
+  let root = medakaRoot ()
   let emitter = emitterBin
   let s1 =
     stage
@@ -576,7 +576,7 @@ runCase scratch unit =
               flatMap
                 runWorks
                 (chunks
-                  testJobs
+                  (testJobs ())
                   (mapWithIndex
                     (prepWork "\{scratch}/\{unit}" dir entry src)
                     plan.allOrders))

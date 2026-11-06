@@ -46,18 +46,18 @@ pinPrograms = [
 ]
 
 {- | The verdict of every pin program, in `pinPrograms` order, each as
-   `checkCodes` reports it. The checks run side by side, at most `testJobs`
+   `checkCodes` reports it. The checks run side by side, at most `testJobs ()`
    at once. Each is wrapped the way `boundedVerb` wraps one (the same
    `alarm`), so a hung check still fails its own row. -}
 pinVerdicts : <Exec, IO> List (String, Result String (Int, List String))
 pinVerdicts =
-  let bin = medakaBin
+  let bin = medakaBin ()
   let base = underRoot "pds/test/authority_pins"
   let argvs = map (checkArgv bin base) pinPrograms
   zipWith
     (name run => (name, checkGraded name run))
     pinPrograms
-    (runCommandBatch "perl" testJobs argvs)
+    (runCommandBatch "perl" (testJobs ()) argvs)
 
 -- | The arguments to `perl` that run `bin check --json` on pin program `name`
 -- under the same `alarm` wrapper `boundedVerb` gives each spawn.

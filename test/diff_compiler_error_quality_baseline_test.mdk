@@ -61,11 +61,16 @@ row p =
   let sub = subcommandFor stage
   let rel = "test/error_quality_fixtures/\{stage}/\{basename p}"
   let golden = "\{dirname p}/\{stem p}.out"
-  let root = medakaRoot
-  match (boundedVerbSeconds 60 "sh" [
-    "-c", "cd \"$1\" && shift && exec \"$@\"", "medaka", medakaRoot, medakaBin,
-    sub, rel
-  ])
+  let root = medakaRoot ()
+  match boundedVerbSeconds 60 "sh" [
+    "-c",
+    "cd \"$1\" && shift && exec \"$@\"",
+    "medaka",
+    medakaRoot (),
+    medakaBin (),
+    sub,
+    rel,
+  ]
     Err e => fail "\{rel}: could not spawn: \{e}"
     Ok (code, out, err) =>
       let diag = filter isDiagLine (lines out)

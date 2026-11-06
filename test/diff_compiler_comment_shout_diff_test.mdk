@@ -113,7 +113,7 @@ findingsOf added scope = sigilHits added ++ shoutHits added scope
 -- Merge-base of HEAD with the given ref, or "" when it cannot be resolved.
 mergeBaseWith : String -> <Exec, IO> String
 mergeBaseWith ref =
-  match boundedVerb "git" ["-C", medakaRoot, "merge-base", ref, "HEAD"]
+  match boundedVerb "git" ["-C", medakaRoot (), "merge-base", ref, "HEAD"]
     Err _ => ""
     Ok (code, out, _) => if code == 0 then trim out else ""
 
@@ -121,20 +121,20 @@ mergeBaseWith ref =
 -- (the script's `2>/dev/null` and unchecked fetch status).
 fetchQuiet : List String -> <Exec, IO> Bool
 fetchQuiet args =
-  match runCommand "git" (["-C", medakaRoot, "fetch", "--quiet"] ++ args)
+  match runCommand "git" (["-C", medakaRoot (), "fetch", "--quiet"] ++ args)
     Ok (0, _, _) => True
     _ => False
 
 -- HEAD's commit sha, or "" when it cannot be resolved.
 headSha : <Exec, IO> String
-headSha = match runCommand "git" ["-C", medakaRoot, "rev-parse", "HEAD"]
+headSha = match runCommand "git" ["-C", medakaRoot (), "rev-parse", "HEAD"]
   Ok (0, out, _) => trim out
   _ => ""
 
 originMainResolves : <Exec, IO> Bool
 originMainResolves = match runCommand "git" [
   "-C",
-  medakaRoot,
+  medakaRoot (),
   "rev-parse",
   "--verify",
   "--quiet",
@@ -167,30 +167,42 @@ baseOf =
   if b /= "" then b else mergeBaseWith "main"
 
 mdkFiles : String -> <Exec, IO> Result String (List String)
-mdkFiles base =
-  match (boundedVerb "git" [
-    "-C", medakaRoot, "diff", "--name-only", "--diff-filter=ACM", base, "HEAD",
-    "--", "*.mdk", ":(exclude)test/**"
-  ])
-    Err e => Err e
-    Ok (code, out, err) =>
-      if code /= 0 then
-        Err "exit \{intToString code}: \{err}"
-      else
-        Ok (filter (/= "") (lines out))
+mdkFiles base = match boundedVerb "git" [
+  "-C",
+  medakaRoot (),
+  "diff",
+  "--name-only",
+  "--diff-filter=ACM",
+  base,
+  "HEAD",
+  "--",
+  "*.mdk",
+  ":(exclude)test/**",
+]
+  Err e => Err e
+  Ok (code, out, err) =>
+    if code /= 0 then
+      Err "exit \{intToString code}: \{err}"
+    else
+      Ok (filter (/= "") (lines out))
 
 fileDiff : String -> String -> <Exec, IO> Result String String
-fileDiff base f =
-  match (boundedVerb "git" [
-    "-C", medakaRoot, "diff", "-U0", base, "HEAD", "--", f
-  ])
-    Err e => Err e
-    Ok (code, out, err) =>
-      if code /= 0 then
-        Err
-          "git diff -U0 \{base} HEAD -- \{f} exited \{intToString code}: \{err}"
-      else
-        Ok out
+fileDiff base f = match boundedVerb "git" [
+  "-C",
+  medakaRoot (),
+  "diff",
+  "-U0",
+  base,
+  "HEAD",
+  "--",
+  f,
+]
+  Err e => Err e
+  Ok (code, out, err) =>
+    if code /= 0 then
+      Err "git diff -U0 \{base} HEAD -- \{f} exited \{intToString code}: \{err}"
+    else
+      Ok out
 
 -- The post-image's comment-scope lines; a failing census run is an error, not
 -- an empty scope.
@@ -201,7 +213,7 @@ postScope f = match boundedVerb "sh" [
   "medaka",
   underRoot "test/comment_register_census.sh",
   "HEAD:" ++ f,
-  medakaRoot,
+  medakaRoot (),
 ]
   Err e => Err e
   Ok (code, out, err) =>

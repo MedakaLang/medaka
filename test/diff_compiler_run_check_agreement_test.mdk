@@ -65,7 +65,7 @@ import test_process.{medakaBin, medakaRoot}
 -- directory: `medaka gate run` exports it and inherits whatever cwd the
 -- caller had.
 corpus : <IO> String
-corpus = "\{medakaRoot}/test/run_check_agreement_fixtures"
+corpus = "\{medakaRoot ()}/test/run_check_agreement_fixtures"
 
 {- | One fixture's graded row. `note` carries a structural failure — a
    fixture missing its verdict pin, a spawn that could not start — which
@@ -255,7 +255,7 @@ test "check, run and build agree with every fixture's pinned verdict and value" 
    otherwise pass. The runtime rows reuse `checkRunBuild`'s fatal-outcome
    grading, which also requires `check` to accept the program. -}
 refusalCorpus : <IO> String
-refusalCorpus = "\{medakaRoot}/test/fixed_width_refusal_fixtures"
+refusalCorpus = "\{medakaRoot ()}/test/fixed_width_refusal_fixtures"
 
 -- The diagnostic an out-of-range literal owes: the literal, the type and its
 -- range, on the same line as the fixture's own location. The two pattern
@@ -417,9 +417,9 @@ refusalSpawns : String ->
 refusalSpawns scratch (name, _) =
   let entry = "\{refusalCorpus}/\{name}.mdk"
   [
-    (medakaBin, ["check", entry]),
-    (medakaBin, ["run", entry]),
-    (medakaBin, ["build", entry, "-o", "\{scratch}/\{name}.bin"]),
+    (medakaBin (), ["check", entry]),
+    (medakaBin (), ["run", entry]),
+    (medakaBin (), ["build", entry, "-o", "\{scratch}/\{name}.bin"]),
   ]
 
 compileRefusalFailure : (String, List String) ->

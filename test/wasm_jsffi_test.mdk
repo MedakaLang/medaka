@@ -22,7 +22,7 @@ import test.{Expectation, expectAll, expectEqual, fail}
 import test_process.{boundedVerbSeconds, medakaBin, medakaRoot}
 
 corpus : <IO> String
-corpus = "\{medakaRoot}/test/wasm_jsffi_fixtures"
+corpus = "\{medakaRoot ()}/test/wasm_jsffi_fixtures"
 
 -- `name`.mdk built for wasm into `scratch`, then run by the stub host: the
 -- exit code, stdout and stderr.  A stale compiler fails the build loudly
@@ -97,7 +97,7 @@ test "jsffi: a Unit binding returning a thenable is a JsBindingError on both hos
         expectEqual
           (Ok (1, "before\n", thenableMsg))
           (boundedVerbSeconds 60 "node" [
-            "\{medakaRoot}/test/wasm/run.js",
+            "\{medakaRoot ()}/test/wasm/run.js",
             "\{scratch}/unit_thenable.wasm",
             "\{corpus}/bindings.mjs",
           ]),
@@ -111,7 +111,7 @@ test "jsffi: a Unit binding returning a thenable is a JsBindingError on both hos
 -- those bytes are the ones the fixture's header derives from the C and JS bodies.
 
 twoHostDir : <IO> String
-twoHostDir = "\{medakaRoot}/test/two_host_fixtures"
+twoHostDir = "\{medakaRoot ()}/test/two_host_fixtures"
 
 expectTwoHost : String
 expectTwoHost =
@@ -135,7 +135,7 @@ twoHostObject scratch = do
     (boundedVerbSeconds 600 "env" [
       "MEDAKA_STRICT=1",
       "MEDAKA_NO_LTO=1",
-      medakaBin,
+      medakaBin (),
       "build",
       "--emit-rt-obj",
       "\{scratch}/rt.o",
@@ -173,7 +173,7 @@ nativeTwoHost scratch obj entry out = do
     (boundedVerbSeconds 600 "env" [
       "MEDAKA_STRICT=1",
       "MEDAKA_RT_OBJ=\{obj}",
-      medakaBin,
+      medakaBin (),
       "build",
       "\{twoHostDir}/\{entry}.mdk",
       "-o",
@@ -198,7 +198,7 @@ wasmTwoHost scratch entry out =
       mustRun
         "run wasm \{entry}"
         (boundedVerbSeconds 60 "node" [
-          "\{medakaRoot}/test/wasm/run.js",
+          "\{medakaRoot ()}/test/wasm/run.js",
           "\{scratch}/\{out}.wasm",
           "\{twoHostDir}/bindings.mjs",
         ])

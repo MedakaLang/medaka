@@ -40,8 +40,10 @@ cachePath w opt = "\{w}/objcache\{opt}"
 -- Env assignments per arm. "K=" sets K to the empty string, which
 -- build_cmd.mdk treats as unset, so an ambient value cannot leak in.
 base : <IO> List String
-base =
-  ["MEDAKA_ROOT=\{medakaRoot}", "MEDAKA_EMITTER=\{medakaRoot}/medaka_emitter"]
+base = [
+  "MEDAKA_ROOT=\{medakaRoot ()}",
+  "MEDAKA_EMITTER=\{medakaRoot ()}/medaka_emitter",
+]
 
 optEnv : String -> <IO> List String
 optEnv opt = base ++ ["MEDAKA_CLANG_OPT=\{opt}"]
@@ -65,7 +67,7 @@ repairEnv rdir =
 spawn : List String ->
   List String ->
   <Exec, IO, FileRead> Result String (Int, String, String)
-spawn env args = boundedVerb "env" (env ++ [medakaBin] ++ args)
+spawn env args = boundedVerb "env" (env ++ [medakaBin ()] ++ args)
 
 buildArgs : String -> String -> List String
 buildArgs src out = ["build", "--allow-internal", src, "-o", out]
@@ -265,5 +267,10 @@ test "rt_obj: header mutations invalidate cache and no SHA disables it" = withSc
     gradeExit
       "header cache controls"
       (boundedVerb "sh" [
-        "-c", headerCacheScript, "sh", w, medakaRoot, medakaBin
+        "-c",
+        headerCacheScript,
+        "sh",
+        w,
+        medakaRoot (),
+        medakaBin (),
       ]))

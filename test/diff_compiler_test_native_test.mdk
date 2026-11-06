@@ -49,19 +49,23 @@ runVerb secs args =
   boundedVerbSeconds
     secs
     "sh"
-    (["-c", plainRunScript, "medaka", medakaRoot, medakaBin] ++ args)
+    (["-c", plainRunScript, "medaka", medakaRoot (), medakaBin ()] ++ args)
 
 prebuild : String -> <Exec, IO, FileRead> Result String String
-prebuild dir =
-  match (boundedVerbSeconds 300 "sh" [
-    "-c", prebuildScript, "medaka", medakaBin, dir, medakaRoot
-  ])
-    Err e => Err "prebuild spawn: \{e}"
-    Ok (code, _, err) =>
-      if code /= 0 then
-        Err "prebuild of the prelude object exited \{intToString code}: \{err}"
-      else
-        Ok dir
+prebuild dir = match boundedVerbSeconds 300 "sh" [
+  "-c",
+  prebuildScript,
+  "medaka",
+  medakaBin (),
+  dir,
+  medakaRoot (),
+]
+  Err e => Err "prebuild spawn: \{e}"
+  Ok (code, _, err) =>
+    if code /= 0 then
+      Err "prebuild of the prelude object exited \{intToString code}: \{err}"
+    else
+      Ok dir
 
 -- Matches the hand-written "<target>: P/T passed" summary line for one module.
 countRe : String -> R.Regex
@@ -86,11 +90,19 @@ checkHits mod expected hits =
 
 doctestRow : String -> String -> String -> <Exec, IO, FileRead> Expectation
 doctestRow dir mod expected =
-  let target = "\{medakaRoot}/\{mod}"
-  match (boundedVerbSeconds 120 "sh" [
-    "-c", fastRunScript, "medaka", medakaBin, dir, medakaRoot, "test",
-    "--engines", "eval,native", target
-  ])
+  let target = "\{medakaRoot ()}/\{mod}"
+  match boundedVerbSeconds 120 "sh" [
+    "-c",
+    fastRunScript,
+    "medaka",
+    medakaBin (),
+    dir,
+    medakaRoot (),
+    "test",
+    "--engines",
+    "eval,native",
+    target,
+  ]
     Err e => fail "\{mod}: could not spawn: \{e}"
     Ok (code, out, err) =>
       if code /= 0 then
@@ -117,14 +129,14 @@ preludeRow label flags =
   match (boundedVerbSeconds
     120
     "sh"
-    (["-c", plainRunScript, "medaka", medakaRoot, medakaBin]
+    (["-c", plainRunScript, "medaka", medakaRoot (), medakaBin ()]
       ++ flags
-      ++ ["\{medakaRoot}/stdlib/core.mdk"]))
+      ++ ["\{medakaRoot ()}/stdlib/core.mdk"]))
     Err e => fail "\{label}: could not spawn: \{e}"
     Ok (code, out, err) =>
       if code /= 0 then
         expectTextContainsAll
-          ["SKIPPED \{medakaRoot}/stdlib/core.mdk", "#1334"]
+          ["SKIPPED \{medakaRoot ()}/stdlib/core.mdk", "#1334"]
           (out ++ err)
       else
         fail
@@ -207,7 +219,7 @@ preludeTargetCheck text =
 
 drainCheck : String -> String -> <Exec, IO, FileRead> Expectation
 drainCheck scope issue =
-  match runVerb 120 ["test", "--native", "\{medakaRoot}/\{scope}"]
+  match runVerb 120 ["test", "--native", "\{medakaRoot ()}/\{scope}"]
     Err e => fail "ledger row PRELUDE-TARGET \{scope}: could not spawn: \{e}"
     Ok (code, out, err) =>
       if code /= 0 then
@@ -215,7 +227,7 @@ drainCheck scope issue =
           requireText
             "ledger row PRELUDE-TARGET \{scope}"
             (out ++ err)
-            "SKIPPED \{medakaRoot}/\{scope}",
+            "SKIPPED \{medakaRoot ()}/\{scope}",
           requireText "ledger row PRELUDE-TARGET \{scope}" (out ++ err) issue,
         ]
       else
@@ -432,7 +444,15 @@ execRun subj args =
   boundedVerbSeconds
     120
     "sh"
-    (["-c", envRunScript, "medaka", medakaBin, subj, medakaRoot, medakaBin]
+    ([
+        "-c",
+        envRunScript,
+        "medaka",
+        medakaBin (),
+        subj,
+        medakaRoot (),
+        medakaBin (),
+      ]
       ++ args)
 
 execPassRow : String ->
@@ -594,14 +614,14 @@ envProbeSrc expected =
 
 envProbeRow : String -> <Exec, IO, FileRead, FileWrite> Expectation
 envProbeRow dir =
-  match writeFile "\{dir}/env_probe.mdk" (envProbeSrc "\{medakaRoot}/medaka")
+  match writeFile "\{dir}/env_probe.mdk" (envProbeSrc "\{medakaRoot ()}/medaka")
     Err e => fail "could not write env_probe.mdk: \{e}"
     Ok _ => match boundedVerbSeconds 120 "sh" [
       "-c",
       unsetMedakaScript,
       "medaka",
-      medakaRoot,
-      medakaBin,
+      medakaRoot (),
+      medakaBin (),
       "test",
       "--native",
       "\{dir}/env_probe.mdk",

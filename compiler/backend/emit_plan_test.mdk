@@ -247,7 +247,7 @@ neverMentions : String -> String -> Expectation
 neverMentions word text = expectEqual [] (codeLinesMentioning word text)
 
 noRecompute : String -> <IO, FileRead> Expectation
-noRecompute file = match readFile "\{medakaRoot}/compiler/backend/\{file}"
+noRecompute file = match readFile "\{medakaRoot ()}/compiler/backend/\{file}"
   Err e => expectEqual "readable" "cannot read \{file}: \{e}"
   Ok text => expectAll [
     labelFail
@@ -275,7 +275,7 @@ test "each emitter uses the shared validation gateway and owns no collision sequ
     (map
       (file => (
         file,
-        match readFile "\{medakaRoot}/compiler/backend/\{file}"
+        match readFile "\{medakaRoot ()}/compiler/backend/\{file}"
           Err e => fail e
           Ok text => expectEach [
             ("gateway", expectTextContainsAll ["validateForEmission"] text),
@@ -292,7 +292,7 @@ test "each emitter uses the shared validation gateway and owns no collision sequ
       ["llvm_emit.mdk", "wasm_emit.mdk"])
 
 test "the gateway owns the impl-symbol check before shape checks" =
-  match readFile "\{medakaRoot}/compiler/backend/core_validate.mdk"
+  match readFile "\{medakaRoot ()}/compiler/backend/core_validate.mdk"
     Err e => fail e
     Ok text =>
       expectTextContainsAll
@@ -301,7 +301,7 @@ test "the gateway owns the impl-symbol check before shape checks" =
 
 -- Reach belongs to the plan builder: no entry calls the filter itself.
 noEntryReach : String -> <IO, FileRead> Expectation
-noEntryReach file = match readFile "\{medakaRoot}/compiler/entries/\{file}"
+noEntryReach file = match readFile "\{medakaRoot ()}/compiler/entries/\{file}"
   Err e => expectEqual "readable" "cannot read \{file}: \{e}"
   Ok text =>
     labelFail
@@ -309,7 +309,7 @@ noEntryReach file = match readFile "\{medakaRoot}/compiler/entries/\{file}"
       (neverMentions "wasmReachFilter" text)
 
 test "no entry runs reach itself" =
-  match listDir "\{medakaRoot}/compiler/entries"
+  match listDir "\{medakaRoot ()}/compiler/entries"
     Err e => expectEqual "listable" "cannot list compiler/entries: \{e}"
     Ok names =>
       let entries = filter (n => endsWith ".mdk" n) names
@@ -332,7 +332,7 @@ withBackendCode : String ->
   (List String -> Expectation) ->
   <IO, FileRead> Expectation
 withBackendCode file check =
-  match readFile "\{medakaRoot}/compiler/backend/\{file}"
+  match readFile "\{medakaRoot ()}/compiler/backend/\{file}"
     Err e => fail "cannot read compiler/backend/\{file}: \{e}"
     Ok text => check (codeLinesOf text)
 
@@ -361,8 +361,8 @@ partialNameFindings : List String -> String -> List String
 partialNameFindings names text = filter (name => contains name text) names
 
 test "supplemental partial-name checks reject historical spellings" = match (
-  readFile "\{medakaRoot}/compiler/backend/llvm_emit.mdk",
-  readFile "\{medakaRoot}/compiler/backend/wasm_emit.mdk",
+  readFile "\{medakaRoot ()}/compiler/backend/llvm_emit.mdk",
+  readFile "\{medakaRoot ()}/compiler/backend/wasm_emit.mdk",
   retirementFixture "group-llvm",
 )
   (Ok llvm, Ok wasm, Ok historical) =>
@@ -413,7 +413,7 @@ retirementFixtures = [
 
 retirementFixture : String -> <IO, FileRead> Result String String
 retirementFixture name =
-  readFile "\{medakaRoot}/test/backend_retirement_fixtures/\{name}.txt"
+  readFile "\{medakaRoot ()}/test/backend_retirement_fixtures/\{name}.txt"
 
 -- Parse first, then print each complete function with the existing AST printer.
 -- This removes comments, source locations, whitespace and redundant parentheses.
@@ -563,7 +563,7 @@ expectRetirementRestored fixture renamed =
   match filter ((_, name, _) => name == fixture) retirementFixtures
     [(family, _, emitter)] => match (
       retirementFixture fixture,
-      readFile "\{medakaRoot}/compiler/backend/\{emitter}",
+      readFile "\{medakaRoot ()}/compiler/backend/\{emitter}",
     )
       (Ok historical, Ok current) =>
         match (if renamed == Renamed then
@@ -630,7 +630,7 @@ test "current target physical adapters contain no historical semantic producer f
           family,
           match (
             retirementFixture fixture,
-            readFile "\{medakaRoot}/compiler/backend/\{emitter}",
+            readFile "\{medakaRoot ()}/compiler/backend/\{emitter}",
           )
             (Ok historical, Ok current) =>
               expectNoFindings
@@ -789,13 +789,13 @@ importsEmitter text =
     (lines text)
 
 test "the emit-route entries are exactly the pinned roster and each builds its plan" =
-  match listDir "\{medakaRoot}/compiler/entries"
+  match listDir "\{medakaRoot ()}/compiler/entries"
     Err e => expectEqual "listable" "cannot list compiler/entries: \{e}"
     Ok names =>
       let entries = filter (n => endsWith ".mdk" n) names
       let routes =
         filter
-          (n => match readFile "\{medakaRoot}/compiler/entries/\{n}"
+          (n => match readFile "\{medakaRoot ()}/compiler/entries/\{n}"
             Ok text => importsEmitter text
             Err _ => False)
           entries
@@ -804,7 +804,7 @@ test "the emit-route entries are exactly the pinned roster and each builds its p
         expectEqual (sort emitRoutes) (sort routes),
         expectAll
           (map
-            (n => match readFile "\{medakaRoot}/compiler/entries/\{n}"
+            (n => match readFile "\{medakaRoot ()}/compiler/entries/\{n}"
               Ok text =>
                 labelFail
                   "\{n} builds no emission plan"

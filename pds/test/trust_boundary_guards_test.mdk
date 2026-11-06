@@ -55,7 +55,7 @@ probe = underRoot "pds/test/guard_probes_main.mdk"
    is the exact inversion a control case exists to catch. -}
 expectControlCase : String -> String -> <Exec, IO> Expectation
 expectControlCase caseName wantLine =
-  expectSpawnOkLine medakaBin ["run", probe, caseName] wantLine
+  expectSpawnOkLine (medakaBin ()) ["run", probe, caseName] wantLine
 
 -- The cells, from RUN-PDS0-036 / #1727 and #3210: case name paired
 -- with its grading shape and the exact text that must appear. `Err` is a
@@ -73,7 +73,7 @@ cellFloor = 2
 
 runCell : (String, Result String String) -> <Exec, IO> (String, Expectation)
 runCell (name, Err wantMessage) =
-  (name, expectSpawnFails medakaBin ["run", probe, name] wantMessage)
+  (name, expectSpawnFails (medakaBin ()) ["run", probe, name] wantMessage)
 runCell (name, Ok wantLine) = (name, expectControlCase name wantLine)
 
 -- Every cell spawned exactly once, shared by every assertion below —

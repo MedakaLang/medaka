@@ -10,7 +10,7 @@ import test_process.{scratchDir}
 import tools.test_pins_io.{PinContext, loadPinContext}
 
 fixtureRoot : String -> <Exec, FileWrite> Result String String
-fixtureRoot tag = match scratchDir
+fixtureRoot tag = match scratchDir ()
   Err err => Err err
   Ok base =>
     let root = joinPath base ("test_pins_" ++ tag)

@@ -562,7 +562,7 @@ test "domain ledger: every pure extern has exactly one well-formed row" =
           (expectAtLeast 100 (length (ledgerRows ledger))),
         expectNoFindings
           "domain ledger"
-          (Ok (domainFindings medakaRoot src ledger)),
+          (Ok (domainFindings (medakaRoot ()) src ledger)),
       ]
     (Err e, _) => expectEqual "read runtime.mdk" "failed: \{e}"
     (_, Err e) => expectEqual "read EXTERN-DOMAIN-LEDGER.txt" "failed: \{e}"
@@ -584,7 +584,7 @@ domainRed label dropped extra expected = match (runtimeText, ledgerText)
       label
       (expectEqual
         expected
-        (domainFindings medakaRoot src "\{join "\n" kept}\n\{extra}\n"))
+        (domainFindings (medakaRoot ()) src "\{join "\n" kept}\n\{extra}\n"))
   (Err e, _) => expectEqual "read runtime.mdk" "failed: \{e}"
   (_, Err e) => expectEqual "read EXTERN-DOMAIN-LEDGER.txt" "failed: \{e}"
 

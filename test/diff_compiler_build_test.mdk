@@ -136,17 +136,17 @@ gate : String ->
   List (String, String) ->
   <Exec, IO, FileRead, FileWrite> Expectation
 gate dir medaka rows =
-  let root = medakaRoot
+  let root = medakaRoot ()
   let emitter = getEnvOr "MEDAKA_EMITTER" "\{root}/medaka_emitter"
   let argvs =
     map
       ((label, src) => buildArgv root emitter (binOf dir label) src medaka)
       rows
-  let builds = runCommandBatch "env" testJobs argvs
+  let builds = runCommandBatch "env" (testJobs ()) argvs
   let runs =
     runCommandBatch
       "sh"
-      testJobs
+      (testJobs ())
       (map
         ((label, _) => ["-c", "exec \"$0\" 2>/dev/null", binOf dir label])
         rows)
@@ -173,7 +173,7 @@ check = match worklist
   Ok (tops, sp) => withScratchDir (dir => expectAll [
     expectAtLeast 86 (length tops),
     expectAtLeast 6 (length sp),
-    gate dir medakaBin (tops ++ sp),
+    gate dir (medakaBin ()) (tops ++ sp),
   ])
 
 test "diff_compiler_build: native build of every build_diff fixture matches its golden stdout" =
@@ -253,10 +253,11 @@ gcBuildType : String ->
   String ->
   <Exec, IO, FileRead, FileWrite> Result String String
 gcBuildType bin prefix =
-  let root = medakaRoot
+  let root = medakaRoot ()
   let emitter = getEnvOr "MEDAKA_EMITTER" "\{root}/medaka_emitter"
   let src = gcFixture
-  let argv = "GC_PREFIX=\{prefix}" :: buildArgv root emitter bin src medakaBin
+  let argv =
+    "GC_PREFIX=\{prefix}" :: buildArgv root emitter bin src (medakaBin ())
   match runCommand "env" argv
     Err e => Err "medaka build could not run: \{e}"
     Ok (bc, _, berr) =>

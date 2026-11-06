@@ -86,7 +86,7 @@ built = match freshScratch ()
   Err e => Err "could not make a scratch directory for the build: \{e}"
   Ok dir =>
     let bin = "\{dir}/store_persistence"
-    match buildNative "\{gate} (native)" "\{medakaRoot}/\{driver}" bin
+    match buildNative "\{gate} (native)" "\{medakaRoot ()}/\{driver}" bin
       [] => Ok bin
       f :: _ => Err f
 

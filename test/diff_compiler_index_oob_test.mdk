@@ -52,7 +52,7 @@ import compiler_cli_test_support.{
 import test_process.{medakaRoot}
 
 corpus : <IO> String
-corpus = "\{medakaRoot}/test/index_oob_fixtures"
+corpus = "\{medakaRoot ()}/test/index_oob_fixtures"
 
 -- The numeric guards' own wording: the abort formats the offending index.
 oob : String -> RuntimeOutcome

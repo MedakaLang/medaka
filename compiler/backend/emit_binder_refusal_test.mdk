@@ -171,7 +171,7 @@ refusedBy backend =
     "env"
     [
       "\{probeVar}=\{backend}",
-      medakaBin,
+      medakaBin (),
       "test",
       "--filter",
       "probe:",
@@ -191,7 +191,7 @@ test "both renderers refuse paired manifest omission against an external checked
           "env"
           [
             "\{probeVar}=manifest-\{backend}",
-            medakaBin,
+            medakaBin (),
             "test",
             "--filter",
             "probe:",
@@ -341,8 +341,8 @@ main = 6.0
           (_, Err e) => fail e
           _ => match (runBuildNativeRoots
             BuildPaths {
-              bpRoot = medakaRoot,
-              bpMedaka = medakaBin,
+              bpRoot = medakaRoot (),
+              bpMedaka = medakaBin (),
               bpCc = envOr "CC" "clang",
               bpInput = probe,
               bpOut = binary,

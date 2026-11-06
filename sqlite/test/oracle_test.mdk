@@ -119,14 +119,11 @@ rowOutput row db = match seedDb db row.seed
 {- | Where one row's database and built demo live: a path PREFIX unique to the
    row, inside this process's scratch directory.
 
-   `test_process.scratchDir` is a nullary binding, so it is memoized: every
-   caller in one process gets the SAME directory, not a fresh one per call.
-   Rows are therefore separated by file name and each removes only its own
-   database file — a row that removed the directory would delete the next row's
-   workspace out from under it. Concurrency across gate runs is still covered,
-   since the directory itself is a per-process `mktemp -d`. -}
+   `scratchDir ()` makes a new directory per call, and rows are also separated
+   by file name; each removes only its own database file. Concurrency across
+   gate runs is covered, since each directory is a `mktemp -d`. -}
 rowPrefix : OracleRow -> <Exec> Result String String
-rowPrefix row = match scratchDir
+rowPrefix row = match scratchDir ()
   Err e => Err "\{row.name}: \{e}"
   Ok dir => Ok "\{dir}/\{row.name}"
 
@@ -655,12 +652,12 @@ test "wide_real: integers against REALs past 2^53 match sqlite3" =
    warning nobody reads is how a multi-page traversal test quietly becomes a
    single-page one, so it is an assertion here. -}
 multipageRootPageType : <Exec, FileRead, IO> Result String String
-multipageRootPageType = match scratchDir
+multipageRootPageType = match scratchDir ()
   Err e => Err e
   Ok dir => rootPageTypeIn "\{dir}/multipage-pagetype.db"
 
--- Its own database, not the `multipage` row's: `scratchDir` is shared (see
--- `rowPrefix`), and that row removes its file as soon as it is graded.
+-- Its own database, not the `multipage` row's: that row removes its file as
+-- soon as it is graded (see `rowPrefix`).
 rootPageTypeIn : String -> <Exec, FileRead, IO> Result String String
 rootPageTypeIn db =
   let out = rootPageTypeOf db

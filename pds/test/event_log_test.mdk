@@ -297,7 +297,7 @@ test "a sweep is due on every interval-th entry and on no other" = expectEach [
    binding is memoized, so every case below names a subdirectory of the same
    `mktemp -d` rather than spawning its own. -}
 scratch : <Exec, IO> String
-scratch = resultOrPanic "event_log_test: mktemp -d failed" scratchDir
+scratch = resultOrPanic "event_log_test: mktemp -d failed" (scratchDir ())
 
 caseDir : String -> <Exec, FileRead, FileWrite, IO> DataDir *
 caseDir name =

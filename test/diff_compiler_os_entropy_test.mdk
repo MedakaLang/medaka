@@ -31,7 +31,7 @@ import test_process.{
 }
 
 corpus : <IO> String
-corpus = "\{medakaRoot}/test/os_entropy_fixtures"
+corpus = "\{medakaRoot ()}/test/os_entropy_fixtures"
 
 positiveFixture : <IO> String
 positiveFixture = "\{corpus}/positive.mdk"
@@ -50,7 +50,7 @@ strictSpawn : Int ->
   List String ->
   <Exec, IO> Result String (Int, String, String)
 strictSpawn secs args =
-  boundedVerbSeconds secs "env" (["MEDAKA_STRICT=1", medakaBin] ++ args)
+  boundedVerbSeconds secs "env" (["MEDAKA_STRICT=1", medakaBin ()] ++ args)
 
 okShape : (Int, String, String) -> Bool
 okShape (code, out, _) = code == 0 && startsWith "ok:" out
@@ -183,7 +183,7 @@ wasmBuild scratch name fixture =
 -- carrying the code and stderr, so a crash is never a result.
 wasmRun : Int -> String -> <Exec, IO> Result String (Int, String, String)
 wasmRun want binPath = match boundedVerbSeconds 60 "node" [
-  "\{medakaRoot}/test/wasm/run.js",
+  "\{medakaRoot ()}/test/wasm/run.js",
   binPath,
 ]
   Err e => Err e
@@ -267,13 +267,13 @@ seedSetFixture = "\{corpus}/seed_set.mdk"
 
 -- A program on one engine: the command and arguments that run it.
 runEngine : String -> <IO> (String, List String)
-runEngine fixture = ("env", ["MEDAKA_STRICT=1", medakaBin, "run", fixture])
+runEngine fixture = ("env", ["MEDAKA_STRICT=1", medakaBin (), "run", fixture])
 
 binEngine : String -> (String, List String)
 binEngine bin = (bin, [])
 
 wasmEngine : String -> <IO> (String, List String)
-wasmEngine bin = ("node", ["\{medakaRoot}/test/wasm/run.js", bin])
+wasmEngine bin = ("node", ["\{medakaRoot ()}/test/wasm/run.js", bin])
 
 -- The stdout of a clean run of `engine` under `MEDAKA_SEED=seed` (with
 -- MEDAKA_SEED removed when `seed` is `None`: `medaka test` gives this process
@@ -410,7 +410,7 @@ sectionAfter startPrefix stopWhen allLines =
     _ :: rest => Ok (takeWhile (l => not (stopWhen l)) rest)
 
 test "os_entropy: extern declares the <Rand> effect exactly" =
-  let path = "\{medakaRoot}/stdlib/runtime.mdk"
+  let path = "\{medakaRoot ()}/stdlib/runtime.mdk"
   match readFile path
     Err e => fail "\{path}: \{e}"
     Ok src =>
@@ -420,7 +420,7 @@ test "os_entropy: extern declares the <Rand> effect exactly" =
         fail "\{path}: exact <Rand> declaration missing"
 
 test "os_entropy: excluded from the deterministic externBindings table" =
-  let path = "\{medakaRoot}/compiler/eval/eval.mdk"
+  let path = "\{medakaRoot ()}/compiler/eval/eval.mdk"
   match readFile path
     Err e => fail "\{path}: \{e}"
     Ok src =>
@@ -439,7 +439,7 @@ test "os_entropy: excluded from the deterministic externBindings table" =
             pass
 
 test "os_entropy: excluded from testCapableExterns" =
-  let path = "\{medakaRoot}/compiler/eval/eval.mdk"
+  let path = "\{medakaRoot ()}/compiler/eval/eval.mdk"
   match readFile path
     Err e => fail "\{path}: \{e}"
     Ok src =>
@@ -454,7 +454,7 @@ test "os_entropy: excluded from testCapableExterns" =
             pass
 
 test "os_entropy: the C runtime helper has no deterministic SplitMix fallback" =
-  let path = "\{medakaRoot}/runtime/medaka_rt.c"
+  let path = "\{medakaRoot ()}/runtime/medaka_rt.c"
   match readFile path
     Err e => fail "\{path}: \{e}"
     Ok src =>
@@ -476,7 +476,7 @@ test "os_entropy: the C runtime helper has no deterministic SplitMix fallback" =
 -- `rosterAgreement`'s doc comment names for a fixture roster: written down
 -- so a corpus that lost a check reads red instead of a quieter suite.
 test "os_entropy: exactly 13 `os_entropy:` checks are declared" =
-  let path = "\{medakaRoot}/test/diff_compiler_os_entropy_test.mdk"
+  let path = "\{medakaRoot ()}/test/diff_compiler_os_entropy_test.mdk"
   match readFile path
     Err e => fail "\{path}: \{e}"
     Ok src =>

@@ -39,31 +39,33 @@ import test.{
 
 export
 fixtureIn : String -> String -> <IO> String
-fixtureIn corpus name = "\{medakaRoot}/\{corpus}/\{name}"
+fixtureIn corpus name = "\{medakaRoot ()}/\{corpus}/\{name}"
 
 export
 runMedaka : List String -> <Exec, IO> Result String (Int, String)
 runMedaka args =
-  map ((code, out, err) => (code, out ++ err)) (runVerb medakaBin args)
+  map ((code, out, err) => (code, out ++ err)) (runVerb (medakaBin ()) args)
 
 -- # Spawning inside the tree under test
 
 {- | The raw native emitter to spawn, from `MEDAKA_EMITTER`, defaulting to the
-   one in `medakaRoot`.
+   one in `medakaRoot ()`.
 
    The peer of `test_process.medakaBin`, for a gate whose subject is the
    emitter binary itself rather than a `medaka` verb. -}
 export
 emitterBin : <IO> String
-emitterBin = getEnvOr "MEDAKA_EMITTER" "\{medakaRoot}/medaka_emitter"
+emitterBin = getEnvOr "MEDAKA_EMITTER" "\{medakaRoot ()}/medaka_emitter"
 
 {- | The wasm emitter binary the CLI's `--target wasm` path execs, from
-   `MEDAKA_WASM_EMITTER`, defaulting to the one in `medakaRoot`; a gate shard
+   `MEDAKA_WASM_EMITTER`, defaulting to the one in `medakaRoot ()`; a gate shard
    builds it but never exports the variable. -}
 export
 wasmEmitter : <IO> String
 wasmEmitter =
-  getEnvOr "MEDAKA_WASM_EMITTER" "\{medakaRoot}/test/bin/wasm_emit_modules_main"
+  getEnvOr
+    "MEDAKA_WASM_EMITTER"
+    "\{medakaRoot ()}/test/bin/wasm_emit_modules_main"
 
 {- | The `env` argv of `medaka build --target wasm src -o out`, with the wasm
    emitter named explicitly and `MEDAKA_STRICT=1` so a stale compiler fails
@@ -73,7 +75,7 @@ wasmBuildArgv : String -> String -> <IO> List String
 wasmBuildArgv src out = [
   "MEDAKA_STRICT=1",
   "MEDAKA_WASM_EMITTER=\{wasmEmitter}",
-  medakaBin,
+  medakaBin (),
   "build",
   "--target",
   "wasm",
@@ -90,7 +92,7 @@ wasmBuildArgv src out = [
    its own emitter is one refactor away from grading a verb that silently did
    nothing. `env` carries them because Medaka has no `setEnv`, which is the
    same device `medaka gate run` uses to hand a gate its environment. A value
-   already set in this process wins, since `medakaRoot` and `emitterBin` read it
+   already set in this process wins, since `medakaRoot ()` and `emitterBin` read it
    first. -}
 export
 boundedInTree : Int ->
@@ -101,10 +103,11 @@ boundedInTree secs cmd args =
   boundedVerbSeconds
     secs
     "env"
-    (["MEDAKA_ROOT=\{medakaRoot}", "MEDAKA_EMITTER=\{emitterBin}", cmd] ++ args)
+    (["MEDAKA_ROOT=\{medakaRoot ()}", "MEDAKA_EMITTER=\{emitterBin}", cmd]
+      ++ args)
 
 {- | `boundedVerbSeconds secs cmd args` for every `(cmd, args)` row, at most
-   `testJobs` of them running at once.
+   `testJobs ()` of them running at once.
 
    Each element is what `boundedVerbSeconds` returns for its row, in input
    order and with the same error text, so grading the results in order reads
@@ -117,7 +120,7 @@ boundedVerbsSeconds : Int ->
 boundedVerbsSeconds secs rows =
   let alarm = "alarm \{intToString secs}; exec @ARGV or die qq(exec: $!)"
   let argvs = map ((cmd, args) => ["-e", alarm, "env", cmd] ++ args) rows
-  map (mapErr (e => "perl: \{e}")) (runCommandBatch "perl" testJobs argvs)
+  map (mapErr (e => "perl: \{e}")) (runCommandBatch "perl" (testJobs ()) argvs)
 
 rejectionRe : Regex
 rejectionRe = mustCompile "(?i)(type error|parse error)|^error:"
@@ -253,7 +256,7 @@ checkRunBuild entry binPath = match checkRunBuildAll [(entry, binPath)]
    then every `run`, then every `build`, then every binary that built.
 
    Each element is what `checkRunBuild` returns for its pair, in input
-   order. Groups of `testJobs` keep `MEDAKA_TEST_JOBS=1` spawning in exactly
+   order. Groups of `testJobs ()` keep `MEDAKA_TEST_JOBS=1` spawning in exactly
    the order a loop over `checkRunBuild` does. A pair whose spawn could not
    be started stops there and spawns nothing further. Pairs that name the
    same `binPath` are each an `Err` naming it, and spawn nothing: built at
@@ -263,13 +266,13 @@ checkRunBuildAll : List (String, String) ->
   <Exec, IO> List (Result String Agreement)
 checkRunBuildAll pairs =
   let shared = sharedPaths (map snd pairs)
-  flatMap (checkRunBuildGroup shared) (chunks testJobs pairs)
+  flatMap (checkRunBuildGroup shared) (chunks (testJobs ()) pairs)
 
 checkRunBuildGroup : List String ->
   List (String, String) ->
   <Exec, IO> List (Result String Agreement)
 checkRunBuildGroup shared pairs =
-  let bin = medakaBin
+  let bin = medakaBin ()
   let start = map (startAgreement shared) pairs
   let checked =
     spawnPhase
@@ -408,7 +411,7 @@ sweepUnits units gradeOne rowFailure summarize =
    without spawning anything, and `grade` turns the unit's agreement into
    its row.
 
-   Units go `testJobs` at a time, each verb of a group running side by side
+   Units go `testJobs ()` at a time, each verb of a group running side by side
    (`checkRunBuildAll`), and each group is graded before the next one
    spawns, so under `MEDAKA_TEST_JOBS=1` the spawns come in exactly the
    order a loop over `checkRunBuild` makes them. Units planned onto the same
@@ -427,7 +430,7 @@ sweepAgreements units plan grade rowFailure summarize = inFreshScratch
     let plans = map (u => (u, plan scratch u)) units
     match sharedPaths (map snd (somes (map (p => fromResult (snd p)) plans)))
       [] =>
-        let graded = flatMap (gradePlanned grade) (chunks testJobs plans)
+        let graded = flatMap (gradePlanned grade) (chunks (testJobs ()) plans)
         summarize (length graded) (somes (map rowFailure graded))
       shared =>
         fail "more than one unit builds to each of: \{join ", " shared}")
@@ -457,7 +460,7 @@ gradeEach grade ((u, Ok pair) :: rest) [] =
    the sweep's scratch directory, and `grade` is handed the unit's results in
    the order its spawns were named.
 
-   Units go `testJobs` at a time, all the spawns of a group running side by
+   Units go `testJobs ()` at a time, all the spawns of a group running side by
    side, and each group is graded before the next one spawns, so under
    `MEDAKA_TEST_JOBS=1` the spawns come in exactly the order a loop over the
    units makes them. The scratch directory is made fresh for each sweep. -}
@@ -471,7 +474,9 @@ sweepSpawns : List unit ->
 sweepSpawns units spawnsOf grade rowFailure summarize = inFreshScratch
   (scratch =>
     let graded =
-      flatMap (gradeSpawned (spawnsOf scratch) grade) (chunks testJobs units)
+      flatMap
+        (gradeSpawned (spawnsOf scratch) grade)
+        (chunks (testJobs ()) units)
     summarize (length graded) (somes (map rowFailure graded)))
 
 -- | `sweepSpawns` for a corpus whose rows each grade exactly one spawn.
@@ -533,7 +538,7 @@ inFreshScratch body = match runVerb "mktemp" ["-d"]
    the caller's result type, so each caller words that failure its own way.
 
    The directory is made here rather than taken from `test_process.scratchDir`,
-   which is one directory per process and outlives the sweep that removes it. -}
+   which leaves removal to its caller. -}
 export
 inFreshDirOf : (String -> <e> a) -> (String -> a) -> <Exec, IO | e> a
 inFreshDirOf body fromMsg = match runVerb "mktemp" ["-d"]
@@ -835,7 +840,8 @@ printsWith want note a =
   let binOut = chompNewlines a.binOut
   let binErr = chompNewlines a.binErr
   let runErrOk = if note == "" then runErr == "" else contains note runErr
-  let owed = if note == "" then "empty stderr" else "stderr carrying \{debug note}"
+  let owed =
+    if note == "" then "empty stderr" else "stderr carrying \{debug note}"
   if a.runCode /= 0 || runOut /= want || not runErrOk then
     Some
       "\{observed "run" a.runCode runOut runErr}; want exit=0, stdout \{debug want}, \{owed}"

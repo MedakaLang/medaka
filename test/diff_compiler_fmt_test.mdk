@@ -176,7 +176,7 @@ test "every probe reproduces its corpus's goldens" = gradeProbeRows rows
    fixture's golden is the report (or the fix) of, so adding a rule moves none
    of them. `capture_goldens.sh` reads the same file. -}
 onlyRows : String -> <FileRead, IO> Result String (List (String, String))
-onlyRows dir = match readFile "\{medakaRoot}/\{dir}/ONLY.txt"
+onlyRows dir = match readFile "\{medakaRoot ()}/\{dir}/ONLY.txt"
   Err e => Err "\{dir}/ONLY.txt: \{e}"
   Ok raw =>
     Ok (somes (map onlyRow (filter (l => not (startsWith "#" l)) (lines raw))))
@@ -202,12 +202,12 @@ narrowedFailure : NarrowedProbe ->
   (String, String) ->
   <Exec, FileRead, IO> Option String
 narrowedFailure np (name, rules) =
-  let src = "\{medakaRoot}/\{np.dir}/\{name}.mdk"
-  match boundedVerb "\{medakaRoot}/\{np.probe}" ["--only=\{rules}", src]
+  let src = "\{medakaRoot ()}/\{np.dir}/\{name}.mdk"
+  match boundedVerb "\{medakaRoot ()}/\{np.probe}" ["--only=\{rules}", src]
     Err e => Some "\{name}: could not spawn \{np.probe}: \{e}"
     Ok (code, out, err) => match processFailure np.probe name code err
       Some m => Some m
-      None => match readFile "\{medakaRoot}/\{np.dir}/\{name}\{np.suffix}"
+      None => match readFile "\{medakaRoot ()}/\{np.dir}/\{name}\{np.suffix}"
         Err e => Some "\{name}: no readable golden: \{e}"
         Ok raw =>
           let text =
@@ -223,7 +223,7 @@ narrowedFailure np (name, rules) =
             Some "\{name}: \{diffNote (chompNewlines raw) actual}"
 
 narrowedFailures : NarrowedProbe -> Int -> <Exec, FileRead, IO> List String
-narrowedFailures np want = match fixtureStems "\{medakaRoot}/\{np.dir}"
+narrowedFailures np want = match fixtureStems "\{medakaRoot ()}/\{np.dir}"
   Err e => ["\{np.dir}: \{e}"]
   Ok stems => match onlyRows np.dir
     Err e => [e]
@@ -813,7 +813,7 @@ typecheckErrorFailures =
     Ok paths =>
       let fixtures = sort (filter (endsWith ".mdk") paths)
       countFloor typecheckErrorFixturesDir typecheckErrorFixtureCount fixtures
-        ++ flatMap typecheckErrorGroup (chunks testJobs fixtures)
+        ++ flatMap typecheckErrorGroup (chunks (testJobs ()) fixtures)
 
 -- # `diff_compiler_repl`
 
@@ -1145,7 +1145,7 @@ testFixturesDir = "test/compiler_test_fixtures"
    `$(…)` did, and what makes a `.test.golden` machine-independent: the
    doctest report embeds the path of every file it ran. -}
 testRelative : String -> <IO> String
-testRelative text = chompNewlines (replaceAll "\{medakaRoot}/" "" text)
+testRelative text = chompNewlines (replaceAll "\{medakaRoot ()}/" "" text)
 
 {- | One `test_main` spawn over `rel` with `roots` as its search roots: the
    exit code, and stdout and stderr each path-normalized. -}
@@ -1390,8 +1390,8 @@ seedDirectoryReport seed file dir =
   let args target =
     ["test", "--engines", "eval", "--seed", intToString seed, target]
   match (
-    boundedVerbSeconds testReportSeconds medakaBin (args file),
-    boundedVerbSeconds testReportSeconds medakaBin (args dir),
+    boundedVerbSeconds testReportSeconds (medakaBin ()) (args file),
+    boundedVerbSeconds testReportSeconds (medakaBin ()) (args dir),
   )
     (Ok (directCode, directOut, directErr), Ok (dirCode, dirOut, dirErr)) =>
       let directText = testRelative "\{directOut}\n\{directErr}"

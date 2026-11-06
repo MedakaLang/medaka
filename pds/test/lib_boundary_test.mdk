@@ -922,10 +922,10 @@ test "mutation control: rows naming only Sign, Mint and Kdf are allowed" =
 
    This is the only control that needs real files: it grades the WALK, and a
    walk that stopped at the top level would see `top.mdk` and miss
-   `nested/probe.mdk`. `scratchDir` hands out a name nothing else holds, so
+   `nested/probe.mdk`. `scratchDir ()` hands out a name nothing else holds, so
    concurrent gate runs do not write over each other. -}
 nestedTree : <Exec, FileRead, FileWrite> Result String String
-nestedTree = match scratchDir
+nestedTree = match scratchDir ()
   Err e => Err "could not make a scratch directory: \{e}"
   Ok dir =>
     let root = "\{dir}/lib"

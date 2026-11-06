@@ -81,7 +81,7 @@ parseCorpus text =
   }
 
 corpus : <FileRead, Exec, Env "MEDAKA_ROOT"> Corpus
-corpus = match filesForConsumer medakaRoot "S-verify-answer-key"
+corpus = match filesForConsumer (medakaRoot ()) "S-verify-answer-key"
   Ok [path] => match readFile (underRoot path)
     Ok text => parseCorpus text
     Err message => panic "service_jwt_verify_test: \{message}"

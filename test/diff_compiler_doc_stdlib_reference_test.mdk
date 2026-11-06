@@ -432,8 +432,14 @@ stdlibArg rel = "stdlib/\{rel}"
 shellArgs : String -> List String -> <IO> List String
 shellArgs scratch rels =
   [
-      "-c", "cd \"$1\" && shift && exec \"$@\"", "medaka", medakaRoot,
-      medakaBin, "doc", "--out", scratch
+      "-c",
+      "cd \"$1\" && shift && exec \"$@\"",
+      "medaka",
+      medakaRoot (),
+      medakaBin (),
+      "doc",
+      "--out",
+      scratch,
     ]
     ++ map stdlibArg rels
 

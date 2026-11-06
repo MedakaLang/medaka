@@ -60,7 +60,9 @@ shArgs : String -> <IO> List String
 shArgs dir = [
   "-c",
   "cd \"$1\" && shift && export MEDAKA_STRICT=1 && exec \"$@\" </dev/null",
-  "medaka", dir, medakaBin
+  "medaka",
+  dir,
+  medakaBin (),
 ]
 
 -- stdout of `medaka help`; a failing `help` yields no text, so the verb-count
@@ -154,12 +156,12 @@ verbsOf dir =
 
 -- ── probes, made once per process ───────────────────────────────────────────
 
--- The one workspace the memoized probes below run from: `scratchDir` is a
+-- The one workspace the memoized probes below run from: this binding is a
 -- value, so every caller gets the same directory, and nothing writes to it
 -- after this. `None` when it cannot be made; the callers then probe their own
 -- test directory, exactly as they did before any memoizing.
 memoWork : <Exec, IO, FileRead, FileWrite> Option String
-memoWork = match scratchDir
+memoWork = match scratchDir ()
   Err _ => None
   Ok dir => match writeFile "\{dir}/ok.mdk" "main = println 1\n"
     Err _ => None
@@ -176,7 +178,7 @@ verbsFor dir = match memoHelp
 
 -- The verbs the compiler sources hand to `requireArgs`, read once.
 sourceVerbsNow : <Exec, IO, FileRead, FileWrite> List String
-sourceVerbsNow = match compilerFiles "\{medakaRoot}/compiler"
+sourceVerbsNow = match compilerFiles "\{medakaRoot ()}/compiler"
   Err _ => []
   Ok files => sourceVerbs files
 
@@ -266,7 +268,7 @@ withWork k = withScratchDir
 
 withFiles : (List (List String) -> <Exec, IO, FileRead, FileWrite> Expectation) ->
   <Exec, IO, FileRead, FileWrite> Expectation
-withFiles k = match compilerFiles "\{medakaRoot}/compiler"
+withFiles k = match compilerFiles "\{medakaRoot ()}/compiler"
   Err e => fail "could not list compiler/ sources: \{e}"
   Ok files => k files
 
@@ -480,7 +482,7 @@ exemptEntries = [
 withMdk : (String -> List (String, List String) -> <Exec, IO, FileRead, FileWrite> Expectation) ->
   <Exec, IO, FileRead, FileWrite> Expectation
 withMdk k =
-  let root = medakaRoot
+  let root = medakaRoot ()
   match fixtureFiles "\{root}/compiler"
     Err e => fail "could not list compiler/ sources: \{e}"
     Ok paths => k root (pairsOf (filter (p => S.endsWith ".mdk" p) paths))

@@ -76,7 +76,7 @@ import test_process.{
 -- directory: `medaka gate run` exports it and inherits whatever cwd the
 -- caller had.
 corpus : <IO> String
-corpus = "\{medakaRoot}/test/shadow_fixtures"
+corpus = "\{medakaRoot ()}/test/shadow_fixtures"
 
 {- | What a row asserts about the stdout of a cell that runs.
 
@@ -1468,11 +1468,11 @@ test "every fixture in the corpus is wired into the table" = match corpusUnits
    `checkRunBuild` the sweep uses, and asserts both of `binaryRanClean`'s
    branches directly, outside the "every cell grades ok" sweep.
 
-   Declared BEFORE the heavy sweep below, and it leaves its `scratchDir` in
+   Declared BEFORE the heavy sweep below, and it leaves its `scratchDir ()` in
    place: this test never removes the root. -}
 test "binaryRanClean distinguishes a panicking binary from a clean one" =
-  let binpanicCorpus = "\{medakaRoot}/test/binpanic_fixtures"
-  match scratchDir
+  let binpanicCorpus = "\{medakaRoot ()}/test/binpanic_fixtures"
+  match scratchDir ()
     Err e => fail "could not make a scratch directory: \{e}"
     Ok scratch =>
       match checkRunBuild "\{binpanicCorpus}/panics.mdk" "\{scratch}/panics.bin"
@@ -1603,7 +1603,7 @@ test "check, run and build agree with every cell's pinned verdict and value" =
   sweep
 
 test "S4 imported length rejects at the user source line on every verb" =
-  match scratchDir
+  match scratchDir ()
     Err e => fail e
     Ok scratch =>
       match (checkRunBuild
@@ -1612,7 +1612,7 @@ test "S4 imported length rejects at the user source line on every verb" =
         Err e => fail e
         Ok a => expectAll [
           expectSpawnFailsAll
-            medakaBin
+            (medakaBin ())
             [
               "check",
               "--json",

@@ -383,7 +383,7 @@ def runs_in(text):
 #
 # Command position, in Medaka: the shell is a string literal in PROGRAM
 # position and the script is the first element of the argument LIST handed to
-# the same call — `boundedInTree n "sh" ["\{medakaRoot}/test/x.sh"]`. That is
+# the same call — `boundedInTree n "sh" ["\{medakaRoot ()}/test/x.sh"]`. That is
 # the same demand the shell rule makes, spelled in the other language, and it
 # is what separates a RUN from the two READS in the same corpus
 # (`readFile "…/test/lsp_bless.sh"`, `readFile "…/test/snapshot_bless.sh"`):

@@ -32,12 +32,12 @@ medakaEnv : List String ->
   List String ->
   <Exec, IO> Result String (Int, String, String)
 medakaEnv envs args =
-  match boundedInTree 600 "env" (envs ++ [medakaBin] ++ args)
+  match boundedInTree 600 "env" (envs ++ [medakaBin ()] ++ args)
     Err e => Err e
     Ok (code, out, err) =>
       if code == 127 then
         Err
-          "`env` could not run \{medakaBin} (exit 127): a missing binary would read as a failed build\n\{err}"
+          "`env` could not run \{medakaBin ()} (exit 127): a missing binary would read as a failed build\n\{err}"
       else
         Ok (code, out, err)
 

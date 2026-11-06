@@ -56,7 +56,7 @@ charLine chStr rest = match S.indexOf "}" rest
 -- One fixture: rejected, located, and not at the decl head.
 fixtureRow : String -> <Exec, IO, FileRead> Expectation
 fixtureRow name =
-  match boundedVerb medakaBin ["check", "--json", "\{corpus}/\{name}.mdk"]
+  match boundedVerb (medakaBin ()) ["check", "--json", "\{corpus}/\{name}.mdk"]
     Err e => fail "could not spawn medaka check on \{name}: \{e}"
     Ok (code, out, err) => gradeRejected name code (out ++ err)
 

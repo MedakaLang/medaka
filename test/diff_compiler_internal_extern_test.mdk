@@ -21,7 +21,7 @@ runWith cmd args =
   map ((code, out, err) => (code, out ++ err)) (boundedVerb cmd args)
 
 spawn : List String -> <Exec, IO, FileRead> Result String (Int, String)
-spawn args = runWith medakaBin args
+spawn args = runWith (medakaBin ()) args
 
 -- Each test block's scratch tree comes from withScratchDir, which makes a fresh
 -- directory and removes it afterwards, also when a check fails.
@@ -160,23 +160,27 @@ fallthroughOk tmp = match spawn ["run", "\{tmp}/guard.mdk"]
 
 -- 9. self-check-rel: `medaka check stdlib/array.mdk` run from the repo root, no flag.
 selfCheckRel : <Exec, IO, FileRead> Expectation
-selfCheckRel =
-  match (runWith "sh" [
-    "-c", "cd \"$1\" && shift && exec \"$@\"", "medaka", medakaRoot, medakaBin,
-    "check", "stdlib/array.mdk"
-  ])
-    Err e => fail "could not spawn relative self-check: \{e}"
-    Ok (code, out) =>
-      if code /= 0 then
-        fail "relative self-check exited \{intToString code}: [\{out}]"
-      else if contains "internal-only primitive" out then
-        fail "false positive on stdlib/array.mdk: [\{out}]"
-      else
-        pass
+selfCheckRel = match runWith "sh" [
+  "-c",
+  "cd \"$1\" && shift && exec \"$@\"",
+  "medaka",
+  medakaRoot (),
+  medakaBin (),
+  "check",
+  "stdlib/array.mdk",
+]
+  Err e => fail "could not spawn relative self-check: \{e}"
+  Ok (code, out) =>
+    if code /= 0 then
+      fail "relative self-check exited \{intToString code}: [\{out}]"
+    else if contains "internal-only primitive" out then
+      fail "false positive on stdlib/array.mdk: [\{out}]"
+    else
+      pass
 
 -- 10. self-check-abs: the same file by absolute path, no flag.
 selfCheckAbs : <Exec, IO, FileRead> Expectation
-selfCheckAbs = match spawn ["check", "\{medakaRoot}/stdlib/array.mdk"]
+selfCheckAbs = match spawn ["check", "\{medakaRoot ()}/stdlib/array.mdk"]
   Err e => fail "could not spawn absolute self-check: \{e}"
   Ok (code, out) =>
     if code /= 0 then
@@ -365,7 +369,7 @@ manifestMatrix tmp = expectEach [
 testExemption : <Exec, IO, FileRead> Expectation
 testExemption = match spawn [
   "test",
-  "\{medakaRoot}/test/ported/test_eval_internal_prims_ported.mdk",
+  "\{medakaRoot ()}/test/ported/test_eval_internal_prims_ported.mdk",
 ]
   Err e => fail "could not spawn medaka test: \{e}"
   Ok (code, out) =>
@@ -399,7 +403,7 @@ docExemption tmp = match writeFile "\{tmp}/doc_internal.mdk" docSource
 -- 24. compiler-self-check: compiler/support/util.mdk calls the kernels; clean with no flag.
 compilerSelfCheck : <Exec, IO, FileRead> Expectation
 compilerSelfCheck =
-  match spawn ["check", "\{medakaRoot}/compiler/support/util.mdk"]
+  match spawn ["check", "\{medakaRoot ()}/compiler/support/util.mdk"]
     Err e => fail "could not spawn compiler self-check: \{e}"
     Ok (code, out) =>
       if contains "internal-only primitive" out then
@@ -417,7 +421,7 @@ spawnIn : String ->
 spawnIn root args =
   runWith
     "env"
-    (["-u", "MEDAKA_STRICT", "MEDAKA_ROOT=\{root}", medakaBin] ++ args)
+    (["-u", "MEDAKA_STRICT", "MEDAKA_ROOT=\{root}", medakaBin ()] ++ args)
 
 -- Scratch root = the real stdlib (each file symlinked) plus `nest/`, and the
 -- real compiler/ tree, so its fingerprint never matches and the stale warning fires.
@@ -439,7 +443,7 @@ linkRoot root nr = match runWith "sh" [
 setupNested : String -> <Exec, IO, FileRead, FileWrite> Result String Unit
 setupNested tmp = do
   mkdirAll "\{tmp}/nested-root/stdlib/nest"
-  linkRoot medakaRoot "\{tmp}/nested-root"
+  linkRoot (medakaRoot ()) "\{tmp}/nested-root"
   writeFile
     "\{tmp}/nested-root/stdlib/nest/probe.mdk"
     "export\nprobeGet : Array Int -> Int\nprobeGet a = arrayGetUnsafe 0 a\n"
