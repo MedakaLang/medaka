@@ -1,5 +1,5 @@
 # META
-source_lines=468
+source_lines=467
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/probe_transcript.mdk — the sentinel-delimited stdout format
@@ -53,16 +53,15 @@ stages=DESUGAR,MARK
 -- target output and quoted operands from being mistaken for result fields.
 --
 -- ── the target's own `main` ─────────────────────────────────────────────────
--- Both probes append a synthesized `main` to the target's VERBATIM source, so
--- a target that defines its own would be a duplicate definition.
--- `renameUserMain` renames the target's top-level `main` definition heads
--- instead: the `main` identifier tokens the lexer places at column 0, which
--- are exactly the clause and signature heads of a top-level binding, and it
--- turns the renamed binding into a unit function, because a top-level value
--- other than `main` must have an empty effect row. The
--- rename is located by tokens, never by printing, so every other byte of the
--- target still reaches the backend unchanged, and a `main` inside a comment,
--- a string or a nested binding is left alone.
+-- Both probes append a synthesized `main` to the target's VERBATIM source, so a target
+-- that defines its own would be a duplicate definition.  `renameUserMain` renames the
+-- target's top-level `main` definition heads instead: the `main` identifier tokens the
+-- lexer places at column 0, which are exactly the clause and signature heads of a
+-- top-level binding.  It also turns the renamed binding into a unit function, because a
+-- top-level value other than `main` must have an empty effect row.  The rename is
+-- located by tokens, never by printing, so every other byte of the target still reaches
+-- the backend unchanged, and a `main` inside a comment, a string or a nested binding is
+-- left alone.
 
 import frontend.lexer.{
   Token(..),
@@ -467,7 +466,7 @@ applyEdits n edits (l :: ls) =
 
 applyEdit : HeadEdit -> String -> String
 applyEdit (RenameMain _ suffix) l =
-  "\{userMainName}\{suffix}\{stringSlice 4 (stringLength l) l}"
+  "\{userMainName}\{suffix}\{stringSlice (stringLength "main") (stringLength l) l}"
 applyEdit (UnitArg _ col) l =
   "\{stringSlice 0 (col + 1) l} Unit ->\{stringSlice (col + 1) (stringLength l) l}"
 # DESUGAR
@@ -593,7 +592,7 @@ applyEdit (UnitArg _ col) l =
 (DFunDef false "applyEdits" (PWild PWild (PList)) (EListLit))
 (DFunDef false "applyEdits" ((PVar "n") (PVar "edits") (PCons (PVar "l") (PVar "ls"))) (EBlock (DoLet false false (PVar "edited") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "e")) (EIf (EBinOp "==" (EApp (EVar "editLine") (EVar "e")) (EVar "n")) (EApp (EApp (EVar "applyEdit") (EVar "e")) (EVar "acc")) (EVar "acc")))) (EVar "l")) (EVar "edits"))) (DoExpr (EBinOp "::" (EVar "edited") (EApp (EApp (EApp (EVar "applyEdits") (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EApp (EApp (EVar "filter") (ELam ((PVar "e")) (EBinOp ">" (EApp (EVar "editLine") (EVar "e")) (EVar "n")))) (EVar "edits"))) (EVar "ls"))))))
 (DTypeSig false "applyEdit" (TyFun (TyCon "HeadEdit") (TyFun (TyCon "String") (TyCon "String"))))
-(DFunDef false "applyEdit" ((PCon "RenameMain" PWild (PVar "suffix")) (PVar "l")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "userMainName"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "suffix"))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 4))) (EApp (EVar "stringLength") (EVar "l"))) (EVar "l")))) (ELit (LString ""))))
+(DFunDef false "applyEdit" ((PCon "RenameMain" PWild (PVar "suffix")) (PVar "l")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "userMainName"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "suffix"))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EApp (EApp (EVar "stringSlice") (EApp (EVar "stringLength") (ELit (LString "main")))) (EApp (EVar "stringLength") (EVar "l"))) (EVar "l")))) (ELit (LString ""))))
 (DFunDef false "applyEdit" ((PCon "UnitArg" PWild (PVar "col")) (PVar "l")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "+" (EVar "col") (ELit (LInt 1)))) (EVar "l")))) (ELit (LString " Unit ->"))) (EApp (EVar "display") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "col") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "l"))) (EVar "l")))) (ELit (LString ""))))
 # MARK
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "tokenizeWithOffsetPairs" false) (mem "lineStartsOf" false) (mem "offsetToLineColFast" false))))
@@ -718,5 +717,5 @@ applyEdit (UnitArg _ col) l =
 (DFunDef false "applyEdits" (PWild PWild (PList)) (EListLit))
 (DFunDef false "applyEdits" ((PVar "n") (PVar "edits") (PCons (PVar "l") (PVar "ls"))) (EBlock (DoLet false false (PVar "edited") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "e")) (EIf (EBinOp "==" (EApp (EVar "editLine") (EVar "e")) (EVar "n")) (EApp (EApp (EVar "applyEdit") (EVar "e")) (EVar "acc")) (EVar "acc")))) (EVar "l")) (EVar "edits"))) (DoExpr (EBinOp "::" (EVar "edited") (EApp (EApp (EApp (EVar "applyEdits") (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "e")) (EBinOp ">" (EApp (EVar "editLine") (EVar "e")) (EVar "n")))) (EVar "edits"))) (EVar "ls"))))))
 (DTypeSig false "applyEdit" (TyFun (TyCon "HeadEdit") (TyFun (TyCon "String") (TyCon "String"))))
-(DFunDef false "applyEdit" ((PCon "RenameMain" PWild (PVar "suffix")) (PVar "l")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "userMainName"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "suffix"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 4))) (EApp (EVar "stringLength") (EVar "l"))) (EVar "l")))) (ELit (LString ""))))
+(DFunDef false "applyEdit" ((PCon "RenameMain" PWild (PVar "suffix")) (PVar "l")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "userMainName"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "suffix"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EApp (EApp (EVar "stringSlice") (EApp (EVar "stringLength") (ELit (LString "main")))) (EApp (EVar "stringLength") (EVar "l"))) (EVar "l")))) (ELit (LString ""))))
 (DFunDef false "applyEdit" ((PCon "UnitArg" PWild (PVar "col")) (PVar "l")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "+" (EVar "col") (ELit (LInt 1)))) (EVar "l")))) (ELit (LString " Unit ->"))) (EApp (EMethodRef "display") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "col") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "l"))) (EVar "l")))) (ELit (LString ""))))

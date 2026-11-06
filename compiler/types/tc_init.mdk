@@ -34,19 +34,20 @@ import frontend.ast.{
   Loc,
   MethodDefault(..),
   Pat(..),
-  RecPatField(..),
   Require(..),
   Section(..),
   Super(..),
   Ty(..),
   TyConOrigin(..),
   ifaceIdentity,
+  patBoundNames,
 }
 import list.{last}
 import map as M
 import string.{nextChar, split, startCursor, stripPrefix}
 import support.ordmap.{
-  OrdMap, omEmpty, omFromPairs, omHasKey, omInsert, omLookup, omMapValues
+  OrdMap, omEmpty, omFromNames, omFromPairs, omHasKey, omInsert, omLookup,
+  omMapValues
 }
 import support.scc.{tarjanSCCs}
 import support.util.{isEmptyL, isNonEmptyL, joinWith, reverseL}
@@ -1309,27 +1310,10 @@ toImpls kind pos impls acc =
 -- ── binders ──────────────────────────────────────────────────────────────────
 
 bindPats : List Pat -> OrdMap Unit -> OrdMap Unit
-bindPats ps bound = fold (b p => bindPat p b) bound ps
+bindPats ps bound = omFromNames (flatMap patBoundNames ps) bound
 
 bindPat : Pat -> OrdMap Unit -> OrdMap Unit
-bindPat (PVar n _ _) bound = omInsert n () bound
-bindPat PWild bound = bound
-bindPat (PLit _) bound = bound
-bindPat (PCon _ ps) bound = bindPats ps bound
-bindPat (PCons h t) bound = bindPat t (bindPat h bound)
-bindPat (PTuple ps) bound = bindPats ps bound
-bindPat (PList ps) bound = bindPats ps bound
-bindPat (PAs n _ _ p) bound = bindPat p (omInsert n () bound)
-bindPat (POr ps) bound = bindPats ps bound
-bindPat (PRng _ _ _) bound = bound
-bindPat (PRec _ fields _) bound =
-  fold
-    (b f => match f
-      RecPatField n _ _ None => omInsert n () b
-      RecPatField _ _ _ (Some p) => bindPat p b)
-    bound
-    fields
-bindPat (PAnn p _) bound = bindPat p bound
+bindPat p bound = omFromNames (patBoundNames p) bound
 
 -- ── the order ────────────────────────────────────────────────────────────────
 

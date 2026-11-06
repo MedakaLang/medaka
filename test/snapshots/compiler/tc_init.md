@@ -1,5 +1,5 @@
 # META
-source_lines=1459
+source_lines=1443
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_init: the initialisation graph of one module's top-level values, the two rules read off
@@ -38,19 +38,20 @@ import frontend.ast.{
   Loc,
   MethodDefault(..),
   Pat(..),
-  RecPatField(..),
   Require(..),
   Section(..),
   Super(..),
   Ty(..),
   TyConOrigin(..),
   ifaceIdentity,
+  patBoundNames,
 }
 import list.{last}
 import map as M
 import string.{nextChar, split, startCursor, stripPrefix}
 import support.ordmap.{
-  OrdMap, omEmpty, omFromPairs, omHasKey, omInsert, omLookup, omMapValues
+  OrdMap, omEmpty, omFromNames, omFromPairs, omHasKey, omInsert, omLookup,
+  omMapValues
 }
 import support.scc.{tarjanSCCs}
 import support.util.{isEmptyL, isNonEmptyL, joinWith, reverseL}
@@ -1313,27 +1314,10 @@ toImpls kind pos impls acc =
 -- ── binders ──────────────────────────────────────────────────────────────────
 
 bindPats : List Pat -> OrdMap Unit -> OrdMap Unit
-bindPats ps bound = fold (b p => bindPat p b) bound ps
+bindPats ps bound = omFromNames (flatMap patBoundNames ps) bound
 
 bindPat : Pat -> OrdMap Unit -> OrdMap Unit
-bindPat (PVar n _ _) bound = omInsert n () bound
-bindPat PWild bound = bound
-bindPat (PLit _) bound = bound
-bindPat (PCon _ ps) bound = bindPats ps bound
-bindPat (PCons h t) bound = bindPat t (bindPat h bound)
-bindPat (PTuple ps) bound = bindPats ps bound
-bindPat (PList ps) bound = bindPats ps bound
-bindPat (PAs n _ _ p) bound = bindPat p (omInsert n () bound)
-bindPat (POr ps) bound = bindPats ps bound
-bindPat (PRng _ _ _) bound = bound
-bindPat (PRec _ fields _) bound =
-  fold
-    (b f => match f
-      RecPatField n _ _ None => omInsert n () b
-      RecPatField _ _ _ (Some p) => bindPat p b)
-    bound
-    fields
-bindPat (PAnn p _) bound = bindPat p bound
+bindPat p bound = omFromNames (patBoundNames p) bound
 
 -- ── the order ────────────────────────────────────────────────────────────────
 
@@ -1462,11 +1446,11 @@ kahn g members dependents indegree ready out = match M.minView ready
         (optionOr [] (M.get s dependents))
     kahn g members dependents indegree2 ready2 out2
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Arm" true) (mem "Constraint" true) (mem "Decl" true) (mem "DoStmt" true) (mem "Expr" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "Guard" true) (mem "GuardArm" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "InterpPart" true) (mem "LetBind" true) (mem "Loc" false) (mem "MethodDefault" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Require" true) (mem "Section" true) (mem "Super" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "ifaceIdentity" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Arm" true) (mem "Constraint" true) (mem "Decl" true) (mem "DoStmt" true) (mem "Expr" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "Guard" true) (mem "GuardArm" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "InterpPart" true) (mem "LetBind" true) (mem "Loc" false) (mem "MethodDefault" true) (mem "Pat" true) (mem "Require" true) (mem "Section" true) (mem "Super" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "ifaceIdentity" false) (mem "patBoundNames" false))))
 (DUse false (UseGroup ("list") ((mem "last" false))))
 (DUse false (UseAlias ("map") "M"))
 (DUse false (UseGroup ("string") ((mem "nextChar" false) (mem "split" false) (mem "startCursor" false) (mem "stripPrefix" false))))
-(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omFromPairs" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omMapValues" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omMapValues" false))))
 (DUse false (UseGroup ("support" "scc") ((mem "tarjanSCCs" false))))
 (DUse false (UseGroup ("support" "util") ((mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "joinWith" false) (mem "reverseL" false))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "renderAtoms" false) (mem "rowFlat" false))))
@@ -1765,20 +1749,9 @@ kahn g members dependents indegree ready out = match M.minView ready
 (DTypeSig false "toImpls" (TyFun (TyCon "InitEdgeKind") (TyFun (TyCon "InitPosition") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "InitMention")) (TyApp (TyCon "List") (TyCon "InitMention")))))))
 (DFunDef false "toImpls" ((PVar "kind") (PVar "pos") (PVar "impls") (PVar "acc")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc2") (PVar "i")) (EBinOp "::" (EApp (EApp (EApp (EVar "mention") (EVar "i")) (EVar "kind")) (EVar "pos")) (EVar "acc2")))) (EVar "acc")) (EVar "impls")))
 (DTypeSig false "bindPats" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
-(DFunDef false "bindPats" ((PVar "ps") (PVar "bound")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "b") (PVar "p")) (EApp (EApp (EVar "bindPat") (EVar "p")) (EVar "b")))) (EVar "bound")) (EVar "ps")))
+(DFunDef false "bindPats" ((PVar "ps") (PVar "bound")) (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "flatMap") (EVar "patBoundNames")) (EVar "ps"))) (EVar "bound")))
 (DTypeSig false "bindPat" (TyFun (TyCon "Pat") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
-(DFunDef false "bindPat" ((PCon "PVar" (PVar "n") PWild PWild) (PVar "bound")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (ELit LUnit)) (EVar "bound")))
-(DFunDef false "bindPat" ((PCon "PWild") (PVar "bound")) (EVar "bound"))
-(DFunDef false "bindPat" ((PCon "PLit" PWild) (PVar "bound")) (EVar "bound"))
-(DFunDef false "bindPat" ((PCon "PCon" PWild (PVar "ps")) (PVar "bound")) (EApp (EApp (EVar "bindPats") (EVar "ps")) (EVar "bound")))
-(DFunDef false "bindPat" ((PCon "PCons" (PVar "h") (PVar "t")) (PVar "bound")) (EApp (EApp (EVar "bindPat") (EVar "t")) (EApp (EApp (EVar "bindPat") (EVar "h")) (EVar "bound"))))
-(DFunDef false "bindPat" ((PCon "PTuple" (PVar "ps")) (PVar "bound")) (EApp (EApp (EVar "bindPats") (EVar "ps")) (EVar "bound")))
-(DFunDef false "bindPat" ((PCon "PList" (PVar "ps")) (PVar "bound")) (EApp (EApp (EVar "bindPats") (EVar "ps")) (EVar "bound")))
-(DFunDef false "bindPat" ((PCon "PAs" (PVar "n") PWild PWild (PVar "p")) (PVar "bound")) (EApp (EApp (EVar "bindPat") (EVar "p")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (ELit LUnit)) (EVar "bound"))))
-(DFunDef false "bindPat" ((PCon "POr" (PVar "ps")) (PVar "bound")) (EApp (EApp (EVar "bindPats") (EVar "ps")) (EVar "bound")))
-(DFunDef false "bindPat" ((PCon "PRng" PWild PWild PWild) (PVar "bound")) (EVar "bound"))
-(DFunDef false "bindPat" ((PCon "PRec" PWild (PVar "fields") PWild) (PVar "bound")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "b") (PVar "f")) (EMatch (EVar "f") (arm (PCon "RecPatField" (PVar "n") PWild PWild (PCon "None")) () (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (ELit LUnit)) (EVar "b"))) (arm (PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p"))) () (EApp (EApp (EVar "bindPat") (EVar "p")) (EVar "b")))))) (EVar "bound")) (EVar "fields")))
-(DFunDef false "bindPat" ((PCon "PAnn" (PVar "p") PWild) (PVar "bound")) (EApp (EApp (EVar "bindPat") (EVar "p")) (EVar "bound")))
+(DFunDef false "bindPat" ((PVar "p") (PVar "bound")) (EApp (EApp (EVar "omFromNames") (EApp (EVar "patBoundNames") (EVar "p"))) (EVar "bound")))
 (DTypeSig true "initOrder" (TyFun (TyCon "InitGraph") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "initOrder" ((PVar "g")) (EBlock (DoLet false false (PVar "nodes") (EFieldAccess (EVar "g") "igraphNodes")) (DoLet false false (PVar "compOf") (EFieldAccess (EApp (EVar "mayReach") (EVar "g")) "mrComp")) (DoLet false false (PVar "members") (EApp (EApp (EApp (EVar "componentMembers") (EVar "compOf")) (EApp (EVar "reverseL") (EVar "nodes"))) (EVar "empty"))) (DoLet false false (PVar "deps") (EApp (EApp (EApp (EVar "componentDeps") (EVar "compOf")) (EVar "nodes")) (EVar "empty"))) (DoLet false false (PVar "indegree") (EApp (EApp (EVar "M.mapWithKey") (ELam (PWild (PVar "ds")) (EApp (EVar "M.size") (EVar "ds")))) (EVar "deps"))) (DoLet false false (PVar "dependents") (EApp (EApp (EApp (EVar "M.foldrWithKey") (ELam ((PVar "s") (PVar "ds") (PVar "acc")) (EApp (EApp (EApp (EVar "M.foldrWithKey") (ELam ((PVar "d") PWild (PVar "acc2")) (EApp (EApp (EApp (EVar "M.set") (EVar "d")) (EBinOp "::" (EVar "s") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "M.get") (EVar "d")) (EVar "acc2"))))) (EVar "acc2")))) (EVar "acc")) (EVar "ds")))) (EVar "empty")) (EVar "deps"))) (DoLet false false (PVar "ready") (EApp (EApp (EApp (EVar "M.foldrWithKey") (ELam ((PVar "s") (PVar "ms") (PVar "acc")) (EIf (EBinOp "==" (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "M.get") (EVar "s")) (EVar "indegree"))) (ELit (LInt 0))) (EApp (EApp (EApp (EVar "M.set") (EApp (EVar "firstOrder") (EVar "ms"))) (EVar "s")) (EVar "acc")) (EVar "acc")))) (EVar "empty")) (EVar "members"))) (DoExpr (EApp (EVar "reverseL") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "kahn") (EVar "g")) (EVar "members")) (EVar "dependents")) (EVar "indegree")) (EVar "ready")) (EListLit))))))
 (DData Private "MayReach" () ((variant "MayReach" (ConNamed (field "mrAdj" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (field "mrComp" (TyApp (TyCon "OrdMap") (TyCon "Int")))))) ())
@@ -1799,11 +1772,11 @@ kahn g members dependents indegree ready out = match M.minView ready
 (DTypeSig false "kahn" (TyFun (TyCon "InitGraph") (TyFun (TyApp (TyApp (TyCon "M.Map") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "InitNode"))) (TyFun (TyApp (TyApp (TyCon "M.Map") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Int"))) (TyFun (TyApp (TyApp (TyCon "M.Map") (TyCon "Int")) (TyCon "Int")) (TyFun (TyApp (TyApp (TyCon "M.Map") (TyCon "Int")) (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))))
 (DFunDef false "kahn" ((PVar "g") (PVar "members") (PVar "dependents") (PVar "indegree") (PVar "ready") (PVar "out")) (EMatch (EApp (EVar "M.minView") (EVar "ready")) (arm (PCon "None") () (EVar "out")) (arm (PCon "Some" (PTuple PWild (PVar "s") (PVar "rest"))) () (EBlock (DoLet false false (PVar "ms") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "M.get") (EVar "s")) (EVar "members")))) (DoLet false false (PVar "out2") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "n")) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "n") "inodeKind") (EVar "ValueNode")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EFieldAccess (EVar "n") "inodeName")) (EFieldAccess (EVar "g") "igraphNotInitialised")))) (EBinOp "::" (EFieldAccess (EVar "n") "inodeName") (EVar "acc")) (EVar "acc")))) (EVar "out")) (EVar "ms"))) (DoLet false false (PTuple (PVar "indegree2") (PVar "ready2")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "st") (PVar "d")) (EMatch (EVar "st") (arm (PTuple (PVar "deg") (PVar "rdy")) () (EBlock (DoLet false false (PVar "left") (EBinOp "-" (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "M.get") (EVar "d")) (EVar "deg"))) (ELit (LInt 1)))) (DoLet false false (PVar "deg2") (EApp (EApp (EApp (EVar "M.set") (EVar "d")) (EVar "left")) (EVar "deg"))) (DoExpr (EIf (EBinOp "==" (EVar "left") (ELit (LInt 0))) (ETuple (EVar "deg2") (EApp (EApp (EApp (EVar "M.set") (EApp (EVar "firstOrder") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "M.get") (EVar "d")) (EVar "members"))))) (EVar "d")) (EVar "rdy"))) (ETuple (EVar "deg2") (EVar "rdy"))))))))) (ETuple (EVar "indegree") (EVar "rest"))) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "M.get") (EVar "s")) (EVar "dependents"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "kahn") (EVar "g")) (EVar "members")) (EVar "dependents")) (EVar "indegree2")) (EVar "ready2")) (EVar "out2")))))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Arm" true) (mem "Constraint" true) (mem "Decl" true) (mem "DoStmt" true) (mem "Expr" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "Guard" true) (mem "GuardArm" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "InterpPart" true) (mem "LetBind" true) (mem "Loc" false) (mem "MethodDefault" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Require" true) (mem "Section" true) (mem "Super" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "ifaceIdentity" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Arm" true) (mem "Constraint" true) (mem "Decl" true) (mem "DoStmt" true) (mem "Expr" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "Guard" true) (mem "GuardArm" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "InterpPart" true) (mem "LetBind" true) (mem "Loc" false) (mem "MethodDefault" true) (mem "Pat" true) (mem "Require" true) (mem "Section" true) (mem "Super" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "ifaceIdentity" false) (mem "patBoundNames" false))))
 (DUse false (UseGroup ("list") ((mem "last" false))))
 (DUse false (UseAlias ("map") "M"))
 (DUse false (UseGroup ("string") ((mem "nextChar" false) (mem "split" false) (mem "startCursor" false) (mem "stripPrefix" false))))
-(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omFromPairs" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omMapValues" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omMapValues" false))))
 (DUse false (UseGroup ("support" "scc") ((mem "tarjanSCCs" false))))
 (DUse false (UseGroup ("support" "util") ((mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "joinWith" false) (mem "reverseL" false))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "renderAtoms" false) (mem "rowFlat" false))))
@@ -2102,20 +2075,9 @@ kahn g members dependents indegree ready out = match M.minView ready
 (DTypeSig false "toImpls" (TyFun (TyCon "InitEdgeKind") (TyFun (TyCon "InitPosition") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "InitMention")) (TyApp (TyCon "List") (TyCon "InitMention")))))))
 (DFunDef false "toImpls" ((PVar "kind") (PVar "pos") (PVar "impls") (PVar "acc")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc2") (PVar "i")) (EBinOp "::" (EApp (EApp (EApp (EVar "mention") (EVar "i")) (EVar "kind")) (EVar "pos")) (EVar "acc2")))) (EVar "acc")) (EVar "impls")))
 (DTypeSig false "bindPats" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
-(DFunDef false "bindPats" ((PVar "ps") (PVar "bound")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "b") (PVar "p")) (EApp (EApp (EVar "bindPat") (EVar "p")) (EVar "b")))) (EVar "bound")) (EVar "ps")))
+(DFunDef false "bindPats" ((PVar "ps") (PVar "bound")) (EApp (EApp (EVar "omFromNames") (EApp (EApp (EDictApp "flatMap") (EVar "patBoundNames")) (EVar "ps"))) (EVar "bound")))
 (DTypeSig false "bindPat" (TyFun (TyCon "Pat") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
-(DFunDef false "bindPat" ((PCon "PVar" (PVar "n") PWild PWild) (PVar "bound")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (ELit LUnit)) (EVar "bound")))
-(DFunDef false "bindPat" ((PCon "PWild") (PVar "bound")) (EVar "bound"))
-(DFunDef false "bindPat" ((PCon "PLit" PWild) (PVar "bound")) (EVar "bound"))
-(DFunDef false "bindPat" ((PCon "PCon" PWild (PVar "ps")) (PVar "bound")) (EApp (EApp (EVar "bindPats") (EVar "ps")) (EVar "bound")))
-(DFunDef false "bindPat" ((PCon "PCons" (PVar "h") (PVar "t")) (PVar "bound")) (EApp (EApp (EVar "bindPat") (EVar "t")) (EApp (EApp (EVar "bindPat") (EVar "h")) (EVar "bound"))))
-(DFunDef false "bindPat" ((PCon "PTuple" (PVar "ps")) (PVar "bound")) (EApp (EApp (EVar "bindPats") (EVar "ps")) (EVar "bound")))
-(DFunDef false "bindPat" ((PCon "PList" (PVar "ps")) (PVar "bound")) (EApp (EApp (EVar "bindPats") (EVar "ps")) (EVar "bound")))
-(DFunDef false "bindPat" ((PCon "PAs" (PVar "n") PWild PWild (PVar "p")) (PVar "bound")) (EApp (EApp (EVar "bindPat") (EVar "p")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (ELit LUnit)) (EVar "bound"))))
-(DFunDef false "bindPat" ((PCon "POr" (PVar "ps")) (PVar "bound")) (EApp (EApp (EVar "bindPats") (EVar "ps")) (EVar "bound")))
-(DFunDef false "bindPat" ((PCon "PRng" PWild PWild PWild) (PVar "bound")) (EVar "bound"))
-(DFunDef false "bindPat" ((PCon "PRec" PWild (PVar "fields") PWild) (PVar "bound")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "b") (PVar "f")) (EMatch (EVar "f") (arm (PCon "RecPatField" (PVar "n") PWild PWild (PCon "None")) () (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (ELit LUnit)) (EVar "b"))) (arm (PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p"))) () (EApp (EApp (EVar "bindPat") (EVar "p")) (EVar "b")))))) (EVar "bound")) (EVar "fields")))
-(DFunDef false "bindPat" ((PCon "PAnn" (PVar "p") PWild) (PVar "bound")) (EApp (EApp (EVar "bindPat") (EVar "p")) (EVar "bound")))
+(DFunDef false "bindPat" ((PVar "p") (PVar "bound")) (EApp (EApp (EVar "omFromNames") (EApp (EVar "patBoundNames") (EVar "p"))) (EVar "bound")))
 (DTypeSig true "initOrder" (TyFun (TyCon "InitGraph") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "initOrder" ((PVar "g")) (EBlock (DoLet false false (PVar "nodes") (EFieldAccess (EVar "g") "igraphNodes")) (DoLet false false (PVar "compOf") (EFieldAccess (EApp (EVar "mayReach") (EVar "g")) "mrComp")) (DoLet false false (PVar "members") (EApp (EApp (EApp (EVar "componentMembers") (EVar "compOf")) (EApp (EVar "reverseL") (EVar "nodes"))) (EMethodRef "empty"))) (DoLet false false (PVar "deps") (EApp (EApp (EApp (EVar "componentDeps") (EVar "compOf")) (EVar "nodes")) (EMethodRef "empty"))) (DoLet false false (PVar "indegree") (EApp (EApp (EVar "M.mapWithKey") (ELam (PWild (PVar "ds")) (EApp (EVar "M.size") (EVar "ds")))) (EVar "deps"))) (DoLet false false (PVar "dependents") (EApp (EApp (EApp (EVar "M.foldrWithKey") (ELam ((PVar "s") (PVar "ds") (PVar "acc")) (EApp (EApp (EApp (EVar "M.foldrWithKey") (ELam ((PVar "d") PWild (PVar "acc2")) (EApp (EApp (EApp (EVar "M.set") (EVar "d")) (EBinOp "::" (EVar "s") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "M.get") (EVar "d")) (EVar "acc2"))))) (EVar "acc2")))) (EVar "acc")) (EVar "ds")))) (EMethodRef "empty")) (EVar "deps"))) (DoLet false false (PVar "ready") (EApp (EApp (EApp (EVar "M.foldrWithKey") (ELam ((PVar "s") (PVar "ms") (PVar "acc")) (EIf (EBinOp "==" (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "M.get") (EVar "s")) (EVar "indegree"))) (ELit (LInt 0))) (EApp (EApp (EApp (EVar "M.set") (EApp (EVar "firstOrder") (EVar "ms"))) (EVar "s")) (EVar "acc")) (EVar "acc")))) (EMethodRef "empty")) (EVar "members"))) (DoExpr (EApp (EVar "reverseL") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "kahn") (EVar "g")) (EVar "members")) (EVar "dependents")) (EVar "indegree")) (EVar "ready")) (EListLit))))))
 (DData Private "MayReach" () ((variant "MayReach" (ConNamed (field "mrAdj" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (field "mrComp" (TyApp (TyCon "OrdMap") (TyCon "Int")))))) ())

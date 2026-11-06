@@ -1,5 +1,5 @@
 # META
-source_lines=2443
+source_lines=2452
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_occurrence: method and literal occurrence inference, operator dispatch-site recording
@@ -1550,6 +1550,15 @@ binopMethod ">=" = Some "gte"
 binopMethod "++" = Some "append"
 binopMethod _ = None
 
+-- The class method a binary operator dispatches through: the arithmetic methods
+-- (`arithDispatchMethod`) first, then the comparison/append ones (`binopMethod`).  The two
+-- operator sets are disjoint, so the order does not change any answer.
+export
+binopDispatchMethod : String -> Option String
+binopDispatchMethod op = match arithDispatchMethod op
+  Some method => Some method
+  None => binopMethod op
+
 -- Roadmap #18c: `-` (unary minus) is the surface operator for `Num`'s `negate`,
 -- joining `++`/comparisons on the record*Site/resolve*Sites/rewrite*Expr seam.
 -- `!` never routes — Bool negation is not a typeclass method.
@@ -2639,6 +2648,8 @@ methodReturnProbeCodes prev ownedRow impls =
 (DFunDef false "binopMethod" ((PLit (LString ">="))) (EApp (EVar "Some") (ELit (LString "gte"))))
 (DFunDef false "binopMethod" ((PLit (LString "++"))) (EApp (EVar "Some") (ELit (LString "append"))))
 (DFunDef false "binopMethod" (PWild) (EVar "None"))
+(DTypeSig true "binopDispatchMethod" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
+(DFunDef false "binopDispatchMethod" ((PVar "op")) (EMatch (EApp (EVar "arithDispatchMethod") (EVar "op")) (arm (PCon "Some" (PVar "method")) () (EApp (EVar "Some") (EVar "method"))) (arm (PCon "None") () (EApp (EVar "binopMethod") (EVar "op")))))
 (DTypeSig true "unopMethod" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "unopMethod" ((PLit (LString "-"))) (EApp (EVar "Some") (ELit (LString "negate"))))
 (DFunDef false "unopMethod" (PWild) (EVar "None"))
@@ -2946,6 +2957,8 @@ methodReturnProbeCodes prev ownedRow impls =
 (DFunDef false "binopMethod" ((PLit (LString ">="))) (EApp (EVar "Some") (ELit (LString "gte"))))
 (DFunDef false "binopMethod" ((PLit (LString "++"))) (EApp (EVar "Some") (ELit (LString "append"))))
 (DFunDef false "binopMethod" (PWild) (EVar "None"))
+(DTypeSig true "binopDispatchMethod" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
+(DFunDef false "binopDispatchMethod" ((PVar "op")) (EMatch (EApp (EVar "arithDispatchMethod") (EVar "op")) (arm (PCon "Some" (PVar "method")) () (EApp (EVar "Some") (EVar "method"))) (arm (PCon "None") () (EApp (EVar "binopMethod") (EVar "op")))))
 (DTypeSig true "unopMethod" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "unopMethod" ((PLit (LString "-"))) (EApp (EVar "Some") (ELit (LString "negate"))))
 (DFunDef false "unopMethod" (PWild) (EVar "None"))

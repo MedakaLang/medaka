@@ -81,7 +81,7 @@ import support.util.{
   orElseOpt, reverseL
 }
 import types.tc_occurrence.{
-  argDispatchIndicesById, arithDispatchMethod, binopMethod, unopMethod
+  argDispatchIndicesById, binopDispatchMethod, unopMethod
 }
 import types.tc_init.{
   InitViolation(..), checkInitRules, initGraphOf, initInputsAt
@@ -3148,7 +3148,7 @@ checkModuleFullDiags gctx mid seedVars accData accAll prog =
       mctx
       declEnvsHere
       ordHere
-      (op => orElseOpt (binopMethod op) (arithDispatchMethod op))
+      binopDispatchMethod
       unopMethod
   each
     (v => match v
