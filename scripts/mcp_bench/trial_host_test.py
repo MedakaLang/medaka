@@ -28,7 +28,7 @@ class HostTests(unittest.TestCase):
             root = Path(directory)
             artifact = root / 'artifact'
             artifact.mkdir()
-            for name in ('medaka', 'medaka_emitter', 'runtime/medaka_rt.c', 'stdlib/core.mdk', 'stdlib/runtime.mdk'):
+            for name in ('medaka', 'medaka_emitter', 'runtime/medaka_rt.c', 'runtime/medaka_abi.h', 'runtime/medaka_runtime.h', 'runtime/medaka_process.h', 'runtime/medaka_process.c', 'stdlib/core.mdk', 'stdlib/runtime.mdk'):
                 path = artifact / name
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text('synthetic')
@@ -117,7 +117,7 @@ class HostTests(unittest.TestCase):
                     root = Path(directory)
                     artifact = root / 'artifact'
                     artifact.mkdir()
-                    for name in ('medaka', 'medaka_emitter', 'runtime/medaka_rt.c', 'stdlib/core.mdk', 'stdlib/runtime.mdk'):
+                    for name in ('medaka', 'medaka_emitter', 'runtime/medaka_rt.c', 'runtime/medaka_abi.h', 'runtime/medaka_runtime.h', 'runtime/medaka_process.h', 'runtime/medaka_process.c', 'stdlib/core.mdk', 'stdlib/runtime.mdk'):
                         path = artifact / name
                         path.parent.mkdir(parents=True, exist_ok=True)
                         path.write_text('synthetic')
@@ -169,7 +169,7 @@ class NamespaceTests(unittest.TestCase):
             root = Path(directory)
             artifact = root / 'artifact'
             artifact.mkdir()
-            for name in ('medaka', 'medaka_emitter', 'runtime/medaka_rt.c', 'stdlib/core.mdk', 'stdlib/runtime.mdk'):
+            for name in ('medaka', 'medaka_emitter', 'runtime/medaka_rt.c', 'runtime/medaka_abi.h', 'runtime/medaka_runtime.h', 'runtime/medaka_process.h', 'runtime/medaka_process.c', 'stdlib/core.mdk', 'stdlib/runtime.mdk'):
                 path = artifact / name
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text('synthetic artifact, not executed')

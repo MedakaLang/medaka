@@ -45,6 +45,7 @@ pinOf "main_box_reverse" = "101203\n"
 pinOf "main_empty_constraint" = "111\n101\n"
 pinOf "main_ia_first" = "111\n101\n"
 pinOf "main_iz_first" = "111\n101\n"
+pinOf "identity_before_core" = "3\n"
 pinOf _ = ""
 
 -- The impl-heavy sample: each fixture defines impls of prelude interfaces and routes
@@ -235,3 +236,25 @@ test "prelude_obj: dynamic-arity probes typecheck and evaluate to their pins" =
 
 test "prelude_obj: inline and prebuilt-prelude links agree on every sample program" =
   withScratchDir (w => expectAll [optRow w "-O0", optRow w "-O2"])
+
+identityRow : String -> <Exec, IO, FileRead, FileWrite> Expectation
+identityRow w =
+  let src = "\{w}/identity_before_core.mdk"
+  let pobj = "\{w}/identity_prelude.o"
+  match (writeFile
+    src
+    """
+data AAA = Alpha | Payload Int
+main = foldUntil (acc x => if x > 2 then Break acc else Continue (acc + x)) 0 [1, 2, 3, 4]
+""")
+    Err e => fail "could not write identity probe: \{e}"
+    Ok _ => match buildExit [medakaBin, "build", "--emit-prelude-obj", pobj]
+      Err e => fail "could not build identity prelude: \{e}"
+      Ok code =>
+        if code == 0 then
+          sampleRow w "-O0" pobj src
+        else
+          fail "identity prelude build failed"
+
+test "prelude_obj: unrelated earlier type keeps core constructor identity" =
+  withScratchDir identityRow

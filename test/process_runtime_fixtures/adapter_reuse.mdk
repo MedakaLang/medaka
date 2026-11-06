@@ -1,0 +1,45 @@
+import async.{runAsync, spawn, sleep, liftIO}
+import process.{
+  SpawnOptions(..), PipeChoice(..), ProcessError(..), OutputStream(..),
+  pollExit, dispose
+}
+import process_async.{
+  after, newCancelToken, startUntil, readUntil, StartResult(..)
+}
+import time.{millis}
+
+options : SpawnOptions
+options = SpawnOptions {
+  argv = ["-c", "sleep 0.05"],
+  cwd = "/tmp",
+  env = [],
+  stdin = Null,
+  stdout = Piped,
+  stderr = Null,
+}
+
+main =
+  let deadline = runAsync (after (millis 5000))
+  let started =
+    runAsync (startUntil "/bin/sh" options deadline (newCancelToken ()))
+  let passed = match started
+    Ok (Started p) =>
+      let disposed = Ref False
+      let control = deferThen (sleep (millis 20)) (_ => liftIO (_ =>
+        sleepMs 200
+        let status = pollExit p
+        let closed = dispose p
+        disposed := match (status, closed)
+          (Ok (Some _), Ok _) => True
+          _ => False))
+      let reading = deferThen (spawn control) (_ =>
+        readUntil p ChildStdout 100 deadline (newCancelToken ()))
+      let outcome = runAsync reading
+      match outcome
+        Err ProcessClosed => !disposed
+        _ => False
+    _ => False
+  if passed then
+    println "adapter reuse passed"
+  else
+    println "adapter reuse failed"

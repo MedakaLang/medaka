@@ -1,0 +1,14 @@
+import process.{start, SpawnOptions(..), PipeChoice(..)}
+launch : Unit -> <Exec "/bin/sh"> Unit
+launch _ =
+  let path = getEnv "PATH"
+  let _ = start "/bin/sh" SpawnOptions {
+    argv = [],
+    cwd = "/tmp",
+    env = [("PATH", optionOr "" path)],
+    stdin = Null,
+    stdout = Null,
+    stderr = Null,
+  }
+  ()
+main = ()

@@ -1,0 +1,38 @@
+import process.{
+  SpawnOptions(..),
+  PipeChoice(..),
+  ProcessError,
+  ExitStatus(..),
+  submit,
+  retryStart,
+  pollExit,
+  dispose,
+}
+
+options : SpawnOptions
+options = SpawnOptions {
+  argv = [],
+  cwd = "/tmp",
+  env = [],
+  stdin = Null,
+  stdout = Null,
+  stderr = Null,
+}
+
+launch : Unit ->
+  <Exec "/bin/true"> Result ProcessError (LaunchTicket "/bin/true")
+launch _ = submit "/bin/true" options
+
+wait : Process p -> <Exec p, Stdout> Unit
+wait p = match pollExit p
+  Ok None => wait p
+  Ok (Some (Exited 0)) => match dispose p
+    Ok _ => println "submitted native passed"
+    Err _ => println "dispose failed"
+  _ => println "wait failed"
+
+main = match launch ()
+  Err _ => println "submit failed"
+  Ok ticket => match retryStart ticket
+    Ok p => wait p
+    Err _ => println "start failed"

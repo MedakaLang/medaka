@@ -1,0 +1,45 @@
+import async.{runAsync}
+import process.{
+  SpawnOptions(..), PipeChoice(..), OutputStream(..), ExitStatus(..),
+  closeStdin, dispose
+}
+import process_async.{
+  after, newCancelToken, startUntil, readUntil, waitUntil, StartResult(..),
+  ReadResult(..), WaitResult(..)
+}
+import time.{millis}
+
+options : SpawnOptions
+options = SpawnOptions {
+  argv = [],
+  cwd = "/tmp",
+  env = [],
+  stdin = Piped,
+  stdout = Piped,
+  stderr = Null,
+}
+
+sessions n =
+  if n == 0 then
+    True
+  else
+    let launch = runAsync (after (millis 5000))
+    match runAsync (startUntil "/bin/cat" options launch (newCancelToken ()))
+      Ok (Started p) =>
+        let idle = runAsync (after (millis 100))
+        let result =
+          runAsync (readUntil p ChildStdout 10 idle (newCancelToken ()))
+        let closed = closeStdin p
+        let exited = runAsync (waitUntil p launch (newCancelToken ()))
+        let disposed = dispose p
+        match (result, closed, exited, disposed)
+          (Ok ReadTimedOut, Ok _, Ok (ChildExited (Exited 0)), Ok _) =>
+            sessions (n - 1)
+          _ => False
+      _ => False
+
+main =
+  if sessions 12 then
+    println "idle sessions=12 passed"
+  else
+    println "idle sessions failed"

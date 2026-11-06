@@ -4,6 +4,7 @@ backend.extern_catalog
 backend.extern_requirements
 backend.global_plan
 backend.impl_groups
+backend.package_identity
 backend.runtime_layout
 backend.trmc_analysis
 backend.wasm_demand

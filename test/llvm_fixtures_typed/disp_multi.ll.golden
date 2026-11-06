@@ -159,6 +159,17 @@ declare i64 @mdk_executable_path(i64)
 declare i64 @mdk_build_fingerprint(i64)
 declare i64 @mdk_build_commit(i64)
 declare i64 @mdk_build_date(i64)
+declare i64 @mdk_process_submit(i64, i64, i64, i64, i64, i64, i64)
+declare i64 @mdk_process_start(i64, i64, i64, i64, i64, i64, i64)
+declare i64 @mdk_process_retry_start(i64)
+declare i64 @mdk_process_check_start(i64)
+declare i64 @mdk_process_abort_start(i64)
+declare i64 @mdk_process_poll_exit(i64)
+declare i64 @mdk_process_close_stdin(i64)
+declare i64 @mdk_process_dispose(i64)
+declare i64 @mdk_process_try_read(i64, i64, i64)
+declare i64 @mdk_process_try_write(i64, i64, i64, i64)
+declare i64 @mdk_process_stream_fd(i64, i64)
 declare i64 @mdk_net_resolve(i64)
 declare i64 @mdk_net_tcp_connect(i64, i64)
 declare i64 @mdk_net_tcp_listen(i64, i64)
@@ -222,14 +233,14 @@ entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
   %t0 = call i64 @mdk.force.6d356635663735373336353732356635665f5f666c61675a65726f()
   %t1 = alloca i64
-  %t3 = icmp eq i64 %t0, 1
+  %t3 = icmp eq i64 %t0, 8589934593
   br i1 %t3, label %conyes4, label %connext4
 conyes4:
   %t5 = call i64 @mdk.force.6d356635663735373336353732356635665f5f696e745a65726f()
   store i64 %t5, ptr %t1
   br label %decend2
 connext4:
-  %t6 = icmp eq i64 %t0, 3
+  %t6 = icmp eq i64 %t0, 8589934595
   br i1 %t6, label %conyes7, label %connext7
 conyes7:
   store i64 199, ptr %t1
@@ -324,7 +335,7 @@ entry:
 ; mdk-module impl.5f5f757365725f5f3a3a5a65726f7c5f5f757365725f5f2e466c61677c.7a65726f
 define internal i64 @mdk.impl.7a5a5f35665f5f35665f757365725f35665f5f35665f5f32655f466c6167.7a65726f() {
 entry:
-  ret i64 1
+  ret i64 8589934593
 }
 
 ; mdk-module program

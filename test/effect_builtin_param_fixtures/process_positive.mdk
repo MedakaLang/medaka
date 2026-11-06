@@ -1,0 +1,13 @@
+import process.{SpawnOptions(..), PipeChoice(..), start, StartError}
+options = SpawnOptions {
+  argv = [],
+  cwd = "/tmp",
+  env = [],
+  stdin = Null,
+  stdout = Null,
+  stderr = Null,
+}
+launch : Unit ->
+  <Exec "/bin/sh"> Result (StartError (LaunchTicket "/bin/sh")) (Process "/bin/sh")
+launch _ = start "/bin/sh" options
+main = ()

@@ -213,7 +213,7 @@ echo "$FP_ENTRY ($(wc -l < "$STATIC" | tr -d ' ') modules) — PASS."
 mkdir "$WORK/key-tree"
 cp -R "$ROOT/compiler" "$ROOT/stdlib" "$WORK/key-tree/"
 mkdir "$WORK/key-tree/runtime" "$WORK/key-tree/test"
-cp "$ROOT/runtime/medaka_rt.c" "$ROOT/runtime/medaka_abi.h" "$WORK/key-tree/runtime/"
+cp "$ROOT/runtime/medaka_rt.c" "$ROOT/runtime/medaka_abi.h" "$ROOT/runtime/medaka_runtime.h" "$ROOT/runtime/medaka_process.h" "$ROOT/runtime/medaka_process.c" "$WORK/key-tree/runtime/"
 cp "$ROOT/test/emitter_source_set.awk" "$WORK/key-tree/test/"
 KEY_SCRIPT="$WORK/key-functions.sh"
 sed -n '/^hash_stream() {/,/^}/p; /^fp_full_file_list() {/,/^}/p; /^src_fingerprint_full() {/,/^}/p; /^src_fingerprint_runtime() {/,/^}/p; /^cache_tag() /p; /^emitter_key_for() {/,/^}/p; /^cli_key_for() {/,/^}/p' "$ROOT/test/build_native_medaka.sh" > "$KEY_SCRIPT"
@@ -247,5 +247,17 @@ FP_RUNTIME=$(src_fingerprint_runtime)
   echo 'FAIL: restoring the header did not restore fingerprints and build keys.'
   exit 1
 }
+for runtime_file in medaka_process.c medaka_process.h medaka_runtime.h; do
+  cp "$ROOT/runtime/$runtime_file" "$WORK/runtime-original"
+  printf '\n/* mutation */\n' >> "$ROOT/runtime/$runtime_file"
+  FP_FULL=$(src_fingerprint_full)
+  FP_RUNTIME=$(src_fingerprint_runtime)
+  [ "$FP_FULL" != "$full_before" ] && [ "$FP_RUNTIME" != "$runtime_before" ] && \
+    [ "$(emitter_key_for test)" != "$emitter_before" ] && [ "$(cli_key_for test)" != "$cli_before" ] || {
+    echo "FAIL: $runtime_file did not change runtime build keys."
+    exit 1
+  }
+  cp "$WORK/runtime-original" "$ROOT/runtime/$runtime_file"
+done
 ROOT="$REAL_ROOT"
 echo 'checked: header-only mutation and restore move emitter and CLI keys — PASS.'

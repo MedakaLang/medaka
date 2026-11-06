@@ -1,0 +1,137 @@
+import backend.package_identity.{
+  PackageIdentity(..), IdentityDefect, packageDefects, renderIdentityDefect
+}
+import backend.runtime_layout.{abiVersion}
+import support.ordmap.{OrdMap, omEmpty, omInsert, omHasKey}
+import support.sexp_value.{SExp(..), parseSExp, renderSExp, atomInt}
+import map.{entries}
+import crypto.sha256_fast.{sha256Fast}
+import bytes.{encodeUtf8}
+import hex as Hex
+
+public export data PackageIdentityError =
+  | MalformedMetadata
+  | MalformedEnvelope
+  | IntegrityFailure
+  | MalformedPayload
+  | IncompatibleFormat
+  | InvalidAbi
+  | IncompatibleAbi
+  | StaleFingerprint
+  | InvalidTypeHigh
+  | InvalidFileHigh
+  | ExpectedRows
+  | InvalidRow
+  | InvalidNumber
+  | DuplicateName
+  | InvalidPackage (List IdentityDefect)
+  deriving (Eq, Debug, Display)
+
+export
+renderPackageIdentityError : PackageIdentityError -> String
+renderPackageIdentityError MalformedMetadata = "identity: malformed metadata"
+renderPackageIdentityError MalformedEnvelope = "identity: malformed envelope"
+renderPackageIdentityError IntegrityFailure = "identity: integrity failure"
+renderPackageIdentityError MalformedPayload = "identity: malformed payload"
+renderPackageIdentityError IncompatibleFormat = "identity: incompatible format"
+renderPackageIdentityError InvalidAbi = "identity: invalid ABI"
+renderPackageIdentityError IncompatibleAbi = "identity: incompatible ABI"
+renderPackageIdentityError StaleFingerprint = "identity: stale fingerprint"
+renderPackageIdentityError InvalidTypeHigh =
+  "identity: invalid type high-water mark"
+renderPackageIdentityError InvalidFileHigh =
+  "identity: invalid file high-water mark"
+renderPackageIdentityError ExpectedRows = "identity: expected rows"
+renderPackageIdentityError InvalidRow = "identity: invalid row"
+renderPackageIdentityError InvalidNumber = "identity: invalid number"
+renderPackageIdentityError DuplicateName = "identity: duplicate name"
+renderPackageIdentityError (InvalidPackage defects) =
+  stringJoin "; " (map renderIdentityDefect defects)
+
+hash : String -> String
+hash text = Hex.encode (sha256Fast (encodeUtf8 text))
+
+rows : List (String, Int) -> SExp
+rows pairs =
+  SList (map ((name, n) => SList [SAtom name, SAtom (intToString n)]) pairs)
+
+payload : PackageIdentity -> SExp
+payload p = SList [
+  SAtom "package-identity",
+  SAtom "1",
+  SAtom (intToString p.abi),
+  SAtom p.fingerprint,
+  SAtom (intToString p.typeHigh),
+  SAtom (intToString p.fileHigh),
+  rows (entries p.types),
+  rows (entries p.files),
+]
+
+export
+encodePackageIdentity : PackageIdentity -> String
+encodePackageIdentity p =
+  let body = payload p
+  renderSExp
+    (SList [SAtom "medaka-package-abi", SAtom (hash (renderSExp body)), body])
+
+readRows : SExp -> Result PackageIdentityError (List (String, Int))
+readRows (SList xs) = traverse readRow xs
+readRows _ = Err ExpectedRows
+
+readRow : SExp -> Result PackageIdentityError (String, Int)
+readRow (SList [SAtom name, n]) =
+  map (v => (name, v)) (mapErr (_ => InvalidNumber) (atomInt "number" n))
+readRow _ = Err InvalidRow
+
+uniqueRows : List (String, Int) -> Result PackageIdentityError (OrdMap Int)
+uniqueRows xs = uniqueRowsInto xs omEmpty
+
+uniqueRowsInto : List (String, Int) ->
+  OrdMap Int ->
+  Result PackageIdentityError (OrdMap Int)
+uniqueRowsInto [] acc = Ok acc
+uniqueRowsInto ((name, n) :: rest) acc =
+  if omHasKey name acc then
+    Err DuplicateName
+  else
+    uniqueRowsInto rest (omInsert name n acc)
+
+readPayload : String -> SExp -> Result PackageIdentityError PackageIdentity
+readPayload expected (SList [SAtom "package-identity", SAtom version, abiNode, SAtom fingerprint, typeHighNode, fileHighNode, typeRows, fileRows]) =
+  do
+    if version /= "1" then Err IncompatibleFormat else Ok ()
+    abi <- mapErr (_ => InvalidAbi) (atomInt "abi" abiNode)
+    if abi /= abiVersion then Err IncompatibleAbi else Ok ()
+    if fingerprint /= expected then Err StaleFingerprint else Ok ()
+    typeHigh <- mapErr (_ => InvalidTypeHigh) (atomInt "typeHigh" typeHighNode)
+    fileHigh <- mapErr (_ => InvalidFileHigh) (atomInt "fileHigh" fileHighNode)
+    ts <- readRows typeRows
+    fs <- readRows fileRows
+    types <- uniqueRows ts
+    files <- uniqueRows fs
+    let p = PackageIdentity {
+      fingerprint = fingerprint,
+      abi = abi,
+      types = types,
+      files = files,
+      typeHigh = typeHigh,
+      fileHigh = fileHigh,
+    }
+    match packageDefects p
+      [] => Ok p
+      defects => Err (InvalidPackage defects)
+readPayload _ _ = Err MalformedPayload
+
+export
+decodePackageIdentity : String ->
+  String ->
+  Result PackageIdentityError PackageIdentity
+decodePackageIdentity expected text = do
+  node <- mapErr (_ => MalformedMetadata) (parseSExp text)
+  match node
+    SList [SAtom "medaka-package-abi", SAtom digest, body] =>
+      if digest /= hash (renderSExp body) then
+        Err IntegrityFailure
+      else
+        readPayload expected body
+    _ => Err MalformedEnvelope

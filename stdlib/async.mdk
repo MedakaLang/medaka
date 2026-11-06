@@ -209,6 +209,9 @@ export
 expired : Wait e -> Async e Bool
 expired w = Suspend (u => Done (expiredNow w))
 
+{- | Checks a wait without yielding. A timer reads its carried clock; other waits
+   return False. The check performs the wait's effect row. -}
+export
 expiredNow : Wait e -> <e> Bool
 expiredNow (WaitUntil t (Timer now _)) = t <= now ()
 expiredNow _ = False

@@ -165,6 +165,10 @@ suites = [
   -- array 52 + core 138 = 190 after it (one doctest moved, two props added).
   ("array", (52, EvalAndNative)),
   ("async", (10, Eval)),
+  ("async_test", (2, NativeCapability)),
+  ("process_async_test", (12, NativeCapability)),
+  ("process", (1, NativeCapability)),
+  ("process_test", (3, NativeCapability)),
   -- The RFC 4648 vectors and the canonical-rejection checks. Neither of the
   -- two vehicles named in the header reaches this module, so without this
   -- row nothing would run them.
@@ -264,6 +268,7 @@ zeroAssertionModules = [
   ("crypto/sha256", Eval),
   ("crypto/sha256_fast", Eval),
   ("net_async", Eval),
+  ("process_async", NativeCapability),
 ]
 
 zeroAssertionNames : List String
@@ -444,6 +449,12 @@ test "stdlib/array.mdk executed >= 52 assertions" = floorExpectation "array"
 
 test "stdlib/async.mdk executed >= 10 assertions" = floorExpectation "async"
 
+test "stdlib/async_test.mdk executed >= 2 assertions" =
+  floorExpectation "async_test"
+
+test "stdlib/process_async_test.mdk executed >= 12 assertions" =
+  floorExpectation "process_async_test"
+
 test "stdlib/base32.mdk executed >= 28 assertions" = floorExpectation "base32"
 
 test "stdlib/base64.mdk executed >= 21 assertions" = floorExpectation "base64"
@@ -548,6 +559,11 @@ test "stdlib/string_test.mdk executed >= 21 assertions" =
 
 test "stdlib/test.mdk executed >= 72 assertions" = floorExpectation "test"
 
+test "stdlib/process.mdk executed >= 1 assertions" = floorExpectation "process"
+
+test "stdlib/process_test.mdk executed >= 3 assertions" =
+  floorExpectation "process_test"
+
 test "stdlib/test_process.mdk executed >= 31 assertions" =
   floorExpectation "test_process"
 
@@ -606,6 +622,9 @@ test "stdlib/crypto/sha256_fast.mdk runs 0 assertions" =
   zeroExpectation "crypto/sha256_fast"
 
 test "stdlib/net_async.mdk runs 0 assertions" = zeroExpectation "net_async"
+
+test "stdlib/process_async.mdk runs 0 assertions" =
+  zeroExpectation "process_async"
 
 -- # Non-vacuity
 
