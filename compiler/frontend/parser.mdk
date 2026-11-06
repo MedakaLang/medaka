@@ -172,6 +172,7 @@ skipNlFor _ = deferPure ()
 -- ladder: lam → or → and → cmp → cons → append → add → mul → app → postfix → atom
 parseExpr : Parser Expr
 parseExpr = defer
+  _ <- deferPure ()
   e <- parseAssign
   annotOpt e
 
@@ -181,6 +182,7 @@ parseExpr = defer
 -- survives resolve/typecheck only up to that lowering).
 parseAssign : Parser Expr
 parseAssign = defer
+  _ <- deferPure ()
   e <- parseLam
   assignOpt e
 
@@ -238,6 +240,7 @@ annotTail e = defer
 
 parseLam : Parser Expr
 parseLam = defer
+  _ <- deferPure ()
   e <- parsePipe
   lamOpt e
 
@@ -605,10 +608,13 @@ negUnaryFor _ = defer
 -- produces `TBacktickIdent` as a sentinel; a pre-grammar scan surfaces a located
 -- hint pointing at the backtick operator.
 parseInfix : Parser Expr
-parseInfix = parseApp
+parseInfix = defer
+  _ <- deferPure ()
+  parseApp
 
 parseApp : Parser Expr
 parseApp = defer
+  _ <- deferPure ()
   head <- parseAspat
   args <- many (appArg head)
   deferPure (applyAll head args)
@@ -724,10 +730,14 @@ headIsNumeric _ = False
 -- (a binding-LHS as-pattern, e.g. a lambda param `xs@rest =>`); else a postfix.
 -- AS_AT is only emitted by the lexer when `@` directly follows an identifier.
 parseAspat : Parser Expr
-parseAspat = parseOrElse parseAspatAt parsePostfix
+parseAspat = defer
+  _ <- deferPure ()
+  parseOrElse parseAspatAt parsePostfix
 
 parseAspatAt : Parser Expr
-parseAspatAt = located parseAspatAtRaw
+parseAspatAt = defer
+  _ <- deferPure ()
+  located parseAspatAtRaw
 
 parseAspatAtRaw : Parser Expr
 parseAspatAtRaw = defer
@@ -742,6 +752,7 @@ applyAll head (a :: rest) = applyAll (EApp head a) rest
 
 parsePostfix : Parser Expr
 parsePostfix = defer
+  _ <- deferPure ()
   e <- parseAtom
   postfixTail e
 
@@ -851,7 +862,8 @@ nestTooDeepMsg =
 -- The engine restores the shared invocation depth on success and both failure
 -- constructors; a decrement sequenced through a bind would miss failures.
 parseAtom : Parser Expr
-parseAtom =
+parseAtom = defer
+  _ <- deferPure ()
   withDepth maxNestDepth (FailMsg nestTooDeepMsg) (ParserE atomRawLocated)
 
 atomRawLocated : ParseContext -> Int -> PR Expr
@@ -941,12 +953,14 @@ braceItemsFor x _ = defer
 -- key is parsed at the pipe level (like the reference `expr_pipe`) so a `=>`
 -- ends the key rather than starting a lambda.
 parseKvOrE : Parser KvItem
-parseKvOrE =
+parseKvOrE = defer
+  _ <- deferPure ()
   parseOrElse parseKvField (parseOrElse parseKvBlockElem parseKvKVorElem)
 
 -- Gate B: a bare-INDENT block as a record-field / set-element value.
 parseKvBlockElem : Parser KvItem
 parseKvBlockElem = defer
+  _ <- deferPure ()
   e <- parseBracketBlock
   deferPure (KvElem e)
 
@@ -961,6 +975,7 @@ parseKvField = defer
 
 parseKvKVorElem : Parser KvItem
 parseKvKVorElem = defer
+  _ <- deferPure ()
   e <- parsePipe
   t <- peekP
   kvKVorElemFor e t
@@ -1076,6 +1091,7 @@ interpOpenFor _ = failP "expected interpolation open"
 
 interpRest : Parser (List InterpPart)
 interpRest = defer
+  _ <- deferPure ()
   e <- parseExpr
   t <- peekP
   interpRestFor e t
@@ -1121,7 +1137,9 @@ unrecordSoleStmt _ = deferPure ()
 
 -- a bracket element: a bare-INDENT block, or an ordinary expression.
 parseBracketElem : Parser Expr
-parseBracketElem = parseOrElse parseBracketBlock parseExpr
+parseBracketElem = defer
+  _ <- deferPure ()
+  parseOrElse parseBracketBlock parseExpr
 
 parseParen : Parser Expr
 parseParen = defer
@@ -1203,6 +1221,7 @@ sectionTail op _ = defer
 
 parseParenExpr : Parser Expr
 parseParenExpr = defer
+  _ <- deferPure ()
   es <- sepBy1 parseOrAltsExpr (expectTok TComma)
   optTrailingCommaTuple es
   expectTok TRParen
@@ -1212,6 +1231,7 @@ parseParenExpr = defer
 -- `|` has no other meaning in a parenthesized expression.
 parseOrAltsExpr : Parser Expr
 parseOrAltsExpr = defer
+  _ <- deferPure ()
   e <- parseBracketElem
   rest <- many orAltExpr
   deferPure (orExprOf e rest)
@@ -1394,6 +1414,7 @@ ifLet = defer
 
 ifPlain : Parser Expr
 ifPlain = defer
+  _ <- deferPure ()
   cond <- parseExpr
   expectTok TThen
   thenE <- parseBranch
@@ -1404,7 +1425,9 @@ ifPlain = defer
 -- without an `ELoc` so the typechecker can tell it from a written `()`
 -- (`isOmittedElse`, `compiler/types/typecheck.mdk`)
 elseBranch : Parser Expr
-elseBranch = parseOrElse elsePresent (deferPure (ELit LUnit))
+elseBranch = defer
+  _ <- deferPure ()
+  parseOrElse elsePresent (deferPure (ELit LUnit))
 
 elsePresent : Parser Expr
 elsePresent = defer
@@ -1413,11 +1436,15 @@ elsePresent = defer
 
 -- a then/else branch is either an inline expr or an indented statement block
 parseBranch : Parser Expr
-parseBranch = parseOrElse branchBlock parseExpr
+parseBranch = defer
+  _ <- deferPure ()
+  parseOrElse branchBlock parseExpr
 
 -- Same offside-block production as `parseBracketBlock`/`indentedBody` (#602).
 branchBlock : Parser Expr
-branchBlock = parseBracketBlock
+branchBlock = defer
+  _ <- deferPure ()
+  parseBracketBlock
 
 -- expression-level `let`: `let [mut] pat = e in e2`, function-let
 -- `let f a… = e in e2`, annotated `let [mut] x : ty = e in e2`, and
@@ -1629,7 +1656,9 @@ barSteerKind _ = MatchGuardBar
 -- binds tighter than `::` (see parsePatCons/parseAsPat below).  AS_AT is the
 -- lexer's `@`-adjacent-to-ident token; if it doesn't follow, parseOrElse backtracks.
 parsePat : Parser Pat
-parsePat = parsePatCons
+parsePat = defer
+  _ <- deferPure ()
+  parsePatCons
 
 -- `@` binds TIGHTER than `::`: `t@(A _)::rest` is `PCons (PAs t (A _)) rest`,
 -- not `PAs t (PCons (A _) rest)` (#812).  So the as-pattern is parsed as a cons
@@ -1647,6 +1676,7 @@ parseAsPat = defer
 
 parsePatCons : Parser Pat
 parsePatCons = defer
+  _ <- deferPure ()
   p <- parseOrElse parseAsPat parsePatApp
   parseOrElse (patConsTail p) (deferPure p)
 
@@ -1808,7 +1838,9 @@ reservedOrPatFail t = match reservedIdentKeyword t
 -- `parseAtom`'s own already-verified boundary: an expr-only input still only
 -- ever increments at `parseAtom`.
 parsePatAtom : Parser Pat
-parsePatAtom = withDepth maxNestDepth (FailMsg nestTooDeepMsg) parsePatAtomRaw
+parsePatAtom = defer
+  _ <- deferPure ()
+  withDepth maxNestDepth (FailMsg nestTooDeepMsg) parsePatAtomRaw
 
 parsePatAtomRaw : Parser Pat
 parsePatAtomRaw = defer
@@ -1988,6 +2020,7 @@ patParenFor _ = defer
 -- `p | q | ...` inside parentheses.
 parsePatAlts : Parser Pat
 parsePatAlts = defer
+  _ <- deferPure ()
   p <- parsePat
   rest <- many patAlt
   deferPure (orPatOf (p :: rest))
@@ -2022,6 +2055,7 @@ patListFor _ = defer
 -- so it fell through to `_ = []` and the constraint vanished at exit 0 (#604).
 parseTy : Parser Ty
 parseTy = defer
+  _ <- deferPure ()
   lhs <- parseTyFun
   parseOrElse (constraintTail lhs) (deferPure lhs)
 
@@ -2313,6 +2347,7 @@ tyArrowSkipLayout _ = deferPure False
 
 parseTyApp : Parser Ty
 parseTyApp = defer
+  _ <- deferPure ()
   head <- parseTyAtom
   args <- many parseTyAtom
   tyQualTail (tyApplyAll head args)
@@ -2429,7 +2464,9 @@ tyApplyAll head (a :: rest) = tyApplyAll (TyApp head a) rest
 -- so pathologically deep type nesting (e.g. `f : ((((Int)))) -> Int`) still
 -- exhausted the native stack with an unlocated exit 134.
 parseTyAtom : Parser Ty
-parseTyAtom = withDepth maxNestDepth (FailMsg nestTooDeepMsg) parseTyAtomRaw
+parseTyAtom = defer
+  _ <- deferPure ()
+  withDepth maxNestDepth (FailMsg nestTooDeepMsg) parseTyAtomRaw
 
 parseTyAtomRaw : Parser Ty
 parseTyAtomRaw = defer
@@ -2623,6 +2660,7 @@ allNames _ _ = None
 
 parseTyParenTuple : Parser Ty
 parseTyParenTuple = defer
+  _ <- deferPure ()
   ts <- sepBy1 parseTy (expectTok TComma)
   optTrailingCommaTuple ts
   expectTok TRParen
@@ -3474,7 +3512,9 @@ ifaceMembers = defer
   ifaceMembersLoop
 
 ifaceMembersLoop : Parser (List IfaceMethod)
-ifaceMembersLoop = parseOrElse ifaceMembersCons (deferPure [])
+ifaceMembersLoop = defer
+  _ <- deferPure ()
+  parseOrElse ifaceMembersCons (deferPure [])
 
 ifaceMembersCons : Parser (List IfaceMethod)
 ifaceMembersCons = defer
@@ -3608,7 +3648,9 @@ implMethods = defer
   implMethodsLoop
 
 implMethodsLoop : Parser (List ImplMethod)
-implMethodsLoop = parseOrElse implMethodsCons (deferPure [])
+implMethodsLoop = defer
+  _ <- deferPure ()
+  parseOrElse implMethodsCons (deferPure [])
 
 implMethodsCons : Parser (List ImplMethod)
 implMethodsCons = defer
@@ -3675,10 +3717,13 @@ parseGuardArms = defer
   guardArmsLoop
 
 guardArmsLoop : Parser (List GuardArm)
-guardArmsLoop = parseOrElse guardArmsCons (deferPure [])
+guardArmsLoop = defer
+  _ <- deferPure ()
+  parseOrElse guardArmsCons (deferPure [])
 
 guardArmsCons : Parser (List GuardArm)
 guardArmsCons = defer
+  _ <- deferPure ()
   a <- parseGuardArm
   skipNewlines
   rest <- guardArmsLoop
@@ -3741,6 +3786,7 @@ eqGuardShapeP =
 -- isn't swallowed as a lambda, and `<-`/`,` stay as the bind/separator tokens.
 parseGuard : Parser Guard
 parseGuard = defer
+  _ <- deferPure ()
   e <- parseOr
   t <- peekP
   guardFor e t
@@ -3798,6 +3844,7 @@ tyParamFor t = defer
 
 kindP : Parser KindAnn
 kindP = defer
+  _ <- deferPure ()
   a <- kindAtomP
   t <- peekP
   kindArrowRest a t
@@ -4138,12 +4185,15 @@ derivedNameP = defer
 -- a decl body is an inline expr, or an INDENT block of statements: a single
 -- expression statement unwraps to that expr; anything else becomes an EBlock
 parseBody : Parser Expr
-parseBody = parseOrElse indentedBody parseBodyExpr
+parseBody = defer
+  _ <- deferPure ()
+  parseOrElse indentedBody parseBodyExpr
 
 -- an inline body expr, optionally followed by a Haskell-style `where` block:
 -- `<expr> INDENT where INDENT bindings DEDENT NEWLINE DEDENT` → ELetGroup
 parseBodyExpr : Parser Expr
 parseBodyExpr = defer
+  _ <- deferPure ()
   e <- parseExpr
   parseOrElse (whereEol e) (parseOrElse (whereTail e) (deferPure e))
 
@@ -4174,10 +4224,13 @@ parseWhereBindings = defer
   whereBindingsLoop
 
 whereBindingsLoop : Parser (List (String, List Pat, Expr, Loc))
-whereBindingsLoop = parseOrElse whereBindingsCons (deferPure [])
+whereBindingsLoop = defer
+  _ <- deferPure ()
+  parseOrElse whereBindingsCons (deferPure [])
 
 whereBindingsCons : Parser (List (String, List Pat, Expr, Loc))
 whereBindingsCons = defer
+  _ <- deferPure ()
   b <- parseWhereBinding
   skipNewlines
   rest <- whereBindingsLoop
@@ -4258,7 +4311,9 @@ coalesceStep name site acc n ps b nsite rest
 -- to a single definition; both call sites keep their own name since each is
 -- reached from a different grammar context.
 indentedBody : Parser Expr
-indentedBody = parseBracketBlock
+indentedBody = defer
+  _ <- deferPure ()
+  parseBracketBlock
 
 blockOrExpr : List DoStmt -> Expr
 blockOrExpr [DoExpr e] = e
@@ -4266,13 +4321,17 @@ blockOrExpr stmts = EBlock stmts
 
 -- `do <INDENT stmt block DEDENT>` → a monadic do-block
 parseDo : Parser Expr
-parseDo = parseDoBlock TDo False
+parseDo = defer
+  _ <- deferPure ()
+  parseDoBlock TDo False
 
 -- `defer <INDENT stmt block DEDENT>` → a deferred do-block (#824).  Identical
 -- grammar to `do`; only the EDo flag differs, which routes desugar to
 -- `deferThen`/`deferPure` instead of `andThen`/`pure`.
 parseDefer : Parser Expr
-parseDefer = parseDoBlock TDefer True
+parseDefer = defer
+  _ <- deferPure ()
+  parseDoBlock TDefer True
 
 parseDoBlock : Token -> Bool -> Parser Expr
 parseDoBlock herald _deferred = defer
@@ -4326,7 +4385,9 @@ blockWord _ = "do"
 -- be an indented block.  Without this the lexer's (correct, oracle-identical)
 -- `LET n EQUAL INDENT … DEDENT` stream had no parser rule and failed to parse.
 parseRhsExpr : Parser Expr
-parseRhsExpr = parseOrElse parseBracketBlock parseExpr
+parseRhsExpr = defer
+  _ <- deferPure ()
+  parseOrElse parseBracketBlock parseExpr
 
 parseStmts : Parser (List DoStmt)
 parseStmts = defer
@@ -4334,10 +4395,13 @@ parseStmts = defer
   stmtsLoop
 
 stmtsLoop : Parser (List DoStmt)
-stmtsLoop = parseOrElse stmtsCons (deferPure [])
+stmtsLoop = defer
+  _ <- deferPure ()
+  parseOrElse stmtsCons (deferPure [])
 
 stmtsCons : Parser (List DoStmt)
 stmtsCons = defer
+  _ <- deferPure ()
   ss <- parseStmt
   skipNewlines
   rest <- stmtsLoop

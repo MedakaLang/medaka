@@ -1366,7 +1366,7 @@ export
 compileValue : (String -> Option Int) ->
   SqlExpr ->
   Result String (List Cell -> Cell)
-compileValue = compileOperand
+compileValue lookup e = compileOperand lookup e
 
 -- ---------------------------------------------------------------------------
 -- CASE evaluation

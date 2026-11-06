@@ -1556,3 +1556,10 @@ export
 topLevelEffectMsg : String -> String -> String
 topLevelEffectMsg name row =
   "top-level value `\{name}` performs \{row} when it is initialised; a top-level value is initialised once at startup and must have an empty effect row. Make it a function, `\{name} () = ...`, and call `\{name} ()` where it is read"
+
+-- [path] runs from the value through the nodes its initialiser evaluates back to the value,
+-- an impl node spelled `impl I T`.
+export
+cyclicValueMsg : String -> List String -> String
+cyclicValueMsg name path =
+  "top-level value `\{name}` evaluates itself while it is initialised, through `\{joinWith " -> " path}`; a top-level value is initialised once, in dependency order, so it cannot depend on itself. Make it a function, `\{name} () = ...`, or move the recursive reference under a `defer` block or a lambda that initialisation does not call"

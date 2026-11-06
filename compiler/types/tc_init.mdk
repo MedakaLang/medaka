@@ -1,9 +1,10 @@
--- tc_init: the initialisation graph of one module's top-level values and the order it implies.
+-- tc_init: the initialisation graph of one module's top-level values, the two rules read off
+-- it (purity, value cycles) and the order it implies.
 -- The nodes are the module's top-level bindings and one node per local `impl`; a node's
 -- mentions are what its bodies may reach, each with the position the cycle rule reads.
 --
--- Spec: language-design "Top-level initialisation (L1)", I1 (order), I3 (value cycles), I6
--- (constrained nullary bindings).  The position split is OCaml `Rec_check`'s
+-- Spec: language-design "Top-level initialisation (L1)", I1 (order), I2 (purity), I3 (value
+-- cycles), I6 (constrained nullary bindings).  The position split is OCaml `Rec_check`'s
 -- Dereference/Guard/Delay modes lifted to the module graph.
 --
 -- The walk over-approximates by construction: a missing mention becomes an uninitialised read
@@ -46,9 +47,9 @@ import support.ordmap.{
   OrdMap, omEmpty, omFromPairs, omHasKey, omInsert, omLookup, omMapValues
 }
 import support.scc.{tarjanSCCs}
-import support.util.{isEmptyL, isNonEmptyL, reverseL}
+import support.util.{isEmptyL, isNonEmptyL, joinWith, reverseL}
 import types.effect_rows.{renderAtoms, rowFlat}
-import types.repr.{IfaceRef(..), Scheme(..), VecObl(..)}
+import types.repr.{IfaceRef(..), Scheme(..), VecObl(..), ppTyAtom}
 import types.tc_env.{
   ceRowIface, ceRowMethods, ceRowSupers, ieRowTriple, ieRowsVisibleAt,
   methodRowIface
@@ -127,9 +128,11 @@ public export data InitNodeKind =
   | ImplNode
   deriving (Eq, Debug)
 
--- [inodeOrder] is the node's source position among the module's nodes.
+-- [inodeOrder] is the node's source position among the module's nodes; [inodeLabel] is
+-- how a diagnostic spells the node, `impl I T` for an impl.
 public export data InitNode = InitNode {
   inodeName : String,
+  inodeLabel : String,
   inodeKind : InitNodeKind,
   inodeOrder : Int,
   inodeLoc : Option Loc,
@@ -144,42 +147,157 @@ public export data InitGraph = InitGraph {
 
 -- ── the rules ────────────────────────────────────────────────────────────────
 
--- A top-level value whose initialiser has a non-empty forcing row (I2): [ivRow] is the row
--- as the signature would write it.
-public export data InitViolation = InitViolation {
-  ivName : String,
-  ivRow : String,
-  ivLoc : Option Loc,
-}
+-- A top-level value that breaks a rule, with the value's name and its binding's location:
+-- I2 with the row it performs, as a signature would write it; I3 with the labels of the path
+-- from the value back to itself.
+public export data InitViolation =
+  | ImpureValue String String (Option Loc)
+  | CyclicValue String (List String) (Option Loc)
 
--- I2: every initialised value node (not a function, an impl, `main` or a constrained
--- nullary binding) must have an empty forcing row in its inferred scheme.  A row tail that
--- is unsolved counts as empty: only labels make a row non-empty.  The source annotation is
--- not read, so a row-less signature over an effectful body is rejected.
+-- The rules over every initialised value node (not a function, an impl, `main` or a
+-- constrained nullary binding), purity before cycles for each.
 export
 checkInitRules : InitInputs -> InitGraph -> List InitViolation
 checkInitRules inputs g =
+  let values =
+    filter
+      (n =>
+        n.inodeKind == ValueNode
+          && not (omHasKey n.inodeName g.igraphNotInitialised))
+      g.igraphNodes
+  let reach = valueReach g values
+  let labels =
+    fold
+      (acc n =>
+        if n.inodeKind == ImplNode then
+          omInsert n.inodeName n.inodeLabel acc
+        else
+          acc)
+      omEmpty
+      g.igraphNodes
   flatMap
-    (n =>
-      if n.inodeKind == ValueNode
-        && not (omHasKey n.inodeName g.igraphNotInitialised) then
-        purityViolation inputs n
-      else
-        [])
-    g.igraphNodes
+    (n => purityViolation inputs n ++ cycleViolation reach labels n)
+    values
 
+-- The may-reach components I3 reads, or `None` when every value is alone in its own.  A
+-- value that evaluates no node, or that no other node mentions, is alone in its component,
+-- so the components are computed only when some node mentions a value that evaluates one.
+valueReach : InitGraph -> List InitNode -> Option MayReach
+valueReach g values =
+  let evaluating =
+    fold
+      (acc n =>
+        if any (m => m.mentionPosition == AtDeref) n.inodeMentions then
+          omInsert n.inodeName () acc
+        else
+          acc)
+      omEmpty
+      values
+  let entered =
+    isNonEmptyL values
+      && any
+        (n =>
+          any
+            (m =>
+              m.mentionTarget /= n.inodeName
+                && omHasKey m.mentionTarget evaluating)
+            n.inodeMentions)
+        g.igraphNodes
+  if entered then Some (mayReach g) else None
+
+-- I2: the value's inferred scheme must have an empty forcing row.  A row tail that is
+-- unsolved counts as empty: only labels make a row non-empty.  The source annotation is not
+-- read, so a row-less signature over an effectful body is rejected.
 purityViolation : InitInputs -> InitNode -> List InitViolation
 purityViolation inputs n = match omLookup n.inodeName inputs.iiSchemes
   Some (Forall _ _ _ _ force _) => match fst (rowFlat force)
     [] => []
-    labels => [
-      InitViolation {
-        ivName = n.inodeName,
-        ivRow = "<\{renderAtoms labels}>",
-        ivLoc = n.inodeLoc,
-      },
-    ]
+    labels => [ImpureValue n.inodeName "<\{renderAtoms labels}>" n.inodeLoc]
   None => []
+
+-- I3: the value is rejected when it evaluates (`AtDeref`) a node of its own may-reach
+-- component, itself included.  `AtGuard` and `AtDelay` mentions only read.  The path is the
+-- shortest one back to the value whose first hop is such an evaluation; a later hop is any
+-- mention inside the component, since a function or impl node's body may run when called.
+cycleViolation : Option MayReach ->
+  OrdMap String ->
+  InitNode ->
+  List InitViolation
+cycleViolation reach labels n =
+  let c = match reach
+    Some r => omLookup n.inodeName r.mrComp
+    None => None
+  let inGroup t = match reach
+    Some r => omLookup t r.mrComp == c
+    None => t == n.inodeName
+  let starts =
+    fold
+      (acc m =>
+        if m.mentionPosition == AtDeref && inGroup m.mentionTarget then
+          m.mentionTarget :: acc
+        else
+          acc)
+      []
+      n.inodeMentions
+  match starts
+    [] => []
+    _ =>
+      let path = match reach
+        Some r => pathBack r c n.inodeName (reverseL starts)
+        None => [n.inodeName]
+      [
+        CyclicValue
+          n.inodeName
+          (map (x => optionOr x (omLookup x labels)) (n.inodeName :: path))
+          n.inodeLoc,
+      ]
+
+-- The shortest path from one of [starts] to [goal] inside component [c], [goal] last.
+pathBack : MayReach -> Option Int -> String -> List String -> List String
+pathBack reach c goal starts =
+  if any (== goal) starts then
+    [goal]
+  else
+    searchBack
+      reach
+      c
+      goal
+      starts
+      (fold (acc s => omInsert s None acc) omEmpty starts)
+
+-- Breadth-first from [frontier]; [parents] maps each node seen to the node it was reached
+-- from, `None` for a start.
+searchBack : MayReach ->
+  Option Int ->
+  String ->
+  List String ->
+  OrdMap (Option String) ->
+  List String
+searchBack _ _ goal [] _ = [goal]
+searchBack reach c goal frontier parents =
+  let (next, seen) =
+    fold
+      (st x =>
+        fold
+          (st2 t => match st2
+            (nx, ps) =>
+              if omLookup t reach.mrComp == c && not (omHasKey t ps) then
+                (t :: nx, omInsert t (Some x) ps)
+              else
+                (nx, ps))
+          st
+          (optionOr [] (omLookup x reach.mrAdj)))
+      ([], parents)
+      frontier
+  if omHasKey goal seen then
+    unwindPath seen goal []
+  else
+    searchBack reach c goal (reverseL next) seen
+
+unwindPath : OrdMap (Option String) -> String -> List String -> List String
+unwindPath parents x acc = match omLookup x parents
+  Some (Some p) => unwindPath parents p (x :: acc)
+  _ => x :: acc
 
 -- ── the input projection ─────────────────────────────────────────────────────
 
@@ -336,6 +454,7 @@ tyConstraintKeys (TyAuth _ _) acc = acc
 -- type is declared here.
 data RawNode = RawNode {
   rnodeName : String,
+  rnodeLabel : String,
   rnodeKind : InitNodeKind,
   rnodeArity : Int,
   rnodeLoc : Option Loc,
@@ -388,6 +507,7 @@ rawNodesGo mid k ((DLetGroup _ binds) :: rest) acc =
 rawNodesGo mid k ((DImpl { iface, tys, methods, implOrigin }) :: rest) acc =
   let node = RawNode {
     rnodeName = "impl#\{intToString k}:\{iface}",
+    rnodeLabel = joinWith " " ("impl" :: iface :: map ppTyAtom tys),
     rnodeKind = ImplNode,
     rnodeArity = 0,
     rnodeLoc = None,
@@ -428,6 +548,7 @@ addClause n ps body site acc = bindingNode n [(ps, body)] (Some site) :: acc
 bindingNode : String -> List (List Pat, Expr) -> Option Loc -> RawNode
 bindingNode n bodies loc = RawNode {
   rnodeName = n,
+  rnodeLabel = n,
   rnodeKind = FunctionNode,
   rnodeArity = match bodies
     (ps, _) :: _ => length ps
@@ -563,6 +684,7 @@ walkNodes w defaults k (n :: rest) acc =
     rest
     (InitNode {
         inodeName = n.rnodeName,
+        inodeLabel = n.rnodeLabel,
         inodeKind = n.rnodeKind,
         inodeOrder = k,
         inodeLoc = n.rnodeLoc,
@@ -1196,14 +1318,7 @@ export
 initOrder : InitGraph -> List String
 initOrder g =
   let nodes = g.igraphNodes
-  let adj =
-    omFromPairs
-      (map
-        (n => (n.inodeName, map (m => m.mentionTarget) n.inodeMentions))
-        nodes)
-      omEmpty
-  let sccs = tarjanSCCs (map (n => n.inodeName) nodes) adj
-  let compOf = componentIndex sccs 0 omEmpty
+  let compOf = (mayReach g).mrComp
   let members = componentMembers compOf (reverseL nodes) empty
   let deps = componentDeps compOf nodes empty
   let indegree = M.mapWithKey (_ ds => M.size ds) deps
@@ -1226,6 +1341,27 @@ initOrder g =
       empty
       members
   reverseL (kahn g members dependents indegree ready [])
+
+-- The may-reach relation, every mention of every node, and its strongly connected
+-- components: [mrComp] numbers each node's component.
+data MayReach = MayReach { mrAdj : OrdMap (List String), mrComp : OrdMap Int }
+
+mayReach : InitGraph -> MayReach
+mayReach g =
+  let adj =
+    omFromPairs
+      (map
+        (n => (n.inodeName, map (m => m.mentionTarget) n.inodeMentions))
+        g.igraphNodes)
+      omEmpty
+  MayReach {
+    mrAdj = adj,
+    mrComp =
+      componentIndex
+        (tarjanSCCs (map (n => n.inodeName) g.igraphNodes) adj)
+        0
+        omEmpty,
+  }
 
 componentIndex : List (List String) -> Int -> OrdMap Int -> OrdMap Int
 componentIndex [] _ acc = acc

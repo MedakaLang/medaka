@@ -1,2 +1,3 @@
 TYPE ERROR: type mismatch: Int vs String
 TYPE ERROR: no impl of Num for String
+TYPE ERROR: top-level value `cell` evaluates itself while it is initialised, through `cell -> helper -> cell`; a top-level value is initialised once, in dependency order, so it cannot depend on itself. Make it a function, `cell () = ...`, or move the recursive reference under a `defer` block or a lambda that initialisation does not call

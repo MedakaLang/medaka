@@ -17,7 +17,7 @@ import frontend.desugar.{desugar}
 import frontend.parser.{parse, parseWithPositionsLocated}
 import frontend.resolve.{stampGraphTyOrigins}
 import support.ordmap.{omEmpty, omFromNames, omHasKey}
-import support.util.{isEmptyL, orElseOpt, sortUniqS}
+import support.util.{isEmptyL, joinWith, orElseOpt, sortUniqS}
 import test.{expectAll, expectEqual, expectTrue}
 import types.repr.{Scheme}
 import types.tc_decls.{buildDeclEnvs, declEnvModulesFrom}
@@ -696,10 +696,14 @@ locatedParse : String -> List Decl
 locatedParse src = fst (parseWithPositionsLocated src)
 
 violationTag : InitViolation -> String
-violationTag v = match v.ivLoc
-  Some (Loc _ l c _ _) =>
-    "\{v.ivName} \{v.ivRow} \{intToString l}:\{intToString c}"
-  None => "\{v.ivName} \{v.ivRow}"
+violationTag (ImpureValue name row loc) = locatedTag "\{name} \{row}" loc
+violationTag (CyclicValue name path loc) =
+  locatedTag "\{name}: \{joinWith " -> " path}" loc
+
+locatedTag : String -> Option Loc -> String
+locatedTag what (Some (Loc _ l c _ _)) =
+  "\{what} \{intToString l}:\{intToString c}"
+locatedTag what None = what
 
 effPrefix : String
 effPrefix =
@@ -796,3 +800,273 @@ test "a value annotated with its row is rejected (count, #4183)" =
         ),
       ]
       [])
+
+-- ── value cycles (I3) ────────────────────────────────────────────────────────
+
+-- The cycle violations of the last of [mods], each as `name: path`.  A value is rejected
+-- when it evaluates (`deref`) a node of its own may-reach component; the path is the
+-- shortest one back to the value whose first hop is such an evaluation.
+cyclesOf : List (String, String) -> List String -> List String
+cyclesOf mods imported =
+  let inputs = inputsOf mods imported
+  flatMap cycleTag (checkInitRules inputs (initGraphOf inputs))
+
+cycleTag : InitViolation -> List String
+cycleTag (CyclicValue name path _) = ["\{name}: \{joinWith " -> " path}"]
+cycleTag (ImpureValue _ _ _) = []
+
+cyclesOne : String -> List String
+cyclesOne src = cyclesOf [("m", src)] []
+
+givesBox : String
+givesBox = "interface Gives a where\n  give : a -> Int\n\ndata Box = Box\n\n"
+
+test "a value reading itself as an operand is rejected (cyc)" =
+  expectEqual ["x: x -> x"] (cyclesOne "x : Int\nx = x + 1\n")
+
+test "only the value that evaluates its partner is rejected (mcyc)" =
+  expectEqual
+    ["ys: ys -> xs -> ys"]
+    (cyclesOne
+      "xs : List Int\nxs = 1 :: ys\n\nys : List Int\nys = map (+ 1) xs\n")
+
+test "a value reaching itself through a local impl is rejected (dcyc)" =
+  expectEqual
+    ["total: total -> impl Gives Box -> total"]
+    (cyclesOne
+      (givesBox
+        ++ "impl Gives Box where\n  give _ = total + 1\n\ntotal : Int\ntotal = give Box\n"))
+
+test "an imported value reaching a local orphan impl is rejected (orph)" =
+  let lib =
+    "export interface Gives a where\n  give : a -> Int\n\npublic export data Box = Box\n\nexport\nuseGives : Box -> Int\nuseGives b = give b\n"
+  let main =
+    "import lib.{Gives, Box(..), useGives}\n\nimpl Gives Box where\n  give _ = total + 1\n\ntotal : Int\ntotal = useGives Box\n"
+  expectEqual
+    ["total: total -> impl Gives Box -> total"]
+    (cyclesOf [("lib", lib), ("main", main)] ["useGives"])
+
+test "a call constrained on a sub-interface reaching a super impl is rejected (sup)" =
+  let lib =
+    "export interface Sup a where\n  sup : a -> Int\n\nexport interface Sub a requires Sup a where\n  sub : a -> Int\n\nexport\nviaSub : Sub a => a -> Int\nviaSub x = sup x\n"
+  let main =
+    "import lib.{Sup, Sub, viaSub}\n\ndata Box = Box\n\nimpl Sup Box where\n  sup _ = total + 1\n\nimpl Sub Box where\n  sub _ = 0\n\ntotal : Int\ntotal = viaSub Box\n"
+  expectEqual
+    ["total: total -> impl Sup Box -> total"]
+    (cyclesOf [("lib", lib), ("main", main)] ["viaSub"])
+
+test "an operator reaching its impl is rejected (opcyc)" =
+  expectEqual
+    ["total: total -> impl Eq Box -> total"]
+    (cyclesOne
+      "interface Eq a where\n  eq : a -> a -> Bool\n\ndata Box = Box\n\nimpl Eq Box where\n  eq _ _ = total > 0\n\ntotal : Int\ntotal = if Box == Box then 1 else 0\n")
+
+test "a literal reaching fromInt's impl is rejected (litcyc)" =
+  expectEqual
+    ["total: total -> impl Num Box -> total"]
+    (cyclesOne
+      "interface Num a where\n  fromInt : Int -> a\n\ndata Box = Box Int\n\nimpl Num Box where\n  fromInt n = Box (n + unbox total)\n\nunbox : Box -> Int\nunbox (Box n) = n\n\ntotal : Box\ntotal = 1\n")
+
+test "a method whose imported default body runs the local impl is rejected (dflt)" =
+  let lib =
+    "export interface Gives a where\n  give : a -> Int\n  other : a -> Int\n  give x = other x + 1\n"
+  let main =
+    "import lib.{Gives, give}\n\ndata Box = Box\n\nimpl Gives Box where\n  other _ = total\n\ntotal : Int\ntotal = give Box\n"
+  expectEqual
+    ["total: total -> impl Gives Box -> total"]
+    (cyclesOf [("lib", lib), ("main", main)] ["give"])
+
+test "a method reaching a local impl through an impl's requires is rejected (reqcyc)" =
+  let lib =
+    "export interface Gives a where\n  give : a -> Int\n\nexport interface Describe a where\n  describe : a -> Int\n\nexport impl Gives (List a) requires Describe a where\n  give xs = sum (map describe xs)\n"
+  let main =
+    "import lib.{Gives, Describe, give, describe}\n\ndata Box = Box\n\nimpl Describe Box where\n  describe _ = total + 1\n\ntotal : Int\ntotal = give [Box]\n"
+  expectEqual
+    ["total: total -> impl Describe Box -> total"]
+    (cyclesOf [("lib", lib), ("main", main)] ["give", "describe"])
+
+test "a method reaching a local impl through its own constraint is rejected (mlcyc)" =
+  let lib =
+    "export interface Describe a where\n  describe : a -> Int\n\nexport interface Gives a where\n  give : Describe b => a -> b -> Int\n\nexport impl Gives Int where\n  give n b = n + describe b\n"
+  let main =
+    "import lib.{Gives, Describe, give, describe}\n\ndata Box = Box\n\nimpl Describe Box where\n  describe _ = total + 1\n\ntotal : Int\ntotal = give 1 Box\n"
+  expectEqual
+    ["total: total -> impl Describe Box -> total"]
+    (cyclesOf [("lib", lib), ("main", main)] ["give", "describe"])
+
+test "an operator reaching a local impl through a container impl's requires is rejected" =
+  let lib =
+    "export interface Eq a where\n  eq : a -> a -> Bool\n\nexport interface Hashable a where\n  hash : a -> Int\n\npublic export data Bag a = Bag a\n\nexport impl Eq (Bag a) requires Hashable a where\n  eq _ _ = True\n"
+  let main =
+    "import lib.{Eq, Hashable, Bag(..)}\n\ndata Box = Box\n\nimpl Hashable Box where\n  hash _ = total\n\ntotal : Int\ntotal = if Bag Box == Bag Box then 1 else 0\n"
+  expectEqual
+    ["total: total -> impl Hashable Box -> total"]
+    (cyclesOf [("lib", lib), ("main", main)] [])
+
+test "an imported generic taking a local impl's dictionary is rejected (cdict)" =
+  let lib =
+    "export interface Gives a where\n  give : a -> Int\n\nexport\nviaG : Gives a => a -> Int\nviaG x = give x\n"
+  let main =
+    "import lib.{Gives, give, viaG}\n\ndata Box = Box\n\nimpl Gives Box where\n  give _ = total + 1\n\ntotal : Int\ntotal = viaG Box\n"
+  expectEqual
+    ["total: total -> impl Gives Box -> total"]
+    (cyclesOf [("lib", lib), ("main", main)] ["give", "viaG"])
+
+test "a constrained call reached through a re-export is rejected" =
+  let lib =
+    "export interface Gives a where\n  give : a -> Int\n\nexport\nviaG : Gives a => a -> Int\nviaG x = give x\n"
+  let mid = "export import lib.{Gives, viaG}\n"
+  let main =
+    "import mid.{Gives, viaG}\n\ndata Box = Box\n\nimpl Gives Box where\n  give _ = total + 1\n\ntotal : Int\ntotal = viaG Box\n"
+  expectEqual
+    ["total: total -> impl Gives Box -> total"]
+    (cyclesOf [("lib", lib), ("mid", mid), ("main", main)] ["viaG"])
+
+test "a lambda applied during initialisation is rejected (lamcyc)" =
+  expectEqual
+    ["total: total -> total"]
+    (cyclesOne
+      "apply0 : (Unit -> Int) -> Int\napply0 f = f ()\n\ntotal : Int\ntotal = apply0 (_ => total + 1)\n")
+
+test "a local function called during initialisation is rejected (letfcyc)" =
+  expectEqual
+    ["total: total -> total"]
+    (cyclesOne "total : Int\ntotal =\n  let f _ = total + 1\n  f ()\n")
+
+test "a local where function called during initialisation is rejected" =
+  expectEqual
+    ["total: total -> total"]
+    (cyclesOne
+      "total : Int\ntotal = helper 1\n  where\n    helper n = total + n\n")
+
+test "a lambda under an evaluated call is rejected (mapcyc)" =
+  expectEqual
+    ["total: total -> total"]
+    (cyclesOne
+      "total : Int\ntotal = optionOr 0 (head (map (_ => total + 1) [1]))\n")
+
+test "a defer block run during initialisation is rejected (runcyc)" =
+  expectEqual
+    ["total: total -> total"]
+    (cyclesOne
+      "total : Int\ntotal = runAsync (defer\n  x <- deferPure 1\n  deferPure (x + total))\n")
+
+test "a value running a stored defer block that reads it is rejected (storedcyc)" =
+  expectEqual
+    ["total: total -> p -> total"]
+    (cyclesOne
+      "p = defer\n  x <- deferPure 1\n  deferPure (x + total)\n\ntotal : Int\ntotal = runAsync p\n")
+
+test "a value calling a stored lambda that reads it is rejected (wrapcyc)" =
+  expectEqual
+    ["total: total -> p -> total"]
+    (cyclesOne
+      "data Wrap = Wrap (Unit -> Int)\n\ncallW : Wrap -> Int\ncallW (Wrap f) = f ()\n\np : Wrap\np = Wrap (u => total + 1)\n\ntotal : Int\ntotal = callW p\n")
+
+test "a receiver of an exempt deferThen that reads the value is rejected (lzcyc3)" =
+  expectEqual
+    ["total: total -> total"]
+    (cyclesOne
+      "data Lz = Lz (Unit -> Int) (Unit -> Int)\n\npeek : Lz -> Int\npeek (Lz p _) = p ()\n\ntotal = deferThen (Lz (u => peek total + 1) (u => 1)) (x => deferPure x)\n")
+
+test "a continuation of an imported plain deferThen is not delayed (fakedefer2)" =
+  let lib =
+    "public export data P a = P a\n\nexport\nrunP : P a -> a\nrunP (P a) = a\n\nexport\ndeferThen : P a -> (a -> P b) -> P b\ndeferThen p k = k (runP p)\n"
+  let main =
+    "import lib.{P(..), runP, deferThen}\n\ntotal : P Int\ntotal = deferThen (P 1) (_ => P (runP total + 1))\n"
+  expectEqual
+    ["total: total -> total"]
+    (cyclesOf [("lib", lib), ("main", main)] ["runP", "deferThen"])
+
+test "interpRest: a defer receiver in the value's group is rejected" =
+  expectEqual
+    [
+      "interpRest: interpRest -> parseExpr -> parseAtom -> interpRest",
+      "parseExpr: parseExpr -> parseAtom -> interpRest -> parseExpr",
+      "parseAtom: parseAtom -> interpRest -> parseExpr -> parseAtom",
+    ]
+    (cyclesOne
+      """
+interpRest = defer
+  e <- parseExpr
+  t <- peekP
+  interpRestFor e t
+
+interpRestFor e t = defer
+  rest <- interpRest
+  deferPure (e :: rest)
+
+parseExpr = defer
+  r <- parseAtom
+  deferPure r
+
+parseAtom = defer
+  s <- interpRest
+  deferPure s
+""")
+
+test "the measured repair, a first bind outside the group, admits interpRest" =
+  expectEqual
+    []
+    (cyclesOne
+      """
+interpRest = defer
+  _ <- deferPure ()
+  e <- parseExpr
+  interpRestFor e
+
+interpRestFor e = defer
+  rest <- interpRest
+  deferPure (e :: rest)
+
+parseExpr = defer
+  _ <- deferPure ()
+  r <- interpRest
+  deferPure r
+""")
+
+test "a value reading a local impl outside its group is admitted (dok)" =
+  expectEqual
+    []
+    (cyclesOne
+      (givesBox
+        ++ "impl Gives Box where\n  give _ = base + 1\n\nbase : Int\nbase = 41\n\ntotal : Int\ntotal = give Box\n"))
+
+test "values with no cycle are admitted; an effectful one is I2's, not I3's (refg, ex, eff)" =
+  let eff = effPrefix ++ "main = putStrLn \"ok\"\n\nside = putStrLn \"BOOM\"\n"
+  expectAll [
+    expectEqual
+      []
+      (cyclesOne
+        "counter = Ref 0\n\nmain =\n  counter := 5\n  println !counter\n"),
+    expectEqual [] (cyclesOne "main = putStrLn \"ok\"\n\nside = exit 3\n"),
+    expectEqual [] (cyclesOne eff),
+    expectEqual
+      ["side <Stdout> 5:0"]
+      (purityOfParsed locatedParse [("m", eff)] []),
+  ]
+
+test "a self-recursive deferred value is admitted; one that maps over itself is not (dloop)" =
+  expectEqual
+    ["loop3: loop3 -> loop3"]
+    (cyclesOne
+      "loop1 = defer\n  x <- deferPure 1\n  loop1\n\nloop2 = deferThen (deferPure 1) (x => loop2)\n\nloop3 = deferMap (x => x + 1) loop3\n")
+
+test "recursive functions and a self-mentioning lambda value are admitted" =
+  expectEqual
+    []
+    (cyclesOne
+      "fact : Int -> Int\nfact n = if n == 0 then 1 else n * fact (n - 1)\n\nisEven : Int -> Bool\nisEven n = if n == 0 then True else isOdd (n - 1)\n\nisOdd : Int -> Bool\nisOdd n = if n == 0 then False else isEven (n - 1)\n\nspin : Int -> Int\nspin = x => if x == 0 then 0 else spin (x - 1)\n\nsix : Int\nsix = fact 3\n")
+
+test "an imported main is never initialised and its module is admitted" =
+  let lib = "main = println helper\n\nhelper = 2\n"
+  let entry = "import lib.{main}\n\nlocal = 3\n"
+  expectAll [
+    expectEqual [] (cyclesOne lib),
+    expectEqual [] (cyclesOf [("lib", lib), ("entry", entry)] ["main"]),
+  ]
+
+test "main reading a cyclic value is exempt; the value is not" =
+  expectEqual
+    ["x: x -> x"]
+    (cyclesOne "main = println x\n\nx : Int\nx = x + 1\n")
