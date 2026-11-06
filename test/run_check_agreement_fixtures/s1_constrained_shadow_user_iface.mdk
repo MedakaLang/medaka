@@ -1,5 +1,6 @@
--- S-1: `Num` is not special -- a USER interface as the standalone's constraint breaks
--- identically.  Must print 6.
+-- C4, L3 (F-R4): an interface method and a top-level function of one name in one module is a
+-- located duplicate-declaration error; the `=>` constraint on the receiver changes nothing
+-- (L8).
 interface Dbl a where
   dbl : a -> a
 

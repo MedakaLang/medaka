@@ -1,6 +1,5 @@
--- A call of a standalone that shadows an interface method, at an argument
--- outside the standalone's domain, is located at the call, not at the `if`
--- around it.
+-- C4, L3 (F-R4): an interface method and a top-level function of one name in one module is a
+-- located duplicate-declaration error at the second declaration.
 interface Sizeable a where
   size : a -> Int
 

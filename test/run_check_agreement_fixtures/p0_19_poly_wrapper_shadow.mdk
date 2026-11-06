@@ -1,8 +1,5 @@
--- P0-19 (SHADOW-SEMANTICS row 12 / cell d5b): a wrapper `useIt x = size x` over the
--- definer-shadow standalone `size : Int -> Int` must MONOMORPHISE to the standalone's
--- domain (S5), not generalize to `a -> Int`.  Calling it at a live-impl type (Box)
--- must then REJECT (Box vs Int).  Was a silent build soundness hole (check accepted
--- `useIt : a -> Int`, build printed a garbage int).
+-- C4, L3 (F-R4): an interface method and a top-level function of one name in one module is a
+-- located duplicate-declaration error.
 interface Sizeable a where
   size : a -> Int
 

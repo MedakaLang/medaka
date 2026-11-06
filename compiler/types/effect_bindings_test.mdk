@@ -681,7 +681,7 @@ test "an alias import admits its synthetic bare method binding" =
 test "a shadow-selected standalone application records its inferred interface obligation" =
   let provider =
     "export interface Addable a where\n  add : a -> a -> a\nexport interface Summable a where\n  sum : a -> a -> a\nimpl Addable String where\n  add x _ = x\nimpl Summable Int where\n  sum x _ = x\n"
-  let entry = "import provider.{add, sum}\nadd x y = sum x y\n"
+  let entry = "import provider.*\nadd x y = sum x y\n"
   expectAll [
     expectEqual
       ["T-NO-IMPL"]
@@ -699,7 +699,7 @@ test "a k>0 shadow-selected standalone attributes a missing impl to its callee" 
   let provider =
     "export interface Selectable a where\n  pick : Int -> a -> Int\n  fuse : Int -> a -> Int\nimpl Selectable Int where\n  pick _ _ = 1\n  fuse _ _ = 1\n"
   let entry =
-    "import provider.{pick, fuse}\ndata Box = Box Int\npick n x = fuse n x\nbad : Int\nbad = pick 7 (Box 3)\n"
+    "import provider.*\ndata Box = Box Int\npick n x = fuse n x\nbad : Int\nbad = pick 7 (Box 3)\n"
   let diags = moduleErrorDiags provider entry
   expectAll [
     expectEqual ["T-NO-IMPL"] (diagCodeTexts diags),
@@ -917,45 +917,18 @@ test "written force contracts charge honest methods at their occurrences" =
         (errorsFor (source ++ "quiet : Unit -> Box\nquiet _ = value\n"))),
   ]
 
-test "dict-bound shadow receivers retain selected method forcing" =
-  let source =
-    "interface Sizeable a where\n  size : <Audit> (a -> Bool)\nsize : Bool -> Bool\nsize _ = False\n"
-  expectAll [
-    expectTrue
-      (contains
-        "T-EFFECT-LEAK"
-        (errorsFor
-          (source
-            ++ "quiet : Sizeable a => a -> <> Bool\nquiet x = size x\n"))),
-    expectEqual
-      []
-      (errorsFor
-        (source
-          ++ "honest : Sizeable a => a -> <Audit> Bool\nhonest x = size x\n")),
-    expectEqual
-      []
-      (errorsFor (source ++ "local : Bool -> <> Bool\nlocal x = size x\n")),
-  ]
-
-test "later dict-bound shadow receivers retain method forcing across modules" =
+test "a dict-bound receiver does not reach the wildcard-imported method (L8)" =
   let provider =
     "export interface Sizeable a where\n  size : <Audit> (Bool -> a -> Bool)\n"
   let entry =
-    "import provider.{Sizeable, size}\nsize : Bool -> Bool -> Bool\nsize _ _ = False\n"
+    "import provider.*\nsize : Bool -> Bool -> Bool\nsize _ _ = False\n"
   expectAll [
-    expectTrue
-      (contains
-        "T-EFFECT-LEAK"
-        (moduleErrors
-          provider
-          (entry
-            ++ "quiet : Sizeable a => a -> <> Bool\nquiet x = size True x\n"))),
     expectEqual
-      []
+      ["T-TYPE-TOO-GENERAL"]
       (moduleErrors
         provider
         (entry
-          ++ "honest : Sizeable a => a -> <Audit> Bool\nhonest x = size True x\n")),
+          ++ "quiet : Sizeable a => a -> <> Bool\nquiet x = size True x\n")),
     expectEqual
       []
       (moduleErrors

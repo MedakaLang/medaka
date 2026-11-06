@@ -1,4 +1,0 @@
-import list.*
-import string.{startsWith}
-
-main = println (startsWith "a" "ab")

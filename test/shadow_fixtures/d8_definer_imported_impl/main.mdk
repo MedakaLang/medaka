@@ -1,6 +1,6 @@
--- SHADOW-SEMANTICS cell D8: DEFINER shadow whose shadowed interface + the
--- receiver's impl are IMPORTED — this module defines only the standalone.
--- Expected: check/run/build REJECT `size (Box 3)` (Int vs Box); the standalone wins.
+-- C6, L2 rung 2: the module's own `size : Int -> Int` is the bare name; `import
+-- prov.{Sizeable, Box(..)}` binds no bare method name, so `size (Box 3)` is a located type
+-- mismatch
 import prov.{Sizeable, Box(..)}
 
 size : Int -> Int

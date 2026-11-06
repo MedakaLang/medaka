@@ -1,7 +1,5 @@
--- S1's standalone operand at a WILDCARD import.  `import list.*` binds every name
--- `list` exports; `length` is not one of them, and the standalone `length` that does
--- exist lives in `own`, which `main` imports only for `ol`.  So `length` is not a
--- shadow in `main`, and `length [1, 2, 3]` is `Foldable.length`'s dispatch: 3.
+-- L2 rungs 2 and 4: `own.ol` uses own's `length` (2) and `main`'s `length` is the wildcard-
+-- imported list function (3)
 import list.*
 import own.{ol}
 

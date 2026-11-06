@@ -1,0 +1,11 @@
+-- C2, L8 (F-R2): an `Ix a i =>` constraint does not make the bare name `get` the imported
+-- method; the own `get : Int -> Int -> Int` answers, so the polymorphic receiver mistypes
+import ifc.*
+
+get : Int -> Int -> Int
+get n i = n * i
+
+viaDict : Ix a i => a -> i -> Int
+viaDict a i = get a i
+
+main = println (viaDict (Box 3) 1)

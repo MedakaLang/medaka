@@ -1,10 +1,6 @@
--- S-1: a CONSTRAINED top-level fn whose name shadows a visible interface method.
--- The marking prePass is a first-match guard chain whose SHADOW arm is tested before
--- the DICT arm, so this occurrence became EMethodAt and was never marked as a dict
--- application -- while dictPassDecl still gave the DEFINITION its leading dict param.
--- Def arity 2, call arity 1: the call silently UNDER-APPLIED and the Int 3 landed in
--- the dict slot.  `check` was green, `run` died with `intToString: not an Int`, and
--- `build` EXITED 0 PRINTING A RAW HEAP POINTER.  Must print 4.
+-- C4, L3 (F-R4): an interface method and a top-level function of one name in one module is a
+-- located duplicate-declaration error; the `=>` constraint on the receiver changes nothing
+-- (L8).
 data Box = Box Int
 
 interface Sz a where

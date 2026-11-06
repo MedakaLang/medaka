@@ -1,11 +1,6 @@
--- `hub` re-exports two unrelated `mth : a -> a`, from `IA` (`n + 1`) and `IB`
--- (`n * 10`), both with an impl at `Int`.  Inside `wrap` the receiver is the rigid
--- `x`, which no declaration's impl query can be asked about, and `wrap` declares no
--- constraint, so the two declarations are not shown to agree.  SHADOW-SEMANTICS.md
--- S2-DECL (d) over the admitted set (ruled 2026-10-14): the located reject
--- `T-AMBIGUOUS-METHOD` at `mth` in `wrap`, exit 1 on every verb, in either hub order
--- (`swapped.mdk`).  Never 4 or 30, which the two hub orders printed while the
--- occurrence kept no route.
+-- C7, L3: the hub re-exports two distinct declarations of `mth`, so the explicit import
+-- binds it to both: a located ambiguity at the occurrence, whatever the receiver, types or
+-- import order.
 import hub.{IA, IB, mth}
 
 wrap : x -> x

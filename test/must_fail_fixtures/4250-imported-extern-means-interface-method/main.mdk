@@ -1,2 +1,0 @@
-import moda.{add}
-main = println (add 20 22)
