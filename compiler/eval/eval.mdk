@@ -43,6 +43,7 @@ import frontend.ast.{
   useMemberOrigin,
   useMemberLocal,
   qualifiedLocal,
+  programIsCore,
   Decl(..),
   ExternDecl(..),
   DataVis(..),
@@ -4436,6 +4437,23 @@ coreImportExports : List (String, Ref (Value e)) ->
 coreImportExports privateCells globalCells preludeDecls =
   ModExports (privateCells ++ globalCells) (ctorsByTypeOf preludeDecls)
 
+-- The prelude surface one module's `import core` binds.  A module that carries
+-- the prelude among its own declarations (`programIsCore`: a flat program, the
+-- prelude and its user spliced into one unit) holds core's cells as its own
+-- [localCells], ahead of the shared [coreExports]; desugar's reserved
+-- `import core as $core` reaches the prelude through them.  Any other module
+-- binds the shared surface.
+export
+moduleCoreExports : ModExports (Value e) ->
+  List (String, Ref (Value e)) ->
+  List Decl ->
+  ModExports (Value e)
+moduleCoreExports (ModExports shared ctors) localCells decls =
+  if programIsCore decls then
+    ModExports (localCells ++ shared) (ctorsByTypeOf decls ++ ctors)
+  else
+    ModExports shared ctors
+
 -- B2 (RUN-EFFECTS): evalModulesWith with EXTRA extern bindings installed alongside
 -- externBindings — the seam `medaka run` uses to install real-I/O prims
 -- (ioExternBindings) without them ever reaching the differential-oracle
@@ -4545,7 +4563,11 @@ buildModInfos facts globalFrame runtimeFrame coreExports sibling fulls exportsMa
       -- test sibling.
       -- lint-disable-next-line rule-list-as-set
       let importsByModule = importsMapFor sibling mid fullsSoFar exportsSoFar
-      let imports = importFrameOf coreExports importsByModule decls
+      let imports =
+        importFrameOf
+          (moduleCoreExports coreExports localCells decls)
+          importsByModule
+          decls
       -- #1542: tag this module's env with its own file, LAST in the frame list so
       -- an ordinary name lookup (which resolves in localCells/imports/globalCells
       -- almost always) never reaches it — only the once-per-call lookup in

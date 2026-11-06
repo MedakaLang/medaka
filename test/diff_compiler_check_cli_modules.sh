@@ -278,14 +278,12 @@ case "$dia_out" in
      else fail=$((fail+1)); printf 'FAIL coh-xmod/diamond (exit %d: [%s])\n' "$dia_code" "$dia_out"; fi ;;
 esac
 
-# 9. P0-18 importer-shadow on a NO-IMPL receiver.  `size` is IMPORTED from `impprov`
-#    and shadows the LOCAL interface method `Sizeable.size`.  `size (Box 3)` must
-#    dispatch to the local `impl Sizeable Box` (3); `size 3` (Int, NO impl) must fall
-#    back to the imported standalone (4).  Before the fix `check` REJECTED (`No impl of
-#    Sizeable for Int`) and `build` PANICKED, while `run` correctly returned the
-#    standalone — the imported shadow's bare name was invisible to the emit-path shadow
-#    detection (mangled) AND its no-impl obligation was not skipped on the check path.
-#    check must ACCEPT and build must AGREE (dispatch 3 then standalone 4).
+# 9. Importer shadow (docs/spec/SHADOW-SEMANTICS.md L4, F-R3).  The explicit
+#    `import impprov.{size}` names a function the module also declares (the method of
+#    its own interface `Sizeable`), which is a located error at the import member,
+#    `R-IMPORT-OWN-NAME`.  check and build give the same verdict, and build leaves no
+#    binary.  The wildcard twin `impwild.mdk` is accepted: `import impprov.*` loses to
+#    the module's own method silently, so `size (Box 3)` dispatches to the local impl.
 cat > "$TMP/impprov.mdk" <<'EOF'
 export size : Int -> Int
 size n = n + 1
@@ -305,41 +303,57 @@ main =
   println (size (Box 3))
   println (size 3)
 EOF
-imp_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/impmain.mdk" 2>/dev/null)"
+imp_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/impmain.mdk" 2>&1)"
 imp_code=$?
+imp_json="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check --json "$TMP/impmain.mdk" 2>/dev/null)"
 case "$imp_out" in
-  *"No impl"*) fail=$((fail+1)); printf 'FAIL importer-shadow/check (spurious no-impl reject: [%s])\n' "$imp_out" ;;
-  *) if [ "$imp_code" -eq 0 ]; then pass=$((pass+1)); printf 'ok   importer-shadow/check (imported shadow on no-impl receiver accepted)\n'
-     else fail=$((fail+1)); printf 'FAIL importer-shadow/check (exit %d: [%s])\n' "$imp_code" "$imp_out"; fi ;;
+  *"impmain.mdk:1:16: \`size\` is imported here and also declared in this module"*)
+    case "$imp_json" in
+      *'"code":"R-IMPORT-OWN-NAME"'*)
+        if [ "$imp_code" -eq 1 ]; then pass=$((pass+1)); printf 'ok   importer-shadow/check (R-IMPORT-OWN-NAME at the import member, exit 1)\n'
+        else fail=$((fail+1)); printf 'FAIL importer-shadow/check (diagnosed but exit %d)\n' "$imp_code"; fi ;;
+      *) fail=$((fail+1)); printf 'FAIL importer-shadow/check (want code R-IMPORT-OWN-NAME, got [%s])\n' "$imp_json" ;;
+    esac ;;
+  *) fail=$((fail+1)); printf 'FAIL importer-shadow/check (want located R-IMPORT-OWN-NAME at impmain.mdk:1:16, got exit %d: [%s])\n' "$imp_code" "$imp_out" ;;
 esac
-# build AGREEMENT: the same project must build AND run to `3` then `4`.
-if MEDAKA_ROOT="$ROOT" MEDAKA="$MEDAKA" bound "$MEDAKA" build "$TMP/impmain.mdk" -o "$TMP/imp.bin" >/dev/null 2>&1 && [ -x "$TMP/imp.bin" ]; then
-  imp_bld="$("$TMP/imp.bin" 2>/dev/null | tr '\n' ',')"
-  if [ "$imp_bld" = "3,4," ]; then pass=$((pass+1)); printf 'ok   importer-shadow/build (dispatch 3 + standalone 4)\n'
-  else fail=$((fail+1)); printf 'FAIL importer-shadow/build (got [%s], want [3,4,])\n' "$imp_bld"; fi
-else fail=$((fail+1)); printf 'FAIL importer-shadow/build (native build failed)\n'; fi
+imp_bld_out="$(MEDAKA_ROOT="$ROOT" MEDAKA="$MEDAKA" bound "$MEDAKA" build "$TMP/impmain.mdk" -o "$TMP/imp.bin" 2>&1)"
+imp_bld_code=$?
+case "$imp_bld_out" in
+  *"impmain.mdk:1:16: \`size\` is imported here and also declared in this module"*)
+    if [ "$imp_bld_code" -ne 0 ] && [ ! -x "$TMP/imp.bin" ]; then pass=$((pass+1)); printf 'ok   importer-shadow/build (same located error, no binary)\n'
+    else fail=$((fail+1)); printf 'FAIL importer-shadow/build (diagnosed but exit %d, binary present=%s)\n' "$imp_bld_code" "$([ -x "$TMP/imp.bin" ] && echo yes || echo no)"; fi ;;
+  *) fail=$((fail+1)); printf 'FAIL importer-shadow/build (want the located R-IMPORT-OWN-NAME error, got exit %d: [%s])\n' "$imp_bld_code" "$imp_bld_out" ;;
+esac
+cat > "$TMP/impwild.mdk" <<'EOF'
+import impprov.*
 
-# 10. THE S2 INVERSION (SHADOW-SEMANTICS row 14 / cell d8) — DEFINER shadow with an
-#     IMPORTED interface+impl.  The CONSUMER defines the standalone `size : Int -> Int`
-#     and IMPORTS the interface `Sizeable` + type `Box(..)` + its impl from `dprov`.
-#
-#     ⚠️ RE-PINNED 2026-07-14, ACCEPT(3,4) -> located REJECT.  This leg was added by
-#     ebb8ee90 (P0-19 batch 2) to assert the OLD S2: "the impl universe is GLOBAL, so
-#     `size (Box 3)` must DISPATCH to the imported `impl Sizeable Box`".  The inversion
-#     abolishes the rule that leg encoded — a DEFINER shadow is now the standalone,
-#     unconditionally, and the impl universe is never queried.  So `size (Box 3)` types
-#     against the consumer's own `size : Int -> Int` and REJECTS `Type mismatch: Int vs
-#     Box` at the call site, on check AND run AND build.  This is a DELIBERATE revert of
-#     a two-day-old intentional fix, not a regression — see the d8 row in
-#     test/diff_compiler_shadow_semantics.sh.
-#
-#     S6 still holds, but VACUOUSLY: where the interface and impl live cannot change the
-#     outcome, because the outcome no longer depends on them.  The all-local cell d2
-#     rejects identically, which is the point.
-#
-#     ⚠️ The IMPORTER-shadow leg immediately above (#9) is the Fork-1 control and MUST
-#     still ACCEPT + dispatch (3,4): an `import` is a SIBLING scope, not an inner one,
-#     so it does NOT shadow.  If #9 and #10 ever agree, the inversion has leaked.
+interface Sizeable a where
+  size : a -> Int
+
+data Box = Box Int
+
+impl Sizeable Box where
+  size (Box n) = n
+
+main = println (size (Box 3))
+EOF
+impw_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/impwild.mdk" 2>&1)"
+impw_code=$?
+if [ "$impw_code" -eq 0 ]; then pass=$((pass+1)); printf 'ok   importer-shadow-wild/check (wildcard loses to the own method, accepted)\n'
+else fail=$((fail+1)); printf 'FAIL importer-shadow-wild/check (exit %d: [%s])\n' "$impw_code" "$impw_out"; fi
+if MEDAKA_ROOT="$ROOT" MEDAKA="$MEDAKA" bound "$MEDAKA" build "$TMP/impwild.mdk" -o "$TMP/impw.bin" >/dev/null 2>&1 && [ -x "$TMP/impw.bin" ]; then
+  impw_bld="$("$TMP/impw.bin" 2>/dev/null)"
+  if [ "$impw_bld" = "3" ]; then pass=$((pass+1)); printf 'ok   importer-shadow-wild/build (own method dispatches to the local impl: 3)\n'
+  else fail=$((fail+1)); printf 'FAIL importer-shadow-wild/build (got [%s], want [3])\n' "$impw_bld"; fi
+else fail=$((fail+1)); printf 'FAIL importer-shadow-wild/build (native build failed)\n'; fi
+
+# 10. Definer shadow with an imported interface and impl (docs/spec/SHADOW-SEMANTICS.md
+#     L2, L5).  The consumer declares `size : Int -> Int` and imports the interface
+#     `Sizeable`, `Box(..)` and its impl from `dprov`.  `import dprov.{Sizeable}` binds
+#     no bare method name, so `size` is the module's own function (rung 2), an ordinary
+#     reference: `size (Box 3)` is a type mismatch located at the argument, as for any
+#     function, on check and build alike.  Where the interface and impl live cannot
+#     change that outcome.
 cat > "$TMP/dprov.mdk" <<'EOF'
 export interface Sizeable a where
   size : a -> Int
@@ -361,18 +375,18 @@ main =
 EOF
 dfn_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/dmain.mdk" 2>&1)"
 dfn_code=$?
-# The standalone WINS: `size (Box 3)` must be a LOCATED reject against `size : Int -> Int`.
+# The own function wins: `size (Box 3)` is a located reject at the argument `(Box 3)`.
 case "$dfn_out" in
-  *"dmain.mdk:7:10: type mismatch: Int vs Box"*)
-    if [ "$dfn_code" -ne 0 ]; then pass=$((pass+1)); printf 'ok   definer-shadow-xmod/check (S2 inversion: standalone wins, located reject at the call)\n'
+  *"dmain.mdk:7:16: type mismatch: Int vs Box"*)
+    if [ "$dfn_code" -ne 0 ]; then pass=$((pass+1)); printf 'ok   definer-shadow-xmod/check (own function wins, located reject at the argument)\n'
     else fail=$((fail+1)); printf 'FAIL definer-shadow-xmod/check (diagnosed but exit 0)\n'; fi ;;
-  *) fail=$((fail+1)); printf 'FAIL definer-shadow-xmod/check (want located "Int vs Box" at 7:10, got exit %d: [%s])\n' "$dfn_code" "$dfn_out" ;;
+  *) fail=$((fail+1)); printf 'FAIL definer-shadow-xmod/check (want located "Int vs Box" at 7:16, got exit %d: [%s])\n' "$dfn_code" "$dfn_out" ;;
 esac
-# build AGREEMENT (S7): the same project must FAIL to build, and emit no binary.
+# build agrees: the same project fails to build and emits no binary.
 if MEDAKA_ROOT="$ROOT" MEDAKA="$MEDAKA" bound "$MEDAKA" build "$TMP/dmain.mdk" -o "$TMP/dfn.bin" >/dev/null 2>&1 && [ -x "$TMP/dfn.bin" ]; then
-  fail=$((fail+1)); printf 'FAIL definer-shadow-xmod/build (built a binary; the standalone-domain reject must stop it)\n'
+  fail=$((fail+1)); printf 'FAIL definer-shadow-xmod/build (built a binary; the type mismatch must stop it)\n'
 else
-  pass=$((pass+1)); printf 'ok   definer-shadow-xmod/build (S2 inversion: rejected, no binary — agrees with check)\n'
+  pass=$((pass+1)); printf 'ok   definer-shadow-xmod/build (rejected, no binary, agrees with check)\n'
 fi
 
 # 11. IMPORTED-MODULE diagnostics (the regression this gate's fix targets).  A type
@@ -3320,12 +3334,12 @@ else
   fail=$((fail+1)); printf 'FAIL shadow/own-still-wins (check exit %d: [%s])\n' "$own_code" "$own_out"
 fi
 
-# 10. elab-located (#2544, ARCH M4): the #1812 alias-import-order shape — a method
-#     reached through an alias-qualified import that precedes the standalone import of
-#     the same name — must be rejected by all three verbs with a LOCATED diagnostic
-#     (`<file>:L:C: <message>`), never the "no located diagnostic is available"
-#     deflection #1813 left behind.  The fixture is
-#     test/run_check_agreement_fixtures/reject_1812_alias_import_order.mdk; the
+# 10. elab-located (#2544, ARCH M4): the #1812 alias-import shape — an explicit import
+#     of a function beside a module alias whose module declares a method of the same
+#     name, the bare call typed against the function — must be rejected by all three
+#     verbs with a LOCATED diagnostic (`<file>:L:C: <message>`), never the "no located
+#     diagnostic is available" deflection #1813 left behind.  The fixture is
+#     test/run_check_agreement_fixtures/reject_1812_alias_receiver_mismatch.mdk; the
 #     agreement gate grades its verdict columns, and this leg grades the SHAPE of the
 #     diagnostic, which a verdict column cannot see.
 #     This leg used to assert that `check` ACCEPTED here while run/build rejected, and
@@ -3334,7 +3348,7 @@ fi
 #     error.  The three-way agreement is asserted, not assumed — dropping `check` from
 #     this leg would leave the divergence unguarded on the shape axis.
 mkdir -p "$TMP/resid"
-resid_src="$ROOT/test/run_check_agreement_fixtures/reject_1812_alias_import_order.mdk"
+resid_src="$ROOT/test/run_check_agreement_fixtures/reject_1812_alias_receiver_mismatch.mdk"
 # `check` renders its diagnostics on STDOUT, `run` on STDERR, so the two captures
 # differ in which stream they keep — not an oversight to be tidied into one form.
 resid_check="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$resid_src" 2>&1; echo "exit:$?")"
