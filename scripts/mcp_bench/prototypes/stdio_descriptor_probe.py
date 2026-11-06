@@ -199,11 +199,12 @@ def main():
     marker.unlink()
 
     supported = ['all nine runtime file families reject both endpoints via proc/dev/symlink aliases',
-                 'fragmented/non-UTF-8 input remains exact', 'regular source/config exact reads',
+                 'prequeued non-UTF-8 input remains exact', 'regular source/config exact reads',
                  'telemetry append and scratch create/write/mode exact effects',
                  'independent identity mutation produces bytes/consumes input',
                  'real piped owner submits/reaps/disposes marker worker; shared content type policy blocks Null mode and type-only mutation restores it']
-    unsupported = ['pathname swap during open and fd replacement/reuse races',
+    unsupported = ['fragmented arrival across consumer reads',
+                   'pathname swap during open and fd replacement/reuse races',
                    'wrong endpoint types/flags, shared endpoints or stderr and injected open/stat/identity errors',
                    'directories for fsync and other special-file compatibility',
                    'acquisition/release/reacquisition, historical/in-flight use and synchronization',

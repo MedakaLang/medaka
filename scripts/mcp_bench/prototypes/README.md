@@ -31,11 +31,11 @@ absolute checkout path and an external output file:
 python3 /absolute/checkout/scripts/mcp_bench/prototypes/stdio_descriptor_census.py --root /absolute/checkout --out /tmp/stdio-descriptor-census.json
 ```
 
-The JSON pins every Git-visible file and relevant runtime sources, records lexical
+The JSON pins Git-visible files except the descriptor report and summary (excluded to avoid self-referential receipt drift), and relevant runtime sources, records lexical
 candidates and exclusions, and maps numbered policy classes to runtime routes.
 Dynamic and indirect uses remain unknown. The previous broad-seal rejection in
 [STDIO.md](../../../docs/findings/mcp-runtime-authority/STDIO.md) remains valid.
 
 The registered `test/process_authority_test.mdk` replay also checks the descriptor
 experiment's separate 77 blocker, mutation effects, non-Linux refusal, and an
-empty-matrix rejection. See `docs/findings/mcp-runtime-stdio-descriptor/REPORT.md`.
+empty, duplicate, missing and substituted matrix rejection, plus historic census receipt integrity and candidate source pins. Later tree changes are outside that historic survey. See `docs/findings/mcp-runtime-stdio-descriptor/REPORT.md`.

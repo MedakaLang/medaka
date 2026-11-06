@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Run the independent authority controls and verify their observed effects."""
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -50,9 +51,42 @@ if sys.platform == 'linux':
     require(by_name['output_alias__proc_self_fd_1']['endpoint_hex'] == '', 'guarded endpoint')
     require(by_name['output_alias__proc_self_fd_1_mutation']['endpoint_hex'] == b'BYPASS'.hex(), 'mutation endpoint')
 
+summary_path = root / 'docs/findings/mcp-runtime-stdio-descriptor/summary.json'
+summary = json.loads(summary_path.read_text())
+def receipt_matches(receipt):
+    payload = receipt.get('inventory')
+    if not isinstance(payload, dict):
+        return False
+    encoded = json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()
+    return hashlib.sha256(encoded).hexdigest() == receipt.get('inventory_sha256')
+def pins_match(pins):
+    try:
+        return all(hashlib.sha256((root / path).read_bytes()).hexdigest() == digest
+                   for path, digest in pins.items()) and bool(pins)
+    except OSError:
+        return False
+receipt = summary['census']
+pins = summary['source']['sha256']
+require(receipt_matches(receipt), 'historic census receipt changed or missing')
+require(pins == receipt['inventory']['candidate_source_pins'] and pins_match(pins),
+        'descriptor candidate source pin changed or missing')
+mutated_receipt = dict(receipt, inventory=dict(receipt['inventory'], carrier_count=-1))
+require(not receipt_matches(mutated_receipt) and not receipt_matches({}), 'census receipt mutation escaped')
+mutated_pins = dict(pins)
+mutated_pins[next(iter(mutated_pins))] = '0' * 64
+require(not pins_match(mutated_pins) and not pins_match({'missing-candidate-source': '0' * 64}),
+        'candidate pin mutation escaped')
+print('historic census receipt and candidate pin mutations verified')
+
 def descriptor_matrix(rows):
     cases = [r for r in rows if r.get('name', '').startswith('alias_') and r.get('status') == 'OBSERVED']
-    require(len(cases) == 72, 'descriptor matrix incomplete or zero executed: ' + str(len(cases)))
+    expected = {'alias_%d_%d_%s' % (fd, alias, op)
+                for fd in (0, 1) for alias in range(4)
+                for op in ('read', 'hash', 'read-bytes', 'write', 'append',
+                           'telemetry', 'write-bytes', 'write-mode', 'fsync')}
+    names = [r['name'] for r in cases]
+    require(len(names) == len(set(names)) and set(names) == expected,
+            'descriptor matrix incomplete or zero executed, duplicate or substituted')
     require(all(r['endpoint_hex'] == '' and r['remaining_hex'] == '00ff41c3285a' for r in cases),
             'descriptor alias effect changed')
 
@@ -77,6 +111,16 @@ if sys.platform == 'linux':
     require(result.returncode == 77, 'descriptor blocker changed: ' + result.stdout + result.stderr)
     rows = json.loads((descriptor / 'results.json').read_text())
     descriptor_matrix(rows)
+    cases = [r for r in rows if r.get('name', '').startswith('alias_') and r.get('status') == 'OBSERVED']
+    for name, mutation in [('missing', cases[1:]), ('duplicate', cases + cases[:1]),
+                           ('substituted', cases[1:] + [dict(cases[0], name='alias_substitute')])]:
+        try:
+            descriptor_matrix(mutation)
+        except RuntimeError as error:
+            require('descriptor matrix incomplete' in str(error), name + ' failed for unrelated reason')
+        else:
+            raise RuntimeError(name + ' matrix escaped')
+        print(name + ' descriptor matrix rejected')
     by_name = {r['name']: r for r in rows}
     for name in ('shared_policy_worker_blocker', 'required_piped_worker',
                  'identity_mutation_rejected_by_observer', 'identity_read_mutation_rejected_by_observer',

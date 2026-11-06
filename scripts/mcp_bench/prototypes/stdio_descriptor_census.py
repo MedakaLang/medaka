@@ -43,6 +43,8 @@ OBSERVATIONS = {
     ('test/llvm_fixtures/s13_run_command.mdk', 1, 'C6', 'runCommand'): 'legacy process launch call',
     ('stdlib/process.mdk', 103, 'C7', 'processSubmitRaw'): 'public owner submission wrapper calls native submission',
 }
+RECEIPT_PATHS = {'docs/findings/mcp-runtime-stdio-descriptor/REPORT.md',
+                 'docs/findings/mcp-runtime-stdio-descriptor/summary.json'}
 PINS = ['runtime/medaka_rt.c', 'runtime/medaka_process.c', 'stdlib/runtime.mdk', 'compiler/backend/extern_catalog.mdk', 'compiler/backend/llvm_emit.mdk', 'compiler/backend/llvm_preamble.mdk', 'compiler/frontend/resolve.mdk', 'scripts/mcp_bench/prototypes/stdio_authority_probe.py', 'scripts/mcp_bench/prototypes/stdio_authority_fixture.c', 'docs/findings/mcp-runtime-authority/STDIO.md']
 
 def digest(data):
@@ -61,6 +63,8 @@ def main():
     carriers, matches, excluded = {}, [], []
     tracked = subprocess.check_output(['git', '-C', str(root), 'ls-files', '-z', '--cached', '--others', '--exclude-standard'])
     for rel in sorted(set(tracked.decode('utf-8').split('\0')) - {''}):
+        if rel in RECEIPT_PATHS:
+            continue
         path = root / rel
         if path.is_symlink() or not path.is_file():
             excluded.append({'path': rel, 'reason': 'symlink or missing file; target not scanned through this path'})
@@ -88,7 +92,7 @@ def main():
     observed = {key: sum(m['class'] == key and m['classification'] == 'inspected route example' for m in matches) for key in RULES}
     if sum(observed.values()) != len(OBSERVATIONS):
         raise ValueError('an inspected source observation moved or no longer matches')
-    result = {'schema': 1, 'source_pins': pins, 'carrier_pins': carriers,
+    result = {'schema': 1, 'receipt_exclusions': sorted(RECEIPT_PATHS), 'source_pins': pins, 'carrier_pins': carriers,
               'numbered_classes': {k: {'description': v[0], 'enforcement': v[1], 'candidate_count': counts[k], 'inspected_example_count': observed[k], 'unknown_candidate_count': counts[k] - observed[k], 'routes': ROUTES[k]} for k, v in RULES.items()},
               'candidates': matches, 'excluded': excluded,
               'unknowns': ['Uninspected lexical hits, including comments and strings, require semantic inspection; unknown dynamic uses have no defensible count.', 'Indirect calls, imported aliases, generated programs, dynamic paths and external native code are not resolved by lexical scanning.', 'Every native main may print automatically or flush on abort, including programs without a matching token.', 'No count proves compatibility or route enforcement; resolver/NSS and descriptor history require executable controls.'],
