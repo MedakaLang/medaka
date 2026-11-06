@@ -304,7 +304,7 @@ declsByName : ModuleExports -> OrdMap (List DeclRef)
 declsByName exp =
   fold
     (m (n, (mod, d)) =>
-      let ref = DeclRef mod d
+      let ref = DeclRef { drModule = mod, drName = d }
       match omLookup n m
         Some ds => if any (== ref) ds then m else omInsert n (ds ++ [ref]) m
         None => omInsert n [ref] m)
@@ -343,12 +343,13 @@ classify : OrdMap (List MethodOrigin) ->
   OrdMap (List MethodOrigin) ->
   DeclRef ->
   NameTarget
-classify preludeMethods methods (DeclRef m d) = match declaringIface m d methods
-  Some i => TargetMethod m i d
-  None => classifyPrelude preludeMethods (DeclRef m d)
+classify preludeMethods methods (DeclRef { drModule = m, drName = d }) =
+  match declaringIface m d methods
+    Some i => TargetMethod m i d
+    None => classifyPrelude preludeMethods DeclRef { drModule = m, drName = d }
 
 classifyPrelude : OrdMap (List MethodOrigin) -> DeclRef -> NameTarget
-classifyPrelude preludeMethods (DeclRef m d)
+classifyPrelude preludeMethods (DeclRef { drModule = m, drName = d })
   | m == "core" = match declaringIface m d preludeMethods
     Some i => TargetMethod m i d
     None => TargetValue m d
