@@ -11,6 +11,7 @@
 -- stays valid.
 
 import frontend.ast.{Pat, patBindings}
+import support.ordmap.{OrdMap, omEmpty, omFromNames}
 import ir.core_ir.{
   CArm(..),
   CBind(..),
@@ -38,6 +39,30 @@ rewriteProgram f (CProgram binds ctorArs ctorTypes impls mctx facts) =
     ctorArs
     ctorTypes
     (map (rewriteImpl f) impls)
+    mctx
+    facts
+
+-- Rewrite bottom-up like `rewriteExpr`; [f] also receives the names bound by
+-- the binders enclosing the node.  A top-level name is not in the scope, and
+-- the binding rules are `core_lint.scopeFaults`'s: a recursive `let` binds its
+-- pattern in its own right-hand side, a guard pattern binds for the later
+-- guards and the arm body, a let-group name binds in every clause.
+export
+rewriteExprScoped : (OrdMap Unit -> CExpr -> CExpr) ->
+  OrdMap Unit ->
+  CExpr ->
+  CExpr
+rewriteExprScoped f s e = f s (mapChildrenScoped f s e)
+
+-- `rewriteProgram` with the scope: clause and impl parameters seed it.
+export
+rewriteProgramScoped : (OrdMap Unit -> CExpr -> CExpr) -> CProgram -> CProgram
+rewriteProgramScoped f (CProgram binds ctorArs ctorTypes impls mctx facts) =
+  CProgram
+    (map (scopedBind f omEmpty) binds)
+    ctorArs
+    ctorTypes
+    (map (scopedImpl f) impls)
     mctx
     facts
 
@@ -178,3 +203,137 @@ stmtExpr (CSAssign _ e) = e
 
 fieldExpr : CField -> CExpr
 fieldExpr (CField _ _ e) = e
+
+bindPats : List Pat -> OrdMap Unit -> OrdMap Unit
+bindPats pats scope = omFromNames (flatMap patBinders pats) scope
+
+scopedBind : (OrdMap Unit -> CExpr -> CExpr) -> OrdMap Unit -> CBind -> CBind
+scopedBind f s (CBind n clauses site bid) =
+  CBind n (map (scopedClause f s) clauses) site bid
+
+scopedClause : (OrdMap Unit -> CExpr -> CExpr) ->
+  OrdMap Unit ->
+  CClause ->
+  CClause
+scopedClause f s (CClause pats body) =
+  CClause pats (rewriteExprScoped f (bindPats pats s) body)
+
+scopedImpl : (OrdMap Unit -> CExpr -> CExpr) -> CImplEntry -> CImplEntry
+scopedImpl f (CImplEntry n s d (CImplTagged tag key iface sym ps pats body)) =
+  CImplEntry
+    n
+    s
+    d
+    (CImplTagged
+      tag
+      key
+      iface
+      sym
+      ps
+      pats
+      (rewriteExprScoped f (bindPats pats omEmpty) body))
+scopedImpl f (CImplEntry n s d (CImplDefault ifaceId tag key sym ps pats body)) =
+  CImplEntry
+    n
+    s
+    d
+    (CImplDefault
+      ifaceId
+      tag
+      key
+      sym
+      ps
+      pats
+      (rewriteExprScoped f (bindPats pats omEmpty) body))
+
+-- One-level rebuild with the scope each sub-expression sees.
+mapChildrenScoped : (OrdMap Unit -> CExpr -> CExpr) ->
+  OrdMap Unit ->
+  CExpr ->
+  CExpr
+mapChildrenScoped _ _ (CLit l) = CLit l
+mapChildrenScoped _ _ (CVar x addr) = CVar x addr
+mapChildrenScoped f s (CApp h args site) =
+  CApp (rewriteExprScoped f s h) (map (rewriteExprScoped f s) args) site
+mapChildrenScoped f s (CLam pats body) =
+  CLam pats (rewriteExprScoped f (bindPats pats s) body)
+mapChildrenScoped f s (CLet isRec pat rhs body) =
+  let inner = bindPats [pat] s
+  CLet
+    isRec
+    pat
+    (rewriteExprScoped f (if isRec then inner else s) rhs)
+    (rewriteExprScoped f inner body)
+mapChildrenScoped f s (CLetGroup binds body) =
+  let inner = omFromNames (bindNames binds) s
+  CLetGroup (map (scopedBind f inner) binds) (rewriteExprScoped f inner body)
+mapChildrenScoped f s (CMatch scrut arms) =
+  CMatch (rewriteExprScoped f s scrut) (map (scopedArm f s) arms)
+mapChildrenScoped f s (CDecision scrut arms tree) =
+  CDecision (rewriteExprScoped f s scrut) (map (scopedArm f s) arms) tree
+mapChildrenScoped f s (CIf c t e) =
+  CIf
+    (rewriteExprScoped f s c)
+    (rewriteExprScoped f s t)
+    (rewriteExprScoped f s e)
+mapChildrenScoped f s (CBinPrim op l r tag site) =
+  CBinPrim op (rewriteExprScoped f s l) (rewriteExprScoped f s r) tag site
+mapChildrenScoped f s (CUnOp op x) = CUnOp op (rewriteExprScoped f s x)
+mapChildrenScoped f s (CTuple es) = CTuple (map (rewriteExprScoped f s) es)
+mapChildrenScoped f s (CList es) = CList (map (rewriteExprScoped f s) es)
+mapChildrenScoped f s (CRecord name fields) =
+  CRecord name (map (mapField (rewriteExprScoped f s)) fields)
+mapChildrenScoped f s (CFieldAccess x label name ord) =
+  CFieldAccess (rewriteExprScoped f s x) label name ord
+mapChildrenScoped f s (CRecordUpdate name base fields) =
+  CRecordUpdate
+    name
+    (rewriteExprScoped f s base)
+    (map (mapField (rewriteExprScoped f s)) fields)
+mapChildrenScoped f s (CVariantUpdate con base fields) =
+  CVariantUpdate
+    con
+    (rewriteExprScoped f s base)
+    (map (mapField (rewriteExprScoped f s)) fields)
+mapChildrenScoped f s (CArray es) = CArray (map (rewriteExprScoped f s) es)
+mapChildrenScoped f s (CRangeList lo hi incl) =
+  CRangeList (rewriteExprScoped f s lo) (rewriteExprScoped f s hi) incl
+mapChildrenScoped f s (CRangeArray lo hi incl) =
+  CRangeArray (rewriteExprScoped f s lo) (rewriteExprScoped f s hi) incl
+mapChildrenScoped f s (CBlock stmts) = CBlock (scopedStmts f s stmts)
+mapChildrenScoped _ _ (CMethod name ev) = CMethod name ev
+mapChildrenScoped _ _ (CDict name rs) = CDict name rs
+
+-- A guard pattern binds for the guards after it and for the body.
+scopedArm : (OrdMap Unit -> CExpr -> CExpr) -> OrdMap Unit -> CArm -> CArm
+scopedArm f s (CArm pat guards body) =
+  let (guards2, inner) = scopedGuards f (bindPats [pat] s) guards
+  CArm pat guards2 (rewriteExprScoped f inner body)
+scopedArm f s (CArmAlt pat guards owner) =
+  CArmAlt pat (fst (scopedGuards f (bindPats [pat] s) guards)) owner
+
+scopedGuards : (OrdMap Unit -> CExpr -> CExpr) ->
+  OrdMap Unit ->
+  List CGuard ->
+  (List CGuard, OrdMap Unit)
+scopedGuards _ s [] = ([], s)
+scopedGuards f s ((CGBool e) :: rest) =
+  let (more, out) = scopedGuards f s rest
+  (CGBool (rewriteExprScoped f s e) :: more, out)
+scopedGuards f s ((CGBind p e) :: rest) =
+  let (more, out) = scopedGuards f (bindPats [p] s) rest
+  (CGBind p (rewriteExprScoped f s e) :: more, out)
+
+scopedStmts : (OrdMap Unit -> CExpr -> CExpr) ->
+  OrdMap Unit ->
+  List CStmt ->
+  List CStmt
+scopedStmts _ _ [] = []
+scopedStmts f s ((CSExpr e) :: rest) =
+  CSExpr (rewriteExprScoped f s e) :: scopedStmts f s rest
+scopedStmts f s ((CSAssign x e) :: rest) =
+  CSAssign x (rewriteExprScoped f s e) :: scopedStmts f s rest
+scopedStmts f s ((CSLet isRec pat e) :: rest) =
+  let inner = bindPats [pat] s
+  CSLet isRec pat (rewriteExprScoped f (if isRec then inner else s) e)
+    :: scopedStmts f inner rest
