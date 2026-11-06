@@ -1,5 +1,5 @@
 # META
-source_lines=480
+source_lines=482
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/native_doctest.mdk — the NATIVE doctest execution engine
@@ -347,7 +347,7 @@ doctestRendered nonce examples synthResults code out errOut =
 -- top-level bindings and never APPLY `main`, so `main () = …` is a silent no-op
 -- (exit 0, no output) — which here would present as every example aborting.
 --
--- Referencing every `__dt_i__` from `main` is also what keeps `dceFilter` from
+-- Calling every `__dt_i__` from `main` is also what keeps `dceFilter` from
 -- dropping them: an unreferenced top-level binding is dead code, and a dropped
 -- binding is an example that never ran.
 probeSource : String ->
@@ -414,10 +414,10 @@ synthLines nonce i (_ :: rest) ((Err _) :: srRest) =
 
 -- Per example: the sentinel, then the value.
 --
--- An example WITH an expected block synthesizes `__dt_i__ = debug (expr)`, i.e.
--- a String — printed directly.  A SMOKE example (no expected block) synthesizes
--- the raw expression, whose type is arbitrary and need not be printable, so it
--- is only FORCED and contributes an empty value; `buildDetailsFrom` passes it
+-- An example WITH an expected block synthesizes `__dt_i__ () = debug (expr)`,
+-- whose call is a String — printed directly.  A SMOKE example (no expected
+-- block) synthesizes the raw expression, whose type is arbitrary and need not be
+-- printable, so its call is only FORCED and contributes an empty value; `buildDetailsFrom` passes it
 -- as long as it evaluated.  (There are currently zero smoke examples in the
 -- tree, so this arm is correctness, not machinery.)
 mainLines : String ->
@@ -437,10 +437,12 @@ mainLines nonce i (ex :: rest) ((Ok _) :: srRest) =
     ++ mainLines nonce (i + 1) rest srRest
 
 valueLine : String -> Int -> Example -> String
-valueLine nonce i ex = match exampleExpected ex
-  Some _ =>
-    "  let _ = \{valuePrintExprWith (runtimeAlias nonce ++ ".putStrLn") (runtimeAlias nonce ++ ".debugStringLit") (probeBindingName nonce i)}"
-  None => "  let _ = \{probeBindingName nonce i}"
+valueLine nonce i ex =
+  let call = "\{probeBindingName nonce i} ()"
+  match exampleExpected ex
+    Some _ =>
+      "  let _ = \{valuePrintExprWith (runtimeAlias nonce ++ ".putStrLn") (runtimeAlias nonce ++ ".debugStringLit") call}"
+    None => "  let _ = \{call}"
 
 -- ── reading the probe's stdout back ─────────────────────────────────────────
 
@@ -542,7 +544,7 @@ renderOne chunks note i (Ok _) = match lookupChunk (intToString i) chunks
 (DFunDef false "mainLines" ((PVar "nonce") (PVar "i") (PCons PWild (PVar "rest")) (PCons (PCon "Err" PWild) (PVar "srRest"))) (EApp (EApp (EApp (EApp (EVar "mainLines") (EVar "nonce")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")) (EVar "srRest")))
 (DFunDef false "mainLines" ((PVar "nonce") (PVar "i") (PCons (PVar "ex") (PVar "rest")) (PCons (PCon "Ok" PWild) (PVar "srRest"))) (EBinOp "++" (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  let _ = ")) (EApp (EVar "display") (EApp (EVar "runtimeAlias") (EVar "nonce")))) (ELit (LString ".putStrLn \""))) (EApp (EVar "display") (EApp (EApp (EVar "sentinelLine") (EApp (EApp (EVar "noncedPrefix") (EVar "sentinelBase")) (EVar "nonce"))) (EApp (EVar "intToString") (EVar "i"))))) (ELit (LString "\""))) (EApp (EApp (EApp (EVar "valueLine") (EVar "nonce")) (EVar "i")) (EVar "ex"))) (EApp (EApp (EApp (EApp (EVar "mainLines") (EVar "nonce")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")) (EVar "srRest"))))
 (DTypeSig false "valueLine" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Example") (TyCon "String")))))
-(DFunDef false "valueLine" ((PVar "nonce") (PVar "i") (PVar "ex")) (EMatch (EApp (EVar "exampleExpected") (EVar "ex")) (arm (PCon "Some" PWild) () (EBinOp "++" (EBinOp "++" (ELit (LString "  let _ = ")) (EApp (EVar "display") (EApp (EApp (EApp (EVar "valuePrintExprWith") (EBinOp "++" (EApp (EVar "runtimeAlias") (EVar "nonce")) (ELit (LString ".putStrLn")))) (EBinOp "++" (EApp (EVar "runtimeAlias") (EVar "nonce")) (ELit (LString ".debugStringLit")))) (EApp (EApp (EVar "probeBindingName") (EVar "nonce")) (EVar "i"))))) (ELit (LString "")))) (arm (PCon "None") () (EBinOp "++" (EBinOp "++" (ELit (LString "  let _ = ")) (EApp (EVar "display") (EApp (EApp (EVar "probeBindingName") (EVar "nonce")) (EVar "i")))) (ELit (LString ""))))))
+(DFunDef false "valueLine" ((PVar "nonce") (PVar "i") (PVar "ex")) (EBlock (DoLet false false (PVar "call") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EApp (EVar "probeBindingName") (EVar "nonce")) (EVar "i")))) (ELit (LString " ()")))) (DoExpr (EMatch (EApp (EVar "exampleExpected") (EVar "ex")) (arm (PCon "Some" PWild) () (EBinOp "++" (EBinOp "++" (ELit (LString "  let _ = ")) (EApp (EVar "display") (EApp (EApp (EApp (EVar "valuePrintExprWith") (EBinOp "++" (EApp (EVar "runtimeAlias") (EVar "nonce")) (ELit (LString ".putStrLn")))) (EBinOp "++" (EApp (EVar "runtimeAlias") (EVar "nonce")) (ELit (LString ".debugStringLit")))) (EVar "call")))) (ELit (LString "")))) (arm (PCon "None") () (EBinOp "++" (EBinOp "++" (ELit (LString "  let _ = ")) (EApp (EVar "display") (EVar "call"))) (ELit (LString ""))))))))
 (DTypeSig false "abortNote" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "abortNote" ((PVar "code") (PVar "errOut")) (EBlock (DoLet false false (PVar "detail") (EApp (EVar "firstNonEmptyLine") (EApp (EVar "splitNl") (EVar "errOut")))) (DoLet false false (PVar "suffix") (EIf (EBinOp "==" (EVar "detail") (ELit (LString ""))) (ELit (LString "")) (EBinOp "++" (ELit (LString " — ")) (EVar "detail")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "native doctest run ended (probe exit ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ") before this example was reported"))) (EApp (EVar "display") (EVar "suffix"))) (ELit (LString ""))))))
 (DTypeSig false "renderAll" (TyFun (TyApp (TyCon "List") (TyCon "Chunk")) (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))))))
@@ -612,7 +614,7 @@ renderOne chunks note i (Ok _) = match lookupChunk (intToString i) chunks
 (DFunDef false "mainLines" ((PVar "nonce") (PVar "i") (PCons PWild (PVar "rest")) (PCons (PCon "Err" PWild) (PVar "srRest"))) (EApp (EApp (EApp (EApp (EVar "mainLines") (EVar "nonce")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")) (EVar "srRest")))
 (DFunDef false "mainLines" ((PVar "nonce") (PVar "i") (PCons (PVar "ex") (PVar "rest")) (PCons (PCon "Ok" PWild) (PVar "srRest"))) (EBinOp "++" (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  let _ = ")) (EApp (EMethodRef "display") (EApp (EVar "runtimeAlias") (EVar "nonce")))) (ELit (LString ".putStrLn \""))) (EApp (EMethodRef "display") (EApp (EApp (EVar "sentinelLine") (EApp (EApp (EVar "noncedPrefix") (EVar "sentinelBase")) (EVar "nonce"))) (EApp (EVar "intToString") (EVar "i"))))) (ELit (LString "\""))) (EApp (EApp (EApp (EVar "valueLine") (EVar "nonce")) (EVar "i")) (EVar "ex"))) (EApp (EApp (EApp (EApp (EVar "mainLines") (EVar "nonce")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")) (EVar "srRest"))))
 (DTypeSig false "valueLine" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Example") (TyCon "String")))))
-(DFunDef false "valueLine" ((PVar "nonce") (PVar "i") (PVar "ex")) (EMatch (EApp (EVar "exampleExpected") (EVar "ex")) (arm (PCon "Some" PWild) () (EBinOp "++" (EBinOp "++" (ELit (LString "  let _ = ")) (EApp (EMethodRef "display") (EApp (EApp (EApp (EVar "valuePrintExprWith") (EBinOp "++" (EApp (EVar "runtimeAlias") (EVar "nonce")) (ELit (LString ".putStrLn")))) (EBinOp "++" (EApp (EVar "runtimeAlias") (EVar "nonce")) (ELit (LString ".debugStringLit")))) (EApp (EApp (EVar "probeBindingName") (EVar "nonce")) (EVar "i"))))) (ELit (LString "")))) (arm (PCon "None") () (EBinOp "++" (EBinOp "++" (ELit (LString "  let _ = ")) (EApp (EMethodRef "display") (EApp (EApp (EVar "probeBindingName") (EVar "nonce")) (EVar "i")))) (ELit (LString ""))))))
+(DFunDef false "valueLine" ((PVar "nonce") (PVar "i") (PVar "ex")) (EBlock (DoLet false false (PVar "call") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EApp (EVar "probeBindingName") (EVar "nonce")) (EVar "i")))) (ELit (LString " ()")))) (DoExpr (EMatch (EApp (EVar "exampleExpected") (EVar "ex")) (arm (PCon "Some" PWild) () (EBinOp "++" (EBinOp "++" (ELit (LString "  let _ = ")) (EApp (EMethodRef "display") (EApp (EApp (EApp (EVar "valuePrintExprWith") (EBinOp "++" (EApp (EVar "runtimeAlias") (EVar "nonce")) (ELit (LString ".putStrLn")))) (EBinOp "++" (EApp (EVar "runtimeAlias") (EVar "nonce")) (ELit (LString ".debugStringLit")))) (EVar "call")))) (ELit (LString "")))) (arm (PCon "None") () (EBinOp "++" (EBinOp "++" (ELit (LString "  let _ = ")) (EApp (EMethodRef "display") (EVar "call"))) (ELit (LString ""))))))))
 (DTypeSig false "abortNote" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "abortNote" ((PVar "code") (PVar "errOut")) (EBlock (DoLet false false (PVar "detail") (EApp (EVar "firstNonEmptyLine") (EApp (EVar "splitNl") (EVar "errOut")))) (DoLet false false (PVar "suffix") (EIf (EBinOp "==" (EVar "detail") (ELit (LString ""))) (ELit (LString "")) (EBinOp "++" (ELit (LString " — ")) (EVar "detail")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "native doctest run ended (probe exit ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ") before this example was reported"))) (EApp (EMethodRef "display") (EVar "suffix"))) (ELit (LString ""))))))
 (DTypeSig false "renderAll" (TyFun (TyApp (TyCon "List") (TyCon "Chunk")) (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))))))

@@ -154,9 +154,9 @@ slugOf key = join "__" (split "/" key)
 envBase : Unit -> <IO> List String
 envBase () = [
   "MEDAKA_ROOT=\{medakaRoot ()}",
-  "MEDAKA_EMITTER=\{emitterBin}",
+  "MEDAKA_EMITTER=\{emitterBin ()}",
   "MEDAKA_STRICT=1",
-  "MEDAKA_WASM_EMITTER=\{wasmEmitter}",
+  "MEDAKA_WASM_EMITTER=\{wasmEmitter ()}",
   medakaBin (),
 ]
 

@@ -68,7 +68,7 @@ wasmReject : String -> <Exec, IO> Expectation
 wasmReject scratch =
   match boundedVerb "sh" ["-c", "command -v wasm-tools >/dev/null 2>&1"]
     Err e => fail "wasm-tools probe: \{e}"
-    Ok (tc, _, _) => match boundedVerb "test" ["-x", wasmEmitter]
+    Ok (tc, _, _) => match boundedVerb "test" ["-x", wasmEmitter ()]
       Err e => fail "wasm emitter probe: \{e}"
       Ok (ec, _, _) =>
         if tc /= 0 || ec /= 0 then

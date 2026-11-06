@@ -270,6 +270,7 @@ The tables below stay as narrative.
 | `T-TARGET-CAPABILITY` | live | entry exceeds the target profile (`check`/`run`) |
 | `T-TARGET-NO-BINDING` | live | reached extern not bound for the target's host (`check`/`run`/`build`) |
 | `T-TARGET-NOT-PROVIDED` | live | reached built-in not provided by the target (`check`/`run`) |
+| `T-TOPLEVEL-EFFECT` | live | a non-`main` top-level value whose initialiser has a non-empty effect row |
 | `T-TYPE-MISMATCH` | live | type mismatch |
 | `T-TYPE-TOO-GENERAL` | live | the declared signature is more general than the definition |
 | `T-UNBOUND` | live | unbound var (tc) |

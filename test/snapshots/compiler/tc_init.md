@@ -1,5 +1,5 @@
 # META
-source_lines=1259
+source_lines=1299
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_init: the initialisation graph of one module's top-level values and the order it implies.
@@ -51,7 +51,8 @@ import support.ordmap.{
 }
 import support.scc.{tarjanSCCs}
 import support.util.{isEmptyL, isNonEmptyL, reverseL}
-import types.repr.{IfaceRef(..), Scheme, VecObl(..)}
+import types.effect_rows.{renderAtoms, rowFlat}
+import types.repr.{IfaceRef(..), Scheme(..), VecObl(..)}
 import types.tc_env.{
   ceRowIface, ceRowMethods, ceRowSupers, ieRowTriple, ieRowsVisibleAt,
   methodRowIface
@@ -144,6 +145,45 @@ public export data InitGraph = InitGraph {
   igraphNodes : List InitNode,
   igraphNotInitialised : OrdMap Unit,
 }
+
+-- ── the rules ────────────────────────────────────────────────────────────────
+
+-- A top-level value whose initialiser has a non-empty forcing row (I2): [ivRow] is the row
+-- as the signature would write it.
+public export data InitViolation = InitViolation {
+  ivName : String,
+  ivRow : String,
+  ivLoc : Option Loc,
+}
+
+-- I2: every initialised value node (not a function, an impl, `main` or a constrained
+-- nullary binding) must have an empty forcing row in its inferred scheme.  A row tail that
+-- is unsolved counts as empty: only labels make a row non-empty.  The source annotation is
+-- not read, so a row-less signature over an effectful body is rejected.
+export
+checkInitRules : InitInputs -> InitGraph -> List InitViolation
+checkInitRules inputs g =
+  flatMap
+    (n =>
+      if n.inodeKind == ValueNode
+        && not (omHasKey n.inodeName g.igraphNotInitialised) then
+        purityViolation inputs n
+      else
+        [])
+    g.igraphNodes
+
+purityViolation : InitInputs -> InitNode -> List InitViolation
+purityViolation inputs n = match omLookup n.inodeName inputs.iiSchemes
+  Some (Forall _ _ _ _ force _) => match fst (rowFlat force)
+    [] => []
+    labels => [
+      InitViolation {
+        ivName = n.inodeName,
+        ivRow = "<\{renderAtoms labels}>",
+        ivLoc = n.inodeLoc,
+      },
+    ]
+  None => []
 
 -- ── the input projection ─────────────────────────────────────────────────────
 
@@ -1269,7 +1309,8 @@ kahn g members dependents indegree ready out = match M.minView ready
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omFromPairs" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omMapValues" false))))
 (DUse false (UseGroup ("support" "scc") ((mem "tarjanSCCs" false))))
 (DUse false (UseGroup ("support" "util") ((mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "reverseL" false))))
-(DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Scheme" false) (mem "VecObl" true))))
+(DUse false (UseGroup ("types" "effect_rows") ((mem "renderAtoms" false) (mem "rowFlat" false))))
+(DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Scheme" true) (mem "VecObl" true))))
 (DUse false (UseGroup ("types" "tc_env") ((mem "ceRowIface" false) (mem "ceRowMethods" false) (mem "ceRowSupers" false) (mem "ieRowTriple" false) (mem "ieRowsVisibleAt" false) (mem "methodRowIface" false))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "ClassEnv" true) (mem "DeclEnvs" true) (mem "MethodEnv" true) (mem "ModuleBindings" true) (mem "ModuleCtx" true) (mem "ModuleSeed" true))))
 (DData Public "InitInputs" () ((variant "InitInputs" (ConNamed (field "iiModule" (TyCon "String")) (field "iiDecls" (TyApp (TyCon "List") (TyCon "Decl"))) (field "iiSchemes" (TyApp (TyCon "OrdMap") (TyCon "Scheme"))) (field "iiMethodIfaces" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (field "iiDispatchClosure" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (field "iiCalleeIfaces" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (field "iiBinopMethod" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (field "iiUnopMethod" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (field "iiImportedValues" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "iiConstrained" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "iiExempt" (TyApp (TyCon "OrdMap") (TyCon "Unit")))))) ())
@@ -1287,6 +1328,11 @@ kahn g members dependents indegree ready out = match M.minView ready
 (DImpl true "Debug" ((TyCon "InitNodeKind")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "ValueNode") () (ELit (LString "ValueNode"))) (arm (PCon "FunctionNode") () (ELit (LString "FunctionNode"))) (arm (PCon "ImplNode") () (ELit (LString "ImplNode")))))))
 (DData Public "InitNode" () ((variant "InitNode" (ConNamed (field "inodeName" (TyCon "String")) (field "inodeKind" (TyCon "InitNodeKind")) (field "inodeOrder" (TyCon "Int")) (field "inodeLoc" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "inodeMentions" (TyApp (TyCon "List") (TyCon "InitMention")))))) ())
 (DData Public "InitGraph" () ((variant "InitGraph" (ConNamed (field "igraphNodes" (TyApp (TyCon "List") (TyCon "InitNode"))) (field "igraphNotInitialised" (TyApp (TyCon "OrdMap") (TyCon "Unit")))))) ())
+(DData Public "InitViolation" () ((variant "InitViolation" (ConNamed (field "ivName" (TyCon "String")) (field "ivRow" (TyCon "String")) (field "ivLoc" (TyApp (TyCon "Option") (TyCon "Loc")))))) ())
+(DTypeSig true "checkInitRules" (TyFun (TyCon "InitInputs") (TyFun (TyCon "InitGraph") (TyApp (TyCon "List") (TyCon "InitViolation")))))
+(DFunDef false "checkInitRules" ((PVar "inputs") (PVar "g")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "n")) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "n") "inodeKind") (EVar "ValueNode")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EFieldAccess (EVar "n") "inodeName")) (EFieldAccess (EVar "g") "igraphNotInitialised")))) (EApp (EApp (EVar "purityViolation") (EVar "inputs")) (EVar "n")) (EListLit)))) (EFieldAccess (EVar "g") "igraphNodes")))
+(DTypeSig false "purityViolation" (TyFun (TyCon "InitInputs") (TyFun (TyCon "InitNode") (TyApp (TyCon "List") (TyCon "InitViolation")))))
+(DFunDef false "purityViolation" ((PVar "inputs") (PVar "n")) (EMatch (EApp (EApp (EVar "omLookup") (EFieldAccess (EVar "n") "inodeName")) (EFieldAccess (EVar "inputs") "iiSchemes")) (arm (PCon "Some" (PCon "Forall" PWild PWild PWild PWild (PVar "force") PWild)) () (EMatch (EApp (EVar "fst") (EApp (EVar "rowFlat") (EVar "force"))) (arm (PList) () (EListLit)) (arm (PVar "labels") () (EListLit (ERecordCreate "InitViolation" ((fa "ivName" (EFieldAccess (EVar "n") "inodeName")) (fa "ivRow" (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EVar "display") (EApp (EVar "renderAtoms") (EVar "labels")))) (ELit (LString ">")))) (fa "ivLoc" (EFieldAccess (EVar "n") "inodeLoc")))))))) (arm (PCon "None") () (EListLit))))
 (DTypeSig true "initInputsAt" (TyFun (TyCon "String") (TyFun (TyCon "ModuleSeed") (TyFun (TyCon "ModuleBindings") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "DeclEnvs") (TyFun (TyCon "Int") (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyCon "InitInputs")))))))))))
 (DFunDef false "initInputsAt" ((PVar "mid") (PVar "seed") (PVar "bindings") (PVar "marked") (PVar "mctx") (PVar "envs") (PVar "ord") (PVar "binop") (PVar "unop")) (EBlock (DoLet false false (PVar "dispatching") (EApp (EVar "declaresImpl") (EVar "marked"))) (DoExpr (ERecordCreate "InitInputs" ((fa "iiModule" (EVar "mid")) (fa "iiDecls" (EVar "marked")) (fa "iiSchemes" (EFieldAccess (EVar "bindings") "mbStandaloneSchemes")) (fa "iiMethodIfaces" (EIf (EVar "dispatching") (EApp (EVar "methodIfacesOf") (EFieldAccess (EVar "envs") "deMethods")) (EVar "omEmpty"))) (fa "iiDispatchClosure" (EIf (EVar "dispatching") (EApp (EApp (EVar "dispatchClosureOf") (EVar "envs")) (EVar "ord")) (EVar "omEmpty"))) (fa "iiCalleeIfaces" (EIf (EVar "dispatching") (EApp (EVar "calleeIfacesOf") (EVar "mctx")) (EVar "omEmpty"))) (fa "iiBinopMethod" (EVar "binop")) (fa "iiUnopMethod" (EVar "unop")) (fa "iiImportedValues" (EFieldAccess (EVar "seed") "msImportedNames")) (fa "iiConstrained" (EApp (EVar "constrainedOf") (EVar "mctx"))) (fa "iiExempt" (EApp (EApp (EApp (EVar "omInsert") (ELit (LString "main"))) (ELit LUnit)) (EVar "omEmpty"))))))))
 (DTypeSig false "declaresImpl" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))
@@ -1584,7 +1630,8 @@ kahn g members dependents indegree ready out = match M.minView ready
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omFromPairs" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omMapValues" false))))
 (DUse false (UseGroup ("support" "scc") ((mem "tarjanSCCs" false))))
 (DUse false (UseGroup ("support" "util") ((mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "reverseL" false))))
-(DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Scheme" false) (mem "VecObl" true))))
+(DUse false (UseGroup ("types" "effect_rows") ((mem "renderAtoms" false) (mem "rowFlat" false))))
+(DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" true) (mem "Scheme" true) (mem "VecObl" true))))
 (DUse false (UseGroup ("types" "tc_env") ((mem "ceRowIface" false) (mem "ceRowMethods" false) (mem "ceRowSupers" false) (mem "ieRowTriple" false) (mem "ieRowsVisibleAt" false) (mem "methodRowIface" false))))
 (DUse false (UseGroup ("types" "tc_types") ((mem "ClassEnv" true) (mem "DeclEnvs" true) (mem "MethodEnv" true) (mem "ModuleBindings" true) (mem "ModuleCtx" true) (mem "ModuleSeed" true))))
 (DData Public "InitInputs" () ((variant "InitInputs" (ConNamed (field "iiModule" (TyCon "String")) (field "iiDecls" (TyApp (TyCon "List") (TyCon "Decl"))) (field "iiSchemes" (TyApp (TyCon "OrdMap") (TyCon "Scheme"))) (field "iiMethodIfaces" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (field "iiDispatchClosure" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (field "iiCalleeIfaces" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))) (field "iiBinopMethod" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (field "iiUnopMethod" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (field "iiImportedValues" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "iiConstrained" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "iiExempt" (TyApp (TyCon "OrdMap") (TyCon "Unit")))))) ())
@@ -1602,6 +1649,11 @@ kahn g members dependents indegree ready out = match M.minView ready
 (DImpl true "Debug" ((TyCon "InitNodeKind")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "ValueNode") () (ELit (LString "ValueNode"))) (arm (PCon "FunctionNode") () (ELit (LString "FunctionNode"))) (arm (PCon "ImplNode") () (ELit (LString "ImplNode")))))))
 (DData Public "InitNode" () ((variant "InitNode" (ConNamed (field "inodeName" (TyCon "String")) (field "inodeKind" (TyCon "InitNodeKind")) (field "inodeOrder" (TyCon "Int")) (field "inodeLoc" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "inodeMentions" (TyApp (TyCon "List") (TyCon "InitMention")))))) ())
 (DData Public "InitGraph" () ((variant "InitGraph" (ConNamed (field "igraphNodes" (TyApp (TyCon "List") (TyCon "InitNode"))) (field "igraphNotInitialised" (TyApp (TyCon "OrdMap") (TyCon "Unit")))))) ())
+(DData Public "InitViolation" () ((variant "InitViolation" (ConNamed (field "ivName" (TyCon "String")) (field "ivRow" (TyCon "String")) (field "ivLoc" (TyApp (TyCon "Option") (TyCon "Loc")))))) ())
+(DTypeSig true "checkInitRules" (TyFun (TyCon "InitInputs") (TyFun (TyCon "InitGraph") (TyApp (TyCon "List") (TyCon "InitViolation")))))
+(DFunDef false "checkInitRules" ((PVar "inputs") (PVar "g")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "n")) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "n") "inodeKind") (EVar "ValueNode")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EFieldAccess (EVar "n") "inodeName")) (EFieldAccess (EVar "g") "igraphNotInitialised")))) (EApp (EApp (EVar "purityViolation") (EVar "inputs")) (EVar "n")) (EListLit)))) (EFieldAccess (EVar "g") "igraphNodes")))
+(DTypeSig false "purityViolation" (TyFun (TyCon "InitInputs") (TyFun (TyCon "InitNode") (TyApp (TyCon "List") (TyCon "InitViolation")))))
+(DFunDef false "purityViolation" ((PVar "inputs") (PVar "n")) (EMatch (EApp (EApp (EVar "omLookup") (EFieldAccess (EVar "n") "inodeName")) (EFieldAccess (EVar "inputs") "iiSchemes")) (arm (PCon "Some" (PCon "Forall" PWild PWild PWild PWild (PVar "force") PWild)) () (EMatch (EApp (EVar "fst") (EApp (EVar "rowFlat") (EVar "force"))) (arm (PList) () (EListLit)) (arm (PVar "labels") () (EListLit (ERecordCreate "InitViolation" ((fa "ivName" (EFieldAccess (EVar "n") "inodeName")) (fa "ivRow" (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EMethodRef "display") (EApp (EVar "renderAtoms") (EVar "labels")))) (ELit (LString ">")))) (fa "ivLoc" (EFieldAccess (EVar "n") "inodeLoc")))))))) (arm (PCon "None") () (EListLit))))
 (DTypeSig true "initInputsAt" (TyFun (TyCon "String") (TyFun (TyCon "ModuleSeed") (TyFun (TyCon "ModuleBindings") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "DeclEnvs") (TyFun (TyCon "Int") (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyCon "InitInputs")))))))))))
 (DFunDef false "initInputsAt" ((PVar "mid") (PVar "seed") (PVar "bindings") (PVar "marked") (PVar "mctx") (PVar "envs") (PVar "ord") (PVar "binop") (PVar "unop")) (EBlock (DoLet false false (PVar "dispatching") (EApp (EVar "declaresImpl") (EVar "marked"))) (DoExpr (ERecordCreate "InitInputs" ((fa "iiModule" (EVar "mid")) (fa "iiDecls" (EVar "marked")) (fa "iiSchemes" (EFieldAccess (EVar "bindings") "mbStandaloneSchemes")) (fa "iiMethodIfaces" (EIf (EVar "dispatching") (EApp (EVar "methodIfacesOf") (EFieldAccess (EVar "envs") "deMethods")) (EVar "omEmpty"))) (fa "iiDispatchClosure" (EIf (EVar "dispatching") (EApp (EApp (EVar "dispatchClosureOf") (EVar "envs")) (EVar "ord")) (EVar "omEmpty"))) (fa "iiCalleeIfaces" (EIf (EVar "dispatching") (EApp (EVar "calleeIfacesOf") (EVar "mctx")) (EVar "omEmpty"))) (fa "iiBinopMethod" (EVar "binop")) (fa "iiUnopMethod" (EVar "unop")) (fa "iiImportedValues" (EFieldAccess (EVar "seed") "msImportedNames")) (fa "iiConstrained" (EApp (EVar "constrainedOf") (EVar "mctx"))) (fa "iiExempt" (EApp (EApp (EApp (EVar "omInsert") (ELit (LString "main"))) (ELit LUnit)) (EVar "omEmpty"))))))))
 (DTypeSig false "declaresImpl" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))

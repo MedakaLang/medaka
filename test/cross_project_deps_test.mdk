@@ -182,7 +182,7 @@ relativeProbeRun : String -> <Exec, IO> Result String (Int, String)
 relativeProbeRun script =
   let args = [
     "MEDAKA_ROOT=\{medakaRoot ()}",
-    "MEDAKA_EMITTER=\{emitterBin}",
+    "MEDAKA_EMITTER=\{emitterBin ()}",
     "MEDAKA_STRICT=1",
     "sh",
     "-c",

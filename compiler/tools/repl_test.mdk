@@ -1,9 +1,11 @@
 import test.{expectAll, expectEqual, expectTrue}
 import list.{sort}
 import frontend.parser.{parse}
+import frontend.ast.{Decl}
 import frontend.desugar.{desugar}
 import types.typecheck.{checkOneScheme, defaultDriveInputs}
-import tools.repl.{preludeBinderNames, endsWithKeyword}
+import types.repr.{ppScheme}
+import tools.repl.{preludeBinderNames, endsWithKeyword, replResultScheme}
 
 sortedUnique : List String -> List String
 sortedUnique xs = dedupe (sort xs)
@@ -36,3 +38,28 @@ test "a trailing vertical tab or form feed does not hide a block-opening keyword
     expectTrue (endsWithKeyword "x = where\u{0b}" "where"),
     expectTrue (endsWithKeyword "x = where\u{0c}" "where"),
   ]
+
+-- The scheme the REPL prints for an expression, from the unit function it is wrapped in.
+exprSchemeText : List Decl -> List Decl -> String -> String
+exprSchemeText rd cd src =
+  let user = desugar (parse "__repl__ () = \{src}\n")
+  let schemes = checkOneScheme defaultDriveInputs rd cd ("__repl__", user)
+  match find (p => fst p == "__repl__") schemes
+    Some (_, sc) => match replResultScheme sc
+      Some rs => ppScheme rs
+      None => "not a function"
+    None => "no __repl__"
+
+test "an effectful REPL expression is a unit function whose value scheme keeps its row" =
+  match (
+    readFile "stdlib/runtime.mdk",
+    readFile "stdlib/core.mdk",
+  )
+    (Ok r, Ok c) =>
+      let rd = desugar (parse r)
+      let cd = desugar (parse c)
+      expectAll [
+        expectEqual "<Stdout> Unit" (exprSchemeText rd cd "putStrLn \"hi\""),
+        expectEqual "Int" (exprSchemeText rd cd "1 + 2"),
+      ]
+    _ => expectEqual "readable" "unreadable"

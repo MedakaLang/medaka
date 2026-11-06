@@ -83,7 +83,9 @@ import support.util.{
 import types.tc_occurrence.{
   argDispatchIndicesById, arithDispatchMethod, binopMethod, unopMethod
 }
-import types.tc_init.{initGraphOf, initInputsAt}
+import types.tc_init.{
+  InitViolation(..), checkInitRules, initGraphOf, initInputsAt
+}
 import types.tc_solve.{
   determineByUniqueInstance, dropGoalsSince, goalsMark, improveByUniqueImpl,
   outerRigidIds, refileDeterminedRows, uOblArgs
@@ -145,7 +147,9 @@ import types.tc_groups.{
   memberForce, nestedRequireGoals, quantifiableAuthorities,
   registerSchemeObligations, sccProtectedSignatureIds, sccSchemes
 }
-import types.tc_diag_text.{cyclicSuperIfaceMsg, ordinalSentinelMsg}
+import types.tc_diag_text.{
+  cyclicSuperIfaceMsg, ordinalSentinelMsg, topLevelEffectMsg
+}
 import types.effect_rows.{effrowNorm, pureRow}
 import frontend.desugar.{exprSpanLoc, joinLocs}
 import types.tc_foreign.{
@@ -3134,19 +3138,26 @@ checkModuleFullDiags gctx mid seedVars accData accAll prog =
     declEnvsHere.deImpls
     declEnvsHere.deImpls
     ordHere
-  -- L1's initialisation graph (`types/tc_init`); no rule reads it yet.
-  let _ =
-    initGraphOf
-      (initInputsAt
-        mid
-        seedVars
-        schemes
-        marked
+  -- L1's initialisation graph (`types/tc_init`) and its purity rule (I2).
+  let initInputs =
+    initInputsAt
+      mid
+      seedVars
+      schemes
+      marked
+      mctx
+      declEnvsHere
+      ordHere
+      (op => orElseOpt (binopMethod op) (arithDispatchMethod op))
+      unopMethod
+  each
+    (v =>
+      pushTypeErrorAt
         mctx
-        declEnvsHere
-        ordHere
-        (op => orElseOpt (binopMethod op) (arithDispatchMethod op))
-        unopMethod)
+        TToplevelEffect
+        v.ivLoc
+        (topLevelEffectMsg v.ivName v.ivRow))
+    (checkInitRules initInputs (initGraphOf initInputs))
   (
     schemes,
     marked,

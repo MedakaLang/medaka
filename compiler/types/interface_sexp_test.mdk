@@ -129,10 +129,10 @@ roundTrips (name, p) =
 -- ── the rows ────────────────────────────────────────────────────────────────
 
 -- The prelude as a drive reads it.
-export
 preludeCell : Ref (Option (Result String (List Decl, List Decl)))
 preludeCell = Ref None
 
+export
 prelude : Unit -> <IO, FileRead> Result String (List Decl, List Decl)
 prelude () = match !preludeCell
   Some v => v

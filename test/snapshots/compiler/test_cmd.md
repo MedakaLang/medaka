@@ -104,7 +104,7 @@ import types.program_facts.{ProgramFacts, factsOfElab, withSibling}
 import frontend.ast.{SiblingPair}
 import frontend.marker.{declRefs}
 import eval.eval.{
-  Value,
+  Value(..),
   EvalEnv,
   evalOneRootEnvFacts,
   evalModulesRootEvalEnvFacts,
@@ -116,6 +116,7 @@ import eval.eval.{
   runJsonMode,
   lookupBinding,
   force,
+  applyValue,
   ppValue,
 }
 import tools.doctest.{
@@ -956,11 +957,10 @@ data Prepared =
 -- the module type-checks, or is exempt) beside the trees the three phases share.
 --
 -- THE GATE MUST NOT READ THE DOCTEST-INJECTED TREE.  A doctest EXPRESSION is not
--- required to type-check as a pure top-level binding — `stdlib/async.mdk`'s
--- `runAsync (sleep …)` examples perform `<Clock>`, so the synthesized
--- `__dt_i__ = debug (…)` bindings are an effectful value where `<>` is allowed —
--- and a module's doctests are not part of what `medaka check` accepts.  Reading
--- the injected tree would therefore reject modules `check` accepts.
+-- part of what `medaka check` accepts: an example need not type-check, and
+-- `stdlib/async.mdk`'s `runAsync (sleep …)` examples perform `<Clock>` inside
+-- the synthesized `__dt_i__ () = debug (…)` functions.  Reading the injected
+-- tree would therefore reject modules `check` accepts.
 --
 -- So the gate's source depends on whether the module has doctests:
 --
@@ -2026,8 +2026,8 @@ runChosen (DtSingle runtimeDecls coreDecls target roots userDecls) examples synt
 -- ── The interpreter's adapter onto doctest.mdk's buildDetailsFrom seam ──────
 -- buildDetailsFrom (Stage 1) wants "one rendered actual per example, or one
 -- whole-file error" — not a raw interpreter env. This is the thin adapter:
--- for each example i, look up its synthesized `__dt_i__` binding in the post-
--- run env and render it, exactly as the pre-Stage-1 `oneResult` did inline.
+-- for each example i, look up its synthesized `__dt_i__` unit function in the
+-- post-run env, apply it to `()`, and render the result.
 renderExamples : List (String, Value e) ->
   OrdMap String ->
   List (Result String (List Decl)) ->
@@ -2080,7 +2080,7 @@ renderOneExample env diags sr i ex =
       Some v => match firstUnresolvedDottedRef env sr
         Some name =>
           Err "could not evaluate: \{exampleInput ex} (unresolved: \{name})"
-        None => Ok (ppValue (force v))
+        None => Ok (ppValue (force (applyValue (force v) VUnit)))
 
 firstUnresolvedDottedRef : List (String, Value e) ->
   Result String (List Decl) ->
@@ -5332,7 +5332,7 @@ testFilesReport _ _ acc = acc
 (DUse false (UseGroup ("types" "program_facts") ((mem "ProgramFacts" false) (mem "factsOfElab" false) (mem "withSibling" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "SiblingPair" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "declRefs" false))))
-(DUse false (UseGroup ("eval" "eval") ((mem "Value" false) (mem "EvalEnv" false) (mem "evalOneRootEnvFacts" false) (mem "evalModulesRootEvalEnvFacts" false) (mem "evalModulesRootEnvFacts" false) (mem "currentEvalFile" false) (mem "modulePathMap" false) (mem "testCapableExterns" false) (mem "seedRunRng" false) (mem "runJsonMode" false) (mem "lookupBinding" false) (mem "force" false) (mem "ppValue" false))))
+(DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "EvalEnv" false) (mem "evalOneRootEnvFacts" false) (mem "evalModulesRootEvalEnvFacts" false) (mem "evalModulesRootEnvFacts" false) (mem "currentEvalFile" false) (mem "modulePathMap" false) (mem "testCapableExterns" false) (mem "seedRunRng" false) (mem "runJsonMode" false) (mem "lookupBinding" false) (mem "force" false) (mem "applyValue" false) (mem "ppValue" false))))
 (DUse false (UseGroup ("tools" "doctest") ((mem "Example" false) (mem "ExResult" true) (mem "RunResult" true) (mem "Engine" true) (mem "engineName" false) (mem "buildSynthResults" false) (mem "buildSynthDecls" false) (mem "buildDetailsFrom" false) (mem "doctestFailSuffix" false) (mem "hasUseDecls" false) (mem "printDoctestDetails" false) (mem "runDetails" false) (mem "runPassed" false) (mem "runFailed" false) (mem "runErrors" false) (mem "exampleExpected" false) (mem "exampleInput" false) (mem "exampleLine" false) (mem "synthName" false) (mem "exResultJsonFields" false))))
 (DUse false (UseGroup ("tools" "native_doctest") ((mem "runNativeDoctests" false))))
 (DUse false (UseGroup ("tools" "native_test_decls") ((mem "runNativeTests" false))))
@@ -5535,7 +5535,7 @@ testFilesReport _ _ acc = acc
 (DFunDef false "renderExamplesGo" ((PVar "env") (PVar "diags") (PCons (PVar "sr") (PVar "srRest")) (PVar "i") (PCons (PVar "ex") (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EVar "renderOneExample") (EVar "env")) (EVar "diags")) (EVar "sr")) (EVar "i")) (EVar "ex")) (EApp (EApp (EApp (EApp (EApp (EVar "renderExamplesGo") (EVar "env")) (EVar "diags")) (EVar "srRest")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))
 (DFunDef false "renderExamplesGo" ((PVar "env") (PVar "diags") (PList) (PVar "i") (PCons (PVar "ex") (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EVar "renderOneExample") (EVar "env")) (EVar "diags")) (EApp (EVar "Err") (ELit (LString "")))) (EVar "i")) (EVar "ex")) (EApp (EApp (EApp (EApp (EApp (EVar "renderExamplesGo") (EVar "env")) (EVar "diags")) (EListLit)) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))
 (DTypeSig false "renderOneExample" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl"))) (TyFun (TyCon "Int") (TyFun (TyCon "Example") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))))))
-(DFunDef false "renderOneExample" ((PVar "env") (PVar "diags") (PVar "sr") (PVar "i") (PVar "ex")) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "intToString") (EApp (EVar "exampleLine") (EVar "ex")))) (EVar "diags")) (arm (PCon "Some" (PVar "msg")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "could not evaluate: ")) (EApp (EVar "display") (EApp (EVar "exampleInput") (EVar "ex")))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "msg"))) (ELit (LString ""))))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "lookupBinding") (EApp (EVar "synthName") (EVar "i"))) (EVar "env")) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (ELit (LString "could not evaluate: ")) (EApp (EVar "exampleInput") (EVar "ex"))))) (arm (PCon "Some" (PVar "v")) () (EMatch (EApp (EApp (EVar "firstUnresolvedDottedRef") (EVar "env")) (EVar "sr")) (arm (PCon "Some" (PVar "name")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "could not evaluate: ")) (EApp (EVar "display") (EApp (EVar "exampleInput") (EVar "ex")))) (ELit (LString " (unresolved: "))) (EApp (EVar "display") (EVar "name"))) (ELit (LString ")"))))) (arm (PCon "None") () (EApp (EVar "Ok") (EApp (EVar "ppValue") (EApp (EVar "force") (EVar "v")))))))))))
+(DFunDef false "renderOneExample" ((PVar "env") (PVar "diags") (PVar "sr") (PVar "i") (PVar "ex")) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "intToString") (EApp (EVar "exampleLine") (EVar "ex")))) (EVar "diags")) (arm (PCon "Some" (PVar "msg")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "could not evaluate: ")) (EApp (EVar "display") (EApp (EVar "exampleInput") (EVar "ex")))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "msg"))) (ELit (LString ""))))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "lookupBinding") (EApp (EVar "synthName") (EVar "i"))) (EVar "env")) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (ELit (LString "could not evaluate: ")) (EApp (EVar "exampleInput") (EVar "ex"))))) (arm (PCon "Some" (PVar "v")) () (EMatch (EApp (EApp (EVar "firstUnresolvedDottedRef") (EVar "env")) (EVar "sr")) (arm (PCon "Some" (PVar "name")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "could not evaluate: ")) (EApp (EVar "display") (EApp (EVar "exampleInput") (EVar "ex")))) (ELit (LString " (unresolved: "))) (EApp (EVar "display") (EVar "name"))) (ELit (LString ")"))))) (arm (PCon "None") () (EApp (EVar "Ok") (EApp (EVar "ppValue") (EApp (EVar "force") (EApp (EApp (EVar "applyValue") (EApp (EVar "force") (EVar "v"))) (EVar "VUnit"))))))))))))
 (DTypeSig false "firstUnresolvedDottedRef" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl"))) (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "firstUnresolvedDottedRef" (PWild (PCon "Err" PWild)) (EVar "None"))
 (DFunDef false "firstUnresolvedDottedRef" ((PVar "env") (PCon "Ok" (PVar "ds"))) (EApp (EApp (EVar "firstUnresolvedName") (EVar "env")) (EApp (EApp (EVar "flatMap") (EVar "declRefs")) (EVar "ds"))))
@@ -6051,7 +6051,7 @@ testFilesReport _ _ acc = acc
 (DUse false (UseGroup ("types" "program_facts") ((mem "ProgramFacts" false) (mem "factsOfElab" false) (mem "withSibling" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "SiblingPair" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "declRefs" false))))
-(DUse false (UseGroup ("eval" "eval") ((mem "Value" false) (mem "EvalEnv" false) (mem "evalOneRootEnvFacts" false) (mem "evalModulesRootEvalEnvFacts" false) (mem "evalModulesRootEnvFacts" false) (mem "currentEvalFile" false) (mem "modulePathMap" false) (mem "testCapableExterns" false) (mem "seedRunRng" false) (mem "runJsonMode" false) (mem "lookupBinding" false) (mem "force" false) (mem "ppValue" false))))
+(DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "EvalEnv" false) (mem "evalOneRootEnvFacts" false) (mem "evalModulesRootEvalEnvFacts" false) (mem "evalModulesRootEnvFacts" false) (mem "currentEvalFile" false) (mem "modulePathMap" false) (mem "testCapableExterns" false) (mem "seedRunRng" false) (mem "runJsonMode" false) (mem "lookupBinding" false) (mem "force" false) (mem "applyValue" false) (mem "ppValue" false))))
 (DUse false (UseGroup ("tools" "doctest") ((mem "Example" false) (mem "ExResult" true) (mem "RunResult" true) (mem "Engine" true) (mem "engineName" false) (mem "buildSynthResults" false) (mem "buildSynthDecls" false) (mem "buildDetailsFrom" false) (mem "doctestFailSuffix" false) (mem "hasUseDecls" false) (mem "printDoctestDetails" false) (mem "runDetails" false) (mem "runPassed" false) (mem "runFailed" false) (mem "runErrors" false) (mem "exampleExpected" false) (mem "exampleInput" false) (mem "exampleLine" false) (mem "synthName" false) (mem "exResultJsonFields" false))))
 (DUse false (UseGroup ("tools" "native_doctest") ((mem "runNativeDoctests" false))))
 (DUse false (UseGroup ("tools" "native_test_decls") ((mem "runNativeTests" false))))
@@ -6254,7 +6254,7 @@ testFilesReport _ _ acc = acc
 (DFunDef false "renderExamplesGo" ((PVar "env") (PVar "diags") (PCons (PVar "sr") (PVar "srRest")) (PVar "i") (PCons (PVar "ex") (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EVar "renderOneExample") (EVar "env")) (EVar "diags")) (EVar "sr")) (EVar "i")) (EVar "ex")) (EApp (EApp (EApp (EApp (EApp (EVar "renderExamplesGo") (EVar "env")) (EVar "diags")) (EVar "srRest")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))
 (DFunDef false "renderExamplesGo" ((PVar "env") (PVar "diags") (PList) (PVar "i") (PCons (PVar "ex") (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EVar "renderOneExample") (EVar "env")) (EVar "diags")) (EApp (EVar "Err") (ELit (LString "")))) (EVar "i")) (EVar "ex")) (EApp (EApp (EApp (EApp (EApp (EVar "renderExamplesGo") (EVar "env")) (EVar "diags")) (EListLit)) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))
 (DTypeSig false "renderOneExample" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl"))) (TyFun (TyCon "Int") (TyFun (TyCon "Example") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))))))
-(DFunDef false "renderOneExample" ((PVar "env") (PVar "diags") (PVar "sr") (PVar "i") (PVar "ex")) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "intToString") (EApp (EVar "exampleLine") (EVar "ex")))) (EVar "diags")) (arm (PCon "Some" (PVar "msg")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "could not evaluate: ")) (EApp (EMethodRef "display") (EApp (EVar "exampleInput") (EVar "ex")))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "msg"))) (ELit (LString ""))))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "lookupBinding") (EApp (EVar "synthName") (EVar "i"))) (EVar "env")) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (ELit (LString "could not evaluate: ")) (EApp (EVar "exampleInput") (EVar "ex"))))) (arm (PCon "Some" (PVar "v")) () (EMatch (EApp (EApp (EVar "firstUnresolvedDottedRef") (EVar "env")) (EVar "sr")) (arm (PCon "Some" (PVar "name")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "could not evaluate: ")) (EApp (EMethodRef "display") (EApp (EVar "exampleInput") (EVar "ex")))) (ELit (LString " (unresolved: "))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString ")"))))) (arm (PCon "None") () (EApp (EVar "Ok") (EApp (EVar "ppValue") (EApp (EVar "force") (EVar "v")))))))))))
+(DFunDef false "renderOneExample" ((PVar "env") (PVar "diags") (PVar "sr") (PVar "i") (PVar "ex")) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "intToString") (EApp (EVar "exampleLine") (EVar "ex")))) (EVar "diags")) (arm (PCon "Some" (PVar "msg")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "could not evaluate: ")) (EApp (EMethodRef "display") (EApp (EVar "exampleInput") (EVar "ex")))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "msg"))) (ELit (LString ""))))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "lookupBinding") (EApp (EVar "synthName") (EVar "i"))) (EVar "env")) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (ELit (LString "could not evaluate: ")) (EApp (EVar "exampleInput") (EVar "ex"))))) (arm (PCon "Some" (PVar "v")) () (EMatch (EApp (EApp (EVar "firstUnresolvedDottedRef") (EVar "env")) (EVar "sr")) (arm (PCon "Some" (PVar "name")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "could not evaluate: ")) (EApp (EMethodRef "display") (EApp (EVar "exampleInput") (EVar "ex")))) (ELit (LString " (unresolved: "))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString ")"))))) (arm (PCon "None") () (EApp (EVar "Ok") (EApp (EVar "ppValue") (EApp (EVar "force") (EApp (EApp (EVar "applyValue") (EApp (EVar "force") (EVar "v"))) (EVar "VUnit"))))))))))))
 (DTypeSig false "firstUnresolvedDottedRef" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl"))) (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "firstUnresolvedDottedRef" (PWild (PCon "Err" PWild)) (EVar "None"))
 (DFunDef false "firstUnresolvedDottedRef" ((PVar "env") (PCon "Ok" (PVar "ds"))) (EApp (EApp (EVar "firstUnresolvedName") (EVar "env")) (EApp (EApp (EDictApp "flatMap") (EVar "declRefs")) (EVar "ds"))))

@@ -54,15 +54,15 @@ runMedaka args =
    The peer of `test_process.medakaBin`, for a gate whose subject is the
    emitter binary itself rather than a `medaka` verb. -}
 export
-emitterBin : <IO> String
-emitterBin = getEnvOr "MEDAKA_EMITTER" "\{medakaRoot ()}/medaka_emitter"
+emitterBin : Unit -> <IO> String
+emitterBin () = getEnvOr "MEDAKA_EMITTER" "\{medakaRoot ()}/medaka_emitter"
 
 {- | The wasm emitter binary the CLI's `--target wasm` path execs, from
    `MEDAKA_WASM_EMITTER`, defaulting to the one in `medakaRoot ()`; a gate shard
    builds it but never exports the variable. -}
 export
-wasmEmitter : <IO> String
-wasmEmitter =
+wasmEmitter : Unit -> <IO> String
+wasmEmitter () =
   getEnvOr
     "MEDAKA_WASM_EMITTER"
     "\{medakaRoot ()}/test/bin/wasm_emit_modules_main"
@@ -74,7 +74,7 @@ export
 wasmBuildArgv : String -> String -> <IO> List String
 wasmBuildArgv src out = [
   "MEDAKA_STRICT=1",
-  "MEDAKA_WASM_EMITTER=\{wasmEmitter}",
+  "MEDAKA_WASM_EMITTER=\{wasmEmitter ()}",
   medakaBin (),
   "build",
   "--target",
@@ -92,7 +92,7 @@ wasmBuildArgv src out = [
    its own emitter is one refactor away from grading a verb that silently did
    nothing. `env` carries them because Medaka has no `setEnv`, which is the
    same device `medaka gate run` uses to hand a gate its environment. A value
-   already set in this process wins, since `medakaRoot ()` and `emitterBin` read it
+   already set in this process wins, since `medakaRoot ()` and `emitterBin ()` read it
    first. -}
 export
 boundedInTree : Int ->
@@ -103,7 +103,7 @@ boundedInTree secs cmd args =
   boundedVerbSeconds
     secs
     "env"
-    (["MEDAKA_ROOT=\{medakaRoot ()}", "MEDAKA_EMITTER=\{emitterBin}", cmd]
+    (["MEDAKA_ROOT=\{medakaRoot ()}", "MEDAKA_EMITTER=\{emitterBin ()}", cmd]
       ++ args)
 
 {- | `boundedVerbSeconds secs cmd args` for every `(cmd, args)` row, at most

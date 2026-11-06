@@ -649,9 +649,9 @@ mergedBuildFailSrc : String
 mergedBuildFailSrc =
   "import test.{expectEqual}\n\n-- > double \"x\"\n-- 0\nexport\ndouble : Int -> Int\ndouble x = x * 2\n\ntest \"double one\" =\n  expectEqual (double 1) 2\n\nprop \"double is even\" (n : Int) =\n  double n % 2 == 0\n"
 
--- A smoke example that panics is a nullary binding the native backend forces
--- before `main`, so every section of the merged probe dies at startup; the
--- tests still pass on their own probe.
+-- A synthesized example is a unit function called in example order, so a smoke
+-- example that panics ends the doctest run at its own turn: the example before
+-- it is reported, it errors, and the tests still pass on their own probe.
 mergedStartupSrc : String
 mergedStartupSrc =
   "import test.{expectEqual}\n\n-- > double 2\n-- 4\n-- > panic \"startup boom\"\nexport\ndouble : Int -> Int\ndouble x = x * 2\n\ntest \"double one\" =\n  expectEqual (double 1) 2\n"
@@ -719,9 +719,9 @@ test "merged native probe: a build failure falls back to one probe per arm" = wi
     "doctest 3 error", "prop double is even pass", "test double one pass"
   ])
 
-test "merged native probe: a section that dies at startup reruns on its own probe" = withScratchDir
+test "native probe: a panicking smoke example errors at its own turn" = withScratchDir
   (dir => mergedFallbackRow dir "merged_startup" mergedStartupSrc [
-    "doctest 3 error", "doctest 5 error", "test double one pass"
+    "doctest 3 pass", "doctest 5 error", "test double one pass"
   ])
 
 -- A smoke example (no expected block) is a binding the native backend forces at

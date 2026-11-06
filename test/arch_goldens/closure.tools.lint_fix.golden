@@ -106,6 +106,7 @@ types.tc_grants
 types.tc_groups
 types.tc_infer
 types.tc_infer_records
+types.tc_init
 types.tc_mark
 types.tc_module
 types.tc_mono

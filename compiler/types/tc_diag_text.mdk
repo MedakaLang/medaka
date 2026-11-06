@@ -1551,3 +1551,8 @@ prependIncomparable =
 export
 dropAmbiguity : List TcDiag -> List TcDiag
 dropAmbiguity = filterList (d => tcCode d /= TAmbiguousInstance)
+
+export
+topLevelEffectMsg : String -> String -> String
+topLevelEffectMsg name row =
+  "top-level value `\{name}` performs \{row} when it is initialised; a top-level value is initialised once at startup and must have an empty effect row. Make it a function, `\{name} () = ...`, and call `\{name} ()` where it is read"

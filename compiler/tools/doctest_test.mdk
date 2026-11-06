@@ -1,6 +1,13 @@
 import test.{expectAll, expectEqual}
 import frontend.lexer.{collectComments}
-import tools.doctest.{extractExamples, exampleInput, exampleExpected}
+import tools.doctest.{
+  Example(..),
+  extractExamples,
+  exampleInput,
+  exampleExpected,
+  synthSrc,
+  synthSrcNamed,
+}
 
 -- (input, expected) of every example extracted from a source text.
 extracted : String -> List (String, Option String)
@@ -32,4 +39,16 @@ test "line-comment doctests still collect their expected output" = expectAll [
   expectEqual
     [("f 1", Some "1\n2")]
     (extracted "-- > f 1\n-- 1\n-- 2\nf x = x\n"),
+]
+
+-- A top-level value must have an empty effect row, and an example may perform
+-- effects, so every synth is a unit function that each engine calls.
+test "a synthesized example is a unit function" = expectAll [
+  expectEqual
+    "__dt_3__ () = debug (f 1)"
+    (synthSrc 3 (Example "f 1" (Some "1") 7)),
+  expectEqual "__dt_0__ () = g 2" (synthSrc 0 (Example "g 2" None 1)),
+  expectEqual
+    "__ndt_x_1__ () = debug (readFile \"a\")"
+    (synthSrcNamed "__ndt_x_1__" (Example "readFile \"a\"" (Some "x") 2)),
 ]

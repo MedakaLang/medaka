@@ -343,7 +343,7 @@ doctestRendered nonce examples synthResults code out errOut =
 -- top-level bindings and never APPLY `main`, so `main () = …` is a silent no-op
 -- (exit 0, no output) — which here would present as every example aborting.
 --
--- Referencing every `__dt_i__` from `main` is also what keeps `dceFilter` from
+-- Calling every `__dt_i__` from `main` is also what keeps `dceFilter` from
 -- dropping them: an unreferenced top-level binding is dead code, and a dropped
 -- binding is an example that never ran.
 probeSource : String ->
@@ -410,10 +410,10 @@ synthLines nonce i (_ :: rest) ((Err _) :: srRest) =
 
 -- Per example: the sentinel, then the value.
 --
--- An example WITH an expected block synthesizes `__dt_i__ = debug (expr)`, i.e.
--- a String — printed directly.  A SMOKE example (no expected block) synthesizes
--- the raw expression, whose type is arbitrary and need not be printable, so it
--- is only FORCED and contributes an empty value; `buildDetailsFrom` passes it
+-- An example WITH an expected block synthesizes `__dt_i__ () = debug (expr)`,
+-- whose call is a String — printed directly.  A SMOKE example (no expected
+-- block) synthesizes the raw expression, whose type is arbitrary and need not be
+-- printable, so its call is only FORCED and contributes an empty value; `buildDetailsFrom` passes it
 -- as long as it evaluated.  (There are currently zero smoke examples in the
 -- tree, so this arm is correctness, not machinery.)
 mainLines : String ->
@@ -433,10 +433,12 @@ mainLines nonce i (ex :: rest) ((Ok _) :: srRest) =
     ++ mainLines nonce (i + 1) rest srRest
 
 valueLine : String -> Int -> Example -> String
-valueLine nonce i ex = match exampleExpected ex
-  Some _ =>
-    "  let _ = \{valuePrintExprWith (runtimeAlias nonce ++ ".putStrLn") (runtimeAlias nonce ++ ".debugStringLit") (probeBindingName nonce i)}"
-  None => "  let _ = \{probeBindingName nonce i}"
+valueLine nonce i ex =
+  let call = "\{probeBindingName nonce i} ()"
+  match exampleExpected ex
+    Some _ =>
+      "  let _ = \{valuePrintExprWith (runtimeAlias nonce ++ ".putStrLn") (runtimeAlias nonce ++ ".debugStringLit") call}"
+    None => "  let _ = \{call}"
 
 -- ── reading the probe's stdout back ─────────────────────────────────────────
 

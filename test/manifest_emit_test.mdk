@@ -233,7 +233,8 @@ test "manifest_emit: manifest refuses what check refuses" = expectEach [
 test "manifest_emit: a user module called core retains its own checked Clock row" = withScratchDir
   (dir => do
     let path = dir ++ "/core.mdk"
-    let _ = writeFile path "not : <Clock> Unit\nnot = ()\nmain = ()\n"
+    let _ =
+      writeFile path "not : Unit -> <Clock> Unit\nnot () = ()\nmain = ()\n"
     let manifest =
       boundedInTree 90 (medakaBin ()) ["manifest", path, "--fn", "not"]
     let policy = boundedInTree 90 (medakaBin ()) [
