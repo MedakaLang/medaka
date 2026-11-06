@@ -202,14 +202,14 @@ envOr name dflt = match getEnv name
 -- `medaka run <emitter>` fallback).  The layout `make medaka` already produces —
 -- `./medaka`, `./medaka_emitter`, and `stdlib/` all siblings at the repo root —
 -- IS this default layout, so the in-repo dev build keeps working with no env
--- vars set: exeDir is the repo root, exactly what MEDAKA_ROOT needs to be.  An
+-- vars set: `exeDir ()` is the repo root, exactly what MEDAKA_ROOT needs to be.  An
 -- explicit env var always wins (envOr only falls back to these when unset).
 export
-exeDir : <IO> String
-exeDir = dirOf (executablePath ())
+exeDir : Unit -> <IO> String
+exeDir () = dirOf (executablePath ())
 
 export
-defaultMedakaRoot : <IO> String
+defaultMedakaRoot : Unit -> <IO> String
 -- Shares a signature with `test_process.medakaRoot` and nothing else: that one
 -- reads the MEDAKA_ROOT env var, this one derives the root from the running
 -- binary's own location, which is the fallback used when no env var is set.
@@ -217,11 +217,11 @@ defaultMedakaRoot : <IO> String
 -- tell the two apart; taking its suggestion would both change behavior and
 -- point the compiler driver at a test-support module.
 -- lint-disable-next-line rule-stdlib-reimpl
-defaultMedakaRoot = exeDir
+defaultMedakaRoot () = exeDir ()
 
 export
-defaultMedakaEmitter : <IO> String
-defaultMedakaEmitter = joinPath exeDir "medaka_emitter"
+defaultMedakaEmitter : Unit -> <IO> String
+defaultMedakaEmitter () = joinPath (exeDir ()) "medaka_emitter"
 
 -- Reads a stdlib prelude file (stdlib/runtime.mdk or stdlib/core.mdk) and, on
 -- failure, wraps the bare strerror `readFile` returns (e.g. "No such file or
@@ -822,7 +822,8 @@ scratchProbeManifest projectName target runtimeDepName =
         ++ runtimeDepName
         ++ " is already declared")
   else
-    let medakaRoot = canonicalizePath (envOr "MEDAKA_ROOT" defaultMedakaRoot)
+    let medakaRoot =
+      canonicalizePath (envOr "MEDAKA_ROOT" (defaultMedakaRoot ()))
     Ok
       (scratchManifestText
         projectName
@@ -1278,7 +1279,7 @@ defaultBuildOptions = BuildOptions {
 export
 probeBuildPaths : String -> String -> <IO> BuildPaths
 probeBuildPaths input out =
-  let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
+  let root = envOr "MEDAKA_ROOT" (defaultMedakaRoot ())
   BuildPaths {
     bpRoot = root,
     bpMedaka = envOr "MEDAKA" (joinPath root "medaka"),
@@ -1456,7 +1457,7 @@ runBuildNativeRootsGo paths tmpDir options frontGate =
   let llPath = joinPath tmpDir "program.ll"
   let emitArgsBase =
     [runtimeP, preludeP, inputAbs] ++ inputRoots ++ [compilerDir, stdlibDir]
-  let emitter2 = envOr "MEDAKA_EMITTER" defaultMedakaEmitter
+  let emitter2 = envOr "MEDAKA_EMITTER" (defaultMedakaEmitter ())
   let useNative = emitter2 /= ""
   let emitProg0 = if useNative then emitter2 else paths.bpMedaka
   let emitArgs0 =
@@ -1817,8 +1818,8 @@ firstWriteError ((path, text) :: rest) = match writeFile path text
 -- runtime on the small gate fixtures they process.  A single reader so the
 -- link path and the `--emit-rt-obj` precompile path can never drift on the opt
 -- level (a mismatch would make the prebuilt object subtly incompatible).
-clangOptFlag : <IO> String
-clangOptFlag =
+clangOptFlag : Unit -> <IO> String
+clangOptFlag () =
   let optFlagRaw = envOr "MEDAKA_CLANG_OPT" "-O2"
   if optFlagRaw == "" then "-O2" else optFlagRaw
 
@@ -1846,7 +1847,7 @@ profileClang BuildProbe _ probeOpt =
 
 resolveProfile : BuildProfile -> <IO> (String, Bool)
 resolveProfile profile =
-  profileClang profile clangOptFlag (envOr "MEDAKA_TEST_CLANG_OPT" "")
+  profileClang profile (clangOptFlag ()) (envOr "MEDAKA_TEST_CLANG_OPT" "")
 
 -- One clang link: the IR, the C runtime, where the binary goes, and the scratch
 -- dir the probes write into.  `ljInput` is the source entry, named in the
@@ -1992,7 +1993,7 @@ provenanceObject True cc tmpDir projRoot =
       -- object cannot be built under flags the link does not expect — the same
       -- discipline emitRtObj and emitPreludeObj follow.
       let ccArgs =
-        [clangOptFlag, "-c"] ++ gcSectionsCflags ++ [provC, "-o", provO]
+        [clangOptFlag (), "-c"] ++ gcSectionsCflags ++ [provC, "-o", provO]
       match runCommandOk cc ccArgs
         Err e => Err "error: compiling the build-provenance stamp failed\n\{e}"
         Ok _ => Ok provO
@@ -2658,7 +2659,7 @@ emitPreludeObjIn cc root medaka outObjPath tmpDir = match detectGC cc tmpDir
           joinPath root "compiler",
           joinPath root "stdlib",
         ]
-        let emitter2 = envOr "MEDAKA_EMITTER" defaultMedakaEmitter
+        let emitter2 = envOr "MEDAKA_EMITTER" (defaultMedakaEmitter ())
         let useNative = emitter2 /= ""
         let emitProg0 = if useNative then emitter2 else medaka
         let emitArgs0 =
@@ -2683,7 +2684,7 @@ emitPreludeObjIn cc root medaka outObjPath tmpDir = match detectGC cc tmpDir
                   -- A native object even under detectLto: the link accepts a
                   -- native input beside bitcode, and this opt-in object is
                   -- compared by program output, not bytes.
-                  let optFlag = clangOptFlag
+                  let optFlag = clangOptFlag ()
                   let ccArgs =
                     [optFlag, "-pthread"]
                       ++ gcSectionsCflags
@@ -2727,7 +2728,7 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
     let res = match detectGC cc tmpDir
       None => buildErr (libgcMissingError ())
       Some (gcCflags, _gcLibs) =>
-        let optFlag = clangOptFlag
+        let optFlag = clangOptFlag ()
         let rtC = joinPath root "runtime/medaka_rt.c"
         -- -c (compile-only): the section-GC LINK flag has no meaning here — only
         -- the compile flags (gcSectionsCflags) apply, and they must match

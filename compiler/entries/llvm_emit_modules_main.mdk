@@ -90,8 +90,8 @@ oracleMain () = driveEmitLocated emitTail
 --   "prelude"  → 1, core.mdk alone, as the shared `prelude.o` (--emit-prelude-obj).
 --   "program"  → 2, this program only, `declare`ing what prelude.o defines.
 -- See the big section comment on emitHalfRef in compiler/backend/llvm_emit.mdk.
-emitHalfOfEnv : <IO> Int
-emitHalfOfEnv = match getEnv "MEDAKA_EMIT_HALF"
+emitHalfOfEnv : Unit -> <IO> Int
+emitHalfOfEnv () = match getEnv "MEDAKA_EMIT_HALF"
   Some "prelude" => 1
   Some "program" => 2
   _ => 0
@@ -134,7 +134,7 @@ emitTail : List (String, String, List Decl) ->
   List (String, List Decl) ->
   <IO> Unit
 emitTail mods requirement _outputs facts runtimeDecls coreD modules1 =
-  let half = emitHalfOfEnv
+  let half = emitHalfOfEnv ()
   let modules2 = stampSiteFiles mods modules1
   let allDecls0 = coreD ++ flatMap snd modules2
   -- SOURCE DCE IS OFF in the prelude-object modes.  It is per-program by

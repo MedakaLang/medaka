@@ -61,7 +61,7 @@ withTarget only targetPath = match readFile targetPath
     -- it cannot read the stdlib itself).  This entry is the LINT GATE'S ORACLE:
     -- if it ran on an empty index while the CLI ran on a real one, the gate
     -- would go green on output the CLI never produces.  Both build the same way.
-    match buildStdlibIndexResult
+    match buildStdlibIndexResult ()
       Ok idx =>
         putStr (onlyRules only (lintToLines idx targetSrc targetPath pos decls))
       Err (StdlibIndexError { path, source, diagnostic }) =>

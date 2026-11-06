@@ -655,7 +655,7 @@ indexForRoster : List Rule ->
   <IO> Result StdlibIndexError StdlibIndex
 indexForRoster roster root keepAll only disable paths =
   indexForRosterIn
-    lintStdlibDir
+    (lintStdlibDir ())
     (stdlibShardDir ())
     roster
     root
@@ -788,9 +788,9 @@ ruleNeedsIndex only disable r =
 -- failure to read the stdlib degrades to an empty or partial index (see
 -- `StdlibIndex`); only a stdlib file that does not PARSE is an error.
 export
-buildStdlibIndexResult : <IO> Result StdlibIndexError StdlibIndex
-buildStdlibIndexResult =
-  buildStdlibIndexResultIn lintStdlibDir (stdlibShardDir ())
+buildStdlibIndexResult : Unit -> <IO> Result StdlibIndexError StdlibIndex
+buildStdlibIndexResult () =
+  buildStdlibIndexResultIn (lintStdlibDir ()) (stdlibShardDir ())
 
 export
 buildStdlibIndexResultIn : String ->
@@ -805,7 +805,7 @@ buildStdlibIndexResultIn sdir shardDir =
 export
 buildProjectIndexResult : String -> <IO> Result StdlibIndexError StdlibIndex
 buildProjectIndexResult root =
-  buildProjectIndexResultIn lintStdlibDir (stdlibShardDir ()) root
+  buildProjectIndexResultIn (lintStdlibDir ()) (stdlibShardDir ()) root
 
 export
 buildProjectIndexResultIn : String ->
@@ -902,13 +902,13 @@ projectFileRows dir stamp root path =
     Ok (digest, rows) => (digest, rows)
 
 -- `<MEDAKA_ROOT>/stdlib`, resolved exactly as the CLI resolves it (`envOr
--- "MEDAKA_ROOT" defaultMedakaRoot`, `driver/build_cmd.mdk`) — an unset or empty
+-- "MEDAKA_ROOT" (defaultMedakaRoot ())`, `driver/build_cmd.mdk`) — an unset or empty
 -- var falls back to the running executable's own directory, so a relocated
 -- `medaka` still finds its stdlib.  Restated locally rather than imported so the
 -- lint graph — and with it `entries/lint_main.mdk`, the gate oracle — does not
 -- pull in `driver/build_cmd.mdk`.  Same reason `tools/lsp.mdk` keeps its own.
-lintStdlibDir : <IO> String
-lintStdlibDir = match getEnv "MEDAKA_ROOT"
+lintStdlibDir : Unit -> <IO> String
+lintStdlibDir () = match getEnv "MEDAKA_ROOT"
   Some v => if v == "" then exeStdlibDir () else "\{v}/stdlib"
   None => exeStdlibDir ()
 

@@ -3406,7 +3406,7 @@ export
 runEvalPropsWorker : String -> List PropRequest -> <IO> Unit
 runEvalPropsWorker target requests =
   let nonce = startEvalPropWorker ()
-  let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
+  let root = envOr "MEDAKA_ROOT" (defaultMedakaRoot ())
   let stdlibDir = joinPath root "stdlib"
   match readPreludeSources stdlibDir
     Err message => evalWorkerDie "could not read the prelude: \{message}"
@@ -4779,7 +4779,7 @@ dropSeedLine out = match !testSeedRef
 export
 runTestOne : List Engine -> Int -> Option String -> String -> <IO> Unit
 runTestOne engines cases filterOpt target =
-  let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
+  let root = envOr "MEDAKA_ROOT" (defaultMedakaRoot ())
   let rtPath = root ++ "/stdlib/runtime.mdk"
   let corePath = root ++ "/stdlib/core.mdk"
   let stdlibDir = root ++ "/stdlib"
