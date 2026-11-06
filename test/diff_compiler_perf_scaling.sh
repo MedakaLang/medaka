@@ -4607,7 +4607,8 @@ if want scoperefs; then   # PERF_ONLY unit: scoperefs
 # FLOOR even if its coupled quadratic is someday fixed — a ~17k prelude-marking constant
 # floors it): if THAT is under FLOOR the profiler produced nothing for this run and we fail
 # harness, never green. (The global ops_graded==0 guard is the whole-gate backstop.)
-SCOPEREFS_N="${PERF_SCOPEREFS_N:-300}"
+# Emit nets ~1 counted op per reference, so N must clear OP_FLOOR for the ratio arm to grade.
+SCOPEREFS_N="${PERF_SCOPEREFS_N:-1200}"
 scn1="$SCOPEREFS_N"; scn2=$((SCOPEREFS_N * 2))
 scd1="$WORK/scoperefs_$scn1.mdk"; scd2="$WORK/scoperefs_$scn2.mdk"
 gen_scoperefs_resolve "$scn1" "$scd1"
