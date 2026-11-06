@@ -700,19 +700,18 @@ mergedFallbackRow dir name src expected =
         1
         ""
         ["/dt_\{name}.mdk:"],
-      mergedFallbackRows name path expected,
+      expectReportRows name path expected,
     ]
 
-mergedFallbackRows : String ->
+expectReportRows : String ->
   String ->
   List String ->
   <Exec, IO, FileRead> Expectation
-mergedFallbackRows name path expected =
-  match runVerb 300 ["test", "--json", path]
-    Err e => fail "\{name}.mdk: could not spawn: \{e}"
-    Ok (_, out, _) => match J.parse out
-      Err e => fail "\{name}.mdk: the --json report did not parse: \{e}"
-      Ok report => expectEqual expected (reportRows report)
+expectReportRows name path expected = match runVerb 300 ["test", "--json", path]
+  Err e => fail "\{name}.mdk: could not spawn: \{e}"
+  Ok (_, out, _) => match J.parse out
+    Err e => fail "\{name}.mdk: the --json report did not parse: \{e}"
+    Ok report => expectEqual expected (reportRows report)
 
 test "merged native probe: a build failure falls back to one probe per arm" = withScratchDir
   (dir => mergedFallbackRow dir "merged_build_fail" mergedBuildFailSrc [
@@ -724,9 +723,9 @@ test "native probe: a panicking smoke example errors at its own turn" = withScra
     "doctest 3 pass", "doctest 5 error", "test double one pass"
   ])
 
--- A smoke example (no expected block) is a binding the native backend forces at
--- startup.  Its side effect must run once, not once per section of a merged
--- probe, so a file with one keeps a probe per arm.
+-- A smoke example (no expected block) is a unit function its doctest section calls.
+-- Its side effect must run once, not once per section of a merged probe, so a
+-- file with one keeps a probe per arm.
 smokeSideEffectSrc : String -> String
 smokeSideEffectSrc log =
   "import test.{expectEqual}\n\n-- > appendFile \"\{log}\" \"x\"\n-- > double 2\n-- 4\nexport\ndouble : Int -> Int\ndouble x = x * 2\n\ntest \"log written once\" =\n  expectEqual (readFile \"\{log}\") (Ok \"x\")\n\nprop \"double is even\" (n : Int) =\n  double n % 2 == 0\n"

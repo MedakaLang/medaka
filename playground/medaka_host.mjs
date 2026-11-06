@@ -1294,8 +1294,9 @@ export function makeImports(profile, opts) { return createHost(profile, opts).im
 // imports from `host.importsFor(true)` may suspend it.  A suspended run settles the
 // same ways a synchronous one ends: an `exit` after a resumption rejects with its
 // ExitSignal and a trap with its RuntimeError, both caught below after a flush.  The
-// start function runs during instantiation and is never promising: a Suspending import
-// it reached would trap with a SuspendError.
+// start function runs during instantiation and is never promising, but it runs only
+// value initializers that call nothing (a call-bearing one is lazy, forced inside
+// main), so it reaches no import that could suspend.
 export async function createProgramSession(wasm, host, opts = {}) {
   let entry;
   try {
@@ -1311,9 +1312,6 @@ export async function createProgramSession(wasm, host, opts = {}) {
     entry = typeof main === 'function' ? (promising ? WebAssembly.promising(main) : main) : () => {};
   } catch (e) {
     host.flush();
-    if (e && (e.name === 'SuspendError' || /suspend without WebAssembly\.promising/.test(e.message)))
-      e.message += ': a top-level value called fetchText or sleepMs during initialization; '
-        + 'JSPI cannot suspend there: move the call into main';
     throw e;
   }
   let active = false;

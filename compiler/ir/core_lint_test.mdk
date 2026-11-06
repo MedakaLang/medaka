@@ -1,0 +1,202 @@
+import test.{expectAll, expectEqual, expectFalse}
+import frontend.ast.{Addr(..), Lit(..), Pat(..), noBinderId, noDeclLoc}
+import ir.core_ir.{
+  CArm(..),
+  CClause(..),
+  CExpr(..),
+  CGuard(..),
+  CProgram(..),
+  CStmt(..),
+  CTree(..),
+  CallMode(..),
+  CallSite(..),
+  FailSite(..),
+  noDeclFacts,
+  synthBind,
+}
+import ir.core_lint.{lintProgram}
+import ir.core_pass.{
+  CorePass(..),
+  PassConfig(..),
+  PassFault(..),
+  PassRun(..),
+  defaultPassConfig,
+  runPasses,
+}
+-- Sibling test module for `compiler/ir/core_lint.mdk` ([P-TEST-SIBLING]).
+--
+-- Each rule has a bad program that fires it and a good twin that is silent.
+
+v : String -> CExpr
+v x = CVar x AGlobal
+
+site : CallSite
+site = CallSite CallDynamic False
+
+num : Int -> CExpr
+num n = CLit (LInt n)
+
+pv : String -> Pat
+pv x = PVar x noDeclLoc noBinderId
+
+-- A program with one top-level function `f` taking `x`, with [body].
+programOf : CExpr -> CProgram
+programOf body =
+  CProgram [synthBind "f" [CClause [pv "x"] body]] [] [] [] [] noDeclFacts
+
+faultCount : CExpr -> Int
+faultCount body = length (lintProgram (programOf body))
+
+arm : Pat -> CExpr -> CArm
+arm p body = CArm p [] body
+
+test "scope: a parameter is bound in its body" =
+  expectEqual 0 (faultCount (v "x"))
+
+test "scope: a name bound nowhere is a fault naming it" = expectAll [
+  expectEqual 1 (faultCount (v "y")),
+  expectEqual
+    ["binding f: unbound variable y"]
+    (lintProgram (programOf (v "y"))),
+]
+
+test "scope: a top-level binding is in scope" =
+  expectEqual
+    0
+    (length
+      (lintProgram
+        (CProgram
+          [
+            synthBind "f" [CClause [] (v "g")],
+            synthBind "g" [CClause [] (num 1)],
+          ]
+          []
+          []
+          []
+          []
+          noDeclFacts)))
+
+test "scope: a constructor name is in scope" =
+  expectEqual
+    0
+    (length
+      (lintProgram
+        (CProgram
+          [synthBind "f" [CClause [] (v "Some")]]
+          [("Some", 1)]
+          []
+          []
+          []
+          noDeclFacts)))
+
+test "scope: a lambda parameter binds in its body only" = expectAll [
+  expectEqual 0 (faultCount (CLam [pv "y"] (v "y"))),
+  expectEqual 1 (faultCount (CTuple [CLam [pv "y"] (v "y"), v "y"])),
+]
+
+test "scope: let binds in the body, and in the rhs only when recursive" = expectAll
+  [
+    expectEqual 0 (faultCount (CLet False (pv "y") (num 1) (v "y"))),
+    expectEqual 1 (faultCount (CLet False (pv "y") (v "y") (num 1))),
+    expectEqual 0 (faultCount (CLet True (pv "y") (v "y") (num 1))),
+  ]
+
+test "scope: a let-group name is in scope in every clause and the body" =
+  let group = [
+    synthBind "a" [CClause [] (v "b")],
+    synthBind "b" [CClause [pv "z"] (v "z")],
+  ]
+  expectAll [
+    expectEqual 0 (faultCount (CLetGroup group (v "a"))),
+    expectEqual 1 (faultCount (CLetGroup group (v "z"))),
+  ]
+
+test "scope: an arm pattern binds in its guards and body, not the next arm" =
+  let good = CMatch (v "x") [arm (pv "y") (v "y")]
+  let leaky = CMatch (v "x") [arm (pv "y") (num 1), arm PWild (v "y")]
+  let guarded = CMatch (v "x") [CArm (pv "y") [CGBool (v "y")] (v "y")]
+  expectAll [
+    expectEqual 0 (faultCount good),
+    expectEqual 1 (faultCount leaky),
+    expectEqual 0 (faultCount guarded),
+  ]
+
+test "scope: a pattern guard binds for later guards and the body" =
+  let good = CMatch (v "x") [
+    CArm PWild [CGBind (pv "y") (v "x"), CGBool (v "y")] (v "y"),
+  ]
+  let early = CMatch (v "x") [CArm PWild [CGBind (pv "y") (v "y")] (num 1)]
+  expectAll [expectEqual 0 (faultCount good), expectEqual 1 (faultCount early)]
+
+test "scope: a block let binds the statements after it" =
+  let good = CBlock [CSLet False (pv "y") (num 1), CSExpr (v "y")]
+  let early = CBlock [CSExpr (v "y"), CSLet False (pv "y") (num 1)]
+  expectAll [expectEqual 0 (faultCount good), expectEqual 1 (faultCount early)]
+
+test "spine: an application headed by an application is a fault" =
+  let inner = CApp (v "x") [num 1] site
+  expectAll [
+    expectEqual 0 (faultCount inner),
+    expectEqual 1 (faultCount (CApp inner [num 2] site)),
+  ]
+
+test "spine: an application with no arguments is a fault" = expectAll [
+  expectEqual 1 (faultCount (CApp (v "x") [] site)),
+  expectEqual 0 (faultCount (CApp (v "x") [num 1] site)),
+]
+
+test "decision: a leaf must index an existing arm" =
+  let arms = [arm PWild (num 1), arm PWild (num 2)]
+  let withTree tree = CDecision (v "x") arms tree
+  expectAll [
+    expectEqual 0 (faultCount (withTree (CTLeaf 1))),
+    expectEqual 1 (faultCount (withTree (CTLeaf 2))),
+    expectEqual 1 (faultCount (withTree (CTGuard 5 (CTLeaf 0)))),
+    expectEqual 0 (faultCount (withTree (CTFail (NoArm noDeclLoc)))),
+  ]
+
+-- ── the runner ──────────────────────────────────────────────────────────────
+breakVar : CorePass String
+breakVar = CorePass {
+  passName = "break-var",
+  passRun =
+    _ (CProgram _ a b c d e) =>
+      CProgram [synthBind "f" [CClause [] (v "nowhere")]] a b c d e,
+}
+
+keep : CorePass String
+keep = CorePass { passName = "keep", passRun = _ p => p }
+
+lintOn : PassConfig
+lintOn = PassConfig { lint = True, dumpAfter = [] }
+
+lintOff : PassConfig
+lintOff = PassConfig { lint = False, dumpAfter = [] }
+
+clean : CProgram
+clean = CProgram [synthBind "f" [CClause [] (num 1)]] [] [] [] [] noDeclFacts
+
+test "a lint-on run turns a finding into a fault naming the pass" =
+  let run = runPasses lintOn "ctx" [keep, breakVar, keep] clean
+  expectEqual
+    [
+      ("break-var", "binding f: unbound variable nowhere"),
+      ("keep", "binding f: unbound variable nowhere"),
+    ]
+    (map (f => (f.faultPass, f.faultMessage)) run.faults)
+
+test "the input program is linted under the name input" =
+  let bad =
+    CProgram [synthBind "f" [CClause [] (v "nowhere")]] [] [] [] [] noDeclFacts
+  expectEqual
+    ["input"]
+    (map (f => f.faultPass) (runPasses lintOn "ctx" [] bad).faults)
+
+test "a lint-off run finds nothing" =
+  expectEqual 0 (length (runPasses lintOff "ctx" [breakVar] clean).faults)
+
+test "the library default config does not lint" =
+  expectFalse defaultPassConfig.lint
+
+test "a clean program through lint-on passes has no faults" =
+  expectEqual 0 (length (runPasses lintOn "ctx" [keep, keep] clean).faults)

@@ -1,5 +1,5 @@
 # META
-source_lines=1818
+source_lines=1806
 stages=DESUGAR,MARK
 # SOURCE
 import backend.package_identity.{validateIdentityPlan, renderIdentityDefect}
@@ -1059,12 +1059,6 @@ walkE ctx scope (CVariantUpdate con base fields) w =
 walkE ctx scope (CArray es) w = walkList ctx scope es w
 walkE ctx scope (CRangeList lo hi _) w = walkList ctx scope [lo, hi] w
 walkE ctx scope (CRangeArray lo hi _) w = walkList ctx scope [lo, hi] w
-walkE ctx scope (CIndex a i) w = walkList ctx scope [a, i] w
-walkE ctx scope (CSlice a lo hi _) w = walkList ctx scope [a, lo, hi] w
-walkE ctx scope (CStringIndex a i) w = walkList ctx scope [a, i] w
-walkE ctx scope (CStringSlice a lo hi _) w = walkList ctx scope [a, lo, hi] w
-walkE ctx scope (CListIndex a i) w = walkList ctx scope [a, i] w
-walkE ctx scope (CListSlice a lo hi _) w = walkList ctx scope [a, lo, hi] w
 walkE ctx scope (CBlock stmts) w = walkStmts ctx scope stmts w
 walkE ctx scope (node@(CMethod name (MethodEvidence iface _ _ _ meths))) w =
   noteEvidence
@@ -1544,12 +1538,6 @@ tailE b _ (CVariantUpdate _ base fields) acc =
 tailE b _ (CArray es) acc = tailList b es acc
 tailE b _ (CRangeList lo hi _) acc = tailList b [lo, hi] acc
 tailE b _ (CRangeArray lo hi _) acc = tailList b [lo, hi] acc
-tailE b _ (CIndex a i) acc = tailList b [a, i] acc
-tailE b _ (CSlice a lo hi _) acc = tailList b [a, lo, hi] acc
-tailE b _ (CStringIndex a i) acc = tailList b [a, i] acc
-tailE b _ (CStringSlice a lo hi _) acc = tailList b [a, lo, hi] acc
-tailE b _ (CListIndex a i) acc = tailList b [a, i] acc
-tailE b _ (CListSlice a lo hi _) acc = tailList b [a, lo, hi] acc
 tailE b tl (CBlock stmts) acc = tailStmts b tl stmts acc
 tailE _ _ (CMethod _ _) acc = acc
 tailE _ _ (CDict _ _) acc = acc
@@ -2075,12 +2063,6 @@ validatePhysicalDemand _ _ _ = []
 (DFunDef false "walkE" ((PVar "ctx") (PVar "scope") (PCon "CArray" (PVar "es")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkList") (EVar "ctx")) (EVar "scope")) (EVar "es")) (EVar "w")))
 (DFunDef false "walkE" ((PVar "ctx") (PVar "scope") (PCon "CRangeList" (PVar "lo") (PVar "hi") PWild) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkList") (EVar "ctx")) (EVar "scope")) (EListLit (EVar "lo") (EVar "hi"))) (EVar "w")))
 (DFunDef false "walkE" ((PVar "ctx") (PVar "scope") (PCon "CRangeArray" (PVar "lo") (PVar "hi") PWild) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkList") (EVar "ctx")) (EVar "scope")) (EListLit (EVar "lo") (EVar "hi"))) (EVar "w")))
-(DFunDef false "walkE" ((PVar "ctx") (PVar "scope") (PCon "CIndex" (PVar "a") (PVar "i")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkList") (EVar "ctx")) (EVar "scope")) (EListLit (EVar "a") (EVar "i"))) (EVar "w")))
-(DFunDef false "walkE" ((PVar "ctx") (PVar "scope") (PCon "CSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkList") (EVar "ctx")) (EVar "scope")) (EListLit (EVar "a") (EVar "lo") (EVar "hi"))) (EVar "w")))
-(DFunDef false "walkE" ((PVar "ctx") (PVar "scope") (PCon "CStringIndex" (PVar "a") (PVar "i")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkList") (EVar "ctx")) (EVar "scope")) (EListLit (EVar "a") (EVar "i"))) (EVar "w")))
-(DFunDef false "walkE" ((PVar "ctx") (PVar "scope") (PCon "CStringSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkList") (EVar "ctx")) (EVar "scope")) (EListLit (EVar "a") (EVar "lo") (EVar "hi"))) (EVar "w")))
-(DFunDef false "walkE" ((PVar "ctx") (PVar "scope") (PCon "CListIndex" (PVar "a") (PVar "i")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkList") (EVar "ctx")) (EVar "scope")) (EListLit (EVar "a") (EVar "i"))) (EVar "w")))
-(DFunDef false "walkE" ((PVar "ctx") (PVar "scope") (PCon "CListSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkList") (EVar "ctx")) (EVar "scope")) (EListLit (EVar "a") (EVar "lo") (EVar "hi"))) (EVar "w")))
 (DFunDef false "walkE" ((PVar "ctx") (PVar "scope") (PCon "CBlock" (PVar "stmts")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkStmts") (EVar "ctx")) (EVar "scope")) (EVar "stmts")) (EVar "w")))
 (DFunDef false "walkE" ((PVar "ctx") (PVar "scope") (PAs "node" (PCon "CMethod" (PVar "name") (PCon "MethodEvidence" (PVar "iface") PWild PWild PWild (PVar "meths")))) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "noteEvidence") (EVar "ctx")) (EVar "scope")) (EVar "node")) (EApp (EApp (EApp (EApp (EVar "noteMethodResult") (EVar "ctx")) (EVar "name")) (EVar "iface")) (EApp (EApp (EApp (EApp (EApp (EVar "noteMethodContext") (EVar "ctx")) (EVar "name")) (EVar "iface")) (EApp (EVar "listLen") (EVar "meths"))) (EVar "w")))))
 (DFunDef false "walkE" ((PVar "ctx") (PVar "scope") (PAs "node" (PCon "CDict" PWild PWild)) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "noteEvidence") (EVar "ctx")) (EVar "scope")) (EVar "node")) (EVar "w")))
@@ -2249,12 +2231,6 @@ validatePhysicalDemand _ _ _ = []
 (DFunDef false "tailE" ((PVar "b") PWild (PCon "CArray" (PVar "es")) (PVar "acc")) (EApp (EApp (EApp (EVar "tailList") (EVar "b")) (EVar "es")) (EVar "acc")))
 (DFunDef false "tailE" ((PVar "b") PWild (PCon "CRangeList" (PVar "lo") (PVar "hi") PWild) (PVar "acc")) (EApp (EApp (EApp (EVar "tailList") (EVar "b")) (EListLit (EVar "lo") (EVar "hi"))) (EVar "acc")))
 (DFunDef false "tailE" ((PVar "b") PWild (PCon "CRangeArray" (PVar "lo") (PVar "hi") PWild) (PVar "acc")) (EApp (EApp (EApp (EVar "tailList") (EVar "b")) (EListLit (EVar "lo") (EVar "hi"))) (EVar "acc")))
-(DFunDef false "tailE" ((PVar "b") PWild (PCon "CIndex" (PVar "a") (PVar "i")) (PVar "acc")) (EApp (EApp (EApp (EVar "tailList") (EVar "b")) (EListLit (EVar "a") (EVar "i"))) (EVar "acc")))
-(DFunDef false "tailE" ((PVar "b") PWild (PCon "CSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild) (PVar "acc")) (EApp (EApp (EApp (EVar "tailList") (EVar "b")) (EListLit (EVar "a") (EVar "lo") (EVar "hi"))) (EVar "acc")))
-(DFunDef false "tailE" ((PVar "b") PWild (PCon "CStringIndex" (PVar "a") (PVar "i")) (PVar "acc")) (EApp (EApp (EApp (EVar "tailList") (EVar "b")) (EListLit (EVar "a") (EVar "i"))) (EVar "acc")))
-(DFunDef false "tailE" ((PVar "b") PWild (PCon "CStringSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild) (PVar "acc")) (EApp (EApp (EApp (EVar "tailList") (EVar "b")) (EListLit (EVar "a") (EVar "lo") (EVar "hi"))) (EVar "acc")))
-(DFunDef false "tailE" ((PVar "b") PWild (PCon "CListIndex" (PVar "a") (PVar "i")) (PVar "acc")) (EApp (EApp (EApp (EVar "tailList") (EVar "b")) (EListLit (EVar "a") (EVar "i"))) (EVar "acc")))
-(DFunDef false "tailE" ((PVar "b") PWild (PCon "CListSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild) (PVar "acc")) (EApp (EApp (EApp (EVar "tailList") (EVar "b")) (EListLit (EVar "a") (EVar "lo") (EVar "hi"))) (EVar "acc")))
 (DFunDef false "tailE" ((PVar "b") (PVar "tl") (PCon "CBlock" (PVar "stmts")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "tailStmts") (EVar "b")) (EVar "tl")) (EVar "stmts")) (EVar "acc")))
 (DFunDef false "tailE" (PWild PWild (PCon "CMethod" PWild PWild) (PVar "acc")) (EVar "acc"))
 (DFunDef false "tailE" (PWild PWild (PCon "CDict" PWild PWild) (PVar "acc")) (EVar "acc"))
@@ -2600,12 +2576,6 @@ validatePhysicalDemand _ _ _ = []
 (DFunDef false "walkE" ((PVar "ctx") (PVar "scope") (PCon "CArray" (PVar "es")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkList") (EVar "ctx")) (EVar "scope")) (EVar "es")) (EVar "w")))
 (DFunDef false "walkE" ((PVar "ctx") (PVar "scope") (PCon "CRangeList" (PVar "lo") (PVar "hi") PWild) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkList") (EVar "ctx")) (EVar "scope")) (EListLit (EVar "lo") (EVar "hi"))) (EVar "w")))
 (DFunDef false "walkE" ((PVar "ctx") (PVar "scope") (PCon "CRangeArray" (PVar "lo") (PVar "hi") PWild) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkList") (EVar "ctx")) (EVar "scope")) (EListLit (EVar "lo") (EVar "hi"))) (EVar "w")))
-(DFunDef false "walkE" ((PVar "ctx") (PVar "scope") (PCon "CIndex" (PVar "a") (PVar "i")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkList") (EVar "ctx")) (EVar "scope")) (EListLit (EVar "a") (EVar "i"))) (EVar "w")))
-(DFunDef false "walkE" ((PVar "ctx") (PVar "scope") (PCon "CSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkList") (EVar "ctx")) (EVar "scope")) (EListLit (EVar "a") (EVar "lo") (EVar "hi"))) (EVar "w")))
-(DFunDef false "walkE" ((PVar "ctx") (PVar "scope") (PCon "CStringIndex" (PVar "a") (PVar "i")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkList") (EVar "ctx")) (EVar "scope")) (EListLit (EVar "a") (EVar "i"))) (EVar "w")))
-(DFunDef false "walkE" ((PVar "ctx") (PVar "scope") (PCon "CStringSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkList") (EVar "ctx")) (EVar "scope")) (EListLit (EVar "a") (EVar "lo") (EVar "hi"))) (EVar "w")))
-(DFunDef false "walkE" ((PVar "ctx") (PVar "scope") (PCon "CListIndex" (PVar "a") (PVar "i")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkList") (EVar "ctx")) (EVar "scope")) (EListLit (EVar "a") (EVar "i"))) (EVar "w")))
-(DFunDef false "walkE" ((PVar "ctx") (PVar "scope") (PCon "CListSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkList") (EVar "ctx")) (EVar "scope")) (EListLit (EVar "a") (EVar "lo") (EVar "hi"))) (EVar "w")))
 (DFunDef false "walkE" ((PVar "ctx") (PVar "scope") (PCon "CBlock" (PVar "stmts")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkStmts") (EVar "ctx")) (EVar "scope")) (EVar "stmts")) (EVar "w")))
 (DFunDef false "walkE" ((PVar "ctx") (PVar "scope") (PAs "node" (PCon "CMethod" (PVar "name") (PCon "MethodEvidence" (PVar "iface") PWild PWild PWild (PVar "meths")))) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "noteEvidence") (EVar "ctx")) (EVar "scope")) (EVar "node")) (EApp (EApp (EApp (EApp (EVar "noteMethodResult") (EVar "ctx")) (EVar "name")) (EVar "iface")) (EApp (EApp (EApp (EApp (EApp (EVar "noteMethodContext") (EVar "ctx")) (EVar "name")) (EVar "iface")) (EApp (EVar "listLen") (EVar "meths"))) (EVar "w")))))
 (DFunDef false "walkE" ((PVar "ctx") (PVar "scope") (PAs "node" (PCon "CDict" PWild PWild)) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "noteEvidence") (EVar "ctx")) (EVar "scope")) (EVar "node")) (EVar "w")))
@@ -2774,12 +2744,6 @@ validatePhysicalDemand _ _ _ = []
 (DFunDef false "tailE" ((PVar "b") PWild (PCon "CArray" (PVar "es")) (PVar "acc")) (EApp (EApp (EApp (EVar "tailList") (EVar "b")) (EVar "es")) (EVar "acc")))
 (DFunDef false "tailE" ((PVar "b") PWild (PCon "CRangeList" (PVar "lo") (PVar "hi") PWild) (PVar "acc")) (EApp (EApp (EApp (EVar "tailList") (EVar "b")) (EListLit (EVar "lo") (EVar "hi"))) (EVar "acc")))
 (DFunDef false "tailE" ((PVar "b") PWild (PCon "CRangeArray" (PVar "lo") (PVar "hi") PWild) (PVar "acc")) (EApp (EApp (EApp (EVar "tailList") (EVar "b")) (EListLit (EVar "lo") (EVar "hi"))) (EVar "acc")))
-(DFunDef false "tailE" ((PVar "b") PWild (PCon "CIndex" (PVar "a") (PVar "i")) (PVar "acc")) (EApp (EApp (EApp (EVar "tailList") (EVar "b")) (EListLit (EVar "a") (EVar "i"))) (EVar "acc")))
-(DFunDef false "tailE" ((PVar "b") PWild (PCon "CSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild) (PVar "acc")) (EApp (EApp (EApp (EVar "tailList") (EVar "b")) (EListLit (EVar "a") (EVar "lo") (EVar "hi"))) (EVar "acc")))
-(DFunDef false "tailE" ((PVar "b") PWild (PCon "CStringIndex" (PVar "a") (PVar "i")) (PVar "acc")) (EApp (EApp (EApp (EVar "tailList") (EVar "b")) (EListLit (EVar "a") (EVar "i"))) (EVar "acc")))
-(DFunDef false "tailE" ((PVar "b") PWild (PCon "CStringSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild) (PVar "acc")) (EApp (EApp (EApp (EVar "tailList") (EVar "b")) (EListLit (EVar "a") (EVar "lo") (EVar "hi"))) (EVar "acc")))
-(DFunDef false "tailE" ((PVar "b") PWild (PCon "CListIndex" (PVar "a") (PVar "i")) (PVar "acc")) (EApp (EApp (EApp (EVar "tailList") (EVar "b")) (EListLit (EVar "a") (EVar "i"))) (EVar "acc")))
-(DFunDef false "tailE" ((PVar "b") PWild (PCon "CListSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild) (PVar "acc")) (EApp (EApp (EApp (EVar "tailList") (EVar "b")) (EListLit (EVar "a") (EVar "lo") (EVar "hi"))) (EVar "acc")))
 (DFunDef false "tailE" ((PVar "b") (PVar "tl") (PCon "CBlock" (PVar "stmts")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "tailStmts") (EVar "b")) (EVar "tl")) (EVar "stmts")) (EVar "acc")))
 (DFunDef false "tailE" (PWild PWild (PCon "CMethod" PWild PWild) (PVar "acc")) (EVar "acc"))
 (DFunDef false "tailE" (PWild PWild (PCon "CDict" PWild PWild) (PVar "acc")) (EVar "acc"))

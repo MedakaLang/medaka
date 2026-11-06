@@ -1,0 +1,284 @@
+import test.{expectAll, expectEqual}
+import string.{split}
+import support.util.{reverseL}
+import frontend.ast.{
+  Addr(..),
+  Lit(..),
+  Pat(..),
+  RecPatField(..),
+  Route(..),
+  Ty(..),
+  noBinderId,
+  noDeclLoc,
+}
+import ir.core_ir.{
+  CArm(..),
+  CBind(..),
+  CClause(..),
+  CExpr(..),
+  CField(..),
+  CGuard(..),
+  CHead(..),
+  CImplBody(..),
+  CImplEntry(..),
+  CProgram(..),
+  CStmt(..),
+  CTBranch(..),
+  CTree(..),
+  CallMode(..),
+  CallSite(..),
+  FailSite(..),
+  MethodEvidence(..),
+  noDeclFacts,
+  noImplSym,
+}
+import ir.core_ir_sexp.{cexprSexp, cprogramToSexp, ctreeSexp, defaultSexpMode}
+import ir.core_walk.{foldExpr, patBinders, rewriteExpr, rewriteProgram}
+-- Sibling test module for `compiler/ir/core_walk.mdk` ([P-TEST-SIBLING]).
+--
+-- Each fixture is a function of the variable name it reads, one fixture per
+-- `CExpr` constructor, with a variable in every sub-expression position.  Renaming
+-- "x" to "y" through the walk must equal the fixture built with "y": a position
+-- the walk skipped keeps "x" and the sexps differ.
+
+v : String -> CExpr
+v x = CVar x AGlobal
+
+site : CallSite
+site = CallSite CallDynamic False
+
+evidence : MethodEvidence
+evidence = MethodEvidence {
+  meIface = "core::Num",
+  meArity = 1,
+  meDispatch = RNone,
+  mePrereqs = [],
+  meContext = [],
+}
+
+tree : CTree
+tree =
+  CTSwitch [CTBranch HNil (CTLeaf 0)] (CTGuard 1 (CTFail (NoArm noDeclLoc)))
+
+arms : String -> List CArm
+arms x = [
+  CArm PWild [CGBool (v x), CGBind PWild (v x)] (v x),
+  CArm PWild [] (v x),
+  CArmAlt PWild [CGBool (v x)] 0,
+]
+
+fixtures : List (String, String -> CExpr)
+fixtures = [
+  ("CLit", _ => CLit (LInt 1)),
+  ("CVar", v),
+  ("CApp", x => CApp (v x) [v x, v x] site),
+  ("CLam", x => CLam [PWild] (v x)),
+  ("CLet", x => CLet False PWild (v x) (v x)),
+  (
+    "CLetGroup",
+    x =>
+      CLetGroup
+        [
+          CBind
+            "f"
+            [CClause [PWild] (v x), CClause [] (v x)]
+            noDeclLoc
+            noBinderId,
+        ]
+        (v x),
+  ),
+  ("CMatch", x => CMatch (v x) (arms x)),
+  ("CDecision", x => CDecision (v x) (arms x) tree),
+  ("CIf", x => CIf (v x) (v x) (v x)),
+  ("CBinPrim", x => CBinPrim "+" (v x) (v x) "Int" noDeclLoc),
+  ("CUnOp", x => CUnOp "-" (v x)),
+  ("CTuple", x => CTuple [v x, v x]),
+  ("CList", x => CList [v x, v x]),
+  ("CRecord", x => CRecord "R" [CField "a" 0 (v x), CField "b" 1 (v x)]),
+  ("CFieldAccess", x => CFieldAccess (v x) "a" "R" 0),
+  ("CRecordUpdate", x => CRecordUpdate "R" (v x) [CField "a" 0 (v x)]),
+  ("CVariantUpdate", x => CVariantUpdate "K" (v x) [CField "a" 0 (v x)]),
+  ("CArray", x => CArray [v x, v x]),
+  ("CRangeList", x => CRangeList (v x) (v x) True),
+  ("CRangeArray", x => CRangeArray (v x) (v x) False),
+  (
+    "CBlock",
+    x => CBlock [CSExpr (v x), CSLet False PWild (v x), CSAssign "z" (v x)],
+  ),
+  ("CMethod", _ => CMethod "fromInt" evidence),
+  ("CDict", _ => CDict "d" [RDict "a"]),
+]
+
+rename : CExpr -> CExpr
+rename (CVar "x" a) = CVar "y" a
+rename e = e
+
+sexp : CExpr -> String
+sexp e = cexprSexp defaultSexpMode e
+
+identityCase : (String, String -> CExpr) -> Bool
+identityCase (_, mk) = sexp (rewriteExpr (e => e) (mk "x")) == sexp (mk "x")
+
+renameCase : (String, String -> CExpr) -> Bool
+renameCase (_, mk) = sexp (rewriteExpr rename (mk "x")) == sexp (mk "y")
+
+failing : (a -> Bool) -> List a -> List a
+failing ok xs = filter (x => not (ok x)) xs
+
+test "an identity rewrite returns an equal expression for every constructor" =
+  expectEqual [] (map fst (failing identityCase fixtures))
+
+test "a rewrite reaches every sub-expression position of every constructor" =
+  expectEqual [] (map fst (failing renameCase fixtures))
+
+exprTags : List String
+exprTags = [
+  "CLit",
+  "CVar",
+  "CApp",
+  "CLam",
+  "CLet",
+  "CLetGroup",
+  "CMatch",
+  "CDecision",
+  "CIf",
+  "CBinPrim",
+  "CUnOp",
+  "CTuple",
+  "CList",
+  "CRecord",
+  "CFieldAccess",
+  "CRecordUpdate",
+  "CVariantUpdate",
+  "CArray",
+  "CRangeList",
+  "CRangeArray",
+  "CBlock",
+  "CMethod",
+  "CDict",
+]
+
+-- Occurrences of a node tag in a sexp: "(Tag " or "(Tag)".  The `CExpr` tags are
+-- the only ones in `exprTags`; arms, fields, statements and tree nodes use other
+-- tags.
+tagCount : String -> String -> Int
+tagCount s tag =
+  length (split "(\{tag} " s) - 1 + (length (split "(\{tag})" s) - 1)
+
+sexpNodeCount : CExpr -> Int
+sexpNodeCount e = sum (map (tagCount (sexp e)) exprTags)
+
+countNodes : CExpr -> Int
+countNodes e = foldExpr (n _ => n + 1) 0 e
+
+countCase : (String, String -> CExpr) -> Bool
+countCase (_, mk) = countNodes (mk "x") == sexpNodeCount (mk "x")
+
+nested : CExpr
+nested =
+  CLetGroup
+    [
+      CBind
+        "f"
+        [CClause [PWild] (CBlock [CSExpr (v "x"), CSLet False PWild (v "x")])]
+        noDeclLoc
+        noBinderId,
+    ]
+    (CDecision (CTuple [v "x", CList []]) (arms "x") tree)
+
+test "foldExpr counts as many nodes as the sexp holds" = expectAll [
+  expectEqual [] (map fst (failing countCase fixtures)),
+  expectEqual (sexpNodeCount nested) (countNodes nested),
+  expectEqual 13 (countNodes nested),
+]
+
+test "foldExpr visits a node before its children, left to right" =
+  expectEqual
+    ["CApp", "a", "b"]
+    (reverseL
+      (foldExpr
+        (acc e => match e
+          CVar x _ => x :: acc
+          CApp _ _ _ => "CApp" :: acc
+          _ => acc)
+        []
+        (CApp (v "a") [v "b"] site)))
+
+test "rewriteExpr rewrites children before their parent" =
+  let f e = match e
+    CVar "a" a => CVar "b" a
+    CApp (CVar "b" _) _ _ => CLit (LInt 1)
+    other => other
+  expectEqual
+    (sexp (CLit (LInt 1)))
+    (sexp (rewriteExpr f (CApp (v "a") [v "a"] site)))
+
+test "a decision rewrite reaches scrutinee, guards and bodies and keeps the tree" =
+  let before = CDecision (v "x") (arms "x") tree
+  let after = rewriteExpr rename before
+  expectAll [
+    expectEqual (sexp (CDecision (v "y") (arms "y") tree)) (sexp after),
+    expectEqual (ctreeSexp tree) (ctreeSexp (treeOf after)),
+    expectEqual 3 (armCount after),
+  ]
+
+treeOf : CExpr -> CTree
+treeOf (CDecision _ _ t) = t
+treeOf _ = CTLeaf (0 - 1)
+
+armCount : CExpr -> Int
+armCount (CDecision _ cases _) = length cases
+armCount _ = 0
+
+program : String -> CProgram
+program x =
+  CProgram
+    [CBind "main" [CClause [] (v x)] noDeclLoc noBinderId]
+    []
+    []
+    [
+      CImplEntry "m" 0 1 (CImplTagged "T" "k" "I" noImplSym [0] [PWild] (v x)),
+      CImplEntry "m" 0 1 (CImplDefault "I" "T" "k" noImplSym [0] [PWild] (v x)),
+    ]
+    []
+    noDeclFacts
+
+test "rewriteProgram rewrites clause bodies and both impl entry bodies" =
+  expectEqual
+    (cprogramToSexp (program "y"))
+    (cprogramToSexp (rewriteProgram rename (program "x")))
+
+pv : String -> Pat
+pv x = PVar x noDeclLoc noBinderId
+
+pun : String -> RecPatField
+pun f = RecPatField f noDeclLoc noBinderId None
+
+test "patBinders names the binders of every Pat constructor" = expectAll [
+  expectEqual ["a"] (patBinders (pv "a")),
+  expectEqual [] (patBinders PWild),
+  expectEqual [] (patBinders (PLit (LInt 1))),
+  expectEqual ["a", "b"] (patBinders (PCon "K" [pv "a", PWild, pv "b"])),
+  expectEqual ["h", "t"] (patBinders (PCons (pv "h") (pv "t"))),
+  expectEqual ["a", "b"] (patBinders (PTuple [pv "a", pv "b"])),
+  expectEqual ["a", "b"] (patBinders (PList [pv "a", pv "b"])),
+  expectEqual
+    ["all", "a"]
+    (patBinders (PAs "all" noDeclLoc noBinderId (pv "a"))),
+  expectEqual ["a"] (patBinders (POr [pv "a", pv "a"])),
+  expectEqual [] (patBinders (POr [])),
+  expectEqual [] (patBinders (PRng (LInt 1) (LInt 2) True)),
+  expectEqual ["a"] (patBinders (PAnn (pv "a") (TyVar "t"))),
+]
+
+test "patBinders reads a PRec pun as a binder and a field pattern by its subpattern" = expectAll
+  [
+    expectEqual ["x", "y"] (patBinders (PRec "R" [pun "x", pun "y"] False)),
+    expectEqual
+      ["inner", "z"]
+      (patBinders
+        (PRec
+          "R"
+          [RecPatField "a" noDeclLoc noBinderId (Some (pv "inner")), pun "z"]
+          True)),
+  ]

@@ -1,5 +1,5 @@
 # META
-source_lines=642
+source_lines=624
 stages=DESUGAR,MARK
 # SOURCE
 import types.symbol_origins.{SymbolOrigin(..), CoreSymbolOrigins(..)}
@@ -187,24 +187,6 @@ cexprSexp m (CRangeList lo hi incl) =
   node "CRangeList" [cexprSexp m lo, cexprSexp m hi, boolStr incl]
 cexprSexp m (CRangeArray lo hi incl) =
   node "CRangeArray" [cexprSexp m lo, cexprSexp m hi, boolStr incl]
-cexprSexp m (CIndex a i) = node "CIndex" [cexprSexp m a, cexprSexp m i]
-cexprSexp m (CSlice a lo hi incl) =
-  node "CSlice" [cexprSexp m a, cexprSexp m lo, cexprSexp m hi, boolStr incl]
-cexprSexp m (CStringIndex a i) =
-  node "CStringIndex" [cexprSexp m a, cexprSexp m i]
-cexprSexp m (CStringSlice a lo hi incl) = node "CStringSlice" [
-  cexprSexp m a,
-  cexprSexp m lo,
-  cexprSexp m hi,
-  boolStr incl,
-]
-cexprSexp m (CListIndex a i) = node "CListIndex" [cexprSexp m a, cexprSexp m i]
-cexprSexp m (CListSlice a lo hi incl) = node "CListSlice" [
-  cexprSexp m a,
-  cexprSexp m lo,
-  cexprSexp m hi,
-  boolStr incl,
-]
 cexprSexp m (CBlock stmts) = node "CBlock" (map (cstmtSexp m) stmts)
 cexprSexp m (CMethod name (MethodEvidence iface arity route implRoutes methRoutes)) = node
   "CMethod"
@@ -703,12 +685,6 @@ manifestStringSexp = option "none" (value => node "some" [escStr value])
 (DFunDef false "cexprSexp" ((PVar "m") (PCon "CArray" (PVar "es"))) (EApp (EApp (EVar "node") (ELit (LString "CArray"))) (EApp (EApp (EVar "map") (EApp (EVar "cexprSexp") (EVar "m"))) (EVar "es"))))
 (DFunDef false "cexprSexp" ((PVar "m") (PCon "CRangeList" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EVar "node") (ELit (LString "CRangeList"))) (EListLit (EApp (EApp (EVar "cexprSexp") (EVar "m")) (EVar "lo")) (EApp (EApp (EVar "cexprSexp") (EVar "m")) (EVar "hi")) (EApp (EVar "boolStr") (EVar "incl")))))
 (DFunDef false "cexprSexp" ((PVar "m") (PCon "CRangeArray" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EVar "node") (ELit (LString "CRangeArray"))) (EListLit (EApp (EApp (EVar "cexprSexp") (EVar "m")) (EVar "lo")) (EApp (EApp (EVar "cexprSexp") (EVar "m")) (EVar "hi")) (EApp (EVar "boolStr") (EVar "incl")))))
-(DFunDef false "cexprSexp" ((PVar "m") (PCon "CIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EVar "node") (ELit (LString "CIndex"))) (EListLit (EApp (EApp (EVar "cexprSexp") (EVar "m")) (EVar "a")) (EApp (EApp (EVar "cexprSexp") (EVar "m")) (EVar "i")))))
-(DFunDef false "cexprSexp" ((PVar "m") (PCon "CSlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EVar "node") (ELit (LString "CSlice"))) (EListLit (EApp (EApp (EVar "cexprSexp") (EVar "m")) (EVar "a")) (EApp (EApp (EVar "cexprSexp") (EVar "m")) (EVar "lo")) (EApp (EApp (EVar "cexprSexp") (EVar "m")) (EVar "hi")) (EApp (EVar "boolStr") (EVar "incl")))))
-(DFunDef false "cexprSexp" ((PVar "m") (PCon "CStringIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EVar "node") (ELit (LString "CStringIndex"))) (EListLit (EApp (EApp (EVar "cexprSexp") (EVar "m")) (EVar "a")) (EApp (EApp (EVar "cexprSexp") (EVar "m")) (EVar "i")))))
-(DFunDef false "cexprSexp" ((PVar "m") (PCon "CStringSlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EVar "node") (ELit (LString "CStringSlice"))) (EListLit (EApp (EApp (EVar "cexprSexp") (EVar "m")) (EVar "a")) (EApp (EApp (EVar "cexprSexp") (EVar "m")) (EVar "lo")) (EApp (EApp (EVar "cexprSexp") (EVar "m")) (EVar "hi")) (EApp (EVar "boolStr") (EVar "incl")))))
-(DFunDef false "cexprSexp" ((PVar "m") (PCon "CListIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EVar "node") (ELit (LString "CListIndex"))) (EListLit (EApp (EApp (EVar "cexprSexp") (EVar "m")) (EVar "a")) (EApp (EApp (EVar "cexprSexp") (EVar "m")) (EVar "i")))))
-(DFunDef false "cexprSexp" ((PVar "m") (PCon "CListSlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EVar "node") (ELit (LString "CListSlice"))) (EListLit (EApp (EApp (EVar "cexprSexp") (EVar "m")) (EVar "a")) (EApp (EApp (EVar "cexprSexp") (EVar "m")) (EVar "lo")) (EApp (EApp (EVar "cexprSexp") (EVar "m")) (EVar "hi")) (EApp (EVar "boolStr") (EVar "incl")))))
 (DFunDef false "cexprSexp" ((PVar "m") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EVar "node") (ELit (LString "CBlock"))) (EApp (EApp (EVar "map") (EApp (EVar "cstmtSexp") (EVar "m"))) (EVar "stmts"))))
 (DFunDef false "cexprSexp" ((PVar "m") (PCon "CMethod" (PVar "name") (PCon "MethodEvidence" (PVar "iface") (PVar "arity") (PVar "route") (PVar "implRoutes") (PVar "methRoutes")))) (EApp (EApp (EVar "node") (ELit (LString "CMethod"))) (EListLit (EApp (EVar "escStr") (EVar "name")) (EApp (EVar "escStr") (EVar "iface")) (EApp (EVar "intToString") (EVar "arity")) (EApp (EApp (EVar "routeSexp") (EVar "m")) (EVar "route")) (EApp (EVar "slist") (EApp (EApp (EVar "map") (EApp (EVar "routeSexp") (EVar "m"))) (EVar "implRoutes"))) (EApp (EVar "slist") (EApp (EApp (EVar "map") (EApp (EVar "routeSexp") (EVar "m"))) (EVar "methRoutes"))))))
 (DFunDef false "cexprSexp" ((PVar "m") (PCon "CDict" (PVar "name") (PVar "routes"))) (EApp (EApp (EVar "node") (ELit (LString "CDict"))) (EListLit (EApp (EVar "escStr") (EVar "name")) (EApp (EVar "slist") (EApp (EApp (EVar "map") (EApp (EVar "routeSexp") (EVar "m"))) (EVar "routes"))))))
@@ -874,12 +850,6 @@ manifestStringSexp = option "none" (value => node "some" [escStr value])
 (DFunDef false "cexprSexp" ((PVar "m") (PCon "CArray" (PVar "es"))) (EApp (EApp (EVar "node") (ELit (LString "CArray"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "cexprSexp") (EVar "m"))) (EVar "es"))))
 (DFunDef false "cexprSexp" ((PVar "m") (PCon "CRangeList" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EVar "node") (ELit (LString "CRangeList"))) (EListLit (EApp (EApp (EVar "cexprSexp") (EVar "m")) (EVar "lo")) (EApp (EApp (EVar "cexprSexp") (EVar "m")) (EVar "hi")) (EApp (EVar "boolStr") (EVar "incl")))))
 (DFunDef false "cexprSexp" ((PVar "m") (PCon "CRangeArray" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EVar "node") (ELit (LString "CRangeArray"))) (EListLit (EApp (EApp (EVar "cexprSexp") (EVar "m")) (EVar "lo")) (EApp (EApp (EVar "cexprSexp") (EVar "m")) (EVar "hi")) (EApp (EVar "boolStr") (EVar "incl")))))
-(DFunDef false "cexprSexp" ((PVar "m") (PCon "CIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EVar "node") (ELit (LString "CIndex"))) (EListLit (EApp (EApp (EVar "cexprSexp") (EVar "m")) (EVar "a")) (EApp (EApp (EVar "cexprSexp") (EVar "m")) (EVar "i")))))
-(DFunDef false "cexprSexp" ((PVar "m") (PCon "CSlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EVar "node") (ELit (LString "CSlice"))) (EListLit (EApp (EApp (EVar "cexprSexp") (EVar "m")) (EVar "a")) (EApp (EApp (EVar "cexprSexp") (EVar "m")) (EVar "lo")) (EApp (EApp (EVar "cexprSexp") (EVar "m")) (EVar "hi")) (EApp (EVar "boolStr") (EVar "incl")))))
-(DFunDef false "cexprSexp" ((PVar "m") (PCon "CStringIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EVar "node") (ELit (LString "CStringIndex"))) (EListLit (EApp (EApp (EVar "cexprSexp") (EVar "m")) (EVar "a")) (EApp (EApp (EVar "cexprSexp") (EVar "m")) (EVar "i")))))
-(DFunDef false "cexprSexp" ((PVar "m") (PCon "CStringSlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EVar "node") (ELit (LString "CStringSlice"))) (EListLit (EApp (EApp (EVar "cexprSexp") (EVar "m")) (EVar "a")) (EApp (EApp (EVar "cexprSexp") (EVar "m")) (EVar "lo")) (EApp (EApp (EVar "cexprSexp") (EVar "m")) (EVar "hi")) (EApp (EVar "boolStr") (EVar "incl")))))
-(DFunDef false "cexprSexp" ((PVar "m") (PCon "CListIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EVar "node") (ELit (LString "CListIndex"))) (EListLit (EApp (EApp (EVar "cexprSexp") (EVar "m")) (EVar "a")) (EApp (EApp (EVar "cexprSexp") (EVar "m")) (EVar "i")))))
-(DFunDef false "cexprSexp" ((PVar "m") (PCon "CListSlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EVar "node") (ELit (LString "CListSlice"))) (EListLit (EApp (EApp (EVar "cexprSexp") (EVar "m")) (EVar "a")) (EApp (EApp (EVar "cexprSexp") (EVar "m")) (EVar "lo")) (EApp (EApp (EVar "cexprSexp") (EVar "m")) (EVar "hi")) (EApp (EVar "boolStr") (EVar "incl")))))
 (DFunDef false "cexprSexp" ((PVar "m") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EVar "node") (ELit (LString "CBlock"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "cstmtSexp") (EVar "m"))) (EVar "stmts"))))
 (DFunDef false "cexprSexp" ((PVar "m") (PCon "CMethod" (PVar "name") (PCon "MethodEvidence" (PVar "iface") (PVar "arity") (PVar "route") (PVar "implRoutes") (PVar "methRoutes")))) (EApp (EApp (EVar "node") (ELit (LString "CMethod"))) (EListLit (EApp (EVar "escStr") (EVar "name")) (EApp (EVar "escStr") (EVar "iface")) (EApp (EVar "intToString") (EVar "arity")) (EApp (EApp (EVar "routeSexp") (EVar "m")) (EVar "route")) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EApp (EVar "routeSexp") (EVar "m"))) (EVar "implRoutes"))) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EApp (EVar "routeSexp") (EVar "m"))) (EVar "methRoutes"))))))
 (DFunDef false "cexprSexp" ((PVar "m") (PCon "CDict" (PVar "name") (PVar "routes"))) (EApp (EApp (EVar "node") (ELit (LString "CDict"))) (EListLit (EApp (EVar "escStr") (EVar "name")) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EApp (EVar "routeSexp") (EVar "m"))) (EVar "routes"))))))

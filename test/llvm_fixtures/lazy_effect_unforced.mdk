@@ -1,0 +1,5 @@
+-- A top-level value is lazy: `side` is never forced, so its effect never runs
+-- and the program prints only "ok", as under `medaka run`.
+main = if False then side else putStrLn "ok"
+
+side = putStrLn "BOOM"

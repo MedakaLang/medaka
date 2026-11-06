@@ -156,11 +156,20 @@ MODULES_RATIO_CEIL_X1000=150   # ratio * 1000, integer-only arithmetic (no bc/aw
 # Descriptor migration measured 508888 plain bytes and 3685 functions; the
 # merged corpus measures 509264 bytes and 3689 functions. Four RNG fixtures
 # add one mdk_rng_ensure each; absolute paths also affect emitted bytes.
-PLAIN_BYTES_CEIL=520000   # measured 510856 B; rounded up to the next 10000
-PLAIN_FUNCS_CEIL=3689   # measured, exact
+#
+# Lazy value globals (sprint core-pass-pipeline): a value global is eager only
+# when its initializer is safe to speculate, so a call-bearing one is now lazy
+# and carries a `$force_` function plus the checked-arithmetic helpers and trap
+# texts its body calls (`global_chain.mdk`, `b = a + 1`, goes from 20 to 25
+# funcs).  Plain 521603 B / 3744 funcs (was
+# 511288 B / 3689), typed 23923 B / 153 funcs (was 23089 B / 150).  The Num
+# Int fromInt fold shrinks the modules corpus to 1368797 B (CI) / 6310 funcs; its
+# ceilings stand.
+PLAIN_BYTES_CEIL=530000   # measured 521603 B; rounded up to the next 10000
+PLAIN_FUNCS_CEIL=3744   # measured, exact
 
-TYPED_BYTES_CEIL=23500
-TYPED_FUNCS_CEIL=150
+TYPED_BYTES_CEIL=24000   # measured 23923 B; rounded up to the next 500
+TYPED_FUNCS_CEIL=153   # measured, exact
 
 # ── exact per-corpus fixture-count floors (F2/S1-2 closure) ────────────────
 # These corpus sizes are fixed and every prior sprint measurement (S1-S5's own

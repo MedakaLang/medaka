@@ -534,38 +534,6 @@ main = probe 8
       ])
       ["raw", "typed"])
 
-ownerBaseline : String -> <IO, Exec, FileWrite> Expectation
-ownerBaseline dir =
-  let owner = dir ++ "/owner"
-  match mkdirAll owner
-    Err e => fail e
-    Ok _ =>
-      match (writeFile
-        (owner ++ "/core.mdk")
-        """
-answer : Int
-answer = 42
-main = answer
-""")
-        Err e => fail e
-        Ok _ => expectAll [
-          expectSpawnFailsAll "env" (strictArgs (dir
-            ++ "/wasm_emit_modules_main") [
-            underRoot "stdlib/runtime.mdk",
-            underRoot "stdlib/core.mdk",
-            owner ++ "/core.mdk",
-            owner,
-          ]) [
-            "E-PANIC", "method result: missing declaration fact", "Num#fromInt"
-          ],
-          match emit dir "modules" (owner ++ "/core.mdk")
-            Err e => fail e
-            Ok (code, out, err) => expectAll [
-              expectEqual (1, "") (code, out),
-              expectTextContainsAll ["Num#fromInt"] err,
-            ],
-        ]
-
 dictionaryBaseline : String
 dictionaryBaseline =
   """
@@ -715,7 +683,6 @@ main =
           dir ++ "/playground-product.mdk",
         ])
         "__MEDAKA_ANALYZE__",
-      ownerBaseline dir,
     ]
 
 test "current entry routes preserve values, physical ABIs, first traps and named baseline refusals" =

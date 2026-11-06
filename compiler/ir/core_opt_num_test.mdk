@@ -1,0 +1,147 @@
+import test.{expectAll, expectEqual, labelFail}
+import frontend.parser.{parse}
+import frontend.desugar.{desugar}
+import types.typecheck.{defaultDriveInputs, elaborateOneFacts}
+import types.tc_elab.{grantWholeDomain}
+import ir.core_ir.{CBind(..), CClause(..), CProgram(..)}
+import ir.core_ir_lower.{lowerTypedProgramWith}
+import ir.core_ir_eval.{cevalMainOf}
+import ir.core_ir_sexp.{cexprSexp, defaultSexpMode}
+import ir.core_opt_num.{foldNumIntFromInt}
+import ir.core_walk.{bindName}
+-- Sibling test module for `compiler/ir/core_opt_num.mdk` ([P-TEST-SIBLING]).
+--
+-- `passCase` is the pass test vehicle: it typechecks a source program, lowers it
+-- with the interpreter-safe lowering, applies ONE pass and returns the before and
+-- after sexp with the interpreter's answer on each.  It takes the pass as a plain
+-- function, so any `CProgram -> CProgram` pass reuses it.
+
+prelude : String
+prelude =
+  "interface Num a where\n  fromInt : Int -> a\nimpl Num Int where\n  fromInt n = n\nimpl Num Float where\n  fromInt n = 1.5\ndata Money = Money Int\nimpl Num Money where\n  fromInt n = Money n\nunMoney : Money -> Int\nunMoney (Money n) = n"
+
+-- (binding body before, binding body after, interpreter answer before, interpreter
+-- answer after) for the binding named [target]; the interpreter runs `main`.
+passCase : (CProgram -> CProgram) ->
+  String ->
+  String ->
+  (String, String, String, String)
+passCase pass target src =
+  let (decls, facts) = elaborateOneFacts defaultDriveInputs [] (desugar
+    (parse prelude)) (
+    "passcase",
+    grantWholeDomain (desugar (parse src)),
+  )
+  let before = lowerTypedProgramWith facts decls
+  let after = pass before
+  (
+    bodyOf target before,
+    bodyOf target after,
+    cevalMainOf facts decls before,
+    cevalMainOf facts decls after,
+  )
+
+bodyOf : String -> CProgram -> String
+bodyOf target (CProgram binds _ _ _ _ _) =
+  match find (b => bindName b == target) binds
+    Some (CBind _ ((CClause _ body) :: _) _ _) => cexprSexp defaultSexpMode body
+    _ => "no binding \{target}"
+
+-- `fromInt` at a given instance, as the dump prints the occurrence.
+fromIntAt : String -> String
+fromIntAt inst =
+  "(CMethod \"fromInt\" \"core::Num\" 1 (RKey \"core::Num|\{inst}|\") () ())"
+
+-- A saturated call of `fromInt` at [inst] on the printed argument [arg].
+callAt : String -> String -> String -> String
+callAt inst arg mode = "(CApp \{fromIntAt inst} (\{arg}) CallExact \{mode})"
+
+-- Every `3` is itself `fromInt 3` at its type, so the literal case folds the
+-- written call and the literal's own.
+test "a literal argument folds to the literal" =
+  let (before, after, outBefore, outAfter) =
+    passCase foldNumIntFromInt "main" "main = (fromInt 3 : Int)"
+  expectAll [
+    labelFail
+      "before"
+      (expectEqual
+        (callAt "Int" (callAt "Int" "(CLit (LInt 3))" "false") "false")
+        before),
+    labelFail "after" (expectEqual "(CLit (LInt 3))" after),
+    labelFail "interpreter before" (expectEqual "3" outBefore),
+    labelFail "interpreter after" (expectEqual "3" outAfter),
+  ]
+
+test "a non-literal argument folds to the argument" =
+  let (before, after, outBefore, outAfter) =
+    passCase foldNumIntFromInt "f" """
+f n = (fromInt n : Int)
+main = f 4
+"""
+  expectAll [
+    labelFail
+      "before"
+      (expectEqual (callAt "Int" "(CVar \"n\" AGlobal)" "true") before),
+    labelFail "after" (expectEqual "(CVar \"n\" AGlobal)" after),
+    labelFail "interpreter before" (expectEqual "4" outBefore),
+    labelFail "interpreter after" (expectEqual "4" outAfter),
+  ]
+
+test "fromInt at Float keeps its call and folds only the literal inside" =
+  let (before, after, outBefore, outAfter) =
+    passCase foldNumIntFromInt "main" "main = (fromInt 2 : Float)"
+  expectAll [
+    labelFail
+      "before"
+      (expectEqual
+        (callAt "Float" (callAt "Int" "(CLit (LInt 2))" "false") "false")
+        before),
+    labelFail
+      "after"
+      (expectEqual (callAt "Float" "(CLit (LInt 2))" "false") after),
+    labelFail "interpreter before" (expectEqual "1.5" outBefore),
+    labelFail "interpreter after" (expectEqual "1.5" outAfter),
+  ]
+
+test "fromInt at a user Num instance keeps its call" =
+  let (before, after, outBefore, outAfter) =
+    passCase foldNumIntFromInt "main" "main = unMoney (fromInt 5)"
+  let money = callAt "Money" "(CLit (LInt 5))" "false"
+  expectAll [
+    labelFail
+      "before"
+      (expectEqual
+        "(CApp (CVar \"unMoney\" AGlobal) (\{callAt "Money" (callAt "Int" "(CLit (LInt 5))" "false") "false"}) CallExact false)"
+        before),
+    labelFail
+      "after"
+      (expectEqual
+        "(CApp (CVar \"unMoney\" AGlobal) (\{money}) CallExact false)"
+        after),
+    labelFail "interpreter before" (expectEqual "5" outBefore),
+    labelFail "interpreter after" (expectEqual "5" outAfter),
+  ]
+
+test "an unsaturated fromInt value is left alone" =
+  let (before, after, outBefore, outAfter) =
+    passCase
+      foldNumIntFromInt
+      "main"
+      """
+apply g x = g x
+main = apply (fromInt : Int -> Int) 6
+"""
+  expectAll [
+    labelFail
+      "before"
+      (expectEqual
+        "(CApp (CVar \"apply\" AGlobal) (\{fromIntAt "Int"} \{callAt "Int" "(CLit (LInt 6))" "false"}) CallExact false)"
+        before),
+    labelFail
+      "after"
+      (expectEqual
+        "(CApp (CVar \"apply\" AGlobal) (\{fromIntAt "Int"} (CLit (LInt 6))) CallExact false)"
+        after),
+    labelFail "interpreter before" (expectEqual "6" outBefore),
+    labelFail "interpreter after" (expectEqual "6" outAfter),
+  ]

@@ -802,6 +802,10 @@ and a re-entrant force raises `E-CYCLIC-VALUE`. The native backend mirrors this 
 
 ### 10.2 The SAFE/LAZY fast-path predicate (`emit_support.lazyGlobalNames`)
 
+> **2026-11-05: §10.2-10.3 describe the predicate as it shipped, not as it is.** The lazy set
+> was widened: a value global is eager only if its initializer is speculation-safe (a literal, a lambda, a variable, or a constructor, tuple, list, array or record cell of safe parts); every other value global is lazy, as is every global that reaches a lazy one and every value cycle (`compiler/backend/emit_support.mdk`, `lazyGlobalNames`). A `CMethod` or any other call in an initializer is now a taint
+> source of its own, so §10.3's compiler globals are lazy by the rule itself, not as dispatch false positives.
+
 Reusing the #553 Stage-B machinery (`eagerCalleesMap` + `tarjanSCCs`), a value global is **LAZY**
 iff, over the eager `CVar`/`CDict` call graph, it reaches EITHER:
 

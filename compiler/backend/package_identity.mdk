@@ -161,14 +161,6 @@ exprFiles files (CVariantUpdate _ e fs) = fold fieldFiles (exprFiles files e) fs
 exprFiles files (CArray es) = fold exprFiles files es
 exprFiles files (CRangeList a b _) = exprFiles (exprFiles files a) b
 exprFiles files (CRangeArray a b _) = exprFiles (exprFiles files a) b
-exprFiles files (CIndex a b) = exprFiles (exprFiles files a) b
-exprFiles files (CSlice a b c _) = exprFiles (exprFiles (exprFiles files a) b) c
-exprFiles files (CStringIndex a b) = exprFiles (exprFiles files a) b
-exprFiles files (CStringSlice a b c _) =
-  exprFiles (exprFiles (exprFiles files a) b) c
-exprFiles files (CListIndex a b) = exprFiles (exprFiles files a) b
-exprFiles files (CListSlice a b c _) =
-  exprFiles (exprFiles (exprFiles files a) b) c
 exprFiles files (CBlock stmts) = fold stmtFiles files stmts
 exprFiles files (CMethod _ _) = files
 exprFiles files (CDict _ _) = files

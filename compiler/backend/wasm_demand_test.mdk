@@ -12,7 +12,7 @@ import backend.emit_plan.{EmitPlan, prepareWasmPlan}
 import backend.emit_target.{Backend(..)}
 import backend.extern_catalog.{RuntimeExternDomain(..), WasmUse(..)}
 import backend.core_validate.{validateForEmission, coreDefectMessage}
-import backend.wasm_emit.{emitProgram, emitProgramGaps, makeWasmEmitInput}
+import backend.wasm_emit.{emitProgramGaps, makeWasmEmitInput}
 import frontend.parser.{parse}
 import frontend.ast.{Addr(..), Lit(..)}
 import frontend.desugar.{desugar}
@@ -474,35 +474,6 @@ test "function value plans follow their own prepared programs" =
     expectTextContainsAll
       ["wasm-function-value-demand-mismatch"]
       (joinNl (map coreDefectMessage defects.defects)),
-  ]
-
-test "index operand function values belong to the emitted plan" =
-  let (_, CProgram bs ca ct impls ms fs) = prepared "f x = x + 1\nmain = 0"
-  let ix = CIndex (CArray [CVar "f" AGlobal]) (CLit (LInt 0))
-  let body = CApp ix [CLit (LInt 41)] (CallSite CallDynamic False)
-  let cp =
-    CProgram
-      (map
-        (b => match b
-          CBind "main" [CClause pats _] loc bid =>
-            CBind "main" [CClause pats body] loc bid
-          _ => b)
-        bs)
-      ca
-      ct
-      impls
-      ms
-      fs
-  let (plan, same) = prepareWasmPlan PreludeFreeRuntime omEmpty cp
-  expectAll [
-    expectEqual ["f"] (omKeys (physical plan).fnValues),
-    expectEqual ["f"] (omKeys (censusWasmDemand (physical plan)).fnValues),
-    match (emitProgram
-      (makeWasmEmitInput RawUnchecked PreludeFreeRuntime [])
-      plan
-      same)
-      Ok wat => expectTextContainsAll ["(func $f.gen.wrapper.66.0"] wat
-      Err _ => fail "index program refused",
   ]
 
 test "paired helper/type/import omissions cannot erase unchanged Core prerequisites" = expectAll
