@@ -1,0 +1,5 @@
+-- L3 (#2017): a re-export hub exporting two distinct declarations of `mth` is a located
+-- ambiguity at the occurrence on every verb, whatever order the hub lists them
+import lib.hub.{IA, IB, mth}
+
+main = println (mth 1)

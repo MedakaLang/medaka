@@ -1,0 +1,6 @@
+-- An explicitly imported `length : String -> Int` is the bare name everywhere
+-- in the module (docs/spec/SHADOW-SEMANTICS.md L2, L5), not the prelude's
+-- `Foldable.length` at a list receiver, so `length [1, 2]` is a type mismatch.
+import lib.ladder_strlen.{length}
+
+main = println (length "abc", length [1, 2])

@@ -85,6 +85,7 @@ stageDumpKeys (k :: rest) =
   ePutStrLn "\{stagePrefix}\{k}\t\{countOf k}"
   stageDumpKeys rest
 # DESUGAR
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("list") ((mem "partition" false))))
 (DUse false (UseGroup ("string") ((mem "split" false) (mem "startsWith" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omKeys" false))))
@@ -111,8 +112,9 @@ stageDumpKeys (k :: rest) =
 (DFunDef false "forwardStageLines" ((PVar "err")) (EBlock (DoLet false false (PTuple (PVar "stage") (PVar "rest")) (EApp (EApp (EVar "partition") (EVar "isStageLine")) (EApp (EApp (EVar "split") (ELit (LString "\n"))) (EVar "err")))) (DoLet false false PWild (EMatch (EVar "stage") (arm (PList) () (ELit LUnit)) (arm PWild () (EApp (EVar "ePutStrLn") (EApp (EVar "joinNl") (EVar "stage")))))) (DoExpr (EApp (EVar "joinNl") (EVar "rest")))))
 (DTypeSig false "stageDumpKeys" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "stageDumpKeys" ((PList)) (ELit LUnit))
-(DFunDef false "stageDumpKeys" ((PCons (PVar "k") (PVar "rest"))) (EBlock (DoExpr (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "stagePrefix"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "k"))) (ELit (LString "\t"))) (EApp (EVar "display") (EApp (EVar "countOf") (EVar "k")))) (ELit (LString ""))))) (DoExpr (EApp (EVar "stageDumpKeys") (EVar "rest")))))
+(DFunDef false "stageDumpKeys" ((PCons (PVar "k") (PVar "rest"))) (EBlock (DoExpr (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "stagePrefix"))) (ELit (LString ""))) (EApp (EVar "$core.display") (EVar "k"))) (ELit (LString "\t"))) (EApp (EVar "$core.display") (EApp (EVar "countOf") (EVar "k")))) (ELit (LString ""))))) (DoExpr (EApp (EVar "stageDumpKeys") (EVar "rest")))))
 # MARK
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("list") ((mem "partition" false))))
 (DUse false (UseGroup ("string") ((mem "split" false) (mem "startsWith" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omKeys" false))))
@@ -139,4 +141,4 @@ stageDumpKeys (k :: rest) =
 (DFunDef false "forwardStageLines" ((PVar "err")) (EBlock (DoLet false false (PTuple (PVar "stage") (PVar "rest")) (EApp (EApp (EVar "partition") (EVar "isStageLine")) (EApp (EApp (EVar "split") (ELit (LString "\n"))) (EVar "err")))) (DoLet false false PWild (EMatch (EVar "stage") (arm (PList) () (ELit LUnit)) (arm PWild () (EApp (EVar "ePutStrLn") (EApp (EVar "joinNl") (EVar "stage")))))) (DoExpr (EApp (EVar "joinNl") (EVar "rest")))))
 (DTypeSig false "stageDumpKeys" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "stageDumpKeys" ((PList)) (ELit LUnit))
-(DFunDef false "stageDumpKeys" ((PCons (PVar "k") (PVar "rest"))) (EBlock (DoExpr (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "stagePrefix"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "k"))) (ELit (LString "\t"))) (EApp (EMethodRef "display") (EApp (EVar "countOf") (EVar "k")))) (ELit (LString ""))))) (DoExpr (EApp (EVar "stageDumpKeys") (EVar "rest")))))
+(DFunDef false "stageDumpKeys" ((PCons (PVar "k") (PVar "rest"))) (EBlock (DoExpr (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "stagePrefix"))) (ELit (LString ""))) (EApp (EVar "$core.display") (EVar "k"))) (ELit (LString "\t"))) (EApp (EVar "$core.display") (EApp (EVar "countOf") (EVar "k")))) (ELit (LString ""))))) (DoExpr (EApp (EVar "stageDumpKeys") (EVar "rest")))))

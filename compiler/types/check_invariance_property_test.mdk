@@ -126,11 +126,13 @@ blocksSource blocks perm = join "" (permute perm (blockTexts blocks))
 -- Shadow programs.
 --
 -- The template declares an interface `Sizeable` with method `size`, an impl at
--- `Int` and at `Tag`, and a standalone `size` over `String`, so `size` is a
--- shadow. The topology says where the three live; the use is the one
--- occurrence whose verdict SHADOW-SEMANTICS decides.
+-- `Int` and at `Tag`, and a standalone `size` over `String`. The topology says
+-- where the three live; the use is the one occurrence whose verdict
+-- SHADOW-SEMANTICS decides. The interface and the standalone in one module are
+-- not a topology here: that is a duplicate definition (L3, F-R4), a resolve
+-- error that this harness never runs, pinned by the shadow gate rows `d1` and
+-- `d11` and the `reject_` run_check_agreement rows.
 public export data Topology =
-  | Local
   | DefinerImported
   | Importer
   | ImporterUnnamed
@@ -169,9 +171,10 @@ public export data ShadowCase =
   ShadowCase Topology Arity ShadowUse Xform Order
   deriving (Eq, Debug)
 
--- An importer shadow is decided by S2's importer arm and S4 only, so the
--- definer-only uses are replaced by the plain application; the constrained
--- standalone has one parameter.
+-- An importer's bare `size` is the imported standalone (L2 rung 3) and no
+-- wrapper or constrained-standalone program exists there, so those uses are
+-- replaced by the plain application; the constrained standalone has one
+-- parameter.
 normalized : ShadowCase -> ShadowCase
 normalized (ShadowCase Importer arity use xf order) =
   ShadowCase Importer arity (importerUse use) xf order
@@ -193,24 +196,17 @@ arityOf _ UConstrDomain = A1
 arityOf _ UConstrLive = A1
 arityOf arity _ = arity
 
-{- The verdict model, from SHADOW-SEMANTICS. A definer shadow (S1) applied to
-   a receiver denotes the standalone whatever impls exist (S2 inverted), so a
-   receiver outside its domain is rejected, including one at a live-impl head
-   (S3). A value-position occurrence is the standalone (S4). A wrapper over an
-   ungrounded receiver monomorphises to the standalone's domain (S5) unless
-   its receiver is a written `=>` constraint variable (S5 carve-out). Arity
-   changes none of this (S8). A constrained standalone is an ordinary
-   constrained call (S9), so a type without the standalone's own constraint
-   is rejected, not dispatched. An importer shadow dispatches when an impl
-   is live at the receiver's head and is the standalone otherwise (S2), and in
-   value position is the standalone (S4). Where the interface lives is not
-   free (S6, narrowed): an importer that imports the interface's module
-   without admitting the interface or the method does not make `size` a
-   shadow (S1-NS (a)), so every use is the imported standalone. -}
+{- The verdict model, from SHADOW-SEMANTICS. No topology makes bare `size` a
+   method: an own standalone is rung 2 of the ladder (L2) and an explicitly
+   imported one is rung 3, and `import m.{I}` binds no bare method name. So no
+   dispatch occurs and `size` is the String-only standalone everywhere: a
+   receiver outside its domain is rejected, live-impl heads included, in
+   application and in value position. A wrapper over `Sizeable a =>` calling
+   it is a type error (F-R2, no carve-out). The constrained standalone is an
+   ordinary constrained call, so a type without its constraint is rejected.
+   Arity and where the interface is imported from change none of this. -}
 shadowVerdict : ShadowCase -> Verdict
 shadowVerdict c = match normalized c
-  ShadowCase Importer _ UApplyLive _ _ => Accepted
-  ShadowCase Importer _ UApplyTag _ _ => Accepted
   ShadowCase _ _ use _ _ => useVerdict use
 
 useVerdict : ShadowUse -> Verdict
@@ -221,7 +217,7 @@ useVerdict UValueDomain = Accepted
 useVerdict UValueLive = Rejected
 useVerdict UWrapDomain = Accepted
 useVerdict UWrapLive = Rejected
-useVerdict UCarveOut = Accepted
+useVerdict UCarveOut = Rejected
 useVerdict UConstrDomain = Accepted
 useVerdict UConstrLive = Rejected
 
@@ -296,6 +292,23 @@ insertions (XInsertFront b) = (fillerAt 90 b, "")
 insertions (XInsertBack b) = ("", fillerAt 91 b)
 insertions _ = ("", "")
 
+-- The template body of a shadow case: the standalone and the use, framed by
+-- the transformation's insertions.
+templateText : ShadowCase -> String
+templateText c = match normalized c
+  ShadowCase _ arity use xf _ =>
+    let ns = names (xf == XRename)
+    let (_, p, _, _) = ns
+    let (front, back) = insertions xf
+    front ++ standaloneText arity use p ++ useText arity use ns ++ back
+
+-- The interface and the standalone in one module, for the route comparison
+-- only. It is a duplicate definition to resolve (L3, F-R4), which this harness
+-- does not run, so the program carries no verdict claim.
+localProgram : ShadowCase -> String
+localProgram c = match normalized c
+  ShadowCase _ arity _ _ _ => ifaceText arity ++ templateText c
+
 -- The module graph of a shadow case, in dependency order.
 shadowModules : ShadowCase -> List (String, String)
 shadowModules c = match normalized c
@@ -304,13 +317,10 @@ shadowModules c = match normalized c
     let ns = names renamed
     let (_, p, _, _) = ns
     let (front, back) = insertions xf
-    let template =
-      front ++ standaloneText arity use p ++ useText arity use ns ++ back
     match topo
-      Local => [("law", ifaceText arity ++ template)]
       DefinerImported => [
         ("lib", ifaceText arity),
-        ("law", "import lib.{Sizeable, Tag(..)}\n" ++ template),
+        ("law", "import lib.{Sizeable, Tag(..)}\n" ++ templateText c),
       ]
       Importer =>
         importerModules
@@ -367,13 +377,12 @@ baseOf : ShadowCase -> ShadowCase
 baseOf (ShadowCase topo arity use _ _) =
   ShadowCase topo arity use XNone Straight
 
--- SHADOW-SEMANTICS S1, S2, S3, S4, S5, S6, S8, S9: the verdict of a shadow
--- program follows the clause model, and neither renaming the unrelated
+-- SHADOW-SEMANTICS L2, L4, L8, F-R2: the verdict of a shadow
+-- program follows the ladder model, and neither renaming the unrelated
 -- binders, inserting an unrelated declaration, nor reordering the importer's
--- imports and providers (S6, visibility stays unique) changes verdict, codes
--- or schemes. Moving the interface out of the importer's reach does change
--- the verdict, as the model says (S6, the interface's location).
-prop "a shadow program's verdict follows the clauses and survives the transformations" (c : ShadowCase) =
+-- imports and providers changes verdict, codes or schemes. Whether the
+-- importer admits the interface does not change the verdict either.
+prop "a shadow program's verdict follows the ladder and survives the transformations" (c : ShadowCase) =
   let xf = xformOf c
   let expected = shadowVerdict c
   let before = graphOutcome (shadowModules (baseOf c))
@@ -392,17 +401,14 @@ prop "permuting the top-level declarations preserves verdict and schemes" (block
     && verdictOfOutcome after == blocksVerdict blocks
     && sameUpToOrder before after
 
-onlySource : List (String, String) -> String
-onlySource [(_, source)] = source
-onlySource _ = ""
-
 -- DICT-SEMANTICS U1/U2: the flat entry point and a one-module graph agree on
--- diagnostics, for a block program and for a definer-shadow program.
+-- diagnostics, for a block program and for a one-module shadow-shaped program.
+-- This compares two routes; it makes no verdict claim about the shadow program.
 prop "the flat route and the one-module route agree" (blocks : List Block) (c : ShadowCase) =
   let blocksProgram = blocksSource blocks PId
   let (ShadowCase _ arity use xf order) = c
   let shadowProgram =
-    onlySource (shadowModules (ShadowCase Local arity use xf order))
+    localProgram (ShadowCase DefinerImported arity use xf order)
   flatDiagnostics blocksProgram == moduleDiagnostics blocksProgram
     && flatDiagnostics shadowProgram == moduleDiagnostics shadowProgram
     && verdictOfOutcome (graphOutcome [("law", blocksProgram)])
@@ -533,7 +539,7 @@ shadowCases =
                 allXforms)
             allUses)
         [A1, A2])
-    [Local, DefinerImported, Importer, ImporterUnnamed]
+    [DefinerImported, Importer, ImporterUnnamed]
 
 floorN : Int
 floorN = 20
@@ -552,15 +558,13 @@ isInsert (XInsertFront _) = True
 isInsert (XInsertBack _) = True
 isInsert _ = False
 
--- N = 20 (16 for the importer's rejections, whose only rejecting use is the
--- value-position receiver outside the standalone's domain): the shadow
--- property sees both verdicts, under each topology, with each transformation
--- applied (the rename, the insertions, the importer's swapped order) over the
--- 640 enumerated cases. The unnamed-interface importer rejects the applied
--- live-impl receivers the named importer dispatches.
+-- N = 20: the shadow property sees both verdicts, under each topology, with
+-- each transformation applied (the rename, the insertions, the importer's
+-- swapped order) over the 480 enumerated cases. All three topologies share
+-- one verdict table, so each one sees both verdicts.
 test "census: the shadow law sees both verdicts, each topology and each transformation" = expectAll
   [
-    expectEqual 640 (length shadowCases),
+    expectEqual 480 (length shadowCases),
     expectAtLeast
       floorN
       (countWhere (c => shadowVerdict c == Accepted) shadowCases),
@@ -568,14 +572,19 @@ test "census: the shadow law sees both verdicts, each topology and each transfor
       floorN
       (countWhere (c => shadowVerdict c == Rejected) shadowCases),
     expectAtLeast
-      16
+      floorN
       (countWhere
-        (c => topoOf c == Importer && shadowVerdict c == Rejected)
+        (c => topoOf c == DefinerImported && shadowVerdict c == Accepted)
         shadowCases),
     expectAtLeast
       floorN
       (countWhere
-        (c => topoOf c == DefinerImported && shadowVerdict c == Accepted)
+        (c => topoOf c == DefinerImported && shadowVerdict c == Rejected)
+        shadowCases),
+    expectAtLeast
+      floorN
+      (countWhere
+        (c => topoOf c == Importer && shadowVerdict c == Rejected)
         shadowCases),
     expectAtLeast
       floorN
@@ -616,12 +625,12 @@ test "census: the permutation and split laws see both verdicts and real reorderi
   ]
 
 -- N = 20: the history-independence law draws P and Q from both families and
--- both verdicts, over the 671 enumerated programs (31 block programs and 640
+-- both verdicts, over the 511 enumerated programs (31 block programs and 480
 -- shadow cases).
 test "census: the history law pairs both families and both verdicts" =
   let progs = map (bs => PBlocks bs PId) blockLists ++ map PShadow shadowCases
   expectAll [
-    expectEqual 671 (length progs),
+    expectEqual 511 (length progs),
     expectAtLeast floorN (countWhere (p => progVerdict p == Accepted) progs),
     expectAtLeast floorN (countWhere (p => progVerdict p == Rejected) progs),
     expectAtLeast

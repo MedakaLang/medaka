@@ -35,7 +35,7 @@ What parses, what it means, formal semantics. Read here first for "does X exist 
 | [`EMITTER-SEMANTICS.md`](spec/EMITTER-SEMANTICS.md) | Native-Emitter Semantics: the Refinement Contract | specification |
 | [`HM-CORE-SEMANTICS.md`](spec/HM-CORE-SEMANTICS.md) | Hindley–Milner Core Semantics (unqualified fragment) | DRAFT |
 | [`LAYOUT-SEMANTICS.md`](spec/LAYOUT-SEMANTICS.md) | LAYOUT-SEMANTICS.md — Medaka's layout rule, formalized | OPEN |
-| [`SHADOW-SEMANTICS.md`](spec/SHADOW-SEMANTICS.md) | Declaration-Shadowing Semantics (standalone fn ⇄ interface method) | ENFORCED |
+| [`SHADOW-SEMANTICS.md`](spec/SHADOW-SEMANTICS.md) | Name Resolution Semantics (the lexical ladder) | specification, ruled by Val 2026-11-04 |
 | [`STYLE.md`](spec/STYLE.md) | Medaka style guide | — |
 | [`SYNTAX.md`](spec/SYNTAX.md) | SYNTAX.md — Medaka construct cheat-sheet | — |
 | [`WASM-SEMANTICS.md`](spec/WASM-SEMANTICS.md) | WasmGC Backend Semantics: the physical-encoding + host-boundary supplement | specification |
@@ -289,6 +289,7 @@ IMPLEMENTED or SUPERSEDED work, kept for provenance. Links inside these docs are
 | [`RUNTIME-DIAGNOSTIC-CHANNEL-DESIGN.md`](../archive/design/RUNTIME-DIAGNOSTIC-CHANNEL-DESIGN.md) | RUNTIME-DIAGNOSTIC-CHANNEL-DESIGN | IMPLEMENTED |
 | [`S1-CONSTRAINED-SHADOW-DESIGN.md`](../archive/design/S1-CONSTRAINED-SHADOW-DESIGN.md) | S-1 — a CONSTRAINED definer-shadow standalone is miscompiled | IMPLEMENTED |
 | [`SHADOW-INVERSION-DESIGN.md`](../archive/design/SHADOW-INVERSION-DESIGN.md) | SHADOW-INVERSION-DESIGN — invert S2: a top-level standalone WINS over a same-named interface method | SHIPPED 2026-07-14 |
+| [`SHADOW-SEMANTICS-S1-S9.md`](../archive/design/SHADOW-SEMANTICS-S1-S9.md) | Declaration-Shadowing Semantics (standalone fn ⇄ interface method) | ENFORCED |
 | [`SHARED-FLOAT-RESIDUAL-DESIGN.md`](../archive/design/SHARED-FLOAT-RESIDUAL-DESIGN.md) | SHARED-FLOAT-RESIDUAL-DESIGN — the signature-free type-lost-Float residual | IMPLEMENTED |
 | [`SQLITE-DESIGN.md`](../archive/design/SQLITE-DESIGN.md) | SQLite Read-Path Library — Design | design document |
 | [`SQLITE-MUTATION-DESIGN.md`](../archive/design/SQLITE-MUTATION-DESIGN.md) | SQLite Mutation (UPDATE / DELETE) — Design & Feasibility | IMPLEMENTED |

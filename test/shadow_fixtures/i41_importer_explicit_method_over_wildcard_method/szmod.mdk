@@ -1,0 +1,7 @@
+export
+interface Sz a where
+  sz : a -> Int
+
+export
+impl Sz Int where
+  sz x = x + 1000

@@ -1,5 +1,5 @@
--- The WILDCARD spelling of `i35`: `import ifc.*` binds the interface and its method
--- and nothing else, so the answer must be the member list's, 20.
+-- L2 rung 4: `import ifc.*` binds the method `size`; a standalone `size` that `sh` declares
+-- is not imported, so the impl for BoxS answers
 import ifc.*
 import sh.{BoxS(..)}
 

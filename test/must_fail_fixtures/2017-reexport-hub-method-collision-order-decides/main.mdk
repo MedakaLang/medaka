@@ -1,3 +1,0 @@
-import lib.hub.{IA, IB, mth}
-
-main = println (mth 1)

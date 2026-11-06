@@ -28,6 +28,7 @@ import types.tc_types.{
   BareLocals(..),
   SpellCtx(..),
   ModuleSeed(..),
+  ScopeClass(..),
 }
 import types.tc_mono.{
   patVarsListTc,
@@ -90,6 +91,7 @@ import types.repr.{
 import support.ordmap.{
   omEmpty,
   omFromNames,
+  omFromPairs,
   omHasKey,
   omInsert,
   omLookup,
@@ -114,9 +116,23 @@ import list.{
 import map as IdMap
 import types.private_mangle.{
   mangledName,
+  unitSurfaces,
 }
 import frontend.visibility.{
+  ModuleExports(..),
+  coreExports,
   useModId,
+  writtenImportsOf,
+}
+import frontend.name_scope.{
+  ImportedSurface(..),
+  NameBinding(..),
+  NameRung(..),
+  NameScope,
+  NameTarget(..),
+  bareBinding,
+  importedSurfaces,
+  nameScopeOf,
 }
 import types.tc_foreign.{
   declExternNames,
@@ -698,9 +714,62 @@ markSetsOf gctx pmf coreDecls modules allDecls =
     msCoreShadowMap = coreShadowMapFor gctx coreDecls shadowMap,
     msBareDictNames = dedup (moduleDictNames pmf.pmfConstrainedNames modules),
     msUnits = units,
+    msScopeClass = scopeClassesOf units,
   }
   gctx.markSetsRef := Some ms
   ms
+
+-- What each user module's scope binds a bare name to at rungs 2 to 4, from the
+-- units' export surfaces (`unitSurfaces`, one `coreExports` per drive) and the
+-- imports each module's source wrote (`writtenImportsOf`).  The prelude stands
+-- for rung 5 without its values, so a name only the prelude binds answers
+-- `ScopeOther` and keeps its marking; its interfaces stay, so a prelude method a
+-- module re-exports without its interface is still a method.  Core itself has
+-- no scope here: it marks its own names without a scope class.
+scopeClassesOf : List (String, List Decl) -> String -> String -> ScopeClass
+scopeClassesOf units =
+  let surfaces = unitSurfaces units
+  let byMid = omFromPairs surfaces omEmpty
+  let prelude = optionOrElse (_ => coreExports []) (lookupAssoc "core" surfaces)
+  let outer = { prelude | expValueOrigins = [] }
+  let scopes =
+    omFromPairs
+      (map (scopeOfUnit byMid outer) (filterList (not << isCoreUnit) units))
+      omEmpty
+  mid n => match omLookup mid scopes
+    Some scope => scopeClassOf (bareBinding scope n)
+    None => ScopeOther
+
+isCoreUnit : (String, List Decl) -> Bool
+isCoreUnit (mid, _) = mid == "core"
+
+scopeOfUnit : OrdMap ModuleExports ->
+  ModuleExports ->
+  (String, List Decl) ->
+  (String, NameScope)
+scopeOfUnit byMid outer (mid, decls) = (mid, unitScope byMid outer decls)
+
+unitScope : OrdMap ModuleExports -> ModuleExports -> List Decl -> NameScope
+unitScope byMid prelude decls =
+  let written = writtenImportsOf decls
+  nameScopeOf
+    written
+    (flatMap (importedSurfaces (mid => omLookup mid byMid)) written)
+    prelude
+
+scopeClassOf : Option NameBinding -> ScopeClass
+scopeClassOf (Some (Bound RungPrelude _)) = ScopeOther
+scopeClassOf (Some (Bound _ (TargetValue _ _))) = ScopeValue
+scopeClassOf (Some (Bound _ (TargetMethod _ _ _))) = ScopeMethod
+scopeClassOf _ = ScopeOther
+
+-- What module [mid]'s scope binds bare [n] to at rungs 2 to 4, once the drive's
+-- mark sets exist.
+export
+scopeClassIn : GraphCtx -> String -> String -> ScopeClass
+scopeClassIn gctx mid n = match gctx.markSetsRef.value
+  Some ms => ms.msScopeClass mid n
+  None => ScopeOther
 
 -- The dict-name set `dictPass` consumes: [names] (the bare set plus every promotion
 -- the graph made) and its import aliases across every module.  The same names, per
@@ -1265,6 +1334,20 @@ moduleMarkCtx gctx ms mid prog imported =
         candidates.mcSm,
   }
 
+-- [mc] without the names the module's scope binds to a value at rungs 2 to 4.
+-- Such a name is an ordinary reference wherever it is written
+-- (docs/spec/SHADOW-SEMANTICS.md L5), so no occurrence of it becomes a method
+-- occurrence; a name bound to a method, or answered only by the prelude, keeps
+-- its marking.
+ladderMarkCtx : (String -> ScopeClass) -> MarkCtx -> MarkCtx
+ladderMarkCtx scopeOf mc =
+  let marked n = scopeOf n /= ScopeValue
+  MarkCtx {
+    mcRp = IdMap.filterWithKey (n _ => marked n) mc.mcRp,
+    mcAn = IdMap.filterWithKey (n _ => marked n) mc.mcAn,
+    mcSm = filterList (e => marked (fst e) && marked (snd e)) mc.mcSm,
+  }
+
 -- Install the module's marking state at module start.  Reads the graph's mark sets
 -- off the driver preamble; a Module arm reached without one is a driver bug, and
 -- fails loud rather than marking nothing.
@@ -1292,8 +1375,9 @@ beginModuleMarking mctx mid prog top seed =
   ]
   mctx.mcGraph.graphRun.localAbs.lasNext := (mid, 0)
   mctx.mcGraph.graphRun.localAbs.lasMinted := []
+  let candidates = moduleMarkCtx mctx.mcGraph ms mid prog seed.msImportedValues
   mctx.mcCells.markingRef := Some ModuleMarking {
-    mmCtx = moduleMarkCtx mctx.mcGraph ms mid prog seed.msImportedValues,
+    mmCtx = ladderMarkCtx (ms.msScopeClass mid) candidates,
     mmTop = top,
     mmDictSet = Ref (omFromNames (known ++ aliases) omEmpty),
     mmUserNames = omFromNames (declTopFnNames prog) seed.msImportedNames,

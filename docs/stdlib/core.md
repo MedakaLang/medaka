@@ -217,6 +217,16 @@ as they are, not quoted. For every other type it matches `debug`, and
 nested strings stay unquoted. `deriving (Display)` works like
 `deriving (Debug)`.
 
+### `derivedShowWrap`
+
+```
+derivedShowWrap : String -> String
+derivedShowWrap s
+```
+
+Parenthesizes a rendered field unless it is a single token. Exported for
+the code the compiler generates for `deriving (Debug, Display)`.
+
 ## Hashing
 
 ### `Hashable`
@@ -233,6 +243,16 @@ unique, and may be negative. The compound instances (`Option`, `Result`,
 `List`, `Array`, tuples) and `deriving (Hashable)` all use the same fold
 over the fields, so an array hashes the same as the list of its
 elements.
+
+### `derivedHashStep`
+
+```
+derivedHashStep : Int -> Int -> Int
+derivedHashStep acc h
+```
+
+One step of the hash fold, `acc * 33 + h`. Exported for the code the
+compiler generates for `deriving (Hashable)`.
 
 ## Output
 
@@ -875,6 +895,16 @@ Containers that can be sliced by a half-open index range.
 
 `slice c lo hi` is the sub-container over indices `[lo, hi)`. The
 `c.[lo..hi]` and `c.[lo..=hi]` syntax dispatches here.
+
+### `sliceInclusiveEnd`
+
+```
+sliceInclusiveEnd : Int -> Int
+sliceInclusiveEnd hi
+```
+
+The exclusive end of an inclusive slice `a.[lo..=hi]`. Exported for the
+code the compiler generates for that slice.
 
 ### `Traversable`
 

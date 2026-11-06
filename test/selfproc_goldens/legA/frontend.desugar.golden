@@ -13,12 +13,14 @@ armChain : List Guard -> Expr -> Expr -> Expr
 armHasAnnot : Arm -> Bool
 assignIndexLhs : Expr -> Expr -> Expr -> EvId -> Expr
 attribHead : List Attr -> List Decl -> List Decl
+barePreludeRef : Expr -> Expr
 binMethod : String -> String -> String -> Expr -> ImplMethod
 binOp : String -> Expr -> Expr -> Expr
 bindMethodName : Bool -> String
 binderOrdinalRef : Ref Int
 callAndThen : Bool -> Expr -> Expr -> Expr
 callBin : String -> Expr -> Expr -> Expr
+callPrelude : String -> Expr -> Expr -> Expr
 cannotDeriveMsg : String -> List String -> String -> String
 checkDerives : List Decl -> List (String, Option Loc)
 collectRecordNames : List Decl -> List String
@@ -31,6 +33,7 @@ concatMapDecl : (Decl -> List Decl) -> List Decl -> List Decl
 concatStrings : List Expr -> Expr
 dataDerivers : String -> List String -> List (Option KindAnn) -> List Variant -> List (String, Unit -> Decl)
 declDeriveErrors : Decl -> List (String, Option Loc)
+declHasPreludeRef : Decl -> Bool
 deriveEqData : String -> List Variant -> Decl
 deriveForData : String -> List String -> List (Option KindAnn) -> List Variant -> String -> Option Decl
 deriveForNewtype : String -> List String -> List (Option KindAnn) -> String -> Ty -> String -> Option Decl
@@ -72,6 +75,7 @@ genericRep : String -> ConPayload -> List String -> Expr
 guardHasAnnot : Guard -> Bool
 guardsAnnotsOut : List Guard -> Int -> List Guard
 guardsToCore : List GuardArm -> Expr
+hasPreludeRef : Expr -> Bool
 hashArm : (Int, Variant) -> Arm
 hashFold : Expr -> List String -> Expr
 indexFrom : Int -> List a -> List (Int, a)
@@ -127,6 +131,9 @@ paramRequires : String -> List String -> List Require
 patBinderIds : Pat -> List (String, BinderId)
 pinType : String -> List Ty -> Ty
 pinTypeGo : Ty -> List Ty -> Ty
+preludeAliasDecl : Decl
+preludePrefix : String
+preludeRef : String -> Expr
 punField : Expr -> FieldAssign
 pureMethodName : Bool -> String
 qualifiedAt : Expr -> String -> Expr -> Expr
@@ -141,6 +148,7 @@ rewriteContainerLit : Expr -> Expr
 rewriteDo : Expr -> Expr
 rewriteRecordPun : List String -> Expr -> Expr
 rewriteSugar : Expr -> Expr
+scopePreludeRefs : Bool -> List Decl -> List Decl
 sectionToCore : Section -> Expr
 sharedBinderId : (String -> BinderId) -> List (String, BinderId) -> String -> BinderId
 showArm : String -> Variant -> Arm

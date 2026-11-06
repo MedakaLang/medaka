@@ -1,6 +1,6 @@
--- `main.mdk` through `hubswap`, whose two `export import` lines are swapped: the
--- occurrences are now typed against `IB.mth : f a -> Int`, so `mth 3` is a type
--- error before the admitted set is asked.  Rejected in both orders.
+-- C7, L3: the hub re-exports two distinct declarations of `mth`, so the explicit import
+-- binds it to both: a located ambiguity at the occurrence, whatever the receiver, types or
+-- import order.
 import hubswap.{IA, IB, mth}
 
 main = println (mth [1, 2], mth 3)

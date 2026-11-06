@@ -477,6 +477,7 @@ oblOver iface args = UObligation {
   oblProj = OpProjected,
 }
 # DESUGAR
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("support" "diag_codes") ((mem "codeText" false))))
 (DUse false (UseGroup ("list") ((mem "drop" false) (mem "range" false) (mem "reverse" false) (mem "zip" false))))
 (DUse false (UseGroup ("test") ((mem "Expectation" false) (mem "expectEqual" false))))
@@ -500,10 +501,10 @@ oblOver iface args = UObligation {
 (DTypeSig true "noPreludeFacts" (TyCon "PreludeMarkFacts"))
 (DFunDef false "noPreludeFacts" () (ERecordCreate "PreludeMarkFacts" ((fa "pmfReturnPos" (EListLit)) (fa "pmfMethodConstraints" (EListLit)) (fa "pmfArgDispatch" (EListLit)) (fa "pmfArgDispatchById" (EListLit)) (fa "pmfConstrainedNames" (EListLit)))))
 (DTypeSig true "routeTag" (TyFun (TyCon "Route") (TyCon "String")))
-(DFunDef false "routeTag" ((PCon "RScalar" (PVar "tag"))) (EBinOp "++" (EBinOp "++" (ELit (LString "scalar:")) (EApp (EVar "display") (EVar "tag"))) (ELit (LString ""))))
+(DFunDef false "routeTag" ((PCon "RScalar" (PVar "tag"))) (EBinOp "++" (EBinOp "++" (ELit (LString "scalar:")) (EApp (EVar "$core.display") (EVar "tag"))) (ELit (LString ""))))
 (DFunDef false "routeTag" ((PCon "RNone")) (ELit (LString "none")))
-(DFunDef false "routeTag" ((PCon "RDict" (PVar "d"))) (EBinOp "++" (EBinOp "++" (ELit (LString "dict:")) (EApp (EVar "display") (EVar "d"))) (ELit (LString ""))))
-(DFunDef false "routeTag" ((PCon "RKey" (PVar "word") PWild PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "key:")) (EApp (EVar "display") (EVar "word"))) (ELit (LString ""))))
+(DFunDef false "routeTag" ((PCon "RDict" (PVar "d"))) (EBinOp "++" (EBinOp "++" (ELit (LString "dict:")) (EApp (EVar "$core.display") (EVar "d"))) (ELit (LString ""))))
+(DFunDef false "routeTag" ((PCon "RKey" (PVar "word") PWild PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "key:")) (EApp (EVar "$core.display") (EVar "word"))) (ELit (LString ""))))
 (DFunDef false "routeTag" (PWild) (ELit (LString "other")))
 (DTypeSig true "at" (TyCon "Loc"))
 (DFunDef false "at" () (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString "t.mdk"))) (ELit (LInt 1))) (ELit (LInt 1))) (ELit (LInt 1))) (ELit (LInt 1))))
@@ -611,6 +612,7 @@ oblOver iface args = UObligation {
 (DTypeSig true "oblOver" (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "UObligation"))))
 (DFunDef false "oblOver" ((PVar "iface") (PVar "args")) (ERecordCreate "UObligation" ((fa "pred" (ERecordCreate "Predicate" ((fa "iface" (EVar "iface")) (fa "args" (EVar "args"))))) (fa "originId" (ELit (LInt 0))) (fa "prov" (EVar "PNumLit")) (fa "loc" (EVar "None")) (fa "uoScope" (EApp (EVar "ScopeId") (ELit (LInt 0)))) (fa "oblProj" (EVar "OpProjected")))))
 # MARK
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("support" "diag_codes") ((mem "codeText" false))))
 (DUse false (UseGroup ("list") ((mem "drop" false) (mem "range" false) (mem "reverse" false) (mem "zip" false))))
 (DUse false (UseGroup ("test") ((mem "Expectation" false) (mem "expectEqual" false))))
@@ -634,10 +636,10 @@ oblOver iface args = UObligation {
 (DTypeSig true "noPreludeFacts" (TyCon "PreludeMarkFacts"))
 (DFunDef false "noPreludeFacts" () (ERecordCreate "PreludeMarkFacts" ((fa "pmfReturnPos" (EListLit)) (fa "pmfMethodConstraints" (EListLit)) (fa "pmfArgDispatch" (EListLit)) (fa "pmfArgDispatchById" (EListLit)) (fa "pmfConstrainedNames" (EListLit)))))
 (DTypeSig true "routeTag" (TyFun (TyCon "Route") (TyCon "String")))
-(DFunDef false "routeTag" ((PCon "RScalar" (PVar "tag"))) (EBinOp "++" (EBinOp "++" (ELit (LString "scalar:")) (EApp (EMethodRef "display") (EVar "tag"))) (ELit (LString ""))))
+(DFunDef false "routeTag" ((PCon "RScalar" (PVar "tag"))) (EBinOp "++" (EBinOp "++" (ELit (LString "scalar:")) (EApp (EVar "$core.display") (EVar "tag"))) (ELit (LString ""))))
 (DFunDef false "routeTag" ((PCon "RNone")) (ELit (LString "none")))
-(DFunDef false "routeTag" ((PCon "RDict" (PVar "d"))) (EBinOp "++" (EBinOp "++" (ELit (LString "dict:")) (EApp (EMethodRef "display") (EVar "d"))) (ELit (LString ""))))
-(DFunDef false "routeTag" ((PCon "RKey" (PVar "word") PWild PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "key:")) (EApp (EMethodRef "display") (EVar "word"))) (ELit (LString ""))))
+(DFunDef false "routeTag" ((PCon "RDict" (PVar "d"))) (EBinOp "++" (EBinOp "++" (ELit (LString "dict:")) (EApp (EVar "$core.display") (EVar "d"))) (ELit (LString ""))))
+(DFunDef false "routeTag" ((PCon "RKey" (PVar "word") PWild PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "key:")) (EApp (EVar "$core.display") (EVar "word"))) (ELit (LString ""))))
 (DFunDef false "routeTag" (PWild) (ELit (LString "other")))
 (DTypeSig true "at" (TyCon "Loc"))
 (DFunDef false "at" () (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString "t.mdk"))) (ELit (LInt 1))) (ELit (LInt 1))) (ELit (LInt 1))) (ELit (LInt 1))))

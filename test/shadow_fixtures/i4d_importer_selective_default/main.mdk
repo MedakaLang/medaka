@@ -1,3 +1,4 @@
+-- L2 rung 3 over rung 5: `import bytes.{length}` binds `bytes.length`; the type mismatch
+-- names it and no shadow warning is emitted
 import bytes.{length}
--- S2-IMPORT-DIFFER warns; Foldable's default still folds Some once.
 main = println (length (Some 7))

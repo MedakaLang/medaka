@@ -1,0 +1,6 @@
+-- L3: main.mdk with its two import lines swapped.  `import smod as S` binds no bare name
+-- whichever import is written first, so the explicit `fmod.size` answers 99
+import smod as S
+import fmod.{size}
+
+main = println (size "abc")

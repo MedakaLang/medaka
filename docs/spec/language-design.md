@@ -981,7 +981,9 @@ import collections.HashMap as HM
 
 Wildcard imports are available but style guides should discourage them — makes it hard to know where names come from.
 
-When a wildcard import and an explicit import make two different declarations available under one name, using that name is an error at the use site: the name is ambiguous, as any two imports of one name are. A name that is never used is accepted, and so is one that reaches the module through two paths to the same declaration, such as a facade's re-export. To use the name, import it from one of the two modules under an alias, such as `import utils.{greet as hello}`. An explicit import of the name alone is not ambiguous.
+When two imports at one rung (two wildcards, or two explicit imports) make two different declarations available under one name, using that name is an error at the use site: the name is ambiguous. A name that is never used is accepted, and so is one that reaches the module through two paths to the same declaration, such as a facade's re-export. To use the name, import it explicitly from one of the two modules, optionally under an alias, such as `import utils.{greet as hello}`. A wildcard and an explicit import of one name are not ambiguous: the explicit import answers.
+
+Every bare name denotes one declaration, chosen by scope alone: local binders, then the module's own top-level declarations, then explicit imports, then wildcard imports, then the prelude (the clauses are in `docs/spec/SHADOW-SEMANTICS.md`). Neither the type of an argument nor the position of the name (applied, piped, passed as a value) changes the choice, and an `impl` in scope never turns a function into a method. A wildcard import loses silently to the module's own declaration of the name. An explicit import of a name the module also declares at top level is an error at the import member. An interface method and a top-level function of one name in one module is a duplicate-declaration error. A method hidden by a nearer rung is reached as `Alias.method` (`import core as C`) or by a member alias (`import core.{method as m2}`).
 
 ---
 

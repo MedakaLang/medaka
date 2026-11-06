@@ -1,5 +1,5 @@
 # META
-source_lines=523
+source_lines=526
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted doctest extraction + running.
@@ -25,7 +25,7 @@ stages=DESUGAR,MARK
 -- compiler/tools/test_cmd.mdk.
 
 import frontend.lexer.{Comment, commentLine, commentText}
-import frontend.ast.{Decl(..)}
+import frontend.ast.{Decl(..), UsePath(..), preludeAlias}
 import frontend.parser.{parseLocatedResult, parseErrorMessage}
 import frontend.desugar.{desugar, moduleAliases, qualifyAliasRefsWith}
 import support.util.{listLen, reverseL, joinNl, startsWith, splitNl, isEmptyL}
@@ -522,12 +522,16 @@ anyUse : List Decl -> Bool
 anyUse [] = False
 anyUse (d :: rest) = isUse d || anyUse rest
 
+-- Desugar's `import core as $core` binds the prelude every program already
+-- has, so it brings no module graph; only an import the source wrote does.
 isUse : Decl -> Bool
+isUse (DUse _ (UseAlias _ alias) _) = alias /= preludeAlias
 isUse (DUse _ _ _) = True
 isUse _ = False
 # DESUGAR
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "commentLine" false) (mem "commentText" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "UsePath" true) (mem "preludeAlias" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseLocatedResult" false) (mem "parseErrorMessage" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false) (mem "moduleAliases" false) (mem "qualifyAliasRefsWith" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "reverseL" false) (mem "joinNl" false) (mem "startsWith" false) (mem "splitNl" false) (mem "isEmptyL" false))))
@@ -556,12 +560,12 @@ isUse _ = False
 (DFunDef false "engineName" ((PCon "EngInterp")) (ELit (LString "eval")))
 (DFunDef false "engineName" ((PCon "EngNative")) (ELit (LString "native")))
 (DTypeSig true "doctestFailSuffix" (TyFun (TyCon "RunResult") (TyCon "String")))
-(DFunDef false "doctestFailSuffix" ((PVar "result")) (EIf (EBinOp "||" (EBinOp ">" (EApp (EVar "runFailed") (EVar "result")) (ELit (LInt 0))) (EBinOp ">" (EApp (EVar "runErrors") (EVar "result")) (ELit (LInt 0)))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString " (")) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "runFailed") (EVar "result"))))) (ELit (LString " failed, "))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "runErrors") (EVar "result"))))) (ELit (LString " errors)"))) (EIf (EVar "otherwise") (ELit (LString "")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "doctestFailSuffix" ((PVar "result")) (EIf (EBinOp "||" (EBinOp ">" (EApp (EVar "runFailed") (EVar "result")) (ELit (LInt 0))) (EBinOp ">" (EApp (EVar "runErrors") (EVar "result")) (ELit (LInt 0)))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString " (")) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EApp (EVar "runFailed") (EVar "result"))))) (ELit (LString " failed, "))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EApp (EVar "runErrors") (EVar "result"))))) (ELit (LString " errors)"))) (EIf (EVar "otherwise") (ELit (LString "")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "printDoctestDetails" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Example") (TyCon "ExResult"))) (TyEffect ("IO") None (TyCon "Unit")))))
 (DFunDef false "printDoctestDetails" (PWild (PList)) (ELit LUnit))
 (DFunDef false "printDoctestDetails" ((PVar "target") (PCons (PTuple (PVar "ex") (PVar "res")) (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EApp (EVar "printDoctestOne") (EVar "target")) (EVar "ex")) (EVar "res"))) (DoExpr (EApp (EApp (EVar "printDoctestDetails") (EVar "target")) (EVar "rest")))))
 (DTypeSig false "printDoctestOne" (TyFun (TyCon "String") (TyFun (TyCon "Example") (TyFun (TyCon "ExResult") (TyEffect ("IO") None (TyCon "Unit"))))))
-(DFunDef false "printDoctestOne" ((PVar "target") (PVar "ex") (PVar "res")) (EBlock (DoLet false false (PVar "loc") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "target"))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "exampleLine") (EVar "ex"))))) (ELit (LString "")))) (DoExpr (EMatch (EVar "res") (arm (PCon "Pass" PWild PWild) () (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ok   ")) (EApp (EVar "display") (EVar "loc"))) (ELit (LString ": "))) (EApp (EVar "display") (EApp (EVar "exampleInput") (EVar "ex")))) (ELit (LString ""))))) (arm (PCon "Fail" PWild (PVar "expected") (PVar "actual")) () (EBlock (DoExpr (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  FAIL ")) (EApp (EVar "display") (EVar "loc"))) (ELit (LString ": "))) (EApp (EVar "display") (EApp (EVar "exampleInput") (EVar "ex")))) (ELit (LString ""))))) (DoExpr (EApp (EVar "putStrLn") (EBinOp "++" (ELit (LString "       expected: ")) (EVar "expected")))) (DoExpr (EApp (EVar "putStrLn") (EBinOp "++" (ELit (LString "         actual: ")) (EVar "actual")))))) (arm (PCon "Errored" (PVar "msg")) () (EBlock (DoExpr (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ERROR ")) (EApp (EVar "display") (EVar "loc"))) (ELit (LString ": "))) (EApp (EVar "display") (EApp (EVar "exampleInput") (EVar "ex")))) (ELit (LString ""))))) (DoExpr (EApp (EVar "putStrLn") (EBinOp "++" (ELit (LString "        ")) (EVar "msg"))))))))))
+(DFunDef false "printDoctestOne" ((PVar "target") (PVar "ex") (PVar "res")) (EBlock (DoLet false false (PVar "loc") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "target"))) (ELit (LString ":"))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EApp (EVar "exampleLine") (EVar "ex"))))) (ELit (LString "")))) (DoExpr (EMatch (EVar "res") (arm (PCon "Pass" PWild PWild) () (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ok   ")) (EApp (EVar "$core.display") (EVar "loc"))) (ELit (LString ": "))) (EApp (EVar "$core.display") (EApp (EVar "exampleInput") (EVar "ex")))) (ELit (LString ""))))) (arm (PCon "Fail" PWild (PVar "expected") (PVar "actual")) () (EBlock (DoExpr (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  FAIL ")) (EApp (EVar "$core.display") (EVar "loc"))) (ELit (LString ": "))) (EApp (EVar "$core.display") (EApp (EVar "exampleInput") (EVar "ex")))) (ELit (LString ""))))) (DoExpr (EApp (EVar "putStrLn") (EBinOp "++" (ELit (LString "       expected: ")) (EVar "expected")))) (DoExpr (EApp (EVar "putStrLn") (EBinOp "++" (ELit (LString "         actual: ")) (EVar "actual")))))) (arm (PCon "Errored" (PVar "msg")) () (EBlock (DoExpr (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ERROR ")) (EApp (EVar "$core.display") (EVar "loc"))) (ELit (LString ": "))) (EApp (EVar "$core.display") (EApp (EVar "exampleInput") (EVar "ex")))) (ELit (LString ""))))) (DoExpr (EApp (EVar "putStrLn") (EBinOp "++" (ELit (LString "        ")) (EVar "msg"))))))))))
 (DTypeSig false "slen" (TyFun (TyCon "String") (TyCon "Int")))
 (DFunDef false "slen" ((PVar "s")) (EApp (EVar "stringLength") (EVar "s")))
 (DTypeSig false "substr3" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String")))))
@@ -618,7 +622,7 @@ isUse _ = False
 (DTypeSig true "synthSrc" (TyFun (TyCon "Int") (TyFun (TyCon "Example") (TyCon "String"))))
 (DFunDef false "synthSrc" ((PVar "i") (PVar "ex")) (EApp (EApp (EVar "synthSrcNamed") (EApp (EVar "synthName") (EVar "i"))) (EVar "ex")))
 (DTypeSig true "synthSrcNamed" (TyFun (TyCon "String") (TyFun (TyCon "Example") (TyCon "String"))))
-(DFunDef false "synthSrcNamed" ((PVar "name") (PVar "ex")) (EBlock (DoLet false false (PVar "rhs") (EMatch (EApp (EVar "exampleExpected") (EVar "ex")) (arm (PCon "Some" PWild) () (EBinOp "++" (EBinOp "++" (ELit (LString "debug (")) (EApp (EVar "exampleInput") (EVar "ex"))) (ELit (LString ")")))) (arm (PCon "None") () (EApp (EVar "exampleInput") (EVar "ex"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "name"))) (ELit (LString " () = "))) (EApp (EVar "display") (EVar "rhs"))) (ELit (LString ""))))))
+(DFunDef false "synthSrcNamed" ((PVar "name") (PVar "ex")) (EBlock (DoLet false false (PVar "rhs") (EMatch (EApp (EVar "exampleExpected") (EVar "ex")) (arm (PCon "Some" PWild) () (EBinOp "++" (EBinOp "++" (ELit (LString "debug (")) (EApp (EVar "exampleInput") (EVar "ex"))) (ELit (LString ")")))) (arm (PCon "None") () (EApp (EVar "exampleInput") (EVar "ex"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "name"))) (ELit (LString " () = "))) (EApp (EVar "$core.display") (EVar "rhs"))) (ELit (LString ""))))))
 (DTypeSig true "buildSynthResults" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))))))
 (DFunDef false "buildSynthResults" ((PVar "targetDecls") (PVar "examples")) (EApp (EApp (EApp (EVar "buildSynthResultsGo") (EApp (EVar "moduleAliases") (EVar "targetDecls"))) (ELit (LInt 0))) (EVar "examples")))
 (DTypeSig false "buildSynthResultsGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl"))))))))
@@ -677,11 +681,13 @@ isUse _ = False
 (DFunDef false "anyUse" ((PList)) (EVar "False"))
 (DFunDef false "anyUse" ((PCons (PVar "d") (PVar "rest"))) (EBinOp "||" (EApp (EVar "isUse") (EVar "d")) (EApp (EVar "anyUse") (EVar "rest"))))
 (DTypeSig false "isUse" (TyFun (TyCon "Decl") (TyCon "Bool")))
+(DFunDef false "isUse" ((PCon "DUse" PWild (PCon "UseAlias" PWild (PVar "alias")) PWild)) (EBinOp "/=" (EVar "alias") (EVar "preludeAlias")))
 (DFunDef false "isUse" ((PCon "DUse" PWild PWild PWild)) (EVar "True"))
 (DFunDef false "isUse" (PWild) (EVar "False"))
 # MARK
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "commentLine" false) (mem "commentText" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "UsePath" true) (mem "preludeAlias" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseLocatedResult" false) (mem "parseErrorMessage" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false) (mem "moduleAliases" false) (mem "qualifyAliasRefsWith" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "reverseL" false) (mem "joinNl" false) (mem "startsWith" false) (mem "splitNl" false) (mem "isEmptyL" false))))
@@ -710,12 +716,12 @@ isUse _ = False
 (DFunDef false "engineName" ((PCon "EngInterp")) (ELit (LString "eval")))
 (DFunDef false "engineName" ((PCon "EngNative")) (ELit (LString "native")))
 (DTypeSig true "doctestFailSuffix" (TyFun (TyCon "RunResult") (TyCon "String")))
-(DFunDef false "doctestFailSuffix" ((PVar "result")) (EIf (EBinOp "||" (EBinOp ">" (EApp (EVar "runFailed") (EVar "result")) (ELit (LInt 0))) (EBinOp ">" (EApp (EVar "runErrors") (EVar "result")) (ELit (LInt 0)))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString " (")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "runFailed") (EVar "result"))))) (ELit (LString " failed, "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "runErrors") (EVar "result"))))) (ELit (LString " errors)"))) (EIf (EVar "otherwise") (ELit (LString "")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "doctestFailSuffix" ((PVar "result")) (EIf (EBinOp "||" (EBinOp ">" (EApp (EVar "runFailed") (EVar "result")) (ELit (LInt 0))) (EBinOp ">" (EApp (EVar "runErrors") (EVar "result")) (ELit (LInt 0)))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString " (")) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EApp (EVar "runFailed") (EVar "result"))))) (ELit (LString " failed, "))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EApp (EVar "runErrors") (EVar "result"))))) (ELit (LString " errors)"))) (EIf (EVar "otherwise") (ELit (LString "")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "printDoctestDetails" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Example") (TyCon "ExResult"))) (TyEffect ("IO") None (TyCon "Unit")))))
 (DFunDef false "printDoctestDetails" (PWild (PList)) (ELit LUnit))
 (DFunDef false "printDoctestDetails" ((PVar "target") (PCons (PTuple (PVar "ex") (PVar "res")) (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EApp (EVar "printDoctestOne") (EVar "target")) (EVar "ex")) (EVar "res"))) (DoExpr (EApp (EApp (EVar "printDoctestDetails") (EVar "target")) (EVar "rest")))))
 (DTypeSig false "printDoctestOne" (TyFun (TyCon "String") (TyFun (TyCon "Example") (TyFun (TyCon "ExResult") (TyEffect ("IO") None (TyCon "Unit"))))))
-(DFunDef false "printDoctestOne" ((PVar "target") (PVar "ex") (PVar "res")) (EBlock (DoLet false false (PVar "loc") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "target"))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "exampleLine") (EVar "ex"))))) (ELit (LString "")))) (DoExpr (EMatch (EVar "res") (arm (PCon "Pass" PWild PWild) () (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ok   ")) (EApp (EMethodRef "display") (EVar "loc"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EApp (EVar "exampleInput") (EVar "ex")))) (ELit (LString ""))))) (arm (PCon "Fail" PWild (PVar "expected") (PVar "actual")) () (EBlock (DoExpr (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  FAIL ")) (EApp (EMethodRef "display") (EVar "loc"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EApp (EVar "exampleInput") (EVar "ex")))) (ELit (LString ""))))) (DoExpr (EApp (EVar "putStrLn") (EBinOp "++" (ELit (LString "       expected: ")) (EVar "expected")))) (DoExpr (EApp (EVar "putStrLn") (EBinOp "++" (ELit (LString "         actual: ")) (EVar "actual")))))) (arm (PCon "Errored" (PVar "msg")) () (EBlock (DoExpr (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ERROR ")) (EApp (EMethodRef "display") (EVar "loc"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EApp (EVar "exampleInput") (EVar "ex")))) (ELit (LString ""))))) (DoExpr (EApp (EVar "putStrLn") (EBinOp "++" (ELit (LString "        ")) (EVar "msg"))))))))))
+(DFunDef false "printDoctestOne" ((PVar "target") (PVar "ex") (PVar "res")) (EBlock (DoLet false false (PVar "loc") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "target"))) (ELit (LString ":"))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EApp (EVar "exampleLine") (EVar "ex"))))) (ELit (LString "")))) (DoExpr (EMatch (EVar "res") (arm (PCon "Pass" PWild PWild) () (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ok   ")) (EApp (EVar "$core.display") (EVar "loc"))) (ELit (LString ": "))) (EApp (EVar "$core.display") (EApp (EVar "exampleInput") (EVar "ex")))) (ELit (LString ""))))) (arm (PCon "Fail" PWild (PVar "expected") (PVar "actual")) () (EBlock (DoExpr (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  FAIL ")) (EApp (EVar "$core.display") (EVar "loc"))) (ELit (LString ": "))) (EApp (EVar "$core.display") (EApp (EVar "exampleInput") (EVar "ex")))) (ELit (LString ""))))) (DoExpr (EApp (EVar "putStrLn") (EBinOp "++" (ELit (LString "       expected: ")) (EVar "expected")))) (DoExpr (EApp (EVar "putStrLn") (EBinOp "++" (ELit (LString "         actual: ")) (EVar "actual")))))) (arm (PCon "Errored" (PVar "msg")) () (EBlock (DoExpr (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ERROR ")) (EApp (EVar "$core.display") (EVar "loc"))) (ELit (LString ": "))) (EApp (EVar "$core.display") (EApp (EVar "exampleInput") (EVar "ex")))) (ELit (LString ""))))) (DoExpr (EApp (EVar "putStrLn") (EBinOp "++" (ELit (LString "        ")) (EVar "msg"))))))))))
 (DTypeSig false "slen" (TyFun (TyCon "String") (TyCon "Int")))
 (DFunDef false "slen" ((PVar "s")) (EApp (EVar "stringLength") (EVar "s")))
 (DTypeSig false "substr3" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String")))))
@@ -772,7 +778,7 @@ isUse _ = False
 (DTypeSig true "synthSrc" (TyFun (TyCon "Int") (TyFun (TyCon "Example") (TyCon "String"))))
 (DFunDef false "synthSrc" ((PVar "i") (PVar "ex")) (EApp (EApp (EVar "synthSrcNamed") (EApp (EVar "synthName") (EVar "i"))) (EVar "ex")))
 (DTypeSig true "synthSrcNamed" (TyFun (TyCon "String") (TyFun (TyCon "Example") (TyCon "String"))))
-(DFunDef false "synthSrcNamed" ((PVar "name") (PVar "ex")) (EBlock (DoLet false false (PVar "rhs") (EMatch (EApp (EVar "exampleExpected") (EVar "ex")) (arm (PCon "Some" PWild) () (EBinOp "++" (EBinOp "++" (ELit (LString "debug (")) (EApp (EVar "exampleInput") (EVar "ex"))) (ELit (LString ")")))) (arm (PCon "None") () (EApp (EVar "exampleInput") (EVar "ex"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString " () = "))) (EApp (EMethodRef "display") (EVar "rhs"))) (ELit (LString ""))))))
+(DFunDef false "synthSrcNamed" ((PVar "name") (PVar "ex")) (EBlock (DoLet false false (PVar "rhs") (EMatch (EApp (EVar "exampleExpected") (EVar "ex")) (arm (PCon "Some" PWild) () (EBinOp "++" (EBinOp "++" (ELit (LString "debug (")) (EApp (EVar "exampleInput") (EVar "ex"))) (ELit (LString ")")))) (arm (PCon "None") () (EApp (EVar "exampleInput") (EVar "ex"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "name"))) (ELit (LString " () = "))) (EApp (EVar "$core.display") (EVar "rhs"))) (ELit (LString ""))))))
 (DTypeSig true "buildSynthResults" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))))))
 (DFunDef false "buildSynthResults" ((PVar "targetDecls") (PVar "examples")) (EApp (EApp (EApp (EVar "buildSynthResultsGo") (EApp (EVar "moduleAliases") (EVar "targetDecls"))) (ELit (LInt 0))) (EVar "examples")))
 (DTypeSig false "buildSynthResultsGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl"))))))))
@@ -831,5 +837,6 @@ isUse _ = False
 (DFunDef false "anyUse" ((PList)) (EVar "False"))
 (DFunDef false "anyUse" ((PCons (PVar "d") (PVar "rest"))) (EBinOp "||" (EApp (EVar "isUse") (EVar "d")) (EApp (EVar "anyUse") (EVar "rest"))))
 (DTypeSig false "isUse" (TyFun (TyCon "Decl") (TyCon "Bool")))
+(DFunDef false "isUse" ((PCon "DUse" PWild (PCon "UseAlias" PWild (PVar "alias")) PWild)) (EBinOp "/=" (EVar "alias") (EVar "preludeAlias")))
 (DFunDef false "isUse" ((PCon "DUse" PWild PWild PWild)) (EVar "True"))
 (DFunDef false "isUse" (PWild) (EVar "False"))

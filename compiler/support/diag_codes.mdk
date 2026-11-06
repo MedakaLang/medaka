@@ -101,6 +101,7 @@ public export data DiagCode =
   | RDuplicateBinding
   | RDuplicateDef
   | RDuplicateIfaceMethod
+  | RDuplicateMethodValue
   | RDuplicateSignature
   | REffectLabelNoMembers
   | RExternWithBody
@@ -108,6 +109,7 @@ public export data DiagCode =
   | RFileNotFound
   | RFileNotUtf8
   | RImmutableAssign
+  | RImportOwnName
   | RInternalExtern
   | RMethodNotInInterface
   | RMisplacedAuthorityBinder
@@ -308,6 +310,7 @@ codeText RDupBinding = "R-DUP-BINDING"
 codeText RDuplicateBinding = "R-DUPLICATE-BINDING"
 codeText RDuplicateDef = "R-DUPLICATE-DEF"
 codeText RDuplicateIfaceMethod = "R-DUPLICATE-IFACE-METHOD"
+codeText RDuplicateMethodValue = "R-DUPLICATE-METHOD-VALUE"
 codeText RDuplicateSignature = "R-DUPLICATE-SIGNATURE"
 codeText REffectLabelNoMembers = "R-EFFECT-LABEL-NO-MEMBERS"
 codeText RExternWithBody = "R-EXTERN-WITH-BODY"
@@ -315,6 +318,7 @@ codeText RFieldNotInRecord = "R-FIELD-NOT-IN-RECORD"
 codeText RFileNotFound = "R-FILE-NOT-FOUND"
 codeText RFileNotUtf8 = "R-FILE-NOT-UTF8"
 codeText RImmutableAssign = "R-IMMUTABLE-ASSIGN"
+codeText RImportOwnName = "R-IMPORT-OWN-NAME"
 codeText RInternalExtern = "R-INTERNAL-EXTERN"
 codeText RMethodNotInInterface = "R-METHOD-NOT-IN-INTERFACE"
 codeText RMisplacedAuthorityBinder = "R-MISPLACED-AUTHORITY-BINDER"
@@ -482,14 +486,14 @@ allDiagCodes = [
   RAmbiguousEffect, RAmbiguousInterface, RAmbiguousOccurrence, RAmbiguousType,
   RAsPatternMisplaced, RBareCtorImport, RBuildFailed, RCannotDerive, RDupBinder,
   RDupBinding, RDuplicateBinding, RDuplicateDef, RDuplicateIfaceMethod,
-  RDuplicateSignature, REffectLabelNoMembers, RExternWithBody,
-  RFieldNotInRecord, RFileNotFound, RFileNotUtf8, RImmutableAssign,
-  RInternalExtern, RMethodNotInInterface, RMisplacedAuthorityBinder,
-  RModuleLoad, RNewtypeCtorPrivate, RNoExportedCtors, RNonrecValueLet,
-  ROrPatternBinders, ROrPatternMisplaced, ROrphanSignature, RPrivateName,
-  RPrivilegedReexport, RTestModuleImport, RUnbound, RUnboundAuthority,
-  RUnknownCtor, RUnknownEffect, RUnknownField, RUnknownInterface,
-  RUnknownModule, RUnknownType, TAbstractField, TAliasArity,
+  RDuplicateMethodValue, RDuplicateSignature, REffectLabelNoMembers,
+  RExternWithBody, RFieldNotInRecord, RFileNotFound, RFileNotUtf8,
+  RImmutableAssign, RImportOwnName, RInternalExtern, RMethodNotInInterface,
+  RMisplacedAuthorityBinder, RModuleLoad, RNewtypeCtorPrivate, RNoExportedCtors,
+  RNonrecValueLet, ROrPatternBinders, ROrPatternMisplaced, ROrphanSignature,
+  RPrivateName, RPrivilegedReexport, RTestModuleImport, RUnbound,
+  RUnboundAuthority, RUnknownCtor, RUnknownEffect, RUnknownField,
+  RUnknownInterface, RUnknownModule, RUnknownType, TAbstractField, TAliasArity,
   TAmbiguousAliasMethod, TAmbiguousField, TAmbiguousInstance, TAmbiguousMethod,
   TAmbiguousReexport, TAmbiguousShadowDecl, TAuthority, TAuthorityBinder,
   TAuthorityDomain, TAuthorityEscape, TAuthorityExistentialScope,

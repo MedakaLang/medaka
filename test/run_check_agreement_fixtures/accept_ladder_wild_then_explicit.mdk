@@ -1,0 +1,7 @@
+-- A wildcard import written before an explicit import of the same bare value
+-- name.  The explicit import is what `foo` denotes, whichever is written first
+-- (docs/spec/SHADOW-SEMANTICS.md L2, L3), so `foo + 10` is `11` on every verb.
+import lib.ladder_b.*
+import lib.ladder_a.{foo}
+
+main = println (foo + 10, bar)

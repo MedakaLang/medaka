@@ -5,7 +5,7 @@ error: test/error_quality_fixtures/typecheck/tuple_call_syntax.mdk:2:16: no impl
   |
 2 | main = println (add(1, 2))
   |                 ^
-error: test/error_quality_fixtures/typecheck/tuple_call_syntax.mdk:2:7: no impl of Display for ((Int, Int) -> (Int, Int))
+error: test/error_quality_fixtures/typecheck/tuple_call_syntax.mdk:2:7: no impl of Display for ((Int, Int) -> (Int, Int)); Medaka calls functions with spaces, not parentheses: `add(1, 2)` passes the single tuple `(1, 2)`; did you mean `add 1 2`?
   |
 2 | main = println (add(1, 2))
   |        ^

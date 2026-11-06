@@ -1,5 +1,5 @@
 # META
-source_lines=1163
+source_lines=1278
 stages=DESUGAR,MARK
 # SOURCE
 -- A module's export surface, built from its declarations and the surfaces of
@@ -154,6 +154,121 @@ declUseIds : Decl -> List String
 declUseIds (DUse _ path _) = [useModId path]
 declUseIds (DAttrib _ d) = declUseIds d
 declUseIds _ = []
+
+-- The rows [decls]' imports give, one import at a time from [rowsOf], without
+-- the rows a wildcard import gives a bare name an explicit import binds: an
+-- explicit import answers over a wildcard (docs/spec/SHADOW-SEMANTICS.md L2,
+-- L3), whichever is written first.  [nameOf] is a row's bare name and [binds]
+-- says whether the row binds it.  Two declarations on one rung keep both rows,
+-- and an alias's method import gives no row at all (`writtenImportsOf`): `import
+-- m as A` binds no bare name (L2), whichever import is written first.
+-- The checker's import seed, the interpreters' import frame and the emit
+-- path's rename entries all bind imports through this rule.
+export
+explicitOverWild : (r -> String) ->
+  (r -> Bool) ->
+  (Decl -> List r) ->
+  List Decl ->
+  List r
+explicitOverWild nameOf binds rowsOf prog =
+  let decls = writtenImportsOf prog
+  let forms = importFormsOf decls
+  let perUse = map (d => (forms d, rowsOf d)) decls
+  let explicit =
+    fold
+      (acc (form, rows) =>
+        if form == ExplicitImport then
+          omFromNames (map nameOf (filterList binds rows)) acc
+        else
+          acc)
+      omEmpty
+      perUse
+  flatMap (dropShadowedWild explicit nameOf) perUse
+
+-- The bare names [decls]' explicit imports bind, by [namesOf] each import.
+export
+explicitImportNames : (Decl -> List String) -> List Decl -> OrdMap Unit
+explicitImportNames namesOf decls =
+  let forms = importFormsOf decls
+  fold
+    (acc d =>
+      if forms d == ExplicitImport then omFromNames (namesOf d) acc else acc)
+    omEmpty
+    decls
+
+-- `explicitOverWild` against a name set built once for several row kinds
+-- (`explicitImportNames`).
+export
+withoutShadowedWild : OrdMap Unit ->
+  (r -> String) ->
+  (Decl -> List r) ->
+  List Decl ->
+  List r
+withoutShadowedWild explicit nameOf rowsOf decls =
+  let forms = importFormsOf decls
+  flatMap (d => dropShadowedWild explicit nameOf (forms d, rowsOf d)) decls
+
+dropShadowedWild : OrdMap Unit ->
+  (r -> String) ->
+  (ImportForm, List r) ->
+  List r
+dropShadowedWild explicit nameOf (form, rows) =
+  if form == WildImport then
+    filterList (r => not (omHasKey (nameOf r) explicit)) rows
+  else
+    rows
+
+-- How a declaration of a module binds bare names: an import that names them,
+-- a wildcard, or anything else (an alias's method import binds none).
+data ImportForm = ExplicitImport | WildImport | NoBareImport deriving (Eq)
+
+importFormsOf : List Decl -> Decl -> ImportForm
+importFormsOf decls =
+  let sites = aliasImportSites decls
+  d => importFormIn sites d
+
+importFormIn : List AliasSite -> Decl -> ImportForm
+importFormIn sites (DAttrib _ d) = importFormIn sites d
+importFormIn _ (DUse _ (UseWild _) _) = WildImport
+importFormIn _ (DUse _ (UseAlias _ _) _) = NoBareImport
+importFormIn sites (d@(DUse _ _ _)) =
+  if isAliasMethodImport sites d then NoBareImport else ExplicitImport
+importFormIn _ _ = NoBareImport
+
+-- [prog] without the method imports `deAliasMethodImports` appends beside each
+-- `import m as A`.  That import exists so the elaborated tree has the origin name the
+-- alias-qualified spelling resolves to after inference; the source never wrote it, and
+-- an alias binds no bare method name (docs/spec/SYNTAX.md § "Import aliasing"), so it
+-- must not witness a declaration on rung 1 or 2.  It is recognised by carrying the
+-- alias import's own module path and location.
+export
+writtenImportsOf : List Decl -> List Decl
+writtenImportsOf prog = match aliasImportSites prog
+  [] => prog
+  sites => filterList (d => not (isAliasMethodImport sites d)) prog
+
+-- The module path and location of one `import m as A`.  Built with record
+-- syntax and read with `.field`: eval represents positional and record
+-- construction differently, so one form per type (#4923).
+public export data AliasSite = AliasSite { asQuals : List String, asLoc : Loc }
+
+-- The module path and location of each `import m as A` in [prog].
+export
+aliasImportSites : List Decl -> List AliasSite
+aliasImportSites [] = []
+aliasImportSites ((DAttrib _ d) :: rest) =
+  aliasImportSites [d] ++ aliasImportSites rest
+aliasImportSites ((DUse _ (UseAlias quals _) loc) :: rest) =
+  AliasSite { asQuals = quals, asLoc = loc } :: aliasImportSites rest
+aliasImportSites (_ :: rest) = aliasImportSites rest
+
+-- Only a `UseGroup` import is ever synthesized, so the final catch-all answering False
+-- for every other declaration is exhaustive by construction.
+isAliasMethodImport : List AliasSite -> Decl -> Bool
+isAliasMethodImport sites (DAttrib _ d) = isAliasMethodImport sites d
+isAliasMethodImport sites (DUse _ (UseGroup quals _) loc) =
+  anyList (s => s.asQuals == quals && s.asLoc == loc) sites
+isAliasMethodImport _ _ = False
 
 -- The public interface of a resolved module
 -- (exp_fields is dropped — consumers only read field OWNERS).
@@ -1227,6 +1342,36 @@ overPubUse coreExp known f path =
 (DFunDef false "declUseIds" ((PCon "DUse" PWild (PVar "path") PWild)) (EListLit (EApp (EVar "useModId") (EVar "path"))))
 (DFunDef false "declUseIds" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "declUseIds") (EVar "d")))
 (DFunDef false "declUseIds" (PWild) (EListLit))
+(DTypeSig true "explicitOverWild" (TyFun (TyFun (TyVar "r") (TyCon "String")) (TyFun (TyFun (TyVar "r") (TyCon "Bool")) (TyFun (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyVar "r"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyVar "r")))))))
+(DFunDef false "explicitOverWild" ((PVar "nameOf") (PVar "binds") (PVar "rowsOf") (PVar "prog")) (EBlock (DoLet false false (PVar "decls") (EApp (EVar "writtenImportsOf") (EVar "prog"))) (DoLet false false (PVar "forms") (EApp (EVar "importFormsOf") (EVar "decls"))) (DoLet false false (PVar "perUse") (EApp (EApp (EVar "map") (ELam ((PVar "d")) (ETuple (EApp (EVar "forms") (EVar "d")) (EApp (EVar "rowsOf") (EVar "d"))))) (EVar "decls"))) (DoLet false false (PVar "explicit") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PTuple (PVar "form") (PVar "rows"))) (EIf (EBinOp "==" (EVar "form") (EVar "ExplicitImport")) (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "map") (EVar "nameOf")) (EApp (EApp (EVar "filterList") (EVar "binds")) (EVar "rows")))) (EVar "acc")) (EVar "acc")))) (EVar "omEmpty")) (EVar "perUse"))) (DoExpr (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "dropShadowedWild") (EVar "explicit")) (EVar "nameOf"))) (EVar "perUse")))))
+(DTypeSig true "explicitImportNames" (TyFun (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
+(DFunDef false "explicitImportNames" ((PVar "namesOf") (PVar "decls")) (EBlock (DoLet false false (PVar "forms") (EApp (EVar "importFormsOf") (EVar "decls"))) (DoExpr (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "d")) (EIf (EBinOp "==" (EApp (EVar "forms") (EVar "d")) (EVar "ExplicitImport")) (EApp (EApp (EVar "omFromNames") (EApp (EVar "namesOf") (EVar "d"))) (EVar "acc")) (EVar "acc")))) (EVar "omEmpty")) (EVar "decls")))))
+(DTypeSig true "withoutShadowedWild" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyFun (TyVar "r") (TyCon "String")) (TyFun (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyVar "r"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyVar "r")))))))
+(DFunDef false "withoutShadowedWild" ((PVar "explicit") (PVar "nameOf") (PVar "rowsOf") (PVar "decls")) (EBlock (DoLet false false (PVar "forms") (EApp (EVar "importFormsOf") (EVar "decls"))) (DoExpr (EApp (EApp (EVar "flatMap") (ELam ((PVar "d")) (EApp (EApp (EApp (EVar "dropShadowedWild") (EVar "explicit")) (EVar "nameOf")) (ETuple (EApp (EVar "forms") (EVar "d")) (EApp (EVar "rowsOf") (EVar "d")))))) (EVar "decls")))))
+(DTypeSig false "dropShadowedWild" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyFun (TyVar "r") (TyCon "String")) (TyFun (TyTuple (TyCon "ImportForm") (TyApp (TyCon "List") (TyVar "r"))) (TyApp (TyCon "List") (TyVar "r"))))))
+(DFunDef false "dropShadowedWild" ((PVar "explicit") (PVar "nameOf") (PTuple (PVar "form") (PVar "rows"))) (EIf (EBinOp "==" (EVar "form") (EVar "WildImport")) (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EApp (EVar "nameOf") (EVar "r"))) (EVar "explicit"))))) (EVar "rows")) (EVar "rows")))
+(DData Private "ImportForm" () ((variant "ExplicitImport" (ConPos)) (variant "WildImport" (ConPos)) (variant "NoBareImport" (ConPos))) ())
+(DImpl true "Eq" ((TyCon "ImportForm")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "ExplicitImport") (PCon "ExplicitImport")) () (EVar "True")) (arm (PTuple (PCon "WildImport") (PCon "WildImport")) () (EVar "True")) (arm (PTuple (PCon "NoBareImport") (PCon "NoBareImport")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
+(DTypeSig false "importFormsOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Decl") (TyCon "ImportForm"))))
+(DFunDef false "importFormsOf" ((PVar "decls")) (EBlock (DoLet false false (PVar "sites") (EApp (EVar "aliasImportSites") (EVar "decls"))) (DoExpr (ELam ((PVar "d")) (EApp (EApp (EVar "importFormIn") (EVar "sites")) (EVar "d"))))))
+(DTypeSig false "importFormIn" (TyFun (TyApp (TyCon "List") (TyCon "AliasSite")) (TyFun (TyCon "Decl") (TyCon "ImportForm"))))
+(DFunDef false "importFormIn" ((PVar "sites") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "importFormIn") (EVar "sites")) (EVar "d")))
+(DFunDef false "importFormIn" (PWild (PCon "DUse" PWild (PCon "UseWild" PWild) PWild)) (EVar "WildImport"))
+(DFunDef false "importFormIn" (PWild (PCon "DUse" PWild (PCon "UseAlias" PWild PWild) PWild)) (EVar "NoBareImport"))
+(DFunDef false "importFormIn" ((PVar "sites") (PAs "d" (PCon "DUse" PWild PWild PWild))) (EIf (EApp (EApp (EVar "isAliasMethodImport") (EVar "sites")) (EVar "d")) (EVar "NoBareImport") (EVar "ExplicitImport")))
+(DFunDef false "importFormIn" (PWild PWild) (EVar "NoBareImport"))
+(DTypeSig true "writtenImportsOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
+(DFunDef false "writtenImportsOf" ((PVar "prog")) (EMatch (EApp (EVar "aliasImportSites") (EVar "prog")) (arm (PList) () (EVar "prog")) (arm (PVar "sites") () (EApp (EApp (EVar "filterList") (ELam ((PVar "d")) (EApp (EVar "not") (EApp (EApp (EVar "isAliasMethodImport") (EVar "sites")) (EVar "d"))))) (EVar "prog")))))
+(DData Public "AliasSite" () ((variant "AliasSite" (ConNamed (field "asQuals" (TyApp (TyCon "List") (TyCon "String"))) (field "asLoc" (TyCon "Loc"))))) ())
+(DTypeSig true "aliasImportSites" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "AliasSite"))))
+(DFunDef false "aliasImportSites" ((PList)) (EListLit))
+(DFunDef false "aliasImportSites" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EBinOp "++" (EApp (EVar "aliasImportSites") (EListLit (EVar "d"))) (EApp (EVar "aliasImportSites") (EVar "rest"))))
+(DFunDef false "aliasImportSites" ((PCons (PCon "DUse" PWild (PCon "UseAlias" (PVar "quals") PWild) (PVar "loc")) (PVar "rest"))) (EBinOp "::" (ERecordCreate "AliasSite" ((fa "asQuals" (EVar "quals")) (fa "asLoc" (EVar "loc")))) (EApp (EVar "aliasImportSites") (EVar "rest"))))
+(DFunDef false "aliasImportSites" ((PCons PWild (PVar "rest"))) (EApp (EVar "aliasImportSites") (EVar "rest")))
+(DTypeSig false "isAliasMethodImport" (TyFun (TyApp (TyCon "List") (TyCon "AliasSite")) (TyFun (TyCon "Decl") (TyCon "Bool"))))
+(DFunDef false "isAliasMethodImport" ((PVar "sites") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "isAliasMethodImport") (EVar "sites")) (EVar "d")))
+(DFunDef false "isAliasMethodImport" ((PVar "sites") (PCon "DUse" PWild (PCon "UseGroup" (PVar "quals") PWild) (PVar "loc"))) (EApp (EApp (EVar "anyList") (ELam ((PVar "s")) (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "s") "asQuals") (EVar "quals")) (EBinOp "==" (EFieldAccess (EVar "s") "asLoc") (EVar "loc"))))) (EVar "sites")))
+(DFunDef false "isAliasMethodImport" (PWild PWild) (EVar "False"))
 (DData Public "ModuleExports" () ((variant "ModuleExports" (ConNamed (field "modId" (TyCon "String")) (field "expValues" (TyApp (TyCon "List") (TyCon "String"))) (field "expTypes" (TyApp (TyCon "List") (TyCon "String"))) (field "expAbstractData" (TyApp (TyCon "List") (TyCon "String"))) (field "expCtors" (TyApp (TyCon "List") (TyCon "String"))) (field "expTypeCtors" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (field "expFieldOwners" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "expInterfaces" (TyApp (TyCon "List") (TyCon "String"))) (field "expIfaceMethods" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (field "expIfaceOrigins" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "expTypeOrigins" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "expCtorOrigins" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "expValueOrigins" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String"))))) (field "expEffects" (TyApp (TyCon "List") (TyCon "String"))) (field "expEffectOrigins" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "expNewtypeCtors" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "expAbstractCtors" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "nameSet" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "ctorTypes" (TyApp (TyCon "OrdMap") (TyCon "String")))))) ())
 (DTypeSig true "filterInSet" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "filterInSet" (PWild (PList)) (EListLit))
@@ -1460,6 +1605,36 @@ overPubUse coreExp known f path =
 (DFunDef false "declUseIds" ((PCon "DUse" PWild (PVar "path") PWild)) (EListLit (EApp (EVar "useModId") (EVar "path"))))
 (DFunDef false "declUseIds" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "declUseIds") (EVar "d")))
 (DFunDef false "declUseIds" (PWild) (EListLit))
+(DTypeSig true "explicitOverWild" (TyFun (TyFun (TyVar "r") (TyCon "String")) (TyFun (TyFun (TyVar "r") (TyCon "Bool")) (TyFun (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyVar "r"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyVar "r")))))))
+(DFunDef false "explicitOverWild" ((PVar "nameOf") (PVar "binds") (PVar "rowsOf") (PVar "prog")) (EBlock (DoLet false false (PVar "decls") (EApp (EVar "writtenImportsOf") (EVar "prog"))) (DoLet false false (PVar "forms") (EApp (EVar "importFormsOf") (EVar "decls"))) (DoLet false false (PVar "perUse") (EApp (EApp (EMethodRef "map") (ELam ((PVar "d")) (ETuple (EApp (EVar "forms") (EVar "d")) (EApp (EVar "rowsOf") (EVar "d"))))) (EVar "decls"))) (DoLet false false (PVar "explicit") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PTuple (PVar "form") (PVar "rows"))) (EIf (EBinOp "==" (EVar "form") (EVar "ExplicitImport")) (EApp (EApp (EVar "omFromNames") (EApp (EApp (EMethodRef "map") (EVar "nameOf")) (EApp (EApp (EVar "filterList") (EVar "binds")) (EVar "rows")))) (EVar "acc")) (EVar "acc")))) (EVar "omEmpty")) (EVar "perUse"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "dropShadowedWild") (EVar "explicit")) (EVar "nameOf"))) (EVar "perUse")))))
+(DTypeSig true "explicitImportNames" (TyFun (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
+(DFunDef false "explicitImportNames" ((PVar "namesOf") (PVar "decls")) (EBlock (DoLet false false (PVar "forms") (EApp (EVar "importFormsOf") (EVar "decls"))) (DoExpr (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "d")) (EIf (EBinOp "==" (EApp (EVar "forms") (EVar "d")) (EVar "ExplicitImport")) (EApp (EApp (EVar "omFromNames") (EApp (EVar "namesOf") (EVar "d"))) (EVar "acc")) (EVar "acc")))) (EVar "omEmpty")) (EVar "decls")))))
+(DTypeSig true "withoutShadowedWild" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyFun (TyVar "r") (TyCon "String")) (TyFun (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyVar "r"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyVar "r")))))))
+(DFunDef false "withoutShadowedWild" ((PVar "explicit") (PVar "nameOf") (PVar "rowsOf") (PVar "decls")) (EBlock (DoLet false false (PVar "forms") (EApp (EVar "importFormsOf") (EVar "decls"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "d")) (EApp (EApp (EApp (EVar "dropShadowedWild") (EVar "explicit")) (EVar "nameOf")) (ETuple (EApp (EVar "forms") (EVar "d")) (EApp (EVar "rowsOf") (EVar "d")))))) (EVar "decls")))))
+(DTypeSig false "dropShadowedWild" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyFun (TyVar "r") (TyCon "String")) (TyFun (TyTuple (TyCon "ImportForm") (TyApp (TyCon "List") (TyVar "r"))) (TyApp (TyCon "List") (TyVar "r"))))))
+(DFunDef false "dropShadowedWild" ((PVar "explicit") (PVar "nameOf") (PTuple (PVar "form") (PVar "rows"))) (EIf (EBinOp "==" (EVar "form") (EVar "WildImport")) (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EApp (EVar "nameOf") (EVar "r"))) (EVar "explicit"))))) (EVar "rows")) (EVar "rows")))
+(DData Private "ImportForm" () ((variant "ExplicitImport" (ConPos)) (variant "WildImport" (ConPos)) (variant "NoBareImport" (ConPos))) ())
+(DImpl true "Eq" ((TyCon "ImportForm")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "ExplicitImport") (PCon "ExplicitImport")) () (EVar "True")) (arm (PTuple (PCon "WildImport") (PCon "WildImport")) () (EVar "True")) (arm (PTuple (PCon "NoBareImport") (PCon "NoBareImport")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
+(DTypeSig false "importFormsOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Decl") (TyCon "ImportForm"))))
+(DFunDef false "importFormsOf" ((PVar "decls")) (EBlock (DoLet false false (PVar "sites") (EApp (EVar "aliasImportSites") (EVar "decls"))) (DoExpr (ELam ((PVar "d")) (EApp (EApp (EVar "importFormIn") (EVar "sites")) (EVar "d"))))))
+(DTypeSig false "importFormIn" (TyFun (TyApp (TyCon "List") (TyCon "AliasSite")) (TyFun (TyCon "Decl") (TyCon "ImportForm"))))
+(DFunDef false "importFormIn" ((PVar "sites") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "importFormIn") (EVar "sites")) (EVar "d")))
+(DFunDef false "importFormIn" (PWild (PCon "DUse" PWild (PCon "UseWild" PWild) PWild)) (EVar "WildImport"))
+(DFunDef false "importFormIn" (PWild (PCon "DUse" PWild (PCon "UseAlias" PWild PWild) PWild)) (EVar "NoBareImport"))
+(DFunDef false "importFormIn" ((PVar "sites") (PAs "d" (PCon "DUse" PWild PWild PWild))) (EIf (EApp (EApp (EVar "isAliasMethodImport") (EVar "sites")) (EVar "d")) (EVar "NoBareImport") (EVar "ExplicitImport")))
+(DFunDef false "importFormIn" (PWild PWild) (EVar "NoBareImport"))
+(DTypeSig true "writtenImportsOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
+(DFunDef false "writtenImportsOf" ((PVar "prog")) (EMatch (EApp (EVar "aliasImportSites") (EVar "prog")) (arm (PList) () (EVar "prog")) (arm (PVar "sites") () (EApp (EApp (EVar "filterList") (ELam ((PVar "d")) (EApp (EVar "not") (EApp (EApp (EVar "isAliasMethodImport") (EVar "sites")) (EVar "d"))))) (EVar "prog")))))
+(DData Public "AliasSite" () ((variant "AliasSite" (ConNamed (field "asQuals" (TyApp (TyCon "List") (TyCon "String"))) (field "asLoc" (TyCon "Loc"))))) ())
+(DTypeSig true "aliasImportSites" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "AliasSite"))))
+(DFunDef false "aliasImportSites" ((PList)) (EListLit))
+(DFunDef false "aliasImportSites" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EBinOp "++" (EApp (EVar "aliasImportSites") (EListLit (EVar "d"))) (EApp (EVar "aliasImportSites") (EVar "rest"))))
+(DFunDef false "aliasImportSites" ((PCons (PCon "DUse" PWild (PCon "UseAlias" (PVar "quals") PWild) (PVar "loc")) (PVar "rest"))) (EBinOp "::" (ERecordCreate "AliasSite" ((fa "asQuals" (EVar "quals")) (fa "asLoc" (EVar "loc")))) (EApp (EVar "aliasImportSites") (EVar "rest"))))
+(DFunDef false "aliasImportSites" ((PCons PWild (PVar "rest"))) (EApp (EVar "aliasImportSites") (EVar "rest")))
+(DTypeSig false "isAliasMethodImport" (TyFun (TyApp (TyCon "List") (TyCon "AliasSite")) (TyFun (TyCon "Decl") (TyCon "Bool"))))
+(DFunDef false "isAliasMethodImport" ((PVar "sites") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "isAliasMethodImport") (EVar "sites")) (EVar "d")))
+(DFunDef false "isAliasMethodImport" ((PVar "sites") (PCon "DUse" PWild (PCon "UseGroup" (PVar "quals") PWild) (PVar "loc"))) (EApp (EApp (EVar "anyList") (ELam ((PVar "s")) (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "s") "asQuals") (EVar "quals")) (EBinOp "==" (EFieldAccess (EVar "s") "asLoc") (EVar "loc"))))) (EVar "sites")))
+(DFunDef false "isAliasMethodImport" (PWild PWild) (EVar "False"))
 (DData Public "ModuleExports" () ((variant "ModuleExports" (ConNamed (field "modId" (TyCon "String")) (field "expValues" (TyApp (TyCon "List") (TyCon "String"))) (field "expTypes" (TyApp (TyCon "List") (TyCon "String"))) (field "expAbstractData" (TyApp (TyCon "List") (TyCon "String"))) (field "expCtors" (TyApp (TyCon "List") (TyCon "String"))) (field "expTypeCtors" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (field "expFieldOwners" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "expInterfaces" (TyApp (TyCon "List") (TyCon "String"))) (field "expIfaceMethods" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (field "expIfaceOrigins" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "expTypeOrigins" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "expCtorOrigins" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "expValueOrigins" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String"))))) (field "expEffects" (TyApp (TyCon "List") (TyCon "String"))) (field "expEffectOrigins" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "expNewtypeCtors" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "expAbstractCtors" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "nameSet" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "ctorTypes" (TyApp (TyCon "OrdMap") (TyCon "String")))))) ())
 (DTypeSig true "filterInSet" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "filterInSet" (PWild (PList)) (EListLit))

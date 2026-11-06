@@ -1,3 +1,5 @@
+-- C3, L4 (F-R3): an explicit import of `take` plus the module's own `take` is a located
+-- error at the import member.
 import string.{take}
 
 take : Bool -> Int

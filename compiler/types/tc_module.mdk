@@ -16,7 +16,7 @@
 
 import types.tc_mark.{
   beginModuleMarking, finishModuleMarking, mapGroupClauses, markGroupClauses,
-  markRecursiveOccurrences
+  markRecursiveOccurrences, scopeClassIn
 }
 import support.diag_codes.{DiagCode(..)}
 import frontend.ast.{
@@ -27,7 +27,7 @@ import frontend.ast.{
 }
 import types.scopes.{ScopeOwner(..)}
 import types.tc_types.{
-  BuiltinClasses(..), CeRow(..), CheckRunSeed(..), ClassEnv(..),
+  ScopeClass(..), BuiltinClasses(..), CeRow(..), CheckRunSeed(..), ClassEnv(..),
   ConstraintReg(..), DeclaringBinder(..), DeclEnvModule(..), DrainFinding(..),
   EnvBinding(..), GoalKind(..), GraphCtx(..), GraphMarks(..), GroupCtx(..),
   ImplEnv(..), LiveGoal(..), MethodPredicateSlot(..), ModuleBindings(..),
@@ -67,9 +67,10 @@ import types.tc_decls.{
 import types.tc_scope.{
   aliasConstraintEntries, aliasMethodSpellings, aliasQualifiedMethodEntries,
   annotateImportedMethodRows, applyCtorScopeOverrides,
-  applyRecordScopeOverrides, declCtorNamed, importedMemberBindingNames,
-  insertCtorPop, insertRecordPop, methodNameDeclaredAt, pickSchemesByDecl,
-  reportAmbiguousImportsIn, resolveMemberRows, schemeOblEntriesFor
+  applyRecordScopeOverrides, declCtorNamed, explicitCoreLocals,
+  importedMemberBindingNames, insertCtorPop, insertRecordPop,
+  methodNameDeclaredAt, pickSchemesByDecl, reportAmbiguousImportsIn,
+  resolveMemberRows, schemeOblEntriesFor
 }
 import types.tc_mono.{
   containsI, dedupI, findTvarInMonos, monoArgUnboundIds, monoScheme,
@@ -701,20 +702,31 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
   let isMethod =
     let envs = gctx.declEnvsRef.value
     methodNameDeclaredAt (declEnvsOrdOf mid envs) envs.deMethods
+  -- A name the module's scope binds to a value at rungs 2 to 4 is that value
+  -- wherever it is written (docs/spec/SHADOW-SEMANTICS.md L5): it is no shadow,
+  -- and no method row is attached to its binding.
+  let methodBound n = scopeClassIn gctx mid n /= ScopeValue
   let definerShadows =
-    nameableIfaceShadows gctx prog0 (definerShadowsFromSet gctx isMethod prog0)
+    filterList
+      methodBound
+      (nameableIfaceShadows
+        gctx
+        prog0
+        (definerShadowsFromSet gctx isMethod prog0))
   let importerShadows =
     if isEmptyL implDecls then
       []
     else
-      nameableIfaceShadows
-        gctx
-        prog0
-        (standaloneShadowsFromSet
+      filterList
+        methodBound
+        (nameableIfaceShadows
           gctx
-          isMethod
-          (omMapValues (_ => ()) moduleSeed.msImportedValues)
-          prog0)
+          prog0
+          (standaloneShadowsFromSet
+            gctx
+            isMethod
+            (omMapValues (_ => ()) moduleSeed.msImportedValues)
+            prog0))
   let sigs = sigsOf prog
   mctx.mcCells.definerShadowNamesRef := namesToSet definerShadows omEmpty
   mctx.mcCells.definerShadowSigsRef := omFromPairs (reverseL sigs) omEmpty
@@ -759,8 +771,14 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
   --     bodies call standalone `toList`).  These must be RECORDED for RLocal but must NOT be
   --     rebound to the method scheme: their local standalone scheme (`Map k v -> ...`) is what
   --     the impl body types against.
+  -- Every name the module's scope binds to a value is a standalone here as well, so
+  -- an unmarked occurrence of it records no method obligation.
+  let valueBound =
+    filterList
+      (n => not (methodBound n))
+      (declTopFnNames prog0 ++ omKeys moduleSeed.msImportedNames)
   mctx.mcCells.standaloneValuesRef :=
-    namesToSet (importerShadows ++ definerShadows) omEmpty
+    namesToSet (importerShadows ++ definerShadows ++ valueBound) omEmpty
   -- #1351: the per-module copy of the identity-keyed dispatch-index universe, read by
   -- `methodDispatchIdx` through `dispatchIdxScoped`.  Its bare-name peer was retired at L5.
   mctx.mcCells.methodDispatchIdxByIdRef :=
@@ -1035,7 +1053,9 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
   let envImported =
     annotateImportedMethodRows
       envSeed
-      (importedMethodBindingNames gctx prog0 aliasSpellings)
+      (filterList
+        methodBound
+        (importedMethodBindingNames gctx prog0 aliasSpellings))
       (nameableIfaceMethodSet gctx prog0)
       (namesToSet importerShadows omEmpty)
       visibleMethodRowIndex
@@ -2896,7 +2916,8 @@ declOwnedBy mid tyName o = match mkIdent NsType (OriginModule mid) tyName
 --
 -- Order and shadowing.  Named-form rows come FIRST (every reader is first-match), and a
 -- wildcard row is dropped when the name is already spoken for — by a named import of
--- this module, or by this module's OWN top-level declaration, which shadows the
+-- this module (one of `core` too, which contributes no row: its name keeps the
+-- prelude's arity), or by this module's OWN top-level declaration, which shadows the
 -- wildcard binding and whose arity `selfDeclArities` answers from its own qual row.
 --
 -- The supply side does not enumerate.  Separate walks for the named and the wildcard form,
@@ -2927,7 +2948,10 @@ importDefinersOf : GraphCtx ->
 importDefinersOf gctx mid prog =
   let defs = importerDefiners gctx mid
   let named = useAdmittedRows defs False prog
-  let taken = namesToSet (map fst named ++ declTopFnNames prog) omEmpty
+  let taken =
+    namesToSet
+      (map fst named ++ explicitCoreLocals prog ++ declTopFnNames prog)
+      omEmpty
   named
     ++ filterList
       (e => not (omHasKey (fst e) taken))

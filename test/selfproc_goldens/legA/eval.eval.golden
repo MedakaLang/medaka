@@ -255,7 +255,6 @@ matchRecFields : List RecPatField -> List (String, Value a) -> Option (List (Str
 matchesTag : String -> Value a -> Bool
 memberBind : UseMember -> (String, String)
 memberCells : ModExports (Value a) -> UseMember -> List (String, Ref (Value a))
-memberIsRenamed : UseMember -> Bool
 memoThunk : EvalEnv (Value a) -> Expr -> Value a
 memoThunkOf : Ref (Option (Value a)) -> EvalEnv (Value a) -> Expr -> Value a
 mergeField : List (String, Value a) -> (String, Value a) -> (String, Value a)
@@ -268,6 +267,7 @@ methodReqCountRef : Ref (Map String (Map String Int))
 mkGroup : List (String, (List Pat, Expr, Loc)) -> String -> (String, List (List Pat, Expr, Loc))
 modExportCells : ModExports a -> List (String, Ref a)
 modImplEntries : ProgramFacts -> List ((String, String, String), List Int) -> ModInfo (Value a) -> List (String, (Int, Value a))
+moduleCoreExports : ModExports (Value a) -> List (String, Ref (Value a)) -> List Decl -> ModExports (Value a)
 moduleExports : ExportView -> ModExports (Value a) -> List (String, ModExports (Value a)) -> EnvFrame (Value a) -> EnvFrame (Value a) -> List (String, Ref (Value a)) -> List Decl -> ModExports (Value a)
 moduleFileOf : String -> String
 moduleMethodNames : List Decl -> List String

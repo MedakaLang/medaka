@@ -1,4 +1,7 @@
+-- C1, L2 rung 3, L8: the explicitly imported box.toList and box.isEmpty are the bare names and take a Box;
+-- the prelude methods are reached as C.toList and C.isEmpty through the module alias.
 import box.{Box(..), toList, isEmpty}
+import core as C
 
 b : Box Int
 b = Box [1, 2]
@@ -6,5 +9,5 @@ b = Box [1, 2]
 main =
   println (toList b)
   println (isEmpty b)
-  println (isEmpty [10, 20, 30])
-  println (toList (Some 7))
+  println (C.isEmpty [10, 20, 30])
+  println (C.toList (Some 7))

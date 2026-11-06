@@ -9,7 +9,13 @@
 -- module fixtures, not here.
 
 import test.{expectSatisfies, Expectation, expectEach, expectEqual}
-import frontend.ast.{Decl, Loc(..), UseMember(..), UsePath(..)}
+import frontend.ast.{
+  Decl(..),
+  Loc(..),
+  UseMember(..),
+  UsePath(..),
+  useMemberLocal,
+}
 import frontend.desugar.{desugar}
 import frontend.parser.{parse}
 import frontend.visibility.{
@@ -22,12 +28,14 @@ import frontend.visibility.{
   directIn,
   exportedValueNames,
   expandMemberNames,
+  explicitOverWild,
   fullExportsOf,
   isPubExp,
   nsTypes,
   nsValues,
   privilegedCarry,
   typeCtorsOf,
+  useModId,
   viewOf,
 }
 import support.ordmap.{OrdMap, omEmpty, omInsert}
@@ -349,3 +357,77 @@ noLoc = Loc "" 0 0 0 0
 -- The names an expanded member list binds, in order.
 boundNames : List (String, String, Loc) -> List String
 boundNames = map ((name, _, _) => name)
+
+-- Each import's rows as (bare name, supplying module): a wildcard supplies
+-- `foo` and `bar`, a member its local name.
+importRows : Decl -> List (String, String)
+importRows (DUse _ (p@(UseWild _)) _) =
+  map (n => (n, useModId p)) ["foo", "bar"]
+importRows (DUse _ (p@(UseGroup _ members)) _) =
+  map (m => (useMemberLocal m, useModId p)) members
+importRows _ = []
+
+rowsOf : (String -> Bool) -> String -> List (String, String)
+rowsOf binds src =
+  explicitOverWild fst (r => binds (snd r)) importRows (declsOf src)
+
+wildThenExplicit : String
+wildThenExplicit = """
+import b.*
+import a.{foo}
+"""
+
+test "an explicit import's name drops a wildcard's row of it, written before or after" = expectEach
+  [
+    (
+      "wildcard first",
+      expectEqual
+        [("bar", "b"), ("foo", "a")]
+        (rowsOf (_ => True) wildThenExplicit),
+    ),
+    (
+      "explicit first",
+      expectEqual
+        [("foo", "a"), ("bar", "b")]
+        (rowsOf (_ => True) """
+import a.{foo}
+import b.*
+"""),
+    ),
+    (
+      "two wildcards keep both rows, so the name stays ambiguous",
+      expectEqual
+        [("foo", "a"), ("bar", "a"), ("foo", "b"), ("bar", "b")]
+        (rowsOf (_ => True) """
+import a.*
+import b.*
+"""),
+    ),
+    (
+      "an explicit row that binds nothing drops nothing",
+      expectEqual
+        [("foo", "b"), ("bar", "b"), ("foo", "a")]
+        (rowsOf (/= "a") wildThenExplicit),
+    ),
+    (
+      "the method import beside an alias binds no bare name: no row, and it drops nothing (L2)",
+      expectEqual
+        [("foo", "b"), ("bar", "b")]
+        (explicitOverWild fst (_ => True) importRows withAliasMethodImport),
+    ),
+  ]
+
+-- `import b.*` and `import m as A`, plus the method import
+-- `deAliasMethodImports` appends beside the alias, at the alias's location.
+withAliasMethodImport : List Decl
+withAliasMethodImport =
+  let decls = declsOf """
+import b.*
+import m as A
+"""
+  decls ++ flatMap aliasMethodImport decls
+
+aliasMethodImport : Decl -> List Decl
+aliasMethodImport (DUse _ (UseAlias quals _) loc) =
+  [DUse False (UseGroup quals [member "foo"]) loc]
+aliasMethodImport _ = []

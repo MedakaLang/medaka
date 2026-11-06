@@ -1,0 +1,154 @@
+-- Sibling test for frontend/desugar.mdk: every name the sugar expands to
+-- denotes the prelude's declaration, whatever this module binds under the same
+-- bare name.  Each top-level binding below shares its name with one the sugar
+-- generates; the module's own written uses of those names still reach them.
+
+import test.{expectEqual, expectNotEqual, expectTrue}
+import core as C
+import map.{Map, get}
+import async.{Async, runAsync, liftIO}
+import frontend.desugar.{desugar}
+import frontend.ast.{
+  Decl(..), Expr(..), InterpPart(..), Loc(..), UsePath(..), noBinderId
+}
+
+-- Each binding below shadows the prelude name the sugar generates; that shadow
+-- is what the tests exercise.
+-- lint-disable-file rule-test-prelude-shadow
+
+-- Two of those shadows keep the prelude helper's own signature.
+-- lint-disable-file rule-stdlib-reimpl
+
+index : Int -> Int -> Int
+index _ _ = 99
+
+slice : Int -> Int -> Int -> Int
+slice _ _ _ = 99
+
+sliceInclusiveEnd : Int -> Int -> Int
+sliceInclusiveEnd _ _ = 99
+
+setIndex : Int -> Int -> Int -> Unit
+setIndex _ _ _ = ()
+
+display : Int -> String
+display _ = "mine"
+
+debug : Int -> String
+debug _ = "mine"
+
+andThen : Int -> Int
+andThen _ = 99
+
+deferThen : Int -> Int
+deferThen _ = 99
+
+derivedShowWrap : String -> String
+derivedShowWrap _ = "mine"
+
+eq : Int -> Int -> Bool
+eq _ _ = False
+
+compare : Int -> Int -> Ordering
+compare _ _ = Gt
+
+hash : Int -> Int
+hash _ = 99
+
+derivedHashStep : Int -> Int -> Int
+derivedHashStep _ _ = 0
+
+to_rep : Int -> Rep
+to_rep _ = RInt 99
+
+fromEntries : List Int -> Int
+fromEntries _ = 99
+
+data E = E Int deriving (Eq, Debug)
+
+data O = O Int deriving (Eq, Ord)
+
+data H = H Int deriving (Eq, Hashable)
+
+data G = G Int deriving (Generic)
+
+data D = D Int deriving (Debug)
+
+data W = W (Option Int) deriving (Debug)
+
+data P = P Int deriving (Display)
+
+test "a.[i] reaches the prelude's index past a user index" =
+  expectEqual 20 [10, 20, 30][1]
+
+test "a.[lo..hi] reaches the prelude's slice past a user slice" =
+  expectEqual [2, 3] [1, 2, 3, 4].[1..3]
+
+test "a.[lo..=hi] reaches the prelude's sliceInclusiveEnd past a user one" =
+  expectEqual [2, 3] [1, 2, 3, 4].[1..=2]
+
+test "a[i] := v reaches the prelude's setIndex past a user setIndex" =
+  let a = [|1, 2, 3|]
+  a[0] := 9
+  expectEqual 9 a[0]
+
+test "an interpolated part reaches the prelude's display past a user display" =
+  expectEqual "v=1" "v=\{1}"
+
+test "deriving (Display) reaches the prelude's display past a user display" =
+  expectEqual "P 1" (C.display (P 1))
+
+test "deriving (Debug) reaches the prelude's debug past a user debug" =
+  expectEqual "D 1" (C.debug (D 1))
+
+test "deriving (Debug) reaches the prelude's derivedShowWrap past a user one" =
+  expectEqual "W (Some 1)" (C.debug (W (Some 1)))
+
+test "do reaches the prelude's andThen past a user andThen" = expectEqual (Some
+  2) (do
+  x <- Some 1
+  Some (x + 1))
+
+test "defer reaches the prelude's deferThen past a user deferThen" =
+  let prog : Async <> Int = defer
+    x <- liftIO (_ => 20)
+    liftIO (_ => x + 22)
+  expectEqual 42 (runAsync prog)
+
+test "deriving (Eq) reaches the prelude's eq past a user eq" =
+  expectEqual (E 1) (E 1)
+
+test "deriving (Ord) reaches the prelude's compare past a user compare" =
+  expectTrue (O 1 < O 2)
+
+test "deriving (Hashable) reaches the prelude's hash past a user hash" =
+  expectNotEqual (C.hash (H 1)) (C.hash (H 2))
+
+test "deriving (Hashable) reaches the prelude's derivedHashStep past a user one" =
+  expectEqual (C.derivedHashStep 0 (C.hash 1)) (C.hash (H 1))
+
+test "deriving (Generic) reaches the prelude's to_rep past a user to_rep" =
+  expectEqual "RCon \"G\" [RInt 1]" (C.debug (C.to_rep (G 1)))
+
+test "a map literal reaches the prelude's fromEntries past a user fromEntries" =
+  let m : Map Int Int = Map { 1 => 10, 2 => 20 }
+  expectEqual (Some 20) (get 2 m)
+
+test "a name the module writes still denotes the module's own binding" =
+  expectEqual ("mine", 99, 99) (display 1, slice 1 2 3, index 1 2)
+
+-- A program that uses a generated name is given the alias that binds it, and
+-- one that uses none is left without it.
+test "desugar scopes the prelude alias to a program that uses it" =
+  let at = Loc "t.mdk" 1 0 1 0
+  let fun body = DFunDef False "f" [] body at noBinderId
+  let heads =
+    prog => match desugar [fun prog]
+      (DUse _ (UseAlias path alias) _) :: _ => Some (path, alias)
+      _ => None
+  expectEqual
+    (Some (["core"], "$core"), None)
+    (
+      heads (EStringInterp [InterpExpr (EVar "x")]),
+      heads (EVar "x"),
+    )
