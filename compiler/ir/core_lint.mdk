@@ -29,7 +29,7 @@ import ir.core_ir.{
   DeclFacts(..),
   siteSentinelName,
 }
-import ir.core_walk.{foldExpr, patBinders}
+import ir.core_walk.{bindNames, foldExpr, implName, patBinders}
 import list.{reverse}
 import types.runtime_abi_data.{runtimeAbiRows}
 import support.ordmap.{OrdMap, omEmpty, omFromNames, omHasKey, omKeys}
@@ -61,12 +61,6 @@ builtinCtors = [
   "$withFileReadBound",
   "$withFileWriteBound",
 ]
-
-bindNames : List CBind -> List String
-bindNames binds = map ((CBind n _ _ _) => n) binds
-
-implName : CImplEntry -> String
-implName (CImplEntry n _ _ _) = n
 
 lintBind : OrdMap Unit -> CBind -> List String
 lintBind globals (CBind name clauses _ _) =

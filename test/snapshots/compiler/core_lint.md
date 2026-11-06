@@ -1,5 +1,5 @@
 # META
-source_lines=196
+source_lines=190
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/ir/core_lint.mdk — invariants of Core IR that hold after every pass
@@ -33,7 +33,7 @@ import ir.core_ir.{
   DeclFacts(..),
   siteSentinelName,
 }
-import ir.core_walk.{foldExpr, patBinders}
+import ir.core_walk.{bindNames, foldExpr, implName, patBinders}
 import list.{reverse}
 import types.runtime_abi_data.{runtimeAbiRows}
 import support.ordmap.{OrdMap, omEmpty, omFromNames, omHasKey, omKeys}
@@ -65,12 +65,6 @@ builtinCtors = [
   "$withFileReadBound",
   "$withFileWriteBound",
 ]
-
-bindNames : List CBind -> List String
-bindNames binds = map ((CBind n _ _ _) => n) binds
-
-implName : CImplEntry -> String
-implName (CImplEntry n _ _ _) = n
 
 lintBind : OrdMap Unit -> CBind -> List String
 lintBind globals (CBind name clauses _ _) =
@@ -201,7 +195,7 @@ blockFaults g s ((CSLet isRec pat e) :: rest) =
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Pat" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CArm" true) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "CField" true) (mem "CGuard" true) (mem "CImplBody" true) (mem "CImplEntry" true) (mem "CProgram" true) (mem "CStmt" true) (mem "CTBranch" true) (mem "CTree" true) (mem "DeclFacts" true) (mem "siteSentinelName" false))))
-(DUse false (UseGroup ("ir" "core_walk") ((mem "foldExpr" false) (mem "patBinders" false))))
+(DUse false (UseGroup ("ir" "core_walk") ((mem "bindNames" false) (mem "foldExpr" false) (mem "implName" false) (mem "patBinders" false))))
 (DUse false (UseGroup ("list") ((mem "reverse" false))))
 (DUse false (UseGroup ("types" "runtime_abi_data") ((mem "runtimeAbiRows" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omKeys" false))))
@@ -210,10 +204,6 @@ blockFaults g s ((CSLet isRec pat e) :: rest) =
 (DFunDef false "lintProgram" ((PCon "CProgram" (PVar "binds") (PVar "ctors") PWild (PVar "impls") PWild (PVar "facts"))) (EBlock (DoLet false false (PVar "globals") (EApp (EApp (EVar "omFromNames") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EVar "bindNames") (EVar "binds")) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "ctors"))) (EApp (EApp (EVar "map") (EVar "implName")) (EVar "impls"))) (EApp (EVar "omKeys") (EFieldAccess (EVar "facts") "factExterns"))) (EVar "builtinCtors")) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "runtimeAbiRows")))) (EVar "omEmpty"))) (DoExpr (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EVar "lintBind") (EVar "globals"))) (EVar "binds")) (EApp (EApp (EVar "flatMap") (EApp (EVar "lintImpl") (EVar "globals"))) (EVar "impls"))))))
 (DTypeSig false "builtinCtors" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "builtinCtors" () (EListLit (ELit (LString "True")) (ELit (LString "False")) (EVar "siteSentinelName") (ELit (LString "$withFileReadBound")) (ELit (LString "$withFileWriteBound"))))
-(DTypeSig false "bindNames" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "bindNames" ((PVar "binds")) (EApp (EApp (EVar "map") (ELam ((PCon "CBind" (PVar "n") PWild PWild PWild)) (EVar "n"))) (EVar "binds")))
-(DTypeSig false "implName" (TyFun (TyCon "CImplEntry") (TyCon "String")))
-(DFunDef false "implName" ((PCon "CImplEntry" (PVar "n") PWild PWild PWild)) (EVar "n"))
 (DTypeSig false "lintBind" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CBind") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "lintBind" ((PVar "globals") (PCon "CBind" (PVar "name") (PVar "clauses") PWild PWild)) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "lintClause") (EVar "globals")) (EBinOp "++" (ELit (LString "binding ")) (EVar "name")))) (EVar "clauses")))
 (DTypeSig false "lintClause" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "String") (TyFun (TyCon "CClause") (TyApp (TyCon "List") (TyCon "String"))))))
@@ -285,7 +275,7 @@ blockFaults g s ((CSLet isRec pat e) :: rest) =
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Pat" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CArm" true) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "CField" true) (mem "CGuard" true) (mem "CImplBody" true) (mem "CImplEntry" true) (mem "CProgram" true) (mem "CStmt" true) (mem "CTBranch" true) (mem "CTree" true) (mem "DeclFacts" true) (mem "siteSentinelName" false))))
-(DUse false (UseGroup ("ir" "core_walk") ((mem "foldExpr" false) (mem "patBinders" false))))
+(DUse false (UseGroup ("ir" "core_walk") ((mem "bindNames" false) (mem "foldExpr" false) (mem "implName" false) (mem "patBinders" false))))
 (DUse false (UseGroup ("list") ((mem "reverse" false))))
 (DUse false (UseGroup ("types" "runtime_abi_data") ((mem "runtimeAbiRows" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omKeys" false))))
@@ -294,10 +284,6 @@ blockFaults g s ((CSLet isRec pat e) :: rest) =
 (DFunDef false "lintProgram" ((PCon "CProgram" (PVar "binds") (PVar "ctors") PWild (PVar "impls") PWild (PVar "facts"))) (EBlock (DoLet false false (PVar "globals") (EApp (EApp (EVar "omFromNames") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EVar "bindNames") (EVar "binds")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "ctors"))) (EApp (EApp (EMethodRef "map") (EVar "implName")) (EVar "impls"))) (EApp (EVar "omKeys") (EFieldAccess (EVar "facts") "factExterns"))) (EVar "builtinCtors")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "runtimeAbiRows")))) (EVar "omEmpty"))) (DoExpr (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EVar "lintBind") (EVar "globals"))) (EVar "binds")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "lintImpl") (EVar "globals"))) (EVar "impls"))))))
 (DTypeSig false "builtinCtors" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "builtinCtors" () (EListLit (ELit (LString "True")) (ELit (LString "False")) (EVar "siteSentinelName") (ELit (LString "$withFileReadBound")) (ELit (LString "$withFileWriteBound"))))
-(DTypeSig false "bindNames" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "bindNames" ((PVar "binds")) (EApp (EApp (EMethodRef "map") (ELam ((PCon "CBind" (PVar "n") PWild PWild PWild)) (EVar "n"))) (EVar "binds")))
-(DTypeSig false "implName" (TyFun (TyCon "CImplEntry") (TyCon "String")))
-(DFunDef false "implName" ((PCon "CImplEntry" (PVar "n") PWild PWild PWild)) (EVar "n"))
 (DTypeSig false "lintBind" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CBind") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "lintBind" ((PVar "globals") (PCon "CBind" (PVar "name") (PVar "clauses") PWild PWild)) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "lintClause") (EVar "globals")) (EBinOp "++" (ELit (LString "binding ")) (EVar "name")))) (EVar "clauses")))
 (DTypeSig false "lintClause" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "String") (TyFun (TyCon "CClause") (TyApp (TyCon "List") (TyCon "String"))))))

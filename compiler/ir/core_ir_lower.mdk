@@ -1005,7 +1005,7 @@ lowerProgramWithFacts facts prog =
       pcLowering = UntypedLowering,
       pcFieldOrders = [],
     }
-    untypedPasses
+    interpPasses
     (lowerProgramWith facts None [] prog)
 
 -- Lowering after an elaboration, against the table it published.  Refuses (panics)
@@ -1025,7 +1025,7 @@ lowerTypedProgramWith facts prog =
       pcLowering = TypedLowering,
       pcFieldOrders = [],
     }
-    typedPasses
+    interpPasses
     (lowerProgramWith facts (Some dispositions) [] prog)
 
 -- [dispositions] is the typechecker's table for [prog] (`None` for an untyped
@@ -1493,13 +1493,11 @@ programOrPanic run = match run.faults
   [] => run.program
   fault :: _ => panic "core pass \{fault.faultPass}: \{fault.faultMessage}"
 
--- The untyped and typed lowerings keep no refutable-let decision.
-untypedPasses : List (CorePass PassCtx)
-untypedPasses =
+-- The untyped and typed interpreter lowerings keep no refutable-let decision, so
+-- both run this one list.
+interpPasses : List (CorePass PassCtx)
+interpPasses =
   namedPass "refold-lets" (_ p => refoldProgram noLetCheck p) :: finishPasses
-
-typedPasses : List (CorePass PassCtx)
-typedPasses = untypedPasses
 
 -- The emitting lowering.  Order is the contract:
 -- - the record-pattern rewrite precedes the refold, because `patCanMiss` reads the
@@ -1815,7 +1813,7 @@ spineOf e = (e, [])
 -- conversion cannot fail: any other impl may panic (a range check), and delaying it
 -- would move or drop the panic.  `Num Int`'s `fromInt` is not atomic here.  In
 -- `emitPasses` it is already folded to its literal by `fold-num-int-fromint`, which
--- runs before `eta-saturate` reads this; `untypedPasses` and `typedPasses` run no
+-- runs before `eta-saturate` reads this; `interpPasses` runs no
 -- fold, so there a partial application with such an argument stays unsaturated
 -- (a partial call) instead of being eta-expanded.
 isAtomicArg : CExpr -> Bool

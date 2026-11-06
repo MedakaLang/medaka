@@ -127,7 +127,7 @@ public export data CExpr =
   | CRecordUpdate String CExpr (List CField)
   -- named-field variant (constructor) update: `Con { base | f = v … }` (§2.3)
   | CVariantUpdate String CExpr (List CField)
-  -- array / range (slice 3)
+  -- array / range
   | CArray (List CExpr)
   | CRangeList CExpr CExpr Bool
   | CRangeArray CExpr CExpr Bool

@@ -89,6 +89,7 @@ import backend.emit_plan.{
 import backend.trmc_analysis.{ctorTailIsCons, dispMembersOf, dispRootOf}
 import backend.wasm_preamble.{jsImportField}
 import backend.global_plan.{validateGlobalInit}
+import ir.core_walk.{implName}
 
 val : String -> CExpr -> CBind
 val name rhs = synthBind name [CClause [] rhs]
@@ -844,9 +845,6 @@ reachProgram =
 
 implMethods : CProgram -> List String
 implMethods (CProgram _ _ _ impls _ _) = map implName impls
-
-implName : CImplEntry -> String
-implName (CImplEntry m _ _ _) = m
 
 bindNames : CProgram -> List String
 bindNames (CProgram groups _ _ _ _ _) = map bindNm groups

@@ -1,5 +1,5 @@
 # META
-source_lines=174
+source_lines=180
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/ir/core_walk.mdk — exhaustive traversal of Core IR: a bottom-up
@@ -38,7 +38,7 @@ export
 rewriteProgram : (CExpr -> CExpr) -> CProgram -> CProgram
 rewriteProgram f (CProgram binds ctorArs ctorTypes impls mctx facts) =
   CProgram
-    (map (rewriteBind f) binds)
+    (map (mapBindBodies (rewriteExpr f)) binds)
     ctorArs
     ctorTypes
     (map (rewriteImpl f) impls)
@@ -56,13 +56,6 @@ foldExpr f acc e = fold (foldExpr f) (f acc e) (children e)
 export
 patBinders : Pat -> List String
 patBinders p = patBindings p
-
-rewriteBind : (CExpr -> CExpr) -> CBind -> CBind
-rewriteBind f (CBind n clauses site bid) =
-  CBind n (map (rewriteClause f) clauses) site bid
-
-rewriteClause : (CExpr -> CExpr) -> CClause -> CClause
-rewriteClause f (CClause pats body) = CClause pats (rewriteExpr f body)
 
 rewriteImpl : (CExpr -> CExpr) -> CImplEntry -> CImplEntry
 rewriteImpl f (CImplEntry n s d (CImplTagged tag key iface sym ps pats body)) =
@@ -158,8 +151,21 @@ children (CDict _ _) = []
 bindBodies : CBind -> List CExpr
 bindBodies (CBind _ clauses _ _) = map clauseBody clauses
 
+export
 clauseBody : CClause -> CExpr
 clauseBody (CClause _ body) = body
+
+export
+bindName : CBind -> String
+bindName (CBind n _ _ _) = n
+
+export
+bindNames : List CBind -> List String
+bindNames binds = map bindName binds
+
+export
+implName : CImplEntry -> String
+implName (CImplEntry n _ _ _) = n
 
 armChildren : CArm -> List CExpr
 armChildren (CArm _ guards body) = map guardExpr guards ++ [body]
@@ -182,15 +188,11 @@ fieldExpr (CField _ _ e) = e
 (DTypeSig true "rewriteExpr" (TyFun (TyFun (TyCon "CExpr") (TyCon "CExpr")) (TyFun (TyCon "CExpr") (TyCon "CExpr"))))
 (DFunDef false "rewriteExpr" ((PVar "f") (PVar "e")) (EApp (EVar "f") (EApp (EApp (EVar "mapChildren") (EApp (EVar "rewriteExpr") (EVar "f"))) (EVar "e"))))
 (DTypeSig true "rewriteProgram" (TyFun (TyFun (TyCon "CExpr") (TyCon "CExpr")) (TyFun (TyCon "CProgram") (TyCon "CProgram"))))
-(DFunDef false "rewriteProgram" ((PVar "f") (PCon "CProgram" (PVar "binds") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") (PVar "mctx") (PVar "facts"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EApp (EApp (EVar "map") (EApp (EVar "rewriteBind") (EVar "f"))) (EVar "binds"))) (EVar "ctorArs")) (EVar "ctorTypes")) (EApp (EApp (EVar "map") (EApp (EVar "rewriteImpl") (EVar "f"))) (EVar "impls"))) (EVar "mctx")) (EVar "facts")))
+(DFunDef false "rewriteProgram" ((PVar "f") (PCon "CProgram" (PVar "binds") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") (PVar "mctx") (PVar "facts"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EApp (EApp (EVar "map") (EApp (EVar "mapBindBodies") (EApp (EVar "rewriteExpr") (EVar "f")))) (EVar "binds"))) (EVar "ctorArs")) (EVar "ctorTypes")) (EApp (EApp (EVar "map") (EApp (EVar "rewriteImpl") (EVar "f"))) (EVar "impls"))) (EVar "mctx")) (EVar "facts")))
 (DTypeSig true "foldExpr" (TyFun (TyFun (TyVar "a") (TyFun (TyCon "CExpr") (TyVar "a"))) (TyFun (TyVar "a") (TyFun (TyCon "CExpr") (TyVar "a")))))
 (DFunDef false "foldExpr" ((PVar "f") (PVar "acc") (PVar "e")) (EApp (EApp (EApp (EVar "fold") (EApp (EVar "foldExpr") (EVar "f"))) (EApp (EApp (EVar "f") (EVar "acc")) (EVar "e"))) (EApp (EVar "children") (EVar "e"))))
 (DTypeSig true "patBinders" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "patBinders" ((PVar "p")) (EApp (EVar "patBindings") (EVar "p")))
-(DTypeSig false "rewriteBind" (TyFun (TyFun (TyCon "CExpr") (TyCon "CExpr")) (TyFun (TyCon "CBind") (TyCon "CBind"))))
-(DFunDef false "rewriteBind" ((PVar "f") (PCon "CBind" (PVar "n") (PVar "clauses") (PVar "site") (PVar "bid"))) (EApp (EApp (EApp (EApp (EVar "CBind") (EVar "n")) (EApp (EApp (EVar "map") (EApp (EVar "rewriteClause") (EVar "f"))) (EVar "clauses"))) (EVar "site")) (EVar "bid")))
-(DTypeSig false "rewriteClause" (TyFun (TyFun (TyCon "CExpr") (TyCon "CExpr")) (TyFun (TyCon "CClause") (TyCon "CClause"))))
-(DFunDef false "rewriteClause" ((PVar "f") (PCon "CClause" (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "CClause") (EVar "pats")) (EApp (EApp (EVar "rewriteExpr") (EVar "f")) (EVar "body"))))
 (DTypeSig false "rewriteImpl" (TyFun (TyFun (TyCon "CExpr") (TyCon "CExpr")) (TyFun (TyCon "CImplEntry") (TyCon "CImplEntry"))))
 (DFunDef false "rewriteImpl" ((PVar "f") (PCon "CImplEntry" (PVar "n") (PVar "s") (PVar "d") (PCon "CImplTagged" (PVar "tag") (PVar "key") (PVar "iface") (PVar "sym") (PVar "ps") (PVar "pats") (PVar "body")))) (EApp (EApp (EApp (EApp (EVar "CImplEntry") (EVar "n")) (EVar "s")) (EVar "d")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplTagged") (EVar "tag")) (EVar "key")) (EVar "iface")) (EVar "sym")) (EVar "ps")) (EVar "pats")) (EApp (EApp (EVar "rewriteExpr") (EVar "f")) (EVar "body")))))
 (DFunDef false "rewriteImpl" ((PVar "f") (PCon "CImplEntry" (PVar "n") (PVar "s") (PVar "d") (PCon "CImplDefault" (PVar "ifaceId") (PVar "tag") (PVar "key") (PVar "sym") (PVar "ps") (PVar "pats") (PVar "body")))) (EApp (EApp (EApp (EApp (EVar "CImplEntry") (EVar "n")) (EVar "s")) (EVar "d")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplDefault") (EVar "ifaceId")) (EVar "tag")) (EVar "key")) (EVar "sym")) (EVar "ps")) (EVar "pats")) (EApp (EApp (EVar "rewriteExpr") (EVar "f")) (EVar "body")))))
@@ -260,8 +262,14 @@ fieldExpr (CField _ _ e) = e
 (DFunDef false "children" ((PCon "CDict" PWild PWild)) (EListLit))
 (DTypeSig false "bindBodies" (TyFun (TyCon "CBind") (TyApp (TyCon "List") (TyCon "CExpr"))))
 (DFunDef false "bindBodies" ((PCon "CBind" PWild (PVar "clauses") PWild PWild)) (EApp (EApp (EVar "map") (EVar "clauseBody")) (EVar "clauses")))
-(DTypeSig false "clauseBody" (TyFun (TyCon "CClause") (TyCon "CExpr")))
+(DTypeSig true "clauseBody" (TyFun (TyCon "CClause") (TyCon "CExpr")))
 (DFunDef false "clauseBody" ((PCon "CClause" PWild (PVar "body"))) (EVar "body"))
+(DTypeSig true "bindName" (TyFun (TyCon "CBind") (TyCon "String")))
+(DFunDef false "bindName" ((PCon "CBind" (PVar "n") PWild PWild PWild)) (EVar "n"))
+(DTypeSig true "bindNames" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "bindNames" ((PVar "binds")) (EApp (EApp (EVar "map") (EVar "bindName")) (EVar "binds")))
+(DTypeSig true "implName" (TyFun (TyCon "CImplEntry") (TyCon "String")))
+(DFunDef false "implName" ((PCon "CImplEntry" (PVar "n") PWild PWild PWild)) (EVar "n"))
 (DTypeSig false "armChildren" (TyFun (TyCon "CArm") (TyApp (TyCon "List") (TyCon "CExpr"))))
 (DFunDef false "armChildren" ((PCon "CArm" PWild (PVar "guards") (PVar "body"))) (EBinOp "++" (EApp (EApp (EVar "map") (EVar "guardExpr")) (EVar "guards")) (EListLit (EVar "body"))))
 (DFunDef false "armChildren" ((PCon "CArmAlt" PWild (PVar "guards") PWild)) (EApp (EApp (EVar "map") (EVar "guardExpr")) (EVar "guards")))
@@ -280,15 +288,11 @@ fieldExpr (CField _ _ e) = e
 (DTypeSig true "rewriteExpr" (TyFun (TyFun (TyCon "CExpr") (TyCon "CExpr")) (TyFun (TyCon "CExpr") (TyCon "CExpr"))))
 (DFunDef false "rewriteExpr" ((PVar "f") (PVar "e")) (EApp (EVar "f") (EApp (EApp (EVar "mapChildren") (EApp (EVar "rewriteExpr") (EVar "f"))) (EVar "e"))))
 (DTypeSig true "rewriteProgram" (TyFun (TyFun (TyCon "CExpr") (TyCon "CExpr")) (TyFun (TyCon "CProgram") (TyCon "CProgram"))))
-(DFunDef false "rewriteProgram" ((PVar "f") (PCon "CProgram" (PVar "binds") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") (PVar "mctx") (PVar "facts"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EApp (EApp (EMethodRef "map") (EApp (EVar "rewriteBind") (EVar "f"))) (EVar "binds"))) (EVar "ctorArs")) (EVar "ctorTypes")) (EApp (EApp (EMethodRef "map") (EApp (EVar "rewriteImpl") (EVar "f"))) (EVar "impls"))) (EVar "mctx")) (EVar "facts")))
+(DFunDef false "rewriteProgram" ((PVar "f") (PCon "CProgram" (PVar "binds") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") (PVar "mctx") (PVar "facts"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EApp (EApp (EMethodRef "map") (EApp (EVar "mapBindBodies") (EApp (EVar "rewriteExpr") (EVar "f")))) (EVar "binds"))) (EVar "ctorArs")) (EVar "ctorTypes")) (EApp (EApp (EMethodRef "map") (EApp (EVar "rewriteImpl") (EVar "f"))) (EVar "impls"))) (EVar "mctx")) (EVar "facts")))
 (DTypeSig true "foldExpr" (TyFun (TyFun (TyVar "a") (TyFun (TyCon "CExpr") (TyVar "a"))) (TyFun (TyVar "a") (TyFun (TyCon "CExpr") (TyVar "a")))))
 (DFunDef false "foldExpr" ((PVar "f") (PVar "acc") (PVar "e")) (EApp (EApp (EApp (EMethodRef "fold") (EApp (EVar "foldExpr") (EVar "f"))) (EApp (EApp (EVar "f") (EVar "acc")) (EVar "e"))) (EApp (EVar "children") (EVar "e"))))
 (DTypeSig true "patBinders" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "patBinders" ((PVar "p")) (EApp (EVar "patBindings") (EVar "p")))
-(DTypeSig false "rewriteBind" (TyFun (TyFun (TyCon "CExpr") (TyCon "CExpr")) (TyFun (TyCon "CBind") (TyCon "CBind"))))
-(DFunDef false "rewriteBind" ((PVar "f") (PCon "CBind" (PVar "n") (PVar "clauses") (PVar "site") (PVar "bid"))) (EApp (EApp (EApp (EApp (EVar "CBind") (EVar "n")) (EApp (EApp (EMethodRef "map") (EApp (EVar "rewriteClause") (EVar "f"))) (EVar "clauses"))) (EVar "site")) (EVar "bid")))
-(DTypeSig false "rewriteClause" (TyFun (TyFun (TyCon "CExpr") (TyCon "CExpr")) (TyFun (TyCon "CClause") (TyCon "CClause"))))
-(DFunDef false "rewriteClause" ((PVar "f") (PCon "CClause" (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "CClause") (EVar "pats")) (EApp (EApp (EVar "rewriteExpr") (EVar "f")) (EVar "body"))))
 (DTypeSig false "rewriteImpl" (TyFun (TyFun (TyCon "CExpr") (TyCon "CExpr")) (TyFun (TyCon "CImplEntry") (TyCon "CImplEntry"))))
 (DFunDef false "rewriteImpl" ((PVar "f") (PCon "CImplEntry" (PVar "n") (PVar "s") (PVar "d") (PCon "CImplTagged" (PVar "tag") (PVar "key") (PVar "iface") (PVar "sym") (PVar "ps") (PVar "pats") (PVar "body")))) (EApp (EApp (EApp (EApp (EVar "CImplEntry") (EVar "n")) (EVar "s")) (EVar "d")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplTagged") (EVar "tag")) (EVar "key")) (EVar "iface")) (EVar "sym")) (EVar "ps")) (EVar "pats")) (EApp (EApp (EVar "rewriteExpr") (EVar "f")) (EVar "body")))))
 (DFunDef false "rewriteImpl" ((PVar "f") (PCon "CImplEntry" (PVar "n") (PVar "s") (PVar "d") (PCon "CImplDefault" (PVar "ifaceId") (PVar "tag") (PVar "key") (PVar "sym") (PVar "ps") (PVar "pats") (PVar "body")))) (EApp (EApp (EApp (EApp (EVar "CImplEntry") (EVar "n")) (EVar "s")) (EVar "d")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplDefault") (EVar "ifaceId")) (EVar "tag")) (EVar "key")) (EVar "sym")) (EVar "ps")) (EVar "pats")) (EApp (EApp (EVar "rewriteExpr") (EVar "f")) (EVar "body")))))
@@ -358,8 +362,14 @@ fieldExpr (CField _ _ e) = e
 (DFunDef false "children" ((PCon "CDict" PWild PWild)) (EListLit))
 (DTypeSig false "bindBodies" (TyFun (TyCon "CBind") (TyApp (TyCon "List") (TyCon "CExpr"))))
 (DFunDef false "bindBodies" ((PCon "CBind" PWild (PVar "clauses") PWild PWild)) (EApp (EApp (EMethodRef "map") (EVar "clauseBody")) (EVar "clauses")))
-(DTypeSig false "clauseBody" (TyFun (TyCon "CClause") (TyCon "CExpr")))
+(DTypeSig true "clauseBody" (TyFun (TyCon "CClause") (TyCon "CExpr")))
 (DFunDef false "clauseBody" ((PCon "CClause" PWild (PVar "body"))) (EVar "body"))
+(DTypeSig true "bindName" (TyFun (TyCon "CBind") (TyCon "String")))
+(DFunDef false "bindName" ((PCon "CBind" (PVar "n") PWild PWild PWild)) (EVar "n"))
+(DTypeSig true "bindNames" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "bindNames" ((PVar "binds")) (EApp (EApp (EMethodRef "map") (EVar "bindName")) (EVar "binds")))
+(DTypeSig true "implName" (TyFun (TyCon "CImplEntry") (TyCon "String")))
+(DFunDef false "implName" ((PCon "CImplEntry" (PVar "n") PWild PWild PWild)) (EVar "n"))
 (DTypeSig false "armChildren" (TyFun (TyCon "CArm") (TyApp (TyCon "List") (TyCon "CExpr"))))
 (DFunDef false "armChildren" ((PCon "CArm" PWild (PVar "guards") (PVar "body"))) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "guardExpr")) (EVar "guards")) (EListLit (EVar "body"))))
 (DFunDef false "armChildren" ((PCon "CArmAlt" PWild (PVar "guards") PWild)) (EApp (EApp (EMethodRef "map") (EVar "guardExpr")) (EVar "guards")))

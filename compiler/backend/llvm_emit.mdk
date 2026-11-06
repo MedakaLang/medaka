@@ -14085,9 +14085,9 @@ lookupOrdinal i ((o, w) :: rest) =
 -- (at offset 8*(i+1)), exactly the ADT field convention.  Allocation reuses
 -- @mdk_alloc; element words are uniform i64 (tagged Ints for range elements).
 -- BOUNDS CHECKS: an OOB index calls @mdk_oob(), an OOB slice @mdk_slice_oob(lo, hi)
--- (both noreturn; print + exit, matching eval's panic).  the array slice's check is #550 — it
--- was missing entirely, which made an over-range slice an out-of-bounds HEAP READ
--- rather than a diagnostic; see emitArraySlice.
+-- (both noreturn; print + exit, matching eval's panic).  The array slice must keep its
+-- check: without it an over-range slice is an out-of-bounds HEAP READ rather than a
+-- diagnostic; see emitArraySlice.
 -- LOOPS: CRangeArray and the array slice use an alloca-counter loop (the first non-recursion
 -- loop in the spike — avoids phi instructions and matches the alloca/store/load
 -- pattern the rest of the emitter uses for multi-path merges).
@@ -14709,7 +14709,7 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries facts =
   e.dictConstCache := []
   e.closConstCache := []
   installKnownFnMap e (collectFns groups)
-  -- #561 PR-A: install the LAZY value globals (emit_support.lazyGlobalNames) once
+  -- Install the LAZY value globals (emit_support.lazyGlobalNames) once
   -- per program.  Reads of these lower to `call @mdk_force_<x>()`; every other
   -- global stays on the eager prologue.
   installLazyGlobalMap e cfg.lazyNames (valBinds groups)
