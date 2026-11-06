@@ -1,0 +1,253 @@
+import frontend.ast.{Pat(..), Route(..)}
+import support.ordmap.{
+  OrdMap, omEmpty, omFromNames, omHasKey, omInsert, omKeys, omLookup
+}
+import support.util.{lenKey}
+import ir.core_ir.{
+  CBind(..),
+  CClause(..),
+  CExpr(..),
+  CImplBody(..),
+  CImplEntry(..),
+  CProgram(..),
+  CallSite,
+  MethodEvidence(..),
+  leadingDictParams,
+}
+import ir.core_walk.{rewriteProgramScoped}
+-- Core IR unfolding of trivial definitions: a call of a definition whose body
+-- cannot duplicate, drop or reorder work becomes that body, as GHC's simplifier
+-- inlines a binding whose unfolding is trivial.
+--
+-- A definition is trivial when it has one clause and is
+-- - a top-level value whose body is a literal, or
+-- - a function or impl entry whose parameters are all variables, none a
+--   dictionary, and whose body is its one parameter (`fromInt x = x`) or applies a
+--   head to all its parameters in order (`fromInt x = intToFloat x`).  The head
+--   must read no parameter and no given dictionary, so it means the same at every
+--   call site that does not rebind its name.
+--
+-- A call site is a saturated application of a top-level name that no enclosing
+-- binder rebinds, or of a method whose evidence selects one instance statically
+-- and passes it no dictionaries.  It is skipped when a binder at the site rebinds
+-- a name the head reads.
+
+-- What a call of a trivial definition unfolds to.
+data Unfolding =
+  -- a literal value: zero parameters
+  | Literal CExpr
+  -- the one argument itself
+  | Identity
+  -- the head applied to the arguments, of which there are the arity
+  | Forward Int CExpr
+
+-- A definition the table can hold: a top-level binding by name, an impl entry by
+-- method and the instance's route word.
+data Target = TopLevel String | ImplEntry String String
+
+-- The table key of a target; the two kinds never share a key.
+targetKey : Target -> String
+targetKey (TopLevel name) = "g\{name}"
+targetKey (ImplEntry method word) = "e\{lenKey method}\{word}"
+
+-- Replace every call of a trivial definition by its unfolding.  [noInline] names
+-- the top-level functions a `@noinline` attribute marks; they keep their calls.
+export
+inlineTrivialCalls : List String -> CProgram -> CProgram
+inlineTrivialCalls noInline prog =
+  rewriteProgramScoped (unfoldSite (unfoldingTable noInline prog)) prog
+
+unfoldSite : OrdMap Unfolding -> OrdMap Unit -> CExpr -> CExpr
+unfoldSite table scope (e@(CApp head args site)) = match siteTarget scope head
+  Some target => match omLookup (targetKey target) table
+    Some u if not (captured scope u) => optionOr e (unfoldAt u args site)
+    _ => e
+  None => e
+unfoldSite _ _ e = e
+
+-- The definition a call head names, when a binder in [scope] does not rebind it.
+siteTarget : OrdMap Unit -> CExpr -> Option Target
+siteTarget scope (CVar name _) =
+  if omHasKey name scope then None else Some (TopLevel name)
+siteTarget _ (CMethod method (MethodEvidence _ _ (RKey word [] _) [] [])) =
+  Some (ImplEntry method word)
+siteTarget _ _ = None
+
+-- [u] at a call with [args], when the call is saturated.
+unfoldAt : Unfolding -> List CExpr -> CallSite -> Option CExpr
+unfoldAt Identity [arg] _ = Some arg
+unfoldAt (Forward n head) args site
+  | n == length args = Some (CApp head args site)
+unfoldAt _ _ _ = None
+
+captured : OrdMap Unit -> Unfolding -> Bool
+captured scope (Forward _ head) = any (n => omHasKey n scope) (headNames head)
+captured _ _ = False
+
+unfoldingArity : Unfolding -> Int
+unfoldingArity (Literal _) = 0
+unfoldingArity Identity = 1
+unfoldingArity (Forward n _) = n
+
+-- ── the table ──────────────────────────────────────────────────────────────
+
+-- Every trivial definition of [prog] with its chain followed (`resolveKey`).
+unfoldingTable : List String -> CProgram -> OrdMap Unfolding
+unfoldingTable noInline (CProgram binds _ _ impls _ _) =
+  let excluded = omFromNames noInline omEmpty
+  let own = fold (acc b => bindRow excluded b acc) omEmpty binds
+  let raw = entryRows impls own
+  let resolved =
+    fold
+      (memo key => snd (resolveKey raw omEmpty key memo))
+      omEmpty
+      (omKeys raw)
+  fold (acc key => keepResolved key resolved acc) omEmpty (omKeys resolved)
+
+bindRow : OrdMap Unit -> CBind -> OrdMap Unfolding -> OrdMap Unfolding
+bindRow excluded (CBind name [CClause pats body] _ _) acc
+  | not (omHasKey name excluded) = match bindUnfolding pats body
+    Some u => omInsert (targetKey (TopLevel name)) u acc
+    None => acc
+bindRow _ _ acc = acc
+
+bindUnfolding : List Pat -> CExpr -> Option Unfolding
+bindUnfolding [] (lit@(CLit _)) = Some (Literal lit)
+bindUnfolding pats body = functionUnfolding pats body
+
+-- An impl method of more than one clause has one entry per clause, so a key
+-- seen twice is left out.
+entryRows : List CImplEntry -> OrdMap Unfolding -> OrdMap Unfolding
+entryRows impls acc =
+  let counts = fold (m ent => countKey (entryKey ent) m) omEmpty impls
+  fold (m ent => entryRow counts ent m) acc impls
+
+entryRow : OrdMap Int -> CImplEntry -> OrdMap Unfolding -> OrdMap Unfolding
+entryRow counts ent acc =
+  let key = entryKey ent
+  if omLookup key counts == Some 1 then match entryParts ent
+    (pats, body) => match functionUnfolding pats body
+      Some u => omInsert key u acc
+      None => acc
+  else
+    acc
+
+countKey : String -> OrdMap Int -> OrdMap Int
+countKey key m = omInsert key (1 + optionOr 0 (omLookup key m)) m
+
+entryKey : CImplEntry -> String
+entryKey (CImplEntry m _ _ (CImplTagged _ word _ _ _ _ _)) =
+  targetKey (ImplEntry m word)
+entryKey (CImplEntry m _ _ (CImplDefault _ _ word _ _ _ _)) =
+  targetKey (ImplEntry m word)
+
+entryParts : CImplEntry -> (List Pat, CExpr)
+entryParts (CImplEntry _ _ _ (CImplTagged _ _ _ _ _ pats body)) = (pats, body)
+entryParts (CImplEntry _ _ _ (CImplDefault _ _ _ _ _ pats body)) = (pats, body)
+
+-- The unfolding of a function whose clause is [pats] and [body], when it is
+-- trivial.  A leading dictionary parameter (an instance's `requires`, a method's
+-- own context, an inherited default's receiver) is not an argument at a call
+-- site, so a definition taking one is not.
+functionUnfolding : List Pat -> CExpr -> Option Unfolding
+functionUnfolding pats body =
+  if leadingDictParams pats > 0 then
+    None
+  else match varNames pats
+    Some [p] if isVarNamed p body => Some Identity
+    Some (params@(_ :: _)) => forwarding params body
+    _ => None
+
+forwarding : List String -> CExpr -> Option Unfolding
+forwarding params (CApp head args _) =
+  if isPlainHead head
+    && all (n => not (elem n params)) (headNames head)
+    && sameVars params args then
+    Some (Forward (length params) head)
+  else
+    None
+forwarding _ _ = None
+
+varNames : List Pat -> Option (List String)
+varNames [] = Some []
+varNames ((PVar x _ _) :: rest) = map (x :: _) (varNames rest)
+varNames _ = None
+
+isVarNamed : String -> CExpr -> Bool
+isVarNamed x (CVar y _) = x == y
+isVarNamed _ _ = False
+
+-- [args] are exactly the variables [params], in order.
+sameVars : List String -> List CExpr -> Bool
+sameVars [] [] = True
+sameVars (p :: ps) (a :: rest) = isVarNamed p a && sameVars ps rest
+sameVars _ _ = False
+
+-- A head an unfolding may carry: a name, or a method or constrained-function
+-- occurrence whose routes read no given dictionary and name no local standalone.
+isPlainHead : CExpr -> Bool
+isPlainHead (CVar _ _) = True
+isPlainHead (CMethod _ ev) =
+  all staticRoute (ev.meDispatch :: ev.mePrereqs ++ ev.meContext)
+isPlainHead (CDict _ routes) = all staticRoute routes
+isPlainHead _ = False
+
+staticRoute : Route -> Bool
+staticRoute (RKey _ reqs sups) = all staticRoute (reqs ++ sups)
+staticRoute (RScalar _) = True
+staticRoute RNone = True
+staticRoute _ = False
+
+-- The name a plain head reads from its scope.
+headNames : CExpr -> List String
+headNames (CVar name _) = [name]
+headNames (CMethod name _) = [name]
+headNames (CDict name _) = [name]
+headNames _ = []
+
+-- The head of a forwarding unfolding as a call target of its own: the next link
+-- of a chain.
+headTarget : CExpr -> Option Target
+headTarget head = siteTarget omEmpty head
+
+-- The final unfolding of [key], following each forwarding head into the table
+-- while the arity agrees.  [path] holds the keys this chain has passed; the link
+-- that would return to one of them is not followed, so a cycle is cut there.
+-- [memo] answers each key once.
+resolveKey : OrdMap Unfolding ->
+  OrdMap Unit ->
+  String ->
+  OrdMap Unfolding ->
+  (Option Unfolding, OrdMap Unfolding)
+resolveKey raw path key memo = match omLookup key memo
+  Some done => (Some done, memo)
+  None => match omLookup key raw
+    Some u if not (omHasKey key path) =>
+      let (result, memo2) = followLink raw (omInsert key () path) u memo
+      (Some result, omInsert key result memo2)
+    _ => (None, memo)
+
+followLink : OrdMap Unfolding ->
+  OrdMap Unit ->
+  Unfolding ->
+  OrdMap Unfolding ->
+  (Unfolding, OrdMap Unfolding)
+followLink raw path (u@(Forward n head)) memo = match headTarget head
+  Some next =>
+    let (found, memo2) = resolveKey raw path (targetKey next) memo
+    match found
+      Some v if unfoldingArity v == n => (v, memo2)
+      _ => (u, memo2)
+  None => (u, memo)
+followLink _ _ u memo = (u, memo)
+
+-- A resolved unfolding whose head names its own definition is a call of
+-- itself, so it is dropped.
+keepResolved : String ->
+  OrdMap Unfolding ->
+  OrdMap Unfolding ->
+  OrdMap Unfolding
+keepResolved key resolved acc = match omLookup key resolved
+  Some (Forward _ head) if map targetKey (headTarget head) == Some key => acc
+  Some u => omInsert key u acc
+  None => acc
