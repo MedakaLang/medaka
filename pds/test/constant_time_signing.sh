@@ -761,7 +761,19 @@ closure_grade=$(cksum "$WORK/full-closure.lst" | awk '{print $1 " " $2}')
 # `putLimb__rw`, the RFC 6979 `filledBytes`, and the byte conversions
 # `mdk_u8__toInt`, `mdk_u8__truncateU64__rw`, `mdk_u64__fromU8__rw`. 127
 # definitions.
-[ "$closure_grade" = '3855056094 3710' ] || fail "emitted transitive closure drifted ($closure_grade)"
+# Re-derived 2026-11-05 for literal-only top-level values becoming eager
+# static globals (a global is lazy only when its initializer is not
+# speculation-safe, and the Num Int `fromInt` fold leaves a literal constant
+# with nothing that makes it so), symbol by symbol against the 127 above.
+# Out, and nothing in: the eight lazy-constant thunks
+# `mdk_force_crypto_hmac__blockBytes`, `mdk_force_lib_field__{feOne,feZero}`,
+# `mdk_force_lib_hmac_sha256__keyBytes`, `mdk_force_lib_scalar__{scOne,scZero}`
+# and `mdk_force_lib_secp256k1__{pointInfinity,rfc6979ByteCount}`. Each was a
+# constant whose only control was its own public init-state switch; its
+# callers now load the static global. The five thunks left
+# (`expPMinus2`, `expNMinus2`, `generatorX`, `generatorY`, `pointGenerator`)
+# are constants too, with public initializers. 119 definitions.
+[ "$closure_grade" = '2864391331 3447' ] || fail "emitted transitive closure drifted ($closure_grade)"
 # Two of the modules live in stdlib/crypto/, which mangles as `crypto_` rather
 # than `lib_`, and one is stdlib/u32.mdk, so the prefixes are spelled out
 # rather than built from a module name.
@@ -892,7 +904,29 @@ control_grade=$(cksum "$WORK/control.manifest" | awk '{print $1 " " $2}')
 # adds a three-word stack `alloca` and its stores in the panic block, which no
 # column counts. Other constant names (`@.strc`, `@.u64c`, one lifted lambda)
 # are renumbered, with identical definitions.
-[ "$control_grade" = '449559333 5772' ] || fail "emitted control/index/allocation manifest drifted ($control_grade)"
+# Re-derived 2026-11-05 for the eager literal constants at the closure grade,
+# row by row against the 127 rows above. The eight thunk rows left; each was
+# `0 0 0 0 0 0 0 0` but pointInfinity's (3 calls, its JPoint fields), since
+# a thunk's init dispatch is a `switch` on the public init state, which no
+# column counts. Fourteen rows lost exactly one call, the force of a thunk
+# that left, and moved in no other column: fillPad 2 -> 1, hmacSha256 9 -> 8
+# and keyPad 6 -> 5 (blockBytes), hmacSha256FixedKey 3 -> 2 (keyBytes),
+# feInverse 2 -> 1 and the pointGenerator thunk 3 -> 2 (feOne), scInverse
+# 2 -> 1 and signCandidate 24 -> 23 (scOne), scSecretCandidate 3 -> 2 (scZero),
+# filledBytes 4 -> 3 and rfc6979Require32 3 -> 2 (rfc6979ByteCount),
+# pointAddComplete 43 -> 42, pointCanonicalize 3 -> 2 and scalarMultiplySecret
+# 3 -> 2 (pointInfinity). One row grew: `mdk_crypto_sha256__fillFirst16` went
+# from `1 0 0 1 0 0 2 1` to `5 0 0 1 0 0 12 8`, because scheduleWord is now
+# lowered inline there instead of called as `scheduleWord__rw`. That worker
+# returns `i32`, and the closure walk follows `call i64 @` only, so its body
+# was in the binary but never in this manifest; the inlined block equals it
+# instruction for instruction (SSA names and labels aside). Its four control
+# branches test the `byteOf` closure's header word on the call fast path (the
+# accessor's arity, never a byte), its seven traps are the overflow checks of
+# `i * 4` and `i * 4 + k` on the public counter, and its ten calls are the four
+# `__mdk_apply` slow paths, three `mdk_shift_left` by a literal amount and
+# three `mdk_bit_or`. The bytes reach only the shifts and ors. No other row moved.
+[ "$control_grade" = '932988870 5382' ] || fail "emitted control/index/allocation manifest drifted ($control_grade)"
 pass 'emitted helper bodies retain the audited branch/index/allocation shape; only fixed public controls remain'
 
 for symbol in \
@@ -1185,7 +1219,13 @@ public_control_grade=$(cksum "$WORK/public-control.manifest" | awk '{print $1 " 
 # scFromBytesReduce and rfc6979Require32), with the same causes, no other row
 # moved in any column across the 139, the callee multisets differ only by the
 # append giving way to `mdk_string_append_n`, and the closure is unchanged.
-if [ "$public_closure_grade" != '2151910788 4065' ] || [ "$public_control_grade" != '2797855792 6324' ]; then
+# Re-derived 2026-11-05 for the eager literal constants: the same eight thunks
+# leave (139 -> 131, nothing enters), the same fourteen one-call drops and the
+# same fillFirst16 row as the internal grade above, plus two rows only the
+# public consumer reaches, each losing the feOne/feZero forces and moving in
+# no other column: affineToPoint 1 -> 0 calls and pointIsCanonicalInfinity
+# 7 -> 5.
+if [ "$public_closure_grade" != '1872915056 3802' ] || [ "$public_control_grade" != '3090551942 5934' ]; then
   fail "public union exact grades drifted (closure=$public_closure_grade control=$public_control_grade)"
 fi
 pass "public-root LLVM union excludes ForTest and retains the audited signing/key topology ($(wc -l < "$WORK/full-closure.lst") definitions)"
