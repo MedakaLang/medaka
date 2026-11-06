@@ -1,0 +1,22 @@
+import test.{expectAll, expectAtLeast, expectTextContainsAll, fail}
+import test_process.{boundedVerbSeconds, medakaBin, underRoot}
+import string.{countOccurrences}
+
+test "persisted package identities execute on both targets" =
+  match boundedVerbSeconds 300 "env" [
+    "MEDAKA_STRICT=1",
+    medakaBin,
+    "test",
+    underRoot "compiler/backend/package_identity_sexp_test.mdk",
+  ]
+    Err e => fail "could not run identity tests: \{e}"
+    Ok (code, out, err) =>
+      if code /= 0 || err /= "" then
+        fail "identity tests exited \{code}: \{err}"
+      else
+        expectAll [
+          expectAtLeast 7 (countOccurrences "  ok   " out),
+          expectTextContainsAll
+            ["persisted identity executes on both physical targets"]
+            out,
+        ]

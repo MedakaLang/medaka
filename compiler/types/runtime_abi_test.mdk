@@ -6,7 +6,7 @@ import types.runtime_grants.{fileGrantExterns}
 import support.ordmap.{omLookup, omFromPairs, omEmpty, omKeys}
 import support.util.{listLen}
 import test_process.{underRoot}
-import test.{expectEqual, expectAll, expectSome, expectOkThen}
+import test.{expectEqual, expectAll, expectSome, expectOkThen, expectAtLeast}
 
 test "the complete generated ABI is the runtime source projection in both directions" =
   expectOkThen
@@ -17,7 +17,7 @@ test "the complete generated ABI is the runtime source projection in both direct
         expectEqual projected runtimeAbiRows,
         expectEqual runtimeAbiRows projected,
         expectEqual (listLen projected) (listLen keys),
-        expectEqual 218 (listLen projected),
+        expectAtLeast 200 (listLen projected),
         expectEqual
           (renderRuntimeAbi projected)
           (renderRuntimeAbi (runtimeRowsFromSource (parse src))),

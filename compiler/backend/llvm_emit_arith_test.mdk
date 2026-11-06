@@ -6,11 +6,12 @@ import types.capability_manifest.{ManifestRequirement(..)}
 --
 -- Run it: medaka test --native compiler/backend/llvm_emit_arith_test.mdk
 
-import test.{expectAll, expectEqual, expectFalse, expectTextContainsAll}
+import test.{expectAll, expectEqual, expectFalse, expectTextContainsAll, fail}
 import string.{contains, countOccurrences, unlines}
 import backend.extern_catalog.{RuntimeExternDomain(..)}
 import backend.emit_target.{Backend(..)}
-import backend.emit_plan.{buildEmitPlan}
+import backend.emit_plan.{buildEmitPlan, buildEmitPlanWithIdentity}
+import backend.package_identity.{planPackageIdentity}
 import backend.llvm_emit.{emitProgram, makeEmitInput}
 import backend.llvm_symbols.{defectMessage}
 import frontend.ast.{
@@ -485,3 +486,31 @@ test "default name cache keeps distinct descriptor components and an unrelated i
         "define internal i64 @mdk.impl.74616734.6e65696768626f72("
         ll),
   ]
+
+identityProgram : Bool -> CProgram
+identityProgram extra = match arithProgram "Int"
+  CProgram ((CBind name [CClause pats _] loc bid) :: main :: _) _ _ impls ctx facts =>
+    CProgram
+      [CBind name [CClause pats (CVar "PackCtor" AGlobal)] loc bid, main]
+      (if extra then [("Earlier", 0), ("PackCtor", 0)] else [("PackCtor", 0)])
+      (if extra then
+        [("Earlier", "a.Earlier"), ("PackCtor", "pkg.Type")]
+      else
+        [("PackCtor", "pkg.Type")])
+      impls
+      ctx
+      facts
+  _ => panic "identityProgram: unexpected arithmetic fixture shape"
+
+test "LLVM uses imported constructor identity with an earlier local type" =
+  match planPackageIdentity "pkg" (identityProgram False)
+    Err _ => fail "could not plan package"
+    Ok pkg =>
+      let cp = identityProgram True
+      let plan = buildEmitPlanWithIdentity LlvmBackend PreludeFreeRuntime pkg cp
+      match (emitProgram
+        (makeEmitInput RawUnchecked PreludeFreeRuntime [] 0 [] [] "")
+        plan
+        cp)
+        Err _ => fail "could not emit program"
+        Ok ir => expectTextContainsAll ["8589934593"] ir

@@ -43,7 +43,7 @@
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
-#include "medaka_abi.h"
+#include "medaka_runtime.h"
 #include <dirent.h>
 #include <errno.h>
 #include <stdio.h>
@@ -78,6 +78,13 @@
  * pthread_create would NOT have its stack registered as a GC root, so Boehm would
  * collect still-live objects and corrupt the heap.  GC_pthread_create registers
  * the worker's stack, keeping conservative scanning correct on it. */
+#include "medaka_process.h"
+/* A process API reference extracts its archive member; this weak hook alone must not. */
+#ifdef __APPLE__
+extern void mdk_process_submission_init(void) __attribute__((weak_import));
+#else
+extern void mdk_process_submission_init(void) __attribute__((weak));
+#endif
 #define GC_THREADS
 #include <gc.h>
 /* gc_inline.h asserts each allocation's size with GC_size, a call per cell, unless
@@ -2862,6 +2869,10 @@ static long long mdk_str_cstr(const char *s) {
   return mdk_str_lossy(s, (long long)strlen(s));
 }
 
+long long mdk_runtime_string(const char *s) {
+  return mdk_str_cstr(s);
+}
+
 /* Every file extern whose path is an authority receives, after its value
  * arguments, the authority granted for each path (EFFECTS-SEMANTICS §8): a
  * List String of domain elements, a trailing `*` spelling a pattern, and Nil
@@ -4791,6 +4802,7 @@ static void *mdk_main_thread(void *p) {
 }
 
 int main(int argc, char **argv) {
+  if (mdk_process_submission_init) mdk_process_submission_init();
   struct mdk_main_args a;
   a.argc = argc;
   a.argv = argv;

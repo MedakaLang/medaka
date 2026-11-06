@@ -29,9 +29,8 @@
    may only fall, and only by re-capturing with `ARCH_PINS_WRITE=1`; the issue
    that owns a duplicate drive is named beside its probe. Counts above 1 for
    `desugar`, `parse.prescan` and `exhaust.oracle` are pinned values, not a
-   claim that they are the minimum. `lint`'s 50 parses are 49 stdlib-index
-   parses plus 1 per file: a constant that moves when the stdlib module set
-   changes, not a duplicate. -}
+   claim that they are the minimum. The lint probe builds a cold stdlib index
+   and indexes its isolated project; its counts move with the stdlib module set. -}
 import json.{Json(..), jArray, jObject, stringify}
 import list.{filterMap, nub, sort}
 import string.{
@@ -112,9 +111,7 @@ probeRowsExit : String ->
   <Exec, Env "MEDAKA_ROOT", Env "MEDAKA"> (List String, Expectation)
 probeRowsExit name want args = probeRowsExitEnv name want [] args
 
--- `probeRowsExit` with extra `NAME=value` settings for the child.  The lint
--- probe runs with its own `XDG_CACHE_HOME`, so the row shards it reads are
--- always cold and the stage counts do not depend on what ran before it.
+-- `probeRowsExit` with extra `NAME=value` settings for the child.
 probeRowsExitEnv : String ->
   Int ->
   List String ->
@@ -395,6 +392,21 @@ driveProbes dir = [
   probeRows "test_bytebuilder" ["test", underRoot "stdlib/bytebuilder.mdk"],
 ]
 
+-- Project-index shards live under the project root, independently of XDG.
+lintProbe : String -> <Exec, IO, FileRead, FileWrite> (List String, Expectation)
+lintProbe dir = match readFile (fixture "lint_probe.mdk")
+  Err e => ([], fail "could not read lint probe: \{e}")
+  Ok src =>
+    let path = "\{dir}/lint_probe.mdk"
+    match writeFile path src
+      Err e => ([], fail "could not write lint probe: \{e}")
+      Ok _ =>
+        probeRowsExitEnv
+          "lint_probe"
+          0
+          ["XDG_CACHE_HOME=\{dir}/lint-index-cache"]
+          ["lint", path]
+
 test "stage_counts: per-verb stage counts match stage_counts.golden" = withScratchDir
   (dir =>
     let probes = [
@@ -409,11 +421,7 @@ test "stage_counts: per-verb stage counts match stage_counts.golden" = withScrat
       probeRows "build_hello" ["build", fixture "hello.mdk", "-o", "\{dir}/h"],
       -- the native child's probe and runtime dependency are not the parent's modules
       probeRows "test_probe" ["test", fixture "test_probe.mdk"],
-      probeRowsExitEnv
-        "lint_probe"
-        0
-        ["XDG_CACHE_HOME=\{dir}/lint-index-cache"]
-        ["lint", fixture "lint_probe.mdk"],
+      lintProbe dir,
       probeRowsExit "check_bad" 1 ["check", fixture "bad.mdk"],
       probeRowsExit "run_bad" 1 ["run", fixture "bad.mdk"],
       probeRowsExit "build_bad" 1 ["build", fixture "bad.mdk", "-o", "\{dir}/b"],

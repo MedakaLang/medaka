@@ -19,8 +19,9 @@ import test.{Expectation, fail, pass}
 requiredNames : List String
 requiredNames = [
   "medaka", "medaka_emitter", "stdlib", "stdlib/core.mdki",
-  "runtime/medaka_rt.c", "runtime/medaka_abi.h", "LICENSE", "LICENSE-bdwgc",
-  "README.md"
+  "runtime/medaka_rt.c", "runtime/medaka_abi.h", "runtime/medaka_runtime.h",
+  "runtime/medaka_process.c", "runtime/medaka_process.h", "LICENSE",
+  "LICENSE-bdwgc", "README.md"
 ]
 
 -- Stat helper: a path counts as present if it is a file or a directory.
@@ -161,7 +162,25 @@ pipeline scratch = do
   ]
   _ <- isExecutable (probe ++ "/hello_built")
   built <- runFrom probe (probe ++ "/hello_built") []
-  expectOut "12345" built
+  _ <- expectOut "12345" built
+  _ <- writeFile
+    (probe ++ "/process_probe.mdk")
+    """
+import process.{SpawnOptions(..), PipeChoice(..), StartError(..), ProcessError(..), ProcessOperation(..), start}
+main = match start "/medaka-no-such-image" (SpawnOptions { argv = [], cwd = "/tmp", env = [], stdin = Null, stdout = Null, stderr = Null })
+  Err (StartRejected (SpawnFailed ExecImage _ _)) => println "missing image"
+  Err (StartRejected (Unsupported "native process unsupported")) => println "unsupported"
+  _ => println "unexpected result"
+"""
+  _ <- runFrom probe (tree ++ "/medaka") [
+    "build", "process_probe.mdk", "-o", "process_built"
+  ]
+  processOut <- runFrom probe (probe ++ "/process_built") []
+  (unameCode, unameOut, unameErr) <- boundedVerb "uname" ["-s"]
+  _ <- if unameCode /= 0 then Err "uname failed: \{unameErr}" else Ok ()
+  expectOut
+    (if trimRight unameOut == "Linux" then "missing image" else "unsupported")
+    processOut
 
 verdict : Result String Unit -> Expectation
 verdict (Err e) = fail "dist_install_smoke: \{e}"

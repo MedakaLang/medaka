@@ -1,6 +1,4 @@
-import backend.runtime_layout.{
-  siteFileShift, siteLineShift, siteFileBits, siteLineBits, siteColumnBits
-}
+import backend.package_identity.{IdentityPlan(..), packSite}
 import ir.constructor_facts.{
   ConstructorFacts, declaredCtorArity, declaredCtorOwner, declaredCtorOrdinal
 }
@@ -448,11 +446,7 @@ data WasmEmit = WasmEmit {
   completionChecked : Bool,
   trapImportNeeded : Ref Bool,
   trapIntNeeded : Ref Bool,
-  -- located traps: the files a trap site names, in reverse number order, and
-  -- their 1-based numbers; whether the located-trap runtime and the shared
-  -- non-exhaustive-match trap are called.
-  siteFiles : Ref (List String),
-  siteFileNums : Ref (OrdMap Int),
+  identity : Option IdentityPlan,
   siteRtUsed : Ref Bool,
   siteNonexhUsed : Ref Bool,
   -- coded trap texts: one `$trapmsg_K` helper per DISTINCT text, numbered in
@@ -530,8 +524,7 @@ freshWasmEmit mode = WasmEmit {
   completionChecked = True,
   trapImportNeeded = Ref False,
   trapIntNeeded = Ref False,
-  siteFiles = Ref [],
-  siteFileNums = Ref omEmpty,
+  identity = None,
   siteRtUsed = Ref False,
   siteNonexhUsed = Ref False,
   trapMsgIds = Ref omEmpty,
@@ -1772,6 +1765,9 @@ emitProgramCore emit input plan cp =
     { emit |
       externFacts = requirementFacts plan.externRequirements,
       physical = plan.wasmPhysical,
+      identity = match plan.identity
+        Ok identity => Some identity
+        Err _ => None,
     }
     input
     plan
@@ -1833,6 +1829,9 @@ emitProgramGaps input plan cp0 =
     externFacts = requirementFacts plan.externRequirements,
     physical = plan.wasmPhysical,
     closureChecked = False,
+    identity = match plan.identity
+      Ok identity => Some identity
+      Err _ => None,
   }
   refuseUnprovidedExternsW
     emit
@@ -2274,7 +2273,7 @@ emitRefProgram prog plan groups =
       (target count =>
         callFnAtW (progEmit prog) trapOriginW CallTailW target count)
       physical
-      (map strBytesW (reverseL (progEmit prog).siteFiles.value))
+      (map strBytesW (identityW (progEmit prog)).orderedFiles)
   let dataSegs = emitDataSegs (progEmit prog)
   -- S-4: the capture-free closure globals (wConstClos), accumulated during fn / impl /
   -- default / init body emission.  Bound HERE, after every body-emit binding above, for
@@ -5212,34 +5211,14 @@ valueArithName op = panic ("wasm A0: not a value-arith op '" ++ op ++ "'")
 -- ── located traps ────────────────────────────────────────────────────────────
 -- A located trap writes `<file>:<line>:<col>: ` ahead of its line, from one packed
 -- i64 `(file + 1) << 44 | line << 20 | col` (the word the native backend packs),
--- where `file` numbers the program's site files in order of first use.  0 means
+-- where `file` numbers the plan's ordered site files.  0 means
 -- no location: the trap is the unlocated line, byte for byte.
 
--- The packed site of [l], 0 when [l] names no file, is the placeholder span, or
--- does not fit its fields.
-sitePackedW : WasmEmit -> Loc -> Int
-sitePackedW emit (Loc f sl sc el ec)
-  | f == "" || sl == 1 && sc == 0 && el == 1 && ec == 0 = 0
-  | sl < 0
-    || sl >= shiftLeft 1 siteLineBits
-    || sc < 0
-    || sc >= shiftLeft 1 siteColumnBits = 0
-  | otherwise = match siteFileNumW emit f
-    Some n =>
-      n * shiftLeft 1 siteFileShift + sl * shiftLeft 1 siteLineShift + sc
-    None => 0
+identityW : WasmEmit -> IdentityPlan
+identityW emit = optionOrPanic "wasm: invalid identity plan" emit.identity
 
-siteFileNumW : WasmEmit -> String -> Option Int
-siteFileNumW emit f = match omLookup f !emit.siteFileNums
-  Some n => Some n
-  None =>
-    let n = omSize !emit.siteFileNums + 1
-    if n >= shiftLeft 1 siteFileBits then
-      None
-    else
-      setRef emit.siteFileNums (omInsert f n !emit.siteFileNums)
-      setRef emit.siteFiles (f :: !emit.siteFiles)
-      Some n
+sitePackedW : WasmEmit -> Loc -> Int
+sitePackedW emit loc = packSite (identityW emit) loc
 
 -- `<file>:<line>:<col>: ` for [site], nothing for 0.
 siteLocInstrs : WasmEmit -> Int -> List String

@@ -1,0 +1,56 @@
+import async.{runAsync, spawn, sleep, liftIO}
+import process.{
+  SpawnOptions(..), PipeChoice(..), LaunchProgress(..), abortStart
+}
+import process_async.{
+  newCancelToken, cancel, after, startUntil, StartResult(..), LaunchStop(..)
+}
+import time.{millis}
+
+options : SpawnOptions
+options = SpawnOptions {
+  argv = [],
+  cwd = "/tmp",
+  env = [],
+  stdin = Null,
+  stdout = Null,
+  stderr = Null,
+}
+
+drain : LaunchTicket p -> Int -> <Exec p, Clock> Bool
+drain _ 0 = False
+drain ticket n = match abortStart ticket
+  Ok LaunchAborted => True
+  Ok LaunchPending =>
+    sleepMs 5
+    drain ticket (n - 1)
+  _ => False
+
+cleanup : LaunchStop (LaunchTicket p) -> <Exec p, Clock> Bool
+cleanup LaunchStopped = True
+cleanup (LaunchCleanupPending ticket _) = drain ticket 400
+cleanup (LaunchCleanupFailed _) = False
+
+timeout : <Clock, Exec "/bin/true"> Bool
+timeout =
+  let deadline = runAsync (after (millis 50))
+  match runAsync (startUntil "/bin/true" options deadline (newCancelToken ()))
+    Ok (StartTimedOut stop) => cleanup stop
+    _ => False
+
+cancellation : <Clock, Exec "/bin/true"> Bool
+cancellation =
+  let deadline = runAsync (after (millis 5000))
+  let token = newCancelToken ()
+  let task = deferThen (spawn
+    (deferThen (sleep (millis 50)) (_ => liftIO (_ => cancel token)))) (_ =>
+    startUntil "/bin/true" options deadline token)
+  match runAsync task
+    Ok (StartCancelled stop) => cleanup stop
+    _ => False
+
+main =
+  if timeout && cancellation then
+    println "adapter stall passed"
+  else
+    println "adapter stall failed"

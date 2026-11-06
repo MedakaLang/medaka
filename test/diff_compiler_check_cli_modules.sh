@@ -2994,8 +2994,9 @@ if [ -x "$TMP/sa4c.main.bin" ]; then
 else
   sa4c_em="!!NO-BINARY"
 fi
+cp "$TMP/sa4c/control.mdk" "$TMP/sa4c/main.mdk"
 rm -f "$TMP/sa4c.control.bin" "$TMP/sa4c.control.bin.ll"
-MEDAKA_ROOT="$ROOT" bound "$MEDAKA" build --keep-ir "$TMP/sa4c/control.mdk" -o "$TMP/sa4c.control.bin" >"$TMP/sa4c.control.buildlog" 2>&1
+MEDAKA_ROOT="$ROOT" bound "$MEDAKA" build --keep-ir "$TMP/sa4c/main.mdk" -o "$TMP/sa4c.control.bin" >"$TMP/sa4c.control.buildlog" 2>&1
 sa4c_bc=$?
 if [ -x "$TMP/sa4c.control.bin" ]; then
   sa4c_ec="$("$TMP/sa4c.control.bin" 2>/dev/null | head -1)"

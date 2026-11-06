@@ -1,0 +1,393 @@
+import test_process.{withScratchDir, boundedVerbSeconds, underRoot}
+import test.{Expectation, fail, expectTextContainsAll}
+import frontend.ast.{Addr(..), Pat(..), BinderId(..)}
+import ir.core_ir.{
+  CArm(..), CTree(..), CTBranch(..), CHead(..), CallSite(..), CallMode(..)
+}
+import types.runtime_types.{BinderRow(..), RuntimeType(..)}
+import types.capability_manifest.{ManifestRequirement(..)}
+import backend.extern_catalog.{RuntimeExternDomain(..)}
+import backend.emit_target.{Backend(..)}
+import backend.emit_plan.{
+  buildEmitPlanWithIdentity, prepareWasmPlanWithIdentity
+}
+import backend.llvm_emit.{emitProgram as llvmEmit, makeEmitInput}
+import backend.wasm_emit.{emitProgram as wasmEmit, makeWasmEmitInput}
+import support.ordmap.{omEmpty}
+import test.{pass}
+import backend.package_identity.{
+  PackageIdentity(..), IdentityPlan(..), planPackageIdentity,
+  planProgramIdentity, renderIdentityDefect, packSite
+}
+import backend.package_identity_sexp.{
+  encodePackageIdentity, decodePackageIdentity as decodeIdentity,
+  renderPackageIdentityError, PackageIdentityError(..)
+}
+import frontend.ast.{Loc(..), Lit(..), noBinderId}
+import ir.core_ir.{CProgram(..), CBind(..), CClause(..), CExpr(..), noDeclFacts}
+import support.ordmap.{omLookup, omInsert}
+import backend.runtime_layout.{reservedTypeBase, abiVersion, siteFileBits}
+import support.sexp_value.{SExp(..), renderSExp}
+import crypto.sha256_fast.{sha256Fast}
+import bytes.{encodeUtf8}
+import hex as Hex
+import test.{expectAll, expectEqual, expectErrContains, expectOkThen}
+
+decodePackageIdentity : String -> String -> Result String PackageIdentity
+decodePackageIdentity fingerprint text =
+  mapErr renderPackageIdentityError (decodeIdentity fingerprint text)
+
+test "decoder exposes distinct compatibility errors" = expectAll [
+  expectEqual
+    (Err MalformedMetadata)
+    (map (_ => ()) (decodeIdentity "pkg" "(")),
+  expectEqual
+    (Err MalformedEnvelope)
+    (map (_ => ()) (decodeIdentity "pkg" "(other)")),
+]
+
+sample : CProgram
+sample =
+  CProgram
+    [
+      CBind
+        "f"
+        [
+          CClause
+            []
+            (CBinPrim
+              "+"
+              (CLit (LInt 1))
+              (CLit (LInt 2))
+              "Int"
+              (Loc "pkg.mdk" 2 3 2 4)),
+        ]
+        (Loc "" 1 0 1 0)
+        noBinderId,
+    ]
+    []
+    [("A", "pkg.T"), ("B", "pkg.U")]
+    []
+    []
+    noDeclFacts
+
+test "planned package identity survives persistence" =
+  expectOkThen
+    (p =>
+      expectOkThen
+        (q => expectAll [
+          expectEqual
+            (omLookup "pkg.T" (p : PackageIdentity).types)
+            (omLookup "pkg.T" (q : PackageIdentity).types),
+          expectEqual (omLookup "pkg.mdk" p.files) (omLookup "pkg.mdk" q.files),
+          expectEqual p.typeHigh q.typeHigh,
+          expectEqual p.fileHigh q.fileHigh,
+        ])
+        (decodePackageIdentity "pkg" (encodePackageIdentity p)))
+    (planPackageIdentity "pkg" sample)
+
+test "stale and truncated metadata are refused" =
+  expectOkThen
+    (p => expectAll [
+      expectEqual
+        (Err StaleFingerprint)
+        (map (_ => ()) (decodeIdentity "other" (encodePackageIdentity p))),
+      expectErrContains
+        "stale fingerprint"
+        (map
+          (_ => ())
+          (decodePackageIdentity "other" (encodePackageIdentity p))),
+      expectErrContains
+        "malformed"
+        (map (_ => ()) (decodePackageIdentity "pkg" "(")),
+    ])
+    (planPackageIdentity "pkg" sample)
+
+test "duplicate numeric identities, ABI and exhausted bounds are refused" =
+  expectOkThen
+    (p =>
+      let invalidTypes = omInsert "other.T" 1 (p : PackageIdentity).types
+      let reject package =
+        map
+          (_ => ())
+          (decodePackageIdentity "pkg" (encodePackageIdentity package))
+      expectAll [
+        expectErrContains
+          "duplicate type number"
+          (reject { p | types = invalidTypes }),
+        expectErrContains "incompatible ABI" (reject { p | abi = p.abi + 1 }),
+        expectErrContains
+          "invalid type high-water mark"
+          (reject { p | typeHigh = reservedTypeBase }),
+      ])
+    (planPackageIdentity "pkg" sample)
+
+consumer : Bool -> CProgram
+consumer extra =
+  CProgram
+    [
+      CBind
+        "f"
+        [
+          CClause
+            []
+            (CBinPrim
+              "+"
+              (CLit (LInt 1))
+              (CLit (LInt 2))
+              "Int"
+              (Loc "pkg.mdk" 2 3 2 4)),
+        ]
+        (Loc "local.mdk" 9 1 9 2)
+        noBinderId,
+    ]
+    []
+    (if extra then
+      [("Z", "a.New"), ("B", "pkg.U"), ("A", "pkg.T")]
+    else
+      [("A", "pkg.T"), ("B", "pkg.U")])
+    []
+    []
+    noDeclFacts
+
+test "reloaded identities survive independently planned consumers" =
+  expectOkThen
+    (p =>
+      expectOkThen
+        (q =>
+          expectOkThen
+            (a =>
+              expectOkThen
+                (b => expectAll [
+                  expectEqual
+                    (Some 1)
+                    (omLookup "pkg.T" (a : IdentityPlan).types),
+                  expectEqual
+                    (Some 1)
+                    (omLookup "pkg.T" (b : IdentityPlan).types),
+                  expectEqual
+                    17592188141571
+                    (packSite a (Loc "pkg.mdk" 2 3 2 4)),
+                  expectEqual
+                    17592188141571
+                    (packSite b (Loc "pkg.mdk" 2 3 2 4)),
+                  expectEqual (Some 2) (omLookup "pkg.U" a.types),
+                  expectEqual (Some 2) (omLookup "pkg.U" b.types),
+                ])
+                (planProgramIdentity q (consumer True)))
+            (planProgramIdentity q (consumer False)))
+        (decodePackageIdentity "pkg" (encodePackageIdentity p)))
+    (planPackageIdentity "pkg" sample)
+
+framed : SExp -> String
+framed body =
+  renderSExp
+    (SList [
+      SAtom "medaka-package-abi",
+      SAtom (Hex.encode (sha256Fast (encodeUtf8 (renderSExp body)))),
+      body,
+    ])
+
+raw : String -> List SExp -> SExp
+raw version types = SList [
+  SAtom "package-identity",
+  SAtom version,
+  SAtom (intToString abiVersion),
+  SAtom "pkg",
+  SAtom "1",
+  SAtom "0",
+  SList types,
+  SList [],
+]
+
+test "format, integrity and duplicate names are checked" =
+  let row = SList [SAtom "pkg.T", SAtom "1"]
+  let reject text = map (_ => ()) (decodePackageIdentity "pkg" text)
+  expectAll [
+    expectErrContains "incompatible format" (reject (framed (raw "2" [row]))),
+    expectErrContains "duplicate name" (reject (framed (raw "1" [row, row]))),
+    expectErrContains
+      "integrity"
+      (reject
+        (renderSExp
+          (SList [SAtom "medaka-package-abi", SAtom "wrong", raw "1" [row]]))),
+  ]
+
+data ConsumerShape = OriginalConsumer | ExtendedConsumer deriving (Eq)
+data Outcome = ReturnValue | DivideByZero deriving (Eq)
+
+divisionAt : Loc -> CExpr
+divisionAt loc = CBinPrim "/" (CLit (LInt 1)) (CLit (LInt 0)) "Int" loc
+
+physicalProgram : ConsumerShape -> Outcome -> CProgram
+physicalProgram shape outcome =
+  let loc = Loc "pkg.mdk" 2 3 2 4
+  let success =
+    if outcome == DivideByZero then divisionAt loc else CLit (LInt 42)
+  let failure = divisionAt loc
+  let payload =
+    CDecision
+      (CApp (CVar "B" AGlobal) [CLit (LInt 42)] (CallSite CallExact False))
+      [CArm (PCon "B" [PLit (LInt 42)]) [] success, CArm PWild [] failure]
+      (CTSwitch
+        [
+          CTBranch
+            (HCon "B" 1)
+            (CTSwitch [CTBranch (HLit (LInt 42)) (CTLeaf 0)] (CTLeaf 1)),
+        ]
+        (CTLeaf 1))
+  let body =
+    CDecision
+      (CVar "A" AGlobal)
+      [CArm (PCon "A" []) [] payload, CArm PWild [] failure]
+      (CTSwitch [CTBranch (HCon "A" 0) (CTLeaf 0)] (CTLeaf 1))
+  CProgram
+    [CBind "main" [CClause [] body] (Loc "a.mdk" 8 1 8 2) (BinderId "pkg" 1)]
+    (if shape == ExtendedConsumer then
+      [("Z", 0), ("B", 1), ("A", 0)]
+    else
+      [("A", 0), ("B", 1)])
+    (if shape == ExtendedConsumer then
+      [("Z", "a.New"), ("B", "pkg.U"), ("A", "pkg.T")]
+    else
+      [("A", "pkg.T"), ("B", "pkg.U")])
+    []
+    []
+    { noDeclFacts |
+      factBinders = [
+        BinderRow {
+          brId = BinderId "pkg" 1,
+          brName = "main",
+          brType = RTInt,
+          brReturns = Some RTInt,
+          brSigned = False,
+        },
+      ],
+    }
+
+emitPhysical : PackageIdentity ->
+  CProgram ->
+  (Result String String, Result String String)
+emitPhysical package cp =
+  let lp = buildEmitPlanWithIdentity LlvmBackend PreludeFreeRuntime package cp
+  let (wp, prepared) =
+    prepareWasmPlanWithIdentity PreludeFreeRuntime omEmpty package cp
+  (
+    mapErr
+      (_ => "LLVM emit failed")
+      (llvmEmit
+        (makeEmitInput RawUnchecked PreludeFreeRuntime [] 0 [] [] "")
+        lp
+        cp),
+    mapErr
+      (_ => "Wasm emit failed")
+      (wasmEmit
+        (makeWasmEmitInput RawUnchecked PreludeFreeRuntime [])
+        wp
+        prepared),
+  )
+
+test "persisted identity is accepted by both emitters" =
+  expectOkThen
+    (p =>
+      expectOkThen
+        (q =>
+          let (ll, wat) =
+            emitPhysical q (physicalProgram ExtendedConsumer ReturnValue)
+          expectAll [
+            expectOkThen
+              (text => expectTextContainsAll ["8589934593", "8589934592"] text)
+              ll,
+            expectOkThen (_ => pass) wat,
+          ])
+        (decodePackageIdentity "pkg" (encodePackageIdentity p)))
+    (planPackageIdentity "pkg" sample)
+
+physicalRun : String ->
+  ConsumerShape ->
+  Outcome ->
+  <IO, Exec, FileRead, FileWrite> Expectation
+physicalRun dir shape outcome = match planPackageIdentity "pkg" sample
+  Err _ => fail "package plan failed"
+  Ok p => match decodePackageIdentity "pkg" (encodePackageIdentity p)
+    Err e => fail e
+    Ok q => match emitPhysical q (physicalProgram shape outcome)
+      (Ok ll, Ok wat) => runPhysicalFiles dir ll wat outcome
+      (Err e, _) => fail e
+      (_, Err e) => fail e
+
+runPhysicalFiles : String ->
+  String ->
+  String ->
+  Outcome ->
+  <IO, Exec, FileRead, FileWrite> Expectation
+runPhysicalFiles dir ll wat outcome =
+  let llPath = "\{dir}/probe.ll"
+  let watPath = "\{dir}/probe.wat"
+  let native = "\{dir}/probe.native"
+  let wasm = "\{dir}/probe.wasm"
+  match (writeFile llPath ll, writeFile watPath wat)
+    (Ok _, Ok _) => match boundedVerbSeconds 120 "clang" [
+      llPath,
+      underRoot "runtime/medaka_rt.c",
+      "-lgc",
+      "-lm",
+      "-o",
+      native,
+    ]
+      Ok (0, _, _) =>
+        match boundedVerbSeconds 120 "wasm-tools" ["parse", watPath, "-o", wasm]
+          Ok (0, _, _) => match (
+            boundedVerbSeconds 120 native [],
+            boundedVerbSeconds 120 "node" [underRoot "test/wasm/run.js", wasm],
+          )
+            (Ok (nc, no, ne), Ok (wc, wo, we)) =>
+              if outcome == DivideByZero then
+                expectAll [
+                  expectEqual 1 nc,
+                  expectEqual 1 wc,
+                  expectEqual
+                    "pkg.mdk:2:3: runtime error [E-DIV-ZERO]: division by zero\n"
+                    ne,
+                  expectEqual
+                    "pkg.mdk:2:3: runtime error [E-DIV-ZERO]: division by zero\n"
+                    we,
+                ]
+              else
+                expectAll [
+                  expectEqual 0 nc,
+                  expectEqual 0 wc,
+                  expectEqual "" ne,
+                  expectEqual "" we,
+                ]
+            _ => fail "could not run physical programs"
+          Ok (_, _, err) => fail "wasm-tools failed: \{err}"
+          Err e => fail "wasm-tools: \{e}"
+      Ok (_, _, err) => fail "clang failed: \{err}"
+      Err e => fail "clang: \{e}"
+    _ => fail "could not write physical programs"
+
+test "persisted identity executes on both physical targets" = withScratchDir
+  (dir => expectAll [
+    physicalRun dir OriginalConsumer ReturnValue,
+    physicalRun dir ExtendedConsumer ReturnValue,
+    physicalRun dir OriginalConsumer DivideByZero,
+    physicalRun dir ExtendedConsumer DivideByZero,
+  ])
+
+test "allocation rejects exhausted imported ranges" =
+  expectOkThen
+    (p =>
+      let reject pkg =
+        mapErr
+          (es => stringJoin "; " (map renderIdentityDefect es))
+          (map (_ => ()) (planProgramIdentity pkg (consumer True)))
+      expectAll [
+        expectErrContains
+          "type IDs exhausted"
+          (reject { p | typeHigh = reservedTypeBase - 1 }),
+        expectErrContains
+          "file IDs exhausted"
+          (reject { p | fileHigh = shiftLeft 1 siteFileBits - 1 }),
+      ])
+    (planPackageIdentity "pkg" sample)

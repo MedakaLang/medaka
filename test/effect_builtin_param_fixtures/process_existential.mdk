@@ -1,0 +1,7 @@
+import process.{StartError(..), checkStart}
+data AnyStart = AnyStart (p : Authority Exec) (StartError (LaunchTicket p))
+restricted : AnyStart -> <Exec "/bin/a"> Unit
+restricted (AnyStart (StartCleanupPending _ ticket)) =
+  let _ = checkStart ticket in ()
+restricted (AnyStart (StartRejected _)) = ()
+main = ()

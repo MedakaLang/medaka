@@ -1,6 +1,6 @@
 # Owned-process supervision boundary
 
-**Status:** PROPOSED. Native authority and independent ownership controls measured; production primitives and containment are not implemented.
+**Status:** Native owner and launch-ticket runtime implemented with independent C controls. Public catalog/wrappers and containment remain pending.
 
 This contract serves #4852 and the Medaka MCP runtime work. The supervisor is intended to be Medaka; Python below only drives experiments. Reuse `Async`, `awaitAny`, `waitRead`, `waitWrite` and `ioPoll`; no second event loop is proposed. Linux receipts are recorded below. Actual macOS acceptance remains #4820.
 
@@ -12,11 +12,11 @@ python3 scripts/mcp_bench/prototypes/process_contract_probe.py --out /tmp/medaka
 
 Python 3, clang (or `--cc`), and Boehm GC development headers/library are required. The driver locates the checkout from its own path, sets `MEDAKA_STRICT=1`, grades native outputs and negative diagnostics, and writes generated fixtures, binaries and `results.json` outside the checkout. `--root /absolute/checkout` selects another built tree. pkg-config or Homebrew supplies GC flags when available. The C source uses POSIX pipe/fcntl; this does not substitute for real macOS receipts.
 
-The driver contains the executable public type spelling and its signature-only operations return `Unsupported "signature probe only"`. Its inhabited Model carries `String @p` and executes legacy runCommand; it is not an opaque Process producer. The independent [C model](../../scripts/mcp_bench/prototypes/process_lifecycle.c) tests OS ownership, not Medaka catalog integration. Full [replay source](../../scripts/mcp_bench/prototypes/process_contract_probe.py).
+The driver contains the earlier Process-only signature probes, whose operations return `Unsupported "signature probe only"`; the indexed ticket declarations below supersede that draft. Its inhabited Model carries `String @p` and executes legacy runCommand; it is not an opaque Process producer. The independent [C model](../../scripts/mcp_bench/prototypes/process_lifecycle.c) tests OS ownership, not Medaka catalog integration. Full [replay source](../../scripts/mcp_bench/prototypes/process_contract_probe.py). Real-owner launch-ticket controls are listed below; public catalog validation belongs to the wrapper implementation.
 
 ## Public Medaka surface
 
-`stdlib/core.mdk` gains only `export extern data Process (p : Authority Exec)`. The extern catalog needs a prelude-visible nominal carrier, as it already does for Socket. No public constructor, fd, pid, Eq, Debug or deriving instance.
+`stdlib/core.mdk` gains `export extern data Process (p : Authority Exec)` and `export extern data LaunchTicket (p : Authority Exec)`. The extern catalog needs prelude-visible nominal carriers, as it already does for Socket. Neither has a public constructor, fd, pid, Eq, Debug or deriving instance.
 
 `process.mdk` in `stdlib/` owns the following exported types and operations, importing stdlib only, with no compiler dependency:
 
@@ -26,7 +26,7 @@ data SpawnOptions = SpawnOptions {
   argv : List String, cwd : String, env : List (String, String),
   stdin : PipeChoice, stdout : PipeChoice, stderr : PipeChoice
 }
-data ProcessOperation = Validate | Pipe | Fork | Chdir | ExecImage | Wait | Close
+data ProcessOperation = Validate | Pipe | Fork | Chdir | ExecImage | Wait | Close | LaunchHandshake
 data ProcessError =
   | InvalidSpawn String
   | SpawnFailed ProcessOperation Int String
@@ -35,8 +35,20 @@ data ProcessError =
   | WaitFailed Int String
   | CloseFailed Int String
   | Unsupported String
+  | LaunchCancelled
 data ExitStatus = Exited Int | Signalled Int Bool
-start : (program : String) -> SpawnOptions -> <Exec program> Result ProcessError (Process program)
+data StartError (p : Authority Exec) =
+  | StartRejected ProcessError
+  | StartCleanupPending ProcessError (LaunchTicket p)
+data LaunchProgress (p : Authority Exec) =
+  | LaunchPending
+  | LaunchStarted (Process p)
+  | LaunchFailed ProcessError
+  | LaunchAborted
+start : (program : String) -> SpawnOptions -> <Exec program> Result (StartError program) (Process program)
+retryStart : LaunchTicket p -> <Exec p> Result (StartError p) (Process p)
+checkStart : LaunchTicket p -> <Exec p> Result ProcessError (LaunchProgress p)
+abortStart : LaunchTicket p -> <Exec p> Result ProcessError (LaunchProgress p)
 pollExit : Process p -> <Exec p> Result ProcessError (Option ExitStatus)
 closeStdin : Process p -> <Exec p> Result ProcessError Unit
 dispose : Process p -> <Exec p> Result ProcessError Unit
@@ -60,32 +72,213 @@ Choose one stable, even, Boehm-scanned owner pointer as the external word. The C
 
 The probe owner payload is 40 bytes (not a reserved VM object header). 100000 disposed owners held by aliases allocated 4802112 GC bytes plus 800000 bytes of alias slots; payload retained=4000000 bytes. A peak-sized generation slot table retained 4800000 native bytes after close, requiring generation exhaustion/reuse and an extra lookup. This small comparison supports stable owner pointers; it does not measure throughput, production pipe buffers, VM headers or exact conservative-GC reclaim time. The model shows root retention explicitly, not eventual automatic cleanup of leaked user handles.
 
-States: Running(pid, open-stream bits) -> Reaped(cached ExitStatus, pid invalid) -> Disposed(tombstone). A wait-ownership failure transitions to LostWait(cached errno, pid invalid), never back to Running. `pollExit` returns Ok None only for waitpid(pid,WNOHANG)==0, and returns cached Ok (Some status) after reap. EINTR retries. ECHILD is WaitFailed, not success or StillRunning, and removes the ability to send a signal. No waitpid(-1), global SIGCHLD rewrite, kill(0), or negative pid/group kill in this layer.
+States after launch: Running(kernel identity, open-stream bits) -> Reaped(cached ExitStatus, identity invalid) -> Disposed(tombstone). LostWait caches ECHILD and invalidates identity, never returning to Running. `pollExit` returns Ok None only when an identity-specific nonblocking wait reports no status; terminal polls return cached Ok (Some status). ECHILD is WaitFailed and removes signaling authority. The Linux amendment below selects atomic pidfds and waitid(P_PIDFD), replacing the original numeric-pid model's waits. No waitpid(-1), numeric-pid signals, global SIGCHLD rewrite or process-group operations in production.
 
 `closeStdin` invalidates the shared fd before close; repetition while undisposed is Ok. The check and invalidation must not yield; concurrent native callers would require synchronization beyond this single-caller model. Never retry a failed close by numeric fd, since its number can already have been reused. A disposed handle returns ProcessClosed from poll/close/read/write. `dispose` is idempotent after release; while Running it returns StillRunning and keeps ownership intact. After Reaped it closes all local streams, releases native registry links and retains the cached status/tombstone. After LostWait it closes local streams and reports WaitFailed once; repetition is Ok. Do not equate direct-child exit with owned-tree cleanup: descendants may hold pipes or outlive this child. `process_scope` must perform the next spike's terminateOwned protocol before disposing if it promises tree cleanup.
 
-Launch uses a close-on-exec error pipe and async-signal-safe child setup. Parent receives a stage+errno for known setup/exec failures, reaps the failed child, closes every acquired fd, and returns SpawnFailed. Missing executable is Err, while a real program exit 127 is Ok (Some (Exited 127)). wait macros preserve exit 143 vs signal 15. Signalled's Bool is the platform WCOREDUMP flag, not a guessed exit-code translation. EOF on the exec error pipe is not worker-origin identity or application readiness: the child may already have exited or been signaled. Successful start produces an owned pid, not an attested ready worker. The portable experiment uses pipe/fcntl, which has no atomic close-on-exec creation guarantee against another native thread spawning concurrently; production must settle that race.
+Launch uses a close-on-exec error pipe and async-signal-safe child setup. Parent receives a stage+errno for known setup/exec failures, reaps the failed child, closes every acquired fd, and returns SpawnFailed. Missing executable is Err, while a real program exit 127 is Ok (Some (Exited 127)). Exit 143 differs from signal 15; waitid's CLD_DUMPED identifies core-dump status. EOF means no setup error was reported: it cannot prove exec happened, even together with exit status. A pre-exec _exit(127) and exec of a program exiting 127 are observationally identical. Successful start transfers an owned child identity, which can already be terminal. Application readiness and executable attestation need a separate protocol. The portable model's pipe/fcntl sequence is not the production launch algorithm.
 
-At preflight, require the SIGCHLD disposition to be SIG_DFL and require SA_NOCLDWAIT to be absent; do not change process-global state. An external thread/signal handler that starts reaping after preflight can still violate ownership; detect ECHILD and fail closed. The cooperative scheduler does not by itself grant exclusive native thread/signal ownership.
+At preflight, require SIGCHLD=SIG_DFL without SA_NOCLDWAIT; do not change process-global state. A foreign reaper or later disposition change can still steal status; ECHILD fails closed. A stable pidfd prevents that interference from redirecting a wait or signal to a reused numeric pid. The scheduler does not itself grant exclusive native thread/signal ownership.
+
+## Launch amendment: synchronous start and indexed cleanup tickets
+
+Linux x86_64 measurements at `7fce10874a40cc2b9b2f2a4c7d7590d392fd3088`,
+2026-11-04: [process_launch.c](../../scripts/mcp_bench/prototypes/process_launch.c).
+The replay above compiles this independent mechanism probe, runs its assertions
+under a 15-second alarm, and saves exact commands and output. It is not runtime
+implementation; no production compiler semantics are modeled.
+
+**Identity:** use clone3(CLONE_PIDFD), with SIGCHLD, to acquire a CLOEXEC pidfd
+atomically with child creation. Use waitid(P_PIDFD, ..., WEXITED | WNOHANG) and
+pidfd_send_signal(..., SIGKILL). Never use a numeric-pid fallback. Fork followed
+by pidfd_open has a reaping/reuse gap. The probe additionally checks fork-like
+clone(CLONE_PIDFD), but production selects clone3. The raw clone child performs
+only prepared async-signal-safe syscall operations and execve/_exit: no GC,
+allocation, stdio, locks or foreign pthread_atfork callbacks. Parent boxing
+remains permitted. GC/catalog integration must be tested against the real owner.
+
+Missing or denied clone3, pidfd wait/signal or atomic descriptor facilities
+returns Unsupported, unwinding local resources. This is an explicit Linux
+capability boundary; macOS remains #4820. Validate non-creating facilities before
+spawning. Failed clone3 creates no child. Once creation succeeds, unexpected
+errors retain the rooted owner until reap or ECHILD; no error path discards a
+live child's only owner. A foreign reaper can deny status, but cannot redirect
+an identity-specific operation to a replacement process.
+
+**Descriptors:** use pipe2(O_CLOEXEC) and open(/dev/null, O_CLOEXEC). Normalize
+all setup fds above 2 with F_DUPFD_CLOEXEC before creation, including parent
+endpoints and error pipe. This avoids dup2(fd,fd),close(fd) self-closing a reused
+standard descriptor. Set parent endpoints and the error reader O_NONBLOCK
+before creation; the opposite child endpoints remain blocking. Child dup2
+installs all three standard streams, then close_range(3, UINT_MAX,
+CLOSE_RANGE_CLOEXEC) seals every other inherited descriptor, including unrelated
+non-CLOEXEC fds. The error writer remains usable until exec. CLOEXEC does not
+hide descriptors during pre-exec setup or provide containment.
+
+The error writer sends one `(operation, errno)` record smaller than PIPE_BUF.
+The parent maintains an incremental buffer: a complete record enters Failing;
+empty EOF enters Running. Partial EOF, invalid operation or unexpected read
+error enters Failing(LaunchHandshake). Child setup never boxes diagnostics.
+
+| State | Ownership and transition |
+|---|---|
+| Prepared | Root the stable owner, native argument copies and local fds before clone3. Pre-child failure closes/unroots everything; no public handle exists. |
+| Launching | Own pidfd, error reader and streams. EAGAIN/EINTR leaves launch pending; error record enters Failing; empty EOF enters Running. |
+| Failing(error) | Cache the error, close local streams/error reader, attempt a pidfd signal and WNOHANG-wait even if signaling failed. A successful signal/ESRCH is not repeated. Return terminal launch failure after reap; ECHILD reports WaitFailed instead. Operation errors retain a ticket. |
+| Aborting | Cancellation wins before later exec observation. Close local streams/error reader, signal pidfd once and poll its wait. ESRCH requires wait observation, not fabricated successful reap. |
+| Running | Transfer the same owner to Process; exec is unproven and cached terminal status is allowed immediately. An old launch ticket cannot abort the transferred owner. |
+| Reaped / LostWait | Cache terminal status or ECHILD; invalidate/close pidfd. Failed/aborted launches close remaining fds and release native copies/root exactly once. |
+| Disposed | Aliases retain only a tombstone; no fd or pidfd can be acted on again. |
+
+Unexpected wait errors other than EINTR/ECHILD report WaitFailed while retaining
+identity/root; they do not prove a live child disappeared. ECHILD invalidates
+identity, so subsequent disposal only closes local resources. Serialize registry
+and per-owner state against native callers. No state check followed by a yield
+and unchecked resource use is permitted.
+
+The private native seam lives entirely in runtime/medaka_process.c; its header
+exposes only the opaque owner and seven boxed ABI entries below. These signatures
+are internal C, not new raw externs:
+
+```c
+typedef enum {
+  MDK_LAUNCH_PENDING, MDK_LAUNCH_OWNED, MDK_LAUNCH_FAILED,
+  MDK_LAUNCH_ABORTED, MDK_LAUNCH_LOST_WAIT, MDK_LAUNCH_ERROR
+} MdkLaunchStep;
+static MdkProcess *process_begin(const MdkSpawnSpec *, MdkProcessError *);
+static MdkLaunchStep process_check_start(MdkProcess *, MdkProcessError *);
+static MdkLaunchStep process_abort_start(MdkProcess *, MdkProcessError *);
+```
+
+MdkSpawnSpec owns validated native argv/cwd/env and stream choices;
+MdkProcessError owns operation, errno and diagnostic data until parent boxing.
+begin returns NULL only when no child is owned; after creation it returns the
+rooted Launching owner even if cleanup is needed. check returns PENDING while
+launch/failure cleanup is incomplete, OWNED on transfer, FAILED after failed-child
+reap, and LOST_WAIT on ECHILD. abort changes Launching/Failing to Aborting and
+returns PENDING until reap, then ABORTED or LOST_WAIT. Repeated abort on its
+terminal tombstone returns the cached result. Abort of a transferred Running
+owner returns ERROR with Validate/InvalidSpawn and leaves ownership intact.
+Unexpected wait/signal failures also return ERROR while retaining the owner;
+the synchronous caller returns StartCleanupPending with that exact owner as a
+LaunchTicket. The seam has
+no compiler, MCP, JSON, Async or workspace imports.
+
+The abstract indexed LaunchTicket hides the owner until OWNED transfer and
+retains pending cleanup after errors. Process and LaunchTicket share one stable
+native address; copying either creates an alias. Their public/catalog types
+require the corresponding catalog packet. Keep the stable rooted representation: replay measured
+100000 aliases retaining 4000000 owner-payload bytes plus 800000 alias bytes;
+the generation table retained 4800000 native bytes after close. Additional launch
+fields will grow the production owner; 40 bytes is the old model's measurement.
+
+**Blocking:** start/retryStart drive the seam synchronously to OWNED, FAILED,
+ABORTED, LOST_WAIT or an operation error. Pending progress blocks on handshake
+reader or pidfd readiness instead of busy-polling. The wait uses a CLOEXEC
+duplicate acquired under the owner mutex, so concurrent aliases cannot redirect
+it to a reused descriptor. Release the mutex while blocking and recheck phase
+after reacquiring it. Readiness/duplicate failures return the retained ticket.
+These operations may wait indefinitely on stalled pre-exec setup or kernel reap;
+there is no timeout, deadline, cooperative or readiness guarantee. Each private
+check/abort uses bounded-count nonblocking reads/waits; EINTR defers instead of
+looping indefinitely. SIGKILL plus WNOHANG retains ownership while termination
+is pending, without a bounded-reap claim. begin still allocates and performs
+clone/setup syscalls; #4854 must arrange scheduler-safe submission before
+claiming a cooperative begin API.
+
+**Errors:** add operation 11=LaunchHandshake and the matching ProcessOperation
+constructor. Pipe covers pipe/open/fcntl/dup2/sealing with errno and syscall
+diagnostic; Fork covers clone3 resource failures; absent/denied required
+facilities map to 10 Unsupported. Chdir/ExecImage retain 3/4. ECHILD is 5
+WaitFailed and invalidates identity; pre-creation SIGCHLD conflicts are 7
+Unsupported. Abort signal errors report WaitFailed and retain the owner.
+
+An operation error from start/retryStart is `StartCleanupPending error ticket`;
+pre-child failures and terminal failed-child cleanup return `StartRejected error`.
+Neither error is a successful Process. Check/abort report transient operation
+errors through Err while the caller retains its input ticket. Each call performs
+bounded-count nonblocking reads, at most one signal attempt and one wait
+observation; EINTR defers. A failed signal may be retried only by a later explicit
+call. Always observe wait after a failed signal: an actual reap or ECHILD
+completes cleanup; pending status reports the signal error; another wait error
+takes priority. No numeric-PID fallback is permitted.
+
+Successful failed-launch cleanup returns LaunchFailed with the cached setup
+error. Successful abort returns LaunchAborted; synchronous retry of that
+tombstone returns StartRejected LaunchCancelled (raw operation 12). ECHILD
+returns LaunchFailed (WaitFailed ECHILD), closes all local resources, invalidates
+identity and unroots once. Non-ECHILD wait errors keep the pidfd/root even when
+pidfd readiness shows exit: readiness is not reap. A persistent denial can leave
+the ticket pending indefinitely; there is no promised eventual cleanup under
+unavailable wait authority. The obligation is visible to the caller, rather
+than lost behind an ownerless diagnostic or inaccessible background reaper.
+
+Keep the terminal launch outcome separate from the Process exit/disposal state.
+Repeated checks/abort on failed or aborted tickets return cached outcomes
+without syscalls. After transfer, check/retry returns the same Process alias
+while undisposed; abort refuses Validate/InvalidSpawn and never signals it.
+After Process disposal check/retry returns ProcessClosed. A LaunchTicket cannot
+be passed to Process operations; native phase checks also refuse that misuse.
+Terminal failed/aborted tickets retain only GC-managed tombstones. Active tickets
+remain rooted even if user aliases are dropped, without finalizer termination.
+
+The real-owner controls are
+`test/process_runtime_fixtures/owner_smoke.c` and
+`test/process_runtime_fixtures/launch_tickets.c`. The latter covers reversible
+signal/wait/readiness faults, retry/reap, ECHILD, fd reuse, cached outcomes and
+transfer, plus selective seccomp denial on real child identities. Its unfiltered
+test thread can finish cleanup after the filtered caller hands back a ticket;
+production does not assume an independently authorized cleanup thread.
+
+| Experiment | Actual outcome / falsifying control |
+|---|---|
+| Stalled pre-exec | 10000 check calls pending; error pipe unreadable after 25ms. A synchronous read cannot finish before child progress. |
+| Abort | Stalled child receives pidfd SIGKILL and is reaped once; repeated abort sends nothing. A later diagnostic-pid wait returns ECHILD. |
+| Handshake | Missing image is ExecImage/ENOENT; actual exit127 is status. Pre-exec _exit127 has identical EOF/status, refuting exec attestation. |
+| Closed stdio | All seven initially-closed subsets normalize/install fd0/1/2. Naive dup2(fd,fd),close(fd) leaves fd0 EBADF. |
+| Inheritance | Sealing removes unrelated non-CLOEXEC fd100+ across exec; omitting the seal leaks it. |
+| Creation race | pipe2 prevents inheritance across a competing native thread's exec; spawning between pipe and fcntl leaks the descriptor. |
+| Wait ownership | Unrelated exit23 stays waitable. SIG_IGN/SA_NOCLDWAIT refuses; stolen status yields ECHILD and identity invalidation. |
+| Atomic identity | CLONE_PIDFD supplies CLOEXEC identity; identity wait reaps; post-reap signal ESRCH. Stealing exit23 first gives ECHILD/ESRCH. |
+| Abort/reap concurrency | 64 native-thread races yield cached terminal status or ECHILD; neither wait nor signal uses a pid number. |
+
+Linux mechanisms passed on this host. Production ownership, hard wall-clock
+bounds, readiness and macOS support are not established by these probes.
+
+## Delivered process I/O boundary
+
+The native process API now provides bounded `tryRead`, `tryWrite`, and `streamFd` operations, and `process_async` provides deadline- and cancellation-aware reads, writes, direct-child waits, and asynchronous launch submission. Launch cleanup can retain a ticket that the caller must drain. Direct-child exit and pipe EOF do not establish descendant containment; #4855 owns the stronger containment and cleanup boundary. Borrowed stdio leasing, its legacy-I/O interlock, and MCP client backpressure remain future work. The proposal sections below retain their original design context rather than describing the current export list.
 
 ## Extern/ABI proposal
 
 `stdlib/runtime.mdk` contains syscall signatures using core-only types, not ProcessError/SpawnOptions imports that create cycles:
 
 ```medaka-nocheck: future catalog signatures, not currently registered foreign declarations
-extern processStartRaw : (program : String) -> List String -> String -> List (String, String) -> Int -> Int -> Int -> <Exec program> Result (Int, Int, String) (Process program)
+extern processStartRaw : (program : String) -> List String -> String -> List (String, String) -> Int -> Int -> Int -> <Exec program> Result (Int, Int, String, Option (LaunchTicket program)) (Process program)
+extern processRetryStartRaw : LaunchTicket p -> <Exec p> Result (Int, Int, String, Option (LaunchTicket p)) (Process p)
+extern processCheckStartRaw : LaunchTicket p -> <Exec p> Result (Int, Int, String) (Int, Option (Process p), Option (Int, Int, String))
+extern processAbortStartRaw : LaunchTicket p -> <Exec p> Result (Int, Int, String) (Int, Option (Process p), Option (Int, Int, String))
 extern processPollExitRaw : Process p -> <Exec p> Result (Int, Int, String) (Option (Int, Int, Bool))
 extern processCloseStdinRaw : Process p -> <Exec p> Result (Int, Int, String) Unit
 extern processDisposeRaw : Process p -> <Exec p> Result (Int, Int, String) Unit
 ```
 
-Pipe flags: 0=Piped, 1=Null; reject any other value. Raw error tuple is (operation, errno-or-zero, diagnostic). Operation codes: 0=Validate, 1=Pipe, 2=Fork, 3=Chdir, 4=ExecImage, 5=Wait, 6=Close, 7=unsupported wait ownership, 8=closed, 9=still running, 10=unsupported engine. Raw exit tuple kind 0=Exited(code), 1=Signalled(signal, coreDumped); reject unknown status tags loudly in the wrapper. These are proposed production encodings; the scratch C error-pipe stage numbers are experimental and are not this ABI.
+Pipe flags: 0=Piped, 1=Null; reject any other value. Raw error tuple is (operation, errno-or-zero, diagnostic), with a fourth `Option LaunchTicket` field for start/retry only. None means rejected/released; Some retains the same native owner. Operation codes: 0=Validate, 1=Pipe, 2=Fork, 3=Chdir, 4=ExecImage, 5=Wait, 6=Close, 7=unsupported wait ownership, 8=closed, 9=still running, 10=unsupported engine or required native facility, 11=LaunchHandshake, 12=LaunchCancelled. Raw exit tuple kind 0=Exited(code), 1=Signalled(signal, coreDumped); reject unknown status tags loudly in the wrapper.
+
+Raw check/abort success tuples are exactly `(0,None,None)` for LaunchPending,
+`(1,Some process,None)` for LaunchStarted, `(2,None,Some error)` for LaunchFailed,
+and `(3,None,None)` for LaunchAborted. Other combinations must fail loudly in
+the public wrapper. Err reports a transient operation error or invalid use of
+a transferred/disposed ticket; the input ticket remains with its caller.
 
 Native C symbols, each returning one Medaka word (Result containing the opaque word or boxed primitive tuples), with no foreign-call marshaling or public C FFI pointer exposure:
 
 ```c
 int64_t mdk_process_start(int64_t program, int64_t argv, int64_t cwd,
                           int64_t env, int64_t in_mode, int64_t out_mode, int64_t err_mode);
+int64_t mdk_process_retry_start(int64_t ticket);
+int64_t mdk_process_check_start(int64_t ticket);
+int64_t mdk_process_abort_start(int64_t ticket);
 int64_t mdk_process_poll_exit(int64_t process);
 int64_t mdk_process_close_stdin(int64_t process);
 int64_t mdk_process_dispose(int64_t process);
@@ -93,7 +286,7 @@ int64_t mdk_process_dispose(int64_t process);
 
 Use the shared runtime ABI's tagged scalar/Result/Option/tuple helpers; no duplicated ADT tag constants in medaka_process.c. Copy launch strings/argv/env into native-owned storage before retaining them; do not keep borrowed Medaka String interior pointers past the call. Error boxing occurs in the parent only. Raw extern options must validate independently of typed wrappers, because raw catalog functions are prelude-visible. No fd-accepting endpoint primitive is proposed. Readiness accessors and typed stream operations belong in the next I/O packet, with alias-close/reuse checks after every wake.
 
-Native catalogs and lowering must enroll these four names together: extern_catalog, llvm_preamble, llvm lowering/disposition, tc runtime ABI generated rows and native runtime build/link/source-fingerprint/cache inputs. Existing unknown/unsupported eval, run and wasm engines must refuse capabilities explicitly. No stubs that return success. No claim that today's `medaka run` supports the operations.
+Native catalogs and lowering must enroll these seven names together: extern_catalog, llvm_preamble, llvm lowering/disposition, tc runtime ABI generated rows and native runtime build/link/source-fingerprint/cache inputs. Existing unknown/unsupported eval, run and wasm engines must refuse capabilities explicitly. No stubs that return success. No claim that today's `medaka run` supports the operations.
 
 ## Measured controls
 
@@ -115,11 +308,11 @@ The C model asserts its outcomes and refuses to compile with NDEBUG. Its allocat
 
 ## Remaining prerequisites and failure controls
 
-1. Re-inspect #4811/V0 at implementation base. At the measured base runtime/ contains only README.md and medaka_rt.c; there is no landed shared medaka_abi header or VM extern table. [INTERPRETER-DESIGN §4](INTERPRETER-DESIGN.md#4-the-abi-is-a-contract-v0) mandates that shared ABI next. Confirm an extern owner word's rooting/layout with the real VM and generic dispatch; the opaque-signature probe only proves type erasure and compiling unused handle operations. Consume the shared header/helpers when landed, or explicitly coordinate their extraction before runtime split. Do not invent a second ABI/header constant set.
+1. Shared runtime/medaka_abi.h is present at the launch amendment's base; runtime_layout.mdk generates its tags/layout. Consume it and expose the existing medaka_rt.c allocation/Result/Option/String helpers through a declaration header when splitting the runtime; do not invent another constant set. Confirm an inhabited owner word's rooting/layout with the real VM and generic dispatch. The opaque-signature probe proves only type erasure and compiling unused operations.
 2. Add catalog, typed wrapper, real producer and native lifecycle tests together under add-primitive. The spike cannot pass an inhabited opaque Process through a real catalog call; foreign-forge is deliberately refused. Require native end-to-end production tests of aliasing under allocation, closures/containers, cached status and shutdown. Keep the legacy runCommand/runCommandBatch semantics and tests unchanged: they still return synthetic 127 / 128+signal. No tree-wide existing test must move for this additive surface. If a later packet changes legacy behavior or grants, it needs its own whole-tree census; this spike does not license it.
-3. The readiness/containment spike below measures pipe nonblocking behavior, descriptor reuse, cancellation and escaped-descendant failures. Native close-on-exec of unrelated descriptors, standard-fd collisions 0/1/2, bounded I/O integration, launch handshake deadlines and protected host containment remain prerequisites. The earlier C lifecycle model proves none of those; it has only stdin/stdout pipes and writes tiny outputs.
+3. The readiness/containment spike below measures pipe nonblocking behavior, descriptor reuse, cancellation and escaped-descendant failures. The launch amendment now measures descriptor sealing, standard-fd collisions and identity-directed pre-exec cancellation independently. Production integration, bounded I/O submission, launch deadlines and protected containment remain prerequisites. The earlier C lifecycle model alone proves none of those; it has only stdin/stdout pipes and tiny outputs.
 4. Additional discriminating production controls: fault-inject pipe/dup2/fork/exec/write/close failures and assert exact stage+errno plus zero leaked fds/pids; signal child before exec; force EINTR and ECHILD; retain stale alias while closing/reusing fd; stub kill syscall to verify no attempt after terminal/lost-wait/disposed state and a reused pid never targeted; force GC during a scoped child lifetime and verify explicit termination/reap/disposal plus no finalizer dependence. The model already measures missing image vs exit 127, exit 143 vs SIGTERM, fd reuse, ECHILD from an external reaper and unrelated-child wait survival.
-5. Linux only for these receipts. Atomic pipe creation, WCOREDUMP portability and real macOS lifecycle receipts remain #4820. #4413 owns eval/cwd/env policy, #4626 the high-level runner; neither closes from these primitives. D7 in INTERPRETER-DESIGN explicitly keeps Exec posture with #4414. No production supervisor implemented in Python; Python here only runs and records native probes.
+5. Linux only for these receipts. Atomic identity/descriptor facilities and real macOS lifecycle receipts remain #4820; unsupported platforms must refuse explicitly. #4413 owns eval/cwd/env policy, #4626 the high-level runner; neither closes from these primitives. D7 in INTERPRETER-DESIGN explicitly keeps Exec posture with #4414. No production supervisor implemented in Python; Python here only runs and records native probes.
 
 ## Readiness and containment spike
 
@@ -174,7 +367,7 @@ fault injection and native signal races remain unproven.
 ### Pipe adapters and scheduler integration
 
 Keep `async.mdk` and runtime `ioPoll` as the sole scheduler/poller. Add bounded
-try-read/write operations to the future `medaka_process.c`/`medaka_process.h` owner in runtime/,
+try-read/write operations to the `medaka_process.c`/`medaka_process.h` owner in runtime/,
 with core-only signatures in `stdlib/runtime.mdk`:
 
 ```medaka-nocheck: proposed catalog additions, not registered extern declarations
@@ -225,13 +418,14 @@ they cannot mutate an ordinary Medaka Ref from signal context.
 
 ### Proposed module boundaries
 
-The following are proposed public exports, not implemented/typechecked APIs.
-Deadline and CancelToken constructors are private. A Deadline wraps a real
+The following are historical interface sketches, not implementation contracts.
+`process_async.mdk` has since landed; its actual exports are in that module.
+The scope and stdio sketches remain unqualified. Deadline and CancelToken constructors are private. A Deadline wraps a real
 `Wait e` produced by `after`, not an arbitrary caller-supplied wait whose
 `expired` result could never become true.
 
 ```text
-process_async.mdk (planned stdlib module)
+process_async.mdk (historical sketch; see landed module)
   types: OutputStream = ChildStdout | ChildStderr
          Deadline (e : Effect), CancelToken
          ReadResult = Read Bytes | EndOfStream | ReadTimedOut | ReadCancelled
@@ -285,13 +479,12 @@ operations require Stdin/Stdout, never an unrelated Exec grant.
 
 ### Launch and stdio prerequisites
 
-`startOwned` needs a nonblocking launch handshake. A synchronous error-pipe read
-inside `process.start` can indefinitely block a cooperative step. Before
-implementing this adapter, amend the owner with a Launching state and explicit
-begin/check/abort operations, or settle broker launch tickets. The concrete
-ticket representation and broker/direct-child wait ownership remain
-SPIKE-FIRST. Timeout/cancel must reap failed launch stubs and close all acquired
-resources. This spike does not silently change the earlier synchronous API.
+`startOwned` needs a nonblocking launch handshake. The launch amendment above
+settles the direct-child private state machine; process.start stays synchronous.
+The adapter must use the indexed LaunchTicket and arrange scheduler-safe submission because
+even begin's clone/setup syscalls can block. Timeout/cancel must retain cleanup
+ownership until reap/ECHILD and local resource release; a deadline does not make
+kernel reap bounded. Broker launch ownership remains a separate prerequisite.
 
 The first stdio boundary is an exclusive lease over already-nonblocking native
 pipes intentionally supplied by a launcher, before buffered stdio begins.
@@ -312,6 +505,17 @@ Prevent read-ahead loss, mixed output and descriptor replacement; silent legacy
 success/data loss after EAGAIN is unacceptable. Until that interlock or an
 enforceable MCP-entry restriction is designed, stdio integration is blocked.
 
+The [stdio authority replay](../findings/mcp-runtime-authority/STDIO.md) refuses
+the narrow all-content-openers runtime seal: it blocks required source/config
+reads, telemetry and scratch content before effects, although metadata and real
+native worker submission remain possible. Non-dumpability blocks the measured
+fresh-stdio child's parent-fd reopen, while supervisor self aliases and libc
+HOSTALIASES still transfer protocol bytes when their model guard is disabled.
+The replay also reproduces #4865's exposed stash/flush primitives and automatic
+main output outside the effect manifest. No candidate is qualified. A narrower
+file/resolver/buffering policy or an explicit protocol-owner/workspace split
+needs a new measured cut; neither cgroups nor an empty-main control supplies it.
+
 ### Candidate Linux containment and blocked proof
 
 The candidate is a Linux cgroup-v2 per-worker scope managed by a trusted
@@ -319,10 +523,17 @@ external broker/service. It is **not an established deployment**. Exec p gives
 no cgroup/namespace privilege. Ordinary users need a host-provided protected
 broker; an arbitrary login user's ability to create it is not assumed.
 
-The measured host exposes cgroup2 read-only; creating a child of its own scope
-fails EROFS=30. Attempting an ordinary-user receipt by dropping uid fails
-EPERM=1 in this sandbox, so ordinary-user availability remains blocked. A
-writable cgroup alone would not suffice: worker access to a destination
+The [ownership authority replay](../../scripts/mcp_bench/prototypes/ownership_probe.py)
+and [2026-11-05 receipt](../findings/mcp-runtime-authority/OWNERSHIP.md) measure
+the current blockers independently. The cgroup2 mount is read-only; a unique
+disposable child mkdir fails EROFS=30. The probe has uid/euid 0 with zero
+effective capabilities, and its child setresuid attempt fails EINVAL=22.
+SO_PASSCRED setup fails EPERM=1. No protected delegated manager is configured;
+ordinary-client deployment and credential authentication remain unqualified.
+The local token/state and external nonexecution controls run without claiming
+containment. Both full and `--refusal-only` replay exit 77; every positive
+deployment row remains UNQUALIFIED. A writable cgroup alone would not suffice:
+worker access to a destination
 cgroup.procs, inherited management fd, broker memory/ptrace or namespace/mount
 authority can permit escape. Require inaccessible broker management authority,
 including protection from `/proc` fd theft and ambient capabilities; a separate
@@ -366,11 +577,11 @@ Ordinary direct-child operations may be separate but carry no owned-tree claim.
 
 ### Implementation order
 
-1. Consume the real shared VM/runtime ABI and settle Launching/begin/check/abort
-   representation and wait ownership; amend the process contract explicitly.
-2. Implement the lifecycle owner plus nonblocking parent pipes and bounded I/O
-   together; enroll catalog, raw signatures, preamble/lowering, refusal engines,
-   runtime linking and source-fingerprint inputs as one coherent addition.
+1. Consume the landed shared ABI and implement the launch amendment's private
+   state machine and atomic kernel identity with explicit capability refusal.
+2. Deliver the lifecycle owner plus nonblocking parent pipes; enroll catalog,
+   raw signatures, preamble/lowering, refusal engines, runtime linking and
+   source-fingerprint inputs coherently. Public bounded I/O remains #4854.
 3. Add process_async over the existing scheduler; prove native alias-close/fd
    reuse after wake, sustained-ready deadlines/cancel, partial progress,
    EINTR/EPIPE, bounds and GC between wake and retry.
@@ -382,3 +593,85 @@ Ordinary direct-child operations may be separate but carry no owned-tree claim.
 No new runtime primitive, opaque carrier or production supervisor is implemented
 by these experiments. None of the old lifecycle, VM ABI, eval or macOS
 obligations closes from these Linux readiness controls.
+
+### Lifecycle handoff to #4854
+
+The native direct-child owner and indexed launch ticket now provide lifecycle
+operations. `start` and `retryStart` are synchronous; a cleanup-pending error
+retains the ticket until retry, check, or abort completes cleanup. #4854 owns
+bounded pipe reads and writes, readiness integration, cancellation and deadlines,
+and scheduler-safe launch submission. A pipe endpoint or an exec handshake is
+not application readiness or descendant containment.
+
+### Authority investigation handoffs
+
+The [authority report](../findings/mcp-runtime-authority/REPORT.md) leaves both
+boundaries SPIKE-FIRST. The earlier proposed signatures above are design sketches,
+not accepted contracts or permission to add externs. In particular, `process_async`
+now exists; its landed `Deadline` and `CancelToken` remain the shared scheduler
+interfaces. The earlier `Process p` scope sketch does not establish ownership of
+a broker's child.
+
+#### Owned scope and cleanup (#4855)
+
+Placement remains a prospective process_scope module in stdlib over the
+existing `process`, `async`, `time` and shared deadline/cancellation exports.
+It must not import compiler tools or create a second scheduler. The earlier
+`startOwned : (program : String) -> SpawnOptions -> Deadline <Clock, Exec program | e> -> CancelToken -> Async <Clock, Exec program | e> (Result ProcessError (Process program))`
+and `terminateOwned : Process p -> Grace -> Async <Clock, Exec p | e> CleanupResult`
+are explicitly unaccepted sketches: the manager-parent finding requires the next
+cut to settle a distinct wire-owned scope identity and its indexed effects and
+error results. No transfer into an existing direct-child `Process` is implied.
+The manager owns admission, pre-exec attachment and retained cleanup authority;
+the actual direct parent owns status and reap. No placeholder native module,
+extern or broker wire signature is authorized before deployment proof.
+
+Acceptance for the next cut:
+
+1. An ordinary client uses an explicitly delegated disposable cgroup and a
+   protected manager inaccessible to the target; admission precedes execution.
+2. Fork, setsid, double-fork and repeated-fork remain contained; migration and
+   management-fd theft fail, while an unrelated child survives and exits 23.
+3. Admission races, channel loss, foreign/stale/replayed tokens and capacity
+   exhaustion are tested with independent effects; rejected launch leaves an
+   external nonexecution marker absent.
+4. Caller and broker death trigger cleanup through a surviving manager. Recovery
+   of manager ownership remains a separate measured prerequisite.
+5. Success requires both populated=0 and actual direct-parent status/reap.
+   Timeout or error retains authority and never claims empty. The supported
+   host and macOS refusal are explicit.
+
+Prerequisite: an operator supplies a delegated disposable cgroup-v2 parent and
+protected long-lived manager; the positive deployment matrix has not run.
+
+#### Stdio and backpressure (#4854)
+
+Placement remains a prospective stdio_async module in stdlib, importing `async`,
+`bytes`, `time`, and the shared deadline/token exports from `process_async`,
+without compiler-tools imports or a second scheduler. The earlier sketches
+`open : Unit -> <Stdin, Stdout> Result StdioError Stdio`,
+`readUntil : Stdio -> Int -> Deadline <Clock, Stdin | e> -> CancelToken -> Async <Clock, Stdin | e> (Result StdioError ReadResult)`,
+`writeUntil : Stdio -> Bytes -> Deadline <Clock, Stdout | e> -> CancelToken -> Async <Clock, Stdout | e> (Result (StdioError, Int) WriteResult)`,
+and `release : Stdio -> <Stdin, Stdout> Result StdioError Unit` remain
+unaccepted until a real authority policy is measured. They do not authorize new
+native exports. A selected boundary must define its lease owner, descriptor
+identity and error/ownership transfer without changing the direct-child owner.
+
+Acceptance for the next cut:
+
+1. Preserve actual supervisor source/config reads, toolchain selection, telemetry,
+   scratch contents and worker submission through the enforced policy.
+2. Independently observe exact fragmented and non-UTF-8 bytes, aliases, fd
+   replacement and fresh-stdio child access to parent descriptors.
+3. Bound resolver/NSS input including HOSTALIASES and all legacy, buffered,
+   automatic and abort output; demonstrate each guard with a disabling control.
+4. Enforce the chosen entry restriction on the actual launch path, including
+   the still-open #4865 internal-output defect. Cgroup membership and advisory
+   policy checks do not establish exclusive stdio.
+5. Define lease release/reacquisition, scheduler-safe backpressure, deadlines,
+   cancellation and committed write prefixes; retain ownership on errors and
+   reject unsupported endpoints before effects.
+
+Prerequisite: measure a descriptor-first file policy plus resolver/output
+interlocks while retaining supervisor work, or recut and prove an explicit
+protocol-owner/workspace split. Neither alternative is yet qualified.

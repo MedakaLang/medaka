@@ -7,7 +7,8 @@ description: Cut a sprint — choose a coherent, reasonably sized set of slices 
 
 In Codex, first read [.codex/SPRINT.md](../../../.codex/SPRINT.md) for model
 and harness mappings. In Pi, read `.pi/SPRINT.md` from the repository root
-instead. The planning workflow below is shared by all three clients.
+instead. The planning workflow below is shared by all three clients. The
+incidents behind this skill's rules are in `.claude/dossier/sprint.md`.
 
 A sprint (v8) is a simple machine: **a series of implementers that run one after
 another, each doing minimal verification, followed by one thorough review round
@@ -28,12 +29,8 @@ This skill produces ONE artifact: `/var/tmp/medaka-sprints/<stage>/CONTRACT.md`
   release).
 - **Check each candidate's state before it enters the pool** — re-derive
   "still open / still owed" against the tree at the pinned base, with the
-  command recorded. When a backlog was last re-derived, SIX entries were
-  already fixed, including two billed as top-value. A `needs-repro` item
-  enters as a cheap repro slice or not at all.
-- **Grep the other arcs/docs for your issue numbers** (`grep -rn '#<NNN>'
-  docs/ .claude/`) — a one-directional citation once scoped a slice that was
-  verbatim another arc's claimed work.
+  command recorded. A `needs-repro` item enters as a cheap repro slice or not
+  at all.
 - **Debt on the files the slices will edit is in the pool** (Val 2026-10-22:
   existing debt is cleaned as we go). For each such file, read the open debt
   items that name it: `gh issue list --label "S3: friction & debt" --state open
@@ -64,8 +61,6 @@ and a tail of mechanical work (rewiring callers, pins and goldens, doc rows,
 comment rewrites, a probe corpus), cut the tail as its own subslice on a
 cheaper model, sequenced after the decision lands (or before it, when the
 tail is preparatory and independent). Name the pair `S-foo` / `S-foo-mech`.
-Evidence: Phase 1's largest opus reports (22–26 KB) were mostly the mechanical
-tail written up at opus prices; the decision each contained fit in a page.
 
 ## Step 3 — the contract, at boundary depth
 
@@ -79,20 +74,19 @@ deeper than this measured ~75% rework.
    an approximation. If the sites can't be named confidently, flag
    `SPIKE-FIRST`: the slice's first dispatch explores and reports instead of
    implementing.
-   **A relayed premise is not a fact.** Any Surface or §4 claim that came from
-   a review, a spike report, a prior contract or a NOTES row carries the
-   `path:line` the planner opened at THIS sprint's base (`Checked-at:`); a row
-   without one is `SPIKE-FIRST`, and splitting or re-modelling a slice resets
-   the check. Phase 1 lost three opus rounds to relayed claims (a hover
-   context that lived in a frozen file, "gate drive = pair drive", "no program
-   depends on it"); every one was refutable with one `grep` at cut time.
+   **A relayed premise is not a fact, and every claim carries its proof.** Any
+   Surface or §4 claim that came from a review, a spike report, a prior
+   contract or a NOTES row carries the `path:line` the planner opened at THIS
+   sprint's base (`Checked-at:`); a row without one is `SPIKE-FIRST`, and
+   splitting or re-modelling a slice resets the check. The same goes for every
+   invariant and every Out row ("at most one X per drive", "Y is out because
+   Z reads it"): it cites the design section or the grep it came from, or it
+   is deleted.
    **A deletion names its victim.** A slice that deletes a check, a drive or a
    re-check names, in §4, one program that only the deleted check rejects,
    with base and head exit codes, or states that none could be built, which is
    itself a finding. "No fixture changed" and "IR identical" are not evidence
-   that nothing judged: every drive Phase 1 removed had been the only judge of
-   something (sprint 1 F1, sprint 7 F1, sprint 8 F1, an S0 miscompile that
-   passed 2,761 differential cases and an unnarrowed CI).
+   that nothing judged.
    ⚠️ **A slice that adds a file, a subcommand, a subsystem, or a helper must
    STATE ITS PLACEMENT AND SHAPE here** — which directory owns the new code,
    and if it extends an existing file rather than adding one, why. **Shape is
@@ -126,20 +120,9 @@ deeper than this measured ~75% rework.
    `oversize.golden` and a header reason (law A8). Record
    `make arch-census` at cut; wrap-up diffs against it
    (`compiler/ARCHITECTURE-PLAYBOOK.md` §10).
-   **Every invariant and every Out row carries its proof.** A line such as "at
-   most one X per drive" or "Y is out because `tc_module` reads it" cites the
-   design section it comes from or the grep that was run, or it is deleted.
-   R35's F3 contract said "at most one sibling pair per drive" against the
-   design and cost a full opus redesign; vis-test-split scoped a probe section
-   out on a relayed "`tc_module` reads them" (the reader was
-   `tc_module_test`), which is why #4767 exists.
-   **A visibility or move migration's census is a name list**, not a per-row
-   class narrative: it misses field reads, aliases and names a sibling borrows
-   through its subject's imports. Slices classify by un-exporting, running the
-   strict directory test, and reverting what breaks. When the first slice
-   defers a row class for a structural obstacle, the orchestrator strikes that
-   class from the remaining packets and sends it to Val, rather than letting
-   each slice re-probe it (R35 migration: 1 of 48 M3 rows over four slices).
+   **If the sprint belongs to a family in `.claude/dossier/sprint-families.md`**
+   (a visibility or move migration, a §7 criterion that demands dead-code
+   deletion), read that section before writing the contract.
 4. **Acceptance shape** — how we'll know it worked ("a `test` case in
    `<module>_test.mdk`", "a `kind = "native"` gate-test row", "IR
    byte-identical"), not exact commands. Pick the vehicle with the
@@ -150,14 +133,7 @@ deeper than this measured ~75% rework.
    lists the classes with counts", and the census that finds the moved rows
    runs once, over the WHOLE tree (every `test/**` program plus the inline test
    programs), in the survey slice. An approved list of rows is a measured set
-   smaller than the affected set: 6e's lexical-location slice was refused
-   twice (102 rows, then 1) for list completeness alone, and the 188 rows were
-   approved by class in the end anyway.
-   **A survey or decision slice that proposes a variant measures the
-   variant's retention** (`ret.sh`-style heap rows) before the landing slice
-   is cut, beside its instruction counts. 6e's landed variant then breached
-   the +5% heap bound (+20.9%), which cost a whole carrier slice and a
-   three-arm measurement the survey's own one-round number had foreshadowed.
+   smaller than the affected set.
 5. **Model** — name the selected harness role, model/reasoning and a one-line
    tier justification. **Claude:** three tiers. `haiku` for a mechanical slice
    whose transform, sites and expected values are all written down (a rename
@@ -188,19 +164,6 @@ Contract sections: **§1 the question · §2 in/out (each Out with its reason) �
 (seeds every packet; implementers trust these and re-derive nothing in them) ·
 §5 issue-closure policy (every close checks the PIN, not the narrative) ·
 §6 expected-red gates for the duration, if any · §7 exit criteria.**
-
-⚠️ **A §7 criterion demanding dead-code deletion ("delete X, with a fixture
-that can fail") can be unfalsifiable as written** — if the dead path is
-already unreachable everywhere the tree can drive it, no fixture can go red
-before the fix, and no fixture can prove the deletion safe. `predicate-slots`
-paid for this: 3 full rebuilds + 298 assertions to demonstrate the literal
-form was unmeetable, then a mid-sprint stop for Val to accept the only
-evidence that existed. **Pre-license a second discharge form in the
-criterion itself**: an N-way build differential (the code path forced live /
-forced dead / as-is, compared) showing the path is unreachable by
-construction is an equally valid close, stated as such up front — not
-improvised and escalated mid-sprint when the literal form turns out
-unmeetable.
 
 If the sprint dogfoods the language in a new domain (crypto, protocols,
 concurrency, irreversible external effects), name the property classes the

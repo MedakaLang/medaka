@@ -110,6 +110,7 @@ validateConstructorFacts cp facts =
     ++ flatMap (validateRuntimeRoster expected) expected.typeOrder
     ++ flatMap validateRuntimeOwner tys
     ++ flatMap (validateRuntimeArity expected) ars
+    ++ flatMap (validateOwnerPresent expected) ars
     ++ validateOwnerPositions expected expected.typeOrder omEmpty
 
 runtimeOwner : String -> Option RuntimeOwner
@@ -185,3 +186,14 @@ validateRosterPositions facts (name :: rest) position seen =
   let (next, defects) =
     validateRosterPositions facts rest (position + 1) (omInsert name () seen)
   (next, bad ++ defects)
+
+validateOwnerPresent : ConstructorFacts -> (String, Int) -> List String
+validateOwnerPresent facts (name, _) =
+  if omHasKey name facts.owners
+    || isSome (namedRuntimeCtor name)
+    || name == "$tuple"
+    || name == "$ref"
+    || name == "$closure" then
+    []
+  else
+    ["constructor-fact: missing owner for " ++ name]
