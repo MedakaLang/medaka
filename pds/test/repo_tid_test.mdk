@@ -212,8 +212,8 @@ revisionAccount =
 priorSeconds : Int
 priorSeconds = 1700000100
 
-priorStore : Store
-priorStore =
+priorStore : Unit -> <Sign "commit"> Store
+priorStore () =
   storeFromRepo
     (resultOrPanic
       "repo_tid_test: repository setup failed"
@@ -278,11 +278,11 @@ keyPresent store micros = match storeRepo store
     expectEqual (Ok True) (map isSome (repoLookup (encodeUtf8 key) repo))
 
 test "a clock behind the latest commit still advances the revision" =
-  let stepped = createAt (priorSeconds - 3600) priorStore
+  let stepped = createAt (priorSeconds - 3600) (priorStore ())
   expectEqual (Some (priorSeconds * 1000000 + 1)) (latestRevision stepped)
 
 test "a clock that steps back after a clock-based write keeps the revision rising" =
-  let ahead = createAt (priorSeconds + 60) priorStore
+  let ahead = createAt (priorSeconds + 60) (priorStore ())
   let back = createAt priorSeconds ahead
   expectEach [
     (
@@ -300,7 +300,7 @@ test "a clock that steps back after a clock-based write keeps the revision risin
 test "three rkey-less creates in one batch get three distinct keys" =
   let clock = priorSeconds + 1
   let batched =
-    writeAt clock "com.atproto.repo.applyWrites" threeCreates priorStore
+    writeAt clock "com.atproto.repo.applyWrites" threeCreates (priorStore ())
   expectEach [
     ("the first key is the clock", keyPresent batched (clock * 1000000)),
     ("the second key follows it", keyPresent batched (clock * 1000000 + 1)),
@@ -313,7 +313,7 @@ test "three rkey-less creates in one batch get three distinct keys" =
 
 test "a clock one second past the latest commit sets the revision" =
   let clock = priorSeconds + 1
-  let first = createAt clock priorStore
+  let first = createAt clock (priorStore ())
   let second = createAt clock first
   expectEach [
     (
@@ -331,8 +331,8 @@ test "a clock one second past the latest commit sets the revision" =
 ceilingTid : Int -> Tid
 ceilingTid step = mustTid (1700000000000000 + step) 0
 
-ceilingRepo : Repo
-ceilingRepo =
+ceilingRepo : Unit -> <Sign "commit"> Repo
+ceilingRepo () =
   resultOrPanic
     "repo_tid_test: ceiling repository setup failed"
     (repoInitFromKeyBytes
@@ -398,11 +398,11 @@ nodeRefusal ceiling =
 
 -- One record under rkey "a"; creating "b" beside it takes the MST from one
 -- node to three, so the same commit crosses all three ceilings at once.
-ceilingBefore : Repo
-ceilingBefore = createText 1 "a" "first" ceilingRepo
+ceilingBefore : Unit -> <Sign "commit"> Repo
+ceilingBefore () = createText 1 "a" "first" (ceilingRepo ())
 
-ceilingAfter : Repo
-ceilingAfter = createText 2 "b" "second" ceilingBefore
+ceilingAfter : Unit -> <Sign "commit"> Repo
+ceilingAfter () = createText 2 "b" "second" (ceilingBefore ())
 
 -- `after` is refused one step under its own export and admitted at it, on
 -- each ceiling, diffed against `before`.
@@ -446,40 +446,40 @@ admittedExactly before after =
   ]
 
 test "a commit past the export byte ceiling is refused, and the graph before it is within it" =
-  let (RepoCeilings bytes blocks nodes) = exactCeilings ceilingAfter
+  let (RepoCeilings bytes blocks nodes) = exactCeilings (ceilingAfter ())
   let ceilings = RepoCeilings (bytes - 1) blocks nodes
   expectEach [
     (
       "the commit is refused with the export's own message",
       expectEqual
         (byteRefusal (bytes - 1))
-        (persistVerdict ceilings (Some ceilingBefore) ceilingAfter),
+        (persistVerdict ceilings (Some (ceilingBefore ())) (ceilingAfter ())),
     ),
     (
       "the repository before it persists under the same ceilings",
-      expectEqual (Ok ()) (persistVerdict ceilings None ceilingBefore),
+      expectEqual (Ok ()) (persistVerdict ceilings None (ceilingBefore ())),
     ),
   ]
 
 test "a commit past the export block ceiling is refused, and the graph before it is within it" =
-  let (RepoCeilings bytes blocks nodes) = exactCeilings ceilingAfter
+  let (RepoCeilings bytes blocks nodes) = exactCeilings (ceilingAfter ())
   let ceilings = RepoCeilings bytes (blocks - 1) nodes
   expectEach [
     (
       "the commit is refused with the export's own message",
       expectEqual
         (blockRefusal (blocks - 1))
-        (persistVerdict ceilings (Some ceilingBefore) ceilingAfter),
+        (persistVerdict ceilings (Some (ceilingBefore ())) (ceilingAfter ())),
     ),
     (
       "the repository before it persists under the same ceilings",
-      expectEqual (Ok ()) (persistVerdict ceilings None ceilingBefore),
+      expectEqual (Ok ()) (persistVerdict ceilings None (ceilingBefore ())),
     ),
   ]
 
 test "a commit past the MST node ceiling is refused, and the graph before it is within it" =
-  let (RepoCeilings bytes blocks nodes) = exactCeilings ceilingAfter
-  let (RepoCeilings _ _ nodesBefore) = exactCeilings ceilingBefore
+  let (RepoCeilings bytes blocks nodes) = exactCeilings (ceilingAfter ())
+  let (RepoCeilings _ _ nodesBefore) = exactCeilings (ceilingBefore ())
   let ceilings = RepoCeilings bytes blocks (nodes - 1)
   expectEach [
     ("the commit adds MST nodes", expectGreaterThan nodesBefore nodes),
@@ -487,22 +487,22 @@ test "a commit past the MST node ceiling is refused, and the graph before it is 
       "the commit is refused with the load walk's own message",
       expectEqual
         (nodeRefusal (nodes - 1))
-        (persistVerdict ceilings (Some ceilingBefore) ceilingAfter),
+        (persistVerdict ceilings (Some (ceilingBefore ())) (ceilingAfter ())),
     ),
     (
       "the repository before it persists under the same ceilings",
-      expectEqual (Ok ()) (persistVerdict ceilings None ceilingBefore),
+      expectEqual (Ok ()) (persistVerdict ceilings None (ceilingBefore ())),
     ),
   ]
 
 test "a commit exactly at every ceiling is admitted, after creates, updates, deletes and shared records" =
-  let updated = updateText 3 "a" "first, edited" ceilingAfter
+  let updated = updateText 3 "a" "first, edited" (ceilingAfter ())
   let shared = createText 4 "c" "second" updated
   let unshared = deletePath 5 "b" shared
   let emptied = deletePath 6 "a" unshared
   expectEach [
-    ("a create", admittedExactly ceilingBefore ceilingAfter),
-    ("an update", admittedExactly ceilingAfter updated),
+    ("a create", admittedExactly (ceilingBefore ()) (ceilingAfter ())),
+    ("an update", admittedExactly (ceilingAfter ()) updated),
     ("a second path naming an existing record", admittedExactly updated shared),
     (
       "deleting one of two paths naming a record",
@@ -512,8 +512,8 @@ test "a commit exactly at every ceiling is admitted, after creates, updates, del
   ]
 
 test "a refused commit leaves the totals the next commit is judged against alone" =
-  let small = createText 2 "b" "small" ceilingBefore
-  let large = createText 2 "b" (repeat 400 "x") ceilingBefore
+  let small = createText 2 "b" "small" (ceilingBefore ())
+  let large = createText 2 "b" (repeat 400 "x") (ceilingBefore ())
   let ceilings = exactCeilings small
   let (RepoCeilings bytes _ _) = ceilings
   expectEach [
@@ -521,10 +521,10 @@ test "a refused commit leaves the totals the next commit is judged against alone
       "the larger commit is refused under the smaller one's ceilings",
       expectEqual
         (byteRefusal bytes)
-        (persistVerdict ceilings (Some ceilingBefore) large),
+        (persistVerdict ceilings (Some (ceilingBefore ())) large),
     ),
     (
       "the smaller commit from the same repository is then admitted exactly",
-      admittedExactly ceilingBefore small,
+      admittedExactly (ceilingBefore ()) small,
     ),
   ]

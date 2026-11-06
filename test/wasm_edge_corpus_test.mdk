@@ -462,11 +462,19 @@ sweepIn programs scratch =
   }
 
 -- Computed once per process; the scratch directory is gone before it returns.
+worldCell : Ref (Option (Result String Sweep))
+worldCell = Ref None
+
 world : Unit -> <Exec, FileRead, IO> Result String Sweep
-world () = match corpus ()
-  Err e => Err e
-  Ok programs =>
-    inFreshDirOf (scratch => Ok (sweepIn programs scratch)) (m => Err m)
+world () = match !worldCell
+  Some v => v
+  None =>
+    let v = match corpus ()
+      Err e => Err e
+      Ok programs =>
+        inFreshDirOf (scratch => Ok (sweepIn programs scratch)) (m => Err m)
+    worldCell := Some v
+    v
 
 -- # The assertions
 

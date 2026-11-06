@@ -159,10 +159,18 @@ verbsFor : String -> <Exec, IO, FileRead, FileWrite> List String
 verbsFor dir = verbsOf dir
 
 -- The verbs the compiler sources hand to `requireArgs`, read once.
+sourceVerbsNowCell : Ref (Option (List String))
+sourceVerbsNowCell = Ref None
+
 sourceVerbsNow : Unit -> <Exec, IO, FileRead, FileWrite> List String
-sourceVerbsNow () = match compilerFiles "\{medakaRoot ()}/compiler"
-  Err _ => []
-  Ok files => sourceVerbs files
+sourceVerbsNow () = match !sourceVerbsNowCell
+  Some v => v
+  None =>
+    let v = match compilerFiles "\{medakaRoot ()}/compiler"
+      Err _ => []
+      Ok files => sourceVerbs files
+    sourceVerbsNowCell := Some v
+    v
 
 -- The `bare` and `withfile` probe of every verb any section looks at: the
 -- usage block's, the exempt list, and the source-covered set. Each owner

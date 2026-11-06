@@ -309,17 +309,33 @@ dedupe (x :: rest) = x :: dedupe (filter (/= x) rest)
 
 -- # Part A — the real tree
 
-root : <IO> String
-root = medakaRoot ()
+root : Unit -> <IO> String
+root () = medakaRoot ()
 
-production : <FileRead, IO> Result String (List Src)
-production = loadSrcs root "pds/lib"
+productionCell : Ref (Option (Result String (List Src)))
+productionCell = Ref None
 
-drivers : <FileRead, IO> Result String (List Src)
-drivers = loadSrcs root "pds/test"
+production : Unit -> <FileRead, IO> Result String (List Src)
+production () = match !productionCell
+  Some v => v
+  None =>
+    let v = loadSrcs (root ()) "pds/lib"
+    productionCell := Some v
+    v
 
-hooks : <FileRead, IO> Result String (List (String, String))
-hooks = map (flatMap hooksOf) production
+drivers : Unit -> <FileRead, IO> Result String (List Src)
+drivers () = loadSrcs (root ()) "pds/test"
+
+hooksCell : Ref (Option (Result String (List (String, String))))
+hooksCell = Ref None
+
+hooks : Unit -> <FileRead, IO> Result String (List (String, String))
+hooks () = match !hooksCell
+  Some v => v
+  None =>
+    let v = map (flatMap hooksOf) (production ())
+    hooksCell := Some v
+    v
 
 allEdges : List Src -> Result String (List (String, String, String))
 allEdges [] = Ok []
@@ -327,13 +343,15 @@ allEdges (src :: rest) = match edgesOf src
   Err e => Err e
   Ok edges => map (edges ++ _) (allEdges rest)
 
-productionEdges : <FileRead, IO> Result String (List (String, String, String))
-productionEdges = match production
+productionEdges : Unit ->
+  <FileRead, IO> Result String (List (String, String, String))
+productionEdges () = match production ()
   Err e => Err e
   Ok srcs => allEdges srcs
 
-driverEdges : <FileRead, IO> Result String (List (String, String, String))
-driverEdges = match drivers
+driverEdges : Unit ->
+  <FileRead, IO> Result String (List (String, String, String))
+driverEdges () = match drivers ()
   Err e => Err e
   Ok srcs => allEdges srcs
 
@@ -341,7 +359,7 @@ driverEdges = match drivers
 breachesOf : Result String (List (String, String, String)) ->
   <FileRead, IO> Result String (List String)
 breachesOf (Err e) = Err e
-breachesOf (Ok edges) = map (h => breaches h edges) hooks
+breachesOf (Ok edges) = map (h => breaches h edges) (hooks ())
 
 indent : String -> String
 indent line = "  \{line}"
@@ -349,24 +367,24 @@ indent line = "  \{line}"
 test "no pds/lib module reaches a test-only ForTest export" =
   expectNoFindings
     "real tree: pds/lib reaches a test-only export"
-    (breachesOf productionEdges)
+    (breachesOf (productionEdges ()))
 
 -- The three non-vacuity assertions the retired script made by refusing an
 -- empty file: a boundary derived from nothing accepts everything.
 
 test "the deployment scan found at least one pds/lib production module" =
-  expectAtLeast "production modules" 1 (map length production)
+  expectAtLeast "production modules" 1 (map length (production ()))
 
 test "the deployment scan found at least one exported test-only API" =
-  expectAtLeast "exported test-only APIs" 1 (map length hooks)
+  expectAtLeast "exported test-only APIs" 1 (map length (hooks ()))
 
-driverReach : <FileRead, IO> Result String (List String)
-driverReach = match driverEdges
+driverReach : Unit -> <FileRead, IO> Result String (List String)
+driverReach () = match driverEdges ()
   Err e => Err e
-  Ok edges => map (h => reaches h edges) hooks
+  Ok edges => map (h => reaches h edges) (hooks ())
 
 test "the test drivers keep at least one explicit route to a test-only API" =
-  expectAtLeast "test-only API consumer edges" 1 (map length driverReach)
+  expectAtLeast "test-only API consumer edges" 1 (map length (driverReach ()))
 
 {- | A census floor over all three counts at once.
 
@@ -375,11 +393,11 @@ test "the test drivers keep at least one explicit route to a test-only API" =
    while a walk that had silently stopped after its first file reported the
    whole boundary clean; these floors are the counts at the time of writing,
    less a margin for a module or a hook being retired. -}
-test "the deployment census did not collapse" = match production
+test "the deployment census did not collapse" = match production ()
   Err e => Fail e "a populated census" "the scan could not run"
-  Ok srcs => match hooks
+  Ok srcs => match hooks ()
     Err e => Fail e "a populated census" "the scan could not run"
-    Ok hs => match driverReach
+    Ok hs => match driverReach ()
       Err e => Fail e "a populated census" "the scan could not run"
       Ok rs =>
         let got =
@@ -416,7 +434,7 @@ signRel = "pds/lib/sign.mdk"
 
 -- | The production source set with `extra` prepended to `pds/lib/sign.mdk`.
 withPrepended : String -> <FileRead, IO> Result String (List Src)
-withPrepended extra = map (map (prependTo extra)) production
+withPrepended extra = map (map (prependTo extra)) (production ())
 
 prependTo : String -> Src -> Src
 prependTo extra src =
@@ -678,8 +696,8 @@ bodyScan (line :: rest) inside =
 isTopLevelLine : String -> Bool
 isTopLevelLine line = line /= "" && not (startsWith " " line)
 
-ownBodyLines : <FileRead, IO> Result String (List String)
-ownBodyLines =
+ownBodyLines : Unit -> <FileRead, IO> Result String (List String)
+ownBodyLines () =
   map
     (text => testBodyLines (lines text))
     (readFile (underRoot "pds/test/opaque_field_scalar_test.mdk"))
@@ -698,7 +716,7 @@ spawnedCells bodies cells =
    rostered, unspawned, and the floor green. -}
 test "the opacity cells spawned meet FAIL_FLOOR=7 and PASS_FLOOR=2" =
   let want = ">= 7 rejected, >= 2 controls"
-  match ownBodyLines
+  match ownBodyLines ()
     Err e =>
       Fail "could not read this gate's own source: \{e}" want "read failed"
     Ok bodies =>

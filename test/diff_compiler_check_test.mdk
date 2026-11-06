@@ -620,15 +620,23 @@ writeAll dir ((name, src) :: rest) = match writeFile "\{dir}/\{name}" src
 
 {- | A directory of this test's own, under the process's scratch root.
 
-   `scratchDir ()` makes one root per call; the binding below is a value, so
-   it is evaluated once per process. Nothing in this module removes the root;
+   `scratchDir ()` makes one root per call; the once-cell below makes it
+   once per process. Nothing in this module removes the root;
    `mkdirAll` keeps each test independent of it. -}
+cycleScratchCell : Ref (Option (Result String String))
+cycleScratchCell = Ref None
+
 cycleScratch : Unit -> <Exec, FileWrite> Result String String
-cycleScratch () = match scratchDir ()
-  Err e => Err e
-  Ok root =>
-    let dir = "\{root}/cycle"
-    map (() => dir) (mkdirAll dir)
+cycleScratch () = match !cycleScratchCell
+  Some v => v
+  None =>
+    let v = match scratchDir ()
+      Err e => Err e
+      Ok root =>
+        let dir = "\{root}/cycle"
+        map (() => dir) (mkdirAll dir)
+    cycleScratchCell := Some v
+    v
 
 cycleVerdict : String -> <Exec, IO> Option String
 cycleVerdict dir =

@@ -652,15 +652,23 @@ writeAll ((path, src) :: rest) = match writeFile path src
 
 {- | A directory of this test's own, under the process's scratch root.
 
-   `scratchDir ()` makes one root per call; the binding below is a value, so
-   it is evaluated once per process. Nothing in this module removes the root;
+   `scratchDir ()` makes one root per call; the once-cell below makes it
+   once per process. Nothing in this module removes the root;
    `mkdirAll` keeps each test independent of it. -}
+ffiScratchCell : Ref (Option (Result String String))
+ffiScratchCell = Ref None
+
 ffiScratch : Unit -> <Exec, FileWrite> Result String String
-ffiScratch () = match scratchDir ()
-  Err e => Err e
-  Ok root =>
-    let dir = "\{root}/ffi"
-    map (() => dir) (mkdirAll dir)
+ffiScratch () = match !ffiScratchCell
+  Some v => v
+  None =>
+    let v = match scratchDir ()
+      Err e => Err e
+      Ok root =>
+        let dir = "\{root}/ffi"
+        map (() => dir) (mkdirAll dir)
+    ffiScratchCell := Some v
+    v
 
 ffiEngineWall : Unit -> <Exec, FileWrite, IO> Expectation
 ffiEngineWall () = match ffiScratch ()

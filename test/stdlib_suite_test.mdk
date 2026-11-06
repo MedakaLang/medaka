@@ -413,18 +413,26 @@ moduleRows =
       zeroAssertionModules
 
 {- | Every module run exactly once, all of them in one batch of spawns,
-   shared by every assertion below — top-level nullary bindings are
-   memoized, so a spawn placed here and read from two `test` decls executes
-   once, not twice. -}
+   shared by every assertion below — `graded` memoizes the batch in a
+   once-cell, so a spawn read from two `test` decls executes once, not
+   twice. -}
+gradedCell : Ref (Option (List (RowKind, (String, (Int, Result String Int)))))
+gradedCell = Ref None
+
 graded : Unit -> <Exec, IO> List (RowKind, (String, (Int, Result String Int)))
-graded () =
-  let spawns = flatMap moduleSpawns moduleRows
-  gradeRows
-    moduleRows
-    (zipWith
-      ((name, _) counted => (name, counted))
-      spawns
-      (testAssertionCounts (map snd spawns)))
+graded () = match !gradedCell
+  Some v => v
+  None =>
+    let v =
+      let spawns = flatMap moduleSpawns moduleRows
+      gradeRows
+        moduleRows
+        (zipWith
+          ((name, _) counted => (name, counted))
+          spawns
+          (testAssertionCounts (map snd spawns)))
+    gradedCell := Some v
+    v
 
 -- The `graded` rows of one kind, in roster order.
 gradedOfKind : RowKind -> <Exec, IO> List (String, (Int, Result String Int))

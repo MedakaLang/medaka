@@ -75,16 +75,27 @@ distinctBuildRows : List OracleRow
 distinctBuildRows = nubBy (a b => buildKey a == buildKey b) rows
 
 -- Every demo the rows run, built together in ONE batch by
--- `test.oracle_support.buildBatch`. A top-level nullary is memoized, so the
--- batch runs once per process; each row then reads its build from `demoBinFor`.
-demoBuilds : <Exec, IO> List (String, Result String String)
-demoBuilds =
-  buildBatch
-    (map (row => (buildKey row, row.entry, row.buildFlags)) distinctBuildRows)
+-- `test.oracle_support.buildBatch`. `demoBuilds` memoizes it in a once-cell,
+-- so the batch runs once per process; each row then reads its build from
+-- `demoBinFor`.
+demoBuildsCell : Ref (Option (List (String, Result String String)))
+demoBuildsCell = Ref None
+
+demoBuilds : Unit -> <Exec, IO> List (String, Result String String)
+demoBuilds () = match !demoBuildsCell
+  Some v => v
+  None =>
+    let v =
+      buildBatch
+        (map
+          (row => (buildKey row, row.entry, row.buildFlags))
+          distinctBuildRows)
+    demoBuildsCell := Some v
+    v
 
 -- The binary a row runs, from the batch above.
 demoBinFor : OracleRow -> <Exec, IO> Result String String
-demoBinFor row = match lookup (buildKey row) demoBuilds
+demoBinFor row = match lookup (buildKey row) (demoBuilds ())
   Some r => r
   None => Err "no build for \{buildKey row} — is it in `rows`?"
 
@@ -575,14 +586,22 @@ typedRow = OracleRow {
 
 -- # Grading
 
--- Every row run exactly once and shared by every assertion below: a top-level
--- nullary binding is memoized, so the demos are built once (see `demoBuilds`)
+-- Every row run exactly once and shared by every assertion below: `results`
+-- memoizes it in a once-cell, so the demos are built once (see `demoBuilds`)
 -- and each row runs once rather than once per `test` block that reads it.
-results : <Exec, FileRead, IO> List (String, Result String RowOutput)
-results = map (r => (r.name, runRow r)) rows
+resultsCell : Ref (Option (List (String, Result String RowOutput)))
+resultsCell = Ref None
+
+results : Unit -> <Exec, FileRead, IO> List (String, Result String RowOutput)
+results () = match !resultsCell
+  Some v => v
+  None =>
+    let v = map (r => (r.name, runRow r)) rows
+    resultsCell := Some v
+    v
 
 resultOf : String -> <Exec, FileRead, IO> Result String RowOutput
-resultOf name = match lookup name results
+resultOf name = match lookup name (results ())
   None => Err "no `results` entry for row \{name} — is it in `rows`?"
   Some r => r
 
@@ -651,8 +670,8 @@ test "wide_real: integers against REALs past 2^53 match sqlite3" =
    computed this with python3 and printed a warning when it was not `05`; a
    warning nobody reads is how a multi-page traversal test quietly becomes a
    single-page one, so it is an assertion here. -}
-multipageRootPageType : <Exec, FileRead, IO> Result String String
-multipageRootPageType = match scratchDir ()
+multipageRootPageType : Unit -> <Exec, FileRead, IO> Result String String
+multipageRootPageType () = match scratchDir ()
   Err e => Err e
   Ok dir => rootPageTypeIn "\{dir}/multipage-pagetype.db"
 
@@ -674,7 +693,7 @@ rootPageTypeSql db =
   "SELECT hex(substr(readfile('\{db}'), ((SELECT rootpage FROM sqlite_master WHERE name='t') - 1) * (SELECT page_size FROM pragma_page_size) + 1, 1));"
 
 test "multipage: 2000 rows put the root page on an interior page (0x05)" =
-  match multipageRootPageType
+  match multipageRootPageType ()
     Err e => Fail e "root page type 05" "could not read the page type"
     Ok t =>
       if t == "05" then

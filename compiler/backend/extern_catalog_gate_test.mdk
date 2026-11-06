@@ -432,8 +432,16 @@ domainFindings root runtimeSrc ledgerSrc =
 
 -- # Inputs
 
+runtimeTextCell : Ref (Option (Result String String))
+runtimeTextCell = Ref None
+
 runtimeText : Unit -> <IO, FileRead> Result String String
-runtimeText () = readFile (underRoot "stdlib/runtime.mdk")
+runtimeText () = match !runtimeTextCell
+  Some v => v
+  None =>
+    let v = readFile (underRoot "stdlib/runtime.mdk")
+    runtimeTextCell := Some v
+    v
 
 ledgerText : Unit -> <IO, FileRead> Result String String
 ledgerText () = readFile (underRoot "test/EXTERN-DOMAIN-LEDGER.txt")

@@ -64,10 +64,18 @@ bannerOf tail = match split "]" tail
 missingFrom : List String -> List String -> List String
 missingFrom have want = filter (t => not (elem t have)) want
 
+docLinesCell : Ref (Option (Result String (List String)))
+docLinesCell = Ref None
+
 docLines : Unit -> <Env "MEDAKA_ROOT", IO> Result String (List String)
-docLines () = match readFile (underRoot "compiler/DIAGNOSTIC-CODES-DESIGN.md")
-  Ok text => Ok (lines text)
-  Err e => Err "could not read DIAGNOSTIC-CODES-DESIGN.md: \{e}"
+docLines () = match !docLinesCell
+  Some v => v
+  None =>
+    let v = match readFile (underRoot "compiler/DIAGNOSTIC-CODES-DESIGN.md")
+      Ok text => Ok (lines text)
+      Err e => Err "could not read DIAGNOSTIC-CODES-DESIGN.md: \{e}"
+    docLinesCell := Some v
+    v
 
 test "diag_codes_doc: the live rows are exactly allDiagCodes" =
   match docLines ()

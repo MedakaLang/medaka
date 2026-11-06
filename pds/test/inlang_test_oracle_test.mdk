@@ -360,13 +360,21 @@ libKeyOf dir name = "\{dir}/\{name}"
 -- Every `pds/lib/`/`pds/shell/` module run exactly once under the eval
 -- engine, shared by every assertion below — memoized the same way `results`
 -- is, and spawned in the same batch.
-libResults : <Exec, IO> List (String, (Int, Result String Int))
-libResults = resultsOfKind LibRow
+libResultsCell : Ref (Option (List (String, (Int, Result String Int))))
+libResultsCell = Ref None
+
+libResults : Unit -> <Exec, IO> List (String, (Int, Result String Int))
+libResults () = match !libResultsCell
+  Some v => v
+  None =>
+    let v = resultsOfKind LibRow
+    libResultsCell := Some v
+    v
 
 -- Grades one `pds/lib/`/`pds/shell/` module's floor, same shape as
 -- `floorExpectation`.
 libFloorExpectation : String -> String -> <Exec, IO> Expectation
-libFloorExpectation dir name = match lookup (libKeyOf dir name) libResults
+libFloorExpectation dir name = match lookup (libKeyOf dir name) (libResults ())
   None => Fail "pds/\{dir}/\{name}.mdk has no `libResults` entry" "" ""
   Some (floor, counted) => expectFloor "pds/\{dir}/\{name}.mdk" floor counted
 
@@ -406,13 +414,13 @@ test "pds/lib/service_jwt_verify.mdk executed >= 3 assertions" =
 test "pds/shell/blobfile.mdk executed >= 1 assertions" =
   libFloorExpectation "shell" "blobfile"
 
-libUnrosteredLibFiles : <FileRead, IO> Result String (List String)
-libUnrosteredLibFiles = match listDir (underRoot "pds/lib")
+libUnrosteredLibFiles : Unit -> <FileRead, IO> Result String (List String)
+libUnrosteredLibFiles () = match listDir (underRoot "pds/lib")
   Err e => Err "could not list pds/lib: \{e}"
   Ok names => Ok (unrosteredUnits mdkModuleStem libKnownNames names)
 
 test "every pds/lib/*.mdk module has a `libSuites` or `libExempt` row" =
-  match libUnrosteredLibFiles
+  match libUnrosteredLibFiles ()
     Err e => Fail e "no unrostered modules" "listDir failed"
     Ok [] => Pass "no unrostered modules" "no unrostered modules"
     Ok extras =>
@@ -421,13 +429,13 @@ test "every pds/lib/*.mdk module has a `libSuites` or `libExempt` row" =
         "no unrostered modules"
         "\{debug extras}"
 
-libUnrosteredShellFiles : <FileRead, IO> Result String (List String)
-libUnrosteredShellFiles = match listDir (underRoot "pds/shell")
+libUnrosteredShellFiles : Unit -> <FileRead, IO> Result String (List String)
+libUnrosteredShellFiles () = match listDir (underRoot "pds/shell")
   Err e => Err "could not list pds/shell: \{e}"
   Ok names => Ok (unrosteredUnits mdkModuleStem libKnownNames names)
 
 test "every pds/shell/*.mdk module has a `libSuites` or `libExempt` row" =
-  match libUnrosteredShellFiles
+  match libUnrosteredShellFiles ()
     Err e => Fail e "no unrostered modules" "listDir failed"
     Ok [] => Pass "no unrostered modules" "no unrostered modules"
     Ok extras =>
@@ -436,8 +444,8 @@ test "every pds/shell/*.mdk module has a `libSuites` or `libExempt` row" =
         "no unrostered modules"
         "\{debug extras}"
 
-libPhantomExemptions : <FileRead, IO> Result String (List String)
-libPhantomExemptions = match listDir (underRoot "pds/lib")
+libPhantomExemptions : Unit -> <FileRead, IO> Result String (List String)
+libPhantomExemptions () = match listDir (underRoot "pds/lib")
   Err e => Err "could not list pds/lib: \{e}"
   Ok libNames => match listDir (underRoot "pds/shell")
     Err e => Err "could not list pds/shell: \{e}"
@@ -445,7 +453,7 @@ libPhantomExemptions = match listDir (underRoot "pds/lib")
       Ok (missingUnits mdkModuleStem libExemptNames (libNames ++ shellNames))
 
 test "every `libExempt` row names a module that exists" =
-  match libPhantomExemptions
+  match libPhantomExemptions ()
     Err e => Fail e "no phantom exemptions" "listDir failed"
     Ok [] => Pass "no phantom exemptions" "no phantom exemptions"
     Ok extras =>
@@ -463,8 +471,8 @@ test "every `libExempt` row names a module that exists" =
    names the engine because the two arms fail differently: a capability
    refusal from the eval arm and a genuine assertion failure both surface as
    a nonzero exit, and only the label says which arm was asked. -}
-suiteSpawns : <IO> List (String, Int, String, List String, String)
-suiteSpawns =
+suiteSpawns : Unit -> <IO> List (String, Int, String, List String, String)
+suiteSpawns () =
   filterMap
     ((name, (floor, engine)) => match lookup name excluded
       Some _ => None
@@ -481,8 +489,8 @@ suiteSpawns =
 
 -- One eval-engine spawn per `libSuites` module, in the shape of
 -- `suiteSpawns`.
-libSpawns : <IO> List (String, Int, String, List String, String)
-libSpawns =
+libSpawns : Unit -> <IO> List (String, Int, String, List String, String)
+libSpawns () =
   map
     ((dir, name, floor) =>
       let path = "pds/\{dir}/\{name}.mdk"
@@ -491,19 +499,29 @@ libSpawns =
 
 {- | Every suite and module spawned exactly once, all in one batch, each
    with its executed-assertion count or an error naming the file and what
-   went wrong. Shared by every assertion below: top-level nullary bindings
-   are memoized, so a spawn placed here and read from two `test` decls
-   executes once, not twice. -}
-allResults : <Exec, IO> List (RowKind, (String, (Int, Result String Int)))
-allResults =
-  let rows =
-    map (s => (SuiteRow, s)) suiteSpawns ++ map (s => (LibRow, s)) libSpawns
-  zipWith
-    ((kind, (key, floor, _, _, label)) counted =>
-      (kind, (key, (floor, mapErr (e => "\{label}: \{e}") counted))))
-    rows
-    (testAssertionCounts
-      (map ((_, (_, _, path, args, _)) => (path, args)) rows))
+   went wrong. Shared by every assertion below: `allResults` memoizes the
+   batch in a once-cell, so a spawn read from two `test` decls executes once,
+   not twice. -}
+allResultsCell : Ref (Option (List (RowKind, (String, (Int, Result String Int)))))
+allResultsCell = Ref None
+
+allResults : Unit ->
+  <Exec, IO> List (RowKind, (String, (Int, Result String Int)))
+allResults () = match !allResultsCell
+  Some v => v
+  None =>
+    let v =
+      let rows =
+        map (s => (SuiteRow, s)) (suiteSpawns ())
+          ++ map (s => (LibRow, s)) (libSpawns ())
+      zipWith
+        ((kind, (key, floor, _, _, label)) counted =>
+          (kind, (key, (floor, mapErr (e => "\{label}: \{e}") counted))))
+        rows
+        (testAssertionCounts
+          (map ((_, (_, _, path, args, _)) => (path, args)) rows))
+    allResultsCell := Some v
+    v
 
 -- Which roster a spawn row came from, so its result is regrouped by that
 -- tag rather than by its position in the batch.
@@ -514,11 +532,19 @@ resultsOfKind : RowKind -> <Exec, IO> List (String, (Int, Result String Int))
 -- The pds and sqlite oracle tests each carry this helper: the two projects
 -- share no test-support module that could host it.
 -- lint-disable-next-line rule-duplicate-body -- an independence requirement: pds and sqlite are separate projects and share no test-support module to host this helper
-resultsOfKind kind = map snd (filter ((k, _) => k == kind) allResults)
+resultsOfKind kind = map snd (filter ((k, _) => k == kind) (allResults ()))
 
 -- Every non-excluded suite's floor and count.
-results : <Exec, IO> List (String, (Int, Result String Int))
-results = resultsOfKind SuiteRow
+resultsCell : Ref (Option (List (String, (Int, Result String Int))))
+resultsCell = Ref None
+
+results : Unit -> <Exec, IO> List (String, (Int, Result String Int))
+results () = match !resultsCell
+  Some v => v
+  None =>
+    let v = resultsOfKind SuiteRow
+    resultsCell := Some v
+    v
 
 {- | Grades one suite's floor. The message names the file and both numbers
    on a miss; a run that failed outright reports the spawn's own text
@@ -527,7 +553,7 @@ results = resultsOfKind SuiteRow
 floorExpectation : String -> <Exec, IO> Expectation
 floorExpectation name = match lookup name excluded
   Some reason => Pass "ledgered exclusion" "skipped: \{reason}"
-  None => match lookup name results
+  None => match lookup name (results ())
     None => Fail "pds/test/\{name}.mdk has no `results` entry" "" ""
     Some (floor, counted) => expectFloor "pds/test/\{name}.mdk" floor counted
 
@@ -642,15 +668,16 @@ ranCountOf : (String, (Int, Result String Int)) -> Int
 ranCountOf (_, (_, Ok n)) = n
 ranCountOf (_, (_, Err _)) = 0
 
-totalRan : <Exec, IO> Int
+totalRan : Unit -> <Exec, IO> Int
 -- The pds and sqlite oracle tests each carry this helper: the two projects
 -- share no test-support module that could host it.
 -- lint-disable-next-line rule-duplicate-body -- an independence requirement: pds and sqlite are separate projects and share no test-support module to host this helper
-totalRan = sum (map ranCountOf results) + sum (map ranCountOf libResults)
+totalRan () =
+  sum (map ranCountOf (results ())) + sum (map ranCountOf (libResults ()))
 
 test "pds in-language suite ran at least one assertion" =
-  if totalRan > 0 then
-    Pass "> 0 assertions" "\{intToString totalRan} assertions"
+  if totalRan () > 0 then
+    Pass "> 0 assertions" "\{intToString (totalRan ())} assertions"
   else
     Fail
       "no assertions ran at all across the pds in-language suite"
@@ -661,22 +688,22 @@ test "pds in-language suite ran at least one assertion" =
 -- The retired `unit_suite.sh` skipped an excluded suite before touching its
 -- running total, and this keeps that: an exclusion may lower what the gate
 -- proves, but it may never raise what the gate claims.
-spawnedCount : <Exec, IO> Int
-spawnedCount = length results
+spawnedCount : Unit -> <Exec, IO> Int
+spawnedCount () = length (results ())
 
 expectedSpawnCount : Int
 expectedSpawnCount = length suites - length excluded
 
 test "an `excluded` suite is neither spawned nor counted" =
-  if spawnedCount == expectedSpawnCount then
+  if spawnedCount () == expectedSpawnCount then
     Pass
       "\{intToString expectedSpawnCount} suites spawned"
-      "\{intToString spawnedCount} suites spawned"
+      "\{intToString (spawnedCount ())} suites spawned"
   else
     Fail
-      "\{intToString spawnedCount} suites were spawned, expected \{intToString expectedSpawnCount} (\{intToString (length suites)} rostered less \{intToString (length excluded)} excluded) — an excluded suite is contributing a phantom count"
+      "\{intToString (spawnedCount ())} suites were spawned, expected \{intToString expectedSpawnCount} (\{intToString (length suites)} rostered less \{intToString (length excluded)} excluded) — an excluded suite is contributing a phantom count"
       "\{intToString expectedSpawnCount} suites spawned"
-      "\{intToString spawnedCount} suites spawned"
+      "\{intToString (spawnedCount ())} suites spawned"
 
 {- # Roster closure
 
@@ -686,12 +713,12 @@ test "an `excluded` suite is neither spawned nor counted" =
    PASS. Every `_test.mdk` file under `pds/test/` must therefore be
    accounted for: a row in `suites` above, or a reasoned row in `exempt`. -}
 
-unrosteredFiles : <FileRead, IO> Result String (List String)
-unrosteredFiles =
+unrosteredFiles : Unit -> <FileRead, IO> Result String (List String)
+unrosteredFiles () =
   unrosteredTestFiles (underRoot "pds/test") (rosterNames ++ exemptNames)
 
 test "every pds/test/*_test.mdk file has a `suites` or `exempt` row" =
-  match unrosteredFiles
+  match unrosteredFiles ()
     Err e => Fail e "no unrostered files" "listDir failed"
     Ok [] => Pass "no unrostered files" "no unrostered files"
     Ok extras =>
@@ -700,10 +727,10 @@ test "every pds/test/*_test.mdk file has a `suites` or `exempt` row" =
         "no unrostered files"
         "\{debug extras}"
 
-phantomExemptions : <FileRead, IO> Result String (List String)
-phantomExemptions = missingTestFiles (underRoot "pds/test") exemptNames
+phantomExemptions : Unit -> <FileRead, IO> Result String (List String)
+phantomExemptions () = missingTestFiles (underRoot "pds/test") exemptNames
 
-test "every `exempt` row names a file that exists" = match phantomExemptions
+test "every `exempt` row names a file that exists" = match phantomExemptions ()
   Err e => Fail e "no phantom exemptions" "listDir failed"
   Ok [] => Pass "no phantom exemptions" "no phantom exemptions"
   Ok extras =>
@@ -727,7 +754,7 @@ test "every `excluded` row names a rostered suite" = match danglingExclusions
 
 {- # Roster/assertion lockstep
 
-   `results` is a shared memoized binding computed for every non-excluded
+   `results` is a shared memoized function computed for every non-excluded
    `suites` row regardless of whether anything ever asserts on it (see the
    doc comment on `results` above): a row with no dedicated `test` block
    still gets spawned, and its verdict is silently discarded. The roster
@@ -748,13 +775,13 @@ test "every `excluded` row names a rostered suite" = match danglingExclusions
 floorCallOpen : String
 floorCallOpen = "floorExpectation \""
 
-ownSourceLines : <IO> Result String (List String)
-ownSourceLines = readLines (underRoot "pds/test/inlang_test_oracle_test.mdk")
+ownSourceLines : Unit -> <IO> Result String (List String)
+ownSourceLines () = readLines (underRoot "pds/test/inlang_test_oracle_test.mdk")
 
 -- | Rostered, non-excluded names with no `test` block that both names them
 -- in its title and grades them in its body.
-uncheckedRows : <IO> Result String (List String)
-uncheckedRows =
+uncheckedRows : Unit -> <IO> Result String (List String)
+uncheckedRows () =
   map
     (ls =>
       ungradedRosterRows
@@ -762,10 +789,10 @@ uncheckedRows =
         floorCallOpen
         (filter (n => not (elem n excludedNames)) rosterNames)
         ls)
-    ownSourceLines
+    (ownSourceLines ())
 
 test "every `suites` row has a matching `test` block (or is `excluded`)" =
-  match uncheckedRows
+  match uncheckedRows ()
     Err e => Fail e "no unchecked rows" "read failed"
     Ok [] => Pass "no unchecked rows" "no unchecked rows"
     Ok extras =>
@@ -774,12 +801,14 @@ test "every `suites` row has a matching `test` block (or is `excluded`)" =
         "no unchecked rows"
         "\{debug extras}"
 
-disagreeingBlocks : <IO> Result String (List String)
-disagreeingBlocks =
-  map (ls => disagreeingFloorBlocks "pds/test/" floorCallOpen ls) ownSourceLines
+disagreeingBlocks : Unit -> <IO> Result String (List String)
+disagreeingBlocks () =
+  map
+    (ls => disagreeingFloorBlocks "pds/test/" floorCallOpen ls)
+    (ownSourceLines ())
 
 test "every floor assertion grades the suite its own title names" =
-  match disagreeingBlocks
+  match disagreeingBlocks ()
     Err e => Fail e "no title/argument disagreements" "read failed"
     Ok [] =>
       Pass "no title/argument disagreements" "no title/argument disagreements"

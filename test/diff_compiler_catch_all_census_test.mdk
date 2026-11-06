@@ -36,49 +36,59 @@ import list.{nub, sort, sortBy, takeWhile, dropWhile}
 
 -- Read every subject file once. Result is (ast, the censused sources joined,
 -- site ledger, decl ledger). The source list matches SRCS in test/catch_all_census.py.
+loadAllCell : Ref (Option (Result String (String, String, String, String)))
+loadAllCell = Ref None
+
 loadAll : Unit -> <IO, FileRead> Result String (String, String, String, String)
-loadAll () = do
-  astText <- readFile (underRoot "compiler/frontend/ast.mdk")
-  tc <- readFile (underRoot "compiler/types/typecheck.mdk")
-  tcMono <- readFile (underRoot "compiler/types/tc_mono.mdk")
-  tcState <- readFile (underRoot "compiler/types/tc_state.mdk")
-  tcEnv <- readFile (underRoot "compiler/types/tc_env.mdk")
-  tcDiagText <- readFile (underRoot "compiler/types/tc_diag_text.mdk")
-  tcDiag <- readFile (underRoot "compiler/types/tc_diag.mdk")
-  tcScope <- readFile (underRoot "compiler/types/tc_scope.mdk")
-  tcUnify <- readFile (underRoot "compiler/types/tc_unify.mdk")
-  tcDeclsVariance <- readFile (underRoot "compiler/types/tc_decls_variance.mdk")
-  tcDeclsTypes <- readFile (underRoot "compiler/types/tc_decls_types.mdk")
-  tcDecls <- readFile (underRoot "compiler/types/tc_decls.mdk")
-  tcForeign <- readFile (underRoot "compiler/types/tc_foreign.mdk")
-  tcSolveGivens <- readFile (underRoot "compiler/types/tc_solve_givens.mdk")
-  tcSolveEntail <- readFile (underRoot "compiler/types/tc_solve_entail.mdk")
-  tcSolve <- readFile (underRoot "compiler/types/tc_solve.mdk")
-  tcSolveCheck <- readFile (underRoot "compiler/types/tc_solve_check.mdk")
-  tcShadow <- readFile (underRoot "compiler/types/tc_shadow.mdk")
-  tcGrants <- readFile (underRoot "compiler/types/tc_grants.mdk")
-  tcEffects <- readFile (underRoot "compiler/types/tc_effects.mdk")
-  tcOccurrence <- readFile (underRoot "compiler/types/tc_occurrence.mdk")
-  tcMark <- readFile (underRoot "compiler/types/tc_mark.mdk")
-  tcGroups <- readFile (underRoot "compiler/types/tc_groups.mdk")
-  tcPat <- readFile (underRoot "compiler/types/tc_pat.mdk")
-  tcInferRecords <- readFile (underRoot "compiler/types/tc_infer_records.mdk")
-  tcInfer <- readFile (underRoot "compiler/types/tc_infer.mdk")
-  tcElab <- readFile (underRoot "compiler/types/tc_elab.mdk")
-  tcGlobal <- readFile (underRoot "compiler/types/tc_global.mdk")
-  tcStamp <- readFile (underRoot "compiler/types/tc_stamp.mdk")
-  tcModule <- readFile (underRoot "compiler/types/tc_module.mdk")
-  rp <- readFile (underRoot "compiler/types/repr.mdk")
-  ck <- readFile (underRoot "compiler/types/chain_key.mdk")
-  ec <- readFile (underRoot "compiler/types/evidence_coverage.mdk")
-  siteLedger <- readFile (underRoot "test/catch_all_census.ledger")
-  declLedger <- readFile (underRoot "test/decl_runner.ledger")
-  Ok (
-    astText,
-    "\{tc}\n\{tcMono}\n\{tcState}\n\{tcEnv}\n\{tcDiagText}\n\{tcDiag}\n\{tcScope}\n\{tcUnify}\n\{tcDeclsVariance}\n\{tcDeclsTypes}\n\{tcDecls}\n\{tcForeign}\n\{tcSolveGivens}\n\{tcSolveEntail}\n\{tcSolve}\n\{tcSolveCheck}\n\{tcShadow}\n\{tcGrants}\n\{tcEffects}\n\{tcOccurrence}\n\{tcMark}\n\{tcGroups}\n\{tcPat}\n\{tcInferRecords}\n\{tcInfer}\n\{tcElab}\n\{tcGlobal}\n\{tcStamp}\n\{tcModule}\n\{rp}\n\{ck}\n\{ec}",
-    siteLedger,
-    declLedger,
-  )
+loadAll () = match !loadAllCell
+  Some v => v
+  None =>
+    let v = do
+      astText <- readFile (underRoot "compiler/frontend/ast.mdk")
+      tc <- readFile (underRoot "compiler/types/typecheck.mdk")
+      tcMono <- readFile (underRoot "compiler/types/tc_mono.mdk")
+      tcState <- readFile (underRoot "compiler/types/tc_state.mdk")
+      tcEnv <- readFile (underRoot "compiler/types/tc_env.mdk")
+      tcDiagText <- readFile (underRoot "compiler/types/tc_diag_text.mdk")
+      tcDiag <- readFile (underRoot "compiler/types/tc_diag.mdk")
+      tcScope <- readFile (underRoot "compiler/types/tc_scope.mdk")
+      tcUnify <- readFile (underRoot "compiler/types/tc_unify.mdk")
+      tcDeclsVariance <- readFile
+        (underRoot "compiler/types/tc_decls_variance.mdk")
+      tcDeclsTypes <- readFile (underRoot "compiler/types/tc_decls_types.mdk")
+      tcDecls <- readFile (underRoot "compiler/types/tc_decls.mdk")
+      tcForeign <- readFile (underRoot "compiler/types/tc_foreign.mdk")
+      tcSolveGivens <- readFile (underRoot "compiler/types/tc_solve_givens.mdk")
+      tcSolveEntail <- readFile (underRoot "compiler/types/tc_solve_entail.mdk")
+      tcSolve <- readFile (underRoot "compiler/types/tc_solve.mdk")
+      tcSolveCheck <- readFile (underRoot "compiler/types/tc_solve_check.mdk")
+      tcShadow <- readFile (underRoot "compiler/types/tc_shadow.mdk")
+      tcGrants <- readFile (underRoot "compiler/types/tc_grants.mdk")
+      tcEffects <- readFile (underRoot "compiler/types/tc_effects.mdk")
+      tcOccurrence <- readFile (underRoot "compiler/types/tc_occurrence.mdk")
+      tcMark <- readFile (underRoot "compiler/types/tc_mark.mdk")
+      tcGroups <- readFile (underRoot "compiler/types/tc_groups.mdk")
+      tcPat <- readFile (underRoot "compiler/types/tc_pat.mdk")
+      tcInferRecords <- readFile
+        (underRoot "compiler/types/tc_infer_records.mdk")
+      tcInfer <- readFile (underRoot "compiler/types/tc_infer.mdk")
+      tcElab <- readFile (underRoot "compiler/types/tc_elab.mdk")
+      tcGlobal <- readFile (underRoot "compiler/types/tc_global.mdk")
+      tcStamp <- readFile (underRoot "compiler/types/tc_stamp.mdk")
+      tcModule <- readFile (underRoot "compiler/types/tc_module.mdk")
+      rp <- readFile (underRoot "compiler/types/repr.mdk")
+      ck <- readFile (underRoot "compiler/types/chain_key.mdk")
+      ec <- readFile (underRoot "compiler/types/evidence_coverage.mdk")
+      siteLedger <- readFile (underRoot "test/catch_all_census.ledger")
+      declLedger <- readFile (underRoot "test/decl_runner.ledger")
+      Ok (
+        astText,
+        "\{tc}\n\{tcMono}\n\{tcState}\n\{tcEnv}\n\{tcDiagText}\n\{tcDiag}\n\{tcScope}\n\{tcUnify}\n\{tcDeclsVariance}\n\{tcDeclsTypes}\n\{tcDecls}\n\{tcForeign}\n\{tcSolveGivens}\n\{tcSolveEntail}\n\{tcSolve}\n\{tcSolveCheck}\n\{tcShadow}\n\{tcGrants}\n\{tcEffects}\n\{tcOccurrence}\n\{tcMark}\n\{tcGroups}\n\{tcPat}\n\{tcInferRecords}\n\{tcInfer}\n\{tcElab}\n\{tcGlobal}\n\{tcStamp}\n\{tcModule}\n\{rp}\n\{ck}\n\{ec}",
+        siteLedger,
+        declLedger,
+      )
+    loadAllCell := Some v
+    v
 
 siteCheck : Unit -> <IO, FileRead> Expectation
 siteCheck () = match loadAll ()

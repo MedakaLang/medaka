@@ -324,8 +324,16 @@ tailOk b = S.contains "musttail call i64 @\{dictPrefix}7461696c(" b
 -- The CDict fixture is built ONCE per process: three tests below read the same
 -- IR. The build goes into a directory that is removed as soon as its IR text
 -- is read, so only the text outlives the build.
+cdictIRCell : Ref (Option (Result String String))
+cdictIRCell = Ref None
+
 cdictIR : Unit -> <Exec, IO, FileRead> Result String String
-cdictIR () = inFreshDirOf (dir => buildIR dir dictStem) (m => Err m)
+cdictIR () = match !cdictIRCell
+  Some v => v
+  None =>
+    let v = inFreshDirOf (dir => buildIR dir dictStem) (m => Err m)
+    cdictIRCell := Some v
+    v
 
 skewCDict : Unit -> <Exec, IO, FileRead> Expectation
 skewCDict () = match cdictIR ()

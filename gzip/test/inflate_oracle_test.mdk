@@ -45,14 +45,14 @@ build dir name = match boundedVerbSeconds 600 "sh" [
     else
       Ok "\{dir}/\{name}"
 
-gzipPresent : <Exec> Expectation
-gzipPresent = match boundedVerbSeconds 10 "gzip" ["--version"]
+gzipPresent : Unit -> <Exec> Expectation
+gzipPresent () = match boundedVerbSeconds 10 "gzip" ["--version"]
   Err _ => fail "gzip not found (this gate's oracle)"
   Ok (code, _, _) =>
     if code /= 0 then fail "gzip --version exited \{intToString code}" else pass
 
-pythonPresent : <Exec> Expectation
-pythonPresent = match boundedVerbSeconds 10 "python3" ["--version"]
+pythonPresent : Unit -> <Exec> Expectation
+pythonPresent () = match boundedVerbSeconds 10 "python3" ["--version"]
   Err _ => fail "python3 not found (needed for the BTYPE probe)"
   Ok (code, _, _) =>
     if code /= 0 then
@@ -589,8 +589,8 @@ test "inflate_oracle: stored, fixed, dynamic round trips and error paths (checks
   (dir => match build dir "inflate_demo"
     Err e => fail e
     Ok inflateBin => expectAll [
-      gzipPresent,
-      pythonPresent,
+      gzipPresent (),
+      pythonPresent (),
       storedGroup dir inflateBin,
       fixedGroup dir inflateBin,
       dynamicGroup dir inflateBin,

@@ -151,16 +151,17 @@ flatLines parts = intercalate [] parts
    set, else the sibling `medaka_emitter` beside the tree's own `medaka`
    binary. -}
 export
-emitterBin : <IO> String
-emitterBin = getEnvOr "MEDAKA_EMITTER" "\{medakaRoot ()}/medaka_emitter"
+emitterBin : Unit -> <IO> String
+emitterBin () = getEnvOr "MEDAKA_EMITTER" "\{medakaRoot ()}/medaka_emitter"
 
 {- | `MEDAKA_ROOT` and `MEDAKA_EMITTER`, exported the way the retired shell
    oracles did: a gate shard exports neither on its own, and a `medaka
    build` left to find its own emitter is one refactor away from being
    graded on a verb that silently did nothing. -}
 export
-spawnEnv : <IO> List String
-spawnEnv = ["MEDAKA_ROOT=\{medakaRoot ()}", "MEDAKA_EMITTER=\{emitterBin}"]
+spawnEnv : Unit -> <IO> List String
+spawnEnv () =
+  ["MEDAKA_ROOT=\{medakaRoot ()}", "MEDAKA_EMITTER=\{emitterBin ()}"]
 
 {- | `cmd` run with `args` under a `secs` ceiling: the raw `(exit, stdout,
    stderr)`, except a missing `cmd` (exit 127 through `env`) or a spawn that
@@ -179,7 +180,7 @@ spawnRaw : Int ->
   List String ->
   <Exec, IO> Result String (Int, String, String)
 spawnRaw secs cmd args =
-  match boundedVerbSeconds secs "env" (spawnEnv ++ (cmd :: args))
+  match boundedVerbSeconds secs "env" (spawnEnv () ++ (cmd :: args))
     Err e =>
       Err "spawn failed: could not start `\{unwords (cmd :: args)}`: \{e}"
     Ok (127, _, err) =>
@@ -219,7 +220,7 @@ buildArgs flags entry bin = ["build"] ++ flags ++ [underRoot entry, "-o", bin]
 perlArgs : List String -> <IO> List String
 perlArgs args =
   ["-e", "alarm \{intToString buildTimeoutSeconds}; exec @ARGV", "env", "env"]
-    ++ spawnEnv
+    ++ spawnEnv ()
     ++ (medakaBin () :: args)
 
 -- Grades one batched build exactly as `spawnRaw` and `spawnOut` grade a single
@@ -242,8 +243,8 @@ gradeBuild args (Ok (code, out, err)) =
    scratch directory, and returns `(key, Result bin)` in job order. A binary is
    never written to after its build, so no caller can change what another runs.
 
-   Callers memoize the result in a top-level nullary, so the batch runs once
-   per process. -}
+   Callers memoize the result in a once-cell, so the batch runs once per
+   process. -}
 export
 buildBatch : List (String, String, List String) ->
   <Exec, IO> List (String, Result String String)

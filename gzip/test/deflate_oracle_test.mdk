@@ -351,8 +351,8 @@ runCase deflateBin inflateBin dir (Case slug desc input bound selfToo) = (
 )
 
 -- System gzip must exist: this gate's oracle.
-gzipPresent : <Exec> Expectation
-gzipPresent = match boundedVerbSeconds 10 "gzip" ["--version"]
+gzipPresent : Unit -> <Exec> Expectation
+gzipPresent () = match boundedVerbSeconds 10 "gzip" ["--version"]
   Err _ => fail "gzip not found (this gate's oracle)"
   Ok (code, _, _) =>
     if code /= 0 then fail "gzip --version exited \{intToString code}" else pass
@@ -361,7 +361,7 @@ test "deflate_oracle: demos build, system gzip exists, every corpus case gunzip-
   (dir => match builtPair dir
     Err e => fail e
     Ok (deflateBin, inflateBin) => expectAll [
-      gzipPresent,
+      gzipPresent (),
       expectAtLeast 10 (length corpus),
       expectEach (map (c => runCase deflateBin inflateBin dir c) corpus),
     ])
