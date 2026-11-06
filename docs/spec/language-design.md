@@ -1204,7 +1204,7 @@ prop "sort preserves length" (xs : List Int) =
 -- None
 head : List a -> Option a
 ```
-`medaka test` runs these alongside regular tests. `medaka doc` renders them into the generated documentation. Examples stay correct because the build fails when they go stale.
+`medaka test` runs these alongside regular tests. `medaka doc` renders them into the generated documentation. Examples stay correct because the build fails when they go stale. Each example runs as a unit function called in example order, since a top-level value may not perform effects (I2). A smoke example that panics therefore errors at its own turn; it no longer fails the examples before it.
 
 ### Snapshot Tests
 For structured output (rendered HTML, generated code, formatted JSON), snapshot tests compare a fresh result against a stored reference, with `medaka test --update-snapshots` to refresh them deliberately.

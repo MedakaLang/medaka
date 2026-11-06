@@ -908,7 +908,7 @@ claim is deliberately narrower than "this plan fixes every backend symptom".
 
 - one elaborated semantics refined by eval, Core, native, and Wasm;
 - effects erase after soundness checks and capability extraction;
-- lazy top-level nullary semantics and three-state cycle detection;
+- strict top-level initialisation in dependency order (language-design I1 to I5), with a cycle rejected statically (`T-CYCLIC-VALUE`);
 - one abstract value contract with two physical encodings;
 - native tagged words, Boehm, and the C runtime;
 - WasmGC typed references and host-managed GC;

@@ -443,14 +443,10 @@ a `VRecord`, never a `VCon` — `evalVariantUpdate` needed a matching `VRecord` 
 Both fixed in lockstep; `wasm/w7_variant_update` now agrees on all three engines and its
 `test/engine_divergence.txt` line was deleted (promoted).
 
-### 4.4 `eval:intended-abort` — 17 fixtures
+### 4.4 `eval:intended-abort` — 14 fixtures
 
 `llvm/abort_panic` (`E-PANIC: boom`), `wasm/w7_array_oob` (`E-INDEX-OOB: index 9
-out of bounds`), `llvm/eager_global_self_cycle` (`E-CYCLIC-VALUE`, #561 PR-A+PR-B), and two
-PR-C regression-corpus additions covering other cycle shapes: `llvm/eager_global_mutual_cycle`
-(a two-node mutual cycle, `x = y + 1` / `y = x + 1`) and `llvmT/eager_global_dispatch_hidden_cycle`
-(a self-cycle whose back edge is hidden behind interface-method dispatch, `cell = mk True` /
-`mk _ = cell + 1`) — both `E-CYCLIC-VALUE` — and the twelve `wasm/arith_int63_*_overflow_*`
+out of bounds`) and the twelve `wasm/arith_int63_*_overflow_*`
 / `wasm/arith_int63_div_intmin` fixtures (#3377), whose `Int` arithmetic leaves the 63-bit
 range and stops with `E-INT-OVERFLOW` on every engine (their exact stderr is pinned by
 `test/wasm/diff_wasm.sh`'s `-- expect-stderr:` line). These are the *program's own* intended
@@ -460,20 +456,19 @@ the gate's eval-arm classifier is deliberately conservative (any interpreter-lev
 nonzero exit is never a program-level exit). Ledgered explicitly rather than
 special-cased, so the conservatism is visible instead of hidden.
 
-`eager_global_self_cycle` (`x = x + 1`, a genuine non-productive value cycle)
-**migrated INTO this category** from `emitter:shared-eager-init` once #561 landed on both
-backends. Pre-fix, both backends mis-emitted the eager topo-sort (a value cycle has no
-static order); PR-A (native) and PR-B (wasm) now emit dispatch-reaching / cyclic nullary
-globals LAZILY (`emit_support.lazyGlobalNames` → native `@mdk_force_x`/`@mdk_gs_x`, wasm
-`$force_x`/`$gs_x` 3-state), so all three engines raise the SAME coded `[E-CYCLIC-VALUE]`.
-The category `emitter:shared-eager-init` asserts a shared-primitive defect where a backend
-is WRONG; post-PR-B neither is, so the correct claim is `eval:intended-abort`. The **four
-dispatch-reaching fixtures** in that family — `llvmT/eager_global_{dispatch_hidden,
-lazy_bool, lazy_float, lazy_string}` — return a real value (42 / 1 / 3.5 / hello world),
-so once PR-B fixed the wasm arm they became fully `eq:eq:eq` and were **promoted out of the
-ledger entirely** (deleted). `emitter:shared-eager-init` now has ZERO `eager_global_*`
-rows; the remaining `eager_global_{list,string}_slice` rows are `wasm:emitter-gap`
-(a lowering gap, unrelated).
+The three value-cycle fixtures (`llvm/eager_global_self_cycle`, `llvm/eager_global_mutual_cycle`,
+`llvmT/eager_global_dispatch_hidden_cycle`) are no longer here. A genuine top-level value cycle
+is rejected statically with `T-CYCLIC-VALUE` (language-design, Top-level initialisation I3)
+before any engine runs, so they make no value comparison; they moved to
+`test/rejection_parity_fixtures.txt`, where `test/diff_compiler_rejection_parity.sh` asserts
+that `medaka build` refuses each one on native and wasm. The prelude-free llvm probe gates
+still emit them and keep their empty `.native.golden`, because that probe runs no typechecker.
+The runtime `E-CYCLIC-VALUE` stays in the compiler until the initialisation rules retire it.
+The **four dispatch-reaching fixtures** in that family — `llvmT/eager_global_{dispatch_hidden,
+lazy_bool, lazy_float, lazy_string}` — return a real value (42 / 1 / 3.5 / hello world)
+and agree on all three engines, so they are not in the ledger. `emitter:shared-eager-init` has
+ZERO `eager_global_*` rows; the remaining `eager_global_{list,string}_slice` rows are
+`wasm:emitter-gap` (a lowering gap, unrelated).
 
 ### 4.5 `native:prelude-collision` — MOVED OUT of this ledger (#709)
 

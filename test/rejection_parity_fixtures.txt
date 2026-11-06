@@ -47,3 +47,9 @@ llvmT/disp_req_eq_list_int
 llvmT/iface_default_scalar_cells
 llvmT/impl_append_list
 llvmT/impl_append_str
+
+# Rejected by the static initialisation rule T-CYCLIC-VALUE (language-design I3), not by a
+# prelude collision: a genuine top-level value cycle is refused before any engine runs.
+llvm/eager_global_mutual_cycle
+llvm/eager_global_self_cycle
+llvmT/eager_global_dispatch_hidden_cycle

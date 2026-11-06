@@ -253,6 +253,8 @@ above Core IR; these laws are the wasm peers of EMITTER-SEMANTICS §2 (V1–V6).
   program-level abort) in `test/engine_divergence.txt` — see `test/ENGINE-DIVERGENCE.md` §4.4.
   PR-C added a mutual-cycle and a dispatch-hidden-cycle sibling fixture to the same category as
   regression coverage for this row.
+  Since I3 the row has left that ledger: the program is rejected statically, and
+  `test/rejection_parity_fixtures.txt` pins the refusal on native and wasm.
   ⚠️ **Only the SILENT arm is pinnable, and that is deliberate.** The boxed/SIGSEGV
   variant cannot live here: `diff_compiler_llvm.sh` runs every fixture against a value
   golden and has **no ledger of any kind** (`engine_divergence.txt` is read by

@@ -6,5 +6,5 @@ import manifest_xmod_helper.{tick}
 
 entry : Unit -> <Clock> Unit
 entry u =
-  let _ = tick
+  let _ = tick ()
   ()

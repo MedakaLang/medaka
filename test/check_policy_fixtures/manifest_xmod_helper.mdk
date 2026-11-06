@@ -2,5 +2,5 @@
 -- helper a sibling module imports, to prove `medaka manifest` resolves a
 -- multi-file target instead of reading exactly one file.
 export
-tick : <Clock> Float
-tick = wallTimeSec ()
+tick : Unit -> <Clock> Float
+tick () = wallTimeSec ()
