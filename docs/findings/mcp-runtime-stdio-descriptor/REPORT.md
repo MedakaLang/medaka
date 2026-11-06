@@ -108,3 +108,19 @@ that distinction through real owner launches. A pathname exception for
 It must then implement and attack the unsupported rows above before any
 production Stdio extern, compiler admission path or protocol-owner split is
 proposed as an accepted implementation.
+
+## Durable replay and handoff
+
+`test/process_authority_test.mdk` runs the independent descriptor observer alongside
+the separate 03a broad-seal and ownership receipts. It requires the 72 observed
+alias rows, the Null blocker, the Piped control, and both identity and type
+mutation effects. It exercises non-Linux refusal and rejects an empty matrix.
+These controls do not fill the unsupported rows above. The survey C1–C7 lexical
+candidate counts are 3134, 21, 322, 3553, 36838, 987 and 1531; they are not
+semantic compatibility counts. Dynamic uses remain unknown.
+
+A future production cut must define acquisition and release, aliases, and errors
+that retain ownership; share the existing Async, Deadline and CancelToken types
+with process_async; and establish compiler/runtime enforcement. Owned-tree
+deployment still requires an operator-supplied protected manager and delegated
+disposable cgroup. Parent issues #4854, #4855 and #4856 remain open.

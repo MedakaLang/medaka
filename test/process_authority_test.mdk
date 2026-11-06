@@ -1,6 +1,6 @@
 import test_process.{underRoot, withScratchDir, expectSpawnOkLine}
 
-test "authority replay refuses unqualified deployment and detects removed controls" = withScratchDir
+test "authority replay preserves blockers and detects removed controls" = withScratchDir
   (dir =>
     expectSpawnOkLine
       "python3"
