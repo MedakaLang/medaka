@@ -1,5 +1,5 @@
 # META
-source_lines=231
+source_lines=232
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted `test "…" = <expr>` runner (Phase 127 restored 2026-07-11).
@@ -27,7 +27,8 @@ import eval.eval.{
   ppValue
 }
 import types.program_facts.{ProgramFacts}
-import support.util.{filterList, markReachable}
+import support.util.{filterList}
+import support.graph.{markReachable}
 import tools.doctest.{ExResult(..)}
 import hash_map.{HashMap, new, setInPlace, has, findWithDefault}
 
@@ -239,7 +240,8 @@ refGraphInto (_ :: rest) g = refGraphInto rest g
 (DUse false (UseGroup ("frontend" "resolve") ((mem "firstExprLoc" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "EvalEnv" true) (mem "EnvFrame" true) (mem "eval" false) (mem "extendEnv" false) (mem "envFrameCells" false) (mem "force" false) (mem "ppValue" false))))
 (DUse false (UseGroup ("types" "program_facts") ((mem "ProgramFacts" false))))
-(DUse false (UseGroup ("support" "util") ((mem "filterList" false) (mem "markReachable" false))))
+(DUse false (UseGroup ("support" "util") ((mem "filterList" false))))
+(DUse false (UseGroup ("support" "graph") ((mem "markReachable" false))))
 (DUse false (UseGroup ("tools" "doctest") ((mem "ExResult" true))))
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "setInPlace" false) (mem "has" false) (mem "findWithDefault" false))))
 (DTypeSig true "hasTests" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))
@@ -298,7 +300,8 @@ refGraphInto (_ :: rest) g = refGraphInto rest g
 (DUse false (UseGroup ("frontend" "resolve") ((mem "firstExprLoc" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "EvalEnv" true) (mem "EnvFrame" true) (mem "eval" false) (mem "extendEnv" false) (mem "envFrameCells" false) (mem "force" false) (mem "ppValue" false))))
 (DUse false (UseGroup ("types" "program_facts") ((mem "ProgramFacts" false))))
-(DUse false (UseGroup ("support" "util") ((mem "filterList" false) (mem "markReachable" false))))
+(DUse false (UseGroup ("support" "util") ((mem "filterList" false))))
+(DUse false (UseGroup ("support" "graph") ((mem "markReachable" false))))
 (DUse false (UseGroup ("tools" "doctest") ((mem "ExResult" true))))
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "setInPlace" false) (mem "has" false) (mem "findWithDefault" false))))
 (DTypeSig true "hasTests" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))

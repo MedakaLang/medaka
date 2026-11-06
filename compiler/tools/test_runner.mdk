@@ -23,7 +23,8 @@ import eval.eval.{
   ppValue
 }
 import types.program_facts.{ProgramFacts}
-import support.util.{filterList, markReachable}
+import support.util.{filterList}
+import support.graph.{markReachable}
 import tools.doctest.{ExResult(..)}
 import hash_map.{HashMap, new, setInPlace, has, findWithDefault}
 

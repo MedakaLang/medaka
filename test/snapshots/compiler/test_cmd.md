@@ -4161,34 +4161,34 @@ rejectPreparedHelpers : PlanEnv ->
   OrdMap String ->
   List PreparedPropRequest ->
   List PreparedPropRequest
--- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
--- lint-disable-next-line rule-threaded-invariant
-rejectPreparedHelpers _ _ _ [] = []
-rejectPreparedHelpers env engine rejected ((row@(PreparedResult _)) :: rest) =
-  row :: rejectPreparedHelpers env engine rejected rest
-rejectPreparedHelpers env engine rejected ((row@(PreparedRun request _ plans)) :: rest) =
-  let next = rejectPreparedHelpers env engine rejected rest
-  if plansHaveNoRejectedCarrier env rejected plans then
-    row :: next
-  else
-    PreparedResult (helperCapabilityResult env engine request rejected plans)
-      :: next
+rejectPreparedHelpers env engine rejected requests = go requests
+  where
+    go [] = []
+    go ((row@(PreparedResult _)) :: rest) = row :: go rest
+    go ((row@(PreparedRun request _ plans)) :: rest) =
+      let next = go rest
+      if plansHaveNoRejectedCarrier env rejected plans then
+        row :: next
+      else
+        PreparedResult
+            (helperCapabilityResult env engine request rejected plans)
+          :: next
 
 rejectPreparedProtocolCustom : PlanEnv ->
   String ->
   String ->
   List PreparedPropRequest ->
   List PreparedPropRequest
--- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
--- lint-disable-next-line rule-threaded-invariant
-rejectPreparedProtocolCustom _ _ _ [] = []
-rejectPreparedProtocolCustom env engine message ((row@(PreparedResult _)) :: rest) =
-  row :: rejectPreparedProtocolCustom env engine message rest
-rejectPreparedProtocolCustom env engine message ((row@(PreparedRun request _ plans)) :: rest) =
-  let next = rejectPreparedProtocolCustom env engine message rest
-  match customPlansReachable env plans
-    [] => row :: next
-    _ => PreparedResult (helperProtocolResult engine message request) :: next
+rejectPreparedProtocolCustom env engine message requests = go requests
+  where
+    go [] = []
+    go ((row@(PreparedResult _)) :: rest) = row :: go rest
+    go ((row@(PreparedRun request _ plans)) :: rest) =
+      let next = go rest
+      match customPlansReachable env plans
+        [] => row :: next
+        _ =>
+          PreparedResult (helperProtocolResult engine message request) :: next
 
 helperProtocolResult : String -> String -> PropRequest -> PropResult
 helperProtocolResult engine message (PropRequest name seed cases) =
@@ -5838,13 +5838,9 @@ testFilesReport _ _ acc = acc
 (DTypeSig false "preparedPlanError" (TyFun (TyCon "String") (TyFun (TyCon "PlanError") (TyFun (TyCon "PropRequest") (TyCon "PreparedPropRequest")))))
 (DFunDef false "preparedPlanError" ((PVar "engine") (PVar "err") (PCon "PropRequest" (PVar "name") (PVar "seed") (PVar "cases"))) (EApp (EVar "PreparedResult") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "PropResult") (EVar "engine")) (EVar "name")) (EVar "PropErroredResult")) (EApp (EVar "Some") (EVar "PropCapabilityError"))) (EApp (EVar "planErrorText") (EVar "err"))) (EVar "seed")) (EVar "cases"))))
 (DTypeSig false "rejectPreparedHelpers" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "PreparedPropRequest")) (TyApp (TyCon "List") (TyCon "PreparedPropRequest")))))))
-(DFunDef false "rejectPreparedHelpers" (PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "rejectPreparedHelpers" ((PVar "env") (PVar "engine") (PVar "rejected") (PCons (PAs "row" (PCon "PreparedResult" PWild)) (PVar "rest"))) (EBinOp "::" (EVar "row") (EApp (EApp (EApp (EApp (EVar "rejectPreparedHelpers") (EVar "env")) (EVar "engine")) (EVar "rejected")) (EVar "rest"))))
-(DFunDef false "rejectPreparedHelpers" ((PVar "env") (PVar "engine") (PVar "rejected") (PCons (PAs "row" (PCon "PreparedRun" (PVar "request") PWild (PVar "plans"))) (PVar "rest"))) (EBlock (DoLet false false (PVar "next") (EApp (EApp (EApp (EApp (EVar "rejectPreparedHelpers") (EVar "env")) (EVar "engine")) (EVar "rejected")) (EVar "rest"))) (DoExpr (EIf (EApp (EApp (EApp (EVar "plansHaveNoRejectedCarrier") (EVar "env")) (EVar "rejected")) (EVar "plans")) (EBinOp "::" (EVar "row") (EVar "next")) (EBinOp "::" (EApp (EVar "PreparedResult") (EApp (EApp (EApp (EApp (EApp (EVar "helperCapabilityResult") (EVar "env")) (EVar "engine")) (EVar "request")) (EVar "rejected")) (EVar "plans"))) (EVar "next"))))))
+(DFunDef false "rejectPreparedHelpers" ((PVar "env") (PVar "engine") (PVar "rejected") (PVar "requests")) (ELetGroup ((lgb "go" (clause ((PList)) (EListLit)) (clause ((PCons (PAs "row" (PCon "PreparedResult" PWild)) (PVar "rest"))) (EBinOp "::" (EVar "row") (EApp (EVar "go") (EVar "rest")))) (clause ((PCons (PAs "row" (PCon "PreparedRun" (PVar "request") PWild (PVar "plans"))) (PVar "rest"))) (EBlock (DoLet false false (PVar "next") (EApp (EVar "go") (EVar "rest"))) (DoExpr (EIf (EApp (EApp (EApp (EVar "plansHaveNoRejectedCarrier") (EVar "env")) (EVar "rejected")) (EVar "plans")) (EBinOp "::" (EVar "row") (EVar "next")) (EBinOp "::" (EApp (EVar "PreparedResult") (EApp (EApp (EApp (EApp (EApp (EVar "helperCapabilityResult") (EVar "env")) (EVar "engine")) (EVar "request")) (EVar "rejected")) (EVar "plans"))) (EVar "next")))))))) (EApp (EVar "go") (EVar "requests"))))
 (DTypeSig false "rejectPreparedProtocolCustom" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "PreparedPropRequest")) (TyApp (TyCon "List") (TyCon "PreparedPropRequest")))))))
-(DFunDef false "rejectPreparedProtocolCustom" (PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "rejectPreparedProtocolCustom" ((PVar "env") (PVar "engine") (PVar "message") (PCons (PAs "row" (PCon "PreparedResult" PWild)) (PVar "rest"))) (EBinOp "::" (EVar "row") (EApp (EApp (EApp (EApp (EVar "rejectPreparedProtocolCustom") (EVar "env")) (EVar "engine")) (EVar "message")) (EVar "rest"))))
-(DFunDef false "rejectPreparedProtocolCustom" ((PVar "env") (PVar "engine") (PVar "message") (PCons (PAs "row" (PCon "PreparedRun" (PVar "request") PWild (PVar "plans"))) (PVar "rest"))) (EBlock (DoLet false false (PVar "next") (EApp (EApp (EApp (EApp (EVar "rejectPreparedProtocolCustom") (EVar "env")) (EVar "engine")) (EVar "message")) (EVar "rest"))) (DoExpr (EMatch (EApp (EApp (EVar "customPlansReachable") (EVar "env")) (EVar "plans")) (arm (PList) () (EBinOp "::" (EVar "row") (EVar "next"))) (arm PWild () (EBinOp "::" (EApp (EVar "PreparedResult") (EApp (EApp (EApp (EVar "helperProtocolResult") (EVar "engine")) (EVar "message")) (EVar "request"))) (EVar "next")))))))
+(DFunDef false "rejectPreparedProtocolCustom" ((PVar "env") (PVar "engine") (PVar "message") (PVar "requests")) (ELetGroup ((lgb "go" (clause ((PList)) (EListLit)) (clause ((PCons (PAs "row" (PCon "PreparedResult" PWild)) (PVar "rest"))) (EBinOp "::" (EVar "row") (EApp (EVar "go") (EVar "rest")))) (clause ((PCons (PAs "row" (PCon "PreparedRun" (PVar "request") PWild (PVar "plans"))) (PVar "rest"))) (EBlock (DoLet false false (PVar "next") (EApp (EVar "go") (EVar "rest"))) (DoExpr (EMatch (EApp (EApp (EVar "customPlansReachable") (EVar "env")) (EVar "plans")) (arm (PList) () (EBinOp "::" (EVar "row") (EVar "next"))) (arm PWild () (EBinOp "::" (EApp (EVar "PreparedResult") (EApp (EApp (EApp (EVar "helperProtocolResult") (EVar "engine")) (EVar "message")) (EVar "request"))) (EVar "next"))))))))) (EApp (EVar "go") (EVar "requests"))))
 (DTypeSig false "helperProtocolResult" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "PropRequest") (TyCon "PropResult")))))
 (DFunDef false "helperProtocolResult" ((PVar "engine") (PVar "message") (PCon "PropRequest" (PVar "name") (PVar "seed") (PVar "cases"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "PropResult") (EVar "engine")) (EVar "name")) (EVar "PropErroredResult")) (EApp (EVar "Some") (EVar "PropProtocolError"))) (EVar "message")) (EVar "seed")) (EVar "cases")))
 (DTypeSig false "helperCapabilityResult" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "String") (TyFun (TyCon "PropRequest") (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "GenPlan")) (TyCon "PropResult")))))))
@@ -6555,13 +6551,9 @@ testFilesReport _ _ acc = acc
 (DTypeSig false "preparedPlanError" (TyFun (TyCon "String") (TyFun (TyCon "PlanError") (TyFun (TyCon "PropRequest") (TyCon "PreparedPropRequest")))))
 (DFunDef false "preparedPlanError" ((PVar "engine") (PVar "err") (PCon "PropRequest" (PVar "name") (PVar "seed") (PVar "cases"))) (EApp (EVar "PreparedResult") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "PropResult") (EVar "engine")) (EVar "name")) (EVar "PropErroredResult")) (EApp (EVar "Some") (EVar "PropCapabilityError"))) (EApp (EVar "planErrorText") (EVar "err"))) (EVar "seed")) (EVar "cases"))))
 (DTypeSig false "rejectPreparedHelpers" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "PreparedPropRequest")) (TyApp (TyCon "List") (TyCon "PreparedPropRequest")))))))
-(DFunDef false "rejectPreparedHelpers" (PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "rejectPreparedHelpers" ((PVar "env") (PVar "engine") (PVar "rejected") (PCons (PAs "row" (PCon "PreparedResult" PWild)) (PVar "rest"))) (EBinOp "::" (EVar "row") (EApp (EApp (EApp (EApp (EVar "rejectPreparedHelpers") (EVar "env")) (EVar "engine")) (EVar "rejected")) (EVar "rest"))))
-(DFunDef false "rejectPreparedHelpers" ((PVar "env") (PVar "engine") (PVar "rejected") (PCons (PAs "row" (PCon "PreparedRun" (PVar "request") PWild (PVar "plans"))) (PVar "rest"))) (EBlock (DoLet false false (PVar "next") (EApp (EApp (EApp (EApp (EVar "rejectPreparedHelpers") (EVar "env")) (EVar "engine")) (EVar "rejected")) (EVar "rest"))) (DoExpr (EIf (EApp (EApp (EApp (EVar "plansHaveNoRejectedCarrier") (EVar "env")) (EVar "rejected")) (EVar "plans")) (EBinOp "::" (EVar "row") (EVar "next")) (EBinOp "::" (EApp (EVar "PreparedResult") (EApp (EApp (EApp (EApp (EApp (EVar "helperCapabilityResult") (EVar "env")) (EVar "engine")) (EVar "request")) (EVar "rejected")) (EVar "plans"))) (EVar "next"))))))
+(DFunDef false "rejectPreparedHelpers" ((PVar "env") (PVar "engine") (PVar "rejected") (PVar "requests")) (ELetGroup ((lgb "go" (clause ((PList)) (EListLit)) (clause ((PCons (PAs "row" (PCon "PreparedResult" PWild)) (PVar "rest"))) (EBinOp "::" (EVar "row") (EApp (EVar "go") (EVar "rest")))) (clause ((PCons (PAs "row" (PCon "PreparedRun" (PVar "request") PWild (PVar "plans"))) (PVar "rest"))) (EBlock (DoLet false false (PVar "next") (EApp (EVar "go") (EVar "rest"))) (DoExpr (EIf (EApp (EApp (EApp (EVar "plansHaveNoRejectedCarrier") (EVar "env")) (EVar "rejected")) (EVar "plans")) (EBinOp "::" (EVar "row") (EVar "next")) (EBinOp "::" (EApp (EVar "PreparedResult") (EApp (EApp (EApp (EApp (EApp (EVar "helperCapabilityResult") (EVar "env")) (EVar "engine")) (EVar "request")) (EVar "rejected")) (EVar "plans"))) (EVar "next")))))))) (EApp (EVar "go") (EVar "requests"))))
 (DTypeSig false "rejectPreparedProtocolCustom" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "PreparedPropRequest")) (TyApp (TyCon "List") (TyCon "PreparedPropRequest")))))))
-(DFunDef false "rejectPreparedProtocolCustom" (PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "rejectPreparedProtocolCustom" ((PVar "env") (PVar "engine") (PVar "message") (PCons (PAs "row" (PCon "PreparedResult" PWild)) (PVar "rest"))) (EBinOp "::" (EVar "row") (EApp (EApp (EApp (EApp (EVar "rejectPreparedProtocolCustom") (EVar "env")) (EVar "engine")) (EVar "message")) (EVar "rest"))))
-(DFunDef false "rejectPreparedProtocolCustom" ((PVar "env") (PVar "engine") (PVar "message") (PCons (PAs "row" (PCon "PreparedRun" (PVar "request") PWild (PVar "plans"))) (PVar "rest"))) (EBlock (DoLet false false (PVar "next") (EApp (EApp (EApp (EApp (EVar "rejectPreparedProtocolCustom") (EVar "env")) (EVar "engine")) (EVar "message")) (EVar "rest"))) (DoExpr (EMatch (EApp (EApp (EVar "customPlansReachable") (EVar "env")) (EVar "plans")) (arm (PList) () (EBinOp "::" (EVar "row") (EVar "next"))) (arm PWild () (EBinOp "::" (EApp (EVar "PreparedResult") (EApp (EApp (EApp (EVar "helperProtocolResult") (EVar "engine")) (EVar "message")) (EVar "request"))) (EVar "next")))))))
+(DFunDef false "rejectPreparedProtocolCustom" ((PVar "env") (PVar "engine") (PVar "message") (PVar "requests")) (ELetGroup ((lgb "go" (clause ((PList)) (EListLit)) (clause ((PCons (PAs "row" (PCon "PreparedResult" PWild)) (PVar "rest"))) (EBinOp "::" (EVar "row") (EApp (EVar "go") (EVar "rest")))) (clause ((PCons (PAs "row" (PCon "PreparedRun" (PVar "request") PWild (PVar "plans"))) (PVar "rest"))) (EBlock (DoLet false false (PVar "next") (EApp (EVar "go") (EVar "rest"))) (DoExpr (EMatch (EApp (EApp (EVar "customPlansReachable") (EVar "env")) (EVar "plans")) (arm (PList) () (EBinOp "::" (EVar "row") (EVar "next"))) (arm PWild () (EBinOp "::" (EApp (EVar "PreparedResult") (EApp (EApp (EApp (EVar "helperProtocolResult") (EVar "engine")) (EVar "message")) (EVar "request"))) (EVar "next"))))))))) (EApp (EVar "go") (EVar "requests"))))
 (DTypeSig false "helperProtocolResult" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "PropRequest") (TyCon "PropResult")))))
 (DFunDef false "helperProtocolResult" ((PVar "engine") (PVar "message") (PCon "PropRequest" (PVar "name") (PVar "seed") (PVar "cases"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "PropResult") (EVar "engine")) (EVar "name")) (EVar "PropErroredResult")) (EApp (EVar "Some") (EVar "PropProtocolError"))) (EVar "message")) (EVar "seed")) (EVar "cases")))
 (DTypeSig false "helperCapabilityResult" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "String") (TyFun (TyCon "PropRequest") (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "GenPlan")) (TyCon "PropResult")))))))

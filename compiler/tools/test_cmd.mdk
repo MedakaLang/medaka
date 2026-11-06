@@ -4157,34 +4157,34 @@ rejectPreparedHelpers : PlanEnv ->
   OrdMap String ->
   List PreparedPropRequest ->
   List PreparedPropRequest
--- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
--- lint-disable-next-line rule-threaded-invariant
-rejectPreparedHelpers _ _ _ [] = []
-rejectPreparedHelpers env engine rejected ((row@(PreparedResult _)) :: rest) =
-  row :: rejectPreparedHelpers env engine rejected rest
-rejectPreparedHelpers env engine rejected ((row@(PreparedRun request _ plans)) :: rest) =
-  let next = rejectPreparedHelpers env engine rejected rest
-  if plansHaveNoRejectedCarrier env rejected plans then
-    row :: next
-  else
-    PreparedResult (helperCapabilityResult env engine request rejected plans)
-      :: next
+rejectPreparedHelpers env engine rejected requests = go requests
+  where
+    go [] = []
+    go ((row@(PreparedResult _)) :: rest) = row :: go rest
+    go ((row@(PreparedRun request _ plans)) :: rest) =
+      let next = go rest
+      if plansHaveNoRejectedCarrier env rejected plans then
+        row :: next
+      else
+        PreparedResult
+            (helperCapabilityResult env engine request rejected plans)
+          :: next
 
 rejectPreparedProtocolCustom : PlanEnv ->
   String ->
   String ->
   List PreparedPropRequest ->
   List PreparedPropRequest
--- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
--- lint-disable-next-line rule-threaded-invariant
-rejectPreparedProtocolCustom _ _ _ [] = []
-rejectPreparedProtocolCustom env engine message ((row@(PreparedResult _)) :: rest) =
-  row :: rejectPreparedProtocolCustom env engine message rest
-rejectPreparedProtocolCustom env engine message ((row@(PreparedRun request _ plans)) :: rest) =
-  let next = rejectPreparedProtocolCustom env engine message rest
-  match customPlansReachable env plans
-    [] => row :: next
-    _ => PreparedResult (helperProtocolResult engine message request) :: next
+rejectPreparedProtocolCustom env engine message requests = go requests
+  where
+    go [] = []
+    go ((row@(PreparedResult _)) :: rest) = row :: go rest
+    go ((row@(PreparedRun request _ plans)) :: rest) =
+      let next = go rest
+      match customPlansReachable env plans
+        [] => row :: next
+        _ =>
+          PreparedResult (helperProtocolResult engine message request) :: next
 
 helperProtocolResult : String -> String -> PropRequest -> PropResult
 helperProtocolResult engine message (PropRequest name seed cases) =

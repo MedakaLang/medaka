@@ -91,7 +91,8 @@ import ir.core_ir.{
   CImplEntry(..),
   CImplBody(..),
 }
-import support.util.{filterList, markReachable, startsWith}
+import support.util.{filterList, startsWith}
+import support.graph.{markReachable}
 import backend.emit_support.{forEachU}
 import hash_map.{HashMap, new, setInPlace, has, findWithDefault}
 
@@ -187,7 +188,6 @@ addEdges : HashMap String Unit ->
 addEdges defined g key refs =
   setInPlace key (map (canonKey defined) refs ++ findWithDefault [] key g) g
 
--- BFS worklist closure; `has` skips already-processed keys so each is expanded once.
 -- ── structural reference collection ────────────────────────────────────────
 -- Every name a body can turn into a call/global reference at emit time.  Binder
 -- scoping is ignored on purpose (see header).  This match is deliberately
@@ -269,7 +269,8 @@ refsImplBody (CImplDefault _ _ _ _ _ _ body) = refsE body
 (DUse false (UseGroup ("support" "symbol_encoding") ((mem "encodePair" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Route" true))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "CExpr" true) (mem "MethodEvidence" true) (mem "CBind" true) (mem "CClause" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CImplEntry" true) (mem "CImplBody" true))))
-(DUse false (UseGroup ("support" "util") ((mem "filterList" false) (mem "markReachable" false) (mem "startsWith" false))))
+(DUse false (UseGroup ("support" "util") ((mem "filterList" false) (mem "startsWith" false))))
+(DUse false (UseGroup ("support" "graph") ((mem "markReachable" false))))
 (DUse false (UseGroup ("backend" "emit_support") ((mem "forEachU" false))))
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "setInPlace" false) (mem "has" false) (mem "findWithDefault" false))))
 (DTypeSig true "wasmReachFilter" (TyFun (TyCon "CProgram") (TyCon "CProgram")))
@@ -355,7 +356,8 @@ refsImplBody (CImplDefault _ _ _ _ _ _ body) = refsE body
 (DUse false (UseGroup ("support" "symbol_encoding") ((mem "encodePair" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Route" true))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "CExpr" true) (mem "MethodEvidence" true) (mem "CBind" true) (mem "CClause" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CImplEntry" true) (mem "CImplBody" true))))
-(DUse false (UseGroup ("support" "util") ((mem "filterList" false) (mem "markReachable" false) (mem "startsWith" false))))
+(DUse false (UseGroup ("support" "util") ((mem "filterList" false) (mem "startsWith" false))))
+(DUse false (UseGroup ("support" "graph") ((mem "markReachable" false))))
 (DUse false (UseGroup ("backend" "emit_support") ((mem "forEachU" false))))
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "setInPlace" false) (mem "has" false) (mem "findWithDefault" false))))
 (DTypeSig true "wasmReachFilter" (TyFun (TyCon "CProgram") (TyCon "CProgram")))
