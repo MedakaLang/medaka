@@ -1926,10 +1926,10 @@ lookupVarG e env x = match omLookup x env
   Some (reg, LTU32U) => (tagU32 e reg, LTInt)
   Some (reg, LTI32U) => (tagI32 e reg, LTInt)
   Some vt => vt
-  -- #561 PR-A: a LAZY value global (dispatch-reaching or cyclic) is forced on first
-  -- use — its read is `call @mdk_force_<x>()`, which memoises into @mdk_g_<x> and
-  -- black-holes a re-entrant force into E-CYCLIC-VALUE.  A LOCAL of the same name
-  -- still shadows (the env is checked first, above).
+  -- #561 PR-A: a LAZY value global (`emit_support.lazyGlobalNames`: it reaches an
+  -- initializer not safe to speculate, a cycle or an eager dispatch) is forced on
+  -- first use: `call @mdk_force_<x>()` memoises into @mdk_g_<x> and black-holes a
+  -- re-entrant force into E-CYCLIC-VALUE.  A LOCAL of the same name still shadows.
   --
   -- The read carries the global's static type (`lazyGlobalTy`), as an eager read
   -- carries its registry entry's: an unstamped program (`llvm_emit_main`) has no

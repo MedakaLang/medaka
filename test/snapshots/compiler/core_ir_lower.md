@@ -1,5 +1,5 @@
 # META
-source_lines=4117
+source_lines=4125
 stages=DESUGAR,MARK
 # SOURCE
 import support.symbol_encoding.{encodePair}
@@ -1528,6 +1528,11 @@ emitPasses =
     ++ finishPasses
     ++ [namedPass "lower-externs" (c p => lowerExterns c.pcFacts c.pcDecls p)]
 
+-- The names of `emitPasses`, in order: what a dump request may name.
+export
+emitPassNames : List String
+emitPassNames = map (p => p.passName) emitPasses
+
 -- Call modes are stamped from the clauses the eta pass produced, so eta comes
 -- first; tail marks and binder stamps read the stamped modes.
 finishPasses : List (CorePass PassCtx)
@@ -1812,8 +1817,11 @@ spineOf e = (e, [])
 -- an argument whose evaluation has no effect and does no work worth delaying.  A
 -- literal's `fromInt` is one only through the prelude's `Num` at `Float`, whose
 -- conversion cannot fail: any other impl may panic (a range check), and delaying it
--- would move or drop the panic.  `Num Int`'s `fromInt` is already folded to its
--- literal by `fold-num-int-fromint`, which runs before `eta-saturate` reads this.
+-- would move or drop the panic.  `Num Int`'s `fromInt` is not atomic here.  In
+-- `emitPasses` it is already folded to its literal by `fold-num-int-fromint`, which
+-- runs before `eta-saturate` reads this; `untypedPasses` and `typedPasses` run no
+-- fold, so there a partial application with such an argument stays unsaturated
+-- (a partial call) instead of being eta-expanded.
 isAtomicArg : CExpr -> Bool
 isAtomicArg (CVar _ _) = True
 isAtomicArg (CLit _) = True
@@ -4590,6 +4598,8 @@ nodeTag _ = "?"
 (DFunDef false "typedPasses" () (EVar "untypedPasses"))
 (DTypeSig false "emitPasses" (TyApp (TyCon "List") (TyApp (TyCon "CorePass") (TyCon "PassCtx"))))
 (DFunDef false "emitPasses" () (EBinOp "++" (EBinOp "++" (EListLit (EApp (EApp (EVar "namedPass") (ELit (LString "decl-facts"))) (ELam ((PVar "c") (PVar "p")) (EApp (EApp (EVar "withDeclFacts") (EApp (EApp (EApp (EVar "emitDeclFacts") (EFieldAccess (EVar "c") "pcFacts")) (EFieldAccess (EVar "c") "pcSited")) (EApp (EVar "cprogramSymbolOrigins") (EVar "p")))) (EVar "p")))) (EApp (EApp (EVar "namedPass") (ELit (LString "record-patterns"))) (ELam ((PVar "c") (PVar "p")) (EApp (EApp (EVar "rewriteProgramRecPats") (EFieldAccess (EVar "c") "pcFieldOrders")) (EVar "p")))) (EApp (EApp (EVar "namedPass") (ELit (LString "refold-lets"))) (ELam (PWild (PVar "p")) (EApp (EApp (EVar "refoldProgram") (EApp (EVar "patCanMiss") (EApp (EVar "siblingTable") (EApp (EVar "cprogramCtorTypes") (EVar "p"))))) (EVar "p")))) (EApp (EApp (EVar "namedPass") (ELit (LString "hoist-nullary-memo"))) (ELam (PWild (PVar "p")) (EApp (EVar "hoistNullaryMemo") (EVar "p")))) (EApp (EApp (EVar "namedPass") (ELit (LString "fold-num-int-fromint"))) (ELam (PWild (PVar "p")) (EApp (EVar "foldNumIntFromInt") (EVar "p"))))) (EVar "finishPasses")) (EListLit (EApp (EApp (EVar "namedPass") (ELit (LString "lower-externs"))) (ELam ((PVar "c") (PVar "p")) (EApp (EApp (EApp (EVar "lowerExterns") (EFieldAccess (EVar "c") "pcFacts")) (EFieldAccess (EVar "c") "pcDecls")) (EVar "p")))))))
+(DTypeSig true "emitPassNames" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "emitPassNames" () (EApp (EApp (EVar "map") (ELam ((PVar "p")) (EFieldAccess (EVar "p") "passName"))) (EVar "emitPasses")))
 (DTypeSig false "finishPasses" (TyApp (TyCon "List") (TyApp (TyCon "CorePass") (TyCon "PassCtx"))))
 (DFunDef false "finishPasses" () (EListLit (EApp (EApp (EVar "namedPass") (ELit (LString "eta-saturate"))) (ELam (PWild (PVar "p")) (EApp (EVar "etaSaturateProgram") (EVar "p")))) (EApp (EApp (EVar "namedPass") (ELit (LString "call-modes"))) (ELam (PWild (PVar "p")) (EApp (EVar "stampCallModes") (EVar "p")))) (EApp (EApp (EVar "namedPass") (ELit (LString "tail-sites"))) (ELam (PWild (PVar "p")) (EApp (EVar "markTailSites") (EVar "p")))) (EApp (EApp (EVar "namedPass") (ELit (LString "binder-stamps"))) (ELam ((PVar "c") (PVar "p")) (EApp (EApp (EApp (EVar "stampBinders") (EFieldAccess (EVar "c") "pcLowering")) (EFieldAccess (EFieldAccess (EVar "c") "pcFacts") "pfBinders")) (EVar "p"))))))
 (DData Public "ArityEnv" () ((variant "ArityEnv" (ConPos (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyApp (TyCon "OrdMap") (TyCon "Int"))))) ())
@@ -5930,6 +5940,8 @@ nodeTag _ = "?"
 (DFunDef false "typedPasses" () (EVar "untypedPasses"))
 (DTypeSig false "emitPasses" (TyApp (TyCon "List") (TyApp (TyCon "CorePass") (TyCon "PassCtx"))))
 (DFunDef false "emitPasses" () (EBinOp "++" (EBinOp "++" (EListLit (EApp (EApp (EVar "namedPass") (ELit (LString "decl-facts"))) (ELam ((PVar "c") (PVar "p")) (EApp (EApp (EVar "withDeclFacts") (EApp (EApp (EApp (EVar "emitDeclFacts") (EFieldAccess (EVar "c") "pcFacts")) (EFieldAccess (EVar "c") "pcSited")) (EApp (EVar "cprogramSymbolOrigins") (EVar "p")))) (EVar "p")))) (EApp (EApp (EVar "namedPass") (ELit (LString "record-patterns"))) (ELam ((PVar "c") (PVar "p")) (EApp (EApp (EVar "rewriteProgramRecPats") (EFieldAccess (EVar "c") "pcFieldOrders")) (EVar "p")))) (EApp (EApp (EVar "namedPass") (ELit (LString "refold-lets"))) (ELam (PWild (PVar "p")) (EApp (EApp (EVar "refoldProgram") (EApp (EVar "patCanMiss") (EApp (EVar "siblingTable") (EApp (EVar "cprogramCtorTypes") (EVar "p"))))) (EVar "p")))) (EApp (EApp (EVar "namedPass") (ELit (LString "hoist-nullary-memo"))) (ELam (PWild (PVar "p")) (EApp (EVar "hoistNullaryMemo") (EVar "p")))) (EApp (EApp (EVar "namedPass") (ELit (LString "fold-num-int-fromint"))) (ELam (PWild (PVar "p")) (EApp (EVar "foldNumIntFromInt") (EVar "p"))))) (EVar "finishPasses")) (EListLit (EApp (EApp (EVar "namedPass") (ELit (LString "lower-externs"))) (ELam ((PVar "c") (PVar "p")) (EApp (EApp (EApp (EVar "lowerExterns") (EFieldAccess (EVar "c") "pcFacts")) (EFieldAccess (EVar "c") "pcDecls")) (EVar "p")))))))
+(DTypeSig true "emitPassNames" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "emitPassNames" () (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (EFieldAccess (EVar "p") "passName"))) (EVar "emitPasses")))
 (DTypeSig false "finishPasses" (TyApp (TyCon "List") (TyApp (TyCon "CorePass") (TyCon "PassCtx"))))
 (DFunDef false "finishPasses" () (EListLit (EApp (EApp (EVar "namedPass") (ELit (LString "eta-saturate"))) (ELam (PWild (PVar "p")) (EApp (EVar "etaSaturateProgram") (EVar "p")))) (EApp (EApp (EVar "namedPass") (ELit (LString "call-modes"))) (ELam (PWild (PVar "p")) (EApp (EVar "stampCallModes") (EVar "p")))) (EApp (EApp (EVar "namedPass") (ELit (LString "tail-sites"))) (ELam (PWild (PVar "p")) (EApp (EVar "markTailSites") (EVar "p")))) (EApp (EApp (EVar "namedPass") (ELit (LString "binder-stamps"))) (ELam ((PVar "c") (PVar "p")) (EApp (EApp (EApp (EVar "stampBinders") (EFieldAccess (EVar "c") "pcLowering")) (EFieldAccess (EFieldAccess (EVar "c") "pcFacts") "pfBinders")) (EVar "p"))))))
 (DData Public "ArityEnv" () ((variant "ArityEnv" (ConPos (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyApp (TyCon "OrdMap") (TyCon "Int"))))) ())

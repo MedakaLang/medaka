@@ -1,8 +1,10 @@
 # META
-source_lines=77
+source_lines=118
 stages=DESUGAR,MARK
 # SOURCE
 import list.{reverse}
+import string.{join, split}
+import support.util.{filterList}
 import ir.core_ir.{CProgram}
 import ir.core_ir_sexp.{cprogramToSexp}
 import ir.core_lint.{lintProgram}
@@ -48,15 +50,53 @@ wantsDump : PassConfig -> String -> Bool
 wantsDump config which =
   elem "all" config.dumpAfter || elem which config.dumpAfter
 
+-- The lint switch an emit entry reads: `1` on, `0` off, unset on.  Any other
+-- value is an error naming the valid ones.
+export
+lintSwitch : Option String -> Result String Bool
+lintSwitch None = Ok True
+lintSwitch (Some "1") = Ok True
+lintSwitch (Some "0") = Ok False
+lintSwitch (Some other) = Err "unknown value `\{other}`; valid values: 0, 1"
+
+-- A comma-separated dump request against a pipeline whose passes are
+-- [passNames].  Besides those names it may use `input` (the program before the
+-- first pass) and `all` (every pass; `input` is dumped only when named).  An
+-- unknown name is an error naming the valid ones.
+export
+dumpSwitch : List String -> Option String -> Result String (List String)
+dumpSwitch passNames value =
+  let valid = passNames ++ ["input", "all"]
+  let names = match value
+    Some text => filterList (/= "") (split "," text)
+    None => []
+  match filterList (n => not (elem n valid)) names
+    [] => Ok names
+    bad :: _ =>
+      Err "unknown pass name `\{bad}`; valid names: \{join ", " valid}"
+
 -- Runs [passes] left to right over [start].  A pass that panics is not caught.
 -- With [lint] on, the start program is checked under the name `input` and the
--- program after each pass under that pass's name.
+-- program after each pass under that pass's name; a dump of `input` is the
+-- start program.
 export
 runPasses : PassConfig -> c -> List (CorePass c) -> CProgram -> PassRun
 runPasses config ctx passes start =
-  let first = PassRun start [] (reverse (lintFaults config "input" start))
+  let first = PassRun {
+    program = start,
+    dumps =
+      if elem "input" config.dumpAfter then
+        [("input", cprogramToSexp start)]
+      else
+        [],
+    faults = reverse (lintFaults config "input" start),
+  }
   let stepped = fold (step config ctx) first passes
-  PassRun stepped.program (reverse stepped.dumps) (reverse stepped.faults)
+  PassRun {
+    program = stepped.program,
+    dumps = reverse stepped.dumps,
+    faults = reverse stepped.faults,
+  }
 
 lintFaults : PassConfig -> String -> CProgram -> List PassFault
 lintFaults config which prog =
@@ -75,12 +115,15 @@ step config ctx acc pass =
       (pass.passName, cprogramToSexp next) :: acc.dumps
     else
       acc.dumps
-  PassRun
-    next
-    dumps
-    (reverse (lintFaults config pass.passName next) ++ acc.faults)
+  PassRun {
+    program = next,
+    dumps = dumps,
+    faults = reverse (lintFaults config pass.passName next) ++ acc.faults,
+  }
 # DESUGAR
 (DUse false (UseGroup ("list") ((mem "reverse" false))))
+(DUse false (UseGroup ("string") ((mem "join" false) (mem "split" false))))
+(DUse false (UseGroup ("support" "util") ((mem "filterList" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" false))))
 (DUse false (UseGroup ("ir" "core_ir_sexp") ((mem "cprogramToSexp" false))))
 (DUse false (UseGroup ("ir" "core_lint") ((mem "lintProgram" false))))
@@ -92,14 +135,23 @@ step config ctx acc pass =
 (DData Public "PassRun" () ((variant "PassRun" (ConNamed (field "program" (TyCon "CProgram")) (field "dumps" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "faults" (TyApp (TyCon "List") (TyCon "PassFault")))))) ())
 (DTypeSig false "wantsDump" (TyFun (TyCon "PassConfig") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "wantsDump" ((PVar "config") (PVar "which")) (EBinOp "||" (EApp (EApp (EVar "elem") (ELit (LString "all"))) (EFieldAccess (EVar "config") "dumpAfter")) (EApp (EApp (EVar "elem") (EVar "which")) (EFieldAccess (EVar "config") "dumpAfter"))))
+(DTypeSig true "lintSwitch" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Bool"))))
+(DFunDef false "lintSwitch" ((PCon "None")) (EApp (EVar "Ok") (EVar "True")))
+(DFunDef false "lintSwitch" ((PCon "Some" (PLit (LString "1")))) (EApp (EVar "Ok") (EVar "True")))
+(DFunDef false "lintSwitch" ((PCon "Some" (PLit (LString "0")))) (EApp (EVar "Ok") (EVar "False")))
+(DFunDef false "lintSwitch" ((PCon "Some" (PVar "other"))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "unknown value `")) (EApp (EVar "display") (EVar "other"))) (ELit (LString "`; valid values: 0, 1")))))
+(DTypeSig true "dumpSwitch" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "dumpSwitch" ((PVar "passNames") (PVar "value")) (EBlock (DoLet false false (PVar "valid") (EBinOp "++" (EVar "passNames") (EListLit (ELit (LString "input")) (ELit (LString "all"))))) (DoLet false false (PVar "names") (EMatch (EVar "value") (arm (PCon "Some" (PVar "text")) () (EApp (EApp (EVar "filterList") (ELam ((PVar "_s")) (EBinOp "/=" (EVar "_s") (ELit (LString ""))))) (EApp (EApp (EVar "split") (ELit (LString ","))) (EVar "text")))) (arm (PCon "None") () (EListLit)))) (DoExpr (EMatch (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EVar "not") (EApp (EApp (EVar "elem") (EVar "n")) (EVar "valid"))))) (EVar "names")) (arm (PList) () (EApp (EVar "Ok") (EVar "names"))) (arm (PCons (PVar "bad") PWild) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "unknown pass name `")) (EApp (EVar "display") (EVar "bad"))) (ELit (LString "`; valid names: "))) (EApp (EVar "display") (EApp (EApp (EVar "join") (ELit (LString ", "))) (EVar "valid")))) (ELit (LString "")))))))))
 (DTypeSig true "runPasses" (TyFun (TyCon "PassConfig") (TyFun (TyVar "c") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "CorePass") (TyVar "c"))) (TyFun (TyCon "CProgram") (TyCon "PassRun"))))))
-(DFunDef false "runPasses" ((PVar "config") (PVar "ctx") (PVar "passes") (PVar "start")) (EBlock (DoLet false false (PVar "first") (EApp (EApp (EApp (EVar "PassRun") (EVar "start")) (EListLit)) (EApp (EVar "reverse") (EApp (EApp (EApp (EVar "lintFaults") (EVar "config")) (ELit (LString "input"))) (EVar "start"))))) (DoLet false false (PVar "stepped") (EApp (EApp (EApp (EVar "fold") (EApp (EApp (EVar "step") (EVar "config")) (EVar "ctx"))) (EVar "first")) (EVar "passes"))) (DoExpr (EApp (EApp (EApp (EVar "PassRun") (EFieldAccess (EVar "stepped") "program")) (EApp (EVar "reverse") (EFieldAccess (EVar "stepped") "dumps"))) (EApp (EVar "reverse") (EFieldAccess (EVar "stepped") "faults"))))))
+(DFunDef false "runPasses" ((PVar "config") (PVar "ctx") (PVar "passes") (PVar "start")) (EBlock (DoLet false false (PVar "first") (ERecordCreate "PassRun" ((fa "program" (EVar "start")) (fa "dumps" (EIf (EApp (EApp (EVar "elem") (ELit (LString "input"))) (EFieldAccess (EVar "config") "dumpAfter")) (EListLit (ETuple (ELit (LString "input")) (EApp (EVar "cprogramToSexp") (EVar "start")))) (EListLit))) (fa "faults" (EApp (EVar "reverse") (EApp (EApp (EApp (EVar "lintFaults") (EVar "config")) (ELit (LString "input"))) (EVar "start"))))))) (DoLet false false (PVar "stepped") (EApp (EApp (EApp (EVar "fold") (EApp (EApp (EVar "step") (EVar "config")) (EVar "ctx"))) (EVar "first")) (EVar "passes"))) (DoExpr (ERecordCreate "PassRun" ((fa "program" (EFieldAccess (EVar "stepped") "program")) (fa "dumps" (EApp (EVar "reverse") (EFieldAccess (EVar "stepped") "dumps"))) (fa "faults" (EApp (EVar "reverse") (EFieldAccess (EVar "stepped") "faults"))))))))
 (DTypeSig false "lintFaults" (TyFun (TyCon "PassConfig") (TyFun (TyCon "String") (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "PassFault"))))))
 (DFunDef false "lintFaults" ((PVar "config") (PVar "which") (PVar "prog")) (EIf (EFieldAccess (EVar "config") "lint") (EApp (EApp (EVar "map") (ELam ((PVar "message")) (ERecordCreate "PassFault" ((fa "faultPass" (EVar "which")) (fa "faultMessage" (EVar "message")))))) (EApp (EVar "lintProgram") (EVar "prog"))) (EListLit)))
 (DTypeSig false "step" (TyFun (TyCon "PassConfig") (TyFun (TyVar "c") (TyFun (TyCon "PassRun") (TyFun (TyApp (TyCon "CorePass") (TyVar "c")) (TyCon "PassRun"))))))
-(DFunDef false "step" ((PVar "config") (PVar "ctx") (PVar "acc") (PVar "pass")) (EBlock (DoLet false false (PVar "next") (EApp (EApp (EFieldAccess (EVar "pass") "passRun") (EVar "ctx")) (EFieldAccess (EVar "acc") "program"))) (DoLet false false (PVar "dumps") (EIf (EApp (EApp (EVar "wantsDump") (EVar "config")) (EFieldAccess (EVar "pass") "passName")) (EBinOp "::" (ETuple (EFieldAccess (EVar "pass") "passName") (EApp (EVar "cprogramToSexp") (EVar "next"))) (EFieldAccess (EVar "acc") "dumps")) (EFieldAccess (EVar "acc") "dumps"))) (DoExpr (EApp (EApp (EApp (EVar "PassRun") (EVar "next")) (EVar "dumps")) (EBinOp "++" (EApp (EVar "reverse") (EApp (EApp (EApp (EVar "lintFaults") (EVar "config")) (EFieldAccess (EVar "pass") "passName")) (EVar "next"))) (EFieldAccess (EVar "acc") "faults"))))))
+(DFunDef false "step" ((PVar "config") (PVar "ctx") (PVar "acc") (PVar "pass")) (EBlock (DoLet false false (PVar "next") (EApp (EApp (EFieldAccess (EVar "pass") "passRun") (EVar "ctx")) (EFieldAccess (EVar "acc") "program"))) (DoLet false false (PVar "dumps") (EIf (EApp (EApp (EVar "wantsDump") (EVar "config")) (EFieldAccess (EVar "pass") "passName")) (EBinOp "::" (ETuple (EFieldAccess (EVar "pass") "passName") (EApp (EVar "cprogramToSexp") (EVar "next"))) (EFieldAccess (EVar "acc") "dumps")) (EFieldAccess (EVar "acc") "dumps"))) (DoExpr (ERecordCreate "PassRun" ((fa "program" (EVar "next")) (fa "dumps" (EVar "dumps")) (fa "faults" (EBinOp "++" (EApp (EVar "reverse") (EApp (EApp (EApp (EVar "lintFaults") (EVar "config")) (EFieldAccess (EVar "pass") "passName")) (EVar "next"))) (EFieldAccess (EVar "acc") "faults"))))))))
 # MARK
 (DUse false (UseGroup ("list") ((mem "reverse" false))))
+(DUse false (UseGroup ("string") ((mem "join" false) (mem "split" false))))
+(DUse false (UseGroup ("support" "util") ((mem "filterList" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" false))))
 (DUse false (UseGroup ("ir" "core_ir_sexp") ((mem "cprogramToSexp" false))))
 (DUse false (UseGroup ("ir" "core_lint") ((mem "lintProgram" false))))
@@ -111,9 +163,16 @@ step config ctx acc pass =
 (DData Public "PassRun" () ((variant "PassRun" (ConNamed (field "program" (TyCon "CProgram")) (field "dumps" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "faults" (TyApp (TyCon "List") (TyCon "PassFault")))))) ())
 (DTypeSig false "wantsDump" (TyFun (TyCon "PassConfig") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "wantsDump" ((PVar "config") (PVar "which")) (EBinOp "||" (EApp (EApp (EDictApp "elem") (ELit (LString "all"))) (EFieldAccess (EVar "config") "dumpAfter")) (EApp (EApp (EDictApp "elem") (EVar "which")) (EFieldAccess (EVar "config") "dumpAfter"))))
+(DTypeSig true "lintSwitch" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Bool"))))
+(DFunDef false "lintSwitch" ((PCon "None")) (EApp (EVar "Ok") (EVar "True")))
+(DFunDef false "lintSwitch" ((PCon "Some" (PLit (LString "1")))) (EApp (EVar "Ok") (EVar "True")))
+(DFunDef false "lintSwitch" ((PCon "Some" (PLit (LString "0")))) (EApp (EVar "Ok") (EVar "False")))
+(DFunDef false "lintSwitch" ((PCon "Some" (PVar "other"))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "unknown value `")) (EApp (EMethodRef "display") (EVar "other"))) (ELit (LString "`; valid values: 0, 1")))))
+(DTypeSig true "dumpSwitch" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "dumpSwitch" ((PVar "passNames") (PVar "value")) (EBlock (DoLet false false (PVar "valid") (EBinOp "++" (EVar "passNames") (EListLit (ELit (LString "input")) (ELit (LString "all"))))) (DoLet false false (PVar "names") (EMatch (EVar "value") (arm (PCon "Some" (PVar "text")) () (EApp (EApp (EVar "filterList") (ELam ((PVar "_s")) (EBinOp "/=" (EVar "_s") (ELit (LString ""))))) (EApp (EApp (EVar "split") (ELit (LString ","))) (EVar "text")))) (arm (PCon "None") () (EListLit)))) (DoExpr (EMatch (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EVar "not") (EApp (EApp (EDictApp "elem") (EVar "n")) (EVar "valid"))))) (EVar "names")) (arm (PList) () (EApp (EVar "Ok") (EVar "names"))) (arm (PCons (PVar "bad") PWild) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "unknown pass name `")) (EApp (EMethodRef "display") (EVar "bad"))) (ELit (LString "`; valid names: "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "join") (ELit (LString ", "))) (EVar "valid")))) (ELit (LString "")))))))))
 (DTypeSig true "runPasses" (TyFun (TyCon "PassConfig") (TyFun (TyVar "c") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "CorePass") (TyVar "c"))) (TyFun (TyCon "CProgram") (TyCon "PassRun"))))))
-(DFunDef false "runPasses" ((PVar "config") (PVar "ctx") (PVar "passes") (PVar "start")) (EBlock (DoLet false false (PVar "first") (EApp (EApp (EApp (EVar "PassRun") (EVar "start")) (EListLit)) (EApp (EVar "reverse") (EApp (EApp (EApp (EVar "lintFaults") (EVar "config")) (ELit (LString "input"))) (EVar "start"))))) (DoLet false false (PVar "stepped") (EApp (EApp (EApp (EMethodRef "fold") (EApp (EApp (EVar "step") (EVar "config")) (EVar "ctx"))) (EVar "first")) (EVar "passes"))) (DoExpr (EApp (EApp (EApp (EVar "PassRun") (EFieldAccess (EVar "stepped") "program")) (EApp (EVar "reverse") (EFieldAccess (EVar "stepped") "dumps"))) (EApp (EVar "reverse") (EFieldAccess (EVar "stepped") "faults"))))))
+(DFunDef false "runPasses" ((PVar "config") (PVar "ctx") (PVar "passes") (PVar "start")) (EBlock (DoLet false false (PVar "first") (ERecordCreate "PassRun" ((fa "program" (EVar "start")) (fa "dumps" (EIf (EApp (EApp (EDictApp "elem") (ELit (LString "input"))) (EFieldAccess (EVar "config") "dumpAfter")) (EListLit (ETuple (ELit (LString "input")) (EApp (EVar "cprogramToSexp") (EVar "start")))) (EListLit))) (fa "faults" (EApp (EVar "reverse") (EApp (EApp (EApp (EVar "lintFaults") (EVar "config")) (ELit (LString "input"))) (EVar "start"))))))) (DoLet false false (PVar "stepped") (EApp (EApp (EApp (EMethodRef "fold") (EApp (EApp (EVar "step") (EVar "config")) (EVar "ctx"))) (EVar "first")) (EVar "passes"))) (DoExpr (ERecordCreate "PassRun" ((fa "program" (EFieldAccess (EVar "stepped") "program")) (fa "dumps" (EApp (EVar "reverse") (EFieldAccess (EVar "stepped") "dumps"))) (fa "faults" (EApp (EVar "reverse") (EFieldAccess (EVar "stepped") "faults"))))))))
 (DTypeSig false "lintFaults" (TyFun (TyCon "PassConfig") (TyFun (TyCon "String") (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "PassFault"))))))
 (DFunDef false "lintFaults" ((PVar "config") (PVar "which") (PVar "prog")) (EIf (EFieldAccess (EVar "config") "lint") (EApp (EApp (EMethodRef "map") (ELam ((PVar "message")) (ERecordCreate "PassFault" ((fa "faultPass" (EVar "which")) (fa "faultMessage" (EVar "message")))))) (EApp (EVar "lintProgram") (EVar "prog"))) (EListLit)))
 (DTypeSig false "step" (TyFun (TyCon "PassConfig") (TyFun (TyVar "c") (TyFun (TyCon "PassRun") (TyFun (TyApp (TyCon "CorePass") (TyVar "c")) (TyCon "PassRun"))))))
-(DFunDef false "step" ((PVar "config") (PVar "ctx") (PVar "acc") (PVar "pass")) (EBlock (DoLet false false (PVar "next") (EApp (EApp (EFieldAccess (EVar "pass") "passRun") (EVar "ctx")) (EFieldAccess (EVar "acc") "program"))) (DoLet false false (PVar "dumps") (EIf (EApp (EApp (EVar "wantsDump") (EVar "config")) (EFieldAccess (EVar "pass") "passName")) (EBinOp "::" (ETuple (EFieldAccess (EVar "pass") "passName") (EApp (EVar "cprogramToSexp") (EVar "next"))) (EFieldAccess (EVar "acc") "dumps")) (EFieldAccess (EVar "acc") "dumps"))) (DoExpr (EApp (EApp (EApp (EVar "PassRun") (EVar "next")) (EVar "dumps")) (EBinOp "++" (EApp (EVar "reverse") (EApp (EApp (EApp (EVar "lintFaults") (EVar "config")) (EFieldAccess (EVar "pass") "passName")) (EVar "next"))) (EFieldAccess (EVar "acc") "faults"))))))
+(DFunDef false "step" ((PVar "config") (PVar "ctx") (PVar "acc") (PVar "pass")) (EBlock (DoLet false false (PVar "next") (EApp (EApp (EFieldAccess (EVar "pass") "passRun") (EVar "ctx")) (EFieldAccess (EVar "acc") "program"))) (DoLet false false (PVar "dumps") (EIf (EApp (EApp (EVar "wantsDump") (EVar "config")) (EFieldAccess (EVar "pass") "passName")) (EBinOp "::" (ETuple (EFieldAccess (EVar "pass") "passName") (EApp (EVar "cprogramToSexp") (EVar "next"))) (EFieldAccess (EVar "acc") "dumps")) (EFieldAccess (EVar "acc") "dumps"))) (DoExpr (ERecordCreate "PassRun" ((fa "program" (EVar "next")) (fa "dumps" (EVar "dumps")) (fa "faults" (EBinOp "++" (EApp (EVar "reverse") (EApp (EApp (EApp (EVar "lintFaults") (EVar "config")) (EFieldAccess (EVar "pass") "passName")) (EVar "next"))) (EFieldAccess (EVar "acc") "faults"))))))))
