@@ -36,8 +36,8 @@ import list.{nub, sort, sortBy, takeWhile, dropWhile}
 
 -- Read every subject file once. Result is (ast, the censused sources joined,
 -- site ledger, decl ledger). The source list matches SRCS in test/catch_all_census.py.
-loadAll : <IO, FileRead> Result String (String, String, String, String)
-loadAll = do
+loadAll : Unit -> <IO, FileRead> Result String (String, String, String, String)
+loadAll () = do
   astText <- readFile (underRoot "compiler/frontend/ast.mdk")
   tc <- readFile (underRoot "compiler/types/typecheck.mdk")
   tcMono <- readFile (underRoot "compiler/types/tc_mono.mdk")
@@ -80,13 +80,13 @@ loadAll = do
     declLedger,
   )
 
-siteCheck : <IO, FileRead> Expectation
-siteCheck = match loadAll
+siteCheck : Unit -> <IO, FileRead> Expectation
+siteCheck () = match loadAll ()
   Err e => fail "catch_all_census: could not read the census subject: \{e}"
   Ok (astText, srcText, siteLedger, _) => siteExpect astText srcText siteLedger
 
-declCheck : <IO, FileRead> Expectation
-declCheck = match loadAll
+declCheck : Unit -> <IO, FileRead> Expectation
+declCheck () = match loadAll ()
   Err e => fail "catch_all_census: could not read the decl-runner subject: \{e}"
   Ok (astText, _, _, declLedger) => declExpect astText declLedger
 
@@ -159,10 +159,10 @@ declExpect astText declLedger =
     ]
 
 test "catch_all_census: typechecker catch-all sites over Expr/Decl match the ledger" =
-  siteCheck
+  siteCheck ()
 
 test "catch_all_census: every Decl constructor has a named runner row, no TODO" =
-  declCheck
+  declCheck ()
 
 -- ---------------------------------------------------------------------------
 -- Constructor sets, from `public export data <Sum> =` in ast.mdk.

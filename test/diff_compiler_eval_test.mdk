@@ -655,15 +655,15 @@ writeAll ((path, src) :: rest) = match writeFile path src
    `scratchDir ()` makes one root per call; the binding below is a value, so
    it is evaluated once per process. Nothing in this module removes the root;
    `mkdirAll` keeps each test independent of it. -}
-ffiScratch : <Exec, FileWrite> Result String String
-ffiScratch = match scratchDir ()
+ffiScratch : Unit -> <Exec, FileWrite> Result String String
+ffiScratch () = match scratchDir ()
   Err e => Err e
   Ok root =>
     let dir = "\{root}/ffi"
     map (() => dir) (mkdirAll dir)
 
-ffiEngineWall : <Exec, FileWrite, IO> Expectation
-ffiEngineWall = match ffiScratch
+ffiEngineWall : Unit -> <Exec, FileWrite, IO> Expectation
+ffiEngineWall () = match ffiScratch ()
   Err e => fail "could not make a scratch directory: \{e}"
   Ok scratch =>
     let reached = "\{scratch}/ffi_reached.mdk"
@@ -694,4 +694,4 @@ ffiEngineWall = match ffiScratch
               "\{intToString (length fs)} FFI engine-wall findings:\n\{unlines fs}"
 
 test "a reached FFI extern walls off both engines, and resets between fixtures" =
-  ffiEngineWall
+  ffiEngineWall ()

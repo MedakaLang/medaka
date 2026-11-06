@@ -133,8 +133,8 @@ labelFinding declared needs (s :: externs) =
       ])
 labelFinding _ _ [] = ["malformed extern row"]
 
-agreement : <IO, Exec, Env "MEDAKA_ROOT", FileRead> Expectation
-agreement = match (
+agreement : Unit -> <IO, Exec, Env "MEDAKA_ROOT", FileRead> Expectation
+agreement () = match (
   boundedVerb "node" [underRoot "test/wasm/host_profile_table.mjs"],
   readFile (underRoot "stdlib/runtime.mdk"),
 )
@@ -153,4 +153,4 @@ agreement = match (
       "node host_profile_table.mjs exited \{debug code}: \{unwords [out, err]}"
 
 test "wasm host profile agreement: host PROFILES grants and slices match target_profile.mdk" =
-  agreement
+  agreement ()

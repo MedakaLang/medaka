@@ -1979,13 +1979,13 @@ warmSessionScript = "test/lsp_warm_session.sh"
    `test/diff_compiler_tier_drift.sh` reads this call to derive when
    `lsp_warm_session` runs — this module IS that gate's only invocation site,
    and a name in front of the list hides it. -}
-runWarmSession : <Exec, IO> Result String (Int, String, String)
-runWarmSession = boundedInTree sessionTimeoutSeconds "sh" [
+runWarmSession : Unit -> <Exec, IO> Result String (Int, String, String)
+runWarmSession () = boundedInTree sessionTimeoutSeconds "sh" [
   "\{medakaRoot ()}/\{warmSessionScript}",
 ]
 
 test "a warm multi-module session publishes what a cold check --json reports" =
-  match runWarmSession
+  match runWarmSession ()
     Err e => fail "could not run \{warmSessionScript}: \{e}"
     Ok (code, out, err) =>
       let text = out ++ err
@@ -2015,8 +2015,8 @@ toolTableStart = "# ── GOLDEN TABLE BEGIN"
 toolTableEnd : String
 toolTableEnd = "# ── GOLDEN TABLE END"
 
-toolGoldens : <FileRead, IO> Result String (List String)
-toolGoldens = match readFile "\{medakaRoot ()}/test/lsp_bless.sh"
+toolGoldens : Unit -> <FileRead, IO> Result String (List String)
+toolGoldens () = match readFile "\{medakaRoot ()}/test/lsp_bless.sh"
   Err e => Err "cannot read test/lsp_bless.sh: \{e}"
   Ok src => match between toolTableStart toolTableEnd (lines src)
     [] => Err "test/lsp_bless.sh has no GOLDEN TABLE block"
@@ -2047,7 +2047,7 @@ oracleName p = match p.oracle
   Frames name => Some name
 
 test "the bless tool mints exactly the goldens this file reads" =
-  match toolGoldens
+  match toolGoldens ()
     Err e => fail e
     Ok minted =>
       if minted == ownGoldens then

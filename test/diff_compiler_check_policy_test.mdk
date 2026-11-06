@@ -13,8 +13,8 @@ import test.{
 }
 import string.{contains, replaceAll, trim}
 
-goldenDir : String
-goldenDir = underRoot "test/check_policy_fixtures"
+goldenDir : Unit -> <Env {"MEDAKA_ROOT"}> String
+goldenDir () = underRoot "test/check_policy_fixtures"
 
 -- Golden case: byte-identical stdout+stderr (plugin path replaced) and the
 -- recorded exit code (accept=0, reject=1).
@@ -31,7 +31,7 @@ policyCase label file allow fn stem =
   ])
     Err e => fail "\{label}: could not spawn: \{e}"
     Ok (code, out, err) =>
-      let rcPath = "\{goldenDir}/\{stem}.rc"
+      let rcPath = "\{goldenDir ()}/\{stem}.rc"
       match readFile rcPath
         Err e => fail "\{label}: missing rc \{rcPath}: \{e}"
         Ok rcRaw =>
@@ -40,7 +40,7 @@ policyCase label file allow fn stem =
             fail "\{label}: rc \{intToString code}, golden rc \{rcText}"
           else
             expectGolden
-              "\{goldenDir}/\{stem}.golden"
+              "\{goldenDir ()}/\{stem}.golden"
               (replaceAll mdk "<plugin>" (out ++ err))
 
 -- WS-1b / WS-2 parameter-level case: exit code, plus a substring of the output.

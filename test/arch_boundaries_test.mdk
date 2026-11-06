@@ -51,8 +51,8 @@ firstComponent m = match split "." m
   d :: _ => d
 
 -- (module id, file lines) for every non-test compiler module, sorted by id.
-loadModules : <IO> List (String, List String)
-loadModules =
+loadModules : Unit -> <IO> List (String, List String)
+loadModules () =
   let root = underRoot "compiler"
   match walkDir root
     Err _ => []
@@ -300,22 +300,22 @@ pin name rows =
     _ => expectGolden path (unlines rows)
 
 test "arch_boundaries: the tree walk finds the compiler modules" =
-  expectAtLeast 100 (length loadModules)
+  expectAtLeast 100 (length (loadModules ()))
 
 test "arch_boundaries: layering violations match layering.golden" =
-  pin "layering.golden" (violations (buildGraph loadModules))
+  pin "layering.golden" (violations (buildGraph (loadModules ())))
 
 test "arch_boundaries: module-level cells match cells.golden" =
-  pin "cells.golden" (countRows "" cellCount loadModules)
+  pin "cells.golden" (countRows "" cellCount (loadModules ()))
 
 test "arch_boundaries: hook field count matches hooks.golden" =
-  pin "hooks.golden" ["hooks.fields\t\{hooksFieldCount loadModules}"]
+  pin "hooks.golden" ["hooks.fields\t\{hooksFieldCount (loadModules ())}"]
 
 test "arch_boundaries: ast.mdk declares no Ref field matches ast_cells.golden" =
-  pin "ast_cells.golden" ["ast_ref_fields\t\{astRefFields loadModules}"]
+  pin "ast_cells.golden" ["ast_ref_fields\t\{astRefFields (loadModules ())}"]
 
 test "arch_boundaries: no types/ module outside the allowlist reaches support.hooks" =
-  let g = buildGraph loadModules
+  let g = buildGraph (loadModules ())
   let offenders =
     sort
       (filter
@@ -340,7 +340,7 @@ oversizeRows mods =
     mods
 
 test "arch_boundaries: modules over 3,000 code lines match oversize.golden" =
-  pin "oversize.golden" (oversizeRows loadModules)
+  pin "oversize.golden" (oversizeRows (loadModules ()))
 
 -- Substrings that mark a declaration's visibility: an exported `DFunDef`,
 -- `DTypeSig`, `DLetGroup` or `DUse` node, an `edPub` flag, a `VisPublic`
@@ -371,10 +371,12 @@ visibilityCount ls =
 -- [root]'s import closure against `closure.<root>.golden`.
 closurePin : String -> <IO> Expectation
 closurePin root =
-  pin "closure.\{root}.golden" (closureOf (buildGraph loadModules) root)
+  pin "closure.\{root}.golden" (closureOf (buildGraph (loadModules ())) root)
 
 test "arch_boundaries: declaration-visibility counts match visibility.golden" =
-  pin "visibility.golden" (countRows "visibility." visibilityCount loadModules)
+  pin
+    "visibility.golden"
+    (countRows "visibility." visibilityCount (loadModules ()))
 
 test "arch_boundaries: frontend.ast closure matches its golden" =
   closurePin "frontend.ast"
@@ -432,7 +434,7 @@ aboveDiagText =
     typecheckFamily
 
 test "arch_boundaries: types.tc_diag_text closure holds no module above it" =
-  let closure = closureOf (buildGraph loadModules) "types.tc_diag_text"
+  let closure = closureOf (buildGraph (loadModules ())) "types.tc_diag_text"
   expectEqual [] (filter (m => elem m aboveDiagText) closure)
 
 -- The state and context record types. A row of `tc_diag_text` names none of
@@ -533,8 +535,8 @@ hasDisallowedRef : String -> Bool
 hasDisallowedRef sig =
   allowedRefs |> fold (acc r => replace r "" acc) sig |> sigTokens |> elem "Ref"
 
-diagTextSigs : List (String, String)
-diagTextSigs = topSigs (linesFor "types.tc_diag_text" loadModules)
+diagTextSigs : Unit -> <IO> List (String, String)
+diagTextSigs () = topSigs (linesFor "types.tc_diag_text" (loadModules ()))
 
 -- A leaf code line holding a context type token, wherever it sits: an import item, a
 -- `type` alias, an annotation, a signature or a body.
@@ -543,7 +545,7 @@ test "arch_boundaries: tc_diag_text names no context type anywhere" =
     []
     (filter
       (l => isCodeLine l && hasContextToken (sigTokens l))
-      (linesFor "types.tc_diag_text" loadModules))
+      (linesFor "types.tc_diag_text" (loadModules ())))
 
 -- Every column-zero row of the leaf is signed, so no row reaches a cell through an
 -- unannotated parameter.
@@ -551,29 +553,33 @@ test "arch_boundaries: every tc_diag_text row has a signature" =
   expectEqual
     []
     (filter
-      (n => not (elem n (map fst diagTextSigs)))
-      (nub (filterMap definedName (linesFor "types.tc_diag_text" loadModules))))
+      (n => not (elem n (map fst (diagTextSigs ()))))
+      (nub
+        (filterMap
+          definedName
+          (linesFor "types.tc_diag_text" (loadModules ())))))
 
 test "arch_boundaries: tc_diag_text signatures carry only the allowed Ref cells" =
   expectEqual
     []
-    (filter (nameSig => hasDisallowedRef (snd nameSig)) diagTextSigs)
+    (filter (nameSig => hasDisallowedRef (snd nameSig)) (diagTextSigs ()))
 
 test "arch_boundaries: tc_diag_text signature census sees its rows" =
-  expectAtLeast 150 (length diagTextSigs)
+  expectAtLeast 150 (length (diagTextSigs ()))
 
 test "arch_boundaries: tc_diag_text assigns no cell" =
   expectEqual
     []
     (filter
       (l => isCodeLine l && indexOf ":=" l /= None)
-      (linesFor "types.tc_diag_text" loadModules))
+      (linesFor "types.tc_diag_text" (loadModules ())))
 
 -- Every `tc_diag` row is signed and takes a context-typed parameter; a row without one
 -- is context-free text and belongs in `tc_diag_text`. The complement of the leaf pins.
 test "arch_boundaries: every tc_diag row takes a context type" =
-  let sigs = topSigs (linesFor "types.tc_diag" loadModules)
-  let rows = nub (filterMap definedName (linesFor "types.tc_diag" loadModules))
+  let sigs = topSigs (linesFor "types.tc_diag" (loadModules ()))
+  let rows =
+    nub (filterMap definedName (linesFor "types.tc_diag" (loadModules ())))
   let takesContext n = match lookup n sigs
     None => False
     Some sig => hasContextToken (sigParamTokens sig)
@@ -910,7 +916,7 @@ moduleBodies ls =
 
 outputAfterRenderer : String -> String -> String -> <IO> Expectation
 outputAfterRenderer moduleName functionName output =
-  let source = optionOr [] (lookup moduleName loadModules)
+  let source = optionOr [] (lookup moduleName (loadModules ()))
   match M.get functionName (moduleBodies source)
     None => fail "missing \{moduleName}.\{functionName}"
     Some (body, _) => match (
@@ -989,7 +995,7 @@ topCount bodies =
   fold max 0 (M.values counts)
 
 test "arch_boundaries: llvm/wasm twins match twins.golden" =
-  pin "twins.golden" (twinNames loadModules)
+  pin "twins.golden" (twinNames (loadModules ()))
 
 test "arch_boundaries: global order has one shared authority" =
   let forbidden = [
@@ -997,12 +1003,12 @@ test "arch_boundaries: global order has one shared authority" =
     "topoValVisitDeps"
   ]
   let names =
-    toList (namesOf loadModules "backend.llvm_emit")
-      ++ toList (namesOf loadModules "backend.wasm_emit")
+    toList (namesOf (loadModules ()) "backend.llvm_emit")
+      ++ toList (namesOf (loadModules ()) "backend.wasm_emit")
   expectEqual [] (filter (n => S.has n (S.fromList names)) forbidden)
 
 test "arch_boundaries: identical-body names match dupbodies.golden" =
-  let idx = definitionIndex loadModules
+  let idx = definitionIndex (loadModules ())
   -- The count of names defined in two or more modules is information only and
   -- not pinned; no passing-test channel surfaces it, so compute
   -- `length (filter (rows => length rows >= 2) (M.values idx))` in a scratch
@@ -1240,7 +1246,7 @@ test "arch_boundaries: CELL-LIFETIMES rows equal the cell census" =
             isDataRow
             (sectionUnder "## Cells outside the file" (lines text)))
       let allRows = rows ++ sideRows
-      let census = cellCensus loadModules
+      let census = cellCensus (loadModules ())
       expectAll [
         expectAtLeast 150 (length census),
         expectEqual [] (symmetricDifference census (map nameOf rows)),
@@ -1295,7 +1301,7 @@ classOf field w = match split "." (optionOr w (stripSuffix "," w))
 -- its class: the partition and the records have the same fields, each once, each in a
 -- class.
 test "arch_boundaries: the module-field partition classifies every ModuleCtx field" =
-  let mods = loadModules
+  let mods = loadModules ()
   let fields =
     filter
       (/= "ModuleCtx.mcCells")
@@ -1435,29 +1441,32 @@ claimProblem g at m (dir, x) =
   else
     None
 
-layerTableText : <IO> Result String (List String)
-layerTableText = match readFile (underRoot "compiler/types/ARCHITECTURE.md")
+layerTableText : Unit -> <IO> Result String (List String)
+layerTableText () = match readFile (underRoot "compiler/types/ARCHITECTURE.md")
   Err e => Err "could not read compiler/types/ARCHITECTURE.md: \{e}"
   Ok text => Ok (lines text)
 
 test "arch_boundaries: the layer table lists exactly the tc_* modules on disk and the entry" =
-  match layerTableText
+  match layerTableText ()
     Err e => fail e
     Ok ls =>
       let ids = layerTableIds ls
       expectAll [
         expectAtLeast 20 (length ids),
-        expectEqual [] (layerCoverageProblems ids loadModules),
+        expectEqual [] (layerCoverageProblems ids (loadModules ())),
       ]
 
 test "arch_boundaries: no layer table row imports a row above it" =
-  match layerTableText
+  match layerTableText ()
     Err e => fail e
-    Ok ls => expectEqual [] (layerOrderProblems (layerTableIds ls) loadModules)
+    Ok ls =>
+      expectEqual [] (layerOrderProblems (layerTableIds ls) (loadModules ()))
 
 test "arch_boundaries: every forced-above and forced-below Position cell names a real import edge" =
-  match layerTableText
+  match layerTableText ()
     Err e => fail e
     Ok ls =>
       let rows = sectionUnder "## Layer order" ls
-      expectEqual [] (layerPositionProblems (layerTableIds ls) rows loadModules)
+      expectEqual
+        []
+        (layerPositionProblems (layerTableIds ls) rows (loadModules ()))

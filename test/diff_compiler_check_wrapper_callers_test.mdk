@@ -175,8 +175,8 @@ joinComma [] = ""
 joinComma [x] = x
 joinComma (x :: rest) = "\{x},\{joinComma rest}"
 
-check : <IO, FileRead> Expectation
-check = match walkDir (underRoot "compiler")
+check : Unit -> <IO, FileRead> Expectation
+check () = match walkDir (underRoot "compiler")
   Err e => fail "could not walk compiler/: \{e}"
   Ok paths =>
     let mdk = filter (p => endsWith ".mdk" p && relPath p /= homeRel) paths
@@ -206,4 +206,4 @@ check = match walkDir (underRoot "compiler")
                 ]
 
 test "diff_compiler_check_wrapper_callers: derived caller set matches the ledger exactly" =
-  check
+  check ()

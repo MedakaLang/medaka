@@ -29,8 +29,8 @@ import compiler_cli_test_support.{
 }
 import test_process.{medakaRoot}
 
-corpus : <IO> String
-corpus = "\{medakaRoot ()}/test/let_refute_fixtures"
+corpus : Unit -> <IO> String
+corpus () = "\{medakaRoot ()}/test/let_refute_fixtures"
 
 refutes : RuntimeOutcome
 refutes = AbortsLocated "E-LET-REFUTE" "let pattern match failed"
@@ -50,7 +50,7 @@ rows = [
 ]
 
 test "every fixture pins a runtime outcome" =
-  rosterAgreement corpus declaredFixtureCount rows
+  rosterAgreement (corpus ()) declaredFixtureCount rows
 
 test "run and build+exec agree with every fixture's pinned outcome" =
-  fatalOutcomeSweep corpus declaredFixtureCount rows
+  fatalOutcomeSweep (corpus ()) declaredFixtureCount rows

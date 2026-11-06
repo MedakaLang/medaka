@@ -397,8 +397,8 @@ effectParamSnapshot = "test/snapshots/diff_fixtures_types/effect_param.md"
 {- | Stage-2a's parameterized effect surface (`effect Net Prefix`,
    `<Net "a.com/foo">`) accepted by the native CLI, inferred correctly, and
    agreeing with the committed `# TYPES_USER` snapshot. -}
-effectParamFailures : <Exec, FileRead, IO> List String
-effectParamFailures =
+effectParamFailures : Unit -> <Exec, FileRead, IO> List String
+effectParamFailures () =
   let fix = underRoot effectParamFixture
   let native = underRoot "medaka"
   let host = underRoot "test/bin/check_main"
@@ -498,8 +498,8 @@ withScratchFile scratch name src use =
 {- | Stage-2b's inferred-hole surface (`<Net>`), the α-derived wildcard
    admission, and the delimiter-aware rejections the WS-2 scope-seeding
    soundness rule depends on (#440-adjacent, WS-2). -}
-effectHoleFailures : <Exec, FileWrite, FileRead, IO> List String
-effectHoleFailures =
+effectHoleFailures : Unit -> <Exec, FileWrite, FileRead, IO> List String
+effectHoleFailures () =
   let fix = underRoot effectHoleFixture
   let native = underRoot "medaka"
   let host = underRoot "test/bin/check_main"
@@ -806,8 +806,8 @@ typecheckErrorGroup paths =
 
 -- | Every `.mdk` fixture directly under `typecheckErrorFixturesDir`,
 -- against its two (or one) drivers, `testJobs` fixtures at a time.
-typecheckErrorFailures : <Exec, FileRead, IO> List String
-typecheckErrorFailures =
+typecheckErrorFailures : Unit -> <Exec, FileRead, IO> List String
+typecheckErrorFailures () =
   match fixtureFiles (underRoot typecheckErrorFixturesDir)
     Err e => ["\{typecheckErrorFixturesDir}: \{e}"]
     Ok paths =>
@@ -834,8 +834,8 @@ replGolden = "test/repl_fixtures/session.golden"
    exit code at all) rather than requiring 0 — an escape outside {0, 1}
    (a crash, not a scripted repl error) is still graded a finding, with
    `err` folded into its message. Stdout is graded against the golden. -}
-replFailures : <Exec, FileRead, IO> List String
-replFailures =
+replFailures : Unit -> <Exec, FileRead, IO> List String
+replFailures () =
   let bin = underRoot "test/bin/repl_main"
   let rt = underRoot "stdlib/runtime.mdk"
   let core = underRoot "stdlib/core.mdk"
@@ -1422,8 +1422,8 @@ seedDirectoryPropertyLine : String -> String
 seedDirectoryPropertyLine text =
   join "\n" (filter (contains "Testing \"seed directory replay\"") (lines text))
 
-seedDirectoryReplayFailure : <Exec, IO> Option String
-seedDirectoryReplayFailure =
+seedDirectoryReplayFailure : Unit -> <Exec, IO> Option String
+seedDirectoryReplayFailure () =
   let dir = underRoot "test/compiler_test_fixtures/seed_directory_replay"
   let file = "\{dir}/case.mdk"
   match (seedDirectoryReport 1 file dir, seedDirectoryReport 2 file dir)
@@ -1440,8 +1440,8 @@ seedDirectoryReplayFailure =
    corpus loop: fixtures whose claim is an exit code, a whole hand-derived
    report, or the presence and ABSENCE of a specific message, none of which a
    per-fixture golden diff can carry. -}
-testBatteryFailures : <Exec, IO> List String
-testBatteryFailures =
+testBatteryFailures : Unit -> <Exec, IO> List String
+testBatteryFailures () =
   let fix = testFixturesDir
   let stdlib = "stdlib"
   let battery = [
@@ -1495,7 +1495,7 @@ testBatteryFailures =
       False
       ["counterexample: w = Wrap(0)"]
       [],
-    seedDirectoryReplayFailure,
+    seedDirectoryReplayFailure (),
     testContentFailure
       "parse_error.mdk (#892)"
       "\{fix}/parse_error.mdk"
@@ -1514,8 +1514,8 @@ testBatteryFailures =
    look capture-ready while neither a passing nor a failing law actually ran.
    The passing fixture reaches custom generators at both its root and nested
    field, while the false law independently retains a minimized witness. -}
-evalPropertyWorkerFailures : <Exec, IO> List String
-evalPropertyWorkerFailures = somes [
+evalPropertyWorkerFailures : Unit -> <Exec, IO> List String
+evalPropertyWorkerFailures () = somes [
   testContentFailureWithoutMedakaEnv
     "eval property worker: passing custom laws"
     "\{testFixturesDir}/user_arbitrary.mdk"
@@ -1563,8 +1563,8 @@ corpusAgreement what here script =
       (n => "\{what}: \{n} is in this module but not in capture_goldens.sh")
       (filter (n => not (elem n script)) here)
 
-captureCorpusFailures : List String
-captureCorpusFailures = match readFile (underRoot "test/capture_goldens.sh")
+captureCorpusFailures : Unit -> <Env {"MEDAKA_ROOT"}, FileRead> List String
+captureCorpusFailures () = match readFile (underRoot "test/capture_goldens.sh")
   Err e => ["test/capture_goldens.sh: \{e}"]
   Ok raw =>
     let ls = lines raw
@@ -1586,7 +1586,7 @@ captureCorpusFailures = match readFile (underRoot "test/capture_goldens.sh")
           (shStatementWords ls "for name in binder_loc"))
 
 test "capture_goldens.sh iterates the same corpora this module grades" =
-  report "capture-corpus" captureCorpusFailures
+  report "capture-corpus" (captureCorpusFailures ())
 
 test "reference-index dumps match binders, not strings" =
   report
@@ -1595,16 +1595,16 @@ test "reference-index dumps match binders, not strings" =
       ++ somes (map referencesFixtureFailure referencesFixtures))
 
 test "the parameterized effect surface typechecks through the real front-end" =
-  report "effect-param" effectParamFailures
+  report "effect-param" (effectParamFailures ())
 
 test "the inferred-hole effect surface typechecks through the real front-end" =
-  report "effect-hole" effectHoleFailures
+  report "effect-hole" (effectHoleFailures ())
 
 test "typecheck-error fixtures agree with their driver(s)' committed golden" =
-  report "typecheck-errors" typecheckErrorFailures
+  report "typecheck-errors" (typecheckErrorFailures ())
 
 test "the self-hosted repl reproduces its committed session transcript" =
-  report "repl" replFailures
+  report "repl" (replFailures ())
 
 test "project-wide diagnostics bucket per file the way the oracle does" = report
   "analyze-project"
@@ -1624,7 +1624,7 @@ test "`medaka test`'s corpus reproduces its committed reports" =
       ++ somes (map testGoldenFailure testReportCorpus))
 
 test "`medaka test`'s exit code and its pinned reports still discriminate" =
-  report "test-battery" testBatteryFailures
+  report "test-battery" (testBatteryFailures ())
 
 test "the standalone evaluator property worker runs laws before reports are captured" =
-  report "eval-property-worker" evalPropertyWorkerFailures
+  report "eval-property-worker" (evalPropertyWorkerFailures ())

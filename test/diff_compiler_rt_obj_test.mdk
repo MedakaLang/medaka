@@ -16,8 +16,8 @@ import string.{lines}
 import list.{filter}
 import regex.{Regex, mustCompile, isMatch}
 
-samples : <IO> List String
-samples = [
+samples : Unit -> <IO> List String
+samples () = [
   underRoot "test/llvm_fixtures/guard_match_ctor.mdk",
   underRoot "test/llvm_fixtures/guard_refut_clause.mdk",
   underRoot "test/llvm_fixtures/guard_refut_clause_chain.mdk",
@@ -39,14 +39,14 @@ cachePath w opt = "\{w}/objcache\{opt}"
 
 -- Env assignments per arm. "K=" sets K to the empty string, which
 -- build_cmd.mdk treats as unset, so an ambient value cannot leak in.
-base : <IO> List String
-base = [
+base : Unit -> <IO> List String
+base () = [
   "MEDAKA_ROOT=\{medakaRoot ()}",
   "MEDAKA_EMITTER=\{medakaRoot ()}/medaka_emitter",
 ]
 
 optEnv : String -> <IO> List String
-optEnv opt = base ++ ["MEDAKA_CLANG_OPT=\{opt}"]
+optEnv opt = base () ++ ["MEDAKA_CLANG_OPT=\{opt}"]
 
 inlineEnv : String -> <IO> List String
 inlineEnv opt = optEnv opt ++ ["MEDAKA_RT_OBJ=", "MEDAKA_NO_OBJ_CACHE=1"]
@@ -62,7 +62,8 @@ cachedEnv opt cdir =
 
 repairEnv : String -> <IO> List String
 repairEnv rdir =
-  base ++ ["MEDAKA_RT_OBJ=", "MEDAKA_NO_OBJ_CACHE=", "MEDAKA_CACHE_DIR=\{rdir}"]
+  base ()
+    ++ ["MEDAKA_RT_OBJ=", "MEDAKA_NO_OBJ_CACHE=", "MEDAKA_CACHE_DIR=\{rdir}"]
 
 spawn : List String ->
   List String ->
@@ -123,7 +124,7 @@ cacheFilled opt cdir = match fixtureFiles cdir
 optArm : String -> String -> <Exec, IO, FileRead> Expectation
 optArm w opt =
   let rtobj = rtObjPath w opt
-  let srcs = samples
+  let srcs = samples ()
   expectAll [
     gradeExit
       "emit-rt-obj \{opt}"

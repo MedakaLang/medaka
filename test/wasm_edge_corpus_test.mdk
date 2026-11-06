@@ -64,21 +64,21 @@ flatCorpus prefix dir =
   map keyed (fixtureFiles root)
 
 -- The multi-module programs: each subdirectory's `entry.mdk`.
-moduleCorpus : <FileRead, IO> Result String (List (String, String))
-moduleCorpus =
+moduleCorpus : Unit -> <FileRead, IO> Result String (List (String, String))
+moduleCorpus () =
   let keyed =
     dirs => sort (map (d => ("llvmM/\{basename d}", "\{d}/entry.mdk")) dirs)
   map keyed (fixtureDirs "\{medakaRoot ()}/test/llvm_fixtures_modules")
 
-corpus : <FileRead, IO> Result String (List (String, String))
-corpus =
+corpus : Unit -> <FileRead, IO> Result String (List (String, String))
+corpus () =
   let parts = [
     flatCorpus "llvm" "test/llvm_fixtures",
     flatCorpus "llvmT" "test/llvm_fixtures_typed",
     flatCorpus "wasm" "test/wasm/fixtures",
     flatCorpus "wasmT" "test/wasm/fixtures_typed",
     flatCorpus "engine" "test/engine_fixtures",
-    moduleCorpus,
+    moduleCorpus (),
   ]
   foldRight
     (part acc => match (part, acc)
@@ -151,8 +151,8 @@ slugOf key = join "__" (split "/" key)
 
 -- The environment every compiler spawn names, so a shard that exports none of
 -- it still finds this tree's emitters, and a stale binary fails loudly.
-envBase : <IO> List String
-envBase = [
+envBase : Unit -> <IO> List String
+envBase () = [
   "MEDAKA_ROOT=\{medakaRoot ()}",
   "MEDAKA_EMITTER=\{emitterBin}",
   "MEDAKA_STRICT=1",
@@ -234,8 +234,8 @@ buildSpawns env scratch p = [
   ),
 ]
 
-runJs : <IO> String
-runJs = "\{medakaRoot ()}/test/wasm/run.js"
+runJs : Unit -> <IO> String
+runJs () = "\{medakaRoot ()}/test/wasm/run.js"
 
 runSpawns : String -> String -> Probe -> List (String, List String)
 runSpawns js scratch p = [
@@ -414,8 +414,8 @@ finish (Ok _) = ("(internal)", Failed "a program was left unsettled")
 
 sweepIn : List (String, String) -> String -> <Exec, FileRead, IO> Sweep
 sweepIn programs scratch =
-  let env = envBase
-  let js = runJs
+  let env = envBase ()
+  let js = runJs ()
   let probes =
     zipWith probeOf programs (spawnEach 120 (checkSpawns env) programs)
   let unprobed =
@@ -462,8 +462,8 @@ sweepIn programs scratch =
   }
 
 -- Computed once per process; the scratch directory is gone before it returns.
-world : <Exec, FileRead, IO> Result String Sweep
-world = match corpus
+world : Unit -> <Exec, FileRead, IO> Result String Sweep
+world () = match corpus ()
   Err e => Err e
   Ok programs =>
     inFreshDirOf (scratch => Ok (sweepIn programs scratch)) (m => Err m)
@@ -472,7 +472,7 @@ world = match corpus
 
 -- The sweep, or the one failure that stopped it.
 withSweep : (Sweep -> <e> Expectation) -> <Exec, FileRead, IO | e> Expectation
-withSweep check = match world
+withSweep check = match world ()
   Err e => fail "the edge corpus sweep could not run: \{e}"
   Ok sweep => check sweep
 

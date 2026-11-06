@@ -33,14 +33,14 @@ import types.interface_sexp.{
 }
 import types.prelude_interface.{PreludeInterface(..), InterfaceKey(..)}
 
-corePath : String
-corePath = underRoot "stdlib/core.mdk"
+corePath : Unit -> <Env {"MEDAKA_ROOT"}> String
+corePath () = underRoot "stdlib/core.mdk"
 
 rowLines : List String -> List String
 rowLines = filter (S.startsWith "  row ")
 
 test "show lists every published row of every section" =
-  match buildInterfaceFile corePath []
+  match buildInterfaceFile (corePath ()) []
     Err e => fail e
     Ok file =>
       let published =

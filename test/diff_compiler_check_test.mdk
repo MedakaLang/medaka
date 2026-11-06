@@ -623,8 +623,8 @@ writeAll dir ((name, src) :: rest) = match writeFile "\{dir}/\{name}" src
    `scratchDir ()` makes one root per call; the binding below is a value, so
    it is evaluated once per process. Nothing in this module removes the root;
    `mkdirAll` keeps each test independent of it. -}
-cycleScratch : <Exec, FileWrite> Result String String
-cycleScratch = match scratchDir ()
+cycleScratch : Unit -> <Exec, FileWrite> Result String String
+cycleScratch () = match scratchDir ()
   Err e => Err e
   Ok root =>
     let dir = "\{root}/cycle"
@@ -649,8 +649,8 @@ cycleVerdict dir =
         Some
           "expected exit 0 reporting \{debug cycleChain}, got exit \{intToString code} reporting \{debug said}"
 
-cycleChainReported : <Exec, FileWrite, IO> Expectation
-cycleChainReported = match cycleScratch
+cycleChainReported : Unit -> <Exec, FileWrite, IO> Expectation
+cycleChainReported () = match cycleScratch ()
   Err e => fail "could not make a scratch directory: \{e}"
   Ok dir => match writeAll dir cycleModules
     Err e => fail "could not write the cycle modules: \{e}"
@@ -662,20 +662,20 @@ cycleChainReported = match cycleScratch
         Some m => fail m
 
 test "a two-module import cycle is reported as the whole chain" =
-  cycleChainReported
+  cycleChainReported ()
 
 {- | The composed `medaka check` locates the same cycle at the `import` that
    closes it, in the module holding that import (`b.mdk`, not the entry), with
    the caret line under it (#2473). -}
-cycleSiteScratch : <Exec, FileWrite> Result String String
-cycleSiteScratch = match scratchDir ()
+cycleSiteScratch : Unit -> <Exec, FileWrite> Result String String
+cycleSiteScratch () = match scratchDir ()
   Err e => Err e
   Ok root =>
     let dir = "\{root}/cycle_site"
     map (() => dir) (mkdirAll dir)
 
-cycleSiteRun : <Exec, FileWrite, IO> Expectation
-cycleSiteRun = match cycleSiteScratch
+cycleSiteRun : Unit -> <Exec, FileWrite, IO> Expectation
+cycleSiteRun () = match cycleSiteScratch ()
   Err e => fail "could not make a scratch directory: \{e}"
   Ok dir => match writeAll dir cycleModules
     Err e => fail "could not write the cycle modules: \{e}"
@@ -692,7 +692,7 @@ cycleSiteRun = match cycleSiteScratch
       result
 
 test "a two-module import cycle is located at the import that closes it" =
-  cycleSiteRun
+  cycleSiteRun ()
 
 {- | Write `files` (relative path, source) under a fresh directory named `tag`
    in the scratch root, creating the parent directories, run `medaka` with
@@ -904,8 +904,8 @@ validModules = [
   ),
 ]
 
-validModulesScratch : <Exec, FileWrite> Result String String
-validModulesScratch = match scratchDir ()
+validModulesScratch : Unit -> <Exec, FileWrite> Result String String
+validModulesScratch () = match scratchDir ()
   Err e => Err e
   Ok root =>
     let dir = "\{root}/resolve_modules_valid"
@@ -931,8 +931,8 @@ validModulesVerdict dir =
             Some
               "compiler reports errors on a valid program: \{debug (joinLines got)}"
 
-validModulesRun : <Exec, FileWrite, IO> Expectation
-validModulesRun = match validModulesScratch
+validModulesRun : Unit -> <Exec, FileWrite, IO> Expectation
+validModulesRun () = match validModulesScratch ()
   Err e => fail "could not make a scratch directory: \{e}"
   Ok dir => match writeAll dir validModules
     Err e => fail "could not write the probe modules: \{e}"
@@ -944,7 +944,7 @@ validModulesRun = match validModulesScratch
         Some m => fail m
 
 test "a valid multi-module program resolves with no false positives" =
-  validModulesRun
+  validModulesRun ()
 
 -- # A self-named newtype: the type imports, the ctor spelling stays out
 
@@ -963,15 +963,15 @@ selfNamedModules = [
   ("use_nt.mdk", "import nt.{NT}\n\nbuild : Int -> NT\nbuild x = NT x\n"),
 ]
 
-selfNamedScratch : <Exec, FileWrite> Result String String
-selfNamedScratch = match scratchDir ()
+selfNamedScratch : Unit -> <Exec, FileWrite> Result String String
+selfNamedScratch () = match scratchDir ()
   Err e => Err e
   Ok root =>
     let dir = "\{root}/newtype_self_named_ctor"
     map (() => dir) (mkdirAll dir)
 
-selfNamedRun : <Exec, FileWrite, IO> Expectation
-selfNamedRun = match selfNamedScratch
+selfNamedRun : Unit -> <Exec, FileWrite, IO> Expectation
+selfNamedRun () = match selfNamedScratch ()
   Err e => fail "could not make a scratch directory: \{e}"
   Ok dir => match writeAll dir selfNamedModules
     Err e => fail "could not write the probe modules: \{e}"
@@ -988,7 +988,7 @@ selfNamedRun = match selfNamedScratch
       result
 
 test "a self-named newtype imports as a type and its ctor spelling stays unbound" =
-  selfNamedRun
+  selfNamedRun ()
 
 -- # parse_main — the panicking rejection path
 
@@ -997,8 +997,8 @@ test "a self-named newtype imports as a type and its ctor spelling stays unbound
    table (see the module header): `parse_main`'s pass condition is a NON-zero
    exit, the reverse of every `Row`'s `processFailure`, and its graded value
    is normalized STDERR rather than stdout. -}
-parseErrorFixtures : <FileRead, IO> Result String (List String)
-parseErrorFixtures =
+parseErrorFixtures : Unit -> <FileRead, IO> Result String (List String)
+parseErrorFixtures () =
   let dir = "\{medakaRoot ()}/test/parse_error_fixtures"
   match fixtureFiles dir
     Err e => Err e
@@ -1065,8 +1065,8 @@ parseErrorVerdict path =
             else
               Some "\{name}: expected \{debug golden}, got \{debug got}"
 
-parseErrorsRun : <Exec, FileRead, IO> Expectation
-parseErrorsRun = match parseErrorFixtures
+parseErrorsRun : Unit -> <Exec, FileRead, IO> Expectation
+parseErrorsRun () = match parseErrorFixtures ()
   Err e => fail "test/parse_error_fixtures: \{e}"
   Ok paths =>
     let expected = 42
@@ -1080,7 +1080,7 @@ parseErrorsRun = match parseErrorFixtures
           "\{intToString (length fs)} of \{intToString (length paths)} fixtures failed:\n\{unlines fs}"
 
 test "parse_main rejects every malformed fixture with the expected message" =
-  parseErrorsRun
+  parseErrorsRun ()
 
 -- # parse_result_main — the non-panicking, structured-error path
 
@@ -1089,8 +1089,8 @@ test "parse_main rejects every malformed fixture with the expected message" =
    lexer) rejection and can therefore round-trip through `parseResult`.
    Derived, not hand-listed (#595: a hand-maintained list silently drifted).
    An empty result is an `Err`, never a silent pass over nothing. -}
-parseResultFixtures : <FileRead, IO> Result String (List String)
-parseResultFixtures = match parseErrorFixtures
+parseResultFixtures : Unit -> <FileRead, IO> Result String (List String)
+parseResultFixtures () = match parseErrorFixtures ()
   Err e => Err e
   Ok paths => derivedParseResultFixtures paths []
 
@@ -1195,8 +1195,8 @@ parseResultVerdict path = match oracleLocatedOrAbsent path
                 else
                   None
 
-parseResultRun : <Exec, FileRead, IO> Expectation
-parseResultRun = match parseResultFixtures
+parseResultRun : Unit -> <Exec, FileRead, IO> Expectation
+parseResultRun () = match parseResultFixtures ()
   Err e => fail "test/parse_error_fixtures: \{e}"
   Ok paths => match somes (map parseResultVerdict paths)
     [] => pass
@@ -1205,7 +1205,7 @@ parseResultRun = match parseResultFixtures
         "\{intToString (length fs)} of \{intToString (length paths)} fixtures failed:\n\{unlines fs}"
 
 test "parseResult reports a located parse error within the source, never a panic" =
-  parseResultRun
+  parseResultRun ()
 
 -- | A well-formed program's `main`-free body — sanity that `parseResult`
 -- returns `Ok` rather than only ever exercising the error arm.
@@ -1225,15 +1225,15 @@ parseResultValidProgramVerdict path =
         Some
           "expected exit 0 reporting \"ok\", got exit \{intToString code} reporting \{debug got}"
 
-parseResultValidProgramScratch : <Exec, FileWrite> Result String String
-parseResultValidProgramScratch = match scratchDir ()
+parseResultValidProgramScratch : Unit -> <Exec, FileWrite> Result String String
+parseResultValidProgramScratch () = match scratchDir ()
   Err e => Err e
   Ok root =>
     let dir = "\{root}/parse_result_valid"
     map (() => dir) (mkdirAll dir)
 
-parseResultValidProgramRun : <Exec, FileWrite, IO> Expectation
-parseResultValidProgramRun = match parseResultValidProgramScratch
+parseResultValidProgramRun : Unit -> <Exec, FileWrite, IO> Expectation
+parseResultValidProgramRun () = match parseResultValidProgramScratch ()
   Err e => fail "could not make a scratch directory: \{e}"
   Ok dir =>
     let path = "\{dir}/valid.mdk"
@@ -1246,7 +1246,7 @@ parseResultValidProgramRun = match parseResultValidProgramScratch
           None => pass
           Some m => fail m
 
-test "parseResult accepts a well-formed program" = parseResultValidProgramRun
+test "parseResult accepts a well-formed program" = parseResultValidProgramRun ()
 
 -- # `run` with a path that names no file
 
@@ -1362,8 +1362,8 @@ cleanupScratchBestEffort dir =
   let _ = runVerb "rm" ["-rf", dir]
   ()
 
-stringEofRun : <Exec, FileWrite, IO> Expectation
-stringEofRun = match scratchDir ()
+stringEofRun : Unit -> <Exec, FileWrite, IO> Expectation
+stringEofRun () = match scratchDir ()
   Err e => fail "could not make scratch directory: \{e}"
   Ok dir => match writeAll dir stringEofCases
     Err e => fail "could not write string EOF cases: \{e}"
@@ -1385,10 +1385,10 @@ stringEofRun = match scratchDir ()
       let _ = cleanupScratchBestEffort dir
       result
 
-test "unterminated string EOF fails strict CLI verbs" = stringEofRun
+test "unterminated string EOF fails strict CLI verbs" = stringEofRun ()
 
-recoveryStrictRun : <Exec, FileWrite, IO> Expectation
-recoveryStrictRun = match scratchDir ()
+recoveryStrictRun : Unit -> <Exec, FileWrite, IO> Expectation
+recoveryStrictRun () = match scratchDir ()
   Err e => fail "could not make scratch directory: \{e}"
   Ok dir =>
     let _ = runVerb "mkdir" ["-p", dir]
@@ -1409,4 +1409,5 @@ recoveryStrictRun = match scratchDir ()
         let _ = cleanupScratchBestEffort dir
         result
 
-test "recovered declarations never enter strict CLI verbs" = recoveryStrictRun
+test "recovered declarations never enter strict CLI verbs" =
+  recoveryStrictRun ()

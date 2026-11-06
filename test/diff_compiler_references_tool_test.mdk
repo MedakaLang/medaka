@@ -16,8 +16,8 @@ import test.{
   Expectation, expectAll, expectAtLeast, expectEach, expectGolden, fail
 }
 
-queryDir : <IO> String
-queryDir = underRoot "test/references_fixtures/query"
+queryDir : Unit -> <IO> String
+queryDir () = underRoot "test/references_fixtures/query"
 
 -- The script ran with cwd at the repo root, so fixture `file` arguments
 -- (repo-relative) resolve the same way. stdin comes from the .jsonl request
@@ -25,7 +25,7 @@ queryDir = underRoot "test/references_fixtures/query"
 transcript : String -> <Exec, IO, FileRead> Result String (Int, String)
 transcript name =
   let script = "cd \"$1\" && exec \"$2\" mcp < \"$3\" 2>/dev/null"
-  let stream = "\{queryDir}/\{name}.jsonl"
+  let stream = "\{queryDir ()}/\{name}.jsonl"
   map
     ((code, out, _) => (code, out))
     (boundedInTree 30 "sh" [
@@ -44,15 +44,15 @@ row name = match transcript name
     if code /= 0 then
       fail "\{name}: medaka mcp exited \{intToString code}"
     else
-      expectGolden "\{queryDir}/\{name}.golden" out
+      expectGolden "\{queryDir ()}/\{name}.golden" out
 
 -- The request streams on disk, by stem. The other `.mdk` files in the
 -- directory are modules the streams query, not fixtures.
-requestStems : <FileRead, IO> Result String (List String)
-requestStems =
+requestStems : Unit -> <FileRead, IO> Result String (List String)
+requestStems () =
   map
     (paths => sort (map stem (filter (endsWith ".jsonl") paths)))
-    (fixtureFiles queryDir)
+    (fixtureFiles (queryDir ()))
 
 -- The corpus has six fixtures today; a corpus that silently shrank is red.
 -- Growing it is expected: add the pair and raise this.
@@ -60,8 +60,8 @@ declaredFixtureFloor : Int
 declaredFixtureFloor = 6
 
 test "references tool: golden MCP transcripts for every query fixture" =
-  match requestStems
-    Err e => fail "could not list \{queryDir}: \{e}"
+  match requestStems ()
+    Err e => fail "could not list \{queryDir ()}: \{e}"
     Ok stems => expectAll [
       expectAtLeast declaredFixtureFloor (length stems),
       expectEach (map (s => (s, row s)) stems),

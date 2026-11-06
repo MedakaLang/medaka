@@ -91,7 +91,7 @@ realDrive : Int ->
   String ->
   <IO, FileRead> Result String (List (List Atom, PreludeInterface))
 realDrive n grants userSrc = do
-  pre <- prelude
+  pre <- prelude ()
   Ok (driveUnder n grants pre userSrc)
 
 oneInterface : List (List Atom, PreludeInterface) ->
@@ -513,17 +513,17 @@ tinyText = encodeInterface PreludeInterfaceFile {
           ++ driveUnder 72 stdinOnly tinyPrelude "x = 1")),
 }
 
-tinyFixture : String
-tinyFixture = underRoot "test/arch_goldens/interface_tiny.mdki"
+tinyFixture : Unit -> <Env {"MEDAKA_ROOT"}> String
+tinyFixture () = underRoot "test/arch_goldens/interface_tiny.mdki"
 
 -- INTERFACE_FIXTURE_WRITE=1 rewrites the golden instead of comparing.
 test "the tiny interface file matches its fixture and round-trips" =
   match getEnv "INTERFACE_FIXTURE_WRITE"
-    Some "1" => match writeFile tinyFixture tinyText
+    Some "1" => match writeFile (tinyFixture ()) tinyText
       Ok _ => pass
-      Err e => fail "could not write \{tinyFixture}: \{e}"
-    _ => match readFile tinyFixture
-      Err e => fail "no fixture \{tinyFixture}: \{e}"
+      Err e => fail "could not write \{tinyFixture ()}: \{e}"
+    _ => match readFile (tinyFixture ())
+      Err e => fail "no fixture \{tinyFixture ()}: \{e}"
       Ok golden => expectAll [
         labelFail "encoding equals the fixture" (expectEqual golden tinyText),
         labelFail

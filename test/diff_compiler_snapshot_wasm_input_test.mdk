@@ -51,8 +51,8 @@ apiWitnessSource = join "\n" [
   "      Ok gaps => if contains \"(module\" wat && gaps == [] then 513 else panic \"unexpected emission\"",
 ]
 
-typedApiCheck : <IO, Exec, FileWrite> Expectation
-typedApiCheck = withScratchDir (dir => match runVerb "sh" [
+typedApiCheck : Unit -> <IO, Exec, FileWrite> Expectation
+typedApiCheck () = withScratchDir (dir => match runVerb "sh" [
   "-c",
   "root=$(cd \"$1\" && pwd -P) || exit 1; for d in backend frontend types ir support driver eval tools; do ln -s \"$root/compiler/$d\" \"$2/$d\" || exit 1; done; cp \"$root/compiler/medaka.toml\" \"$2/medaka.toml\"",
   "sh",
@@ -92,11 +92,11 @@ typedApiCheck = withScratchDir (dir => match runVerb "sh" [
       ]
       _ => fail "could not write typed API witnesses")
 
-wasmEmitPath : <IO> String
-wasmEmitPath = "\{medakaRoot ()}/compiler/backend/wasm_emit.mdk"
+wasmEmitPath : Unit -> <IO> String
+wasmEmitPath () = "\{medakaRoot ()}/compiler/backend/wasm_emit.mdk"
 
-emitSupportPath : <IO> String
-emitSupportPath = "\{medakaRoot ()}/compiler/backend/emit_support.mdk"
+emitSupportPath : Unit -> <IO> String
+emitSupportPath () = "\{medakaRoot ()}/compiler/backend/emit_support.mdk"
 
 legacyNames : List String
 legacyNames = [
@@ -157,8 +157,8 @@ legacyHits wasmLines supportLines =
     (name => legacyHit wasmLines name || legacyHit supportLines name)
     legacyNames
 
-apiCheck : <IO, FileRead> Expectation
-apiCheck = match readFile wasmEmitPath
+apiCheck : Unit -> <IO, FileRead> Expectation
+apiCheck () = match readFile (wasmEmitPath ())
   Err e =>
     fail "FAIL: WasmEmitInput API is incomplete (cannot read wasm_emit: \{e})"
   Ok text =>
@@ -172,10 +172,10 @@ apiCheck = match readFile wasmEmitPath
           "emitProgramGaps : WasmEmitInput ->"
           ls)
 
-legacyCheck : <IO, FileRead> Expectation
-legacyCheck = match readFile wasmEmitPath
+legacyCheck : Unit -> <IO, FileRead> Expectation
+legacyCheck () = match readFile (wasmEmitPath ())
   Err e => fail "could not read wasm_emit: \{e}"
-  Ok wasmText => match readFile emitSupportPath
+  Ok wasmText => match readFile (emitSupportPath ())
     Err e => fail "could not read emit_support: \{e}"
     Ok supportText => match legacyHits (lines wasmText) (lines supportText)
       [] => pass
@@ -231,8 +231,8 @@ scoreFuncLine : String
 scoreFuncLine =
   "(func $f.impl.7a5a5f35665f5f35665f757365725f35665f5f35665f5f32655f55.73636f7265 (result"
 
-wasmCheck : <Exec, IO, FileRead, FileWrite> Expectation
-wasmCheck = withScratchDir (work => wasmCheckIn work)
+wasmCheck : Unit -> <Exec, IO, FileRead, FileWrite> Expectation
+wasmCheck () = withScratchDir (work => wasmCheckIn work)
 
 wasmCheckIn : String -> <Exec, IO, FileRead, FileWrite> Expectation
 wasmCheckIn work = match prepare work
@@ -269,4 +269,4 @@ renderBoth work = do
   Ok (only, combined)
 
 test "snapshot_wasm_input: WASM-only equals combined; Score defined at its clause arity; WasmEmitInput API and no legacy hooks" =
-  expectAll [apiCheck, typedApiCheck, legacyCheck, wasmCheck]
+  expectAll [apiCheck (), typedApiCheck (), legacyCheck (), wasmCheck ()]

@@ -94,8 +94,8 @@ quotedScan : List String -> List String -> List String
 quotedScan [] found = found
 quotedScan (l :: rest) found = quotedScan rest (addQuoted l found)
 
-check : <Exec, IO, FileRead> Expectation
-check = match boundedVerb "git" [
+check : Unit -> <Exec, IO, FileRead> Expectation
+check () = match boundedVerb "git" [
   "-C",
   medakaRoot (),
   "-c",
@@ -125,4 +125,4 @@ scanCheck (n, bad) quoted = expectAll [
 ]
 
 test "diff_compiler_source_bytes: no tracked source file has a raw control byte" =
-  check
+  check ()

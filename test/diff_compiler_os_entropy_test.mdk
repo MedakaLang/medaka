@@ -30,17 +30,17 @@ import test_process.{
   medakaRoot,
 }
 
-corpus : <IO> String
-corpus = "\{medakaRoot ()}/test/os_entropy_fixtures"
+corpus : Unit -> <IO> String
+corpus () = "\{medakaRoot ()}/test/os_entropy_fixtures"
 
-positiveFixture : <IO> String
-positiveFixture = "\{corpus}/positive.mdk"
+positiveFixture : Unit -> <IO> String
+positiveFixture () = "\{corpus ()}/positive.mdk"
 
-negativeFixture : <IO> String
-negativeFixture = "\{corpus}/negative.mdk"
+negativeFixture : Unit -> <IO> String
+negativeFixture () = "\{corpus ()}/negative.mdk"
 
-tooLargeFixture : <IO> String
-tooLargeFixture = "\{corpus}/too_large.mdk"
+tooLargeFixture : Unit -> <IO> String
+tooLargeFixture () = "\{corpus ()}/too_large.mdk"
 
 -- `medakaBin` under `MEDAKA_STRICT=1`, via the same double-`env` device
 -- `compiler_cli_test_support.boundedInTree` uses to pass a variable through
@@ -78,16 +78,16 @@ freshSpawnsIndependent tag a (bc, bo, be) =
     else
       pass
 
-test "os_entropy: exactly 5 fixtures on disk" = match fixtureFiles corpus
-  Err e => fail "\{corpus}: \{e}"
+test "os_entropy: exactly 5 fixtures on disk" = match fixtureFiles (corpus ())
+  Err e => fail "\{corpus ()}: \{e}"
   Ok paths => match expectUnitCount 5 (filter (endsWith ".mdk") paths)
-    Err e => fail "\{corpus}: \{e}"
+    Err e => fail "\{corpus ()}: \{e}"
     Ok _ => pass
 
 test "os_entropy: positive fixture — `medaka run` is well-shaped and independent across fresh spawns" =
-  match strictSpawn 30 ["run", positiveFixture]
+  match strictSpawn 30 ["run", positiveFixture ()]
     Err e => fail "first `medaka run` spawn: \{e}"
-    Ok a => match strictSpawn 30 ["run", positiveFixture]
+    Ok a => match strictSpawn 30 ["run", positiveFixture ()]
       Err e => fail "second `medaka run` spawn: \{e}"
       Ok b => freshSpawnsIndependent "run" a b
 
@@ -106,10 +106,12 @@ runRejected fixture wantSubstring = match strictSpawn 30 ["run", fixture]
       pass
 
 test "os_entropy: negative length is rejected by `medaka run`" =
-  runRejected negativeFixture "osEntropyBytes: length must be non-negative"
+  runRejected (negativeFixture ()) "osEntropyBytes: length must be non-negative"
 
 test "os_entropy: too-large length is rejected by `medaka run`" =
-  runRejected tooLargeFixture "osEntropyBytes: requested length is too large"
+  runRejected
+    (tooLargeFixture ())
+    "osEntropyBytes: requested length is too large"
 
 -- Builds `fixture` into `\{scratch}/\{name}` and executes it once. `scratch`
 -- is the directory the caller made for its own builds (`inFreshDirOf`), so
@@ -231,27 +233,27 @@ wasmRejected scratch name fixture wantSubstring =
 test "os_entropy: build+exec — positive is independent, negative and too-large are rejected" =
   inFreshDirOf
     (scratch => expectAll [
-      buildIndependence scratch "positive" positiveFixture,
+      buildIndependence scratch "positive" (positiveFixture ()),
       buildRejected
         scratch
         "negative"
-        negativeFixture
+        (negativeFixture ())
         "osEntropyBytes: length must be non-negative",
       buildRejected
         scratch
         "too_large"
-        tooLargeFixture
+        (tooLargeFixture ())
         "osEntropyBytes: requested length is too large",
-      wasmIndependence scratch "positive" positiveFixture,
+      wasmIndependence scratch "positive" (positiveFixture ()),
       wasmRejected
         scratch
         "negative"
-        negativeFixture
+        (negativeFixture ())
         "osEntropyBytes: length must be non-negative",
       wasmRejected
         scratch
         "too_large"
-        tooLargeFixture
+        (tooLargeFixture ())
         "osEntropyBytes: requested length is too large",
     ])
     (msg => fail msg)
@@ -259,11 +261,11 @@ test "os_entropy: build+exec — positive is independent, negative and too-large
 -- # MEDAKA_SEED: the first draw of an unseeded program seeds from the
 -- environment, on `run`, a built binary and a wasm module alike (#4621).
 
-seedDrawFixture : <IO> String
-seedDrawFixture = "\{corpus}/seed_draw.mdk"
+seedDrawFixture : Unit -> <IO> String
+seedDrawFixture () = "\{corpus ()}/seed_draw.mdk"
 
-seedSetFixture : <IO> String
-seedSetFixture = "\{corpus}/seed_set.mdk"
+seedSetFixture : Unit -> <IO> String
+seedSetFixture () = "\{corpus ()}/seed_set.mdk"
 
 -- A program on one engine: the command and arguments that run it.
 runEngine : String -> <IO> (String, List String)
@@ -338,12 +340,14 @@ badSeeds = ["abc", "", " 42", "42 "]
 
 test "os_entropy: unseeded draws differ across runs on `run` and a built binary" =
   inFreshDirOf
-    (scratch => match buildOnly scratch "seed_draw" seedDrawFixture
+    (scratch => match buildOnly scratch "seed_draw" (seedDrawFixture ())
       Err e => fail e
       Ok bin => expectAll [
         allDistinctDraws
           "run"
-          (map (_ => drawOf "run" None (runEngine seedDrawFixture)) [1, 2, 3]),
+          (map
+            (_ => drawOf "run" None (runEngine (seedDrawFixture ())))
+            [1, 2, 3]),
         allDistinctDraws
           "native"
           (map (_ => drawOf "native" None (binEngine bin)) [1, 2, 3]),
@@ -352,19 +356,19 @@ test "os_entropy: unseeded draws differ across runs on `run` and a built binary"
 
 test "os_entropy: MEDAKA_SEED=42 equals a leading setSeed 42 on run, native and wasm" =
   inFreshDirOf
-    (scratch => match buildOnly scratch "seed_draw" seedDrawFixture
+    (scratch => match buildOnly scratch "seed_draw" (seedDrawFixture ())
       Err e => fail e
-      Ok draw => match buildOnly scratch "seed_set" seedSetFixture
+      Ok draw => match buildOnly scratch "seed_set" (seedSetFixture ())
         Err e => fail e
-        Ok set => match wasmBuild scratch "seed_draw" seedDrawFixture
+        Ok set => match wasmBuild scratch "seed_draw" (seedDrawFixture ())
           Err e => fail e
-          Ok wdraw => match wasmBuild scratch "seed_set" seedSetFixture
+          Ok wdraw => match wasmBuild scratch "seed_set" (seedSetFixture ())
             Err e => fail e
             Ok wset => expectAll [
               sameDraw
                 "run"
-                (drawOf "run" (Some "42") (runEngine seedDrawFixture))
-                (drawOf "run" (Some "42") (runEngine seedSetFixture)),
+                (drawOf "run" (Some "42") (runEngine (seedDrawFixture ())))
+                (drawOf "run" (Some "42") (runEngine (seedSetFixture ()))),
               sameDraw
                 "native"
                 (drawOf "native" (Some "42") (binEngine draw))
@@ -378,15 +382,15 @@ test "os_entropy: MEDAKA_SEED=42 equals a leading setSeed 42 on run, native and 
 
 test "os_entropy: a malformed MEDAKA_SEED fails loudly on run, native and wasm" =
   inFreshDirOf
-    (scratch => match buildOnly scratch "seed_draw" seedDrawFixture
+    (scratch => match buildOnly scratch "seed_draw" (seedDrawFixture ())
       Err e => fail e
-      Ok draw => match wasmBuild scratch "seed_draw" seedDrawFixture
+      Ok draw => match wasmBuild scratch "seed_draw" (seedDrawFixture ())
         Err e => fail e
         Ok wdraw =>
           expectAll
             (flatMap
               (seed => [
-                refusesSeed "run" seed (runEngine seedDrawFixture),
+                refusesSeed "run" seed (runEngine (seedDrawFixture ())),
                 refusesSeed "native" seed (binEngine draw),
                 refusesSeed "wasm" seed (wasmEngine wdraw),
               ])

@@ -159,8 +159,8 @@ fallthroughOk tmp = match spawn ["run", "\{tmp}/guard.mdk"]
       fail "guard run printed [\{out}], want pos"
 
 -- 9. self-check-rel: `medaka check stdlib/array.mdk` run from the repo root, no flag.
-selfCheckRel : <Exec, IO, FileRead> Expectation
-selfCheckRel = match runWith "sh" [
+selfCheckRel : Unit -> <Exec, IO, FileRead> Expectation
+selfCheckRel () = match runWith "sh" [
   "-c",
   "cd \"$1\" && shift && exec \"$@\"",
   "medaka",
@@ -179,8 +179,8 @@ selfCheckRel = match runWith "sh" [
       pass
 
 -- 10. self-check-abs: the same file by absolute path, no flag.
-selfCheckAbs : <Exec, IO, FileRead> Expectation
-selfCheckAbs = match spawn ["check", "\{medakaRoot ()}/stdlib/array.mdk"]
+selfCheckAbs : Unit -> <Exec, IO, FileRead> Expectation
+selfCheckAbs () = match spawn ["check", "\{medakaRoot ()}/stdlib/array.mdk"]
   Err e => fail "could not spawn absolute self-check: \{e}"
   Ok (code, out) =>
     if code /= 0 then
@@ -200,8 +200,8 @@ test "internal-extern 1-10: the wall, the opt-in, stdlib trust, self-check" = wi
     ("6 build-allow", buildAllow tmp),
     ("7 stdlib-trust", stdlibTrust tmp),
     ("8 fallthrough-ok", fallthroughOk tmp),
-    ("9 self-check-rel", selfCheckRel),
-    ("10 self-check-abs", selfCheckAbs),
+    ("9 self-check-rel", selfCheckRel ()),
+    ("10 self-check-abs", selfCheckAbs ()),
   ])
 
 -- ── #1713: a `medaka.toml` is not itself a grant of privilege ────────────────
@@ -366,8 +366,8 @@ manifestMatrix tmp = expectEach [
 ]
 
 -- 22. test-exemption: `medaka test` runs the internal-primitive corpus, no flag.
-testExemption : <Exec, IO, FileRead> Expectation
-testExemption = match spawn [
+testExemption : Unit -> <Exec, IO, FileRead> Expectation
+testExemption () = match spawn [
   "test",
   "\{medakaRoot ()}/test/ported/test_eval_internal_prims_ported.mdk",
 ]
@@ -401,8 +401,8 @@ docExemption tmp = match writeFile "\{tmp}/doc_internal.mdk" docSource
         pass
 
 -- 24. compiler-self-check: compiler/support/util.mdk calls the kernels; clean with no flag.
-compilerSelfCheck : <Exec, IO, FileRead> Expectation
-compilerSelfCheck =
+compilerSelfCheck : Unit -> <Exec, IO, FileRead> Expectation
+compilerSelfCheck () =
   match spawn ["check", "\{medakaRoot ()}/compiler/support/util.mdk"]
     Err e => fail "could not spawn compiler self-check: \{e}"
     Ok (code, out) =>
@@ -541,9 +541,9 @@ test "internal-extern 13-21: the manifest opt-in matrix" =
 
 test "internal-extern 22-24: test and doc are exempt; the compiler self-check is clean" = withScratchDir
   (tmp => expectEach [
-    ("22 test-exemption", testExemption),
+    ("22 test-exemption", testExemption ()),
     ("23 doc-exemption", docExemption tmp),
-    ("24 compiler-self-check", compilerSelfCheck),
+    ("24 compiler-self-check", compilerSelfCheck ()),
   ])
 
 test "internal-extern 25-26: a nested stdlib module is trusted by its file, not its root" = withNested
