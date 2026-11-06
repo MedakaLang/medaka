@@ -576,14 +576,14 @@ balScrapeEach root (g :: gs)
 -- MISSING is not stale — the gate's own "oracle not built" exit-2 owns that
 -- case and says so in its own words.
 staleOf : String -> Float -> List String -> <IO> List String
-staleOf root newest xs0 = go xs0
-  where
-    go [] = []
-    go (o :: os) =
-      let rest = go os
-      match statFile "\{root}/test/bin/\{o}"
-        Err _ => rest
-        Ok (_, _, _, mt) => if mt < newest then o :: rest else rest
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
+staleOf _ _ [] = []
+staleOf root newest (o :: os) =
+  let rest = staleOf root newest os
+  match statFile "\{root}/test/bin/\{o}"
+    Err _ => rest
+    Ok (_, _, _, mt) => if mt < newest then o :: rest else rest
 
 indentedNames : List String -> List String
 indentedNames [] = []
@@ -844,13 +844,13 @@ runGatesLoop env (g :: gs) acc =
 -- dropped off the head of `splitNl`'s list and rejoined: one pass over the
 -- string, no intermediate list, for a 200-line output bound.
 afterNewlines : Array Char -> Int -> Int -> Int -> Int
-afterNewlines cs i0 len want0 = go i0 want0
-  where
-    go i want
-      | i >= len = len
-      | want <= 0 = i
-      | arrayGetUnsafe i cs == '\n' = go (i + 1) (want - 1)
-      | otherwise = go (i + 1) want
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
+afterNewlines cs i len want
+  | i >= len = len
+  | want <= 0 = i
+  | arrayGetUnsafe i cs == '\n' = afterNewlines cs (i + 1) len (want - 1)
+  | otherwise = afterNewlines cs (i + 1) len want
 
 tailLines : Int -> String -> String
 tailLines n s =
@@ -1889,15 +1889,15 @@ arrowAt cs n i = charAtOr cs n i == '=' && charAtOr cs n (i + 1) == '>'
 -- stepped over, so `Ok (127, _, Some (e)) =>` and `Ok (0, ")", "")` both
 -- close where the eye says they do. `n` when the text runs out first.
 closeParen : Array Char -> Int -> Int -> Int -> Int
-closeParen cs n i0 depth0 = go i0 depth0
-  where
-    go i depth
-      | i >= n = n
-      | arrayGetUnsafe i cs == '"' = go (skipStrLit cs n (i + 1)) depth
-      | arrayGetUnsafe i cs == '(' = go (i + 1) (depth + 1)
-      | arrayGetUnsafe i cs /= ')' = go (i + 1) depth
-      | depth == 0 = i + 1
-      | otherwise = go (i + 1) (depth - 1)
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
+closeParen cs n i depth
+  | i >= n = n
+  | arrayGetUnsafe i cs == '"' = closeParen cs n (skipStrLit cs n (i + 1)) depth
+  | arrayGetUnsafe i cs == '(' = closeParen cs n (i + 1) (depth + 1)
+  | arrayGetUnsafe i cs /= ')' = closeParen cs n (i + 1) depth
+  | depth == 0 = i + 1
+  | otherwise = closeParen cs n (i + 1) (depth - 1)
 
 -- Index just past the closing `"` of a string literal whose opening quote
 -- has already been consumed; a backslashed character never closes it.
@@ -3081,13 +3081,13 @@ closeGo : Int ->
   List (String, List String) ->
   List String ->
   List String
-closeGo fuel0 deps ces sel0 = go fuel0 sel0
-  where
-    go fuel sel
-      | fuel <= 0 = sel
-      | otherwise =
-        let nxt = sortUniqS (sel ++ edgeAdds deps sel ++ edgeAdds ces sel)
-        if listLen nxt == listLen sel then sel else go (fuel - 1) nxt
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
+closeGo fuel deps ces sel
+  | fuel <= 0 = sel
+  | otherwise =
+    let nxt = sortUniqS (sel ++ edgeAdds deps sel ++ edgeAdds ces sel)
+    if listLen nxt == listLen sel then sel else closeGo (fuel - 1) deps ces nxt
 
 {- | The projects a queue entry touching `paths` must run gates for: `univ` is
    the project universe (every `project` value in the registry), `deps` the

@@ -1700,11 +1700,11 @@ assignAnchors used ((name, line, tag) :: rest) =
   (name, line, tag, a) :: assignAnchors (a :: used) rest
 
 freshAnchor : List String -> String -> Int -> String
-freshAnchor used base n0 = go n0
-  where
-    go n =
-      let cand = if n == 0 then base else "\{base}-\{n}"
-      if anyDoc (== cand) used then go (n + 1) else cand
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
+freshAnchor used base n =
+  let cand = if n == 0 then base else "\{base}-\{n}"
+  if anyDoc (== cand) used then freshAnchor used base (n + 1) else cand
 
 anchorOf : AnchorTable -> DocEntry -> String
 anchorOf tbl e = match e

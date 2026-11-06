@@ -3121,14 +3121,14 @@ deadAltIndexes : Oracle ->
   Int ->
   List Pat ->
   List Int
-deadAltIndexes oracle col0 prec unguarded x50 x60 xs0 = go x50 x60 xs0
-  where
-    go _ _ [] = []
-    go seen k (a :: rest) =
-      let dead = patUnreachable oracle col0 (seen ++ prec) a
-      let seen2 = if unguarded then [a] :: seen else seen
-      let more = go seen2 (k + 1) rest
-      if dead then k :: more else more
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
+deadAltIndexes _ _ _ _ _ _ [] = []
+deadAltIndexes oracle col0 prec unguarded seen k (a :: rest) =
+  let dead = patUnreachable oracle col0 (seen ++ prec) a
+  let seen2 = if unguarded then [a] :: seen else seen
+  let more = deadAltIndexes oracle col0 prec unguarded seen2 (k + 1) rest
+  if dead then k :: more else more
 
 -- PERF fast path.  `patUnreachable` runs the full Maranget `useful` recursion, which
 -- re-scans EVERY preceding row — so the fold as a whole is O(arms²) on a wide match.

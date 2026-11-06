@@ -760,18 +760,18 @@ customPlansCtors : PlanEnv ->
   OrdMap Unit ->
   List CustomPlan ->
   (OrdMap Unit, List CustomPlan)
-customPlansCtors env depth nominal xs0 xs1 s0 f0 = go xs0 xs1 s0 f0
-  where
-    go [] _ seen found = (seen, found)
-    go _ [] seen found = (seen, found)
-    go (ctor :: rest) (weight :: weights) seen found =
-      if weight <= 0 then
-        go rest weights seen found
-      else match instantiateCtor env nominal ctor
-        Ok fields =>
-          let (seen2, found2) = customPlansFields env depth fields seen found
-          go rest weights seen2 found2
-        Err _ => go rest weights seen found
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
+customPlansCtors _ _ _ [] _ seen found = (seen, found)
+customPlansCtors _ _ _ _ [] seen found = (seen, found)
+customPlansCtors env depth nominal (ctor :: rest) (weight :: weights) seen found =
+  if weight <= 0 then
+    customPlansCtors env depth nominal rest weights seen found
+  else match instantiateCtor env nominal ctor
+    Ok fields =>
+      let (seen2, found2) = customPlansFields env depth fields seen found
+      customPlansCtors env depth nominal rest weights seen2 found2
+    Err _ => customPlansCtors env depth nominal rest weights seen found
 
 customPlansFields : PlanEnv ->
   Int ->

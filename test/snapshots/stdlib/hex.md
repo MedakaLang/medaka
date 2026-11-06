@@ -50,13 +50,13 @@ byteToHexChars b upper =
   (digitChar hi upper, digitChar lo upper)
 
 encodeGo : Bytes -> Int -> Bool -> List Char -> List Char
-encodeGo bs i0 upper acc0 = go i0 acc0
-  where
-    go i acc
-      | i < 0 = acc
-      | otherwise =
-        let (hi, lo) = byteToHexChars (U8.toInt bs[i]) upper
-        go (i - 1) (hi :: lo :: acc)
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
+encodeGo bs i upper acc
+  | i < 0 = acc
+  | otherwise =
+    let (hi, lo) = byteToHexChars (U8.toInt bs[i]) upper
+    encodeGo bs (i - 1) upper (hi :: lo :: acc)
 
 encodeAs : Bytes -> Bool -> String
 encodeAs bs upper =
@@ -182,7 +182,7 @@ prop "hex encode length is 2x byte length" (xs : List Int) =
 (DTypeSig false "byteToHexChars" (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyTuple (TyCon "Char") (TyCon "Char")))))
 (DFunDef false "byteToHexChars" ((PVar "b") (PVar "upper")) (EBlock (DoLet false false (PVar "masked") (EApp (EApp (EVar "bitAnd") (EVar "b")) (ELit (LInt 255)))) (DoLet false false (PVar "hi") (EApp (EApp (EVar "shiftRight") (EVar "masked")) (ELit (LInt 4)))) (DoLet false false (PVar "lo") (EApp (EApp (EVar "bitAnd") (EVar "masked")) (ELit (LInt 15)))) (DoExpr (ETuple (EApp (EApp (EVar "digitChar") (EVar "hi")) (EVar "upper")) (EApp (EApp (EVar "digitChar") (EVar "lo")) (EVar "upper"))))))
 (DTypeSig false "encodeGo" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Char")) (TyApp (TyCon "List") (TyCon "Char")))))))
-(DFunDef false "encodeGo" ((PVar "bs") (PVar "i0") (PVar "upper") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PVar "i") (PVar "acc")) (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EVar "acc") (EIf (EVar "otherwise") (EBlock (DoLet false false (PTuple (PVar "hi") (PVar "lo")) (EApp (EApp (EVar "byteToHexChars") (EApp (EVar "U8.toInt") (EApp (EApp (EVar "index") (EVar "bs")) (EVar "i")))) (EVar "upper"))) (DoExpr (EApp (EApp (EVar "go") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EBinOp "::" (EVar "hi") (EBinOp "::" (EVar "lo") (EVar "acc")))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EApp (EVar "go") (EVar "i0")) (EVar "acc0"))))
+(DFunDef false "encodeGo" ((PVar "bs") (PVar "i") (PVar "upper") (PVar "acc")) (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EVar "acc") (EIf (EVar "otherwise") (EBlock (DoLet false false (PTuple (PVar "hi") (PVar "lo")) (EApp (EApp (EVar "byteToHexChars") (EApp (EVar "U8.toInt") (EApp (EApp (EVar "index") (EVar "bs")) (EVar "i")))) (EVar "upper"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "encodeGo") (EVar "bs")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "upper")) (EBinOp "::" (EVar "hi") (EBinOp "::" (EVar "lo") (EVar "acc")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "encodeAs" (TyFun (TyCon "Bytes") (TyFun (TyCon "Bool") (TyCon "String"))))
 (DFunDef false "encodeAs" ((PVar "bs") (PVar "upper")) (EApp (EVar "stringFromChars") (EApp (EVar "arrayFromList") (EApp (EApp (EApp (EApp (EVar "encodeGo") (EVar "bs")) (EBinOp "-" (EApp (EVar "B.length") (EVar "bs")) (ELit (LInt 1)))) (EVar "upper")) (EListLit)))))
 (DTypeSig true "encode" (TyFun (TyCon "Bytes") (TyCon "String")))
@@ -215,7 +215,7 @@ prop "hex encode length is 2x byte length" (xs : List Int) =
 (DTypeSig false "byteToHexChars" (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyTuple (TyCon "Char") (TyCon "Char")))))
 (DFunDef false "byteToHexChars" ((PVar "b") (PVar "upper")) (EBlock (DoLet false false (PVar "masked") (EApp (EApp (EVar "bitAnd") (EVar "b")) (ELit (LInt 255)))) (DoLet false false (PVar "hi") (EApp (EApp (EVar "shiftRight") (EVar "masked")) (ELit (LInt 4)))) (DoLet false false (PVar "lo") (EApp (EApp (EVar "bitAnd") (EVar "masked")) (ELit (LInt 15)))) (DoExpr (ETuple (EApp (EApp (EVar "digitChar") (EVar "hi")) (EVar "upper")) (EApp (EApp (EVar "digitChar") (EVar "lo")) (EVar "upper"))))))
 (DTypeSig false "encodeGo" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Char")) (TyApp (TyCon "List") (TyCon "Char")))))))
-(DFunDef false "encodeGo" ((PVar "bs") (PVar "i0") (PVar "upper") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PVar "i") (PVar "acc")) (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EVar "acc") (EIf (EVar "otherwise") (EBlock (DoLet false false (PTuple (PVar "hi") (PVar "lo")) (EApp (EApp (EVar "byteToHexChars") (EApp (EVar "U8.toInt") (EApp (EApp (EMethodRef "index") (EVar "bs")) (EVar "i")))) (EVar "upper"))) (DoExpr (EApp (EApp (EVar "go") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EBinOp "::" (EVar "hi") (EBinOp "::" (EVar "lo") (EVar "acc")))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EApp (EVar "go") (EVar "i0")) (EVar "acc0"))))
+(DFunDef false "encodeGo" ((PVar "bs") (PVar "i") (PVar "upper") (PVar "acc")) (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EVar "acc") (EIf (EVar "otherwise") (EBlock (DoLet false false (PTuple (PVar "hi") (PVar "lo")) (EApp (EApp (EVar "byteToHexChars") (EApp (EVar "U8.toInt") (EApp (EApp (EMethodRef "index") (EVar "bs")) (EVar "i")))) (EVar "upper"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "encodeGo") (EVar "bs")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "upper")) (EBinOp "::" (EVar "hi") (EBinOp "::" (EVar "lo") (EVar "acc")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "encodeAs" (TyFun (TyCon "Bytes") (TyFun (TyCon "Bool") (TyCon "String"))))
 (DFunDef false "encodeAs" ((PVar "bs") (PVar "upper")) (EApp (EVar "stringFromChars") (EApp (EVar "arrayFromList") (EApp (EApp (EApp (EApp (EVar "encodeGo") (EVar "bs")) (EBinOp "-" (EApp (EVar "B.length") (EVar "bs")) (ELit (LInt 1)))) (EVar "upper")) (EListLit)))))
 (DTypeSig true "encode" (TyFun (TyCon "Bytes") (TyCon "String")))

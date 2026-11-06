@@ -37,16 +37,16 @@ newBindingSummary arity freshType freshSummary =
 -- recursive uses may constrain their assumption without claiming ownership of
 -- the envelope that will be published after all producers have been inferred.
 freshBodyValues : Int -> (Unit -> Mono) -> EffRow -> (Mono, Mono)
-freshBodyValues arity0 freshType body = go arity0
-  where
-    go arity =
-      if arity <= 0 then
-        (freshType (), freshType ())
-      else
-        let domain = freshType ()
-        let row = if arity == 1 then body else pureRow
-        let (published, recursive) = go (arity - 1)
-        (TFun domain row published, TFun domain row recursive)
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
+freshBodyValues arity freshType body =
+  if arity <= 0 then
+    (freshType (), freshType ())
+  else
+    let domain = freshType ()
+    let row = if arity == 1 then body else pureRow
+    let (published, recursive) = freshBodyValues (arity - 1) freshType body
+    (TFun domain row published, TFun domain row recursive)
 
 -- Only source applications belong to the binding; a function-valued result
 -- starts a new invocation protocol. An arity mismatch is diagnosed by typing.

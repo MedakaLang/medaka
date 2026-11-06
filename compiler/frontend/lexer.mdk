@@ -145,12 +145,12 @@ commentText (Comment _ _ t) = t
 -- first char; `line` its 1-based number.  O(pos) per call, but only invoked
 -- once per comment in a single left-to-right walk (see `posToLineCol`).
 posLineColFrom : Array Char -> Int -> Int -> Int -> Int -> (Int, Int)
-posLineColFrom src target p0 line0 lineStart0 = go p0 line0 lineStart0
-  where
-    go p line lineStart
-      | p >= target = (line, target - lineStart)
-      | isLineBreakAt src p = go (p + 1) (line + 1) (p + 1)
-      | otherwise = go (p + 1) line lineStart
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds); inlined hot path (hot-list).
+-- lint-disable-next-line rule-threaded-invariant
+posLineColFrom src target p line lineStart
+  | p >= target = (line, target - lineStart)
+  | isLineBreakAt src p = posLineColFrom src target (p + 1) (line + 1) (p + 1)
+  | otherwise = posLineColFrom src target (p + 1) line lineStart
 
 -- Turn each `RComment startPos endPos` into a `Comment line col text`.
 -- `RComment` tokens arrive in strictly-ascending `startPos` order (scan is a

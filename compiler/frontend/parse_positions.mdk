@@ -412,14 +412,15 @@ firstContentAt toks i0 e = go i0
       | isNoiseTok (arrayGetUnsafe i toks) = go (i + 1)
       | otherwise = i
 rhsStartIdx : Array Token -> Int -> Int -> Int -> Int
-rhsStartIdx toks i0 e depth0 = go i0 depth0
-  where
-    go i depth
-      | i >= e = e
-      | isOpenDelim (arrayGetUnsafe i toks) = go (i + 1) (depth + 1)
-      | isCloseDelim (arrayGetUnsafe i toks) = go (i + 1) (depth - 1)
-      | depth == 0 && isEqualTok (arrayGetUnsafe i toks) = i + 1
-      | otherwise = go (i + 1) depth
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
+rhsStartIdx toks i e depth
+  | i >= e = e
+  | isOpenDelim (arrayGetUnsafe i toks) = rhsStartIdx toks (i + 1) e (depth + 1)
+  | isCloseDelim (arrayGetUnsafe i toks) =
+    rhsStartIdx toks (i + 1) e (depth - 1)
+  | depth == 0 && isEqualTok (arrayGetUnsafe i toks) = i + 1
+  | otherwise = rhsStartIdx toks (i + 1) e depth
 chainOperandLines : Array Token -> Array Int -> String -> Int -> Int -> List Int
 chainOperandLines toks lines op rs e =
   let h = firstContentAt toks rs e

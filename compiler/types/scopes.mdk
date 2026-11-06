@@ -93,13 +93,13 @@ freshScope store parent level moduleId owner =
 
 export
 givenVisibleFrom : ScopeStore -> ScopeId -> ScopeId -> Bool
-givenVisibleFrom store useScope0 binderScope = go useScope0
-  where
-    go useScope
-      | useScope == binderScope = True
-      | otherwise = match (scopeFrame store useScope).sfParent
-        Some parent => go parent
-        None => False
+-- Bound: inlined hot path (hot-list): the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
+givenVisibleFrom store useScope binderScope
+  | useScope == binderScope = True
+  | otherwise = match (scopeFrame store useScope).sfParent
+    Some parent => givenVisibleFrom store parent binderScope
+    None => False
 
 -- `givenVisibleFrom` with the use site's side read once: the ordinals of the use
 -- scope and each of its ancestors, innermost first.  A scan testing many givens

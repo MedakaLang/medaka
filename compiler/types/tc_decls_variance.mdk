@@ -257,14 +257,17 @@ declEnvPolarityFixGo : List (TabKey, List Polarity) ->
   Int ->
   List (TabKey, List Polarity) ->
   List (TabKey, List Polarity)
-declEnvPolarityFixGo base ds fuel0 prev0 = go fuel0 prev0
-  where
-    go fuel prev =
-      if fuel <= 0 then
-        map (e => (fst e, map (_ => PInv) (snd e))) prev
-      else
-        let next = declEnvPolarityEntries (prev ++ base) ds
-        if polarityEntriesEq prev next then prev else go (fuel - 1) next
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
+declEnvPolarityFixGo base ds fuel prev =
+  if fuel <= 0 then
+    map (e => (fst e, map (_ => PInv) (snd e))) prev
+  else
+    let next = declEnvPolarityEntries (prev ++ base) ds
+    if polarityEntriesEq prev next then
+      prev
+    else
+      declEnvPolarityFixGo base ds (fuel - 1) next
 
 -- A parameter with no occurrence is phantom: nothing about it can be
 -- laundered, so the published verdict is the lenient one.
