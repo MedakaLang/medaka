@@ -71,7 +71,6 @@ import types.route_key.{
   evDictRoutesIn,
   evMethodRoutesIn,
   evSiteHeadIn,
-  numIntWord,
   numFloatWord,
 }
 import ir.core_ir.{
@@ -1807,9 +1806,10 @@ spineOf (CApp f args _) =
 spineOf e = (e, [])
 
 -- an argument whose evaluation has no effect and does no work worth delaying.  A
--- literal's `fromInt` is one only through the prelude's `Num` at `Int` and
--- `Float`, whose conversions cannot fail: any other impl may panic (a range
--- check), and delaying it would move or drop the panic.
+-- literal's `fromInt` is one only through the prelude's `Num` at `Float`, whose
+-- conversion cannot fail: any other impl may panic (a range check), and delaying it
+-- would move or drop the panic.  `Num Int`'s `fromInt` is already folded to its
+-- literal by `fold-num-int-fromint`, which runs before `eta-saturate` reads this.
 isAtomicArg : CExpr -> Bool
 isAtomicArg (CVar _ _) = True
 isAtomicArg (CLit _) = True
@@ -1817,7 +1817,7 @@ isAtomicArg (CLam _ _) = True
 isAtomicArg (CMethod _ _) = True
 isAtomicArg (CDict _ _) = True
 isAtomicArg (CApp (CMethod "fromInt" (MethodEvidence _ _ (RKey key _ _) _ _)) [CLit _] _) =
-  key == numIntWord || key == numFloatWord
+  key == numFloatWord
 isAtomicArg _ = False
 
 isFunctionBind : CBind -> Bool
