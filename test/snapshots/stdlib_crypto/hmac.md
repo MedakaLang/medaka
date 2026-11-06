@@ -1,5 +1,5 @@
 # META
-source_lines=158
+source_lines=151
 stages=DESUGAR,MARK
 # SOURCE
 {- | HMAC-SHA-256 (RFC 2104) over byte strings.
@@ -25,13 +25,11 @@ import bytes as B
 import u8 as U8
 
 ctEqAccum : Bytes -> Bytes -> Int -> Int -> Int
-ctEqAccum a b i0 acc0 = go i0 acc0
-  where
-    go i acc =
-      if i >= B.length a then
-        acc
-      else
-        go (i + 1) (bitOr acc (bitXor (U8.toInt a[i]) (U8.toInt b[i])))
+ctEqAccum a b i acc =
+  if i >= B.length a then
+    acc
+  else
+    ctEqAccum a b (i + 1) (bitOr acc (bitXor (U8.toInt a[i]) (U8.toInt b[i])))
 
 {- | Whether two byte strings contain the same bytes.
 
@@ -59,25 +57,20 @@ blockBytes : Int
 blockBytes = 64
 
 fillPad : ByteBlock -> Int -> Int -> Unit
-fillPad out pad i0 = go i0
-  where
-    go i =
-      if i >= blockBytes then
-        ()
-      else
-        let () = byteBlockSetUnsafe i pad out
-        go (i + 1)
+fillPad out pad i =
+  if i >= blockBytes then
+    ()
+  else
+    let () = byteBlockSetUnsafe i pad out
+    fillPad out pad (i + 1)
 
 fillKeyPad : ByteBlock -> ByteBlock -> Int -> Int -> Unit
-fillKeyPad key out pad i0 = go i0
-  where
-    go i =
-      if i >= byteBlockLength key then
-        ()
-      else
-        let () =
-          byteBlockSetUnsafe i (bitXor (byteBlockGetUnsafe i key) pad) out
-        go (i + 1)
+fillKeyPad key out pad i =
+  if i >= byteBlockLength key then
+    ()
+  else
+    let () = byteBlockSetUnsafe i (bitXor (byteBlockGetUnsafe i key) pad) out
+    fillKeyPad key out pad (i + 1)
 
 -- `key` is already normalized to at most `blockBytes`, so the tail of the
 -- block keeps the raw pad byte: that is the zero-padding of RFC 2104 §2
@@ -133,7 +126,7 @@ hmacSha256 key message =
    the inner and outer hash, two SHA-256 compressions for a message that
    fits in the tag's own 32 bytes, instead of `hmacSha256`'s four. -}
 export data HmacSha256Key =
-  HmacSha256Key (U32, U32, U32, U32, U32, U32, U32, U32) (U32, U32, U32, U32, U32, U32, U32, U32)
+  | HmacSha256Key (U32, U32, U32, U32, U32, U32, U32, U32) (U32, U32, U32, U32, U32, U32, U32, U32)
 
 {- | Precomputes the ipad/opad compressions for `key`, once. -}
 export
@@ -166,15 +159,15 @@ hmacSha256WithKey (HmacSha256Key innerStart outerStart) message =
 (DUse false (UseAlias ("bytes") "B"))
 (DUse false (UseAlias ("u8") "U8"))
 (DTypeSig false "ctEqAccum" (TyFun (TyCon "Bytes") (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
-(DFunDef false "ctEqAccum" ((PVar "a") (PVar "b") (PVar "i0") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "B.length") (EVar "a"))) (EVar "acc") (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EApp (EVar "bitOr") (EVar "acc")) (EApp (EApp (EVar "bitXor") (EApp (EVar "U8.toInt") (EApp (EApp (EVar "index") (EVar "a")) (EVar "i")))) (EApp (EVar "U8.toInt") (EApp (EApp (EVar "index") (EVar "b")) (EVar "i")))))))))) (EApp (EApp (EVar "go") (EVar "i0")) (EVar "acc0"))))
+(DFunDef false "ctEqAccum" ((PVar "a") (PVar "b") (PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "B.length") (EVar "a"))) (EVar "acc") (EApp (EApp (EApp (EApp (EVar "ctEqAccum") (EVar "a")) (EVar "b")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EApp (EVar "bitOr") (EVar "acc")) (EApp (EApp (EVar "bitXor") (EApp (EVar "U8.toInt") (EApp (EApp (EVar "index") (EVar "a")) (EVar "i")))) (EApp (EVar "U8.toInt") (EApp (EApp (EVar "index") (EVar "b")) (EVar "i"))))))))
 (DTypeSig true "ctEq" (TyFun (TyCon "Bytes") (TyFun (TyCon "Bytes") (TyCon "Bool"))))
 (DFunDef false "ctEq" ((PVar "a") (PVar "b")) (EIf (EBinOp "/=" (EApp (EVar "B.length") (EVar "a")) (EApp (EVar "B.length") (EVar "b"))) (EVar "False") (EBinOp "==" (EApp (EApp (EApp (EApp (EVar "ctEqAccum") (EVar "a")) (EVar "b")) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))))
 (DTypeSig false "blockBytes" (TyCon "Int"))
 (DFunDef false "blockBytes" () (ELit (LInt 64)))
 (DTypeSig false "fillPad" (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Unit")))))
-(DFunDef false "fillPad" ((PVar "out") (PVar "pad") (PVar "i0")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "blockBytes")) (ELit LUnit) (EBlock (DoLet false false (PLit LUnit) (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EVar "i")) (EVar "pad")) (EVar "out"))) (DoExpr (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))))))))) (EApp (EVar "go") (EVar "i0"))))
+(DFunDef false "fillPad" ((PVar "out") (PVar "pad") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "blockBytes")) (ELit LUnit) (EBlock (DoLet false false (PLit LUnit) (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EVar "i")) (EVar "pad")) (EVar "out"))) (DoExpr (EApp (EApp (EApp (EVar "fillPad") (EVar "out")) (EVar "pad")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))))
 (DTypeSig false "fillKeyPad" (TyFun (TyCon "ByteBlock") (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Unit"))))))
-(DFunDef false "fillKeyPad" ((PVar "key") (PVar "out") (PVar "pad") (PVar "i0")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "byteBlockLength") (EVar "key"))) (ELit LUnit) (EBlock (DoLet false false (PLit LUnit) (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EVar "i")) (EApp (EApp (EVar "bitXor") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "key"))) (EVar "pad"))) (EVar "out"))) (DoExpr (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))))))))) (EApp (EVar "go") (EVar "i0"))))
+(DFunDef false "fillKeyPad" ((PVar "key") (PVar "out") (PVar "pad") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "byteBlockLength") (EVar "key"))) (ELit LUnit) (EBlock (DoLet false false (PLit LUnit) (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EVar "i")) (EApp (EApp (EVar "bitXor") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "key"))) (EVar "pad"))) (EVar "out"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "fillKeyPad") (EVar "key")) (EVar "out")) (EVar "pad")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))))
 (DTypeSig false "keyPad" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyCon "Bytes"))))
 (DFunDef false "keyPad" ((PVar "key") (PVar "pad")) (EBlock (DoLet false false (PVar "out") (EApp (EVar "byteBlockMake") (EVar "blockBytes"))) (DoLet false false (PLit LUnit) (EApp (EApp (EApp (EVar "fillPad") (EVar "out")) (EVar "pad")) (ELit (LInt 0)))) (DoLet false false (PLit LUnit) (EApp (EApp (EApp (EApp (EVar "fillKeyPad") (EApp (EVar "lendByteBlockUnsafe") (EVar "key"))) (EVar "out")) (EVar "pad")) (ELit (LInt 0)))) (DoExpr (EApp (EVar "adoptByteBlockUnsafe") (EVar "out")))))
 (DTypeSig true "hmacSha256" (TyFun (TyCon "Bytes") (TyFun (TyCon "Bytes") (TyCon "Bytes"))))
@@ -190,15 +183,15 @@ hmacSha256WithKey (HmacSha256Key innerStart outerStart) message =
 (DUse false (UseAlias ("bytes") "B"))
 (DUse false (UseAlias ("u8") "U8"))
 (DTypeSig false "ctEqAccum" (TyFun (TyCon "Bytes") (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
-(DFunDef false "ctEqAccum" ((PVar "a") (PVar "b") (PVar "i0") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "B.length") (EVar "a"))) (EVar "acc") (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EApp (EVar "bitOr") (EVar "acc")) (EApp (EApp (EVar "bitXor") (EApp (EVar "U8.toInt") (EApp (EApp (EMethodRef "index") (EVar "a")) (EVar "i")))) (EApp (EVar "U8.toInt") (EApp (EApp (EMethodRef "index") (EVar "b")) (EVar "i")))))))))) (EApp (EApp (EVar "go") (EVar "i0")) (EVar "acc0"))))
+(DFunDef false "ctEqAccum" ((PVar "a") (PVar "b") (PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "B.length") (EVar "a"))) (EVar "acc") (EApp (EApp (EApp (EApp (EVar "ctEqAccum") (EVar "a")) (EVar "b")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EApp (EVar "bitOr") (EVar "acc")) (EApp (EApp (EVar "bitXor") (EApp (EVar "U8.toInt") (EApp (EApp (EMethodRef "index") (EVar "a")) (EVar "i")))) (EApp (EVar "U8.toInt") (EApp (EApp (EMethodRef "index") (EVar "b")) (EVar "i"))))))))
 (DTypeSig true "ctEq" (TyFun (TyCon "Bytes") (TyFun (TyCon "Bytes") (TyCon "Bool"))))
 (DFunDef false "ctEq" ((PVar "a") (PVar "b")) (EIf (EBinOp "/=" (EApp (EVar "B.length") (EVar "a")) (EApp (EVar "B.length") (EVar "b"))) (EVar "False") (EBinOp "==" (EApp (EApp (EApp (EApp (EVar "ctEqAccum") (EVar "a")) (EVar "b")) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))))
 (DTypeSig false "blockBytes" (TyCon "Int"))
 (DFunDef false "blockBytes" () (ELit (LInt 64)))
 (DTypeSig false "fillPad" (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Unit")))))
-(DFunDef false "fillPad" ((PVar "out") (PVar "pad") (PVar "i0")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "blockBytes")) (ELit LUnit) (EBlock (DoLet false false (PLit LUnit) (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EVar "i")) (EVar "pad")) (EVar "out"))) (DoExpr (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))))))))) (EApp (EVar "go") (EVar "i0"))))
+(DFunDef false "fillPad" ((PVar "out") (PVar "pad") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "blockBytes")) (ELit LUnit) (EBlock (DoLet false false (PLit LUnit) (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EVar "i")) (EVar "pad")) (EVar "out"))) (DoExpr (EApp (EApp (EApp (EVar "fillPad") (EVar "out")) (EVar "pad")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))))
 (DTypeSig false "fillKeyPad" (TyFun (TyCon "ByteBlock") (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Unit"))))))
-(DFunDef false "fillKeyPad" ((PVar "key") (PVar "out") (PVar "pad") (PVar "i0")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "byteBlockLength") (EVar "key"))) (ELit LUnit) (EBlock (DoLet false false (PLit LUnit) (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EVar "i")) (EApp (EApp (EVar "bitXor") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "key"))) (EVar "pad"))) (EVar "out"))) (DoExpr (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))))))))) (EApp (EVar "go") (EVar "i0"))))
+(DFunDef false "fillKeyPad" ((PVar "key") (PVar "out") (PVar "pad") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "byteBlockLength") (EVar "key"))) (ELit LUnit) (EBlock (DoLet false false (PLit LUnit) (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EVar "i")) (EApp (EApp (EVar "bitXor") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "key"))) (EVar "pad"))) (EVar "out"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "fillKeyPad") (EVar "key")) (EVar "out")) (EVar "pad")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))))
 (DTypeSig false "keyPad" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyCon "Bytes"))))
 (DFunDef false "keyPad" ((PVar "key") (PVar "pad")) (EBlock (DoLet false false (PVar "out") (EApp (EVar "byteBlockMake") (EVar "blockBytes"))) (DoLet false false (PLit LUnit) (EApp (EApp (EApp (EVar "fillPad") (EVar "out")) (EVar "pad")) (ELit (LInt 0)))) (DoLet false false (PLit LUnit) (EApp (EApp (EApp (EApp (EVar "fillKeyPad") (EApp (EVar "lendByteBlockUnsafe") (EVar "key"))) (EVar "out")) (EVar "pad")) (ELit (LInt 0)))) (DoExpr (EApp (EVar "adoptByteBlockUnsafe") (EVar "out")))))
 (DTypeSig true "hmacSha256" (TyFun (TyCon "Bytes") (TyFun (TyCon "Bytes") (TyCon "Bytes"))))

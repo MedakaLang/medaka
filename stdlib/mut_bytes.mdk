@@ -126,13 +126,11 @@ fill v (MutBytes bb) = fillFrom (u8ToInt v) bb 0 (byteBlockLength bb)
 -- through the unchecked setter, with the bounds established by `fill`
 -- above.
 fillFrom : Int -> ByteBlock -> Int -> Int -> Unit
-fillFrom v bb i0 n = go i0
-  where
-    go i
-      | i >= n = ()
-      | otherwise =
-        byteBlockSetUnsafe i v bb
-        go (i + 1)
+fillFrom v bb i n
+  | i >= n = ()
+  | otherwise =
+    byteBlockSetUnsafe i v bb
+    fillFrom v bb (i + 1) n
 
 {- | Copies `len` bytes from the first buffer, starting at `srcOff`, into the
    second, starting at `dstOff`.

@@ -165,9 +165,9 @@ blobHalfEmpty = BlobHalf blockStoreEmpty Tip 0 0
 -- The declared type recorded for a blob, or `None` for one that has no entry
 -- at all as well as one inserted without a type.
 declaredTypeOf : Cid -> BlobHalf -> Option String
-declaredTypeOf cid (BlobHalf _ index _ _) = do
-  (_, declared) <- get (cidToString cid) index
-  declared
+declaredTypeOf cid (BlobHalf _ index _ _) = match get (cidToString cid) index
+  Some (_, declared) => declared
+  None => None
 
 -- Insert one verified blob under an already-decided declared type. The byte
 -- total moves only when the block store gains a row: `blockStorePut` accepts
@@ -330,11 +330,9 @@ withoutConsumed wanted consumed =
     consumed
 
 hasAccess : Int -> Bytes -> List SessionRecord -> Bool
-hasAccess now wanted xs0 = go xs0
-  where
-    go [] = False
-    go ((SessionRecord access _ expires _) :: rest) =
-      now < expires && ctEq wanted access || go rest
+hasAccess _ _ [] = False
+hasAccess now wanted ((SessionRecord access _ expires _) :: rest) =
+  now < expires && ctEq wanted access || hasAccess now wanted rest
 
 withoutRefresh : Bytes -> List SessionRecord -> List SessionRecord
 withoutRefresh wanted open =

@@ -120,6 +120,7 @@ import tools.lint_cache.{
 }
 import tools.lint_baseline.{
   LintBaseline,
+  LintExempt,
   applyBaselineToDiags,
   applyBaselineToFindings,
   baselineDiagViolations,
@@ -127,6 +128,7 @@ import tools.lint_baseline.{
   baselineViolationLine,
   baselineViolations,
   diagCodeOf,
+  exemptRulesFor,
   findingRuleOf,
 }
 
@@ -153,6 +155,9 @@ lintHelpText = stringConcat [
   "  --baseline=<file>      error only where a file's per-rule finding count\n",
   "                       exceeds its row in <file> (counts may fall freely)\n",
   "  --write-baseline=<f>   regenerate <f> from this run instead of reporting\n",
+  "  --exempt=<file>        drop each listed file's findings of its listed rules\n",
+  "                       before --deny and --baseline; every row of <file>\n",
+  "                       needs a reason (test/lint_path_exempt.toml)\n",
   "  --list-rules           list every rule with its metadata (--json for the\n",
   "                       machine form, --markdown for docs/ops/LINT-RULES.md)\n",
   "  --scope=universal|internal     with --list-rules: keep one scope\n",
@@ -448,17 +453,19 @@ lintCacheCtx True False =
 export
 runLintJsonCmd : StdlibIndex ->
   Bool ->
+  LintExempt ->
   List String ->
   List String ->
   List String ->
   Option (String, LintBaseline) ->
   List String ->
   <IO> Unit
-runLintJsonCmd idx internalFlag disableNames onlyNames denyNames baseCtx files =
+runLintJsonCmd idx internalFlag exempt disableNames onlyNames denyNames baseCtx files =
   let quads =
     lintFilesToDiagQuads
       idx
       internalFlag
+      exempt
       disableNames
       onlyNames
       denyNames
@@ -466,7 +473,14 @@ runLintJsonCmd idx internalFlag disableNames onlyNames denyNames baseCtx files =
       files
   let triples = map dropQuadParse quads
   let cross =
-    projectJsonFindings idx internalFlag disableNames onlyNames denyNames quads
+    projectJsonFindings
+      idx
+      internalFlag
+      exempt
+      disableNames
+      onlyNames
+      denyNames
+      quads
   let merged = mergeProjectIntoTriples cross triples
   putStr (cjAllToJson merged)
   if anyList cjLintTripleHasErr merged then stageExit 1
@@ -483,15 +497,19 @@ runLintJsonCmd idx internalFlag disableNames onlyNames denyNames baseCtx files =
 export
 projectJsonFindings : StdlibIndex ->
   Bool ->
+  LintExempt ->
   List String ->
   List String ->
   List String ->
   List (String, String, List Diag, Positions, List Decl) ->
   <IO> List Finding
-projectJsonFindings idx internalFlag disableNames onlyNames denyNames quads =
+projectJsonFindings idx internalFlag exempt disableNames onlyNames denyNames quads =
   let summaries = map (quadSummaries onlyNames disableNames) quads
   let raw = runProjectRules onlyNames disableNames idx summaries
-  let active = dropInactiveInternalProject allProjectRules internalFlag raw
+  let active =
+    dropExemptFindings
+      exempt
+      (dropInactiveInternalProject allProjectRules internalFlag raw)
   let suppressed = applySuppressionsMulti (map quadToSrc quads) active
   applyFindingDeny denyNames suppressed
 
@@ -523,6 +541,7 @@ dropQuadParse (path, src, diags, _, _) = (path, src, diags)
 export
 lintFilesToDiagQuads : StdlibIndex ->
   Bool ->
+  LintExempt ->
   List String ->
   List String ->
   List String ->
@@ -531,13 +550,21 @@ lintFilesToDiagQuads : StdlibIndex ->
   <IO> List (String, String, List Diag, Positions, List Decl)
 -- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
 -- lint-disable-next-line rule-threaded-invariant
-lintFilesToDiagQuads _ _ _ _ _ _ [] = []
-lintFilesToDiagQuads idx internalFlag disable only deny baseCtx (f :: rest) =
-  let fileDisable = disable ++ internalDisabledFor internalFlag f
+lintFilesToDiagQuads _ _ _ _ _ _ _ [] = []
+lintFilesToDiagQuads idx internalFlag exempt disable only deny baseCtx (f :: rest) =
+  let fileDisable = disable ++ fileDisabledFor internalFlag exempt f
   applyBaselineQuad
       baseCtx
       (lintFileDiagTripleParsed idx fileDisable only deny f)
-    :: lintFilesToDiagQuads idx internalFlag disable only deny baseCtx rest
+    :: lintFilesToDiagQuads
+      idx
+      internalFlag
+      exempt
+      disable
+      only
+      deny
+      baseCtx
+      rest
 
 applyBaselineQuad : Option (String, LintBaseline) ->
   (String, String, List Diag, Positions, List Decl) ->
@@ -556,6 +583,7 @@ applyBaselineQuad (Some (cwd, base)) (path, src, diags, pos, decls) =
 export
 lintFilesToDiagTriples : StdlibIndex ->
   Bool ->
+  LintExempt ->
   List String ->
   List String ->
   List String ->
@@ -564,11 +592,19 @@ lintFilesToDiagTriples : StdlibIndex ->
   <IO> List (String, String, List Diag)
 -- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
 -- lint-disable-next-line rule-threaded-invariant
-lintFilesToDiagTriples _ _ _ _ _ _ [] = []
-lintFilesToDiagTriples idx internalFlag disable only deny baseCtx (f :: rest) =
-  let fileDisable = disable ++ internalDisabledFor internalFlag f
+lintFilesToDiagTriples _ _ _ _ _ _ _ [] = []
+lintFilesToDiagTriples idx internalFlag exempt disable only deny baseCtx (f :: rest) =
+  let fileDisable = disable ++ fileDisabledFor internalFlag exempt f
   applyBaselineTriple baseCtx (lintFileDiagTriple idx fileDisable only deny f)
-    :: lintFilesToDiagTriples idx internalFlag disable only deny baseCtx rest
+    :: lintFilesToDiagTriples
+      idx
+      internalFlag
+      exempt
+      disable
+      only
+      deny
+      baseCtx
+      rest
 
 -- The `--json` half of the baseline promotion.  Reports the same stderr lines
 -- the text path does: stdout stays exactly one JSON document (C4), so a machine
@@ -631,17 +667,24 @@ baselineFileCodes cwd (path, _, diags) =
 export
 runProjectReport : StdlibIndex ->
   Bool ->
+  LintExempt ->
   List String ->
   List String ->
   List String ->
   List LintEntry ->
   <IO> Bool
-runProjectReport idx internalFlag disableNames onlyNames denyNames entries =
+runProjectReport idx internalFlag exempt disableNames onlyNames denyNames entries =
   let raw =
-    dropInactiveInternalProject
-      allProjectRules
-      internalFlag
-      (runProjectRules onlyNames disableNames idx (map entrySummaries entries))
+    dropExemptFindings
+      exempt
+      (dropInactiveInternalProject
+        allProjectRules
+        internalFlag
+        (runProjectRules
+          onlyNames
+          disableNames
+          idx
+          (map entrySummaries entries)))
   let suppressed = applySuppressionsMultiDirs (map entryDirTable entries) raw
   reportProjectFindings (applyFindingDeny denyNames suppressed)
 
@@ -713,6 +756,21 @@ export
 internalDisabledFor : Bool -> String -> <IO> List String
 internalDisabledFor internalFlag target =
   if internalActiveFor internalFlag target then [] else internalRuleNames
+
+-- Everything switched off for one target beyond the run's own `--disable`: the
+-- inactive internal-scope rules and the target's `--exempt` row.
+fileDisabledFor : Bool -> LintExempt -> String -> <IO> List String
+fileDisabledFor internalFlag exempt target =
+  internalDisabledFor internalFlag target ++ exemptRulesFor exempt target
+
+-- The project tier's half of `--exempt`: a finding is dropped when its rule is
+-- exempt for the file it lands in.
+dropExemptFindings : LintExempt -> List Finding -> List Finding
+dropExemptFindings exempt = filter (f =>
+  not (contains (findingRuleOf f) (exemptRulesFor exempt (findingFileOf f))))
+
+findingFileOf : Finding -> String
+findingFileOf f = locFileOf f.loc
 
 export
 internalActiveFor : Bool -> String -> <IO> Bool
@@ -808,10 +866,12 @@ memoStore key active =
   active
 
 -- How one `medaka lint` run treats its files: `--internal` forces the
--- internal-scope rules on, `--fix` rewrites instead of reporting, and
+-- internal-scope rules on, `lrExempt` is the `--exempt` table (`noExempt`
+-- without one), `--fix` rewrites instead of reporting, and
 -- `lrMulti` (more than one target) adds the per-file "path:" header.
 public export data LintRun = LintRun {
   lrInternal : Bool,
+  lrExempt : LintExempt,
   lrFix : Bool,
   lrUnsafe : Bool,
   lrMulti : Bool,
@@ -843,7 +903,8 @@ lintFilesGo : StdlibIndex ->
 -- lint-disable-next-line rule-threaded-invariant
 lintFilesGo _ _ _ _ _ _ _ [] acc = (acc, [])
 lintFilesGo idx run disableNames onlyNames denyNames baseCtx cacheCtx (f :: rest) acc =
-  let fileDisable = disableNames ++ internalDisabledFor run.lrInternal f
+  let fileDisable =
+    disableNames ++ fileDisabledFor run.lrInternal run.lrExempt f
   if run.lrFix then
     let hadErr = lintOneFileFix idx run.lrUnsafe onlyNames fileDisable f
     lintFilesGo

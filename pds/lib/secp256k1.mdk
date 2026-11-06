@@ -75,14 +75,12 @@ rfc6979Require32 label bytes =
 -- Copy all of `input` into `out` from `offset`. Lengths, offsets and the
 -- counter are public; the bytes are only moved, never tested.
 copyBytesInto : B.Bytes -> MB.MutBytes -> Int -> Int -> Unit
-copyBytesInto input out offset i0 = go i0
-  where
-    go i =
-      if i >= B.length input then
-        ()
-      else
-        let () = MB.setInPlace (offset + i) input[i] out
-        go (i + 1)
+copyBytesInto input out offset i =
+  if i >= B.length input then
+    ()
+  else
+    let () = MB.setInPlace (offset + i) input[i] out
+    copyBytesInto input out offset (i + 1)
 
 -- 32 copies of one public byte: the schedule's initial `K` and `V`.
 filledBytes : U8 -> B.Bytes
@@ -160,17 +158,14 @@ selectBytes bit a b =
   MB.freeze out
 
 selectBytesGo : Int -> B.Bytes -> B.Bytes -> MB.MutBytes -> Int -> Unit
-selectBytesGo bit a b out i0 = go i0
-  where
-    go i =
-      if i >= rfc6979ByteCount then
-        ()
-      else
-        let x = U64.fromU8 a[i]
-        let blended =
-          U8.truncateU64 (x + U64.truncate bit * (U64.fromU8 b[i] - x))
-        let () = MB.setInPlace i blended out
-        go (i + 1)
+selectBytesGo bit a b out i =
+  if i >= rfc6979ByteCount then
+    ()
+  else
+    let x = U64.fromU8 a[i]
+    let blended = U8.truncateU64 (x + U64.truncate bit * (U64.fromU8 b[i] - x))
+    let () = MB.setInPlace i blended out
+    selectBytesGo bit a b out (i + 1)
 
 firstValidCandidate : Rfc6979Schedule -> (Int, Sc, B.Bytes)
 firstValidCandidate (Rfc6979Schedule (Rfc6979Candidate valid0 scalar0 bytes0) (Rfc6979Candidate valid1 scalar1 bytes1)) =
