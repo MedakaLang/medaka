@@ -105,7 +105,7 @@ scan : String ->
   Option (String, Int) ->
   List String ->
   (List String, Option (String, Int))
-scan dl n fs0 pend0 xs0 = go fs0 pend0 xs0
+scan dl n fields0 pending0 xs0 = go fields0 pending0 xs0
   where
     go fs pend [] = (fs, pend)
     go fs pend (p :: rest) =

@@ -627,7 +627,7 @@ checkTypeGo bound0 cur env x0 = go bound0 x0
             (authTermNames ps),
         b1,
       )
-    -- ⚠️ The predicates are checked with `cur` WIDENED by the constrained type's own
+    -- The predicates are checked with `cur` widened by the constrained type's own
     -- first span, not with the bare `cur`.  A `Constraint` carries no `Loc` (see
     -- `ambiguousIfaceErrors`), and at DECL level `cur` is `None`, so `f : Speak a =>
     -- a -> String` had no span anywhere for an interface-position diagnostic to use —

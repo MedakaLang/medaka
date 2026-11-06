@@ -3377,7 +3377,7 @@ lowerDeclImpl : ProgramFacts ->
   List CImplEntry
 lowerDeclImpl facts disp reqCounts arities dt decl0 = go decl0
   where
-    -- #1037: an ATTRIBUTE IS METADATA — it must never change which impls exist.  A
+    -- #1037: an attribute is metadata: it must never change which impls exist.  A
     -- decl attribute parses to `DAttrib attrs <decl>` (parser.parseAttrib wraps ANY
     -- decl), so `@deprecated "…" impl Speak Cat where …` reaches here as a DAttrib and
     -- fell through to `_ => []`: the impl contributed ZERO entries and simply VANISHED

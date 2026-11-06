@@ -188,11 +188,11 @@ walkEntries root (name :: rest) =
   match stat full
     Err e => Err e
     Ok st =>
-      -- Bound: as above.
+      -- Bound: a `do` bind on the `stat` result adds one frame for every entry of the directory.
       -- lint-disable-next-line rule-passthrough-arm
       if st.isDir then match listDir full
         Err e => Err e
-        -- Bound: as above.
+        -- Bound: a `do` bind on the `listDir` result adds one frame for every nested directory.
         -- lint-disable-next-line rule-passthrough-arm
         Ok subs => match walkEntries full subs
           Err e => Err e
@@ -301,7 +301,7 @@ walkDirSorted : WalkKind ->
 -- lint-disable-next-line rule-bind-chain-to-do
 walkDirSorted kind levels skip root names =
   let collected = collectEntries kind levels skip root names
-  -- Bound: the frame cost of a `do` chain per entry, stated above.
+  -- Bound: a `do` bind on `collected` adds one frame per directory level of the walk.
   -- lint-disable-next-line rule-passthrough-arm
   match collected
     Err e => Err e
@@ -325,7 +325,7 @@ walkSorted kind levels skip xs0 = go xs0
           map ("\{full}/" :: _) (go rest)
         else match listDir full
           Err e => Err (namePath full e)
-          -- Bound: the frame cost of a `do` chain per entry, stated above.
+          -- Bound: a `do` bind on the recursive `walkDirSorted` result adds one frame per directory level.
           -- lint-disable-next-line rule-passthrough-arm
           Ok subs => match walkDirSorted kind (belowLevel levels) skip full subs
             Err e => Err e

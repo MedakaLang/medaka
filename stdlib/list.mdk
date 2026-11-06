@@ -323,10 +323,10 @@ scanLeft f z (x :: xs) = z :: scanLeft f (f z x) xs
    [6, 5, 3, 0] -}
 export
 scanRight : (a -> b -> <e> b) -> b -> List a -> <e> List b
-scanRight f z xs0 = go xs0
+scanRight f z xs = go xs
   where
     go [] = [z]
-    go (x :: xs) = match go xs
+    go (x :: rest) = match go rest
       q :: qs => f x q :: q :: qs
       [] => [f x z]
 
@@ -515,11 +515,11 @@ mapAccumL f s (x :: xs) =
    (6, [5, 3, 0]) -}
 export
 mapAccumR : (s -> a -> <e> (s, b)) -> s -> List a -> <e> (s, List b)
-mapAccumR f s xs0 = go xs0
+mapAccumR f s xs = go xs
   where
     go [] = (s, [])
-    go (x :: xs) =
-      let (s2, ys) = go xs
+    go (x :: rest) =
+      let (s2, ys) = go rest
       let (s3, y) = f s2 x
       (s3, y :: ys)
 

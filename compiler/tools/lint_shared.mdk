@@ -14,7 +14,7 @@ import support.util.{
 }
 import list.{sortBy, last, reverse, findMap}
 import array.{get as arrayGet}
-import string.{split, isUpper, words, unwords}
+import string.{split, isUpper, words, unwords, trim, trimLeft}
 import support.path.{stripMdk}
 import regex.{Regex, mustCompile, find as reFind, escape, isMatch}
 import frontend.lexer.{Comment, commentLine, commentText, commentCol}
@@ -1110,3 +1110,13 @@ ruleNameThreadedInvariant = "rule-threaded-invariant"
 export
 ruleNamePassthroughArm : String
 ruleNamePassthroughArm = "rule-passthrough-arm"
+
+-- Columns of leading whitespace on a source line.
+export
+indentWidth : String -> Int
+indentWidth l = stringLength l - stringLength (trimLeft l)
+
+-- A line that is neither blank nor a `--` comment.
+export
+isCodeText : String -> Bool
+isCodeText l = not (trim l == "" || startsWith "--" (trim l))

@@ -1008,7 +1008,7 @@ walkImplBody ctx (CImplDefault iface tag key _ _ pats body) w =
     w
 
 walkClauses : Ctx -> CallScope -> List CClause -> Walk -> Walk
-walkClauses ctx scope xs0 w0 = go xs0 w0
+walkClauses ctx scope xs0 walk0 = go xs0 walk0
   where
     go [] w = w
     go ((CClause pats body) :: rest) w =
@@ -1425,19 +1425,19 @@ noteVar (Ctx backend top _ _ _ facts binding _) scope x (w@(Walk seen found bad 
           results
 
 walkList : Ctx -> CallScope -> List CExpr -> Walk -> Walk
-walkList ctx scope xs0 w0 = go xs0 w0
+walkList ctx scope xs0 walk0 = go xs0 walk0
   where
     go [] w = w
     go (e :: rest) w = go rest (walkE ctx scope e w)
 
 walkFields : Ctx -> CallScope -> List CField -> Walk -> Walk
-walkFields ctx scope xs0 w0 = go xs0 w0
+walkFields ctx scope xs0 walk0 = go xs0 walk0
   where
     go [] w = w
     go ((CField _ _ e) :: rest) w = go rest (walkE ctx scope e w)
 
 walkLocalBinds : Ctx -> CallScope -> List CBind -> Walk -> Walk
-walkLocalBinds ctx scope xs0 w0 = go xs0 w0
+walkLocalBinds ctx scope xs0 walk0 = go xs0 walk0
   where
     go [] w = w
     go ((CBind _ clauses _ _) :: rest) w =
@@ -1446,7 +1446,7 @@ walkLocalBinds ctx scope xs0 w0 = go xs0 w0
 -- An arm's pattern scopes over its guards and body; a `Pat <- e` guard's
 -- pattern scopes over the guards after it and the body.
 walkArms : Ctx -> CallScope -> List CArm -> Walk -> Walk
-walkArms ctx scope xs0 w0 = go xs0 w0
+walkArms ctx scope xs0 walk0 = go xs0 walk0
   where
     go [] w = w
     go ((CArm pat guards body) :: rest) w =
@@ -1462,7 +1462,7 @@ walkGuards ctx scope ((CGBind pat e) :: rest) w =
   walkGuards ctx (bindPatScope pat scope) rest (walkE ctx scope e w)
 
 walkGuarded : Ctx -> CallScope -> List CGuard -> CExpr -> Walk -> Walk
-walkGuarded ctx scope0 xs0 body w0 = go scope0 xs0 w0
+walkGuarded ctx scope0 xs0 body walk0 = go scope0 xs0 walk0
   where
     go scope [] w = walkE ctx scope body w
     go scope ((CGBool c) :: rest) w = go scope rest (walkE ctx scope c w)

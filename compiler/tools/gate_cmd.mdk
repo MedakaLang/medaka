@@ -2453,7 +2453,7 @@ importsBack : (String -> <IO> ImportTarget) ->
   String ->
   List String ->
   <IO> Bool
-importsBack resolve file ms0 = go ms0
+importsBack resolve file mods0 = go mods0
   where
     go [] = False
     go (m :: ms) = match resolve m

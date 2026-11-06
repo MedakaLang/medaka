@@ -201,7 +201,7 @@ entryOrdinal (EvEntry (EvId _ i) _) = i
 -- The position of the last of [runs] starting at or below ordinal [i], searched
 -- in positions [a] up to [b]; one less than [a] when none there does.
 runAt : Array EvRun -> Int -> Int -> Int -> Int
-runAt runs i a0 b0 = go a0 b0
+runAt runs i lo0 hi0 = go lo0 hi0
   where
     go a b =
       if a >= b then

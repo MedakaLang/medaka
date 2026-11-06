@@ -681,7 +681,7 @@ walkResiduals name authIds rs w =
     w
 
 walkMono : String -> List Int -> List Int -> List Int -> Mono -> Walk -> Walk
-walkMono name ids effIds authIds x0 w0 = go x0 w0
+walkMono name ids effIds authIds mono0 walk0 = go mono0 walk0
   where
     go (TVar cell) w = match !cell
       Link _ => push (LinkCell name TyVarK None) w
@@ -698,7 +698,7 @@ walkMono name ids effIds authIds x0 w0 = go x0 w0
     go (TCon _ _ | TRigid _) w = w
 
 walkAuth : String -> List Int -> Authority -> Walk -> Walk
-walkAuth name authIds x0 w0 = go x0 w0
+walkAuth name authIds auth0 walk0 = go auth0 walk0
   where
     go (AVar cell) w = match !cell
       ALink id _ _ => push (LinkCell name AuthVarK (Some id)) w
