@@ -1,5 +1,5 @@
 # META
-source_lines=607
+source_lines=590
 stages=DESUGAR,MARK
 # SOURCE
 -- Shared internal helpers for the self-hosted compiler stages.  compiler
@@ -13,7 +13,6 @@ stages=DESUGAR,MARK
 import support.ordmap.{OrdMap, omLookup, omInsert, omEmpty}
 import support.opcount.{opBump}
 import support.path.{dirOf}
-import hash_map.{HashMap, setInPlace, has, findWithDefault}
 import list.{reverse, zip}
 import string.{join, split, startsWith as stdStartsWith}
 
@@ -593,27 +592,10 @@ hexDigits 0 _ acc = acc
 hexDigits k n acc =
   let d = n % 16
   hexDigits (k - 1) (n / 16) (stringSlice d (d + 1) "0123456789abcdef" ++ acc)
-
--- Marks in [seen] every key reachable from [xs0] in [graph] (a worklist walk: a key
--- already in [seen] is skipped, so each is expanded once).
-export
-markReachable : HashMap String (List String) ->
-  HashMap String Unit ->
-  List String ->
-  Unit
-markReachable graph seen xs0 = go xs0
-  where
-    go [] = ()
-    go (w :: work)
-      | has w seen = go work
-      | otherwise =
-        setInPlace w () seen
-        go (findWithDefault [] w graph ++ work)
 # DESUGAR
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omLookup" false) (mem "omInsert" false) (mem "omEmpty" false))))
 (DUse false (UseGroup ("support" "opcount") ((mem "opBump" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false))))
-(DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "setInPlace" false) (mem "has" false) (mem "findWithDefault" false))))
 (DUse false (UseGroup ("list") ((mem "reverse" false) (mem "zip" false))))
 (DUse false (UseGroup ("string") ((mem "join" false) (mem "split" false) (mem "startsWith" false "stdStartsWith"))))
 (DTypeSig true "contains" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
@@ -772,13 +754,10 @@ markReachable graph seen xs0 = go xs0
 (DTypeSig false "hexDigits" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "hexDigits" ((PLit (LInt 0)) PWild (PVar "acc")) (EVar "acc"))
 (DFunDef false "hexDigits" ((PVar "k") (PVar "n") (PVar "acc")) (EBlock (DoLet false false (PVar "d") (EBinOp "%" (EVar "n") (ELit (LInt 16)))) (DoExpr (EApp (EApp (EApp (EVar "hexDigits") (EBinOp "-" (EVar "k") (ELit (LInt 1)))) (EBinOp "/" (EVar "n") (ELit (LInt 16)))) (EBinOp "++" (EApp (EApp (EApp (EVar "stringSlice") (EVar "d")) (EBinOp "+" (EVar "d") (ELit (LInt 1)))) (ELit (LString "0123456789abcdef"))) (EVar "acc"))))))
-(DTypeSig true "markReachable" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit")))))
-(DFunDef false "markReachable" ((PVar "graph") (PVar "seen") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PVar "w") (PVar "work"))) (EIf (EApp (EApp (EVar "has") (EVar "w")) (EVar "seen")) (EApp (EVar "go") (EVar "work")) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EVar "w")) (ELit LUnit)) (EVar "seen"))) (DoExpr (EApp (EVar "go") (EBinOp "++" (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "w")) (EVar "graph")) (EVar "work"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EVar "go") (EVar "xs0"))))
 # MARK
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omLookup" false) (mem "omInsert" false) (mem "omEmpty" false))))
 (DUse false (UseGroup ("support" "opcount") ((mem "opBump" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false))))
-(DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "setInPlace" false) (mem "has" false) (mem "findWithDefault" false))))
 (DUse false (UseGroup ("list") ((mem "reverse" false) (mem "zip" false))))
 (DUse false (UseGroup ("string") ((mem "join" false) (mem "split" false) (mem "startsWith" false "stdStartsWith"))))
 (DTypeSig true "contains" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
@@ -937,5 +916,3 @@ markReachable graph seen xs0 = go xs0
 (DTypeSig false "hexDigits" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "hexDigits" ((PLit (LInt 0)) PWild (PVar "acc")) (EVar "acc"))
 (DFunDef false "hexDigits" ((PVar "k") (PVar "n") (PVar "acc")) (EBlock (DoLet false false (PVar "d") (EBinOp "%" (EVar "n") (ELit (LInt 16)))) (DoExpr (EApp (EApp (EApp (EVar "hexDigits") (EBinOp "-" (EVar "k") (ELit (LInt 1)))) (EBinOp "/" (EVar "n") (ELit (LInt 16)))) (EBinOp "++" (EApp (EApp (EApp (EVar "stringSlice") (EVar "d")) (EBinOp "+" (EVar "d") (ELit (LInt 1)))) (ELit (LString "0123456789abcdef"))) (EVar "acc"))))))
-(DTypeSig true "markReachable" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit")))))
-(DFunDef false "markReachable" ((PVar "graph") (PVar "seen") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PVar "w") (PVar "work"))) (EIf (EApp (EApp (EVar "has") (EVar "w")) (EVar "seen")) (EApp (EVar "go") (EVar "work")) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EVar "w")) (ELit LUnit)) (EVar "seen"))) (DoExpr (EApp (EVar "go") (EBinOp "++" (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "w")) (EVar "graph")) (EVar "work"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EVar "go") (EVar "xs0"))))

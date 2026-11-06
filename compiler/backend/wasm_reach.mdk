@@ -87,7 +87,8 @@ import ir.core_ir.{
   CImplEntry(..),
   CImplBody(..),
 }
-import support.util.{filterList, markReachable, startsWith}
+import support.util.{filterList, startsWith}
+import support.graph.{markReachable}
 import backend.emit_support.{forEachU}
 import hash_map.{HashMap, new, setInPlace, has, findWithDefault}
 
@@ -183,7 +184,6 @@ addEdges : HashMap String Unit ->
 addEdges defined g key refs =
   setInPlace key (map (canonKey defined) refs ++ findWithDefault [] key g) g
 
--- BFS worklist closure; `has` skips already-processed keys so each is expanded once.
 -- ── structural reference collection ────────────────────────────────────────
 -- Every name a body can turn into a call/global reference at emit time.  Binder
 -- scoping is ignored on purpose (see header).  This match is deliberately

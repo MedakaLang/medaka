@@ -83,17 +83,24 @@ eachUpTo f hi i
     f i
     eachUpTo f hi (i + 1)
 
--- The positives the fix rewrites.
-
--- Both invariants are threaded through guarded match arms.
+-- A match-arm guard reads an invariant parameter: the converted `go` would
+-- capture it, which the emitter cannot do yet (#4901).
 sumBetween : Int -> Int -> Int -> List Int -> Int
--- expect-next-line rule-threaded-invariant
-sumBetween lo hi acc0 xs0 = go acc0 xs0
-  where
-    go acc xs = match xs
-      [] => acc
-      y :: ys if y >= lo && y <= hi => go (acc + y) ys
-      _ :: ys => go acc ys
+-- expect-next-line rule-threaded-invariant unfixed
+sumBetween lo hi acc xs = match xs
+  [] => acc
+  y :: ys if y >= lo && y <= hi => sumBetween lo hi (acc + y) ys
+  _ :: ys => sumBetween lo hi acc ys
+
+-- The same through a guard on a match over a changing parameter's element.
+countEq : Int -> Int -> List Int -> Int
+-- expect-next-line rule-threaded-invariant unfixed
+countEq a b (x :: xs) = match x
+  y if y == a => b + countEq a b xs
+  _ => 1 + countEq a b xs
+countEq _ _ [] = 0
+
+-- The positives the fix rewrites.
 
 -- The self-call sits under a let; the base clause ignores both invariants.
 countIn : Int -> Int -> List Int -> Int

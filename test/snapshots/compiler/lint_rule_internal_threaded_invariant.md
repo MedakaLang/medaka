@@ -1,15 +1,17 @@
 # META
-source_lines=876
+source_lines=901
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-threaded-invariant: a top-level self-recursive function whose self-calls all pass two or more of its own parameters through unchanged. Close over them in a where-local `go`.
 
 import driver.diagnostics.{Severity(..)}
 import frontend.ast.{
+  Arm(..),
   Constraint(..),
   Decl(..),
   Expr(..),
   FunClause(..),
+  Guard(..),
   LetBind(..),
   Loc(..),
   Pat(..),
@@ -236,6 +238,7 @@ quoted n = "`\{n}`"
 --     with more after it;
 --   * the signature has an effect row variable: `go` would infer and
 --     generalise a row of its own;
+--   * a match-arm guard reads an invariant parameter (#4901);
 --   * a field read or record update reads a record that is neither an
 --     invariant parameter nor a name no clause binds: `go` learns the types of
 --     its parameters only by inference, too late to choose between records
@@ -276,6 +279,7 @@ threadFix facts prog (Group name _ clauses next) shared names calls = do
   guard (allList (usedBeyondCalls plan spans) names)
   guard (not (anyList (sp => buildsModuloCons plan sp.spBody) spans))
   guard (allList (sp => recordTargetsFit plan sp.spBody) spans)
+  guard (not (anyList (sp => armGuardReadsInvariant plan sp.spBody) spans))
   guard (signatureFits plan prog)
   merge <- whereMerge plan spans
   edits <- rewriteEdits plan spans merge
@@ -476,6 +480,27 @@ isCtorHead e = match unwrapLoc e
 isSelfApp : Plan -> Expr -> Bool
 isSelfApp plan e = match spineOf e []
   (hd, args) => isEVarNamed plan.plName hd && listLen args == plan.plArity
+
+-- A match-arm guard that reads an invariant parameter: the emitter cannot
+-- capture it in the local `go` (#4901).
+armGuardReadsInvariant : Plan -> Expr -> Bool
+armGuardReadsInvariant plan e =
+  armGuards plan (unwrapLoc e)
+    || anyList (armGuardReadsInvariant plan) (childExprs (unwrapLoc e))
+
+armGuards : Plan -> Expr -> Bool
+armGuards plan (EMatch _ arms) = anyList (armReads plan) arms
+armGuards _ _ = False
+
+armReads : Plan -> Arm -> Bool
+armReads plan (Arm _ gs _) = anyList (guardReads plan) gs
+
+guardReads : Plan -> Guard -> Bool
+guardReads plan (GBool g) = readsInvariant plan g
+guardReads plan (GBind _ g) = readsInvariant plan g
+
+readsInvariant : Plan -> Expr -> Bool
+readsInvariant plan g = anyList (n => mentionsVar n g) plan.plNames
 
 -- A field read or record update whose record is an invariant parameter or a
 -- name no clause binds. The type of anything else may reach the local `go`
@@ -880,7 +905,7 @@ dropLine plan l =
     ""
 # DESUGAR
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Constraint" true) (mem "Decl" true) (mem "Expr" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Loc" true) (mem "Pat" true) (mem "Ty" true) (mem "patBoundNames" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Arm" true) (mem "Constraint" true) (mem "Decl" true) (mem "Expr" true) (mem "FunClause" true) (mem "Guard" true) (mem "LetBind" true) (mem "Loc" true) (mem "Pat" true) (mem "Ty" true) (mem "patBoundNames" false))))
 (DUse false (UseGroup ("frontend" "ast_walk") ((mem "childExprs" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "localBoundNames" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
@@ -938,7 +963,7 @@ dropLine plan l =
 (DTypeSig false "quoted" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "quoted" ((PVar "n")) (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "`"))))
 (DTypeSig false "threadFix" (TyFun (TyCon "FileFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Group") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "SelfCall")) (TyApp (TyCon "Option") (TyCon "Fix")))))))))
-(DFunDef false "threadFix" ((PVar "facts") (PVar "prog") (PCon "Group" (PVar "name") PWild (PVar "clauses") (PVar "next")) (PVar "shared") (PVar "names") (PVar "calls")) (EApp (EApp (EVar "andThen") (EApp (EVar "clauseHead") (EVar "clauses"))) (ELam ((PVar "first")) (ELet false (PVar "ls") (EApp (EVar "factLines") (EVar "facts")) (ELet false (PVar "plan") (ERecordCreate "Plan" ((fa "plLines" (EVar "ls")) (fa "plName" (EVar "name")) (fa "plArity" (EApp (EVar "listLen") (EApp (EVar "clausePats") (EVar "first")))) (fa "plShared" (EVar "shared")) (fa "plNames" (EVar "names")) (fa "plCalls" (EVar "calls")) (fa "plBound" (EApp (EVar "localBoundNames") (EApp (EApp (EVar "filterList") (EApp (EVar "definesName") (EVar "name"))) (EVar "prog")))))) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "traverse") (EApp (EVar "clauseSpan") (EVar "plan"))) (EApp (EApp (EVar "withBounds") (EApp (EApp (EVar "lineCount") (EVar "ls")) (EVar "next"))) (EVar "clauses")))) (ELam ((PVar "spans")) (EApp (EApp (EVar "andThen") (EApp (EVar "guard") (EApp (EApp (EVar "allList") (EApp (EVar "spanFits") (EVar "plan"))) (EVar "spans")))) (ELam (PWild) (EApp (EApp (EVar "andThen") (EApp (EVar "guard") (EApp (EApp (EVar "allList") (EApp (EApp (EVar "usedBeyondCalls") (EVar "plan")) (EVar "spans"))) (EVar "names")))) (ELam (PWild) (EApp (EApp (EVar "andThen") (EApp (EVar "guard") (EApp (EVar "not") (EApp (EApp (EVar "anyList") (ELam ((PVar "sp")) (EApp (EApp (EVar "buildsModuloCons") (EVar "plan")) (EFieldAccess (EVar "sp") "spBody")))) (EVar "spans"))))) (ELam (PWild) (EApp (EApp (EVar "andThen") (EApp (EVar "guard") (EApp (EApp (EVar "allList") (ELam ((PVar "sp")) (EApp (EApp (EVar "recordTargetsFit") (EVar "plan")) (EFieldAccess (EVar "sp") "spBody")))) (EVar "spans")))) (ELam (PWild) (EApp (EApp (EVar "andThen") (EApp (EVar "guard") (EApp (EApp (EVar "signatureFits") (EVar "plan")) (EVar "prog")))) (ELam (PWild) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "whereMerge") (EVar "plan")) (EVar "spans"))) (ELam ((PVar "merge")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "rewriteEdits") (EVar "plan")) (EVar "spans")) (EVar "merge"))) (ELam ((PVar "edits")) (EApp (EVar "Some") (ERecordCreate "Fix" ((fa "fixApplicability" (EVar "Unsafe")) (fa "fixEdits" (EVar "edits")) (fa "fixMessage" (ELit (LString "close over the invariant parameters in a where-local `go`")))))))))))))))))))))))))))
+(DFunDef false "threadFix" ((PVar "facts") (PVar "prog") (PCon "Group" (PVar "name") PWild (PVar "clauses") (PVar "next")) (PVar "shared") (PVar "names") (PVar "calls")) (EApp (EApp (EVar "andThen") (EApp (EVar "clauseHead") (EVar "clauses"))) (ELam ((PVar "first")) (ELet false (PVar "ls") (EApp (EVar "factLines") (EVar "facts")) (ELet false (PVar "plan") (ERecordCreate "Plan" ((fa "plLines" (EVar "ls")) (fa "plName" (EVar "name")) (fa "plArity" (EApp (EVar "listLen") (EApp (EVar "clausePats") (EVar "first")))) (fa "plShared" (EVar "shared")) (fa "plNames" (EVar "names")) (fa "plCalls" (EVar "calls")) (fa "plBound" (EApp (EVar "localBoundNames") (EApp (EApp (EVar "filterList") (EApp (EVar "definesName") (EVar "name"))) (EVar "prog")))))) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "traverse") (EApp (EVar "clauseSpan") (EVar "plan"))) (EApp (EApp (EVar "withBounds") (EApp (EApp (EVar "lineCount") (EVar "ls")) (EVar "next"))) (EVar "clauses")))) (ELam ((PVar "spans")) (EApp (EApp (EVar "andThen") (EApp (EVar "guard") (EApp (EApp (EVar "allList") (EApp (EVar "spanFits") (EVar "plan"))) (EVar "spans")))) (ELam (PWild) (EApp (EApp (EVar "andThen") (EApp (EVar "guard") (EApp (EApp (EVar "allList") (EApp (EApp (EVar "usedBeyondCalls") (EVar "plan")) (EVar "spans"))) (EVar "names")))) (ELam (PWild) (EApp (EApp (EVar "andThen") (EApp (EVar "guard") (EApp (EVar "not") (EApp (EApp (EVar "anyList") (ELam ((PVar "sp")) (EApp (EApp (EVar "buildsModuloCons") (EVar "plan")) (EFieldAccess (EVar "sp") "spBody")))) (EVar "spans"))))) (ELam (PWild) (EApp (EApp (EVar "andThen") (EApp (EVar "guard") (EApp (EApp (EVar "allList") (ELam ((PVar "sp")) (EApp (EApp (EVar "recordTargetsFit") (EVar "plan")) (EFieldAccess (EVar "sp") "spBody")))) (EVar "spans")))) (ELam (PWild) (EApp (EApp (EVar "andThen") (EApp (EVar "guard") (EApp (EVar "not") (EApp (EApp (EVar "anyList") (ELam ((PVar "sp")) (EApp (EApp (EVar "armGuardReadsInvariant") (EVar "plan")) (EFieldAccess (EVar "sp") "spBody")))) (EVar "spans"))))) (ELam (PWild) (EApp (EApp (EVar "andThen") (EApp (EVar "guard") (EApp (EApp (EVar "signatureFits") (EVar "plan")) (EVar "prog")))) (ELam (PWild) (EApp (EApp (EVar "andThen") (EApp (EApp (EVar "whereMerge") (EVar "plan")) (EVar "spans"))) (ELam ((PVar "merge")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "rewriteEdits") (EVar "plan")) (EVar "spans")) (EVar "merge"))) (ELam ((PVar "edits")) (EApp (EVar "Some") (ERecordCreate "Fix" ((fa "fixApplicability" (EVar "Unsafe")) (fa "fixEdits" (EVar "edits")) (fa "fixMessage" (ELit (LString "close over the invariant parameters in a where-local `go`")))))))))))))))))))))))))))))
 (DTypeSig false "clauseHead" (TyFun (TyApp (TyCon "List") (TyCon "Clause")) (TyApp (TyCon "Option") (TyCon "Clause"))))
 (DFunDef false "clauseHead" ((PCons (PVar "c") PWild)) (EApp (EVar "Some") (EVar "c")))
 (DFunDef false "clauseHead" ((PList)) (EVar "None"))
@@ -993,6 +1018,18 @@ dropLine plan l =
 (DFunDef false "isCtorHead" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EVar" (PVar "c")) () (EApp (EVar "isCtorName") (EVar "c"))) (arm PWild () (EVar "False"))))
 (DTypeSig false "isSelfApp" (TyFun (TyCon "Plan") (TyFun (TyCon "Expr") (TyCon "Bool"))))
 (DFunDef false "isSelfApp" ((PVar "plan") (PVar "e")) (EMatch (EApp (EApp (EVar "spineOf") (EVar "e")) (EListLit)) (arm (PTuple (PVar "hd") (PVar "args")) () (EBinOp "&&" (EApp (EApp (EVar "isEVarNamed") (EFieldAccess (EVar "plan") "plName")) (EVar "hd")) (EBinOp "==" (EApp (EVar "listLen") (EVar "args")) (EFieldAccess (EVar "plan") "plArity"))))))
+(DTypeSig false "armGuardReadsInvariant" (TyFun (TyCon "Plan") (TyFun (TyCon "Expr") (TyCon "Bool"))))
+(DFunDef false "armGuardReadsInvariant" ((PVar "plan") (PVar "e")) (EBinOp "||" (EApp (EApp (EVar "armGuards") (EVar "plan")) (EApp (EVar "unwrapLoc") (EVar "e"))) (EApp (EApp (EVar "anyList") (EApp (EVar "armGuardReadsInvariant") (EVar "plan"))) (EApp (EVar "childExprs") (EApp (EVar "unwrapLoc") (EVar "e"))))))
+(DTypeSig false "armGuards" (TyFun (TyCon "Plan") (TyFun (TyCon "Expr") (TyCon "Bool"))))
+(DFunDef false "armGuards" ((PVar "plan") (PCon "EMatch" PWild (PVar "arms"))) (EApp (EApp (EVar "anyList") (EApp (EVar "armReads") (EVar "plan"))) (EVar "arms")))
+(DFunDef false "armGuards" (PWild PWild) (EVar "False"))
+(DTypeSig false "armReads" (TyFun (TyCon "Plan") (TyFun (TyCon "Arm") (TyCon "Bool"))))
+(DFunDef false "armReads" ((PVar "plan") (PCon "Arm" PWild (PVar "gs") PWild)) (EApp (EApp (EVar "anyList") (EApp (EVar "guardReads") (EVar "plan"))) (EVar "gs")))
+(DTypeSig false "guardReads" (TyFun (TyCon "Plan") (TyFun (TyCon "Guard") (TyCon "Bool"))))
+(DFunDef false "guardReads" ((PVar "plan") (PCon "GBool" (PVar "g"))) (EApp (EApp (EVar "readsInvariant") (EVar "plan")) (EVar "g")))
+(DFunDef false "guardReads" ((PVar "plan") (PCon "GBind" PWild (PVar "g"))) (EApp (EApp (EVar "readsInvariant") (EVar "plan")) (EVar "g")))
+(DTypeSig false "readsInvariant" (TyFun (TyCon "Plan") (TyFun (TyCon "Expr") (TyCon "Bool"))))
+(DFunDef false "readsInvariant" ((PVar "plan") (PVar "g")) (EApp (EApp (EVar "anyList") (ELam ((PVar "n")) (EApp (EApp (EVar "mentionsVar") (EVar "n")) (EVar "g")))) (EFieldAccess (EVar "plan") "plNames")))
 (DTypeSig false "recordTargetsFit" (TyFun (TyCon "Plan") (TyFun (TyCon "Expr") (TyCon "Bool"))))
 (DFunDef false "recordTargetsFit" ((PVar "plan") (PVar "e")) (EBinOp "&&" (EApp (EApp (EVar "targetFits") (EVar "plan")) (EApp (EVar "unwrapLoc") (EVar "e"))) (EApp (EApp (EVar "allList") (EApp (EVar "recordTargetsFit") (EVar "plan"))) (EApp (EVar "childExprs") (EApp (EVar "unwrapLoc") (EVar "e"))))))
 (DTypeSig false "targetFits" (TyFun (TyCon "Plan") (TyFun (TyCon "Expr") (TyCon "Bool"))))
@@ -1096,7 +1133,7 @@ dropLine plan l =
 (DFunDef false "dropLine" ((PVar "plan") (PVar "l")) (EApp (EApp (EVar "FixEdit") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (EBinOp "-" (EVar "l") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EApp (EApp (EVar "lineText") (EFieldAccess (EVar "plan") "plLines")) (EBinOp "-" (EVar "l") (ELit (LInt 1)))))) (EVar "l")) (EApp (EVar "stringLength") (EApp (EApp (EVar "lineText") (EFieldAccess (EVar "plan") "plLines")) (EVar "l"))))) (ELit (LString ""))))
 # MARK
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Constraint" true) (mem "Decl" true) (mem "Expr" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Loc" true) (mem "Pat" true) (mem "Ty" true) (mem "patBoundNames" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Arm" true) (mem "Constraint" true) (mem "Decl" true) (mem "Expr" true) (mem "FunClause" true) (mem "Guard" true) (mem "LetBind" true) (mem "Loc" true) (mem "Pat" true) (mem "Ty" true) (mem "patBoundNames" false))))
 (DUse false (UseGroup ("frontend" "ast_walk") ((mem "childExprs" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "localBoundNames" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
@@ -1154,7 +1191,7 @@ dropLine plan l =
 (DTypeSig false "quoted" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "quoted" ((PVar "n")) (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "`"))))
 (DTypeSig false "threadFix" (TyFun (TyCon "FileFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Group") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "SelfCall")) (TyApp (TyCon "Option") (TyCon "Fix")))))))))
-(DFunDef false "threadFix" ((PVar "facts") (PVar "prog") (PCon "Group" (PVar "name") PWild (PVar "clauses") (PVar "next")) (PVar "shared") (PVar "names") (PVar "calls")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "clauseHead") (EVar "clauses"))) (ELam ((PVar "first")) (ELet false (PVar "ls") (EApp (EVar "factLines") (EVar "facts")) (ELet false (PVar "plan") (ERecordCreate "Plan" ((fa "plLines" (EVar "ls")) (fa "plName" (EVar "name")) (fa "plArity" (EApp (EVar "listLen") (EApp (EVar "clausePats") (EVar "first")))) (fa "plShared" (EVar "shared")) (fa "plNames" (EVar "names")) (fa "plCalls" (EVar "calls")) (fa "plBound" (EApp (EVar "localBoundNames") (EApp (EApp (EVar "filterList") (EApp (EVar "definesName") (EVar "name"))) (EVar "prog")))))) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EMethodRef "traverse") (EApp (EVar "clauseSpan") (EVar "plan"))) (EApp (EApp (EVar "withBounds") (EApp (EApp (EVar "lineCount") (EVar "ls")) (EVar "next"))) (EVar "clauses")))) (ELam ((PVar "spans")) (EApp (EApp (EMethodRef "andThen") (EApp (EDictApp "guard") (EApp (EApp (EVar "allList") (EApp (EVar "spanFits") (EVar "plan"))) (EVar "spans")))) (ELam (PWild) (EApp (EApp (EMethodRef "andThen") (EApp (EDictApp "guard") (EApp (EApp (EVar "allList") (EApp (EApp (EVar "usedBeyondCalls") (EVar "plan")) (EVar "spans"))) (EVar "names")))) (ELam (PWild) (EApp (EApp (EMethodRef "andThen") (EApp (EDictApp "guard") (EApp (EVar "not") (EApp (EApp (EVar "anyList") (ELam ((PVar "sp")) (EApp (EApp (EVar "buildsModuloCons") (EVar "plan")) (EFieldAccess (EVar "sp") "spBody")))) (EVar "spans"))))) (ELam (PWild) (EApp (EApp (EMethodRef "andThen") (EApp (EDictApp "guard") (EApp (EApp (EVar "allList") (ELam ((PVar "sp")) (EApp (EApp (EVar "recordTargetsFit") (EVar "plan")) (EFieldAccess (EVar "sp") "spBody")))) (EVar "spans")))) (ELam (PWild) (EApp (EApp (EMethodRef "andThen") (EApp (EDictApp "guard") (EApp (EApp (EVar "signatureFits") (EVar "plan")) (EVar "prog")))) (ELam (PWild) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "whereMerge") (EVar "plan")) (EVar "spans"))) (ELam ((PVar "merge")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "rewriteEdits") (EVar "plan")) (EVar "spans")) (EVar "merge"))) (ELam ((PVar "edits")) (EApp (EVar "Some") (ERecordCreate "Fix" ((fa "fixApplicability" (EVar "Unsafe")) (fa "fixEdits" (EVar "edits")) (fa "fixMessage" (ELit (LString "close over the invariant parameters in a where-local `go`")))))))))))))))))))))))))))
+(DFunDef false "threadFix" ((PVar "facts") (PVar "prog") (PCon "Group" (PVar "name") PWild (PVar "clauses") (PVar "next")) (PVar "shared") (PVar "names") (PVar "calls")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "clauseHead") (EVar "clauses"))) (ELam ((PVar "first")) (ELet false (PVar "ls") (EApp (EVar "factLines") (EVar "facts")) (ELet false (PVar "plan") (ERecordCreate "Plan" ((fa "plLines" (EVar "ls")) (fa "plName" (EVar "name")) (fa "plArity" (EApp (EVar "listLen") (EApp (EVar "clausePats") (EVar "first")))) (fa "plShared" (EVar "shared")) (fa "plNames" (EVar "names")) (fa "plCalls" (EVar "calls")) (fa "plBound" (EApp (EVar "localBoundNames") (EApp (EApp (EVar "filterList") (EApp (EVar "definesName") (EVar "name"))) (EVar "prog")))))) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EMethodRef "traverse") (EApp (EVar "clauseSpan") (EVar "plan"))) (EApp (EApp (EVar "withBounds") (EApp (EApp (EVar "lineCount") (EVar "ls")) (EVar "next"))) (EVar "clauses")))) (ELam ((PVar "spans")) (EApp (EApp (EMethodRef "andThen") (EApp (EDictApp "guard") (EApp (EApp (EVar "allList") (EApp (EVar "spanFits") (EVar "plan"))) (EVar "spans")))) (ELam (PWild) (EApp (EApp (EMethodRef "andThen") (EApp (EDictApp "guard") (EApp (EApp (EVar "allList") (EApp (EApp (EVar "usedBeyondCalls") (EVar "plan")) (EVar "spans"))) (EVar "names")))) (ELam (PWild) (EApp (EApp (EMethodRef "andThen") (EApp (EDictApp "guard") (EApp (EVar "not") (EApp (EApp (EVar "anyList") (ELam ((PVar "sp")) (EApp (EApp (EVar "buildsModuloCons") (EVar "plan")) (EFieldAccess (EVar "sp") "spBody")))) (EVar "spans"))))) (ELam (PWild) (EApp (EApp (EMethodRef "andThen") (EApp (EDictApp "guard") (EApp (EApp (EVar "allList") (ELam ((PVar "sp")) (EApp (EApp (EVar "recordTargetsFit") (EVar "plan")) (EFieldAccess (EVar "sp") "spBody")))) (EVar "spans")))) (ELam (PWild) (EApp (EApp (EMethodRef "andThen") (EApp (EDictApp "guard") (EApp (EVar "not") (EApp (EApp (EVar "anyList") (ELam ((PVar "sp")) (EApp (EApp (EVar "armGuardReadsInvariant") (EVar "plan")) (EFieldAccess (EVar "sp") "spBody")))) (EVar "spans"))))) (ELam (PWild) (EApp (EApp (EMethodRef "andThen") (EApp (EDictApp "guard") (EApp (EApp (EVar "signatureFits") (EVar "plan")) (EVar "prog")))) (ELam (PWild) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EVar "whereMerge") (EVar "plan")) (EVar "spans"))) (ELam ((PVar "merge")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "rewriteEdits") (EVar "plan")) (EVar "spans")) (EVar "merge"))) (ELam ((PVar "edits")) (EApp (EVar "Some") (ERecordCreate "Fix" ((fa "fixApplicability" (EVar "Unsafe")) (fa "fixEdits" (EVar "edits")) (fa "fixMessage" (ELit (LString "close over the invariant parameters in a where-local `go`")))))))))))))))))))))))))))))
 (DTypeSig false "clauseHead" (TyFun (TyApp (TyCon "List") (TyCon "Clause")) (TyApp (TyCon "Option") (TyCon "Clause"))))
 (DFunDef false "clauseHead" ((PCons (PVar "c") PWild)) (EApp (EVar "Some") (EVar "c")))
 (DFunDef false "clauseHead" ((PList)) (EVar "None"))
@@ -1209,6 +1246,18 @@ dropLine plan l =
 (DFunDef false "isCtorHead" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EVar" (PVar "c")) () (EApp (EVar "isCtorName") (EVar "c"))) (arm PWild () (EVar "False"))))
 (DTypeSig false "isSelfApp" (TyFun (TyCon "Plan") (TyFun (TyCon "Expr") (TyCon "Bool"))))
 (DFunDef false "isSelfApp" ((PVar "plan") (PVar "e")) (EMatch (EApp (EApp (EVar "spineOf") (EVar "e")) (EListLit)) (arm (PTuple (PVar "hd") (PVar "args")) () (EBinOp "&&" (EApp (EApp (EVar "isEVarNamed") (EFieldAccess (EVar "plan") "plName")) (EVar "hd")) (EBinOp "==" (EApp (EVar "listLen") (EVar "args")) (EFieldAccess (EVar "plan") "plArity"))))))
+(DTypeSig false "armGuardReadsInvariant" (TyFun (TyCon "Plan") (TyFun (TyCon "Expr") (TyCon "Bool"))))
+(DFunDef false "armGuardReadsInvariant" ((PVar "plan") (PVar "e")) (EBinOp "||" (EApp (EApp (EVar "armGuards") (EVar "plan")) (EApp (EVar "unwrapLoc") (EVar "e"))) (EApp (EApp (EVar "anyList") (EApp (EVar "armGuardReadsInvariant") (EVar "plan"))) (EApp (EVar "childExprs") (EApp (EVar "unwrapLoc") (EVar "e"))))))
+(DTypeSig false "armGuards" (TyFun (TyCon "Plan") (TyFun (TyCon "Expr") (TyCon "Bool"))))
+(DFunDef false "armGuards" ((PVar "plan") (PCon "EMatch" PWild (PVar "arms"))) (EApp (EApp (EVar "anyList") (EApp (EVar "armReads") (EVar "plan"))) (EVar "arms")))
+(DFunDef false "armGuards" (PWild PWild) (EVar "False"))
+(DTypeSig false "armReads" (TyFun (TyCon "Plan") (TyFun (TyCon "Arm") (TyCon "Bool"))))
+(DFunDef false "armReads" ((PVar "plan") (PCon "Arm" PWild (PVar "gs") PWild)) (EApp (EApp (EVar "anyList") (EApp (EVar "guardReads") (EVar "plan"))) (EVar "gs")))
+(DTypeSig false "guardReads" (TyFun (TyCon "Plan") (TyFun (TyCon "Guard") (TyCon "Bool"))))
+(DFunDef false "guardReads" ((PVar "plan") (PCon "GBool" (PVar "g"))) (EApp (EApp (EVar "readsInvariant") (EVar "plan")) (EVar "g")))
+(DFunDef false "guardReads" ((PVar "plan") (PCon "GBind" PWild (PVar "g"))) (EApp (EApp (EVar "readsInvariant") (EVar "plan")) (EVar "g")))
+(DTypeSig false "readsInvariant" (TyFun (TyCon "Plan") (TyFun (TyCon "Expr") (TyCon "Bool"))))
+(DFunDef false "readsInvariant" ((PVar "plan") (PVar "g")) (EApp (EApp (EVar "anyList") (ELam ((PVar "n")) (EApp (EApp (EVar "mentionsVar") (EVar "n")) (EVar "g")))) (EFieldAccess (EVar "plan") "plNames")))
 (DTypeSig false "recordTargetsFit" (TyFun (TyCon "Plan") (TyFun (TyCon "Expr") (TyCon "Bool"))))
 (DFunDef false "recordTargetsFit" ((PVar "plan") (PVar "e")) (EBinOp "&&" (EApp (EApp (EVar "targetFits") (EVar "plan")) (EApp (EVar "unwrapLoc") (EVar "e"))) (EApp (EApp (EVar "allList") (EApp (EVar "recordTargetsFit") (EVar "plan"))) (EApp (EVar "childExprs") (EApp (EVar "unwrapLoc") (EVar "e"))))))
 (DTypeSig false "targetFits" (TyFun (TyCon "Plan") (TyFun (TyCon "Expr") (TyCon "Bool"))))

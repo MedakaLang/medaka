@@ -1,0 +1,19 @@
+-- Worklist closure over a `HashMap String (List String)` graph, shared by wasm_reach and test_runner.
+
+import hash_map.{HashMap, setInPlace, has, findWithDefault}
+
+-- Marks in [seen] every key reachable from [xs0] in [graph] (a worklist walk: a key
+-- already in [seen] is skipped, so each is expanded once).
+export
+markReachable : HashMap String (List String) ->
+  HashMap String Unit ->
+  List String ->
+  Unit
+markReachable graph seen xs0 = go xs0
+  where
+    go [] = ()
+    go (w :: work)
+      | has w seen = go work
+      | otherwise =
+        setInPlace w () seen
+        go (findWithDefault [] w graph ++ work)

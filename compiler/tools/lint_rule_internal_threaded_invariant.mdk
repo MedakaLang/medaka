@@ -2,10 +2,12 @@
 
 import driver.diagnostics.{Severity(..)}
 import frontend.ast.{
+  Arm(..),
   Constraint(..),
   Decl(..),
   Expr(..),
   FunClause(..),
+  Guard(..),
   LetBind(..),
   Loc(..),
   Pat(..),
@@ -232,6 +234,7 @@ quoted n = "`\{n}`"
 --     with more after it;
 --   * the signature has an effect row variable: `go` would infer and
 --     generalise a row of its own;
+--   * a match-arm guard reads an invariant parameter (#4901);
 --   * a field read or record update reads a record that is neither an
 --     invariant parameter nor a name no clause binds: `go` learns the types of
 --     its parameters only by inference, too late to choose between records
@@ -272,6 +275,7 @@ threadFix facts prog (Group name _ clauses next) shared names calls = do
   guard (allList (usedBeyondCalls plan spans) names)
   guard (not (anyList (sp => buildsModuloCons plan sp.spBody) spans))
   guard (allList (sp => recordTargetsFit plan sp.spBody) spans)
+  guard (not (anyList (sp => armGuardReadsInvariant plan sp.spBody) spans))
   guard (signatureFits plan prog)
   merge <- whereMerge plan spans
   edits <- rewriteEdits plan spans merge
@@ -472,6 +476,27 @@ isCtorHead e = match unwrapLoc e
 isSelfApp : Plan -> Expr -> Bool
 isSelfApp plan e = match spineOf e []
   (hd, args) => isEVarNamed plan.plName hd && listLen args == plan.plArity
+
+-- A match-arm guard that reads an invariant parameter: the emitter cannot
+-- capture it in the local `go` (#4901).
+armGuardReadsInvariant : Plan -> Expr -> Bool
+armGuardReadsInvariant plan e =
+  armGuards plan (unwrapLoc e)
+    || anyList (armGuardReadsInvariant plan) (childExprs (unwrapLoc e))
+
+armGuards : Plan -> Expr -> Bool
+armGuards plan (EMatch _ arms) = anyList (armReads plan) arms
+armGuards _ _ = False
+
+armReads : Plan -> Arm -> Bool
+armReads plan (Arm _ gs _) = anyList (guardReads plan) gs
+
+guardReads : Plan -> Guard -> Bool
+guardReads plan (GBool g) = readsInvariant plan g
+guardReads plan (GBind _ g) = readsInvariant plan g
+
+readsInvariant : Plan -> Expr -> Bool
+readsInvariant plan g = anyList (n => mentionsVar n g) plan.plNames
 
 -- A field read or record update whose record is an invariant parameter or a
 -- name no clause binds. The type of anything else may reach the local `go`

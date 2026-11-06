@@ -1,5 +1,5 @@
 # META
-source_lines=2280
+source_lines=2281
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_mono: operations over `Mono`/`Scheme`, pure except for minting effect-variable ids from the
@@ -1238,6 +1238,7 @@ patVarsTc (PTuple ps) = patVarsListTc ps
 patVarsTc (PList ps) = patVarsListTc ps
 patVarsTc (PAs x _ _ p) = x :: patVarsTc p
 patVarsTc (POr (p :: _)) = patVarsTc p
+patVarsTc (POr []) = []
 patVarsTc (PRec _ fields _) = flatMap recPatFieldVarsTc fields
 patVarsTc (PAnn p _) = patVarsTc p
 patVarsTc (PWild | PLit _ | PRng _ _ _) = []
@@ -2615,6 +2616,7 @@ implDeclWithReqs _ = []
 (DFunDef false "patVarsTc" ((PCon "PList" (PVar "ps"))) (EApp (EVar "patVarsListTc") (EVar "ps")))
 (DFunDef false "patVarsTc" ((PCon "PAs" (PVar "x") PWild PWild (PVar "p"))) (EBinOp "::" (EVar "x") (EApp (EVar "patVarsTc") (EVar "p"))))
 (DFunDef false "patVarsTc" ((PCon "POr" (PCons (PVar "p") PWild))) (EApp (EVar "patVarsTc") (EVar "p")))
+(DFunDef false "patVarsTc" ((PCon "POr" (PList))) (EListLit))
 (DFunDef false "patVarsTc" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EVar "flatMap") (EVar "recPatFieldVarsTc")) (EVar "fields")))
 (DFunDef false "patVarsTc" ((PCon "PAnn" (PVar "p") PWild)) (EApp (EVar "patVarsTc") (EVar "p")))
 (DFunDef false "patVarsTc" ((POr (PCon "PWild") (PCon "PLit" PWild) (PCon "PRng" PWild PWild PWild))) (EListLit))
@@ -3215,6 +3217,7 @@ implDeclWithReqs _ = []
 (DFunDef false "patVarsTc" ((PCon "PList" (PVar "ps"))) (EApp (EVar "patVarsListTc") (EVar "ps")))
 (DFunDef false "patVarsTc" ((PCon "PAs" (PVar "x") PWild PWild (PVar "p"))) (EBinOp "::" (EVar "x") (EApp (EVar "patVarsTc") (EVar "p"))))
 (DFunDef false "patVarsTc" ((PCon "POr" (PCons (PVar "p") PWild))) (EApp (EVar "patVarsTc") (EVar "p")))
+(DFunDef false "patVarsTc" ((PCon "POr" (PList))) (EListLit))
 (DFunDef false "patVarsTc" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EDictApp "flatMap") (EVar "recPatFieldVarsTc")) (EVar "fields")))
 (DFunDef false "patVarsTc" ((PCon "PAnn" (PVar "p") PWild)) (EApp (EVar "patVarsTc") (EVar "p")))
 (DFunDef false "patVarsTc" ((POr (PCon "PWild") (PCon "PLit" PWild) (PCon "PRng" PWild PWild PWild))) (EListLit))

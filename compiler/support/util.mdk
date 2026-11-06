@@ -9,7 +9,6 @@
 import support.ordmap.{OrdMap, omLookup, omInsert, omEmpty}
 import support.opcount.{opBump}
 import support.path.{dirOf}
-import hash_map.{HashMap, setInPlace, has, findWithDefault}
 import list.{reverse, zip}
 import string.{join, split, startsWith as stdStartsWith}
 
@@ -589,19 +588,3 @@ hexDigits 0 _ acc = acc
 hexDigits k n acc =
   let d = n % 16
   hexDigits (k - 1) (n / 16) (stringSlice d (d + 1) "0123456789abcdef" ++ acc)
-
--- Marks in [seen] every key reachable from [xs0] in [graph] (a worklist walk: a key
--- already in [seen] is skipped, so each is expanded once).
-export
-markReachable : HashMap String (List String) ->
-  HashMap String Unit ->
-  List String ->
-  Unit
-markReachable graph seen xs0 = go xs0
-  where
-    go [] = ()
-    go (w :: work)
-      | has w seen = go work
-      | otherwise =
-        setInPlace w () seen
-        go (findWithDefault [] w graph ++ work)
