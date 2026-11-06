@@ -986,7 +986,7 @@ takeRun : String ->
   Int ->
   List String ->
   <IO> (List String, List String)
--- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds).
 -- lint-disable-next-line rule-threaded-invariant
 takeRun _ _ _ _ _ _ [] = ([], [])
 takeRun root outDir forceIsolate cli sel n (f :: rest) =

@@ -1072,7 +1072,7 @@ handleNewline ctx src len pos depth id =
   afterNl ctx src len np depth id indent pos
 
 consumeNl : Array Char -> Int -> Int -> Int -> (Int, Int)
--- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds).
 -- lint-disable-next-line rule-threaded-invariant
 consumeNl src len p indent
   | p >= len = (indent, p)

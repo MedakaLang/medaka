@@ -2594,7 +2594,7 @@ positionsByName : String ->
   String ->
   List ((String, String, String), List Int) ->
   List Int
--- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds).
 -- lint-disable-next-line rule-threaded-invariant
 positionsByName _ _ [] = [0]
 positionsByName iface mname (((_, i, m), p) :: rest)
@@ -4158,7 +4158,7 @@ pArrayFill _ _ = panic "arrayFill: not an Array"
 -- Copies len elements from src[srcOff..] into dst[dstOff..] in place.
 -- Mirrors OCaml Array.blit semantics (memmove; handles overlapping regions).
 blitGo : Array (Value e) -> Int -> Array (Value e) -> Int -> Int -> <e> Unit
--- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds).
 -- lint-disable-next-line rule-threaded-invariant
 blitGo src srcOff dst dstOff len
   | len <= 0 = ()

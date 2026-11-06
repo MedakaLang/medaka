@@ -149,7 +149,7 @@ commentText (Comment _ _ t) = t
 -- first char; `line` its 1-based number.  O(pos) per call, but only invoked
 -- once per comment in a single left-to-right walk (see `posToLineCol`).
 posLineColFrom : Array Char -> Int -> Int -> Int -> Int -> (Int, Int)
--- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds); inlined hot path (hot-list).
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds); inlined hot path (hot-list).
 -- lint-disable-next-line rule-threaded-invariant
 posLineColFrom src target p line lineStart
   | p >= target = (line, target - lineStart)

@@ -478,7 +478,7 @@ expandRepeat greedy node lo hi =
     catRepeat node lo (optChain greedy node (hi - lo))
 
 catRepeat : Node -> Int -> Node -> Node
--- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds).
 -- lint-disable-next-line rule-threaded-invariant
 catRepeat node n rest =
   if n <= 0 then rest else NCat node (catRepeat node (n - 1) rest)
@@ -486,7 +486,7 @@ catRepeat node n rest =
 -- `a{2,4}` is `a a (a (a)?)?`, nested rather than a flat run of options, so
 -- a greedy bound takes as many copies as it can and a lazy one as few.
 optChain : Bool -> Node -> Int -> Node
--- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds).
 -- lint-disable-next-line rule-threaded-invariant
 optChain greedy node k =
   if k <= 0 then

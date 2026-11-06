@@ -991,7 +991,7 @@ graphCtorChildren : PlanEnv ->
   Int ->
   NativeGraph ->
   NativeGraph
--- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds).
 -- lint-disable-next-line rule-threaded-invariant
 graphCtorChildren _ _ [] _ _ graph = graph
 graphCtorChildren env plan (ctor :: rest) (weight :: weights) depth graph =
@@ -1943,7 +1943,7 @@ graphNamedDisplaysTail : NativeGraph ->
   List (Option String, GenPlan) ->
   List String ->
   String
--- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds).
 -- lint-disable-next-line rule-threaded-invariant
 graphNamedDisplaysTail _ _ [] _ = ""
 graphNamedDisplaysTail graph prefix ((Some field, plan) :: rest) (value :: values) =

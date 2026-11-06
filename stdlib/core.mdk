@@ -696,7 +696,7 @@ derivedArgNeedsParens s =
       c == '-' || derivedHasTopLevelSpace chars 0 (stringLength s) 0
 
 derivedHasTopLevelSpace : Array Char -> Int -> Int -> Int -> Bool
--- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds).
 -- lint-disable-next-line rule-threaded-invariant
 derivedHasTopLevelSpace chars i n depth =
   if i >= n then
@@ -1518,7 +1518,7 @@ listIndexAt site xs i =
 -- to the base case, so the out-of-bounds message can name the index the caller
 -- passed rather than the leftover 0 from the recursion.
 indexGo : Int -> List a -> Int -> Int -> a
--- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds).
 -- lint-disable-next-line rule-threaded-invariant
 indexGo site [] i0 _ = indexErrorAtSite site i0
 indexGo site (h :: t) i0 i = if i <= 0 then h else indexGo site t i0 (i - 1)

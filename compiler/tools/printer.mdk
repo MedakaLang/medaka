@@ -876,7 +876,7 @@ cmpPos (l1, c1) (l2, c2) = if l1 == l2 then compare c1 c2 else compare l1 l2
 
 -- number of entries strictly before (line, col)
 posLowerBound : Array (Int, Int) -> Int -> Int -> Int -> Int -> Int
--- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds).
 -- lint-disable-next-line rule-threaded-invariant
 posLowerBound arr line col lo hi =
   if lo >= hi then
@@ -1885,7 +1885,7 @@ cmpUnit (k1, l1, c1) (k2, l2, c2) =
 
 -- number of entries at or before (kind, line, col)
 unitUpperBound : Array (Int, Int, Int) -> Int -> Int -> Int -> Int -> Int -> Int
--- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds).
 -- lint-disable-next-line rule-threaded-invariant
 unitUpperBound arr kind line col lo hi =
   if lo >= hi then

@@ -1,4 +1,4 @@
--- lint rule rule-threaded-invariant: a top-level self-recursive function whose self-calls all pass two or more of its own parameters through unchanged. Close over them in a where-local `go`. The `--fix` rewrite can leave a let-generalised loop that dictionary-dispatches (#MONOLOCAL); see the notes above `threadFix`.
+-- lint rule rule-threaded-invariant: a top-level self-recursive function whose self-calls all pass two or more of its own parameters through unchanged. Close over them in a where-local `go`. The `--fix` rewrite can leave a let-generalised loop that dictionary-dispatches (#4921); see the notes above `threadFix`.
 
 import driver.diagnostics.{Severity(..)}
 import frontend.ast.{
@@ -63,7 +63,7 @@ rule =
       summary =
         "a self-recursive function passes two or more of its parameters through every self-call unchanged: close over them in a where-local `go`",
       doc =
-        "A top-level function that calls itself with the same two or more parameters, in the same positions, in every self-call carries those parameters through the whole recursion for nothing. A local `go` in a `where` closes over them, so the recursion names only what changes. The rule reads each function as a group of clauses: a position counts when every full-arity self-call of every clause that makes one passes that clause's own parameter there, unchanged. One invariant parameter is not reported, nor is a `go` that already closes over its invariants, a partial application, mutual recursion, or a loop local to a `let` or `where`.\n\n`--fix --unsafe-fixes` writes the `go` form when the whole shape is known: a signature whose class constraints the closed-over parameters carry, each invariant parameter a plain name (or ignored) in every clause, no list builder in tail position modulo cons, no invariant parameter used only to be passed on, and a `where` of its own only on a single clause. The rest are reported only. Run `medaka fmt --write` after it, then check the converted loop for dictionary dispatch: `go` is inferred, not declared, so a changing parameter whose type only the signature fixes (a counter under `+` or `==`, an element that is interpolated) is let-generalised and the loop passes a dictionary on every call (#MONOLOCAL, MonoLocalBinds). The fix does not see that shape.\n\nBefore:\n  extractFold bare heads acc (x :: xs) = extractFold bare heads (step bare heads acc x) xs\n  extractFold _ _ acc [] = acc\nAfter:\n  extractFold bare heads acc0 xs0 = go acc0 xs0\n    where\n      go acc [] = acc\n      go acc (x :: xs) = go (step bare heads acc x) xs",
+        "A top-level function that calls itself with the same two or more parameters, in the same positions, in every self-call carries those parameters through the whole recursion for nothing. A local `go` in a `where` closes over them, so the recursion names only what changes. The rule reads each function as a group of clauses: a position counts when every full-arity self-call of every clause that makes one passes that clause's own parameter there, unchanged. One invariant parameter is not reported, nor is a `go` that already closes over its invariants, a partial application, mutual recursion, or a loop local to a `let` or `where`.\n\n`--fix --unsafe-fixes` writes the `go` form when the whole shape is known: a signature whose class constraints the closed-over parameters carry, each invariant parameter a plain name (or ignored) in every clause, no list builder in tail position modulo cons, no invariant parameter used only to be passed on, and a `where` of its own only on a single clause. The rest are reported only. Run `medaka fmt --write` after it, then check the converted loop for dictionary dispatch: `go` is inferred, not declared, so a changing parameter whose type only the signature fixes (a counter under `+` or `==`, an element that is interpolated) is let-generalised and the loop passes a dictionary on every call (#4921, MonoLocalBinds). The fix does not see that shape.\n\nBefore:\n  extractFold bare heads acc (x :: xs) = extractFold bare heads (step bare heads acc x) xs\n  extractFold _ _ acc [] = acc\nAfter:\n  extractFold bare heads acc0 xs0 = go acc0 xs0\n    where\n      go acc [] = acc\n      go acc (x :: xs) = go (step bare heads acc x) xs",
       category = Style,
       scope = Internal,
       ratchet = Gated,
@@ -250,7 +250,7 @@ quoted n = "`\{n}`"
 -- changing parameter whose type only the outer signature fixes becomes a type
 -- variable of its own. Under an overloaded operator, literal or interpolation
 -- it carries a class constraint, and the loop then dictionary-dispatches on
--- every call (#MONOLOCAL, MonoLocalBinds). Whether a captured variable or a
+-- every call (#4921, MonoLocalBinds). Whether a captured variable or a
 -- monomorphic callee fixes that type takes type inference, which this rule
 -- does not run; check the converted loop's IR for a `mdk.gen.dictcell`.
 -- The local is `go`, or `go1`, `go2`, ... when the function mentions `go`, and
@@ -385,7 +385,7 @@ headAtoms text start =
   headAtomsFrom cs (arrayLength cs) start 0 (0 - 1) []
 
 -- Top level rather than a where-local loop: a local `go` here is let-generalised
--- over `depth` and dictionary-passes the walk (#MONOLOCAL, MonoLocalBinds).
+-- over `depth` and dictionary-passes the walk (#4921, MonoLocalBinds).
 headAtomsFrom : Array Char ->
   Int ->
   Int ->

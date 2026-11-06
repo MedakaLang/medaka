@@ -50,7 +50,7 @@ byteToHexChars b upper =
   (digitChar hi upper, digitChar lo upper)
 
 encodeGo : Bytes -> Int -> Bool -> List Char -> List Char
--- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds).
 -- lint-disable-next-line rule-threaded-invariant
 encodeGo bs i upper acc
   | i < 0 = acc

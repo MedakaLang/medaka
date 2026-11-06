@@ -41,7 +41,7 @@ newBindingSummary arity freshType freshSummary =
 -- recursive uses may constrain their assumption without claiming ownership of
 -- the envelope that will be published after all producers have been inferred.
 freshBodyValues : Int -> (Unit -> Mono) -> EffRow -> (Mono, Mono)
--- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds).
 -- lint-disable-next-line rule-threaded-invariant
 freshBodyValues arity freshType body =
   if arity <= 0 then

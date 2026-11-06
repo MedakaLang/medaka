@@ -7893,7 +7893,7 @@ emitApplyRuntime e cw argOps =
 
 -- store each arg word into the argv alloca at index `i` (getelementptr i64 stride).
 storeArgv : Emit -> String -> List String -> Int -> Unit
--- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds).
 -- lint-disable-next-line rule-threaded-invariant
 storeArgv _ _ [] _ = ()
 storeArgv e arr (a :: rest) i =
@@ -10488,7 +10488,7 @@ emitCtorAlloc e name fields =
 
 -- store each field at offset 8*(i+1) (field 0 follows the one-word header).
 storeFields : Emit -> String -> List String -> Int -> Unit
--- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds).
 -- lint-disable-next-line rule-threaded-invariant
 storeFields _ _ [] _ = ()
 storeFields e p (f :: rest) i =
@@ -13114,7 +13114,7 @@ collectRawWorkers e binds =
   refineRawWorkers e binds (rawWorkerKey first) 20
 
 refineRawWorkers : Emit -> List CBind -> String -> Int -> OrdMap RawWorker
--- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds).
 -- lint-disable-next-line rule-threaded-invariant
 refineRawWorkers e binds prevKey fuel =
   let next = collectRawWorkersPass e True binds

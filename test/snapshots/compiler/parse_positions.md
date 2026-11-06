@@ -416,7 +416,7 @@ firstContentAt toks i0 e = go i0
       | isNoiseTok (arrayGetUnsafe i toks) = go (i + 1)
       | otherwise = i
 rhsStartIdx : Array Token -> Int -> Int -> Int -> Int
--- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds).
 -- lint-disable-next-line rule-threaded-invariant
 rhsStartIdx toks i e depth
   | i >= e = e

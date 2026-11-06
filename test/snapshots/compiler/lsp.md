@@ -1109,7 +1109,7 @@ columnAfterName index arr line =
 
 -- Length of the leading identifier run starting at byte `i` (stops at EOL/EOF).
 identRunLen : Array Char -> Int -> Int -> Int -> Int
--- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds).
 -- lint-disable-next-line rule-threaded-invariant
 identRunLen arr len i acc
   | i >= len = acc

@@ -1760,7 +1760,7 @@ balJobLine cands r runs = match balJobGrade cands r runs
 
 -- Counts over the rows: (within, outside, not gradeable).
 balJobTally : List Cand -> List Row -> List RunRecord -> (Int, Int, Int)
--- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds).
 -- lint-disable-next-line rule-threaded-invariant
 balJobTally _ [] _ = (0, 0, 0)
 balJobTally cands (r :: rs) runs =

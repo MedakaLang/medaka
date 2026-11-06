@@ -2230,7 +2230,7 @@ varKindsFix : KindReads ->
   Int ->
   List (String, Kind) ->
   List (String, Kind)
--- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds).
 -- lint-disable-next-line rule-threaded-invariant
 varKindsFix reads declared items fuel cur =
   let next = varKindsRound reads declared items cur

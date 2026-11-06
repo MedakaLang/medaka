@@ -764,7 +764,7 @@ customPlansCtors : PlanEnv ->
   OrdMap Unit ->
   List CustomPlan ->
   (OrdMap Unit, List CustomPlan)
--- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds).
 -- lint-disable-next-line rule-threaded-invariant
 customPlansCtors _ _ _ [] _ seen found = (seen, found)
 customPlansCtors _ _ _ _ [] seen found = (seen, found)

@@ -31,7 +31,7 @@ bodyComplexity body =
   countOpenParens cs (arrayLength cs) 0 0
 
 countOpenParens : Array Char -> Int -> Int -> Int -> Int
--- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds); inlined hot path (hot-list).
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds); inlined hot path (hot-list).
 -- lint-disable-next-line rule-threaded-invariant
 countOpenParens cs n i acc
   | i >= n = acc

@@ -3121,7 +3121,7 @@ deadAltIndexes : Oracle ->
   Int ->
   List Pat ->
   List Int
--- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds).
 -- lint-disable-next-line rule-threaded-invariant
 deadAltIndexes _ _ _ _ _ _ [] = []
 deadAltIndexes oracle col0 prec unguarded seen k (a :: rest) =

@@ -68,7 +68,7 @@ rawLiteralAfterDot src toks offs pos =
     _ => None
 
 matchHeaderStart : HintInput -> Int -> Int -> Int -> (Int, Int)
--- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds).
 -- lint-disable-next-line rule-threaded-invariant
 matchHeaderStart input start i left
   | left <= 0 || i <= 0 = (i, left)

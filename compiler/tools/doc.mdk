@@ -1700,7 +1700,7 @@ assignAnchors used ((name, line, tag) :: rest) =
   (name, line, tag, a) :: assignAnchors (a :: used) rest
 
 freshAnchor : List String -> String -> Int -> String
--- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#MONOLOCAL, MonoLocalBinds).
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds).
 -- lint-disable-next-line rule-threaded-invariant
 freshAnchor used base n =
   let cand = if n == 0 then base else "\{base}-\{n}"
