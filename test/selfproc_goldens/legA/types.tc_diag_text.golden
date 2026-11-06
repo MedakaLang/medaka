@@ -169,6 +169,7 @@ stickyDiagsInPushOrder : List (String, TcDiag) -> List (String, TcDiag)
 superContextNoImplMsg : String -> Bool -> String -> String -> String -> String
 superContextUndeclaredMsg : String -> Bool -> String -> String -> String -> String
 tcDiagGoalKey : (String, TcDiag) -> String
+topLevelEffectMsg : String -> String -> String
 tyOfMsg : Option TabKey -> String
 tyVarNoun : List String -> String
 typeAsAuthorityMsg : String -> String -> String
