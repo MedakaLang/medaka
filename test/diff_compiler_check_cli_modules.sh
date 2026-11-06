@@ -1831,10 +1831,14 @@ main = println (mth (MkW 1))
 EOF
 x1530_run="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" run "$TMP/x1530_main.mdk" 2>&1)"
 x1530_run_code=$?
-if [ "$x1530_run_code" -eq 0 ] && [ "$x1530_run" = "5" ]; then
-  pass=$((pass+1)); printf 'ok   S2-DECL/1530-reexport-merge-collision-accepts (5)\n'
+case "$x1530_run" in
+  *"x1530_main.mdk:8:16: ambiguous occurrence: \`mth\` is bound to 2 declarations"*) x1530_run_amb=1 ;;
+  *) x1530_run_amb=0 ;;
+esac
+if [ "$x1530_run_code" -eq 1 ] && [ "$x1530_run_amb" -eq 1 ]; then
+  pass=$((pass+1)); printf 'ok   S2-DECL/1530-reexport-merge-collision-rejects (L3 ambiguity)\n'
 else
-  fail=$((fail+1)); printf 'FAIL S2-DECL/1530-reexport-merge-collision-accepts (exit %d, got [%s], want 5)\n' "$x1530_run_code" "$x1530_run"
+  fail=$((fail+1)); printf 'FAIL S2-DECL/1530-reexport-merge-collision-rejects (exit %d, got [%s])\n' "$x1530_run_code" "$x1530_run"
 fi
 cat > "$TMP/x1530_noimpl.mdk" <<'EOF'
 import x1530_mid.{IP, IG, mth}
@@ -1846,11 +1850,11 @@ EOF
 x1530_no="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/x1530_noimpl.mdk" 2>&1)"
 x1530_no_code=$?
 case "$x1530_no" in
-  *"no impl of IG or IP"*|*"no impl of IP or IG"*) x1530_no_named=1 ;;
+  *"x1530_noimpl.mdk:5:16: ambiguous occurrence: \`mth\` is bound to 2 declarations"*) x1530_no_named=1 ;;
   *) x1530_no_named=0 ;;
 esac
 if [ "$x1530_no_code" -eq 1 ] && [ "$x1530_no_named" -eq 1 ]; then
-  pass=$((pass+1)); printf 'ok   S2-DECL/1530-reexport-merge-no-impl-rejects (names both admitted interfaces)\n'
+  pass=$((pass+1)); printf 'ok   S2-DECL/1530-reexport-merge-no-impl-rejects (L3 ambiguity)\n'
 else
   fail=$((fail+1)); printf 'FAIL S2-DECL/1530-reexport-merge-no-impl-rejects (exit %d, got [%s])\n' "$x1530_no_code" "$x1530_no"
 fi
