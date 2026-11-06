@@ -16,8 +16,8 @@ import fs.{fixtureFiles}
 import path.{dirname, basename}
 import list.{nub, sort}
 
-corpus : <IO> String
-corpus = underRoot "test/effect_polarity_fixtures"
+corpus : Unit -> <IO> String
+corpus () = underRoot "test/effect_polarity_fixtures"
 
 polarityMsg : String
 polarityMsg = "non-covariant type argument"
@@ -72,7 +72,7 @@ checkArgv name = [
   "medaka",
   medakaRoot (),
   medakaBin (),
-  "\{corpus}/\{name}/main.mdk",
+  "\{corpus ()}/\{name}/main.mdk",
 ]
 
 row : String -> <Exec, IO, FileRead> Expectation
@@ -81,10 +81,10 @@ row name = match boundedVerb "sh" (checkArgv name)
   Ok (code, out, err) => grade name code (out ++ err)
 
 test "effect polarity: every fixture matches its spec verdict" =
-  match fixtureFiles corpus
-    Err e => fail "could not list \{corpus}: \{e}"
+  match fixtureFiles (corpus ())
+    Err e => fail "could not list \{corpus ()}: \{e}"
     Ok paths =>
-      let root = corpus
+      let root = corpus ()
       let names =
         nub
           (sort

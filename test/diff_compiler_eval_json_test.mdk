@@ -59,8 +59,8 @@ import test_process.{
   scratchDir,
 }
 
-corpus : <IO> String
-corpus = "\{medakaRoot ()}/test/error_quality_fixtures/eval"
+corpus : Unit -> <IO> String
+corpus () = "\{medakaRoot ()}/test/error_quality_fixtures/eval"
 
 declaredFixtureCount : Int
 declaredFixtureCount = 11
@@ -71,10 +71,11 @@ declaredFixtureCount = 11
    file, only changes what a stale-binary failure message says. `""` when
    that source no longer has this shape, in which case `staleNote` appends
    nothing (never a guess either way). -}
-staleMarker : <FileRead, IO> String
-staleMarker = match readFile "\{medakaRoot ()}/compiler/driver/medaka_cli.mdk"
-  Err _ => ""
-  Ok src => markerBefore "" (lines src)
+staleMarker : Unit -> <FileRead, IO> String
+staleMarker () =
+  match readFile "\{medakaRoot ()}/compiler/driver/medaka_cli.mdk"
+    Err _ => ""
+    Ok src => markerBefore "" (lines src)
 
 markerBefore : String -> List String -> String
 markerBefore _ [] = ""
@@ -108,8 +109,8 @@ staleNote marker text =
 -- the process boundary the byte comparison alone never inspects.
 gradeOne : String -> String -> <Exec, FileRead, IO> Option String
 gradeOne marker name =
-  let entry = "\{corpus}/\{name}.mdk"
-  let golden = "\{corpus}/\{name}.json.out"
+  let entry = "\{corpus ()}/\{name}.mdk"
+  let golden = "\{corpus ()}/\{name}.json.out"
   match boundedVerb (medakaBin ()) ["run", "--json", entry]
     Err e => Some "  \{name}: could not run `medaka run --json`: \{e}"
     Ok (code, _, err) =>
@@ -127,26 +128,26 @@ gradeOne marker name =
             Some
               "  \{name}\{staleNote marker actual}\n    want: \{debug want}\n    got:  \{debug actual}"
 
-test "eval_json: exactly 11 fixtures on disk" = match fixtureStems corpus
-  Err e => fail "\{corpus}: \{e}"
+test "eval_json: exactly 11 fixtures on disk" = match fixtureStems (corpus ())
+  Err e => fail "\{corpus ()}: \{e}"
   Ok names => match expectUnitCount declaredFixtureCount names
-    Err e => fail "\{corpus}: \{e}"
+    Err e => fail "\{corpus ()}: \{e}"
     Ok _ => pass
 
 test "eval_json: `medaka run --json` agrees with the committed goldens, byte for byte" =
-  let marker = staleMarker
-  match fixtureStems corpus
-    Err e => fail "\{corpus}: \{e}"
+  let marker = staleMarker ()
+  match fixtureStems (corpus ())
+    Err e => fail "\{corpus ()}: \{e}"
     Ok names =>
       let failures = somes (map (gradeOne marker) names)
       match failures
         [] => pass
         _ =>
           fail
-            "\{intToString (length failures)} of \{intToString (length names)} fixtures under \{corpus} disagreed with their committed golden:\n\{unlines failures}"
+            "\{intToString (length failures)} of \{intToString (length names)} fixtures under \{corpus ()} disagreed with their committed golden:\n\{unlines failures}"
 
-trapSites : <IO> String
-trapSites = "\{medakaRoot ()}/test/trap_site_fixtures"
+trapSites : Unit -> <IO> String
+trapSites () = "\{medakaRoot ()}/test/trap_site_fixtures"
 
 -- (fixture stem, `line:col` of the trapping expression's start, the rest of
 -- the runtime-error line). Columns are 0-based.
@@ -237,18 +238,19 @@ trapSiteImportedRow (name, raiser, site, rest) = (
   name,
   expectSpawnFails
     (medakaBin ())
-    ["run", "\{trapSites}/\{name}.mdk"]
-    "\{trapSites}/\{raiser}:\{site}: runtime error \{rest}",
+    ["run", "\{trapSites ()}/\{name}.mdk"]
+    "\{trapSites ()}/\{raiser}:\{site}: runtime error \{rest}",
 )
 
-test "trap_site: every fixture on disk has a row" = match fixtureStems trapSites
-  Err e => fail "\{trapSites}: \{e}"
-  Ok names =>
-    expectEqual
-      (sort
-        (map ((n, _, _) => n) trapSiteRows
-          ++ map ((n, _, _, _) => n) trapSiteImportedRows))
-      (sort names)
+test "trap_site: every fixture on disk has a row" =
+  match fixtureStems (trapSites ())
+    Err e => fail "\{trapSites ()}: \{e}"
+    Ok names =>
+      expectEqual
+        (sort
+          (map ((n, _, _) => n) trapSiteRows
+            ++ map ((n, _, _, _) => n) trapSiteImportedRows))
+        (sort names)
 
 test "trap_site: `medaka run` names the start of the trapping expression" =
   expectEach
@@ -288,8 +290,8 @@ nativeTrapSiteRow scratch (name, raiser, site, rest) = (
   nativeAgreement
     scratch
     name
-    "\{trapSites}/\{name}.mdk"
-    "\{trapSites}/\{raiser}:\{site}: runtime error \{rest}\n",
+    "\{trapSites ()}/\{name}.mdk"
+    "\{trapSites ()}/\{raiser}:\{site}: runtime error \{rest}\n",
 )
 
 -- [grade] run against a fresh directory [tag] under the scratch directory,
@@ -331,7 +333,7 @@ test "trap_site: a read through a dictionary or a missed do bind is unlocated in
           nativeAgreement
             scratch
             name
-            "\{trapSites}/\{name}.mdk"
+            "\{trapSites ()}/\{name}.mdk"
             "runtime error \{rest}\n",
         ))
         rows))
@@ -339,7 +341,7 @@ test "trap_site: a read through a dictionary or a missed do bind is unlocated in
 -- `panic` bound as a parameter is that parameter, not the extern: the call
 -- applies it and prints 42, in a built binary as in `medaka run`.
 test "trap_site: a parameter named `panic` shadows the extern in a built binary" =
-  let entry = "\{trapSites}/no_trap/panic_parameter_shadows_extern.mdk"
+  let entry = "\{trapSites ()}/no_trap/panic_parameter_shadows_extern.mdk"
   inScratch "shadow" (scratch =>
     let bin = "\{scratch}/shadow"
     let want = (0, "42\n", "")

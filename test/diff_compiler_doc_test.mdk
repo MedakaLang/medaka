@@ -19,17 +19,17 @@ import test.{
   expectSatisfies, expectTextContainsAll, fail, pass
 }
 
-fixDir : <IO> String
-fixDir = underRoot "test/doc_fixtures"
+fixDir : Unit -> <IO> String
+fixDir () = underRoot "test/doc_fixtures"
 
-goldenDir : <IO> String
-goldenDir = underRoot "test/doc_goldens"
+goldenDir : Unit -> <IO> String
+goldenDir () = underRoot "test/doc_goldens"
 
-libFix : <IO> String
-libFix = underRoot "test/doc_fixtures/library"
+libFix : Unit -> <IO> String
+libFix () = underRoot "test/doc_fixtures/library"
 
-libGolden : <IO> String
-libGolden = underRoot "test/doc_goldens/library"
+libGolden : Unit -> <IO> String
+libGolden () = underRoot "test/doc_goldens/library"
 
 -- ── helpers ────────────────────────────────────────────────────────────────
 
@@ -81,16 +81,16 @@ withDoc path k = match boundedVerb (medakaBin ()) ["doc", path]
 
 singleRow : String -> <Exec, IO, FileRead> Expectation
 singleRow name =
-  match boundedVerb (medakaBin ()) ["doc", "\{fixDir}/\{name}.mdk"]
+  match boundedVerb (medakaBin ()) ["doc", "\{fixDir ()}/\{name}.mdk"]
     Err e => fail "could not spawn medaka doc on \{name}: \{e}"
     Ok (code, out, _) =>
       if code /= 0 then
         fail "\{name}: medaka doc exited \{intToString code}"
       else
-        expectGolden "\{goldenDir}/\{name}.doc.golden" out
+        expectGolden "\{goldenDir ()}/\{name}.doc.golden" out
 
 test "medaka doc: every single-file fixture matches its golden" =
-  match fixtureStems fixDir
+  match fixtureStems (fixDir ())
     Err e => fail "could not list doc fixtures: \{e}"
     Ok stems => expectAll [
       expectAtLeast 24 (length stems),
@@ -99,14 +99,14 @@ test "medaka doc: every single-file fixture matches its golden" =
 
 -- ── library mode ───────────────────────────────────────────────────────────
 
-mdkPaths : <IO, FileRead> Result String (List String)
-mdkPaths = map (ps => L.filter (endsWith ".mdk") ps) (walkDir libFix)
+mdkPaths : Unit -> <IO, FileRead> Result String (List String)
+mdkPaths () = map (ps => L.filter (endsWith ".mdk") ps) (walkDir (libFix ()))
 
 -- Writes the library pages into `tmp`, which the caller owns (withScratchDir);
 -- fails on a non-zero exit.
 libPages : String -> <Exec, IO, FileRead> Result String String
 libPages tmp = do
-  mdks <- mdkPaths
+  mdks <- mdkPaths ()
   res <- boundedVerb (medakaBin ()) (["doc", "--out", tmp] ++ mdks)
   libExit tmp res
 
@@ -174,12 +174,12 @@ treeRels root =
 libTreeRow : String -> String -> <FileRead, IO> Expectation
 libTreeRow tmp rel = match readFile "\{tmp}/\{rel}"
   Err e => fail "library-mode tree: missing \{rel}: \{e}"
-  Ok text => expectGolden "\{libGolden}/\{rel}" text
+  Ok text => expectGolden "\{libGolden ()}/\{rel}" text
 
 test "medaka doc: library-mode output tree matches the golden tree" = withScratchDir
   (dir => match libPages dir
     Err e => fail e
-    Ok tmp => match treeRels libGolden
+    Ok tmp => match treeRels (libGolden ())
       Err e => fail "could not list library golden tree: \{e}"
       Ok goldRels => match treeRels tmp
         Err e => fail "could not list library output tree: \{e}"
@@ -196,8 +196,8 @@ test "medaka doc: library mode writes every target and files impls correctly" =
 -- `base` is the caller's own directory (withScratchDir); nothing here is shared.
 dupRun : String -> <Exec, IO, FileRead> Result String (Int, String, String)
 dupRun base = do
-  a <- readFile "\{libFix}/alpha.mdk"
-  b <- readFile "\{libFix}/beta.mdk"
+  a <- readFile "\{libFix ()}/alpha.mdk"
+  b <- readFile "\{libFix ()}/beta.mdk"
   _ <- mkdirAll "\{base}/a"
   _ <- mkdirAll "\{base}/b"
   _ <- mkdirAll "\{base}/out"
@@ -229,11 +229,11 @@ test "medaka doc: library mode refuses a duplicate module basename" = withScratc
 -- ── rendered examples and layout (direct property checks) ──────────────────
 
 -- Fence count must agree with medaka test's doctest count (one each).
-doctestAgree : <Exec, IO, FileRead> Expectation
-doctestAgree = withDoc
-  "\{fixDir}/doctest_marker.mdk"
+doctestAgree : Unit -> <Exec, IO, FileRead> Expectation
+doctestAgree () = withDoc
+  "\{fixDir ()}/doctest_marker.mdk"
   (out =>
-    match boundedVerb (medakaBin ()) ["test", "\{fixDir}/doctest_marker.mdk"]
+    match boundedVerb (medakaBin ()) ["test", "\{fixDir ()}/doctest_marker.mdk"]
       Err e => fail "could not spawn medaka test on doctest_marker: \{e}"
       Ok (code, testOut, _) =>
         if code /= 0 then
@@ -250,8 +250,8 @@ doctestAgree = withDoc
 
 test "medaka doc: rendered examples agree with medaka test and escape the decoy" = expectAll
   [
-    doctestAgree,
-    withDoc "\{fixDir}/doctest_marker.mdk" (out =>
+    doctestAgree (),
+    withDoc "\{fixDir ()}/doctest_marker.mdk" (out =>
       if hasLine out "\\> fakeExample 1" then
         pass
       else
@@ -259,7 +259,7 @@ test "medaka doc: rendered examples agree with medaka test and escape the decoy"
   ]
 
 test "medaka doc: pipe marker stripped once per block, table rows survive" = withDoc
-  "\{fixDir}/pipe_prose.mdk"
+  "\{fixDir ()}/pipe_prose.mdk"
   (pp =>
     if hasLine pp "Parse an expression."
       && hasLine pp "| expr | term |"
@@ -271,7 +271,7 @@ test "medaka doc: pipe marker stripped once per block, table rows survive" = wit
         "pipe-prose handling (marker not stripped, or a `|`-led user line was eaten)")
 
 test "medaka doc: head line names clause parameters, absent on destructuring entries" = withDoc
-  "\{fixDir}/params.mdk"
+  "\{fixDir ()}/params.mdk"
   (pm => expectAll [
     if hasLine pm "take n _"
       && hasLine pm "clampTo hi v"

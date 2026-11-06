@@ -75,8 +75,8 @@ import test_process.{
 -- Fixtures are located through MEDAKA_ROOT rather than the working
 -- directory: `medaka gate run` exports it and inherits whatever cwd the
 -- caller had.
-corpus : <IO> String
-corpus = "\{medakaRoot ()}/test/shadow_fixtures"
+corpus : Unit -> <IO> String
+corpus () = "\{medakaRoot ()}/test/shadow_fixtures"
 
 {- | What a row asserts about the stdout of a cell that runs.
 
@@ -1374,7 +1374,7 @@ gradePasses grade = grade == "-" || grade == "ok" || grade == "n/a"
 
 planOne : String -> Row -> <FileRead, IO> Result Graded (String, String)
 planOne scratch r =
-  let entrypath = "\{corpus}/\{r.entry}"
+  let entrypath = "\{corpus ()}/\{r.entry}"
   match readFile entrypath
     Err e => Err (structuralRow r.entry "missing fixture file: \{e}")
     Ok _ => Ok (entrypath, "\{scratch}/\{binName r.entry}.bin")
@@ -1423,8 +1423,8 @@ cellRowFailure g =
     Some
       "  \{padRight 60 ' ' g.entry} check=\{padRight 7 ' ' g.checkV} run=\{padRight 7 ' ' g.runV} build=\{padRight 7 ' ' g.buildV} value=\{g.grade}\{g.note}"
 
-sweep : <Exec, FileRead, IO> Expectation
-sweep = sweepAgreements table planOne gradeOne cellRowFailure summarizeSweep
+sweep : Unit -> <Exec, FileRead, IO> Expectation
+sweep () = sweepAgreements table planOne gradeOne cellRowFailure summarizeSweep
 
 -- A row may name a secondary entry point inside a fixture directory
 -- (`<dir>/order-swapped.mdk`), which grades that directory a second way;
@@ -1444,21 +1444,22 @@ roster = map unitOf (map rowEntry table)
    or a whole directory. `fixtureDirs` carries the anti-vacuity floor, so a
    corpus that reads cleanly but holds nothing is an `Err` rather than a
    green run over zero cells. -}
-corpusUnits : <FileRead, IO> Result String (List String)
-corpusUnits = match fixtureDirs corpus
+corpusUnits : Unit -> <FileRead, IO> Result String (List String)
+corpusUnits () = match fixtureDirs (corpus ())
   Err e => Err e
   Ok dirs =>
     map
       (names => sort (map basename dirs ++ filter (endsWith ".mdk") names))
-      (listDir corpus)
+      (listDir (corpus ()))
 
-test "every fixture in the corpus is wired into the table" = match corpusUnits
-  Err e => fail "\{corpus}: \{e}"
-  Ok units => match unrosteredUnits (n => Some n) roster units
-    [] => pass
-    orphans =>
-      fail
-        "present in \{corpus} but not wired into this gate's table: \{debug orphans}"
+test "every fixture in the corpus is wired into the table" =
+  match corpusUnits ()
+    Err e => fail "\{corpus ()}: \{e}"
+    Ok units => match unrosteredUnits (n => Some n) roster units
+      [] => pass
+      orphans =>
+        fail
+          "present in \{corpus ()} but not wired into this gate's table: \{debug orphans}"
 
 {- | `binaryRanClean`'s False branch has no vehicle anywhere in the tree:
    every `table` row that reaches it would need to grade `"BINPANIC"`
@@ -1600,14 +1601,14 @@ test "every warnChecks entry names a row in the table" =
         "warnChecks names an entry with no row in `table`, so its assertion never runs: \{debug orphans}"
 
 test "check, run and build agree with every cell's pinned verdict and value" =
-  sweep
+  sweep ()
 
 test "S4 imported length rejects at the user source line on every verb" =
   match scratchDir ()
     Err e => fail e
     Ok scratch =>
       match (checkRunBuild
-        "\{corpus}/i4f_importer_value_position_reject/main.mdk"
+        "\{corpus ()}/i4f_importer_value_position_reject/main.mdk"
         "\{scratch}/value-position.bin")
         Err e => fail e
         Ok a => expectAll [
@@ -1616,7 +1617,7 @@ test "S4 imported length rejects at the user source line on every verb" =
             [
               "check",
               "--json",
-              "\{corpus}/i4f_importer_value_position_reject/main.mdk",
+              "\{corpus ()}/i4f_importer_value_position_reject/main.mdk",
             ]
             ["T-TYPE-MISMATCH", "type mismatch: Bytes vs List", "\"line\":1"],
           expectLineContainsAll

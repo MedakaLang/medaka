@@ -35,8 +35,8 @@ import string.{contains, lines}
 import test.{Expectation, expectSatisfies, fail}
 import test_process.{boundedVerbSeconds, medakaBin, medakaRoot}
 
-corpus : <IO> String
-corpus = "\{medakaRoot ()}/test/stack_overflow_fixtures"
+corpus : Unit -> <IO> String
+corpus () = "\{medakaRoot ()}/test/stack_overflow_fixtures"
 
 -- Both engines die before anything is printed, so the stdout every row pins
 -- is the empty string rather than a sentinel line. That the printed bytes of
@@ -63,10 +63,10 @@ rows = [
 ]
 
 test "every fixture pins a runtime outcome" =
-  rosterAgreement corpus declaredFixtureCount rows
+  rosterAgreement (corpus ()) declaredFixtureCount rows
 
 test "run and build+exec agree with every fixture's pinned outcome" =
-  fatalOutcomeSweep corpus declaredFixtureCount rows
+  fatalOutcomeSweep (corpus ()) declaredFixtureCount rows
 
 -- #3781: the interpreter arm of `medaka test` names the file in the
 -- diagnostic, as `medaka run` does, rather than printing a bare `:L:C:`.

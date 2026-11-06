@@ -57,15 +57,15 @@ harnessRun dir =
           else
             verdict "\{out}\n\{err}"
 
-corpus : <IO> String
-corpus = underRoot "test/lsp_fixtures"
+corpus : Unit -> <IO> String
+corpus () = underRoot "test/lsp_fixtures"
 
 -- The harness reads the corpus itself, so a corpus that emptied would still
 -- print a clean summary; the floor is what makes that red.
-corpusFloor : <IO, FileRead> Expectation
-corpusFloor = match fixtureFiles corpus
-  Err e => fail "could not list \{corpus}: \{e}"
+corpusFloor : Unit -> <IO, FileRead> Expectation
+corpusFloor () = match fixtureFiles (corpus ())
+  Err e => fail "could not list \{corpus ()}: \{e}"
   Ok paths => expectAtLeast 11 (length paths)
 
 test "lsp_harness: native LSP harness reports 0 failures" =
-  withScratchDir (dir => expectAll [corpusFloor, harnessRun dir])
+  withScratchDir (dir => expectAll [corpusFloor (), harnessRun dir])

@@ -167,11 +167,11 @@ import regex.{Regex, isMatch, mustCompile}
 import string as S
 import list.{head, sort, take, drop, reverse, removeAt}
 
-corpus : <IO> String
-corpus = underRoot "test/iface_order_fixtures"
+corpus : Unit -> <IO> String
+corpus () = underRoot "test/iface_order_fixtures"
 
-ledgerPath : <IO> String
-ledgerPath = underRoot "test/IFACE-ORDER-LEDGER.txt"
+ledgerPath : Unit -> <IO> String
+ledgerPath () = underRoot "test/IFACE-ORDER-LEDGER.txt"
 
 ifaceRe : Regex
 ifaceRe = mustCompile "^(public[ \t]+)?(export[ \t]+)?interface[ \t]"
@@ -557,7 +557,7 @@ caseRun : List LedgerRow ->
   String ->
   String ->
   <Exec, IO, FileRead, FileWrite> (Int, Expectation)
-caseRun rows base name = caseSpec rows base name "\{corpus}/\{name}"
+caseRun rows base name = caseSpec rows base name "\{corpus ()}/\{name}"
 
 -- Case directories, derived from the fixture file listing: the first path segment
 -- under the corpus root, for every file that sits at least one directory down.
@@ -588,7 +588,7 @@ rawCaseOf : String -> String
 rawCaseOf line = S.trim (firstOr "" (S.split "|" line))
 
 rotCase : String -> <IO, FileRead> Expectation
-rotCase c = match isDir "\{corpus}/\{c}"
+rotCase c = match isDir "\{corpus ()}/\{c}"
   Err e => fail "could not stat ledger case \"\{c}\": \{e}"
   Ok True => pass
   Ok False =>
@@ -649,15 +649,15 @@ ledgerBanner rows =
       True
 
 iterBody : String -> <Exec, IO, FileRead, FileWrite> Expectation
-iterBody base = match readFile ledgerPath
+iterBody base = match readFile (ledgerPath ())
   Err e => fail "could not read the ledger: \{e}"
-  Ok ledgerText => match fixtureFiles corpus
+  Ok ledgerText => match fixtureFiles (corpus ())
     Err e => fail "could not list the corpus: \{e}"
-    Ok files => match fixtureDirs corpus
+    Ok files => match fixtureDirs (corpus ())
       Err e => fail "could not list the corpus directories: \{e}"
       Ok dirs =>
         let rows = ledgerRowsOf ledgerText
-        let names = caseNames (corpus ++ "/") files
+        let names = caseNames (corpus () ++ "/") files
         let results = map (nm => (nm, caseRun rows base nm)) names
         let builds = fold (acc r => acc + buildsOfRes r) 0 results
         expectAll [

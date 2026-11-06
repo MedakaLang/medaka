@@ -61,8 +61,8 @@ import string.{trim}
 import test.{Expectation, expectAll, expectEach, expectEqual, fail}
 import test_process.{medakaRoot}
 
-corpus : <IO> String
-corpus = "\{medakaRoot ()}/test/run_stdout_flush_fixtures"
+corpus : Unit -> <IO> String
+corpus () = "\{medakaRoot ()}/test/run_stdout_flush_fixtures"
 
 -- The bytes every fixture prints before dying, and the only thing any of
 -- them prints. The trailing newline is part of the pin.
@@ -108,10 +108,10 @@ rows = [
 ]
 
 test "every fixture pins a runtime outcome" =
-  rosterAgreement corpus declaredFixtureCount rows
+  rosterAgreement (corpus ()) declaredFixtureCount rows
 
 test "run and build+exec agree with every fixture's pinned outcome" =
-  fatalOutcomeSweep corpus declaredFixtureCount rows
+  fatalOutcomeSweep (corpus ()) declaredFixtureCount rows
 
 -- # Order around `writeStdoutBytes`
 --

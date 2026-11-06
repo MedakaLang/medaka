@@ -28,14 +28,14 @@ import test.{
   expectEqual,
 }
 
-corpus : <IO> String
-corpus = underRoot "test/check_json_fixtures"
+corpus : Unit -> <IO> String
+corpus () = underRoot "test/check_json_fixtures"
 
-agreementCorpus : <IO> String
-agreementCorpus = underRoot "test/run_check_agreement_fixtures"
+agreementCorpus : Unit -> <IO> String
+agreementCorpus () = underRoot "test/run_check_agreement_fixtures"
 
-projectsCorpus : <IO> String
-projectsCorpus = underRoot "test/check_json_fixtures/projects"
+projectsCorpus : Unit -> <IO> String
+projectsCorpus () = underRoot "test/check_json_fixtures/projects"
 
 -- A file path (or project directory) replaced by its stable placeholder.
 placeholder : String -> String -> String -> String
@@ -59,16 +59,16 @@ runGolden label args place golden = match boundedVerb (medakaBin ()) args
 -- One top-level fixture: `check --json` against its own golden.
 singleRow : String -> <Exec, IO, FileRead> Expectation
 singleRow name =
-  let file = "\{corpus}/\{name}.mdk"
+  let file = "\{corpus ()}/\{name}.mdk"
   runGolden
     "check --json \{name}"
     ["check", "--json", file]
     (text => placeholder file "<fixture>" text)
-    "\{corpus}/\{name}.check_json.golden"
+    "\{corpus ()}/\{name}.check_json.golden"
 
 test "check --json: every top-level fixture matches its golden" =
-  match fixtureStems corpus
-    Err e => fail "could not list \{corpus}: \{e}"
+  match fixtureStems (corpus ())
+    Err e => fail "could not list \{corpus ()}: \{e}"
     Ok stems => expectAll [
       expectAtLeast 95 (length stems),
       expectEach (map (s => (s, singleRow s)) stems),
@@ -78,7 +78,7 @@ test "check --json: every top-level fixture matches its golden" =
 -- survive into `--json`. Each project is a directory with a `main.mdk` entry.
 projectRow : String -> <Exec, IO, FileRead> Expectation
 projectRow dir =
-  let rel = S.replaceAll (projectsCorpus ++ "/") "" dir
+  let rel = S.replaceAll (projectsCorpus () ++ "/") "" dir
   match isFile "\{dir}/main.mdk"
     Ok True =>
       runGolden
@@ -95,13 +95,13 @@ projectRow dir =
 -- Every top-level directory of the projects corpus is a project, whether or
 -- not it holds a `main.mdk`: a directory without one is red, not skipped.
 test "check --json: every project fixture matches its golden (#159)" =
-  match fixtureDirs projectsCorpus
-    Err e => fail "could not list \{projectsCorpus}: \{e}"
+  match fixtureDirs (projectsCorpus ())
+    Err e => fail "could not list \{projectsCorpus ()}: \{e}"
     Ok dirs => expectAll [
       expectAtLeast 11 (length dirs),
       expectEach
         (map
-          (d => (S.replaceAll (projectsCorpus ++ "/") "" d, projectRow d))
+          (d => (S.replaceAll (projectsCorpus () ++ "/") "" d, projectRow d))
           dirs),
     ]
 
@@ -109,13 +109,13 @@ test "check --json: every project fixture matches its golden (#159)" =
 -- they live; the golden sits beside the other check_json goldens.
 agreementRow : String -> <Exec, IO, FileRead> Expectation
 agreementRow extname =
-  let file = "\{agreementCorpus}/\{extname}.mdk"
+  let file = "\{agreementCorpus ()}/\{extname}.mdk"
   let rel = "test/run_check_agreement_fixtures/\{extname}.mdk"
   runGolden
     "check --json agreement/\{extname}"
     ["check", "--json", file]
     (text => placeholder rel "<fixture>" (placeholder file "<fixture>" text))
-    "\{corpus}/\{extname}.check_json.golden"
+    "\{corpus ()}/\{extname}.check_json.golden"
 
 test "check --json: agreement-corpus reject fixtures pin their code and range" =
   expectEach
@@ -150,12 +150,12 @@ test "333/nonexistent-path: reports R-FILE-NOT-FOUND with exit 1, not R-MODULE-L
 -- #1078: `build --json` on a program that never reaches the emitter must be
 -- byte-identical to `check --json` on the same fixture.
 test "1078/build-json-agrees-with-check-json: type_mismatch matches check's golden" =
-  let file = "\{corpus}/type_mismatch.mdk"
+  let file = "\{corpus ()}/type_mismatch.mdk"
   runGolden
     "build --json type_mismatch"
     ["build", "--json", file]
     (text => placeholder file "<fixture>" text)
-    "\{corpus}/type_mismatch.check_json.golden"
+    "\{corpus ()}/type_mismatch.check_json.golden"
 
 -- #1078: a clean program reaches the emitter: exit 0, a real executable, and
 -- the empty-diagnostics envelope on the JSON channel.
@@ -167,7 +167,7 @@ cleanBuild dir =
   match boundedVerb (medakaBin ()) [
     "build",
     "--json",
-    "\{corpus}/clean.mdk",
+    "\{corpus ()}/clean.mdk",
     "-o",
     bin,
   ]

@@ -137,14 +137,14 @@ import test_process.{medakaBin, medakaRoot, missingUnits, testJobs}
 -- Everything is located through MEDAKA_ROOT rather than the working
 -- directory: a gate runner exports it and inherits whatever cwd its caller
 -- happened to be in.
-corpus : <IO> String
-corpus = "\{medakaRoot ()}/test/import_order_fixtures"
+corpus : Unit -> <IO> String
+corpus () = "\{medakaRoot ()}/test/import_order_fixtures"
 
-orderLedgerPath : <IO> String
-orderLedgerPath = "\{medakaRoot ()}/test/IMPORT-ORDER-LEDGER.txt"
+orderLedgerPath : Unit -> <IO> String
+orderLedgerPath () = "\{medakaRoot ()}/test/IMPORT-ORDER-LEDGER.txt"
 
-emitLedgerPath : <IO> String
-emitLedgerPath = "\{medakaRoot ()}/test/EMITTER-VERDICT-LEDGER.txt"
+emitLedgerPath : Unit -> <IO> String
+emitLedgerPath () = "\{medakaRoot ()}/test/EMITTER-VERDICT-LEDGER.txt"
 
 {- | The ceiling on one spawned invocation, in seconds, sized to cover a
    `medaka build` and the `clang` it drives.
@@ -551,7 +551,7 @@ prepWork caseScratch dir entry src k order =
 
 runCase : String -> String -> <Exec, FileRead, FileWrite, IO> Case
 runCase scratch unit =
-  let dir = "\{corpus}/\{unit}"
+  let dir = "\{corpus ()}/\{unit}"
   match readFile "\{dir}/case.txt"
     Err e => brokenCase unit "no readable case.txt: \{e}"
     Ok spec =>
@@ -854,8 +854,8 @@ summarizeCensus cases blocks = fail "\{census cases}\n\{unlines blocks}"
 
 -- # The units
 
-corpusUnits : <FileRead, IO> Result String (List String)
-corpusUnits = map (ds => sort (map basename ds)) (fixtureDirs corpus)
+corpusUnits : Unit -> <FileRead, IO> Result String (List String)
+corpusUnits () = map (ds => sort (map basename ds)) (fixtureDirs (corpus ()))
 
 readLedger : String -> Int -> <FileRead, IO> Result String (List Row)
 readLedger path pinAt = match readFile path
@@ -865,8 +865,8 @@ readLedger path pinAt = match readFile path
     Ok rows => Ok rows
 
 test "every case declares an entry with at least two import clauses" =
-  match corpusUnits
-    Err e => fail "\{corpus}: \{e}"
+  match corpusUnits ()
+    Err e => fail "\{corpus ()}: \{e}"
     Ok units => match somes (map declarationFailure units)
       [] => pass
       failures =>
@@ -875,7 +875,7 @@ test "every case declares an entry with at least two import clauses" =
 
 declarationFailure : String -> <FileRead, IO> Option String
 declarationFailure unit =
-  let dir = "\{corpus}/\{unit}"
+  let dir = "\{corpus ()}/\{unit}"
   match readFile "\{dir}/case.txt"
     Err e => Some (failLine unit "no readable case.txt: \{e}")
     Ok spec =>
@@ -901,29 +901,33 @@ declarationFailure unit =
 {- | A ledger entry that outlives its fixture is rot, and rot is how a ledger
    becomes a skip-list. Graded as its own unit because it needs no
    subprocess and its failure is legible on its own. -}
-test "neither ledger names a case that is not in the corpus" = match corpusUnits
-  Err e => fail "\{corpus}: \{e}"
-  Ok units => match (readLedger orderLedgerPath 2, readLedger emitLedgerPath 3)
-    (Err e, _) => fail e
-    (_, Err e) => fail e
-    (Ok orderRows, Ok emitRows) =>
-      let stale =
-        name rows =>
-          map
-            (u =>
-              "  \{name} names case \{debug u}, which does not exist under test/import_order_fixtures/")
-            (missingUnits Some (map (r => r.rowCase) rows) units)
-      match (stale "test/IMPORT-ORDER-LEDGER.txt" orderRows
-        ++ stale "test/EMITTER-VERDICT-LEDGER.txt" emitRows)
-        [] => pass
-        failures => fail "stale ledger row(s):\n\{unlines failures}"
+test "neither ledger names a case that is not in the corpus" =
+  match corpusUnits ()
+    Err e => fail "\{corpus ()}: \{e}"
+    Ok units => match (
+      readLedger (orderLedgerPath ()) 2,
+      readLedger (emitLedgerPath ()) 3,
+    )
+      (Err e, _) => fail e
+      (_, Err e) => fail e
+      (Ok orderRows, Ok emitRows) =>
+        let stale =
+          name rows =>
+            map
+              (u =>
+                "  \{name} names case \{debug u}, which does not exist under test/import_order_fixtures/")
+              (missingUnits Some (map (r => r.rowCase) rows) units)
+        match (stale "test/IMPORT-ORDER-LEDGER.txt" orderRows
+          ++ stale "test/EMITTER-VERDICT-LEDGER.txt" emitRows)
+          [] => pass
+          failures => fail "stale ledger row(s):\n\{unlines failures}"
 
 {- | A missing `medaka_emitter` makes every `emitVerdictFor` answer
    `emit=127:noir`, so every ledgered DISAGREE row observes AGREE and reads as
    DRAINED — pointing a reader at deleting four live rows for four open bugs.
    Named as a precondition instead, before any row is graded. -}
-emitterPrecondition : <FileRead, IO> Option String
-emitterPrecondition =
+emitterPrecondition : Unit -> <FileRead, IO> Option String
+emitterPrecondition () =
   let bin = emitterBin
   if fileExists bin then
     None
@@ -931,14 +935,17 @@ emitterPrecondition =
     Some "missing native emitter: \{bin} (make medaka)"
 
 test "the answer does not depend on import-clause order" =
-  match emitterPrecondition
+  match emitterPrecondition ()
     Some why => fail why
-    None => gradedCorpus
+    None => gradedCorpus ()
 
-gradedCorpus : <Exec, FileRead, FileWrite, IO> Expectation
-gradedCorpus = match corpusUnits
-  Err e => fail "\{corpus}: \{e}"
-  Ok units => match (readLedger orderLedgerPath 2, readLedger emitLedgerPath 3)
+gradedCorpus : Unit -> <Exec, FileRead, FileWrite, IO> Expectation
+gradedCorpus () = match corpusUnits ()
+  Err e => fail "\{corpus ()}: \{e}"
+  Ok units => match (
+    readLedger (orderLedgerPath ()) 2,
+    readLedger (emitLedgerPath ()) 3,
+  )
     (Err e, _) => fail e
     (_, Err e) => fail e
     (Ok orderRows, Ok emitRows) =>

@@ -26,8 +26,8 @@ import test.{
   Expectation, expectAll, expectAtLeast, expectEqual, expectNoFindings, fail
 }
 
-fixDir : <IO> String
-fixDir = underRoot "test/construct_fixtures"
+fixDir : Unit -> <IO> String
+fixDir () = underRoot "test/construct_fixtures"
 
 -- Strip every trailing newline.
 stripNl : String -> String
@@ -118,8 +118,8 @@ rows _ (_ :: _) (_ :: _) [] = []
 rows dir (l :: ls) (b :: bs) (r :: rs) = rowOf dir l b r :: rows dir ls bs rs
 
 check : String -> <Exec, IO, FileRead, FileWrite> Expectation
-check dir = match fixtureFiles fixDir
-  Err e => fail "could not list construct fixtures in \{fixDir}: \{e}"
+check dir = match fixtureFiles (fixDir ())
+  Err e => fail "could not list construct fixtures in \{fixDir ()}: \{e}"
   Ok entries =>
     let labels =
       sort (filter (/= "") (map stem (filter (endsWith ".mdk") entries)))
@@ -134,14 +134,14 @@ check dir = match fixtureFiles fixDir
         "env"
         (testJobs ())
         (map
-          (l => buildArgv allEnvs medaka "\{fixDir}/\{l}.mdk" (binOf dir l))
+          (l => buildArgv allEnvs medaka "\{fixDir ()}/\{l}.mdk" (binOf dir l))
           labels)
     let runs =
       runCommandBatch
         "sh"
         (testJobs ())
         (map (l => runArgv (binOf dir l)) labels)
-    let table = rows fixDir labels builds runs
+    let table = rows (fixDir ()) labels builds runs
     let failures = filter (/= "") table
     let what =
       "\{intToString (length failures)} of \{intToString (length labels)} construct fixtures failed (regen the goldens only after reviewing the native output: sh test/capture_goldens.sh --frozen build_construct)"

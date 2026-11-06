@@ -16,16 +16,16 @@ import test.{
 }
 import test_process.{boundedVerbSeconds, medakaBin, medakaRoot, underRoot}
 
-corpus : <IO> String
-corpus = underRoot "test/error_quality_fixtures"
+corpus : Unit -> <IO> String
+corpus () = underRoot "test/error_quality_fixtures"
 
 {- Top-level `.mdk` fixtures: one level under the corpus root, never the
    multi-module subdirectories (`eval/xmod*/`), which the baseline never graded. -}
-fixtures : <IO, FileRead> Result String (List String)
-fixtures = match fixtureFiles corpus
+fixtures : Unit -> <IO, FileRead> Result String (List String)
+fixtures () = match fixtureFiles (corpus ())
   Err e => Err e
   Ok paths =>
-    let own = p => endsWith ".mdk" p && dirname (dirname p) == corpus
+    let own = p => endsWith ".mdk" p && dirname (dirname p) == corpus ()
     match sort (filter own paths)
       [] => Err "no top-level error-quality fixtures"
       found => Ok found
@@ -86,7 +86,7 @@ row p =
         Ok text => expectEqualText (stripNewlines text) actual
 
 test "error-quality baseline: every fixture matches its committed .out record" =
-  match fixtures
+  match fixtures ()
     Err e => fail "error-quality corpus unreadable: \{e}"
     Ok paths => expectAll [
       expectAtLeast 102 (length paths),

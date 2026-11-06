@@ -639,8 +639,8 @@ prepAll fixDir [] (_ :: ds) =
   Err (fail "internal: a scratch directory was made for no row")
     :: prepAll fixDir [] ds
 
-check : <Exec, IO, FileRead, FileWrite> Expectation
-check = checkIn (medakaBin ()) (underRoot "test/dict_fixtures")
+check : Unit -> <Exec, IO, FileRead, FileWrite> Expectation
+check () = checkIn (medakaBin ()) (underRoot "test/dict_fixtures")
 
 -- The script globbed `*.mdk` directly in the fixture dir (no recursion). The
 -- enumerator returns full paths, recursive; keep top-level `.mdk` leaves only.
@@ -665,7 +665,7 @@ checkIn bin fixDir = match fixtureFiles fixDir
       ]
 
 test "DICT-SEMANTICS section 4: declaration-order permutation keeps verdict, run and build" =
-  check
+  check ()
 
 -- A file's trailing blank line travels with its last chunk, so a reordered file
 -- can gain a blank line between imports; only the order of lines is asserted.

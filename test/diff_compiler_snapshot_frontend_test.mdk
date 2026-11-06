@@ -350,10 +350,11 @@ badLines ls = filter (l => contains ": FAIL" l || contains ": ERROR" l) ls
    `medaka fmt` that joins the two degrades this to the same `""`. That is a
    lost hint on an already-failing row, never a wrong verdict: `staleNote`
    appends nothing when the marker is `""`. -}
-staleMarker : <FileRead, IO> String
-staleMarker = match readFile "\{medakaRoot ()}/compiler/driver/medaka_cli.mdk"
-  Err _ => ""
-  Ok src => markerBefore "" (lines src)
+staleMarker : Unit -> <FileRead, IO> String
+staleMarker () =
+  match readFile "\{medakaRoot ()}/compiler/driver/medaka_cli.mdk"
+    Err _ => ""
+    Ok src => markerBefore "" (lines src)
 
 markerBefore : String -> List String -> String
 markerBefore _ [] = ""
@@ -455,7 +456,7 @@ runFamily f paths =
       failures = ["\{f.sub}: could not spawn medaka snapshot: \{e}"],
     }
     Ok (code, out, err) =>
-      let note = staleNote staleMarker (out ++ err)
+      let note = staleNote (staleMarker ()) (out ++ err)
       let counted = match countsOf out
         None => [
           "\{f.sub}: could not read a summary line out of medaka snapshot's output\{note}",
@@ -553,8 +554,8 @@ toolTableStart = "# ── FAMILY TABLE BEGIN"
 toolTableEnd : String
 toolTableEnd = "# ── FAMILY TABLE END"
 
-toolRows : <FileRead, IO> Result String (List String)
-toolRows = match readFile "\{medakaRoot ()}/test/snapshot_bless.sh"
+toolRows : Unit -> <FileRead, IO> Result String (List String)
+toolRows () = match readFile "\{medakaRoot ()}/test/snapshot_bless.sh"
   Err e => Err "cannot read test/snapshot_bless.sh: \{e}"
   Ok src => match between toolTableStart toolTableEnd (lines src)
     [] => Err "test/snapshot_bless.sh has no FAMILY TABLE block"
@@ -582,7 +583,7 @@ rowText f = "\{f.sub} \{f.stages} \{f.spec}"
 ownRows : List String
 ownRows = map rowText families
 
-test "the write tool's family table is this file's" = match toolRows
+test "the write tool's family table is this file's" = match toolRows ()
   Err e => fail e
   Ok rows =>
     if rows == ownRows then

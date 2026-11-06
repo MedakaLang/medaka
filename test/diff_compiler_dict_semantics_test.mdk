@@ -85,8 +85,8 @@ import test_process.{
 -- Fixtures are located through MEDAKA_ROOT rather than the working
 -- directory: `medaka gate run` exports it and inherits whatever cwd the
 -- caller had.
-corpus : <IO> String
-corpus = "\{medakaRoot ()}/test/dict_fixtures"
+corpus : Unit -> <IO> String
+corpus () = "\{medakaRoot ()}/test/dict_fixtures"
 
 {- | What a row asserts about the stdout of a fixture that runs.
 
@@ -6037,7 +6037,7 @@ codeFailures _ (Err e) = Err "could not run `medaka check --json`: \{e}"
 codeFailures cs (Ok (_, json)) = Ok (somes (map (codeProblem json) cs))
 
 entryPath : Row -> <IO> String
-entryPath r = "\{corpus}/\{r.entry}"
+entryPath r = "\{corpus ()}/\{r.entry}"
 
 hasCodes : Row -> Bool
 hasCodes r = match r.codes
@@ -6149,13 +6149,13 @@ roster = map unitOf (map rowEntry table)
    or a whole directory. `fixtureDirs` carries the anti-vacuity floor, so a
    corpus that reads cleanly but holds nothing is an `Err` rather than a
    green run over zero units. -}
-corpusUnits : <FileRead, IO> Result String (List String)
-corpusUnits = match fixtureDirs corpus
+corpusUnits : Unit -> <FileRead, IO> Result String (List String)
+corpusUnits () = match fixtureDirs (corpus ())
   Err e => Err e
   Ok dirs =>
     map
       (names => sort (map basename dirs ++ filter (endsWith ".mdk") names))
-      (listDir corpus)
+      (listDir (corpus ()))
 
 -- An `AllExact` row whose stdout agrees everywhere must still go red when the
 -- built binary exited nonzero or panicked on stderr (#3334).
@@ -6185,13 +6185,14 @@ test "the table still holds every row it is supposed to" =
     Err e => fail "the verdict table \{e}"
     Ok _ => pass
 
-test "every fixture in the corpus is wired into the table" = match corpusUnits
-  Err e => fail "\{corpus}: \{e}"
-  Ok units => match unrosteredUnits (n => Some n) roster units
-    [] => pass
-    orphans =>
-      fail
-        "present in \{corpus} but not wired into this gate's table: \{debug orphans}"
+test "every fixture in the corpus is wired into the table" =
+  match corpusUnits ()
+    Err e => fail "\{corpus ()}: \{e}"
+    Ok units => match unrosteredUnits (n => Some n) roster units
+      [] => pass
+      orphans =>
+        fail
+          "present in \{corpus ()} but not wired into this gate's table: \{debug orphans}"
 
 {- | The `s6-d1-test-body-num-default` row above type-checks that fixture's
    test bodies but never executes them. Native execution is what observes
@@ -6199,7 +6200,7 @@ test "every fixture in the corpus is wired into the table" = match corpusUnits
    generalized local's `Float` use, so the fixture's own `cases.mdk` is run
    as well. -}
 test "the closed test-body defaulting fixture's own cases run natively" =
-  let cases = "\{corpus}/s6-d1-test-body-num-default/cases.mdk"
+  let cases = "\{corpus ()}/s6-d1-test-body-num-default/cases.mdk"
   match testAssertionCount cases ["--native"]
     Err e => fail e
     Ok n =>
@@ -7666,7 +7667,7 @@ simpleFailure g =
 
 -- The one spawn every Section 2 and Section 6 row grades.
 checkSpawn : String -> <IO> (String, List String)
-checkSpawn entry = (medakaBin (), ["check", "\{corpus}/\{entry}"])
+checkSpawn entry = (medakaBin (), ["check", "\{corpus ()}/\{entry}"])
 
 schemeSpawn : String -> SchemeRow -> <IO> (String, List String)
 schemeSpawn _ r = checkSpawn r.entry
@@ -7704,8 +7705,8 @@ summarizeSchemes graded failures =
   else
     summarizeSweep graded failures
 
-schemeSweep : <Exec, FileRead, IO> Expectation
-schemeSweep =
+schemeSweep : Unit -> <Exec, FileRead, IO> Expectation
+schemeSweep () =
   sweepSpawn schemeTable schemeSpawn gradeScheme simpleFailure summarizeSchemes
 
 -- # Section 5 grading
@@ -7716,7 +7717,7 @@ schemeSweep =
 -- own index under the sweep's scratch directory.
 verbSpawns : String -> (Int, VerbRow) -> <IO> List (String, List String)
 verbSpawns scratch (i, r) =
-  let entrypath = "\{corpus}/\{r.ventry}"
+  let entrypath = "\{corpus ()}/\{r.ventry}"
   match r.verb
     "check" => [(medakaBin (), ["check", entrypath])]
     "run" => [(medakaBin (), ["run", entrypath])]
@@ -7815,8 +7816,8 @@ summarizeVerbs graded failures =
   else
     summarizeSweep graded failures
 
-verbSweep : <Exec, FileRead, IO> Expectation
-verbSweep =
+verbSweep : Unit -> <Exec, FileRead, IO> Expectation
+verbSweep () =
   sweepSpawns
     (indexed verbTable)
     verbSpawns
@@ -7874,13 +7875,13 @@ summarizeSpans graded failures =
   else
     summarizeSweep graded failures
 
-spanSweep : <Exec, FileRead, IO> Expectation
-spanSweep =
+spanSweep : Unit -> <Exec, FileRead, IO> Expectation
+spanSweep () =
   sweepSpawn spanTable spanSpawn gradeSpan simpleFailure summarizeSpans
 
-test "medaka check prints every pinned scheme line verbatim" = schemeSweep
+test "medaka check prints every pinned scheme line verbatim" = schemeSweep ()
 
 test "the demoted warning reaches every verb, and only the demoted warning" =
-  verbSweep
+  verbSweep ()
 
-test "every pinned diagnostic lands at its exact line:col" = spanSweep
+test "every pinned diagnostic lands at its exact line:col" = spanSweep ()

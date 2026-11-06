@@ -17,8 +17,8 @@ import test.{
 }
 import test_process.{boundedVerbSeconds, medakaBin, medakaRoot}
 
-corpus : <IO> String
-corpus = "\{medakaRoot ()}/test/wasm_edge_loader_fixtures"
+corpus : Unit -> <IO> String
+corpus () = "\{medakaRoot ()}/test/wasm_edge_loader_fixtures"
 
 buildArgv : String -> String -> String -> <IO> List String
 buildArgv target src out = [
@@ -56,7 +56,7 @@ driven =
 
 drive : String -> String -> <Exec, IO> Result String (Int, String, String)
 drive scratch loader = match boundedVerbSeconds 60 "node" [
-  "\{corpus}/driver.mjs",
+  "\{corpus ()}/driver.mjs",
   "\{scratch}/\{loader}",
 ]
   Err e => Err e
@@ -69,7 +69,7 @@ drive scratch loader = match boundedVerbSeconds 60 "node" [
 test "edge build: the output directory is the wasm, both loaders and the host" =
   inFreshDirOf
     (scratch =>
-      match built "wasmgc/edge" "\{corpus}/hello.mdk" "\{scratch}/hello.wasm"
+      match built "wasmgc/edge" "\{corpus ()}/hello.mdk" "\{scratch}/hello.wasm"
         Err e => fail e
         Ok (code, _, err) => expectAll [
           expectEqual 0 code,
@@ -83,7 +83,7 @@ test "edge build: the output directory is the wasm, both loaders and the host" =
 test "edge build: both loaders export run and a default fetch that answers 200 with stdout" =
   inFreshDirOf
     (scratch =>
-      match built "wasmgc/edge" "\{corpus}/hello.mdk" "\{scratch}/hello.wasm"
+      match built "wasmgc/edge" "\{corpus ()}/hello.mdk" "\{scratch}/hello.wasm"
         Err e => fail e
         Ok _ => expectAll [
           expectEqual (Ok (0, driven, "")) (drive scratch "hello.mjs"),
@@ -94,7 +94,7 @@ test "edge build: both loaders export run and a default fetch that answers 200 w
 test "node build: only the wasm is written" =
   inFreshDirOf
     (scratch =>
-      match built "wasmgc/node" "\{corpus}/hello.mdk" "\{scratch}/hello.wasm"
+      match built "wasmgc/node" "\{corpus ()}/hello.mdk" "\{scratch}/hello.wasm"
         Err e => fail e
         Ok (code, _, _) => expectAll [
           expectEqual 0 code,
@@ -105,7 +105,7 @@ test "node build: only the wasm is written" =
 test "edge build: an -o that does not end in .wasm is a build error" =
   inFreshDirOf
     (scratch =>
-      match built "wasmgc/edge" "\{corpus}/hello.mdk" "\{scratch}/x.out"
+      match built "wasmgc/edge" "\{corpus ()}/hello.mdk" "\{scratch}/x.out"
         Err e => fail e
         Ok (code, out, err) => expectAll [
           expectNotEqual 0 code,
@@ -122,7 +122,7 @@ test "edge build: an -o that would collide with a companion file leaves nothing 
 
 collides : String -> String -> <Exec, IO> Expectation
 collides scratch name =
-  match built "wasmgc/edge" "\{corpus}/hello.mdk" "\{scratch}/\{name}"
+  match built "wasmgc/edge" "\{corpus ()}/hello.mdk" "\{scratch}/\{name}"
     Err e => fail e
     Ok (code, out, err) => expectAll [
       expectNotEqual 0 code,
@@ -137,7 +137,7 @@ test "edge build: a # or % in the wasm name loads through both loaders" =
 
 loads : String -> String -> <Exec, IO> Expectation
 loads scratch stem =
-  match built "wasmgc/edge" "\{corpus}/hello.mdk" "\{scratch}/\{stem}.wasm"
+  match built "wasmgc/edge" "\{corpus ()}/hello.mdk" "\{scratch}/\{stem}.wasm"
     Err e => fail e
     Ok _ => expectAll [
       expectEqual (Ok (0, driven, "")) (drive scratch "\{stem}.mjs"),

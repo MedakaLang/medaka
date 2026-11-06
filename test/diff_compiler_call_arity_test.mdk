@@ -20,8 +20,8 @@ import test.{Expectation, expectAll, expectAtLeast, expectEach, fail, pass}
 import string as S
 import list as L
 
-fixtures : <IO> String
-fixtures = underRoot "test/build_diff_fixtures"
+fixtures : Unit -> <IO> String
+fixtures () = underRoot "test/build_diff_fixtures"
 
 reg1101 : String
 reg1101 = "tail_over_application_arity_conformance"
@@ -204,7 +204,7 @@ irSkews ir = skewLines (defsOf (S.lines ir)) (S.lines ir) 1
 buildIR : String -> String -> <Exec, IO, FileRead> Result String String
 buildIR work stem = match boundedInTree 600 (medakaBin ()) [
   "build",
-  "\{fixtures}/\{stem}.mdk",
+  "\{fixtures ()}/\{stem}.mdk",
   "-o",
   "\{work}/\{stem}.bin",
   "--keep-ir",
@@ -229,7 +229,7 @@ censusRow work stem =
       skews => fail "\{stem}: call/define arity skew: \{S.join "; " skews}"
 
 census : String -> <Exec, IO, FileRead, FileWrite> Expectation
-census work = match fixtureStems fixtures
+census work = match fixtureStems (fixtures ())
   Err e => fail "could not list fixtures: \{e}"
   Ok stems => expectAll [
     expectAtLeast 86 (length stems),
@@ -324,21 +324,21 @@ tailOk b = S.contains "musttail call i64 @\{dictPrefix}7461696c(" b
 -- The CDict fixture is built ONCE per process: three tests below read the same
 -- IR. The build goes into a directory that is removed as soon as its IR text
 -- is read, so only the text outlives the build.
-cdictIR : <Exec, IO, FileRead> Result String String
-cdictIR = inFreshDirOf (dir => buildIR dir dictStem) (m => Err m)
+cdictIR : Unit -> <Exec, IO, FileRead> Result String String
+cdictIR () = inFreshDirOf (dir => buildIR dir dictStem) (m => Err m)
 
-skewCDict : <Exec, IO, FileRead> Expectation
-skewCDict = match cdictIR
+skewCDict : Unit -> <Exec, IO, FileRead> Expectation
+skewCDict () = match cdictIR ()
   Err e => fail "\{dictStem}: failed to build or read IR: \{e}"
   Ok ir => match irSkews ir
     [] => pass
     skews => fail "\{dictStem}: call/define arity skew: \{S.join "; " skews}"
 
 test "diff_compiler_call_arity (8): the CDict fixture has no call/define arity skew" =
-  skewCDict
+  skewCDict ()
 
 test "diff_compiler_call_arity (9): the CDict fixture is present in the corpus" =
-  match fixtureStems fixtures
+  match fixtureStems (fixtures ())
     Err e => fail "could not list fixtures: \{e}"
     Ok stems =>
       if any (s => s == dictStem) stems then
@@ -346,8 +346,8 @@ test "diff_compiler_call_arity (9): the CDict fixture is present in the corpus" 
       else
         fail "the CDict fixture is MISSING from the corpus"
 
-shapesCDict : <Exec, IO, FileRead> Expectation
-shapesCDict = match cdictIR
+shapesCDict : Unit -> <Exec, IO, FileRead> Expectation
+shapesCDict () = match cdictIR ()
   Err e => fail "\{dictStem}: failed to build or read IR: \{e}"
   Ok ir => expectEach [
     ("(10) adder3's define binds the dictionary and a", defineOk ir),
@@ -410,15 +410,15 @@ shapesCDict = match cdictIR
   ]
 
 test "diff_compiler_call_arity (10)-(15): CDict call shapes reach their intended lowering" =
-  shapesCDict
+  shapesCDict ()
 
-buildCDict : <Exec, IO, FileRead> Expectation
-buildCDict = match cdictIR
+buildCDict : Unit -> <Exec, IO, FileRead> Expectation
+buildCDict () = match cdictIR ()
   Err e => fail "\{dictStem}: did not build or produce kept IR: \{e}"
   Ok _ => pass
 
 test "diff_compiler_call_arity (16): the CDict fixture builds and produces kept IR" =
-  buildCDict
+  buildCDict ()
 
 -- The skew scanner must be able to fire: a define of arity 2 called with 1 arg.
 synthetic : String

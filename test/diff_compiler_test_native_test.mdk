@@ -175,8 +175,8 @@ fixture name = underRoot "test/compiler_test_fixtures/\{name}"
 
 -- ── check 6-7: the exceptions ledger self-drains ──────────────────────────────
 
-ledgerPath : <IO> String
-ledgerPath = underRoot "test/NATIVE-DOCTEST-EXCEPTIONS.txt"
+ledgerPath : Unit -> <IO> String
+ledgerPath () = underRoot "test/NATIVE-DOCTEST-EXCEPTIONS.txt"
 
 -- A row header is exactly two leading spaces then an uppercase/hyphen tag; the
 -- prose continuation lines are indented six spaces and never match.
@@ -235,7 +235,7 @@ drainCheck scope issue =
           "ledger row PRELUDE-TARGET \{scope} \{issue} no longer reproduces: 'medaka test --native \{scope}' now exits 0. The row's DRAINS WHEN condition appears met — remove the arm in native_doctest.mdk's nativeSkipReason AND this row from test/NATIVE-DOCTEST-EXCEPTIONS.txt, and close \{issue}."
 
 test "ledger self-drain: row tags are known and PRELUDE-TARGET still reproduces (checks 6-7)" =
-  match readFile ledgerPath
+  match readFile (ledgerPath ())
     Err e => fail "could not read the ledger: \{e}"
     Ok text => expectEach [
       ("PRELUDE-TARGET", preludeTargetCheck text),

@@ -14,15 +14,15 @@ import test.{Expectation, expectEach, expectGolden, fail}
 import io.{getEnvOr}
 import string.{replaceAll}
 
-fixtureDir : String
-fixtureDir = underRoot "test/target_fixtures"
+fixtureDir : Unit -> <Env {"MEDAKA_ROOT"}> String
+fixtureDir () = underRoot "test/target_fixtures"
 
 -- The transcript a golden holds: the exit code, then each stream, with the
 -- fixture directory spelled `<fixtures>` so the golden does not name a tree.
 transcript : Int -> String -> String -> <IO> String
 transcript code out err =
   replaceAll
-    fixtureDir
+    (fixtureDir ())
     "<fixtures>"
     "exit=\{intToString code}\n--- stdout\n\{out}--- stderr\n\{err}"
 
@@ -34,7 +34,7 @@ targetCase : String ->
   String ->
   <Exec, IO, FileRead> (String, Expectation)
 targetCase stem verb flags fixture =
-  (stem, runCase stem ([verb] ++ flags ++ ["\{fixtureDir}/\{fixture}"]))
+  (stem, runCase stem ([verb] ++ flags ++ ["\{fixtureDir ()}/\{fixture}"]))
 
 runCase : String -> List String -> <Exec, IO, FileRead> Expectation
 runCase stem argv = spawnCase stem (medakaBin ()) argv
@@ -43,7 +43,7 @@ spawnCase : String -> String -> List String -> <Exec, IO, FileRead> Expectation
 spawnCase stem cmd argv = match boundedVerb cmd argv
   Err e => fail "\{stem}: could not spawn: \{e}"
   Ok (code, out, err) =>
-    expectGolden "\{fixtureDir}/\{stem}.golden" (transcript code out err)
+    expectGolden "\{fixtureDir ()}/\{stem}.golden" (transcript code out err)
 
 -- One case run from inside `dir` (under the fixtures), naming the entry by its
 -- bare file name, as a user in that directory would.
@@ -58,7 +58,7 @@ inDirCase stem verb dir entry = (
     "-c",
     "cd \"$1\" && exec \"$2\" \"$3\" \"$4\"",
     "sh",
-    "\{fixtureDir}/\{dir}",
+    "\{fixtureDir ()}/\{dir}",
     medakaBin (),
     verb,
     entry,
@@ -83,8 +83,8 @@ emitterCase stem profile fixture =
       emitter,
       "\{stdlib}/runtime.mdk",
       "\{stdlib}/core.mdk",
-      "\{fixtureDir}/\{fixture}",
-      fixtureDir,
+      "\{fixtureDir ()}/\{fixture}",
+      fixtureDir (),
       stdlib,
     ],
   )
@@ -491,7 +491,7 @@ buildOrderCase stem first second fixture = (
     medakaBin (),
     first,
     second,
-    "\{fixtureDir}/\{fixture}",
+    "\{fixtureDir ()}/\{fixture}",
   ],
 )
 

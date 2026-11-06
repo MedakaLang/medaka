@@ -37,8 +37,8 @@ reShout : Regex
 reShout = mustCompile "([A-Z][A-Z]+[,.:;)]? ){2,}[A-Z][A-Z]+"
 
 -- Assertion 1: tree-wide comment-register baseline ratchet.
-baselineCheck : <Exec, IO> Expectation
-baselineCheck = match boundedVerb "sh" [
+baselineCheck : Unit -> <Exec, IO> Expectation
+baselineCheck () = match boundedVerb "sh" [
   underRoot "test/comment_register_census.sh",
   "--check",
   underRoot "test/comment_register_baseline.toml",
@@ -126,13 +126,13 @@ fetchQuiet args =
     _ => False
 
 -- HEAD's commit sha, or "" when it cannot be resolved.
-headSha : <Exec, IO> String
-headSha = match runCommand "git" ["-C", medakaRoot (), "rev-parse", "HEAD"]
+headSha : Unit -> <Exec, IO> String
+headSha () = match runCommand "git" ["-C", medakaRoot (), "rev-parse", "HEAD"]
   Ok (0, out, _) => trim out
   _ => ""
 
-originMainResolves : <Exec, IO> Bool
-originMainResolves = match runCommand "git" [
+originMainResolves : Unit -> <Exec, IO> Bool
+originMainResolves () = match runCommand "git" [
   "-C",
   medakaRoot (),
   "rev-parse",
@@ -147,22 +147,22 @@ originMainResolves = match runCommand "git" [
 -- checkout is depth=1 of the triggering ref: origin/main is unresolvable and HEAD has
 -- no parent history, so both fetches are needed there. Locally they never run.
 -- Each step is sequenced by `let`; the Bool result is only for ordering.
-recoverShallow : <Exec, IO> Bool
-recoverShallow =
+recoverShallow : Unit -> <Exec, IO> Bool
+recoverShallow () =
   let originOk =
-    originMainResolves
+    originMainResolves ()
       || fetchQuiet [
         "--depth=50", "origin", "refs/heads/main:refs/remotes/origin/main"
       ]
   let historyOk =
     mergeBaseWith "origin/main" /= ""
-      || fetchQuiet ["--depth=50", "origin", headSha]
+      || fetchQuiet ["--depth=50", "origin", headSha ()]
   originOk && historyOk
 
 -- origin/main first, then local main (the script's fallback order).
-baseOf : <Exec, IO> String
-baseOf =
-  let _recovered = recoverShallow
+baseOf : Unit -> <Exec, IO> String
+baseOf () =
+  let _recovered = recoverShallow ()
   let b = mergeBaseWith "origin/main"
   if b /= "" then b else mergeBaseWith "main"
 
@@ -251,9 +251,9 @@ diffCheckFrom base = match mdkFiles base
       "new shout comment line(s) added (🚨/⚠️/🔒 or sigil-free ALL-CAPS) in .mdk outside test/ -- see AGENTS.md [T-COMMENT-REGISTER]: no new shout comments"
       (diffFindings base files)
 
-diffCheck : <Exec, IO> Expectation
-diffCheck =
-  let base = baseOf
+diffCheck : Unit -> <Exec, IO> Expectation
+diffCheck () =
+  let base = baseOf ()
   if base == "" then
     fail "could not determine a merge-base with main -- pass a base explicitly"
   else
@@ -311,10 +311,10 @@ test "diff_compiler_comment_shout_diff.sh: re_emoji/re_shout literals agree with
   ]
 
 test "diff_compiler_comment_shout_diff.sh: comment-register baseline ratchet (tree-wide)" =
-  baselineCheck
+  baselineCheck ()
 
 test "diff_compiler_comment_shout_diff.sh: no new shout line in .mdk outside test/ (PR diff)" =
-  diffCheck
+  diffCheck ()
 
 test "diff_compiler_comment_shout_diff.sh: detector catches planted shouts on synthetic diff text" =
   detectorSelfCheck

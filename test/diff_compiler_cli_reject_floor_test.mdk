@@ -11,9 +11,7 @@
    Runs under `medaka test --native`: it spawns the binary once per probe and reads
    compiler/ sources, neither of which the interpreter binds. -}
 
-import test_process.{
-  medakaBin, medakaRoot, boundedVerb, scratchDir, withScratchDir
-}
+import test_process.{medakaBin, medakaRoot, boundedVerb, withScratchDir}
 import test.{Expectation, expectAll, expectAtLeast, fail, pass}
 import string as S
 import regex as R
@@ -154,51 +152,35 @@ verbsOf : String -> <Exec, IO, FileRead, FileWrite> List String
 verbsOf dir =
   uniq (filter (/= "") (map (l => capture usageRe l) (S.lines (helpOut dir))))
 
--- ── probes, made once per process ───────────────────────────────────────────
+-- ── probes, made once per owning call ──────────────────────────────────────
 
--- The one workspace the memoized probes below run from: this binding is a
--- value, so every caller gets the same directory, and nothing writes to it
--- after this. `None` when it cannot be made; the callers then probe their own
--- test directory, exactly as they did before any memoizing.
-memoWork : <Exec, IO, FileRead, FileWrite> Option String
-memoWork = match scratchDir ()
-  Err _ => None
-  Ok dir => match writeFile "\{dir}/ok.mdk" "main = println 1\n"
-    Err _ => None
-    Ok _ => Some dir
-
--- The verbs `medaka help` lists, from the memoized workspace.
-memoHelp : <Exec, IO, FileRead, FileWrite> Option (List String)
-memoHelp = map verbsOf memoWork
-
+-- The verbs `medaka help` lists, from the test's own workspace.
 verbsFor : String -> <Exec, IO, FileRead, FileWrite> List String
-verbsFor dir = match memoHelp
-  Some vs => vs
-  None => verbsOf dir
+verbsFor dir = verbsOf dir
 
 -- The verbs the compiler sources hand to `requireArgs`, read once.
-sourceVerbsNow : <Exec, IO, FileRead, FileWrite> List String
-sourceVerbsNow = match compilerFiles "\{medakaRoot ()}/compiler"
+sourceVerbsNow : Unit -> <Exec, IO, FileRead, FileWrite> List String
+sourceVerbsNow () = match compilerFiles "\{medakaRoot ()}/compiler"
   Err _ => []
   Ok files => sourceVerbs files
 
 -- The `bare` and `withfile` probe of every verb any section looks at: the
--- usage block's, the exempt list, and the source-covered set. R, R' and K each
--- read these instead of running the same binary again.
-memoShapes : <Exec, IO, FileRead, FileWrite> List (String, ((String, String, Int, String), (String, String, Int, String)))
-memoShapes = match memoWork
-  None => []
-  Some dir =>
-    map
-      (v => (v, (shapeProbe dir v "bare", shapeProbe dir v "withfile")))
-      (uniq (verbsOf dir ++ exempt ++ sourceVerbsNow))
+-- usage block's, the exempt list, and the source-covered set. Each owner
+-- (`rFails`, `rPrimeFails`, `kFails`) makes this table once and passes it down.
+memoShapes : String ->
+  <Exec, IO, FileRead, FileWrite> List (String, ((String, String, Int, String), (String, String, Int, String)))
+memoShapes dir =
+  map
+    (v => (v, (shapeProbe dir v "bare", shapeProbe dir v "withfile")))
+    (uniq (verbsOf dir ++ exempt ++ sourceVerbsNow ()))
 
--- A verb's two probes: from `memoShapes`, or probed in `dir` when it is not
--- there (the workspace could not be made, or a verb appeared since).
-shapesOf : String ->
+-- A verb's two probes: from the table, or probed in `dir` when it is not there
+-- (a verb appeared since the table was made).
+shapesOf : List (String, ((String, String, Int, String), (String, String, Int, String))) ->
+  String ->
   String ->
   <Exec, IO, FileRead, FileWrite> ((String, String, Int, String), (String, String, Int, String))
-shapesOf dir v = match lookup v memoShapes
+shapesOf shapes dir v = match lookup v shapes
   Some pair => pair
   None => (shapeProbe dir v "bare", shapeProbe dir v "withfile")
 
@@ -320,20 +302,28 @@ rVerbFails : String -> List (String, String, Int, String) -> List String
 rVerbFails v shapes =
   rVerbOf v shapes (filter (/= "") (map (rShapeFail v) shapes))
 
-rFailsFor : String -> String -> <Exec, IO, FileRead, FileWrite> List String
-rFailsFor dir v = match shapesOf dir v
+rFailsFor : List (String, ((String, String, Int, String), (String, String, Int, String))) ->
+  String ->
+  String ->
+  <Exec, IO, FileRead, FileWrite> List String
+rFailsFor shapes dir v = match shapesOf shapes dir v
   (bare, withf) => rVerbFails v [bare, withf]
 
 rFails : String -> List String -> <Exec, IO, FileRead, FileWrite> List String
 rFails dir verbs =
-  fold (acc v => if elem v exempt then acc else acc ++ rFailsFor dir v) [] verbs
+  let shapes = memoShapes dir
+  fold
+    (acc v => if elem v exempt then acc else acc ++ rFailsFor shapes dir v)
+    []
+    verbs
 
 -- R': the declared exemptions are still needed.
-rPrimeOne : String ->
+rPrimeOne : List (String, ((String, String, Int, String), (String, String, Int, String))) ->
+  String ->
   List String ->
   String ->
   <Exec, IO, FileRead, FileWrite> List String
-rPrimeOne dir verbs v = match shapesOf dir v
+rPrimeOne shapes dir verbs v = match shapesOf shapes dir v
   (bare, withf) => rPrimeIn v (elem v verbs) (any isRejects [bare, withf])
 
 rPrimeIn : String -> Bool -> Bool -> List String
@@ -348,11 +338,16 @@ rPrimeIn _ True False = []
 rPrimeFails : String ->
   List String ->
   <Exec, IO, FileRead, FileWrite> List String
-rPrimeFails dir verbs = fold (acc v => acc ++ rPrimeOne dir verbs v) [] exempt
+rPrimeFails dir verbs =
+  let shapes = memoShapes dir
+  fold (acc v => acc ++ rPrimeOne shapes dir verbs v) [] exempt
 
 -- K: every source-covered verb prints a `(known: …)` roster on a bare rejection.
-kOne : String -> String -> <Exec, IO, FileRead, FileWrite> List String
-kOne dir v = match shapesOf dir v
+kOne : List (String, ((String, String, Int, String), (String, String, Int, String))) ->
+  String ->
+  String ->
+  <Exec, IO, FileRead, FileWrite> List String
+kOne shapes dir v = match shapesOf shapes dir v
   (bare, _) => kOneOf v bare
 
 kOneOf : String -> (String, String, Int, String) -> List String
@@ -368,7 +363,9 @@ kFails : String -> List String -> <Exec, IO, FileRead, FileWrite> List String
 kFails _ [] = [
   "K no `requireArgs <verb>ArgSpec` call resolving to a `spec \"<verb>\"` head found anywhere under compiler/ — the shared rejection helper has been removed or renamed. That is the regression this gate exists to catch, not a derivation bug: if the helper was deliberately renamed, update this gate's two-step pattern in the same commit.",
 ]
-kFails dir srcVerbs = fold (acc v => acc ++ kOne dir v) [] srcVerbs
+kFails dir srcVerbs =
+  let shapes = memoShapes dir
+  fold (acc v => acc ++ kOne shapes dir v) [] srcVerbs
 
 -- S: every source-covered verb is in the usage block, and none is exempt.
 sOne : List String -> String -> List String
