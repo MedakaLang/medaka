@@ -9,12 +9,15 @@ import ir.core_ir.{
   synthBind,
 }
 import ir.core_ir_sexp.{cprogramToSexp}
+import support.util.{filterList}
 import ir.core_pass.{
   CorePass(..),
   PassConfig(..),
   PassFault(..),
   PassRun(..),
   defaultPassConfig,
+  dumpSwitch,
+  lintSwitch,
   runPasses,
 }
 -- Sibling test module for `compiler/ir/core_pass.mdk` ([P-TEST-SIBLING]).
@@ -82,6 +85,45 @@ test "all captures a dump for every pass, in list order" =
   expectEqual
     ["first", "second", "third"]
     (map fst (runPasses config "ctx" passes emptyProgram).dumps)
+
+test "an input dump is the start program and all does not include it" =
+  let named = PassConfig { lint = False, dumpAfter = ["input", "first"] }
+  let everyPass = PassConfig { lint = False, dumpAfter = ["all"] }
+  expectAll [
+    expectEqual
+      [("input", cprogramToSexp emptyProgram)]
+      (filterList
+        (d => fst d == "input")
+        (runPasses named "ctx" passes emptyProgram).dumps),
+    expectEqual
+      ["input", "first"]
+      (map fst (runPasses named "ctx" passes emptyProgram).dumps),
+    expectFalse
+      (elem
+        "input"
+        (map fst (runPasses everyPass "ctx" passes emptyProgram).dumps)),
+  ]
+
+test "the lint switch accepts only 0 and 1, and unset is on" = expectAll [
+  expectEqual (Ok True) (lintSwitch None),
+  expectEqual (Ok True) (lintSwitch (Some "1")),
+  expectEqual (Ok False) (lintSwitch (Some "0")),
+  expectEqual
+    (Err "unknown value `off`; valid values: 0, 1")
+    (lintSwitch (Some "off")),
+]
+
+test "a dump request names only passes, input or all" =
+  let names = ["first", "second"]
+  expectAll [
+    expectEqual (Ok []) (dumpSwitch names None),
+    expectEqual
+      (Ok ["second", "input", "all"])
+      (dumpSwitch names (Some "second,,input,all")),
+    expectEqual
+      (Err "unknown pass name `secnd`; valid names: first, second, input, all")
+      (dumpSwitch names (Some "first,secnd")),
+  ]
 
 test "good passes leave no faults" =
   expectEqual

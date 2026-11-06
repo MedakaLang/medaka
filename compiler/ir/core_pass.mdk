@@ -1,4 +1,6 @@
 import list.{reverse}
+import string.{join, split}
+import support.util.{filterList}
 import ir.core_ir.{CProgram}
 import ir.core_ir_sexp.{cprogramToSexp}
 import ir.core_lint.{lintProgram}
@@ -44,15 +46,53 @@ wantsDump : PassConfig -> String -> Bool
 wantsDump config which =
   elem "all" config.dumpAfter || elem which config.dumpAfter
 
+-- The lint switch an emit entry reads: `1` on, `0` off, unset on.  Any other
+-- value is an error naming the valid ones.
+export
+lintSwitch : Option String -> Result String Bool
+lintSwitch None = Ok True
+lintSwitch (Some "1") = Ok True
+lintSwitch (Some "0") = Ok False
+lintSwitch (Some other) = Err "unknown value `\{other}`; valid values: 0, 1"
+
+-- A comma-separated dump request against a pipeline whose passes are
+-- [passNames].  Besides those names it may use `input` (the program before the
+-- first pass) and `all` (every pass; `input` is dumped only when named).  An
+-- unknown name is an error naming the valid ones.
+export
+dumpSwitch : List String -> Option String -> Result String (List String)
+dumpSwitch passNames value =
+  let valid = passNames ++ ["input", "all"]
+  let names = match value
+    Some text => filterList (/= "") (split "," text)
+    None => []
+  match filterList (n => not (elem n valid)) names
+    [] => Ok names
+    bad :: _ =>
+      Err "unknown pass name `\{bad}`; valid names: \{join ", " valid}"
+
 -- Runs [passes] left to right over [start].  A pass that panics is not caught.
 -- With [lint] on, the start program is checked under the name `input` and the
--- program after each pass under that pass's name.
+-- program after each pass under that pass's name; a dump of `input` is the
+-- start program.
 export
 runPasses : PassConfig -> c -> List (CorePass c) -> CProgram -> PassRun
 runPasses config ctx passes start =
-  let first = PassRun start [] (reverse (lintFaults config "input" start))
+  let first = PassRun {
+    program = start,
+    dumps =
+      if elem "input" config.dumpAfter then
+        [("input", cprogramToSexp start)]
+      else
+        [],
+    faults = reverse (lintFaults config "input" start),
+  }
   let stepped = fold (step config ctx) first passes
-  PassRun stepped.program (reverse stepped.dumps) (reverse stepped.faults)
+  PassRun {
+    program = stepped.program,
+    dumps = reverse stepped.dumps,
+    faults = reverse stepped.faults,
+  }
 
 lintFaults : PassConfig -> String -> CProgram -> List PassFault
 lintFaults config which prog =
@@ -71,7 +111,8 @@ step config ctx acc pass =
       (pass.passName, cprogramToSexp next) :: acc.dumps
     else
       acc.dumps
-  PassRun
-    next
-    dumps
-    (reverse (lintFaults config pass.passName next) ++ acc.faults)
+  PassRun {
+    program = next,
+    dumps = dumps,
+    faults = reverse (lintFaults config pass.passName next) ++ acc.faults,
+  }
