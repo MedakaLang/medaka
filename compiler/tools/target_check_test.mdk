@@ -55,7 +55,7 @@ verdictOf dir profile row reason =
   match writeFile file "main = let x = \{row} in ()\n"
     Err e => fail "could not write \{file}: \{e}"
     Ok _ =>
-      match (boundedVerb medakaBin [
+      match (boundedVerb (medakaBin ()) [
         "check", "--target", profile, "--allow-internal", file
       ])
         Err e => fail "could not spawn: \{e}"
@@ -92,7 +92,7 @@ programCase : String ->
   <Exec, IO, FileRead, FileWrite> Expectation
 programCase dir files argv entry code texts = match writeAll dir files
   Err e => fail "could not write \{dir}: \{e}"
-  Ok _ => match boundedVerb medakaBin (argv ++ ["\{dir}/\{entry}"])
+  Ok _ => match boundedVerb (medakaBin ()) (argv ++ ["\{dir}/\{entry}"])
     Err e => fail "could not spawn: \{e}"
     Ok (got, out, err) =>
       if got == code then

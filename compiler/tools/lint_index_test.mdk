@@ -530,7 +530,7 @@ probeMessages idx rule = match lintParseSource "x = 1\n"
     map findingMessage (lintProgram idx [rule] "probe.mdk" "x = 1\n" pos decls)
 
 test "a rule that declares no index need is handed the empty index" =
-  match buildStdlibIndexResult
+  match buildStdlibIndexResult ()
     Err _ => fail "cannot build the stdlib index"
     Ok full => expectEach [
       (

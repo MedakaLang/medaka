@@ -1546,6 +1546,15 @@ binopMethod ">=" = Some "gte"
 binopMethod "++" = Some "append"
 binopMethod _ = None
 
+-- The class method a binary operator dispatches through: the arithmetic methods
+-- (`arithDispatchMethod`) first, then the comparison/append ones (`binopMethod`).  The two
+-- operator sets are disjoint, so the order does not change any answer.
+export
+binopDispatchMethod : String -> Option String
+binopDispatchMethod op = match arithDispatchMethod op
+  Some method => Some method
+  None => binopMethod op
+
 -- Roadmap #18c: `-` (unary minus) is the surface operator for `Num`'s `negate`,
 -- joining `++`/comparisons on the record*Site/resolve*Sites/rewrite*Expr seam.
 -- `!` never routes — Bool negation is not a typeclass method.

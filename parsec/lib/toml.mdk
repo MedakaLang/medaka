@@ -257,7 +257,8 @@ parseArrayElement = defer
   deferPure v
 
 parseArray : Parser TomlValue
-parseArray =
+parseArray = defer
+  _ <- deferPure ()
   deferMap
     TArray
     (between (char '[') (char ']') (sepBy parseArrayElement (char ',')))
@@ -270,12 +271,14 @@ parseArray =
 -- prefix-free from each other; try string before int; try int before array
 -- (no ambiguity, but keep consistent ordering).
 parseValue : Parser TomlValue
-parseValue = choice [
-  parseArray,
-  deferMap TStr quotedString,
-  deferMap TBool parseBool,
-  deferMap TInt parseInt,
-]
+parseValue = defer
+  _ <- deferPure ()
+  choice [
+    parseArray,
+    deferMap TStr quotedString,
+    deferMap TBool parseBool,
+    deferMap TInt parseInt,
+  ]
 
 -- ---------------------------------------------------------------------------
 -- Key = value line

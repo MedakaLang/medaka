@@ -1,6 +1,6 @@
 emit : Int -> <IO> Unit
 gen : a -> <IO, Rand> a
-pureVal : <IO> Int
+pureVal : Unit -> <IO> Int
 higher : (a -> <IO> b) -> a -> <IO> b
 runTwice : (Unit -> <IO> a) -> <IO> Unit
 mixed : Int -> Int -> <Rand> Bool

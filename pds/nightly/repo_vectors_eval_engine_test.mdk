@@ -73,10 +73,10 @@ evalArm = arm EvalEngine [
 ]
 
 -- The one ledgered file `consumer` owns, as an absolute path.
-corpusPath : <Exec, FileRead, IO> Result String String
-corpusPath = match filesForConsumer medakaRoot consumer
+corpusPath : Unit -> <Exec, FileRead, IO> Result String String
+corpusPath () = match filesForConsumer (medakaRoot ()) consumer
   Err e => Err e
-  Ok [rel] => Ok "\{medakaRoot}/\{rel}"
+  Ok [rel] => Ok "\{medakaRoot ()}/\{rel}"
   Ok rels =>
     Err
       "\{consumer} owns \{intToString (length rels)} ledgered files, expected exactly 1"
@@ -85,7 +85,7 @@ nativeRun : String -> String -> <Exec, IO> (String, List String)
 nativeRun scratch corpus =
   let label = "\{gate} (native)"
   let bin = "\{scratch}/repo_vectors_main"
-  match buildNative label "\{medakaRoot}/\{driver}" bin
+  match buildNative label "\{medakaRoot ()}/\{driver}" bin
     [] =>
       gradedSpawn
         label
@@ -99,14 +99,14 @@ nativeRun scratch corpus =
 evalRun : String -> String -> <Exec, IO> List String
 evalRun corpus native =
   let label = "\{gate} (eval)"
-  let args = ["run", "\{medakaRoot}/\{driver}", corpus, "--representative"]
+  let args = ["run", "\{medakaRoot ()}/\{driver}", corpus, "--representative"]
   match (gradedSpawn
     label
     evalArm
     (spawnFindings
       label
       "medaka run"
-      (spawn evalSeconds medakaEnv medakaBin args)))
+      (spawn evalSeconds (medakaEnv ()) (medakaBin ()) args)))
     (out, []) =>
       if out == native then
         []
@@ -117,7 +117,7 @@ evalRun corpus native =
     (_, fs) => fs
 
 findings : String -> <Exec, FileRead, IO> List String
-findings scratch = match corpusPath
+findings scratch = match corpusPath ()
   Err e => ["\{gate}: \{e}"]
   Ok corpus => match nativeRun scratch corpus
     (native, []) => evalRun corpus native

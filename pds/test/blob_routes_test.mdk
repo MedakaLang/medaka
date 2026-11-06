@@ -91,8 +91,8 @@ server =
 -- | The account credential, derived at a small fixed count rather than
 -- `defaultIterations`, so this file's cost does not grow when the shipped
 -- count does. What is under test here is the blob routes, not the login.
-credential : CredentialRecord
-credential =
+credential : Unit -> <Kdf> CredentialRecord
+credential () =
   let derived =
     makeCredential
       (fromU8Array (arrayMakeWith 16 (i => U8.truncate (i * 13 + 3))))
@@ -104,10 +104,10 @@ credential =
 
 -- | A configured server's store: session secret and account credential, no
 -- repository. No blob route touches the repository.
-configuredStore : Store
-configuredStore =
+configuredStore : Unit -> <Kdf> Store
+configuredStore () =
   let withSecret = storeWithServerSecret altTestKey storeEmpty
-  storeWithCredential credential withSecret
+  storeWithCredential (credential ()) withSecret
 
 testInstant : Int
 testInstant = 1700000000
@@ -203,17 +203,18 @@ login instant seed store =
       createSessionNsid
       (loginJson accountHandleText password))
 
-loggedIn : (Store, String)
-loggedIn =
-  let (store, response) = login testInstant 1 configuredStore
+loggedIn : Unit ->
+  <Kdf, Mint {"access", "refresh"}, Sign "commit"> (Store, String)
+loggedIn () =
+  let (store, response) = login testInstant 1 (configuredStore ())
   (store, stringField "accessJwt" response)
 
-sessionStore : Store
-sessionStore = match loggedIn
+sessionStore : Unit -> <Kdf, Mint {"access", "refresh"}, Sign "commit"> Store
+sessionStore () = match loggedIn ()
   (store, _) => store
 
-accessToken : String
-accessToken = match loggedIn
+accessToken : Unit -> <Kdf, Mint {"access", "refresh"}, Sign "commit"> String
+accessToken () = match loggedIn ()
   (_, token) => token
 
 uploadedBytes : Bytes
@@ -228,19 +229,21 @@ uploadedCidText = cidToString (blobCid uploadedBytes)
 -- | The store and response after one successful authenticated upload. Every
 -- cell that reads back what was uploaded starts here — the read-back happens
 -- in the SAME test process, no restart (that is `S-blob-persist`'s job).
-uploaded : (Store, Bytes)
-uploaded =
+uploaded : Unit ->
+  <Kdf, Mint {"access", "refresh"}, Sign "commit"> (Store, Bytes)
+uploaded () =
   send
     (contextAt testInstant 2)
-    sessionStore
-    (postRaw accessToken uploadBlobNsid uploadedMimeType uploadedBytes)
+    (sessionStore ())
+    (postRaw (accessToken ()) uploadBlobNsid uploadedMimeType uploadedBytes)
 
-uploadedStore : Store
-uploadedStore = match uploaded
+uploadedStore : Unit -> <Kdf, Mint {"access", "refresh"}, Sign "commit"> Store
+uploadedStore () = match uploaded ()
   (store, _) => store
 
-uploadedResponse : Bytes
-uploadedResponse = match uploaded
+uploadedResponse : Unit ->
+  <Kdf, Mint {"access", "refresh"}, Sign "commit"> Bytes
+uploadedResponse () = match uploaded ()
   (_, response) => response
 
 -- # uploadBlob
@@ -249,28 +252,32 @@ test "uploadBlob without a credential is refused" =
   let (_, response) =
     send
       (contextAt testInstant 1)
-      sessionStore
+      (sessionStore ())
       (postRaw "" uploadBlobNsid uploadedMimeType uploadedBytes)
   expectEqual (outcome response) "401 Unauthorized AuthenticationRequired"
 
 test "uploadBlob with a valid session is accepted" =
-  expectEqual (outcome uploadedResponse) "200 OK"
+  expectEqual (outcome (uploadedResponse ())) "200 OK"
 
 test "uploadBlob's response names the CID of the uploaded bytes" =
-  expectEqual (blobRefCidText uploadedResponse) uploadedCidText
+  expectEqual (blobRefCidText (uploadedResponse ())) uploadedCidText
 
 test "uploadBlob's response names the declared MIME type" =
-  expectEqual (blobStringField "mimeType" uploadedResponse) uploadedMimeType
+  expectEqual
+    (blobStringField "mimeType" (uploadedResponse ()))
+    uploadedMimeType
 
 test "uploadBlob's response names the exact byte size" =
-  expectEqual (blobIntField "size" uploadedResponse) (B.length uploadedBytes)
+  expectEqual
+    (blobIntField "size" (uploadedResponse ()))
+    (B.length uploadedBytes)
 
 test "uploadBlob with a malformed MIME type is refused with the XRPC envelope, not a framing failure" =
   let (_, response) =
     send
       (contextAt testInstant 3)
-      sessionStore
-      (postRaw accessToken uploadBlobNsid "image/p!ng" uploadedBytes)
+      (sessionStore ())
+      (postRaw (accessToken ()) uploadBlobNsid "image/p!ng" uploadedBytes)
   expectEqual (outcome response) "400 Bad Request InvalidRequest"
 
 -- # uploadBlob under `*/*`
@@ -283,8 +290,8 @@ uploadWildcard body =
   let (_, response) =
     send
       (contextAt testInstant 3)
-      sessionStore
-      (postRaw accessToken uploadBlobNsid "*/*" body)
+      (sessionStore ())
+      (postRaw (accessToken ()) uploadBlobNsid "*/*" body)
   response
 
 test "uploadBlob under */* takes video/mp4 from an mp4 body's ftyp box" =
@@ -304,7 +311,7 @@ test "getBlob on a just-uploaded blob returns the exact bytes" =
   let (_, response) =
     send
       (contextAt testInstant 4)
-      uploadedStore
+      (uploadedStore ())
       (getQuery "" getBlobNsid "?did=\{accountDidText}&cid=\{uploadedCidText}")
   expectEqual (rawBodyOf response) uploadedBytes
 
@@ -312,7 +319,7 @@ test "getBlob on a just-uploaded blob declares its MIME type" =
   let (_, response) =
     send
       (contextAt testInstant 5)
-      uploadedStore
+      (uploadedStore ())
       (getQuery "" getBlobNsid "?did=\{accountDidText}&cid=\{uploadedCidText}")
   expectTrue (hasContentType uploadedMimeType response)
 
@@ -320,7 +327,7 @@ test "getBlob for an unknown CID is refused" =
   let (_, response) =
     send
       (contextAt testInstant 6)
-      uploadedStore
+      (uploadedStore ())
       (getQuery
         ""
         getBlobNsid
@@ -331,7 +338,7 @@ test "getBlob needs no credential" =
   let (_, response) =
     send
       (contextAt testInstant 7)
-      uploadedStore
+      (uploadedStore ())
       (getQuery "" getBlobNsid "?did=\{accountDidText}&cid=\{uploadedCidText}")
   expectEqual "200 OK" (statusLine response)
 
@@ -341,7 +348,7 @@ test "listBlobs lists the just-uploaded CID" =
   let (_, response) =
     send
       (contextAt testInstant 8)
-      uploadedStore
+      (uploadedStore ())
       (getQuery "" listBlobsNsid "?did=\{accountDidText}")
   expectEqual [uploadedCidText] (listedCids response)
 
@@ -349,7 +356,7 @@ test "listBlobs on an empty store lists nothing" =
   let (_, response) =
     send
       (contextAt testInstant 9)
-      sessionStore
+      (sessionStore ())
       (getQuery "" listBlobsNsid "?did=\{accountDidText}")
   expectEqual [] (listedCids response)
 
@@ -357,7 +364,7 @@ test "listBlobs needs no credential" =
   let (_, response) =
     send
       (contextAt testInstant 10)
-      uploadedStore
+      (uploadedStore ())
       (getQuery "" listBlobsNsid "?did=\{accountDidText}")
   expectEqual "200 OK" (statusLine response)
 
@@ -387,11 +394,15 @@ uploadPaged n store =
       send
         (contextAt testInstant (100 + n))
         store
-        (postRaw accessToken uploadBlobNsid uploadedMimeType (pagedBytes n))
+        (postRaw
+          (accessToken ())
+          uploadBlobNsid
+          uploadedMimeType
+          (pagedBytes n))
     uploadPaged (n + 1) next
 
-pagedStore : Store
-pagedStore = uploadPaged 0 sessionStore
+pagedStore : Unit -> <Kdf, Mint {"access", "refresh"}, Sign "commit"> Store
+pagedStore () = uploadPaged 0 (sessionStore ())
 
 pagedCids : List String
 pagedCids =
@@ -414,33 +425,34 @@ walkPages fuel cursor =
     let (_, response) =
       send
         (contextAt testInstant 200)
-        pagedStore
+        (pagedStore ())
         (getQuery "" listBlobsNsid (pagedQuery cursor))
     let page = listedCids response
     match stringField "cursor" response
       "" => page
       next => page ++ walkPages (fuel - 1) next
 
-walkedCids : List String
-walkedCids = walkPages (pagedCount + 2) ""
+walkedCids : Unit ->
+  <Kdf, Mint {"access", "refresh"}, Sign "commit"> List String
+walkedCids () = walkPages (pagedCount + 2) ""
 
 test "listBlobs with one big page lists every uploaded blob" =
   let (_, response) =
     send
       (contextAt testInstant 201)
-      pagedStore
+      (pagedStore ())
       (getQuery "" listBlobsNsid "?did=\{accountDidText}&limit=1000")
   expectEqual (sort (listedCids response)) pagedCids
 
 test "listBlobs cursor pagination returns every uploaded blob exactly once" =
-  expectEqual walkedCids pagedCids
+  expectEqual (walkedCids ()) pagedCids
 
 -- # record writes name only blobs this server holds
 
 -- | `configuredStore` with a repository for `account`, so the record writes
 -- have somewhere to commit.
-repoStore : Store
-repoStore =
+repoStore : Unit -> <Kdf, Sign "commit"> Store
+repoStore () =
   let secret =
     resultOrPanic
       "blob_routes_test: signing key"
@@ -455,27 +467,28 @@ repoStore =
       "blob_routes_test: repository"
       (repoInitFromKeyBytes accountDidText secret rev)
   let withSecret = storeWithServerSecret altTestKey (storeFromRepo repo)
-  storeWithCredential credential withSecret
+  storeWithCredential (credential ()) withSecret
 
-repoLoggedIn : (Store, String)
-repoLoggedIn =
-  let (store, response) = login testInstant 300 repoStore
+repoLoggedIn : Unit ->
+  <Kdf, Mint {"access", "refresh"}, Sign "commit"> (Store, String)
+repoLoggedIn () =
+  let (store, response) = login testInstant 300 (repoStore ())
   (store, stringField "accessJwt" response)
 
-repoToken : String
-repoToken = match repoLoggedIn
+repoToken : Unit -> <Kdf, Mint {"access", "refresh"}, Sign "commit"> String
+repoToken () = match repoLoggedIn ()
   (_, token) => token
 
 -- | The repository store after `uploadedBytes` is uploaded: the one blob every
 -- write below can name and have held.
-heldStore : Store
-heldStore =
-  let (store, _) = repoLoggedIn
+heldStore : Unit -> <Kdf, Mint {"access", "refresh"}, Sign "commit"> Store
+heldStore () =
+  let (store, _) = repoLoggedIn ()
   let (next, _) =
     send
       (contextAt testInstant 301)
       store
-      (postRaw repoToken uploadBlobNsid uploadedMimeType uploadedBytes)
+      (postRaw (repoToken ()) uploadBlobNsid uploadedMimeType uploadedBytes)
   next
 
 blobRef : String -> String -> Int -> Json
@@ -522,10 +535,10 @@ writeTo : String ->
 writeTo nsid fields =
   send
     (contextAt testInstant 302)
-    heldStore
+    (heldStore ())
     (postJson
       accountHostText
-      repoToken
+      (repoToken ())
       nsid
       (stringify (jObject ([("repo", JString accountDidText)] ++ fields))))
 
@@ -568,7 +581,7 @@ batchOf writes =
 committedNothing : (Store, Bytes) ->
   <Kdf, Mint {"access", "refresh"}, Sign "commit"> Bool
 committedNothing (store, _) =
-  storeFingerprint store == storeFingerprint heldStore
+  storeFingerprint store == storeFingerprint (heldStore ())
 
 test "createRecord naming a blob this server does not hold is refused BlobNotFound" =
   let (_, response) = createOf (holderWith unheldRef)
@@ -675,15 +688,15 @@ test "a ref carrying the type an earlier upload of the same bytes answered is ac
   let (reuploaded, uploadResponse) =
     send
       (contextAt testInstant 303)
-      heldStore
-      (postRaw repoToken uploadBlobNsid "image/jpeg" uploadedBytes)
+      (heldStore ())
+      (postRaw (repoToken ()) uploadBlobNsid "image/jpeg" uploadedBytes)
   let (_, response) =
     send
       (contextAt testInstant 304)
       reuploaded
       (postJson
         accountHostText
-        repoToken
+        (repoToken ())
         "com.atproto.repo.createRecord"
         (stringify
           (jObject [

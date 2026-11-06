@@ -30,11 +30,19 @@ data Row = Row {
   message : String,
 }
 
-corpusLines : <IO> List String
-corpusLines = match readLines corpusPath
-  Ok lines => filter (/= "") lines
-  Err message =>
-    panic "lexicon_corpus_test: cannot read \{corpusPath}: \{message}"
+corpusLinesCell : Ref (Option (List String))
+corpusLinesCell = Ref None
+
+corpusLines : Unit -> <IO> List String
+corpusLines () = match !corpusLinesCell
+  Some v => v
+  None =>
+    let v = match readLines corpusPath
+      Ok lines => filter (/= "") lines
+      Err message =>
+        panic "lexicon_corpus_test: cannot read \{corpusPath}: \{message}"
+    corpusLinesCell := Some v
+    v
 
 field : String -> Json -> String
 field name value = match get name value
@@ -67,8 +75,8 @@ readableRow line = match parse line
   Ok value => Some (rowOf value)
   Err _ => None
 
-corpusRows : <IO> List Row
-corpusRows = filterMap readableRow corpusLines
+corpusRows : Unit -> <IO> List Row
+corpusRows () = filterMap readableRow (corpusLines ())
 
 verdictOf : Row -> LexVerdict
 verdictOf row = validateRecord knownLexicons row.collection row.rkey row.record
@@ -98,16 +106,16 @@ agreement row = match verdictOf row
   )
   verdict => (row.id, expectEqual row.verdict (answerOf verdict))
 
-undecidedIds : <IO> List String
-undecidedIds =
+undecidedIds : Unit -> <IO> List String
+undecidedIds () =
   map
     (row => row.id)
-    (filter (row => answerOf (verdictOf row) == "undecided") corpusRows)
+    (filter (row => answerOf (verdictOf row) == "undecided") (corpusRows ()))
 
-test "the corpus has its 437 rows" = expectEqual 437 (length corpusLines)
+test "the corpus has its 437 rows" = expectEqual 437 (length (corpusLines ()))
 
 test "every readable row gets the reference's answer" =
-  expectEach (map agreement corpusRows)
+  expectEach (map agreement (corpusRows ()))
 
 {- | `json.parse` refuses a lone surrogate escape, since a Medaka string is
    always valid UTF-8, so the one row whose text carries `\ud800` never
@@ -116,7 +124,7 @@ test "every readable row gets the reference's answer" =
 test "the only row the JSON parser cannot read is the lone surrogate" =
   expectEqual
     ["grapheme-edge-lone-surrogate-escape"]
-    (filterMap unreadableId corpusLines)
+    (filterMap unreadableId (corpusLines ()))
 
 test "11 rows are left undecided by the grapheme bound" =
-  expectEqual 11 (length undecidedIds)
+  expectEqual 11 (length (undecidedIds ()))

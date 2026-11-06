@@ -1,5 +1,5 @@
 # META
-source_lines=2056
+source_lines=2050
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_elab: dict-passing elaboration (`dictPass`), the grant rewrite (`grantWholeDomain`),
@@ -93,8 +93,7 @@ import types.tc_grants.{
   narrowFileAtom,
 }
 import types.tc_occurrence.{
-  arithDispatchMethod,
-  binopMethod,
+  binopDispatchMethod,
   isGrantOnlyEv,
   mintMethodCellRaw,
   unopMethod,
@@ -1428,11 +1427,6 @@ binopMethodApp mctx pe op l r route =
       r
   if op == "/=" then EApp (EVar "not") call else call
 
-binopDispatchMethod : String -> Option String
-binopDispatchMethod op = match arithDispatchMethod op
-  Some method => Some method
-  None => binopMethod op
-
 -- The EUnOp analogue of binopMethodApp: one operand, no `/=`-style postfix
 -- (unopMethod only ever routes `-`).  Reuses binopRouteSplit (a generic
 -- Route-ripping helper — nothing about it is binop-specific).
@@ -2074,7 +2068,7 @@ sigPredicateSlot (iface, _) =
 (DUse false (UseGroup ("types" "tc_mark") ((mem "constrainedSigNames" false))))
 (DUse false (UseGroup ("types" "tc_shadow") ((mem "methodCellOf" false))))
 (DUse false (UseGroup ("types" "tc_grants") ((mem "evOrdinal" false) (mem "fileBodyLoc" false) (mem "fileBoundSite" false) (mem "fileValueKey" false) (mem "grantOccOf" false) (mem "hasFileBoundValue" false) (mem "methodGrantOf" false) (mem "narrowFileAtom" false))))
-(DUse false (UseGroup ("types" "tc_occurrence") ((mem "arithDispatchMethod" false) (mem "binopMethod" false) (mem "isGrantOnlyEv" false) (mem "mintMethodCellRaw" false) (mem "unopMethod" false))))
+(DUse false (UseGroup ("types" "tc_occurrence") ((mem "binopDispatchMethod" false) (mem "isGrantOnlyEv" false) (mem "mintMethodCellRaw" false) (mem "unopMethod" false))))
 (DUse false (UseGroup ("types" "tc_groups") ((mem "sigConstraints" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Arm" true) (mem "Decl" true) (mem "DoStmt" true) (mem "EvId" true) (mem "EvVal" true) (mem "Expr" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "Guard" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "LetBind" true) (mem "Lit" true) (mem "Loc" true) (mem "MethodDefault" true) (mem "Pat" true) (mem "Route" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "EvTable" false) (mem "isI32Head" false) (mem "isI64Head" false) (mem "isU64Head" false) (mem "noBinderId" false) (mem "noDeclLoc" false) (mem "taggedFixedRange" false) (mem "tyConBuiltin" false) (mem "unminted" false))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "Authvar" true) (mem "GrantShape" true) (mem "authGrantShape" false) (mem "authvarId" false))))
@@ -2303,8 +2297,6 @@ sigPredicateSlot (iface, _) =
 (DFunDef false "binopRouteSplit" ((PVar "r")) (ETuple (EVar "r") (EListLit)))
 (DTypeSig false "binopMethodApp" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "PassEvidence") (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "Route") (TyCon "Expr"))))))))
 (DFunDef false "binopMethodApp" ((PVar "mctx") (PVar "pe") (PVar "op") (PVar "l") (PVar "r") (PVar "route")) (EBlock (DoLet false false (PVar "method") (EApp (EApp (EVar "optionOr") (ELit (LString "eq"))) (EApp (EVar "binopDispatchMethod") (EVar "op")))) (DoLet false false (PVar "split") (EApp (EVar "binopRouteSplit") (EVar "route"))) (DoLet false false (PVar "call") (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EApp (EApp (EVar "EMethodAt") (EVar "method")) (ELit (LString ""))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "mintMethodCellWith") (EVar "mctx")) (EVar "pe")) (EApp (EApp (EVar "builtinMethodIfaceWord") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "method"))) (ELit (LInt 2))) (EApp (EVar "fst") (EVar "split"))) (EApp (EVar "snd") (EVar "split"))))) (EVar "l"))) (EVar "r"))) (DoExpr (EIf (EBinOp "==" (EVar "op") (ELit (LString "/="))) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "not")))) (EVar "call")) (EVar "call")))))
-(DTypeSig false "binopDispatchMethod" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "binopDispatchMethod" ((PVar "op")) (EMatch (EApp (EVar "arithDispatchMethod") (EVar "op")) (arm (PCon "Some" (PVar "method")) () (EApp (EVar "Some") (EVar "method"))) (arm (PCon "None") () (EApp (EVar "binopMethod") (EVar "op")))))
 (DTypeSig false "unopMethodApp" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "PassEvidence") (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyCon "Route") (TyCon "Expr")))))))
 (DFunDef false "unopMethodApp" ((PVar "mctx") (PVar "pe") (PVar "op") (PVar "e") (PVar "route")) (EBlock (DoLet false false (PVar "method") (EApp (EApp (EVar "optionOr") (ELit (LString "negate"))) (EApp (EVar "unopMethod") (EVar "op")))) (DoLet false false (PVar "split") (EApp (EVar "binopRouteSplit") (EVar "route"))) (DoExpr (EApp (EApp (EVar "EApp") (EApp (EApp (EApp (EVar "EMethodAt") (EVar "method")) (ELit (LString ""))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "mintMethodCellWith") (EVar "mctx")) (EVar "pe")) (EApp (EApp (EVar "builtinMethodIfaceWord") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "method"))) (ELit (LInt 1))) (EApp (EVar "fst") (EVar "split"))) (EApp (EVar "snd") (EVar "split"))))) (EVar "e")))))
 (DTypeSig false "dictPassDecl" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "PassEvidence") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Decl") (TyCon "Decl")))))))
@@ -2443,7 +2435,7 @@ sigPredicateSlot (iface, _) =
 (DUse false (UseGroup ("types" "tc_mark") ((mem "constrainedSigNames" false))))
 (DUse false (UseGroup ("types" "tc_shadow") ((mem "methodCellOf" false))))
 (DUse false (UseGroup ("types" "tc_grants") ((mem "evOrdinal" false) (mem "fileBodyLoc" false) (mem "fileBoundSite" false) (mem "fileValueKey" false) (mem "grantOccOf" false) (mem "hasFileBoundValue" false) (mem "methodGrantOf" false) (mem "narrowFileAtom" false))))
-(DUse false (UseGroup ("types" "tc_occurrence") ((mem "arithDispatchMethod" false) (mem "binopMethod" false) (mem "isGrantOnlyEv" false) (mem "mintMethodCellRaw" false) (mem "unopMethod" false))))
+(DUse false (UseGroup ("types" "tc_occurrence") ((mem "binopDispatchMethod" false) (mem "isGrantOnlyEv" false) (mem "mintMethodCellRaw" false) (mem "unopMethod" false))))
 (DUse false (UseGroup ("types" "tc_groups") ((mem "sigConstraints" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Arm" true) (mem "Decl" true) (mem "DoStmt" true) (mem "EvId" true) (mem "EvVal" true) (mem "Expr" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "Guard" true) (mem "IfaceMethod" true) (mem "ImplMethod" true) (mem "LetBind" true) (mem "Lit" true) (mem "Loc" true) (mem "MethodDefault" true) (mem "Pat" true) (mem "Route" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "EvTable" false) (mem "isI32Head" false) (mem "isI64Head" false) (mem "isU64Head" false) (mem "noBinderId" false) (mem "noDeclLoc" false) (mem "taggedFixedRange" false) (mem "tyConBuiltin" false) (mem "unminted" false))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "Authvar" true) (mem "GrantShape" true) (mem "authGrantShape" false) (mem "authvarId" false))))
@@ -2672,8 +2664,6 @@ sigPredicateSlot (iface, _) =
 (DFunDef false "binopRouteSplit" ((PVar "r")) (ETuple (EVar "r") (EListLit)))
 (DTypeSig false "binopMethodApp" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "PassEvidence") (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "Route") (TyCon "Expr"))))))))
 (DFunDef false "binopMethodApp" ((PVar "mctx") (PVar "pe") (PVar "op") (PVar "l") (PVar "r") (PVar "route")) (EBlock (DoLet false false (PVar "method") (EApp (EApp (EVar "optionOr") (ELit (LString "eq"))) (EApp (EVar "binopDispatchMethod") (EVar "op")))) (DoLet false false (PVar "split") (EApp (EVar "binopRouteSplit") (EVar "route"))) (DoLet false false (PVar "call") (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EApp (EApp (EVar "EMethodAt") (EVar "method")) (ELit (LString ""))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "mintMethodCellWith") (EVar "mctx")) (EVar "pe")) (EApp (EApp (EVar "builtinMethodIfaceWord") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "method"))) (ELit (LInt 2))) (EApp (EVar "fst") (EVar "split"))) (EApp (EVar "snd") (EVar "split"))))) (EVar "l"))) (EVar "r"))) (DoExpr (EIf (EBinOp "==" (EVar "op") (ELit (LString "/="))) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "not")))) (EVar "call")) (EVar "call")))))
-(DTypeSig false "binopDispatchMethod" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "binopDispatchMethod" ((PVar "op")) (EMatch (EApp (EVar "arithDispatchMethod") (EVar "op")) (arm (PCon "Some" (PVar "method")) () (EApp (EVar "Some") (EVar "method"))) (arm (PCon "None") () (EApp (EVar "binopMethod") (EVar "op")))))
 (DTypeSig false "unopMethodApp" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "PassEvidence") (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyCon "Route") (TyCon "Expr")))))))
 (DFunDef false "unopMethodApp" ((PVar "mctx") (PVar "pe") (PVar "op") (PVar "e") (PVar "route")) (EBlock (DoLet false false (PVar "method") (EApp (EApp (EVar "optionOr") (ELit (LString "negate"))) (EApp (EVar "unopMethod") (EVar "op")))) (DoLet false false (PVar "split") (EApp (EVar "binopRouteSplit") (EVar "route"))) (DoExpr (EApp (EApp (EVar "EApp") (EApp (EApp (EApp (EVar "EMethodAt") (EVar "method")) (ELit (LString ""))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "mintMethodCellWith") (EVar "mctx")) (EVar "pe")) (EApp (EApp (EVar "builtinMethodIfaceWord") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "method"))) (ELit (LInt 1))) (EApp (EVar "fst") (EVar "split"))) (EApp (EVar "snd") (EVar "split"))))) (EVar "e")))))
 (DTypeSig false "dictPassDecl" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "PassEvidence") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Decl") (TyCon "Decl")))))))

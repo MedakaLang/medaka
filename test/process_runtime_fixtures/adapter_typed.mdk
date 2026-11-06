@@ -29,8 +29,8 @@ inspectResult (Started n) = n
 inspectResult (StartTimedOut stop) = inspect stop
 inspectResult (StartCancelled stop) = inspect stop
 
-launch : <Clock, Exec "/bin/true"> Bool
-launch =
+launch : Unit -> <Clock, Exec "/bin/true"> Bool
+launch () =
   let deadline = runAsync (after (millis 5000))
   match runAsync (startUntil "/bin/true" options deadline (newCancelToken ()))
     Ok (Started p) =>
@@ -42,7 +42,7 @@ launch =
     _ => False
 
 main =
-  if launch
+  if launch ()
     && inspect LaunchStopped == 1
     && inspect (LaunchCleanupPending 2 None) == 2
     && inspectResult

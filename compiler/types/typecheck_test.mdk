@@ -1237,20 +1237,25 @@ test "an erased sibling defaults its own contract copy; an expansive sibling fix
         "floating : Float",
         "floating = signed 0",
       ]
-  expectAll [
-    expectEqual
-      []
-      (declaredNumErrorCodes
-        (floatInstance
-          ++ joinNl [
-            "signed : Num a => Int -> a",
-            "signed n = fromInt n",
-            "floating : Float",
-            "floating = signed 2",
-          ])),
-    expectEqual [] (declaredNumErrorCodes erased),
-    expectEqual ["T-TYPE-TOO-GENERAL"] (declaredNumErrorCodes expansive),
-  ]
+  expectAll
+    [
+      expectEqual
+        []
+        (declaredNumErrorCodes
+          (floatInstance
+            ++ joinNl [
+              "signed : Num a => Int -> a",
+              "signed n = fromInt n",
+              "floating : Float",
+              "floating = signed 2",
+            ])),
+      expectEqual [] (declaredNumErrorCodes erased),
+      -- `ping` evaluates its group member `signed`, which the value-cycle rule
+      -- also rejects (language-design I3).
+      expectEqual
+        ["T-TYPE-TOO-GENERAL", "T-CYCLIC-VALUE"]
+        (declaredNumErrorCodes expansive),
+    ]
 
 test "declared result protection preserves missing-context and value-restriction errors" = expectAll
   [

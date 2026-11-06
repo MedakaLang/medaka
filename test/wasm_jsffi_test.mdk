@@ -21,8 +21,8 @@ import compiler_cli_test_support.{inFreshDirOf, wasmBuildArgv}
 import test.{Expectation, expectAll, expectEqual, fail}
 import test_process.{boundedVerbSeconds, medakaBin, medakaRoot}
 
-corpus : <IO> String
-corpus = "\{medakaRoot}/test/wasm_jsffi_fixtures"
+corpus : Unit -> <IO> String
+corpus () = "\{medakaRoot ()}/test/wasm_jsffi_fixtures"
 
 -- `name`.mdk built for wasm into `scratch`, then run by the stub host: the
 -- exit code, stdout and stderr.  A stale compiler fails the build loudly
@@ -30,7 +30,10 @@ corpus = "\{medakaRoot}/test/wasm_jsffi_fixtures"
 stubRun : String -> String -> <Exec, IO> Result String (Int, String, String)
 stubRun scratch name =
   let wasm = "\{scratch}/\{name}.wasm"
-  match boundedVerbSeconds 60 "env" (wasmBuildArgv "\{corpus}/\{name}.mdk" wasm)
+  match (boundedVerbSeconds
+    60
+    "env"
+    (wasmBuildArgv "\{corpus ()}/\{name}.mdk" wasm))
     Err e => Err "medaka build --target wasm \{name}: \{e}"
     Ok (code, out, err) =>
       if code /= 0 then
@@ -38,9 +41,9 @@ stubRun scratch name =
           "medaka build --target wasm \{name} failed: exit=\{intToString code} \{debug (out ++ err)}"
       else
         boundedVerbSeconds 60 "node" [
-          "\{corpus}/stub_host.mjs",
+          "\{corpus ()}/stub_host.mjs",
           wasm,
-          "\{corpus}/bindings.mjs",
+          "\{corpus ()}/bindings.mjs",
         ]
 
 runsAs : String -> String -> (Int, String, String) -> <Exec, IO> Expectation
@@ -97,9 +100,9 @@ test "jsffi: a Unit binding returning a thenable is a JsBindingError on both hos
         expectEqual
           (Ok (1, "before\n", thenableMsg))
           (boundedVerbSeconds 60 "node" [
-            "\{medakaRoot}/test/wasm/run.js",
+            "\{medakaRoot ()}/test/wasm/run.js",
             "\{scratch}/unit_thenable.wasm",
-            "\{corpus}/bindings.mjs",
+            "\{corpus ()}/bindings.mjs",
           ]),
       ])
     (msg => fail msg)
@@ -110,8 +113,8 @@ test "jsffi: a Unit binding returning a thenable is a JsBindingError on both hos
 -- for wasmgc/node (run.js with bindings.mjs) must print the same bytes, and
 -- those bytes are the ones the fixture's header derives from the C and JS bodies.
 
-twoHostDir : <IO> String
-twoHostDir = "\{medakaRoot}/test/two_host_fixtures"
+twoHostDir : Unit -> <IO> String
+twoHostDir () = "\{medakaRoot ()}/test/two_host_fixtures"
 
 expectTwoHost : String
 expectTwoHost =
@@ -135,7 +138,7 @@ twoHostObject scratch = do
     (boundedVerbSeconds 600 "env" [
       "MEDAKA_STRICT=1",
       "MEDAKA_NO_LTO=1",
-      medakaBin,
+      medakaBin (),
       "build",
       "--emit-rt-obj",
       "\{scratch}/rt.o",
@@ -145,7 +148,7 @@ twoHostObject scratch = do
     (boundedVerbSeconds 120 "clang" [
       "-O2",
       "-c",
-      "\{twoHostDir}/stub.c",
+      "\{twoHostDir ()}/stub.c",
       "-o",
       "\{scratch}/stub.o",
     ])
@@ -173,9 +176,9 @@ nativeTwoHost scratch obj entry out = do
     (boundedVerbSeconds 600 "env" [
       "MEDAKA_STRICT=1",
       "MEDAKA_RT_OBJ=\{obj}",
-      medakaBin,
+      medakaBin (),
       "build",
-      "\{twoHostDir}/\{entry}.mdk",
+      "\{twoHostDir ()}/\{entry}.mdk",
       "-o",
       "\{scratch}/\{out}.bin",
     ])
@@ -192,15 +195,15 @@ wasmTwoHost scratch entry out =
     (boundedVerbSeconds
       120
       "env"
-      (wasmBuildArgv "\{twoHostDir}/\{entry}.mdk" "\{scratch}/\{out}.wasm")))
+      (wasmBuildArgv "\{twoHostDir ()}/\{entry}.mdk" "\{scratch}/\{out}.wasm")))
     Err e => Err e
     Ok _ =>
       mustRun
         "run wasm \{entry}"
         (boundedVerbSeconds 60 "node" [
-          "\{medakaRoot}/test/wasm/run.js",
+          "\{medakaRoot ()}/test/wasm/run.js",
           "\{scratch}/\{out}.wasm",
-          "\{twoHostDir}/bindings.mjs",
+          "\{twoHostDir ()}/bindings.mjs",
         ])
 
 -- `entry` prints `want` built native and built for wasmgc/node.

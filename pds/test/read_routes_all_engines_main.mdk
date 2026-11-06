@@ -434,8 +434,8 @@ proxySessionKey =
     "read_routes_all_engines_main: session key"
     (sessionKeyFromBytes proxySessionSecret)
 
-proxyAccessToken : String
-proxyAccessToken =
+proxyAccessToken : Unit -> <Mint "access"> String
+proxyAccessToken () =
   mintAccessToken
     proxySessionKey
     accountDidText
@@ -444,11 +444,11 @@ proxyAccessToken =
     1699999000
     1700003600
 
-proxySessionStore : Store
-proxySessionStore =
+proxySessionStore : Unit -> <Mint "access"> Store
+proxySessionStore () =
   let store = storeWithServerSecret proxySessionKey storeEmpty
   storeSessionOpen
-    (sessionFingerprint proxyAccessToken)
+    (sessionFingerprint (proxyAccessToken ()))
     (sessionFingerprint "read-routes-proxy-refresh")
     1700090000
     store
@@ -456,8 +456,8 @@ proxySessionStore =
 {- | The `Authorization` field every proxied request below carries, built once
    so that the ONE cell that presents no credential
    (`proxyRequestUnauthenticated`) is the only place this file differs on it. -}
-proxyAuthField : String
-proxyAuthField = "Authorization: Bearer \{proxyAccessToken}\r\n"
+proxyAuthField : Unit -> <Mint "access"> String
+proxyAuthField () = "Authorization: Bearer \{proxyAccessToken ()}\r\n"
 
 -- A server with no `--appview-did` at all, which is what every deployment that
 -- has not configured an appview runs.
@@ -467,7 +467,7 @@ noPolicy = None
 proxyRequest : String -> String -> String -> <Mint "access"> Bytes
 proxyRequest verb header target =
   encodeUtf8
-    "\{verb} \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{proxyAuthField}atproto-proxy: \{header}\r\n\r\n"
+    "\{verb} \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{proxyAuthField ()}atproto-proxy: \{header}\r\n\r\n"
 
 {- | A forwarded write: a POST carrying a body, the two inbound fields a
    forward relays for it, and one field it must NOT relay.
@@ -479,7 +479,7 @@ proxyRequest verb header target =
 proxyPostRequest : String -> String -> <Mint "access"> Bytes
 proxyPostRequest target body =
   encodeUtf8
-    "POST \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{proxyAuthField}atproto-proxy: \{configuredAppviewDid}\r\naccept-language: en-GB\r\nx-medaka-not-relayed: 1\r\ncontent-type: application/json\r\ncontent-length: \{intToString (stringLength body)}\r\n\r\n\{body}"
+    "POST \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{proxyAuthField ()}atproto-proxy: \{configuredAppviewDid}\r\naccept-language: en-GB\r\nx-medaka-not-relayed: 1\r\ncontent-type: application/json\r\ncontent-length: \{intToString (stringLength body)}\r\n\r\n\{body}"
 
 {- | A call that names NO audience, made by the logged-in account.
 
@@ -490,7 +490,7 @@ proxyPostRequest target body =
 proxyRequestNoHeader : String -> <Mint "access"> Bytes
 proxyRequestNoHeader target =
   encodeUtf8
-    "GET \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{proxyAuthField}\r\n"
+    "GET \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{proxyAuthField ()}\r\n"
 
 {- | The same request `proxy-admitted-timeline` sends, with the caller's own
    credential left out. An anonymous caller asking this server to forward under
@@ -506,7 +506,7 @@ proxyRequestUnauthenticated target =
 proxyMixedCaseRequest : String -> <Mint "access"> Bytes
 proxyMixedCaseRequest target =
   encodeUtf8
-    "GET \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{proxyAuthField}Atproto-Proxy: \{configuredAppviewDid}\r\n\r\n"
+    "GET \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{proxyAuthField ()}Atproto-Proxy: \{configuredAppviewDid}\r\n\r\n"
 
 -- Two fields, the first naming the configured appview and the second naming
 -- somewhere else. A seam that took the first would be proxying a request whose
@@ -514,7 +514,7 @@ proxyMixedCaseRequest target =
 proxyRepeatedRequest : String -> <Mint "access"> Bytes
 proxyRepeatedRequest target =
   encodeUtf8
-    "GET \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{proxyAuthField}atproto-proxy: \{configuredAppviewDid}\r\natproto-proxy: \{foreignServiceDid}\r\n\r\n"
+    "GET \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{proxyAuthField ()}atproto-proxy: \{configuredAppviewDid}\r\natproto-proxy: \{foreignServiceDid}\r\n\r\n"
 
 mustRequest : Bytes -> Request
 mustRequest bytes = match parseRequest bytes
@@ -582,7 +582,7 @@ proxyCell label policy bytes expected =
       mustServer
       testContext
       policy
-      proxySessionStore
+      (proxySessionStore ())
       (mustRequest bytes)
   let got = proxyOutcome policy decision
   check label (got == expected) got
@@ -685,8 +685,8 @@ mixedCaseNsidTarget = xrpc "App.Bsky.Feed.getTimeline?limit=2"
    repository-free — `classifyProxy` reads the registry and the account, never
    the store — so all three engines can run it for the price of the cells
    themselves. -}
-runProxyCells : <IO, Mint "access"> Int
-runProxyCells =
+runProxyCells : Unit -> <IO, Mint "access"> Int
+runProxyCells () =
   let profileTarget = xrpc "app.bsky.actor.getProfile?actor=\{accountDidText}"
   let authorFeedTarget =
     xrpc "app.bsky.feed.getAuthorFeed?actor=\{accountDidText}"
@@ -996,7 +996,7 @@ serviceAuthCell label policy bytes expected =
       mustServer
       testContext
       policy
-      proxySessionStore
+      (proxySessionStore ())
       (mustRequest bytes)
   let got = serviceAuthOutcome decision
   check label (got == expected) got
@@ -1483,7 +1483,7 @@ runCells corpus =
       "origin-only-on-404"
       (pathRequest accountHostText "/favicon.ico")
       "404"
-  let proxied = runProxyCells
+  let proxied = runProxyCells ()
   let serviceAuth = runServiceAuthCells corpus
   let cells =
     proxied

@@ -673,7 +673,7 @@ gradeBuilt (entry, _, _) _ = fail "\{entry}: internal: no single build result"
 -- batch did not answer, or an entry that got no directory, is a failure row.
 groupEntries : List String -> <Exec, IO, FileRead> List (String, Expectation)
 groupEntries group =
-  let bin = medakaBin
+  let bin = medakaBin ()
   let dirs = map freshDirFor group
   let prepared = prepEntries group dirs
   let live = somes (map liveOf prepared)
@@ -714,7 +714,7 @@ gradeBuilts [] (_ :: rs) =
 test "diff_compiler_dict_semantics_ir: section 3 emitted-LLVM IR rows" = expectAll
   [
     expectAtLeast 90 (length table),
-    expectEach (flatMap groupEntries (chunks testJobs entries)),
+    expectEach (flatMap groupEntries (chunks (testJobs ()) entries)),
   ]
 
 test "diff_compiler_dict_semantics_ir: grader decides HAS, LACKS and COUNT= correctly" = expectAll

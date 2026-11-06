@@ -1,5 +1,5 @@
 # META
-source_lines=462
+source_lines=474
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_test_support: the fixtures the `tc_*_test` siblings of `compiler/types` share: a fresh
@@ -85,11 +85,23 @@ import types.tc_types.{
   ModuleMarking(..),
   OblProjection(..),
   Predicate(..),
+  PreludeMarkFacts(..),
   Provenance(..),
   StandaloneOrigin(..),
   TcEnv,
   UObligation(..),
   ValueScheme(..),
+}
+
+-- The mark sets of a graph with no prelude facts: the driver preamble a module check reads.
+export
+noPreludeFacts : PreludeMarkFacts
+noPreludeFacts = PreludeMarkFacts {
+  pmfReturnPos = [],
+  pmfMethodConstraints = [],
+  pmfArgDispatch = [],
+  pmfArgDispatchById = [],
+  pmfConstrainedNames = [],
 }
 
 -- The tag a route carries, as text: a route has no `Show`, and the tests compare these.
@@ -485,7 +497,9 @@ oblOver iface args = UObligation {
 (DUse false (UseGroup ("types" "tc_state") ((mem "blankModuleCtx" false) (mem "currentScopeStore" false) (mem "emptyClassEnv" false) (mem "freshModuleCtx" false) (mem "probeGraphCtx" false) (mem "wAll" false))))
 (DUse false (UseGroup ("types" "evidence") ((mem "ScopeId" true))))
 (DUse false (UseGroup ("types" "evidence_complete") ((mem "innerNone" false))))
-(DUse false (UseGroup ("types" "tc_types") ((mem "CheckRunSeed" true) (mem "EvCell" true) (mem "Kind" true) (mem "MarkCtx" true) (mem "ModuleCtx" true) (mem "ClassEnv" false) (mem "ImplEnv" false) (mem "ModuleMarking" true) (mem "OblProjection" true) (mem "Predicate" true) (mem "Provenance" true) (mem "StandaloneOrigin" true) (mem "TcEnv" false) (mem "UObligation" true) (mem "ValueScheme" true))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "CheckRunSeed" true) (mem "EvCell" true) (mem "Kind" true) (mem "MarkCtx" true) (mem "ModuleCtx" true) (mem "ClassEnv" false) (mem "ImplEnv" false) (mem "ModuleMarking" true) (mem "OblProjection" true) (mem "Predicate" true) (mem "PreludeMarkFacts" true) (mem "Provenance" true) (mem "StandaloneOrigin" true) (mem "TcEnv" false) (mem "UObligation" true) (mem "ValueScheme" true))))
+(DTypeSig true "noPreludeFacts" (TyCon "PreludeMarkFacts"))
+(DFunDef false "noPreludeFacts" () (ERecordCreate "PreludeMarkFacts" ((fa "pmfReturnPos" (EListLit)) (fa "pmfMethodConstraints" (EListLit)) (fa "pmfArgDispatch" (EListLit)) (fa "pmfArgDispatchById" (EListLit)) (fa "pmfConstrainedNames" (EListLit)))))
 (DTypeSig true "routeTag" (TyFun (TyCon "Route") (TyCon "String")))
 (DFunDef false "routeTag" ((PCon "RScalar" (PVar "tag"))) (EBinOp "++" (EBinOp "++" (ELit (LString "scalar:")) (EApp (EVar "$core.display") (EVar "tag"))) (ELit (LString ""))))
 (DFunDef false "routeTag" ((PCon "RNone")) (ELit (LString "none")))
@@ -618,7 +632,9 @@ oblOver iface args = UObligation {
 (DUse false (UseGroup ("types" "tc_state") ((mem "blankModuleCtx" false) (mem "currentScopeStore" false) (mem "emptyClassEnv" false) (mem "freshModuleCtx" false) (mem "probeGraphCtx" false) (mem "wAll" false))))
 (DUse false (UseGroup ("types" "evidence") ((mem "ScopeId" true))))
 (DUse false (UseGroup ("types" "evidence_complete") ((mem "innerNone" false))))
-(DUse false (UseGroup ("types" "tc_types") ((mem "CheckRunSeed" true) (mem "EvCell" true) (mem "Kind" true) (mem "MarkCtx" true) (mem "ModuleCtx" true) (mem "ClassEnv" false) (mem "ImplEnv" false) (mem "ModuleMarking" true) (mem "OblProjection" true) (mem "Predicate" true) (mem "Provenance" true) (mem "StandaloneOrigin" true) (mem "TcEnv" false) (mem "UObligation" true) (mem "ValueScheme" true))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "CheckRunSeed" true) (mem "EvCell" true) (mem "Kind" true) (mem "MarkCtx" true) (mem "ModuleCtx" true) (mem "ClassEnv" false) (mem "ImplEnv" false) (mem "ModuleMarking" true) (mem "OblProjection" true) (mem "Predicate" true) (mem "PreludeMarkFacts" true) (mem "Provenance" true) (mem "StandaloneOrigin" true) (mem "TcEnv" false) (mem "UObligation" true) (mem "ValueScheme" true))))
+(DTypeSig true "noPreludeFacts" (TyCon "PreludeMarkFacts"))
+(DFunDef false "noPreludeFacts" () (ERecordCreate "PreludeMarkFacts" ((fa "pmfReturnPos" (EListLit)) (fa "pmfMethodConstraints" (EListLit)) (fa "pmfArgDispatch" (EListLit)) (fa "pmfArgDispatchById" (EListLit)) (fa "pmfConstrainedNames" (EListLit)))))
 (DTypeSig true "routeTag" (TyFun (TyCon "Route") (TyCon "String")))
 (DFunDef false "routeTag" ((PCon "RScalar" (PVar "tag"))) (EBinOp "++" (EBinOp "++" (ELit (LString "scalar:")) (EApp (EVar "$core.display") (EVar "tag"))) (ELit (LString ""))))
 (DFunDef false "routeTag" ((PCon "RNone")) (ELit (LString "none")))

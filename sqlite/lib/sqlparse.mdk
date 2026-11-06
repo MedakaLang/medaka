@@ -68,14 +68,14 @@
 --   Both COMMIT once an operator has matched — `a +` / `a AND` are hard errors,
 --   not a successful parse of `a` with trailing garbage.  (parsec's `chainl1` was
 --   made committed for this; see findings F5.)
--- * **Recursive grammar values**: the back-edges (`parens` → `sqlExpr`,
---   `notPrefix` → `notExpr`, `negAtom` → `atom`) are written with `do`-notation
---   ON PURPOSE.  A top-level nullary binding is a VALUE, and `between`/`chainl1`
---   are strict in their parser arguments, so `parens = between (symbol "(")
---   (symbol ")") sqlExpr` is a non-productive cyclic value and is rejected at
---   run time with `E-CYCLIC-VALUE`.  Under `do`-notation the recursive reference
---   lands inside a continuation lambda and is only forced when the parser RUNS.
---   See `sqlite/findings/sql-parser-expr.md` (F3).
+-- * **Recursive grammar values**: the expression levels are one recursive group
+--   (`parens` → `sqlExpr`, `notPrefix` → `notExpr`, `negAtom` → `atom`).  A
+--   top-level nullary binding is a value initialised once, and `between`/`chainl1`
+--   evaluate their parser arguments, so a level that passes the next one as an
+--   argument evaluates its own group, which `check` rejects (`T-CYCLIC-VALUE`).
+--   Each level starts its `defer` block with `_ <- deferPure ()`, or reaches its
+--   back-edge inside a `defer` continuation, so the recursive reference is read
+--   only when the parser runs.  See `sqlite/findings/sql-parser-expr.md` (F3).
 --
 -- ## Aggregate calls (stage 2)
 --
@@ -433,11 +433,15 @@ blobFrom s = match decode s
 -- Ok "EAnd (EBin OpEq (ECol a) (ELit (LInt 1))) (EBin OpEq (ECol b) (ELit (LInt 2)))"
 export
 sqlExpr : Parser SqlExpr
-sqlExpr = orExpr
+sqlExpr = defer
+  _ <- deferPure ()
+  orExpr
 
 -- OR — loosest, left-associative.
 orExpr : Parser SqlExpr
-orExpr = chainl1 andExpr orOp
+orExpr = defer
+  _ <- deferPure ()
+  chainl1 andExpr orOp
 
 orOp : Parser (SqlExpr -> SqlExpr -> SqlExpr)
 orOp = defer
@@ -446,7 +450,9 @@ orOp = defer
 
 -- AND — binds tighter than OR, left-associative.
 andExpr : Parser SqlExpr
-andExpr = chainl1 notExpr andOp
+andExpr = defer
+  _ <- deferPure ()
+  chainl1 notExpr andOp
 
 andOp : Parser (SqlExpr -> SqlExpr -> SqlExpr)
 andOp = defer
@@ -465,11 +471,12 @@ andOp = defer
 -- whole level restores it (a label only rewrites a zero-consumption failure, so a
 -- real error deeper inside either branch still outranks it).
 notExpr : Parser SqlExpr
-notExpr = label "expected an expression" (orElse notPrefix cmpExpr)
+notExpr = defer
+  _ <- deferPure ()
+  label "expected an expression" (orElse notPrefix cmpExpr)
 
--- The recursive reference to `notExpr` sits in a do-continuation (NOT in
--- argument position), so this is productive — see the header note on
--- E-CYCLIC-VALUE.
+-- The recursive reference to `notExpr` sits in a `defer` continuation, so it is
+-- read only when the parser runs; see the header note on recursive grammar values.
 notPrefix : Parser SqlExpr
 notPrefix = defer
   _ <- keyword "NOT"
@@ -481,6 +488,7 @@ notPrefix = defer
 -- the two suffix shapes are not both infix (`IS NULL` is postfix).
 cmpExpr : Parser SqlExpr
 cmpExpr = defer
+  _ <- deferPure ()
   l <- addExpr
   cmpSuffixes l
 
@@ -611,14 +619,18 @@ cmpTok s op = defer
 
 -- Additive — left-associative.
 addExpr : Parser SqlExpr
-addExpr = chainl1 mulExpr addOp
+addExpr = defer
+  _ <- deferPure ()
+  chainl1 mulExpr addOp
 
 addOp : Parser (SqlExpr -> SqlExpr -> SqlExpr)
 addOp = choice [arithTok "+" AAdd, arithTok "-" ASub]
 
 -- Multiplicative — left-associative.
 mulExpr : Parser SqlExpr
-mulExpr = chainl1 concatExpr mulOp
+mulExpr = defer
+  _ <- deferPure ()
+  chainl1 concatExpr mulOp
 
 mulOp : Parser (SqlExpr -> SqlExpr -> SqlExpr)
 mulOp = choice [arithTok "*" AMul, arithTok "/" ADiv, arithTok "%" AMod]
@@ -626,7 +638,9 @@ mulOp = choice [arithTok "*" AMul, arithTok "/" ADiv, arithTok "%" AMod]
 -- `||` concatenation — binds TIGHTER than `* / %` (see the module header's
 -- precedence note), left-associative.
 concatExpr : Parser SqlExpr
-concatExpr = chainl1 atom concatOp
+concatExpr = defer
+  _ <- deferPure ()
+  chainl1 atom concatOp
 
 concatOp : Parser (SqlExpr -> SqlExpr -> SqlExpr)
 concatOp = defer
@@ -658,14 +672,15 @@ arithTok s op = defer
 -- reason as always: `count`/`length`/etc. are NOT reserved words, so `column`
 -- would happily eat the name and strand the `(`.
 atom : Parser SqlExpr
-atom =
+atom = defer
+  _ <- deferPure ()
   label
     "expected an expression"
     (choice [parens, litAtom, negAtom, caseExpr, aggCall, fnCall, column])
 
--- The recursive reference to `sqlExpr` is in a do-continuation, NOT in argument
--- position.  Writing this as `between (symbol "(") (symbol ")") sqlExpr` would
--- make `atom` a non-productive cyclic value (E-CYCLIC-VALUE) — see header.
+-- The recursive reference to `sqlExpr` is in a `defer` continuation.  Written as
+-- `between (symbol "(") (symbol ")") sqlExpr`, `parens` would evaluate `sqlExpr`
+-- while the group initialises (`T-CYCLIC-VALUE`); see the header.
 parens : Parser SqlExpr
 parens = defer
   _ <- symbol "("

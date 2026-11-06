@@ -64,25 +64,34 @@ bannerOf tail = match split "]" tail
 missingFrom : List String -> List String -> List String
 missingFrom have want = filter (t => not (elem t have)) want
 
-docLines : <Env "MEDAKA_ROOT", IO> Result String (List String)
-docLines = match readFile (underRoot "compiler/DIAGNOSTIC-CODES-DESIGN.md")
-  Ok text => Ok (lines text)
-  Err e => Err "could not read DIAGNOSTIC-CODES-DESIGN.md: \{e}"
+docLinesCell : Ref (Option (Result String (List String)))
+docLinesCell = Ref None
 
-test "diag_codes_doc: the live rows are exactly allDiagCodes" = match docLines
-  Err e => fail e
-  Ok ls =>
-    let rows = registryRows ls
-    let live = textsWith "live" rows
-    let codes = sort (map codeText allDiagCodes)
-    expectAll [
-      expectEqual [] (missingFrom live codes),
-      expectEqual [] (missingFrom codes live),
-      expectEqual (length live) (length (nub live)),
-    ]
+docLines : Unit -> <Env "MEDAKA_ROOT", IO> Result String (List String)
+docLines () = match !docLinesCell
+  Some v => v
+  None =>
+    let v = match readFile (underRoot "compiler/DIAGNOSTIC-CODES-DESIGN.md")
+      Ok text => Ok (lines text)
+      Err e => Err "could not read DIAGNOSTIC-CODES-DESIGN.md: \{e}"
+    docLinesCell := Some v
+    v
+
+test "diag_codes_doc: the live rows are exactly allDiagCodes" =
+  match docLines ()
+    Err e => fail e
+    Ok ls =>
+      let rows = registryRows ls
+      let live = textsWith "live" rows
+      let codes = sort (map codeText allDiagCodes)
+      expectAll [
+        expectEqual [] (missingFrom live codes),
+        expectEqual [] (missingFrom codes live),
+        expectEqual (length live) (length (nub live)),
+      ]
 
 test "diag_codes_doc: retired, reserved and runtime rows are not live codes" =
-  match docLines
+  match docLines ()
     Err e => fail e
     Ok ls =>
       let rows = registryRows ls
@@ -111,7 +120,7 @@ test "diag_codes_doc: constructor names follow the naming rule" =
       ]
 
 test "diag_codes_doc: every C runtime banner is a runtime or live row" = match (
-  docLines,
+  docLines (),
   readFile (underRoot "runtime/medaka_rt.c"),
 )
   (Err e, _) => fail e

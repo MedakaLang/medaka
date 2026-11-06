@@ -143,12 +143,20 @@ libPath name = "sqlite/lib/\{name}.mdk"
 
 -- Every `sqlite/lib/` module run exactly once, shared by every assertion
 -- below — memoized the same way `results` is.
-libResults : <Exec, IO> List (String, (Int, Result String Int))
-libResults = resultsOfKind LibRow
+libResultsCell : Ref (Option (List (String, (Int, Result String Int))))
+libResultsCell = Ref None
+
+libResults : Unit -> <Exec, IO> List (String, (Int, Result String Int))
+libResults () = match !libResultsCell
+  Some v => v
+  None =>
+    let v = resultsOfKind LibRow
+    libResultsCell := Some v
+    v
 
 -- Grades one `sqlite/lib/` module's floor, same shape as `floorExpectation`.
 libFloorExpectation : String -> <Exec, IO> Expectation
-libFloorExpectation name = match lookup name libResults
+libFloorExpectation name = match lookup name (libResults ())
   None => Fail "sqlite/lib/\{name}.mdk has no `libResults` entry" "" ""
   Some (floor, counted) => expectFloor "sqlite/lib/\{name}.mdk" floor counted
 
@@ -197,14 +205,14 @@ test "sqlite/lib/wideint.mdk executed >= 14 assertions" =
 test "sqlite/lib/writer.mdk executed >= 4 assertions" =
   libFloorExpectation "writer"
 
-libUnrosteredFiles : <FileRead, IO> Result String (List String)
-libUnrosteredFiles = match listDir (underRoot "sqlite/lib")
+libUnrosteredFiles : Unit -> <FileRead, IO> Result String (List String)
+libUnrosteredFiles () = match listDir (underRoot "sqlite/lib")
   Err e => Err "could not list sqlite/lib: \{e}"
   Ok names =>
     Ok (unrosteredUnits mdkModuleStem (libRosterNames ++ libExemptNames) names)
 
 test "every sqlite/lib/*.mdk module has a `libSuites` or `libExempt` row" =
-  match libUnrosteredFiles
+  match libUnrosteredFiles ()
     Err e => Fail e "no unrostered modules" "listDir failed"
     Ok [] => Pass "no unrostered modules" "no unrostered modules"
     Ok extras =>
@@ -213,13 +221,13 @@ test "every sqlite/lib/*.mdk module has a `libSuites` or `libExempt` row" =
         "no unrostered modules"
         "\{debug extras}"
 
-libPhantomExemptions : <FileRead, IO> Result String (List String)
-libPhantomExemptions = match listDir (underRoot "sqlite/lib")
+libPhantomExemptions : Unit -> <FileRead, IO> Result String (List String)
+libPhantomExemptions () = match listDir (underRoot "sqlite/lib")
   Err e => Err "could not list sqlite/lib: \{e}"
   Ok names => Ok (missingUnits mdkModuleStem libExemptNames names)
 
 test "every `libExempt` row names a module that exists" =
-  match libPhantomExemptions
+  match libPhantomExemptions ()
     Err e => Fail e "no phantom exemptions" "listDir failed"
     Ok [] => Pass "no phantom exemptions" "no phantom exemptions"
     Ok extras =>
@@ -247,35 +255,51 @@ allRows =
    engine, all in one batch of spawns, each with its executed-assertion
    count or an error naming the file and what went wrong.
 
-   Shared by every assertion below: top-level nullary bindings are memoized
-   (a spawn placed in a shared top-level binding and read from two `test`
-   decls was confirmed, by probe, to execute once, not twice). -}
-allResults : <Exec, IO> List (RowKind, (String, (Int, Result String Int)))
-allResults =
-  zipWith
-    ((kind, name, floor, path) counted =>
-      (kind, (name, (floor, mapErr (e => "\{path}: \{e}") counted))))
-    allRows
-    (testAssertionCounts
-      (map
-        ((_, _, _, path) => (underRoot path, ["--engines", "eval"]))
-        allRows))
+   Shared by every assertion below: `allResults` memoizes the batch in a
+   once-cell, so a spawn read from two `test` decls executes once, not twice. -}
+allResultsCell : Ref (Option (List (RowKind, (String, (Int, Result String Int)))))
+allResultsCell = Ref None
+
+allResults : Unit ->
+  <Exec, IO> List (RowKind, (String, (Int, Result String Int)))
+allResults () = match !allResultsCell
+  Some v => v
+  None =>
+    let v =
+      zipWith
+        ((kind, name, floor, path) counted =>
+          (kind, (name, (floor, mapErr (e => "\{path}: \{e}") counted))))
+        allRows
+        (testAssertionCounts
+          (map
+            ((_, _, _, path) => (underRoot path, ["--engines", "eval"]))
+            allRows))
+    allResultsCell := Some v
+    v
 
 -- The `allResults` rows of one roster, in roster order.
 resultsOfKind : RowKind -> <Exec, IO> List (String, (Int, Result String Int))
 -- The pds and sqlite oracle tests each carry this helper: the two projects
 -- share no test-support module that could host it.
 -- lint-disable-next-line rule-duplicate-body -- an independence requirement: pds and sqlite are separate projects and share no test-support module to host this helper
-resultsOfKind kind = map snd (filter ((k, _) => k == kind) allResults)
+resultsOfKind kind = map snd (filter ((k, _) => k == kind) (allResults ()))
 
 -- Every suite's floor and count.
-results : <Exec, IO> List (String, (Int, Result String Int))
-results = resultsOfKind SuiteRow
+resultsCell : Ref (Option (List (String, (Int, Result String Int))))
+resultsCell = Ref None
+
+results : Unit -> <Exec, IO> List (String, (Int, Result String Int))
+results () = match !resultsCell
+  Some v => v
+  None =>
+    let v = resultsOfKind SuiteRow
+    resultsCell := Some v
+    v
 
 -- Grades one suite's floor: the message names both the file and both
 -- numbers on a miss, per the migration's own acceptance check.
 floorExpectation : String -> <Exec, IO> Expectation
-floorExpectation name = match lookup name results
+floorExpectation name = match lookup name (results ())
   None => Fail "sqlite/test/\{name}.mdk has no `results` entry" "" ""
   Some (floor, counted) => expectFloor "sqlite/test/\{name}.mdk" floor counted
 
@@ -315,15 +339,16 @@ ranCountOf : (String, (Int, Result String Int)) -> Int
 ranCountOf (_, (_, Ok n)) = n
 ranCountOf (_, (_, Err _)) = 0
 
-totalRan : <Exec, IO> Int
+totalRan : Unit -> <Exec, IO> Int
 -- The pds and sqlite oracle tests each carry this helper: the two projects
 -- share no test-support module that could host it.
 -- lint-disable-next-line rule-duplicate-body -- an independence requirement: pds and sqlite are separate projects and share no test-support module to host this helper
-totalRan = sum (map ranCountOf results) + sum (map ranCountOf libResults)
+totalRan () =
+  sum (map ranCountOf (results ())) + sum (map ranCountOf (libResults ()))
 
 test "sqlite in-language suite ran at least one assertion" =
-  if totalRan > 0 then
-    Pass "> 0 assertions" "\{intToString totalRan} assertions"
+  if totalRan () > 0 then
+    Pass "> 0 assertions" "\{intToString (totalRan ())} assertions"
   else
     Fail
       "no assertions ran at all across the sqlite in-language suite"
@@ -336,12 +361,12 @@ test "sqlite in-language suite ran at least one assertion" =
 -- `_test.mdk` file under `sqlite/test/` is accounted for by a row in
 -- `suites` above or a reasoned row in `exempt`.
 
-unrosteredFiles : <FileRead, IO> Result String (List String)
-unrosteredFiles =
+unrosteredFiles : Unit -> <FileRead, IO> Result String (List String)
+unrosteredFiles () =
   unrosteredTestFiles (underRoot "sqlite/test") (rosterNames ++ exemptNames)
 
 test "every sqlite/test/*_test.mdk file has a `suites` or `exempt` row" =
-  match unrosteredFiles
+  match unrosteredFiles ()
     Err e => Fail e "no unrostered files" "listDir failed"
     Ok [] => Pass "no unrostered files" "no unrostered files"
     Ok extras =>
@@ -350,10 +375,10 @@ test "every sqlite/test/*_test.mdk file has a `suites` or `exempt` row" =
         "no unrostered files"
         "\{debug extras}"
 
-phantomExemptions : <FileRead, IO> Result String (List String)
-phantomExemptions = missingTestFiles (underRoot "sqlite/test") exemptNames
+phantomExemptions : Unit -> <FileRead, IO> Result String (List String)
+phantomExemptions () = missingTestFiles (underRoot "sqlite/test") exemptNames
 
-test "every `exempt` row names a file that exists" = match phantomExemptions
+test "every `exempt` row names a file that exists" = match phantomExemptions ()
   Err e => Fail e "no phantom exemptions" "listDir failed"
   Ok [] => Pass "no phantom exemptions" "no phantom exemptions"
   Ok extras =>
@@ -364,7 +389,7 @@ test "every `exempt` row names a file that exists" = match phantomExemptions
 
 {- # `libSuites`/assertion lockstep
 
-   `libResults` is a shared memoized binding computed for every `libSuites`
+   `libResults` is a shared memoized function computed for every `libSuites`
    row whether or not anything asserts on it: a row with no `test` block of
    its own is still spawned, and its verdict is silently discarded. The
    closure checks above prove only that a MODULE is named somewhere; they
@@ -378,17 +403,18 @@ test "every `exempt` row names a file that exists" = match phantomExemptions
 libFloorCallOpen : String
 libFloorCallOpen = "libFloorExpectation \""
 
-ownSourceLines : <IO> Result String (List String)
-ownSourceLines = readLines (underRoot "sqlite/test/inlang_test_oracle_test.mdk")
+ownSourceLines : Unit -> <IO> Result String (List String)
+ownSourceLines () =
+  readLines (underRoot "sqlite/test/inlang_test_oracle_test.mdk")
 
-uncheckedLibRows : <IO> Result String (List String)
-uncheckedLibRows =
+uncheckedLibRows : Unit -> <IO> Result String (List String)
+uncheckedLibRows () =
   map
     (ls => ungradedRosterRows "sqlite/lib/" libFloorCallOpen libRosterNames ls)
-    ownSourceLines
+    (ownSourceLines ())
 
 test "every `libSuites` row has a matching `test` block" =
-  match uncheckedLibRows
+  match uncheckedLibRows ()
     Err e => Fail e "no unchecked rows" "read failed"
     Ok [] => Pass "no unchecked rows" "no unchecked rows"
     Ok extras =>
@@ -397,14 +423,14 @@ test "every `libSuites` row has a matching `test` block" =
         "no unchecked rows"
         "\{debug extras}"
 
-disagreeingLibBlocks : <IO> Result String (List String)
-disagreeingLibBlocks =
+disagreeingLibBlocks : Unit -> <IO> Result String (List String)
+disagreeingLibBlocks () =
   map
     (ls => disagreeingFloorBlocks "sqlite/lib/" libFloorCallOpen ls)
-    ownSourceLines
+    (ownSourceLines ())
 
 test "every `libSuites` floor assertion grades the module its title names" =
-  match disagreeingLibBlocks
+  match disagreeingLibBlocks ()
     Err e => Fail e "no title/argument disagreements" "read failed"
     Ok [] =>
       Pass "no title/argument disagreements" "no title/argument disagreements"

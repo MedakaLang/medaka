@@ -54,8 +54,8 @@ edgeRefusal : String
 edgeRefusal =
   "performs <FileRead \"x\"> where only <IO> is allowed; `IO` on `wasmgc/edge` is <Clock, Net, Rand, Stderr, Stdout>"
 
-check : <IO> Expectation
-check = match readFile "stdlib/runtime.mdk"
+check : Unit -> <IO> Expectation
+check () = match readFile "stdlib/runtime.mdk"
   Err e => fail "could not read stdlib/runtime.mdk: \{e}"
   Ok rsrc => match readFile "stdlib/core.mdk"
     Err e => fail "could not read stdlib/core.mdk: \{e}"
@@ -78,4 +78,4 @@ check = match readFile "stdlib/runtime.mdk"
           (analyzedIn rsrc csrc (manifest edgeTarget)),
       ]
 
-test "the memoized project check follows each project's own [target]" = check
+test "the memoized project check follows each project's own [target]" = check ()

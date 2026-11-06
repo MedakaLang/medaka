@@ -16,7 +16,7 @@ test "medaka check reports no non-exhaustive clauses in ast_walk.mdk" =
   expectNoFindings
     "non-exhaustive clauses in compiler/frontend/ast_walk.mdk"
     (andThen
-      (boundedVerb medakaBin [
+      (boundedVerb (medakaBin ()) [
         "check",
         underRoot "compiler/frontend/ast_walk.mdk",
       ])

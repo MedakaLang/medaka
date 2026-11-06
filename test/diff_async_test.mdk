@@ -76,8 +76,8 @@ import test_process.{
 }
 import time.{monotonic}
 
-corpus : <IO> String
-corpus = "\{medakaRoot}/test/async_fixtures"
+corpus : Unit -> <IO> String
+corpus () = "\{medakaRoot ()}/test/async_fixtures"
 
 -- | The size of the corpus, written down so that a corpus which silently
 -- shrank is red. Growing it is expected: add the row and raise this.
@@ -113,19 +113,19 @@ roster : List String
 roster = exitZeroRoster ++ [deadlockFixture] ++ ioPollTrapRoster
 
 test "diff_async: exactly 6 fixtures on disk, matching the roster" =
-  match fixtureStems corpus
-    Err e => fail "\{corpus}: \{e}"
+  match fixtureStems (corpus ())
+    Err e => fail "\{corpus ()}: \{e}"
     Ok found => match expectUnitCount declaredFixtureCount found
-      Err e => fail "\{corpus}: \{e} on disk"
+      Err e => fail "\{corpus ()}: \{e} on disk"
       Ok _ =>
         if sort found == sort roster then
           pass
         else
-          fail "\{corpus}: found \{debug found}, want \{debug roster}"
+          fail "\{corpus ()}: found \{debug found}, want \{debug roster}"
 
 -- `Some name` when `name`'s source mentions the Net effect or a net module.
 netUser : String -> <FileRead, IO> Option String
-netUser name = match readFile "\{corpus}/\{name}.mdk"
+netUser name = match readFile "\{corpus ()}/\{name}.mdk"
   Err _ => Some name
   Ok src =>
     if contains "Net" src || contains "import net" src then Some name else None
@@ -142,15 +142,17 @@ test "diff_async: no wasm-roster fixture uses Net" =
 -- once, without ever invoking `medaka run` — see the file header for why.
 buildAndRun : String -> String -> <Exec, IO> Result String (Int, String, String)
 buildAndRun scratch name =
-  let entry = "\{corpus}/\{name}.mdk"
+  let entry = "\{corpus ()}/\{name}.mdk"
   let binPath = "\{scratch}/\{name}"
-  match boundedVerbSeconds 30 medakaBin ["check", entry]
+  match boundedVerbSeconds 30 (medakaBin ()) ["check", entry]
     Err e => Err "\{name}: could not run `medaka check`: \{e}"
     Ok (checkCode, _, checkErr) =>
       if checkCode /= 0 then
         Err
           "\{name}: `medaka check` rejected it (exit \{intToString checkCode}): \{checkErr}"
-      else match boundedVerbSeconds 60 medakaBin ["build", entry, "-o", binPath]
+      else match (boundedVerbSeconds 60 (medakaBin ()) [
+        "build", entry, "-o", binPath
+      ])
         Err e => Err "\{name}: could not run `medaka build`: \{e}"
         Ok (buildCode, buildOut, buildErr) =>
           if buildCode /= 0 then
@@ -161,8 +163,8 @@ buildAndRun scratch name =
             Ok r => Ok r
 
 -- Preload that deletes WebAssembly.Suspending and WebAssembly.promising.
-noJspiPreload : <IO> String
-noJspiPreload = "\{medakaRoot}/test/async_jspi_fixtures/no_jspi.mjs"
+noJspiPreload : Unit -> <IO> String
+noJspiPreload () = "\{medakaRoot ()}/test/async_jspi_fixtures/no_jspi.mjs"
 
 -- Builds the .mdk file `entry` for wasm into `out`.
 buildWasmFile : String -> String -> <Exec, IO> Result String Unit
@@ -181,8 +183,8 @@ buildWasmFile entry out =
 runWasmFile : String -> Int -> <Exec, IO> Result String (Int, String, String)
 runWasmFile wasmPath want = match boundedVerbSeconds 30 "node" [
   "--import",
-  noJspiPreload,
-  "\{medakaRoot}/test/wasm/run.js",
+  noJspiPreload (),
+  "\{medakaRoot ()}/test/wasm/run.js",
   wasmPath,
 ]
   Err e => Err e
@@ -200,13 +202,11 @@ buildAndRunWasm : String ->
   <Exec, IO> Result String (Int, String, String)
 buildAndRunWasm scratch name want =
   let wasmPath = "\{scratch}/\{name}.wasm"
-  match buildWasmFile "\{corpus}/\{name}.mdk" wasmPath
+  match buildWasmFile "\{corpus ()}/\{name}.mdk" wasmPath
     Err e => Err "\{name}: \{e}"
     Ok _ => runWasmFile wasmPath want
 
--- A new empty directory per call. `test_process.scratchDir` is one value
--- shared by every test in the file, so a test that removes its own scratch
--- directory would pull it from under the others.
+-- A new empty directory per call, which the caller removes.
 freshDir : Unit -> <Exec> Result String String
 freshDir u = match boundedVerbSeconds 10 "mktemp" ["-d"]
   Err e => Err "mktemp -d: \{e}"
@@ -216,7 +216,7 @@ freshDir u = match boundedVerbSeconds 10 "mktemp" ["-d"]
 -- `name`'s committed expected stdout, without its trailing newlines — the
 -- same comparison the retired shell gate made via `$(cat …)`.
 wantOutput : String -> <FileRead, IO> Result String String
-wantOutput name = map chompNewlines (readFile "\{corpus}/\{name}.expected")
+wantOutput name = map chompNewlines (readFile "\{corpus ()}/\{name}.expected")
 
 -- Grades one arm's result: exit 0 and stdout equal to the shared `.expected`.
 gradeRun : String ->
@@ -261,7 +261,7 @@ gradeAll what grade names = match freshDir ()
       [] => pass
       _ =>
         fail
-          "\{intToString (length failures)} of \{intToString (length names)} \{what} fixtures under \{corpus} missed their expected stdout:\n\{unlines failures}"
+          "\{intToString (length failures)} of \{intToString (length names)} \{what} fixtures under \{corpus ()} missed their expected stdout:\n\{unlines failures}"
 
 test "diff_async: build+exec matches the committed stdout for every native fixture" =
   gradeAll "native" gradeFixture exitZeroRoster
@@ -278,12 +278,12 @@ test "diff_async: wasm build+run matches the same committed stdout for every was
 -- identical either way, so the run is preloaded with a tracer that reports how
 -- many Suspending imports were built and called.
 
-jspiTracer : <IO> String
-jspiTracer = "\{medakaRoot}/test/async_jspi_fixtures/suspending_trace.mjs"
+jspiTracer : Unit -> <IO> String
+jspiTracer () = "\{medakaRoot ()}/test/async_jspi_fixtures/suspending_trace.mjs"
 
 -- True when this node, given the JSPI flag, exposes `WebAssembly.Suspending`.
-nodeHasJspi : <Exec> Bool
-nodeHasJspi = match boundedVerbSeconds 20 "node" [
+nodeHasJspi : Unit -> <Exec> Bool
+nodeHasJspi () = match boundedVerbSeconds 20 "node" [
   "--experimental-wasm-jspi",
   "-e",
   "process.exit(typeof WebAssembly.Suspending === 'function' ? 0 : 1)",
@@ -302,8 +302,8 @@ runTraced flags wasmPath = match (boundedVerbSeconds
   (flags
     ++ [
       "--import",
-      jspiTracer,
-      "\{medakaRoot}/test/wasm/run.js",
+      jspiTracer (),
+      "\{medakaRoot ()}/test/wasm/run.js",
       wasmPath,
     ]))
   Err e => Err e
@@ -322,8 +322,9 @@ runTraced flags wasmPath = match (boundedVerbSeconds
 runJspiTraced : String -> <Exec, IO> Result String (Int, String, String)
 runJspiTraced = runTraced ["--experimental-wasm-jspi"]
 
-runNoJspiTraced : String -> <Exec, IO> Result String (Int, String, String)
-runNoJspiTraced = runTraced ["--import", noJspiPreload]
+runNoJspiTraced : Unit ->
+  <IO> (String -> <Exec, IO> Result String (Int, String, String))
+runNoJspiTraced () = runTraced ["--import", noJspiPreload ()]
 
 -- The stdout grade of `gradeRun`, plus: the tracer saw the sleep go through a
 -- Suspending import.
@@ -362,16 +363,17 @@ test "diff_async: overlap_sleeps without JSPI prints the same stdout through Ato
     (_, Err e) => fail "overlap_sleeps: \{e}"
     (Ok scratch, Ok want) =>
       let wasmPath = "\{scratch}/overlap_sleeps.wasm"
-      let verdict = match buildWasmFile "\{corpus}/overlap_sleeps.mdk" wasmPath
-        Err e => fail "overlap_sleeps: \{e}"
-        Ok _ => match gradeNoJspi want (runNoJspiTraced wasmPath)
-          Some e => fail e
-          None => pass
+      let verdict =
+        match buildWasmFile "\{corpus ()}/overlap_sleeps.mdk" wasmPath
+          Err e => fail "overlap_sleeps: \{e}"
+          Ok _ => match gradeNoJspi want (runNoJspiTraced () wasmPath)
+            Some e => fail e
+            None => pass
       let _ = boundedVerbSeconds 10 "rm" ["-rf", scratch]
       verdict
 
 test "diff_async: overlap_sleeps under JSPI prints the same stdout through a Suspending sleep" =
-  if not nodeHasJspi then
+  if not (nodeHasJspi ()) then
     let _ =
       println
         "SKIP diff_async JSPI arm: node --experimental-wasm-jspi exposes no WebAssembly.Suspending"
@@ -381,11 +383,12 @@ test "diff_async: overlap_sleeps under JSPI prints the same stdout through a Sus
     (_, Err e) => fail "overlap_sleeps: \{e}"
     (Ok scratch, Ok want) =>
       let wasmPath = "\{scratch}/overlap_sleeps.wasm"
-      let verdict = match buildWasmFile "\{corpus}/overlap_sleeps.mdk" wasmPath
-        Err e => fail "overlap_sleeps: \{e}"
-        Ok _ => match gradeJspi want (runJspiTraced wasmPath)
-          Some e => fail e
-          None => pass
+      let verdict =
+        match buildWasmFile "\{corpus ()}/overlap_sleeps.mdk" wasmPath
+          Err e => fail "overlap_sleeps: \{e}"
+          Ok _ => match gradeJspi want (runJspiTraced wasmPath)
+            Some e => fail e
+            None => pass
       let _ = boundedVerbSeconds 10 "rm" ["-rf", scratch]
       verdict
 
@@ -435,7 +438,7 @@ measureWasm wasmPath =
   let t0 = monotonic ()
   let ran = boundedVerbSeconds 60 "sh" [
     "-c",
-    "node \{medakaRoot}/test/wasm/run.js \{wasmPath} >/dev/null; rc=$?; times; exit $rc",
+    "node \{medakaRoot ()}/test/wasm/run.js \{wasmPath} >/dev/null; rc=$?; times; exit $rc",
   ]
   let t1 = monotonic ()
   match ran
@@ -467,7 +470,7 @@ detectOverlap scratch =
   let overlap = "\{scratch}/overlap_sleeps.wasm"
   let built = (
     buildWasmFile "\{scratch}/baseline.mdk" baseline,
-    buildWasmFile "\{corpus}/overlap_sleeps.mdk" overlap,
+    buildWasmFile "\{corpus ()}/overlap_sleeps.mdk" overlap,
   )
   match built
     (Ok _, Ok _) => match (measureWasm baseline, measureWasm overlap)
@@ -528,9 +531,9 @@ test "diff_async: async_deadlock under `medaka run` exits 1 with the coded line"
     deadlockLine
     deadlockFixture
     "run"
-    (boundedVerbSeconds 30 medakaBin [
+    (boundedVerbSeconds 30 (medakaBin ()) [
       "run",
-      "\{corpus}/\{deadlockFixture}.mdk",
+      "\{corpus ()}/\{deadlockFixture}.mdk",
     ])
 
 test "diff_async: async_deadlock built native exits 1 with the coded line" =
@@ -596,7 +599,7 @@ readinessExterns = [
 ]
 
 test "diff_async: the readiness externs have no eval binding — the missing arm is structural" =
-  let path = "\{medakaRoot}/compiler/eval/eval.mdk"
+  let path = "\{medakaRoot ()}/compiler/eval/eval.mdk"
   match readFile path
     Err e => fail "\{path}: \{e}"
     Ok src =>
@@ -657,21 +660,21 @@ gradeLookalike param mismatch dir =
       (
         "run",
         expectSpawnFails
-          medakaBin
+          (medakaBin ())
           ["run", entry]
           "main.mdk:4:0: type mismatch: \{mismatch}",
       ),
       (
         "build",
         expectSpawnFails
-          medakaBin
+          (medakaBin ())
           ["build", entry, "-o", "\{dir}/bin"]
           "main.mdk:4:0: type mismatch: \{mismatch}",
       ),
       (
         "build --json",
         expectSpawnFails
-          medakaBin
+          (medakaBin ())
           ["build", "--json", entry, "-o", "\{dir}/jbin"]
           "\"code\":\"T-TYPE-MISMATCH\",\"kind\":\"type\",\"message\":\"type mismatch: \{mismatch}\",\"range\":{\"end\":{\"character\":4,\"line\":3},\"start\":{\"character\":0,\"line\":3}}",
       ),

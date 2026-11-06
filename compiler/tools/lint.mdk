@@ -146,7 +146,7 @@ export
 indexForRules : List String -> <IO> Result String StdlibIndex
 indexForRules only =
   if stdlibIndexNeeded only []
-    || wildIndexNeeded only [] then match buildStdlibIndexResult
+    || wildIndexNeeded only [] then match buildStdlibIndexResult ()
     Ok idx => Ok idx
     Err _ => Err "cannot build the stdlib index"
   else

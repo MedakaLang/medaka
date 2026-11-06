@@ -132,8 +132,8 @@ dupsFor (mname :: ms) es = dupsIn mname es ++ dupsFor ms es
 dupFindings : List (String, String, String) -> List String
 dupFindings es = dupsFor (nub (map rowMod es)) es
 
-check : <IO, FileRead> Expectation
-check = match readFile (underRoot "docs/stdlib/inventory.json")
+check : Unit -> <IO, FileRead> Expectation
+check () = match readFile (underRoot "docs/stdlib/inventory.json")
   Err e =>
     fail
       "docs/stdlib/inventory.json does not exist or is unreadable (\{e}) — regenerate with: medaka doc --out docs/stdlib stdlib/*.mdk stdlib/*/*.mdk"
@@ -151,4 +151,4 @@ check = match readFile (underRoot "docs/stdlib/inventory.json")
     ]
 
 test "diff_compiler_stdlib_conventions: ratified stdlib API conventions (rules 8 and 9)" =
-  check
+  check ()

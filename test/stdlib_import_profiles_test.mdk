@@ -5,7 +5,7 @@
    `IO` is the join of a profile's grants, so a module definition typed
    `<IO>` that performs a label the profile lacks fails the whole import.
    Each module is checked in its own `medaka check --target <profile>` child
-   over a generated one-line program; the children run `testJobs` at a time.
+   over a generated one-line program; the children run `testJobs ()` at a time.
 
    Runs under `medaka test --native`: it spawns subprocesses and writes
    scratch files. -}
@@ -27,8 +27,8 @@ profiles =
   ["wasmgc/node", "wasmgc/browser-worker", "wasmgc/edge", "wasmgc/wasi-p2"]
 
 -- The module names under stdlib/ and stdlib/crypto/, without `_test` siblings.
-stdlibModules : <IO> List String
-stdlibModules = sort (dirModules "" ++ dirModules "crypto")
+stdlibModules : Unit -> <IO> List String
+stdlibModules () = sort (dirModules "" ++ dirModules "crypto")
 
 dirModules : String -> <IO> List String
 dirModules sub =
@@ -66,14 +66,14 @@ writeProbes dir mods =
 -- Refusals nobody listed, and listed refusals that no longer happen.
 sweep : String -> <Exec, IO, FileRead, FileWrite> List String
 sweep dir =
-  let mods = stdlibModules
+  let mods = stdlibModules ()
   let cells = flatMap (p => map (m => (p, m)) mods) profiles
   let writeErrs = writeProbes dir mods
   let results =
     boundedVerbsSeconds
       300
       (map
-        ((p, m) => (medakaBin, ["check", "--target", p, probeFile dir m]))
+        ((p, m) => (medakaBin (), ["check", "--target", p, probeFile dir m]))
         cells)
   writeErrs ++ flatMap (r => r) (zipWith verdict cells results)
 
@@ -91,4 +91,4 @@ test "stdlib_import_profiles: no unexpected refusal on any wasm profile" =
   withScratchDir (dir => expectEqual [] (sweep dir))
 
 test "stdlib_import_profiles: the sweep finds stdlib modules to check" =
-  expectAtLeast 1 (length stdlibModules)
+  expectAtLeast 1 (length (stdlibModules ()))

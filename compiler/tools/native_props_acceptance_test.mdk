@@ -28,8 +28,14 @@ runInvocation : List String ->
 runInvocation options target =
   let args =
     [
-        "MEDAKA_NATIVE_PROP_PROOF=compiled", medakaBin, "test", "--json",
-        "--cases", "20", "--seed", "20261005"
+        "MEDAKA_NATIVE_PROP_PROOF=compiled",
+        medakaBin (),
+        "test",
+        "--json",
+        "--cases",
+        "20",
+        "--seed",
+        "20261005",
       ]
       ++ options
       ++ [target]
@@ -42,9 +48,18 @@ runReportIn options target =
   let dir = replaceAll "/main.mdk" "" target
   let args =
     [
-        "-c", "cd \"$0\" && exec \"$@\"", dir, "env",
-        "MEDAKA_NATIVE_PROP_PROOF=compiled", medakaBin, "test", "--json",
-        "--cases", "20", "--seed", "20261005"
+        "-c",
+        "cd \"$0\" && exec \"$@\"",
+        dir,
+        "env",
+        "MEDAKA_NATIVE_PROP_PROOF=compiled",
+        medakaBin (),
+        "test",
+        "--json",
+        "--cases",
+        "20",
+        "--seed",
+        "20261005",
       ]
       ++ options
       ++ ["main.mdk"]
@@ -195,7 +210,7 @@ test "native property execution works for the core auto-prelude itself" =
     [("native", "neq is the negation of eq", "pass")]
     (runReport
       ["--native", "--filter", "neq is the negation of eq"]
-      "\{medakaRoot}/stdlib/core.mdk")
+      "\{medakaRoot ()}/stdlib/core.mdk")
 
 test "native property generation keeps stdlib array on its original identity graph" =
   gradeReport
@@ -203,7 +218,7 @@ test "native property generation keeps stdlib array on its original identity gra
     [("native", "makeWith length", "pass")]
     (runReport
       ["--native", "--filter", "makeWith length"]
-      "\{medakaRoot}/stdlib/array.mdk")
+      "\{medakaRoot ()}/stdlib/array.mdk")
 
 test "native generators explore containers, characters and independent Boolean draws" =
   withFixtures
@@ -409,7 +424,7 @@ test "property bodies must typecheck as Bool" =
     (target =>
       gradeFailedInvocation
         ["Bool", "Int"]
-        (boundedVerbSeconds 120 medakaBin ["check", target]))
+        (boundedVerbSeconds 120 (medakaBin ()) ["check", target]))
 
 test "same-spelled imported ADTs retain their declaring identities" =
   withFixtures
@@ -522,7 +537,7 @@ test "unsupported property parameters produce a named capability error" =
       ])
 
 runSeededReport : Int -> String -> <Exec, IO> Result String (Int, Json)
-runSeededReport seed target = match boundedVerbSeconds 120 medakaBin [
+runSeededReport seed target = match boundedVerbSeconds 120 (medakaBin ()) [
   "test",
   "--json",
   "--engines",
@@ -545,7 +560,7 @@ runSingleSeededReport : Int ->
   String ->
   <Exec, IO> Result String (Int, Json)
 runSingleSeededReport seed filter target =
-  match boundedVerbSeconds 120 medakaBin [
+  match boundedVerbSeconds 120 (medakaBin ()) [
     "test",
     "--json",
     "--engines",
@@ -806,7 +821,7 @@ test "a failing eval law still executes and labels native in a human report" =
     (target =>
       gradeFailedInvocation
         ["both failures", "[eval]", "[native]"]
-        (boundedVerbSeconds 120 medakaBin [
+        (boundedVerbSeconds 120 (medakaBin ()) [
           "test",
           "--engines",
           "eval,native",

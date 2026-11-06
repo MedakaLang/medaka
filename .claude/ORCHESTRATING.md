@@ -1399,8 +1399,7 @@ Build/seed mechanics live in `AGENTS.md`; what is orchestrator-specific:
   reproduces its own IR), plus the byte-identical `diff_compiler_llvm` / `_modules` / `_typed` /
   `diff_compiler_build` differentials. These compare the native compiler against **checked-in goldens
   captured from itself** — there is no OCaml oracle (OCaml was removed 2026-06-26).
-- **Decided invariants — do not relitigate** (see memory): retirement ≠ removal; lazy top-level nullary
-  canonical; no catchable panics.
+- **Decided invariants — do not relitigate** (see memory): retirement ≠ removal; no catchable panics.
 - **A new gap in a tool's native compile** (a tool pulled into the native graph for the first time) is the
   recurring shape: census it gap-tolerantly, then close each gap principled. `compiler/EMITTER-GAPS.md` is
   the gap ledger.

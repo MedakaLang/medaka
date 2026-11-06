@@ -64,8 +64,8 @@ import test_process.{medakaBin, medakaRoot}
 -- Fixtures are located through MEDAKA_ROOT rather than the working
 -- directory: `medaka gate run` exports it and inherits whatever cwd the
 -- caller had.
-corpus : <IO> String
-corpus = "\{medakaRoot}/test/run_check_agreement_fixtures"
+corpus : Unit -> <IO> String
+corpus () = "\{medakaRoot ()}/test/run_check_agreement_fixtures"
 
 {- | One fixture's graded row. `note` carries a structural failure — a
    fixture missing its verdict pin, a spawn that could not start — which
@@ -125,7 +125,7 @@ structuralRow base note = Row {
 planOne : String -> String -> <FileRead, IO> Result Row (String, String)
 planOne scratch path =
   let base = stem path
-  match readFile "\{corpus}/\{base}.expected"
+  match readFile "\{corpus ()}/\{base}.expected"
     Err e => Err (structuralRow base "no readable .expected file: \{e}")
     Ok _ => Ok (path, "\{scratch}/\{base}.bin")
 
@@ -135,7 +135,7 @@ gradeOne : String ->
   <FileRead, IO> Row
 gradeOne path _ spawned =
   let base = stem path
-  let sibling = "\{corpus}/\{base}"
+  let sibling = "\{corpus ()}/\{base}"
   match (spawned, readFile "\{sibling}.expected")
     (Err e, _) => structuralRow base e
     (_, Err e) => structuralRow base "no readable .expected file: \{e}"
@@ -191,16 +191,16 @@ sweep entries =
    nothing is an `Err` rather than a green run over zero rows; it walks
    recursively, and `lib/` holds imported modules rather than entry points,
    so only the root's own files are fixtures. -}
-mdkFixtures : <FileRead, IO> Result String (List String)
-mdkFixtures = match fixtureFiles corpus
+mdkFixtures : Unit -> <FileRead, IO> Result String (List String)
+mdkFixtures () = match fixtureFiles (corpus ())
   Err e => Err e
   Ok paths =>
-    match sort (filter (p => endsWith ".mdk" p && dirname p == corpus) paths)
+    match sort (filter (p => endsWith ".mdk" p && dirname p == corpus ()) paths)
       [] => Err "no top-level .mdk fixtures"
       fixtures => Ok fixtures
 
 pinnedVerdict : String -> <FileRead, IO> Option String
-pinnedVerdict path = match readFile "\{corpus}/\{stem path}.expected"
+pinnedVerdict path = match readFile "\{corpus ()}/\{stem path}.expected"
   Err _ => Some "  \{stem path}: no .expected file pinning ACCEPT or REJECT"
   Ok raw =>
     let v = trim raw
@@ -209,8 +209,8 @@ pinnedVerdict path = match readFile "\{corpus}/\{stem path}.expected"
     else
       Some "  \{stem path}: .expected reads \{debug v}, not ACCEPT or REJECT"
 
-test "every fixture pins exactly one of ACCEPT or REJECT" = match mdkFixtures
-  Err e => fail "\{corpus}: \{e}"
+test "every fixture pins exactly one of ACCEPT or REJECT" = match mdkFixtures ()
+  Err e => fail "\{corpus ()}: \{e}"
   Ok entries =>
     summarizeAgreement
       "do not pin a verdict"
@@ -226,10 +226,10 @@ declaredFixtureCount : Int
 declaredFixtureCount = 299
 
 test "check, run and build agree with every fixture's pinned verdict and value" =
-  match mdkFixtures
-    Err e => fail "\{corpus}: \{e}"
+  match mdkFixtures ()
+    Err e => fail "\{corpus ()}: \{e}"
     Ok entries => match expectUnitCount declaredFixtureCount entries
-      Err e => fail "\{corpus}: \{e} — see `declaredFixtureCount`"
+      Err e => fail "\{corpus ()}: \{e} — see `declaredFixtureCount`"
       Ok _ => sweep entries
 
 -- # Fixed-width integers: out of range is refused, never stored
@@ -254,8 +254,8 @@ test "check, run and build agree with every fixture's pinned verdict and value" 
    look identical, and a range check that fired as an emitter panic would
    otherwise pass. The runtime rows reuse `checkRunBuild`'s fatal-outcome
    grading, which also requires `check` to accept the program. -}
-refusalCorpus : <IO> String
-refusalCorpus = "\{medakaRoot}/test/fixed_width_refusal_fixtures"
+refusalCorpus : Unit -> <IO> String
+refusalCorpus () = "\{medakaRoot ()}/test/fixed_width_refusal_fixtures"
 
 -- The diagnostic an out-of-range literal owes: the literal, the type and its
 -- range, on the same line as the fixture's own location. The two pattern
@@ -415,11 +415,11 @@ refusalSpawns : String ->
   (String, List String) ->
   <IO> List (String, List String)
 refusalSpawns scratch (name, _) =
-  let entry = "\{refusalCorpus}/\{name}.mdk"
+  let entry = "\{refusalCorpus ()}/\{name}.mdk"
   [
-    (medakaBin, ["check", entry]),
-    (medakaBin, ["run", entry]),
-    (medakaBin, ["build", entry, "-o", "\{scratch}/\{name}.bin"]),
+    (medakaBin (), ["check", entry]),
+    (medakaBin (), ["run", entry]),
+    (medakaBin (), ["build", entry, "-o", "\{scratch}/\{name}.bin"]),
   ]
 
 compileRefusalFailure : (String, List String) ->
@@ -431,8 +431,8 @@ compileRefusalFailure (name, needles) spawned =
     whys => Some "  \{padRight 26 ' ' name} \{join "; " whys}"
 
 test "every fixed-width refusal fixture has a row, and every row a fixture" =
-  match fixtureStems refusalCorpus
-    Err e => fail "\{refusalCorpus}: \{e}"
+  match fixtureStems (refusalCorpus ())
+    Err e => fail "\{refusalCorpus ()}: \{e}"
     Ok found =>
       expectEqual
         (sort (map fst compileRefusals ++ map fst runtimeRefusals))
@@ -447,4 +447,4 @@ test "an out-of-range fixed-width literal is refused by check, run and build" =
     summarizeSweep
 
 test "a computed out-of-range fixed-width value panics on run and build, never stored" =
-  fatalOutcomeSweep refusalCorpus (length runtimeRefusals) runtimeRefusals
+  fatalOutcomeSweep (refusalCorpus ()) (length runtimeRefusals) runtimeRefusals

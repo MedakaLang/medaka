@@ -569,8 +569,8 @@ roundTripFixture runtimeDecls coreDecls name =
 
 -- Every engine fixture's verdict, and the check that together they carry every
 -- field a dump must round-trip.
-corpusRoundTrip : <IO, FileRead> Result String Expectation
-corpusRoundTrip = do
+corpusRoundTrip : Unit -> <IO, FileRead> Result String Expectation
+corpusRoundTrip () = do
   entries <- listDir (underRoot "test/engine_fixtures")
   rsrc <- readFile (underRoot "stdlib/runtime.mdk")
   csrc <- readFile (underRoot "stdlib/core.mdk")
@@ -594,7 +594,7 @@ corpusRoundTrip = do
     ])
 
 test "every engine fixture's lowered program round-trips through its dump" =
-  match corpusRoundTrip
+  match corpusRoundTrip ()
     Ok verdict => verdict
     Err e => fail e
 
@@ -648,8 +648,8 @@ test "origin codec retains owner rows and generated component lists" =
   let encoded = cprogramToSexp prog
   expectEqual encoded (cprogramToSexp (parseCProgram encoded))
 
-memoOriginRoundTrip : <IO, FileRead> Result String Expectation
-memoOriginRoundTrip = do
+memoOriginRoundTrip : Unit -> <IO, FileRead> Result String Expectation
+memoOriginRoundTrip () = do
   rsrc <- readFile (underRoot "stdlib/runtime.mdk")
   csrc <- readFile (underRoot "stdlib/core.mdk")
   let dir = underRoot "test/llvm_fixtures_typed"
@@ -668,6 +668,6 @@ memoOriginRoundTrip = do
     ])
 
 test "lowered nullary memo origin survives the codec" =
-  match memoOriginRoundTrip
+  match memoOriginRoundTrip ()
     Ok verdict => verdict
     Err e => fail e

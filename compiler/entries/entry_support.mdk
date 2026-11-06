@@ -989,14 +989,14 @@ withSiteFile : String -> Loc -> Loc
 withSiteFile path (Loc "" sl sc el ec) = Loc path sl sc el ec
 withSiteFile _ l = l
 
--- The pass configuration the two real emit entries run with, read once per
--- process: `MEDAKA_CORE_LINT` (`1` on, `0` off; unset is on, unlike
+-- The pass configuration the two real emit entries run with. Each entry calls
+-- this once per process, since it reads the environment: `MEDAKA_CORE_LINT` (`1` on, `0` off; unset is on, unlike
 -- `defaultPassConfig`, which library callers use unlinted) and `MEDAKA_DUMP_CORE_AFTER`
 -- (comma-separated names of `emitPasses`, `input`, or `all`).  A value outside
 -- those is a usage error naming the valid ones.
 export
-passConfigOfEnv : <IO> PassConfig
-passConfigOfEnv =
+passConfigOfEnv : Unit -> <IO> PassConfig
+passConfigOfEnv () =
   let lintOn =
     switchOrFail
       "MEDAKA_CORE_LINT"

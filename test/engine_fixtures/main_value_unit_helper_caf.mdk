@@ -1,6 +1,6 @@
--- A Unit main through an unannotated CAF that calls a user function (#3792).
+-- A Unit main through an unannotated unit function that calls a user function (#3792).
 helper x = println x
 
-go = helper 1
+go () = helper 1
 
-main = go
+main = go ()

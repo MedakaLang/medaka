@@ -1,5 +1,8 @@
--- `cell` names itself, so it is a lazy global; a value `main` that reads it
--- prints the String "under", as under `medaka run`.
+-- Since top-level initialisation rule I3, `medaka check`, `run` and `build` refuse this
+-- program with T-CYCLIC-VALUE before any engine runs: `cell` mentions itself in a
+-- deref position while it is initialised (test/rejection_parity_fixtures.txt pins that
+-- on native and wasm). The prelude-free llvm probe runs no typechecker, so it still
+-- emits `cell` as a lazy global that `main` reads, printing the String "under".
 cell = if True then "under" else cell
 
 main = cell
