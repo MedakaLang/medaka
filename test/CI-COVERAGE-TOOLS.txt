@@ -374,6 +374,11 @@ scripts/cost_baseline_land     the BOX-SIDE half of #2180's baseline auto-advanc
                                the compiler. Never run by CI.
 scripts/mutation_transaction   one-source expected-red transaction helper; its focused test
                                runs unguarded in the soundness job.
+scripts/emit_identity          sprint-orchestration evidence tool: same-source emit differential
+                               (LLVM IR or WAT) between a base tree and a head tree, tree paths
+                               normalised. Its red/green behaviour is pinned by the enrolled
+                               gate test/emit_identity_selftest.sh; the tool itself asserts
+                               nothing about the compiler, and exit 1 is data for a reviewer.
 scripts/sprint-disjoint        sprint-orchestration evidence tool: mechanical disjointness
                                check (file/golden/snapshot/fixture-corpus intersection +
                                merge-tree dry merge) for running two sprint writers in

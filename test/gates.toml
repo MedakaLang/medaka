@@ -3797,6 +3797,24 @@ corpus = ["test/bench_fixtures"]
 toolchain = ["clang", "valgrind"]
 link = "production"
 
+# The red/green pin for scripts/emit_identity.sh, the same-source emit differential
+# sprint packets cite (#4930).
+[[gate]]
+name = "emit_identity_selftest"
+area = "infra"
+shard = "gates_5"
+project = "compiler"
+tiers = ["merge"]
+cost = "cheap"
+kind = "exec"
+migration = "shell:external-harness"
+run = "test/emit_identity_selftest.sh"
+oracles = []
+sources = ["scripts/emit_identity.sh", "scripts/emit_identity_norm.py", "test/emit_identity_selftest.sh"]
+corpus = []
+toolchain = ["clang"]
+link = "production"
+
 # Every help/usage string must describe the CLI that actually exists (#2354,
 # S-help-truthfulness). Asserts three agreement properties, all derived from the
 # BINARY through test/cli_conformance_lib.sh — the same derivation
