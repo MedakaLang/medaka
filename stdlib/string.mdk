@@ -879,28 +879,33 @@ export
 lines : String -> List String
 lines s = match stringIndexOf "\n" s
   None => [stripCR s]
-  Some _ => linesFrom s (stringByteLength s) 0 0 False
+  Some _ => linesFrom s (stringByteLength s) 0
 
--- The lines from byte `start`, scanning at byte `i`; `cr` says the character
--- before `i` is a `\r`.  A `\n` byte in UTF-8 is always a whole character, so
--- the scan steps one codepoint at a time and cuts each line once at byte
--- offsets, leaving the `\r` before its `\n` out of the slice.
-linesFrom : String -> Int -> Int -> Int -> Bool -> List String
+-- The lines from byte `start`.  The scan for each line end returns before the
+-- next line starts, so the call depth under `medaka run` is the line count,
+-- not the byte count.
+linesFrom : String -> Int -> Int -> List String
 -- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
 -- lint-disable-next-line rule-threaded-invariant
-linesFrom s n start i cr
-  | i >= n = [lineSlice s start n cr]
-  | otherwise =
-    let packed = stringCodepointAtByte s i
-    let c = packed / 8
-    if c == 10 then
-      lineSlice s start i cr :: linesFrom s n (i + 1) (i + 1) False
-    else
-      linesFrom s n start (i + packed - c * 8) (c == 13)
+linesFrom s n start =
+  let e = newlineFrom s n start
+  if e >= n then
+    [stripCR (stringSliceBytes start n s)]
+  else
+    stripCR (stringSliceBytes start e s) :: linesFrom s n (e + 1)
 
--- The bytes `[start, hi)`, minus the `\r` that ends them when `cr`.
-lineSlice : String -> Int -> Int -> Bool -> String
-lineSlice s start hi cr = stringSliceBytes start (if cr then hi - 1 else hi) s
+-- The byte offset of the first `\n` at or after byte `i`, or `n` when there
+-- is none.  A `\n` byte in UTF-8 is always a whole character, so the scan steps
+-- one codepoint at a time.
+newlineFrom : String -> Int -> Int -> Int
+newlineFrom s n i0 = go i0
+  where
+    go i
+      | i >= n = n
+      | otherwise =
+        let packed = stringCodepointAtByte s i
+        let c = packed / 8
+        if c == 10 then i else go (i + packed - c * 8)
 
 {- | The line without one trailing `\r`.
 

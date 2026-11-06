@@ -1,5 +1,5 @@
 # META
-source_lines=1215
+source_lines=1220
 stages=DESUGAR,MARK
 # SOURCE
 {- | Operations on `String` and `Char`.
@@ -883,28 +883,33 @@ export
 lines : String -> List String
 lines s = match stringIndexOf "\n" s
   None => [stripCR s]
-  Some _ => linesFrom s (stringByteLength s) 0 0 False
+  Some _ => linesFrom s (stringByteLength s) 0
 
--- The lines from byte `start`, scanning at byte `i`; `cr` says the character
--- before `i` is a `\r`.  A `\n` byte in UTF-8 is always a whole character, so
--- the scan steps one codepoint at a time and cuts each line once at byte
--- offsets, leaving the `\r` before its `\n` out of the slice.
-linesFrom : String -> Int -> Int -> Int -> Bool -> List String
+-- The lines from byte `start`.  The scan for each line end returns before the
+-- next line starts, so the call depth under `medaka run` is the line count,
+-- not the byte count.
+linesFrom : String -> Int -> Int -> List String
 -- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
 -- lint-disable-next-line rule-threaded-invariant
-linesFrom s n start i cr
-  | i >= n = [lineSlice s start n cr]
-  | otherwise =
-    let packed = stringCodepointAtByte s i
-    let c = packed / 8
-    if c == 10 then
-      lineSlice s start i cr :: linesFrom s n (i + 1) (i + 1) False
-    else
-      linesFrom s n start (i + packed - c * 8) (c == 13)
+linesFrom s n start =
+  let e = newlineFrom s n start
+  if e >= n then
+    [stripCR (stringSliceBytes start n s)]
+  else
+    stripCR (stringSliceBytes start e s) :: linesFrom s n (e + 1)
 
--- The bytes `[start, hi)`, minus the `\r` that ends them when `cr`.
-lineSlice : String -> Int -> Int -> Bool -> String
-lineSlice s start hi cr = stringSliceBytes start (if cr then hi - 1 else hi) s
+-- The byte offset of the first `\n` at or after byte `i`, or `n` when there
+-- is none.  A `\n` byte in UTF-8 is always a whole character, so the scan steps
+-- one codepoint at a time.
+newlineFrom : String -> Int -> Int -> Int
+newlineFrom s n i0 = go i0
+  where
+    go i
+      | i >= n = n
+      | otherwise =
+        let packed = stringCodepointAtByte s i
+        let c = packed / 8
+        if c == 10 then i else go (i + packed - c * 8)
 
 {- | The line without one trailing `\r`.
 
@@ -1363,11 +1368,11 @@ sliceBetween (StrCursor s a) (StrCursor _ b) = stringSliceBytes a b s
 (DTypeSig false "subChars" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
 (DFunDef false "subChars" ((PVar "a") (PVar "lo") (PVar "hi")) (EApp (EVar "stringFromChars") (EApp (EApp (EVar "arrayMakeWith") (EBinOp "-" (EVar "hi") (EVar "lo"))) (ELam ((PVar "i")) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "lo") (EVar "i"))) (EVar "a"))))))
 (DTypeSig true "lines" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "lines" ((PVar "s")) (EMatch (EApp (EApp (EVar "stringIndexOf") (ELit (LString "\n"))) (EVar "s")) (arm (PCon "None") () (EListLit (EApp (EVar "stripCR") (EVar "s")))) (arm (PCon "Some" PWild) () (EApp (EApp (EApp (EApp (EApp (EVar "linesFrom") (EVar "s")) (EApp (EVar "stringByteLength") (EVar "s"))) (ELit (LInt 0))) (ELit (LInt 0))) (EVar "False")))))
-(DTypeSig false "linesFrom" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "linesFrom" ((PVar "s") (PVar "n") (PVar "start") (PVar "i") (PVar "cr")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EListLit (EApp (EApp (EApp (EApp (EVar "lineSlice") (EVar "s")) (EVar "start")) (EVar "n")) (EVar "cr"))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "packed") (EApp (EApp (EVar "stringCodepointAtByte") (EVar "s")) (EVar "i"))) (DoLet false false (PVar "c") (EBinOp "/" (EVar "packed") (ELit (LInt 8)))) (DoExpr (EIf (EBinOp "==" (EVar "c") (ELit (LInt 10))) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "lineSlice") (EVar "s")) (EVar "start")) (EVar "i")) (EVar "cr")) (EApp (EApp (EApp (EApp (EApp (EVar "linesFrom") (EVar "s")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "False"))) (EApp (EApp (EApp (EApp (EApp (EVar "linesFrom") (EVar "s")) (EVar "n")) (EVar "start")) (EBinOp "-" (EBinOp "+" (EVar "i") (EVar "packed")) (EBinOp "*" (EVar "c") (ELit (LInt 8))))) (EBinOp "==" (EVar "c") (ELit (LInt 13))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "lineSlice" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyCon "String"))))))
-(DFunDef false "lineSlice" ((PVar "s") (PVar "start") (PVar "hi") (PVar "cr")) (EApp (EApp (EApp (EVar "stringSliceBytes") (EVar "start")) (EIf (EVar "cr") (EBinOp "-" (EVar "hi") (ELit (LInt 1))) (EVar "hi"))) (EVar "s")))
+(DFunDef false "lines" ((PVar "s")) (EMatch (EApp (EApp (EVar "stringIndexOf") (ELit (LString "\n"))) (EVar "s")) (arm (PCon "None") () (EListLit (EApp (EVar "stripCR") (EVar "s")))) (arm (PCon "Some" PWild) () (EApp (EApp (EApp (EVar "linesFrom") (EVar "s")) (EApp (EVar "stringByteLength") (EVar "s"))) (ELit (LInt 0))))))
+(DTypeSig false "linesFrom" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "linesFrom" ((PVar "s") (PVar "n") (PVar "start")) (EBlock (DoLet false false (PVar "e") (EApp (EApp (EApp (EVar "newlineFrom") (EVar "s")) (EVar "n")) (EVar "start"))) (DoExpr (EIf (EBinOp ">=" (EVar "e") (EVar "n")) (EListLit (EApp (EVar "stripCR") (EApp (EApp (EApp (EVar "stringSliceBytes") (EVar "start")) (EVar "n")) (EVar "s")))) (EBinOp "::" (EApp (EVar "stripCR") (EApp (EApp (EApp (EVar "stringSliceBytes") (EVar "start")) (EVar "e")) (EVar "s"))) (EApp (EApp (EApp (EVar "linesFrom") (EVar "s")) (EVar "n")) (EBinOp "+" (EVar "e") (ELit (LInt 1)))))))))
+(DTypeSig false "newlineFrom" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
+(DFunDef false "newlineFrom" ((PVar "s") (PVar "n") (PVar "i0")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "n") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "packed") (EApp (EApp (EVar "stringCodepointAtByte") (EVar "s")) (EVar "i"))) (DoLet false false (PVar "c") (EBinOp "/" (EVar "packed") (ELit (LInt 8)))) (DoExpr (EIf (EBinOp "==" (EVar "c") (ELit (LInt 10))) (EVar "i") (EApp (EVar "go") (EBinOp "-" (EBinOp "+" (EVar "i") (EVar "packed")) (EBinOp "*" (EVar "c") (ELit (LInt 8)))))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EVar "go") (EVar "i0"))))
 (DTypeSig true "stripCR" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "stripCR" ((PVar "line")) (EIf (EApp (EApp (EVar "endsWith") (ELit (LString "\r"))) (EVar "line")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EApp (EVar "stringLength") (EVar "line")) (ELit (LInt 1)))) (EVar "line")) (EVar "line")))
 (DTypeSig true "words" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
@@ -1580,11 +1585,11 @@ sliceBetween (StrCursor s a) (StrCursor _ b) = stringSliceBytes a b s
 (DTypeSig false "subChars" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
 (DFunDef false "subChars" ((PVar "a") (PVar "lo") (PVar "hi")) (EApp (EVar "stringFromChars") (EApp (EApp (EVar "arrayMakeWith") (EBinOp "-" (EVar "hi") (EVar "lo"))) (ELam ((PVar "i")) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "lo") (EVar "i"))) (EVar "a"))))))
 (DTypeSig true "lines" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "lines" ((PVar "s")) (EMatch (EApp (EApp (EVar "stringIndexOf") (ELit (LString "\n"))) (EVar "s")) (arm (PCon "None") () (EListLit (EApp (EVar "stripCR") (EVar "s")))) (arm (PCon "Some" PWild) () (EApp (EApp (EApp (EApp (EApp (EVar "linesFrom") (EVar "s")) (EApp (EVar "stringByteLength") (EVar "s"))) (ELit (LInt 0))) (ELit (LInt 0))) (EVar "False")))))
-(DTypeSig false "linesFrom" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "linesFrom" ((PVar "s") (PVar "n") (PVar "start") (PVar "i") (PVar "cr")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EListLit (EApp (EApp (EApp (EApp (EVar "lineSlice") (EVar "s")) (EVar "start")) (EVar "n")) (EVar "cr"))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "packed") (EApp (EApp (EVar "stringCodepointAtByte") (EVar "s")) (EVar "i"))) (DoLet false false (PVar "c") (EBinOp "/" (EVar "packed") (ELit (LInt 8)))) (DoExpr (EIf (EBinOp "==" (EVar "c") (ELit (LInt 10))) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "lineSlice") (EVar "s")) (EVar "start")) (EVar "i")) (EVar "cr")) (EApp (EApp (EApp (EApp (EApp (EVar "linesFrom") (EVar "s")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "False"))) (EApp (EApp (EApp (EApp (EApp (EVar "linesFrom") (EVar "s")) (EVar "n")) (EVar "start")) (EBinOp "-" (EBinOp "+" (EVar "i") (EVar "packed")) (EBinOp "*" (EVar "c") (ELit (LInt 8))))) (EBinOp "==" (EVar "c") (ELit (LInt 13))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "lineSlice" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyCon "String"))))))
-(DFunDef false "lineSlice" ((PVar "s") (PVar "start") (PVar "hi") (PVar "cr")) (EApp (EApp (EApp (EVar "stringSliceBytes") (EVar "start")) (EIf (EVar "cr") (EBinOp "-" (EVar "hi") (ELit (LInt 1))) (EVar "hi"))) (EVar "s")))
+(DFunDef false "lines" ((PVar "s")) (EMatch (EApp (EApp (EVar "stringIndexOf") (ELit (LString "\n"))) (EVar "s")) (arm (PCon "None") () (EListLit (EApp (EVar "stripCR") (EVar "s")))) (arm (PCon "Some" PWild) () (EApp (EApp (EApp (EVar "linesFrom") (EVar "s")) (EApp (EVar "stringByteLength") (EVar "s"))) (ELit (LInt 0))))))
+(DTypeSig false "linesFrom" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "linesFrom" ((PVar "s") (PVar "n") (PVar "start")) (EBlock (DoLet false false (PVar "e") (EApp (EApp (EApp (EVar "newlineFrom") (EVar "s")) (EVar "n")) (EVar "start"))) (DoExpr (EIf (EBinOp ">=" (EVar "e") (EVar "n")) (EListLit (EApp (EVar "stripCR") (EApp (EApp (EApp (EVar "stringSliceBytes") (EVar "start")) (EVar "n")) (EVar "s")))) (EBinOp "::" (EApp (EVar "stripCR") (EApp (EApp (EApp (EVar "stringSliceBytes") (EVar "start")) (EVar "e")) (EVar "s"))) (EApp (EApp (EApp (EVar "linesFrom") (EVar "s")) (EVar "n")) (EBinOp "+" (EVar "e") (ELit (LInt 1)))))))))
+(DTypeSig false "newlineFrom" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
+(DFunDef false "newlineFrom" ((PVar "s") (PVar "n") (PVar "i0")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "n") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "packed") (EApp (EApp (EVar "stringCodepointAtByte") (EVar "s")) (EVar "i"))) (DoLet false false (PVar "c") (EBinOp "/" (EVar "packed") (ELit (LInt 8)))) (DoExpr (EIf (EBinOp "==" (EVar "c") (ELit (LInt 10))) (EVar "i") (EApp (EVar "go") (EBinOp "-" (EBinOp "+" (EVar "i") (EVar "packed")) (EBinOp "*" (EVar "c") (ELit (LInt 8)))))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EVar "go") (EVar "i0"))))
 (DTypeSig true "stripCR" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "stripCR" ((PVar "line")) (EIf (EApp (EApp (EVar "endsWith") (ELit (LString "\r"))) (EVar "line")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EApp (EVar "stringLength") (EVar "line")) (ELit (LInt 1)))) (EVar "line")) (EVar "line")))
 (DTypeSig true "words" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))

@@ -94,20 +94,20 @@ running doctests in stdlib/string.mdk
   ok   stdlib/string.mdk:872: lines "a\nb\nc"
   ok   stdlib/string.mdk:874: lines "a\n"
   ok   stdlib/string.mdk:876: lines ""
-  ok   stdlib/string.mdk:909: stripCR "ab\r"
-  ok   stdlib/string.mdk:911: stripCR "ab"
-  ok   stdlib/string.mdk:925: words "  hello   world "
-  ok   stdlib/string.mdk:928: words "a\u{00A0}b c"
-  ok   stdlib/string.mdk:947: unlines ["a", "b"]
-  ok   stdlib/string.mdk:964: unwords ["a", "b", "c"]
-  ok   stdlib/string.mdk:987: dedent "\n    foo = 1\n    bar = 2\n"
-  ok   stdlib/string.mdk:1006: indent "> " "a\n\n  \nb"
-  ok   stdlib/string.mdk:1008: indent "> " "a\r\n\r\nb\r\n"
-  ok   stdlib/string.mdk:1010: indent "> " "a\rb"
-  ok   stdlib/string.mdk:1126: padLeft 5 '.' "ab"
-  ok   stdlib/string.mdk:1140: padRight 5 '.' "ab"
-  ok   stdlib/string.mdk:1155: center 5 '.' "ab"
-  ok   stdlib/string.mdk:1184: isNone (nextChar (startCursor ""))
-  ok   stdlib/string.mdk:1211: sliceBetween (startCursor "héllo") (startCursor "héllo")
+  ok   stdlib/string.mdk:914: stripCR "ab\r"
+  ok   stdlib/string.mdk:916: stripCR "ab"
+  ok   stdlib/string.mdk:930: words "  hello   world "
+  ok   stdlib/string.mdk:933: words "a\u{00A0}b c"
+  ok   stdlib/string.mdk:952: unlines ["a", "b"]
+  ok   stdlib/string.mdk:969: unwords ["a", "b", "c"]
+  ok   stdlib/string.mdk:992: dedent "\n    foo = 1\n    bar = 2\n"
+  ok   stdlib/string.mdk:1011: indent "> " "a\n\n  \nb"
+  ok   stdlib/string.mdk:1013: indent "> " "a\r\n\r\nb\r\n"
+  ok   stdlib/string.mdk:1015: indent "> " "a\rb"
+  ok   stdlib/string.mdk:1131: padLeft 5 '.' "ab"
+  ok   stdlib/string.mdk:1145: padRight 5 '.' "ab"
+  ok   stdlib/string.mdk:1160: center 5 '.' "ab"
+  ok   stdlib/string.mdk:1189: isNone (nextChar (startCursor ""))
+  ok   stdlib/string.mdk:1216: sliceBetween (startCursor "héllo") (startCursor "héllo")
 
 stdlib/string.mdk: 110/110 passed
