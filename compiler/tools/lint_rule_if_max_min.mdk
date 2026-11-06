@@ -24,10 +24,10 @@ import tools.lint_core.{
   Visitor(..),
   fixLater,
   mkVisitorRule,
+  factDeclLocs,
 }
 import tools.lint_shared.{
   rebinds,
-  declLocList,
   replaceNodeFix,
   ruleNameIfMaxMin,
   unwrapLoc,
@@ -131,8 +131,8 @@ ruleIfMaxMin : StdlibIndex ->
   Positions ->
   List Decl ->
   List Visitor
-ruleIfMaxMin idx _ facts pos decls =
-  [OnExpr [KIf] (ifMaxMinAt idx (ordImplLocs pos decls) facts)]
+ruleIfMaxMin idx _ facts _ _ =
+  [OnExpr [KIf] (ifMaxMinAt idx (ordImplLocs facts) facts)]
 
 ifMaxMinAt : StdlibIndex -> List Loc -> FileFacts -> Ctx -> Expr -> List Finding
 ifMaxMinAt idx ordLocs facts ctx (e@(EIf cond t el)) =
@@ -182,8 +182,8 @@ ifMaxMinFix idx ordLocs facts ctx e (fn, a, b) =
 
 -- The declaration locations of the `impl Ord` blocks.  The walk gives every body
 -- of an impl the impl's own location as its `ctxDeclLoc`.
-ordImplLocs : Positions -> List Decl -> List Loc
-ordImplLocs pos decls = flatMap ordImplLoc (declLocList pos decls)
+ordImplLocs : FileFacts -> List Loc
+ordImplLocs facts = flatMap ordImplLoc (factDeclLocs facts)
 
 ordImplLoc : (Decl, Option Loc) -> List Loc
 ordImplLoc (d, loc) = match (isOrdImpl d, loc)

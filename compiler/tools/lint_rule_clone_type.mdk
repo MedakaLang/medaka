@@ -40,9 +40,9 @@ import tools.lint_core.{
   StdlibIndex,
   mkRule,
   noFix,
+  factDeclLocs,
 }
 import tools.lint_shared.{
-  declLocList,
   ruleNameCloneType,
   tyHeadName,
 }
@@ -106,9 +106,9 @@ ruleCloneType : StdlibIndex ->
   Positions ->
   List Decl ->
   List Finding
-ruleCloneType _ _ _ pos prog =
+ruleCloneType _ _ facts _ prog =
   let impls = cloneImplTargets prog
-  flatMap (cloneTypeDeclL impls) (declLocList pos prog)
+  flatMap (cloneTypeDeclL impls) (factDeclLocs facts)
 
 cloneTypeDeclL : List String -> (Decl, Option Loc) -> List Finding
 cloneTypeDeclL impls (d, loc) = cloneTypeDecl impls loc d

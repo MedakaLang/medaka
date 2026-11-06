@@ -1,5 +1,5 @@
 # META
-source_lines=346
+source_lines=347
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-promissory-reader: a comment says a symbol has no reader yet, but the file reads it (#2550).
@@ -26,6 +26,7 @@ import tools.lint_core.{
   StdlibIndex,
   factComments,
   mkRule,
+  noFix,
 }
 import tools.lint_shared.{
   CommentBlock(..),
@@ -266,7 +267,7 @@ readerFinding path subject (line, _, _) (firstReader :: more) = [
       "comment claims nothing reads `\{subject}` yet, but it is read on line \{firstReader}\{readerCountSuffix (listLen more)}. Restate the claim as what is measured today, or delete it",
     severity = SevWarning,
     loc = Some (Loc path line 1 line 1),
-    fix = None,
+    fix = noFix,
   },
 ]
 
@@ -356,7 +357,7 @@ assignFollows cs n i0 = go i0
 (DUse false (UseGroup ("list") ((mem "last" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isAlnum" false))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "Match" false) (mem "mustCompile" false) (mem "isMatch" false) (mem "find" false "reFind") (mem "findAll" false "reFindAll") (mem "replaceAll" false) (mem "escape" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "factComments" false) (mem "mkRule" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "factComments" false) (mem "mkRule" false) (mem "noFix" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "CommentBlock" true) (mem "codeLineAt" false) (mem "codePortions" false) (mem "commentBlocks" false) (mem "ruleNamePromissoryReader" false) (mem "trimWs" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNamePromissoryReader")) (fa "summary" (ELit (LString "comment claims a symbol has no reader yet (\"nothing reads this yet\", \"no reader yet\", \"do not add a reader\") but the file reads it (#2550)"))) (fa "doc" (ELit (LString "A comment claiming a symbol has no reader yet (\"nothing reads this yet\", \"no reader yet\", \"do not add a reader\") while the file reads it is stale and misleads the next editor (#2550). This enforces the repository comment register.\n\nBefore:\n  -- nothing reads this yet\n  cache = ...   -- read two screens down\nAfter:\n  delete or correct the comment"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Internal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "NotFixable")) (fa "needs" (EListLit))))) (EVar "rulePromissoryReader")) (EVar "None")))
@@ -405,7 +406,7 @@ assignFollows cs n i0 = go i0
 (DFunDef false "promissoryFinding" ((PVar "path") (PVar "codeLines") (PVar "claim")) (EMatch (EApp (EApp (EVar "claimSubject") (EVar "codeLines")) (EVar "claim")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "subject")) () (EIf (EApp (EApp (EVar "declaredInFile") (EVar "subject")) (EVar "codeLines")) (EApp (EApp (EApp (EApp (EVar "readerFinding") (EVar "path")) (EVar "subject")) (EVar "claim")) (EApp (EApp (EVar "readerLines") (EVar "subject")) (EVar "codeLines"))) (EListLit)))))
 (DTypeSig false "readerFinding" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "Int") (TyCon "String") (TyCon "CommentBlock")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Finding")))))))
 (DFunDef false "readerFinding" (PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "readerFinding" ((PVar "path") (PVar "subject") (PTuple (PVar "line") PWild PWild) (PCons (PVar "firstReader") (PVar "more"))) (EListLit (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNamePromissoryReader")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "comment claims nothing reads `")) (EApp (EVar "display") (EVar "subject"))) (ELit (LString "` yet, but it is read on line "))) (EApp (EVar "display") (EVar "firstReader"))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EVar "readerCountSuffix") (EApp (EVar "listLen") (EVar "more"))))) (ELit (LString ". Restate the claim as what is measured today, or delete it")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "path")) (EVar "line")) (ELit (LInt 1))) (EVar "line")) (ELit (LInt 1))))) (fa "fix" (EVar "None"))))))
+(DFunDef false "readerFinding" ((PVar "path") (PVar "subject") (PTuple (PVar "line") PWild PWild) (PCons (PVar "firstReader") (PVar "more"))) (EListLit (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNamePromissoryReader")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "comment claims nothing reads `")) (EApp (EVar "display") (EVar "subject"))) (ELit (LString "` yet, but it is read on line "))) (EApp (EVar "display") (EVar "firstReader"))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EVar "readerCountSuffix") (EApp (EVar "listLen") (EVar "more"))))) (ELit (LString ". Restate the claim as what is measured today, or delete it")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "path")) (EVar "line")) (ELit (LInt 1))) (EVar "line")) (ELit (LInt 1))))) (fa "fix" (EVar "noFix"))))))
 (DTypeSig false "declaredInFile" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyCon "Bool"))))
 (DFunDef false "declaredInFile" ((PVar "subject") (PVar "codeLines")) (EApp (EApp (EApp (EApp (EVar "declaredInFileGo") (EVar "subject")) (EVar "codeLines")) (EApp (EVar "arrayLength") (EVar "codeLines"))) (ELit (LInt 1))))
 (DTypeSig false "declaredInFileGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))))
@@ -437,7 +438,7 @@ assignFollows cs n i0 = go i0
 (DUse false (UseGroup ("list") ((mem "last" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isAlnum" false))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "Match" false) (mem "mustCompile" false) (mem "isMatch" false) (mem "find" false "reFind") (mem "findAll" false "reFindAll") (mem "replaceAll" false) (mem "escape" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "factComments" false) (mem "mkRule" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "factComments" false) (mem "mkRule" false) (mem "noFix" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "CommentBlock" true) (mem "codeLineAt" false) (mem "codePortions" false) (mem "commentBlocks" false) (mem "ruleNamePromissoryReader" false) (mem "trimWs" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNamePromissoryReader")) (fa "summary" (ELit (LString "comment claims a symbol has no reader yet (\"nothing reads this yet\", \"no reader yet\", \"do not add a reader\") but the file reads it (#2550)"))) (fa "doc" (ELit (LString "A comment claiming a symbol has no reader yet (\"nothing reads this yet\", \"no reader yet\", \"do not add a reader\") while the file reads it is stale and misleads the next editor (#2550). This enforces the repository comment register.\n\nBefore:\n  -- nothing reads this yet\n  cache = ...   -- read two screens down\nAfter:\n  delete or correct the comment"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Internal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "NotFixable")) (fa "needs" (EListLit))))) (EVar "rulePromissoryReader")) (EVar "None")))
@@ -486,7 +487,7 @@ assignFollows cs n i0 = go i0
 (DFunDef false "promissoryFinding" ((PVar "path") (PVar "codeLines") (PVar "claim")) (EMatch (EApp (EApp (EVar "claimSubject") (EVar "codeLines")) (EVar "claim")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "subject")) () (EIf (EApp (EApp (EVar "declaredInFile") (EVar "subject")) (EVar "codeLines")) (EApp (EApp (EApp (EApp (EVar "readerFinding") (EVar "path")) (EVar "subject")) (EVar "claim")) (EApp (EApp (EVar "readerLines") (EVar "subject")) (EVar "codeLines"))) (EListLit)))))
 (DTypeSig false "readerFinding" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "Int") (TyCon "String") (TyCon "CommentBlock")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Finding")))))))
 (DFunDef false "readerFinding" (PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "readerFinding" ((PVar "path") (PVar "subject") (PTuple (PVar "line") PWild PWild) (PCons (PVar "firstReader") (PVar "more"))) (EListLit (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNamePromissoryReader")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "comment claims nothing reads `")) (EApp (EMethodRef "display") (EVar "subject"))) (ELit (LString "` yet, but it is read on line "))) (EApp (EMethodRef "display") (EVar "firstReader"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EVar "readerCountSuffix") (EApp (EVar "listLen") (EVar "more"))))) (ELit (LString ". Restate the claim as what is measured today, or delete it")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "path")) (EVar "line")) (ELit (LInt 1))) (EVar "line")) (ELit (LInt 1))))) (fa "fix" (EVar "None"))))))
+(DFunDef false "readerFinding" ((PVar "path") (PVar "subject") (PTuple (PVar "line") PWild PWild) (PCons (PVar "firstReader") (PVar "more"))) (EListLit (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNamePromissoryReader")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "comment claims nothing reads `")) (EApp (EMethodRef "display") (EVar "subject"))) (ELit (LString "` yet, but it is read on line "))) (EApp (EMethodRef "display") (EVar "firstReader"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EVar "readerCountSuffix") (EApp (EVar "listLen") (EVar "more"))))) (ELit (LString ". Restate the claim as what is measured today, or delete it")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "path")) (EVar "line")) (ELit (LInt 1))) (EVar "line")) (ELit (LInt 1))))) (fa "fix" (EVar "noFix"))))))
 (DTypeSig false "declaredInFile" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyCon "Bool"))))
 (DFunDef false "declaredInFile" ((PVar "subject") (PVar "codeLines")) (EApp (EApp (EApp (EApp (EVar "declaredInFileGo") (EVar "subject")) (EVar "codeLines")) (EApp (EVar "arrayLength") (EVar "codeLines"))) (ELit (LInt 1))))
 (DTypeSig false "declaredInFileGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))))

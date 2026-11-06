@@ -18,9 +18,9 @@ import tools.lint_core.{
   mkRule,
   factOracle,
   noFix,
+  factDeclLocs,
 }
 import tools.lint_shared.{
-  declLocList,
   isStdlibPath,
   ruleNameDerivable,
   tyHeadName,
@@ -65,11 +65,11 @@ ruleDerivable : StdlibIndex ->
   Positions ->
   List Decl ->
   List Finding
-ruleDerivable _ path facts pos prog
+ruleDerivable _ path facts _ _
   | isStdlibPath path = []
   | otherwise =
     let orc = factOracle facts
-    flatMap (derivableDeclL orc) (declLocList pos prog)
+    flatMap (derivableDeclL orc) (factDeclLocs facts)
 
 derivableDeclL : Oracle -> (Decl, Option Loc) -> List Finding
 derivableDeclL orc (d, loc) = derivableDecl orc loc d

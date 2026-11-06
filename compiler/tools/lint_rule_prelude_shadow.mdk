@@ -17,10 +17,10 @@ import tools.lint_core.{
   StdlibIndex,
   mkRule,
   noFix,
+  factDeclLocs,
 }
 import tools.lint_shared.{
   dedupeNamesLoc,
-  declLocList,
   ruleNamePreludeShadow,
   topDefNameL,
 }
@@ -78,10 +78,10 @@ rulePreludeShadow : StdlibIndex ->
   Positions ->
   List Decl ->
   List Finding
-rulePreludeShadow _ _ _ pos prog =
+rulePreludeShadow _ _ facts _ prog =
   flatMap
     (preludeShadowHit (declaredTypes prog))
-    (dedupeNamesLoc (flatMap topDefNameL (declLocList pos prog)))
+    (dedupeNamesLoc (flatMap topDefNameL (factDeclLocs facts)))
 
 declaredTypes : List Decl -> List String
 declaredTypes prog = flatMap declaredType prog

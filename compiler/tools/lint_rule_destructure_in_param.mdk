@@ -21,11 +21,11 @@ import tools.lint_core.{
   factOracle,
   mkRule,
   noFix,
+  factDeclLocs,
 }
 import tools.lint_shared.{
   armToClause,
   ctorIsSingle,
-  declLocList,
   matchBodyOnBareParam,
   ruleNameDestructureInParam,
   wholeWordIn,
@@ -72,9 +72,9 @@ ruleDestructureInParam : StdlibIndex ->
   Positions ->
   List Decl ->
   List Finding
-ruleDestructureInParam _ _ facts pos prog =
+ruleDestructureInParam _ _ facts _ _ =
   let orc = factOracle facts
-  flatMap (destructureDeclL orc) (declLocList pos prog)
+  flatMap (destructureDeclL orc) (factDeclLocs facts)
 
 destructureDeclL : Oracle -> (Decl, Option Loc) -> List Finding
 destructureDeclL orc (d, loc) = match d

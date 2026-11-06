@@ -1,5 +1,5 @@
 # META
-source_lines=227
+source_lines=228
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-unused-param: a function, method or `prop` parameter that no use in its clause resolves to. Rename it `_name` to say it is unused.
@@ -41,6 +41,7 @@ import tools.lint_core.{
   StdlibIndex,
   factLines,
   factScopes,
+  fixLater,
   mkRule,
 }
 import tools.lint_scope.{
@@ -126,7 +127,7 @@ paramFinding facts pos sites b =
         "parameter '\{b.binderName}' is never used. Rename it to '_\{b.binderName}' to mark it intentionally unused",
       severity = SevWarning,
       loc = Some b.binderSpan,
-      fix = paramFix facts (declLines pos b) b mine,
+      fix = fixLater (_ => paramFix facts (declLines pos b) b mine),
     },
   ]
 
@@ -236,7 +237,7 @@ siteKind (NameSite _ _ kind) = kind
 (DUse false (UseGroup ("frontend" "parser") ((mem "DeclPos" false) (mem "Positions" true) (mem "declPosEndLine" false) (mem "declPosLine" false) (mem "positionsDecls" false))))
 (DUse false (UseGroup ("string") ((mem "length" false "strLength") (mem "sliceClamped" false))))
 (DUse false (UseGroup ("array") ((mem "get" false "arrayGet"))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" true) (mem "FixEdit" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "factLines" false) (mem "factScopes" false) (mem "mkRule" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" true) (mem "FixEdit" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "factLines" false) (mem "factScopes" false) (mem "fixLater" false) (mem "mkRule" false))))
 (DUse false (UseGroup ("tools" "lint_scope") ((mem "Binder" true) (mem "BinderKind" true) (mem "NameSite" true) (mem "SiteKind" true) (mem "FileScopes" false) (mem "binderOf" false) (mem "bindersNamedIn" false) (mem "ownerNameSites" false) (mem "patNameSites" false) (mem "unusedBinders" false) (mem "usesNamedIn" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "ruleNameUnusedParam" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
@@ -257,7 +258,7 @@ siteKind (NameSite _ _ kind) = kind
 (DTypeSig false "clauseNameSites" (TyFun (TyCon "FunClause") (TyApp (TyCon "List") (TyCon "NameSite"))))
 (DFunDef false "clauseNameSites" ((PCon "FunClause" (PVar "ps") PWild)) (EApp (EApp (EVar "flatMap") (EVar "patNameSites")) (EVar "ps")))
 (DTypeSig false "paramFinding" (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "NameSite")) (TyFun (TyCon "Binder") (TyApp (TyCon "List") (TyCon "Finding")))))))
-(DFunDef false "paramFinding" ((PVar "facts") (PVar "pos") (PVar "sites") (PVar "b")) (EBlock (DoLet false false (PVar "fs") (EApp (EVar "factScopes") (EVar "facts"))) (DoLet false false (PVar "mine") (EApp (EApp (EVar "filter") (EApp (EApp (EVar "binderIs") (EVar "fs")) (EVar "b"))) (EVar "sites"))) (DoExpr (EListLit (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameUnusedParam")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "parameter '")) (EApp (EVar "display") (EFieldAccess (EVar "b") "binderName"))) (ELit (LString "' is never used. Rename it to '_"))) (EApp (EVar "display") (EFieldAccess (EVar "b") "binderName"))) (ELit (LString "' to mark it intentionally unused")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EFieldAccess (EVar "b") "binderSpan"))) (fa "fix" (EApp (EApp (EApp (EApp (EVar "paramFix") (EVar "facts")) (EApp (EApp (EVar "declLines") (EVar "pos")) (EVar "b"))) (EVar "b")) (EVar "mine")))))))))
+(DFunDef false "paramFinding" ((PVar "facts") (PVar "pos") (PVar "sites") (PVar "b")) (EBlock (DoLet false false (PVar "fs") (EApp (EVar "factScopes") (EVar "facts"))) (DoLet false false (PVar "mine") (EApp (EApp (EVar "filter") (EApp (EApp (EVar "binderIs") (EVar "fs")) (EVar "b"))) (EVar "sites"))) (DoExpr (EListLit (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameUnusedParam")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "parameter '")) (EApp (EVar "display") (EFieldAccess (EVar "b") "binderName"))) (ELit (LString "' is never used. Rename it to '_"))) (EApp (EVar "display") (EFieldAccess (EVar "b") "binderName"))) (ELit (LString "' to mark it intentionally unused")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EFieldAccess (EVar "b") "binderSpan"))) (fa "fix" (EApp (EVar "fixLater") (ELam (PWild) (EApp (EApp (EApp (EApp (EVar "paramFix") (EVar "facts")) (EApp (EApp (EVar "declLines") (EVar "pos")) (EVar "b"))) (EVar "b")) (EVar "mine")))))))))))
 (DTypeSig false "binderIs" (TyFun (TyCon "FileScopes") (TyFun (TyCon "Binder") (TyFun (TyCon "NameSite") (TyCon "Bool")))))
 (DFunDef false "binderIs" ((PVar "fs") (PVar "b") (PCon "NameSite" PWild (PVar "l") PWild)) (EMatch (EApp (EApp (EVar "binderOf") (EVar "fs")) (EVar "l")) (arm (PCon "Some" (PVar "c")) () (EBinOp "==" (EFieldAccess (EVar "c") "binderId") (EFieldAccess (EVar "b") "binderId"))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "declLines" (TyFun (TyCon "Positions") (TyFun (TyCon "Binder") (TyTuple (TyCon "Int") (TyCon "Int")))))
@@ -295,7 +296,7 @@ siteKind (NameSite _ _ kind) = kind
 (DUse false (UseGroup ("frontend" "parser") ((mem "DeclPos" false) (mem "Positions" true) (mem "declPosEndLine" false) (mem "declPosLine" false) (mem "positionsDecls" false))))
 (DUse false (UseGroup ("string") ((mem "length" false "strLength") (mem "sliceClamped" false))))
 (DUse false (UseGroup ("array") ((mem "get" false "arrayGet"))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" true) (mem "FixEdit" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "factLines" false) (mem "factScopes" false) (mem "mkRule" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" true) (mem "FixEdit" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "factLines" false) (mem "factScopes" false) (mem "fixLater" false) (mem "mkRule" false))))
 (DUse false (UseGroup ("tools" "lint_scope") ((mem "Binder" true) (mem "BinderKind" true) (mem "NameSite" true) (mem "SiteKind" true) (mem "FileScopes" false) (mem "binderOf" false) (mem "bindersNamedIn" false) (mem "ownerNameSites" false) (mem "patNameSites" false) (mem "unusedBinders" false) (mem "usesNamedIn" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "ruleNameUnusedParam" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
@@ -316,7 +317,7 @@ siteKind (NameSite _ _ kind) = kind
 (DTypeSig false "clauseNameSites" (TyFun (TyCon "FunClause") (TyApp (TyCon "List") (TyCon "NameSite"))))
 (DFunDef false "clauseNameSites" ((PCon "FunClause" (PVar "ps") PWild)) (EApp (EApp (EDictApp "flatMap") (EVar "patNameSites")) (EVar "ps")))
 (DTypeSig false "paramFinding" (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "NameSite")) (TyFun (TyCon "Binder") (TyApp (TyCon "List") (TyCon "Finding")))))))
-(DFunDef false "paramFinding" ((PVar "facts") (PVar "pos") (PVar "sites") (PVar "b")) (EBlock (DoLet false false (PVar "fs") (EApp (EVar "factScopes") (EVar "facts"))) (DoLet false false (PVar "mine") (EApp (EApp (EMethodRef "filter") (EApp (EApp (EVar "binderIs") (EVar "fs")) (EVar "b"))) (EVar "sites"))) (DoExpr (EListLit (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameUnusedParam")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "parameter '")) (EApp (EMethodRef "display") (EFieldAccess (EVar "b") "binderName"))) (ELit (LString "' is never used. Rename it to '_"))) (EApp (EMethodRef "display") (EFieldAccess (EVar "b") "binderName"))) (ELit (LString "' to mark it intentionally unused")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EFieldAccess (EVar "b") "binderSpan"))) (fa "fix" (EApp (EApp (EApp (EApp (EVar "paramFix") (EVar "facts")) (EApp (EApp (EVar "declLines") (EVar "pos")) (EVar "b"))) (EVar "b")) (EVar "mine")))))))))
+(DFunDef false "paramFinding" ((PVar "facts") (PVar "pos") (PVar "sites") (PVar "b")) (EBlock (DoLet false false (PVar "fs") (EApp (EVar "factScopes") (EVar "facts"))) (DoLet false false (PVar "mine") (EApp (EApp (EMethodRef "filter") (EApp (EApp (EVar "binderIs") (EVar "fs")) (EVar "b"))) (EVar "sites"))) (DoExpr (EListLit (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameUnusedParam")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "parameter '")) (EApp (EMethodRef "display") (EFieldAccess (EVar "b") "binderName"))) (ELit (LString "' is never used. Rename it to '_"))) (EApp (EMethodRef "display") (EFieldAccess (EVar "b") "binderName"))) (ELit (LString "' to mark it intentionally unused")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EFieldAccess (EVar "b") "binderSpan"))) (fa "fix" (EApp (EVar "fixLater") (ELam (PWild) (EApp (EApp (EApp (EApp (EVar "paramFix") (EVar "facts")) (EApp (EApp (EVar "declLines") (EVar "pos")) (EVar "b"))) (EVar "b")) (EVar "mine")))))))))))
 (DTypeSig false "binderIs" (TyFun (TyCon "FileScopes") (TyFun (TyCon "Binder") (TyFun (TyCon "NameSite") (TyCon "Bool")))))
 (DFunDef false "binderIs" ((PVar "fs") (PVar "b") (PCon "NameSite" PWild (PVar "l") PWild)) (EMatch (EApp (EApp (EVar "binderOf") (EVar "fs")) (EVar "l")) (arm (PCon "Some" (PVar "c")) () (EBinOp "==" (EFieldAccess (EVar "c") "binderId") (EFieldAccess (EVar "b") "binderId"))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "declLines" (TyFun (TyCon "Positions") (TyFun (TyCon "Binder") (TyTuple (TyCon "Int") (TyCon "Int")))))

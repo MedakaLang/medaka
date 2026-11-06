@@ -16,8 +16,9 @@ import tools.lint_core.{
   StdlibIndex,
   mkRule,
   noFix,
+  factDeclLocs,
 }
-import tools.lint_shared.{declLocList, ruleNameSelfShadowExtern, unwrapLoc}
+import tools.lint_shared.{ruleNameSelfShadowExtern, unwrapLoc}
 
 export
 rule : Rule
@@ -71,8 +72,8 @@ ruleSelfShadowExtern : StdlibIndex ->
   Positions ->
   List Decl ->
   List Finding
-ruleSelfShadowExtern _ _ _ pos prog =
-  selfShadowFindings (flatMap selfShadowClauseL (declLocList pos prog))
+ruleSelfShadowExtern _ _ facts _ _ =
+  selfShadowFindings (flatMap selfShadowClauseL (factDeclLocs facts))
 
 selfShadowFindings : List (String, List Pat, Expr, Option Loc) -> List Finding
 selfShadowFindings clauses =

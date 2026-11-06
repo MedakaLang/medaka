@@ -40,13 +40,13 @@ import tools.lint_core.{
   factScopes,
   fixLater,
   mkRule,
+  factDeclLocs,
 }
 import tools.lint_recursion.{
   ArgRole(..), Owner(..), SelfCall(..), selfCalls, spineOf
 }
 import tools.lint_scope.{FileScopes}
 import tools.lint_shared.{
-  declLocList,
   indentWidth,
   isCodeText,
   isCtorName,
@@ -84,8 +84,8 @@ ruleThreadedInvariant : StdlibIndex ->
   Positions ->
   List Decl ->
   List Finding
-ruleThreadedInvariant _ _ facts pos prog =
-  let groups = functionGroups (declLocList pos prog)
+ruleThreadedInvariant _ _ facts _ prog =
+  let groups = functionGroups (factDeclLocs facts)
   flatMap (functionFindings facts prog) groups
 
 -- ── the functions of a file ──────────────────────────────────────────────────

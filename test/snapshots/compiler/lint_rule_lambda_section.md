@@ -1,5 +1,5 @@
 # META
-source_lines=212
+source_lines=214
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-lambda-section: a lambda whose body is one binary op on its parameter(s). Prefer an operator section.
@@ -22,12 +22,14 @@ import tools.lint_core.{
   Finding(..),
   Fix,
   Fixability(..),
+  Memo,
   Ratchet(..),
   Rule,
   RuleMeta(..),
   Scope(..),
   StdlibIndex,
   Visitor(..),
+  fixLater,
   mkVisitorRule,
 }
 import tools.lint_shared.{
@@ -153,12 +155,12 @@ lambdaSectionAt facts ctx (ELam pats body) = match lamSection pats body
     lambdaSectionFinding
       ctx.ctxDeclLoc
       sec
-      (lambdaSectionFix facts ctx pats sec),
+      (fixLater (_ => lambdaSectionFix facts ctx pats sec)),
   ]
   None => []
 lambdaSectionAt _ _ _ = []
 
-lambdaSectionFinding : Option Loc -> Section -> Option Fix -> Finding
+lambdaSectionFinding : Option Loc -> Section -> Memo (Option Fix) -> Finding
 lambdaSectionFinding loc s fix = Finding {
   rule = ruleNameLambdaSection,
   message =
@@ -225,7 +227,7 @@ endsInIdent text = match last (toList (stringToChars text))
 (DUse false (UseGroup ("string") ((mem "stripSuffix" false) (mem "trimRight" false) (mem "unwords" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "exprToString" false))))
 (DUse false (UseGroup ("tools" "lint_fix") ((mem "Binding" true))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" false) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "mkVisitorRule" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" false) (mem "Fixability" true) (mem "Memo" false) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "fixLater" false) (mem "mkVisitorRule" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "isEVarNamed" false) (mem "mentionsVar" false) (mem "replaceFix" false) (mem "parenAt" false) (mem "sourceLine" false) (mem "ruleNameLambdaSection" false) (mem "unwrapLoc" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameLambdaSection")) (fa "summary" (ELit (LString "lambda whose body is a single binary op on its parameter(s). Prefer an operator section (STYLE \"Dogfooding\")"))) (fa "doc" (ELit (LString "A lambda whose body is a single binary operator applied to its parameter is an operator section. The section is shorter and names no throwaway variable.\n\nBefore:\n  map (x => x + 1) xs\nAfter:\n  map (+ 1) xs"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "Fixable")) (fa "needs" (EListLit))))) (EVar "ruleLambdaSection")) (EVar "None")))
@@ -250,9 +252,9 @@ endsInIdent text = match last (toList (stringToChars text))
 (DTypeSig false "ruleLambdaSection" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor"))))))))
 (DFunDef false "ruleLambdaSection" (PWild PWild (PVar "facts") PWild PWild) (EListLit (EApp (EApp (EVar "OnExpr") (EListLit (EVar "KLam"))) (EApp (EVar "lambdaSectionAt") (EVar "facts")))))
 (DTypeSig false "lambdaSectionAt" (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding"))))))
-(DFunDef false "lambdaSectionAt" ((PVar "facts") (PVar "ctx") (PCon "ELam" (PVar "pats") (PVar "body"))) (EMatch (EApp (EApp (EVar "lamSection") (EVar "pats")) (EVar "body")) (arm (PCon "Some" (PVar "sec")) () (EListLit (EApp (EApp (EApp (EVar "lambdaSectionFinding") (EFieldAccess (EVar "ctx") "ctxDeclLoc")) (EVar "sec")) (EApp (EApp (EApp (EApp (EVar "lambdaSectionFix") (EVar "facts")) (EVar "ctx")) (EVar "pats")) (EVar "sec"))))) (arm (PCon "None") () (EListLit))))
+(DFunDef false "lambdaSectionAt" ((PVar "facts") (PVar "ctx") (PCon "ELam" (PVar "pats") (PVar "body"))) (EMatch (EApp (EApp (EVar "lamSection") (EVar "pats")) (EVar "body")) (arm (PCon "Some" (PVar "sec")) () (EListLit (EApp (EApp (EApp (EVar "lambdaSectionFinding") (EFieldAccess (EVar "ctx") "ctxDeclLoc")) (EVar "sec")) (EApp (EVar "fixLater") (ELam (PWild) (EApp (EApp (EApp (EApp (EVar "lambdaSectionFix") (EVar "facts")) (EVar "ctx")) (EVar "pats")) (EVar "sec"))))))) (arm (PCon "None") () (EListLit))))
 (DFunDef false "lambdaSectionAt" (PWild PWild PWild) (EListLit))
-(DTypeSig false "lambdaSectionFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Section") (TyFun (TyApp (TyCon "Option") (TyCon "Fix")) (TyCon "Finding")))))
+(DTypeSig false "lambdaSectionFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Section") (TyFun (TyApp (TyCon "Memo") (TyApp (TyCon "Option") (TyCon "Fix"))) (TyCon "Finding")))))
 (DFunDef false "lambdaSectionFinding" ((PVar "loc") (PVar "s") (PVar "fix")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameLambdaSection")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "lambda is a single binary operation on its parameter(s). Rewrite as the operator section '")) (EApp (EVar "exprToString") (EApp (EVar "ESection") (EVar "s")))) (ELit (LString "'")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "fix")))))
 (DTypeSig false "lambdaSectionFix" (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Section") (TyApp (TyCon "Option") (TyCon "Fix")))))))
 (DFunDef false "lambdaSectionFix" ((PVar "facts") (PVar "ctx") (PVar "pats") (PVar "sec")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "replaceFix") (EVar "Safe")) (ELit (LString "use the operator section"))) (EApp (EApp (EApp (EVar "lambdaSpan") (EVar "facts")) (EVar "ctx")) (EVar "pats"))) (EVar "Closed")) (EVar "ctx")) (EApp (EVar "exprToString") (EApp (EVar "ESection") (EVar "sec")))))
@@ -276,7 +278,7 @@ endsInIdent text = match last (toList (stringToChars text))
 (DUse false (UseGroup ("string") ((mem "stripSuffix" false) (mem "trimRight" false) (mem "unwords" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "exprToString" false))))
 (DUse false (UseGroup ("tools" "lint_fix") ((mem "Binding" true))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" false) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "mkVisitorRule" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" false) (mem "Fixability" true) (mem "Memo" false) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "fixLater" false) (mem "mkVisitorRule" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "isEVarNamed" false) (mem "mentionsVar" false) (mem "replaceFix" false) (mem "parenAt" false) (mem "sourceLine" false) (mem "ruleNameLambdaSection" false) (mem "unwrapLoc" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameLambdaSection")) (fa "summary" (ELit (LString "lambda whose body is a single binary op on its parameter(s). Prefer an operator section (STYLE \"Dogfooding\")"))) (fa "doc" (ELit (LString "A lambda whose body is a single binary operator applied to its parameter is an operator section. The section is shorter and names no throwaway variable.\n\nBefore:\n  map (x => x + 1) xs\nAfter:\n  map (+ 1) xs"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "Fixable")) (fa "needs" (EListLit))))) (EVar "ruleLambdaSection")) (EVar "None")))
@@ -301,9 +303,9 @@ endsInIdent text = match last (toList (stringToChars text))
 (DTypeSig false "ruleLambdaSection" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor"))))))))
 (DFunDef false "ruleLambdaSection" (PWild PWild (PVar "facts") PWild PWild) (EListLit (EApp (EApp (EVar "OnExpr") (EListLit (EVar "KLam"))) (EApp (EVar "lambdaSectionAt") (EVar "facts")))))
 (DTypeSig false "lambdaSectionAt" (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding"))))))
-(DFunDef false "lambdaSectionAt" ((PVar "facts") (PVar "ctx") (PCon "ELam" (PVar "pats") (PVar "body"))) (EMatch (EApp (EApp (EVar "lamSection") (EVar "pats")) (EVar "body")) (arm (PCon "Some" (PVar "sec")) () (EListLit (EApp (EApp (EApp (EVar "lambdaSectionFinding") (EFieldAccess (EVar "ctx") "ctxDeclLoc")) (EVar "sec")) (EApp (EApp (EApp (EApp (EVar "lambdaSectionFix") (EVar "facts")) (EVar "ctx")) (EVar "pats")) (EVar "sec"))))) (arm (PCon "None") () (EListLit))))
+(DFunDef false "lambdaSectionAt" ((PVar "facts") (PVar "ctx") (PCon "ELam" (PVar "pats") (PVar "body"))) (EMatch (EApp (EApp (EVar "lamSection") (EVar "pats")) (EVar "body")) (arm (PCon "Some" (PVar "sec")) () (EListLit (EApp (EApp (EApp (EVar "lambdaSectionFinding") (EFieldAccess (EVar "ctx") "ctxDeclLoc")) (EVar "sec")) (EApp (EVar "fixLater") (ELam (PWild) (EApp (EApp (EApp (EApp (EVar "lambdaSectionFix") (EVar "facts")) (EVar "ctx")) (EVar "pats")) (EVar "sec"))))))) (arm (PCon "None") () (EListLit))))
 (DFunDef false "lambdaSectionAt" (PWild PWild PWild) (EListLit))
-(DTypeSig false "lambdaSectionFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Section") (TyFun (TyApp (TyCon "Option") (TyCon "Fix")) (TyCon "Finding")))))
+(DTypeSig false "lambdaSectionFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Section") (TyFun (TyApp (TyCon "Memo") (TyApp (TyCon "Option") (TyCon "Fix"))) (TyCon "Finding")))))
 (DFunDef false "lambdaSectionFinding" ((PVar "loc") (PVar "s") (PVar "fix")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameLambdaSection")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "lambda is a single binary operation on its parameter(s). Rewrite as the operator section '")) (EApp (EVar "exprToString") (EApp (EVar "ESection") (EVar "s")))) (ELit (LString "'")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "fix")))))
 (DTypeSig false "lambdaSectionFix" (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Section") (TyApp (TyCon "Option") (TyCon "Fix")))))))
 (DFunDef false "lambdaSectionFix" ((PVar "facts") (PVar "ctx") (PVar "pats") (PVar "sec")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "replaceFix") (EVar "Safe")) (ELit (LString "use the operator section"))) (EApp (EApp (EApp (EVar "lambdaSpan") (EVar "facts")) (EVar "ctx")) (EVar "pats"))) (EVar "Closed")) (EVar "ctx")) (EApp (EVar "exprToString") (EApp (EVar "ESection") (EVar "sec")))))

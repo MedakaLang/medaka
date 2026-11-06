@@ -1,5 +1,5 @@
 # META
-source_lines=172
+source_lines=173
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-duplicate-body (same-file arm): two top-level functions in one file with structurally identical bodies.
@@ -22,6 +22,7 @@ import tools.lint_core.{
   StdlibIndex(..),
   mkRule,
   factDupClauses,
+  noFix,
 }
 import tools.lint_shared.{ruleNameDuplicateBody, sortUniqS}
 
@@ -160,7 +161,7 @@ sameFileFinding grp occ =
       "function '\{sameFileOccName occ}' has a body structurally identical to '\{joinWith "', '" (map sameFileOccName others)}' in this same file — consolidate into one function",
     severity = SevWarning,
     loc = Some (Loc "" (sameFileOccLine occ) 1 (sameFileOccLine occ) 1),
-    fix = None,
+    fix = noFix,
   }
 
 sortSameFileOccs : List (String, Int, String) -> List (String, Int, String)
@@ -180,7 +181,7 @@ sameFileInsert x (y :: ys)
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "filterList" false) (mem "reverseL" false) (mem "joinWith" false))))
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "setInPlace" false) (mem "has" false) (mem "findWithDefault" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "DupClause" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" true) (mem "mkRule" false) (mem "factDupClauses" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "DupClause" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" true) (mem "mkRule" false) (mem "factDupClauses" false) (mem "noFix" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "ruleNameDuplicateBody" false) (mem "sortUniqS" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameDuplicateBody")) (fa "summary" (ELit (LString "top-level function body is structurally identical to another top-level function in the SAME file (copy-paste; consolidate) — the in-file counterpart of the cross-file rule of the same name"))) (fa "doc" (ELit (LString "Two top-level functions in the same file with structurally identical bodies (location-stripped, above a complexity floor) are copy-paste. Consolidate them. The cross-file arm of the same rule compares across files.\n\nBefore:\n  f x = big x\n  g y = big y   -- same body shape\nAfter:\n  one function, called twice"))) (fa "category" (EVar "Complexity")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "NotFixable")) (fa "needs" (EListLit))))) (EVar "ruleDuplicateBodySameFile")) (EVar "None")))
@@ -209,7 +210,7 @@ sameFileInsert x (y :: ys)
 (DTypeSig false "emitSameFileGroup" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "Finding"))))
 (DFunDef false "emitSameFileGroup" ((PVar "grp")) (EIf (EBinOp "<" (EApp (EVar "listLen") (EVar "grp")) (ELit (LInt 2))) (EListLit) (EApp (EApp (EVar "map") (EApp (EVar "sameFileFinding") (EVar "grp"))) (EApp (EVar "sortSameFileOccs") (EVar "grp")))))
 (DTypeSig false "sameFileFinding" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String"))) (TyFun (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String")) (TyCon "Finding"))))
-(DFunDef false "sameFileFinding" ((PVar "grp") (PVar "occ")) (EBlock (DoLet false false (PVar "others") (EApp (EApp (EVar "filterList") (ELam ((PVar "o")) (EBinOp "/=" (EApp (EVar "sameFileOccName") (EVar "o")) (EApp (EVar "sameFileOccName") (EVar "occ"))))) (EVar "grp"))) (DoExpr (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDuplicateBody")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "function '")) (EApp (EVar "display") (EApp (EVar "sameFileOccName") (EVar "occ")))) (ELit (LString "' has a body structurally identical to '"))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString "', '"))) (EApp (EApp (EVar "map") (EVar "sameFileOccName")) (EVar "others"))))) (ELit (LString "' in this same file — consolidate into one function")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (EApp (EVar "sameFileOccLine") (EVar "occ"))) (ELit (LInt 1))) (EApp (EVar "sameFileOccLine") (EVar "occ"))) (ELit (LInt 1))))) (fa "fix" (EVar "None")))))))
+(DFunDef false "sameFileFinding" ((PVar "grp") (PVar "occ")) (EBlock (DoLet false false (PVar "others") (EApp (EApp (EVar "filterList") (ELam ((PVar "o")) (EBinOp "/=" (EApp (EVar "sameFileOccName") (EVar "o")) (EApp (EVar "sameFileOccName") (EVar "occ"))))) (EVar "grp"))) (DoExpr (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDuplicateBody")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "function '")) (EApp (EVar "display") (EApp (EVar "sameFileOccName") (EVar "occ")))) (ELit (LString "' has a body structurally identical to '"))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString "', '"))) (EApp (EApp (EVar "map") (EVar "sameFileOccName")) (EVar "others"))))) (ELit (LString "' in this same file — consolidate into one function")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (EApp (EVar "sameFileOccLine") (EVar "occ"))) (ELit (LInt 1))) (EApp (EVar "sameFileOccLine") (EVar "occ"))) (ELit (LInt 1))))) (fa "fix" (EVar "noFix")))))))
 (DTypeSig false "sortSameFileOccs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String")))))
 (DFunDef false "sortSameFileOccs" ((PList)) (EListLit))
 (DFunDef false "sortSameFileOccs" ((PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EVar "sameFileInsert") (EVar "x")) (EApp (EVar "sortSameFileOccs") (EVar "xs"))))
@@ -222,7 +223,7 @@ sameFileInsert x (y :: ys)
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "filterList" false) (mem "reverseL" false) (mem "joinWith" false))))
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "setInPlace" false) (mem "has" false) (mem "findWithDefault" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "DupClause" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" true) (mem "mkRule" false) (mem "factDupClauses" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "DupClause" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" true) (mem "mkRule" false) (mem "factDupClauses" false) (mem "noFix" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "ruleNameDuplicateBody" false) (mem "sortUniqS" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameDuplicateBody")) (fa "summary" (ELit (LString "top-level function body is structurally identical to another top-level function in the SAME file (copy-paste; consolidate) — the in-file counterpart of the cross-file rule of the same name"))) (fa "doc" (ELit (LString "Two top-level functions in the same file with structurally identical bodies (location-stripped, above a complexity floor) are copy-paste. Consolidate them. The cross-file arm of the same rule compares across files.\n\nBefore:\n  f x = big x\n  g y = big y   -- same body shape\nAfter:\n  one function, called twice"))) (fa "category" (EVar "Complexity")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "NotFixable")) (fa "needs" (EListLit))))) (EVar "ruleDuplicateBodySameFile")) (EVar "None")))
@@ -251,7 +252,7 @@ sameFileInsert x (y :: ys)
 (DTypeSig false "emitSameFileGroup" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "Finding"))))
 (DFunDef false "emitSameFileGroup" ((PVar "grp")) (EIf (EBinOp "<" (EApp (EVar "listLen") (EVar "grp")) (ELit (LInt 2))) (EListLit) (EApp (EApp (EMethodRef "map") (EApp (EVar "sameFileFinding") (EVar "grp"))) (EApp (EVar "sortSameFileOccs") (EVar "grp")))))
 (DTypeSig false "sameFileFinding" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String"))) (TyFun (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String")) (TyCon "Finding"))))
-(DFunDef false "sameFileFinding" ((PVar "grp") (PVar "occ")) (EBlock (DoLet false false (PVar "others") (EApp (EApp (EVar "filterList") (ELam ((PVar "o")) (EBinOp "/=" (EApp (EVar "sameFileOccName") (EVar "o")) (EApp (EVar "sameFileOccName") (EVar "occ"))))) (EVar "grp"))) (DoExpr (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDuplicateBody")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "function '")) (EApp (EMethodRef "display") (EApp (EVar "sameFileOccName") (EVar "occ")))) (ELit (LString "' has a body structurally identical to '"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString "', '"))) (EApp (EApp (EMethodRef "map") (EVar "sameFileOccName")) (EVar "others"))))) (ELit (LString "' in this same file — consolidate into one function")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (EApp (EVar "sameFileOccLine") (EVar "occ"))) (ELit (LInt 1))) (EApp (EVar "sameFileOccLine") (EVar "occ"))) (ELit (LInt 1))))) (fa "fix" (EVar "None")))))))
+(DFunDef false "sameFileFinding" ((PVar "grp") (PVar "occ")) (EBlock (DoLet false false (PVar "others") (EApp (EApp (EVar "filterList") (ELam ((PVar "o")) (EBinOp "/=" (EApp (EVar "sameFileOccName") (EVar "o")) (EApp (EVar "sameFileOccName") (EVar "occ"))))) (EVar "grp"))) (DoExpr (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDuplicateBody")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "function '")) (EApp (EMethodRef "display") (EApp (EVar "sameFileOccName") (EVar "occ")))) (ELit (LString "' has a body structurally identical to '"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString "', '"))) (EApp (EApp (EMethodRef "map") (EVar "sameFileOccName")) (EVar "others"))))) (ELit (LString "' in this same file — consolidate into one function")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (EApp (EVar "sameFileOccLine") (EVar "occ"))) (ELit (LInt 1))) (EApp (EVar "sameFileOccLine") (EVar "occ"))) (ELit (LInt 1))))) (fa "fix" (EVar "noFix")))))))
 (DTypeSig false "sortSameFileOccs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String")))))
 (DFunDef false "sortSameFileOccs" ((PList)) (EListLit))
 (DFunDef false "sortSameFileOccs" ((PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EVar "sameFileInsert") (EVar "x")) (EApp (EVar "sortSameFileOccs") (EVar "xs"))))

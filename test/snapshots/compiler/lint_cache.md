@@ -1,5 +1,5 @@
 # META
-source_lines=516
+source_lines=518
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_cache.mdk — the on-disk cache behind `medaka lint --cache` (#395).
@@ -62,7 +62,9 @@ import frontend.ast.{Loc(..)}
 import driver.diagnostics.{Severity(..)}
 import path.{dirname}
 import u64 as U64
-import tools.lint_core.{Finding(..), Directive(..), DirScope(..), Summary(..)}
+import tools.lint_core.{
+  Finding(..), Directive(..), DirScope(..), Summary(..), noFix
+}
 import tools.lint_index.{Answer(..), makeStagingDir, stageAndRename}
 import support.util.{joinWith, listLen, filterList}
 import support.char.{isAlnum}
@@ -358,7 +360,7 @@ readRanked cur =
       message = message,
       severity = sev,
       loc = loc,
-      fix = None,
+      fix = noFix,
     },
   )
 
@@ -523,7 +525,7 @@ ensureCacheDir cacheDir =
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("path") ((mem "dirname" false))))
 (DUse false (UseAlias ("u64") "U64"))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Finding" true) (mem "Directive" true) (mem "DirScope" true) (mem "Summary" true))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Finding" true) (mem "Directive" true) (mem "DirScope" true) (mem "Summary" true) (mem "noFix" false))))
 (DUse false (UseGroup ("tools" "lint_index") ((mem "Answer" true) (mem "makeStagingDir" false) (mem "stageAndRename" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "listLen" false) (mem "filterList" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isAlnum" false))))
@@ -586,7 +588,7 @@ ensureCacheDir cacheDir =
 (DTypeSig false "readAnswer" (TyFun (TyCon "SexpCursor") (TyCon "Answer")))
 (DFunDef false "readAnswer" ((PVar "cur")) (EBlock (DoExpr (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "question") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoLet false false (PVar "digest") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoExpr (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (ERecordCreate "Answer" ((fa "ansQuestion" (EVar "question")) (fa "ansDigest" (EVar "digest")))))))
 (DTypeSig false "readRanked" (TyFun (TyCon "SexpCursor") (TyTuple (TyCon "Int") (TyCon "Finding"))))
-(DFunDef false "readRanked" ((PVar "cur")) (EBlock (DoExpr (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "rank") (EApp (EVar "cursorInt") (EVar "cur"))) (DoLet false false (PVar "rule") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoLet false false (PVar "message") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoLet false false (PVar "sev") (EApp (EVar "readSeverity") (EVar "cur"))) (DoLet false false (PVar "loc") (EApp (EVar "readLoc") (EVar "cur"))) (DoExpr (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (ETuple (EVar "rank") (ERecordCreate "Finding" ((fa "rule" (EVar "rule")) (fa "message" (EVar "message")) (fa "severity" (EVar "sev")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None"))))))))
+(DFunDef false "readRanked" ((PVar "cur")) (EBlock (DoExpr (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "rank") (EApp (EVar "cursorInt") (EVar "cur"))) (DoLet false false (PVar "rule") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoLet false false (PVar "message") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoLet false false (PVar "sev") (EApp (EVar "readSeverity") (EVar "cur"))) (DoLet false false (PVar "loc") (EApp (EVar "readLoc") (EVar "cur"))) (DoExpr (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (ETuple (EVar "rank") (ERecordCreate "Finding" ((fa "rule" (EVar "rule")) (fa "message" (EVar "message")) (fa "severity" (EVar "sev")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "noFix"))))))))
 (DTypeSig false "readSeverity" (TyFun (TyCon "SexpCursor") (TyCon "Severity")))
 (DFunDef false "readSeverity" ((PVar "cur")) (EBlock (DoLet false false (PVar "c") (EApp (EVar "cursorChar") (EVar "cur"))) (DoExpr (EIf (EBinOp "==" (EVar "c") (ELit (LInt 101))) (EVar "SevError") (EIf (EBinOp "==" (EVar "c") (ELit (LInt 119))) (EVar "SevWarning") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "SevWarning")))))))
 (DTypeSig false "readLoc" (TyFun (TyCon "SexpCursor") (TyApp (TyCon "Option") (TyCon "Loc"))))
@@ -616,7 +618,7 @@ ensureCacheDir cacheDir =
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("path") ((mem "dirname" false))))
 (DUse false (UseAlias ("u64") "U64"))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Finding" true) (mem "Directive" true) (mem "DirScope" true) (mem "Summary" true))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Finding" true) (mem "Directive" true) (mem "DirScope" true) (mem "Summary" true) (mem "noFix" false))))
 (DUse false (UseGroup ("tools" "lint_index") ((mem "Answer" true) (mem "makeStagingDir" false) (mem "stageAndRename" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "listLen" false) (mem "filterList" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isAlnum" false))))
@@ -679,7 +681,7 @@ ensureCacheDir cacheDir =
 (DTypeSig false "readAnswer" (TyFun (TyCon "SexpCursor") (TyCon "Answer")))
 (DFunDef false "readAnswer" ((PVar "cur")) (EBlock (DoExpr (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "question") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoLet false false (PVar "digest") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoExpr (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (ERecordCreate "Answer" ((fa "ansQuestion" (EVar "question")) (fa "ansDigest" (EVar "digest")))))))
 (DTypeSig false "readRanked" (TyFun (TyCon "SexpCursor") (TyTuple (TyCon "Int") (TyCon "Finding"))))
-(DFunDef false "readRanked" ((PVar "cur")) (EBlock (DoExpr (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "rank") (EApp (EVar "cursorInt") (EVar "cur"))) (DoLet false false (PVar "rule") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoLet false false (PVar "message") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoLet false false (PVar "sev") (EApp (EVar "readSeverity") (EVar "cur"))) (DoLet false false (PVar "loc") (EApp (EVar "readLoc") (EVar "cur"))) (DoExpr (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (ETuple (EVar "rank") (ERecordCreate "Finding" ((fa "rule" (EVar "rule")) (fa "message" (EVar "message")) (fa "severity" (EVar "sev")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None"))))))))
+(DFunDef false "readRanked" ((PVar "cur")) (EBlock (DoExpr (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "rank") (EApp (EVar "cursorInt") (EVar "cur"))) (DoLet false false (PVar "rule") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoLet false false (PVar "message") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoLet false false (PVar "sev") (EApp (EVar "readSeverity") (EVar "cur"))) (DoLet false false (PVar "loc") (EApp (EVar "readLoc") (EVar "cur"))) (DoExpr (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (ETuple (EVar "rank") (ERecordCreate "Finding" ((fa "rule" (EVar "rule")) (fa "message" (EVar "message")) (fa "severity" (EVar "sev")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "noFix"))))))))
 (DTypeSig false "readSeverity" (TyFun (TyCon "SexpCursor") (TyCon "Severity")))
 (DFunDef false "readSeverity" ((PVar "cur")) (EBlock (DoLet false false (PVar "c") (EApp (EVar "cursorChar") (EVar "cur"))) (DoExpr (EIf (EBinOp "==" (EVar "c") (ELit (LInt 101))) (EVar "SevError") (EIf (EBinOp "==" (EVar "c") (ELit (LInt 119))) (EVar "SevWarning") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "SevWarning")))))))
 (DTypeSig false "readLoc" (TyFun (TyCon "SexpCursor") (TyApp (TyCon "Option") (TyCon "Loc"))))

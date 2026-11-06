@@ -1,5 +1,5 @@
 # META
-source_lines=223
+source_lines=225
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-concat-to-interp: a `++` chain mixing string literals and expressions. Prefer string interpolation.
@@ -41,6 +41,7 @@ import tools.lint_core.{
   Finding(..),
   Fix,
   Fixability(..),
+  Memo,
   Need(..),
   Ratchet(..),
   Rule,
@@ -48,6 +49,7 @@ import tools.lint_core.{
   Scope(..),
   StdlibIndex,
   Visitor(..),
+  fixLater,
   mkVisitorRule,
 }
 import tools.lint_shared.{
@@ -191,9 +193,9 @@ concatToInterpHit idx facts ctx (rewritten, span) =
   concatToInterpFinding
     ctx.ctxSpan
     rewritten
-    (concatToInterpFix idx facts ctx span rewritten)
+    (fixLater (_ => concatToInterpFix idx facts ctx span rewritten))
 
-concatToInterpFinding : Option Loc -> Expr -> Option Fix -> Finding
+concatToInterpFinding : Option Loc -> Expr -> Memo (Option Fix) -> Finding
 concatToInterpFinding loc rewritten fix = Finding {
   rule = ruleNameConcatToInterp,
   message =
@@ -231,7 +233,7 @@ concatToInterpFix idx facts ctx span rewritten =
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "anyList" false) (mem "isNonEmptyL" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "exprToString" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" false) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "mkVisitorRule" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" false) (mem "Fixability" true) (mem "Memo" false) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "fixLater" false) (mem "mkVisitorRule" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "bindingOf" false) (mem "rebinds" false) (mem "declHeadHits" false) (mem "mapChildExprs" false) (mem "replaceFix" false) (mem "ruleNameConcatToInterp" false) (mem "tightSpan" false) (mem "unwrapLoc" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameConcatToInterp")) (fa "summary" (ELit (LString "`++` chain mixing string literals and expressions. Prefer string interpolation `\"…\\{e}…\"` (hlint 'use interpolation')"))) (fa "doc" (ELit (LString "A `++` chain mixing string literals with expressions reads better as string interpolation.\n\nBefore:\n  \"n = \" ++ show n ++ \"!\"\nAfter:\n  \"n = \\{show n}!\""))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "Fixable")) (fa "needs" (EListLit (EVar "NeedsScopes") (EVar "NeedsWildIndex")))))) (EVar "ruleConcatToInterp")) (EVar "None")))
@@ -271,8 +273,8 @@ concatToInterpFix idx facts ctx span rewritten =
 (DTypeSig false "concatToInterpAt" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Finding")))))))
 (DFunDef false "concatToInterpAt" ((PVar "idx") (PVar "facts") (PVar "ctx") (PVar "d")) (EApp (EApp (EVar "map") (EApp (EApp (EApp (EVar "concatToInterpHit") (EVar "idx")) (EVar "facts")) (EVar "ctx"))) (EApp (EApp (EVar "declHeadHits") (EVar "concatChainPick")) (EVar "d"))))
 (DTypeSig false "concatToInterpHit" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyTuple (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyCon "Finding"))))))
-(DFunDef false "concatToInterpHit" ((PVar "idx") (PVar "facts") (PVar "ctx") (PTuple (PVar "rewritten") (PVar "span"))) (EApp (EApp (EApp (EVar "concatToInterpFinding") (EFieldAccess (EVar "ctx") "ctxSpan")) (EVar "rewritten")) (EApp (EApp (EApp (EApp (EApp (EVar "concatToInterpFix") (EVar "idx")) (EVar "facts")) (EVar "ctx")) (EVar "span")) (EVar "rewritten"))))
-(DTypeSig false "concatToInterpFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "Option") (TyCon "Fix")) (TyCon "Finding")))))
+(DFunDef false "concatToInterpHit" ((PVar "idx") (PVar "facts") (PVar "ctx") (PTuple (PVar "rewritten") (PVar "span"))) (EApp (EApp (EApp (EVar "concatToInterpFinding") (EFieldAccess (EVar "ctx") "ctxSpan")) (EVar "rewritten")) (EApp (EVar "fixLater") (ELam (PWild) (EApp (EApp (EApp (EApp (EApp (EVar "concatToInterpFix") (EVar "idx")) (EVar "facts")) (EVar "ctx")) (EVar "span")) (EVar "rewritten"))))))
+(DTypeSig false "concatToInterpFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "Memo") (TyApp (TyCon "Option") (TyCon "Fix"))) (TyCon "Finding")))))
 (DFunDef false "concatToInterpFinding" ((PVar "loc") (PVar "rewritten") (PVar "fix")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameConcatToInterp")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "`++` chain of string literals and expressions. Rewrite as an interpolated string '")) (EApp (EVar "exprToString") (EVar "rewritten"))) (ELit (LString "'")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "fix")))))
 (DTypeSig false "concatToInterpFix" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Fix"))))))))
 (DFunDef false "concatToInterpFix" ((PVar "idx") (PVar "facts") (PVar "ctx") (PVar "span") (PVar "rewritten")) (EIf (EApp (EApp (EApp (EApp (EVar "rebinds") (EVar "idx")) (EVar "facts")) (EVar "ctx")) (ELit (LString "display"))) (EVar "None") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "replaceFix") (EVar "Safe")) (ELit (LString "interpolate the string"))) (EVar "span")) (EApp (EVar "bindingOf") (EVar "rewritten"))) (EVar "ctx")) (EApp (EVar "exprToString") (EVar "rewritten")))))
@@ -282,7 +284,7 @@ concatToInterpFix idx facts ctx span rewritten =
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "anyList" false) (mem "isNonEmptyL" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "exprToString" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" false) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "mkVisitorRule" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" false) (mem "Fixability" true) (mem "Memo" false) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "fixLater" false) (mem "mkVisitorRule" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "bindingOf" false) (mem "rebinds" false) (mem "declHeadHits" false) (mem "mapChildExprs" false) (mem "replaceFix" false) (mem "ruleNameConcatToInterp" false) (mem "tightSpan" false) (mem "unwrapLoc" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameConcatToInterp")) (fa "summary" (ELit (LString "`++` chain mixing string literals and expressions. Prefer string interpolation `\"…\\{e}…\"` (hlint 'use interpolation')"))) (fa "doc" (ELit (LString "A `++` chain mixing string literals with expressions reads better as string interpolation.\n\nBefore:\n  \"n = \" ++ show n ++ \"!\"\nAfter:\n  \"n = \\{show n}!\""))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "Fixable")) (fa "needs" (EListLit (EVar "NeedsScopes") (EVar "NeedsWildIndex")))))) (EVar "ruleConcatToInterp")) (EVar "None")))
@@ -322,8 +324,8 @@ concatToInterpFix idx facts ctx span rewritten =
 (DTypeSig false "concatToInterpAt" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Finding")))))))
 (DFunDef false "concatToInterpAt" ((PVar "idx") (PVar "facts") (PVar "ctx") (PVar "d")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EVar "concatToInterpHit") (EVar "idx")) (EVar "facts")) (EVar "ctx"))) (EApp (EApp (EVar "declHeadHits") (EVar "concatChainPick")) (EVar "d"))))
 (DTypeSig false "concatToInterpHit" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyTuple (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyCon "Finding"))))))
-(DFunDef false "concatToInterpHit" ((PVar "idx") (PVar "facts") (PVar "ctx") (PTuple (PVar "rewritten") (PVar "span"))) (EApp (EApp (EApp (EVar "concatToInterpFinding") (EFieldAccess (EVar "ctx") "ctxSpan")) (EVar "rewritten")) (EApp (EApp (EApp (EApp (EApp (EVar "concatToInterpFix") (EVar "idx")) (EVar "facts")) (EVar "ctx")) (EVar "span")) (EVar "rewritten"))))
-(DTypeSig false "concatToInterpFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "Option") (TyCon "Fix")) (TyCon "Finding")))))
+(DFunDef false "concatToInterpHit" ((PVar "idx") (PVar "facts") (PVar "ctx") (PTuple (PVar "rewritten") (PVar "span"))) (EApp (EApp (EApp (EVar "concatToInterpFinding") (EFieldAccess (EVar "ctx") "ctxSpan")) (EVar "rewritten")) (EApp (EVar "fixLater") (ELam (PWild) (EApp (EApp (EApp (EApp (EApp (EVar "concatToInterpFix") (EVar "idx")) (EVar "facts")) (EVar "ctx")) (EVar "span")) (EVar "rewritten"))))))
+(DTypeSig false "concatToInterpFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "Memo") (TyApp (TyCon "Option") (TyCon "Fix"))) (TyCon "Finding")))))
 (DFunDef false "concatToInterpFinding" ((PVar "loc") (PVar "rewritten") (PVar "fix")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameConcatToInterp")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "`++` chain of string literals and expressions. Rewrite as an interpolated string '")) (EApp (EVar "exprToString") (EVar "rewritten"))) (ELit (LString "'")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "fix")))))
 (DTypeSig false "concatToInterpFix" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Fix"))))))))
 (DFunDef false "concatToInterpFix" ((PVar "idx") (PVar "facts") (PVar "ctx") (PVar "span") (PVar "rewritten")) (EIf (EApp (EApp (EApp (EApp (EVar "rebinds") (EVar "idx")) (EVar "facts")) (EVar "ctx")) (ELit (LString "display"))) (EVar "None") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "replaceFix") (EVar "Safe")) (ELit (LString "interpolate the string"))) (EVar "span")) (EApp (EVar "bindingOf") (EVar "rewritten"))) (EVar "ctx")) (EApp (EVar "exprToString") (EVar "rewritten")))))

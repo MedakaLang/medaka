@@ -1,5 +1,5 @@
 # META
-source_lines=932
+source_lines=940
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-threaded-invariant: a top-level self-recursive function whose self-calls all pass two or more of its own parameters through unchanged. Close over them in a where-local `go`. The `--fix` rewrite can leave a let-generalised loop that dictionary-dispatches (#4921); see the notes above `threadFix`.
@@ -33,6 +33,7 @@ import tools.lint_core.{
   Fix(..),
   FixEdit(..),
   Fixability(..),
+  Memo,
   Need(..),
   Ratchet(..),
   Rule,
@@ -41,14 +42,15 @@ import tools.lint_core.{
   StdlibIndex,
   factLines,
   factScopes,
+  fixLater,
   mkRule,
+  factDeclLocs,
 }
 import tools.lint_recursion.{
   ArgRole(..), Owner(..), SelfCall(..), selfCalls, spineOf
 }
 import tools.lint_scope.{FileScopes}
 import tools.lint_shared.{
-  declLocList,
   indentWidth,
   isCodeText,
   isCtorName,
@@ -86,8 +88,8 @@ ruleThreadedInvariant : StdlibIndex ->
   Positions ->
   List Decl ->
   List Finding
-ruleThreadedInvariant _ _ facts pos prog =
-  let groups = functionGroups (declLocList pos prog)
+ruleThreadedInvariant _ _ facts _ prog =
+  let groups = functionGroups (factDeclLocs facts)
   flatMap (functionFindings facts prog) groups
 
 -- ── the functions of a file ──────────────────────────────────────────────────
@@ -144,7 +146,13 @@ functionFindings facts prog (g@(Group name loc clauses _)) =
       if listLen shared >= 2 then
         let names = map (i => paramName ps i) shared
         let calls = flatMap threadedCalls ts
-        [report name loc names (threadFix facts prog g shared names calls)]
+        [
+          report
+            name
+            loc
+            names
+            (fixLater (_ => threadFix facts prog g shared names calls)),
+        ]
       else
         []
 
@@ -183,7 +191,7 @@ paramName ps i = match get i ps
 
 -- ── findings ─────────────────────────────────────────────────────────────────
 
-report : String -> Option Loc -> List String -> Option Fix -> Finding
+report : String -> Option Loc -> List String -> Memo (Option Fix) -> Finding
 report name loc names fix =
   let listed = joinWith ", " (map quoted names)
   Finding {
@@ -944,14 +952,14 @@ dropLine plan l =
 (DUse false (UseGroup ("string") ((mem "contains" false) (mem "repeat" false) (mem "startsWith" false) (mem "trim" false) (mem "trimLeft" false) (mem "trimRight" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isIdentChar" false))))
 (DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "filterList" false) (mem "joinWith" false) (mem "listLen" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "FileFacts" false) (mem "Finding" true) (mem "Fix" true) (mem "FixEdit" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "factLines" false) (mem "factScopes" false) (mem "mkRule" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "FileFacts" false) (mem "Finding" true) (mem "Fix" true) (mem "FixEdit" true) (mem "Fixability" true) (mem "Memo" false) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "factLines" false) (mem "factScopes" false) (mem "fixLater" false) (mem "mkRule" false) (mem "factDeclLocs" false))))
 (DUse false (UseGroup ("tools" "lint_recursion") ((mem "ArgRole" true) (mem "Owner" true) (mem "SelfCall" true) (mem "selfCalls" false) (mem "spineOf" false))))
 (DUse false (UseGroup ("tools" "lint_scope") ((mem "FileScopes" false))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "declLocList" false) (mem "indentWidth" false) (mem "isCodeText" false) (mem "isCtorName" false) (mem "isEVarNamed" false) (mem "mentionsVar" false) (mem "ruleNameThreadedInvariant" false) (mem "sourceLine" false) (mem "unwrapLoc" false) (mem "varSite" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "indentWidth" false) (mem "isCodeText" false) (mem "isCtorName" false) (mem "isEVarNamed" false) (mem "mentionsVar" false) (mem "ruleNameThreadedInvariant" false) (mem "sourceLine" false) (mem "unwrapLoc" false) (mem "varSite" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameThreadedInvariant")) (fa "summary" (ELit (LString "a self-recursive function passes two or more of its parameters through every self-call unchanged: close over them in a where-local `go`"))) (fa "doc" (ELit (LString "A top-level function that calls itself with the same two or more parameters, in the same positions, in every self-call carries those parameters through the whole recursion for nothing. A local `go` in a `where` closes over them, so the recursion names only what changes. The rule reads each function as a group of clauses: a position counts when every full-arity self-call of every clause that makes one passes that clause's own parameter there, unchanged. One invariant parameter is not reported, nor is a `go` that already closes over its invariants, a partial application, mutual recursion, or a loop local to a `let` or `where`.\n\n`--fix --unsafe-fixes` writes the `go` form when the whole shape is known: a signature whose class constraints the closed-over parameters carry, each invariant parameter a plain name (or ignored) in every clause, no list builder in tail position modulo cons, no invariant parameter used only to be passed on, and a `where` of its own only on a single clause. The rest are reported only. Run `medaka fmt --write` after it, then check the converted loop for dictionary dispatch: `go` is inferred, not declared, so a changing parameter whose type only the signature fixes (a counter under `+` or `==`, an element that is interpolated) is let-generalised and the loop passes a dictionary on every call (#4921, MonoLocalBinds). The fix does not see that shape.\n\nBefore:\n  extractFold bare heads acc (x :: xs) = extractFold bare heads (step bare heads acc x) xs\n  extractFold _ _ acc [] = acc\nAfter:\n  extractFold bare heads acc0 xs0 = go acc0 xs0\n    where\n      go acc [] = acc\n      go acc (x :: xs) = go (step bare heads acc x) xs"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Internal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "FixableUnsafe")) (fa "needs" (EListLit (EVar "NeedsScopes")))))) (EVar "ruleThreadedInvariant")) (EVar "None")))
 (DTypeSig false "ruleThreadedInvariant" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "ruleThreadedInvariant" (PWild PWild (PVar "facts") (PVar "pos") (PVar "prog")) (EBlock (DoLet false false (PVar "groups") (EApp (EVar "functionGroups") (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog")))) (DoExpr (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "functionFindings") (EVar "facts")) (EVar "prog"))) (EVar "groups")))))
+(DFunDef false "ruleThreadedInvariant" (PWild PWild (PVar "facts") PWild (PVar "prog")) (EBlock (DoLet false false (PVar "groups") (EApp (EVar "functionGroups") (EApp (EVar "factDeclLocs") (EVar "facts")))) (DoExpr (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "functionFindings") (EVar "facts")) (EVar "prog"))) (EVar "groups")))))
 (DData Private "Clause" () ((variant "Clause" (ConPos (TyCon "Int") (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) ())
 (DData Private "Group" () ((variant "Group" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "List") (TyCon "Clause")) (TyCon "Int")))) ())
 (DTypeSig false "functionGroups" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc")))) (TyApp (TyCon "List") (TyCon "Group"))))
@@ -973,7 +981,7 @@ dropLine plan l =
 (DFunDef false "joinClause" ((PTuple (PVar "n") (PVar "loc") (PVar "next") (PVar "c")) (PVar "groups")) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "Group") (EVar "n")) (EVar "loc")) (EListLit (EVar "c"))) (EVar "next")) (EVar "groups")))
 (DData Private "Threaded" () ((variant "Threaded" (ConPos (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "SelfCall"))))) ())
 (DTypeSig false "functionFindings" (TyFun (TyCon "FileFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Group") (TyApp (TyCon "List") (TyCon "Finding"))))))
-(DFunDef false "functionFindings" ((PVar "facts") (PVar "prog") (PAs "g" (PCon "Group" (PVar "name") (PVar "loc") (PVar "clauses") PWild))) (EMatch (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "clauseThreaded") (EApp (EVar "factScopes") (EVar "facts"))) (EVar "name"))) (EVar "clauses")) (arm (PList) () (EListLit)) (arm (PAs "ts" (PCons (PCon "Threaded" (PVar "ps") (PVar "first") PWild) PWild)) () (EBlock (DoLet false false (PVar "shared") (EApp (EApp (EVar "filterList") (EApp (EVar "inAll") (EVar "ts"))) (EVar "first"))) (DoExpr (EIf (EBinOp ">=" (EApp (EVar "listLen") (EVar "shared")) (ELit (LInt 2))) (EBlock (DoLet false false (PVar "names") (EApp (EApp (EVar "map") (ELam ((PVar "i")) (EApp (EApp (EVar "paramName") (EVar "ps")) (EVar "i")))) (EVar "shared"))) (DoLet false false (PVar "calls") (EApp (EApp (EVar "flatMap") (EVar "threadedCalls")) (EVar "ts"))) (DoExpr (EListLit (EApp (EApp (EApp (EApp (EVar "report") (EVar "name")) (EVar "loc")) (EVar "names")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "threadFix") (EVar "facts")) (EVar "prog")) (EVar "g")) (EVar "shared")) (EVar "names")) (EVar "calls")))))) (EListLit)))))))
+(DFunDef false "functionFindings" ((PVar "facts") (PVar "prog") (PAs "g" (PCon "Group" (PVar "name") (PVar "loc") (PVar "clauses") PWild))) (EMatch (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "clauseThreaded") (EApp (EVar "factScopes") (EVar "facts"))) (EVar "name"))) (EVar "clauses")) (arm (PList) () (EListLit)) (arm (PAs "ts" (PCons (PCon "Threaded" (PVar "ps") (PVar "first") PWild) PWild)) () (EBlock (DoLet false false (PVar "shared") (EApp (EApp (EVar "filterList") (EApp (EVar "inAll") (EVar "ts"))) (EVar "first"))) (DoExpr (EIf (EBinOp ">=" (EApp (EVar "listLen") (EVar "shared")) (ELit (LInt 2))) (EBlock (DoLet false false (PVar "names") (EApp (EApp (EVar "map") (ELam ((PVar "i")) (EApp (EApp (EVar "paramName") (EVar "ps")) (EVar "i")))) (EVar "shared"))) (DoLet false false (PVar "calls") (EApp (EApp (EVar "flatMap") (EVar "threadedCalls")) (EVar "ts"))) (DoExpr (EListLit (EApp (EApp (EApp (EApp (EVar "report") (EVar "name")) (EVar "loc")) (EVar "names")) (EApp (EVar "fixLater") (ELam (PWild) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "threadFix") (EVar "facts")) (EVar "prog")) (EVar "g")) (EVar "shared")) (EVar "names")) (EVar "calls")))))))) (EListLit)))))))
 (DTypeSig false "clauseThreaded" (TyFun (TyCon "FileScopes") (TyFun (TyCon "String") (TyFun (TyCon "Clause") (TyApp (TyCon "List") (TyCon "Threaded"))))))
 (DFunDef false "clauseThreaded" ((PVar "scopes") (PVar "name") (PCon "Clause" PWild (PVar "ps") (PVar "body"))) (EIf (EBinOp "||" (EBinOp "<" (EApp (EVar "listLen") (EVar "ps")) (ELit (LInt 2))) (EApp (EVar "not") (EApp (EApp (EVar "mentionsVar") (EVar "name")) (EVar "body")))) (EListLit) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EApp (EVar "selfCalls") (EVar "scopes")) (EApp (EApp (EApp (EVar "Owner") (EVar "name")) (EVar "ps")) (EVar "None"))) (EVar "body")) (arm (PList) () (EListLit)) (arm (PVar "calls") () (EListLit (EApp (EApp (EApp (EVar "Threaded") (EVar "ps")) (EApp (EApp (EVar "filterList") (EApp (EVar "unchangedIn") (EVar "calls"))) (ERangeList (ELit (LInt 0)) (EBinOp "-" (EApp (EVar "listLen") (EVar "ps")) (ELit (LInt 1))) true))) (EVar "calls"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "threadedCalls" (TyFun (TyCon "Threaded") (TyApp (TyCon "List") (TyCon "SelfCall"))))
@@ -988,7 +996,7 @@ dropLine plan l =
 (DFunDef false "callKeeps" ((PVar "i") (PCon "SelfCall" PWild PWild (PVar "roles"))) (EMatch (EApp (EApp (EVar "get") (EVar "i")) (EVar "roles")) (arm (PCon "Some" (PCon "Unchanged" (PVar "j"))) () (EBinOp "==" (EVar "j") (EVar "i"))) (arm PWild () (EVar "False"))))
 (DTypeSig false "paramName" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Int") (TyCon "String"))))
 (DFunDef false "paramName" ((PVar "ps") (PVar "i")) (EMatch (EApp (EApp (EVar "get") (EVar "i")) (EVar "ps")) (arm (PCon "Some" (PCon "PVar" (PVar "n") PWild PWild)) () (EVar "n")) (arm (PCon "Some" (PCon "PAs" (PVar "n") PWild PWild PWild)) () (EVar "n")) (arm PWild () (ELit (LString "_")))))
-(DTypeSig false "report" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Fix")) (TyCon "Finding"))))))
+(DTypeSig false "report" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Memo") (TyApp (TyCon "Option") (TyCon "Fix"))) (TyCon "Finding"))))))
 (DFunDef false "report" ((PVar "name") (PVar "loc") (PVar "names") (PVar "fix")) (EBlock (DoLet false false (PVar "listed") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EVar "quoted")) (EVar "names")))) (DoExpr (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameThreadedInvariant")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "` passes "))) (EApp (EVar "display") (EVar "listed"))) (ELit (LString " through every self-call unchanged: close over them in a where-local `go`")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "fix")))))))
 (DTypeSig false "quoted" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "quoted" ((PVar "n")) (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "`"))))
@@ -1177,14 +1185,14 @@ dropLine plan l =
 (DUse false (UseGroup ("string") ((mem "contains" false) (mem "repeat" false) (mem "startsWith" false) (mem "trim" false) (mem "trimLeft" false) (mem "trimRight" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isIdentChar" false))))
 (DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "filterList" false) (mem "joinWith" false) (mem "listLen" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "FileFacts" false) (mem "Finding" true) (mem "Fix" true) (mem "FixEdit" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "factLines" false) (mem "factScopes" false) (mem "mkRule" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "FileFacts" false) (mem "Finding" true) (mem "Fix" true) (mem "FixEdit" true) (mem "Fixability" true) (mem "Memo" false) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "factLines" false) (mem "factScopes" false) (mem "fixLater" false) (mem "mkRule" false) (mem "factDeclLocs" false))))
 (DUse false (UseGroup ("tools" "lint_recursion") ((mem "ArgRole" true) (mem "Owner" true) (mem "SelfCall" true) (mem "selfCalls" false) (mem "spineOf" false))))
 (DUse false (UseGroup ("tools" "lint_scope") ((mem "FileScopes" false))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "declLocList" false) (mem "indentWidth" false) (mem "isCodeText" false) (mem "isCtorName" false) (mem "isEVarNamed" false) (mem "mentionsVar" false) (mem "ruleNameThreadedInvariant" false) (mem "sourceLine" false) (mem "unwrapLoc" false) (mem "varSite" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "indentWidth" false) (mem "isCodeText" false) (mem "isCtorName" false) (mem "isEVarNamed" false) (mem "mentionsVar" false) (mem "ruleNameThreadedInvariant" false) (mem "sourceLine" false) (mem "unwrapLoc" false) (mem "varSite" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameThreadedInvariant")) (fa "summary" (ELit (LString "a self-recursive function passes two or more of its parameters through every self-call unchanged: close over them in a where-local `go`"))) (fa "doc" (ELit (LString "A top-level function that calls itself with the same two or more parameters, in the same positions, in every self-call carries those parameters through the whole recursion for nothing. A local `go` in a `where` closes over them, so the recursion names only what changes. The rule reads each function as a group of clauses: a position counts when every full-arity self-call of every clause that makes one passes that clause's own parameter there, unchanged. One invariant parameter is not reported, nor is a `go` that already closes over its invariants, a partial application, mutual recursion, or a loop local to a `let` or `where`.\n\n`--fix --unsafe-fixes` writes the `go` form when the whole shape is known: a signature whose class constraints the closed-over parameters carry, each invariant parameter a plain name (or ignored) in every clause, no list builder in tail position modulo cons, no invariant parameter used only to be passed on, and a `where` of its own only on a single clause. The rest are reported only. Run `medaka fmt --write` after it, then check the converted loop for dictionary dispatch: `go` is inferred, not declared, so a changing parameter whose type only the signature fixes (a counter under `+` or `==`, an element that is interpolated) is let-generalised and the loop passes a dictionary on every call (#4921, MonoLocalBinds). The fix does not see that shape.\n\nBefore:\n  extractFold bare heads acc (x :: xs) = extractFold bare heads (step bare heads acc x) xs\n  extractFold _ _ acc [] = acc\nAfter:\n  extractFold bare heads acc0 xs0 = go acc0 xs0\n    where\n      go acc [] = acc\n      go acc (x :: xs) = go (step bare heads acc x) xs"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Internal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "FixableUnsafe")) (fa "needs" (EListLit (EVar "NeedsScopes")))))) (EVar "ruleThreadedInvariant")) (EVar "None")))
 (DTypeSig false "ruleThreadedInvariant" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "ruleThreadedInvariant" (PWild PWild (PVar "facts") (PVar "pos") (PVar "prog")) (EBlock (DoLet false false (PVar "groups") (EApp (EVar "functionGroups") (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog")))) (DoExpr (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "functionFindings") (EVar "facts")) (EVar "prog"))) (EVar "groups")))))
+(DFunDef false "ruleThreadedInvariant" (PWild PWild (PVar "facts") PWild (PVar "prog")) (EBlock (DoLet false false (PVar "groups") (EApp (EVar "functionGroups") (EApp (EVar "factDeclLocs") (EVar "facts")))) (DoExpr (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "functionFindings") (EVar "facts")) (EVar "prog"))) (EVar "groups")))))
 (DData Private "Clause" () ((variant "Clause" (ConPos (TyCon "Int") (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) ())
 (DData Private "Group" () ((variant "Group" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "List") (TyCon "Clause")) (TyCon "Int")))) ())
 (DTypeSig false "functionGroups" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc")))) (TyApp (TyCon "List") (TyCon "Group"))))
@@ -1206,7 +1214,7 @@ dropLine plan l =
 (DFunDef false "joinClause" ((PTuple (PVar "n") (PVar "loc") (PVar "next") (PVar "c")) (PVar "groups")) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "Group") (EVar "n")) (EVar "loc")) (EListLit (EVar "c"))) (EVar "next")) (EVar "groups")))
 (DData Private "Threaded" () ((variant "Threaded" (ConPos (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "SelfCall"))))) ())
 (DTypeSig false "functionFindings" (TyFun (TyCon "FileFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Group") (TyApp (TyCon "List") (TyCon "Finding"))))))
-(DFunDef false "functionFindings" ((PVar "facts") (PVar "prog") (PAs "g" (PCon "Group" (PVar "name") (PVar "loc") (PVar "clauses") PWild))) (EMatch (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "clauseThreaded") (EApp (EVar "factScopes") (EVar "facts"))) (EVar "name"))) (EVar "clauses")) (arm (PList) () (EListLit)) (arm (PAs "ts" (PCons (PCon "Threaded" (PVar "ps") (PVar "first") PWild) PWild)) () (EBlock (DoLet false false (PVar "shared") (EApp (EApp (EVar "filterList") (EApp (EVar "inAll") (EVar "ts"))) (EVar "first"))) (DoExpr (EIf (EBinOp ">=" (EApp (EVar "listLen") (EVar "shared")) (ELit (LInt 2))) (EBlock (DoLet false false (PVar "names") (EApp (EApp (EMethodRef "map") (ELam ((PVar "i")) (EApp (EApp (EVar "paramName") (EVar "ps")) (EVar "i")))) (EVar "shared"))) (DoLet false false (PVar "calls") (EApp (EApp (EDictApp "flatMap") (EVar "threadedCalls")) (EVar "ts"))) (DoExpr (EListLit (EApp (EApp (EApp (EApp (EVar "report") (EVar "name")) (EVar "loc")) (EVar "names")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "threadFix") (EVar "facts")) (EVar "prog")) (EVar "g")) (EVar "shared")) (EVar "names")) (EVar "calls")))))) (EListLit)))))))
+(DFunDef false "functionFindings" ((PVar "facts") (PVar "prog") (PAs "g" (PCon "Group" (PVar "name") (PVar "loc") (PVar "clauses") PWild))) (EMatch (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "clauseThreaded") (EApp (EVar "factScopes") (EVar "facts"))) (EVar "name"))) (EVar "clauses")) (arm (PList) () (EListLit)) (arm (PAs "ts" (PCons (PCon "Threaded" (PVar "ps") (PVar "first") PWild) PWild)) () (EBlock (DoLet false false (PVar "shared") (EApp (EApp (EVar "filterList") (EApp (EVar "inAll") (EVar "ts"))) (EVar "first"))) (DoExpr (EIf (EBinOp ">=" (EApp (EVar "listLen") (EVar "shared")) (ELit (LInt 2))) (EBlock (DoLet false false (PVar "names") (EApp (EApp (EMethodRef "map") (ELam ((PVar "i")) (EApp (EApp (EVar "paramName") (EVar "ps")) (EVar "i")))) (EVar "shared"))) (DoLet false false (PVar "calls") (EApp (EApp (EDictApp "flatMap") (EVar "threadedCalls")) (EVar "ts"))) (DoExpr (EListLit (EApp (EApp (EApp (EApp (EVar "report") (EVar "name")) (EVar "loc")) (EVar "names")) (EApp (EVar "fixLater") (ELam (PWild) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "threadFix") (EVar "facts")) (EVar "prog")) (EVar "g")) (EVar "shared")) (EVar "names")) (EVar "calls")))))))) (EListLit)))))))
 (DTypeSig false "clauseThreaded" (TyFun (TyCon "FileScopes") (TyFun (TyCon "String") (TyFun (TyCon "Clause") (TyApp (TyCon "List") (TyCon "Threaded"))))))
 (DFunDef false "clauseThreaded" ((PVar "scopes") (PVar "name") (PCon "Clause" PWild (PVar "ps") (PVar "body"))) (EIf (EBinOp "||" (EBinOp "<" (EApp (EVar "listLen") (EVar "ps")) (ELit (LInt 2))) (EApp (EVar "not") (EApp (EApp (EVar "mentionsVar") (EVar "name")) (EVar "body")))) (EListLit) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EApp (EVar "selfCalls") (EVar "scopes")) (EApp (EApp (EApp (EVar "Owner") (EVar "name")) (EVar "ps")) (EVar "None"))) (EVar "body")) (arm (PList) () (EListLit)) (arm (PVar "calls") () (EListLit (EApp (EApp (EApp (EVar "Threaded") (EVar "ps")) (EApp (EApp (EVar "filterList") (EApp (EVar "unchangedIn") (EVar "calls"))) (ERangeList (ELit (LInt 0)) (EBinOp "-" (EApp (EVar "listLen") (EVar "ps")) (ELit (LInt 1))) true))) (EVar "calls"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "threadedCalls" (TyFun (TyCon "Threaded") (TyApp (TyCon "List") (TyCon "SelfCall"))))
@@ -1221,7 +1229,7 @@ dropLine plan l =
 (DFunDef false "callKeeps" ((PVar "i") (PCon "SelfCall" PWild PWild (PVar "roles"))) (EMatch (EApp (EApp (EVar "get") (EVar "i")) (EVar "roles")) (arm (PCon "Some" (PCon "Unchanged" (PVar "j"))) () (EBinOp "==" (EVar "j") (EVar "i"))) (arm PWild () (EVar "False"))))
 (DTypeSig false "paramName" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Int") (TyCon "String"))))
 (DFunDef false "paramName" ((PVar "ps") (PVar "i")) (EMatch (EApp (EApp (EVar "get") (EVar "i")) (EVar "ps")) (arm (PCon "Some" (PCon "PVar" (PVar "n") PWild PWild)) () (EVar "n")) (arm (PCon "Some" (PCon "PAs" (PVar "n") PWild PWild PWild)) () (EVar "n")) (arm PWild () (ELit (LString "_")))))
-(DTypeSig false "report" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Fix")) (TyCon "Finding"))))))
+(DTypeSig false "report" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Memo") (TyApp (TyCon "Option") (TyCon "Fix"))) (TyCon "Finding"))))))
 (DFunDef false "report" ((PVar "name") (PVar "loc") (PVar "names") (PVar "fix")) (EBlock (DoLet false false (PVar "listed") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EVar "quoted")) (EVar "names")))) (DoExpr (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameThreadedInvariant")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "` passes "))) (EApp (EMethodRef "display") (EVar "listed"))) (ELit (LString " through every self-call unchanged: close over them in a where-local `go`")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "fix")))))))
 (DTypeSig false "quoted" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "quoted" ((PVar "n")) (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "`"))))

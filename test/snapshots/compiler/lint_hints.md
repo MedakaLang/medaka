@@ -1,5 +1,5 @@
 # META
-source_lines=418
+source_lines=419
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_hints.mdk — the rewrite-hint engine: a rule that rewrites
@@ -45,6 +45,7 @@ import tools.lint_core.{
   Fix,
   StdlibIndex,
   Visitor(..),
+  fixLater,
 }
 import tools.lint_shared.{
   oneLine,
@@ -388,7 +389,7 @@ hintFinding name severity h found idx facts ctx e =
       "\{h.hintRow.rowMessage}. Rewrite as '\{oneLine (exprToString rewritten)}'",
     severity = severity,
     loc = ctx.ctxSpan,
-    fix = hintFix h found idx facts ctx e rewritten,
+    fix = fixLater (_ => hintFix h found idx facts ctx e rewritten),
   }
 
 hintFix : Hint ->
@@ -429,7 +430,7 @@ ownsName _ _ = False
 (DUse false (UseGroup ("support" "util") ((mem "lookupAssoc" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "exprToString" false))))
 (DUse false (UseGroup ("ir" "sexp") ((mem "exprSexp" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" false) (mem "StdlibIndex" false) (mem "Visitor" true))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" false) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "fixLater" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "oneLine" false) (mem "rebinds" false) (mem "replaceNodeFix" false) (mem "unwrapLoc" false) (mem "usesPreludeName" false))))
 (DUse false (UseGroup ("list") ((mem "nub" false))))
 (DData Public "HintCond" () ((variant "Atomic" (ConPos (TyCon "String"))) (variant "NotInDefOf" (ConPos (TyApp (TyCon "List") (TyCon "String"))))) ())
@@ -532,7 +533,7 @@ ownsName _ _ = False
 (DTypeSig false "hintsKeyed" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Severity") (TyFun (TyApp (TyCon "List") (TyCon "Hint")) (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding")))))))))))
 (DFunDef false "hintsKeyed" ((PVar "key") (PVar "name") (PVar "severity") (PVar "hints0") (PVar "idx") (PVar "facts") (PVar "ctx") (PVar "e")) (ELetGroup ((lgb "go" (clause ((PList)) (EListLit)) (clause ((PCons (PVar "h") (PVar "rest"))) (EIf (EBinOp "||" (EBinOp "==" (EFieldAccess (EVar "h") "hintKey") (ELit (LString ""))) (EBinOp "==" (EFieldAccess (EVar "h") "hintKey") (EVar "key"))) (EMatch (EApp (EApp (EVar "matchHint") (EVar "h")) (EVar "e")) (arm (PCon "Some" (PVar "found")) () (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hintFinding") (EVar "name")) (EVar "severity")) (EVar "h")) (EVar "found")) (EVar "idx")) (EVar "facts")) (EVar "ctx")) (EVar "e")))) (arm (PCon "None") () (EApp (EVar "go") (EVar "rest")))) (EApp (EVar "go") (EVar "rest")))))) (EApp (EVar "go") (EVar "hints0"))))
 (DTypeSig false "hintFinding" (TyFun (TyCon "String") (TyFun (TyCon "Severity") (TyFun (TyCon "Hint") (TyFun (TyCon "Found") (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyCon "Finding"))))))))))
-(DFunDef false "hintFinding" ((PVar "name") (PVar "severity") (PVar "h") (PVar "found") (PVar "idx") (PVar "facts") (PVar "ctx") (PVar "e")) (EBlock (DoLet false false (PVar "rewritten") (EApp (EApp (EVar "instantiate") (EVar "h")) (EVar "found"))) (DoExpr (ERecordCreate "Finding" ((fa "rule" (EVar "name")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EFieldAccess (EFieldAccess (EVar "h") "hintRow") "rowMessage"))) (ELit (LString ". Rewrite as '"))) (EApp (EVar "display") (EApp (EVar "oneLine") (EApp (EVar "exprToString") (EVar "rewritten"))))) (ELit (LString "'")))) (fa "severity" (EVar "severity")) (fa "loc" (EFieldAccess (EVar "ctx") "ctxSpan")) (fa "fix" (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hintFix") (EVar "h")) (EVar "found")) (EVar "idx")) (EVar "facts")) (EVar "ctx")) (EVar "e")) (EVar "rewritten"))))))))
+(DFunDef false "hintFinding" ((PVar "name") (PVar "severity") (PVar "h") (PVar "found") (PVar "idx") (PVar "facts") (PVar "ctx") (PVar "e")) (EBlock (DoLet false false (PVar "rewritten") (EApp (EApp (EVar "instantiate") (EVar "h")) (EVar "found"))) (DoExpr (ERecordCreate "Finding" ((fa "rule" (EVar "name")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EFieldAccess (EFieldAccess (EVar "h") "hintRow") "rowMessage"))) (ELit (LString ". Rewrite as '"))) (EApp (EVar "display") (EApp (EVar "oneLine") (EApp (EVar "exprToString") (EVar "rewritten"))))) (ELit (LString "'")))) (fa "severity" (EVar "severity")) (fa "loc" (EFieldAccess (EVar "ctx") "ctxSpan")) (fa "fix" (EApp (EVar "fixLater") (ELam (PWild) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hintFix") (EVar "h")) (EVar "found")) (EVar "idx")) (EVar "facts")) (EVar "ctx")) (EVar "e")) (EVar "rewritten"))))))))))
 (DTypeSig false "hintFix" (TyFun (TyCon "Hint") (TyFun (TyCon "Found") (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Fix"))))))))))
 (DFunDef false "hintFix" ((PVar "h") (PVar "found") (PVar "idx") (PVar "facts") (PVar "ctx") (PVar "e") (PVar "rewritten")) (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EApp (EVar "allHeadsPrelude") (EVar "idx")) (EVar "facts")) (EVar "found")) (EApp (EVar "not") (EApp (EApp (EVar "any") (EApp (EApp (EApp (EVar "rebinds") (EVar "idx")) (EVar "facts")) (EVar "ctx"))) (EFieldAccess (EVar "h") "hintIntro")))) (EApp (EVar "not") (EApp (EApp (EVar "inOwnDefinition") (EVar "h")) (EVar "ctx")))) (EApp (EApp (EApp (EApp (EApp (EVar "replaceNodeFix") (EFieldAccess (EFieldAccess (EVar "h") "hintRow") "rowApplicability")) (EFieldAccess (EFieldAccess (EVar "h") "hintRow") "rowFix")) (EVar "ctx")) (EVar "e")) (EVar "rewritten")) (EVar "None")))
 (DTypeSig false "allHeadsPrelude" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Found") (TyCon "Bool")))))
@@ -551,7 +552,7 @@ ownsName _ _ = False
 (DUse false (UseGroup ("support" "util") ((mem "lookupAssoc" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "exprToString" false))))
 (DUse false (UseGroup ("ir" "sexp") ((mem "exprSexp" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" false) (mem "StdlibIndex" false) (mem "Visitor" true))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" false) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "fixLater" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "oneLine" false) (mem "rebinds" false) (mem "replaceNodeFix" false) (mem "unwrapLoc" false) (mem "usesPreludeName" false))))
 (DUse false (UseGroup ("list") ((mem "nub" false))))
 (DData Public "HintCond" () ((variant "Atomic" (ConPos (TyCon "String"))) (variant "NotInDefOf" (ConPos (TyApp (TyCon "List") (TyCon "String"))))) ())
@@ -654,7 +655,7 @@ ownsName _ _ = False
 (DTypeSig false "hintsKeyed" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Severity") (TyFun (TyApp (TyCon "List") (TyCon "Hint")) (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding")))))))))))
 (DFunDef false "hintsKeyed" ((PVar "key") (PVar "name") (PVar "severity") (PVar "hints0") (PVar "idx") (PVar "facts") (PVar "ctx") (PVar "e")) (ELetGroup ((lgb "go" (clause ((PList)) (EListLit)) (clause ((PCons (PVar "h") (PVar "rest"))) (EIf (EBinOp "||" (EBinOp "==" (EFieldAccess (EVar "h") "hintKey") (ELit (LString ""))) (EBinOp "==" (EFieldAccess (EVar "h") "hintKey") (EVar "key"))) (EMatch (EApp (EApp (EVar "matchHint") (EVar "h")) (EVar "e")) (arm (PCon "Some" (PVar "found")) () (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hintFinding") (EVar "name")) (EVar "severity")) (EVar "h")) (EVar "found")) (EVar "idx")) (EVar "facts")) (EVar "ctx")) (EVar "e")))) (arm (PCon "None") () (EApp (EVar "go") (EVar "rest")))) (EApp (EVar "go") (EVar "rest")))))) (EApp (EVar "go") (EVar "hints0"))))
 (DTypeSig false "hintFinding" (TyFun (TyCon "String") (TyFun (TyCon "Severity") (TyFun (TyCon "Hint") (TyFun (TyCon "Found") (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyCon "Finding"))))))))))
-(DFunDef false "hintFinding" ((PVar "name") (PVar "severity") (PVar "h") (PVar "found") (PVar "idx") (PVar "facts") (PVar "ctx") (PVar "e")) (EBlock (DoLet false false (PVar "rewritten") (EApp (EApp (EVar "instantiate") (EVar "h")) (EVar "found"))) (DoExpr (ERecordCreate "Finding" ((fa "rule" (EVar "name")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EFieldAccess (EFieldAccess (EVar "h") "hintRow") "rowMessage"))) (ELit (LString ". Rewrite as '"))) (EApp (EMethodRef "display") (EApp (EVar "oneLine") (EApp (EVar "exprToString") (EVar "rewritten"))))) (ELit (LString "'")))) (fa "severity" (EVar "severity")) (fa "loc" (EFieldAccess (EVar "ctx") "ctxSpan")) (fa "fix" (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hintFix") (EVar "h")) (EVar "found")) (EVar "idx")) (EVar "facts")) (EVar "ctx")) (EVar "e")) (EVar "rewritten"))))))))
+(DFunDef false "hintFinding" ((PVar "name") (PVar "severity") (PVar "h") (PVar "found") (PVar "idx") (PVar "facts") (PVar "ctx") (PVar "e")) (EBlock (DoLet false false (PVar "rewritten") (EApp (EApp (EVar "instantiate") (EVar "h")) (EVar "found"))) (DoExpr (ERecordCreate "Finding" ((fa "rule" (EVar "name")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EFieldAccess (EFieldAccess (EVar "h") "hintRow") "rowMessage"))) (ELit (LString ". Rewrite as '"))) (EApp (EMethodRef "display") (EApp (EVar "oneLine") (EApp (EVar "exprToString") (EVar "rewritten"))))) (ELit (LString "'")))) (fa "severity" (EVar "severity")) (fa "loc" (EFieldAccess (EVar "ctx") "ctxSpan")) (fa "fix" (EApp (EVar "fixLater") (ELam (PWild) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hintFix") (EVar "h")) (EVar "found")) (EVar "idx")) (EVar "facts")) (EVar "ctx")) (EVar "e")) (EVar "rewritten"))))))))))
 (DTypeSig false "hintFix" (TyFun (TyCon "Hint") (TyFun (TyCon "Found") (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Fix"))))))))))
 (DFunDef false "hintFix" ((PVar "h") (PVar "found") (PVar "idx") (PVar "facts") (PVar "ctx") (PVar "e") (PVar "rewritten")) (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EApp (EVar "allHeadsPrelude") (EVar "idx")) (EVar "facts")) (EVar "found")) (EApp (EVar "not") (EApp (EApp (EDictApp "any") (EApp (EApp (EApp (EVar "rebinds") (EVar "idx")) (EVar "facts")) (EVar "ctx"))) (EFieldAccess (EVar "h") "hintIntro")))) (EApp (EVar "not") (EApp (EApp (EVar "inOwnDefinition") (EVar "h")) (EVar "ctx")))) (EApp (EApp (EApp (EApp (EApp (EVar "replaceNodeFix") (EFieldAccess (EFieldAccess (EVar "h") "hintRow") "rowApplicability")) (EFieldAccess (EFieldAccess (EVar "h") "hintRow") "rowFix")) (EVar "ctx")) (EVar "e")) (EVar "rewritten")) (EVar "None")))
 (DTypeSig false "allHeadsPrelude" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Found") (TyCon "Bool")))))

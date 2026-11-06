@@ -26,12 +26,12 @@ import tools.lint_core.{
   noFix,
   stdlibEntriesOf,
   stdlibIndexNames,
+  factDeclLocs,
 }
 import tools.lint_shared.{
   appSpineOf,
   clausesOf,
   dedupeNamesLoc,
-  declLocList,
   lastSegOf,
   memberLocalIfOrigin,
   nameSetOf,
@@ -127,7 +127,7 @@ ruleStdlibReimpl : StdlibIndex ->
   Positions ->
   List Decl ->
   List Finding
-ruleStdlibReimpl idx path _ pos prog =
+ruleStdlibReimpl idx path facts _ prog =
   -- both hoisted out of the per-def loop: `stdlibIndexNames` sorts the whole
   -- key set on every call, and the signature map is one pass over the file.
   let ownMod = stdlibModuleOf path
@@ -140,7 +140,7 @@ ruleStdlibReimpl idx path _ pos prog =
   -- keeping the FIRST clause's location.
   flatMap
     (reimplHit idx ownMod names sigs locals prog)
-    (dedupeNamesLoc (flatMap topDefNameL (declLocList pos prog)))
+    (dedupeNamesLoc (flatMap topDefNameL (factDeclLocs facts)))
 
 -- ── homonym guard (#2327 finding 2) ───────────────────────────────────────────
 -- `tyCanon` compares type constructors, constraint heads and effect labels by

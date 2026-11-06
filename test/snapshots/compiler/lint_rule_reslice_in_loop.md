@@ -1,5 +1,5 @@
 # META
-source_lines=308
+source_lines=309
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-reslice-in-loop: a loop parameter re-sliced from its start on every step (`stringSlice`, `charAtStr`, `slice`, `drop`). Walk a `StrCursor`, or convert with `toChars` once.
@@ -34,6 +34,7 @@ import tools.lint_core.{
   Visitor(..),
   factScopes,
   mkVisitorRule,
+  noFix,
 }
 import tools.lint_recursion.{
   ArgRole(..),
@@ -283,7 +284,7 @@ report loc msg = Finding {
   message = msg,
   severity = SevWarning,
   loc = loc,
-  fix = None,
+  fix = noFix,
 }
 
 message : Form -> String -> String -> Option String -> String
@@ -318,7 +319,7 @@ stringFix =
 (DUse false (UseGroup ("list") ((mem "findMap" false) (mem "get" false) (mem "nubBy" false))))
 (DUse false (UseGroup ("string") ((mem "contains" false))))
 (DUse false (UseGroup ("tools" "lint_calls") ((mem "lastSegment" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "Ctx" true) (mem "FileFacts" false) (mem "Finding" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "factScopes" false) (mem "mkVisitorRule" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "Ctx" true) (mem "FileFacts" false) (mem "Finding" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "factScopes" false) (mem "mkVisitorRule" false) (mem "noFix" false))))
 (DUse false (UseGroup ("tools" "lint_recursion") ((mem "ArgRole" true) (mem "Owner" true) (mem "SelfCall" true) (mem "letOwners" false) (mem "selfCalls" false) (mem "spineOf" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "firstLoc" false) (mem "mentionsVar" false) (mem "ruleNameResliceInLoop" false) (mem "unwrapLoc" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
@@ -402,7 +403,7 @@ stringFix =
 (DTypeSig false "sameSpan" (TyFun (TyCon "Finding") (TyFun (TyCon "Finding") (TyCon "Bool"))))
 (DFunDef false "sameSpan" ((PRec "Finding" ((rf "loc" (PVar "a"))) true) (PRec "Finding" ((rf "loc" (PVar "b"))) true)) (EBinOp "==" (EVar "a") (EVar "b")))
 (DTypeSig false "report" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyCon "Finding"))))
-(DFunDef false "report" ((PVar "loc") (PVar "msg")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameResliceInLoop")) (fa "message" (EVar "msg")) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None")))))
+(DFunDef false "report" ((PVar "loc") (PVar "msg")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameResliceInLoop")) (fa "message" (EVar "msg")) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "noFix")))))
 (DTypeSig false "message" (TyFun (TyCon "Form") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String"))))))
 (DFunDef false "message" ((PVar "form") (PVar "callee") (PVar "v") (PVar "ty")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "display") (EVar "callee"))) (ELit (LString "` on `"))) (EApp (EVar "display") (EVar "v"))) (ELit (LString "`, which the loop passes on unchanged while another argument advances, starts from the front of `"))) (EApp (EVar "display") (EVar "v"))) (ELit (LString "` on every step. "))) (EApp (EVar "display") (EApp (EApp (EVar "costNote") (EVar "form")) (EVar "ty")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EApp (EVar "fixTarget") (EVar "form")) (EVar "ty")))) (ELit (LString ""))))
 (DTypeSig false "costNote" (TyFun (TyCon "Form") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String"))))
@@ -425,7 +426,7 @@ stringFix =
 (DUse false (UseGroup ("list") ((mem "findMap" false) (mem "get" false) (mem "nubBy" false))))
 (DUse false (UseGroup ("string") ((mem "contains" false))))
 (DUse false (UseGroup ("tools" "lint_calls") ((mem "lastSegment" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "Ctx" true) (mem "FileFacts" false) (mem "Finding" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "factScopes" false) (mem "mkVisitorRule" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "Ctx" true) (mem "FileFacts" false) (mem "Finding" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "factScopes" false) (mem "mkVisitorRule" false) (mem "noFix" false))))
 (DUse false (UseGroup ("tools" "lint_recursion") ((mem "ArgRole" true) (mem "Owner" true) (mem "SelfCall" true) (mem "letOwners" false) (mem "selfCalls" false) (mem "spineOf" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "firstLoc" false) (mem "mentionsVar" false) (mem "ruleNameResliceInLoop" false) (mem "unwrapLoc" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
@@ -509,7 +510,7 @@ stringFix =
 (DTypeSig false "sameSpan" (TyFun (TyCon "Finding") (TyFun (TyCon "Finding") (TyCon "Bool"))))
 (DFunDef false "sameSpan" ((PRec "Finding" ((rf "loc" (PVar "a"))) true) (PRec "Finding" ((rf "loc" (PVar "b"))) true)) (EBinOp "==" (EVar "a") (EVar "b")))
 (DTypeSig false "report" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyCon "Finding"))))
-(DFunDef false "report" ((PVar "loc") (PVar "msg")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameResliceInLoop")) (fa "message" (EVar "msg")) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None")))))
+(DFunDef false "report" ((PVar "loc") (PVar "msg")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameResliceInLoop")) (fa "message" (EVar "msg")) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "noFix")))))
 (DTypeSig false "message" (TyFun (TyCon "Form") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String"))))))
 (DFunDef false "message" ((PVar "form") (PVar "callee") (PVar "v") (PVar "ty")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EMethodRef "display") (EVar "callee"))) (ELit (LString "` on `"))) (EApp (EMethodRef "display") (EVar "v"))) (ELit (LString "`, which the loop passes on unchanged while another argument advances, starts from the front of `"))) (EApp (EMethodRef "display") (EVar "v"))) (ELit (LString "` on every step. "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "costNote") (EVar "form")) (EVar "ty")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "fixTarget") (EVar "form")) (EVar "ty")))) (ELit (LString ""))))
 (DTypeSig false "costNote" (TyFun (TyCon "Form") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String"))))

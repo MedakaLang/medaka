@@ -113,12 +113,14 @@ import tools.lint_core.{
   StdlibIndexError(..),
   Visitor(..),
   factComments,
+  factDeclLocs,
   fixToDiagFix,
   findingFixOf,
   factScopes,
   clampApplicability,
   emptyStdlibIndex,
   maxApplicability,
+  memoGet,
   memoMap,
   memoNew,
   mkStdlibIndex,
@@ -157,16 +159,19 @@ import tools.lint_registry.{
 
 export
 mkFileFacts : String -> List Decl -> Positions -> FileFacts
-mkFileFacts src prog pos = FileFacts {
-  ffSrc = src,
-  ffComments = memoNew (_ => collectComments src),
-  ffOracle = memoNew (_ => buildOracle prog),
-  ffDupClauses = memoNew (_ => flatMap dupClauseOfDecl (declLocList pos prog)),
-  ffScopes = memoNew (_ => buildScopes prog),
-  ffLines = memoNew (_ => fromList (lines src)),
-  ffLocalMods = [],
-  ffCanonPath = "",
-}
+mkFileFacts src prog pos =
+  let declLocs = memoNew (_ => declLocList pos prog)
+  FileFacts {
+    ffSrc = src,
+    ffComments = memoNew (_ => collectComments src),
+    ffOracle = memoNew (_ => buildOracle prog),
+    ffDeclLocs = declLocs,
+    ffDupClauses = memoNew (_ => flatMap dupClauseOfDecl (memoGet declLocs)),
+    ffScopes = memoNew (_ => buildScopes prog),
+    ffLines = memoNew (_ => fromList (lines src)),
+    ffLocalMods = [],
+    ffCanonPath = "",
+  }
 
 -- The dotted names of the program's `import m.*` modules that resolve to a file
 -- of the project: `<root>/<m as a path>.mdk` under the file's own directory or
@@ -313,7 +318,7 @@ lintProgramRanked idx rules path facts pos prog =
     if isEmptyL visitorSets then
       []
     else
-      runVisitors visitorSets (declLocList pos prog)
+      runVisitors visitorSets (factDeclLocs facts)
   ruleFindings idx path facts pos prog enabled walked
 
 rankedEnabled : (Int, Rule) -> Bool
