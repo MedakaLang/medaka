@@ -31,15 +31,15 @@ cleanup LaunchStopped = True
 cleanup (LaunchCleanupPending ticket _) = drain ticket 400
 cleanup (LaunchCleanupFailed _) = False
 
-timeout : <Clock, Exec "/bin/true"> Bool
-timeout =
+timeout : Unit -> <Clock, Exec "/bin/true"> Bool
+timeout () =
   let deadline = runAsync (after (millis 50))
   match runAsync (startUntil "/bin/true" options deadline (newCancelToken ()))
     Ok (StartTimedOut stop) => cleanup stop
     _ => False
 
-cancellation : <Clock, Exec "/bin/true"> Bool
-cancellation =
+cancellation : Unit -> <Clock, Exec "/bin/true"> Bool
+cancellation () =
   let deadline = runAsync (after (millis 5000))
   let token = newCancelToken ()
   let task = deferThen (spawn
@@ -50,7 +50,7 @@ cancellation =
     _ => False
 
 main =
-  if timeout && cancellation then
+  if timeout () && cancellation () then
     println "adapter stall passed"
   else
     println "adapter stall failed"

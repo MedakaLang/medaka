@@ -14,8 +14,8 @@ g n =
   println "var"
   let y = println n
 
-h : <IO> Unit
-h =
+h : Unit -> <IO> Unit
+h () =
   println "tuple"
   let (a, b) = (1, 2)
 
@@ -27,5 +27,5 @@ control n =
 main =
   let _ = f 1
   let _ = g 2
-  let _ = h
+  let _ = h ()
   control 3

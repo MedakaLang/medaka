@@ -1,6 +1,6 @@
--- A chain of nullary references to a Unit binding is still a Unit `main` (#3758).
-main = a
+-- A chain of unit-function calls ending in a Unit binding is still a Unit `main` (#3758).
+main = a ()
 
-a = b
+a () = b ()
 
-b = println "x"
+b () = println "x"

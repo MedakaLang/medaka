@@ -988,22 +988,18 @@ console.log(JSON.stringify({ kind: r.kind, out: host.sink.text('stdout'), calls 
     JSON.stringify(got));
 }
 
-// (w) a top-level value that suspends traps at instantiation; the error names the cause.
+// (w) a top-level value that suspends is refused at build (T-TOPLEVEL-EFFECT); the error names the binding.
 {
-  const wasm = build('toplevelfetch', 'wasmgc/edge');
-  const runner = join(work, 'toplevel_runner.mjs');
-  writeFileSync(runner, `
-import { createHost, runToResult } from ${JSON.stringify(pathToFileURL(join(here, 'medaka_host.mjs')).href)};
-import { readFileSync } from 'node:fs';
-const r = await runToResult(readFileSync(process.argv[2]), 'wasmgc/edge', { fetch: async () => { throw new TypeError('no net'); } });
-process.stderr.write(r.stderr);
-process.exit(r.exitCode);
-`);
-  const r = spawnSync(process.execPath, ['--experimental-wasm-jspi', runner, wasm], { encoding: 'utf8' });
-  check('(w) a top-level fetchText exits 1 with a message naming the top-level value and main',
-    r.status === 1 && r.stderr.includes('a top-level value called fetchText or sleepMs during initialization')
-      && r.stderr.includes('move the call into main'),
-    JSON.stringify({ status: r.status, stderr: r.stderr }));
+  const src = join(work, 'toplevelfetch.mdk');
+  writeFileSync(src, PROGRAMS.toplevelfetch);
+  const r = spawnSync(medaka, ['build', '--target', 'wasmgc/edge', src, '-o', join(work, 'toplevelfetch.wasm')], {
+    env: { ...process.env, MEDAKA_STRICT: '1', MEDAKA_WASM_EMITTER: emitter }, encoding: 'utf8',
+  });
+  const text = r.stdout + r.stderr;
+  check('(w) a top-level fetchText is refused at build, naming the top-level value and the empty-row rule',
+    r.status !== 0 && text.includes('top-level value `page` performs')
+      && text.includes('must have an empty effect row') && text.includes('call `page ()`'),
+    JSON.stringify({ status: r.status, text }));
 }
 
 // Report only: slices no module built above imports a key of.
