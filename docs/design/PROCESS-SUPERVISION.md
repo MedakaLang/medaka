@@ -675,3 +675,12 @@ Acceptance for the next cut:
 Prerequisite: measure a descriptor-first file policy plus resolver/output
 interlocks while retaining supervisor work, or recut and prove an explicit
 protocol-owner/workspace split. Neither alternative is yet qualified.
+
+The descriptor-first experiment in
+`docs/findings/mcp-runtime-stdio-descriptor/REPORT.md` remains unqualified: its
+shared content type restriction blocks the owner's Null streams while Piped
+workers succeed. The next cut must distinguish trusted owner stream setup from
+caller-controlled content opens and attack the untested acquisition, alias,
+release and error-retention paths. Compiler/runtime admission remains unproved;
+reuse the existing Async, Deadline and CancelToken ownership. Protected-manager
+and delegated-cgroup prerequisites for owned-tree deployment remain open.

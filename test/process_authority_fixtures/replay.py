@@ -50,6 +50,41 @@ if sys.platform == 'linux':
     require(by_name['output_alias__proc_self_fd_1']['endpoint_hex'] == '', 'guarded endpoint')
     require(by_name['output_alias__proc_self_fd_1_mutation']['endpoint_hex'] == b'BYPASS'.hex(), 'mutation endpoint')
 
+def descriptor_matrix(rows):
+    cases = [r for r in rows if r.get('name', '').startswith('alias_') and r.get('status') == 'OBSERVED']
+    require(len(cases) == 72, 'descriptor matrix incomplete or zero executed: ' + str(len(cases)))
+    require(all(r['endpoint_hex'] == '' and r['remaining_hex'] == '00ff41c3285a' for r in cases),
+            'descriptor alias effect changed')
+
+try:
+    descriptor_matrix([])
+    raise RuntimeError('zero-executed descriptor matrix escaped')
+except RuntimeError as error:
+    require('zero executed' in str(error), 'zero matrix failed for unrelated reason: ' + str(error))
+print('zero-executed descriptor matrix rejected')
+
+nonlinux = out / 'descriptor-nonlinux'
+script = "import runpy,sys; sys.platform='darwin'; runpy.run_path(sys.argv.pop(1),run_name='__main__')"
+result = run(['python3', '-c', script, prototype / 'stdio_descriptor_probe.py', '--root', root, '--out', nonlinux])
+require(result.returncode == 77, 'non-Linux refusal failed: ' + result.stdout + result.stderr)
+rows = json.loads((nonlinux / 'results.json').read_text())
+require(rows[-1]['status'] == 'UNAVAILABLE' and 'no matrix executed' in rows[-1]['reason'], 'non-Linux diagnostic missing')
+print('non-Linux descriptor refusal verified')
+
+if sys.platform == 'linux':
+    descriptor = out / 'descriptor'
+    result = run(['python3', prototype / 'stdio_descriptor_probe.py', '--root', root, '--out', descriptor])
+    require(result.returncode == 77, 'descriptor blocker changed: ' + result.stdout + result.stderr)
+    rows = json.loads((descriptor / 'results.json').read_text())
+    descriptor_matrix(rows)
+    by_name = {r['name']: r for r in rows}
+    for name in ('shared_policy_worker_blocker', 'required_piped_worker',
+                 'identity_mutation_rejected_by_observer', 'identity_read_mutation_rejected_by_observer',
+                 'type_mutation_restores_required_worker'):
+        require(by_name[name]['status'] == 'PASS', name + ': ' + json.dumps(by_name[name]))
+    require(by_name['qualification']['status'] == 'BLOCKED', 'descriptor falsely qualified')
+    print('descriptor blocker and mutation controls verified')
+
 source = (prototype / 'ownership_fixture.c').read_text()
 mutations = {
     'nonexecution': ('return 77;\n  }\n#ifdef __linux__', 'return target(argv[2]);\n  }\n#ifdef __linux__'),
