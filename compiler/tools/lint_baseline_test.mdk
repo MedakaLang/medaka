@@ -21,10 +21,15 @@
 
 import test.{expectEqual, expectTrue}
 import tools.lint_baseline.{
+  LintExempt(..),
   baselineAllowed,
   baselineViolations,
+  exemptMissingFileErr,
+  exemptRulesFor,
   missingBaselineErr,
+  noExempt,
   parseLintBaseline,
+  parseLintExempt,
 }
 import support.util.{startsWith}
 
@@ -86,3 +91,64 @@ test "a rule the baseline never mentions has no allowance" = expectEqual
   (match parseLintBaseline "origin.toml" ""
     Err _ => Some 999  -- unreachable: proves the Err branch wasn't taken
     Ok base => baselineAllowed base "a.mdk" "rule-x")
+
+-- ── the path exemption table (`--exempt`) ────────────────────────────────────
+knownRules : List String
+knownRules = ["rule-x", "rule-y"]
+
+exemptRowSrc : String -> String -> String
+exemptRowSrc rules reason =
+  "[[entry]]\nfile = \"a.mdk\"\nrules = [\{rules}]\nreason = \"\{reason}\"\n"
+
+exemptTableOf : String -> LintExempt
+exemptTableOf src = match parseLintExempt knownRules "ex.toml" src
+  Ok rows => LintExempt "/repo" rows
+  Err _ => noExempt
+
+exemptErrOf : String -> String
+exemptErrOf src = match parseLintExempt knownRules "ex.toml" src
+  Err msg => msg
+  Ok _ => "unexpectedly parsed"
+
+oneRowTable : LintExempt
+oneRowTable = exemptTableOf (exemptRowSrc "\"rule-x\"" "pinned bytes")
+
+test "an exempt row drops only its named rules, only for its named file" =
+  expectEqual
+    [["rule-x"], ["rule-x"], []]
+    (map (exemptRulesFor oneRowTable) ["a.mdk", "/repo/a.mdk", "b.mdk"])
+
+test "no --exempt table exempts nothing" =
+  expectEqual [] (exemptRulesFor noExempt "a.mdk")
+
+test "an exempt row with an empty reason is an error naming the row" =
+  expectEqual
+    "ex.toml: [[entry]] #0 ('a.mdk') has an empty reason"
+    (exemptErrOf (exemptRowSrc "\"rule-x\"" " "))
+
+test "an exempt row without a reason field is an error naming the row" =
+  expectEqual
+    "ex.toml: [[entry]] #0 ('a.mdk') needs file, rules and reason"
+    (exemptErrOf "[[entry]]\nfile = \"a.mdk\"\nrules = [\"rule-x\"]\n")
+
+test "an exempt row naming an unknown rule is an error naming the row" =
+  expectEqual
+    "ex.toml: [[entry]] #0 ('a.mdk') names unknown rule rule-nope"
+    (exemptErrOf (exemptRowSrc "\"rule-x\", \"rule-nope\"" "pinned bytes"))
+
+test "an exempt row naming no rules is an error naming the row" =
+  expectEqual
+    "ex.toml: [[entry]] #0 ('a.mdk') names no rules"
+    (exemptErrOf (exemptRowSrc "" "pinned bytes"))
+
+test "a second exempt row for one file is an error" =
+  expectEqual
+    "ex.toml: duplicate row for 'a.mdk'"
+    (exemptErrOf
+      (exemptRowSrc "\"rule-x\"" "pinned"
+        ++ exemptRowSrc "\"rule-y\"" "pinned"))
+
+test "an exempt row for a missing file names the row's file" =
+  expectEqual
+    "ex.toml: row for 'gone.mdk' names a file that does not exist"
+    (exemptMissingFileErr "ex.toml" "gone.mdk")

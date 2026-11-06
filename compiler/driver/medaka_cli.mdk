@@ -274,7 +274,10 @@ import tools.lint.{
 import tools.lint_cache.{storeEntries}
 import tools.lint_baseline.{
   LintBaseline,
+  LintExempt,
+  noExempt,
   readLintBaseline,
+  readLintExempt,
   renderLintBaseline,
 }
 import tools.codemod.{
@@ -3898,6 +3901,9 @@ runManifestArgs (ManifestArgs (Some target) fn) = match analyzeTarget target fn
 --                        findings and no row is an error, not a pass.
 --   --write-baseline=<f> regenerate <f> from this run instead of reporting;
 --                        the ONLY sanctioned way to move a count
+--   --exempt=<file>      drop the findings of each row's rules in that row's
+--                        file before --deny and --baseline (a hand-written,
+--                        reason-bearing table; see lint_baseline.mdk)
 -- Target resolution:
 --   ≥1 explicit file args   → lint each in order
 --   single directory arg    → lint all top-level .mdk files in that dir (sorted)
@@ -3932,6 +3938,10 @@ lintArgSpec =
         ["--write-baseline"]
         "<file>"
         "regenerate <file> from this run instead of reporting",
+      value
+        ["--exempt"]
+        "<file>"
+        "drop each listed file's findings of its listed rules",
       switch ["--list-rules"] "list every rule with its metadata",
       switch ["--markdown"] "with --list-rules: render docs/ops/LINT-RULES.md",
       value
@@ -3977,6 +3987,7 @@ lintRunFlags = [
   "--deny",
   "--baseline",
   "--write-baseline",
+  "--exempt",
 ]
 
 listRulesBannedFlags : List String
@@ -4080,6 +4091,7 @@ runLintTargets a =
   let baselineArg = flagValue "--baseline" a
   let writeBaselineArg = flagValue "--write-baseline" a
   assertBaselineFlagsCoherent baselineArg writeBaselineArg fixMode
+  let exemptArg = flagValue "--exempt" a
   let fileArgs = a.positionals
   assertLintTargetsExist fileArgs
   let files = resolveLintTargets fileArgs
@@ -4125,6 +4137,7 @@ runLintTargets a =
         jsonMode
         baselineArg
         writeBaselineArg
+        exemptArg
         files
 
 runLintWithIndex : StdlibIndex ->
@@ -4136,19 +4149,22 @@ runLintWithIndex : StdlibIndex ->
   Bool ->
   Option String ->
   Option String ->
+  Option String ->
   List String ->
   <IO> Unit
-runLintWithIndex stdlibIdx a disableNames onlyNames denyNames fixMode jsonMode baselineArg writeBaselineArg files =
+runLintWithIndex stdlibIdx a disableNames onlyNames denyNames fixMode jsonMode baselineArg writeBaselineArg exemptArg files =
   -- The baseline keys on paths relative to the process's working directory (see
   -- lint_baseline.mdk's header), so the anchor is resolved once, here, and
   -- handed down alongside the parsed rows.
   let cwd = canonicalizePath "."
   let baseCtx = loadLintBaselineCtx cwd baselineArg
+  let exempt = loadLintExempt cwd exemptArg
   let internalFlag = flag "--internal" a
   if isSome writeBaselineArg then
     runLintWriteBaselineCmd
       stdlibIdx
       internalFlag
+      exempt
       disableNames
       onlyNames
       denyNames
@@ -4159,6 +4175,7 @@ runLintWithIndex stdlibIdx a disableNames onlyNames denyNames fixMode jsonMode b
     runLintJsonCmd
       stdlibIdx
       internalFlag
+      exempt
       disableNames
       onlyNames
       denyNames
@@ -4171,6 +4188,7 @@ runLintWithIndex stdlibIdx a disableNames onlyNames denyNames fixMode jsonMode b
     let cacheCtx = lintCacheCtx (flag "--cache" a) fixMode
     let run = LintRun {
       lrInternal = internalFlag,
+      lrExempt = exempt,
       lrFix = fixMode,
       lrUnsafe = flag "--unsafe-fixes" a,
       lrMulti = multiFile,
@@ -4193,6 +4211,7 @@ runLintWithIndex stdlibIdx a disableNames onlyNames denyNames fixMode jsonMode b
         runProjectReport
           stdlibIdx
           internalFlag
+          exempt
           disableNames
           onlyNames
           denyNames
@@ -4254,6 +4273,16 @@ loadLintBaselineCtx cwd (Some path) = match readLintBaseline path
     None
   Ok base => Some (cwd, base)
 
+-- Same rule for the exemption table: a table that cannot be read or has a row
+-- it cannot justify ends the run, rather than exempting nothing.
+loadLintExempt : String -> Option String -> <IO> LintExempt
+loadLintExempt _ None = noExempt
+loadLintExempt cwd (Some path) = match readLintExempt allRuleNames cwd path
+  Err msg =>
+    dieMsg "medaka lint: \{msg}"
+    noExempt
+  Ok table => table
+
 -- `--write-baseline`: regenerate the file from THIS run rather than reporting
 -- against it.  Counts are read off the same per-file diagnostic triples the
 -- `--json` surface emits, so what gets pinned is exactly what a report would
@@ -4261,6 +4290,7 @@ loadLintBaselineCtx cwd (Some path) = match readLintBaseline path
 -- the one that checks it.
 runLintWriteBaselineCmd : StdlibIndex ->
   Bool ->
+  LintExempt ->
   List String ->
   List String ->
   List String ->
@@ -4268,11 +4298,12 @@ runLintWriteBaselineCmd : StdlibIndex ->
   String ->
   List String ->
   <IO> Unit
-runLintWriteBaselineCmd idx internalFlag disableNames onlyNames denyNames cwd out files =
+runLintWriteBaselineCmd idx internalFlag exempt disableNames onlyNames denyNames cwd out files =
   let triples =
     lintFilesToDiagTriples
       idx
       internalFlag
+      exempt
       disableNames
       onlyNames
       denyNames

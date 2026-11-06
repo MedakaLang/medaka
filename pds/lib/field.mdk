@@ -349,9 +349,8 @@ feEqual : Fe -> Fe -> Bool
 feEqual a b = equalGo (rawFe a) (rawFe b) 0
 
 equalGo : Array Int -> Array Int -> Int -> Bool
-equalGo a b i0 = go i0
-  where
-    go i = if i >= 5 then True else if a[i] /= b[i] then False else go (i + 1)
+equalGo a b i =
+  if i >= 5 then True else if a[i] /= b[i] then False else equalGo a b (i + 1)
 
 -- | Is this element zero?
 export
