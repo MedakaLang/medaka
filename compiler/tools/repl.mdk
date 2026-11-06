@@ -15,7 +15,9 @@
 --
 -- Implementation strategy (no try/catch in Medaka):
 --   1. Tokenize input to classify (decl vs expr) BEFORE calling parse.
---   2. Expression input wrapped as `__repl__ = <src>` so parse succeeds.
+--   2. Expression input wrapped as `__repl__ () = <src>` so parse succeeds; the
+--      unit function keeps an effectful expression out of the top-level value rule
+--      (L1 I2) and is applied once to run it.
 --   3. Re-run pipeline (parse → desugar → resolve → typecheck → eval) on
 --      prelude ++ accumulated ++ new_input each time.
 --   4. Resolve errors: safe list return.  Typecheck: checkOneDiags.
@@ -32,7 +34,7 @@ import frontend.parser.{
 }
 import frontend.desugar.{desugar}
 import frontend.resolve.{resolveProgram, ppResError}
-import types.repr.{ppScheme, Scheme(..)}
+import types.repr.{Mono(..), ppScheme, Scheme(..), normalize}
 import types.typecheck.{
   driveInputsFor, elaborateModulesWithSchemes, pubSchemes, tcMsg
 }
@@ -48,6 +50,7 @@ import eval.eval.{
   ppValue,
   lookupBinding,
   force,
+  applyValue,
 }
 import support.util.{contains, startsWith}
 import string.{split as splitString, trimAscii}
@@ -337,12 +340,26 @@ schemeToBinding : (String, Scheme) -> (String, String)
 schemeToBinding (n, s) = (n, ppScheme s)
 
 -- ── Process an expression input ───────────────────────────────────────────
+-- An expression is bound as the unit function `__repl__`, the source text after the
+-- `__repl__ () = ` prefix of [replWrapLen] characters.
+replWrap : String -> String
+replWrap src = "__repl__ () = " ++ src
+
+replWrapLen : Int
+replWrapLen = 14
+
+-- The scheme of the expression's value, read off the unit function's scheme: the result
+-- type, with the function arrow's row as the value's forcing row.
+export
+replResultScheme : Scheme -> Option Scheme
+replResultScheme (Forall qs es auths residual _ t) = match normalize t
+  TFun _ row res => Some (Forall qs es auths residual row res)
+  _ => None
+
 processExprInput : String -> <IO> Unit
-processExprInput src =
-  let wrappedSrc = "__repl__ = " ++ src
-  match parseResult wrappedSrc
-    Err e => printParseErr 11 e
-    Ok raw => processExprParsed (desugar raw)
+processExprInput src = match parseResult (replWrap src)
+  Err e => printParseErr replWrapLen e
+  Ok raw => processExprParsed (desugar raw)
 
 processExprParsed : List Decl -> <IO> Unit
 processExprParsed newDecls =
@@ -354,10 +371,11 @@ processExprParsed newDecls =
       let valOpt = lookupBinding "__repl__" bindings
       let schemeOpt = lookupScheme "__repl__" allSchemes
       match (valOpt, schemeOpt)
-        (Some v, Some scheme) =>
-          let vStr = ppValue (force v)
-          let tStr = ppScheme scheme
-          putStrLn "\{vStr} : \{tStr}"
+        (Some v, Some scheme) => match replResultScheme scheme
+          Some rs =>
+            let vStr = ppValue (force (applyValue (force v) VUnit))
+            putStrLn "\{vStr} : \{ppScheme rs}"
+          None => ()
         _ => ()
 
 -- ── Process :type command ─────────────────────────────────────────────────
@@ -366,11 +384,9 @@ processTypeCmd commandLen exprSrc =
   let trimmed = trimAscii exprSrc
   if trimmed == "" then
     ePutStrLn ":type requires an expression"
-  else
-    let wrappedSrc = "__repl__ = " ++ exprSrc
-    match parseResult wrappedSrc
-      Err e => printParseErr (11 - commandLen) e
-      Ok raw => processTypeParsed (desugar raw)
+  else match parseResult (replWrap exprSrc)
+    Err e => printParseErr (replWrapLen - commandLen) e
+    Ok raw => processTypeParsed (desugar raw)
 
 processTypeParsed : List Decl -> <IO> Unit
 processTypeParsed newDecls =
@@ -379,7 +395,9 @@ processTypeParsed newDecls =
   match errs
     e :: _ => mapIO_ printErr errs
     [] => match lookupScheme "__repl__" allSchemes
-      Some scheme => putStrLn (ppScheme scheme)
+      Some scheme => match replResultScheme scheme
+        Some rs => putStrLn (ppScheme rs)
+        None => ()
       None => ()
 
 -- ── Process :browse / :env command ───────────────────────────────────────

@@ -47,7 +47,8 @@ import support.ordmap.{
 }
 import support.scc.{tarjanSCCs}
 import support.util.{isEmptyL, isNonEmptyL, reverseL}
-import types.repr.{IfaceRef(..), Scheme, VecObl(..)}
+import types.effect_rows.{renderAtoms, rowFlat}
+import types.repr.{IfaceRef(..), Scheme(..), VecObl(..)}
 import types.tc_env.{
   ceRowIface, ceRowMethods, ceRowSupers, ieRowTriple, ieRowsVisibleAt,
   methodRowIface
@@ -140,6 +141,45 @@ public export data InitGraph = InitGraph {
   igraphNodes : List InitNode,
   igraphNotInitialised : OrdMap Unit,
 }
+
+-- ── the rules ────────────────────────────────────────────────────────────────
+
+-- A top-level value whose initialiser has a non-empty forcing row (I2): [ivRow] is the row
+-- as the signature would write it.
+public export data InitViolation = InitViolation {
+  ivName : String,
+  ivRow : String,
+  ivLoc : Option Loc,
+}
+
+-- I2: every initialised value node (not a function, an impl, `main` or a constrained
+-- nullary binding) must have an empty forcing row in its inferred scheme.  A row tail that
+-- is unsolved counts as empty: only labels make a row non-empty.  The source annotation is
+-- not read, so a row-less signature over an effectful body is rejected.
+export
+checkInitRules : InitInputs -> InitGraph -> List InitViolation
+checkInitRules inputs g =
+  flatMap
+    (n =>
+      if n.inodeKind == ValueNode
+        && not (omHasKey n.inodeName g.igraphNotInitialised) then
+        purityViolation inputs n
+      else
+        [])
+    g.igraphNodes
+
+purityViolation : InitInputs -> InitNode -> List InitViolation
+purityViolation inputs n = match omLookup n.inodeName inputs.iiSchemes
+  Some (Forall _ _ _ _ force _) => match fst (rowFlat force)
+    [] => []
+    labels => [
+      InitViolation {
+        ivName = n.inodeName,
+        ivRow = "<\{renderAtoms labels}>",
+        ivLoc = n.inodeLoc,
+      },
+    ]
+  None => []
 
 -- ── the input projection ─────────────────────────────────────────────────────
 

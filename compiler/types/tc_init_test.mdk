@@ -12,9 +12,9 @@
 -- component, is read (`guard`); a direct lambda argument of a `Deferred*` call in guarded
 -- position is delayed (`delay`).  An edge renders as `target kind position`.
 
-import frontend.ast.{Decl}
+import frontend.ast.{Decl, Loc(..)}
 import frontend.desugar.{desugar}
-import frontend.parser.{parse}
+import frontend.parser.{parse, parseWithPositionsLocated}
 import frontend.resolve.{stampGraphTyOrigins}
 import support.ordmap.{omEmpty, omFromNames, omHasKey}
 import support.util.{isEmptyL, orElseOpt, sortUniqS}
@@ -26,10 +26,12 @@ import types.tc_init.{
   InitEdgeKind(..),
   InitGraph(..),
   InitInputs,
+  InitViolation(..),
   InitMention(..),
   InitNode(..),
   InitNodeKind(..),
   InitPosition(..),
+  checkInitRules,
   initGraphOf,
   initInputsAt,
   initOrder,
@@ -55,8 +57,18 @@ noPreludeFacts = PreludeMarkFacts {
 -- The graph of the last of [mods] (id, source), the modules checked in order in one
 -- graph, the last one's imports binding the value names [imported].
 graphOf : List (String, String) -> List String -> InitGraph
-graphOf mods imported =
-  let parsed = map (m => (fst m, desugar (parse (snd m)))) mods
+graphOf mods imported = initGraphOf (inputsOf mods imported)
+
+-- The inputs of the last of [mods], projected as `tc_module` projects them.
+inputsOf : List (String, String) -> List String -> InitInputs
+inputsOf = inputsOfParsed parse
+
+inputsOfParsed : (String -> List Decl) ->
+  List (String, String) ->
+  List String ->
+  InitInputs
+inputsOfParsed parser mods imported =
+  let parsed = map (m => (fst m, desugar (parser (snd m)))) mods
   let stamped = snd (stampGraphTyOrigins [] [] parsed)
   let g = (fresh ()).mcGraph
   g.declEnvsRef :=
@@ -66,7 +78,7 @@ graphOf mods imported =
       (declEnvModule g 0 "core" [])
       (declEnvModulesFrom g 1 stamped)
   let _ = markSetsOf g noPreludeFacts [] stamped (flatMap snd stamped)
-  initGraphOf (subjectInputs g [] imported 1 stamped)
+  subjectInputs g [] imported 1 stamped
 
 -- One module, importing nothing.
 graphOne : String -> InitGraph
@@ -665,3 +677,122 @@ v = 1
     expectTrue (omHasKey "pick" g.igraphNotInitialised),
     expectEqual ["v"] (initOrder g),
   ]
+
+-- ── purity (I2) ──────────────────────────────────────────────────────────────
+
+-- The purity violations of the last of [mods], each as `name row line:col`.
+purityOf : List (String, String) -> List String -> List String
+purityOf = purityOfParsed parse
+
+purityOfParsed : (String -> List Decl) ->
+  List (String, String) ->
+  List String ->
+  List String
+purityOfParsed parser mods imported =
+  let inputs = inputsOfParsed parser mods imported
+  map violationTag (checkInitRules inputs (initGraphOf inputs))
+
+locatedParse : String -> List Decl
+locatedParse src = fst (parseWithPositionsLocated src)
+
+violationTag : InitViolation -> String
+violationTag v = match v.ivLoc
+  Some (Loc _ l c _ _) =>
+    "\{v.ivName} \{v.ivRow} \{intToString l}:\{intToString c}"
+  None => "\{v.ivName} \{v.ivRow}"
+
+effPrefix : String
+effPrefix =
+  "extern putStrLn : String -> <Stdout> Unit\nextern exit : Int -> a\n"
+
+test "an effectful value is rejected at its binding with its row (eff, #4183)" =
+  expectEqual
+    ["side <Stdout> 5:0"]
+    (purityOfParsed
+      locatedParse
+      [
+        (
+          "m",
+          effPrefix ++ "main = putStrLn \"ok\"\n\nside = putStrLn \"BOOM\"\n",
+        ),
+      ]
+      [])
+
+test "a row-less annotation over an effectful body is rejected (eff2)" =
+  expectEqual
+    ["token <Stdout> 7:0"]
+    (purityOfParsed
+      locatedParse
+      [
+        (
+          "m",
+          effPrefix
+            ++ "mint : Unit -> <Stdout> String\nmint _ = \"t\"\n\ntoken : String\ntoken = mint ()\n",
+        ),
+      ]
+      [])
+
+test "a value effectful through a helper is rejected" =
+  expectEqual
+    ["viaHelper <Stdout> 6:0"]
+    (purityOfParsed
+      locatedParse
+      [
+        (
+          "m",
+          effPrefix
+            ++ "say : Unit -> <Stdout> Unit\nsay _ = putStrLn \"x\"\n\nviaHelper = say ()\n",
+        ),
+      ]
+      [])
+
+test "exit, panic and a Ref are rowless and admitted (ex, refg)" =
+  expectEqual
+    []
+    (purityOf
+      [
+        (
+          "m",
+          effPrefix
+            ++ "side = exit 3\n\ncounter = Ref 0\n\nmain = putStrLn \"ok\"\n",
+        ),
+      ]
+      [])
+
+test "a value read through a dispatching impl is admitted when rowless (dok)" =
+  expectEqual
+    []
+    (purityOf
+      [
+        (
+          "m",
+          "interface Gives a where\n  give : a -> Int\n\ndata Box = Box\n\nimpl Gives Box where\n  give _ = base + 1\n\nbase : Int\nbase = 41\n\ntotal : Int\ntotal = give Box\n",
+        ),
+      ]
+      [])
+
+test "main, an imported main and a constrained nullary binding are admitted" =
+  let lib = effPrefix ++ "main = putStrLn \"ok\"\n"
+  let entry = "import lib.{main}\n\nlocal = 3\n"
+  let constrained =
+    effPrefix
+      ++ "interface Sel a where\n  choose : a\n\npick : Sel a => a\npick = choose\n"
+  expectAll [
+    expectEqual [] (purityOf [("m", lib)] []),
+    expectEqual [] (purityOf [("lib", lib), ("entry", entry)] ["main"]),
+    expectEqual [] (purityOf [("m", constrained)] []),
+  ]
+
+test "a value annotated with its row is rejected (count, #4183)" =
+  expectEqual
+    ["count <Stdout> 5:0"]
+    (purityOfParsed
+      locatedParse
+      [
+        (
+          "m",
+          effPrefix
+            ++ "extern bump : Unit -> <Stdout> Int\ncount : <Stdout> Int\ncount = bump ()\n",
+        ),
+      ]
+      [])
