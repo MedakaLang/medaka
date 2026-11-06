@@ -159,6 +159,17 @@ declare i64 @mdk_executable_path(i64)
 declare i64 @mdk_build_fingerprint(i64)
 declare i64 @mdk_build_commit(i64)
 declare i64 @mdk_build_date(i64)
+declare i64 @mdk_process_submit(i64, i64, i64, i64, i64, i64, i64)
+declare i64 @mdk_process_start(i64, i64, i64, i64, i64, i64, i64)
+declare i64 @mdk_process_retry_start(i64)
+declare i64 @mdk_process_check_start(i64)
+declare i64 @mdk_process_abort_start(i64)
+declare i64 @mdk_process_poll_exit(i64)
+declare i64 @mdk_process_close_stdin(i64)
+declare i64 @mdk_process_dispose(i64)
+declare i64 @mdk_process_try_read(i64, i64, i64)
+declare i64 @mdk_process_try_write(i64, i64, i64, i64)
+declare i64 @mdk_process_stream_fd(i64, i64)
 declare i64 @mdk_net_resolve(i64)
 declare i64 @mdk_net_tcp_connect(i64, i64)
 declare i64 @mdk_net_tcp_listen(i64, i64)
@@ -328,7 +339,7 @@ entry:
 ; mdk-module module.5f5f757365725f5f
 @mdk.state.6d356635663735373336353732356635665f5f616767 = global i8 0
 ; mdk-module program
-@mdk.gen.dictcell.70726f6772616d..0 = internal constant [3 x i64] [i64 0, i64 19, i64 15]
+@mdk.gen.dictcell.70726f6772616d..0 = internal constant [3 x i64] [i64 8589934592, i64 19, i64 15]
 ; mdk-module module.5f5f757365725f5f
 @mdk.gen.globalname.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f616767.0 = private unnamed_addr constant [23 x i8] c"\6D\35\66\35\66\37\35\37\33\36\35\37\32\35\66\35\66\5F\5F\61\67\67\00"
 ; mdk-module module.5f5f757365725f5f
