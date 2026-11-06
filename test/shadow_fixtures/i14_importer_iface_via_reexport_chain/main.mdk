@@ -1,4 +1,4 @@
--- C6, L2 rung 3: `import reexp.{Sizeable}` binds no bare method name through a re-export
+-- L2 rung 3: `import reexp.{Sizeable}` binds no bare method name through a re-export
 -- hop; `size` is fmod's `Int -> Int`, so `size (Box 3)` mistypes
 import reexp.{Sizeable}
 import boxmod.{Box(..)}

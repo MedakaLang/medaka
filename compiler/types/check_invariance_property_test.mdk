@@ -377,11 +377,11 @@ baseOf : ShadowCase -> ShadowCase
 baseOf (ShadowCase topo arity use _ _) =
   ShadowCase topo arity use XNone Straight
 
--- SHADOW-SEMANTICS L2, L4, L8, F-R2 (C1, C2, C6): the verdict of a shadow
+-- SHADOW-SEMANTICS L2, L4, L8, F-R2: the verdict of a shadow
 -- program follows the ladder model, and neither renaming the unrelated
 -- binders, inserting an unrelated declaration, nor reordering the importer's
 -- imports and providers changes verdict, codes or schemes. Whether the
--- importer admits the interface does not change the verdict either (C6).
+-- importer admits the interface does not change the verdict either.
 prop "a shadow program's verdict follows the ladder and survives the transformations" (c : ShadowCase) =
   let xf = xformOf c
   let expected = shadowVerdict c

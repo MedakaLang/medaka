@@ -1,4 +1,4 @@
--- C3, L4 (F-R3): an explicit import of `size` plus the module's own `size` is a located
+-- L4 (F-R3): an explicit import of `size` plus the module's own `size` is a located
 -- error at the import member.
 import lib.shadow2722_iface.{Sizeable, size, Box(..)}
 

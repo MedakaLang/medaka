@@ -1,4 +1,4 @@
--- C1, L2 rung 4 over rung 5: `import map.*` binds `isEmpty` for maps, which beats the
+-- L2 rung 4 over rung 5: `import map.*` binds `isEmpty` for maps, which beats the
 -- prelude method; `isEmpty (Some 7)` is a located type mismatch
 import map.*
 main =

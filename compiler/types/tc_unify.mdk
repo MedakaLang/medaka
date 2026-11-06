@@ -1324,7 +1324,7 @@ boundFailureMsg mctx name label lower lo hi upper written =
     "`\{name}` reaches \{lo} where only \{hi} is admitted, the authority of the value this arm or clause opened; derive the operation from the opened value, or widen the declared row to the label bare"
   else if authHasVars upper
     && binderIn mctx.mcCells.displayHiddenBindersRef upper then
-    "`\{name}` reaches \{lo} where only \{hi} is admitted: the interpolation uses this module's own `display`, not the prelude's, so the string is not known to derive from \{hi}; build it with `++` from the named argument"
+    "`\{name}` reaches \{lo} where only \{hi} is admitted: the `display` call written here is this module's own, not the prelude's, so the string is not known to derive from \{hi}; build it with `++` from the named argument"
   else if authHasVars upper && allList authvarIsPattern (authVars upper) then
     "`\{name}` reaches \{lo} where only \{hi} is admitted, a pattern-ranging authority the caller chooses; build the value by appending to the named argument, `root ++ suffix`, or widen the declared row to the label bare"
   else if authHasVars upper then

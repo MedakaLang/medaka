@@ -1,4 +1,4 @@
-aliasImportSites : List Decl -> List (List String, Loc)
+aliasImportSites : List Decl -> List AliasSite
 bindsNonCtorExport : ModuleExports -> String -> Bool
 buildExportsWith : ModuleExports -> Map String ModuleExports -> String -> List Decl -> List String -> ModuleExports
 buildSurface : ExportView -> ModuleExports -> Map String ModuleExports -> String -> List Decl -> List String -> ModuleExports
@@ -37,11 +37,11 @@ ifaceMethodNm : IfaceMethod -> String
 ifaceMethodPairs : ModuleExports -> List String -> List (String, List String)
 ifaceMethodsOf : String -> List (String, List String) -> List String
 implMethodNm : ImplMethod -> String
-importFormIn : List (List String, Loc) -> Decl -> ImportForm
+importFormIn : List AliasSite -> Decl -> ImportForm
 importFormsOf : List Decl -> Decl -> ImportForm
 indexExports : ModuleExports -> ModuleExports
 interfaceList : List Decl -> List (String, List String)
-isAliasMethodImport : List (List String, Loc) -> Decl -> Bool
+isAliasMethodImport : List AliasSite -> Decl -> Bool
 isNewtypeExport : String -> ModuleExports -> Bool
 isPubExp : ModuleExports -> String -> Bool
 isSubjectIn : List SiblingPair -> String -> Bool

@@ -23,7 +23,7 @@ aliasRowLastLoc : List (String, String, String, Ident, Loc) -> Option Loc
 aliasRowMethodOf : List (String, String, String, Ident, Loc) -> String
 aliasRowModule : (String, String, String, Ident, Loc) -> String
 aliasRowSpelling : (String, String, String, Ident, Loc) -> (String, String)
-aliasWitnessesMethod : GraphCtx -> List (List String, Loc) -> String -> Ident -> Bool
+aliasWitnessesMethod : GraphCtx -> List AliasSite -> String -> Ident -> Bool
 ambiguousAdmitted : Map String Unit -> UsePath -> List (String, List String) -> List (String, List String)
 annotateImportedMethodRows : TcEnv -> List String -> Map String Unit -> Map String Unit -> Registry MethodSchemeRow -> TcEnv
 anyMemberBindsCtor : String -> String -> List UseMember -> Bool

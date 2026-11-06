@@ -1,5 +1,5 @@
 # META
-source_lines=1824
+source_lines=1821
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_scope: name visibility across imports, read off the envelopes: the method-scope ladder (the
@@ -119,6 +119,7 @@ import types.disposition.{MethodDisposition(..)}
 import types.route_key.{ifaceWordOf}
 import types.solver_contract.{Wanted(..)}
 import frontend.visibility.{
+  AliasSite(..),
   aliasImportSites,
   explicitOverWild,
   useModId,
@@ -294,12 +295,12 @@ methodNameDeclaredAt cur env n = isNonEmptyL (methodCandsAt n cur env)
 -- METHOD-BOUND: resolve bound a bare occurrence of it through this module's own
 -- interface, a use-path naming the method (rung 1), or the prelude, and through
 -- nothing else, since `import m.{I}` and `import m as A` bind no bare method name.
--- That declaration answers the occurrence (docs/spec/SHADOW-SEMANTICS.md S2-DECL,
--- "a method-bound occurrence"), so a prelude row outranks rung 2 there.  Rung 2 still
+-- That declaration answers the occurrence (docs/spec/SHADOW-SEMANTICS.md L2, L3),
+-- so a prelude row outranks rung 2 there.  Rung 2 still
 -- answers a method-bound spelling with no prelude row: resolve rejects every bare
 -- occurrence of it, so only readers that answer no occurrence (an `impl` this module
 -- writes, say) see that answer.  A standalone-bound spelling keeps the whole ladder,
--- which is S2-DECL (c)'s admitted set.
+-- which L2 and L3 leave to the ladder's rungs.
 methodScopeAt : GraphCtx ->
   Bool ->
   List Decl ->
@@ -445,15 +446,11 @@ methodAliasedScope gctx prog n cs =
     [only] => MsOne only
     aliased => MsMany (sortIfaceRefs (map methodRowIface aliased))
 
-aliasWitnessesMethod : GraphCtx ->
-  List (List String, Loc) ->
-  String ->
-  Ident ->
-  Bool
+aliasWitnessesMethod : GraphCtx -> List AliasSite -> String -> Ident -> Bool
 aliasWitnessesMethod gctx sites n ident =
   anyList
     (s =>
-      let dep = joinDot (fst s)
+      let dep = joinDot s.asQuals
       dep /= "core" && depExportsMethodIdent gctx dep n ident)
     sites
 
@@ -1842,7 +1839,7 @@ importedIfaceRows idx (_ :: rest) = importedIfaceRows idx rest
 (DUse false (UseGroup ("types" "disposition") ((mem "MethodDisposition" true))))
 (DUse false (UseGroup ("types" "route_key") ((mem "ifaceWordOf" false))))
 (DUse false (UseGroup ("types" "solver_contract") ((mem "Wanted" true))))
-(DUse false (UseGroup ("frontend" "visibility") ((mem "aliasImportSites" false) (mem "explicitOverWild" false) (mem "useModId" false) (mem "writtenImportsOf" false))))
+(DUse false (UseGroup ("frontend" "visibility") ((mem "AliasSite" true) (mem "aliasImportSites" false) (mem "explicitOverWild" false) (mem "useModId" false) (mem "writtenImportsOf" false))))
 (DTypeSig true "ifaceSortKey" (TyFun (TyCon "IfaceRef") (TyCon "String")))
 (DFunDef false "ifaceSortKey" ((PVar "ir")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EApp (EApp (EVar "ifaceIdentity") (EFieldAccess (EVar "ir") "irOrigin")) (EFieldAccess (EVar "ir") "irName")))) (ELit (LString "|"))) (EApp (EVar "$core.display") (EFieldAccess (EVar "ir") "irName"))) (ELit (LString ""))))
 (DTypeSig false "sortIfaceRefs" (TyFun (TyApp (TyCon "List") (TyCon "IfaceRef")) (TyApp (TyCon "List") (TyCon "IfaceRef"))))
@@ -1901,8 +1898,8 @@ importedIfaceRows idx (_ :: rest) = importedIfaceRows idx rest
 (DFunDef false "methodUndecided" ((PVar "_gctx") PWild PWild PWild (PVar "admitted")) (EApp (EVar "MsMany") (EApp (EVar "sortIfaceRefs") (EApp (EApp (EVar "map") (EVar "methodRowIface")) (EVar "admitted")))))
 (DTypeSig false "methodAliasedScope" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "MethodRow")) (TyCon "MethodScope"))))))
 (DFunDef false "methodAliasedScope" ((PVar "gctx") (PVar "prog") (PVar "n") (PVar "cs")) (EBlock (DoLet false false (PVar "sites") (EApp (EVar "aliasImportSites") (EVar "prog"))) (DoExpr (EMatch (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EApp (EApp (EApp (EApp (EVar "aliasWitnessesMethod") (EVar "gctx")) (EVar "sites")) (EVar "n")) (EFieldAccess (EVar "r") "mrIdent")))) (EVar "cs")) (arm (PList) () (EVar "MsAbsent")) (arm (PList (PVar "only")) () (EApp (EVar "MsOne") (EVar "only"))) (arm (PVar "aliased") () (EApp (EVar "MsMany") (EApp (EVar "sortIfaceRefs") (EApp (EApp (EVar "map") (EVar "methodRowIface")) (EVar "aliased")))))))))
-(DTypeSig false "aliasWitnessesMethod" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Loc"))) (TyFun (TyCon "String") (TyFun (TyCon "Ident") (TyCon "Bool"))))))
-(DFunDef false "aliasWitnessesMethod" ((PVar "gctx") (PVar "sites") (PVar "n") (PVar "ident")) (EApp (EApp (EVar "anyList") (ELam ((PVar "s")) (EBlock (DoLet false false (PVar "dep") (EApp (EVar "joinDot") (EApp (EVar "fst") (EVar "s")))) (DoExpr (EBinOp "&&" (EBinOp "/=" (EVar "dep") (ELit (LString "core"))) (EApp (EApp (EApp (EApp (EVar "depExportsMethodIdent") (EVar "gctx")) (EVar "dep")) (EVar "n")) (EVar "ident"))))))) (EVar "sites")))
+(DTypeSig false "aliasWitnessesMethod" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "AliasSite")) (TyFun (TyCon "String") (TyFun (TyCon "Ident") (TyCon "Bool"))))))
+(DFunDef false "aliasWitnessesMethod" ((PVar "gctx") (PVar "sites") (PVar "n") (PVar "ident")) (EApp (EApp (EVar "anyList") (ELam ((PVar "s")) (EBlock (DoLet false false (PVar "dep") (EApp (EVar "joinDot") (EFieldAccess (EVar "s") "asQuals"))) (DoExpr (EBinOp "&&" (EBinOp "/=" (EVar "dep") (ELit (LString "core"))) (EApp (EApp (EApp (EApp (EVar "depExportsMethodIdent") (EVar "gctx")) (EVar "dep")) (EVar "n")) (EVar "ident"))))))) (EVar "sites")))
 (DTypeSig false "methodScopeHere" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyCon "MethodScope"))))
 (DFunDef false "methodScopeHere" ((PVar "mctx") (PVar "n")) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "methodScopeCtxRef") "value") (arm (PCon "None") () (EVar "MsAbsent")) (arm (PCon "Some" (PTuple (PVar "prog") (PVar "cur"))) () (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "methodScopeMemoRef") "value")) (arm (PCon "Some" (PVar "s")) () (EVar "s")) (arm (PCon "None") () (EBlock (DoLet false false (PVar "s") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "methodScopeAt") (EFieldAccess (EVar "mctx") "mcGraph")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "standaloneValuesRef") "value"))) (EVar "prog")) (EVar "n")) (EVar "cur")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "declEnvsRef") "value"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "methodScopeMemoRef")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EVar "s")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "methodScopeMemoRef") "value")))) (DoExpr (EVar "s"))))))))
 (DTypeSig true "methodEntryHere" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "MethodEntry")))))
@@ -2158,7 +2155,7 @@ importedIfaceRows idx (_ :: rest) = importedIfaceRows idx rest
 (DUse false (UseGroup ("types" "disposition") ((mem "MethodDisposition" true))))
 (DUse false (UseGroup ("types" "route_key") ((mem "ifaceWordOf" false))))
 (DUse false (UseGroup ("types" "solver_contract") ((mem "Wanted" true))))
-(DUse false (UseGroup ("frontend" "visibility") ((mem "aliasImportSites" false) (mem "explicitOverWild" false) (mem "useModId" false) (mem "writtenImportsOf" false))))
+(DUse false (UseGroup ("frontend" "visibility") ((mem "AliasSite" true) (mem "aliasImportSites" false) (mem "explicitOverWild" false) (mem "useModId" false) (mem "writtenImportsOf" false))))
 (DTypeSig true "ifaceSortKey" (TyFun (TyCon "IfaceRef") (TyCon "String")))
 (DFunDef false "ifaceSortKey" ((PVar "ir")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EApp (EApp (EVar "ifaceIdentity") (EFieldAccess (EVar "ir") "irOrigin")) (EFieldAccess (EVar "ir") "irName")))) (ELit (LString "|"))) (EApp (EVar "$core.display") (EFieldAccess (EVar "ir") "irName"))) (ELit (LString ""))))
 (DTypeSig false "sortIfaceRefs" (TyFun (TyApp (TyCon "List") (TyCon "IfaceRef")) (TyApp (TyCon "List") (TyCon "IfaceRef"))))
@@ -2217,8 +2214,8 @@ importedIfaceRows idx (_ :: rest) = importedIfaceRows idx rest
 (DFunDef false "methodUndecided" ((PVar "_gctx") PWild PWild PWild (PVar "admitted")) (EApp (EVar "MsMany") (EApp (EVar "sortIfaceRefs") (EApp (EApp (EMethodRef "map") (EVar "methodRowIface")) (EVar "admitted")))))
 (DTypeSig false "methodAliasedScope" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "MethodRow")) (TyCon "MethodScope"))))))
 (DFunDef false "methodAliasedScope" ((PVar "gctx") (PVar "prog") (PVar "n") (PVar "cs")) (EBlock (DoLet false false (PVar "sites") (EApp (EVar "aliasImportSites") (EVar "prog"))) (DoExpr (EMatch (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EApp (EApp (EApp (EApp (EVar "aliasWitnessesMethod") (EVar "gctx")) (EVar "sites")) (EVar "n")) (EFieldAccess (EVar "r") "mrIdent")))) (EVar "cs")) (arm (PList) () (EVar "MsAbsent")) (arm (PList (PVar "only")) () (EApp (EVar "MsOne") (EVar "only"))) (arm (PVar "aliased") () (EApp (EVar "MsMany") (EApp (EVar "sortIfaceRefs") (EApp (EApp (EMethodRef "map") (EVar "methodRowIface")) (EVar "aliased")))))))))
-(DTypeSig false "aliasWitnessesMethod" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Loc"))) (TyFun (TyCon "String") (TyFun (TyCon "Ident") (TyCon "Bool"))))))
-(DFunDef false "aliasWitnessesMethod" ((PVar "gctx") (PVar "sites") (PVar "n") (PVar "ident")) (EApp (EApp (EVar "anyList") (ELam ((PVar "s")) (EBlock (DoLet false false (PVar "dep") (EApp (EVar "joinDot") (EApp (EVar "fst") (EVar "s")))) (DoExpr (EBinOp "&&" (EBinOp "/=" (EVar "dep") (ELit (LString "core"))) (EApp (EApp (EApp (EApp (EVar "depExportsMethodIdent") (EVar "gctx")) (EVar "dep")) (EVar "n")) (EVar "ident"))))))) (EVar "sites")))
+(DTypeSig false "aliasWitnessesMethod" (TyFun (TyCon "GraphCtx") (TyFun (TyApp (TyCon "List") (TyCon "AliasSite")) (TyFun (TyCon "String") (TyFun (TyCon "Ident") (TyCon "Bool"))))))
+(DFunDef false "aliasWitnessesMethod" ((PVar "gctx") (PVar "sites") (PVar "n") (PVar "ident")) (EApp (EApp (EVar "anyList") (ELam ((PVar "s")) (EBlock (DoLet false false (PVar "dep") (EApp (EVar "joinDot") (EFieldAccess (EVar "s") "asQuals"))) (DoExpr (EBinOp "&&" (EBinOp "/=" (EVar "dep") (ELit (LString "core"))) (EApp (EApp (EApp (EApp (EVar "depExportsMethodIdent") (EVar "gctx")) (EVar "dep")) (EVar "n")) (EVar "ident"))))))) (EVar "sites")))
 (DTypeSig false "methodScopeHere" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyCon "MethodScope"))))
 (DFunDef false "methodScopeHere" ((PVar "mctx") (PVar "n")) (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "methodScopeCtxRef") "value") (arm (PCon "None") () (EVar "MsAbsent")) (arm (PCon "Some" (PTuple (PVar "prog") (PVar "cur"))) () (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "methodScopeMemoRef") "value")) (arm (PCon "Some" (PVar "s")) () (EVar "s")) (arm (PCon "None") () (EBlock (DoLet false false (PVar "s") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "methodScopeAt") (EFieldAccess (EVar "mctx") "mcGraph")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "standaloneValuesRef") "value"))) (EVar "prog")) (EVar "n")) (EVar "cur")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "declEnvsRef") "value"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "methodScopeMemoRef")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EVar "s")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "methodScopeMemoRef") "value")))) (DoExpr (EVar "s"))))))))
 (DTypeSig true "methodEntryHere" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "MethodEntry")))))

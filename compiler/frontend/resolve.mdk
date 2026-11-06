@@ -164,6 +164,7 @@ import frontend.name_scope.{
   NameTarget(..),
   bareBinding,
   bindingImporters,
+  importedSurfaces,
   nameScopeOf,
   scopeCollisions,
 }
@@ -2757,9 +2758,9 @@ methodValueCollisions coreExp prog =
   flatMap
     (c => match (c.ncRungs, c.ncFirst, c.ncSecond)
       ((RungOwn, RungOwn), TargetMethod _ i _, _) =>
-        [DuplicateMethodValue c.ncName i (Some c.ncLoc)]
+        [DuplicateMethodValue c.ncName i c.ncLoc]
       ((RungOwn, RungOwn), _, TargetMethod _ i _) =>
-        [DuplicateMethodValue c.ncName i (Some c.ncLoc)]
+        [DuplicateMethodValue c.ncName i c.ncLoc]
       _ => [])
     (scopeCollisions (nameScopeOf prog [] coreExp))
 
@@ -4226,7 +4227,11 @@ buildEnvMM ps known prog internalGuard =
   -- prelude scope instead, which is the only place this path holds core's surface.
   let coreAliased = whenL seed (coreAliasImports ps.psCoreAliasValues prog)
   let importedM = omFromNames (adds.iaImported ++ coreAliased) omEmpty
-  let scope = nameScopeOf prog (importedSurfaces ps known prog) ps.psCoreExports
+  let scope =
+    nameScopeOf
+      prog
+      (flatMap (importedSurfaces (surfaceOfModule ps known)) prog)
+      ps.psCoreExports
   let env = Env {
     values = valuesM,
     types = typesM,
@@ -4258,24 +4263,15 @@ buildEnvMM ps known prog internalGuard =
   }
   (env, adds.iaErrors ++ importOwnNameErrors scope)
 
--- Every import declaration of [prog] with the surface of the module it names;
--- `core` is never in [known], so its surface is the prelude's.
-importedSurfaces : PreludeScope ->
+-- The export surface of the module [mid] names; `core` is never in [known], so
+-- its surface is the prelude's.
+surfaceOfModule : PreludeScope ->
   OrdMap ModuleExports ->
-  List Decl ->
-  List ImportedSurface
-importedSurfaces ps known prog =
-  flatMap
-    (d => match d
-      DUse _ path _ =>
-        let mid = useModId path
-        if mid == "core" then
-          [ImportedSurface d ps.psCoreExports]
-        else match findExports mid known
-          Some exp => [ImportedSurface d exp]
-          None => []
-      _ => [])
-    prog
+  String ->
+  Option ModuleExports
+surfaceOfModule ps known mid
+  | mid == "core" = Some ps.psCoreExports
+  | otherwise = findExports mid known
 
 -- An explicit import of a name the module declares (`frontend/name_scope.mdk`,
 -- rung 3 against rung 2), at the import member.
@@ -4283,7 +4279,7 @@ importOwnNameErrors : NameScope -> List ResError
 importOwnNameErrors scope =
   flatMap
     (c => match c.ncRungs
-      (RungOwn, RungExplicit) => [ImportOwnName c.ncName (Some c.ncLoc)]
+      (RungOwn, RungExplicit) => [ImportOwnName c.ncName c.ncLoc]
       _ => [])
     (scopeCollisions scope)
 

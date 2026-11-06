@@ -1,4 +1,4 @@
--- C6, L2 rung 3: the same with two interfaces of one name; the explicit `fmodI2.mth` answers
+-- L2 rung 3: the same with two interfaces of one name; the explicit `fmodI2.mth` answers
 -- (99, not 55)
 import fmodI2.{mth}
 import amodI2.{Method, af}

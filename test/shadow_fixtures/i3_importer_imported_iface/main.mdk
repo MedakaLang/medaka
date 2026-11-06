@@ -1,4 +1,4 @@
--- C1, L2 rung 3: `import ifc.{Sizeable, Box(..)}` binds no bare method name; `size` is
+-- L2 rung 3: `import ifc.{Sizeable, Box(..)}` binds no bare method name; `size` is
 -- prov's `Int -> Int`, so `size (Box 3)` is a located type mismatch
 import ifc.{Sizeable, Box(..)}
 import prov.{size}

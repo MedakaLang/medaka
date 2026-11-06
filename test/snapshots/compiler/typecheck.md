@@ -46,8 +46,8 @@ stages=DESUGAR,MARK
 -- difference: it runs on both selections, because half (b) of it decides which
 -- declaration a bare method name binds to, so skipping it on one selection would make
 -- that selection typecheck a different program
--- (`test/run_check_agreement_fixtures/reject_1812_alias_import_order.mdk` and its
--- permuted accepting twin).
+-- (`test/run_check_agreement_fixtures/accept_1812_alias_import_order.mdk` and
+-- `accept_1812_alias_first_then_explicit.mdk`, both accepted, printing 99).
 --
 -- Single-file consumers are one-module projections of the same graph driver. There
 -- is no second stamper order; `checkOne*` and `elaborateOne`

@@ -1,4 +1,4 @@
--- C6, L2 rung 3: the explicit `box.peek` answers; `import peekable.{Peekable}` binds no
+-- L2 rung 3: the explicit `box.peek` answers; `import peekable.{Peekable}` binds no
 -- method `peek`
 import box.{Box(..), peek}
 import peekable.{Peekable}

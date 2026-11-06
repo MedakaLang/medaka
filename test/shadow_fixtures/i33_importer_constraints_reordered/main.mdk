@@ -1,4 +1,4 @@
--- C1, L2 rung 3: the explicit `prov.tagOf` answers; constraint order is irrelevant
+-- L2 rung 3: the explicit `prov.tagOf` answers; constraint order is irrelevant
 import ifc.{Taggable, Box(..)}
 import prov.{tagOf}
 

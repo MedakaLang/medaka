@@ -1,4 +1,4 @@
--- C2, L8 (F-R2): an `Ix a i =>` constraint does not make the bare name `get` the imported
+-- L8 (F-R2): an `Ix a i =>` constraint does not make the bare name `get` the imported
 -- method; the own `get : Int -> Int -> Int` answers, so the polymorphic receiver mistypes
 import ifc.*
 

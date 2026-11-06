@@ -1,4 +1,4 @@
--- C6, L2 rung 3: the explicitly imported standalone `size` answers; `import smod.{sf}` binds
+-- L2 rung 3: the explicitly imported standalone `size` answers; `import smod.{sf}` binds
 -- no method
 import fmod.{size}
 import smod.{sf}

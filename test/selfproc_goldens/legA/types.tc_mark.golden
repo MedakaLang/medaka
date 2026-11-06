@@ -12,7 +12,7 @@ declBareLocals : GraphCtx -> List Decl -> BareLocals -> BareLocals
 finishModuleMarking : ModuleMarking -> TcEnv -> Map String (List (List Pat, Expr)) -> List Decl -> List Decl
 formBareLocals : GraphCtx -> UsePath -> BareLocals -> BareLocals
 freshLocalAbsName : GraphCtx -> String -> String
-importedSurface : Map String ModuleExports -> Decl -> List ImportedSurface
+isCoreUnit : (String, List Decl) -> Bool
 ladderMarkCtx : (String -> ScopeClass) -> MarkCtx -> MarkCtx
 letPatRename : GraphCtx -> Pat -> Expr -> Map String String -> (Pat, Map String String)
 localAbsCandidate : Expr -> Bool
@@ -65,6 +65,7 @@ rewriteArgStmts : ModuleCtx -> ArgRw -> Map String String -> List DoStmt -> List
 scopeClassIn : GraphCtx -> String -> String -> ScopeClass
 scopeClassOf : Option NameBinding -> ScopeClass
 scopeClassesOf : List (String, List Decl) -> String -> String -> ScopeClass
+scopeOfUnit : Map String ModuleExports -> ModuleExports -> (String, List Decl) -> (String, NameScope)
 shadowBareName : List (String, String) -> String -> String
 shadowSymSpelledBare : SpellCtx -> List (String, String) -> String -> Bool
 spellCtxOf : GraphCtx -> List Decl -> SpellCtx

@@ -1175,7 +1175,7 @@ scope (`import`) or forwards them across a re-export hop (`export import`):
 | Type→ctor sets | — | yes (what `(..)` expands through) | — | — | yes | yes |
 | Field owners | travels with the owning type | travels with the owning type | travels with the owning type | travels with the owning type | yes | yes |
 | Interfaces | yes | — | yes | yes, as `A.Iface` | yes | yes |
-| Interface methods | travels with the interface | — | travels with the interface | travels with the interface, re-keyed under `A.name` | yes | yes |
+| Interface methods | the named method only (`import m.{I}` binds no bare method, SHADOW-SEMANTICS L2) | — | every method of every exported interface | none bare; re-keyed under `A.name` | yes | yes |
 | Effect labels | yes, ALL of `m`'s labels — any import installs the whole set, not just the named ones | — (rejected on a label, see below) | yes | yes, bare — never `A.`-qualified | no | yes |
 | Newtype constructors | no | no | no | no | no | no |
 

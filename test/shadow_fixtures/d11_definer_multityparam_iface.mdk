@@ -1,4 +1,4 @@
--- C4, L3 (F-R4): the duplicate-declaration error holds for a multi-type-parameter interface;
+-- L3 (F-R4): the duplicate-declaration error holds for a multi-type-parameter interface;
 -- arity takes no part (L1)
 interface Ix a i where
   get : a -> i -> Int

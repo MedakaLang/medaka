@@ -1,4 +1,4 @@
--- C1, L2 rung 4 over rung 5: `import bytes.*` binds `length : Bytes -> Int`, which beats the
+-- L2 rung 4 over rung 5: `import bytes.*` binds `length : Bytes -> Int`, which beats the
 -- prelude method; `length (Some 7)` is a located type mismatch
 import bytes.*
 o : Option Int

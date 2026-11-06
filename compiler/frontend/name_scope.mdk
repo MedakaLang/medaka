@@ -19,6 +19,7 @@ import frontend.ast.{
   Loc(..),
   UseMember(..),
   UsePath(..),
+  useMemberLoc,
   useMemberLocal,
   useMemberOrigin,
 }
@@ -53,6 +54,20 @@ public export data NameBinding =
 -- it names.
 public export data ImportedSurface = ImportedSurface Decl ModuleExports
 
+-- The surfaces of one import declaration of a module, through [lookup] of the
+-- module id it names (`core` answers with the prelude's surface); an attributed
+-- import is read through its attribute and a module [lookup] cannot find
+-- contributes none.
+export
+importedSurfaces : (String -> Option ModuleExports) ->
+  Decl ->
+  List ImportedSurface
+importedSurfaces lookup (DAttrib _ d) = importedSurfaces lookup d
+importedSurfaces lookup (d@(DUse _ path _)) = match lookup (useModId path)
+  Some exp => [ImportedSurface d exp]
+  None => []
+importedSurfaces _ _ = []
+
 -- A name bound twice where the ladder allows only one: an explicit import of a
 -- name the module declares (rungs own and explicit, at the import member), or
 -- an interface method and a top-level binding of one module (rungs own and own,
@@ -62,7 +77,7 @@ public export data NameCollision = NameCollision {
   ncFirst : NameTarget,
   ncSecond : NameTarget,
   ncRungs : (NameRung, NameRung),
-  ncLoc : Loc,
+  ncLoc : Option Loc,
 }
 
 -- `scBound` holds rungs 2 to 4; the prelude rung is read from `scPrelude` on
@@ -83,6 +98,18 @@ data ImportBind = ImportBind {
   ibLoc : Loc,
   ibModule : String,
 }
+
+-- An interface that declares a method, and the module declaring that interface.
+data MethodOrigin = MethodOrigin { moIface : String, moModule : String }
+
+-- A declaration by its declaring module and the name it is declared under.
+data DeclRef = DeclRef { drModule : String, drName : String } deriving (Eq)
+
+-- A declaration an import brings, with the importing module.
+data Brought = Brought { brTarget : NameTarget, brModule : String }
+
+-- A name an import rung binds, with the declarations it denotes there.
+data RungRow = RungRow { rrName : String, rrBrought : List Brought }
 
 -- The scope of a module from its declarations, its import declarations with
 -- the surfaces they name, and the prelude's surface.
@@ -130,9 +157,7 @@ bindingImporters : NameScope -> String -> List String
 bindingImporters scope n = match omLookup n scope.scBound
   Some (Bound RungOwn _) => []
   Some (Ambiguous RungOwn _) => []
-  Some _ => match omLookup n scope.scImporters
-    Some ms => ms
-    None => []
+  Some _ => optionOr [] (omLookup n scope.scImporters)
   None => []
 
 -- ── rung 2: the module's own declarations ──────────────────────────────────
@@ -147,35 +172,44 @@ ownBindings prog =
     Some c => (n, Ambiguous RungOwn [c.ncFirst, c.ncSecond])
     None => (n, Bound RungOwn t)
   (
-    map (e => bindingOf (fst e) (fst (snd e))) (reverseL walk.owOrder),
+    map (b => bindingOf b.bdName b.bdTarget) (reverseL walk.owOrder),
     reverseL walk.owClashes,
   )
 
 -- Each name's first declaration, by name and in source order, and the
 -- collisions found so far, latest first.
 data OwnWalk = OwnWalk {
-  owFirst : OrdMap (NameTarget, Option Loc),
-  owOrder : List (String, (NameTarget, Option Loc)),
+  owFirst : OrdMap Binder,
+  owOrder : List Binder,
   owClashes : List NameCollision,
+}
+
+-- One name a declaration binds, with the declaration and its span.
+data Binder = Binder {
+  bdName : String,
+  bdTarget : NameTarget,
+  bdLoc : Option Loc,
 }
 
 emptyOwnWalk : OwnWalk
 emptyOwnWalk = OwnWalk { owFirst = omEmpty, owOrder = [], owClashes = [] }
 
-ownStep : OwnWalk -> (String, NameTarget, Option Loc) -> OwnWalk
-ownStep walk (n, t, l) = match omLookup n walk.owFirst
+ownStep : OwnWalk -> Binder -> OwnWalk
+ownStep walk (b@(Binder n t l)) = match omLookup n walk.owFirst
   None => { walk |
-    owFirst = omInsert n (t, l) walk.owFirst,
-    owOrder = (n, (t, l)) :: walk.owOrder,
+    owFirst = omInsert n b walk.owFirst,
+    owOrder = b :: walk.owOrder,
   }
-  Some (first, firstLoc) =>
+  Some (Binder _ first firstLoc) =>
     if isMethod first /= isMethod t && not (anyClash n walk.owClashes) then
+      -- The later declaration's span, else the earlier one's: an interface
+      -- method parsed without a span still reports at a real declaration.
       let clash = NameCollision {
         ncName = n,
         ncFirst = first,
         ncSecond = t,
         ncRungs = (RungOwn, RungOwn),
-        ncLoc = locOr l firstLoc,
+        ncLoc = orElse l firstLoc,
       }
       { walk | owClashes = clash :: walk.owClashes }
     else
@@ -188,17 +222,10 @@ isMethod : NameTarget -> Bool
 isMethod (TargetMethod _ _ _) = True
 isMethod (TargetValue _ _) = False
 
--- The later declaration's span, else the earlier one's: an interface method
--- parsed without a span still reports at a real declaration.
-locOr : Option Loc -> Option Loc -> Loc
-locOr (Some l) _ = l
-locOr None (Some l) = l
-locOr None None = Loc "" 0 0 0 0
-
 -- The names one top-level declaration binds, each with its declaration and
 -- span.  A signature counts as a declaration of its name, so a signature
 -- without a body still keeps an import from answering for it.
-declBinders : Decl -> List (String, NameTarget, Option Loc)
+declBinders : Decl -> List Binder
 declBinders (DFunDef _ n _ _ loc _) = [ownValue n (Some loc)]
 declBinders (DTypeSig _ n _ loc) = [ownValue n (Some loc)]
 declBinders (DExtern ed) = [ownValue ed.edName (Some ed.edLoc)]
@@ -208,20 +235,17 @@ declBinders (DInterface { name = i, methods, ifaceNameLoc, ... }) =
 declBinders (DAttrib _ d) = declBinders d
 declBinders _ = []
 
-ownValue : String -> Option Loc -> (String, NameTarget, Option Loc)
-ownValue n l = (n, TargetValue "" n, l)
+ownValue : String -> Option Loc -> Binder
+ownValue n l = Binder n (TargetValue "" n) l
 
-letBinder : LetBind -> (String, NameTarget, Option Loc)
+letBinder : LetBind -> Binder
 letBinder (LetBind n _ loc _) = ownValue n (Some loc)
 
-methodBinder : String ->
-  Option Loc ->
-  IfaceMethod ->
-  (String, NameTarget, Option Loc)
+methodBinder : String -> Option Loc -> IfaceMethod -> Binder
 methodBinder i _ (IfaceMethod m _ _ (Some loc)) =
-  (m, TargetMethod "" i m, Some loc)
+  Binder m (TargetMethod "" i m) (Some loc)
 methodBinder i nameLoc (IfaceMethod m _ _ None) =
-  (m, TargetMethod "" i m, nameLoc)
+  Binder m (TargetMethod "" i m) nameLoc
 
 -- ── rungs 3 and 4: explicit and wildcard imports ───────────────────────────
 
@@ -229,9 +253,7 @@ methodBinder i nameLoc (IfaceMethod m _ _ None) =
 -- name bind at the explicit rung, a wildcard at the wildcard rung; a module
 -- alias and a bare module import bind no bare name.  A member that names no
 -- exported value (a type, a constructor, an interface) binds no value here.
-surfaceBinds : OrdMap (List (String, String)) ->
-  ImportedSurface ->
-  List ImportBind
+surfaceBinds : OrdMap (List MethodOrigin) -> ImportedSurface -> List ImportBind
 surfaceBinds preludeMethods (ImportedSurface (DAttrib _ d) exp) =
   surfaceBinds preludeMethods (ImportedSurface d exp)
 surfaceBinds preludeMethods (ImportedSurface (DUse _ path useLoc) exp) =
@@ -257,44 +279,40 @@ surfaceBinds preludeMethods (ImportedSurface (DUse _ path useLoc) exp) =
             RungExplicit
             (useMemberLocal m)
             (useMemberOrigin m)
-            (memberLoc m))
+            (useMemberLoc m))
         members
-    UseName ns =>
-      if listLen ns > 1 then
-        let n = optionOr "" (last ns)
-        bindAt RungExplicit n n useLoc
-      else
-        []
+    UseName ns => match (listLen ns > 1, last ns)
+      (True, Some n) => bindAt RungExplicit n n useLoc
+      _ => []
     UseWild _ => flatMap (v => bindAt RungWild v v useLoc) (dedup exp.expValues)
     UseAlias _ _ => []
 surfaceBinds _ _ = []
 
-memberLoc : UseMember -> Loc
-memberLoc (UseMember _ _ loc _) = loc
-
 -- Each exported value name with the distinct declarations it denotes, read
 -- from the whole origin list: a hub that re-exports two declarations under
 -- one name keeps both.
-declsByName : ModuleExports -> OrdMap (List (String, String))
+declsByName : ModuleExports -> OrdMap (List DeclRef)
 declsByName exp =
   fold
-    (m (n, d) => match omLookup n m
-      Some ds => if any (== d) ds then m else omInsert n (ds ++ [d]) m
-      None => omInsert n [d] m)
+    (m (n, (mod, d)) =>
+      let ref = DeclRef mod d
+      match omLookup n m
+        Some ds => if any (== ref) ds then m else omInsert n (ds ++ [ref]) m
+        None => omInsert n [ref] m)
     omEmpty
     exp.expValueOrigins
 
--- Each method name of the surface's interfaces with every (interface,
--- declaring module) pair that declares it.
-methodOrigins : ModuleExports -> OrdMap (List (String, String))
+-- Each method name of the surface's interfaces with every interface and
+-- declaring module that declares it.
+methodOrigins : ModuleExports -> OrdMap (List MethodOrigin)
 methodOrigins exp =
   fold
     (m (i, ms) =>
       let owners = map snd (filter (o => fst o == i) exp.expIfaceOrigins)
       fold
         (acc meth => match omLookup meth acc
-          Some ps => omInsert meth (ps ++ map (o => (i, o)) owners) acc
-          None => omInsert meth (map (o => (i, o)) owners) acc)
+          Some ps => omInsert meth (ps ++ map (MethodOrigin i) owners) acc
+          None => omInsert meth (map (MethodOrigin i) owners) acc)
         m
         ms)
     omEmpty
@@ -303,85 +321,71 @@ methodOrigins exp =
 -- A declaration is a method when an interface of the surface declares it in its
 -- declaring module.  A prelude method re-exported without its interface is
 -- still found through the prelude's own interfaces.
-classify : OrdMap (List (String, String)) ->
-  OrdMap (List (String, String)) ->
-  (String, String) ->
+classify : OrdMap (List MethodOrigin) ->
+  OrdMap (List MethodOrigin) ->
+  DeclRef ->
   NameTarget
-classify preludeMethods methods (m, d) = match declaringIface m d methods
+classify preludeMethods methods (DeclRef m d) = match declaringIface m d methods
   Some i => TargetMethod m i d
-  None => classifyPrelude preludeMethods (m, d)
+  None => classifyPrelude preludeMethods (DeclRef m d)
 
-classifyPrelude : OrdMap (List (String, String)) ->
-  (String, String) ->
-  NameTarget
-classifyPrelude preludeMethods (m, d)
+classifyPrelude : OrdMap (List MethodOrigin) -> DeclRef -> NameTarget
+classifyPrelude preludeMethods (DeclRef m d)
   | m == "core" = match declaringIface m d preludeMethods
     Some i => TargetMethod m i d
     None => TargetValue m d
   | otherwise = TargetValue m d
 
 -- The interface of [methods] that declares method [d] in module [m].
-declaringIface : String ->
-  String ->
-  OrdMap (List (String, String)) ->
-  Option String
+declaringIface : String -> String -> OrdMap (List MethodOrigin) -> Option String
 declaringIface m d methods =
-  map fst (find (p => snd p == m) (methodsNamed d methods))
+  map (o => o.moIface) (find (o => o.moModule == m) (methodsNamed d methods))
 
-methodsNamed : String -> OrdMap (List (String, String)) -> List (String, String)
-methodsNamed d methods = match omLookup d methods
-  Some ps => ps
-  None => []
+methodsNamed : String -> OrdMap (List MethodOrigin) -> List MethodOrigin
+methodsNamed d methods = optionOr [] (omLookup d methods)
 
 -- Every name the imports of [rung] bind, in first-binding order, with its
 -- distinct declarations and the importing module that first brought each.
-rungTargets : NameRung ->
-  List ImportBind ->
-  List (String, List (NameTarget, String))
+rungTargets : NameRung -> List ImportBind -> List RungRow
 rungTargets rung binds =
   let (m, order) =
     fold
       (acc b => if b.ibRung == rung then addBind acc b else acc)
       (omEmpty, [])
       binds
-  map (n => (n, targetsOf n m)) (reverseL order)
+  map (n => RungRow n (targetsOf n m)) (reverseL order)
 
-addBind : (OrdMap (List (NameTarget, String)), List String) ->
+addBind : (OrdMap (List Brought), List String) ->
   ImportBind ->
-  (OrdMap (List (NameTarget, String)), List String)
+  (OrdMap (List Brought), List String)
 addBind (m, order) b =
-  let fresh known = filter (t => not (any (p => fst p == t) known)) b.ibTargets
+  let fresh known =
+    filter (t => not (any (p => p.brTarget == t) known)) b.ibTargets
   match omLookup b.ibName m
     Some known => (
-      omInsert b.ibName (known ++ map (t => (t, b.ibModule)) (fresh known)) m,
+      omInsert
+        b.ibName
+        (known ++ map (t => Brought t b.ibModule) (fresh known))
+        m,
       order,
     )
     None => (
-      omInsert b.ibName (map (t => (t, b.ibModule)) (fresh [])) m,
+      omInsert b.ibName (map (t => Brought t b.ibModule) (fresh [])) m,
       b.ibName :: order,
     )
 
-targetsOf : String ->
-  OrdMap (List (NameTarget, String)) ->
-  List (NameTarget, String)
-targetsOf n m = match omLookup n m
-  Some ts => ts
-  None => []
+targetsOf : String -> OrdMap (List Brought) -> List Brought
+targetsOf n m = optionOr [] (omLookup n m)
 
-insertRung : NameRung ->
-  OrdMap NameBinding ->
-  (String, List (NameTarget, String)) ->
-  OrdMap NameBinding
-insertRung rung m (n, ts) = omInsert n (rungBinding rung ts) m
+insertRung : NameRung -> OrdMap NameBinding -> RungRow -> OrdMap NameBinding
+insertRung rung m (RungRow n ts) = omInsert n (rungBinding rung ts) m
 
-insertImporters : OrdMap (List String) ->
-  (String, List (NameTarget, String)) ->
-  OrdMap (List String)
-insertImporters m (n, ts) = omInsert n (map snd ts) m
+insertImporters : OrdMap (List String) -> RungRow -> OrdMap (List String)
+insertImporters m (RungRow n ts) = omInsert n (map (b => b.brModule) ts) m
 
-rungBinding : NameRung -> List (NameTarget, String) -> NameBinding
-rungBinding rung [(t, _)] = Bound rung t
-rungBinding rung ts = Ambiguous rung (map fst ts)
+rungBinding : NameRung -> List Brought -> NameBinding
+rungBinding rung [b] = Bound rung b.brTarget
+rungBinding rung ts = Ambiguous rung (map (b => b.brTarget) ts)
 
 -- An explicit import of a name the module declares, at the import member.
 importClashes : OrdMap NameBinding -> List ImportBind -> List NameCollision
@@ -400,7 +404,7 @@ ownClash b own t = NameCollision {
   ncFirst = own,
   ncSecond = t,
   ncRungs = (RungOwn, RungExplicit),
-  ncLoc = b.ibLoc,
+  ncLoc = Some b.ibLoc,
 }
 
 -- ── rung 5: the prelude ────────────────────────────────────────────────────

@@ -1,5 +1,5 @@
 # META
-source_lines=1273
+source_lines=1276
 stages=DESUGAR,MARK
 # SOURCE
 -- A module's export surface, built from its declarations and the surfaces of
@@ -227,7 +227,7 @@ importFormsOf decls =
   let sites = aliasImportSites decls
   d => importFormIn sites d
 
-importFormIn : List (List String, Loc) -> Decl -> ImportForm
+importFormIn : List AliasSite -> Decl -> ImportForm
 importFormIn sites (DAttrib _ d) = importFormIn sites d
 importFormIn _ (DUse _ (UseWild _) _) = WildImport
 importFormIn _ (DUse _ (UseAlias _ _) _) = NoBareImport
@@ -247,22 +247,25 @@ writtenImportsOf prog = match aliasImportSites prog
   [] => prog
   sites => filterList (d => not (isAliasMethodImport sites d)) prog
 
+-- The module path and location of one `import m as A`.
+public export data AliasSite = AliasSite { asQuals : List String, asLoc : Loc }
+
 -- The module path and location of each `import m as A` in [prog].
 export
-aliasImportSites : List Decl -> List (List String, Loc)
+aliasImportSites : List Decl -> List AliasSite
 aliasImportSites [] = []
 aliasImportSites ((DAttrib _ d) :: rest) =
   aliasImportSites [d] ++ aliasImportSites rest
 aliasImportSites ((DUse _ (UseAlias quals _) loc) :: rest) =
-  (quals, loc) :: aliasImportSites rest
+  AliasSite quals loc :: aliasImportSites rest
 aliasImportSites (_ :: rest) = aliasImportSites rest
 
 -- Only a `UseGroup` import is ever synthesized, so the final catch-all answering False
 -- for every other declaration is exhaustive by construction.
-isAliasMethodImport : List (List String, Loc) -> Decl -> Bool
+isAliasMethodImport : List AliasSite -> Decl -> Bool
 isAliasMethodImport sites (DAttrib _ d) = isAliasMethodImport sites d
 isAliasMethodImport sites (DUse _ (UseGroup quals _) loc) =
-  anyList (s => fst s == quals && snd s == loc) sites
+  anyList (s => s.asQuals == quals && s.asLoc == loc) sites
 isAliasMethodImport _ _ = False
 
 -- The public interface of a resolved module
@@ -1349,7 +1352,7 @@ overPubUse coreExp known f path =
 (DImpl true "Eq" ((TyCon "ImportForm")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "ExplicitImport") (PCon "ExplicitImport")) () (EVar "True")) (arm (PTuple (PCon "WildImport") (PCon "WildImport")) () (EVar "True")) (arm (PTuple (PCon "NoBareImport") (PCon "NoBareImport")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DTypeSig false "importFormsOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Decl") (TyCon "ImportForm"))))
 (DFunDef false "importFormsOf" ((PVar "decls")) (EBlock (DoLet false false (PVar "sites") (EApp (EVar "aliasImportSites") (EVar "decls"))) (DoExpr (ELam ((PVar "d")) (EApp (EApp (EVar "importFormIn") (EVar "sites")) (EVar "d"))))))
-(DTypeSig false "importFormIn" (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Loc"))) (TyFun (TyCon "Decl") (TyCon "ImportForm"))))
+(DTypeSig false "importFormIn" (TyFun (TyApp (TyCon "List") (TyCon "AliasSite")) (TyFun (TyCon "Decl") (TyCon "ImportForm"))))
 (DFunDef false "importFormIn" ((PVar "sites") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "importFormIn") (EVar "sites")) (EVar "d")))
 (DFunDef false "importFormIn" (PWild (PCon "DUse" PWild (PCon "UseWild" PWild) PWild)) (EVar "WildImport"))
 (DFunDef false "importFormIn" (PWild (PCon "DUse" PWild (PCon "UseAlias" PWild PWild) PWild)) (EVar "NoBareImport"))
@@ -1357,14 +1360,15 @@ overPubUse coreExp known f path =
 (DFunDef false "importFormIn" (PWild PWild) (EVar "NoBareImport"))
 (DTypeSig true "writtenImportsOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
 (DFunDef false "writtenImportsOf" ((PVar "prog")) (EMatch (EApp (EVar "aliasImportSites") (EVar "prog")) (arm (PList) () (EVar "prog")) (arm (PVar "sites") () (EApp (EApp (EVar "filterList") (ELam ((PVar "d")) (EApp (EVar "not") (EApp (EApp (EVar "isAliasMethodImport") (EVar "sites")) (EVar "d"))))) (EVar "prog")))))
-(DTypeSig true "aliasImportSites" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Loc")))))
+(DData Public "AliasSite" () ((variant "AliasSite" (ConNamed (field "asQuals" (TyApp (TyCon "List") (TyCon "String"))) (field "asLoc" (TyCon "Loc"))))) ())
+(DTypeSig true "aliasImportSites" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "AliasSite"))))
 (DFunDef false "aliasImportSites" ((PList)) (EListLit))
 (DFunDef false "aliasImportSites" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EBinOp "++" (EApp (EVar "aliasImportSites") (EListLit (EVar "d"))) (EApp (EVar "aliasImportSites") (EVar "rest"))))
-(DFunDef false "aliasImportSites" ((PCons (PCon "DUse" PWild (PCon "UseAlias" (PVar "quals") PWild) (PVar "loc")) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "quals") (EVar "loc")) (EApp (EVar "aliasImportSites") (EVar "rest"))))
+(DFunDef false "aliasImportSites" ((PCons (PCon "DUse" PWild (PCon "UseAlias" (PVar "quals") PWild) (PVar "loc")) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EVar "AliasSite") (EVar "quals")) (EVar "loc")) (EApp (EVar "aliasImportSites") (EVar "rest"))))
 (DFunDef false "aliasImportSites" ((PCons PWild (PVar "rest"))) (EApp (EVar "aliasImportSites") (EVar "rest")))
-(DTypeSig false "isAliasMethodImport" (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Loc"))) (TyFun (TyCon "Decl") (TyCon "Bool"))))
+(DTypeSig false "isAliasMethodImport" (TyFun (TyApp (TyCon "List") (TyCon "AliasSite")) (TyFun (TyCon "Decl") (TyCon "Bool"))))
 (DFunDef false "isAliasMethodImport" ((PVar "sites") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "isAliasMethodImport") (EVar "sites")) (EVar "d")))
-(DFunDef false "isAliasMethodImport" ((PVar "sites") (PCon "DUse" PWild (PCon "UseGroup" (PVar "quals") PWild) (PVar "loc"))) (EApp (EApp (EVar "anyList") (ELam ((PVar "s")) (EBinOp "&&" (EBinOp "==" (EApp (EVar "fst") (EVar "s")) (EVar "quals")) (EBinOp "==" (EApp (EVar "snd") (EVar "s")) (EVar "loc"))))) (EVar "sites")))
+(DFunDef false "isAliasMethodImport" ((PVar "sites") (PCon "DUse" PWild (PCon "UseGroup" (PVar "quals") PWild) (PVar "loc"))) (EApp (EApp (EVar "anyList") (ELam ((PVar "s")) (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "s") "asQuals") (EVar "quals")) (EBinOp "==" (EFieldAccess (EVar "s") "asLoc") (EVar "loc"))))) (EVar "sites")))
 (DFunDef false "isAliasMethodImport" (PWild PWild) (EVar "False"))
 (DData Public "ModuleExports" () ((variant "ModuleExports" (ConNamed (field "modId" (TyCon "String")) (field "expValues" (TyApp (TyCon "List") (TyCon "String"))) (field "expTypes" (TyApp (TyCon "List") (TyCon "String"))) (field "expAbstractData" (TyApp (TyCon "List") (TyCon "String"))) (field "expCtors" (TyApp (TyCon "List") (TyCon "String"))) (field "expTypeCtors" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (field "expFieldOwners" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "expInterfaces" (TyApp (TyCon "List") (TyCon "String"))) (field "expIfaceMethods" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (field "expIfaceOrigins" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "expTypeOrigins" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "expCtorOrigins" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "expValueOrigins" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String"))))) (field "expEffects" (TyApp (TyCon "List") (TyCon "String"))) (field "expEffectOrigins" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "expNewtypeCtors" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "expAbstractCtors" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "nameSet" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "ctorTypes" (TyApp (TyCon "OrdMap") (TyCon "String")))))) ())
 (DTypeSig true "filterInSet" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
@@ -1611,7 +1615,7 @@ overPubUse coreExp known f path =
 (DImpl true "Eq" ((TyCon "ImportForm")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "ExplicitImport") (PCon "ExplicitImport")) () (EVar "True")) (arm (PTuple (PCon "WildImport") (PCon "WildImport")) () (EVar "True")) (arm (PTuple (PCon "NoBareImport") (PCon "NoBareImport")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DTypeSig false "importFormsOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Decl") (TyCon "ImportForm"))))
 (DFunDef false "importFormsOf" ((PVar "decls")) (EBlock (DoLet false false (PVar "sites") (EApp (EVar "aliasImportSites") (EVar "decls"))) (DoExpr (ELam ((PVar "d")) (EApp (EApp (EVar "importFormIn") (EVar "sites")) (EVar "d"))))))
-(DTypeSig false "importFormIn" (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Loc"))) (TyFun (TyCon "Decl") (TyCon "ImportForm"))))
+(DTypeSig false "importFormIn" (TyFun (TyApp (TyCon "List") (TyCon "AliasSite")) (TyFun (TyCon "Decl") (TyCon "ImportForm"))))
 (DFunDef false "importFormIn" ((PVar "sites") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "importFormIn") (EVar "sites")) (EVar "d")))
 (DFunDef false "importFormIn" (PWild (PCon "DUse" PWild (PCon "UseWild" PWild) PWild)) (EVar "WildImport"))
 (DFunDef false "importFormIn" (PWild (PCon "DUse" PWild (PCon "UseAlias" PWild PWild) PWild)) (EVar "NoBareImport"))
@@ -1619,14 +1623,15 @@ overPubUse coreExp known f path =
 (DFunDef false "importFormIn" (PWild PWild) (EVar "NoBareImport"))
 (DTypeSig true "writtenImportsOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
 (DFunDef false "writtenImportsOf" ((PVar "prog")) (EMatch (EApp (EVar "aliasImportSites") (EVar "prog")) (arm (PList) () (EVar "prog")) (arm (PVar "sites") () (EApp (EApp (EVar "filterList") (ELam ((PVar "d")) (EApp (EVar "not") (EApp (EApp (EVar "isAliasMethodImport") (EVar "sites")) (EVar "d"))))) (EVar "prog")))))
-(DTypeSig true "aliasImportSites" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Loc")))))
+(DData Public "AliasSite" () ((variant "AliasSite" (ConNamed (field "asQuals" (TyApp (TyCon "List") (TyCon "String"))) (field "asLoc" (TyCon "Loc"))))) ())
+(DTypeSig true "aliasImportSites" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "AliasSite"))))
 (DFunDef false "aliasImportSites" ((PList)) (EListLit))
 (DFunDef false "aliasImportSites" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EBinOp "++" (EApp (EVar "aliasImportSites") (EListLit (EVar "d"))) (EApp (EVar "aliasImportSites") (EVar "rest"))))
-(DFunDef false "aliasImportSites" ((PCons (PCon "DUse" PWild (PCon "UseAlias" (PVar "quals") PWild) (PVar "loc")) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "quals") (EVar "loc")) (EApp (EVar "aliasImportSites") (EVar "rest"))))
+(DFunDef false "aliasImportSites" ((PCons (PCon "DUse" PWild (PCon "UseAlias" (PVar "quals") PWild) (PVar "loc")) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EVar "AliasSite") (EVar "quals")) (EVar "loc")) (EApp (EVar "aliasImportSites") (EVar "rest"))))
 (DFunDef false "aliasImportSites" ((PCons PWild (PVar "rest"))) (EApp (EVar "aliasImportSites") (EVar "rest")))
-(DTypeSig false "isAliasMethodImport" (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Loc"))) (TyFun (TyCon "Decl") (TyCon "Bool"))))
+(DTypeSig false "isAliasMethodImport" (TyFun (TyApp (TyCon "List") (TyCon "AliasSite")) (TyFun (TyCon "Decl") (TyCon "Bool"))))
 (DFunDef false "isAliasMethodImport" ((PVar "sites") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "isAliasMethodImport") (EVar "sites")) (EVar "d")))
-(DFunDef false "isAliasMethodImport" ((PVar "sites") (PCon "DUse" PWild (PCon "UseGroup" (PVar "quals") PWild) (PVar "loc"))) (EApp (EApp (EVar "anyList") (ELam ((PVar "s")) (EBinOp "&&" (EBinOp "==" (EApp (EVar "fst") (EVar "s")) (EVar "quals")) (EBinOp "==" (EApp (EVar "snd") (EVar "s")) (EVar "loc"))))) (EVar "sites")))
+(DFunDef false "isAliasMethodImport" ((PVar "sites") (PCon "DUse" PWild (PCon "UseGroup" (PVar "quals") PWild) (PVar "loc"))) (EApp (EApp (EVar "anyList") (ELam ((PVar "s")) (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "s") "asQuals") (EVar "quals")) (EBinOp "==" (EFieldAccess (EVar "s") "asLoc") (EVar "loc"))))) (EVar "sites")))
 (DFunDef false "isAliasMethodImport" (PWild PWild) (EVar "False"))
 (DData Public "ModuleExports" () ((variant "ModuleExports" (ConNamed (field "modId" (TyCon "String")) (field "expValues" (TyApp (TyCon "List") (TyCon "String"))) (field "expTypes" (TyApp (TyCon "List") (TyCon "String"))) (field "expAbstractData" (TyApp (TyCon "List") (TyCon "String"))) (field "expCtors" (TyApp (TyCon "List") (TyCon "String"))) (field "expTypeCtors" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (field "expFieldOwners" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "expInterfaces" (TyApp (TyCon "List") (TyCon "String"))) (field "expIfaceMethods" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) (field "expIfaceOrigins" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "expTypeOrigins" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "expCtorOrigins" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "expValueOrigins" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String"))))) (field "expEffects" (TyApp (TyCon "List") (TyCon "String"))) (field "expEffectOrigins" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "expNewtypeCtors" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "expAbstractCtors" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "nameSet" (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (field "ctorTypes" (TyApp (TyCon "OrdMap") (TyCon "String")))))) ())
 (DTypeSig true "filterInSet" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))

@@ -1,4 +1,4 @@
--- C4, L3 (F-R4): an interface method and a top-level function of one name in one module is a
+-- L3 (F-R4): an interface method and a top-level function of one name in one module is a
 -- located duplicate-declaration error, in value position as in application position (L1).
 interface Sizeable a where
   size : a -> Int

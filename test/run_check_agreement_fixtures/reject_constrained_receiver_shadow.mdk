@@ -1,4 +1,4 @@
--- C4, L3 (F-R4): an interface method and a top-level function of one name in one module is a
+-- L3 (F-R4): an interface method and a top-level function of one name in one module is a
 -- located duplicate-declaration error; the `=>` constraint on the receiver changes nothing
 -- (L8).
 interface Sz a where

@@ -1,4 +1,4 @@
--- C3, L4 (F-R3): the same located error when `size` is written in value position; position
+-- L4 (F-R3): the same located error when `size` is written in value position; position
 -- takes no part (L1)
 import prov.{size}
 

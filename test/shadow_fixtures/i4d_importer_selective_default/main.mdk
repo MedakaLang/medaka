@@ -1,4 +1,4 @@
--- C1, L2 rung 3 over rung 5: `import bytes.{length}` binds `bytes.length`; the type mismatch
+-- L2 rung 3 over rung 5: `import bytes.{length}` binds `bytes.length`; the type mismatch
 -- names it and no shadow warning is emitted
 import bytes.{length}
 main = println (length (Some 7))

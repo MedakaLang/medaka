@@ -1,4 +1,4 @@
--- C1, L2 rung 3 over rung 5: the imported `isEmpty : Int -> Bool` beats the prelude method;
+-- L2 rung 3 over rung 5: the imported `isEmpty : Int -> Bool` beats the prelude method;
 -- `isEmpty [1, 2]` is a located type mismatch
 import prov.{isEmpty}
 

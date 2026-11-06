@@ -1,4 +1,4 @@
--- C7, L3: the control; a hub re-exporting one declaration is one binding, so `mth 1` is 2
+-- L3: the control; a hub re-exporting one declaration is one binding, so `mth 1` is 2
 import lib.hubone.{IA, mth}
 
 main = println (mth 1)

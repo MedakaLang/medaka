@@ -388,3 +388,6 @@ REF	compiler/entries/perf_main.mdk	TODO(docs-cleanup): entry point renamed durin
 REF	test/diff_compiler_eval_bytecode.sh	TODO(docs-cleanup): gate for the retired bytecode pipeline stage; no successor script exists
 REF	test/diff_compiler_eval_bytecode_modules.sh	TODO(docs-cleanup): gate for the retired bytecode pipeline stage; no successor script exists
 REF	test/diff_compiler_eval_typed.sh	migrated into the snapshot # EVAL section in #81 R6 (diff_compiler_snapshot_eval.sh); the eval_typed_main probe + eval_typed_fixtures/*.eval.golden survive for the batch gate — compiler/README.md's as-built port-slice log records the gate as it existed
+REF	test/shadow_fixtures/d10_definer_constrained.mdk	cited by archive/design/S1-CONSTRAINED-SHADOW-DESIGN.md, a closed design record of the S1 regime; the fixture was deleted with that regime (shadow-ladder-1)
+REF	test/run_check_agreement_fixtures/accept_constrained_receiver_shadow.mdk	cited by archive/design/SHADOW-INVERSION-DESIGN.md, a closed design record; the fixture was deleted with the S1 regime (shadow-ladder-1)
+REF	test/shadow_fixtures/d4_definer_value_pos.mdk	cited by archive/design/SHADOW-INVERSION-DESIGN.md, a closed design record; the fixture was deleted with the S1 regime (shadow-ladder-1)

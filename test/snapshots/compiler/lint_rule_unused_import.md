@@ -1,10 +1,12 @@
 # META
-source_lines=150
+source_lines=149
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-unused-import: an `import m.{…}` member that nothing in the file uses. Drop the name from the list.
 
-import frontend.ast.{Decl(..), Loc(..), UseMember(..), UsePath(..)}
+import frontend.ast.{
+  Decl(..), Loc(..), UseMember(..), UsePath(..), useMemberLoc
+}
 import frontend.parser.{Positions(..)}
 import driver.diagnostics.{Severity(..)}
 import frontend.lex_scan.{scanRaw}
@@ -77,7 +79,7 @@ ruleUnusedImport _ _ facts _ prog =
 groupFindings : FileScopes -> List Int -> Decl -> List Finding
 groupFindings fs dead (DUse False (UseGroup path members) groupLoc) =
   let flags = map (memberDead fs dead) members
-  let locs = map memberLoc members
+  let locs = map useMemberLoc members
   let everyDead = all (f => f) flags
   flatMap
     (m => memberFinding path groupLoc locs everyDead (fst m))
@@ -105,9 +107,6 @@ doctestBody line =
   let t = trim line
   let inner = trim (optionOr t (stripPrefix "{-" t))
   toList (stripPrefix "-- > " t) ++ toList (stripPrefix "> " inner)
-
-memberLoc : UseMember -> Loc
-memberLoc (UseMember _ _ loc _) = loc
 
 -- A `T(..)` member is never dead: it may be used through a constructor, which
 -- the scope model does not tie to `T`.
@@ -154,7 +153,7 @@ fixOf applicability edit = Fix {
 }
 # DESUGAR
 (DUse false (UseAlias ("core") "$core"))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Loc" true) (mem "UseMember" true) (mem "UsePath" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Loc" true) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberLoc" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("frontend" "lex_scan") ((mem "scanRaw" false))))
@@ -172,7 +171,7 @@ fixOf applicability edit = Fix {
 (DTypeSig false "ruleUnusedImport" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleUnusedImport" (PWild PWild (PVar "facts") PWild (PVar "prog")) (EBlock (DoLet false false (PVar "fs") (EApp (EVar "factScopes") (EVar "facts"))) (DoLet false false (PVar "silent") (EApp (EApp (EVar "filter") (ELam ((PVar "u")) (EBinOp "==" (EApp (EVar "snd") (EVar "u")) (ELit (LInt 0))))) (EApp (EVar "importUses") (EVar "fs")))) (DoExpr (EIf (EApp (EVar "isEmpty") (EVar "silent")) (EListLit) (EBlock (DoLet false false (PVar "seen") (EApp (EVar "doctestNames") (EApp (EVar "doctestBodies") (EApp (EVar "factComments") (EVar "facts"))))) (DoLet false false (PVar "dead") (EApp (EApp (EVar "map") (ELam ((PVar "u")) (EFieldAccess (EApp (EVar "fst") (EVar "u")) "binderId"))) (EApp (EApp (EVar "filter") (ELam ((PVar "u")) (EApp (EVar "not") (EApp (EApp (EVar "elem") (EFieldAccess (EApp (EVar "fst") (EVar "u")) "binderName")) (EVar "seen"))))) (EVar "silent")))) (DoExpr (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "groupFindings") (EVar "fs")) (EVar "dead"))) (EVar "prog"))))))))
 (DTypeSig false "groupFindings" (TyFun (TyCon "FileScopes") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Finding"))))))
-(DFunDef false "groupFindings" ((PVar "fs") (PVar "dead") (PCon "DUse" (PCon "False") (PCon "UseGroup" (PVar "path") (PVar "members")) (PVar "groupLoc"))) (EBlock (DoLet false false (PVar "flags") (EApp (EApp (EVar "map") (EApp (EApp (EVar "memberDead") (EVar "fs")) (EVar "dead"))) (EVar "members"))) (DoLet false false (PVar "locs") (EApp (EApp (EVar "map") (EVar "memberLoc")) (EVar "members"))) (DoLet false false (PVar "everyDead") (EApp (EApp (EVar "all") (ELam ((PVar "f")) (EVar "f"))) (EVar "flags"))) (DoExpr (EApp (EApp (EVar "flatMap") (ELam ((PVar "m")) (EApp (EApp (EApp (EApp (EApp (EVar "memberFinding") (EVar "path")) (EVar "groupLoc")) (EVar "locs")) (EVar "everyDead")) (EApp (EVar "fst") (EVar "m"))))) (EApp (EApp (EVar "filter") (EVar "snd")) (EApp (EApp (EVar "zip") (EApp (EVar "indexed") (EVar "members"))) (EVar "flags")))))))
+(DFunDef false "groupFindings" ((PVar "fs") (PVar "dead") (PCon "DUse" (PCon "False") (PCon "UseGroup" (PVar "path") (PVar "members")) (PVar "groupLoc"))) (EBlock (DoLet false false (PVar "flags") (EApp (EApp (EVar "map") (EApp (EApp (EVar "memberDead") (EVar "fs")) (EVar "dead"))) (EVar "members"))) (DoLet false false (PVar "locs") (EApp (EApp (EVar "map") (EVar "useMemberLoc")) (EVar "members"))) (DoLet false false (PVar "everyDead") (EApp (EApp (EVar "all") (ELam ((PVar "f")) (EVar "f"))) (EVar "flags"))) (DoExpr (EApp (EApp (EVar "flatMap") (ELam ((PVar "m")) (EApp (EApp (EApp (EApp (EApp (EVar "memberFinding") (EVar "path")) (EVar "groupLoc")) (EVar "locs")) (EVar "everyDead")) (EApp (EVar "fst") (EVar "m"))))) (EApp (EApp (EVar "filter") (EVar "snd")) (EApp (EApp (EVar "zip") (EApp (EVar "indexed") (EVar "members"))) (EVar "flags")))))))
 (DFunDef false "groupFindings" (PWild PWild PWild) (EListLit))
 (DTypeSig false "doctestNames" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "doctestNames" ((PVar "inputs")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "d")) (EApp (EApp (EVar "flatMap") (EVar "rawIdent")) (EApp (EVar "scanRaw") (EVar "d"))))) (EVar "inputs")))
@@ -184,8 +183,6 @@ fixOf applicability edit = Fix {
 (DFunDef false "doctestBodies" ((PVar "comments")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "c")) (EApp (EApp (EVar "flatMap") (EVar "doctestBody")) (EApp (EVar "lines") (EApp (EVar "commentText") (EVar "c")))))) (EVar "comments")))
 (DTypeSig false "doctestBody" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "doctestBody" ((PVar "line")) (EBlock (DoLet false false (PVar "t") (EApp (EVar "trim") (EVar "line"))) (DoLet false false (PVar "inner") (EApp (EVar "trim") (EApp (EApp (EVar "optionOr") (EVar "t")) (EApp (EApp (EVar "stripPrefix") (ELit (LString "{-"))) (EVar "t"))))) (DoExpr (EBinOp "++" (EApp (EVar "toList") (EApp (EApp (EVar "stripPrefix") (ELit (LString "-- > "))) (EVar "t"))) (EApp (EVar "toList") (EApp (EApp (EVar "stripPrefix") (ELit (LString "> "))) (EVar "inner")))))))
-(DTypeSig false "memberLoc" (TyFun (TyCon "UseMember") (TyCon "Loc")))
-(DFunDef false "memberLoc" ((PCon "UseMember" PWild PWild (PVar "loc") PWild)) (EVar "loc"))
 (DTypeSig false "memberDead" (TyFun (TyCon "FileScopes") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "UseMember") (TyCon "Bool")))))
 (DFunDef false "memberDead" ((PVar "fs") (PVar "dead") (PCon "UseMember" PWild (PVar "allCtors") (PVar "loc") PWild)) (EMatch (EApp (EApp (EVar "binderOf") (EVar "fs")) (EVar "loc")) (arm (PCon "Some" (PVar "b")) () (EBinOp "&&" (EApp (EVar "not") (EVar "allCtors")) (EApp (EApp (EVar "elem") (EFieldAccess (EVar "b") "binderId")) (EVar "dead")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "memberFinding" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Loc") (TyFun (TyApp (TyCon "List") (TyCon "Loc")) (TyFun (TyCon "Bool") (TyFun (TyTuple (TyCon "Int") (TyCon "UseMember")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
@@ -196,7 +193,7 @@ fixOf applicability edit = Fix {
 (DFunDef false "fixOf" ((PVar "applicability") (PVar "edit")) (ERecordCreate "Fix" ((fa "fixApplicability" (EVar "applicability")) (fa "fixEdits" (EListLit (EVar "edit"))) (fa "fixMessage" (ELit (LString "remove the unused import"))))))
 # MARK
 (DUse false (UseAlias ("core") "$core"))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Loc" true) (mem "UseMember" true) (mem "UsePath" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Loc" true) (mem "UseMember" true) (mem "UsePath" true) (mem "useMemberLoc" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("frontend" "lex_scan") ((mem "scanRaw" false))))
@@ -214,7 +211,7 @@ fixOf applicability edit = Fix {
 (DTypeSig false "ruleUnusedImport" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "ruleUnusedImport" (PWild PWild (PVar "facts") PWild (PVar "prog")) (EBlock (DoLet false false (PVar "fs") (EApp (EVar "factScopes") (EVar "facts"))) (DoLet false false (PVar "silent") (EApp (EApp (EMethodRef "filter") (ELam ((PVar "u")) (EBinOp "==" (EApp (EVar "snd") (EVar "u")) (ELit (LInt 0))))) (EApp (EVar "importUses") (EVar "fs")))) (DoExpr (EIf (EApp (EMethodRef "isEmpty") (EVar "silent")) (EListLit) (EBlock (DoLet false false (PVar "seen") (EApp (EVar "doctestNames") (EApp (EVar "doctestBodies") (EApp (EVar "factComments") (EVar "facts"))))) (DoLet false false (PVar "dead") (EApp (EApp (EMethodRef "map") (ELam ((PVar "u")) (EFieldAccess (EApp (EVar "fst") (EVar "u")) "binderId"))) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "u")) (EApp (EVar "not") (EApp (EApp (EDictApp "elem") (EFieldAccess (EApp (EVar "fst") (EVar "u")) "binderName")) (EVar "seen"))))) (EVar "silent")))) (DoExpr (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "groupFindings") (EVar "fs")) (EVar "dead"))) (EVar "prog"))))))))
 (DTypeSig false "groupFindings" (TyFun (TyCon "FileScopes") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Finding"))))))
-(DFunDef false "groupFindings" ((PVar "fs") (PVar "dead") (PCon "DUse" (PCon "False") (PCon "UseGroup" (PVar "path") (PVar "members")) (PVar "groupLoc"))) (EBlock (DoLet false false (PVar "flags") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "memberDead") (EVar "fs")) (EVar "dead"))) (EVar "members"))) (DoLet false false (PVar "locs") (EApp (EApp (EMethodRef "map") (EVar "memberLoc")) (EVar "members"))) (DoLet false false (PVar "everyDead") (EApp (EApp (EDictApp "all") (ELam ((PVar "f")) (EVar "f"))) (EVar "flags"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "m")) (EApp (EApp (EApp (EApp (EApp (EVar "memberFinding") (EVar "path")) (EVar "groupLoc")) (EVar "locs")) (EVar "everyDead")) (EApp (EVar "fst") (EVar "m"))))) (EApp (EApp (EMethodRef "filter") (EVar "snd")) (EApp (EApp (EVar "zip") (EApp (EVar "indexed") (EVar "members"))) (EVar "flags")))))))
+(DFunDef false "groupFindings" ((PVar "fs") (PVar "dead") (PCon "DUse" (PCon "False") (PCon "UseGroup" (PVar "path") (PVar "members")) (PVar "groupLoc"))) (EBlock (DoLet false false (PVar "flags") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "memberDead") (EVar "fs")) (EVar "dead"))) (EVar "members"))) (DoLet false false (PVar "locs") (EApp (EApp (EMethodRef "map") (EVar "useMemberLoc")) (EVar "members"))) (DoLet false false (PVar "everyDead") (EApp (EApp (EDictApp "all") (ELam ((PVar "f")) (EVar "f"))) (EVar "flags"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "m")) (EApp (EApp (EApp (EApp (EApp (EVar "memberFinding") (EVar "path")) (EVar "groupLoc")) (EVar "locs")) (EVar "everyDead")) (EApp (EVar "fst") (EVar "m"))))) (EApp (EApp (EMethodRef "filter") (EVar "snd")) (EApp (EApp (EVar "zip") (EApp (EVar "indexed") (EVar "members"))) (EVar "flags")))))))
 (DFunDef false "groupFindings" (PWild PWild PWild) (EListLit))
 (DTypeSig false "doctestNames" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "doctestNames" ((PVar "inputs")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "d")) (EApp (EApp (EDictApp "flatMap") (EVar "rawIdent")) (EApp (EVar "scanRaw") (EVar "d"))))) (EVar "inputs")))
@@ -226,8 +223,6 @@ fixOf applicability edit = Fix {
 (DFunDef false "doctestBodies" ((PVar "comments")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "c")) (EApp (EApp (EDictApp "flatMap") (EVar "doctestBody")) (EApp (EVar "lines") (EApp (EVar "commentText") (EVar "c")))))) (EVar "comments")))
 (DTypeSig false "doctestBody" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "doctestBody" ((PVar "line")) (EBlock (DoLet false false (PVar "t") (EApp (EVar "trim") (EVar "line"))) (DoLet false false (PVar "inner") (EApp (EVar "trim") (EApp (EApp (EVar "optionOr") (EVar "t")) (EApp (EApp (EVar "stripPrefix") (ELit (LString "{-"))) (EVar "t"))))) (DoExpr (EBinOp "++" (EApp (EMethodRef "toList") (EApp (EApp (EVar "stripPrefix") (ELit (LString "-- > "))) (EVar "t"))) (EApp (EMethodRef "toList") (EApp (EApp (EVar "stripPrefix") (ELit (LString "> "))) (EVar "inner")))))))
-(DTypeSig false "memberLoc" (TyFun (TyCon "UseMember") (TyCon "Loc")))
-(DFunDef false "memberLoc" ((PCon "UseMember" PWild PWild (PVar "loc") PWild)) (EVar "loc"))
 (DTypeSig false "memberDead" (TyFun (TyCon "FileScopes") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "UseMember") (TyCon "Bool")))))
 (DFunDef false "memberDead" ((PVar "fs") (PVar "dead") (PCon "UseMember" PWild (PVar "allCtors") (PVar "loc") PWild)) (EMatch (EApp (EApp (EVar "binderOf") (EVar "fs")) (EVar "loc")) (arm (PCon "Some" (PVar "b")) () (EBinOp "&&" (EApp (EVar "not") (EVar "allCtors")) (EApp (EApp (EDictApp "elem") (EFieldAccess (EVar "b") "binderId")) (EVar "dead")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "memberFinding" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Loc") (TyFun (TyApp (TyCon "List") (TyCon "Loc")) (TyFun (TyCon "Bool") (TyFun (TyTuple (TyCon "Int") (TyCon "UseMember")) (TyApp (TyCon "List") (TyCon "Finding"))))))))

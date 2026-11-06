@@ -1,4 +1,4 @@
--- C6, L2 rung 3: `import amodI.{IA, af}` and `import zmodI.{IZ, zf}` bind no method `mth`,
+-- L2 rung 3: `import amodI.{IA, af}` and `import zmodI.{IZ, zf}` bind no method `mth`,
 -- so the explicit `fmodI.mth` answers
 import fmodI.{mth}
 import amodI.{IA, af}
