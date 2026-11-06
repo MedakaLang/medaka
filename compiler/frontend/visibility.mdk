@@ -243,7 +243,9 @@ writtenImportsOf prog = match aliasImportSites prog
   [] => prog
   sites => filterList (d => not (isAliasMethodImport sites d)) prog
 
--- The module path and location of one `import m as A`.
+-- The module path and location of one `import m as A`.  Built with record
+-- syntax and read with `.field`: eval represents positional and record
+-- construction differently, so one form per type (#TBD).
 public export data AliasSite = AliasSite { asQuals : List String, asLoc : Loc }
 
 -- The module path and location of each `import m as A` in [prog].
@@ -253,7 +255,7 @@ aliasImportSites [] = []
 aliasImportSites ((DAttrib _ d) :: rest) =
   aliasImportSites [d] ++ aliasImportSites rest
 aliasImportSites ((DUse _ (UseAlias quals _) loc) :: rest) =
-  AliasSite quals loc :: aliasImportSites rest
+  AliasSite { asQuals = quals, asLoc = loc } :: aliasImportSites rest
 aliasImportSites (_ :: rest) = aliasImportSites rest
 
 -- Only a `UseGroup` import is ever synthesized, so the final catch-all answering False

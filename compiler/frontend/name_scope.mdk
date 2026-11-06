@@ -100,12 +100,15 @@ data ImportBind = ImportBind {
 }
 
 -- An interface that declares a method, and the module declaring that interface.
+-- Built with record syntax and read with `.field`: eval represents positional and
+-- record construction differently, so one form per type (#TBD).
 data MethodOrigin = MethodOrigin { moIface : String, moModule : String }
 
 -- A declaration by its declaring module and the name it is declared under.
 data DeclRef = DeclRef { drModule : String, drName : String } deriving (Eq)
 
--- A declaration an import brings, with the importing module.
+-- A declaration an import brings, with the importing module.  Record form only
+-- (see MethodOrigin).
 data Brought = Brought { brTarget : NameTarget, brModule : String }
 
 -- A name an import rung binds, with the declarations it denotes there.
@@ -184,7 +187,8 @@ data OwnWalk = OwnWalk {
   owClashes : List NameCollision,
 }
 
--- One name a declaration binds, with the declaration and its span.
+-- One name a declaration binds, with the declaration and its span.  Record form
+-- only (see MethodOrigin).
 data Binder = Binder {
   bdName : String,
   bdTarget : NameTarget,
@@ -195,25 +199,30 @@ emptyOwnWalk : OwnWalk
 emptyOwnWalk = OwnWalk { owFirst = omEmpty, owOrder = [], owClashes = [] }
 
 ownStep : OwnWalk -> Binder -> OwnWalk
-ownStep walk (b@(Binder n t l)) = match omLookup n walk.owFirst
-  None => { walk |
-    owFirst = omInsert n b walk.owFirst,
-    owOrder = b :: walk.owOrder,
-  }
-  Some (Binder _ first firstLoc) =>
-    if isMethod first /= isMethod t && not (anyClash n walk.owClashes) then
-      -- The later declaration's span, else the earlier one's: an interface
-      -- method parsed without a span still reports at a real declaration.
-      let clash = NameCollision {
-        ncName = n,
-        ncFirst = first,
-        ncSecond = t,
-        ncRungs = (RungOwn, RungOwn),
-        ncLoc = orElse l firstLoc,
-      }
-      { walk | owClashes = clash :: walk.owClashes }
-    else
-      walk
+ownStep walk b =
+  let n = b.bdName
+  let t = b.bdTarget
+  let l = b.bdLoc
+  match omLookup n walk.owFirst
+    None => { walk |
+      owFirst = omInsert n b walk.owFirst,
+      owOrder = b :: walk.owOrder,
+    }
+    Some prior =>
+      if isMethod prior.bdTarget /= isMethod t
+        && not (anyClash n walk.owClashes) then
+        -- The later declaration's span, else the earlier one's: an interface
+        -- method parsed without a span still reports at a real declaration.
+        let clash = NameCollision {
+          ncName = n,
+          ncFirst = prior.bdTarget,
+          ncSecond = t,
+          ncRungs = (RungOwn, RungOwn),
+          ncLoc = orElse l prior.bdLoc,
+        }
+        { walk | owClashes = clash :: walk.owClashes }
+      else
+        walk
 
 anyClash : String -> List NameCollision -> Bool
 anyClash n clashes = any (c => c.ncName == n) clashes
@@ -236,16 +245,16 @@ declBinders (DAttrib _ d) = declBinders d
 declBinders _ = []
 
 ownValue : String -> Option Loc -> Binder
-ownValue n l = Binder n (TargetValue "" n) l
+ownValue n l = Binder { bdName = n, bdTarget = TargetValue "" n, bdLoc = l }
 
 letBinder : LetBind -> Binder
 letBinder (LetBind n _ loc _) = ownValue n (Some loc)
 
 methodBinder : String -> Option Loc -> IfaceMethod -> Binder
 methodBinder i _ (IfaceMethod m _ _ (Some loc)) =
-  Binder m (TargetMethod "" i m) (Some loc)
+  Binder { bdName = m, bdTarget = TargetMethod "" i m, bdLoc = Some loc }
 methodBinder i nameLoc (IfaceMethod m _ _ None) =
-  Binder m (TargetMethod "" i m) nameLoc
+  Binder { bdName = m, bdTarget = TargetMethod "" i m, bdLoc = nameLoc }
 
 -- ── rungs 3 and 4: explicit and wildcard imports ───────────────────────────
 
@@ -311,8 +320,17 @@ methodOrigins exp =
       let owners = map snd (filter (o => fst o == i) exp.expIfaceOrigins)
       fold
         (acc meth => match omLookup meth acc
-          Some ps => omInsert meth (ps ++ map (MethodOrigin i) owners) acc
-          None => omInsert meth (map (MethodOrigin i) owners) acc)
+          Some ps =>
+            omInsert
+              meth
+              (ps
+                ++ map (o => MethodOrigin { moIface = i, moModule = o }) owners)
+              acc
+          None =>
+            omInsert
+              meth
+              (map (o => MethodOrigin { moIface = i, moModule = o }) owners)
+              acc)
         m
         ms)
     omEmpty
@@ -365,12 +383,18 @@ addBind (m, order) b =
     Some known => (
       omInsert
         b.ibName
-        (known ++ map (t => Brought t b.ibModule) (fresh known))
+        (known
+          ++ map
+            (t => Brought { brTarget = t, brModule = b.ibModule })
+            (fresh known))
         m,
       order,
     )
     None => (
-      omInsert b.ibName (map (t => Brought t b.ibModule) (fresh [])) m,
+      omInsert
+        b.ibName
+        (map (t => Brought { brTarget = t, brModule = b.ibModule }) (fresh []))
+        m,
       b.ibName :: order,
     )
 
