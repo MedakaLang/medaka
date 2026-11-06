@@ -50,6 +50,7 @@ containerArgMsg : Option String -> String -> String
 contraRowMsg : List Atom -> List Atom -> List Atom -> String
 countTypeArguments : Int -> String
 cyclicSuperIfaceMsg : List String -> String
+cyclicValueMsg : String -> List String -> String
 declareRemedy : String -> String -> String
 defaultEffectLaunderMsg : String -> List Atom -> String
 defaultSubject : String -> String -> String
