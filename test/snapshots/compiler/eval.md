@@ -1,5 +1,5 @@
 # META
-source_lines=5531
+source_lines=5526
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -46,7 +46,6 @@ import frontend.ast.{
   UseMember(..),
   useMemberOrigin,
   useMemberLocal,
-  useMemberAlias,
   qualifiedLocal,
   Decl(..),
   ExternDecl(..),
@@ -4917,21 +4916,17 @@ useImports coreExports exportsMap (DUse _ path _) =
 useImports _ _ _ = []
 
 -- `core` is not in `exportsMap` — the prelude is installed straight into the GLOBAL
--- frame, which is why an unaliased core reference needs no import frame entry at all.
--- An ALIAS is the exception: `C.isEven` and a member rename's `even2` are spellings the
--- global frame does not hold, so they get a frame entry pointing at the very same cell.
--- Only the renamed members of a `UseGroup` are bound; a plain member would enter the
--- global cell under its own name and shadow itself.  `resolve.coreAliasNames` decides
--- the same two forms at the scope layer, and the engine may not bind a spelling that
--- layer refuses.
+-- frame, which is why a core reference through no import needs no frame entry.  An
+-- ALIAS needs one: `C.isEven` and a member rename's `even2` are spellings the global
+-- frame does not hold.  A plain member or dotted name gets one too, pointing at the
+-- global frame's own cell: it is an explicit import, so a wildcard's cell of that name
+-- is left out of the frame (`explicitOverWild`).  A core wildcard binds nothing here;
+-- the global frame already holds every one of its names.  `resolve.coreAliasNames`
+-- decides the alias forms at the scope layer, and the engine may not bind a spelling
+-- that layer refuses.
 coreAliasCells : UsePath -> ModExports (Value e) -> List (String, Ref (Value e))
-coreAliasCells (p@(UseAlias _ _)) me = resolveMembers p me
-coreAliasCells (UseGroup quals ms) me =
-  resolveMembers (UseGroup quals (filterList memberIsRenamed ms)) me
-coreAliasCells _ _ = []
-
-memberIsRenamed : UseMember -> Bool
-memberIsRenamed m = isSome (useMemberAlias m)
+coreAliasCells (UseWild _) _ = []
+coreAliasCells p me = resolveMembers p me
 
 -- cells re-exported by a `pub import`.
 --
@@ -5536,7 +5531,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 # DESUGAR
 (DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "variantName" false) (mem "ifaceMethodName" false) (mem "fieldName" false) (mem "implMethodName" false) (mem "noBinderId" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Route" true) (mem "ConPayload" true) (mem "Field" true) (mem "Variant" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "Decl" true) (mem "ExternDecl" true) (mem "DataVis" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "isTaggedFixedHead" false) (mem "fixedWidthMask" false) (mem "ifaceIdMatches" false) (mem "defaultReceiverDict" false) (mem "patBindings" false) (mem "paramCandidates" false) (mem "armCandidates" false) (mem "armHasOr" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "variantName" false) (mem "ifaceMethodName" false) (mem "fieldName" false) (mem "implMethodName" false) (mem "noBinderId" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Route" true) (mem "ConPayload" true) (mem "Field" true) (mem "Variant" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "Decl" true) (mem "ExternDecl" true) (mem "DataVis" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "isTaggedFixedHead" false) (mem "fixedWidthMask" false) (mem "ifaceIdMatches" false) (mem "defaultReceiverDict" false) (mem "patBindings" false) (mem "paramCandidates" false) (mem "armCandidates" false) (mem "armHasOr" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "evDictRoutesIn" false) (mem "evMethodRoutesIn" false) (mem "typeTagName" false))))
 (DUse false (UseGroup ("types" "dispatch_keys") ((mem "tupleHeadTag" false) (mem "headTyconHead" false) (mem "tyvarsInArgs" false) (mem "buildIfaceDispatch" false) (mem "buildCtorToType" false))))
 (DUse false (UseGroup ("types" "expr_loc") ((mem "noTrapLoc" false) (mem "isNoLoc" false) (mem "exprStartLoc" false))))
@@ -7159,11 +7154,8 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "useImports" ((PVar "coreExports") (PVar "exportsMap") (PCon "DUse" PWild (PVar "path") PWild)) (EIf (EBinOp "==" (EApp (EVar "useModuleId") (EVar "path")) (ELit (LString "core"))) (EApp (EApp (EVar "coreAliasCells") (EVar "path")) (EVar "coreExports")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EApp (EVar "useModuleId") (EVar "path"))) (EVar "exportsMap")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "exports")) () (EApp (EApp (EVar "resolveMembers") (EVar "path")) (EVar "exports"))))))
 (DFunDef false "useImports" (PWild PWild PWild) (EListLit))
 (DTypeSig false "coreAliasCells" (TyFun (TyCon "UsePath") (TyFun (TyApp (TyCon "ModExports") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))))))
-(DFunDef false "coreAliasCells" ((PAs "p" (PCon "UseAlias" PWild PWild)) (PVar "me")) (EApp (EApp (EVar "resolveMembers") (EVar "p")) (EVar "me")))
-(DFunDef false "coreAliasCells" ((PCon "UseGroup" (PVar "quals") (PVar "ms")) (PVar "me")) (EApp (EApp (EVar "resolveMembers") (EApp (EApp (EVar "UseGroup") (EVar "quals")) (EApp (EApp (EVar "filterList") (EVar "memberIsRenamed")) (EVar "ms")))) (EVar "me")))
-(DFunDef false "coreAliasCells" (PWild PWild) (EListLit))
-(DTypeSig false "memberIsRenamed" (TyFun (TyCon "UseMember") (TyCon "Bool")))
-(DFunDef false "memberIsRenamed" ((PVar "m")) (EApp (EVar "isSome") (EApp (EVar "useMemberAlias") (EVar "m"))))
+(DFunDef false "coreAliasCells" ((PCon "UseWild" PWild) PWild) (EListLit))
+(DFunDef false "coreAliasCells" ((PVar "p") (PVar "me")) (EApp (EApp (EVar "resolveMembers") (EVar "p")) (EVar "me")))
 (DTypeSig false "reexport" (TyFun (TyApp (TyCon "ModExports") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "ModExports") (TyApp (TyCon "Value") (TyVar "e"))))) (TyFun (TyCon "UsePath") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e")))))))))
 (DFunDef false "reexport" ((PVar "coreExports") (PVar "exportsMap") (PVar "path")) (EBlock (DoLet false false (PVar "src") (EIf (EBinOp "==" (EApp (EVar "useModuleId") (EVar "path")) (ELit (LString "core"))) (EApp (EVar "Some") (EVar "coreExports")) (EApp (EApp (EVar "lookupAssoc") (EApp (EVar "useModuleId") (EVar "path"))) (EVar "exportsMap")))) (DoExpr (EMatch (EVar "src") (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "exports")) () (EApp (EApp (EVar "resolveMembers") (EVar "path")) (EVar "exports")))))))
 (DTypeSig false "resolveMembers" (TyFun (TyCon "UsePath") (TyFun (TyApp (TyCon "ModExports") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))))))
@@ -7353,7 +7345,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 # MARK
 (DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "variantName" false) (mem "ifaceMethodName" false) (mem "fieldName" false) (mem "implMethodName" false) (mem "noBinderId" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Route" true) (mem "ConPayload" true) (mem "Field" true) (mem "Variant" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "useMemberAlias" false) (mem "qualifiedLocal" false) (mem "Decl" true) (mem "ExternDecl" true) (mem "DataVis" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "isTaggedFixedHead" false) (mem "fixedWidthMask" false) (mem "ifaceIdMatches" false) (mem "defaultReceiverDict" false) (mem "patBindings" false) (mem "paramCandidates" false) (mem "armCandidates" false) (mem "armHasOr" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "variantName" false) (mem "ifaceMethodName" false) (mem "fieldName" false) (mem "implMethodName" false) (mem "noBinderId" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Route" true) (mem "ConPayload" true) (mem "Field" true) (mem "Variant" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "Decl" true) (mem "ExternDecl" true) (mem "DataVis" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "isTaggedFixedHead" false) (mem "fixedWidthMask" false) (mem "ifaceIdMatches" false) (mem "defaultReceiverDict" false) (mem "patBindings" false) (mem "paramCandidates" false) (mem "armCandidates" false) (mem "armHasOr" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "evDictRoutesIn" false) (mem "evMethodRoutesIn" false) (mem "typeTagName" false))))
 (DUse false (UseGroup ("types" "dispatch_keys") ((mem "tupleHeadTag" false) (mem "headTyconHead" false) (mem "tyvarsInArgs" false) (mem "buildIfaceDispatch" false) (mem "buildCtorToType" false))))
 (DUse false (UseGroup ("types" "expr_loc") ((mem "noTrapLoc" false) (mem "isNoLoc" false) (mem "exprStartLoc" false))))
@@ -8976,11 +8968,8 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "useImports" ((PVar "coreExports") (PVar "exportsMap") (PCon "DUse" PWild (PVar "path") PWild)) (EIf (EBinOp "==" (EApp (EVar "useModuleId") (EVar "path")) (ELit (LString "core"))) (EApp (EApp (EVar "coreAliasCells") (EVar "path")) (EVar "coreExports")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EApp (EVar "useModuleId") (EVar "path"))) (EVar "exportsMap")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "exports")) () (EApp (EApp (EVar "resolveMembers") (EVar "path")) (EVar "exports"))))))
 (DFunDef false "useImports" (PWild PWild PWild) (EListLit))
 (DTypeSig false "coreAliasCells" (TyFun (TyCon "UsePath") (TyFun (TyApp (TyCon "ModExports") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))))))
-(DFunDef false "coreAliasCells" ((PAs "p" (PCon "UseAlias" PWild PWild)) (PVar "me")) (EApp (EApp (EVar "resolveMembers") (EVar "p")) (EVar "me")))
-(DFunDef false "coreAliasCells" ((PCon "UseGroup" (PVar "quals") (PVar "ms")) (PVar "me")) (EApp (EApp (EVar "resolveMembers") (EApp (EApp (EVar "UseGroup") (EVar "quals")) (EApp (EApp (EVar "filterList") (EVar "memberIsRenamed")) (EVar "ms")))) (EVar "me")))
-(DFunDef false "coreAliasCells" (PWild PWild) (EListLit))
-(DTypeSig false "memberIsRenamed" (TyFun (TyCon "UseMember") (TyCon "Bool")))
-(DFunDef false "memberIsRenamed" ((PVar "m")) (EApp (EVar "isSome") (EApp (EVar "useMemberAlias") (EVar "m"))))
+(DFunDef false "coreAliasCells" ((PCon "UseWild" PWild) PWild) (EListLit))
+(DFunDef false "coreAliasCells" ((PVar "p") (PVar "me")) (EApp (EApp (EVar "resolveMembers") (EVar "p")) (EVar "me")))
 (DTypeSig false "reexport" (TyFun (TyApp (TyCon "ModExports") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "ModExports") (TyApp (TyCon "Value") (TyVar "e"))))) (TyFun (TyCon "UsePath") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e")))))))))
 (DFunDef false "reexport" ((PVar "coreExports") (PVar "exportsMap") (PVar "path")) (EBlock (DoLet false false (PVar "src") (EIf (EBinOp "==" (EApp (EVar "useModuleId") (EVar "path")) (ELit (LString "core"))) (EApp (EVar "Some") (EVar "coreExports")) (EApp (EApp (EVar "lookupAssoc") (EApp (EVar "useModuleId") (EVar "path"))) (EVar "exportsMap")))) (DoExpr (EMatch (EVar "src") (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "exports")) () (EApp (EApp (EVar "resolveMembers") (EVar "path")) (EVar "exports")))))))
 (DTypeSig false "resolveMembers" (TyFun (TyCon "UsePath") (TyFun (TyApp (TyCon "ModExports") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))))))

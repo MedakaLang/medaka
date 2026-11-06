@@ -1,0 +1,4 @@
+-- L3: the roles swapped; `import tzmod.{sz}` binds `Tz`'s method, so 2001
+import szmod.*
+import tzmod.{sz}
+main = println (sz 1)

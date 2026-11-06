@@ -262,7 +262,6 @@ matchRecFields : List RecPatField -> List (String, Value a) -> Option (List (Str
 matchesTag : String -> Value a -> Bool
 memberBind : UseMember -> (String, String)
 memberCells : ModExports (Value a) -> UseMember -> List (String, Ref (Value a))
-memberIsRenamed : UseMember -> Bool
 memoThunk : EvalEnv (Value a) -> Expr -> Value a
 memoThunkOf : Ref (Option (Value a)) -> EvalEnv (Value a) -> Expr -> Value a
 mergeField : List (String, Value a) -> (String, Value a) -> (String, Value a)

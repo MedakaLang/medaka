@@ -67,9 +67,10 @@ import types.tc_decls.{
 import types.tc_scope.{
   aliasConstraintEntries, aliasMethodSpellings, aliasQualifiedMethodEntries,
   annotateImportedMethodRows, applyCtorScopeOverrides,
-  applyRecordScopeOverrides, declCtorNamed, importedMemberBindingNames,
-  insertCtorPop, insertRecordPop, methodNameDeclaredAt, pickSchemesByDecl,
-  reportAmbiguousImportsIn, resolveMemberRows, schemeOblEntriesFor
+  applyRecordScopeOverrides, declCtorNamed, explicitCoreLocals,
+  importedMemberBindingNames, insertCtorPop, insertRecordPop,
+  methodNameDeclaredAt, pickSchemesByDecl, reportAmbiguousImportsIn,
+  resolveMemberRows, schemeOblEntriesFor
 }
 import types.tc_mono.{
   containsI, dedupI, findTvarInMonos, monoArgUnboundIds, monoScheme,
@@ -2908,7 +2909,8 @@ declOwnedBy mid tyName o = match mkIdent NsType (OriginModule mid) tyName
 --
 -- Order and shadowing.  Named-form rows come FIRST (every reader is first-match), and a
 -- wildcard row is dropped when the name is already spoken for — by a named import of
--- this module, or by this module's OWN top-level declaration, which shadows the
+-- this module (one of `core` too, which contributes no row: its name keeps the
+-- prelude's arity), or by this module's OWN top-level declaration, which shadows the
 -- wildcard binding and whose arity `selfDeclArities` answers from its own qual row.
 --
 -- The supply side does not enumerate.  Separate walks for the named and the wildcard form,
@@ -2939,7 +2941,10 @@ importDefinersOf : GraphCtx ->
 importDefinersOf gctx mid prog =
   let defs = importerDefiners gctx mid
   let named = useAdmittedRows defs False prog
-  let taken = namesToSet (map fst named ++ declTopFnNames prog) omEmpty
+  let taken =
+    namesToSet
+      (map fst named ++ explicitCoreLocals prog ++ declTopFnNames prog)
+      omEmpty
   named
     ++ filterList
       (e => not (omHasKey (fst e) taken))

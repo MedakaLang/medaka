@@ -1,5 +1,5 @@
 # META
-source_lines=3382
+source_lines=3387
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_module: the per-module check in one order: declarations, top-level groups, test and prop
@@ -71,9 +71,10 @@ import types.tc_decls.{
 import types.tc_scope.{
   aliasConstraintEntries, aliasMethodSpellings, aliasQualifiedMethodEntries,
   annotateImportedMethodRows, applyCtorScopeOverrides,
-  applyRecordScopeOverrides, declCtorNamed, importedMemberBindingNames,
-  insertCtorPop, insertRecordPop, methodNameDeclaredAt, pickSchemesByDecl,
-  reportAmbiguousImportsIn, resolveMemberRows, schemeOblEntriesFor
+  applyRecordScopeOverrides, declCtorNamed, explicitCoreLocals,
+  importedMemberBindingNames, insertCtorPop, insertRecordPop,
+  methodNameDeclaredAt, pickSchemesByDecl, reportAmbiguousImportsIn,
+  resolveMemberRows, schemeOblEntriesFor
 }
 import types.tc_mono.{
   containsI, dedupI, findTvarInMonos, monoArgUnboundIds, monoScheme,
@@ -2912,7 +2913,8 @@ declOwnedBy mid tyName o = match mkIdent NsType (OriginModule mid) tyName
 --
 -- Order and shadowing.  Named-form rows come FIRST (every reader is first-match), and a
 -- wildcard row is dropped when the name is already spoken for — by a named import of
--- this module, or by this module's OWN top-level declaration, which shadows the
+-- this module (one of `core` too, which contributes no row: its name keeps the
+-- prelude's arity), or by this module's OWN top-level declaration, which shadows the
 -- wildcard binding and whose arity `selfDeclArities` answers from its own qual row.
 --
 -- The supply side does not enumerate.  Separate walks for the named and the wildcard form,
@@ -2943,7 +2945,10 @@ importDefinersOf : GraphCtx ->
 importDefinersOf gctx mid prog =
   let defs = importerDefiners gctx mid
   let named = useAdmittedRows defs False prog
-  let taken = namesToSet (map fst named ++ declTopFnNames prog) omEmpty
+  let taken =
+    namesToSet
+      (map fst named ++ explicitCoreLocals prog ++ declTopFnNames prog)
+      omEmpty
   named
     ++ filterList
       (e => not (omHasKey (fst e) taken))
@@ -3400,7 +3405,7 @@ stampTailDecl top d = stampDeclWith top d
 (DUse false (UseGroup ("types" "publish") ((mem "TcDiag" true))))
 (DUse false (UseGroup ("types" "tc_env") ((mem "addCtor" false) (mem "attachStandaloneSources" false) (mem "bindingWithStandalone" false) (mem "ceLookupAt" false) (mem "ceRowDoneKey" false) (mem "ceRowIface" false) (mem "ceRowIfaceName" false) (mem "ceRowLoc" false) (mem "ceRowOrd" false) (mem "ceRowSupers" false) (mem "ceRowsVisibleAt" false) (mem "ctorExportsIndex" false) (mem "declEnvRowVisible" false) (mem "declEnvsOrdOf" false) (mem "declTopFnNames" false) (mem "emptyMethodModulePredicateSlots" false) (mem "extendBindings" false) (mem "extendLocalVar" false) (mem "extendMethodRows" false) (mem "extendTermBindings" false) (mem "extendVars" false) (mem "funDefs" false) (mem "ieUniverseAt" false) (mem "ifaceMethodNames" false) (mem "ifaceTabKey" false) (mem "importedBindings" false) (mem "importLocFor" false) (mem "importTableMid" false) (mem "legacyMethodSchemes" false) (mem "methodRowsByIdentity" false) (mem "methodSlotKey" false) (mem "namesToSet" false) (mem "ordinaryEnvBinding" false) (mem "publicDataDecl" false) (mem "publicDataDecls" false) (mem "withCtors" false))))
 (DUse false (UseGroup ("types" "tc_decls") ((mem "addFieldOwners" false) (mem "builtinClassesGo" false) (mem "builtinClassesOf" false) (mem "declEnvSeedDataUniverse" false) (mem "ifaceMethodSchemeRows" false) (mem "importerDefiners" false) (mem "isAliasDecl" false) (mem "loadDataUniverse" false) (mem "recordDeclKinds" false) (mem "registerAllData" false) (mem "registerAllDataScoped" false) (mem "registerData" false) (mem "rejectCyclicAliases" false) (mem "seedNumLitFromIntAnchor" false) (mem "sigToScheme" false))))
-(DUse false (UseGroup ("types" "tc_scope") ((mem "aliasConstraintEntries" false) (mem "aliasMethodSpellings" false) (mem "aliasQualifiedMethodEntries" false) (mem "annotateImportedMethodRows" false) (mem "applyCtorScopeOverrides" false) (mem "applyRecordScopeOverrides" false) (mem "declCtorNamed" false) (mem "importedMemberBindingNames" false) (mem "insertCtorPop" false) (mem "insertRecordPop" false) (mem "methodNameDeclaredAt" false) (mem "pickSchemesByDecl" false) (mem "reportAmbiguousImportsIn" false) (mem "resolveMemberRows" false) (mem "schemeOblEntriesFor" false))))
+(DUse false (UseGroup ("types" "tc_scope") ((mem "aliasConstraintEntries" false) (mem "aliasMethodSpellings" false) (mem "aliasQualifiedMethodEntries" false) (mem "annotateImportedMethodRows" false) (mem "applyCtorScopeOverrides" false) (mem "applyRecordScopeOverrides" false) (mem "declCtorNamed" false) (mem "explicitCoreLocals" false) (mem "importedMemberBindingNames" false) (mem "insertCtorPop" false) (mem "insertRecordPop" false) (mem "methodNameDeclaredAt" false) (mem "pickSchemesByDecl" false) (mem "reportAmbiguousImportsIn" false) (mem "resolveMemberRows" false) (mem "schemeOblEntriesFor" false))))
 (DUse false (UseGroup ("types" "tc_mono") ((mem "containsI" false) (mem "dedupI" false) (mem "findTvarInMonos" false) (mem "monoArgUnboundIds" false) (mem "monoScheme" false) (mem "monoUnboundIds" false) (mem "schemeMono" false) (mem "tconBuiltin" false) (mem "tconUnresolved" false) (mem "tyVarNames" false) (mem "unquantifiedAuthIds" false))))
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "dedup" false) (mem "dedupBy" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "listLen" false) (mem "orElseOpt" false) (mem "reverseL" false))))
 (DUse false (UseGroup ("types" "tc_occurrence") ((mem "argDispatchIndicesById" false))))
@@ -3654,7 +3659,7 @@ stampTailDecl top d = stampDeclWith top d
 (DTypeSig false "declOwnedBy" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyCon "Bool")))))
 (DFunDef false "declOwnedBy" ((PVar "mid") (PVar "tyName") (PVar "o")) (EMatch (EApp (EApp (EApp (EVar "mkIdent") (EVar "NsType")) (EApp (EVar "OriginModule") (EVar "mid"))) (EVar "tyName")) (arm (PCon "Some" (PVar "want")) () (EBinOp "==" (EApp (EApp (EApp (EVar "mkIdent") (EVar "NsType")) (EVar "o")) (EVar "tyName")) (EApp (EVar "Some") (EVar "want")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "importDefinersOf" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String"))))))))
-(DFunDef false "importDefinersOf" ((PVar "gctx") (PVar "mid") (PVar "prog")) (EBlock (DoLet false false (PVar "defs") (EApp (EApp (EVar "importerDefiners") (EVar "gctx")) (EVar "mid"))) (DoLet false false (PVar "named") (EApp (EApp (EApp (EVar "useAdmittedRows") (EVar "defs")) (EVar "False")) (EVar "prog"))) (DoLet false false (PVar "taken") (EApp (EApp (EVar "namesToSet") (EBinOp "++" (EApp (EApp (EVar "map") (EVar "fst")) (EVar "named")) (EApp (EVar "declTopFnNames") (EVar "prog")))) (EVar "omEmpty"))) (DoExpr (EBinOp "++" (EVar "named") (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EApp (EVar "fst") (EVar "e"))) (EVar "taken"))))) (EApp (EApp (EApp (EVar "useAdmittedRows") (EVar "defs")) (EVar "True")) (EVar "prog")))))))
+(DFunDef false "importDefinersOf" ((PVar "gctx") (PVar "mid") (PVar "prog")) (EBlock (DoLet false false (PVar "defs") (EApp (EApp (EVar "importerDefiners") (EVar "gctx")) (EVar "mid"))) (DoLet false false (PVar "named") (EApp (EApp (EApp (EVar "useAdmittedRows") (EVar "defs")) (EVar "False")) (EVar "prog"))) (DoLet false false (PVar "taken") (EApp (EApp (EVar "namesToSet") (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "map") (EVar "fst")) (EVar "named")) (EApp (EVar "explicitCoreLocals") (EVar "prog"))) (EApp (EVar "declTopFnNames") (EVar "prog")))) (EVar "omEmpty"))) (DoExpr (EBinOp "++" (EVar "named") (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EApp (EVar "fst") (EVar "e"))) (EVar "taken"))))) (EApp (EApp (EApp (EVar "useAdmittedRows") (EVar "defs")) (EVar "True")) (EVar "prog")))))))
 (DTypeSig false "useAdmittedRows" (TyFun (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String"))))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String"))))))))
 (DFunDef false "useAdmittedRows" ((PVar "_defs") PWild (PList)) (EListLit))
 (DFunDef false "useAdmittedRows" ((PVar "defs") (PVar "wild") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EApp (EVar "useAdmittedRows") (EVar "defs")) (EVar "wild")) (EListLit (EVar "d"))) (EApp (EApp (EApp (EVar "useAdmittedRows") (EVar "defs")) (EVar "wild")) (EVar "rest"))))
@@ -3717,7 +3722,7 @@ stampTailDecl top d = stampDeclWith top d
 (DUse false (UseGroup ("types" "publish") ((mem "TcDiag" true))))
 (DUse false (UseGroup ("types" "tc_env") ((mem "addCtor" false) (mem "attachStandaloneSources" false) (mem "bindingWithStandalone" false) (mem "ceLookupAt" false) (mem "ceRowDoneKey" false) (mem "ceRowIface" false) (mem "ceRowIfaceName" false) (mem "ceRowLoc" false) (mem "ceRowOrd" false) (mem "ceRowSupers" false) (mem "ceRowsVisibleAt" false) (mem "ctorExportsIndex" false) (mem "declEnvRowVisible" false) (mem "declEnvsOrdOf" false) (mem "declTopFnNames" false) (mem "emptyMethodModulePredicateSlots" false) (mem "extendBindings" false) (mem "extendLocalVar" false) (mem "extendMethodRows" false) (mem "extendTermBindings" false) (mem "extendVars" false) (mem "funDefs" false) (mem "ieUniverseAt" false) (mem "ifaceMethodNames" false) (mem "ifaceTabKey" false) (mem "importedBindings" false) (mem "importLocFor" false) (mem "importTableMid" false) (mem "legacyMethodSchemes" false) (mem "methodRowsByIdentity" false) (mem "methodSlotKey" false) (mem "namesToSet" false) (mem "ordinaryEnvBinding" false) (mem "publicDataDecl" false) (mem "publicDataDecls" false) (mem "withCtors" false))))
 (DUse false (UseGroup ("types" "tc_decls") ((mem "addFieldOwners" false) (mem "builtinClassesGo" false) (mem "builtinClassesOf" false) (mem "declEnvSeedDataUniverse" false) (mem "ifaceMethodSchemeRows" false) (mem "importerDefiners" false) (mem "isAliasDecl" false) (mem "loadDataUniverse" false) (mem "recordDeclKinds" false) (mem "registerAllData" false) (mem "registerAllDataScoped" false) (mem "registerData" false) (mem "rejectCyclicAliases" false) (mem "seedNumLitFromIntAnchor" false) (mem "sigToScheme" false))))
-(DUse false (UseGroup ("types" "tc_scope") ((mem "aliasConstraintEntries" false) (mem "aliasMethodSpellings" false) (mem "aliasQualifiedMethodEntries" false) (mem "annotateImportedMethodRows" false) (mem "applyCtorScopeOverrides" false) (mem "applyRecordScopeOverrides" false) (mem "declCtorNamed" false) (mem "importedMemberBindingNames" false) (mem "insertCtorPop" false) (mem "insertRecordPop" false) (mem "methodNameDeclaredAt" false) (mem "pickSchemesByDecl" false) (mem "reportAmbiguousImportsIn" false) (mem "resolveMemberRows" false) (mem "schemeOblEntriesFor" false))))
+(DUse false (UseGroup ("types" "tc_scope") ((mem "aliasConstraintEntries" false) (mem "aliasMethodSpellings" false) (mem "aliasQualifiedMethodEntries" false) (mem "annotateImportedMethodRows" false) (mem "applyCtorScopeOverrides" false) (mem "applyRecordScopeOverrides" false) (mem "declCtorNamed" false) (mem "explicitCoreLocals" false) (mem "importedMemberBindingNames" false) (mem "insertCtorPop" false) (mem "insertRecordPop" false) (mem "methodNameDeclaredAt" false) (mem "pickSchemesByDecl" false) (mem "reportAmbiguousImportsIn" false) (mem "resolveMemberRows" false) (mem "schemeOblEntriesFor" false))))
 (DUse false (UseGroup ("types" "tc_mono") ((mem "containsI" false) (mem "dedupI" false) (mem "findTvarInMonos" false) (mem "monoArgUnboundIds" false) (mem "monoScheme" false) (mem "monoUnboundIds" false) (mem "schemeMono" false) (mem "tconBuiltin" false) (mem "tconUnresolved" false) (mem "tyVarNames" false) (mem "unquantifiedAuthIds" false))))
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "dedup" false) (mem "dedupBy" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "listLen" false) (mem "orElseOpt" false) (mem "reverseL" false))))
 (DUse false (UseGroup ("types" "tc_occurrence") ((mem "argDispatchIndicesById" false))))
@@ -3971,7 +3976,7 @@ stampTailDecl top d = stampDeclWith top d
 (DTypeSig false "declOwnedBy" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyCon "Bool")))))
 (DFunDef false "declOwnedBy" ((PVar "mid") (PVar "tyName") (PVar "o")) (EMatch (EApp (EApp (EApp (EVar "mkIdent") (EVar "NsType")) (EApp (EVar "OriginModule") (EVar "mid"))) (EVar "tyName")) (arm (PCon "Some" (PVar "want")) () (EBinOp "==" (EApp (EApp (EApp (EVar "mkIdent") (EVar "NsType")) (EVar "o")) (EVar "tyName")) (EApp (EVar "Some") (EVar "want")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "importDefinersOf" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String"))))))))
-(DFunDef false "importDefinersOf" ((PVar "gctx") (PVar "mid") (PVar "prog")) (EBlock (DoLet false false (PVar "defs") (EApp (EApp (EVar "importerDefiners") (EVar "gctx")) (EVar "mid"))) (DoLet false false (PVar "named") (EApp (EApp (EApp (EVar "useAdmittedRows") (EVar "defs")) (EVar "False")) (EVar "prog"))) (DoLet false false (PVar "taken") (EApp (EApp (EVar "namesToSet") (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "named")) (EApp (EVar "declTopFnNames") (EVar "prog")))) (EVar "omEmpty"))) (DoExpr (EBinOp "++" (EVar "named") (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EApp (EVar "fst") (EVar "e"))) (EVar "taken"))))) (EApp (EApp (EApp (EVar "useAdmittedRows") (EVar "defs")) (EVar "True")) (EVar "prog")))))))
+(DFunDef false "importDefinersOf" ((PVar "gctx") (PVar "mid") (PVar "prog")) (EBlock (DoLet false false (PVar "defs") (EApp (EApp (EVar "importerDefiners") (EVar "gctx")) (EVar "mid"))) (DoLet false false (PVar "named") (EApp (EApp (EApp (EVar "useAdmittedRows") (EVar "defs")) (EVar "False")) (EVar "prog"))) (DoLet false false (PVar "taken") (EApp (EApp (EVar "namesToSet") (EBinOp "++" (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "named")) (EApp (EVar "explicitCoreLocals") (EVar "prog"))) (EApp (EVar "declTopFnNames") (EVar "prog")))) (EVar "omEmpty"))) (DoExpr (EBinOp "++" (EVar "named") (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EApp (EVar "fst") (EVar "e"))) (EVar "taken"))))) (EApp (EApp (EApp (EVar "useAdmittedRows") (EVar "defs")) (EVar "True")) (EVar "prog")))))))
 (DTypeSig false "useAdmittedRows" (TyFun (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String"))))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String"))))))))
 (DFunDef false "useAdmittedRows" ((PVar "_defs") PWild (PList)) (EListLit))
 (DFunDef false "useAdmittedRows" ((PVar "defs") (PVar "wild") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EApp (EVar "useAdmittedRows") (EVar "defs")) (EVar "wild")) (EListLit (EVar "d"))) (EApp (EApp (EApp (EVar "useAdmittedRows") (EVar "defs")) (EVar "wild")) (EVar "rest"))))
