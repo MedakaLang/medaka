@@ -39,9 +39,10 @@ import tools.lint_core.{
   Scope(..),
   StdlibIndex,
   mkRule,
+  noFix,
+  factDeclLocs,
 }
 import tools.lint_shared.{
-  declLocList,
   ruleNameCloneType,
   tyHeadName,
 }
@@ -105,9 +106,9 @@ ruleCloneType : StdlibIndex ->
   Positions ->
   List Decl ->
   List Finding
-ruleCloneType _ _ _ pos prog =
+ruleCloneType _ _ facts _ prog =
   let impls = cloneImplTargets prog
-  flatMap (cloneTypeDeclL impls) (declLocList pos prog)
+  flatMap (cloneTypeDeclL impls) (factDeclLocs facts)
 
 cloneTypeDeclL : List String -> (Decl, Option Loc) -> List Finding
 cloneTypeDeclL impls (d, loc) = cloneTypeDecl impls loc d
@@ -138,5 +139,5 @@ cloneTypeFinding loc n shape = Finding {
     "'\{n}' re-declares `\{shape}`'s constructor shape and its file writes no `impl` for it -- prefer the stdlib `\{shape}`, whose combinators come with it",
   severity = SevWarning,
   loc = loc,
-  fix = None,
+  fix = noFix,
 }

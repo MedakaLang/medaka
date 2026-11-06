@@ -877,34 +877,30 @@ subChars a lo hi =
    [""] -}
 export
 lines : String -> List String
-lines s =
-  let a = toChars s
-  linesFrom a (arrayLength a) 0
+lines s = match stringIndexOf "\n" s
+  None => [stripCR s]
+  Some _ => linesFrom s (stringByteLength s) 0 0 False
 
--- Each line is cut once: the `\r` before the `\n` is left out of the slice,
--- so no line is copied a second time to strip it.
-linesFrom : Array Char -> Int -> Int -> List String
--- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- The lines from byte `start`, scanning at byte `i`; `cr` says the character
+-- before `i` is a `\r`.  A `\n` byte in UTF-8 is always a whole character, so
+-- the scan steps one codepoint at a time and cuts each line once at byte
+-- offsets, leaving the `\r` before its `\n` out of the slice.
+linesFrom : String -> Int -> Int -> Int -> Bool -> List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
 -- lint-disable-next-line rule-threaded-invariant
-linesFrom a n start = match newlineFrom a n start
-  None => [lineSlice a start n]
-  Some i => lineSlice a start i :: linesFrom a n (i + 1)
+linesFrom s n start i cr
+  | i >= n = [lineSlice s start n cr]
+  | otherwise =
+    let packed = stringCodepointAtByte s i
+    let c = packed / 8
+    if c == 10 then
+      lineSlice s start i cr :: linesFrom s n (i + 1) (i + 1) False
+    else
+      linesFrom s n start (i + packed - c * 8) (c == 13)
 
-newlineFrom : Array Char -> Int -> Int -> Option Int
--- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
--- lint-disable-next-line rule-threaded-invariant
-newlineFrom a n i
-  | i >= n = None
-  | arrayGetUnsafe i a == '\n' = Some i
-  | otherwise = newlineFrom a n (i + 1)
-
--- The characters `[start, hi)`, minus one trailing `\r` when present.
-lineSlice : Array Char -> Int -> Int -> String
-lineSlice a start hi =
-  if hi > start && arrayGetUnsafe (hi - 1) a == '\r' then
-    subChars a start (hi - 1)
-  else
-    subChars a start hi
+-- The bytes `[start, hi)`, minus the `\r` that ends them when `cr`.
+lineSlice : String -> Int -> Int -> Bool -> String
+lineSlice s start hi cr = stringSliceBytes start (if cr then hi - 1 else hi) s
 
 {- | The line without one trailing `\r`.
 

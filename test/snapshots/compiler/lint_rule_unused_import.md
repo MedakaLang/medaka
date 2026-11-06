@@ -1,5 +1,5 @@
 # META
-source_lines=150
+source_lines=151
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-unused-import: an `import m.{…}` member that nothing in the file uses. Drop the name from the list.
@@ -29,6 +29,7 @@ import tools.lint_core.{
   StdlibIndex,
   factComments,
   factScopes,
+  fixLater,
   mkRule,
 }
 import tools.lint_fix.{removeListItem}
@@ -129,7 +130,7 @@ memberFinding path groupLoc locs everyDead (ix, UseMember n _ loc alias) = [
       "imported name '\{optionOr n alias}' is never used. Remove it from the import list",
     severity = SevWarning,
     loc = Some loc,
-    fix = removalFix path groupLoc locs everyDead ix,
+    fix = fixLater (_ => removalFix path groupLoc locs everyDead ix),
   },
 ]
 
@@ -162,7 +163,7 @@ fixOf applicability edit = Fix {
 (DUse false (UseGroup ("list") ((mem "indexed" false) (mem "zip" false))))
 (DUse false (UseGroup ("string") ((mem "lines" false) (mem "stripPrefix" false) (mem "trim" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" true) (mem "FixEdit" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "factComments" false) (mem "factScopes" false) (mem "mkRule" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" true) (mem "FixEdit" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "factComments" false) (mem "factScopes" false) (mem "fixLater" false) (mem "mkRule" false))))
 (DUse false (UseGroup ("tools" "lint_fix") ((mem "removeListItem" false))))
 (DUse false (UseGroup ("tools" "lint_scope") ((mem "Binder" true) (mem "FileScopes" false) (mem "binderOf" false) (mem "importUses" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "ruleNameUnusedImport" false))))
@@ -188,7 +189,7 @@ fixOf applicability edit = Fix {
 (DTypeSig false "memberDead" (TyFun (TyCon "FileScopes") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "UseMember") (TyCon "Bool")))))
 (DFunDef false "memberDead" ((PVar "fs") (PVar "dead") (PCon "UseMember" PWild (PVar "allCtors") (PVar "loc") PWild)) (EMatch (EApp (EApp (EVar "binderOf") (EVar "fs")) (EVar "loc")) (arm (PCon "Some" (PVar "b")) () (EBinOp "&&" (EApp (EVar "not") (EVar "allCtors")) (EApp (EApp (EVar "elem") (EFieldAccess (EVar "b") "binderId")) (EVar "dead")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "memberFinding" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Loc") (TyFun (TyApp (TyCon "List") (TyCon "Loc")) (TyFun (TyCon "Bool") (TyFun (TyTuple (TyCon "Int") (TyCon "UseMember")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "memberFinding" ((PVar "path") (PVar "groupLoc") (PVar "locs") (PVar "everyDead") (PTuple (PVar "ix") (PCon "UseMember" (PVar "n") PWild (PVar "loc") (PVar "alias")))) (EListLit (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameUnusedImport")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "imported name '")) (EApp (EVar "display") (EApp (EApp (EVar "optionOr") (EVar "n")) (EVar "alias")))) (ELit (LString "' is never used. Remove it from the import list")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EVar "loc"))) (fa "fix" (EApp (EApp (EApp (EApp (EApp (EVar "removalFix") (EVar "path")) (EVar "groupLoc")) (EVar "locs")) (EVar "everyDead")) (EVar "ix")))))))
+(DFunDef false "memberFinding" ((PVar "path") (PVar "groupLoc") (PVar "locs") (PVar "everyDead") (PTuple (PVar "ix") (PCon "UseMember" (PVar "n") PWild (PVar "loc") (PVar "alias")))) (EListLit (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameUnusedImport")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "imported name '")) (EApp (EVar "display") (EApp (EApp (EVar "optionOr") (EVar "n")) (EVar "alias")))) (ELit (LString "' is never used. Remove it from the import list")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EVar "loc"))) (fa "fix" (EApp (EVar "fixLater") (ELam (PWild) (EApp (EApp (EApp (EApp (EApp (EVar "removalFix") (EVar "path")) (EVar "groupLoc")) (EVar "locs")) (EVar "everyDead")) (EVar "ix")))))))))
 (DTypeSig false "removalFix" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Loc") (TyFun (TyApp (TyCon "List") (TyCon "Loc")) (TyFun (TyCon "Bool") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Fix"))))))))
 (DFunDef false "removalFix" ((PVar "path") (PVar "groupLoc") (PVar "locs") (PVar "everyDead") (PVar "ix")) (EIf (EVar "everyDead") (EApp (EVar "Some") (EApp (EApp (EVar "fixOf") (EIf (EBinOp ">" (EApp (EVar "length") (EVar "path")) (ELit (LInt 1))) (EVar "Suggest") (EVar "Safe"))) (EApp (EApp (EVar "FixEdit") (EVar "groupLoc")) (EBinOp "++" (ELit (LString "import ")) (EApp (EApp (EVar "joinWith") (ELit (LString "."))) (EVar "path")))))) (EIf (EVar "otherwise") (EApp (EApp (EVar "map") (EApp (EVar "fixOf") (EVar "Safe"))) (EApp (EApp (EVar "removeListItem") (EVar "locs")) (EVar "ix"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "fixOf" (TyFun (TyCon "Applicability") (TyFun (TyCon "FixEdit") (TyCon "Fix"))))
@@ -203,7 +204,7 @@ fixOf applicability edit = Fix {
 (DUse false (UseGroup ("list") ((mem "indexed" false) (mem "zip" false))))
 (DUse false (UseGroup ("string") ((mem "lines" false) (mem "stripPrefix" false) (mem "trim" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" true) (mem "FixEdit" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "factComments" false) (mem "factScopes" false) (mem "mkRule" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" true) (mem "FixEdit" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "factComments" false) (mem "factScopes" false) (mem "fixLater" false) (mem "mkRule" false))))
 (DUse false (UseGroup ("tools" "lint_fix") ((mem "removeListItem" false))))
 (DUse false (UseGroup ("tools" "lint_scope") ((mem "Binder" true) (mem "FileScopes" false) (mem "binderOf" false) (mem "importUses" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "ruleNameUnusedImport" false))))
@@ -229,7 +230,7 @@ fixOf applicability edit = Fix {
 (DTypeSig false "memberDead" (TyFun (TyCon "FileScopes") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "UseMember") (TyCon "Bool")))))
 (DFunDef false "memberDead" ((PVar "fs") (PVar "dead") (PCon "UseMember" PWild (PVar "allCtors") (PVar "loc") PWild)) (EMatch (EApp (EApp (EVar "binderOf") (EVar "fs")) (EVar "loc")) (arm (PCon "Some" (PVar "b")) () (EBinOp "&&" (EApp (EVar "not") (EVar "allCtors")) (EApp (EApp (EDictApp "elem") (EFieldAccess (EVar "b") "binderId")) (EVar "dead")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "memberFinding" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Loc") (TyFun (TyApp (TyCon "List") (TyCon "Loc")) (TyFun (TyCon "Bool") (TyFun (TyTuple (TyCon "Int") (TyCon "UseMember")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "memberFinding" ((PVar "path") (PVar "groupLoc") (PVar "locs") (PVar "everyDead") (PTuple (PVar "ix") (PCon "UseMember" (PVar "n") PWild (PVar "loc") (PVar "alias")))) (EListLit (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameUnusedImport")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "imported name '")) (EApp (EMethodRef "display") (EApp (EApp (EVar "optionOr") (EVar "n")) (EVar "alias")))) (ELit (LString "' is never used. Remove it from the import list")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EVar "loc"))) (fa "fix" (EApp (EApp (EApp (EApp (EApp (EVar "removalFix") (EVar "path")) (EVar "groupLoc")) (EVar "locs")) (EVar "everyDead")) (EVar "ix")))))))
+(DFunDef false "memberFinding" ((PVar "path") (PVar "groupLoc") (PVar "locs") (PVar "everyDead") (PTuple (PVar "ix") (PCon "UseMember" (PVar "n") PWild (PVar "loc") (PVar "alias")))) (EListLit (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameUnusedImport")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "imported name '")) (EApp (EMethodRef "display") (EApp (EApp (EVar "optionOr") (EVar "n")) (EVar "alias")))) (ELit (LString "' is never used. Remove it from the import list")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EVar "loc"))) (fa "fix" (EApp (EVar "fixLater") (ELam (PWild) (EApp (EApp (EApp (EApp (EApp (EVar "removalFix") (EVar "path")) (EVar "groupLoc")) (EVar "locs")) (EVar "everyDead")) (EVar "ix")))))))))
 (DTypeSig false "removalFix" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Loc") (TyFun (TyApp (TyCon "List") (TyCon "Loc")) (TyFun (TyCon "Bool") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Fix"))))))))
 (DFunDef false "removalFix" ((PVar "path") (PVar "groupLoc") (PVar "locs") (PVar "everyDead") (PVar "ix")) (EIf (EVar "everyDead") (EApp (EVar "Some") (EApp (EApp (EVar "fixOf") (EIf (EBinOp ">" (EApp (EMethodRef "length") (EVar "path")) (ELit (LInt 1))) (EVar "Suggest") (EVar "Safe"))) (EApp (EApp (EVar "FixEdit") (EVar "groupLoc")) (EBinOp "++" (ELit (LString "import ")) (EApp (EApp (EVar "joinWith") (ELit (LString "."))) (EVar "path")))))) (EIf (EVar "otherwise") (EApp (EApp (EMethodRef "map") (EApp (EVar "fixOf") (EVar "Safe"))) (EApp (EApp (EVar "removeListItem") (EVar "locs")) (EVar "ix"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "fixOf" (TyFun (TyCon "Applicability") (TyFun (TyCon "FixEdit") (TyCon "Fix"))))

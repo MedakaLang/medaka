@@ -1,5 +1,5 @@
 # META
-source_lines=305
+source_lines=307
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_fix.mdk — turns the fixes findings carry into validated
@@ -13,7 +13,9 @@ import frontend.ast_walk.{ExprKind(..)}
 import frontend.lex_scan.{scanRawChars}
 import frontend.lex_token.{RawTok(..)}
 import frontend.syntax_source.{SourceSpan(..)}
-import tools.lint_core.{Applicability(..), Finding(..), Fix(..), FixEdit(..)}
+import tools.lint_core.{
+  Applicability(..), Finding(..), Fix(..), FixEdit(..), findingFixOf, memoMap
+}
 import tools.source_edits.{
   EditError, SourceEdit(..), applySourceEdits, validateSourceEdits
 }
@@ -88,7 +90,7 @@ fixesOf : List Finding -> List Fix
 fixesOf findings = flatMap findingFix findings
 
 findingFix : Finding -> List Fix
-findingFix f = toList f.fix
+findingFix f = toList (findingFixOf f)
 
 resolveEdits : SourceSnapshot -> List FixEdit -> Option (List SourceEdit)
 resolveEdits _ [] = Some []
@@ -169,7 +171,7 @@ demoteOverComments path src findings =
 
 demoteFinding : SourceSnapshot -> List SourceSpan -> Finding -> Finding
 demoteFinding snap comments f =
-  { f | fix = map (demoteFix snap comments) f.fix }
+  { f | fix = memoMap (map (demoteFix snap comments)) f.fix }
 
 demoteFix : SourceSnapshot -> List SourceSpan -> Fix -> Fix
 demoteFix snap comments fx = match resolveFix snap fx
@@ -314,7 +316,7 @@ separatesChildren _ = False
 (DUse false (UseGroup ("frontend" "lex_scan") ((mem "scanRawChars" false))))
 (DUse false (UseGroup ("frontend" "lex_token") ((mem "RawTok" true))))
 (DUse false (UseGroup ("frontend" "syntax_source") ((mem "SourceSpan" true))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Finding" true) (mem "Fix" true) (mem "FixEdit" true))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Finding" true) (mem "Fix" true) (mem "FixEdit" true) (mem "findingFixOf" false) (mem "memoMap" false))))
 (DUse false (UseGroup ("tools" "source_edits") ((mem "EditError" false) (mem "SourceEdit" true) (mem "applySourceEdits" false) (mem "validateSourceEdits" false))))
 (DUse false (UseGroup ("tools" "source_snapshot") ((mem "SourceSnapshot" true) (mem "makeSnapshot" false) (mem "snapshotId" false))))
 (DUse false (UseGroup ("support" "source_index") ((mem "sourcePositionToOffset" false))))
@@ -346,7 +348,7 @@ separatesChildren _ = False
 (DTypeSig false "fixesOf" (TyFun (TyApp (TyCon "List") (TyCon "Finding")) (TyApp (TyCon "List") (TyCon "Fix"))))
 (DFunDef false "fixesOf" ((PVar "findings")) (EApp (EApp (EVar "flatMap") (EVar "findingFix")) (EVar "findings")))
 (DTypeSig false "findingFix" (TyFun (TyCon "Finding") (TyApp (TyCon "List") (TyCon "Fix"))))
-(DFunDef false "findingFix" ((PVar "f")) (EApp (EVar "toList") (EFieldAccess (EVar "f") "fix")))
+(DFunDef false "findingFix" ((PVar "f")) (EApp (EVar "toList") (EApp (EVar "findingFixOf") (EVar "f"))))
 (DTypeSig false "resolveEdits" (TyFun (TyCon "SourceSnapshot") (TyFun (TyApp (TyCon "List") (TyCon "FixEdit")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "SourceEdit"))))))
 (DFunDef false "resolveEdits" (PWild (PList)) (EApp (EVar "Some") (EListLit)))
 (DFunDef false "resolveEdits" ((PAs "snap" (PCon "SourceSnapshot" PWild PWild PWild (PVar "text") (PVar "index"))) (PCons (PCon "FixEdit" (PCon "Loc" PWild (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec")) (PVar "repl")) (PVar "rest"))) (EMatch (ETuple (EApp (EApp (EApp (EVar "sourcePositionToOffset") (EVar "index")) (EVar "sl")) (EVar "sc")) (EApp (EApp (EApp (EVar "sourcePositionToOffset") (EVar "index")) (EVar "el")) (EVar "ec"))) (arm (PTuple (PCon "Some" (PVar "lo")) (PCon "Some" (PVar "hi"))) () (EBlock (DoLet false false (PVar "edit") (EApp (EApp (EApp (EApp (EVar "SourceEdit") (EApp (EVar "snapshotId") (EVar "snap"))) (EApp (EApp (EVar "SourceSpan") (EVar "lo")) (EVar "hi"))) (EApp (EApp (EApp (EVar "stringSlice") (EVar "lo")) (EVar "hi")) (EVar "text"))) (EVar "repl"))) (DoExpr (EIf (EBinOp "<=" (EVar "lo") (EVar "hi")) (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "edit") (EVar "_s")))) (EApp (EApp (EVar "resolveEdits") (EVar "snap")) (EVar "rest"))) (EVar "None"))))) (arm PWild () (EVar "None"))))
@@ -370,7 +372,7 @@ separatesChildren _ = False
 (DTypeSig true "demoteOverComments" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Finding")) (TyApp (TyCon "List") (TyCon "Finding"))))))
 (DFunDef false "demoteOverComments" ((PVar "path") (PVar "src") (PVar "findings")) (EBlock (DoLet false false (PVar "comments") (EApp (EVar "commentSpans") (EVar "src"))) (DoExpr (EIf (EApp (EVar "isEmpty") (EVar "comments")) (EVar "findings") (EBlock (DoLet false false (PVar "snap") (EApp (EApp (EApp (EApp (EVar "makeSnapshot") (EVar "path")) (EVar "None")) (ELit (LInt 0))) (EVar "src"))) (DoExpr (EApp (EApp (EVar "map") (EApp (EApp (EVar "demoteFinding") (EVar "snap")) (EVar "comments"))) (EVar "findings"))))))))
 (DTypeSig false "demoteFinding" (TyFun (TyCon "SourceSnapshot") (TyFun (TyApp (TyCon "List") (TyCon "SourceSpan")) (TyFun (TyCon "Finding") (TyCon "Finding")))))
-(DFunDef false "demoteFinding" ((PVar "snap") (PVar "comments") (PVar "f")) (ERecordUpdate (EVar "f") ((fa "fix" (EApp (EApp (EVar "map") (EApp (EApp (EVar "demoteFix") (EVar "snap")) (EVar "comments"))) (EFieldAccess (EVar "f") "fix"))))))
+(DFunDef false "demoteFinding" ((PVar "snap") (PVar "comments") (PVar "f")) (ERecordUpdate (EVar "f") ((fa "fix" (EApp (EApp (EVar "memoMap") (EApp (EVar "map") (EApp (EApp (EVar "demoteFix") (EVar "snap")) (EVar "comments")))) (EFieldAccess (EVar "f") "fix"))))))
 (DTypeSig false "demoteFix" (TyFun (TyCon "SourceSnapshot") (TyFun (TyApp (TyCon "List") (TyCon "SourceSpan")) (TyFun (TyCon "Fix") (TyCon "Fix")))))
 (DFunDef false "demoteFix" ((PVar "snap") (PVar "comments") (PVar "fx")) (EMatch (EApp (EApp (EVar "resolveFix") (EVar "snap")) (EVar "fx")) (arm (PCon "Some" (PVar "r")) () (EIf (EApp (EApp (EVar "any") (EApp (EVar "editTouchesComment") (EVar "comments"))) (EFieldAccess (EVar "r") "rsEdits")) (ERecordUpdate (EVar "fx") ((fa "fixApplicability" (EVar "Suggest")))) (EVar "fx"))) (arm (PCon "None") () (EVar "fx"))))
 (DTypeSig false "compareResolved" (TyFun (TyCon "Resolved") (TyFun (TyCon "Resolved") (TyCon "Ordering"))))
@@ -424,7 +426,7 @@ separatesChildren _ = False
 (DUse false (UseGroup ("frontend" "lex_scan") ((mem "scanRawChars" false))))
 (DUse false (UseGroup ("frontend" "lex_token") ((mem "RawTok" true))))
 (DUse false (UseGroup ("frontend" "syntax_source") ((mem "SourceSpan" true))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Finding" true) (mem "Fix" true) (mem "FixEdit" true))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Finding" true) (mem "Fix" true) (mem "FixEdit" true) (mem "findingFixOf" false) (mem "memoMap" false))))
 (DUse false (UseGroup ("tools" "source_edits") ((mem "EditError" false) (mem "SourceEdit" true) (mem "applySourceEdits" false) (mem "validateSourceEdits" false))))
 (DUse false (UseGroup ("tools" "source_snapshot") ((mem "SourceSnapshot" true) (mem "makeSnapshot" false) (mem "snapshotId" false))))
 (DUse false (UseGroup ("support" "source_index") ((mem "sourcePositionToOffset" false))))
@@ -456,7 +458,7 @@ separatesChildren _ = False
 (DTypeSig false "fixesOf" (TyFun (TyApp (TyCon "List") (TyCon "Finding")) (TyApp (TyCon "List") (TyCon "Fix"))))
 (DFunDef false "fixesOf" ((PVar "findings")) (EApp (EApp (EDictApp "flatMap") (EVar "findingFix")) (EVar "findings")))
 (DTypeSig false "findingFix" (TyFun (TyCon "Finding") (TyApp (TyCon "List") (TyCon "Fix"))))
-(DFunDef false "findingFix" ((PVar "f")) (EApp (EMethodRef "toList") (EFieldAccess (EVar "f") "fix")))
+(DFunDef false "findingFix" ((PVar "f")) (EApp (EMethodRef "toList") (EApp (EVar "findingFixOf") (EVar "f"))))
 (DTypeSig false "resolveEdits" (TyFun (TyCon "SourceSnapshot") (TyFun (TyApp (TyCon "List") (TyCon "FixEdit")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "SourceEdit"))))))
 (DFunDef false "resolveEdits" (PWild (PList)) (EApp (EVar "Some") (EListLit)))
 (DFunDef false "resolveEdits" ((PAs "snap" (PCon "SourceSnapshot" PWild PWild PWild (PVar "text") (PVar "index"))) (PCons (PCon "FixEdit" (PCon "Loc" PWild (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec")) (PVar "repl")) (PVar "rest"))) (EMatch (ETuple (EApp (EApp (EApp (EVar "sourcePositionToOffset") (EMethodRef "index")) (EVar "sl")) (EVar "sc")) (EApp (EApp (EApp (EVar "sourcePositionToOffset") (EMethodRef "index")) (EVar "el")) (EVar "ec"))) (arm (PTuple (PCon "Some" (PVar "lo")) (PCon "Some" (PVar "hi"))) () (EBlock (DoLet false false (PVar "edit") (EApp (EApp (EApp (EApp (EVar "SourceEdit") (EApp (EVar "snapshotId") (EVar "snap"))) (EApp (EApp (EVar "SourceSpan") (EVar "lo")) (EVar "hi"))) (EApp (EApp (EApp (EVar "stringSlice") (EVar "lo")) (EVar "hi")) (EVar "text"))) (EVar "repl"))) (DoExpr (EIf (EBinOp "<=" (EVar "lo") (EVar "hi")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "edit") (EVar "_s")))) (EApp (EApp (EVar "resolveEdits") (EVar "snap")) (EVar "rest"))) (EVar "None"))))) (arm PWild () (EVar "None"))))
@@ -480,7 +482,7 @@ separatesChildren _ = False
 (DTypeSig true "demoteOverComments" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Finding")) (TyApp (TyCon "List") (TyCon "Finding"))))))
 (DFunDef false "demoteOverComments" ((PVar "path") (PVar "src") (PVar "findings")) (EBlock (DoLet false false (PVar "comments") (EApp (EVar "commentSpans") (EVar "src"))) (DoExpr (EIf (EApp (EMethodRef "isEmpty") (EVar "comments")) (EVar "findings") (EBlock (DoLet false false (PVar "snap") (EApp (EApp (EApp (EApp (EVar "makeSnapshot") (EVar "path")) (EVar "None")) (ELit (LInt 0))) (EVar "src"))) (DoExpr (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "demoteFinding") (EVar "snap")) (EVar "comments"))) (EVar "findings"))))))))
 (DTypeSig false "demoteFinding" (TyFun (TyCon "SourceSnapshot") (TyFun (TyApp (TyCon "List") (TyCon "SourceSpan")) (TyFun (TyCon "Finding") (TyCon "Finding")))))
-(DFunDef false "demoteFinding" ((PVar "snap") (PVar "comments") (PVar "f")) (ERecordUpdate (EVar "f") ((fa "fix" (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "demoteFix") (EVar "snap")) (EVar "comments"))) (EFieldAccess (EVar "f") "fix"))))))
+(DFunDef false "demoteFinding" ((PVar "snap") (PVar "comments") (PVar "f")) (ERecordUpdate (EVar "f") ((fa "fix" (EApp (EApp (EVar "memoMap") (EApp (EMethodRef "map") (EApp (EApp (EVar "demoteFix") (EVar "snap")) (EVar "comments")))) (EFieldAccess (EVar "f") "fix"))))))
 (DTypeSig false "demoteFix" (TyFun (TyCon "SourceSnapshot") (TyFun (TyApp (TyCon "List") (TyCon "SourceSpan")) (TyFun (TyCon "Fix") (TyCon "Fix")))))
 (DFunDef false "demoteFix" ((PVar "snap") (PVar "comments") (PVar "fx")) (EMatch (EApp (EApp (EVar "resolveFix") (EVar "snap")) (EVar "fx")) (arm (PCon "Some" (PVar "r")) () (EIf (EApp (EApp (EDictApp "any") (EApp (EVar "editTouchesComment") (EVar "comments"))) (EFieldAccess (EVar "r") "rsEdits")) (ERecordUpdate (EVar "fx") ((fa "fixApplicability" (EVar "Suggest")))) (EVar "fx"))) (arm (PCon "None") () (EVar "fx"))))
 (DTypeSig false "compareResolved" (TyFun (TyCon "Resolved") (TyFun (TyCon "Resolved") (TyCon "Ordering"))))

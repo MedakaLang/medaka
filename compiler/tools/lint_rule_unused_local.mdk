@@ -16,6 +16,7 @@ import tools.lint_core.{
   StdlibIndex,
   factScopes,
   mkRule,
+  noFix,
 }
 import tools.lint_scope.{Binder(..), BinderKind(..), unusedBinders}
 import tools.lint_shared.{ruleNameUnusedLocal}
@@ -57,5 +58,5 @@ localFinding b = Finding {
     "'\{b.binderName}' is bound by a `let` but never read. Either the bound expression is dead work and the binding can be deleted, or a use of '\{b.binderName}' is missing; name it '_\{b.binderName}' to keep it on purpose, or when only the effect is wanted drop the binder (a bare statement; `let _ =` in `do` code)",
   severity = SevWarning,
   loc = Some b.binderSpan,
-  fix = None,
+  fix = noFix,
 }

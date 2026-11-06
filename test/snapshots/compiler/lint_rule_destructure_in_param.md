@@ -1,5 +1,5 @@
 # META
-source_lines=180
+source_lines=181
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-destructure-in-param: a single-arm irrefutable `match` on a bare parameter. Destructure in the parameter position.
@@ -24,11 +24,12 @@ import tools.lint_core.{
   StdlibIndex,
   factOracle,
   mkRule,
+  noFix,
+  factDeclLocs,
 }
 import tools.lint_shared.{
   armToClause,
   ctorIsSingle,
-  declLocList,
   matchBodyOnBareParam,
   ruleNameDestructureInParam,
   wholeWordIn,
@@ -75,9 +76,9 @@ ruleDestructureInParam : StdlibIndex ->
   Positions ->
   List Decl ->
   List Finding
-ruleDestructureInParam _ _ facts pos prog =
+ruleDestructureInParam _ _ facts _ _ =
   let orc = factOracle facts
-  flatMap (destructureDeclL orc) (declLocList pos prog)
+  flatMap (destructureDeclL orc) (factDeclLocs facts)
 
 destructureDeclL : Oracle -> (Decl, Option Loc) -> List Finding
 destructureDeclL orc (d, loc) = match d
@@ -109,7 +110,7 @@ destructureArmsFinding orc loc name p [arm] =
           "function '\{name}' destructures parameter '\{p}' via a single-arm irrefutable `match`. Destructure it directly in the parameter position",
         severity = SevWarning,
         loc = loc,
-        fix = None,
+        fix = noFix,
       },
     ]
   else
@@ -189,18 +190,18 @@ destructureInParamFixArms _ _ _ _ _ _ _ = None
 (DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "isEmptyL" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "exprToString" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "factOracle" false) (mem "mkRule" false))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "armToClause" false) (mem "ctorIsSingle" false) (mem "declLocList" false) (mem "matchBodyOnBareParam" false) (mem "ruleNameDestructureInParam" false) (mem "wholeWordIn" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "factOracle" false) (mem "mkRule" false) (mem "noFix" false) (mem "factDeclLocs" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "armToClause" false) (mem "ctorIsSingle" false) (mem "matchBodyOnBareParam" false) (mem "ruleNameDestructureInParam" false) (mem "wholeWordIn" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameDestructureInParam")) (fa "summary" (ELit (LString "function body is a single-arm `match` on a bare parameter with an irrefutable pattern (tuple/record/single-ctor). Destructure directly in the parameter position"))) (fa "doc" (ELit (LString "A function body that is a single-arm `match` on a bare parameter with an irrefutable pattern (tuple, record, single-constructor) can destructure in the parameter position.\n\nBefore:\n  f p = match p\n    (a, b) => a + b\nAfter:\n  f (a, b) = a + b"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "Fixable")) (fa "needs" (EListLit))))) (EVar "ruleDestructureInParam")) (EApp (EVar "Some") (EVar "destructureInParamFix"))))
 (DTypeSig false "ruleDestructureInParam" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "ruleDestructureInParam" (PWild PWild (PVar "facts") (PVar "pos") (PVar "prog")) (EBlock (DoLet false false (PVar "orc") (EApp (EVar "factOracle") (EVar "facts"))) (DoExpr (EApp (EApp (EVar "flatMap") (EApp (EVar "destructureDeclL") (EVar "orc"))) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))))
+(DFunDef false "ruleDestructureInParam" (PWild PWild (PVar "facts") PWild PWild) (EBlock (DoLet false false (PVar "orc") (EApp (EVar "factOracle") (EVar "facts"))) (DoExpr (EApp (EApp (EVar "flatMap") (EApp (EVar "destructureDeclL") (EVar "orc"))) (EApp (EVar "factDeclLocs") (EVar "facts"))))))
 (DTypeSig false "destructureDeclL" (TyFun (TyCon "Oracle") (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding")))))
 (DFunDef false "destructureDeclL" ((PVar "orc") (PTuple (PVar "d") (PVar "loc"))) (EMatch (EVar "d") (arm (PCon "DFunDef" PWild (PVar "name") (PVar "pats") (PVar "body") PWild PWild) () (EApp (EApp (EApp (EApp (EApp (EVar "destructureFinding") (EVar "orc")) (EVar "loc")) (EVar "name")) (EVar "pats")) (EVar "body"))) (arm PWild () (EListLit))))
 (DTypeSig false "destructureFinding" (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "destructureFinding" ((PVar "orc") (PVar "loc") (PVar "name") (PVar "pats") (PVar "body")) (EMatch (EApp (EApp (EVar "matchBodyOnBareParam") (EVar "pats")) (EVar "body")) (arm (PCon "Some" (PTuple (PVar "p") PWild (PVar "arms"))) () (EApp (EApp (EApp (EApp (EApp (EVar "destructureArmsFinding") (EVar "orc")) (EVar "loc")) (EVar "name")) (EVar "p")) (EVar "arms"))) (arm (PCon "None") () (EListLit))))
 (DTypeSig false "destructureArmsFinding" (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "destructureArmsFinding" ((PVar "orc") (PVar "loc") (PVar "name") (PVar "p") (PList (PVar "arm"))) (EIf (EApp (EApp (EApp (EVar "destructureArmFires") (EVar "orc")) (EVar "p")) (EVar "arm")) (EListLit (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDestructureInParam")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "function '")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "' destructures parameter '"))) (EApp (EVar "display") (EVar "p"))) (ELit (LString "' via a single-arm irrefutable `match`. Destructure it directly in the parameter position")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None"))))) (EListLit)))
+(DFunDef false "destructureArmsFinding" ((PVar "orc") (PVar "loc") (PVar "name") (PVar "p") (PList (PVar "arm"))) (EIf (EApp (EApp (EApp (EVar "destructureArmFires") (EVar "orc")) (EVar "p")) (EVar "arm")) (EListLit (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDestructureInParam")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "function '")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "' destructures parameter '"))) (EApp (EVar "display") (EVar "p"))) (ELit (LString "' via a single-arm irrefutable `match`. Destructure it directly in the parameter position")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "noFix"))))) (EListLit)))
 (DFunDef false "destructureArmsFinding" (PWild PWild PWild PWild PWild) (EListLit))
 (DTypeSig false "destructureArmFires" (TyFun (TyCon "Oracle") (TyFun (TyCon "String") (TyFun (TyCon "Arm") (TyCon "Bool")))))
 (DFunDef false "destructureArmFires" ((PVar "orc") (PVar "p") (PCon "Arm" (PVar "pat") (PVar "guards") (PVar "body"))) (EBinOp "&&" (EBinOp "&&" (EApp (EVar "isEmptyL") (EVar "guards")) (EApp (EApp (EVar "destructurablePat") (EVar "orc")) (EVar "pat"))) (EApp (EVar "not") (EApp (EApp (EVar "wholeWordIn") (EVar "p")) (EApp (EVar "exprToString") (EVar "body"))))))
@@ -233,18 +234,18 @@ destructureInParamFixArms _ _ _ _ _ _ _ = None
 (DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "isEmptyL" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "exprToString" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "factOracle" false) (mem "mkRule" false))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "armToClause" false) (mem "ctorIsSingle" false) (mem "declLocList" false) (mem "matchBodyOnBareParam" false) (mem "ruleNameDestructureInParam" false) (mem "wholeWordIn" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "factOracle" false) (mem "mkRule" false) (mem "noFix" false) (mem "factDeclLocs" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "armToClause" false) (mem "ctorIsSingle" false) (mem "matchBodyOnBareParam" false) (mem "ruleNameDestructureInParam" false) (mem "wholeWordIn" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameDestructureInParam")) (fa "summary" (ELit (LString "function body is a single-arm `match` on a bare parameter with an irrefutable pattern (tuple/record/single-ctor). Destructure directly in the parameter position"))) (fa "doc" (ELit (LString "A function body that is a single-arm `match` on a bare parameter with an irrefutable pattern (tuple, record, single-constructor) can destructure in the parameter position.\n\nBefore:\n  f p = match p\n    (a, b) => a + b\nAfter:\n  f (a, b) = a + b"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "Fixable")) (fa "needs" (EListLit))))) (EVar "ruleDestructureInParam")) (EApp (EVar "Some") (EVar "destructureInParamFix"))))
 (DTypeSig false "ruleDestructureInParam" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "ruleDestructureInParam" (PWild PWild (PVar "facts") (PVar "pos") (PVar "prog")) (EBlock (DoLet false false (PVar "orc") (EApp (EVar "factOracle") (EVar "facts"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (EApp (EVar "destructureDeclL") (EVar "orc"))) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))))
+(DFunDef false "ruleDestructureInParam" (PWild PWild (PVar "facts") PWild PWild) (EBlock (DoLet false false (PVar "orc") (EApp (EVar "factOracle") (EVar "facts"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (EApp (EVar "destructureDeclL") (EVar "orc"))) (EApp (EVar "factDeclLocs") (EVar "facts"))))))
 (DTypeSig false "destructureDeclL" (TyFun (TyCon "Oracle") (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding")))))
 (DFunDef false "destructureDeclL" ((PVar "orc") (PTuple (PVar "d") (PVar "loc"))) (EMatch (EVar "d") (arm (PCon "DFunDef" PWild (PVar "name") (PVar "pats") (PVar "body") PWild PWild) () (EApp (EApp (EApp (EApp (EApp (EVar "destructureFinding") (EVar "orc")) (EVar "loc")) (EVar "name")) (EVar "pats")) (EVar "body"))) (arm PWild () (EListLit))))
 (DTypeSig false "destructureFinding" (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "destructureFinding" ((PVar "orc") (PVar "loc") (PVar "name") (PVar "pats") (PVar "body")) (EMatch (EApp (EApp (EVar "matchBodyOnBareParam") (EVar "pats")) (EVar "body")) (arm (PCon "Some" (PTuple (PVar "p") PWild (PVar "arms"))) () (EApp (EApp (EApp (EApp (EApp (EVar "destructureArmsFinding") (EVar "orc")) (EVar "loc")) (EVar "name")) (EVar "p")) (EVar "arms"))) (arm (PCon "None") () (EListLit))))
 (DTypeSig false "destructureArmsFinding" (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "destructureArmsFinding" ((PVar "orc") (PVar "loc") (PVar "name") (PVar "p") (PList (PVar "arm"))) (EIf (EApp (EApp (EApp (EVar "destructureArmFires") (EVar "orc")) (EVar "p")) (EVar "arm")) (EListLit (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDestructureInParam")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "function '")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "' destructures parameter '"))) (EApp (EMethodRef "display") (EVar "p"))) (ELit (LString "' via a single-arm irrefutable `match`. Destructure it directly in the parameter position")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None"))))) (EListLit)))
+(DFunDef false "destructureArmsFinding" ((PVar "orc") (PVar "loc") (PVar "name") (PVar "p") (PList (PVar "arm"))) (EIf (EApp (EApp (EApp (EVar "destructureArmFires") (EVar "orc")) (EVar "p")) (EVar "arm")) (EListLit (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDestructureInParam")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "function '")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "' destructures parameter '"))) (EApp (EMethodRef "display") (EVar "p"))) (ELit (LString "' via a single-arm irrefutable `match`. Destructure it directly in the parameter position")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "noFix"))))) (EListLit)))
 (DFunDef false "destructureArmsFinding" (PWild PWild PWild PWild PWild) (EListLit))
 (DTypeSig false "destructureArmFires" (TyFun (TyCon "Oracle") (TyFun (TyCon "String") (TyFun (TyCon "Arm") (TyCon "Bool")))))
 (DFunDef false "destructureArmFires" ((PVar "orc") (PVar "p") (PCon "Arm" (PVar "pat") (PVar "guards") (PVar "body"))) (EBinOp "&&" (EBinOp "&&" (EApp (EVar "isEmptyL") (EVar "guards")) (EApp (EApp (EVar "destructurablePat") (EVar "orc")) (EVar "pat"))) (EApp (EVar "not") (EApp (EApp (EVar "wholeWordIn") (EVar "p")) (EApp (EVar "exprToString") (EVar "body"))))))

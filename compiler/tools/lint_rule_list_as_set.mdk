@@ -65,6 +65,7 @@ import tools.lint_core.{
   Visitor(..),
   factScopes,
   mkVisitorRule,
+  noFix,
 }
 import tools.lint_recursion.{
   ArgRole(..),
@@ -622,7 +623,7 @@ probeFinding fallback (Probe loc callee via c) = Finding {
   message = message callee via (containerName c),
   severity = SevWarning,
   loc = orElseLoc loc fallback,
-  fix = None,
+  fix = noFix,
 }
 
 containerName : Expr -> String

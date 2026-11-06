@@ -21,13 +21,14 @@ import tools.lint_core.{
   Scope(..),
   StdlibIndex,
   mkRule,
+  noFix,
+  factDeclLocs,
 }
 import tools.lint_shared.{
   andThenEtaFn,
   appSpineOf,
   clausesOf,
   dedupeNamesLoc,
-  declLocList,
   isEVarNamed,
   mentionsVar,
   paramNameOf,
@@ -187,13 +188,13 @@ ruleClauseMap : StdlibIndex ->
   Positions ->
   List Decl ->
   List Finding
-ruleClauseMap _ _ _ pos prog =
+ruleClauseMap _ _ facts _ prog =
   -- dedupe by name so a two-clause function is inspected once, not once per
   -- clause, keeping the FIRST clause's location (same shape as
   -- `rule-stdlib-reimpl`).
   flatMap
     (clauseMapHit prog)
-    (dedupeNamesLoc (flatMap topDefNameL (declLocList pos prog)))
+    (dedupeNamesLoc (flatMap topDefNameL (factDeclLocs facts)))
 
 clauseMapHit : List Decl -> (String, Option Loc) -> List Finding
 clauseMapHit prog (name, loc) = match clauseMapFnOf name prog
@@ -207,5 +208,5 @@ clauseMapFinding name g loc = Finding {
     "'\{name}' is a hand-written list map ('[]'/'(x :: xs)' clauses consing a per-element transform onto the recursive call). Rewrite as '\{exprToString (EApp (EVar "map") g)}' (suggest-only)",
   severity = SevWarning,
   loc = loc,
-  fix = None,
+  fix = noFix,
 }

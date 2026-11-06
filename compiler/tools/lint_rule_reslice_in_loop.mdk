@@ -30,6 +30,7 @@ import tools.lint_core.{
   Visitor(..),
   factScopes,
   mkVisitorRule,
+  noFix,
 }
 import tools.lint_recursion.{
   ArgRole(..),
@@ -279,7 +280,7 @@ report loc msg = Finding {
   message = msg,
   severity = SevWarning,
   loc = loc,
-  fix = None,
+  fix = noFix,
 }
 
 message : Form -> String -> String -> Option String -> String

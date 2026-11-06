@@ -13,6 +13,7 @@ import tools.lint_core.{
   Finding(..),
   Fix,
   Fixability(..),
+  Memo,
   Need(..),
   Ratchet(..),
   Rule,
@@ -112,7 +113,7 @@ ruleComplementPredicate idx _ facts _ _ =
     (complementPredicateFix idx facts)
     complementPredicateFinding
 
-complementPredicateFinding : Option Loc -> Expr -> Option Fix -> Finding
+complementPredicateFinding : Option Loc -> Expr -> Memo (Option Fix) -> Finding
 complementPredicateFinding loc rewritten fix = Finding {
   rule = ruleNameComplementPredicate,
   message = "negated predicate. Rewrite as '" ++ exprToString rewritten ++ "'",

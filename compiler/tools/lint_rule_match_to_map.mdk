@@ -19,6 +19,7 @@ import tools.lint_core.{
   Finding(..),
   Fix,
   Fixability(..),
+  Memo,
   Need(..),
   Ratchet(..),
   Rule,
@@ -122,7 +123,7 @@ ruleMatchToMap idx _ facts _ _ =
     (matchToMapEdit idx facts)
     matchToMapFinding
 
-matchToMapFinding : Option Loc -> Expr -> Option Fix -> Finding
+matchToMapFinding : Option Loc -> Expr -> Memo (Option Fix) -> Finding
 matchToMapFinding loc rewritten fix = Finding {
   rule = ruleNameMatchToMap,
   message =

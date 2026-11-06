@@ -1,5 +1,5 @@
 # META
-source_lines=1761
+source_lines=1805
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_walk.mdk — the lint runner: `lintProgram*` and the one
@@ -18,6 +18,8 @@ import frontend.ast.{
   Decl(..),
   Expr(..),
   ExternDecl(..),
+  FunClause(..),
+  LetBind(..),
   Pat,
 }
 import frontend.ast_walk.{
@@ -115,11 +117,15 @@ import tools.lint_core.{
   StdlibIndexError(..),
   Visitor(..),
   factComments,
+  factDeclLocs,
   fixToDiagFix,
+  findingFixOf,
   factScopes,
   clampApplicability,
   emptyStdlibIndex,
   maxApplicability,
+  memoGet,
+  memoMap,
   memoNew,
   mkStdlibIndex,
   projectIndexOf,
@@ -157,16 +163,19 @@ import tools.lint_registry.{
 
 export
 mkFileFacts : String -> List Decl -> Positions -> FileFacts
-mkFileFacts src prog pos = FileFacts {
-  ffSrc = src,
-  ffComments = memoNew (_ => collectComments src),
-  ffOracle = memoNew (_ => buildOracle prog),
-  ffDupClauses = memoNew (_ => flatMap dupClauseOfDecl (declLocList pos prog)),
-  ffScopes = memoNew (_ => buildScopes prog),
-  ffLines = memoNew (_ => fromList (lines src)),
-  ffLocalMods = [],
-  ffCanonPath = "",
-}
+mkFileFacts src prog pos =
+  let declLocs = memoNew (_ => declLocList pos prog)
+  FileFacts {
+    ffSrc = src,
+    ffComments = memoNew (_ => collectComments src),
+    ffOracle = memoNew (_ => buildOracle prog),
+    ffDeclLocs = declLocs,
+    ffDupClauses = memoNew (_ => flatMap dupClauseOfDecl (memoGet declLocs)),
+    ffScopes = memoNew (_ => buildScopes prog),
+    ffLines = memoNew (_ => fromList (lines src)),
+    ffLocalMods = [],
+    ffCanonPath = "",
+  }
 
 -- The dotted names of the program's `import m.*` modules that resolve to a file
 -- of the project: `<root>/<m as a path>.mdk` under the file's own directory or
@@ -313,7 +322,7 @@ lintProgramRanked idx rules path facts pos prog =
     if isEmptyL visitorSets then
       []
     else
-      runVisitors visitorSets (declLocList pos prog)
+      runVisitors visitorSets (factDeclLocs facts)
   ruleFindings idx path facts pos prog enabled walked
 
 rankedEnabled : (Int, Rule) -> Bool
@@ -383,9 +392,11 @@ data ExprHook =
 
 data DeclHook = DeclHook Int (Ctx -> Decl -> List Finding)
 
--- What every node of one body shares: its owner's name and parameters, and
--- whether it is a test or prop body.
-data BodyScope = BodyScope String (List Pat) BodyKind (Option Loc)
+-- What every node of one body shares: its owner's name and parameters,
+-- whether it is a test or prop body, the declaration's start, and the nearest
+-- `let` or `where` binding the node is in.
+data BodyScope =
+  BodyScope String (List Pat) BodyKind (Option Loc) (Option (String, Loc))
 
 data BodyKind = PlainBody | TestBody
 
@@ -435,22 +446,26 @@ walkDecls exprHooks declHooks acc ((d, loc) :: rest) =
 -- A declaration's own `Ctx` reads its first body's owner, so a function clause
 -- carries its name and parameters and a test or prop is in a test.
 declScope : List DeclBody -> Option Loc -> BodyScope
-declScope [] loc = BodyScope "" [] PlainBody loc
+declScope [] loc = BodyScope "" [] PlainBody loc None
 declScope ((DeclBody owner _) :: _) loc = ownerScope owner loc
 
 ownerScope : BodyOwner -> Option Loc -> BodyScope
-ownerScope (OwnerClause name ps) loc = BodyScope name ps PlainBody loc
-ownerScope (OwnerImplMethod _ m ps) loc = BodyScope m ps PlainBody loc
-ownerScope (OwnerIfaceDefault _ m ps) loc = BodyScope m ps PlainBody loc
-ownerScope (OwnerTest name) loc = BodyScope name [] TestBody loc
-ownerScope (OwnerProp name _) loc = BodyScope name [] TestBody loc
-ownerScope (OwnerLetGroup name ps) loc = BodyScope name ps PlainBody loc
+ownerScope (OwnerClause name ps) loc = BodyScope name ps PlainBody loc None
+ownerScope (OwnerImplMethod _ m ps) loc = BodyScope m ps PlainBody loc None
+ownerScope (OwnerIfaceDefault _ m ps) loc = BodyScope m ps PlainBody loc None
+ownerScope (OwnerTest name) loc = BodyScope name [] TestBody loc None
+ownerScope (OwnerProp name _) loc = BodyScope name [] TestBody loc None
+ownerScope (OwnerLetGroup name ps) loc = BodyScope name ps PlainBody loc None
+
+inBinding : String -> Loc -> BodyScope -> BodyScope
+inBinding name site (BodyScope n ps kind declLoc _) =
+  BodyScope n ps kind declLoc (Some (name, site))
 
 -- The walk carries the parent kind unwrapped, with `KLoc` standing for "no
 -- parent": an `ELoc` is never a parent, and the `Option` is built only when a
 -- callback fires.
 scopeCtx : BodyScope -> ExprKind -> Option Loc -> Option Loc -> Ctx
-scopeCtx (BodyScope name ps kind declLoc) parent span own = Ctx {
+scopeCtx (BodyScope name ps kind declLoc binding) parent span own = Ctx {
   ctxDeclName = name,
   ctxParams = ps,
   ctxInTest = isTestBody kind,
@@ -458,6 +473,7 @@ scopeCtx (BodyScope name ps kind declLoc) parent span own = Ctx {
   ctxSpan = span,
   ctxOwn = own,
   ctxDeclLoc = declLoc,
+  ctxBinding = binding,
 }
 
 isTestBody : BodyKind -> Bool
@@ -529,7 +545,35 @@ walkNode : List ExprHook ->
 walkNode hooks scope parent span own acc e =
   let k = exprKind e
   let acc2 = visitHooks (scopeCtx scope parent span own) k e acc hooks
-  walkKids hooks scope k span acc2 (childExprs e)
+  match e
+    ELetGroup binds body =>
+      walkKids hooks scope k span (walkBinds hooks scope span acc2 binds) [body]
+    _ => walkKids hooks scope k span acc2 (childExprs e)
+
+-- The clause bodies of a `let` group's bindings, in `childExprs` order, each
+-- under its binding.
+walkBinds : List ExprHook ->
+  BodyScope ->
+  Option Loc ->
+  List (Int, Finding) ->
+  List LetBind ->
+  List (Int, Finding)
+walkBinds hooks scope span acc0 xs0 = go acc0 xs0
+  where
+    go acc [] = acc
+    go acc ((LetBind name clauses site _) :: rest) =
+      go
+        (walkKids
+          hooks
+          (inBinding name site scope)
+          KLetGroup
+          span
+          acc
+          (map clauseBody clauses))
+        rest
+
+clauseBody : FunClause -> Expr
+clauseBody (FunClause _ body) = body
 
 walkKids : List ExprHook ->
   BodyScope ->
@@ -574,7 +618,7 @@ restampFinding r f = Finding {
   message = f.message,
   severity = r.severity,
   loc = f.loc,
-  fix = map (clampFix r.meta.fixability) f.fix,
+  fix = memoMap (map (clampFix r.meta.fixability)) f.fix,
 }
 
 clampFix : Fixability -> Fix -> Fix
@@ -1449,7 +1493,7 @@ findingToDiag f =
     "[\{f.rule}] \{f.message}"
     f.loc
     None
-    (map fixToDiagFix f.fix)
+    (map fixToDiagFix (findingFixOf f))
 
 -- Run the full lint pipeline (all rules, inline `-- lint-disable-*` suppression,
 -- then the `--disable`/`--only`/`--deny` CLI-flag-style filters) over ONE file
@@ -1764,7 +1808,7 @@ appendIfPath : String ->
 appendIfPath file diag (path, src, diags) =
   if path == file then (path, src, diags ++ [diag]) else (path, src, diags)
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Ty" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberLocal" false) (mem "IfaceMethod" true) (mem "Decl" true) (mem "Expr" true) (mem "ExternDecl" true) (mem "Pat" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Ty" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberLocal" false) (mem "IfaceMethod" true) (mem "Decl" true) (mem "Expr" true) (mem "ExternDecl" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Pat" false))))
 (DUse false (UseGroup ("frontend" "ast_walk") ((mem "BodyOwner" true) (mem "DeclBody" true) (mem "ExprKind" true) (mem "childExprs" false) (mem "declBodies" false) (mem "exprKind" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "parseWithPositions" false) (mem "parseResultPairs" false) (mem "parseWithPositionsOptPairs" false) (mem "prescanErrorPairs" false) (mem "ParseError" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "entrySearchRoots" false) (mem "fileOfModuleId" false) (mem "findProjectRootOrSelf" false) (mem "moduleIdOfPath" false))))
@@ -1783,14 +1827,14 @@ appendIfPath file diag (path, src, diags) =
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false) (mem "buildOracle" false))))
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "collectComments" false) (mem "tokenizeWithOffsetPairs" false) (mem "commentLine" false) (mem "commentText" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Ctx" true) (mem "DirScope" true) (mem "Directive" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" true) (mem "Fixability" true) (mem "ProjectRule" true) (mem "Rule" true) (mem "RuleCheck" true) (mem "RuleMeta" false) (mem "StdlibIndex" true) (mem "Summary" false) (mem "StdlibIndexError" true) (mem "Visitor" true) (mem "factComments" false) (mem "fixToDiagFix" false) (mem "factScopes" false) (mem "clampApplicability" false) (mem "emptyStdlibIndex" false) (mem "maxApplicability" false) (mem "memoNew" false) (mem "mkStdlibIndex" false) (mem "projectIndexOf" false) (mem "stdlibIndexFingerprint" false) (mem "stdlibLocalModAsked" false) (mem "withStdlibLocalMods" false) (mem "needsProjectIndex" false) (mem "needsScopes" false) (mem "needsStdlibIndex" false) (mem "needsWildIndex" false) (mem "readsIndex" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Ctx" true) (mem "DirScope" true) (mem "Directive" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" true) (mem "Fixability" true) (mem "ProjectRule" true) (mem "Rule" true) (mem "RuleCheck" true) (mem "RuleMeta" false) (mem "StdlibIndex" true) (mem "Summary" false) (mem "StdlibIndexError" true) (mem "Visitor" true) (mem "factComments" false) (mem "factDeclLocs" false) (mem "fixToDiagFix" false) (mem "findingFixOf" false) (mem "factScopes" false) (mem "clampApplicability" false) (mem "emptyStdlibIndex" false) (mem "maxApplicability" false) (mem "memoGet" false) (mem "memoMap" false) (mem "memoNew" false) (mem "mkStdlibIndex" false) (mem "projectIndexOf" false) (mem "stdlibIndexFingerprint" false) (mem "stdlibLocalModAsked" false) (mem "withStdlibLocalMods" false) (mem "needsProjectIndex" false) (mem "needsScopes" false) (mem "needsStdlibIndex" false) (mem "needsWildIndex" false) (mem "readsIndex" false))))
 (DUse false (UseGroup ("tools" "lint_scope") ((mem "Binder" true) (mem "BinderKind" true) (mem "FileScopes" false) (mem "Use" true) (mem "bindersNamed" false) (mem "bindersNamedIn" false) (mem "buildScopes" false) (mem "usesNamedIn" false) (mem "wildImports" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "collectDirectives" false) (mem "declLocList" false) (mem "sortUniqS" false) (mem "zipDeclPos" false))))
 (DUse false (UseGroup ("tools" "lint_fix") ((mem "demoteOverComments" false))))
 (DUse false (UseGroup ("tools" "lint_dup") ((mem "dupClauseOfDecl" false))))
 (DUse false (UseGroup ("tools" "lint_registry") ((mem "allProjectRules" false) (mem "allRules" false) (mem "projectRuleActive" false) (mem "selectRules" false))))
 (DTypeSig true "mkFileFacts" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Positions") (TyCon "FileFacts")))))
-(DFunDef false "mkFileFacts" ((PVar "src") (PVar "prog") (PVar "pos")) (ERecordCreate "FileFacts" ((fa "ffSrc" (EVar "src")) (fa "ffComments" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "collectComments") (EVar "src"))))) (fa "ffOracle" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "buildOracle") (EVar "prog"))))) (fa "ffDupClauses" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EApp (EVar "flatMap") (EVar "dupClauseOfDecl")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog")))))) (fa "ffScopes" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "buildScopes") (EVar "prog"))))) (fa "ffLines" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "fromList") (EApp (EVar "lines") (EVar "src")))))) (fa "ffLocalMods" (EListLit)) (fa "ffCanonPath" (ELit (LString ""))))))
+(DFunDef false "mkFileFacts" ((PVar "src") (PVar "prog") (PVar "pos")) (EBlock (DoLet false false (PVar "declLocs") (EApp (EVar "memoNew") (ELam (PWild) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))) (DoExpr (ERecordCreate "FileFacts" ((fa "ffSrc" (EVar "src")) (fa "ffComments" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "collectComments") (EVar "src"))))) (fa "ffOracle" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "buildOracle") (EVar "prog"))))) (fa "ffDeclLocs" (EVar "declLocs")) (fa "ffDupClauses" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EApp (EVar "flatMap") (EVar "dupClauseOfDecl")) (EApp (EVar "memoGet") (EVar "declLocs")))))) (fa "ffScopes" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "buildScopes") (EVar "prog"))))) (fa "ffLines" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "fromList") (EApp (EVar "lines") (EVar "src")))))) (fa "ffLocalMods" (EListLit)) (fa "ffCanonPath" (ELit (LString ""))))))))
 (DTypeSig true "projectWildMods" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "projectWildMods" ((PVar "path") (PVar "prog")) (EMatch (EApp (EVar "wildModsOf") (EVar "prog")) (arm (PList) () (EListLit)) (arm (PVar "wild") () (EApp (EApp (EVar "localModsIn") (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf") (EVar "path")))) (EVar "wild")))))
 (DTypeSig true "wildModsOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
@@ -1825,7 +1869,7 @@ appendIfPath file diag (path, src, diags) =
 (DFunDef false "ranked" (PWild (PList)) (EListLit))
 (DFunDef false "ranked" ((PVar "i") (PCons (PVar "r") (PVar "rest"))) (EBinOp "::" (ETuple (EVar "i") (EVar "r")) (EApp (EApp (EVar "ranked") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))
 (DTypeSig true "lintProgramRanked" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Rule"))) (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Finding"))))))))))
-(DFunDef false "lintProgramRanked" ((PVar "idx") (PVar "rules") (PVar "path") (PVar "facts") (PVar "pos") (PVar "prog")) (EBlock (DoLet false false (PVar "enabled") (EApp (EApp (EVar "filterList") (EVar "rankedEnabled")) (EVar "rules"))) (DoLet false false (PVar "visitorSets") (EApp (EApp (EVar "flatMap") (ELam ((PVar "rf")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "ruleVisitors") (EVar "idx")) (EVar "path")) (EVar "facts")) (EVar "pos")) (EVar "prog")) (EApp (EVar "snd") (EVar "rf"))))) (EVar "enabled"))) (DoLet false false (PVar "walked") (EIf (EApp (EVar "isEmptyL") (EVar "visitorSets")) (EListLit) (EApp (EApp (EVar "runVisitors") (EVar "visitorSets")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "ruleFindings") (EVar "idx")) (EVar "path")) (EVar "facts")) (EVar "pos")) (EVar "prog")) (EVar "enabled")) (EVar "walked")))))
+(DFunDef false "lintProgramRanked" ((PVar "idx") (PVar "rules") (PVar "path") (PVar "facts") (PVar "pos") (PVar "prog")) (EBlock (DoLet false false (PVar "enabled") (EApp (EApp (EVar "filterList") (EVar "rankedEnabled")) (EVar "rules"))) (DoLet false false (PVar "visitorSets") (EApp (EApp (EVar "flatMap") (ELam ((PVar "rf")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "ruleVisitors") (EVar "idx")) (EVar "path")) (EVar "facts")) (EVar "pos")) (EVar "prog")) (EApp (EVar "snd") (EVar "rf"))))) (EVar "enabled"))) (DoLet false false (PVar "walked") (EIf (EApp (EVar "isEmptyL") (EVar "visitorSets")) (EListLit) (EApp (EApp (EVar "runVisitors") (EVar "visitorSets")) (EApp (EVar "factDeclLocs") (EVar "facts"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "ruleFindings") (EVar "idx")) (EVar "path")) (EVar "facts")) (EVar "pos")) (EVar "prog")) (EVar "enabled")) (EVar "walked")))))
 (DTypeSig false "rankedEnabled" (TyFun (TyTuple (TyCon "Int") (TyCon "Rule")) (TyCon "Bool")))
 (DFunDef false "rankedEnabled" ((PTuple PWild (PVar "r"))) (EFieldAccess (EVar "r") "enabled"))
 (DTypeSig false "ruleVisitors" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Rule") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Visitor"))))))))))
@@ -1838,7 +1882,7 @@ appendIfPath file diag (path, src, diags) =
 (DFunDef false "runVisitors" ((PVar "sets") (PVar "decls")) (EBlock (DoLet false false (PVar "tagged") (EApp (EVar "indexed") (EVar "sets"))) (DoLet false false (PVar "exprHooks") (EApp (EApp (EVar "flatMap") (EApp (EVar "hooksOf") (EVar "exprHookOf"))) (EVar "tagged"))) (DoLet false false (PVar "declHooks") (EApp (EApp (EVar "flatMap") (EApp (EVar "hooksOf") (EVar "declHookOf"))) (EVar "tagged"))) (DoLet false false (PVar "hits") (EApp (EVar "reverseL") (EApp (EApp (EApp (EApp (EVar "walkDecls") (EVar "exprHooks")) (EVar "declHooks")) (EListLit)) (EVar "decls")))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "t")) (EApp (EApp (EVar "findingsTagged") (EApp (EVar "fst") (EVar "t"))) (EVar "hits")))) (EVar "tagged")))))
 (DData Private "ExprHook" () ((variant "ExprHook" (ConPos (TyCon "Int") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "ExprKind"))) (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding"))))))) ())
 (DData Private "DeclHook" () ((variant "DeclHook" (ConPos (TyCon "Int") (TyFun (TyCon "Ctx") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Finding"))))))) ())
-(DData Private "BodyScope" () ((variant "BodyScope" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "BodyKind") (TyApp (TyCon "Option") (TyCon "Loc"))))) ())
+(DData Private "BodyScope" () ((variant "BodyScope" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "BodyKind") (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Loc")))))) ())
 (DData Private "BodyKind" () ((variant "PlainBody" (ConPos)) (variant "TestBody" (ConPos))) ())
 (DTypeSig false "hooksOf" (TyFun (TyFun (TyCon "Int") (TyFun (TyCon "Visitor") (TyApp (TyCon "List") (TyVar "h")))) (TyFun (TyTuple (TyCon "Int") (TyApp (TyCon "List") (TyCon "Visitor"))) (TyApp (TyCon "List") (TyVar "h")))))
 (DFunDef false "hooksOf" ((PVar "hookOf") (PTuple (PVar "i") (PVar "vs"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "hookOf") (EVar "i"))) (EVar "vs")))
@@ -1856,17 +1900,19 @@ appendIfPath file diag (path, src, diags) =
 (DFunDef false "walkDecls" (PWild PWild (PVar "acc") (PList)) (EVar "acc"))
 (DFunDef false "walkDecls" ((PVar "exprHooks") (PVar "declHooks") (PVar "acc") (PCons (PTuple (PVar "d") (PVar "loc")) (PVar "rest"))) (EBlock (DoLet false false (PVar "bodies") (EApp (EVar "declBodies") (EVar "d"))) (DoLet false false (PVar "acc2") (EMatch (EVar "declHooks") (arm (PList) () (EVar "acc")) (arm PWild () (EApp (EApp (EApp (EApp (EVar "runDeclHooks") (EApp (EApp (EApp (EApp (EVar "scopeCtx") (EApp (EApp (EVar "declScope") (EVar "bodies")) (EVar "loc"))) (EVar "KLoc")) (EVar "loc")) (EVar "None"))) (EVar "d")) (EVar "acc")) (EVar "declHooks"))))) (DoLet false false (PVar "acc3") (EMatch (EVar "exprHooks") (arm (PList) () (EVar "acc2")) (arm PWild () (EApp (EApp (EApp (EApp (EVar "walkBodies") (EVar "exprHooks")) (EVar "loc")) (EVar "acc2")) (EVar "bodies"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "walkDecls") (EVar "exprHooks")) (EVar "declHooks")) (EVar "acc3")) (EVar "rest")))))
 (DTypeSig false "declScope" (TyFun (TyApp (TyCon "List") (TyCon "DeclBody")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "BodyScope"))))
-(DFunDef false "declScope" ((PList) (PVar "loc")) (EApp (EApp (EApp (EApp (EVar "BodyScope") (ELit (LString ""))) (EListLit)) (EVar "PlainBody")) (EVar "loc")))
+(DFunDef false "declScope" ((PList) (PVar "loc")) (EApp (EApp (EApp (EApp (EApp (EVar "BodyScope") (ELit (LString ""))) (EListLit)) (EVar "PlainBody")) (EVar "loc")) (EVar "None")))
 (DFunDef false "declScope" ((PCons (PCon "DeclBody" (PVar "owner") PWild) PWild) (PVar "loc")) (EApp (EApp (EVar "ownerScope") (EVar "owner")) (EVar "loc")))
 (DTypeSig false "ownerScope" (TyFun (TyCon "BodyOwner") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "BodyScope"))))
-(DFunDef false "ownerScope" ((PCon "OwnerClause" (PVar "name") (PVar "ps")) (PVar "loc")) (EApp (EApp (EApp (EApp (EVar "BodyScope") (EVar "name")) (EVar "ps")) (EVar "PlainBody")) (EVar "loc")))
-(DFunDef false "ownerScope" ((PCon "OwnerImplMethod" PWild (PVar "m") (PVar "ps")) (PVar "loc")) (EApp (EApp (EApp (EApp (EVar "BodyScope") (EVar "m")) (EVar "ps")) (EVar "PlainBody")) (EVar "loc")))
-(DFunDef false "ownerScope" ((PCon "OwnerIfaceDefault" PWild (PVar "m") (PVar "ps")) (PVar "loc")) (EApp (EApp (EApp (EApp (EVar "BodyScope") (EVar "m")) (EVar "ps")) (EVar "PlainBody")) (EVar "loc")))
-(DFunDef false "ownerScope" ((PCon "OwnerTest" (PVar "name")) (PVar "loc")) (EApp (EApp (EApp (EApp (EVar "BodyScope") (EVar "name")) (EListLit)) (EVar "TestBody")) (EVar "loc")))
-(DFunDef false "ownerScope" ((PCon "OwnerProp" (PVar "name") PWild) (PVar "loc")) (EApp (EApp (EApp (EApp (EVar "BodyScope") (EVar "name")) (EListLit)) (EVar "TestBody")) (EVar "loc")))
-(DFunDef false "ownerScope" ((PCon "OwnerLetGroup" (PVar "name") (PVar "ps")) (PVar "loc")) (EApp (EApp (EApp (EApp (EVar "BodyScope") (EVar "name")) (EVar "ps")) (EVar "PlainBody")) (EVar "loc")))
+(DFunDef false "ownerScope" ((PCon "OwnerClause" (PVar "name") (PVar "ps")) (PVar "loc")) (EApp (EApp (EApp (EApp (EApp (EVar "BodyScope") (EVar "name")) (EVar "ps")) (EVar "PlainBody")) (EVar "loc")) (EVar "None")))
+(DFunDef false "ownerScope" ((PCon "OwnerImplMethod" PWild (PVar "m") (PVar "ps")) (PVar "loc")) (EApp (EApp (EApp (EApp (EApp (EVar "BodyScope") (EVar "m")) (EVar "ps")) (EVar "PlainBody")) (EVar "loc")) (EVar "None")))
+(DFunDef false "ownerScope" ((PCon "OwnerIfaceDefault" PWild (PVar "m") (PVar "ps")) (PVar "loc")) (EApp (EApp (EApp (EApp (EApp (EVar "BodyScope") (EVar "m")) (EVar "ps")) (EVar "PlainBody")) (EVar "loc")) (EVar "None")))
+(DFunDef false "ownerScope" ((PCon "OwnerTest" (PVar "name")) (PVar "loc")) (EApp (EApp (EApp (EApp (EApp (EVar "BodyScope") (EVar "name")) (EListLit)) (EVar "TestBody")) (EVar "loc")) (EVar "None")))
+(DFunDef false "ownerScope" ((PCon "OwnerProp" (PVar "name") PWild) (PVar "loc")) (EApp (EApp (EApp (EApp (EApp (EVar "BodyScope") (EVar "name")) (EListLit)) (EVar "TestBody")) (EVar "loc")) (EVar "None")))
+(DFunDef false "ownerScope" ((PCon "OwnerLetGroup" (PVar "name") (PVar "ps")) (PVar "loc")) (EApp (EApp (EApp (EApp (EApp (EVar "BodyScope") (EVar "name")) (EVar "ps")) (EVar "PlainBody")) (EVar "loc")) (EVar "None")))
+(DTypeSig false "inBinding" (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyFun (TyCon "BodyScope") (TyCon "BodyScope")))))
+(DFunDef false "inBinding" ((PVar "name") (PVar "site") (PCon "BodyScope" (PVar "n") (PVar "ps") (PVar "kind") (PVar "declLoc") PWild)) (EApp (EApp (EApp (EApp (EApp (EVar "BodyScope") (EVar "n")) (EVar "ps")) (EVar "kind")) (EVar "declLoc")) (EApp (EVar "Some") (ETuple (EVar "name") (EVar "site")))))
 (DTypeSig false "scopeCtx" (TyFun (TyCon "BodyScope") (TyFun (TyCon "ExprKind") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Ctx"))))))
-(DFunDef false "scopeCtx" ((PCon "BodyScope" (PVar "name") (PVar "ps") (PVar "kind") (PVar "declLoc")) (PVar "parent") (PVar "span") (PVar "own")) (ERecordCreate "Ctx" ((fa "ctxDeclName" (EVar "name")) (fa "ctxParams" (EVar "ps")) (fa "ctxInTest" (EApp (EVar "isTestBody") (EVar "kind"))) (fa "ctxParent" (EIf (EBinOp "==" (EVar "parent") (EVar "KLoc")) (EVar "None") (EApp (EVar "Some") (EVar "parent")))) (fa "ctxSpan" (EVar "span")) (fa "ctxOwn" (EVar "own")) (fa "ctxDeclLoc" (EVar "declLoc")))))
+(DFunDef false "scopeCtx" ((PCon "BodyScope" (PVar "name") (PVar "ps") (PVar "kind") (PVar "declLoc") (PVar "binding")) (PVar "parent") (PVar "span") (PVar "own")) (ERecordCreate "Ctx" ((fa "ctxDeclName" (EVar "name")) (fa "ctxParams" (EVar "ps")) (fa "ctxInTest" (EApp (EVar "isTestBody") (EVar "kind"))) (fa "ctxParent" (EIf (EBinOp "==" (EVar "parent") (EVar "KLoc")) (EVar "None") (EApp (EVar "Some") (EVar "parent")))) (fa "ctxSpan" (EVar "span")) (fa "ctxOwn" (EVar "own")) (fa "ctxDeclLoc" (EVar "declLoc")) (fa "ctxBinding" (EVar "binding")))))
 (DTypeSig false "isTestBody" (TyFun (TyCon "BodyKind") (TyCon "Bool")))
 (DFunDef false "isTestBody" ((PCon "TestBody")) (EVar "True"))
 (DFunDef false "isTestBody" ((PCon "PlainBody")) (EVar "False"))
@@ -1883,7 +1929,11 @@ appendIfPath file diag (path, src, diags) =
 (DTypeSig false "walkWrapped" (TyFun (TyApp (TyCon "List") (TyCon "ExprHook")) (TyFun (TyCon "BodyScope") (TyFun (TyCon "ExprKind") (TyFun (TyCon "Loc") (TyFun (TyCon "Loc") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Finding"))) (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Finding")))))))))))
 (DFunDef false "walkWrapped" ((PVar "hooks") (PVar "scope") (PVar "parent") (PVar "outer") (PVar "innermost0") (PVar "acc") (PVar "e0")) (ELetGroup ((lgb "go" (clause (PWild (PCon "ELoc" (PVar "l") (PVar "inner"))) (EApp (EApp (EVar "go") (EVar "l")) (EVar "inner"))) (clause ((PVar "innermost") (PVar "e")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "walkNode") (EVar "hooks")) (EVar "scope")) (EVar "parent")) (EApp (EVar "Some") (EVar "innermost"))) (EApp (EVar "Some") (EVar "outer"))) (EVar "acc")) (EVar "e"))))) (EApp (EApp (EVar "go") (EVar "innermost0")) (EVar "e0"))))
 (DTypeSig false "walkNode" (TyFun (TyApp (TyCon "List") (TyCon "ExprHook")) (TyFun (TyCon "BodyScope") (TyFun (TyCon "ExprKind") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Finding"))) (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Finding")))))))))))
-(DFunDef false "walkNode" ((PVar "hooks") (PVar "scope") (PVar "parent") (PVar "span") (PVar "own") (PVar "acc") (PVar "e")) (EBlock (DoLet false false (PVar "k") (EApp (EVar "exprKind") (EVar "e"))) (DoLet false false (PVar "acc2") (EApp (EApp (EApp (EApp (EApp (EVar "visitHooks") (EApp (EApp (EApp (EApp (EVar "scopeCtx") (EVar "scope")) (EVar "parent")) (EVar "span")) (EVar "own"))) (EVar "k")) (EVar "e")) (EVar "acc")) (EVar "hooks"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "walkKids") (EVar "hooks")) (EVar "scope")) (EVar "k")) (EVar "span")) (EVar "acc2")) (EApp (EVar "childExprs") (EVar "e"))))))
+(DFunDef false "walkNode" ((PVar "hooks") (PVar "scope") (PVar "parent") (PVar "span") (PVar "own") (PVar "acc") (PVar "e")) (EBlock (DoLet false false (PVar "k") (EApp (EVar "exprKind") (EVar "e"))) (DoLet false false (PVar "acc2") (EApp (EApp (EApp (EApp (EApp (EVar "visitHooks") (EApp (EApp (EApp (EApp (EVar "scopeCtx") (EVar "scope")) (EVar "parent")) (EVar "span")) (EVar "own"))) (EVar "k")) (EVar "e")) (EVar "acc")) (EVar "hooks"))) (DoExpr (EMatch (EVar "e") (arm (PCon "ELetGroup" (PVar "binds") (PVar "body")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "walkKids") (EVar "hooks")) (EVar "scope")) (EVar "k")) (EVar "span")) (EApp (EApp (EApp (EApp (EApp (EVar "walkBinds") (EVar "hooks")) (EVar "scope")) (EVar "span")) (EVar "acc2")) (EVar "binds"))) (EListLit (EVar "body")))) (arm PWild () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "walkKids") (EVar "hooks")) (EVar "scope")) (EVar "k")) (EVar "span")) (EVar "acc2")) (EApp (EVar "childExprs") (EVar "e"))))))))
+(DTypeSig false "walkBinds" (TyFun (TyApp (TyCon "List") (TyCon "ExprHook")) (TyFun (TyCon "BodyScope") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Finding"))) (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Finding")))))))))
+(DFunDef false "walkBinds" ((PVar "hooks") (PVar "scope") (PVar "span") (PVar "acc0") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PVar "acc") (PList)) (EVar "acc")) (clause ((PVar "acc") (PCons (PCon "LetBind" (PVar "name") (PVar "clauses") (PVar "site") PWild) (PVar "rest"))) (EApp (EApp (EVar "go") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "walkKids") (EVar "hooks")) (EApp (EApp (EApp (EVar "inBinding") (EVar "name")) (EVar "site")) (EVar "scope"))) (EVar "KLetGroup")) (EVar "span")) (EVar "acc")) (EApp (EApp (EVar "map") (EVar "clauseBody")) (EVar "clauses")))) (EVar "rest"))))) (EApp (EApp (EVar "go") (EVar "acc0")) (EVar "xs0"))))
+(DTypeSig false "clauseBody" (TyFun (TyCon "FunClause") (TyCon "Expr")))
+(DFunDef false "clauseBody" ((PCon "FunClause" PWild (PVar "body"))) (EVar "body"))
 (DTypeSig false "walkKids" (TyFun (TyApp (TyCon "List") (TyCon "ExprHook")) (TyFun (TyCon "BodyScope") (TyFun (TyCon "ExprKind") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Finding"))) (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Finding"))))))))))
 (DFunDef false "walkKids" ((PVar "hooks") (PVar "scope") (PVar "parent") (PVar "span") (PVar "acc0") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PVar "acc") (PList)) (EVar "acc")) (clause ((PVar "acc") (PCons (PVar "c") (PVar "cs"))) (EApp (EApp (EVar "go") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "walkExpr") (EVar "hooks")) (EVar "scope")) (EVar "parent")) (EVar "span")) (EVar "acc")) (EVar "c"))) (EVar "cs"))))) (EApp (EApp (EVar "go") (EVar "acc0")) (EVar "xs0"))))
 (DTypeSig false "visitHooks" (TyFun (TyCon "Ctx") (TyFun (TyCon "ExprKind") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Finding"))) (TyFun (TyApp (TyCon "List") (TyCon "ExprHook")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Finding")))))))))
@@ -1896,7 +1946,7 @@ appendIfPath file diag (path, src, diags) =
 (DFunDef false "kindIn" (PWild (PList)) (EVar "False"))
 (DFunDef false "kindIn" ((PVar "k") (PCons (PVar "x") (PVar "xs"))) (EBinOp "||" (EBinOp "==" (EVar "k") (EVar "x")) (EApp (EApp (EVar "kindIn") (EVar "k")) (EVar "xs"))))
 (DTypeSig false "restampFinding" (TyFun (TyCon "Rule") (TyFun (TyCon "Finding") (TyCon "Finding"))))
-(DFunDef false "restampFinding" ((PVar "r") (PVar "f")) (ERecordCreate "Finding" ((fa "rule" (EFieldAccess (EVar "f") "rule")) (fa "message" (EFieldAccess (EVar "f") "message")) (fa "severity" (EFieldAccess (EVar "r") "severity")) (fa "loc" (EFieldAccess (EVar "f") "loc")) (fa "fix" (EApp (EApp (EVar "map") (EApp (EVar "clampFix") (EFieldAccess (EFieldAccess (EVar "r") "meta") "fixability"))) (EFieldAccess (EVar "f") "fix"))))))
+(DFunDef false "restampFinding" ((PVar "r") (PVar "f")) (ERecordCreate "Finding" ((fa "rule" (EFieldAccess (EVar "f") "rule")) (fa "message" (EFieldAccess (EVar "f") "message")) (fa "severity" (EFieldAccess (EVar "r") "severity")) (fa "loc" (EFieldAccess (EVar "f") "loc")) (fa "fix" (EApp (EApp (EVar "memoMap") (EApp (EVar "map") (EApp (EVar "clampFix") (EFieldAccess (EFieldAccess (EVar "r") "meta") "fixability")))) (EFieldAccess (EVar "f") "fix"))))))
 (DTypeSig false "clampFix" (TyFun (TyCon "Fixability") (TyFun (TyCon "Fix") (TyCon "Fix"))))
 (DFunDef false "clampFix" ((PVar "fixability") (PVar "fx")) (EMatch (EApp (EVar "maxApplicability") (EVar "fixability")) (arm (PCon "Some" (PVar "ceiling")) () (ERecordCreate "Fix" ((fa "fixApplicability" (EApp (EApp (EVar "clampApplicability") (EVar "ceiling")) (EFieldAccess (EVar "fx") "fixApplicability"))) (fa "fixEdits" (EFieldAccess (EVar "fx") "fixEdits")) (fa "fixMessage" (EFieldAccess (EVar "fx") "fixMessage"))))) (arm (PCon "None") () (EVar "fx"))))
 (DTypeSig false "restampSeverity" (TyFun (TyCon "Severity") (TyFun (TyCon "Finding") (TyCon "Finding"))))
@@ -2093,7 +2143,7 @@ appendIfPath file diag (path, src, diags) =
 (DTypeSig true "isFindingError" (TyFun (TyCon "Finding") (TyCon "Bool")))
 (DFunDef false "isFindingError" ((PVar "f")) (EMatch (EFieldAccess (EVar "f") "severity") (arm (PCon "SevError") () (EVar "True")) (arm (PCon "SevWarning") () (EVar "False"))))
 (DTypeSig true "findingToDiag" (TyFun (TyCon "Finding") (TyCon "Diag")))
-(DFunDef false "findingToDiag" ((PVar "f")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EFieldAccess (EVar "f") "severity")) (EApp (EVar "LintRule") (EFieldAccess (EVar "f") "rule"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "[")) (EApp (EVar "display") (EFieldAccess (EVar "f") "rule"))) (ELit (LString "] "))) (EApp (EVar "display") (EFieldAccess (EVar "f") "message"))) (ELit (LString "")))) (EFieldAccess (EVar "f") "loc")) (EVar "None")) (EApp (EApp (EVar "map") (EVar "fixToDiagFix")) (EFieldAccess (EVar "f") "fix"))))
+(DFunDef false "findingToDiag" ((PVar "f")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EFieldAccess (EVar "f") "severity")) (EApp (EVar "LintRule") (EFieldAccess (EVar "f") "rule"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "[")) (EApp (EVar "display") (EFieldAccess (EVar "f") "rule"))) (ELit (LString "] "))) (EApp (EVar "display") (EFieldAccess (EVar "f") "message"))) (ELit (LString "")))) (EFieldAccess (EVar "f") "loc")) (EVar "None")) (EApp (EApp (EVar "map") (EVar "fixToDiagFix")) (EApp (EVar "findingFixOf") (EVar "f")))))
 (DTypeSig true "lintFileDiagTripleParsed" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))))))))))
 (DFunDef false "lintFileDiagTripleParsed" ((PVar "idx") (PVar "disable") (PVar "only") (PVar "deny") (PVar "path")) (EBlock (DoLet false false (PVar "src") (EApp (EVar "readFileSafe") (EVar "path"))) (DoExpr (EMatch (EApp (EVar "lintParseSource") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (ETuple (EVar "path") (EVar "src") (EListLit (EApp (EApp (EVar "parseErrDiag") (EVar "path")) (EVar "e"))) (EApp (EApp (EApp (EApp (EVar "Positions") (EListLit)) (EListLit)) (ELit (LInt 0))) (EListLit)) (EListLit))) (arm (PCon "Ok" (PTuple (PVar "decls") (PVar "pos"))) () (EBlock (DoLet false false (PVar "facts") (EApp (EApp (EApp (EApp (EVar "mkFileFactsAt") (EVar "path")) (EVar "src")) (EVar "decls")) (EVar "pos"))) (DoLet false false (PVar "allFindings") (EApp (EApp (EVar "applySuppressionsDirs") (EApp (EVar "factDirectives") (EVar "facts"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintProgramFacts") (EVar "idx")) (EApp (EApp (EVar "selectRules") (EVar "only")) (EVar "disable"))) (EVar "path")) (EVar "facts")) (EVar "pos")) (EVar "decls")))) (DoLet false false (PVar "findings") (EApp (EApp (EApp (EApp (EVar "applyFindingFilters") (EVar "disable")) (EVar "only")) (EVar "deny")) (EVar "allFindings"))) (DoExpr (ETuple (EVar "path") (EVar "src") (EApp (EApp (EVar "map") (EVar "findingToDiag")) (EApp (EApp (EApp (EVar "demoteOverComments") (EVar "path")) (EVar "src")) (EVar "findings"))) (EVar "pos") (EVar "decls")))))))))
 (DTypeSig true "lintFileDiagTriple" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))
@@ -2158,7 +2208,7 @@ appendIfPath file diag (path, src, diags) =
 (DTypeSig false "appendIfPath" (TyFun (TyCon "String") (TyFun (TyCon "Diag") (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))))))
 (DFunDef false "appendIfPath" ((PVar "file") (PVar "diag") (PTuple (PVar "path") (PVar "src") (PVar "diags"))) (EIf (EBinOp "==" (EVar "path") (EVar "file")) (ETuple (EVar "path") (EVar "src") (EBinOp "++" (EVar "diags") (EListLit (EVar "diag")))) (ETuple (EVar "path") (EVar "src") (EVar "diags"))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Ty" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberLocal" false) (mem "IfaceMethod" true) (mem "Decl" true) (mem "Expr" true) (mem "ExternDecl" true) (mem "Pat" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Ty" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberLocal" false) (mem "IfaceMethod" true) (mem "Decl" true) (mem "Expr" true) (mem "ExternDecl" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Pat" false))))
 (DUse false (UseGroup ("frontend" "ast_walk") ((mem "BodyOwner" true) (mem "DeclBody" true) (mem "ExprKind" true) (mem "childExprs" false) (mem "declBodies" false) (mem "exprKind" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "parseWithPositions" false) (mem "parseResultPairs" false) (mem "parseWithPositionsOptPairs" false) (mem "prescanErrorPairs" false) (mem "ParseError" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "entrySearchRoots" false) (mem "fileOfModuleId" false) (mem "findProjectRootOrSelf" false) (mem "moduleIdOfPath" false))))
@@ -2177,14 +2227,14 @@ appendIfPath file diag (path, src, diags) =
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false) (mem "buildOracle" false))))
 (DUse false (UseGroup ("support" "stage_count") ((mem "stageBump" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "collectComments" false) (mem "tokenizeWithOffsetPairs" false) (mem "commentLine" false) (mem "commentText" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Ctx" true) (mem "DirScope" true) (mem "Directive" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" true) (mem "Fixability" true) (mem "ProjectRule" true) (mem "Rule" true) (mem "RuleCheck" true) (mem "RuleMeta" false) (mem "StdlibIndex" true) (mem "Summary" false) (mem "StdlibIndexError" true) (mem "Visitor" true) (mem "factComments" false) (mem "fixToDiagFix" false) (mem "factScopes" false) (mem "clampApplicability" false) (mem "emptyStdlibIndex" false) (mem "maxApplicability" false) (mem "memoNew" false) (mem "mkStdlibIndex" false) (mem "projectIndexOf" false) (mem "stdlibIndexFingerprint" false) (mem "stdlibLocalModAsked" false) (mem "withStdlibLocalMods" false) (mem "needsProjectIndex" false) (mem "needsScopes" false) (mem "needsStdlibIndex" false) (mem "needsWildIndex" false) (mem "readsIndex" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Ctx" true) (mem "DirScope" true) (mem "Directive" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" true) (mem "Fixability" true) (mem "ProjectRule" true) (mem "Rule" true) (mem "RuleCheck" true) (mem "RuleMeta" false) (mem "StdlibIndex" true) (mem "Summary" false) (mem "StdlibIndexError" true) (mem "Visitor" true) (mem "factComments" false) (mem "factDeclLocs" false) (mem "fixToDiagFix" false) (mem "findingFixOf" false) (mem "factScopes" false) (mem "clampApplicability" false) (mem "emptyStdlibIndex" false) (mem "maxApplicability" false) (mem "memoGet" false) (mem "memoMap" false) (mem "memoNew" false) (mem "mkStdlibIndex" false) (mem "projectIndexOf" false) (mem "stdlibIndexFingerprint" false) (mem "stdlibLocalModAsked" false) (mem "withStdlibLocalMods" false) (mem "needsProjectIndex" false) (mem "needsScopes" false) (mem "needsStdlibIndex" false) (mem "needsWildIndex" false) (mem "readsIndex" false))))
 (DUse false (UseGroup ("tools" "lint_scope") ((mem "Binder" true) (mem "BinderKind" true) (mem "FileScopes" false) (mem "Use" true) (mem "bindersNamed" false) (mem "bindersNamedIn" false) (mem "buildScopes" false) (mem "usesNamedIn" false) (mem "wildImports" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "collectDirectives" false) (mem "declLocList" false) (mem "sortUniqS" false) (mem "zipDeclPos" false))))
 (DUse false (UseGroup ("tools" "lint_fix") ((mem "demoteOverComments" false))))
 (DUse false (UseGroup ("tools" "lint_dup") ((mem "dupClauseOfDecl" false))))
 (DUse false (UseGroup ("tools" "lint_registry") ((mem "allProjectRules" false) (mem "allRules" false) (mem "projectRuleActive" false) (mem "selectRules" false))))
 (DTypeSig true "mkFileFacts" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Positions") (TyCon "FileFacts")))))
-(DFunDef false "mkFileFacts" ((PVar "src") (PVar "prog") (PVar "pos")) (ERecordCreate "FileFacts" ((fa "ffSrc" (EVar "src")) (fa "ffComments" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "collectComments") (EVar "src"))))) (fa "ffOracle" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "buildOracle") (EVar "prog"))))) (fa "ffDupClauses" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EApp (EDictApp "flatMap") (EVar "dupClauseOfDecl")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog")))))) (fa "ffScopes" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "buildScopes") (EVar "prog"))))) (fa "ffLines" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "fromList") (EApp (EVar "lines") (EVar "src")))))) (fa "ffLocalMods" (EListLit)) (fa "ffCanonPath" (ELit (LString ""))))))
+(DFunDef false "mkFileFacts" ((PVar "src") (PVar "prog") (PVar "pos")) (EBlock (DoLet false false (PVar "declLocs") (EApp (EVar "memoNew") (ELam (PWild) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))) (DoExpr (ERecordCreate "FileFacts" ((fa "ffSrc" (EVar "src")) (fa "ffComments" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "collectComments") (EVar "src"))))) (fa "ffOracle" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "buildOracle") (EVar "prog"))))) (fa "ffDeclLocs" (EVar "declLocs")) (fa "ffDupClauses" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EApp (EDictApp "flatMap") (EVar "dupClauseOfDecl")) (EApp (EVar "memoGet") (EVar "declLocs")))))) (fa "ffScopes" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "buildScopes") (EVar "prog"))))) (fa "ffLines" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "fromList") (EApp (EVar "lines") (EVar "src")))))) (fa "ffLocalMods" (EListLit)) (fa "ffCanonPath" (ELit (LString ""))))))))
 (DTypeSig true "projectWildMods" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "projectWildMods" ((PVar "path") (PVar "prog")) (EMatch (EApp (EVar "wildModsOf") (EVar "prog")) (arm (PList) () (EListLit)) (arm (PVar "wild") () (EApp (EApp (EVar "localModsIn") (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf") (EVar "path")))) (EVar "wild")))))
 (DTypeSig true "wildModsOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
@@ -2219,7 +2269,7 @@ appendIfPath file diag (path, src, diags) =
 (DFunDef false "ranked" (PWild (PList)) (EListLit))
 (DFunDef false "ranked" ((PVar "i") (PCons (PVar "r") (PVar "rest"))) (EBinOp "::" (ETuple (EVar "i") (EVar "r")) (EApp (EApp (EVar "ranked") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))
 (DTypeSig true "lintProgramRanked" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Rule"))) (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Finding"))))))))))
-(DFunDef false "lintProgramRanked" ((PVar "idx") (PVar "rules") (PVar "path") (PVar "facts") (PVar "pos") (PVar "prog")) (EBlock (DoLet false false (PVar "enabled") (EApp (EApp (EVar "filterList") (EVar "rankedEnabled")) (EVar "rules"))) (DoLet false false (PVar "visitorSets") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "rf")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "ruleVisitors") (EVar "idx")) (EVar "path")) (EVar "facts")) (EVar "pos")) (EVar "prog")) (EApp (EVar "snd") (EVar "rf"))))) (EVar "enabled"))) (DoLet false false (PVar "walked") (EIf (EApp (EVar "isEmptyL") (EVar "visitorSets")) (EListLit) (EApp (EApp (EVar "runVisitors") (EVar "visitorSets")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "ruleFindings") (EVar "idx")) (EVar "path")) (EVar "facts")) (EVar "pos")) (EVar "prog")) (EVar "enabled")) (EVar "walked")))))
+(DFunDef false "lintProgramRanked" ((PVar "idx") (PVar "rules") (PVar "path") (PVar "facts") (PVar "pos") (PVar "prog")) (EBlock (DoLet false false (PVar "enabled") (EApp (EApp (EVar "filterList") (EVar "rankedEnabled")) (EVar "rules"))) (DoLet false false (PVar "visitorSets") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "rf")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "ruleVisitors") (EVar "idx")) (EVar "path")) (EVar "facts")) (EVar "pos")) (EVar "prog")) (EApp (EVar "snd") (EVar "rf"))))) (EVar "enabled"))) (DoLet false false (PVar "walked") (EIf (EApp (EVar "isEmptyL") (EVar "visitorSets")) (EListLit) (EApp (EApp (EVar "runVisitors") (EVar "visitorSets")) (EApp (EVar "factDeclLocs") (EVar "facts"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "ruleFindings") (EVar "idx")) (EVar "path")) (EVar "facts")) (EVar "pos")) (EVar "prog")) (EVar "enabled")) (EVar "walked")))))
 (DTypeSig false "rankedEnabled" (TyFun (TyTuple (TyCon "Int") (TyCon "Rule")) (TyCon "Bool")))
 (DFunDef false "rankedEnabled" ((PTuple PWild (PVar "r"))) (EFieldAccess (EVar "r") "enabled"))
 (DTypeSig false "ruleVisitors" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Rule") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Visitor"))))))))))
@@ -2232,7 +2282,7 @@ appendIfPath file diag (path, src, diags) =
 (DFunDef false "runVisitors" ((PVar "sets") (PVar "decls")) (EBlock (DoLet false false (PVar "tagged") (EApp (EVar "indexed") (EVar "sets"))) (DoLet false false (PVar "exprHooks") (EApp (EApp (EDictApp "flatMap") (EApp (EVar "hooksOf") (EVar "exprHookOf"))) (EVar "tagged"))) (DoLet false false (PVar "declHooks") (EApp (EApp (EDictApp "flatMap") (EApp (EVar "hooksOf") (EVar "declHookOf"))) (EVar "tagged"))) (DoLet false false (PVar "hits") (EApp (EVar "reverseL") (EApp (EApp (EApp (EApp (EVar "walkDecls") (EVar "exprHooks")) (EVar "declHooks")) (EListLit)) (EVar "decls")))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "t")) (EApp (EApp (EVar "findingsTagged") (EApp (EVar "fst") (EVar "t"))) (EVar "hits")))) (EVar "tagged")))))
 (DData Private "ExprHook" () ((variant "ExprHook" (ConPos (TyCon "Int") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "ExprKind"))) (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding"))))))) ())
 (DData Private "DeclHook" () ((variant "DeclHook" (ConPos (TyCon "Int") (TyFun (TyCon "Ctx") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Finding"))))))) ())
-(DData Private "BodyScope" () ((variant "BodyScope" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "BodyKind") (TyApp (TyCon "Option") (TyCon "Loc"))))) ())
+(DData Private "BodyScope" () ((variant "BodyScope" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "BodyKind") (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Loc")))))) ())
 (DData Private "BodyKind" () ((variant "PlainBody" (ConPos)) (variant "TestBody" (ConPos))) ())
 (DTypeSig false "hooksOf" (TyFun (TyFun (TyCon "Int") (TyFun (TyCon "Visitor") (TyApp (TyCon "List") (TyVar "h")))) (TyFun (TyTuple (TyCon "Int") (TyApp (TyCon "List") (TyCon "Visitor"))) (TyApp (TyCon "List") (TyVar "h")))))
 (DFunDef false "hooksOf" ((PVar "hookOf") (PTuple (PVar "i") (PVar "vs"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "hookOf") (EVar "i"))) (EVar "vs")))
@@ -2250,17 +2300,19 @@ appendIfPath file diag (path, src, diags) =
 (DFunDef false "walkDecls" (PWild PWild (PVar "acc") (PList)) (EVar "acc"))
 (DFunDef false "walkDecls" ((PVar "exprHooks") (PVar "declHooks") (PVar "acc") (PCons (PTuple (PVar "d") (PVar "loc")) (PVar "rest"))) (EBlock (DoLet false false (PVar "bodies") (EApp (EVar "declBodies") (EVar "d"))) (DoLet false false (PVar "acc2") (EMatch (EVar "declHooks") (arm (PList) () (EVar "acc")) (arm PWild () (EApp (EApp (EApp (EApp (EVar "runDeclHooks") (EApp (EApp (EApp (EApp (EVar "scopeCtx") (EApp (EApp (EVar "declScope") (EVar "bodies")) (EVar "loc"))) (EVar "KLoc")) (EVar "loc")) (EVar "None"))) (EVar "d")) (EVar "acc")) (EVar "declHooks"))))) (DoLet false false (PVar "acc3") (EMatch (EVar "exprHooks") (arm (PList) () (EVar "acc2")) (arm PWild () (EApp (EApp (EApp (EApp (EVar "walkBodies") (EVar "exprHooks")) (EVar "loc")) (EVar "acc2")) (EVar "bodies"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "walkDecls") (EVar "exprHooks")) (EVar "declHooks")) (EVar "acc3")) (EVar "rest")))))
 (DTypeSig false "declScope" (TyFun (TyApp (TyCon "List") (TyCon "DeclBody")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "BodyScope"))))
-(DFunDef false "declScope" ((PList) (PVar "loc")) (EApp (EApp (EApp (EApp (EVar "BodyScope") (ELit (LString ""))) (EListLit)) (EVar "PlainBody")) (EVar "loc")))
+(DFunDef false "declScope" ((PList) (PVar "loc")) (EApp (EApp (EApp (EApp (EApp (EVar "BodyScope") (ELit (LString ""))) (EListLit)) (EVar "PlainBody")) (EVar "loc")) (EVar "None")))
 (DFunDef false "declScope" ((PCons (PCon "DeclBody" (PVar "owner") PWild) PWild) (PVar "loc")) (EApp (EApp (EVar "ownerScope") (EVar "owner")) (EVar "loc")))
 (DTypeSig false "ownerScope" (TyFun (TyCon "BodyOwner") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "BodyScope"))))
-(DFunDef false "ownerScope" ((PCon "OwnerClause" (PVar "name") (PVar "ps")) (PVar "loc")) (EApp (EApp (EApp (EApp (EVar "BodyScope") (EVar "name")) (EVar "ps")) (EVar "PlainBody")) (EVar "loc")))
-(DFunDef false "ownerScope" ((PCon "OwnerImplMethod" PWild (PVar "m") (PVar "ps")) (PVar "loc")) (EApp (EApp (EApp (EApp (EVar "BodyScope") (EVar "m")) (EVar "ps")) (EVar "PlainBody")) (EVar "loc")))
-(DFunDef false "ownerScope" ((PCon "OwnerIfaceDefault" PWild (PVar "m") (PVar "ps")) (PVar "loc")) (EApp (EApp (EApp (EApp (EVar "BodyScope") (EVar "m")) (EVar "ps")) (EVar "PlainBody")) (EVar "loc")))
-(DFunDef false "ownerScope" ((PCon "OwnerTest" (PVar "name")) (PVar "loc")) (EApp (EApp (EApp (EApp (EVar "BodyScope") (EVar "name")) (EListLit)) (EVar "TestBody")) (EVar "loc")))
-(DFunDef false "ownerScope" ((PCon "OwnerProp" (PVar "name") PWild) (PVar "loc")) (EApp (EApp (EApp (EApp (EVar "BodyScope") (EVar "name")) (EListLit)) (EVar "TestBody")) (EVar "loc")))
-(DFunDef false "ownerScope" ((PCon "OwnerLetGroup" (PVar "name") (PVar "ps")) (PVar "loc")) (EApp (EApp (EApp (EApp (EVar "BodyScope") (EVar "name")) (EVar "ps")) (EVar "PlainBody")) (EVar "loc")))
+(DFunDef false "ownerScope" ((PCon "OwnerClause" (PVar "name") (PVar "ps")) (PVar "loc")) (EApp (EApp (EApp (EApp (EApp (EVar "BodyScope") (EVar "name")) (EVar "ps")) (EVar "PlainBody")) (EVar "loc")) (EVar "None")))
+(DFunDef false "ownerScope" ((PCon "OwnerImplMethod" PWild (PVar "m") (PVar "ps")) (PVar "loc")) (EApp (EApp (EApp (EApp (EApp (EVar "BodyScope") (EVar "m")) (EVar "ps")) (EVar "PlainBody")) (EVar "loc")) (EVar "None")))
+(DFunDef false "ownerScope" ((PCon "OwnerIfaceDefault" PWild (PVar "m") (PVar "ps")) (PVar "loc")) (EApp (EApp (EApp (EApp (EApp (EVar "BodyScope") (EVar "m")) (EVar "ps")) (EVar "PlainBody")) (EVar "loc")) (EVar "None")))
+(DFunDef false "ownerScope" ((PCon "OwnerTest" (PVar "name")) (PVar "loc")) (EApp (EApp (EApp (EApp (EApp (EVar "BodyScope") (EVar "name")) (EListLit)) (EVar "TestBody")) (EVar "loc")) (EVar "None")))
+(DFunDef false "ownerScope" ((PCon "OwnerProp" (PVar "name") PWild) (PVar "loc")) (EApp (EApp (EApp (EApp (EApp (EVar "BodyScope") (EVar "name")) (EListLit)) (EVar "TestBody")) (EVar "loc")) (EVar "None")))
+(DFunDef false "ownerScope" ((PCon "OwnerLetGroup" (PVar "name") (PVar "ps")) (PVar "loc")) (EApp (EApp (EApp (EApp (EApp (EVar "BodyScope") (EVar "name")) (EVar "ps")) (EVar "PlainBody")) (EVar "loc")) (EVar "None")))
+(DTypeSig false "inBinding" (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyFun (TyCon "BodyScope") (TyCon "BodyScope")))))
+(DFunDef false "inBinding" ((PVar "name") (PVar "site") (PCon "BodyScope" (PVar "n") (PVar "ps") (PVar "kind") (PVar "declLoc") PWild)) (EApp (EApp (EApp (EApp (EApp (EVar "BodyScope") (EVar "n")) (EVar "ps")) (EVar "kind")) (EVar "declLoc")) (EApp (EVar "Some") (ETuple (EVar "name") (EVar "site")))))
 (DTypeSig false "scopeCtx" (TyFun (TyCon "BodyScope") (TyFun (TyCon "ExprKind") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Ctx"))))))
-(DFunDef false "scopeCtx" ((PCon "BodyScope" (PVar "name") (PVar "ps") (PVar "kind") (PVar "declLoc")) (PVar "parent") (PVar "span") (PVar "own")) (ERecordCreate "Ctx" ((fa "ctxDeclName" (EVar "name")) (fa "ctxParams" (EVar "ps")) (fa "ctxInTest" (EApp (EVar "isTestBody") (EVar "kind"))) (fa "ctxParent" (EIf (EBinOp "==" (EVar "parent") (EVar "KLoc")) (EVar "None") (EApp (EVar "Some") (EVar "parent")))) (fa "ctxSpan" (EVar "span")) (fa "ctxOwn" (EVar "own")) (fa "ctxDeclLoc" (EVar "declLoc")))))
+(DFunDef false "scopeCtx" ((PCon "BodyScope" (PVar "name") (PVar "ps") (PVar "kind") (PVar "declLoc") (PVar "binding")) (PVar "parent") (PVar "span") (PVar "own")) (ERecordCreate "Ctx" ((fa "ctxDeclName" (EVar "name")) (fa "ctxParams" (EVar "ps")) (fa "ctxInTest" (EApp (EVar "isTestBody") (EVar "kind"))) (fa "ctxParent" (EIf (EBinOp "==" (EVar "parent") (EVar "KLoc")) (EVar "None") (EApp (EVar "Some") (EVar "parent")))) (fa "ctxSpan" (EVar "span")) (fa "ctxOwn" (EVar "own")) (fa "ctxDeclLoc" (EVar "declLoc")) (fa "ctxBinding" (EVar "binding")))))
 (DTypeSig false "isTestBody" (TyFun (TyCon "BodyKind") (TyCon "Bool")))
 (DFunDef false "isTestBody" ((PCon "TestBody")) (EVar "True"))
 (DFunDef false "isTestBody" ((PCon "PlainBody")) (EVar "False"))
@@ -2277,7 +2329,11 @@ appendIfPath file diag (path, src, diags) =
 (DTypeSig false "walkWrapped" (TyFun (TyApp (TyCon "List") (TyCon "ExprHook")) (TyFun (TyCon "BodyScope") (TyFun (TyCon "ExprKind") (TyFun (TyCon "Loc") (TyFun (TyCon "Loc") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Finding"))) (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Finding")))))))))))
 (DFunDef false "walkWrapped" ((PVar "hooks") (PVar "scope") (PVar "parent") (PVar "outer") (PVar "innermost0") (PVar "acc") (PVar "e0")) (ELetGroup ((lgb "go" (clause (PWild (PCon "ELoc" (PVar "l") (PVar "inner"))) (EApp (EApp (EVar "go") (EVar "l")) (EVar "inner"))) (clause ((PVar "innermost") (PVar "e")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "walkNode") (EVar "hooks")) (EVar "scope")) (EVar "parent")) (EApp (EVar "Some") (EVar "innermost"))) (EApp (EVar "Some") (EVar "outer"))) (EVar "acc")) (EVar "e"))))) (EApp (EApp (EVar "go") (EVar "innermost0")) (EVar "e0"))))
 (DTypeSig false "walkNode" (TyFun (TyApp (TyCon "List") (TyCon "ExprHook")) (TyFun (TyCon "BodyScope") (TyFun (TyCon "ExprKind") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Finding"))) (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Finding")))))))))))
-(DFunDef false "walkNode" ((PVar "hooks") (PVar "scope") (PVar "parent") (PVar "span") (PVar "own") (PVar "acc") (PVar "e")) (EBlock (DoLet false false (PVar "k") (EApp (EVar "exprKind") (EVar "e"))) (DoLet false false (PVar "acc2") (EApp (EApp (EApp (EApp (EApp (EVar "visitHooks") (EApp (EApp (EApp (EApp (EVar "scopeCtx") (EVar "scope")) (EVar "parent")) (EVar "span")) (EVar "own"))) (EVar "k")) (EVar "e")) (EVar "acc")) (EVar "hooks"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "walkKids") (EVar "hooks")) (EVar "scope")) (EVar "k")) (EVar "span")) (EVar "acc2")) (EApp (EVar "childExprs") (EVar "e"))))))
+(DFunDef false "walkNode" ((PVar "hooks") (PVar "scope") (PVar "parent") (PVar "span") (PVar "own") (PVar "acc") (PVar "e")) (EBlock (DoLet false false (PVar "k") (EApp (EVar "exprKind") (EVar "e"))) (DoLet false false (PVar "acc2") (EApp (EApp (EApp (EApp (EApp (EVar "visitHooks") (EApp (EApp (EApp (EApp (EVar "scopeCtx") (EVar "scope")) (EVar "parent")) (EVar "span")) (EVar "own"))) (EVar "k")) (EVar "e")) (EVar "acc")) (EVar "hooks"))) (DoExpr (EMatch (EVar "e") (arm (PCon "ELetGroup" (PVar "binds") (PVar "body")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "walkKids") (EVar "hooks")) (EVar "scope")) (EVar "k")) (EVar "span")) (EApp (EApp (EApp (EApp (EApp (EVar "walkBinds") (EVar "hooks")) (EVar "scope")) (EVar "span")) (EVar "acc2")) (EVar "binds"))) (EListLit (EVar "body")))) (arm PWild () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "walkKids") (EVar "hooks")) (EVar "scope")) (EVar "k")) (EVar "span")) (EVar "acc2")) (EApp (EVar "childExprs") (EVar "e"))))))))
+(DTypeSig false "walkBinds" (TyFun (TyApp (TyCon "List") (TyCon "ExprHook")) (TyFun (TyCon "BodyScope") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Finding"))) (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Finding")))))))))
+(DFunDef false "walkBinds" ((PVar "hooks") (PVar "scope") (PVar "span") (PVar "acc0") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PVar "acc") (PList)) (EVar "acc")) (clause ((PVar "acc") (PCons (PCon "LetBind" (PVar "name") (PVar "clauses") (PVar "site") PWild) (PVar "rest"))) (EApp (EApp (EVar "go") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "walkKids") (EVar "hooks")) (EApp (EApp (EApp (EVar "inBinding") (EVar "name")) (EVar "site")) (EVar "scope"))) (EVar "KLetGroup")) (EVar "span")) (EVar "acc")) (EApp (EApp (EMethodRef "map") (EVar "clauseBody")) (EVar "clauses")))) (EVar "rest"))))) (EApp (EApp (EVar "go") (EVar "acc0")) (EVar "xs0"))))
+(DTypeSig false "clauseBody" (TyFun (TyCon "FunClause") (TyCon "Expr")))
+(DFunDef false "clauseBody" ((PCon "FunClause" PWild (PVar "body"))) (EVar "body"))
 (DTypeSig false "walkKids" (TyFun (TyApp (TyCon "List") (TyCon "ExprHook")) (TyFun (TyCon "BodyScope") (TyFun (TyCon "ExprKind") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Finding"))) (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Finding"))))))))))
 (DFunDef false "walkKids" ((PVar "hooks") (PVar "scope") (PVar "parent") (PVar "span") (PVar "acc0") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PVar "acc") (PList)) (EVar "acc")) (clause ((PVar "acc") (PCons (PVar "c") (PVar "cs"))) (EApp (EApp (EVar "go") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "walkExpr") (EVar "hooks")) (EVar "scope")) (EVar "parent")) (EVar "span")) (EVar "acc")) (EVar "c"))) (EVar "cs"))))) (EApp (EApp (EVar "go") (EVar "acc0")) (EVar "xs0"))))
 (DTypeSig false "visitHooks" (TyFun (TyCon "Ctx") (TyFun (TyCon "ExprKind") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Finding"))) (TyFun (TyApp (TyCon "List") (TyCon "ExprHook")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Finding")))))))))
@@ -2290,7 +2346,7 @@ appendIfPath file diag (path, src, diags) =
 (DFunDef false "kindIn" (PWild (PList)) (EVar "False"))
 (DFunDef false "kindIn" ((PVar "k") (PCons (PVar "x") (PVar "xs"))) (EBinOp "||" (EBinOp "==" (EVar "k") (EVar "x")) (EApp (EApp (EVar "kindIn") (EVar "k")) (EVar "xs"))))
 (DTypeSig false "restampFinding" (TyFun (TyCon "Rule") (TyFun (TyCon "Finding") (TyCon "Finding"))))
-(DFunDef false "restampFinding" ((PVar "r") (PVar "f")) (ERecordCreate "Finding" ((fa "rule" (EFieldAccess (EVar "f") "rule")) (fa "message" (EFieldAccess (EVar "f") "message")) (fa "severity" (EFieldAccess (EVar "r") "severity")) (fa "loc" (EFieldAccess (EVar "f") "loc")) (fa "fix" (EApp (EApp (EMethodRef "map") (EApp (EVar "clampFix") (EFieldAccess (EFieldAccess (EVar "r") "meta") "fixability"))) (EFieldAccess (EVar "f") "fix"))))))
+(DFunDef false "restampFinding" ((PVar "r") (PVar "f")) (ERecordCreate "Finding" ((fa "rule" (EFieldAccess (EVar "f") "rule")) (fa "message" (EFieldAccess (EVar "f") "message")) (fa "severity" (EFieldAccess (EVar "r") "severity")) (fa "loc" (EFieldAccess (EVar "f") "loc")) (fa "fix" (EApp (EApp (EVar "memoMap") (EApp (EMethodRef "map") (EApp (EVar "clampFix") (EFieldAccess (EFieldAccess (EVar "r") "meta") "fixability")))) (EFieldAccess (EVar "f") "fix"))))))
 (DTypeSig false "clampFix" (TyFun (TyCon "Fixability") (TyFun (TyCon "Fix") (TyCon "Fix"))))
 (DFunDef false "clampFix" ((PVar "fixability") (PVar "fx")) (EMatch (EApp (EVar "maxApplicability") (EVar "fixability")) (arm (PCon "Some" (PVar "ceiling")) () (ERecordCreate "Fix" ((fa "fixApplicability" (EApp (EApp (EVar "clampApplicability") (EVar "ceiling")) (EFieldAccess (EVar "fx") "fixApplicability"))) (fa "fixEdits" (EFieldAccess (EVar "fx") "fixEdits")) (fa "fixMessage" (EFieldAccess (EVar "fx") "fixMessage"))))) (arm (PCon "None") () (EVar "fx"))))
 (DTypeSig false "restampSeverity" (TyFun (TyCon "Severity") (TyFun (TyCon "Finding") (TyCon "Finding"))))
@@ -2487,7 +2543,7 @@ appendIfPath file diag (path, src, diags) =
 (DTypeSig true "isFindingError" (TyFun (TyCon "Finding") (TyCon "Bool")))
 (DFunDef false "isFindingError" ((PVar "f")) (EMatch (EFieldAccess (EVar "f") "severity") (arm (PCon "SevError") () (EVar "True")) (arm (PCon "SevWarning") () (EVar "False"))))
 (DTypeSig true "findingToDiag" (TyFun (TyCon "Finding") (TyCon "Diag")))
-(DFunDef false "findingToDiag" ((PVar "f")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EFieldAccess (EVar "f") "severity")) (EApp (EVar "LintRule") (EFieldAccess (EVar "f") "rule"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "[")) (EApp (EMethodRef "display") (EFieldAccess (EVar "f") "rule"))) (ELit (LString "] "))) (EApp (EMethodRef "display") (EFieldAccess (EVar "f") "message"))) (ELit (LString "")))) (EFieldAccess (EVar "f") "loc")) (EVar "None")) (EApp (EApp (EMethodRef "map") (EVar "fixToDiagFix")) (EFieldAccess (EVar "f") "fix"))))
+(DFunDef false "findingToDiag" ((PVar "f")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EFieldAccess (EVar "f") "severity")) (EApp (EVar "LintRule") (EFieldAccess (EVar "f") "rule"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "[")) (EApp (EMethodRef "display") (EFieldAccess (EVar "f") "rule"))) (ELit (LString "] "))) (EApp (EMethodRef "display") (EFieldAccess (EVar "f") "message"))) (ELit (LString "")))) (EFieldAccess (EVar "f") "loc")) (EVar "None")) (EApp (EApp (EMethodRef "map") (EVar "fixToDiagFix")) (EApp (EVar "findingFixOf") (EVar "f")))))
 (DTypeSig true "lintFileDiagTripleParsed" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")) (TyCon "Positions") (TyApp (TyCon "List") (TyCon "Decl"))))))))))
 (DFunDef false "lintFileDiagTripleParsed" ((PVar "idx") (PVar "disable") (PVar "only") (PVar "deny") (PVar "path")) (EBlock (DoLet false false (PVar "src") (EApp (EVar "readFileSafe") (EVar "path"))) (DoExpr (EMatch (EApp (EVar "lintParseSource") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (ETuple (EVar "path") (EVar "src") (EListLit (EApp (EApp (EVar "parseErrDiag") (EVar "path")) (EVar "e"))) (EApp (EApp (EApp (EApp (EVar "Positions") (EListLit)) (EListLit)) (ELit (LInt 0))) (EListLit)) (EListLit))) (arm (PCon "Ok" (PTuple (PVar "decls") (PVar "pos"))) () (EBlock (DoLet false false (PVar "facts") (EApp (EApp (EApp (EApp (EVar "mkFileFactsAt") (EVar "path")) (EVar "src")) (EVar "decls")) (EVar "pos"))) (DoLet false false (PVar "allFindings") (EApp (EApp (EVar "applySuppressionsDirs") (EApp (EVar "factDirectives") (EVar "facts"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lintProgramFacts") (EVar "idx")) (EApp (EApp (EVar "selectRules") (EVar "only")) (EVar "disable"))) (EVar "path")) (EVar "facts")) (EVar "pos")) (EVar "decls")))) (DoLet false false (PVar "findings") (EApp (EApp (EApp (EApp (EVar "applyFindingFilters") (EVar "disable")) (EVar "only")) (EVar "deny")) (EVar "allFindings"))) (DoExpr (ETuple (EVar "path") (EVar "src") (EApp (EApp (EMethodRef "map") (EVar "findingToDiag")) (EApp (EApp (EApp (EVar "demoteOverComments") (EVar "path")) (EVar "src")) (EVar "findings"))) (EVar "pos") (EVar "decls")))))))))
 (DTypeSig true "lintFileDiagTriple" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))

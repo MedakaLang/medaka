@@ -21,10 +21,11 @@ import tools.lint_core.{
   StdlibIndex,
   factComments,
   mkRule,
+  noFix,
+  factDeclLocs,
 }
 import tools.lint_shared.{
   dedupeNamesLoc,
-  declLocList,
   nameSetOf,
   ruleNameDeadCode,
   sortUniqS,
@@ -84,9 +85,9 @@ ruleDeadCode : StdlibIndex ->
   Positions ->
   List Decl ->
   List Finding
-ruleDeadCode _ _ facts pos prog =
+ruleDeadCode _ _ facts _ prog =
   let reach = reachableNames facts prog
-  map deadFinding (filterList (deadPair reach) (privateDefLocs pos prog))
+  map deadFinding (filterList (deadPair reach) (privateDefLocs facts prog))
 
 deadPair : HashMap String Unit -> (String, Option Loc) -> Bool
 deadPair reach (n, _) = not (has n reach)
@@ -100,7 +101,7 @@ deadFinding (name, loc) = Finding {
       ++ "' is unreachable from exports/main/doctests — remove it (dead code)",
   severity = SevWarning,
   loc = loc,
-  fix = None,
+  fix = noFix,
 }
 
 -- private (unexported) top-level fn/value bindings, deduped by name (first loc),
@@ -111,8 +112,8 @@ deadFinding (name, loc) = Finding {
 -- (`DTypeSig True`), NOT the `DFunDef` — so exportedness is decided by
 -- `exportedNames` (which unions DFunDef-pub and DTypeSig-pub), not the DFunDef
 -- flag alone.
-privateDefLocs : Positions -> List Decl -> List (String, Option Loc)
-privateDefLocs pos prog =
+privateDefLocs : FileFacts -> List Decl -> List (String, Option Loc)
+privateDefLocs facts prog =
   -- HashMap-as-set: `contains` over the exported LIST was O(exports) per decl,
   -- i.e. O(decls x exports) over the filterList — one of this rule's four
   -- List-as-a-set quadratics (see reachableNames).  Membership only; order
@@ -121,7 +122,7 @@ privateDefLocs pos prog =
   dedupeNamesLoc
     (filterList
       (candidatePair exported)
-      (flatMap allDefNameL (declLocList pos prog)))
+      (flatMap allDefNameL (factDeclLocs facts)))
 
 allDefNameL : (Decl, Option Loc) -> List (String, Option Loc)
 allDefNameL (DFunDef _ name _ _ _ _, loc) = [(name, loc)]

@@ -1,5 +1,5 @@
 # META
-source_lines=526
+source_lines=527
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-stdlib-reimpl: a top-level function that reimplements an exported stdlib function under another name (same declared signature) (STYLE §7a).
@@ -27,14 +27,15 @@ import tools.lint_core.{
   Scope(..),
   StdlibIndex,
   mkRule,
+  noFix,
   stdlibEntriesOf,
   stdlibIndexNames,
+  factDeclLocs,
 }
 import tools.lint_shared.{
   appSpineOf,
   clausesOf,
   dedupeNamesLoc,
-  declLocList,
   lastSegOf,
   memberLocalIfOrigin,
   nameSetOf,
@@ -130,7 +131,7 @@ ruleStdlibReimpl : StdlibIndex ->
   Positions ->
   List Decl ->
   List Finding
-ruleStdlibReimpl idx path _ pos prog =
+ruleStdlibReimpl idx path facts _ prog =
   -- both hoisted out of the per-def loop: `stdlibIndexNames` sorts the whole
   -- key set on every call, and the signature map is one pass over the file.
   let ownMod = stdlibModuleOf path
@@ -143,7 +144,7 @@ ruleStdlibReimpl idx path _ pos prog =
   -- keeping the FIRST clause's location.
   flatMap
     (reimplHit idx ownMod names sigs locals prog)
-    (dedupeNamesLoc (flatMap topDefNameL (declLocList pos prog)))
+    (dedupeNamesLoc (flatMap topDefNameL (factDeclLocs facts)))
 
 -- ── homonym guard (#2327 finding 2) ───────────────────────────────────────────
 -- `tyCanon` compares type constructors, constraint heads and effect labels by
@@ -425,7 +426,7 @@ stdlibFinding name modName stdName loc = Finding {
     "top-level '\{name}' reimplements stdlib '\{modName}.\{stdName}' (same declared signature) — use the stdlib version",
   severity = SevWarning,
   loc = loc,
-  fix = None,
+  fix = noFix,
 }
 
 -- ── declared-signature identity, up to renaming ───────────────────────────────
@@ -534,12 +535,12 @@ indexInGo x (y :: ys) i
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("support" "util") ((mem "escStr" false) (mem "anyList" false) (mem "filterList" false) (mem "reverseL" false) (mem "joinWith" false) (mem "startsWith" false) (mem "endsWith" false) (mem "dedup" false))))
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "get" false) (mem "setInPlace" false) (mem "has" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "mkRule" false) (mem "stdlibEntriesOf" false) (mem "stdlibIndexNames" false))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "appSpineOf" false) (mem "clausesOf" false) (mem "dedupeNamesLoc" false) (mem "declLocList" false) (mem "lastSegOf" false) (mem "memberLocalIfOrigin" false) (mem "nameSetOf" false) (mem "paramNameOf" false) (mem "ruleNameStdlibReimpl" false) (mem "sortUniqS" false) (mem "stdlibModuleOf" false) (mem "stripELoc" false) (mem "topDefNameL" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "mkRule" false) (mem "noFix" false) (mem "stdlibEntriesOf" false) (mem "stdlibIndexNames" false) (mem "factDeclLocs" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "appSpineOf" false) (mem "clausesOf" false) (mem "dedupeNamesLoc" false) (mem "lastSegOf" false) (mem "memberLocalIfOrigin" false) (mem "nameSetOf" false) (mem "paramNameOf" false) (mem "ruleNameStdlibReimpl" false) (mem "sortUniqS" false) (mem "stdlibModuleOf" false) (mem "stripELoc" false) (mem "topDefNameL" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameStdlibReimpl")) (fa "summary" (ELit (LString "top-level function reimplements a stdlib function under a different name (same declared signature) (STYLE §7a)"))) (fa "doc" (ELit (LString "A top-level function whose declared signature equals that of an exported stdlib function, and whose body does the same work, reimplements the stdlib under another name. The rule compares against the stdlib signature index. Call the stdlib function.\n\nBefore:\n  sumAll : List Int -> Int\n  sumAll xs = foldl (+) 0 xs\nAfter:\n  use `sum` from the stdlib"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Baselined")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "NotFixable")) (fa "needs" (EListLit (EVar "NeedsStdlibIndex")))))) (EVar "ruleStdlibReimpl")) (EVar "None")))
 (DTypeSig false "ruleStdlibReimpl" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "ruleStdlibReimpl" ((PVar "idx") (PVar "path") PWild (PVar "pos") (PVar "prog")) (EBlock (DoLet false false (PVar "ownMod") (EApp (EVar "stdlibModuleOf") (EVar "path"))) (DoLet false false (PVar "names") (EApp (EVar "stdlibIndexNames") (EVar "idx"))) (DoLet false false (PVar "sigs") (EApp (EVar "sigTyMapOf") (EVar "prog"))) (DoLet false false (PVar "locals") (EApp (EVar "nameSetOf") (EApp (EApp (EVar "flatMap") (EVar "localTyNamesL")) (EVar "prog")))) (DoExpr (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "reimplHit") (EVar "idx")) (EVar "ownMod")) (EVar "names")) (EVar "sigs")) (EVar "locals")) (EVar "prog"))) (EApp (EVar "dedupeNamesLoc") (EApp (EApp (EVar "flatMap") (EVar "topDefNameL")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))))))
+(DFunDef false "ruleStdlibReimpl" ((PVar "idx") (PVar "path") (PVar "facts") PWild (PVar "prog")) (EBlock (DoLet false false (PVar "ownMod") (EApp (EVar "stdlibModuleOf") (EVar "path"))) (DoLet false false (PVar "names") (EApp (EVar "stdlibIndexNames") (EVar "idx"))) (DoLet false false (PVar "sigs") (EApp (EVar "sigTyMapOf") (EVar "prog"))) (DoLet false false (PVar "locals") (EApp (EVar "nameSetOf") (EApp (EApp (EVar "flatMap") (EVar "localTyNamesL")) (EVar "prog")))) (DoExpr (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "reimplHit") (EVar "idx")) (EVar "ownMod")) (EVar "names")) (EVar "sigs")) (EVar "locals")) (EVar "prog"))) (EApp (EVar "dedupeNamesLoc") (EApp (EApp (EVar "flatMap") (EVar "topDefNameL")) (EApp (EVar "factDeclLocs") (EVar "facts"))))))))
 (DTypeSig false "localTyNamesL" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "localTyNamesL" ((PRec "DData" ((rf "dataName" (PVar "n"))) false)) (EListLit (EVar "n")))
 (DFunDef false "localTyNamesL" ((PRec "DNewtype" ((rf "newtypeName" (PVar "n"))) false)) (EListLit (EVar "n")))
@@ -617,7 +618,7 @@ indexInGo x (y :: ys) i
 (DFunDef false "topSigPairL" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "topSigPairL") (EVar "d")))
 (DFunDef false "topSigPairL" (PWild) (EListLit))
 (DTypeSig false "stdlibFinding" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Finding"))))))
-(DFunDef false "stdlibFinding" ((PVar "name") (PVar "modName") (PVar "stdName") (PVar "loc")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameStdlibReimpl")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "top-level '")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "' reimplements stdlib '"))) (EApp (EVar "display") (EVar "modName"))) (ELit (LString "."))) (EApp (EVar "display") (EVar "stdName"))) (ELit (LString "' (same declared signature) — use the stdlib version")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None")))))
+(DFunDef false "stdlibFinding" ((PVar "name") (PVar "modName") (PVar "stdName") (PVar "loc")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameStdlibReimpl")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "top-level '")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "' reimplements stdlib '"))) (EApp (EVar "display") (EVar "modName"))) (ELit (LString "."))) (EApp (EVar "display") (EVar "stdName"))) (ELit (LString "' (same declared signature) — use the stdlib version")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "noFix")))))
 (DTypeSig false "tyCanon" (TyFun (TyCon "Ty") (TyCon "String")))
 (DFunDef false "tyCanon" ((PVar "t")) (EApp (EApp (EApp (EVar "tyCanonIn") (EApp (EVar "dedup") (EApp (EVar "tyVarsOf") (EVar "t")))) (EApp (EVar "dedup") (EApp (EVar "rowVarsOf") (EVar "t")))) (EVar "t")))
 (DTypeSig false "tyVarsOf" (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "String"))))
@@ -669,12 +670,12 @@ indexInGo x (y :: ys) i
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("support" "util") ((mem "escStr" false) (mem "anyList" false) (mem "filterList" false) (mem "reverseL" false) (mem "joinWith" false) (mem "startsWith" false) (mem "endsWith" false) (mem "dedup" false))))
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "get" false) (mem "setInPlace" false) (mem "has" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "mkRule" false) (mem "stdlibEntriesOf" false) (mem "stdlibIndexNames" false))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "appSpineOf" false) (mem "clausesOf" false) (mem "dedupeNamesLoc" false) (mem "declLocList" false) (mem "lastSegOf" false) (mem "memberLocalIfOrigin" false) (mem "nameSetOf" false) (mem "paramNameOf" false) (mem "ruleNameStdlibReimpl" false) (mem "sortUniqS" false) (mem "stdlibModuleOf" false) (mem "stripELoc" false) (mem "topDefNameL" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "mkRule" false) (mem "noFix" false) (mem "stdlibEntriesOf" false) (mem "stdlibIndexNames" false) (mem "factDeclLocs" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "appSpineOf" false) (mem "clausesOf" false) (mem "dedupeNamesLoc" false) (mem "lastSegOf" false) (mem "memberLocalIfOrigin" false) (mem "nameSetOf" false) (mem "paramNameOf" false) (mem "ruleNameStdlibReimpl" false) (mem "sortUniqS" false) (mem "stdlibModuleOf" false) (mem "stripELoc" false) (mem "topDefNameL" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameStdlibReimpl")) (fa "summary" (ELit (LString "top-level function reimplements a stdlib function under a different name (same declared signature) (STYLE §7a)"))) (fa "doc" (ELit (LString "A top-level function whose declared signature equals that of an exported stdlib function, and whose body does the same work, reimplements the stdlib under another name. The rule compares against the stdlib signature index. Call the stdlib function.\n\nBefore:\n  sumAll : List Int -> Int\n  sumAll xs = foldl (+) 0 xs\nAfter:\n  use `sum` from the stdlib"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Baselined")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "NotFixable")) (fa "needs" (EListLit (EVar "NeedsStdlibIndex")))))) (EVar "ruleStdlibReimpl")) (EVar "None")))
 (DTypeSig false "ruleStdlibReimpl" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "ruleStdlibReimpl" ((PVar "idx") (PVar "path") PWild (PVar "pos") (PVar "prog")) (EBlock (DoLet false false (PVar "ownMod") (EApp (EVar "stdlibModuleOf") (EVar "path"))) (DoLet false false (PVar "names") (EApp (EVar "stdlibIndexNames") (EVar "idx"))) (DoLet false false (PVar "sigs") (EApp (EVar "sigTyMapOf") (EVar "prog"))) (DoLet false false (PVar "locals") (EApp (EVar "nameSetOf") (EApp (EApp (EDictApp "flatMap") (EVar "localTyNamesL")) (EVar "prog")))) (DoExpr (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "reimplHit") (EVar "idx")) (EVar "ownMod")) (EVar "names")) (EVar "sigs")) (EVar "locals")) (EVar "prog"))) (EApp (EVar "dedupeNamesLoc") (EApp (EApp (EDictApp "flatMap") (EVar "topDefNameL")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))))))
+(DFunDef false "ruleStdlibReimpl" ((PVar "idx") (PVar "path") (PVar "facts") PWild (PVar "prog")) (EBlock (DoLet false false (PVar "ownMod") (EApp (EVar "stdlibModuleOf") (EVar "path"))) (DoLet false false (PVar "names") (EApp (EVar "stdlibIndexNames") (EVar "idx"))) (DoLet false false (PVar "sigs") (EApp (EVar "sigTyMapOf") (EVar "prog"))) (DoLet false false (PVar "locals") (EApp (EVar "nameSetOf") (EApp (EApp (EDictApp "flatMap") (EVar "localTyNamesL")) (EVar "prog")))) (DoExpr (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "reimplHit") (EVar "idx")) (EVar "ownMod")) (EVar "names")) (EVar "sigs")) (EVar "locals")) (EVar "prog"))) (EApp (EVar "dedupeNamesLoc") (EApp (EApp (EDictApp "flatMap") (EVar "topDefNameL")) (EApp (EVar "factDeclLocs") (EVar "facts"))))))))
 (DTypeSig false "localTyNamesL" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "localTyNamesL" ((PRec "DData" ((rf "dataName" (PVar "n"))) false)) (EListLit (EVar "n")))
 (DFunDef false "localTyNamesL" ((PRec "DNewtype" ((rf "newtypeName" (PVar "n"))) false)) (EListLit (EVar "n")))
@@ -752,7 +753,7 @@ indexInGo x (y :: ys) i
 (DFunDef false "topSigPairL" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "topSigPairL") (EVar "d")))
 (DFunDef false "topSigPairL" (PWild) (EListLit))
 (DTypeSig false "stdlibFinding" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Finding"))))))
-(DFunDef false "stdlibFinding" ((PVar "name") (PVar "modName") (PVar "stdName") (PVar "loc")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameStdlibReimpl")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "top-level '")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "' reimplements stdlib '"))) (EApp (EMethodRef "display") (EVar "modName"))) (ELit (LString "."))) (EApp (EMethodRef "display") (EVar "stdName"))) (ELit (LString "' (same declared signature) — use the stdlib version")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None")))))
+(DFunDef false "stdlibFinding" ((PVar "name") (PVar "modName") (PVar "stdName") (PVar "loc")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameStdlibReimpl")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "top-level '")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "' reimplements stdlib '"))) (EApp (EMethodRef "display") (EVar "modName"))) (ELit (LString "."))) (EApp (EMethodRef "display") (EVar "stdName"))) (ELit (LString "' (same declared signature) — use the stdlib version")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "noFix")))))
 (DTypeSig false "tyCanon" (TyFun (TyCon "Ty") (TyCon "String")))
 (DFunDef false "tyCanon" ((PVar "t")) (EApp (EApp (EApp (EVar "tyCanonIn") (EApp (EVar "dedup") (EApp (EVar "tyVarsOf") (EVar "t")))) (EApp (EVar "dedup") (EApp (EVar "rowVarsOf") (EVar "t")))) (EVar "t")))
 (DTypeSig false "tyVarsOf" (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "String"))))

@@ -58,7 +58,9 @@ import frontend.ast.{Loc(..)}
 import driver.diagnostics.{Severity(..)}
 import path.{dirname}
 import u64 as U64
-import tools.lint_core.{Finding(..), Directive(..), DirScope(..), Summary(..)}
+import tools.lint_core.{
+  Finding(..), Directive(..), DirScope(..), Summary(..), noFix
+}
 import tools.lint_index.{Answer(..), makeStagingDir, stageAndRename}
 import support.util.{joinWith, listLen, filterList}
 import support.char.{isAlnum}
@@ -354,7 +356,7 @@ readRanked cur =
       message = message,
       severity = sev,
       loc = loc,
-      fix = None,
+      fix = noFix,
     },
   )
 

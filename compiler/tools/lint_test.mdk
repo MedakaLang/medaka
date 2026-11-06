@@ -87,6 +87,7 @@ import tools.lint_core.{
   Summary(..),
   Visitor(..),
   mkProjectRule,
+  noFix,
 }
 import tools.lint_cmd.{
   allRuleRows,
@@ -243,7 +244,7 @@ sampleFinding = Finding {
   message = "has \"quotes\"\nand a newline",
   severity = SevError,
   loc = Some (Loc "p" 1 2 3 4),
-  fix = None,
+  fix = noFix,
 }
 
 sampleEntry : LintEntry
@@ -675,7 +676,7 @@ probeFindingIn file = Finding {
   message = file,
   severity = SevWarning,
   loc = Some (Loc file 1 1 1 1),
-  fix = None,
+  fix = noFix,
 }
 
 findingFile : Finding -> String
@@ -713,7 +714,7 @@ countFinding n (path, _) = Finding {
   message = intToString n,
   severity = SevWarning,
   loc = Some (Loc path 1 1 1 1),
-  fix = None,
+  fix = noFix,
 }
 
 test "a second project rule is evaluated over its own summaries and keeps --cache on" =
@@ -894,7 +895,7 @@ ctxFinding ctx = Finding {
     "\{ctx.ctxDeclName} params=\{intToString (listLen ctx.ctxParams)} test=\{debug ctx.ctxInTest} parent=\{debug ctx.ctxParent}",
   severity = SevWarning,
   loc = ctx.ctxSpan,
-  fix = None,
+  fix = noFix,
 }
 
 walkSrc : String

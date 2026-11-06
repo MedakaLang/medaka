@@ -40,6 +40,7 @@ import tools.lint_core.{
   StdlibIndex(..),
   Visitor(..),
   mkVisitorRule,
+  noFix,
 }
 import tools.lint_shared.{
   declHeadHits,
@@ -186,5 +187,5 @@ bindChainFinding loc _ = Finding {
     "deep nested Result/Option passthrough-bind `match` chain (≥3 binds). Rewrite as a `do` block",
   severity = SevWarning,
   loc = loc,
-  fix = None,
+  fix = noFix,
 }

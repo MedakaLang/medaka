@@ -20,8 +20,8 @@ import regex.{Regex, mustCompile, find as reFind, escape, isMatch}
 import frontend.lexer.{Comment, commentLine, commentText, commentCol}
 import tools.lint_core.{
   Applicability(..), Ctx(..), DirScope(..), Directive(..), FileFacts(..),
-  Finding(..), Fix(..), FixEdit(..), StdlibIndex, Visitor(..), factLines,
-  factScopes, stdlibKnowsModule, stdlibSigIn
+  Finding(..), Fix(..), FixEdit(..), Memo, StdlibIndex, Visitor(..), factLines,
+  factScopes, fixLater, stdlibKnowsModule, stdlibSigIn
 }
 import tools.lint_fix.{Binding(..), parenIfNeeded}
 import tools.lint_scope.{
@@ -617,7 +617,7 @@ export
 exprRuleEditVisitors : (String -> Bool) ->
   (Expr -> Option Expr) ->
   (Ctx -> Expr -> Expr -> Option Fix) ->
-  (Option Loc -> Expr -> Option Fix -> Finding) ->
+  (Option Loc -> Expr -> Memo (Option Fix) -> Finding) ->
   List Visitor
 exprRuleEditVisitors excl det fixOf mkFinding =
   [OnAnyExpr (exprRuleEditHit excl det fixOf mkFinding)]
@@ -625,14 +625,14 @@ exprRuleEditVisitors excl det fixOf mkFinding =
 exprRuleEditHit : (String -> Bool) ->
   (Expr -> Option Expr) ->
   (Ctx -> Expr -> Expr -> Option Fix) ->
-  (Option Loc -> Expr -> Option Fix -> Finding) ->
+  (Option Loc -> Expr -> Memo (Option Fix) -> Finding) ->
   Ctx ->
   Expr ->
   List Finding
 exprRuleEditHit excl det fixOf mkFinding ctx e
   | not ctx.ctxInTest && excl ctx.ctxDeclName = []
   | otherwise = match det e
-    Some hit => [mkFinding ctx.ctxSpan hit (fixOf ctx e hit)]
+    Some hit => [mkFinding ctx.ctxSpan hit (fixLater (_ => fixOf ctx e hit))]
     None => []
 
 -- ── generic fix driver ────────────────────────────────────────────────────────

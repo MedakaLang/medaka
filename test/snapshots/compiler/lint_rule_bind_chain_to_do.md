@@ -1,5 +1,5 @@
 # META
-source_lines=190
+source_lines=191
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-bind-chain-to-do: a deep (>=3) Result/Option passthrough-bind `match` pyramid. Rewrite as a `do` block (suggest-only).
@@ -44,6 +44,7 @@ import tools.lint_core.{
   StdlibIndex(..),
   Visitor(..),
   mkVisitorRule,
+  noFix,
 }
 import tools.lint_shared.{
   declHeadHits,
@@ -190,7 +191,7 @@ bindChainFinding loc _ = Finding {
     "deep nested Result/Option passthrough-bind `match` chain (≥3 binds). Rewrite as a `do` block",
   severity = SevWarning,
   loc = loc,
-  fix = None,
+  fix = noFix,
 }
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Pat" true) (mem "Arm" true) (mem "DoStmt" true) (mem "Expr" true) (mem "Decl" true))))
@@ -198,7 +199,7 @@ bindChainFinding loc _ = Finding {
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("support" "util") ((mem "isEmptyL" false) (mem "reverseL" false))))
 (DUse false (UseName ("hash_map")))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" true) (mem "Visitor" true) (mem "mkVisitorRule" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" true) (mem "Visitor" true) (mem "mkVisitorRule" false) (mem "noFix" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "declHeadHits" false) (mem "isEVarNamed" false) (mem "isNilPCon" false) (mem "matchScrutOf" false) (mem "matchToMapErrPassthru" false) (mem "matchToMapTransform" false) (mem "ruleNameBindChainToDo" false) (mem "stmtExprs" false) (mem "unwrapLoc" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameBindChainToDo")) (fa "summary" (ELit (LString "deep (≥3) nested Result/Option passthrough-bind `match` pyramid. Rewrite as a `do` block (suggest-only)"))) (fa "doc" (ELit (LString "Three or more nested `match` arms that each pass a `Result` or `Option` failure straight through form a pyramid. A `do` block flattens it. The rule only suggests; it has no fixer.\n\nBefore:\n  match a\n    Ok x => match b x\n      Ok y => match c y\n        Ok z => Ok z\n        Err e => Err e\n      Err e => Err e\n    Err e => Err e\nAfter:\n  do\n    x <- a\n    y <- b x\n    c y"))) (fa "category" (EVar "Complexity")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "NotFixable")) (fa "needs" (EListLit))))) (EVar "ruleBindChainToDo")) (EVar "None")))
@@ -230,14 +231,14 @@ bindChainFinding loc _ = Finding {
 (DTypeSig false "bindChainAt" (TyFun (TyCon "Ctx") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Finding")))))
 (DFunDef false "bindChainAt" ((PVar "ctx") (PVar "d")) (EApp (EApp (EVar "map") (EApp (EVar "bindChainFinding") (EFieldAccess (EVar "ctx") "ctxSpan"))) (EApp (EApp (EVar "declHeadHits") (EVar "bindChainPick")) (EVar "d"))))
 (DTypeSig false "bindChainFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))))
-(DFunDef false "bindChainFinding" ((PVar "loc") PWild) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameBindChainToDo")) (fa "message" (ELit (LString "deep nested Result/Option passthrough-bind `match` chain (≥3 binds). Rewrite as a `do` block"))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None")))))
+(DFunDef false "bindChainFinding" ((PVar "loc") PWild) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameBindChainToDo")) (fa "message" (ELit (LString "deep nested Result/Option passthrough-bind `match` chain (≥3 binds). Rewrite as a `do` block"))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "noFix")))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Pat" true) (mem "Arm" true) (mem "DoStmt" true) (mem "Expr" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("support" "util") ((mem "isEmptyL" false) (mem "reverseL" false))))
 (DUse false (UseName ("hash_map")))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" true) (mem "Visitor" true) (mem "mkVisitorRule" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" true) (mem "Visitor" true) (mem "mkVisitorRule" false) (mem "noFix" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "declHeadHits" false) (mem "isEVarNamed" false) (mem "isNilPCon" false) (mem "matchScrutOf" false) (mem "matchToMapErrPassthru" false) (mem "matchToMapTransform" false) (mem "ruleNameBindChainToDo" false) (mem "stmtExprs" false) (mem "unwrapLoc" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameBindChainToDo")) (fa "summary" (ELit (LString "deep (≥3) nested Result/Option passthrough-bind `match` pyramid. Rewrite as a `do` block (suggest-only)"))) (fa "doc" (ELit (LString "Three or more nested `match` arms that each pass a `Result` or `Option` failure straight through form a pyramid. A `do` block flattens it. The rule only suggests; it has no fixer.\n\nBefore:\n  match a\n    Ok x => match b x\n      Ok y => match c y\n        Ok z => Ok z\n        Err e => Err e\n      Err e => Err e\n    Err e => Err e\nAfter:\n  do\n    x <- a\n    y <- b x\n    c y"))) (fa "category" (EVar "Complexity")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "NotFixable")) (fa "needs" (EListLit))))) (EVar "ruleBindChainToDo")) (EVar "None")))
@@ -269,4 +270,4 @@ bindChainFinding loc _ = Finding {
 (DTypeSig false "bindChainAt" (TyFun (TyCon "Ctx") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Finding")))))
 (DFunDef false "bindChainAt" ((PVar "ctx") (PVar "d")) (EApp (EApp (EMethodRef "map") (EApp (EVar "bindChainFinding") (EFieldAccess (EVar "ctx") "ctxSpan"))) (EApp (EApp (EVar "declHeadHits") (EVar "bindChainPick")) (EVar "d"))))
 (DTypeSig false "bindChainFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))))
-(DFunDef false "bindChainFinding" ((PVar "loc") PWild) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameBindChainToDo")) (fa "message" (ELit (LString "deep nested Result/Option passthrough-bind `match` chain (≥3 binds). Rewrite as a `do` block"))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None")))))
+(DFunDef false "bindChainFinding" ((PVar "loc") PWild) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameBindChainToDo")) (fa "message" (ELit (LString "deep nested Result/Option passthrough-bind `match` chain (≥3 binds). Rewrite as a `do` block"))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "noFix")))))

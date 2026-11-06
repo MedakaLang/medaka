@@ -16,16 +16,18 @@ import frontend.ast.{
   patBoundNames,
   variantName,
 }
-import frontend.ast_walk.{childExprs}
+import frontend.ast_walk.{ExprKind(..), childExprs}
+import hash_map.{HashMap, fromList, has}
 import frontend.parser.{Positions(..)}
 import list.{findMap, get, init, last, takeWhile, dropWhile}
 import support.util.{
-  anyList, allList, filterList, initList, isNonEmptyL, joinWith, listLen,
-  startsWith
+  anyList, allList, filterList, initList, isEmptyL, isNonEmptyL, joinWith,
+  listLen, startsWith
 }
 import tools.lint_calls.{lastSegment}
 import tools.lint_core.{
   Category(..),
+  Ctx(..),
   FileFacts,
   Finding(..),
   Fixability(..),
@@ -35,8 +37,11 @@ import tools.lint_core.{
   RuleMeta(..),
   Scope(..),
   StdlibIndex,
-  mkRule,
+  Visitor(..),
+  mkVisitorRule,
+  noFix,
   projectIndexOf,
+  factDeclLocs,
 }
 import tools.lint_index.{
   IndexRow,
@@ -50,14 +55,13 @@ import tools.lint_index.{
 }
 import tools.lint_recursion.{spineOf}
 import tools.lint_shared.{
-  declLocList, firstLoc, isCtorName, mentionsVar, ruleNameWalkerWildcard,
-  unwrapLoc
+  firstLoc, isCtorName, mentionsVar, ruleNameWalkerWildcard, unwrapLoc
 }
 
 export
 rule : Rule
 rule =
-  mkRule
+  mkVisitorRule
     RuleMeta {
       name = ruleNameWalkerWildcard,
       summary =
@@ -82,27 +86,43 @@ data Env = Env ProjectIndex (List Decl)
 -- One top-level clause with the declaration's start line.
 data TopClause = TopClause String (List Pat) Expr (Option Loc)
 
+-- The clause form of each top-level function is read off the declarations and
+-- reported at its first clause.  The `match` form and the clause form of a
+-- local function are read on the runner's walk, in the bodies of top-level
+-- function clauses only, outside every `let` binding; a `let` group there
+-- reads its bindings' bodies itself, so each binding's clause form comes
+-- before the findings inside it and after those of the binding before it.
 ruleWalkerWildcard : StdlibIndex ->
   String ->
   FileFacts ->
   Positions ->
   List Decl ->
-  List Finding
-ruleWalkerWildcard idx _ _ pos prog =
-  topFindings (Env (projectIndexOf idx) prog) (declLocList pos prog)
+  List Visitor
+ruleWalkerWildcard idx _ facts _ prog =
+  let env = Env (projectIndexOf idx) prog
+  let decls = factDeclLocs facts
+  let tops = topFindings env decls
+  let clauseLines = fromList (flatMap clauseLine decls)
+  [OnDecl (topAt tops), OnExpr [KMatch, KLetGroup] (bodyAt env clauseLines)]
 
 -- ── top-level groups ─────────────────────────────────────────────────────────
 
-topFindings : Env -> List (Decl, Option Loc) -> List Finding
+-- The findings of each top-level function's clause form, with the start of
+-- its first clause.
+topFindings : Env -> List (Decl, Option Loc) -> List (Option Loc, List Finding)
 topFindings _ [] = []
 topFindings env (dl :: rest) = match topClause dl
   None => topFindings env rest
   Some (TopClause name ps body loc) =>
     let same = takeWhile (sameTop name) rest
     let group = TopClause name ps body loc :: flatMap clauseList same
-    groupFindings env name (map toClause group) (clauseLoc (last group))
-      ++ flatMap (topBodyFindings env) group
-      ++ topFindings env (dropWhile (sameTop name) rest)
+    let found =
+      groupFindings env name (map toClause group) (clauseLoc (last group))
+    let others = topFindings env (dropWhile (sameTop name) rest)
+    if isEmptyL found then others else (loc, found) :: others
+
+topAt : List (Option Loc, List Finding) -> Ctx -> Decl -> List Finding
+topAt tops ctx _ = flatMap snd (filterList (t => fst t == ctx.ctxDeclLoc) tops)
 
 clauseList : (Decl, Option Loc) -> List TopClause
 clauseList dl = match topClause dl
@@ -126,12 +146,42 @@ sameTop name dl = match topClause dl
   Some (TopClause n _ _ _) => n == name
   None => False
 
-topBodyFindings : Env -> TopClause -> List Finding
-topBodyFindings env (TopClause name _ body loc) = walkBody env name loc body
+-- The start line of a top-level function clause, which is the `ctxDeclLoc` of
+-- every node in its body.
+clauseLine : (Decl, Option Loc) -> List (Int, Unit)
+clauseLine (dl@(_, Some (Loc _ line _ _ _))) = match topClause dl
+  Some _ => [(line, ())]
+  None => []
+clauseLine (_, None) = []
 
 -- ── bodies ───────────────────────────────────────────────────────────────────
 
--- The `match` forms in a body and the `let`/`where` groups it opens.
+-- A node inside a `let` binding was read by the walk of the outermost group
+-- around it (`letBindFindings`).
+bodyAt : Env -> HashMap Int Unit -> Ctx -> Expr -> List Finding
+bodyAt env clauseLines ctx e
+  | not (inClause clauseLines ctx.ctxDeclLoc) = []
+  | isSome ctx.ctxBinding = []
+  | otherwise = match e
+    EMatch scrut arms => matchArms env ctx.ctxDeclName ctx.ctxSpan scrut arms
+    ELetGroup binds _ => flatMap (letBindFindings env) binds
+    _ => []
+
+inClause : HashMap Int Unit -> Option Loc -> Bool
+inClause clauseLines (Some (Loc _ line _ _ _)) = has line clauseLines
+inClause _ None = False
+
+-- A binding's clause form, then the `match` forms in its clause bodies and the
+-- `let` groups they open, each under the binding's name.
+letBindFindings : Env -> LetBind -> List Finding
+letBindFindings env (LetBind name clauses site _) =
+  groupFindings env name clauses (Some site)
+    ++ flatMap (letClauseFindings env name site) clauses
+
+letClauseFindings : Env -> String -> Loc -> FunClause -> List Finding
+letClauseFindings env name site (FunClause _ body) =
+  walkBody env name (Some site) body
+
 walkBody : Env -> String -> Option Loc -> Expr -> List Finding
 -- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
 -- lint-disable-next-line rule-threaded-invariant
@@ -143,14 +193,10 @@ walkBody env name loc e =
         flatMap (letBindFindings env) binds ++ walkBody env name loc body
       _ => flatMap (walkBody env name loc) (childExprs e))
 
-letBindFindings : Env -> LetBind -> List Finding
-letBindFindings env (LetBind name clauses site _) =
-  groupFindings env name clauses (Some site)
-    ++ flatMap (letClauseFindings env name site) clauses
-
-letClauseFindings : Env -> String -> Loc -> FunClause -> List Finding
-letClauseFindings env name site (FunClause _ body) =
-  walkBody env name (Some site) body
+matchFindings : Env -> String -> Option Loc -> Expr -> List Finding
+matchFindings env name loc (EMatch scrut arms) =
+  matchArms env name loc scrut arms
+matchFindings _ _ _ _ = []
 
 -- ── the clause form ──────────────────────────────────────────────────────────
 
@@ -243,11 +289,6 @@ irrefutable (PVar _ _ _) = True
 irrefutable _ = False
 
 -- ── the match form ───────────────────────────────────────────────────────────
-
-matchFindings : Env -> String -> Option Loc -> Expr -> List Finding
-matchFindings env name loc (EMatch scrut arms) =
-  matchArms env name loc scrut arms
-matchFindings _ _ _ _ = []
 
 -- The last arm is read first: the arms before it are read only behind an
 -- unguarded catch-all that answers without recursing, which few matches end in.
@@ -361,7 +402,7 @@ finding loc message = Finding {
   message = message,
   severity = SevWarning,
   loc = loc,
-  fix = None,
+  fix = noFix,
 }
 
 swallowMessage : String -> String -> List String -> String

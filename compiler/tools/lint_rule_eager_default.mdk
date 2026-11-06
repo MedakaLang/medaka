@@ -12,6 +12,7 @@ import tools.lint_core.{
   Finding(..),
   Fix,
   Fixability(..),
+  Memo,
   Need(..),
   Ratchet(..),
   Rule,
@@ -122,7 +123,7 @@ eagerEdit idx facts ctx (EApp f _) rewritten =
       (exprToString rewritten)
 eagerEdit _ _ _ _ _ = None
 
-eagerFinding : Option Loc -> Expr -> Option Fix -> Finding
+eagerFinding : Option Loc -> Expr -> Memo (Option Fix) -> Finding
 eagerFinding loc rewritten fix = Finding {
   rule = ruleNameEagerDefault,
   message =

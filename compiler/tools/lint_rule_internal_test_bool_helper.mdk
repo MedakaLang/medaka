@@ -16,6 +16,7 @@ import tools.lint_core.{
   Scope(..),
   StdlibIndex,
   mkRule,
+  noFix,
 }
 import tools.lint_shared.{
   appSpineOf,
@@ -78,7 +79,7 @@ helperFinding graded propBodies x0 = go x0
             "`\{name}` returns `Bool` and is graded with `expectTrue`/`expectFalse`, which reports no expectation on failure. Return an `Expect` (for example `expectErrContains`, `expectEqual`) and drop the wrapper at its call sites",
           severity = SevWarning,
           loc = Some loc,
-          fix = None,
+          fix = noFix,
         },
       ]
     go (DAttrib _ d) = go d

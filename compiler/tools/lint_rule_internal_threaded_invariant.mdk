@@ -29,6 +29,7 @@ import tools.lint_core.{
   Fix(..),
   FixEdit(..),
   Fixability(..),
+  Memo,
   Need(..),
   Ratchet(..),
   Rule,
@@ -37,14 +38,15 @@ import tools.lint_core.{
   StdlibIndex,
   factLines,
   factScopes,
+  fixLater,
   mkRule,
+  factDeclLocs,
 }
 import tools.lint_recursion.{
   ArgRole(..), Owner(..), SelfCall(..), selfCalls, spineOf
 }
 import tools.lint_scope.{FileScopes}
 import tools.lint_shared.{
-  declLocList,
   indentWidth,
   isCodeText,
   isCtorName,
@@ -82,8 +84,8 @@ ruleThreadedInvariant : StdlibIndex ->
   Positions ->
   List Decl ->
   List Finding
-ruleThreadedInvariant _ _ facts pos prog =
-  let groups = functionGroups (declLocList pos prog)
+ruleThreadedInvariant _ _ facts _ prog =
+  let groups = functionGroups (factDeclLocs facts)
   flatMap (functionFindings facts prog) groups
 
 -- ── the functions of a file ──────────────────────────────────────────────────
@@ -140,7 +142,13 @@ functionFindings facts prog (g@(Group name loc clauses _)) =
       if listLen shared >= 2 then
         let names = map (i => paramName ps i) shared
         let calls = flatMap threadedCalls ts
-        [report name loc names (threadFix facts prog g shared names calls)]
+        [
+          report
+            name
+            loc
+            names
+            (fixLater (_ => threadFix facts prog g shared names calls)),
+        ]
       else
         []
 
@@ -179,7 +187,7 @@ paramName ps i = match get i ps
 
 -- ── findings ─────────────────────────────────────────────────────────────────
 
-report : String -> Option Loc -> List String -> Option Fix -> Finding
+report : String -> Option Loc -> List String -> Memo (Option Fix) -> Finding
 report name loc names fix =
   let listed = joinWith ", " (map quoted names)
   Finding {

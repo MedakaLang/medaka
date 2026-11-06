@@ -19,10 +19,11 @@ import tools.lint_core.{
   Scope(..),
   StdlibIndex,
   mkRule,
+  noFix,
+  factDeclLocs,
 }
 import tools.lint_shared.{
   armToClause,
-  declLocList,
   isBareParam,
   matchBodyOnBareParam,
   patIsWild,
@@ -61,7 +62,7 @@ ruleMatchOnParam : StdlibIndex ->
   Positions ->
   List Decl ->
   List Finding
-ruleMatchOnParam _ _ _ pos prog = flatMap matchParamDeclL (declLocList pos prog)
+ruleMatchOnParam _ _ facts _ _ = flatMap matchParamDeclL (factDeclLocs facts)
 
 matchParamDeclL : (Decl, Option Loc) -> List Finding
 matchParamDeclL (d, loc) = matchParamDecl loc d
@@ -104,7 +105,7 @@ matchParamHit loc name pats p
         "function '\{name}' matches on parameter '\{p}' — use a multi-clause function definition",
       severity = SevWarning,
       loc = loc,
-      fix = None,
+      fix = noFix,
     },
   ]
   | otherwise = []

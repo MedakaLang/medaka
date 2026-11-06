@@ -41,6 +41,7 @@ import tools.lint_core.{
   Fix,
   StdlibIndex,
   Visitor(..),
+  fixLater,
 }
 import tools.lint_shared.{
   oneLine,
@@ -384,7 +385,7 @@ hintFinding name severity h found idx facts ctx e =
       "\{h.hintRow.rowMessage}. Rewrite as '\{oneLine (exprToString rewritten)}'",
     severity = severity,
     loc = ctx.ctxSpan,
-    fix = hintFix h found idx facts ctx e rewritten,
+    fix = fixLater (_ => hintFix h found idx facts ctx e rewritten),
   }
 
 hintFix : Hint ->

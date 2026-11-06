@@ -12,7 +12,7 @@ import driver.diagnostics.{Severity(..)}
 import support.util.{listLen, allList, filterList, reverseL, joinWith}
 import hash_map.{HashMap, new, setInPlace, has, findWithDefault}
 import ir.sexp.{exprSexp, patSexp}
-import tools.lint_core.{DupClause(..), Finding(..)}
+import tools.lint_core.{DupClause(..), Finding(..), noFix}
 import tools.lint_shared.{
   isCtorName, ruleNameDuplicateBody, sortUniqS, unwrapLoc
 }
@@ -375,7 +375,7 @@ dupFinding distinctFiles occ =
       "function '\{occName occ}' has a body structurally identical to a definition in \{joinWith ", " others} — consolidate into a shared module",
     severity = SevWarning,
     loc = Some (Loc file line 1 line 1),
-    fix = None,
+    fix = noFix,
   }
 
 -- insertion sort occurrences by (file, line) for deterministic output.
@@ -406,7 +406,7 @@ dupOccLe a b = match stringCompare (occFile a) (occFile b)
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "allList" false) (mem "filterList" false) (mem "reverseL" false) (mem "joinWith" false))))
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "setInPlace" false) (mem "has" false) (mem "findWithDefault" false))))
 (DUse false (UseGroup ("ir" "sexp") ((mem "exprSexp" false) (mem "patSexp" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "DupClause" true) (mem "Finding" true))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "DupClause" true) (mem "Finding" true) (mem "noFix" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "isCtorName" false) (mem "ruleNameDuplicateBody" false) (mem "sortUniqS" false) (mem "unwrapLoc" false))))
 (DTypeSig false "dupComplexityThreshold" (TyCon "Int"))
 (DFunDef false "dupComplexityThreshold" () (ELit (LInt 10)))
@@ -495,7 +495,7 @@ dupOccLe a b = match stringCompare (occFile a) (occFile b)
 (DTypeSig false "emitDupGroup" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "Finding"))))
 (DFunDef false "emitDupGroup" ((PVar "grp")) (EBlock (DoLet false false (PVar "distinctFiles") (EApp (EVar "sortUniqS") (EApp (EApp (EVar "map") (EVar "occFile")) (EVar "grp")))) (DoExpr (EIf (EBinOp "<" (EApp (EVar "listLen") (EVar "distinctFiles")) (ELit (LInt 2))) (EListLit) (EApp (EApp (EVar "map") (EApp (EVar "dupFinding") (EVar "distinctFiles"))) (EApp (EVar "sortDupOccs") (EVar "grp")))))))
 (DTypeSig false "dupFinding" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String")) (TyCon "Finding"))))
-(DFunDef false "dupFinding" ((PVar "distinctFiles") (PVar "occ")) (EBlock (DoLet false false (PVar "file") (EApp (EVar "occFile") (EVar "occ"))) (DoLet false false (PVar "line") (EApp (EVar "occLine") (EVar "occ"))) (DoLet false false (PVar "others") (EApp (EApp (EVar "filterList") (ELam ((PVar "_s")) (EBinOp "/=" (EVar "_s") (EVar "file")))) (EVar "distinctFiles"))) (DoExpr (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDuplicateBody")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "function '")) (EApp (EVar "display") (EApp (EVar "occName") (EVar "occ")))) (ELit (LString "' has a body structurally identical to a definition in "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "others")))) (ELit (LString " — consolidate into a shared module")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "file")) (EVar "line")) (ELit (LInt 1))) (EVar "line")) (ELit (LInt 1))))) (fa "fix" (EVar "None")))))))
+(DFunDef false "dupFinding" ((PVar "distinctFiles") (PVar "occ")) (EBlock (DoLet false false (PVar "file") (EApp (EVar "occFile") (EVar "occ"))) (DoLet false false (PVar "line") (EApp (EVar "occLine") (EVar "occ"))) (DoLet false false (PVar "others") (EApp (EApp (EVar "filterList") (ELam ((PVar "_s")) (EBinOp "/=" (EVar "_s") (EVar "file")))) (EVar "distinctFiles"))) (DoExpr (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDuplicateBody")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "function '")) (EApp (EVar "display") (EApp (EVar "occName") (EVar "occ")))) (ELit (LString "' has a body structurally identical to a definition in "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "others")))) (ELit (LString " — consolidate into a shared module")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "file")) (EVar "line")) (ELit (LInt 1))) (EVar "line")) (ELit (LInt 1))))) (fa "fix" (EVar "noFix")))))))
 (DTypeSig false "sortDupOccs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String")))))
 (DFunDef false "sortDupOccs" ((PList)) (EListLit))
 (DFunDef false "sortDupOccs" ((PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EVar "dupInsert") (EVar "x")) (EApp (EVar "sortDupOccs") (EVar "xs"))))
@@ -511,7 +511,7 @@ dupOccLe a b = match stringCompare (occFile a) (occFile b)
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "allList" false) (mem "filterList" false) (mem "reverseL" false) (mem "joinWith" false))))
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "setInPlace" false) (mem "has" false) (mem "findWithDefault" false))))
 (DUse false (UseGroup ("ir" "sexp") ((mem "exprSexp" false) (mem "patSexp" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "DupClause" true) (mem "Finding" true))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "DupClause" true) (mem "Finding" true) (mem "noFix" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "isCtorName" false) (mem "ruleNameDuplicateBody" false) (mem "sortUniqS" false) (mem "unwrapLoc" false))))
 (DTypeSig false "dupComplexityThreshold" (TyCon "Int"))
 (DFunDef false "dupComplexityThreshold" () (ELit (LInt 10)))
@@ -600,7 +600,7 @@ dupOccLe a b = match stringCompare (occFile a) (occFile b)
 (DTypeSig false "emitDupGroup" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "Finding"))))
 (DFunDef false "emitDupGroup" ((PVar "grp")) (EBlock (DoLet false false (PVar "distinctFiles") (EApp (EVar "sortUniqS") (EApp (EApp (EMethodRef "map") (EVar "occFile")) (EVar "grp")))) (DoExpr (EIf (EBinOp "<" (EApp (EVar "listLen") (EVar "distinctFiles")) (ELit (LInt 2))) (EListLit) (EApp (EApp (EMethodRef "map") (EApp (EVar "dupFinding") (EVar "distinctFiles"))) (EApp (EVar "sortDupOccs") (EVar "grp")))))))
 (DTypeSig false "dupFinding" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String")) (TyCon "Finding"))))
-(DFunDef false "dupFinding" ((PVar "distinctFiles") (PVar "occ")) (EBlock (DoLet false false (PVar "file") (EApp (EVar "occFile") (EVar "occ"))) (DoLet false false (PVar "line") (EApp (EVar "occLine") (EVar "occ"))) (DoLet false false (PVar "others") (EApp (EApp (EVar "filterList") (ELam ((PVar "_s")) (EBinOp "/=" (EVar "_s") (EVar "file")))) (EVar "distinctFiles"))) (DoExpr (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDuplicateBody")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "function '")) (EApp (EMethodRef "display") (EApp (EVar "occName") (EVar "occ")))) (ELit (LString "' has a body structurally identical to a definition in "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "others")))) (ELit (LString " — consolidate into a shared module")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "file")) (EVar "line")) (ELit (LInt 1))) (EVar "line")) (ELit (LInt 1))))) (fa "fix" (EVar "None")))))))
+(DFunDef false "dupFinding" ((PVar "distinctFiles") (PVar "occ")) (EBlock (DoLet false false (PVar "file") (EApp (EVar "occFile") (EVar "occ"))) (DoLet false false (PVar "line") (EApp (EVar "occLine") (EVar "occ"))) (DoLet false false (PVar "others") (EApp (EApp (EVar "filterList") (ELam ((PVar "_s")) (EBinOp "/=" (EVar "_s") (EVar "file")))) (EVar "distinctFiles"))) (DoExpr (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDuplicateBody")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "function '")) (EApp (EMethodRef "display") (EApp (EVar "occName") (EVar "occ")))) (ELit (LString "' has a body structurally identical to a definition in "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "others")))) (ELit (LString " — consolidate into a shared module")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "file")) (EVar "line")) (ELit (LInt 1))) (EVar "line")) (ELit (LInt 1))))) (fa "fix" (EVar "noFix")))))))
 (DTypeSig false "sortDupOccs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "String") (TyCon "String")))))
 (DFunDef false "sortDupOccs" ((PList)) (EListLit))
 (DFunDef false "sortDupOccs" ((PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EVar "dupInsert") (EVar "x")) (EApp (EVar "sortDupOccs") (EVar "xs"))))

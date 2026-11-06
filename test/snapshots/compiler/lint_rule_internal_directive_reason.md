@@ -1,5 +1,5 @@
 # META
-source_lines=272
+source_lines=273
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-directive-reason: a `-- lint-disable-*` directive with no comment in its own comment block stating the constraint that forced it. An issue number alone is not a reason.
@@ -31,6 +31,7 @@ import tools.lint_core.{
   StdlibIndex,
   factComments,
   mkRule,
+  noFix,
 }
 import tools.lint_shared.{
   CommentBlock(..),
@@ -272,7 +273,7 @@ directiveReasonFinding c = Finding {
     "`-- lint-disable-*` directive has no comment in its own comment block stating the constraint that forced it -- an issue number alone is not a reason",
   severity = SevWarning,
   loc = Some (Loc "" (commentLine c) 1 (commentLine c) 1),
-  fix = None,
+  fix = noFix,
 }
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Decl" true))))
@@ -282,7 +283,7 @@ directiveReasonFinding c = Finding {
 (DUse false (UseGroup ("string") ((mem "toLower" false) (mem "words" false))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "mustCompile" false) (mem "isMatch" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "commentLine" false) (mem "commentText" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "DirScope" true) (mem "Directive" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "factComments" false) (mem "mkRule" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "DirScope" true) (mem "Directive" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "factComments" false) (mem "mkRule" false) (mem "noFix" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "CommentBlock" true) (mem "codePortions" false) (mem "commentBlocks" false) (mem "parseDirective" false) (mem "ruleNameDirectiveReason" false) (mem "zipDeclPos" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameDirectiveReason")) (fa "summary" (ELit (LString "a `-- lint-disable-*` directive with no comment in its own comment block stating the constraint that forced it — an issue number alone is not a reason (#2862)"))) (fa "doc" (ELit (LString "A `-- lint-disable-*` directive needs a comment in its own comment block stating the constraint that forced it; an issue number alone is not a reason (#2862). This enforces the repository suppression convention.\n\nBefore:\n  -- lint-disable-next-line rule-x\nAfter:\n  -- bounded: at most 3 fields, so a list lookup is cheaper\n  -- lint-disable-next-line rule-x"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Internal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "NotFixable")) (fa "needs" (EListLit))))) (EVar "ruleDirectiveReason")) (EVar "None")))
@@ -336,7 +337,7 @@ directiveReasonFinding c = Finding {
 (DTypeSig false "hasSubstantiveWord" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "hasSubstantiveWord" ((PVar "s")) (EApp (EApp (EVar "isMatch") (EVar "substantiveWordRe")) (EVar "s")))
 (DTypeSig false "directiveReasonFinding" (TyFun (TyCon "Comment") (TyCon "Finding")))
-(DFunDef false "directiveReasonFinding" ((PVar "c")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDirectiveReason")) (fa "message" (ELit (LString "`-- lint-disable-*` directive has no comment in its own comment block stating the constraint that forced it -- an issue number alone is not a reason"))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (EApp (EVar "commentLine") (EVar "c"))) (ELit (LInt 1))) (EApp (EVar "commentLine") (EVar "c"))) (ELit (LInt 1))))) (fa "fix" (EVar "None")))))
+(DFunDef false "directiveReasonFinding" ((PVar "c")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDirectiveReason")) (fa "message" (ELit (LString "`-- lint-disable-*` directive has no comment in its own comment block stating the constraint that forced it -- an issue number alone is not a reason"))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (EApp (EVar "commentLine") (EVar "c"))) (ELit (LInt 1))) (EApp (EVar "commentLine") (EVar "c"))) (ELit (LInt 1))))) (fa "fix" (EVar "noFix")))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false) (mem "declPosEndLine" false))))
@@ -345,7 +346,7 @@ directiveReasonFinding c = Finding {
 (DUse false (UseGroup ("string") ((mem "toLower" false) (mem "words" false))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "mustCompile" false) (mem "isMatch" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "commentLine" false) (mem "commentText" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "DirScope" true) (mem "Directive" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "factComments" false) (mem "mkRule" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "DirScope" true) (mem "Directive" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "factComments" false) (mem "mkRule" false) (mem "noFix" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "CommentBlock" true) (mem "codePortions" false) (mem "commentBlocks" false) (mem "parseDirective" false) (mem "ruleNameDirectiveReason" false) (mem "zipDeclPos" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameDirectiveReason")) (fa "summary" (ELit (LString "a `-- lint-disable-*` directive with no comment in its own comment block stating the constraint that forced it — an issue number alone is not a reason (#2862)"))) (fa "doc" (ELit (LString "A `-- lint-disable-*` directive needs a comment in its own comment block stating the constraint that forced it; an issue number alone is not a reason (#2862). This enforces the repository suppression convention.\n\nBefore:\n  -- lint-disable-next-line rule-x\nAfter:\n  -- bounded: at most 3 fields, so a list lookup is cheaper\n  -- lint-disable-next-line rule-x"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Internal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "NotFixable")) (fa "needs" (EListLit))))) (EVar "ruleDirectiveReason")) (EVar "None")))
@@ -399,4 +400,4 @@ directiveReasonFinding c = Finding {
 (DTypeSig false "hasSubstantiveWord" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "hasSubstantiveWord" ((PVar "s")) (EApp (EApp (EVar "isMatch") (EVar "substantiveWordRe")) (EVar "s")))
 (DTypeSig false "directiveReasonFinding" (TyFun (TyCon "Comment") (TyCon "Finding")))
-(DFunDef false "directiveReasonFinding" ((PVar "c")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDirectiveReason")) (fa "message" (ELit (LString "`-- lint-disable-*` directive has no comment in its own comment block stating the constraint that forced it -- an issue number alone is not a reason"))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (EApp (EVar "commentLine") (EVar "c"))) (ELit (LInt 1))) (EApp (EVar "commentLine") (EVar "c"))) (ELit (LInt 1))))) (fa "fix" (EVar "None")))))
+(DFunDef false "directiveReasonFinding" ((PVar "c")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDirectiveReason")) (fa "message" (ELit (LString "`-- lint-disable-*` directive has no comment in its own comment block stating the constraint that forced it -- an issue number alone is not a reason"))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (EApp (EVar "commentLine") (EVar "c"))) (ELit (LInt 1))) (EApp (EVar "commentLine") (EVar "c"))) (ELit (LInt 1))))) (fa "fix" (EVar "noFix")))))

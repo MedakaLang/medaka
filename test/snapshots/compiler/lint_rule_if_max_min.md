@@ -1,5 +1,5 @@
 # META
-source_lines=195
+source_lines=200
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-if-max-min: an `if` that selects the larger or smaller of two operands. Prefer `max`/`min`.
@@ -18,6 +18,7 @@ import tools.lint_core.{
   Finding(..),
   Fix,
   Fixability(..),
+  Memo,
   Need(..),
   Ratchet(..),
   Rule,
@@ -25,11 +26,12 @@ import tools.lint_core.{
   Scope(..),
   StdlibIndex,
   Visitor(..),
+  fixLater,
   mkVisitorRule,
+  factDeclLocs,
 }
 import tools.lint_shared.{
   rebinds,
-  declLocList,
   replaceNodeFix,
   ruleNameIfMaxMin,
   unwrapLoc,
@@ -133,8 +135,8 @@ ruleIfMaxMin : StdlibIndex ->
   Positions ->
   List Decl ->
   List Visitor
-ruleIfMaxMin idx _ facts pos decls =
-  [OnExpr [KIf] (ifMaxMinAt idx (ordImplLocs pos decls) facts)]
+ruleIfMaxMin idx _ facts _ _ =
+  [OnExpr [KIf] (ifMaxMinAt idx (ordImplLocs facts) facts)]
 
 ifMaxMinAt : StdlibIndex -> List Loc -> FileFacts -> Ctx -> Expr -> List Finding
 ifMaxMinAt idx ordLocs facts ctx (e@(EIf cond t el)) =
@@ -143,12 +145,15 @@ ifMaxMinAt idx ordLocs facts ctx (e@(EIf cond t el)) =
       ifMaxMinFinding
         ctx.ctxDeclLoc
         hit
-        (ifMaxMinFix idx ordLocs facts ctx e hit),
+        (fixLater (_ => ifMaxMinFix idx ordLocs facts ctx e hit)),
     ]
     None => []
 ifMaxMinAt _ _ _ _ _ = []
 
-ifMaxMinFinding : Option Loc -> (String, Expr, Expr) -> Option Fix -> Finding
+ifMaxMinFinding : Option Loc ->
+  (String, Expr, Expr) ->
+  Memo (Option Fix) ->
+  Finding
 ifMaxMinFinding loc (fn, a, b) fix = Finding {
   rule = ruleNameIfMaxMin,
   message =
@@ -181,8 +186,8 @@ ifMaxMinFix idx ordLocs facts ctx e (fn, a, b) =
 
 -- The declaration locations of the `impl Ord` blocks.  The walk gives every body
 -- of an impl the impl's own location as its `ctxDeclLoc`.
-ordImplLocs : Positions -> List Decl -> List Loc
-ordImplLocs pos decls = flatMap ordImplLoc (declLocList pos decls)
+ordImplLocs : FileFacts -> List Loc
+ordImplLocs facts = flatMap ordImplLoc (factDeclLocs facts)
 
 ordImplLoc : (Decl, Option Loc) -> List Loc
 ordImplLoc (d, loc) = match (isOrdImpl d, loc)
@@ -204,8 +209,8 @@ inOrdImpl None _ = False
 (DUse false (UseGroup ("ir" "sexp") ((mem "exprSexp" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("tools" "printer") ((mem "exprToString" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" false) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "mkVisitorRule" false))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "rebinds" false) (mem "declLocList" false) (mem "replaceNodeFix" false) (mem "ruleNameIfMaxMin" false) (mem "unwrapLoc" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" false) (mem "Fixability" true) (mem "Memo" false) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "fixLater" false) (mem "mkVisitorRule" false) (mem "factDeclLocs" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "rebinds" false) (mem "replaceNodeFix" false) (mem "ruleNameIfMaxMin" false) (mem "unwrapLoc" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameIfMaxMin")) (fa "summary" (ELit (LString "if-then-else selects the larger/smaller of the same two operands. Prefer `max`/`min`"))) (fa "doc" (ELit (LString "An `if` that picks the larger or smaller of two operands is `max` or `min`.\n\nBefore:\n  if a > b then a else b\nAfter:\n  max a b"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "FixableUnsafe")) (fa "needs" (EListLit (EVar "NeedsScopes") (EVar "NeedsWildIndex")))))) (EVar "ruleIfMaxMin")) (EVar "None")))
 (DTypeSig false "ifMaxMinCompareOp" (TyFun (TyCon "String") (TyCon "Bool")))
@@ -219,16 +224,16 @@ inOrdImpl None _ = False
 (DTypeSig false "ifMaxMinOf" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Expr") (TyCon "Expr")))))))
 (DFunDef false "ifMaxMinOf" ((PVar "cond") (PVar "t") (PVar "el")) (EMatch (EApp (EVar "unwrapLoc") (EVar "cond")) (arm (PCon "EBinOp" (PVar "op") (PVar "a") (PVar "b") PWild) ((GBool (EApp (EVar "ifMaxMinCompareOp") (EVar "op")))) (EBlock (DoLet false false (PVar "aK") (EApp (EVar "exprSexp") (EVar "a"))) (DoLet false false (PVar "bK") (EApp (EVar "exprSexp") (EVar "b"))) (DoLet false false (PVar "tK") (EApp (EVar "exprSexp") (EVar "t"))) (DoLet false false (PVar "eK") (EApp (EVar "exprSexp") (EVar "el"))) (DoExpr (EIf (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "aK") (EVar "bK")) (EApp (EVar "isLiteralExpr") (EVar "a"))) (EApp (EVar "isLiteralExpr") (EVar "b"))) (EVar "None") (EIf (EBinOp "&&" (EBinOp "==" (EVar "tK") (EVar "aK")) (EBinOp "==" (EVar "eK") (EVar "bK"))) (EApp (EVar "Some") (ETuple (EApp (EVar "ifMaxMinFnNormal") (EVar "op")) (EVar "a") (EVar "b"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "tK") (EVar "bK")) (EBinOp "==" (EVar "eK") (EVar "aK"))) (EApp (EVar "Some") (ETuple (EApp (EVar "ifMaxMinFnReversed") (EVar "op")) (EVar "a") (EVar "b"))) (EVar "None"))))))) (arm PWild () (EVar "None"))))
 (DTypeSig false "ruleIfMaxMin" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor"))))))))
-(DFunDef false "ruleIfMaxMin" ((PVar "idx") PWild (PVar "facts") (PVar "pos") (PVar "decls")) (EListLit (EApp (EApp (EVar "OnExpr") (EListLit (EVar "KIf"))) (EApp (EApp (EApp (EVar "ifMaxMinAt") (EVar "idx")) (EApp (EApp (EVar "ordImplLocs") (EVar "pos")) (EVar "decls"))) (EVar "facts")))))
+(DFunDef false "ruleIfMaxMin" ((PVar "idx") PWild (PVar "facts") PWild PWild) (EListLit (EApp (EApp (EVar "OnExpr") (EListLit (EVar "KIf"))) (EApp (EApp (EApp (EVar "ifMaxMinAt") (EVar "idx")) (EApp (EVar "ordImplLocs") (EVar "facts"))) (EVar "facts")))))
 (DTypeSig false "ifMaxMinAt" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyCon "Loc")) (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "ifMaxMinAt" ((PVar "idx") (PVar "ordLocs") (PVar "facts") (PVar "ctx") (PAs "e" (PCon "EIf" (PVar "cond") (PVar "t") (PVar "el")))) (EMatch (EApp (EApp (EApp (EVar "ifMaxMinOf") (EVar "cond")) (EVar "t")) (EVar "el")) (arm (PCon "Some" (PVar "hit")) () (EListLit (EApp (EApp (EApp (EVar "ifMaxMinFinding") (EFieldAccess (EVar "ctx") "ctxDeclLoc")) (EVar "hit")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "ifMaxMinFix") (EVar "idx")) (EVar "ordLocs")) (EVar "facts")) (EVar "ctx")) (EVar "e")) (EVar "hit"))))) (arm (PCon "None") () (EListLit))))
+(DFunDef false "ifMaxMinAt" ((PVar "idx") (PVar "ordLocs") (PVar "facts") (PVar "ctx") (PAs "e" (PCon "EIf" (PVar "cond") (PVar "t") (PVar "el")))) (EMatch (EApp (EApp (EApp (EVar "ifMaxMinOf") (EVar "cond")) (EVar "t")) (EVar "el")) (arm (PCon "Some" (PVar "hit")) () (EListLit (EApp (EApp (EApp (EVar "ifMaxMinFinding") (EFieldAccess (EVar "ctx") "ctxDeclLoc")) (EVar "hit")) (EApp (EVar "fixLater") (ELam (PWild) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "ifMaxMinFix") (EVar "idx")) (EVar "ordLocs")) (EVar "facts")) (EVar "ctx")) (EVar "e")) (EVar "hit"))))))) (arm (PCon "None") () (EListLit))))
 (DFunDef false "ifMaxMinAt" (PWild PWild PWild PWild PWild) (EListLit))
-(DTypeSig false "ifMaxMinFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyTuple (TyCon "String") (TyCon "Expr") (TyCon "Expr")) (TyFun (TyApp (TyCon "Option") (TyCon "Fix")) (TyCon "Finding")))))
+(DTypeSig false "ifMaxMinFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyTuple (TyCon "String") (TyCon "Expr") (TyCon "Expr")) (TyFun (TyApp (TyCon "Memo") (TyApp (TyCon "Option") (TyCon "Fix"))) (TyCon "Finding")))))
 (DFunDef false "ifMaxMinFinding" ((PVar "loc") (PTuple (PVar "fn") (PVar "a") (PVar "b")) (PVar "fix")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameIfMaxMin")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "if-then-else selects the ")) (EApp (EVar "display") (EIf (EBinOp "==" (EVar "fn") (ELit (LString "max"))) (ELit (LString "larger")) (ELit (LString "smaller"))))) (ELit (LString " of the same two operands. Rewrite as '"))) (EApp (EVar "display") (EApp (EVar "exprToString") (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (EVar "fn"))) (EVar "a"))) (EVar "b"))))) (ELit (LString "'")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "fix")))))
 (DTypeSig false "ifMaxMinFix" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyCon "Loc")) (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyFun (TyTuple (TyCon "String") (TyCon "Expr") (TyCon "Expr")) (TyApp (TyCon "Option") (TyCon "Fix")))))))))
 (DFunDef false "ifMaxMinFix" ((PVar "idx") (PVar "ordLocs") (PVar "facts") (PVar "ctx") (PVar "e") (PTuple (PVar "fn") (PVar "a") (PVar "b"))) (EIf (EBinOp "||" (EApp (EApp (EVar "inOrdImpl") (EFieldAccess (EVar "ctx") "ctxDeclLoc")) (EVar "ordLocs")) (EApp (EApp (EApp (EApp (EVar "rebinds") (EVar "idx")) (EVar "facts")) (EVar "ctx")) (EVar "fn"))) (EVar "None") (EBlock (DoLet false false (PVar "call") (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (EVar "fn"))) (EVar "a"))) (EVar "b"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "replaceNodeFix") (EVar "Unsafe")) (EBinOp "++" (ELit (LString "select with ")) (EVar "fn"))) (EVar "ctx")) (EVar "e")) (EVar "call"))))))
-(DTypeSig false "ordImplLocs" (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Loc")))))
-(DFunDef false "ordImplLocs" ((PVar "pos") (PVar "decls")) (EApp (EApp (EVar "flatMap") (EVar "ordImplLoc")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "decls"))))
+(DTypeSig false "ordImplLocs" (TyFun (TyCon "FileFacts") (TyApp (TyCon "List") (TyCon "Loc"))))
+(DFunDef false "ordImplLocs" ((PVar "facts")) (EApp (EApp (EVar "flatMap") (EVar "ordImplLoc")) (EApp (EVar "factDeclLocs") (EVar "facts"))))
 (DTypeSig false "ordImplLoc" (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Loc"))))
 (DFunDef false "ordImplLoc" ((PTuple (PVar "d") (PVar "loc"))) (EMatch (ETuple (EApp (EVar "isOrdImpl") (EVar "d")) (EVar "loc")) (arm (PTuple (PCon "True") (PCon "Some" (PVar "l"))) () (EListLit (EVar "l"))) (arm PWild () (EListLit))))
 (DTypeSig false "isOrdImpl" (TyFun (TyCon "Decl") (TyCon "Bool")))
@@ -245,8 +250,8 @@ inOrdImpl None _ = False
 (DUse false (UseGroup ("ir" "sexp") ((mem "exprSexp" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("tools" "printer") ((mem "exprToString" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" false) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "mkVisitorRule" false))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "rebinds" false) (mem "declLocList" false) (mem "replaceNodeFix" false) (mem "ruleNameIfMaxMin" false) (mem "unwrapLoc" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" false) (mem "Fixability" true) (mem "Memo" false) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "fixLater" false) (mem "mkVisitorRule" false) (mem "factDeclLocs" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "rebinds" false) (mem "replaceNodeFix" false) (mem "ruleNameIfMaxMin" false) (mem "unwrapLoc" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameIfMaxMin")) (fa "summary" (ELit (LString "if-then-else selects the larger/smaller of the same two operands. Prefer `max`/`min`"))) (fa "doc" (ELit (LString "An `if` that picks the larger or smaller of two operands is `max` or `min`.\n\nBefore:\n  if a > b then a else b\nAfter:\n  max a b"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "FixableUnsafe")) (fa "needs" (EListLit (EVar "NeedsScopes") (EVar "NeedsWildIndex")))))) (EVar "ruleIfMaxMin")) (EVar "None")))
 (DTypeSig false "ifMaxMinCompareOp" (TyFun (TyCon "String") (TyCon "Bool")))
@@ -260,16 +265,16 @@ inOrdImpl None _ = False
 (DTypeSig false "ifMaxMinOf" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Expr") (TyCon "Expr")))))))
 (DFunDef false "ifMaxMinOf" ((PVar "cond") (PVar "t") (PVar "el")) (EMatch (EApp (EVar "unwrapLoc") (EVar "cond")) (arm (PCon "EBinOp" (PVar "op") (PVar "a") (PVar "b") PWild) ((GBool (EApp (EVar "ifMaxMinCompareOp") (EVar "op")))) (EBlock (DoLet false false (PVar "aK") (EApp (EVar "exprSexp") (EVar "a"))) (DoLet false false (PVar "bK") (EApp (EVar "exprSexp") (EVar "b"))) (DoLet false false (PVar "tK") (EApp (EVar "exprSexp") (EVar "t"))) (DoLet false false (PVar "eK") (EApp (EVar "exprSexp") (EVar "el"))) (DoExpr (EIf (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "aK") (EVar "bK")) (EApp (EVar "isLiteralExpr") (EVar "a"))) (EApp (EVar "isLiteralExpr") (EVar "b"))) (EVar "None") (EIf (EBinOp "&&" (EBinOp "==" (EVar "tK") (EVar "aK")) (EBinOp "==" (EVar "eK") (EVar "bK"))) (EApp (EVar "Some") (ETuple (EApp (EVar "ifMaxMinFnNormal") (EVar "op")) (EVar "a") (EVar "b"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "tK") (EVar "bK")) (EBinOp "==" (EVar "eK") (EVar "aK"))) (EApp (EVar "Some") (ETuple (EApp (EVar "ifMaxMinFnReversed") (EVar "op")) (EVar "a") (EVar "b"))) (EVar "None"))))))) (arm PWild () (EVar "None"))))
 (DTypeSig false "ruleIfMaxMin" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor"))))))))
-(DFunDef false "ruleIfMaxMin" ((PVar "idx") PWild (PVar "facts") (PVar "pos") (PVar "decls")) (EListLit (EApp (EApp (EVar "OnExpr") (EListLit (EVar "KIf"))) (EApp (EApp (EApp (EVar "ifMaxMinAt") (EVar "idx")) (EApp (EApp (EVar "ordImplLocs") (EVar "pos")) (EVar "decls"))) (EVar "facts")))))
+(DFunDef false "ruleIfMaxMin" ((PVar "idx") PWild (PVar "facts") PWild PWild) (EListLit (EApp (EApp (EVar "OnExpr") (EListLit (EVar "KIf"))) (EApp (EApp (EApp (EVar "ifMaxMinAt") (EVar "idx")) (EApp (EVar "ordImplLocs") (EVar "facts"))) (EVar "facts")))))
 (DTypeSig false "ifMaxMinAt" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyCon "Loc")) (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "ifMaxMinAt" ((PVar "idx") (PVar "ordLocs") (PVar "facts") (PVar "ctx") (PAs "e" (PCon "EIf" (PVar "cond") (PVar "t") (PVar "el")))) (EMatch (EApp (EApp (EApp (EVar "ifMaxMinOf") (EVar "cond")) (EVar "t")) (EVar "el")) (arm (PCon "Some" (PVar "hit")) () (EListLit (EApp (EApp (EApp (EVar "ifMaxMinFinding") (EFieldAccess (EVar "ctx") "ctxDeclLoc")) (EVar "hit")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "ifMaxMinFix") (EVar "idx")) (EVar "ordLocs")) (EVar "facts")) (EVar "ctx")) (EVar "e")) (EVar "hit"))))) (arm (PCon "None") () (EListLit))))
+(DFunDef false "ifMaxMinAt" ((PVar "idx") (PVar "ordLocs") (PVar "facts") (PVar "ctx") (PAs "e" (PCon "EIf" (PVar "cond") (PVar "t") (PVar "el")))) (EMatch (EApp (EApp (EApp (EVar "ifMaxMinOf") (EVar "cond")) (EVar "t")) (EVar "el")) (arm (PCon "Some" (PVar "hit")) () (EListLit (EApp (EApp (EApp (EVar "ifMaxMinFinding") (EFieldAccess (EVar "ctx") "ctxDeclLoc")) (EVar "hit")) (EApp (EVar "fixLater") (ELam (PWild) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "ifMaxMinFix") (EVar "idx")) (EVar "ordLocs")) (EVar "facts")) (EVar "ctx")) (EVar "e")) (EVar "hit"))))))) (arm (PCon "None") () (EListLit))))
 (DFunDef false "ifMaxMinAt" (PWild PWild PWild PWild PWild) (EListLit))
-(DTypeSig false "ifMaxMinFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyTuple (TyCon "String") (TyCon "Expr") (TyCon "Expr")) (TyFun (TyApp (TyCon "Option") (TyCon "Fix")) (TyCon "Finding")))))
+(DTypeSig false "ifMaxMinFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyTuple (TyCon "String") (TyCon "Expr") (TyCon "Expr")) (TyFun (TyApp (TyCon "Memo") (TyApp (TyCon "Option") (TyCon "Fix"))) (TyCon "Finding")))))
 (DFunDef false "ifMaxMinFinding" ((PVar "loc") (PTuple (PVar "fn") (PVar "a") (PVar "b")) (PVar "fix")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameIfMaxMin")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "if-then-else selects the ")) (EApp (EMethodRef "display") (EIf (EBinOp "==" (EVar "fn") (ELit (LString "max"))) (ELit (LString "larger")) (ELit (LString "smaller"))))) (ELit (LString " of the same two operands. Rewrite as '"))) (EApp (EMethodRef "display") (EApp (EVar "exprToString") (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (EVar "fn"))) (EVar "a"))) (EVar "b"))))) (ELit (LString "'")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "fix")))))
 (DTypeSig false "ifMaxMinFix" (TyFun (TyCon "StdlibIndex") (TyFun (TyApp (TyCon "List") (TyCon "Loc")) (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyFun (TyTuple (TyCon "String") (TyCon "Expr") (TyCon "Expr")) (TyApp (TyCon "Option") (TyCon "Fix")))))))))
 (DFunDef false "ifMaxMinFix" ((PVar "idx") (PVar "ordLocs") (PVar "facts") (PVar "ctx") (PVar "e") (PTuple (PVar "fn") (PVar "a") (PVar "b"))) (EIf (EBinOp "||" (EApp (EApp (EVar "inOrdImpl") (EFieldAccess (EVar "ctx") "ctxDeclLoc")) (EVar "ordLocs")) (EApp (EApp (EApp (EApp (EVar "rebinds") (EVar "idx")) (EVar "facts")) (EVar "ctx")) (EVar "fn"))) (EVar "None") (EBlock (DoLet false false (PVar "call") (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (EVar "fn"))) (EVar "a"))) (EVar "b"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "replaceNodeFix") (EVar "Unsafe")) (EBinOp "++" (ELit (LString "select with ")) (EVar "fn"))) (EVar "ctx")) (EVar "e")) (EVar "call"))))))
-(DTypeSig false "ordImplLocs" (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Loc")))))
-(DFunDef false "ordImplLocs" ((PVar "pos") (PVar "decls")) (EApp (EApp (EDictApp "flatMap") (EVar "ordImplLoc")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "decls"))))
+(DTypeSig false "ordImplLocs" (TyFun (TyCon "FileFacts") (TyApp (TyCon "List") (TyCon "Loc"))))
+(DFunDef false "ordImplLocs" ((PVar "facts")) (EApp (EApp (EDictApp "flatMap") (EVar "ordImplLoc")) (EApp (EVar "factDeclLocs") (EVar "facts"))))
 (DTypeSig false "ordImplLoc" (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Loc"))))
 (DFunDef false "ordImplLoc" ((PTuple (PVar "d") (PVar "loc"))) (EMatch (ETuple (EApp (EVar "isOrdImpl") (EVar "d")) (EVar "loc")) (arm (PTuple (PCon "True") (PCon "Some" (PVar "l"))) () (EListLit (EVar "l"))) (arm PWild () (EListLit))))
 (DTypeSig false "isOrdImpl" (TyFun (TyCon "Decl") (TyCon "Bool")))

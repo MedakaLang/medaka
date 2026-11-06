@@ -12,6 +12,7 @@ import tools.lint_core.{
   Finding(..),
   Fix,
   Fixability(..),
+  Memo,
   Need(..),
   Ratchet(..),
   Rule,
@@ -87,7 +88,7 @@ ruleWhenUnless idx _ facts _ _ =
     (whenUnlessFix idx facts)
     whenUnlessFinding
 
-whenUnlessFinding : Option Loc -> Expr -> Option Fix -> Finding
+whenUnlessFinding : Option Loc -> Expr -> Memo (Option Fix) -> Finding
 whenUnlessFinding loc rewritten fix = Finding {
   rule = ruleNameWhenUnless,
   message =

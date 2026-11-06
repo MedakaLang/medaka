@@ -13,6 +13,7 @@ import tools.lint_core.{
   Finding(..),
   Fix,
   Fixability(..),
+  Memo,
   Need(..),
   Ratchet(..),
   Rule,
@@ -20,6 +21,7 @@ import tools.lint_core.{
   Scope(..),
   StdlibIndex,
   Visitor(..),
+  fixLater,
   mkVisitorRule,
 }
 import tools.lint_shared.{
@@ -138,11 +140,11 @@ andThenPureMapAt idx facts ctx e = match andThenPureMapOf e
     andThenPureMapFinding
       ctx.ctxDeclLoc
       rewritten
-      (andThenPureMapFix idx facts ctx e rewritten),
+      (fixLater (_ => andThenPureMapFix idx facts ctx e rewritten)),
   ]
   None => []
 
-andThenPureMapFinding : Option Loc -> Expr -> Option Fix -> Finding
+andThenPureMapFinding : Option Loc -> Expr -> Memo (Option Fix) -> Finding
 andThenPureMapFinding loc rewritten fix = Finding {
   rule = ruleNameAndThenPureMap,
   message =

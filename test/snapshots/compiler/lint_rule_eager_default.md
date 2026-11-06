@@ -1,5 +1,5 @@
 # META
-source_lines=151
+source_lines=152
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-eager-default: a call passed as an always-evaluated default. `optionOr d o` and `resultOr d r` evaluate `d` even when `o` holds a value; `optionOrElse` and `resultOrElse` take a function and run it only on the miss.
@@ -16,6 +16,7 @@ import tools.lint_core.{
   Finding(..),
   Fix,
   Fixability(..),
+  Memo,
   Need(..),
   Ratchet(..),
   Rule,
@@ -126,7 +127,7 @@ eagerEdit idx facts ctx (EApp f _) rewritten =
       (exprToString rewritten)
 eagerEdit _ _ _ _ _ = None
 
-eagerFinding : Option Loc -> Expr -> Option Fix -> Finding
+eagerFinding : Option Loc -> Expr -> Memo (Option Fix) -> Finding
 eagerFinding loc rewritten fix = Finding {
   rule = ruleNameEagerDefault,
   message =
@@ -158,7 +159,7 @@ ruleEagerDefault idx _ facts _ _ =
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("tools" "printer") ((mem "exprToString" false))))
 (DUse false (UseGroup ("tools" "lint_fix") ((mem "Binding" true))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" false) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" false) (mem "mkVisitorRule" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" false) (mem "Fixability" true) (mem "Memo" false) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" false) (mem "mkVisitorRule" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "calledName" false) (mem "exprRuleEditVisitors" false) (mem "isCtorName" false) (mem "isFalseLit" false) (mem "noExcl" false) (mem "oneLine" false) (mem "rebinds" false) (mem "replaceFix" false) (mem "ruleNameEagerDefault" false) (mem "tightSpan" false) (mem "unwrapLoc" false) (mem "usesPreludeName" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
 (DTypeSig true "rule" (TyCon "Rule"))
@@ -179,7 +180,7 @@ ruleEagerDefault idx _ facts _ _ =
 (DTypeSig false "eagerEdit" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Fix"))))))))
 (DFunDef false "eagerEdit" ((PVar "idx") (PVar "facts") (PVar "ctx") (PCon "EApp" (PVar "f") PWild) (PVar "rewritten")) (EIf (EBinOp "||" (EApp (EVar "isWhenL") (EVar "rewritten")) (EApp (EApp (EApp (EApp (EVar "rebinds") (EVar "idx")) (EVar "facts")) (EVar "ctx")) (EApp (EVar "calledName") (EVar "rewritten")))) (EVar "None") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "replaceFix") (EVar "Unsafe")) (ELit (LString "run the default only on a miss"))) (EApp (EVar "tightSpan") (EVar "f"))) (EVar "Closed")) (EVar "ctx")) (EApp (EVar "exprToString") (EVar "rewritten")))))
 (DFunDef false "eagerEdit" (PWild PWild PWild PWild PWild) (EVar "None"))
-(DTypeSig false "eagerFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "Option") (TyCon "Fix")) (TyCon "Finding")))))
+(DTypeSig false "eagerFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "Memo") (TyApp (TyCon "Option") (TyCon "Fix"))) (TyCon "Finding")))))
 (DFunDef false "eagerFinding" ((PVar "loc") (PVar "rewritten") (PVar "fix")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameEagerDefault")) (fa "message" (EIf (EApp (EVar "isWhenL") (EVar "rewritten")) (ELit (LString "the argument of 'whenL False' is evaluated although the guard is False")) (EBinOp "++" (EBinOp "++" (ELit (LString "this default is evaluated even when the value is present — rewrite as '")) (EApp (EVar "oneLine") (EApp (EVar "exprToString") (EVar "rewritten")))) (ELit (LString "'"))))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "fix")))))
 (DTypeSig false "ruleEagerDefault" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor"))))))))
 (DFunDef false "ruleEagerDefault" ((PVar "idx") PWild (PVar "facts") PWild PWild) (EApp (EApp (EApp (EApp (EVar "exprRuleEditVisitors") (EVar "noExcl")) (EApp (EApp (EVar "eagerOf") (EVar "idx")) (EVar "facts"))) (EApp (EApp (EVar "eagerEdit") (EVar "idx")) (EVar "facts"))) (EVar "eagerFinding")))
@@ -188,7 +189,7 @@ ruleEagerDefault idx _ facts _ _ =
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("tools" "printer") ((mem "exprToString" false))))
 (DUse false (UseGroup ("tools" "lint_fix") ((mem "Binding" true))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" false) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" false) (mem "mkVisitorRule" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" false) (mem "Fixability" true) (mem "Memo" false) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" false) (mem "mkVisitorRule" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "calledName" false) (mem "exprRuleEditVisitors" false) (mem "isCtorName" false) (mem "isFalseLit" false) (mem "noExcl" false) (mem "oneLine" false) (mem "rebinds" false) (mem "replaceFix" false) (mem "ruleNameEagerDefault" false) (mem "tightSpan" false) (mem "unwrapLoc" false) (mem "usesPreludeName" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
 (DTypeSig true "rule" (TyCon "Rule"))
@@ -209,7 +210,7 @@ ruleEagerDefault idx _ facts _ _ =
 (DTypeSig false "eagerEdit" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Fix"))))))))
 (DFunDef false "eagerEdit" ((PVar "idx") (PVar "facts") (PVar "ctx") (PCon "EApp" (PVar "f") PWild) (PVar "rewritten")) (EIf (EBinOp "||" (EApp (EVar "isWhenL") (EVar "rewritten")) (EApp (EApp (EApp (EApp (EVar "rebinds") (EVar "idx")) (EVar "facts")) (EVar "ctx")) (EApp (EVar "calledName") (EVar "rewritten")))) (EVar "None") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "replaceFix") (EVar "Unsafe")) (ELit (LString "run the default only on a miss"))) (EApp (EVar "tightSpan") (EVar "f"))) (EVar "Closed")) (EVar "ctx")) (EApp (EVar "exprToString") (EVar "rewritten")))))
 (DFunDef false "eagerEdit" (PWild PWild PWild PWild PWild) (EVar "None"))
-(DTypeSig false "eagerFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "Option") (TyCon "Fix")) (TyCon "Finding")))))
+(DTypeSig false "eagerFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "Memo") (TyApp (TyCon "Option") (TyCon "Fix"))) (TyCon "Finding")))))
 (DFunDef false "eagerFinding" ((PVar "loc") (PVar "rewritten") (PVar "fix")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameEagerDefault")) (fa "message" (EIf (EApp (EVar "isWhenL") (EVar "rewritten")) (ELit (LString "the argument of 'whenL False' is evaluated although the guard is False")) (EBinOp "++" (EBinOp "++" (ELit (LString "this default is evaluated even when the value is present — rewrite as '")) (EApp (EVar "oneLine") (EApp (EVar "exprToString") (EVar "rewritten")))) (ELit (LString "'"))))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "fix")))))
 (DTypeSig false "ruleEagerDefault" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor"))))))))
 (DFunDef false "ruleEagerDefault" ((PVar "idx") PWild (PVar "facts") PWild PWild) (EApp (EApp (EApp (EApp (EVar "exprRuleEditVisitors") (EVar "noExcl")) (EApp (EApp (EVar "eagerOf") (EVar "idx")) (EVar "facts"))) (EApp (EApp (EVar "eagerEdit") (EVar "idx")) (EVar "facts"))) (EVar "eagerFinding")))
