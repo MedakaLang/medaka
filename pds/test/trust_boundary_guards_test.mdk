@@ -42,8 +42,8 @@ import test_process.{
   underRoot,
 }
 
-probe : <IO> String
-probe = underRoot "pds/test/guard_probes_main.mdk"
+probe : Unit -> <IO> String
+probe () = underRoot "pds/test/guard_probes_main.mdk"
 
 {- | Passes when spawning the probe under `caseName` exits 0 AND one whole
    line of its output equals `wantLine`. The CONTROL half of the grading;
@@ -55,7 +55,7 @@ probe = underRoot "pds/test/guard_probes_main.mdk"
    is the exact inversion a control case exists to catch. -}
 expectControlCase : String -> String -> <Exec, IO> Expectation
 expectControlCase caseName wantLine =
-  expectSpawnOkLine (medakaBin ()) ["run", probe, caseName] wantLine
+  expectSpawnOkLine (medakaBin ()) ["run", probe (), caseName] wantLine
 
 -- The cells, from RUN-PDS0-036 / #1727 and #3210: case name paired
 -- with its grading shape and the exact text that must appear. `Err` is a
@@ -73,17 +73,25 @@ cellFloor = 2
 
 runCell : (String, Result String String) -> <Exec, IO> (String, Expectation)
 runCell (name, Err wantMessage) =
-  (name, expectSpawnFails (medakaBin ()) ["run", probe, name] wantMessage)
+  (name, expectSpawnFails (medakaBin ()) ["run", probe (), name] wantMessage)
 runCell (name, Ok wantLine) = (name, expectControlCase name wantLine)
 
 -- Every cell spawned exactly once, shared by every assertion below —
--- top-level nullary bindings are memoized, so a spawn placed here and read
--- from several `test` decls executes once, not twice.
-results : <Exec, IO> List (String, Expectation)
-results = map runCell cells
+-- a once-cell holds the result, so a spawn read from several `test` decls
+-- executes once, not twice.
+resultsCell : Ref (Option (List (String, Expectation)))
+resultsCell = Ref None
+
+results : Unit -> <Exec, IO> List (String, Expectation)
+results () = match !resultsCell
+  Some v => v
+  None =>
+    let v = map runCell cells
+    resultsCell := Some v
+    v
 
 cellExpectation : String -> <Exec, IO> Expectation
-cellExpectation name = match lookup name results
+cellExpectation name = match lookup name (results ())
   None => Fail "\{name} has no `results` entry" "" ""
   Some e => e
 
@@ -95,7 +103,7 @@ test "uvarint-ok control case is unaffected" = cellExpectation "uvarint-ok"
 -- # Non-vacuity
 
 test "trust_boundary_guards ran at least CELL_FLOOR=2 cells" =
-  let n = length results
+  let n = length (results ())
   if n >= cellFloor then
     Pass ">= \{intToString cellFloor} cells" "\{intToString n} cells"
   else

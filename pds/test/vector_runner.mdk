@@ -210,8 +210,8 @@ spawn secs envs cmd args = boundedVerbSeconds secs "env" (envs ++ (cmd :: args))
    of a parity row share one compiler tree, so asserting freshness on each
    of them is consistent rather than self-contradictory. -}
 export
-medakaEnv : <IO> List String
-medakaEnv = [
+medakaEnv : Unit -> <IO> List String
+medakaEnv () = [
   "MEDAKA_ROOT=\{medakaRoot ()}",
   "MEDAKA_EMITTER=\{medakaRoot ()}/medaka_emitter",
   "MEDAKA_STRICT=1",
@@ -219,8 +219,8 @@ medakaEnv = [
 
 -- `medakaEnv` plus the Wasm emitter, which only a `--target wasm` build reads.
 export
-wasmBuildEnv : <IO> List String
-wasmBuildEnv = medakaEnv ++ ["MEDAKA_WASM_EMITTER=\{wasmEmitter}"]
+wasmBuildEnv : Unit -> <IO> List String
+wasmBuildEnv () = medakaEnv () ++ ["MEDAKA_WASM_EMITTER=\{wasmEmitter ()}"]
 
 -- Whether `name` resolves to something runnable. A missing command makes
 -- `env` exit 127 without running anything, which is the one code that
@@ -462,7 +462,7 @@ evalStdout a label driver corpusPaths =
   spawnFindings
     label
     "medaka run"
-    (spawn runSeconds medakaEnv (medakaBin ()) args)
+    (spawn runSeconds (medakaEnv ()) (medakaBin ()) args)
 
 nativeStdout : Row ->
   Arm ->
@@ -491,7 +491,7 @@ buildNative label driver bin =
     (spawnFindings
       label
       "medaka build"
-      (spawn buildSeconds medakaEnv (medakaBin ()) [
+      (spawn buildSeconds (medakaEnv ()) (medakaBin ()) [
         "build", driver, "-o", bin
       ]))
 
@@ -501,7 +501,7 @@ buildNative label driver bin =
 export
 buildNativeBatch : List (String, String, String) -> <Exec, IO> List String
 buildNativeBatch rows =
-  let envs = medakaEnv
+  let envs = medakaEnv ()
   let bin = medakaBin ()
   let spawned =
     spawnBatch
@@ -530,7 +530,7 @@ wasmStdout r a label driver corpusPaths scratch =
     spawnFindings
       label
       "medaka build --target wasm"
-      (spawn buildSeconds wasmBuildEnv (medakaBin ()) args)
+      (spawn buildSeconds (wasmBuildEnv ()) (medakaBin ()) args)
   match built
     (_, []) =>
       spawnFindings
@@ -550,8 +550,8 @@ runWasm secs wasm args =
 
 -- The Wasm emitter this host would use. It is not built by `make medaka`, so
 -- `wasmUnavailable` grades its presence rather than assuming it.
-wasmEmitter : <IO> String
-wasmEmitter =
+wasmEmitter : Unit -> <IO> String
+wasmEmitter () =
   getEnvOr
     "MEDAKA_WASM_EMITTER"
     "\{medakaRoot ()}/test/bin/wasm_emit_modules_main"
@@ -571,10 +571,10 @@ spaceStr = " "
    The three prerequisites are the ones the retired script checked, in the
    same order. Each absence is named, so the finding says what to install or
    build rather than only that the arm did not run. -}
-wasmUnavailable : <Exec, FileRead, IO> Option String
-wasmUnavailable =
-  if not (fileExists wasmEmitter) then
-    Some "the Wasm emitter \{wasmEmitter} is not built"
+wasmUnavailable : Unit -> <Exec, FileRead, IO> Option String
+wasmUnavailable () =
+  if not (fileExists (wasmEmitter ())) then
+    Some "the Wasm emitter \{wasmEmitter ()} is not built"
   else if not (commandPresent "node") then
     Some "node is not installed"
   else if not (commandPresent "wasm-tools") then
@@ -599,7 +599,7 @@ oneArm : Row ->
 oneArm r corpusPaths scratch extraNeeds a =
   let label = "\{r.gate} \{engineLabel a.engine}"
   match a.engine
-    WasmEngine => match wasmUnavailable
+    WasmEngine => match wasmUnavailable ()
       None => runArm r corpusPaths scratch extraNeeds a
       Some why => failedArm label ["\{label}: Wasm is required but \{why}"]
     _ => runArm r corpusPaths scratch extraNeeds a
@@ -1037,7 +1037,7 @@ mutationsFindings : MutationTest ->
   <Exec, FileRead, FileWrite, IO> List String
 mutationsFindings t tree =
   let bin = medakaBin ()
-  let envs = medakaEnv
+  let envs = medakaEnv ()
   let staged = map ((i, m) => stageMutation t tree i m) (indexed 0 t.mutations)
   let buildRows =
     map

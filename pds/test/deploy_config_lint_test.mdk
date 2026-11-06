@@ -55,32 +55,32 @@ import test_process.{scratchDir, underRoot}
 
 -- # The files
 
-service : <IO> String
-service = underRoot "pds/pds.service"
+service : Unit -> <IO> String
+service () = underRoot "pds/pds.service"
 
-caddyfile : <IO> String
-caddyfile = underRoot "pds/Caddyfile"
+caddyfile : Unit -> <IO> String
+caddyfile () = underRoot "pds/Caddyfile"
 
-egressService : <IO> String
-egressService = underRoot "pds/pds-egress.service"
+egressService : Unit -> <IO> String
+egressService () = underRoot "pds/pds-egress.service"
 
-egressCaddyfile : <IO> String
-egressCaddyfile = underRoot "pds/Caddyfile.egress"
+egressCaddyfile : Unit -> <IO> String
+egressCaddyfile () = underRoot "pds/Caddyfile.egress"
 
-backupService : <IO> String
-backupService = underRoot "pds/pds-backup.service"
+backupService : Unit -> <IO> String
+backupService () = underRoot "pds/pds-backup.service"
 
-backupTimer : <IO> String
-backupTimer = underRoot "pds/pds-backup.timer"
+backupTimer : Unit -> <IO> String
+backupTimer () = underRoot "pds/pds-backup.timer"
 
-healthpingService : <IO> String
-healthpingService = underRoot "pds/pds-healthping.service"
+healthpingService : Unit -> <IO> String
+healthpingService () = underRoot "pds/pds-healthping.service"
 
-healthpingTimer : <IO> String
-healthpingTimer = underRoot "pds/pds-healthping.timer"
+healthpingTimer : Unit -> <IO> String
+healthpingTimer () = underRoot "pds/pds-healthping.timer"
 
-alertService : <IO> String
-alertService = underRoot "pds/pds-alert@.service"
+alertService : Unit -> <IO> String
+alertService () = underRoot "pds/pds-alert@.service"
 
 -- # The rosters
 --
@@ -392,16 +392,24 @@ presentForbidden file ((label, pattern) :: rest) =
 
 {- | A fresh scratch directory, shared by every mutation control below.
 
-   A top-level nullary binding is memoized, so this is one `mktemp -d` for
+   A once-cell holds it, so this is one `mktemp -d` for
    the whole module rather than one per control. `medaka gate run` hands a
    native gate a `TMPDIR` under a scratch root it reaps itself, so the
    directory is left in place. -}
-scratch : <Exec> Result String String
-scratch = scratchDir ()
+scratchCell : Ref (Option (Result String String))
+scratchCell = Ref None
+
+scratch : Unit -> <Exec> Result String String
+scratch () = match !scratchCell
+  Some v => v
+  None =>
+    let v = scratchDir ()
+    scratchCell := Some v
+    v
 
 -- | `content` written to `name` under `scratch`, and the path it landed at.
 scratchFile : String -> String -> <Exec, FileWrite> Result String String
-scratchFile name content = match scratch
+scratchFile name content = match scratch ()
   Err e => Err "could not make a scratch directory: \{e}"
   Ok dir =>
     let p = "\{dir}/\{name}"
@@ -568,7 +576,7 @@ bindFlagsIn (Ok path) = bindFlags path
 test "pds.service carries every required hardening directive" =
   expectNoFindings
     "pds/pds.service is missing a required hardening directive"
-    (missingDirectives service serviceDirectives)
+    (missingDirectives (service ()) serviceDirectives)
 
 -- systemd accepts repeated assignments; a weaker final row overrides the
 -- roster's 110s line. Exactly one effective stop allowance must remain.
@@ -589,52 +597,52 @@ stopTimeoutIn (Ok path) = stopTimeoutFindings path
 test "pds.service has exactly one effective 110s stop timeout" =
   expectNoFindings
     "pds.service must allow its 95s drain plus 15s margin"
-    (stopTimeoutFindings service)
+    (stopTimeoutFindings (service ()))
 
 test "Caddyfile carries every required hardening directive" =
   expectNoFindings
     "pds/Caddyfile is missing a required hardening directive"
-    (missingDirectives caddyfile caddyDirectives)
+    (missingDirectives (caddyfile ()) caddyDirectives)
 
 test "Caddyfile keeps the request timeouts out of the firehose block" =
   expectNoFindings
     "pds/Caddyfile bounds a firehose subscription with a request timeout"
-    (firehoseTimeouts caddyfile)
+    (firehoseTimeouts (caddyfile ()))
 
 test "Caddyfile proxies requests over HTTP to the loopback upstream" =
   expectNoFindings
     "pds/Caddyfile has no HTTP reverse_proxy to the loopback upstream"
-    (missingDirectives caddyfile caddyProxiedDirectives)
+    (missingDirectives (caddyfile ()) caddyProxiedDirectives)
 
 test "Caddyfile has no TCP pass-through in front of pdsd" =
   expectNoFindings
     "pds/Caddyfile carries a layer4 pass-through"
-    (presentForbidden caddyfile caddyForbidden)
+    (presentForbidden (caddyfile ()) caddyForbidden)
 
 test "pds.service passes no --bind" =
   expectNoFindings
     "pds/pds.service passes a --bind flag pdsd refuses"
-    (bindFlags service)
+    (bindFlags (service ()))
 
 test "pds-egress.service carries every required hardening directive" =
   expectNoFindings
     "pds/pds-egress.service is missing a required hardening directive"
-    (missingDirectives egressService egressServiceDirectives)
+    (missingDirectives (egressService ()) egressServiceDirectives)
 
 test "pds-egress.service has no blanket IPAddressAllow voiding its deny list" =
   expectNoFindings
     "pds/pds-egress.service has a blanket IPAddressAllow that voids its deny list"
-    (presentForbidden egressService egressServiceForbidden)
+    (presentForbidden (egressService ()) egressServiceForbidden)
 
 test "Caddyfile.egress carries every required hardening directive" =
   expectNoFindings
     "pds/Caddyfile.egress is missing a required hardening directive"
-    (missingDirectives egressCaddyfile egressCaddyDirectives)
+    (missingDirectives (egressCaddyfile ()) egressCaddyDirectives)
 
 test "Caddyfile.egress has no dynamic or header-driven upstream" =
   expectNoFindings
     "pds/Caddyfile.egress has a dynamic/header-driven upstream"
-    (presentForbidden egressCaddyfile egressCaddyForbidden)
+    (presentForbidden (egressCaddyfile ()) egressCaddyForbidden)
 
 -- ## The three outbound units
 --
@@ -645,67 +653,67 @@ test "Caddyfile.egress has no dynamic or header-driven upstream" =
 test "pds-backup.service carries the shared outbound-unit roster" =
   expectNoFindings
     "pds-backup.service is missing a required hardening directive"
-    (missingDirectives backupService outboundUnitDirectives)
+    (missingDirectives (backupService ()) outboundUnitDirectives)
 
 test "pds-backup.service has no blanket IPAddressAllow" =
   expectNoFindings
     "pds-backup.service has a blanket IPAddressAllow that voids its deny list"
-    (presentForbidden backupService outboundUnitForbidden)
+    (presentForbidden (backupService ()) outboundUnitForbidden)
 
 test "pds-healthping.service carries the shared outbound-unit roster" =
   expectNoFindings
     "pds-healthping.service is missing a required hardening directive"
-    (missingDirectives healthpingService outboundUnitDirectives)
+    (missingDirectives (healthpingService ()) outboundUnitDirectives)
 
 test "pds-healthping.service has no blanket IPAddressAllow" =
   expectNoFindings
     "pds-healthping.service has a blanket IPAddressAllow that voids its deny list"
-    (presentForbidden healthpingService outboundUnitForbidden)
+    (presentForbidden (healthpingService ()) outboundUnitForbidden)
 
 test "pds-alert@.service carries the shared outbound-unit roster" =
   expectNoFindings
     "pds-alert@.service is missing a required hardening directive"
-    (missingDirectives alertService outboundUnitDirectives)
+    (missingDirectives (alertService ()) outboundUnitDirectives)
 
 test "pds-alert@.service has no blanket IPAddressAllow" =
   expectNoFindings
     "pds-alert@.service has a blanket IPAddressAllow that voids its deny list"
-    (presentForbidden alertService outboundUnitForbidden)
+    (presentForbidden (alertService ()) outboundUnitForbidden)
 
 test "pds-backup.service carries its own oneshot and alert directives" =
   expectNoFindings
     "pds/pds-backup.service is missing a required directive"
-    (missingDirectives backupService backupServiceDirectives)
+    (missingDirectives (backupService ()) backupServiceDirectives)
 
 test "pds-backup.timer replays a missed backup" =
   expectNoFindings
     "pds/pds-backup.timer is missing a required directive"
-    (missingDirectives backupTimer backupTimerDirectives)
+    (missingDirectives (backupTimer ()) backupTimerDirectives)
 
 test "pds-healthping.service probes the health route and fails on HTTP errors" =
   expectNoFindings
     "pds/pds-healthping.service is missing a required directive"
-    (missingDirectives healthpingService healthpingServiceDirectives)
+    (missingDirectives (healthpingService ()) healthpingServiceDirectives)
 
 test "pds-healthping.service does not dispatch a push every interval" =
   expectNoFindings
     "a failed healthping must only withhold the dead-man's-switch ping"
-    (presentForbidden healthpingService healthpingServiceForbidden)
+    (presentForbidden (healthpingService ()) healthpingServiceForbidden)
 
 test "pds-healthping.timer carries its own schedule directives" =
   expectNoFindings
     "pds/pds-healthping.timer is missing a required directive"
-    (missingDirectives healthpingTimer healthpingTimerDirectives)
+    (missingDirectives (healthpingTimer ()) healthpingTimerDirectives)
 
 test "pds-healthping.timer does not replay a missed ping" =
   expectNoFindings
     "pds/pds-healthping.timer replays missed pings, which reports health for an outage"
-    (presentForbidden healthpingTimer healthpingTimerForbidden)
+    (presentForbidden (healthpingTimer ()) healthpingTimerForbidden)
 
 test "pds-alert@.service carries its own oneshot and curl directives" =
   expectNoFindings
     "pds/pds-alert@.service is missing a required directive"
-    (missingDirectives alertService alertServiceDirectives)
+    (missingDirectives (alertService ()) alertServiceDirectives)
 
 -- A later assignment can undo the in-memory incident hold or the retry
 -- limit even if the roster still matches an earlier assignment.
@@ -739,12 +747,12 @@ alertLimitIn (Ok path) = alertLimitFindings path
 test "pds-alert@.service retains one incident and one failed attempt" =
   expectNoFindings
     "pds-alert@.service must allow only one push until operator re-arms it"
-    (alertLimitFindings alertService)
+    (alertLimitFindings (alertService ()))
 
 test "pds-alert@.service has no self-referential OnFailure" =
   expectNoFindings
     "pds/pds-alert@.service has a self-referential OnFailure"
-    (presentForbidden alertService alertServiceForbidden)
+    (presentForbidden (alertService ()) alertServiceForbidden)
 
 -- The ops docs must name the instance `OnFailure=` starts. That instance is
 -- the full unit name inside the template, so the short spelling is a
@@ -828,7 +836,7 @@ test "mutation control: a stripped 110s stop allowance is caught" =
     "a stripped TimeoutStopSec=110s"
     (missingIn
       (mutantOf
-        service
+        (service ())
         "pds.service.no-stop-timeout"
         (without (startsWith "TimeoutStopSec=")))
       serviceDirectives)
@@ -838,7 +846,7 @@ test "mutation control: a later 90s stop allowance is caught" =
     "a later 90s TimeoutStopSec overriding 110s"
     (stopTimeoutIn
       (mutantOf
-        service
+        (service ())
         "pds.service.short-stop-timeout"
         (appending "TimeoutStopSec=90s")))
 
@@ -847,7 +855,7 @@ test "mutation control: a stripped systemd directive (IPAddressDeny) is caught" 
     "a stripped systemd directive (IPAddressDeny)"
     (missingIn
       (mutantOf
-        service
+        (service ())
         "pds.service.no-deny"
         (without (startsWith "IPAddressDeny=")))
       serviceDirectives)
@@ -857,7 +865,7 @@ test "mutation control: a stripped systemd directive (MemoryMax) is caught" =
     "a stripped systemd directive (MemoryMax)"
     (missingIn
       (mutantOf
-        service
+        (service ())
         "pds.service.no-memorymax"
         (without (startsWith "MemoryMax=")))
       serviceDirectives)
@@ -867,7 +875,7 @@ test "mutation control: a stripped GC_MARKERS on pds.service is caught" =
     "a stripped Environment=GC_MARKERS=1"
     (missingIn
       (mutantOf
-        service
+        (service ())
         "pds.service.no-gc-markers"
         (without (startsWith "Environment=GC_MARKERS=")))
       serviceDirectives)
@@ -877,7 +885,7 @@ test "mutation control: a stripped OnFailure= on pds.service is caught" =
     "a stripped OnFailure= on pds.service"
     (missingIn
       (mutantOf
-        service
+        (service ())
         "pds.service.no-onfailure"
         (without (startsWith "OnFailure=")))
       serviceDirectives)
@@ -887,7 +895,7 @@ test "mutation control: a stripped RestrictAddressFamilies on pds.service is cau
     "a stripped RestrictAddressFamilies=AF_INET"
     (missingIn
       (mutantOf
-        service
+        (service ())
         "pds.service.no-address-families"
         (without (startsWith "RestrictAddressFamilies=")))
       serviceDirectives)
@@ -897,7 +905,7 @@ test "mutation control: a stripped SystemCallFilter on pds.service is caught" =
     "a stripped SystemCallFilter"
     (missingIn
       (mutantOf
-        service
+        (service ())
         "pds.service.no-syscall-filter"
         (without (startsWith "SystemCallFilter=")))
       serviceDirectives)
@@ -907,7 +915,7 @@ test "mutation control: a stripped SystemCallErrorNumber on pds.service is caugh
     "a stripped SystemCallErrorNumber=EPERM"
     (missingIn
       (mutantOf
-        service
+        (service ())
         "pds.service.no-syscall-errno"
         (without (startsWith "SystemCallErrorNumber=")))
       serviceDirectives)
@@ -917,7 +925,7 @@ test "mutation control: a stripped OOMPolicy on pds.service is caught" =
     "a stripped OOMPolicy=kill"
     (missingIn
       (mutantOf
-        service
+        (service ())
         "pds.service.no-oom-policy"
         (without (startsWith "OOMPolicy=")))
       serviceDirectives)
@@ -929,7 +937,7 @@ test "mutation control: a pds.service bound to the wildcard address is caught" =
     "a --bind 0.0.0.0 on pds.service"
     (bindFlagsIn
       (mutantOf
-        service
+        (service ())
         "pds.service.bind-wildcard"
         (substituting "--port 8080" "--bind 0.0.0.0 --port 8080")))
 
@@ -938,7 +946,7 @@ test "mutation control: a pds.service bound with --bind= to a public address is 
     "a --bind=203.0.113.7 on pds.service"
     (bindFlagsIn
       (mutantOf
-        service
+        (service ())
         "pds.service.bind-equals"
         (substituting "--port 8080" "--bind=203.0.113.7 --port 8080")))
 
@@ -947,7 +955,7 @@ test "mutation control: an explicit loopback --bind is caught too" =
     "an explicit --bind 127.0.0.1 on pds.service"
     (bindFlagsIn
       (mutantOf
-        service
+        (service ())
         "pds.service.bind-loopback"
         (substituting "--port 8080" "--bind 127.0.0.1 --port 8080")))
 
@@ -956,7 +964,7 @@ test "mutation control: an alert unit that forgets its successful incident is ca
     "a stripped RemainAfterExit=yes"
     (missingIn
       (mutantOf
-        alertService
+        (alertService ())
         "pds-alert.service.no-retention"
         (without (startsWith "RemainAfterExit=")))
       alertServiceDirectives)
@@ -966,7 +974,7 @@ test "mutation control: a later RemainAfterExit=no is caught" =
     "a later RemainAfterExit=no overriding incident retention"
     (alertLimitIn
       (mutantOf
-        alertService
+        (alertService ())
         "pds-alert.service.retention-overridden"
         (appending "RemainAfterExit=no")))
 
@@ -975,7 +983,7 @@ test "mutation control: a removed alert limit is caught" =
     "a stripped StartLimitIntervalSec=infinity"
     (missingIn
       (mutantOf
-        alertService
+        (alertService ())
         "pds-alert.service.no-interval"
         (without (startsWith "StartLimitIntervalSec=")))
       alertServiceDirectives)
@@ -985,34 +993,35 @@ test "mutation control: a removed alert burst limit is caught" =
     "a stripped StartLimitBurst=1"
     (missingIn
       (mutantOf
-        alertService
+        (alertService ())
         "pds-alert.service.no-burst"
         (without (startsWith "StartLimitBurst=")))
       alertServiceDirectives)
 
-alertLimitOverridden : <Exec, FileRead, FileWrite, IO> Result String String
-alertLimitOverridden =
+alertLimitOverridden : Unit ->
+  <Exec, FileRead, FileWrite, IO> Result String String
+alertLimitOverridden () =
   mutantOf
-    alertService
+    (alertService ())
     "pds-alert.service.limit-overridden"
     (appending "StartLimitBurst=10")
 
 test "mutation control: a later alert burst override is caught" =
   expectFindings
     "a later StartLimitBurst=10 overriding the one-start limit"
-    (alertLimitIn alertLimitOverridden)
+    (alertLimitIn (alertLimitOverridden ()))
 
 test "mutation control: the overridden alert copy still passes its roster" =
   expectNoFindings
     "the overridden alert copy was expected to pass the directive roster"
-    (missingIn alertLimitOverridden alertServiceDirectives)
+    (missingIn (alertLimitOverridden ()) alertServiceDirectives)
 
 test "mutation control: a stripped Caddy HSTS header is caught" =
   expectFindings
     "a stripped Caddy directive (Strict-Transport-Security)"
     (missingIn
       (mutantOf
-        caddyfile
+        (caddyfile ())
         "Caddyfile.no-hsts"
         (without (contains "Strict-Transport-Security")))
       caddyDirectives)
@@ -1022,7 +1031,7 @@ test "mutation control: a stripped Caddy request-body limit is caught" =
     "a stripped Caddy directive (max_size)"
     (missingIn
       (mutantOf
-        caddyfile
+        (caddyfile ())
         "Caddyfile.no-max-size"
         (without (contains "max_size")))
       caddyDirectives)
@@ -1032,7 +1041,7 @@ test "mutation control: a stripped X-Forwarded-For overwrite is caught" =
     "a stripped X-Forwarded-For overwrite"
     (missingIn
       (mutantOf
-        caddyfile
+        (caddyfile ())
         "Caddyfile.no-xff"
         (without (contains "header_up X-Forwarded-For")))
       caddyDirectives)
@@ -1076,7 +1085,7 @@ test "mutation control: an access log redirected away from the journal is caught
   expectFindings
     "an access log redirected away from the journal"
     (missingIn
-      (mutantOf caddyfile "Caddyfile.log-to-file" toJournalFile)
+      (mutantOf (caddyfile ()) "Caddyfile.log-to-file" toJournalFile)
       caddyDirectives)
 
 {- | A firehose block that bounds its own stream.
@@ -1084,26 +1093,26 @@ test "mutation control: an access log redirected away from the journal is caught
    The directive roster still passes on this copy — the file carries every
    pattern it asks for, and one more — which is the whole reason the
    structural check exists beside it. Both halves are asserted. -}
-firehoseBounded : <Exec, FileRead, FileWrite, IO> Result String String
-firehoseBounded =
-  mutantOf caddyfile "Caddyfile.firehose-bounded" withFirehoseTimeout
+firehoseBounded : Unit -> <Exec, FileRead, FileWrite, IO> Result String String
+firehoseBounded () =
+  mutantOf (caddyfile ()) "Caddyfile.firehose-bounded" withFirehoseTimeout
 
 test "mutation control: a request timeout inside the firehose block is caught" =
   expectFindings
     "a request timeout inside the firehose block"
-    (firehoseTimeoutsIn firehoseBounded)
+    (firehoseTimeoutsIn (firehoseBounded ()))
 
 test "mutation control: the firehose-bounded copy still passes the roster" =
   expectNoFindings
     "the firehose-bounded copy was expected to pass the directive roster"
-    (missingIn firehoseBounded caddyDirectives)
+    (missingIn (firehoseBounded ()) caddyDirectives)
 
 test "mutation control: a Caddyfile with no firehose block at all is caught" =
   expectFindings
     "a Caddyfile serving the upgrade under the request path's timeouts"
     (firehoseTimeoutsIn
       (mutantOf
-        caddyfile
+        (caddyfile ())
         "Caddyfile.no-firehose"
         (without (contains "reverse_proxy @firehose"))))
 
@@ -1112,7 +1121,7 @@ test "mutation control: a Caddyfile with no reverse_proxy in front of pdsd is ca
     "a Caddyfile that proxies nothing to the loopback upstream"
     (missingIn
       (mutantOf
-        caddyfile
+        (caddyfile ())
         "Caddyfile.no-proxy"
         (without (contains "reverse_proxy")))
       caddyProxiedDirectives)
@@ -1123,8 +1132,9 @@ test "mutation control: a Caddyfile with no reverse_proxy in front of pdsd is ca
    The HTTP `reverse_proxy` is still present in this copy, so the proxied
    roster still passes, which is why the forbidden-direction check exists.
    Both halves are asserted. -}
-layer4InFront : <Exec, FileRead, FileWrite, IO> Result String String
-layer4InFront = mutantOf caddyfile "Caddyfile.layer4" withLayer4Passthrough
+layer4InFront : Unit -> <Exec, FileRead, FileWrite, IO> Result String String
+layer4InFront () =
+  mutantOf (caddyfile ()) "Caddyfile.layer4" withLayer4Passthrough
 
 withLayer4Passthrough : List String -> List String
 withLayer4Passthrough ls =
@@ -1144,19 +1154,19 @@ withLayer4Passthrough ls =
 test "mutation control: a layer4 pass-through in front of pdsd is caught" =
   expectFindings
     "a layer4 TCP pass-through in front of pdsd"
-    (presentIn layer4InFront caddyForbidden)
+    (presentIn (layer4InFront ()) caddyForbidden)
 
 test "mutation control: the layer4 copy still passes the proxied roster" =
   expectNoFindings
     "the layer4 copy was expected to pass the proxied roster"
-    (missingIn layer4InFront caddyProxiedDirectives)
+    (missingIn (layer4InFront ()) caddyProxiedDirectives)
 
 test "mutation control: a dropped egress IPAddressDeny range is caught" =
   expectFindings
     "a dropped egress IPAddressDeny range (172.16.0.0/12)"
     (missingIn
       (mutantOf
-        egressService
+        (egressService ())
         "pds-egress.service.no-172"
         (without (== "IPAddressDeny=172.16.0.0/12")))
       egressServiceDirectives)
@@ -1166,29 +1176,30 @@ test "mutation control: a dropped egress IPAddressDeny range is caught" =
    The directive roster still passes on this copy — every deny line is still
    present — which is why the forbidden-direction check exists, and both
    halves are asserted below. -}
-blanketAllowEgress : <Exec, FileRead, FileWrite, IO> Result String String
-blanketAllowEgress =
+blanketAllowEgress : Unit ->
+  <Exec, FileRead, FileWrite, IO> Result String String
+blanketAllowEgress () =
   mutantOf
-    egressService
+    (egressService ())
     "pds-egress.service.blanket-allow"
     (appending "IPAddressAllow=any")
 
 test "mutation control: a blanket egress IPAddressAllow (any) is caught" =
   expectFindings
     "a blanket egress IPAddressAllow (any)"
-    (presentIn blanketAllowEgress egressServiceForbidden)
+    (presentIn (blanketAllowEgress ()) egressServiceForbidden)
 
 test "mutation control: the blanket-allow copy still passes the egress roster" =
   expectNoFindings
     "the blanket-allow copy was expected to pass the directive roster"
-    (missingIn blanketAllowEgress egressServiceDirectives)
+    (missingIn (blanketAllowEgress ()) egressServiceDirectives)
 
 test "mutation control: a dynamic header-driven egress upstream is caught" =
   expectFindings
     "a dynamic/header-driven egress upstream"
     (presentIn
       (mutantOf
-        egressCaddyfile
+        (egressCaddyfile ())
         "Caddyfile.egress.dynamic"
         (substituting
           "reverse_proxy https://api.bsky.app"
@@ -1200,7 +1211,7 @@ test "mutation control: a stripped egress upstream (chat) is caught" =
     "a stripped egress upstream (chat)"
     (missingIn
       (mutantOf
-        egressCaddyfile
+        (egressCaddyfile ())
         "Caddyfile.egress.no-chat"
         (without (contains "reverse_proxy https://api.bsky.chat")))
       egressCaddyDirectives)
@@ -1217,7 +1228,7 @@ test "mutation control: a wildcard-bound egress listener is caught" =
     "a wildcard-bound egress listener"
     (missingIn
       (mutantOf
-        egressCaddyfile
+        (egressCaddyfile ())
         "Caddyfile.egress.no-bind"
         (without (== "\tbind 127.0.0.1")))
       egressCaddyDirectives)
@@ -1229,7 +1240,7 @@ test "mutation control: an egress config without admin off is caught" =
     "an egress config without `admin off`"
     (missingIn
       (mutantOf
-        egressCaddyfile
+        (egressCaddyfile ())
         "Caddyfile.egress.no-admin-off"
         (without (== "\tadmin off")))
       egressCaddyDirectives)
@@ -1241,7 +1252,7 @@ test "mutation control: a dropped backup IPAddressDeny range is caught" =
     "a dropped backup IPAddressDeny range (169.254.0.0/16)"
     (missingIn
       (mutantOf
-        backupService
+        (backupService ())
         "pds-backup.service.no-169"
         (without (== "IPAddressDeny=169.254.0.0/16")))
       outboundUnitDirectives)
@@ -1251,29 +1262,30 @@ test "mutation control: a dropped backup IPAddressDeny range is caught" =
    The directive roster still passes on this copy — nothing was removed —
    which is exactly why the forbidden-direction check exists. A replayed
    liveness ping reports health for a window the box spent switched off. -}
-replayingHealthpingTimer : <Exec, FileRead, FileWrite, IO> Result String String
-replayingHealthpingTimer =
+replayingHealthpingTimer : Unit ->
+  <Exec, FileRead, FileWrite, IO> Result String String
+replayingHealthpingTimer () =
   mutantOf
-    healthpingTimer
+    (healthpingTimer ())
     "pds-healthping.timer.persistent"
     (appending "Persistent=true")
 
 test "mutation control: a replaying healthping timer is caught" =
   expectFindings
     "a replaying healthping timer (Persistent=true)"
-    (presentIn replayingHealthpingTimer healthpingTimerForbidden)
+    (presentIn (replayingHealthpingTimer ()) healthpingTimerForbidden)
 
 test "mutation control: the Persistent=true copy still passes the timer roster" =
   expectNoFindings
     "the Persistent=true copy was expected to pass the directive roster"
-    (missingIn replayingHealthpingTimer healthpingTimerDirectives)
+    (missingIn (replayingHealthpingTimer ()) healthpingTimerDirectives)
 
 test "mutation control: a healthping with per-interval OnFailure is caught" =
   expectFindings
     "a healthping that pages for every failed probe"
     (presentIn
       (mutantOf
-        healthpingService
+        (healthpingService ())
         "pds-healthping.service.push-every-interval"
         (appending "OnFailure=pds-alert@%n.service"))
       healthpingServiceForbidden)
@@ -1286,7 +1298,7 @@ test "mutation control: a healthping probe that ignores HTTP errors is caught" =
     "a healthping probe that ignores HTTP errors"
     (missingIn
       (mutantOf
-        healthpingService
+        (healthpingService ())
         "pds-healthping.service.no-f"
         (substitutingAll "curl -fsS" "curl -sS"))
       healthpingServiceDirectives)
@@ -1347,8 +1359,8 @@ test "deploy_config_lint grades at least PATTERN_FLOOR=114 patterns" =
    deleted block leaves every roster intact. So the count of blocks is
    pinned the same way each roster's floor is: committed when written, only
    ever raised. -}
-declaredAssertions : <FileRead, IO> Result String Int
-declaredAssertions =
+declaredAssertions : Unit -> <FileRead, IO> Result String Int
+declaredAssertions () =
   map
     (text => count (startsWith "test \"") (lines text))
     (readFile (underRoot "pds/test/deploy_config_lint_test.mdk"))
@@ -1358,7 +1370,7 @@ assertionFloor = 69
 
 test "deploy_config_lint declares at least ASSERTION_FLOOR=69 `test` blocks" =
   let want = ">= \{intToString assertionFloor} `test` blocks"
-  match declaredAssertions
+  match declaredAssertions ()
     Err e =>
       Fail "could not read this gate's own source: \{e}" want "read failed"
     Ok declared =>

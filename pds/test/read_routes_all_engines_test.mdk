@@ -67,8 +67,8 @@ row = Row {
 
 -- # Mutations
 
-mutationTest : MutationTest
-mutationTest = MutationTest {
+mutationTest : Unit -> <Env "MEDAKA_ROOT"> MutationTest
+mutationTest () = MutationTest {
   gate = gate,
   driver = driver,
   args = ["\{medakaRoot ()}/\{corpusFile}"],
@@ -120,4 +120,4 @@ mutationTest = MutationTest {
 test "read routes: 81 hand-authored cells, native == Wasm" = expectRow row
 
 test "read routes: each of 4 mutations turns the gate red with its own witness" =
-  expectMutations mutationTest
+  expectMutations (mutationTest ())

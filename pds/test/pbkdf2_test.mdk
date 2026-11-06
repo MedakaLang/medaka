@@ -239,8 +239,8 @@ parseKdfLine line = match words (trim line)
   [] => None
   _ => panic "pbkdf2_test: unparseable line: \{line}"
 
-wycheproofRows : <IO> List KdfRow
-wycheproofRows = match readLines wycheproofCorpusPath
+wycheproofRows : Unit -> <IO> List KdfRow
+wycheproofRows () = match readLines wycheproofCorpusPath
   Err e => panic "pbkdf2_test: could not read \{wycheproofCorpusPath}: \{e}"
   Ok lns => filterMap parseKdfLine lns
 
@@ -252,5 +252,5 @@ kdfRowExpectation r = (
 
 test "Wycheproof PBKDF2-HMAC-SHA256: 60 rows" =
   expectEach
-    (("row count == 60", expectEqual 60 (length wycheproofRows))
-      :: map kdfRowExpectation wycheproofRows)
+    (("row count == 60", expectEqual 60 (length (wycheproofRows ())))
+      :: map kdfRowExpectation (wycheproofRows ()))

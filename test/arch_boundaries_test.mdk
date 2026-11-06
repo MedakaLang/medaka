@@ -51,12 +51,20 @@ firstComponent m = match split "." m
   d :: _ => d
 
 -- (module id, file lines) for every non-test compiler module, sorted by id.
+loadModulesCell : Ref (Option (List (String, List String)))
+loadModulesCell = Ref None
+
 loadModules : Unit -> <IO> List (String, List String)
-loadModules () =
-  let root = underRoot "compiler"
-  match walkDir root
-    Err _ => []
-    Ok paths => M.entries (M.fromList (filterMap (loadOne root) paths))
+loadModules () = match !loadModulesCell
+  Some v => v
+  None =>
+    let v =
+      let root = underRoot "compiler"
+      match walkDir root
+        Err _ => []
+        Ok paths => M.entries (M.fromList (filterMap (loadOne root) paths))
+    loadModulesCell := Some v
+    v
 
 loadOne : String -> String -> <IO> Option (String, List String)
 loadOne root path =
@@ -1441,10 +1449,18 @@ claimProblem g at m (dir, x) =
   else
     None
 
+layerTableTextCell : Ref (Option (Result String (List String)))
+layerTableTextCell = Ref None
+
 layerTableText : Unit -> <IO> Result String (List String)
-layerTableText () = match readFile (underRoot "compiler/types/ARCHITECTURE.md")
-  Err e => Err "could not read compiler/types/ARCHITECTURE.md: \{e}"
-  Ok text => Ok (lines text)
+layerTableText () = match !layerTableTextCell
+  Some v => v
+  None =>
+    let v = match readFile (underRoot "compiler/types/ARCHITECTURE.md")
+      Err e => Err "could not read compiler/types/ARCHITECTURE.md: \{e}"
+      Ok text => Ok (lines text)
+    layerTableTextCell := Some v
+    v
 
 test "arch_boundaries: the layer table lists exactly the tc_* modules on disk and the entry" =
   match layerTableText ()

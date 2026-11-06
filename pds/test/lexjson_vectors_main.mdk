@@ -105,8 +105,8 @@ rejectMalformed label text = match parse text
       let () = println "MALFORMED \{label} FAIL accepted"
       0
 
-runMalformed : <IO> Int
-runMalformed =
+runMalformed : Unit -> <IO> Int
+runMalformed () =
   let checks = [
     rejectMalformed "duplicate-key" "{\"a\":1,\"a\":2}",
     rejectMalformed
@@ -163,8 +163,8 @@ timeDecision n =
 -- shared cores), so the ratio is measured up to three times and the check
 -- passes on the first sample under the threshold. A quadratic decision gives
 -- a ratio near 16 on every sample and stays red.
-runScaling : <IO, Clock> Bool
-runScaling =
+runScaling : Unit -> <IO, Clock> Bool
+runScaling () =
   let _warm = timeDecision 1000
   scalingAttempt 3
 
@@ -181,8 +181,8 @@ scalingAttempt left =
   else
     scalingAttempt (left - 1)
 
-runCap : <IO, Clock> Unit
-runCap =
+runCap : Unit -> <IO, Clock> Unit
+runCap () =
   let t = timeDecision 19000
   println "cap-19k: \{t}s"
 
@@ -193,16 +193,16 @@ main = match args ()
     Ok rows =>
       let total = countCases rows 0
       let passed = runRows rows 0
-      let malformed = runMalformed
+      let malformed = runMalformed ()
       let () =
         println
           "lexjson: \{intToString passed}/\{intToString total} round-trip (both directions)"
       let () = println "malformed: \{intToString malformed}/3 rejected"
       let dups = runDupCells
       let () = println "dup-keys: \{intToString dups}/5"
-      let scaled = runScaling
+      let scaled = runScaling ()
       let () = println "scaling-ok: \{scaled}"
-      let () = runCap
+      let () = runCap ()
       if passed == total && malformed == 3 && dups == 5 && scaled then
         println "TOTAL: PASS"
       else

@@ -130,11 +130,19 @@ roundTrips (name, p) =
 
 -- The prelude as a drive reads it.
 export
+preludeCell : Ref (Option (Result String (List Decl, List Decl)))
+preludeCell = Ref None
+
 prelude : Unit -> <IO, FileRead> Result String (List Decl, List Decl)
-prelude () = do
-  rsrc <- readFile (underRoot "stdlib/runtime.mdk")
-  csrc <- readFile (underRoot "stdlib/core.mdk")
-  Ok (desugar (parse rsrc), desugar (parse csrc))
+prelude () = match !preludeCell
+  Some v => v
+  None =>
+    let v = do
+      rsrc <- readFile (underRoot "stdlib/runtime.mdk")
+      csrc <- readFile (underRoot "stdlib/core.mdk")
+      Ok (desugar (parse rsrc), desugar (parse csrc))
+    preludeCell := Some v
+    v
 
 -- Every stdlib module but the prelude's two, as an import path.
 stdlibModules : Unit -> <IO, FileRead> Result String (List String)
@@ -622,18 +630,26 @@ test "together the rows carry every node kind" = withScratchDir
 
 -- A drive under a prelude key no earlier drive used misses, checks core and
 -- leaves the prelude's interface as the cache's one section.
+preludeInterfaceCell : Ref (Option (Result String PreludeInterface))
+preludeInterfaceCell = Ref None
+
 preludeInterface : Unit -> <IO, FileRead> Result String PreludeInterface
-preludeInterface () = do
-  (runtimeDecls, coreDecls) <- prelude ()
-  let _ = checkModulesChainReportFor defaultDriveInputs False (Some (
-    4364,
-    3,
-  )) "" [] runtimeDecls coreDecls [
-    ("m", desugarIn "m" (parseLocated "x = 1")),
-  ]
-  match currentPreludeInterface ()
-    [(_, pi)] => Ok pi
-    sections => Err "expected one section, got \{length sections}"
+preludeInterface () = match !preludeInterfaceCell
+  Some v => v
+  None =>
+    let v = do
+      (runtimeDecls, coreDecls) <- prelude ()
+      let _ = checkModulesChainReportFor defaultDriveInputs False (Some (
+        4364,
+        3,
+      )) "" [] runtimeDecls coreDecls [
+        ("m", desugarIn "m" (parseLocated "x = 1")),
+      ]
+      match currentPreludeInterface ()
+        [(_, pi)] => Ok pi
+        sections => Err "expected one section, got \{length sections}"
+    preludeInterfaceCell := Some v
+    v
 
 -- [x] encoded, rendered, parsed and decoded at [path]: the re-encoded text is
 -- the encoded text, and the view of the decoded value is the original's.  A
