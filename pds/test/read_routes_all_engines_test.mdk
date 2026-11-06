@@ -99,8 +99,8 @@ mutationTest () = MutationTest {
       name = "proxy-no-credential",
       file = driver,
       anchor =
-        "proxyAuthField = \"Authorization: Bearer \\{proxyAccessToken}\\r\\n\"",
-      mutant = "proxyAuthField = \"\"",
+        "proxyAuthField () = \"Authorization: Bearer \\{proxyAccessToken ()}\\r\\n\"",
+      mutant = "proxyAuthField () = \"\"",
       witness =
         "CELL proxy-admitted-timeline FAIL decision=refused status=401 error=AuthenticationRequired",
     },
