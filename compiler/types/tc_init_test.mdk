@@ -8,9 +8,10 @@
 -- Expected edges come from the L1 clauses (`docs/spec/language-design.md`, "Top-level
 -- initialisation") and the position rule the cycle rule reads: an application head or
 -- argument, a scrutinee, a `let` right-hand side and an operand are evaluated (`deref`); a
--- constructor component, and anything inside a lambda that is the whole right-hand side or a
--- component, is read (`guard`); a direct lambda argument of a `Deferred*` call in guarded
--- position is delayed (`delay`).  An edge renders as `target kind position`.
+-- constructor, tuple, list or record component and an argument of an under-saturated local
+-- call are stored (`store`); anything inside a lambda that is the whole right-hand side or a
+-- component is read when called (`guard`); a direct lambda argument of a `Deferred*` call in
+-- guarded position is delayed (`delay`).  An edge renders as `target kind position`.
 
 import frontend.ast.{Decl, Loc(..)}
 import frontend.desugar.{desugar}
@@ -123,6 +124,7 @@ kindTag ByClosure = "closure"
 
 posTag : InitPosition -> String
 posTag AtDeref = "deref"
+posTag AtStore = "store"
 posTag AtGuard = "guard"
 posTag AtDelay = "delay"
 
@@ -148,11 +150,11 @@ test "a value reading itself as an operand is a deref name edge (cyc)" =
   let g = graphOne "x : Int\nx = x + 1\n"
   expectEqual ["x name deref"] (edgesOf g "x")
 
-test "a cons component is guarded and an application argument is deref (mcyc)" =
+test "a cons component is stored and an application argument is deref (mcyc)" =
   let g =
     graphOne "xs : List Int\nxs = 1 :: ys\n\nys : List Int\nys = map (+ 1) xs\n"
   expectAll [
-    expectEqual ["ys name guard"] (edgesOf g "xs"),
+    expectEqual ["ys name store"] (edgesOf g "xs"),
     expectEqual ["xs name deref"] (edgesOf g "ys"),
   ]
 
@@ -824,9 +826,9 @@ givesBox = "interface Gives a where\n  give : a -> Int\n\ndata Box = Box\n\n"
 test "a value reading itself as an operand is rejected (cyc)" =
   expectEqual ["x: x -> x"] (cyclesOne "x : Int\nx = x + 1\n")
 
-test "only the value that evaluates its partner is rejected (mcyc)" =
+test "a value storing its partner and the partner evaluating it are both rejected (mcyc)" =
   expectEqual
-    ["ys: ys -> xs -> ys"]
+    ["xs: xs -> ys -> xs", "ys: ys -> xs -> ys"]
     (cyclesOne
       "xs : List Int\nxs = 1 :: ys\n\nys : List Int\nys = map (+ 1) xs\n")
 
@@ -1051,6 +1053,42 @@ test "a self-recursive deferred value is admitted; one that maps over itself is 
     ["loop3: loop3 -> loop3"]
     (cyclesOne
       "loop1 = defer\n  x <- deferPure 1\n  loop1\n\nloop2 = deferThen (deferPure 1) (x => loop2)\n\nloop3 = deferMap (x => x + 1) loop3\n")
+
+test "a value stored in its own constructor, list or record is rejected (g1, g2, g6)" =
+  expectEqual
+    ["xs: xs -> xs", "ones: ones -> ones", "r: r -> r", "ts: ts -> ts"]
+    (cyclesOne
+      "data Stream = Cons Int Stream\n\ndata Node = Node { v : Int, next : Option Node }\n\nxs : List Int\nxs = 1 :: xs\n\nones : Stream\nones = Cons 1 ones\n\nr : Node\nr = Node { v = 1, next = Some r }\n\nts = (1, [ts])\n")
+
+test "two values storing each other are both rejected (g3)" =
+  expectEqual
+    ["a: a -> b -> a", "b: b -> a -> b"]
+    (cyclesOne
+      "data T = T Int (List T)\n\na : T\na = T 1 [b]\n\nb : T\nb = T 2 [a]\n")
+
+test "a value passed to an under-saturated local call of itself is rejected (g4)" =
+  expectEqual
+    ["x: x -> x"]
+    (cyclesOne
+      "f : (Int -> Int) -> Int -> Int\nf g n = g n\n\nx : Int -> Int\nx = f x\n")
+
+test "an exported value stored in its own list is rejected in its module (mm1)" =
+  expectEqual
+    ["xs: xs -> xs"]
+    (cyclesOf
+      [
+        (
+          "lib",
+          "export\nxs : List Int\nxs = 1 :: xs\n\nexport\nf : Int -> Int\nf n = n + 1\n",
+        ),
+      ]
+      [])
+
+test "a stored function of the value's group and a value's own lambda body are admitted" =
+  expectEqual
+    []
+    (cyclesOne
+      "data Foo = Foo (Int -> Int)\n\nunfoo : Foo -> Int -> Int\nunfoo (Foo g) n = g n\n\nhelper : Int -> Int\nhelper n = if n == 0 then 0 else unfoo p (n - 1)\n\np : Foo\np = Foo helper\n\nf : Int -> Int\nf = n => if n == 0 then 0 else f (n - 1)\n\nfs : List (Int -> Int)\nfs = [helper, n => length fs + n]\n")
 
 test "recursive functions and a self-mentioning lambda value are admitted" =
   expectEqual

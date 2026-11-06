@@ -211,8 +211,9 @@ above Core IR; these laws are the wasm peers of EMITTER-SEMANTICS §2 (V1–V6).
   `VThunk`/`forceCell`/`blackholeCell` — see `archive/design/EAGER-INIT-DESIGN.md` §10). All
   three engines now raise the same coded `E-CYCLIC-VALUE` on a genuine cycle, and the
   dispatch arm now reads the correct, fully-initialized value on both backends.
-  `check` now rejects a genuine cycle with `T-CYCLIC-VALUE` (language-design I3), so an
-  admitted program never reaches this trap; the engines keep it until initialisation is strict.
+  `check` now rejects a genuine cycle with `T-CYCLIC-VALUE` (language-design I3), whether the
+  value evaluates a member of its group or stores one as a direct component, so an admitted
+  program never reaches this trap; the engines keep it until initialisation is strict.
   ⚠️ **Superseded:** the decided invariant named below was replaced by I1 to I5; the
   next sentences are the pre-L1 account.
   ⚠️ **This whole law is a DEVIATION from a decided invariant, not the design.**

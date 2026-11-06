@@ -51,7 +51,12 @@ test "a shebang line is emptied and main still becomes a unit function" =
     "\n__probe_user_main__ () = 1\n"
     (renameUserMain "#!/usr/bin/env medaka\nmain = 1\n")
 
-test "a signature continued on a later line keeps main a renamed value" =
+test "a signature continued on a later line still makes main a unit function" =
   expectEqual
-    "__probe_user_main__ :\n  <Stdout> Unit\n__probe_user_main__ = println \"hi\"\n"
+    "__probe_user_main__ : Unit ->\n  <Stdout> Unit\n__probe_user_main__ () = println \"hi\"\n"
     (renameUserMain "main :\n  <Stdout> Unit\nmain = println \"hi\"\n")
+
+test "a clause whose = is on the next line still makes main a unit function" =
+  expectEqual
+    "__probe_user_main__ ()\n  = println \"hi\"\n"
+    (renameUserMain "main\n  = println \"hi\"\n")

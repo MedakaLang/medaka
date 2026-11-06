@@ -11,14 +11,12 @@
    nonzero too. Test blocks and doctests emit it on stderr; a supervised
    property reports its typed runtime row on stdout.
 
-   Two mechanisms are exercised. `E-STACK-OVERFLOW` is the interpreter's
-   depth guard under `run` and the native signal backstop under `build`, and
-   the two word it differently on purpose — the guard names the evaluator's
-   call-depth limit, the backstop names a real stack — so the code is what is
-   pinned, not the sentence. `E-CYCLIC-VALUE` is `forceCell`'s black-holing,
-   which only the interpreter has; the compiled binary reaches its cyclic
-   fault through the same signal backstop and is free to report a different
-   code for it, so its row asks only that the death be coded at all.
+   `E-STACK-OVERFLOW` is the interpreter's depth guard under `run` and the
+   native signal backstop under `build`, and the two word it differently on
+   purpose — the guard names the evaluator's call-depth limit, the backstop
+   names a real stack — so the code is what is pinned, not the sentence. A
+   self-referential value has no row here: `check` rejects it with
+   `T-CYCLIC-VALUE` (language-design I3) before either engine runs.
 
    `deep_ok` is the control, and it is load-bearing: a moderately deep but
    finite program, below the guard's limit, that must still print 10000 and
@@ -47,7 +45,7 @@ silently = ""
 -- | The size of the corpus, written down so that a corpus which silently
 -- shrank is red. Growing it is expected: add the row and raise this.
 declaredFixtureCount : Int
-declaredFixtureCount = 3
+declaredFixtureCount = 2
 
 overflow : EngineDeath
 overflow = Coded "E-STACK-OVERFLOW"
@@ -58,7 +56,6 @@ overflow = Coded "E-STACK-OVERFLOW"
 rows : List (String, RuntimeOutcome)
 rows = [
   ("deep_recursion", Dies overflow overflow silently),
-  ("cyclic_value", Dies (Coded "E-CYCLIC-VALUE") AnyCode silently),
   ("deep_ok", Prints "10000"),
 ]
 

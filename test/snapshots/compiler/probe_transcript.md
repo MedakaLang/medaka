@@ -1,5 +1,5 @@
 # META
-source_lines=474
+source_lines=468
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/probe_transcript.mdk — the sentinel-delimited stdout format
@@ -382,10 +382,9 @@ userMainName : String
 userMainName = "__probe_user_main__"
 
 -- `src` with its top-level `main` turned into the unit function
--- `userMainName`: `main = e` becomes `userMainName () = e` and a one-line
--- `main : T` becomes `userMainName : Unit -> T`.  When any head has another
--- shape (a pattern argument, a guard, a signature continued on later lines)
--- every head is renamed in place and left a value.  `src` itself when it
+-- `userMainName`: a clause head `main ...` becomes `userMainName () ...`, and
+-- `main : T` becomes `userMainName : Unit -> T` with the `Unit ->` right after
+-- the colon wherever the signature's lines break.  `src` itself when it
 -- defines no top-level `main`.
 export
 renameUserMain : String -> String
@@ -395,8 +394,8 @@ renameUserMain src =
   match mainHeads starts toks spans
     [] => blankShebang src
     heads =>
-      let asFunction = all (h => not (isOtherHead h)) heads
-      blankShebang (joinNl (renameHeads asFunction 1 heads (splitNl src)))
+      blankShebang
+        (joinNl (applyEdits 1 (flatMap headEdits heads) (splitNl src)))
 
 -- A `#!` line is only valid at offset 0 of a file, and a probe puts its own
 -- lines in front of the target, so the line is emptied (its newline and every
@@ -411,18 +410,23 @@ blankShebang src
 -- A column-0 `main` head, by its 1-based line.
 data MainHead =
   | DefHead Int
-  -- The column of the signature's `:`.
-  | SigHead Int Int
-  | OtherHead Int
+  -- The line and column of the signature's `:`.
+  | SigHead Int Int Int
 
-headLine : MainHead -> Int
-headLine (DefHead line) = line
-headLine (SigHead line _) = line
-headLine (OtherHead line) = line
+-- One line's rewrite: the column-0 `main` renamed, followed by a suffix; or
+-- ` Unit ->` inserted after the colon at a column.
+data HeadEdit = RenameMain Int String | UnitArg Int Int
 
-isOtherHead : MainHead -> Bool
-isOtherHead (OtherHead _) = True
-isOtherHead _ = False
+editLine : HeadEdit -> Int
+editLine (RenameMain line _) = line
+editLine (UnitArg line _) = line
+
+-- On a line holding both, the insertion comes first, so its column still
+-- counts from the original `main`.
+headEdits : MainHead -> List HeadEdit
+headEdits (DefHead line) = [RenameMain line " ()"]
+headEdits (SigHead line colonLine col) =
+  [UnitArg colonLine col, RenameMain line ""]
 
 -- The heads, ascending, of every `main` identifier token that starts at
 -- column 0.
@@ -435,25 +439,16 @@ mainHeads starts ((TIdent "main") :: toks) ((off, _) :: spans) =
 mainHeads starts (_ :: toks) (_ :: spans) = mainHeads starts toks spans
 mainHeads _ _ _ = []
 
--- The head on `line`, from the tokens after its `main`.
+-- The head on `line`, from the first token after its `main` that is not
+-- layout: a colon starts a signature, anything else a clause.
 classifyHead : Array Int -> Int -> List Token -> List (Int, Int) -> MainHead
-classifyHead _ line (TEqual :: _) _ = DefHead line
-classifyHead starts line (TColon :: toks) ((off, _) :: spans) =
-  if endsOnLine starts line toks spans then
-    SigHead line (snd (offsetToLineColFast starts off))
-  else
-    OtherHead line
-classifyHead _ line _ _ = OtherHead line
-
--- Whether the first token after `line` (layout tokens skipped) starts a new
--- declaration at column 0, so the signature on `line` ends there.
-endsOnLine : Array Int -> Int -> List Token -> List (Int, Int) -> Bool
-endsOnLine starts line (tok :: toks) ((off, _) :: spans)
-  | isLayout tok = endsOnLine starts line toks spans
-  | otherwise = match offsetToLineColFast starts off
-    (l, col) =>
-      if l == line then endsOnLine starts line toks spans else col == 0
-endsOnLine _ _ _ _ = True
+classifyHead starts line (TColon :: _) ((off, _) :: _) =
+  match offsetToLineColFast starts off
+    (colonLine, col) => SigHead line colonLine col
+classifyHead starts line (tok :: toks) (_ :: spans)
+  | isLayout tok = classifyHead starts line toks spans
+  | otherwise = DefHead line
+classifyHead _ line _ _ = DefHead line
 
 isLayout : Token -> Bool
 isLayout TNewline = True
@@ -461,21 +456,20 @@ isLayout TIndent = True
 isLayout TDedent = True
 isLayout _ = False
 
-renameHeads : Bool -> Int -> List MainHead -> List String -> List String
-renameHeads _ _ [] lines = lines
-renameHeads _ _ _ [] = []
-renameHeads asFunction n (h :: hs) (l :: ls)
-  | n == headLine h =
-    renameHead asFunction h l :: renameHeads asFunction (n + 1) hs ls
-  | otherwise = l :: renameHeads asFunction (n + 1) (h :: hs) ls
+-- [lines] numbered from [n]; each line takes the edits on it in list order.
+applyEdits : Int -> List HeadEdit -> List String -> List String
+applyEdits _ [] lines = lines
+applyEdits _ _ [] = []
+applyEdits n edits (l :: ls) =
+  let edited =
+    fold (acc e => if editLine e == n then applyEdit e acc else acc) l edits
+  edited :: applyEdits (n + 1) (filter (e => editLine e > n) edits) ls
 
-renameHead : Bool -> MainHead -> String -> String
-renameHead True (DefHead _) l =
-  "\{userMainName} ()\{stringSlice 4 (stringLength l) l}"
-renameHead True (SigHead _ col) l =
-  let colonAndBefore = stringSlice 4 (col + 1) l
-  "\{userMainName}\{colonAndBefore} Unit ->\{stringSlice (col + 1) (stringLength l) l}"
-renameHead _ _ l = userMainName ++ stringSlice 4 (stringLength l) l
+applyEdit : HeadEdit -> String -> String
+applyEdit (RenameMain _ suffix) l =
+  "\{userMainName}\{suffix}\{stringSlice 4 (stringLength l) l}"
+applyEdit (UnitArg _ col) l =
+  "\{stringSlice 0 (col + 1) l} Unit ->\{stringSlice (col + 1) (stringLength l) l}"
 # DESUGAR
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "tokenizeWithOffsetPairs" false) (mem "lineStartsOf" false) (mem "offsetToLineColFast" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "reverseL" false) (mem "splitNl" false) (mem "startsWith" false))))
@@ -570,41 +564,37 @@ renameHead _ _ l = userMainName ++ stringSlice 4 (stringLength l) l
 (DTypeSig true "userMainName" (TyCon "String"))
 (DFunDef false "userMainName" () (ELit (LString "__probe_user_main__")))
 (DTypeSig true "renameUserMain" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "renameUserMain" ((PVar "src")) (EBlock (DoLet false false (PVar "starts") (EApp (EVar "lineStartsOf") (EVar "src"))) (DoLet false false (PTuple (PVar "toks") (PVar "spans")) (EApp (EVar "probeTokens") (EVar "src"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "mainHeads") (EVar "starts")) (EVar "toks")) (EVar "spans")) (arm (PList) () (EApp (EVar "blankShebang") (EVar "src"))) (arm (PVar "heads") () (EBlock (DoLet false false (PVar "asFunction") (EApp (EApp (EVar "all") (ELam ((PVar "h")) (EApp (EVar "not") (EApp (EVar "isOtherHead") (EVar "h"))))) (EVar "heads"))) (DoExpr (EApp (EVar "blankShebang") (EApp (EVar "joinNl") (EApp (EApp (EApp (EApp (EVar "renameHeads") (EVar "asFunction")) (ELit (LInt 1))) (EVar "heads")) (EApp (EVar "splitNl") (EVar "src"))))))))))))
+(DFunDef false "renameUserMain" ((PVar "src")) (EBlock (DoLet false false (PVar "starts") (EApp (EVar "lineStartsOf") (EVar "src"))) (DoLet false false (PTuple (PVar "toks") (PVar "spans")) (EApp (EVar "probeTokens") (EVar "src"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "mainHeads") (EVar "starts")) (EVar "toks")) (EVar "spans")) (arm (PList) () (EApp (EVar "blankShebang") (EVar "src"))) (arm (PVar "heads") () (EApp (EVar "blankShebang") (EApp (EVar "joinNl") (EApp (EApp (EApp (EVar "applyEdits") (ELit (LInt 1))) (EApp (EApp (EVar "flatMap") (EVar "headEdits")) (EVar "heads"))) (EApp (EVar "splitNl") (EVar "src"))))))))))
 (DTypeSig false "blankShebang" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "blankShebang" ((PVar "src")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "#!"))) (EVar "src")) (EMatch (EApp (EVar "splitNl") (EVar "src")) (arm (PCons PWild (PVar "rest")) () (EApp (EVar "joinNl") (EBinOp "::" (ELit (LString "")) (EVar "rest")))) (arm (PList) () (EVar "src"))) (EIf (EVar "otherwise") (EVar "src") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DData Private "MainHead" () ((variant "DefHead" (ConPos (TyCon "Int"))) (variant "SigHead" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "OtherHead" (ConPos (TyCon "Int")))) ())
-(DTypeSig false "headLine" (TyFun (TyCon "MainHead") (TyCon "Int")))
-(DFunDef false "headLine" ((PCon "DefHead" (PVar "line"))) (EVar "line"))
-(DFunDef false "headLine" ((PCon "SigHead" (PVar "line") PWild)) (EVar "line"))
-(DFunDef false "headLine" ((PCon "OtherHead" (PVar "line"))) (EVar "line"))
-(DTypeSig false "isOtherHead" (TyFun (TyCon "MainHead") (TyCon "Bool")))
-(DFunDef false "isOtherHead" ((PCon "OtherHead" PWild)) (EVar "True"))
-(DFunDef false "isOtherHead" (PWild) (EVar "False"))
+(DData Private "MainHead" () ((variant "DefHead" (ConPos (TyCon "Int"))) (variant "SigHead" (ConPos (TyCon "Int") (TyCon "Int") (TyCon "Int")))) ())
+(DData Private "HeadEdit" () ((variant "RenameMain" (ConPos (TyCon "Int") (TyCon "String"))) (variant "UnitArg" (ConPos (TyCon "Int") (TyCon "Int")))) ())
+(DTypeSig false "editLine" (TyFun (TyCon "HeadEdit") (TyCon "Int")))
+(DFunDef false "editLine" ((PCon "RenameMain" (PVar "line") PWild)) (EVar "line"))
+(DFunDef false "editLine" ((PCon "UnitArg" (PVar "line") PWild)) (EVar "line"))
+(DTypeSig false "headEdits" (TyFun (TyCon "MainHead") (TyApp (TyCon "List") (TyCon "HeadEdit"))))
+(DFunDef false "headEdits" ((PCon "DefHead" (PVar "line"))) (EListLit (EApp (EApp (EVar "RenameMain") (EVar "line")) (ELit (LString " ()")))))
+(DFunDef false "headEdits" ((PCon "SigHead" (PVar "line") (PVar "colonLine") (PVar "col"))) (EListLit (EApp (EApp (EVar "UnitArg") (EVar "colonLine")) (EVar "col")) (EApp (EApp (EVar "RenameMain") (EVar "line")) (ELit (LString "")))))
 (DTypeSig false "mainHeads" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyApp (TyCon "List") (TyCon "MainHead"))))))
 (DFunDef false "mainHeads" ((PVar "starts") (PCons (PCon "TIdent" (PLit (LString "main"))) (PVar "toks")) (PCons (PTuple (PVar "off") PWild) (PVar "spans"))) (EMatch (EApp (EApp (EVar "offsetToLineColFast") (EVar "starts")) (EVar "off")) (arm (PTuple (PVar "line") (PLit (LInt 0))) () (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "classifyHead") (EVar "starts")) (EVar "line")) (EVar "toks")) (EVar "spans")) (EApp (EApp (EApp (EVar "mainHeads") (EVar "starts")) (EVar "toks")) (EVar "spans")))) (arm PWild () (EApp (EApp (EApp (EVar "mainHeads") (EVar "starts")) (EVar "toks")) (EVar "spans")))))
 (DFunDef false "mainHeads" ((PVar "starts") (PCons PWild (PVar "toks")) (PCons PWild (PVar "spans"))) (EApp (EApp (EApp (EVar "mainHeads") (EVar "starts")) (EVar "toks")) (EVar "spans")))
 (DFunDef false "mainHeads" (PWild PWild PWild) (EListLit))
 (DTypeSig false "classifyHead" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyCon "MainHead"))))))
-(DFunDef false "classifyHead" (PWild (PVar "line") (PCons (PCon "TEqual") PWild) PWild) (EApp (EVar "DefHead") (EVar "line")))
-(DFunDef false "classifyHead" ((PVar "starts") (PVar "line") (PCons (PCon "TColon") (PVar "toks")) (PCons (PTuple (PVar "off") PWild) (PVar "spans"))) (EIf (EApp (EApp (EApp (EApp (EVar "endsOnLine") (EVar "starts")) (EVar "line")) (EVar "toks")) (EVar "spans")) (EApp (EApp (EVar "SigHead") (EVar "line")) (EApp (EVar "snd") (EApp (EApp (EVar "offsetToLineColFast") (EVar "starts")) (EVar "off")))) (EApp (EVar "OtherHead") (EVar "line"))))
-(DFunDef false "classifyHead" (PWild (PVar "line") PWild PWild) (EApp (EVar "OtherHead") (EVar "line")))
-(DTypeSig false "endsOnLine" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyCon "Bool"))))))
-(DFunDef false "endsOnLine" ((PVar "starts") (PVar "line") (PCons (PVar "tok") (PVar "toks")) (PCons (PTuple (PVar "off") PWild) (PVar "spans"))) (EIf (EApp (EVar "isLayout") (EVar "tok")) (EApp (EApp (EApp (EApp (EVar "endsOnLine") (EVar "starts")) (EVar "line")) (EVar "toks")) (EVar "spans")) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "offsetToLineColFast") (EVar "starts")) (EVar "off")) (arm (PTuple (PVar "l") (PVar "col")) () (EIf (EBinOp "==" (EVar "l") (EVar "line")) (EApp (EApp (EApp (EApp (EVar "endsOnLine") (EVar "starts")) (EVar "line")) (EVar "toks")) (EVar "spans")) (EBinOp "==" (EVar "col") (ELit (LInt 0)))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DFunDef false "endsOnLine" (PWild PWild PWild PWild) (EVar "True"))
+(DFunDef false "classifyHead" ((PVar "starts") (PVar "line") (PCons (PCon "TColon") PWild) (PCons (PTuple (PVar "off") PWild) PWild)) (EMatch (EApp (EApp (EVar "offsetToLineColFast") (EVar "starts")) (EVar "off")) (arm (PTuple (PVar "colonLine") (PVar "col")) () (EApp (EApp (EApp (EVar "SigHead") (EVar "line")) (EVar "colonLine")) (EVar "col")))))
+(DFunDef false "classifyHead" ((PVar "starts") (PVar "line") (PCons (PVar "tok") (PVar "toks")) (PCons PWild (PVar "spans"))) (EIf (EApp (EVar "isLayout") (EVar "tok")) (EApp (EApp (EApp (EApp (EVar "classifyHead") (EVar "starts")) (EVar "line")) (EVar "toks")) (EVar "spans")) (EIf (EVar "otherwise") (EApp (EVar "DefHead") (EVar "line")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "classifyHead" (PWild (PVar "line") PWild PWild) (EApp (EVar "DefHead") (EVar "line")))
 (DTypeSig false "isLayout" (TyFun (TyCon "Token") (TyCon "Bool")))
 (DFunDef false "isLayout" ((PCon "TNewline")) (EVar "True"))
 (DFunDef false "isLayout" ((PCon "TIndent")) (EVar "True"))
 (DFunDef false "isLayout" ((PCon "TDedent")) (EVar "True"))
 (DFunDef false "isLayout" (PWild) (EVar "False"))
-(DTypeSig false "renameHeads" (TyFun (TyCon "Bool") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "MainHead")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "renameHeads" (PWild PWild (PList) (PVar "lines")) (EVar "lines"))
-(DFunDef false "renameHeads" (PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "renameHeads" ((PVar "asFunction") (PVar "n") (PCons (PVar "h") (PVar "hs")) (PCons (PVar "l") (PVar "ls"))) (EIf (EBinOp "==" (EVar "n") (EApp (EVar "headLine") (EVar "h"))) (EBinOp "::" (EApp (EApp (EApp (EVar "renameHead") (EVar "asFunction")) (EVar "h")) (EVar "l")) (EApp (EApp (EApp (EApp (EVar "renameHeads") (EVar "asFunction")) (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EVar "hs")) (EVar "ls"))) (EIf (EVar "otherwise") (EBinOp "::" (EVar "l") (EApp (EApp (EApp (EApp (EVar "renameHeads") (EVar "asFunction")) (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EBinOp "::" (EVar "h") (EVar "hs"))) (EVar "ls"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "renameHead" (TyFun (TyCon "Bool") (TyFun (TyCon "MainHead") (TyFun (TyCon "String") (TyCon "String")))))
-(DFunDef false "renameHead" ((PCon "True") (PCon "DefHead" PWild) (PVar "l")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "userMainName"))) (ELit (LString " ()"))) (EApp (EVar "display") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 4))) (EApp (EVar "stringLength") (EVar "l"))) (EVar "l")))) (ELit (LString ""))))
-(DFunDef false "renameHead" ((PCon "True") (PCon "SigHead" PWild (PVar "col")) (PVar "l")) (EBlock (DoLet false false (PVar "colonAndBefore") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 4))) (EBinOp "+" (EVar "col") (ELit (LInt 1)))) (EVar "l"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "userMainName"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "colonAndBefore"))) (ELit (LString " Unit ->"))) (EApp (EVar "display") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "col") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "l"))) (EVar "l")))) (ELit (LString ""))))))
-(DFunDef false "renameHead" (PWild PWild (PVar "l")) (EBinOp "++" (EVar "userMainName") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 4))) (EApp (EVar "stringLength") (EVar "l"))) (EVar "l"))))
+(DTypeSig false "applyEdits" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "HeadEdit")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "applyEdits" (PWild (PList) (PVar "lines")) (EVar "lines"))
+(DFunDef false "applyEdits" (PWild PWild (PList)) (EListLit))
+(DFunDef false "applyEdits" ((PVar "n") (PVar "edits") (PCons (PVar "l") (PVar "ls"))) (EBlock (DoLet false false (PVar "edited") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "e")) (EIf (EBinOp "==" (EApp (EVar "editLine") (EVar "e")) (EVar "n")) (EApp (EApp (EVar "applyEdit") (EVar "e")) (EVar "acc")) (EVar "acc")))) (EVar "l")) (EVar "edits"))) (DoExpr (EBinOp "::" (EVar "edited") (EApp (EApp (EApp (EVar "applyEdits") (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EApp (EApp (EVar "filter") (ELam ((PVar "e")) (EBinOp ">" (EApp (EVar "editLine") (EVar "e")) (EVar "n")))) (EVar "edits"))) (EVar "ls"))))))
+(DTypeSig false "applyEdit" (TyFun (TyCon "HeadEdit") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "applyEdit" ((PCon "RenameMain" PWild (PVar "suffix")) (PVar "l")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "userMainName"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "suffix"))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 4))) (EApp (EVar "stringLength") (EVar "l"))) (EVar "l")))) (ELit (LString ""))))
+(DFunDef false "applyEdit" ((PCon "UnitArg" PWild (PVar "col")) (PVar "l")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "+" (EVar "col") (ELit (LInt 1)))) (EVar "l")))) (ELit (LString " Unit ->"))) (EApp (EVar "display") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "col") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "l"))) (EVar "l")))) (ELit (LString ""))))
 # MARK
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "tokenizeWithOffsetPairs" false) (mem "lineStartsOf" false) (mem "offsetToLineColFast" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "reverseL" false) (mem "splitNl" false) (mem "startsWith" false))))
@@ -699,38 +689,34 @@ renameHead _ _ l = userMainName ++ stringSlice 4 (stringLength l) l
 (DTypeSig true "userMainName" (TyCon "String"))
 (DFunDef false "userMainName" () (ELit (LString "__probe_user_main__")))
 (DTypeSig true "renameUserMain" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "renameUserMain" ((PVar "src")) (EBlock (DoLet false false (PVar "starts") (EApp (EVar "lineStartsOf") (EVar "src"))) (DoLet false false (PTuple (PVar "toks") (PVar "spans")) (EApp (EVar "probeTokens") (EVar "src"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "mainHeads") (EVar "starts")) (EVar "toks")) (EVar "spans")) (arm (PList) () (EApp (EVar "blankShebang") (EVar "src"))) (arm (PVar "heads") () (EBlock (DoLet false false (PVar "asFunction") (EApp (EApp (EDictApp "all") (ELam ((PVar "h")) (EApp (EVar "not") (EApp (EVar "isOtherHead") (EVar "h"))))) (EVar "heads"))) (DoExpr (EApp (EVar "blankShebang") (EApp (EVar "joinNl") (EApp (EApp (EApp (EApp (EVar "renameHeads") (EVar "asFunction")) (ELit (LInt 1))) (EVar "heads")) (EApp (EVar "splitNl") (EVar "src"))))))))))))
+(DFunDef false "renameUserMain" ((PVar "src")) (EBlock (DoLet false false (PVar "starts") (EApp (EVar "lineStartsOf") (EVar "src"))) (DoLet false false (PTuple (PVar "toks") (PVar "spans")) (EApp (EVar "probeTokens") (EVar "src"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "mainHeads") (EVar "starts")) (EVar "toks")) (EVar "spans")) (arm (PList) () (EApp (EVar "blankShebang") (EVar "src"))) (arm (PVar "heads") () (EApp (EVar "blankShebang") (EApp (EVar "joinNl") (EApp (EApp (EApp (EVar "applyEdits") (ELit (LInt 1))) (EApp (EApp (EDictApp "flatMap") (EVar "headEdits")) (EVar "heads"))) (EApp (EVar "splitNl") (EVar "src"))))))))))
 (DTypeSig false "blankShebang" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "blankShebang" ((PVar "src")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "#!"))) (EVar "src")) (EMatch (EApp (EVar "splitNl") (EVar "src")) (arm (PCons PWild (PVar "rest")) () (EApp (EVar "joinNl") (EBinOp "::" (ELit (LString "")) (EVar "rest")))) (arm (PList) () (EVar "src"))) (EIf (EVar "otherwise") (EVar "src") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DData Private "MainHead" () ((variant "DefHead" (ConPos (TyCon "Int"))) (variant "SigHead" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "OtherHead" (ConPos (TyCon "Int")))) ())
-(DTypeSig false "headLine" (TyFun (TyCon "MainHead") (TyCon "Int")))
-(DFunDef false "headLine" ((PCon "DefHead" (PVar "line"))) (EVar "line"))
-(DFunDef false "headLine" ((PCon "SigHead" (PVar "line") PWild)) (EVar "line"))
-(DFunDef false "headLine" ((PCon "OtherHead" (PVar "line"))) (EVar "line"))
-(DTypeSig false "isOtherHead" (TyFun (TyCon "MainHead") (TyCon "Bool")))
-(DFunDef false "isOtherHead" ((PCon "OtherHead" PWild)) (EVar "True"))
-(DFunDef false "isOtherHead" (PWild) (EVar "False"))
+(DData Private "MainHead" () ((variant "DefHead" (ConPos (TyCon "Int"))) (variant "SigHead" (ConPos (TyCon "Int") (TyCon "Int") (TyCon "Int")))) ())
+(DData Private "HeadEdit" () ((variant "RenameMain" (ConPos (TyCon "Int") (TyCon "String"))) (variant "UnitArg" (ConPos (TyCon "Int") (TyCon "Int")))) ())
+(DTypeSig false "editLine" (TyFun (TyCon "HeadEdit") (TyCon "Int")))
+(DFunDef false "editLine" ((PCon "RenameMain" (PVar "line") PWild)) (EVar "line"))
+(DFunDef false "editLine" ((PCon "UnitArg" (PVar "line") PWild)) (EVar "line"))
+(DTypeSig false "headEdits" (TyFun (TyCon "MainHead") (TyApp (TyCon "List") (TyCon "HeadEdit"))))
+(DFunDef false "headEdits" ((PCon "DefHead" (PVar "line"))) (EListLit (EApp (EApp (EVar "RenameMain") (EVar "line")) (ELit (LString " ()")))))
+(DFunDef false "headEdits" ((PCon "SigHead" (PVar "line") (PVar "colonLine") (PVar "col"))) (EListLit (EApp (EApp (EVar "UnitArg") (EVar "colonLine")) (EVar "col")) (EApp (EApp (EVar "RenameMain") (EVar "line")) (ELit (LString "")))))
 (DTypeSig false "mainHeads" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyApp (TyCon "List") (TyCon "MainHead"))))))
 (DFunDef false "mainHeads" ((PVar "starts") (PCons (PCon "TIdent" (PLit (LString "main"))) (PVar "toks")) (PCons (PTuple (PVar "off") PWild) (PVar "spans"))) (EMatch (EApp (EApp (EVar "offsetToLineColFast") (EVar "starts")) (EVar "off")) (arm (PTuple (PVar "line") (PLit (LInt 0))) () (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "classifyHead") (EVar "starts")) (EVar "line")) (EVar "toks")) (EVar "spans")) (EApp (EApp (EApp (EVar "mainHeads") (EVar "starts")) (EVar "toks")) (EVar "spans")))) (arm PWild () (EApp (EApp (EApp (EVar "mainHeads") (EVar "starts")) (EVar "toks")) (EVar "spans")))))
 (DFunDef false "mainHeads" ((PVar "starts") (PCons PWild (PVar "toks")) (PCons PWild (PVar "spans"))) (EApp (EApp (EApp (EVar "mainHeads") (EVar "starts")) (EVar "toks")) (EVar "spans")))
 (DFunDef false "mainHeads" (PWild PWild PWild) (EListLit))
 (DTypeSig false "classifyHead" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyCon "MainHead"))))))
-(DFunDef false "classifyHead" (PWild (PVar "line") (PCons (PCon "TEqual") PWild) PWild) (EApp (EVar "DefHead") (EVar "line")))
-(DFunDef false "classifyHead" ((PVar "starts") (PVar "line") (PCons (PCon "TColon") (PVar "toks")) (PCons (PTuple (PVar "off") PWild) (PVar "spans"))) (EIf (EApp (EApp (EApp (EApp (EVar "endsOnLine") (EVar "starts")) (EVar "line")) (EVar "toks")) (EVar "spans")) (EApp (EApp (EVar "SigHead") (EVar "line")) (EApp (EVar "snd") (EApp (EApp (EVar "offsetToLineColFast") (EVar "starts")) (EVar "off")))) (EApp (EVar "OtherHead") (EVar "line"))))
-(DFunDef false "classifyHead" (PWild (PVar "line") PWild PWild) (EApp (EVar "OtherHead") (EVar "line")))
-(DTypeSig false "endsOnLine" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyCon "Bool"))))))
-(DFunDef false "endsOnLine" ((PVar "starts") (PVar "line") (PCons (PVar "tok") (PVar "toks")) (PCons (PTuple (PVar "off") PWild) (PVar "spans"))) (EIf (EApp (EVar "isLayout") (EVar "tok")) (EApp (EApp (EApp (EApp (EVar "endsOnLine") (EVar "starts")) (EVar "line")) (EVar "toks")) (EVar "spans")) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "offsetToLineColFast") (EVar "starts")) (EVar "off")) (arm (PTuple (PVar "l") (PVar "col")) () (EIf (EBinOp "==" (EVar "l") (EVar "line")) (EApp (EApp (EApp (EApp (EVar "endsOnLine") (EVar "starts")) (EVar "line")) (EVar "toks")) (EVar "spans")) (EBinOp "==" (EVar "col") (ELit (LInt 0)))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DFunDef false "endsOnLine" (PWild PWild PWild PWild) (EVar "True"))
+(DFunDef false "classifyHead" ((PVar "starts") (PVar "line") (PCons (PCon "TColon") PWild) (PCons (PTuple (PVar "off") PWild) PWild)) (EMatch (EApp (EApp (EVar "offsetToLineColFast") (EVar "starts")) (EVar "off")) (arm (PTuple (PVar "colonLine") (PVar "col")) () (EApp (EApp (EApp (EVar "SigHead") (EVar "line")) (EVar "colonLine")) (EVar "col")))))
+(DFunDef false "classifyHead" ((PVar "starts") (PVar "line") (PCons (PVar "tok") (PVar "toks")) (PCons PWild (PVar "spans"))) (EIf (EApp (EVar "isLayout") (EVar "tok")) (EApp (EApp (EApp (EApp (EVar "classifyHead") (EVar "starts")) (EVar "line")) (EVar "toks")) (EVar "spans")) (EIf (EVar "otherwise") (EApp (EVar "DefHead") (EVar "line")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "classifyHead" (PWild (PVar "line") PWild PWild) (EApp (EVar "DefHead") (EVar "line")))
 (DTypeSig false "isLayout" (TyFun (TyCon "Token") (TyCon "Bool")))
 (DFunDef false "isLayout" ((PCon "TNewline")) (EVar "True"))
 (DFunDef false "isLayout" ((PCon "TIndent")) (EVar "True"))
 (DFunDef false "isLayout" ((PCon "TDedent")) (EVar "True"))
 (DFunDef false "isLayout" (PWild) (EVar "False"))
-(DTypeSig false "renameHeads" (TyFun (TyCon "Bool") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "MainHead")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "renameHeads" (PWild PWild (PList) (PVar "lines")) (EVar "lines"))
-(DFunDef false "renameHeads" (PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "renameHeads" ((PVar "asFunction") (PVar "n") (PCons (PVar "h") (PVar "hs")) (PCons (PVar "l") (PVar "ls"))) (EIf (EBinOp "==" (EVar "n") (EApp (EVar "headLine") (EVar "h"))) (EBinOp "::" (EApp (EApp (EApp (EVar "renameHead") (EVar "asFunction")) (EVar "h")) (EVar "l")) (EApp (EApp (EApp (EApp (EVar "renameHeads") (EVar "asFunction")) (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EVar "hs")) (EVar "ls"))) (EIf (EVar "otherwise") (EBinOp "::" (EVar "l") (EApp (EApp (EApp (EApp (EVar "renameHeads") (EVar "asFunction")) (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EBinOp "::" (EVar "h") (EVar "hs"))) (EVar "ls"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "renameHead" (TyFun (TyCon "Bool") (TyFun (TyCon "MainHead") (TyFun (TyCon "String") (TyCon "String")))))
-(DFunDef false "renameHead" ((PCon "True") (PCon "DefHead" PWild) (PVar "l")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "userMainName"))) (ELit (LString " ()"))) (EApp (EMethodRef "display") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 4))) (EApp (EVar "stringLength") (EVar "l"))) (EVar "l")))) (ELit (LString ""))))
-(DFunDef false "renameHead" ((PCon "True") (PCon "SigHead" PWild (PVar "col")) (PVar "l")) (EBlock (DoLet false false (PVar "colonAndBefore") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 4))) (EBinOp "+" (EVar "col") (ELit (LInt 1)))) (EVar "l"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "userMainName"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "colonAndBefore"))) (ELit (LString " Unit ->"))) (EApp (EMethodRef "display") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "col") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "l"))) (EVar "l")))) (ELit (LString ""))))))
-(DFunDef false "renameHead" (PWild PWild (PVar "l")) (EBinOp "++" (EVar "userMainName") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 4))) (EApp (EVar "stringLength") (EVar "l"))) (EVar "l"))))
+(DTypeSig false "applyEdits" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "HeadEdit")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "applyEdits" (PWild (PList) (PVar "lines")) (EVar "lines"))
+(DFunDef false "applyEdits" (PWild PWild (PList)) (EListLit))
+(DFunDef false "applyEdits" ((PVar "n") (PVar "edits") (PCons (PVar "l") (PVar "ls"))) (EBlock (DoLet false false (PVar "edited") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "e")) (EIf (EBinOp "==" (EApp (EVar "editLine") (EVar "e")) (EVar "n")) (EApp (EApp (EVar "applyEdit") (EVar "e")) (EVar "acc")) (EVar "acc")))) (EVar "l")) (EVar "edits"))) (DoExpr (EBinOp "::" (EVar "edited") (EApp (EApp (EApp (EVar "applyEdits") (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "e")) (EBinOp ">" (EApp (EVar "editLine") (EVar "e")) (EVar "n")))) (EVar "edits"))) (EVar "ls"))))))
+(DTypeSig false "applyEdit" (TyFun (TyCon "HeadEdit") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "applyEdit" ((PCon "RenameMain" PWild (PVar "suffix")) (PVar "l")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "userMainName"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "suffix"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 4))) (EApp (EVar "stringLength") (EVar "l"))) (EVar "l")))) (ELit (LString ""))))
+(DFunDef false "applyEdit" ((PCon "UnitArg" PWild (PVar "col")) (PVar "l")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "+" (EVar "col") (ELit (LInt 1)))) (EVar "l")))) (ELit (LString " Unit ->"))) (EApp (EMethodRef "display") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "col") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "l"))) (EVar "l")))) (ELit (LString ""))))
