@@ -1,5 +1,5 @@
 # META
-source_lines=1553
+source_lines=1558
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_diag_text: the context-free message text of the typechecker: every message, help and fix
@@ -1555,6 +1555,11 @@ prependIncomparable =
 export
 dropAmbiguity : List TcDiag -> List TcDiag
 dropAmbiguity = filterList (d => tcCode d /= TAmbiguousInstance)
+
+export
+topLevelEffectMsg : String -> String -> String
+topLevelEffectMsg name row =
+  "top-level value `\{name}` performs \{row} when it is initialised; a top-level value is initialised once at startup and must have an empty effect row. Make it a function, `\{name} () = ...`, and call `\{name} ()` where it is read"
 # DESUGAR
 (DUse false (UseGroup ("types" "tc_mono") ((mem "cohPpPair" false) (mem "dedupI" false) (mem "findTvName" false) (mem "firstIdConflict" false) (mem "headIdConflict" false) (mem "headTyconNameMono" false) (mem "isPreludeOrigin" false) (mem "recordOwnerModule" false) (mem "recordResultMono" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "authTermsSurface" false) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "Expr" true) (mem "isI64Head" false) (mem "KindAnn" true) (mem "kindAnnSource" false) (mem "Lit" true) (mem "Loc" true) (mem "patternMark" false) (mem "qualifierSource" false) (mem "TabKey" true) (mem "tabKeyName" false) (mem "Ty" true) (mem "TyConOrigin" true))))
@@ -2030,6 +2035,8 @@ dropAmbiguity = filterList (d => tcCode d /= TAmbiguousInstance)
 (DFunDef false "prependIncomparable" () (EApp (EApp (EApp (EVar "prependDiagOpt") (EVar "WIncomparableImpls")) (ELit (LInt 2))) (EApp (EVar "Some") (EVar "cohIncomparableHelp"))))
 (DTypeSig true "dropAmbiguity" (TyFun (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))
 (DFunDef false "dropAmbiguity" () (EApp (EVar "filterList") (ELam ((PVar "d")) (EBinOp "/=" (EApp (EVar "tcCode") (EVar "d")) (EVar "TAmbiguousInstance")))))
+(DTypeSig true "topLevelEffectMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "topLevelEffectMsg" ((PVar "name") (PVar "row")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "top-level value `")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "` performs "))) (EApp (EVar "display") (EVar "row"))) (ELit (LString " when it is initialised; a top-level value is initialised once at startup and must have an empty effect row. Make it a function, `"))) (EApp (EVar "display") (EVar "name"))) (ELit (LString " () = ...`, and call `"))) (EApp (EVar "display") (EVar "name"))) (ELit (LString " ()` where it is read"))))
 # MARK
 (DUse false (UseGroup ("types" "tc_mono") ((mem "cohPpPair" false) (mem "dedupI" false) (mem "findTvName" false) (mem "firstIdConflict" false) (mem "headIdConflict" false) (mem "headTyconNameMono" false) (mem "isPreludeOrigin" false) (mem "recordOwnerModule" false) (mem "recordResultMono" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "authTermsSurface" false) (mem "EffAtomTy" true) (mem "EffParamTy" true) (mem "Expr" true) (mem "isI64Head" false) (mem "KindAnn" true) (mem "kindAnnSource" false) (mem "Lit" true) (mem "Loc" true) (mem "patternMark" false) (mem "qualifierSource" false) (mem "TabKey" true) (mem "tabKeyName" false) (mem "Ty" true) (mem "TyConOrigin" true))))
@@ -2505,3 +2512,5 @@ dropAmbiguity = filterList (d => tcCode d /= TAmbiguousInstance)
 (DFunDef false "prependIncomparable" () (EApp (EApp (EApp (EVar "prependDiagOpt") (EVar "WIncomparableImpls")) (ELit (LInt 2))) (EApp (EVar "Some") (EVar "cohIncomparableHelp"))))
 (DTypeSig true "dropAmbiguity" (TyFun (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))
 (DFunDef false "dropAmbiguity" () (EApp (EVar "filterList") (ELam ((PVar "d")) (EBinOp "/=" (EApp (EVar "tcCode") (EVar "d")) (EVar "TAmbiguousInstance")))))
+(DTypeSig true "topLevelEffectMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "topLevelEffectMsg" ((PVar "name") (PVar "row")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "top-level value `")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "` performs "))) (EApp (EMethodRef "display") (EVar "row"))) (ELit (LString " when it is initialised; a top-level value is initialised once at startup and must have an empty effect row. Make it a function, `"))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString " () = ...`, and call `"))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString " ()` where it is read"))))
