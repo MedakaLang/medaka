@@ -4793,9 +4793,9 @@ emitVarRefPlain prog env d x =
   if envHas x env then
     ["local.get " ++ localTargetW prog env x]
   else if progValMemberW prog x then
-    -- #561 PR-B: a LAZY value global (dispatch-reaching / cyclic) is forced on first use —
-    -- `call $force_<x>` memoises into $<x> and black-holes a re-entrant force into
-    -- E-CYCLIC-VALUE.  A LOCAL of the same name still shadows (env checked first, above).
+    -- #561 PR-B: a LAZY value global (`emit_support.lazyGlobalNames`: it reaches an
+    -- initializer not safe to speculate, a cycle or an eager dispatch) is forced on first use:
+    -- `call $force_<x>` memoises into $<x>; a re-entrant force is E-CYCLIC-VALUE; a local shadows.
     -- The result is a non-null (ref eq), same as the eager `global.get; ref.as_non_null`.
     -- #664: a single memo membership check (was two linear `contains … (progValNames prog)`
     -- scans on this hot path); the lazy/eager choice nests under it, byte-identical.

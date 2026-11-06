@@ -1524,6 +1524,11 @@ emitPasses =
     ++ finishPasses
     ++ [namedPass "lower-externs" (c p => lowerExterns c.pcFacts c.pcDecls p)]
 
+-- The names of `emitPasses`, in order: what a dump request may name.
+export
+emitPassNames : List String
+emitPassNames = map (p => p.passName) emitPasses
+
 -- Call modes are stamped from the clauses the eta pass produced, so eta comes
 -- first; tail marks and binder stamps read the stamped modes.
 finishPasses : List (CorePass PassCtx)
@@ -1808,8 +1813,11 @@ spineOf e = (e, [])
 -- an argument whose evaluation has no effect and does no work worth delaying.  A
 -- literal's `fromInt` is one only through the prelude's `Num` at `Float`, whose
 -- conversion cannot fail: any other impl may panic (a range check), and delaying it
--- would move or drop the panic.  `Num Int`'s `fromInt` is already folded to its
--- literal by `fold-num-int-fromint`, which runs before `eta-saturate` reads this.
+-- would move or drop the panic.  `Num Int`'s `fromInt` is not atomic here.  In
+-- `emitPasses` it is already folded to its literal by `fold-num-int-fromint`, which
+-- runs before `eta-saturate` reads this; `untypedPasses` and `typedPasses` run no
+-- fold, so there a partial application with such an argument stays unsaturated
+-- (a partial call) instead of being eta-expanded.
 isAtomicArg : CExpr -> Bool
 isAtomicArg (CVar _ _) = True
 isAtomicArg (CLit _) = True
