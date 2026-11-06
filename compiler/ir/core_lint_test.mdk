@@ -2,7 +2,6 @@ import test.{expectAll, expectEqual, expectFalse}
 import frontend.ast.{Addr(..), Lit(..), Pat(..), noBinderId, noDeclLoc}
 import ir.core_ir.{
   CArm(..),
-  CBind(..),
   CClause(..),
   CExpr(..),
   CGuard(..),

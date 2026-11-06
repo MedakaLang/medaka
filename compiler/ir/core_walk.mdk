@@ -34,7 +34,7 @@ export
 rewriteProgram : (CExpr -> CExpr) -> CProgram -> CProgram
 rewriteProgram f (CProgram binds ctorArs ctorTypes impls mctx facts) =
   CProgram
-    (map (rewriteBind f) binds)
+    (map (mapBindBodies (rewriteExpr f)) binds)
     ctorArs
     ctorTypes
     (map (rewriteImpl f) impls)
@@ -52,13 +52,6 @@ foldExpr f acc e = fold (foldExpr f) (f acc e) (children e)
 export
 patBinders : Pat -> List String
 patBinders p = patBindings p
-
-rewriteBind : (CExpr -> CExpr) -> CBind -> CBind
-rewriteBind f (CBind n clauses site bid) =
-  CBind n (map (rewriteClause f) clauses) site bid
-
-rewriteClause : (CExpr -> CExpr) -> CClause -> CClause
-rewriteClause f (CClause pats body) = CClause pats (rewriteExpr f body)
 
 rewriteImpl : (CExpr -> CExpr) -> CImplEntry -> CImplEntry
 rewriteImpl f (CImplEntry n s d (CImplTagged tag key iface sym ps pats body)) =
@@ -154,8 +147,21 @@ children (CDict _ _) = []
 bindBodies : CBind -> List CExpr
 bindBodies (CBind _ clauses _ _) = map clauseBody clauses
 
+export
 clauseBody : CClause -> CExpr
 clauseBody (CClause _ body) = body
+
+export
+bindName : CBind -> String
+bindName (CBind n _ _ _) = n
+
+export
+bindNames : List CBind -> List String
+bindNames binds = map bindName binds
+
+export
+implName : CImplEntry -> String
+implName (CImplEntry n _ _ _) = n
 
 armChildren : CArm -> List CExpr
 armChildren (CArm _ guards body) = map guardExpr guards ++ [body]

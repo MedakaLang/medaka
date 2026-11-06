@@ -54,6 +54,7 @@ import ir.core_ir.{withBinderRows}
 import types.route_key.{ifaceWordOf}
 import ir.core_ir_sexp.{cprogramToSexp}
 import ir.core_ir_sexp_parse.{parseCProgram}
+import ir.core_walk.{clauseBody}
 import ir.dce.{dceFilter}
 import backend.wasm_names.{uniqueBinders}
 import backend.wasm_reach.{wasmReachFilter}
@@ -296,9 +297,6 @@ armPatText (CArmAlt p _ _) = patSexp p
 decisionArms : CExpr -> List CArm
 decisionArms (CDecision _ arms _) = arms
 decisionArms _ = []
-
-clauseBody : CClause -> CExpr
-clauseBody (CClause _ body) = body
 
 clauseParams : CClause -> List String
 clauseParams (CClause pats _) = map patSexp pats

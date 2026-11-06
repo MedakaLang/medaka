@@ -1010,7 +1010,7 @@ switchOrFail switch (Err message) unused =
 export
 programOfRun : PassRun -> <IO> CProgram
 programOfRun run =
-  let _ = map writeDumpFrame run.dumps
+  each writeDumpFrame run.dumps
   match run.faults
     [] => run.program
     fault :: _ =>

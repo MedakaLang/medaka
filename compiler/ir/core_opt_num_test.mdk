@@ -8,6 +8,7 @@ import ir.core_ir_lower.{lowerTypedProgramWith}
 import ir.core_ir_eval.{cevalMainOf}
 import ir.core_ir_sexp.{cexprSexp, defaultSexpMode}
 import ir.core_opt_num.{foldNumIntFromInt}
+import ir.core_walk.{bindName}
 -- Sibling test module for `compiler/ir/core_opt_num.mdk` ([P-TEST-SIBLING]).
 --
 -- `passCase` is the pass test vehicle: it typechecks a source program, lowers it
@@ -46,9 +47,6 @@ bodyOf target (CProgram binds _ _ _ _ _) =
     Some (CBind _ ((CClause _ body) :: _) _ _) => cexprSexp defaultSexpMode body
     _ => "no binding \{target}"
 
-bindName : CBind -> String
-bindName (CBind n _ _ _) = n
-
 -- `fromInt` at a given instance, as the dump prints the occurrence.
 fromIntAt : String -> String
 fromIntAt inst =
@@ -76,7 +74,10 @@ test "a literal argument folds to the literal" =
 
 test "a non-literal argument folds to the argument" =
   let (before, after, outBefore, outAfter) =
-    passCase foldNumIntFromInt "f" "f n = (fromInt n : Int)\nmain = f 4"
+    passCase foldNumIntFromInt "f" """
+f n = (fromInt n : Int)
+main = f 4
+"""
   expectAll [
     labelFail
       "before"
@@ -126,7 +127,10 @@ test "an unsaturated fromInt value is left alone" =
     passCase
       foldNumIntFromInt
       "main"
-      "apply g x = g x\nmain = apply (fromInt : Int -> Int) 6"
+      """
+apply g x = g x
+main = apply (fromInt : Int -> Int) 6
+"""
   expectAll [
     labelFail
       "before"

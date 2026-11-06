@@ -10,6 +10,7 @@ import ir.core_ir.{
 }
 import ir.core_ir_sexp.{cprogramToSexp}
 import support.util.{filterList}
+import ir.core_walk.{bindName}
 import ir.core_pass.{
   CorePass(..),
   PassConfig(..),
@@ -130,12 +131,15 @@ test "good passes leave no faults" =
     0
     (length (runPasses defaultPassConfig "ctx" passes emptyProgram).faults)
 
--- The runner detects no fault yet, so this pins the record's shape: a fault
--- carries the name of the pass that produced it.
+-- Pins the record's shape on a hand-built run: a fault carries the name of the
+-- pass that produced it.  The runner's own fault detection is pinned by the
+-- lint-on tests below.
 test "a fault names its pass" =
-  let run = PassRun emptyProgram [] [
-    PassFault { faultPass = "second", faultMessage = "bad" },
-  ]
+  let run = PassRun {
+    program = emptyProgram,
+    dumps = [],
+    faults = [PassFault { faultPass = "second", faultMessage = "bad" }],
+  }
   expectEqual ["second"] (map (f => f.faultPass) run.faults)
 
 test "the library default config does not lint" =
@@ -154,6 +158,3 @@ test "a lint-on run turns a finding into a fault naming its pass" =
     (map
       (f => f.faultPass)
       (runPasses config "ctx" [breakIt] emptyProgram).faults)
-
-bindName : CBind -> String
-bindName (CBind n _ _ _) = n
