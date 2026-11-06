@@ -312,6 +312,7 @@ ctxWithParent parent = Ctx {
   ctxSpan = None,
   ctxOwn = None,
   ctxDeclLoc = None,
+  ctxBinding = None,
 }
 
 -- The verdict of the first `let _ =` of `src`, a module `m` of a project whose

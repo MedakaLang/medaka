@@ -25,6 +25,7 @@ import tools.lint_core.{
   StdlibIndex,
   factComments,
   factScopes,
+  fixLater,
   mkRule,
 }
 import tools.lint_fix.{removeListItem}
@@ -125,7 +126,7 @@ memberFinding path groupLoc locs everyDead (ix, UseMember n _ loc alias) = [
       "imported name '\{optionOr n alias}' is never used. Remove it from the import list",
     severity = SevWarning,
     loc = Some loc,
-    fix = removalFix path groupLoc locs everyDead ix,
+    fix = fixLater (_ => removalFix path groupLoc locs everyDead ix),
   },
 ]
 

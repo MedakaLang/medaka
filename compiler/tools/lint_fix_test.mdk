@@ -22,7 +22,14 @@ import tools.lint.{
   lintProgram,
 }
 import tools.lint_core.{
-  Applicability(..), Finding(..), Fix(..), FixEdit(..), Rule, mkRule
+  Applicability(..),
+  Finding(..),
+  Fix(..),
+  FixEdit(..),
+  Rule,
+  findingFixOf,
+  memoReady,
+  mkRule,
 }
 import tools.lint_fix.{
   Binding(..), FixError, FixRun(..), applyFixes, demoteOverComments,
@@ -56,11 +63,13 @@ probeFinding applicability loc replacement = Finding {
   message = "probe",
   severity = SevWarning,
   loc = Some loc,
-  fix = Some Fix {
-    fixApplicability = applicability,
-    fixEdits = [FixEdit { feSpan = loc, feText = replacement }],
-    fixMessage = "probe",
-  },
+  fix =
+    memoReady
+      (Some Fix {
+        fixApplicability = applicability,
+        fixEdits = [FixEdit { feSpan = loc, feText = replacement }],
+        fixMessage = "probe",
+      }),
 }
 
 probeFindings : List Probe -> String -> List Finding
@@ -294,9 +303,9 @@ found (Ok fs) = fs
 found (Err _) = []
 
 fixApplicabilities : Finding -> List String
-fixApplicabilities (Finding { fix = (Some fx), ... }) =
-  [applicabilityText fx.fixApplicability]
-fixApplicabilities _ = []
+fixApplicabilities f = match findingFixOf f
+  Some fx => [applicabilityText fx.fixApplicability]
+  None => []
 
 -- A source span as its four numbers.
 data SpanQuad = SpanQuad {

@@ -21,6 +21,7 @@ import tools.lint_core.{
   StdlibIndex,
   factComments,
   mkRule,
+  noFix,
 }
 import tools.lint_shared.{
   dedupeNamesLoc,
@@ -100,7 +101,7 @@ deadFinding (name, loc) = Finding {
       ++ "' is unreachable from exports/main/doctests — remove it (dead code)",
   severity = SevWarning,
   loc = loc,
-  fix = None,
+  fix = noFix,
 }
 
 -- private (unexported) top-level fn/value bindings, deduped by name (first loc),

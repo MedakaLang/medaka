@@ -8,7 +8,7 @@ import driver.diagnostics.{Severity(..)}
 import support.util.{listLen, allList, filterList, reverseL, joinWith}
 import hash_map.{HashMap, new, setInPlace, has, findWithDefault}
 import ir.sexp.{exprSexp, patSexp}
-import tools.lint_core.{DupClause(..), Finding(..)}
+import tools.lint_core.{DupClause(..), Finding(..), noFix}
 import tools.lint_shared.{
   isCtorName, ruleNameDuplicateBody, sortUniqS, unwrapLoc
 }
@@ -371,7 +371,7 @@ dupFinding distinctFiles occ =
       "function '\{occName occ}' has a body structurally identical to a definition in \{joinWith ", " others} — consolidate into a shared module",
     severity = SevWarning,
     loc = Some (Loc file line 1 line 1),
-    fix = None,
+    fix = noFix,
   }
 
 -- insertion sort occurrences by (file, line) for deterministic output.

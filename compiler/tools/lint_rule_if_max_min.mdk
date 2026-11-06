@@ -14,6 +14,7 @@ import tools.lint_core.{
   Finding(..),
   Fix,
   Fixability(..),
+  Memo,
   Need(..),
   Ratchet(..),
   Rule,
@@ -21,6 +22,7 @@ import tools.lint_core.{
   Scope(..),
   StdlibIndex,
   Visitor(..),
+  fixLater,
   mkVisitorRule,
 }
 import tools.lint_shared.{
@@ -139,12 +141,15 @@ ifMaxMinAt idx ordLocs facts ctx (e@(EIf cond t el)) =
       ifMaxMinFinding
         ctx.ctxDeclLoc
         hit
-        (ifMaxMinFix idx ordLocs facts ctx e hit),
+        (fixLater (_ => ifMaxMinFix idx ordLocs facts ctx e hit)),
     ]
     None => []
 ifMaxMinAt _ _ _ _ _ = []
 
-ifMaxMinFinding : Option Loc -> (String, Expr, Expr) -> Option Fix -> Finding
+ifMaxMinFinding : Option Loc ->
+  (String, Expr, Expr) ->
+  Memo (Option Fix) ->
+  Finding
 ifMaxMinFinding loc (fn, a, b) fix = Finding {
   rule = ruleNameIfMaxMin,
   message =

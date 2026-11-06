@@ -9,7 +9,9 @@ import frontend.ast_walk.{ExprKind(..)}
 import frontend.lex_scan.{scanRawChars}
 import frontend.lex_token.{RawTok(..)}
 import frontend.syntax_source.{SourceSpan(..)}
-import tools.lint_core.{Applicability(..), Finding(..), Fix(..), FixEdit(..)}
+import tools.lint_core.{
+  Applicability(..), Finding(..), Fix(..), FixEdit(..), findingFixOf, memoMap
+}
 import tools.source_edits.{
   EditError, SourceEdit(..), applySourceEdits, validateSourceEdits
 }
@@ -84,7 +86,7 @@ fixesOf : List Finding -> List Fix
 fixesOf findings = flatMap findingFix findings
 
 findingFix : Finding -> List Fix
-findingFix f = toList f.fix
+findingFix f = toList (findingFixOf f)
 
 resolveEdits : SourceSnapshot -> List FixEdit -> Option (List SourceEdit)
 resolveEdits _ [] = Some []
@@ -165,7 +167,7 @@ demoteOverComments path src findings =
 
 demoteFinding : SourceSnapshot -> List SourceSpan -> Finding -> Finding
 demoteFinding snap comments f =
-  { f | fix = map (demoteFix snap comments) f.fix }
+  { f | fix = memoMap (map (demoteFix snap comments)) f.fix }
 
 demoteFix : SourceSnapshot -> List SourceSpan -> Fix -> Fix
 demoteFix snap comments fx = match resolveFix snap fx

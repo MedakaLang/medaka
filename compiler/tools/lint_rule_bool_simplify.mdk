@@ -12,6 +12,7 @@ import tools.lint_core.{
   Finding(..),
   Fix,
   Fixability(..),
+  Memo,
   Need(..),
   Ratchet(..),
   Rule,
@@ -19,6 +20,7 @@ import tools.lint_core.{
   Scope(..),
   StdlibIndex,
   Visitor(..),
+  fixLater,
   mkVisitorRule,
 }
 import tools.lint_shared.{
@@ -106,11 +108,11 @@ boolSimplifyAt idx facts ctx e = match boolSimplifyOf e
     boolSimplifyFinding
       ctx.ctxSpan
       rewritten
-      (boolSimplifyFix idx facts ctx e rewritten),
+      (fixLater (_ => boolSimplifyFix idx facts ctx e rewritten)),
   ]
   None => []
 
-boolSimplifyFinding : Option Loc -> Expr -> Option Fix -> Finding
+boolSimplifyFinding : Option Loc -> Expr -> Memo (Option Fix) -> Finding
 boolSimplifyFinding loc rewritten fix = Finding {
   rule = ruleNameBoolSimplify,
   message =

@@ -16,6 +16,7 @@ import tools.lint_core.{
   Fix(..),
   FixEdit(..),
   Fixability(..),
+  Memo,
   Need(..),
   Ratchet(..),
   Rule,
@@ -23,6 +24,7 @@ import tools.lint_core.{
   Scope(..),
   StdlibIndex,
   Visitor(..),
+  fixLater,
   mkVisitorRule,
 }
 import tools.lint_index.{ProjectIndex}
@@ -60,10 +62,10 @@ ruleLetUnderscoreUnit = plainBlockVisitors unitStmt
 unitStmt : ProjectIndex -> FileScopes -> String -> DoStmt -> List Finding
 unitStmt ix scopes path s = match discardOf ix scopes path s
   Some (loc@(Loc f sl sc _ _), rhs, ClassUnit) =>
-    [finding loc (dropFix f sl sc rhs)]
+    [finding loc (fixLater (_ => dropFix f sl sc rhs))]
   _ => []
 
-finding : Loc -> Option Fix -> Finding
+finding : Loc -> Memo (Option Fix) -> Finding
 finding loc fix = Finding {
   rule = ruleNameLetUnderscoreUnit,
   message =

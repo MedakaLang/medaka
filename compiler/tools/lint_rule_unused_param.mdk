@@ -37,6 +37,7 @@ import tools.lint_core.{
   StdlibIndex,
   factLines,
   factScopes,
+  fixLater,
   mkRule,
 }
 import tools.lint_scope.{
@@ -122,7 +123,7 @@ paramFinding facts pos sites b =
         "parameter '\{b.binderName}' is never used. Rename it to '_\{b.binderName}' to mark it intentionally unused",
       severity = SevWarning,
       loc = Some b.binderSpan,
-      fix = paramFix facts (declLines pos b) b mine,
+      fix = fixLater (_ => paramFix facts (declLines pos b) b mine),
     },
   ]
 

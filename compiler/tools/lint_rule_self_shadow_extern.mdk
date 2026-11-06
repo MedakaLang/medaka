@@ -15,6 +15,7 @@ import tools.lint_core.{
   Scope(..),
   StdlibIndex,
   mkRule,
+  noFix,
 }
 import tools.lint_shared.{declLocList, ruleNameSelfShadowExtern, unwrapLoc}
 
@@ -134,5 +135,5 @@ selfShadowFinding (name, loc) = Finding {
     "top-level '\{name}' unconditionally calls itself with no base case — an infinite self-recursion, not a forward to a same-named extern/definition. Rename the binding (give it a distinct name) or add a terminating `match`/`if`/guard",
   severity = SevWarning,
   loc = loc,
-  fix = None,
+  fix = noFix,
 }

@@ -19,6 +19,7 @@ import tools.lint_core.{
   Scope(..),
   StdlibIndex,
   mkRule,
+  noFix,
 }
 import tools.lint_shared.{
   armToClause,
@@ -104,7 +105,7 @@ matchParamHit loc name pats p
         "function '\{name}' matches on parameter '\{p}' — use a multi-clause function definition",
       severity = SevWarning,
       loc = loc,
-      fix = None,
+      fix = noFix,
     },
   ]
   | otherwise = []

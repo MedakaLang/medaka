@@ -37,6 +37,7 @@ import tools.lint_core.{
   Finding(..),
   Fix,
   Fixability(..),
+  Memo,
   Need(..),
   Ratchet(..),
   Rule,
@@ -44,6 +45,7 @@ import tools.lint_core.{
   Scope(..),
   StdlibIndex,
   Visitor(..),
+  fixLater,
   mkVisitorRule,
 }
 import tools.lint_shared.{
@@ -187,9 +189,9 @@ concatToInterpHit idx facts ctx (rewritten, span) =
   concatToInterpFinding
     ctx.ctxSpan
     rewritten
-    (concatToInterpFix idx facts ctx span rewritten)
+    (fixLater (_ => concatToInterpFix idx facts ctx span rewritten))
 
-concatToInterpFinding : Option Loc -> Expr -> Option Fix -> Finding
+concatToInterpFinding : Option Loc -> Expr -> Memo (Option Fix) -> Finding
 concatToInterpFinding loc rewritten fix = Finding {
   rule = ruleNameConcatToInterp,
   message =

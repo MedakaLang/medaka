@@ -29,6 +29,7 @@ import tools.lint_core.{
   Fix(..),
   FixEdit(..),
   Fixability(..),
+  Memo,
   Need(..),
   Ratchet(..),
   Rule,
@@ -37,6 +38,7 @@ import tools.lint_core.{
   StdlibIndex,
   factLines,
   factScopes,
+  fixLater,
   mkRule,
 }
 import tools.lint_recursion.{
@@ -140,7 +142,13 @@ functionFindings facts prog (g@(Group name loc clauses _)) =
       if listLen shared >= 2 then
         let names = map (i => paramName ps i) shared
         let calls = flatMap threadedCalls ts
-        [report name loc names (threadFix facts prog g shared names calls)]
+        [
+          report
+            name
+            loc
+            names
+            (fixLater (_ => threadFix facts prog g shared names calls)),
+        ]
       else
         []
 
@@ -179,7 +187,7 @@ paramName ps i = match get i ps
 
 -- ── findings ─────────────────────────────────────────────────────────────────
 
-report : String -> Option Loc -> List String -> Option Fix -> Finding
+report : String -> Option Loc -> List String -> Memo (Option Fix) -> Finding
 report name loc names fix =
   let listed = joinWith ", " (map quoted names)
   Finding {

@@ -59,6 +59,7 @@ import tools.lint.{
 import tools.lint_core.{
   mkRule,
   FileFacts(..),
+  noFix,
   stdlibSigTextIn,
   recordingStdlibIndex,
 }
@@ -106,7 +107,7 @@ probeCheck name idx _ _ _ _ = [
     message = probeText idx,
     severity = SevWarning,
     loc = None,
-    fix = None,
+    fix = noFix,
   },
 ]
 
@@ -606,7 +607,7 @@ askerCheck questions idx _ _ _ _ = [
     message = joinWith "; " (map (q => q idx) questions),
     severity = SevWarning,
     loc = None,
-    fix = None,
+    fix = noFix,
   },
 ]
 
@@ -997,7 +998,7 @@ localCheck _ _ facts _ _ = [
     message = "local: \{joinWith "," facts.ffLocalMods}",
     severity = SevWarning,
     loc = None,
-    fix = None,
+    fix = noFix,
   },
 ]
 

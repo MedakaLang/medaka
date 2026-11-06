@@ -23,6 +23,7 @@ import tools.lint_core.{
   Scope(..),
   StdlibIndex,
   mkRule,
+  noFix,
   stdlibEntriesOf,
   stdlibIndexNames,
 }
@@ -421,7 +422,7 @@ stdlibFinding name modName stdName loc = Finding {
     "top-level '\{name}' reimplements stdlib '\{modName}.\{stdName}' (same declared signature) — use the stdlib version",
   severity = SevWarning,
   loc = loc,
-  fix = None,
+  fix = noFix,
 }
 
 -- ── declared-signature identity, up to renaming ───────────────────────────────

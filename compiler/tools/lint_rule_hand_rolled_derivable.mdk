@@ -17,6 +17,7 @@ import tools.lint_core.{
   StdlibIndex(..),
   mkRule,
   factOracle,
+  noFix,
 }
 import tools.lint_shared.{
   declLocList,
@@ -92,7 +93,7 @@ derivableHit orc loc iface tys
               "hand-written `impl \{iface}` for '\{tyName}' — use `deriving (\{iface})`",
             severity = SevWarning,
             loc = loc,
-            fix = None,
+            fix = noFix,
           },
         ]
       else

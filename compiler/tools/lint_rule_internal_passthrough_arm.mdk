@@ -28,6 +28,7 @@ import tools.lint_core.{
   Scope(..),
   StdlibIndex,
   Visitor(..),
+  fixLater,
   memoGet,
   memoNew,
   mkVisitorRule,
@@ -100,7 +101,7 @@ passthroughAt facts exempt ctx e = match passthroughOf e
     if anyList (== ctx.ctxSpan) (memoGet exempt) then
       []
     else
-      [report ctx.ctxSpan kind (passthroughFix facts ctx e)]
+      [report ctx.ctxSpan kind (fixLater (_ => passthroughFix facts ctx e))]
   None => []
 
 -- `(kind, success body)` of a two-arm passthrough `match`.
@@ -188,7 +189,7 @@ calls name f = match unwrapLoc f
   EApp g _ => calls name g
   _ => False
 
-report : Option Loc -> String -> Option Fix -> Finding
+report : Option Loc -> String -> Memo (Option Fix) -> Finding
 report loc kind fix = Finding {
   rule = ruleNamePassthroughArm,
   message =

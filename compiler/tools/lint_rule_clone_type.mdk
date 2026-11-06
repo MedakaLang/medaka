@@ -39,6 +39,7 @@ import tools.lint_core.{
   Scope(..),
   StdlibIndex,
   mkRule,
+  noFix,
 }
 import tools.lint_shared.{
   declLocList,
@@ -138,5 +139,5 @@ cloneTypeFinding loc n shape = Finding {
     "'\{n}' re-declares `\{shape}`'s constructor shape and its file writes no `impl` for it -- prefer the stdlib `\{shape}`, whose combinators come with it",
   severity = SevWarning,
   loc = loc,
-  fix = None,
+  fix = noFix,
 }
