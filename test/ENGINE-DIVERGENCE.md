@@ -464,6 +464,10 @@ before any engine runs, so they make no value comparison; they moved to
 that `medaka build` refuses each one on native and wasm. The prelude-free llvm probe gates
 still emit them and keep their empty `.native.golden`, because that probe runs no typechecker.
 The runtime `E-CYCLIC-VALUE` stays in the compiler until the initialisation rules retire it.
+`llvm/lazy_effect_unforced`, `llvm/lazy_effect_unreferenced` (effectful top-level value,
+`T-TOPLEVEL-EFFECT`) and `llvm/lazy_global_string_read` (self-mention, `T-CYCLIC-VALUE`) moved
+there too, for the same reason; `llvm/lazy_exit_unforced` stays, since `exit : Int -> Unit` is
+row-less and the program is admitted.
 The **four dispatch-reaching fixtures** in that family — `llvmT/eager_global_{dispatch_hidden,
 lazy_bool, lazy_float, lazy_string}` — return a real value (42 / 1 / 3.5 / hello world)
 and agree on all three engines, so they are not in the ledger. `emitter:shared-eager-init` has

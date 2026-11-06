@@ -53,3 +53,9 @@ llvmT/impl_append_str
 llvm/eager_global_mutual_cycle
 llvm/eager_global_self_cycle
 llvmT/eager_global_dispatch_hidden_cycle
+
+# Rejected by the static initialisation rules, as above: I2 (T-TOPLEVEL-EFFECT) for the
+# two effectful top-level values, I3 (T-CYCLIC-VALUE) for the self-mentioning String cell.
+llvm/lazy_effect_unforced
+llvm/lazy_effect_unreferenced
+llvm/lazy_global_string_read
