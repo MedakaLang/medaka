@@ -418,13 +418,14 @@ they cannot mutate an ordinary Medaka Ref from signal context.
 
 ### Proposed module boundaries
 
-The following are proposed public exports, not implemented/typechecked APIs.
-Deadline and CancelToken constructors are private. A Deadline wraps a real
+The following are historical interface sketches, not implementation contracts.
+`process_async.mdk` has since landed; its actual exports are in that module.
+The scope and stdio sketches remain unqualified. Deadline and CancelToken constructors are private. A Deadline wraps a real
 `Wait e` produced by `after`, not an arbitrary caller-supplied wait whose
 `expired` result could never become true.
 
 ```text
-process_async.mdk (planned stdlib module)
+process_async.mdk (historical sketch; see landed module)
   types: OutputStream = ChildStdout | ChildStderr
          Deadline (e : Effect), CancelToken
          ReadResult = Read Bytes | EndOfStream | ReadTimedOut | ReadCancelled
@@ -504,6 +505,17 @@ Prevent read-ahead loss, mixed output and descriptor replacement; silent legacy
 success/data loss after EAGAIN is unacceptable. Until that interlock or an
 enforceable MCP-entry restriction is designed, stdio integration is blocked.
 
+The [stdio authority replay](../findings/mcp-runtime-authority/STDIO.md) refuses
+the narrow all-content-openers runtime seal: it blocks required source/config
+reads, telemetry and scratch content before effects, although metadata and real
+native worker submission remain possible. Non-dumpability blocks the measured
+fresh-stdio child's parent-fd reopen, while supervisor self aliases and libc
+HOSTALIASES still transfer protocol bytes when their model guard is disabled.
+The replay also reproduces #4865's exposed stash/flush primitives and automatic
+main output outside the effect manifest. No candidate is qualified. A narrower
+file/resolver/buffering policy or an explicit protocol-owner/workspace split
+needs a new measured cut; neither cgroups nor an empty-main control supplies it.
+
 ### Candidate Linux containment and blocked proof
 
 The candidate is a Linux cgroup-v2 per-worker scope managed by a trusted
@@ -511,10 +523,17 @@ external broker/service. It is **not an established deployment**. Exec p gives
 no cgroup/namespace privilege. Ordinary users need a host-provided protected
 broker; an arbitrary login user's ability to create it is not assumed.
 
-The measured host exposes cgroup2 read-only; creating a child of its own scope
-fails EROFS=30. Attempting an ordinary-user receipt by dropping uid fails
-EPERM=1 in this sandbox, so ordinary-user availability remains blocked. A
-writable cgroup alone would not suffice: worker access to a destination
+The [ownership authority replay](../../scripts/mcp_bench/prototypes/ownership_probe.py)
+and [2026-11-05 receipt](../findings/mcp-runtime-authority/OWNERSHIP.md) measure
+the current blockers independently. The cgroup2 mount is read-only; a unique
+disposable child mkdir fails EROFS=30. The probe has uid/euid 0 with zero
+effective capabilities, and its child setresuid attempt fails EINVAL=22.
+SO_PASSCRED setup fails EPERM=1. No protected delegated manager is configured;
+ordinary-client deployment and credential authentication remain unqualified.
+The local token/state and external nonexecution controls run without claiming
+containment. Both full and `--refusal-only` replay exit 77; every positive
+deployment row remains UNQUALIFIED. A writable cgroup alone would not suffice:
+worker access to a destination
 cgroup.procs, inherited management fd, broker memory/ptrace or namespace/mount
 authority can permit escape. Require inaccessible broker management authority,
 including protection from `/proc` fd theft and ambient capabilities; a separate
@@ -583,3 +602,76 @@ retains the ticket until retry, check, or abort completes cleanup. #4854 owns
 bounded pipe reads and writes, readiness integration, cancellation and deadlines,
 and scheduler-safe launch submission. A pipe endpoint or an exec handshake is
 not application readiness or descendant containment.
+
+### Authority investigation handoffs
+
+The [authority report](../findings/mcp-runtime-authority/REPORT.md) leaves both
+boundaries SPIKE-FIRST. The earlier proposed signatures above are design sketches,
+not accepted contracts or permission to add externs. In particular, `process_async`
+now exists; its landed `Deadline` and `CancelToken` remain the shared scheduler
+interfaces. The earlier `Process p` scope sketch does not establish ownership of
+a broker's child.
+
+#### Owned scope and cleanup (#4855)
+
+Placement remains a prospective process_scope module in stdlib over the
+existing `process`, `async`, `time` and shared deadline/cancellation exports.
+It must not import compiler tools or create a second scheduler. The earlier
+`startOwned : (program : String) -> SpawnOptions -> Deadline <Clock, Exec program | e> -> CancelToken -> Async <Clock, Exec program | e> (Result ProcessError (Process program))`
+and `terminateOwned : Process p -> Grace -> Async <Clock, Exec p | e> CleanupResult`
+are explicitly unaccepted sketches: the manager-parent finding requires the next
+cut to settle a distinct wire-owned scope identity and its indexed effects and
+error results. No transfer into an existing direct-child `Process` is implied.
+The manager owns admission, pre-exec attachment and retained cleanup authority;
+the actual direct parent owns status and reap. No placeholder native module,
+extern or broker wire signature is authorized before deployment proof.
+
+Acceptance for the next cut:
+
+1. An ordinary client uses an explicitly delegated disposable cgroup and a
+   protected manager inaccessible to the target; admission precedes execution.
+2. Fork, setsid, double-fork and repeated-fork remain contained; migration and
+   management-fd theft fail, while an unrelated child survives and exits 23.
+3. Admission races, channel loss, foreign/stale/replayed tokens and capacity
+   exhaustion are tested with independent effects; rejected launch leaves an
+   external nonexecution marker absent.
+4. Caller and broker death trigger cleanup through a surviving manager. Recovery
+   of manager ownership remains a separate measured prerequisite.
+5. Success requires both populated=0 and actual direct-parent status/reap.
+   Timeout or error retains authority and never claims empty. The supported
+   host and macOS refusal are explicit.
+
+Prerequisite: an operator supplies a delegated disposable cgroup-v2 parent and
+protected long-lived manager; the positive deployment matrix has not run.
+
+#### Stdio and backpressure (#4854)
+
+Placement remains a prospective stdio_async module in stdlib, importing `async`,
+`bytes`, `time`, and the shared deadline/token exports from `process_async`,
+without compiler-tools imports or a second scheduler. The earlier sketches
+`open : Unit -> <Stdin, Stdout> Result StdioError Stdio`,
+`readUntil : Stdio -> Int -> Deadline <Clock, Stdin | e> -> CancelToken -> Async <Clock, Stdin | e> (Result StdioError ReadResult)`,
+`writeUntil : Stdio -> Bytes -> Deadline <Clock, Stdout | e> -> CancelToken -> Async <Clock, Stdout | e> (Result (StdioError, Int) WriteResult)`,
+and `release : Stdio -> <Stdin, Stdout> Result StdioError Unit` remain
+unaccepted until a real authority policy is measured. They do not authorize new
+native exports. A selected boundary must define its lease owner, descriptor
+identity and error/ownership transfer without changing the direct-child owner.
+
+Acceptance for the next cut:
+
+1. Preserve actual supervisor source/config reads, toolchain selection, telemetry,
+   scratch contents and worker submission through the enforced policy.
+2. Independently observe exact fragmented and non-UTF-8 bytes, aliases, fd
+   replacement and fresh-stdio child access to parent descriptors.
+3. Bound resolver/NSS input including HOSTALIASES and all legacy, buffered,
+   automatic and abort output; demonstrate each guard with a disabling control.
+4. Enforce the chosen entry restriction on the actual launch path, including
+   the still-open #4865 internal-output defect. Cgroup membership and advisory
+   policy checks do not establish exclusive stdio.
+5. Define lease release/reacquisition, scheduler-safe backpressure, deadlines,
+   cancellation and committed write prefixes; retain ownership on errors and
+   reject unsupported endpoints before effects.
+
+Prerequisite: measure a descriptor-first file policy plus resolver/output
+interlocks while retaining supervisor work, or recut and prove an explicit
+protocol-owner/workspace split. Neither alternative is yet qualified.

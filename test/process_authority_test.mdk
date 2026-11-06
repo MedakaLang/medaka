@@ -1,0 +1,8 @@
+import test_process.{underRoot, withScratchDir, expectSpawnOkLine}
+
+test "authority replay refuses unqualified deployment and detects removed controls" = withScratchDir
+  (dir =>
+    expectSpawnOkLine
+      "python3"
+      [underRoot "test/process_authority_fixtures/replay.py", underRoot "", dir]
+      "authority replay controls passed")

@@ -1,0 +1,172 @@
+{
+  "schema": 1,
+  "measured": "2026-11-05",
+  "source_base": "fa83e1594a01210a17d771fb71105bedc03e1055",
+  "source_sha256": {
+    "scripts/mcp_bench/prototypes/ownership_fixture.c": "f06c90cd147ed0d2208d62243a41583415ea6a9d1ea0cf34ff85af2355607135",
+    "scripts/mcp_bench/prototypes/ownership_probe.py": "a95d5d3408e92ad32bb550b02bfe0440b879612b71d9c5b2e40ff15de9ddc3f1"
+  },
+  "qualified": false,
+  "exit_code": 77,
+  "decision": "Deployment blocked; no protected delegated manager configured or exercised.",
+  "inventory": {
+    "platform": "Linux-6.12.95+deb13-amd64-x86_64-with-glibc2.41",
+    "uid": 0,
+    "euid": 0,
+    "gid": 0,
+    "groups": [
+      0
+    ],
+    "manager_configuration": null,
+    "process_status": {
+      "Uid": "0\t0\t0\t0",
+      "Gid": "0\t0\t0\t0",
+      "CapInh": "0000000000000000",
+      "CapPrm": "0000000000000000",
+      "CapEff": "0000000000000000",
+      "CapBnd": "0000000000000000",
+      "CapAmb": "0000000000000000",
+      "NoNewPrivs": "1",
+      "Seccomp": "2"
+    },
+    "namespaces": {
+      "net": "net:[4026532504]",
+      "uts": "uts:[4026531838]",
+      "ipc": "ipc:[4026532502]",
+      "pid": "pid:[4026532503]",
+      "pid_for_children": "pid:[4026532503]",
+      "user": "user:[4026532438]",
+      "mnt": "mnt:[4026532501]",
+      "cgroup": "cgroup:[4026531835]",
+      "time": "time:[4026531834]",
+      "time_for_children": "time:[4026531834]"
+    },
+    "cgroup_membership": "0::/user.slice/user-0.slice/session-428.scope\n",
+    "identity_maps": {
+      "uid_map": "         0          0          1\n",
+      "gid_map": "         0          0          1\n"
+    },
+    "cgroup_mountinfo": [
+      "340 338 0:28 / /sys/fs/cgroup ro,nosuid,nodev,noexec,relatime master:8 - cgroup2 cgroup2 rw,nsdelegate,memory_recursiveprot"
+    ]
+  },
+  "prerequisite_rows": [
+    {
+      "name": "disposable_scope_creation",
+      "status": "UNAVAILABLE",
+      "operation": "mkdir",
+      "path": "/sys/fs/cgroup/medaka-authority-2afb9d4f7d5b40028ce1647c31b664ba",
+      "errno": 30,
+      "error": "[Errno 30] Read-only file system: '/sys/fs/cgroup/medaka-authority-2afb9d4f7d5b40028ce1647c31b664ba'"
+    },
+    {
+      "name": "ordinary_identity_attempt",
+      "status": "OBSERVED",
+      "setresuid_rc": -1,
+      "errno": 22,
+      "uid": 0,
+      "euid": 0
+    },
+    {
+      "name": "protocol_credential_auth",
+      "status": "UNAVAILABLE",
+      "errno": 1,
+      "scope": "local-protocol-only"
+    }
+  ],
+  "rows": {
+    "cgroup_v2_inventory": "OBSERVED",
+    "disposable_scope_creation": "UNAVAILABLE",
+    "native_fixture_build": "PASS",
+    "external_nonexecution": "PASS",
+    "external_marker_control": "PASS",
+    "ordinary_identity_attempt": "OBSERVED",
+    "protocol_credential_auth": "UNAVAILABLE",
+    "protocol_missing_authority": "PASS",
+    "protocol_stale_token": "PASS",
+    "protocol_foreign_token": "PASS",
+    "protocol_foreign_peer": "UNAVAILABLE",
+    "protocol_token_replay": "PASS",
+    "protocol_capacity": "PASS",
+    "protocol_admission_kill_race": "PASS",
+    "protocol_channel_loss": "PASS",
+    "protocol_cleanup_retained": "PASS",
+    "protocol_admitted_control": "PASS",
+    "protocol_unrelated_child_status": "PASS",
+    "protocol_local_cleanup": "PASS",
+    "external_protocol_markers": "PASS",
+    "ordinary_client_deployment": "UNQUALIFIED",
+    "pre_exec_attachment": "UNQUALIFIED",
+    "fork_containment": "UNQUALIFIED",
+    "setsid_containment": "UNQUALIFIED",
+    "double_fork_containment": "UNQUALIFIED",
+    "repeated_fork_containment": "UNQUALIFIED",
+    "denied_migration": "UNQUALIFIED",
+    "management_fd_theft_denied": "UNQUALIFIED",
+    "unrelated_child_exit_23": "UNQUALIFIED",
+    "caller_death_cleanup": "UNQUALIFIED",
+    "broker_death_cleanup": "UNQUALIFIED",
+    "manager_recovery": "UNQUALIFIED",
+    "admission_kill_race": "UNQUALIFIED",
+    "channel_loss_cleanup": "UNQUALIFIED",
+    "stale_foreign_token": "UNQUALIFIED",
+    "token_replay": "UNQUALIFIED",
+    "capacity_exhaustion": "UNQUALIFIED",
+    "populated_zero_and_direct_reap": "UNQUALIFIED",
+    "cleanup_error_retains_authority": "UNQUALIFIED",
+    "qualification": "UNAVAILABLE"
+  },
+  "external_effects": [
+    {
+      "name": "external_nonexecution",
+      "status": "PASS",
+      "rc": 77,
+      "marker_exists": false
+    },
+    {
+      "name": "external_marker_control",
+      "status": "PASS",
+      "observed_hex": "65786563757465640a"
+    },
+    {
+      "name": "external_protocol_markers",
+      "status": "PASS",
+      "executed": [
+        "token_replay",
+        "cleanup_retained",
+        "admitted_control"
+      ],
+      "absent": [
+        "missing_authority",
+        "stale_token",
+        "foreign_token",
+        "foreign_peer",
+        "capacity",
+        "admission_kill_race",
+        "channel_loss"
+      ]
+    }
+  ],
+  "local_control_limit": "Token/state model only; credential auth denied. Stop-before-commit is serialized; timeout is injected after direct target reap.",
+  "cleanup": "All successful-replay exact fixture children reaped; no cgroup created or populated scope modified. Earlier aborted protocol attempts are recorded separately.",
+  "replay": {
+    "cwd": "/tmp",
+    "full_and_local_exit": 77,
+    "full_row_status_errno_equal": true,
+    "refusal_local_rows_equal": {
+      "protocol_credential_auth": "UNAVAILABLE",
+      "protocol_missing_authority": "PASS",
+      "protocol_stale_token": "PASS",
+      "protocol_foreign_token": "PASS",
+      "protocol_foreign_peer": "UNAVAILABLE",
+      "protocol_token_replay": "PASS",
+      "protocol_capacity": "PASS",
+      "protocol_admission_kill_race": "PASS",
+      "protocol_channel_loss": "PASS",
+      "protocol_cleanup_retained": "PASS",
+      "protocol_admitted_control": "PASS",
+      "protocol_unrelated_child_status": "PASS",
+      "protocol_local_cleanup": "PASS"
+    }
+  }
+}
