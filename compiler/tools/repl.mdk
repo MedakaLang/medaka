@@ -342,11 +342,14 @@ schemeToBinding (n, s) = (n, ppScheme s)
 -- ── Process an expression input ───────────────────────────────────────────
 -- An expression is bound as the unit function `__repl__`, the source text after the
 -- `__repl__ () = ` prefix of [replWrapLen] characters.
+replWrapPrefix : String
+replWrapPrefix = "__repl__ () = "
+
 replWrap : String -> String
-replWrap src = "__repl__ () = " ++ src
+replWrap src = replWrapPrefix ++ src
 
 replWrapLen : Int
-replWrapLen = 14
+replWrapLen = stringLength replWrapPrefix
 
 -- The scheme of the expression's value, read off the unit function's scheme: the result
 -- type, with the function arrow's row as the value's forcing row.

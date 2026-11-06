@@ -410,12 +410,12 @@ synthLines nonce i (_ :: rest) ((Err _) :: srRest) =
 
 -- Per example: the sentinel, then the value.
 --
--- An example WITH an expected block synthesizes `__dt_i__ () = debug (expr)`,
--- whose call is a String — printed directly.  A SMOKE example (no expected
--- block) synthesizes the raw expression, whose type is arbitrary and need not be
--- printable, so its call is only FORCED and contributes an empty value; `buildDetailsFrom` passes it
--- as long as it evaluated.  (There are currently zero smoke examples in the
--- tree, so this arm is correctness, not machinery.)
+-- An example WITH an expected block synthesizes `__dt_i__ () = debug (expr)`, whose call
+-- is a String, printed directly.  A SMOKE example (no expected block) synthesizes the raw
+-- expression, whose type is arbitrary and need not be printable, so its call is only
+-- forced and contributes an empty value; `buildDetailsFrom` passes it as long as it
+-- evaluated.  (There are currently zero smoke examples in the tree, so this arm is
+-- correctness, not machinery.)
 mainLines : String ->
   Int ->
   List Example ->

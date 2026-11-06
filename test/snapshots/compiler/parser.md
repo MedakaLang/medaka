@@ -1,5 +1,5 @@
 # META
-source_lines=5270
+source_lines=5274
 stages=DESUGAR,MARK
 # SOURCE
 import frontend.parse_locate.{locateOffset, locateTokenDiagnostic}
@@ -174,6 +174,10 @@ skipNlFor _ = deferPure ()
 
 -- ── Expressions ─────────────────────────────────────────────────────────
 -- ladder: lam → or → and → cmp → cons → append → add → mul → app → postfix → atom
+--
+-- A recursive production is wrapped in `ParserE` (here and below) rather than built by
+-- chaining binds: a value that reads itself while it initialises is rejected as
+-- `T-CYCLIC-VALUE` (I3), and the lambda held by the constructor is read only when called.
 parseExpr : Parser Expr
 parseExpr = ParserE (ctx pos =>
   runPWith

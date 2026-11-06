@@ -1,5 +1,5 @@
 # META
-source_lines=506
+source_lines=509
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka REPL (Stage 4, Phase B.9)
@@ -346,11 +346,14 @@ schemeToBinding (n, s) = (n, ppScheme s)
 -- ── Process an expression input ───────────────────────────────────────────
 -- An expression is bound as the unit function `__repl__`, the source text after the
 -- `__repl__ () = ` prefix of [replWrapLen] characters.
+replWrapPrefix : String
+replWrapPrefix = "__repl__ () = "
+
 replWrap : String -> String
-replWrap src = "__repl__ () = " ++ src
+replWrap src = replWrapPrefix ++ src
 
 replWrapLen : Int
-replWrapLen = 14
+replWrapLen = stringLength replWrapPrefix
 
 -- The scheme of the expression's value, read off the unit function's scheme: the result
 -- type, with the function arrow's row as the value's forcing row.
@@ -632,10 +635,12 @@ dispatchInput src =
 (DFunDef false "printTypeAnn" ((PTuple (PVar "kind") (PVar "name"))) (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "kind"))) (ELit (LString " "))) (EApp (EVar "display") (EVar "name"))) (ELit (LString "")))))
 (DTypeSig false "schemeToBinding" (TyFun (TyTuple (TyCon "String") (TyCon "Scheme")) (TyTuple (TyCon "String") (TyCon "String"))))
 (DFunDef false "schemeToBinding" ((PTuple (PVar "n") (PVar "s"))) (ETuple (EVar "n") (EApp (EVar "ppScheme") (EVar "s"))))
+(DTypeSig false "replWrapPrefix" (TyCon "String"))
+(DFunDef false "replWrapPrefix" () (ELit (LString "__repl__ () = ")))
 (DTypeSig false "replWrap" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "replWrap" ((PVar "src")) (EBinOp "++" (ELit (LString "__repl__ () = ")) (EVar "src")))
+(DFunDef false "replWrap" ((PVar "src")) (EBinOp "++" (EVar "replWrapPrefix") (EVar "src")))
 (DTypeSig false "replWrapLen" (TyCon "Int"))
-(DFunDef false "replWrapLen" () (ELit (LInt 14)))
+(DFunDef false "replWrapLen" () (EApp (EVar "stringLength") (EVar "replWrapPrefix")))
 (DTypeSig true "replResultScheme" (TyFun (TyCon "Scheme") (TyApp (TyCon "Option") (TyCon "Scheme"))))
 (DFunDef false "replResultScheme" ((PCon "Forall" (PVar "qs") (PVar "es") (PVar "auths") (PVar "residual") PWild (PVar "t"))) (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TFun" PWild (PVar "row") (PVar "res")) () (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Forall") (EVar "qs")) (EVar "es")) (EVar "auths")) (EVar "residual")) (EVar "row")) (EVar "res")))) (arm PWild () (EVar "None"))))
 (DTypeSig false "processExprInput" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
@@ -793,10 +798,12 @@ dispatchInput src =
 (DFunDef false "printTypeAnn" ((PTuple (PVar "kind") (PVar "name"))) (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "kind"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "")))))
 (DTypeSig false "schemeToBinding" (TyFun (TyTuple (TyCon "String") (TyCon "Scheme")) (TyTuple (TyCon "String") (TyCon "String"))))
 (DFunDef false "schemeToBinding" ((PTuple (PVar "n") (PVar "s"))) (ETuple (EVar "n") (EApp (EVar "ppScheme") (EVar "s"))))
+(DTypeSig false "replWrapPrefix" (TyCon "String"))
+(DFunDef false "replWrapPrefix" () (ELit (LString "__repl__ () = ")))
 (DTypeSig false "replWrap" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "replWrap" ((PVar "src")) (EBinOp "++" (ELit (LString "__repl__ () = ")) (EVar "src")))
+(DFunDef false "replWrap" ((PVar "src")) (EBinOp "++" (EVar "replWrapPrefix") (EVar "src")))
 (DTypeSig false "replWrapLen" (TyCon "Int"))
-(DFunDef false "replWrapLen" () (ELit (LInt 14)))
+(DFunDef false "replWrapLen" () (EApp (EVar "stringLength") (EVar "replWrapPrefix")))
 (DTypeSig true "replResultScheme" (TyFun (TyCon "Scheme") (TyApp (TyCon "Option") (TyCon "Scheme"))))
 (DFunDef false "replResultScheme" ((PCon "Forall" (PVar "qs") (PVar "es") (PVar "auths") (PVar "residual") PWild (PVar "t"))) (EMatch (EApp (EVar "normalize") (EVar "t")) (arm (PCon "TFun" PWild (PVar "row") (PVar "res")) () (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Forall") (EVar "qs")) (EVar "es")) (EVar "auths")) (EVar "residual")) (EVar "row")) (EVar "res")))) (arm PWild () (EVar "None"))))
 (DTypeSig false "processExprInput" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))
