@@ -1,5 +1,5 @@
 # META
-source_lines=4174
+source_lines=4180
 stages=DESUGAR,MARK
 # SOURCE
 import support.symbol_encoding.{encodePair}
@@ -248,10 +248,16 @@ lower facts (EHeadAnnot e _) = lower facts e
 -- (instance-`requires` impl dicts — the second ref — are unsupported in the Core
 -- IR experiment; drop them, the core_ir fixtures carry no requires-impls)
 -- #2705: the occurrence's answer is read from the published evidence table, the
--- same seam `EDictAt` crosses on the next line.
+-- same seam `EDictAt` crosses below.
 lower facts (EMethodAt name _ ev) =
   cmethodOf name (evMethodRoutesIn facts.pfEvidence ev)
-lower facts (EDictAt name ev) = CDict name (evDictRoutesIn facts.pfEvidence ev)
+-- A dictionary application of no dictionaries is the plain name: the marker's
+-- dict-name set is bare-named, so a definition sharing its name with another
+-- module's constrained one reaches here with no routes, and a value global (a CAF)
+-- has no function to apply them to.
+lower facts (EDictAt name ev) = match evDictRoutesIn facts.pfEvidence ev
+  [] => CVar name AGlobal
+  routes => CDict name routes
 -- A located `match` keeps its keyword's span as the trap site of the decision
 -- it lowers to, the span the interpreter reports (`eval`'s `ELoc l (EMatch …)`
 -- arm); a refutable `let` takes its own site field (the `ELet` arm above).
@@ -4234,7 +4240,7 @@ nodeTag _ = "?"
 (DFunDef false "lower" ((PVar "facts") (PCon "EAnnot" (PVar "e") PWild)) (EApp (EApp (EVar "lower") (EVar "facts")) (EVar "e")))
 (DFunDef false "lower" ((PVar "facts") (PCon "EHeadAnnot" (PVar "e") PWild)) (EApp (EApp (EVar "lower") (EVar "facts")) (EVar "e")))
 (DFunDef false "lower" ((PVar "facts") (PCon "EMethodAt" (PVar "name") PWild (PVar "ev"))) (EApp (EApp (EVar "cmethodOf") (EVar "name")) (EApp (EApp (EVar "evMethodRoutesIn") (EFieldAccess (EVar "facts") "pfEvidence")) (EVar "ev"))))
-(DFunDef false "lower" ((PVar "facts") (PCon "EDictAt" (PVar "name") (PVar "ev"))) (EApp (EApp (EVar "CDict") (EVar "name")) (EApp (EApp (EVar "evDictRoutesIn") (EFieldAccess (EVar "facts") "pfEvidence")) (EVar "ev"))))
+(DFunDef false "lower" ((PVar "facts") (PCon "EDictAt" (PVar "name") (PVar "ev"))) (EMatch (EApp (EApp (EVar "evDictRoutesIn") (EFieldAccess (EVar "facts") "pfEvidence")) (EVar "ev")) (arm (PList) () (EApp (EApp (EVar "CVar") (EVar "name")) (EVar "AGlobal"))) (arm (PVar "routes") () (EApp (EApp (EVar "CDict") (EVar "name")) (EVar "routes")))))
 (DFunDef false "lower" ((PVar "facts") (PCon "ELoc" (PVar "l") (PCon "EMatch" (PVar "scrut") (PVar "arms")))) (EApp (EApp (EApp (EApp (EVar "lowerMatch") (EVar "facts")) (EVar "l")) (EApp (EApp (EVar "lower") (EVar "facts")) (EVar "scrut"))) (EVar "arms")))
 (DFunDef false "lower" ((PVar "facts") (PCon "ELoc" PWild (PVar "e"))) (EApp (EApp (EVar "lower") (EVar "facts")) (EVar "e")))
 (DFunDef false "lower" ((PVar "facts") (PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EApp (EVar "lower") (EVar "facts")) (EVar "e")))
@@ -5590,7 +5596,7 @@ nodeTag _ = "?"
 (DFunDef false "lower" ((PVar "facts") (PCon "EAnnot" (PVar "e") PWild)) (EApp (EApp (EVar "lower") (EVar "facts")) (EVar "e")))
 (DFunDef false "lower" ((PVar "facts") (PCon "EHeadAnnot" (PVar "e") PWild)) (EApp (EApp (EVar "lower") (EVar "facts")) (EVar "e")))
 (DFunDef false "lower" ((PVar "facts") (PCon "EMethodAt" (PVar "name") PWild (PVar "ev"))) (EApp (EApp (EVar "cmethodOf") (EVar "name")) (EApp (EApp (EVar "evMethodRoutesIn") (EFieldAccess (EVar "facts") "pfEvidence")) (EVar "ev"))))
-(DFunDef false "lower" ((PVar "facts") (PCon "EDictAt" (PVar "name") (PVar "ev"))) (EApp (EApp (EVar "CDict") (EVar "name")) (EApp (EApp (EVar "evDictRoutesIn") (EFieldAccess (EVar "facts") "pfEvidence")) (EVar "ev"))))
+(DFunDef false "lower" ((PVar "facts") (PCon "EDictAt" (PVar "name") (PVar "ev"))) (EMatch (EApp (EApp (EVar "evDictRoutesIn") (EFieldAccess (EVar "facts") "pfEvidence")) (EVar "ev")) (arm (PList) () (EApp (EApp (EVar "CVar") (EVar "name")) (EVar "AGlobal"))) (arm (PVar "routes") () (EApp (EApp (EVar "CDict") (EVar "name")) (EVar "routes")))))
 (DFunDef false "lower" ((PVar "facts") (PCon "ELoc" (PVar "l") (PCon "EMatch" (PVar "scrut") (PVar "arms")))) (EApp (EApp (EApp (EApp (EVar "lowerMatch") (EVar "facts")) (EVar "l")) (EApp (EApp (EVar "lower") (EVar "facts")) (EVar "scrut"))) (EVar "arms")))
 (DFunDef false "lower" ((PVar "facts") (PCon "ELoc" PWild (PVar "e"))) (EApp (EApp (EVar "lower") (EVar "facts")) (EVar "e")))
 (DFunDef false "lower" ((PVar "facts") (PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EApp (EVar "lower") (EVar "facts")) (EVar "e")))

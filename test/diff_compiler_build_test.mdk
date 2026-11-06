@@ -1,7 +1,7 @@
 {- | Gate for the SELF-HOSTED `medaka build`, re-rooted off the OCaml oracle
    (REROOT-PLAN §2d). Replaces the former shell gate of the same name.
 
-   For every top-level test/build_diff_fixtures/*.mdk, plus six multi-module
+   For every top-level test/build_diff_fixtures/*.mdk, plus seven multi-module
    specials (subfolder entry files), it runs `medaka build` with MEDAKA_EMITTER
    (default <root>/medaka_emitter) and MEDAKA_CLANG_OPT=-O0, runs the produced
    binary, and compares its stdout with the committed <fixture>.build.golden.
@@ -40,7 +40,7 @@ import list.{zip}
 fixDir : <IO> String
 fixDir = underRoot "test/build_diff_fixtures"
 
--- The script's six multi-module specials: (label, entry file under fixDir).
+-- The multi-module specials: (label, entry file under fixDir).
 specials : List (String, String)
 specials = [
   ("multimodule", "mm/entry.mdk"),
@@ -49,6 +49,7 @@ specials = [
   ("bimappable_constrained_sibling", "bimappable_constrained_sibling/main.mdk"),
   ("bimappable_tuple_sibling", "bimappable_tuple_sibling/main.mdk"),
   ("traverse_parametric_sibling", "traverse_parametric_sibling/main.mdk"),
+  ("caf_dict_name_collision", "caf_dict_name_collision/main.mdk"),
 ]
 
 -- A (label, src) row for a top-level `<name>.mdk` file; subfolder files are not top-level.
