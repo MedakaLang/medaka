@@ -183,24 +183,6 @@ cexprSexp m (CRangeList lo hi incl) =
   node "CRangeList" [cexprSexp m lo, cexprSexp m hi, boolStr incl]
 cexprSexp m (CRangeArray lo hi incl) =
   node "CRangeArray" [cexprSexp m lo, cexprSexp m hi, boolStr incl]
-cexprSexp m (CIndex a i) = node "CIndex" [cexprSexp m a, cexprSexp m i]
-cexprSexp m (CSlice a lo hi incl) =
-  node "CSlice" [cexprSexp m a, cexprSexp m lo, cexprSexp m hi, boolStr incl]
-cexprSexp m (CStringIndex a i) =
-  node "CStringIndex" [cexprSexp m a, cexprSexp m i]
-cexprSexp m (CStringSlice a lo hi incl) = node "CStringSlice" [
-  cexprSexp m a,
-  cexprSexp m lo,
-  cexprSexp m hi,
-  boolStr incl,
-]
-cexprSexp m (CListIndex a i) = node "CListIndex" [cexprSexp m a, cexprSexp m i]
-cexprSexp m (CListSlice a lo hi incl) = node "CListSlice" [
-  cexprSexp m a,
-  cexprSexp m lo,
-  cexprSexp m hi,
-  boolStr incl,
-]
 cexprSexp m (CBlock stmts) = node "CBlock" (map (cstmtSexp m) stmts)
 cexprSexp m (CMethod name (MethodEvidence iface arity route implRoutes methRoutes)) = node
   "CMethod"

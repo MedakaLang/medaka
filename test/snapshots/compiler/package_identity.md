@@ -1,5 +1,5 @@
 # META
-source_lines=365
+source_lines=357
 stages=DESUGAR,MARK
 # SOURCE
 import frontend.ast.{Loc(..), Lit(..)}
@@ -165,14 +165,6 @@ exprFiles files (CVariantUpdate _ e fs) = fold fieldFiles (exprFiles files e) fs
 exprFiles files (CArray es) = fold exprFiles files es
 exprFiles files (CRangeList a b _) = exprFiles (exprFiles files a) b
 exprFiles files (CRangeArray a b _) = exprFiles (exprFiles files a) b
-exprFiles files (CIndex a b) = exprFiles (exprFiles files a) b
-exprFiles files (CSlice a b c _) = exprFiles (exprFiles (exprFiles files a) b) c
-exprFiles files (CStringIndex a b) = exprFiles (exprFiles files a) b
-exprFiles files (CStringSlice a b c _) =
-  exprFiles (exprFiles (exprFiles files a) b) c
-exprFiles files (CListIndex a b) = exprFiles (exprFiles files a) b
-exprFiles files (CListSlice a b c _) =
-  exprFiles (exprFiles (exprFiles files a) b) c
 exprFiles files (CBlock stmts) = fold stmtFiles files stmts
 exprFiles files (CMethod _ _) = files
 exprFiles files (CDict _ _) = files
@@ -455,12 +447,6 @@ packSite plan (loc@(Loc f line col _ _)) =
 (DFunDef false "exprFiles" ((PVar "files") (PCon "CArray" (PVar "es"))) (EApp (EApp (EApp (EVar "fold") (EVar "exprFiles")) (EVar "files")) (EVar "es")))
 (DFunDef false "exprFiles" ((PVar "files") (PCon "CRangeList" (PVar "a") (PVar "b") PWild)) (EApp (EApp (EVar "exprFiles") (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "a"))) (EVar "b")))
 (DFunDef false "exprFiles" ((PVar "files") (PCon "CRangeArray" (PVar "a") (PVar "b") PWild)) (EApp (EApp (EVar "exprFiles") (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "a"))) (EVar "b")))
-(DFunDef false "exprFiles" ((PVar "files") (PCon "CIndex" (PVar "a") (PVar "b"))) (EApp (EApp (EVar "exprFiles") (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "a"))) (EVar "b")))
-(DFunDef false "exprFiles" ((PVar "files") (PCon "CSlice" (PVar "a") (PVar "b") (PVar "c") PWild)) (EApp (EApp (EVar "exprFiles") (EApp (EApp (EVar "exprFiles") (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "a"))) (EVar "b"))) (EVar "c")))
-(DFunDef false "exprFiles" ((PVar "files") (PCon "CStringIndex" (PVar "a") (PVar "b"))) (EApp (EApp (EVar "exprFiles") (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "a"))) (EVar "b")))
-(DFunDef false "exprFiles" ((PVar "files") (PCon "CStringSlice" (PVar "a") (PVar "b") (PVar "c") PWild)) (EApp (EApp (EVar "exprFiles") (EApp (EApp (EVar "exprFiles") (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "a"))) (EVar "b"))) (EVar "c")))
-(DFunDef false "exprFiles" ((PVar "files") (PCon "CListIndex" (PVar "a") (PVar "b"))) (EApp (EApp (EVar "exprFiles") (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "a"))) (EVar "b")))
-(DFunDef false "exprFiles" ((PVar "files") (PCon "CListSlice" (PVar "a") (PVar "b") (PVar "c") PWild)) (EApp (EApp (EVar "exprFiles") (EApp (EApp (EVar "exprFiles") (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "a"))) (EVar "b"))) (EVar "c")))
 (DFunDef false "exprFiles" ((PVar "files") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EApp (EVar "fold") (EVar "stmtFiles")) (EVar "files")) (EVar "stmts")))
 (DFunDef false "exprFiles" ((PVar "files") (PCon "CMethod" PWild PWild)) (EVar "files"))
 (DFunDef false "exprFiles" ((PVar "files") (PCon "CDict" PWild PWild)) (EVar "files"))
@@ -580,12 +566,6 @@ packSite plan (loc@(Loc f line col _ _)) =
 (DFunDef false "exprFiles" ((PVar "files") (PCon "CArray" (PVar "es"))) (EApp (EApp (EApp (EMethodRef "fold") (EVar "exprFiles")) (EVar "files")) (EVar "es")))
 (DFunDef false "exprFiles" ((PVar "files") (PCon "CRangeList" (PVar "a") (PVar "b") PWild)) (EApp (EApp (EVar "exprFiles") (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "a"))) (EVar "b")))
 (DFunDef false "exprFiles" ((PVar "files") (PCon "CRangeArray" (PVar "a") (PVar "b") PWild)) (EApp (EApp (EVar "exprFiles") (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "a"))) (EVar "b")))
-(DFunDef false "exprFiles" ((PVar "files") (PCon "CIndex" (PVar "a") (PVar "b"))) (EApp (EApp (EVar "exprFiles") (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "a"))) (EVar "b")))
-(DFunDef false "exprFiles" ((PVar "files") (PCon "CSlice" (PVar "a") (PVar "b") (PVar "c") PWild)) (EApp (EApp (EVar "exprFiles") (EApp (EApp (EVar "exprFiles") (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "a"))) (EVar "b"))) (EVar "c")))
-(DFunDef false "exprFiles" ((PVar "files") (PCon "CStringIndex" (PVar "a") (PVar "b"))) (EApp (EApp (EVar "exprFiles") (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "a"))) (EVar "b")))
-(DFunDef false "exprFiles" ((PVar "files") (PCon "CStringSlice" (PVar "a") (PVar "b") (PVar "c") PWild)) (EApp (EApp (EVar "exprFiles") (EApp (EApp (EVar "exprFiles") (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "a"))) (EVar "b"))) (EVar "c")))
-(DFunDef false "exprFiles" ((PVar "files") (PCon "CListIndex" (PVar "a") (PVar "b"))) (EApp (EApp (EVar "exprFiles") (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "a"))) (EVar "b")))
-(DFunDef false "exprFiles" ((PVar "files") (PCon "CListSlice" (PVar "a") (PVar "b") (PVar "c") PWild)) (EApp (EApp (EVar "exprFiles") (EApp (EApp (EVar "exprFiles") (EApp (EApp (EVar "exprFiles") (EVar "files")) (EVar "a"))) (EVar "b"))) (EVar "c")))
 (DFunDef false "exprFiles" ((PVar "files") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EApp (EMethodRef "fold") (EVar "stmtFiles")) (EVar "files")) (EVar "stmts")))
 (DFunDef false "exprFiles" ((PVar "files") (PCon "CMethod" PWild PWild)) (EVar "files"))
 (DFunDef false "exprFiles" ((PVar "files") (PCon "CDict" PWild PWild)) (EVar "files"))

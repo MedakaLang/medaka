@@ -717,6 +717,18 @@ test "arch_boundaries: backend.emit_plan closure matches its golden" =
 test "arch_boundaries: ir.core_ir_lower closure matches its golden" =
   closurePin "ir.core_ir_lower"
 
+test "arch_boundaries: ir.core_lint closure matches its golden" =
+  closurePin "ir.core_lint"
+
+test "arch_boundaries: ir.core_opt_num closure matches its golden" =
+  closurePin "ir.core_opt_num"
+
+test "arch_boundaries: ir.core_pass closure matches its golden" =
+  closurePin "ir.core_pass"
+
+test "arch_boundaries: ir.core_walk closure matches its golden" =
+  closurePin "ir.core_walk"
+
 test "arch_boundaries: support.diag_codes closure matches its golden" =
   closurePin "support.diag_codes"
 

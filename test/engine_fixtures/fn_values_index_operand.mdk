@@ -1,0 +1,16 @@
+-- Function values as the indexed operand of `.[i]`: an array literal, an array
+-- global and a list literal of functions, each indexed and applied.  The callee is
+-- known only through the index, so every emitted plan must keep `f` and `g`.
+f : Int -> Int
+f x = x + 1
+
+g : Int -> Int
+g x = x * 2
+
+fs : Array (Int -> Int)
+fs = [| f, g |]
+
+main =
+  putStrLn (debug ([| f |].[0] 41))
+  putStrLn (debug (fs.[1] 21))
+  putStrLn (debug ([f, g].[1] 5))

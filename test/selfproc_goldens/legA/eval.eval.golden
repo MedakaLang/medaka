@@ -113,8 +113,6 @@ evalField : Value a -> String -> Value a
 evalFieldAssign : EvalEnv (Value a) -> FieldAssign -> <a> (String, Value a)
 evalFileTagName : String
 evalIf : EvalEnv (Value a) -> Value a -> Expr -> Expr -> <a> Value a
-evalIndex : Value a -> Value a -> Value a
-evalIndexInt : Value a -> Int -> Value a
 evalLastIndexOf : String -> String -> Option Int
 evalLet : Loc -> EvalEnv (Value a) -> Pat -> Expr -> Expr -> <a> Value a
 evalLetGroup : EvalEnv (Value a) -> List LetBind -> Expr -> <a> Value a
@@ -136,8 +134,6 @@ evalOutputWithFacts : ProgramFacts -> List Decl -> List Decl -> String
 evalRange : Value a -> Value a -> Bool -> (List Int -> Value a) -> Value a
 evalRecLet : EvalEnv (Value a) -> String -> Expr -> Expr -> <a> Value a
 evalRecordUpdate : Value a -> List (String, Value a) -> Value a
-evalSlice : Value a -> Value a -> Value a -> Bool -> Value a
-evalSliceInt : Value a -> Int -> Int -> Bool -> Value a
 evalSpineArgs : EvalEnv (Value a) -> List Expr -> <a> List (Value a)
 evalUnop : String -> Value a -> Value a
 evalValueField : Value a -> Value a
@@ -230,9 +226,6 @@ leadingImplDictPats : List Pat -> Int
 letBindCell : LetBind -> (String, Ref (Value a))
 letGroupDefs : List LetBind -> List (String, (List Pat, Expr, Loc))
 letRefuted : Loc -> a
-listNthAt : List (Value a) -> Int -> Int -> Value a
-listSliceGo : List (Value a) -> Int -> Int -> Int -> List (Value a)
-listSliceV : List (Value a) -> Int -> Int -> List (Value a)
 lookupAtAddr : EvalEnv (Value a) -> String -> Addr -> <a> Value a
 lookupBinding : String -> List (String, Value a) -> Option (Value a)
 lookupCells : List (String, Ref (Value a)) -> String -> Option (Ref (Value a))
@@ -527,14 +520,12 @@ seqV : Unit -> Value a -> Value a
 shadowedFun : List String -> Decl -> Bool
 sharedDefaultValue : EvalEnv (Value a) -> List Int -> List Pat -> Expr -> String -> Value a
 signExtend32 : Int -> Int
-sliceArray : Array (Value a) -> Int -> Int -> Value a
 sortByScore : List (Int, Value a) -> List (Int, Value a)
 sortGo : List (Int, Value a) -> List (Int, Value a) -> List (Int, Value a)
 stampDefiningFile : EvalEnv (Value a) -> <a> Unit
 startsWithAt : String -> Bool
 statTuple : (Int, Bool, Bool, Float) -> Value a
 storeMemo : Ref (Option (Value a)) -> Value a -> <a> Value a
-stringIndexCp : String -> Int -> Value a
 stripBody : Value a -> Value a -> <a> Value a
 stripModPrefix : String -> String
 stripResolved : Value a -> <a> Value a

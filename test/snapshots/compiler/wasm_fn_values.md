@@ -1,5 +1,5 @@
 # META
-source_lines=225
+source_lines=217
 stages=DESUGAR,MARK
 # SOURCE
 import frontend.ast.{Pat(..), Route(..), patBoundNames}
@@ -186,14 +186,6 @@ walkExpr scope acc (CVariantUpdate _ base fields) =
   walkFields scope (walkExpr scope acc base) fields
 walkExpr scope acc (CRangeList lo hi _) = walkExprs scope acc [lo, hi]
 walkExpr scope acc (CRangeArray lo hi _) = walkExprs scope acc [lo, hi]
-walkExpr scope acc (CIndex base index) = walkExprs scope acc [base, index]
-walkExpr scope acc (CSlice base lo hi _) = walkExprs scope acc [base, lo, hi]
-walkExpr scope acc (CStringIndex base index) = walkExprs scope acc [base, index]
-walkExpr scope acc (CStringSlice base lo hi _) =
-  walkExprs scope acc [base, lo, hi]
-walkExpr scope acc (CListIndex base index) = walkExprs scope acc [base, index]
-walkExpr scope acc (CListSlice base lo hi _) =
-  walkExprs scope acc [base, lo, hi]
 walkExpr scope acc (CBlock stmts) = walkBlock scope acc stmts
 walkExpr _ acc (CMethod _ _) = acc
 walkExpr _ acc (CDict _ _) = acc
@@ -284,12 +276,6 @@ walkBlock scope acc ((CSLet _ pat expr) :: rest) =
 (DFunDef false "walkExpr" ((PVar "scope") (PVar "acc") (PCon "CVariantUpdate" PWild (PVar "base") (PVar "fields"))) (EApp (EApp (EApp (EVar "walkFields") (EVar "scope")) (EApp (EApp (EApp (EVar "walkExpr") (EVar "scope")) (EVar "acc")) (EVar "base"))) (EVar "fields")))
 (DFunDef false "walkExpr" ((PVar "scope") (PVar "acc") (PCon "CRangeList" (PVar "lo") (PVar "hi") PWild)) (EApp (EApp (EApp (EVar "walkExprs") (EVar "scope")) (EVar "acc")) (EListLit (EVar "lo") (EVar "hi"))))
 (DFunDef false "walkExpr" ((PVar "scope") (PVar "acc") (PCon "CRangeArray" (PVar "lo") (PVar "hi") PWild)) (EApp (EApp (EApp (EVar "walkExprs") (EVar "scope")) (EVar "acc")) (EListLit (EVar "lo") (EVar "hi"))))
-(DFunDef false "walkExpr" ((PVar "scope") (PVar "acc") (PCon "CIndex" (PVar "base") (PVar "index"))) (EApp (EApp (EApp (EVar "walkExprs") (EVar "scope")) (EVar "acc")) (EListLit (EVar "base") (EVar "index"))))
-(DFunDef false "walkExpr" ((PVar "scope") (PVar "acc") (PCon "CSlice" (PVar "base") (PVar "lo") (PVar "hi") PWild)) (EApp (EApp (EApp (EVar "walkExprs") (EVar "scope")) (EVar "acc")) (EListLit (EVar "base") (EVar "lo") (EVar "hi"))))
-(DFunDef false "walkExpr" ((PVar "scope") (PVar "acc") (PCon "CStringIndex" (PVar "base") (PVar "index"))) (EApp (EApp (EApp (EVar "walkExprs") (EVar "scope")) (EVar "acc")) (EListLit (EVar "base") (EVar "index"))))
-(DFunDef false "walkExpr" ((PVar "scope") (PVar "acc") (PCon "CStringSlice" (PVar "base") (PVar "lo") (PVar "hi") PWild)) (EApp (EApp (EApp (EVar "walkExprs") (EVar "scope")) (EVar "acc")) (EListLit (EVar "base") (EVar "lo") (EVar "hi"))))
-(DFunDef false "walkExpr" ((PVar "scope") (PVar "acc") (PCon "CListIndex" (PVar "base") (PVar "index"))) (EApp (EApp (EApp (EVar "walkExprs") (EVar "scope")) (EVar "acc")) (EListLit (EVar "base") (EVar "index"))))
-(DFunDef false "walkExpr" ((PVar "scope") (PVar "acc") (PCon "CListSlice" (PVar "base") (PVar "lo") (PVar "hi") PWild)) (EApp (EApp (EApp (EVar "walkExprs") (EVar "scope")) (EVar "acc")) (EListLit (EVar "base") (EVar "lo") (EVar "hi"))))
 (DFunDef false "walkExpr" ((PVar "scope") (PVar "acc") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EApp (EVar "walkBlock") (EVar "scope")) (EVar "acc")) (EVar "stmts")))
 (DFunDef false "walkExpr" (PWild (PVar "acc") (PCon "CMethod" PWild PWild)) (EVar "acc"))
 (DFunDef false "walkExpr" (PWild (PVar "acc") (PCon "CDict" PWild PWild)) (EVar "acc"))
@@ -362,12 +348,6 @@ walkBlock scope acc ((CSLet _ pat expr) :: rest) =
 (DFunDef false "walkExpr" ((PVar "scope") (PVar "acc") (PCon "CVariantUpdate" PWild (PVar "base") (PVar "fields"))) (EApp (EApp (EApp (EVar "walkFields") (EVar "scope")) (EApp (EApp (EApp (EVar "walkExpr") (EVar "scope")) (EVar "acc")) (EVar "base"))) (EVar "fields")))
 (DFunDef false "walkExpr" ((PVar "scope") (PVar "acc") (PCon "CRangeList" (PVar "lo") (PVar "hi") PWild)) (EApp (EApp (EApp (EVar "walkExprs") (EVar "scope")) (EVar "acc")) (EListLit (EVar "lo") (EVar "hi"))))
 (DFunDef false "walkExpr" ((PVar "scope") (PVar "acc") (PCon "CRangeArray" (PVar "lo") (PVar "hi") PWild)) (EApp (EApp (EApp (EVar "walkExprs") (EVar "scope")) (EVar "acc")) (EListLit (EVar "lo") (EVar "hi"))))
-(DFunDef false "walkExpr" ((PVar "scope") (PVar "acc") (PCon "CIndex" (PVar "base") (PVar "index"))) (EApp (EApp (EApp (EVar "walkExprs") (EVar "scope")) (EVar "acc")) (EListLit (EVar "base") (EMethodRef "index"))))
-(DFunDef false "walkExpr" ((PVar "scope") (PVar "acc") (PCon "CSlice" (PVar "base") (PVar "lo") (PVar "hi") PWild)) (EApp (EApp (EApp (EVar "walkExprs") (EVar "scope")) (EVar "acc")) (EListLit (EVar "base") (EVar "lo") (EVar "hi"))))
-(DFunDef false "walkExpr" ((PVar "scope") (PVar "acc") (PCon "CStringIndex" (PVar "base") (PVar "index"))) (EApp (EApp (EApp (EVar "walkExprs") (EVar "scope")) (EVar "acc")) (EListLit (EVar "base") (EMethodRef "index"))))
-(DFunDef false "walkExpr" ((PVar "scope") (PVar "acc") (PCon "CStringSlice" (PVar "base") (PVar "lo") (PVar "hi") PWild)) (EApp (EApp (EApp (EVar "walkExprs") (EVar "scope")) (EVar "acc")) (EListLit (EVar "base") (EVar "lo") (EVar "hi"))))
-(DFunDef false "walkExpr" ((PVar "scope") (PVar "acc") (PCon "CListIndex" (PVar "base") (PVar "index"))) (EApp (EApp (EApp (EVar "walkExprs") (EVar "scope")) (EVar "acc")) (EListLit (EVar "base") (EMethodRef "index"))))
-(DFunDef false "walkExpr" ((PVar "scope") (PVar "acc") (PCon "CListSlice" (PVar "base") (PVar "lo") (PVar "hi") PWild)) (EApp (EApp (EApp (EVar "walkExprs") (EVar "scope")) (EVar "acc")) (EListLit (EVar "base") (EVar "lo") (EVar "hi"))))
 (DFunDef false "walkExpr" ((PVar "scope") (PVar "acc") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EApp (EVar "walkBlock") (EVar "scope")) (EVar "acc")) (EVar "stmts")))
 (DFunDef false "walkExpr" (PWild (PVar "acc") (PCon "CMethod" PWild PWild)) (EVar "acc"))
 (DFunDef false "walkExpr" (PWild (PVar "acc") (PCon "CDict" PWild PWild)) (EVar "acc"))

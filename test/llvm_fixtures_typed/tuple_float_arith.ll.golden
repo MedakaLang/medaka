@@ -234,12 +234,12 @@ entry:
   %t0 = call ptr @mdk_alloc_atomic(i64 16)
   store i64 2, ptr %t0
   %t1 = getelementptr i8, ptr %t0, i64 8
-  store double 1.0, ptr %t1
+  store double 1.5, ptr %t1
   %t2 = ptrtoint ptr %t0 to i64
   %t3 = call ptr @mdk_alloc_atomic(i64 16)
   store i64 2, ptr %t3
   %t4 = getelementptr i8, ptr %t3, i64 8
-  store double 2.0, ptr %t4
+  store double 2.5, ptr %t4
   %t5 = ptrtoint ptr %t3 to i64
   %t6 = call ptr @mdk_alloc(i64 24)
   store i64 6950939912435, ptr %t6
@@ -248,65 +248,81 @@ entry:
   %t8 = getelementptr i8, ptr %t6, i64 16
   store i64 %t5, ptr %t8
   %t9 = ptrtoint ptr %t6 to i64
-  %t10 = inttoptr i64 %t9 to ptr
-  %t11 = getelementptr i8, ptr %t10, i64 8
-  %t12 = load i64, ptr %t11
-  %t13 = inttoptr i64 %t9 to ptr
-  %t14 = getelementptr i8, ptr %t13, i64 16
-  %t15 = load i64, ptr %t14
-  %t16 = inttoptr i64 %t12 to ptr
-  %t17 = getelementptr i8, ptr %t16, i64 8
-  %t18 = load double, ptr %t17
-  %t19 = inttoptr i64 %t15 to ptr
-  %t20 = getelementptr i8, ptr %t19, i64 8
-  %t21 = load double, ptr %t20
-  %t22 = inttoptr i64 %t12 to ptr
-  %t23 = getelementptr i8, ptr %t22, i64 8
-  %t24 = load double, ptr %t23
-  %t25 = call double @llvm.arithmetic.fence.f64(double %t21)
-  %t26 = fmul double %t25, %t24
-  %t27 = call double @llvm.arithmetic.fence.f64(double %t18)
-  %t28 = fadd double %t27, %t26
-  %t29 = call ptr @mdk_alloc_atomic(i64 16)
-  store i64 2, ptr %t29
-  %t30 = getelementptr i8, ptr %t29, i64 8
-  store double %t28, ptr %t30
-  %t31 = ptrtoint ptr %t29 to i64
-  store i64 %t31, ptr @mdk.global.6d356635663735373336353732356635665f5f6c6574446573
-  %t32 = call ptr @mdk_alloc_atomic(i64 16)
-  store i64 2, ptr %t32
-  %t33 = getelementptr i8, ptr %t32, i64 8
-  store double 1.5, ptr %t33
-  %t34 = ptrtoint ptr %t32 to i64
-  %t35 = call ptr @mdk_alloc_atomic(i64 16)
-  store i64 2, ptr %t35
-  %t36 = getelementptr i8, ptr %t35, i64 8
-  store double 2.5, ptr %t36
-  %t37 = ptrtoint ptr %t35 to i64
-  %t38 = call ptr @mdk_alloc(i64 24)
-  store i64 6950939912435, ptr %t38
-  %t39 = getelementptr i8, ptr %t38, i64 8
-  store i64 %t34, ptr %t39
-  %t40 = getelementptr i8, ptr %t38, i64 16
-  store i64 %t37, ptr %t40
-  %t41 = ptrtoint ptr %t38 to i64
-  %t42 = call double @mdk.worker.float.6d356635663735373336353732356635665f5f61646450(i64 %t41)
-  %t43 = load i64, ptr @mdk.global.6d356635663735373336353732356635665f5f6c6574446573
-  %t44 = inttoptr i64 %t43 to ptr
-  %t45 = getelementptr i8, ptr %t44, i64 8
-  %t46 = load double, ptr %t45
-  %t47 = call double @llvm.arithmetic.fence.f64(double %t42)
-  %t48 = fadd double %t47, %t46
-  %t49 = call ptr @mdk_alloc_atomic(i64 16)
-  store i64 2, ptr %t49
-  %t50 = getelementptr i8, ptr %t49, i64 8
-  store double %t48, ptr %t50
-  %t51 = ptrtoint ptr %t49 to i64
-  %t52 = inttoptr i64 %t51 to ptr
-  %t53 = getelementptr i8, ptr %t52, i64 8
-  %t54 = load double, ptr %t53
-  call void @mdk_print_float(double %t54)
+  %t10 = call double @mdk.worker.float.6d356635663735373336353732356635665f5f61646450(i64 %t9)
+  %t11 = call i64 @mdk.force.6d356635663735373336353732356635665f5f6c6574446573()
+  %t12 = inttoptr i64 %t11 to ptr
+  %t13 = getelementptr i8, ptr %t12, i64 8
+  %t14 = load double, ptr %t13
+  %t15 = call double @llvm.arithmetic.fence.f64(double %t10)
+  %t16 = fadd double %t15, %t14
+  %t17 = call ptr @mdk_alloc_atomic(i64 16)
+  store i64 2, ptr %t17
+  %t18 = getelementptr i8, ptr %t17, i64 8
+  store double %t16, ptr %t18
+  %t19 = ptrtoint ptr %t17 to i64
+  %t20 = inttoptr i64 %t19 to ptr
+  %t21 = getelementptr i8, ptr %t20, i64 8
+  %t22 = load double, ptr %t21
+  call void @mdk_print_float(double %t22)
   ret i32 0
+}
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.force.6d356635663735373336353732356635665f5f6c6574446573() {
+entry:
+  %t0 = load i8, ptr @mdk.state.6d356635663735373336353732356635665f5f6c6574446573
+  switch i8 %t0, label %lz_unforced [ i8 2, label %lz_forced i8 1, label %lz_forcing ]
+lz_forced:
+  %t1 = load i64, ptr @mdk.global.6d356635663735373336353732356635665f5f6c6574446573
+  ret i64 %t1
+lz_forcing:
+  call void @mdk_cyclic_value(ptr @mdk.gen.globalname.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f6c6574446573.0)
+  unreachable
+lz_unforced:
+  store i8 1, ptr @mdk.state.6d356635663735373336353732356635665f5f6c6574446573
+  %t2 = call ptr @mdk_alloc_atomic(i64 16)
+  store i64 2, ptr %t2
+  %t3 = getelementptr i8, ptr %t2, i64 8
+  store double 1.0, ptr %t3
+  %t4 = ptrtoint ptr %t2 to i64
+  %t5 = call ptr @mdk_alloc_atomic(i64 16)
+  store i64 2, ptr %t5
+  %t6 = getelementptr i8, ptr %t5, i64 8
+  store double 2.0, ptr %t6
+  %t7 = ptrtoint ptr %t5 to i64
+  %t8 = call ptr @mdk_alloc(i64 24)
+  store i64 6950939912435, ptr %t8
+  %t9 = getelementptr i8, ptr %t8, i64 8
+  store i64 %t4, ptr %t9
+  %t10 = getelementptr i8, ptr %t8, i64 16
+  store i64 %t7, ptr %t10
+  %t11 = ptrtoint ptr %t8 to i64
+  %t12 = inttoptr i64 %t11 to ptr
+  %t13 = getelementptr i8, ptr %t12, i64 8
+  %t14 = load i64, ptr %t13
+  %t15 = inttoptr i64 %t11 to ptr
+  %t16 = getelementptr i8, ptr %t15, i64 16
+  %t17 = load i64, ptr %t16
+  %t18 = inttoptr i64 %t14 to ptr
+  %t19 = getelementptr i8, ptr %t18, i64 8
+  %t20 = load double, ptr %t19
+  %t21 = inttoptr i64 %t17 to ptr
+  %t22 = getelementptr i8, ptr %t21, i64 8
+  %t23 = load double, ptr %t22
+  %t24 = inttoptr i64 %t14 to ptr
+  %t25 = getelementptr i8, ptr %t24, i64 8
+  %t26 = load double, ptr %t25
+  %t27 = call double @llvm.arithmetic.fence.f64(double %t23)
+  %t28 = fmul double %t27, %t26
+  %t29 = call double @llvm.arithmetic.fence.f64(double %t20)
+  %t30 = fadd double %t29, %t28
+  %t31 = call ptr @mdk_alloc_atomic(i64 16)
+  store i64 2, ptr %t31
+  %t32 = getelementptr i8, ptr %t31, i64 8
+  store double %t30, ptr %t32
+  %t33 = ptrtoint ptr %t31 to i64
+  store i64 %t33, ptr @mdk.global.6d356635663735373336353732356635665f5f6c6574446573
+  store i8 2, ptr @mdk.state.6d356635663735373336353732356635665f5f6c6574446573
+  ret i64 %t33
 }
 ; mdk-module module.5f5f757365725f5f
 define internal i64 @mdk.user.6d356635663735373336353732356635665f5f61646450(i64 %arg0) {
@@ -409,3 +425,7 @@ decend1:
 @mdk_disc_none = private unnamed_addr constant i64 -1
 ; mdk-module module.5f5f757365725f5f
 @mdk.global.6d356635663735373336353732356635665f5f6c6574446573 = global i64 0
+; mdk-module module.5f5f757365725f5f
+@mdk.state.6d356635663735373336353732356635665f5f6c6574446573 = global i8 0
+; mdk-module module.5f5f757365725f5f
+@mdk.gen.globalname.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f6c6574446573.0 = private unnamed_addr constant [26 x i8] c"\6D\35\66\35\66\37\35\37\33\36\35\37\32\35\66\35\66\5F\5F\6C\65\74\44\65\73\00"

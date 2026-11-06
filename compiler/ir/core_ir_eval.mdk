@@ -83,8 +83,6 @@ import eval.eval.{
   ppValue,
   readOutput,
   resetOutput,
-  evalIndex,
-  evalSlice,
   evalRange,
   rangeListMk,
   rangeArrayMk,
@@ -157,15 +155,6 @@ ceval env (CVariantUpdate con base fields) =
   evalVariantUpdate con (ceval env base) (map (cevalField env) fields)
 ceval env (CFieldAccess e "value" _ _) = evalValueField (ceval env e)
 ceval env (CFieldAccess e field _ _) = evalField (ceval env e) field
-ceval env (CIndex a i) = evalIndex (ceval env a) (ceval env i)
-ceval env (CSlice a lo hi incl) =
-  evalSlice (ceval env a) (ceval env lo) (ceval env hi) incl
-ceval env (CStringIndex a i) = evalIndex (ceval env a) (ceval env i)
-ceval env (CStringSlice a lo hi incl) =
-  evalSlice (ceval env a) (ceval env lo) (ceval env hi) incl
-ceval env (CListIndex a i) = evalIndex (ceval env a) (ceval env i)
-ceval env (CListSlice a lo hi incl) =
-  evalSlice (ceval env a) (ceval env lo) (ceval env hi) incl
 ceval env (CRangeList lo hi incl) =
   evalRange (ceval env lo) (ceval env hi) incl rangeListMk
 ceval env (CRangeArray lo hi incl) =

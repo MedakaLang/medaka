@@ -94,12 +94,6 @@ test "ordinary call modes" =
         [unit]
         (CallSite (CallOver 1) True)),
     example "assignment" ["f"] (CBlock [CSAssign "x" (var "f"), CSExpr unit]),
-    example "index" ["f"] (CIndex unit (var "f")),
-    example "slice" ["f"] (CSlice unit unit (var "f") False),
-    example "string index" ["f"] (CStringIndex (var "f") unit),
-    example "string slice" ["f"] (CStringSlice unit (var "f") unit True),
-    example "list index" ["f"] (CListIndex unit (var "f")),
-    example "list slice" ["f"] (CListSlice (var "f") unit unit False),
     example "record field" ["f"] (CRecord "R" [CField "x" 0 (var "f")]),
     example
       "record update"

@@ -629,13 +629,6 @@ mergedBuildFailSrc : String
 mergedBuildFailSrc =
   "import test.{expectEqual}\n\n-- > double \"x\"\n-- 0\nexport\ndouble : Int -> Int\ndouble x = x * 2\n\ntest \"double one\" =\n  expectEqual (double 1) 2\n\nprop \"double is even\" (n : Int) =\n  double n % 2 == 0\n"
 
--- A smoke example that panics is a nullary binding the native backend forces
--- before `main`, so every section of the merged probe dies at startup; the
--- tests still pass on their own probe.
-mergedStartupSrc : String
-mergedStartupSrc =
-  "import test.{expectEqual}\n\n-- > double 2\n-- 4\n-- > panic \"startup boom\"\nexport\ndouble : Int -> Int\ndouble x = x * 2\n\ntest \"double one\" =\n  expectEqual (double 1) 2\n"
-
 -- One line per graded row of a `--json` report: the phase, the row's name (a
 -- doctest's line) and its status.
 reportRows : J.Json -> List String
@@ -680,33 +673,49 @@ mergedFallbackRow dir name src expected =
         1
         ""
         ["/dt_\{name}.mdk:"],
-      mergedFallbackRows name path expected,
+      expectReportRows name path expected,
     ]
 
-mergedFallbackRows : String ->
+expectReportRows : String ->
   String ->
   List String ->
   <Exec, IO, FileRead> Expectation
-mergedFallbackRows name path expected =
-  match runVerb 300 ["test", "--json", path]
-    Err e => fail "\{name}.mdk: could not spawn: \{e}"
-    Ok (_, out, _) => match J.parse out
-      Err e => fail "\{name}.mdk: the --json report did not parse: \{e}"
-      Ok report => expectEqual expected (reportRows report)
+expectReportRows name path expected = match runVerb 300 ["test", "--json", path]
+  Err e => fail "\{name}.mdk: could not spawn: \{e}"
+  Ok (_, out, _) => match J.parse out
+    Err e => fail "\{name}.mdk: the --json report did not parse: \{e}"
+    Ok report => expectEqual expected (reportRows report)
 
 test "merged native probe: a build failure falls back to one probe per arm" = withScratchDir
   (dir => mergedFallbackRow dir "merged_build_fail" mergedBuildFailSrc [
     "doctest 3 error", "prop double is even pass", "test double one pass"
   ])
 
-test "merged native probe: a section that dies at startup reruns on its own probe" = withScratchDir
-  (dir => mergedFallbackRow dir "merged_startup" mergedStartupSrc [
-    "doctest 3 error", "doctest 5 error", "test double one pass"
-  ])
+-- A smoke example that panics is a binding whose initializer calls, so its
+-- doctest probe forces it only when it reaches that example: the example before
+-- it is still reported, and the tests pass on their own probe.  No top-level
+-- binding can end a native probe before `main`: the prologue runs only
+-- initializers that call nothing (`emit_support.speculationSafe`).  (A file with
+-- a smoke example keeps a probe per arm, `test_cmd.mergesNativeArms`.)
+smokePanicSrc : String
+smokePanicSrc =
+  "import test.{expectEqual}\n\n-- > double 2\n-- 4\n-- > panic \"smoke boom\"\nexport\ndouble : Int -> Int\ndouble x = x * 2\n\ntest \"double one\" =\n  expectEqual (double 1) 2\n"
 
--- A smoke example (no expected block) is a binding the native backend forces at
--- startup.  Its side effect must run once, not once per section of a merged
--- probe, so a file with one keeps a probe per arm.
+smokePanicRow : String -> <Exec, IO, FileRead, FileWrite> Expectation
+smokePanicRow dir =
+  let path = "\{dir}/smoke_panic.mdk"
+  match writeFile path smokePanicSrc
+    Err e => fail "could not write smoke_panic.mdk: \{e}"
+    Ok _ => expectReportRows "smoke_panic" path [
+      "doctest 3 pass", "doctest 5 error", "test double one pass"
+    ]
+
+test "native doctest probe: a smoke example that panics fails only its own example" =
+  withScratchDir smokePanicRow
+
+-- A smoke example (no expected block) is a binding its doctest section forces.
+-- Its side effect must run once, not once per section of a merged probe, so a
+-- file with one keeps a probe per arm.
 smokeSideEffectSrc : String -> String
 smokeSideEffectSrc log =
   "import test.{expectEqual}\n\n-- > appendFile \"\{log}\" \"x\"\n-- > double 2\n-- 4\nexport\ndouble : Int -> Int\ndouble x = x * 2\n\ntest \"log written once\" =\n  expectEqual (readFile \"\{log}\") (Ok \"x\")\n\nprop \"double is even\" (n : Int) =\n  double n % 2 == 0\n"

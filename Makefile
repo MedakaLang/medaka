@@ -244,6 +244,26 @@ inlang-ir-core-ir-sexp-test:
 inlang-ir-core-ir-lower-test:
 	./medaka test compiler/ir/core_ir_lower_test.mdk
 
+## The pass runner runs passes in list order and captures a dump only for a named
+## pass; no entry imports this sibling.
+inlang-ir-core-pass-test:
+	./medaka test compiler/ir/core_pass_test.mdk
+
+## The numeric Core IR pass folds `fromInt` at `Num Int` to its argument and leaves
+## every other `fromInt` alone; no entry imports this sibling.
+inlang-ir-core-opt-num-test:
+	./medaka test compiler/ir/core_opt_num_test.mdk
+
+## The Core IR lint fires each rule on a bad program and stays silent on its good
+## twin; no entry imports this sibling.
+inlang-ir-core-lint-test:
+	./medaka test compiler/ir/core_lint_test.mdk
+
+## The Core IR walk rewrites, folds and collects binders over every `CExpr`
+## constructor; no entry imports this sibling.
+inlang-ir-core-walk-test:
+	./medaka test compiler/ir/core_walk_test.mdk
+
 inlang-eval-eval-test:
 	./medaka test compiler/eval/eval_test.mdk
 
