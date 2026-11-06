@@ -80,7 +80,10 @@ import support.util.{
   anyList, dedup, dedupBy, filterList, isEmptyL, isNonEmptyL, listLen,
   orElseOpt, reverseL
 }
-import types.tc_occurrence.{argDispatchIndicesById}
+import types.tc_occurrence.{
+  argDispatchIndicesById, arithDispatchMethod, binopMethod, unopMethod
+}
+import types.tc_init.{initGraphOf, initInputsAt}
 import types.tc_solve.{
   determineByUniqueInstance, dropGoalsSince, goalsMark, improveByUniqueImpl,
   outerRigidIds, refileDeterminedRows, uOblArgs
@@ -3131,6 +3134,19 @@ checkModuleFullDiags gctx mid seedVars accData accAll prog =
     declEnvsHere.deImpls
     declEnvsHere.deImpls
     ordHere
+  -- L1's initialisation graph (`types/tc_init`); no rule reads it yet.
+  let _ =
+    initGraphOf
+      (initInputsAt
+        mid
+        seedVars
+        schemes
+        marked
+        mctx
+        declEnvsHere
+        ordHere
+        (op => orElseOpt (binopMethod op) (arithDispatchMethod op))
+        unopMethod)
   (
     schemes,
     marked,
