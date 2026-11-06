@@ -1,9 +1,10 @@
 -- `probeTokens` holds the tokens of the latest source only; an alternation of
--- sources must still return each source's own tokens.
+-- sources must still return each source's own tokens. `renameUserMain` turns a
+-- target's `main` into a unit function.
 
 import frontend.lexer.{Token, tokenizeWithOffsetPairs, tokenToString}
 import test.{expectAll, expectEqual}
-import tools.probe_transcript.{probeTokens}
+import tools.probe_transcript.{probeTokens, renameUserMain}
 
 srcA : String
 srcA = "main = 1\n"
@@ -29,3 +30,28 @@ test "probeTokens agrees with a direct tokenization across alternating sources" 
       (shown (tokenizeWithOffsetPairs srcA))
       (shown (probeTokens srcA)),
   ]
+
+test "a value main becomes a unit function" =
+  expectEqual
+    "__probe_user_main__ () = println \"hi\"\n"
+    (renameUserMain "main = println \"hi\"\n")
+
+test "a main signature gains a Unit argument" =
+  expectEqual
+    "__probe_user_main__ : Unit -> <Stdout> Unit\n__probe_user_main__ () = println \"hi\"\n"
+    (renameUserMain "main : <Stdout> Unit\nmain = println \"hi\"\n")
+
+test "a source with no top-level main is unchanged" =
+  expectEqual
+    "f x =\n  let main = x\n  main\n-- main = 1\n"
+    (renameUserMain "f x =\n  let main = x\n  main\n-- main = 1\n")
+
+test "a shebang line is emptied and main still becomes a unit function" =
+  expectEqual
+    "\n__probe_user_main__ () = 1\n"
+    (renameUserMain "#!/usr/bin/env medaka\nmain = 1\n")
+
+test "a signature continued on a later line keeps main a renamed value" =
+  expectEqual
+    "__probe_user_main__ :\n  <Stdout> Unit\n__probe_user_main__ = println \"hi\"\n"
+    (renameUserMain "main :\n  <Stdout> Unit\nmain = println \"hi\"\n")
