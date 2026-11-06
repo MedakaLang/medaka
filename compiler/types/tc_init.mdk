@@ -86,7 +86,8 @@ public export data InitInputs = InitInputs {
   -- the method a binary or unary operator dispatches through
   iiBinopMethod : String -> Option String,
   iiUnopMethod : String -> Option String,
-  -- every value name an import of the module binds; the prelude's names are not in it
+  -- every value name an import of the module binds, the reserved `$core` alias's included;
+  -- the prelude's bare names are not in it
   iiImportedValues : OrdMap Unit,
   -- nullary top-level bindings with a class constraint (I6)
   iiConstrained : OrdMap Unit,
@@ -1103,16 +1104,21 @@ nameShape w ctx bound n nargs
       else
         ShapeCall
 
--- Whether [n] names the prelude's `Deferred*` method: the prelude spelling, and neither a
--- local binder, a local top-level binding, a local interface's method nor an import of the
--- module binds it.  This is the spelling plus a shadow check, not a resolved identity.
+-- Whether [n] names the prelude's `Deferred*` method.  The spelling desugar generates for a
+-- `defer` block, `$core.deferThen`, reaches the prelude through the reserved alias the
+-- module's imports bind and no binding can shadow (docs/spec/SHADOW-SEMANTICS.md L6).  A
+-- bare spelling names it when neither a local binder, a local top-level binding, a local
+-- interface's method nor an import of the module binds it.  This is the spelling plus a
+-- shadow check, not a resolved identity.
 isPreludeDefer : InitWalk -> OrdMap Unit -> String -> Bool
-isPreludeDefer w bound n =
-  isDeferSpelling (bareSpelling n)
-    && not (omHasKey n bound)
-    && not (omHasKey n w.iwTop)
-    && not (omHasKey n w.iwLocalMethods)
-    && not (omHasKey n w.iwInputs.iiImportedValues)
+isPreludeDefer w bound n = match stripPrefix "$core." n
+  Some bare => isDeferSpelling bare
+  None =>
+    isDeferSpelling n
+      && not (omHasKey n bound)
+      && not (omHasKey n w.iwTop)
+      && not (omHasKey n w.iwLocalMethods)
+      && not (omHasKey n w.iwInputs.iiImportedValues)
 
 isDeferSpelling : String -> Bool
 isDeferSpelling "deferThen" = True

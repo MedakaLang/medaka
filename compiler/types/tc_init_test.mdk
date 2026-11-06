@@ -316,7 +316,9 @@ total = deferThen (P 1) (_ => P (runP total + 1))
     expectEqual ["total name delay"] (edgesOf (graphOne unbound) "total"),
   ]
 
-test "a top-level deferThen of the module captures defer blocks and is not exempt" =
+-- A `defer` block names the prelude's `deferThen` past the module's own
+-- (docs/spec/SHADOW-SEMANTICS.md L6), so its continuation is delayed.
+test "a top-level deferThen of the module is not exempt and does not capture defer blocks" =
   let g =
     graphOne
       """
@@ -340,9 +342,7 @@ q = defer
     expectEqual
       ["deferThen name deref", "runP name deref", "total name deref"]
       (edgesOf g "total"),
-    expectEqual
-      ["deferThen name deref", "q name deref", "runP name deref"]
-      (edgesOf g "q"),
+    expectEqual ["q name delay", "runP name delay"] (edgesOf g "q"),
   ]
 
 -- The `interpRest` row of `compiler/frontend/parser.mdk`.  Each value is a `defer` block
