@@ -56,7 +56,7 @@ oracleMain : Unit -> <IO> Unit
 oracleMain () = match args ()
   ["--isolation", runtimePath, pPath, pPlusUPath] =>
     emitIsolation runtimePath pPath pPlusUPath
-  ["--gap-isolation"] => emitGapIsolation
+  ["--gap-isolation"] => emitGapIsolation ()
   _ => driveRuntime emit
 
 -- P -> P+U -> P in one interpreter process. The middle program reuses P's
@@ -89,8 +89,8 @@ emitIsolation runtimePath pPath pPlusUPath =
 -- record marker reaches stdout before the strict panic; the shell control asserts
 -- both, so an ambient Record mode leak changes the second observation to exit 0.
 -- `main` is stamped, as every lowered binder is, so the emitter reaches the node.
-emitGapIsolation : <IO> Unit
-emitGapIsolation =
+emitGapIsolation : Unit -> <IO> Unit
+emitGapIsolation () =
   let input = makeEmitInput RawUnchecked PreludeFreeRuntime [] 0 [] [] ""
   let mainId = BinderId "" 0
   let cp =
