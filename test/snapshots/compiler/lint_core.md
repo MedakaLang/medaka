@@ -1,5 +1,5 @@
 # META
-source_lines=633
+source_lines=635
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_core.mdk — the lint framework's data types: `Finding`,
@@ -81,15 +81,17 @@ fixToDiagFix fx =
     (map (e => (e.feSpan, e.feText)) fx.fixEdits)
 
 -- A write-once cell holding a derived value, forced on first demand.  Rules run
--- under a pure `check`, and the cell is private to one file's `FileFacts`, so
--- two rules asking for the same derived value share one computation without any
--- table keyed by source text.
+-- under a pure `check`, and a cell is private to one file's run (its
+-- `FileFacts`, or the state a rule builds for that file's visitors), so two
+-- readers of the same derived value share one computation without any table
+-- keyed by source text.
 export data Memo a = Memo (Ref (Option a)) (Unit -> a)
 
 export
 memoNew : (Unit -> a) -> Memo a
 memoNew f = Memo (Ref None) f
 
+export
 memoGet : Memo a -> a
 memoGet (Memo cell f) = match !cell
   Some v => v
@@ -661,7 +663,7 @@ public export data DupClause = DupClause {
 (DData Abstract "Memo" ("a") ((variant "Memo" (ConPos (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyVar "a"))) (TyFun (TyCon "Unit") (TyVar "a"))))) ())
 (DTypeSig true "memoNew" (TyFun (TyFun (TyCon "Unit") (TyVar "a")) (TyApp (TyCon "Memo") (TyVar "a"))))
 (DFunDef false "memoNew" ((PVar "f")) (EApp (EApp (EVar "Memo") (EApp (EVar "Ref") (EVar "None"))) (EVar "f")))
-(DTypeSig false "memoGet" (TyFun (TyApp (TyCon "Memo") (TyVar "a")) (TyVar "a")))
+(DTypeSig true "memoGet" (TyFun (TyApp (TyCon "Memo") (TyVar "a")) (TyVar "a")))
 (DFunDef false "memoGet" ((PCon "Memo" (PVar "cell") (PVar "f"))) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "Some" (PVar "v")) () (EVar "v")) (arm (PCon "None") () (EBlock (DoLet false false (PVar "v") (EApp (EVar "f") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "cell")) (EApp (EVar "Some") (EVar "v")))) (DoExpr (EVar "v"))))))
 (DData Public "FileFacts" () ((variant "FileFacts" (ConNamed (field "ffSrc" (TyCon "String")) (field "ffComments" (TyApp (TyCon "Memo") (TyApp (TyCon "List") (TyCon "Comment")))) (field "ffOracle" (TyApp (TyCon "Memo") (TyCon "Oracle"))) (field "ffDupClauses" (TyApp (TyCon "Memo") (TyApp (TyCon "List") (TyCon "DupClause")))) (field "ffScopes" (TyApp (TyCon "Memo") (TyCon "FileScopes"))) (field "ffLines" (TyApp (TyCon "Memo") (TyApp (TyCon "Array") (TyCon "String")))) (field "ffLocalMods" (TyApp (TyCon "List") (TyCon "String"))) (field "ffCanonPath" (TyCon "String"))))) ())
 (DTypeSig true "factComments" (TyFun (TyCon "FileFacts") (TyApp (TyCon "List") (TyCon "Comment"))))
@@ -817,7 +819,7 @@ public export data DupClause = DupClause {
 (DData Abstract "Memo" ("a") ((variant "Memo" (ConPos (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyVar "a"))) (TyFun (TyCon "Unit") (TyVar "a"))))) ())
 (DTypeSig true "memoNew" (TyFun (TyFun (TyCon "Unit") (TyVar "a")) (TyApp (TyCon "Memo") (TyVar "a"))))
 (DFunDef false "memoNew" ((PVar "f")) (EApp (EApp (EVar "Memo") (EApp (EVar "Ref") (EVar "None"))) (EVar "f")))
-(DTypeSig false "memoGet" (TyFun (TyApp (TyCon "Memo") (TyVar "a")) (TyVar "a")))
+(DTypeSig true "memoGet" (TyFun (TyApp (TyCon "Memo") (TyVar "a")) (TyVar "a")))
 (DFunDef false "memoGet" ((PCon "Memo" (PVar "cell") (PVar "f"))) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "Some" (PVar "v")) () (EVar "v")) (arm (PCon "None") () (EBlock (DoLet false false (PVar "v") (EApp (EVar "f") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "cell")) (EApp (EVar "Some") (EVar "v")))) (DoExpr (EVar "v"))))))
 (DData Public "FileFacts" () ((variant "FileFacts" (ConNamed (field "ffSrc" (TyCon "String")) (field "ffComments" (TyApp (TyCon "Memo") (TyApp (TyCon "List") (TyCon "Comment")))) (field "ffOracle" (TyApp (TyCon "Memo") (TyCon "Oracle"))) (field "ffDupClauses" (TyApp (TyCon "Memo") (TyApp (TyCon "List") (TyCon "DupClause")))) (field "ffScopes" (TyApp (TyCon "Memo") (TyCon "FileScopes"))) (field "ffLines" (TyApp (TyCon "Memo") (TyApp (TyCon "Array") (TyCon "String")))) (field "ffLocalMods" (TyApp (TyCon "List") (TyCon "String"))) (field "ffCanonPath" (TyCon "String"))))) ())
 (DTypeSig true "factComments" (TyFun (TyCon "FileFacts") (TyApp (TyCon "List") (TyCon "Comment"))))

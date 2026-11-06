@@ -1,5 +1,5 @@
 # META
-source_lines=422
+source_lines=431
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-passthrough-arm: a two-arm `match` over an Option/Result with a verbatim `None => None` / `Err e => Err e` arm. Bind in a `do` block instead.
@@ -25,12 +25,15 @@ import tools.lint_core.{
   Fix(..),
   FixEdit(..),
   Fixability(..),
+  Memo,
   Ratchet(..),
   Rule,
   RuleMeta(..),
   Scope(..),
   StdlibIndex,
   Visitor(..),
+  memoGet,
+  memoNew,
   mkVisitorRule,
 }
 import tools.lint_shared.{
@@ -83,16 +86,22 @@ rulePassthroughArm : StdlibIndex ->
   List Decl ->
   List Visitor
 rulePassthroughArm _ _ facts _ prog =
-  [OnExpr [KMatch] (passthroughAt facts (flatMap declExempt prog))]
+  let exempt = memoNew (_ => flatMap declExempt prog)
+  [OnExpr [KMatch] (passthroughAt facts exempt)]
 
 -- ── the match ────────────────────────────────────────────────────────────────
 
 -- `exempt` holds the span of each match whose success arm is a self-recursive
--- tail.
-passthroughAt : FileFacts -> List (Option Loc) -> Ctx -> Expr -> List Finding
+-- tail.  Finding them walks every body of the file, so the walk waits for the
+-- file's first passthrough match: most files have none.
+passthroughAt : FileFacts ->
+  Memo (List (Option Loc)) ->
+  Ctx ->
+  Expr ->
+  List Finding
 passthroughAt facts exempt ctx e = match passthroughOf e
   Some (kind, _) =>
-    if anyList (== ctx.ctxSpan) exempt then
+    if anyList (== ctx.ctxSpan) (memoGet exempt) then
       []
     else
       [report ctx.ctxSpan kind (passthroughFix facts ctx e)]
@@ -433,14 +442,14 @@ deleteLines facts path (lo, hi) =
 (DUse false (UseGroup ("string") ((mem "endsWith" false) (mem "indexOf" false) (mem "repeat" false) (mem "startsWith" false) (mem "trim" false) (mem "trimLeft" false) (mem "trimRight" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isAlnum" false))))
 (DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "initList" false) (mem "isEmptyL" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "Ctx" true) (mem "FileFacts" false) (mem "Finding" true) (mem "Fix" true) (mem "FixEdit" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "mkVisitorRule" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "Ctx" true) (mem "FileFacts" false) (mem "Finding" true) (mem "Fix" true) (mem "FixEdit" true) (mem "Fixability" true) (mem "Memo" false) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "memoGet" false) (mem "memoNew" false) (mem "mkVisitorRule" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "ctorVarPassthru" false) (mem "indentWidth" false) (mem "isCodeText" false) (mem "isEVarNamed" false) (mem "isNilPCon" false) (mem "matchScrutOf" false) (mem "matchToMapTransform" false) (mem "ruleNamePassthroughArm" false) (mem "sourceLine" false) (mem "tightSpan" false) (mem "unwrapLoc" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNamePassthroughArm")) (fa "summary" (ELit (LString "a two-arm `match` over an Option/Result with a verbatim `None => None` / `Err e => Err e` arm: bind in a `do` block instead"))) (fa "doc" (ELit (LString "A `match` that passes a failure straight through (`None => None`, or `Err e => Err e` with the same variable) and continues in the other arm is a monadic bind written by hand. Write it as a `do` block, at any depth: one level is enough, unlike `rule-bind-chain-to-do`, which needs a pyramid of three. `--fix --unsafe-fixes` rewrites the statement-position cases; the rest are reported only.\n\nNot reported: a failure arm that rebuilds its value (`Err e => Err (wrap e)`), a match with a third arm or a guard, a success arm that re-wraps in the same constructor (`rule-match-to-map` owns it). A match whose success arm ends, through `if`, `let`, `match` arms and block tails, in a call of the enclosing function (a self-recursive tail, including a where-local `go`) is not reported: the `do` form lowers to `andThen`, which allocates a closure per iteration and measurably slows the loop.\n\nBefore:\n  match catalogRow n\n    Some r => g r\n    None => None\nAfter:\n  do\n    r <- catalogRow n\n    g r"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Internal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "FixableUnsafe")) (fa "needs" (EListLit))))) (EVar "rulePassthroughArm")) (EVar "None")))
 (DTypeSig false "rulePassthroughArm" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor"))))))))
-(DFunDef false "rulePassthroughArm" (PWild PWild (PVar "facts") PWild (PVar "prog")) (EListLit (EApp (EApp (EVar "OnExpr") (EListLit (EVar "KMatch"))) (EApp (EApp (EVar "passthroughAt") (EVar "facts")) (EApp (EApp (EVar "flatMap") (EVar "declExempt")) (EVar "prog"))))))
-(DTypeSig false "passthroughAt" (TyFun (TyCon "FileFacts") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding")))))))
-(DFunDef false "passthroughAt" ((PVar "facts") (PVar "exempt") (PVar "ctx") (PVar "e")) (EMatch (EApp (EVar "passthroughOf") (EVar "e")) (arm (PCon "Some" (PTuple (PVar "kind") PWild)) () (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EFieldAccess (EVar "ctx") "ctxSpan")))) (EVar "exempt")) (EListLit) (EListLit (EApp (EApp (EApp (EVar "report") (EFieldAccess (EVar "ctx") "ctxSpan")) (EVar "kind")) (EApp (EApp (EApp (EVar "passthroughFix") (EVar "facts")) (EVar "ctx")) (EVar "e")))))) (arm (PCon "None") () (EListLit))))
+(DFunDef false "rulePassthroughArm" (PWild PWild (PVar "facts") PWild (PVar "prog")) (EBlock (DoLet false false (PVar "exempt") (EApp (EVar "memoNew") (ELam (PWild) (EApp (EApp (EVar "flatMap") (EVar "declExempt")) (EVar "prog"))))) (DoExpr (EListLit (EApp (EApp (EVar "OnExpr") (EListLit (EVar "KMatch"))) (EApp (EApp (EVar "passthroughAt") (EVar "facts")) (EVar "exempt")))))))
+(DTypeSig false "passthroughAt" (TyFun (TyCon "FileFacts") (TyFun (TyApp (TyCon "Memo") (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Loc")))) (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding")))))))
+(DFunDef false "passthroughAt" ((PVar "facts") (PVar "exempt") (PVar "ctx") (PVar "e")) (EMatch (EApp (EVar "passthroughOf") (EVar "e")) (arm (PCon "Some" (PTuple (PVar "kind") PWild)) () (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EFieldAccess (EVar "ctx") "ctxSpan")))) (EApp (EVar "memoGet") (EVar "exempt"))) (EListLit) (EListLit (EApp (EApp (EApp (EVar "report") (EFieldAccess (EVar "ctx") "ctxSpan")) (EVar "kind")) (EApp (EApp (EApp (EVar "passthroughFix") (EVar "facts")) (EVar "ctx")) (EVar "e")))))) (arm (PCon "None") () (EListLit))))
 (DTypeSig false "passthroughOf" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Expr")))))
 (DFunDef false "passthroughOf" ((PCon "EMatch" PWild (PList (PVar "a1") (PVar "a2")))) (EMatch (EApp (EApp (EVar "bindArm") (EVar "a1")) (EVar "a2")) (arm (PCon "Some" (PVar "r")) () (EApp (EVar "Some") (EVar "r"))) (arm (PCon "None") () (EApp (EApp (EVar "bindArm") (EVar "a2")) (EVar "a1")))))
 (DFunDef false "passthroughOf" (PWild) (EVar "None"))
@@ -548,14 +557,14 @@ deleteLines facts path (lo, hi) =
 (DUse false (UseGroup ("string") ((mem "endsWith" false) (mem "indexOf" false) (mem "repeat" false) (mem "startsWith" false) (mem "trim" false) (mem "trimLeft" false) (mem "trimRight" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isAlnum" false))))
 (DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "anyList" false) (mem "initList" false) (mem "isEmptyL" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "Ctx" true) (mem "FileFacts" false) (mem "Finding" true) (mem "Fix" true) (mem "FixEdit" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "mkVisitorRule" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "Ctx" true) (mem "FileFacts" false) (mem "Finding" true) (mem "Fix" true) (mem "FixEdit" true) (mem "Fixability" true) (mem "Memo" false) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "memoGet" false) (mem "memoNew" false) (mem "mkVisitorRule" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "ctorVarPassthru" false) (mem "indentWidth" false) (mem "isCodeText" false) (mem "isEVarNamed" false) (mem "isNilPCon" false) (mem "matchScrutOf" false) (mem "matchToMapTransform" false) (mem "ruleNamePassthroughArm" false) (mem "sourceLine" false) (mem "tightSpan" false) (mem "unwrapLoc" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNamePassthroughArm")) (fa "summary" (ELit (LString "a two-arm `match` over an Option/Result with a verbatim `None => None` / `Err e => Err e` arm: bind in a `do` block instead"))) (fa "doc" (ELit (LString "A `match` that passes a failure straight through (`None => None`, or `Err e => Err e` with the same variable) and continues in the other arm is a monadic bind written by hand. Write it as a `do` block, at any depth: one level is enough, unlike `rule-bind-chain-to-do`, which needs a pyramid of three. `--fix --unsafe-fixes` rewrites the statement-position cases; the rest are reported only.\n\nNot reported: a failure arm that rebuilds its value (`Err e => Err (wrap e)`), a match with a third arm or a guard, a success arm that re-wraps in the same constructor (`rule-match-to-map` owns it). A match whose success arm ends, through `if`, `let`, `match` arms and block tails, in a call of the enclosing function (a self-recursive tail, including a where-local `go`) is not reported: the `do` form lowers to `andThen`, which allocates a closure per iteration and measurably slows the loop.\n\nBefore:\n  match catalogRow n\n    Some r => g r\n    None => None\nAfter:\n  do\n    r <- catalogRow n\n    g r"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Internal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "FixableUnsafe")) (fa "needs" (EListLit))))) (EVar "rulePassthroughArm")) (EVar "None")))
 (DTypeSig false "rulePassthroughArm" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor"))))))))
-(DFunDef false "rulePassthroughArm" (PWild PWild (PVar "facts") PWild (PVar "prog")) (EListLit (EApp (EApp (EVar "OnExpr") (EListLit (EVar "KMatch"))) (EApp (EApp (EVar "passthroughAt") (EVar "facts")) (EApp (EApp (EDictApp "flatMap") (EVar "declExempt")) (EVar "prog"))))))
-(DTypeSig false "passthroughAt" (TyFun (TyCon "FileFacts") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding")))))))
-(DFunDef false "passthroughAt" ((PVar "facts") (PVar "exempt") (PVar "ctx") (PVar "e")) (EMatch (EApp (EVar "passthroughOf") (EVar "e")) (arm (PCon "Some" (PTuple (PVar "kind") PWild)) () (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EFieldAccess (EVar "ctx") "ctxSpan")))) (EVar "exempt")) (EListLit) (EListLit (EApp (EApp (EApp (EVar "report") (EFieldAccess (EVar "ctx") "ctxSpan")) (EVar "kind")) (EApp (EApp (EApp (EVar "passthroughFix") (EVar "facts")) (EVar "ctx")) (EVar "e")))))) (arm (PCon "None") () (EListLit))))
+(DFunDef false "rulePassthroughArm" (PWild PWild (PVar "facts") PWild (PVar "prog")) (EBlock (DoLet false false (PVar "exempt") (EApp (EVar "memoNew") (ELam (PWild) (EApp (EApp (EDictApp "flatMap") (EVar "declExempt")) (EVar "prog"))))) (DoExpr (EListLit (EApp (EApp (EVar "OnExpr") (EListLit (EVar "KMatch"))) (EApp (EApp (EVar "passthroughAt") (EVar "facts")) (EVar "exempt")))))))
+(DTypeSig false "passthroughAt" (TyFun (TyCon "FileFacts") (TyFun (TyApp (TyCon "Memo") (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Loc")))) (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding")))))))
+(DFunDef false "passthroughAt" ((PVar "facts") (PVar "exempt") (PVar "ctx") (PVar "e")) (EMatch (EApp (EVar "passthroughOf") (EVar "e")) (arm (PCon "Some" (PTuple (PVar "kind") PWild)) () (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EFieldAccess (EVar "ctx") "ctxSpan")))) (EApp (EVar "memoGet") (EVar "exempt"))) (EListLit) (EListLit (EApp (EApp (EApp (EVar "report") (EFieldAccess (EVar "ctx") "ctxSpan")) (EVar "kind")) (EApp (EApp (EApp (EVar "passthroughFix") (EVar "facts")) (EVar "ctx")) (EVar "e")))))) (arm (PCon "None") () (EListLit))))
 (DTypeSig false "passthroughOf" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Expr")))))
 (DFunDef false "passthroughOf" ((PCon "EMatch" PWild (PList (PVar "a1") (PVar "a2")))) (EMatch (EApp (EApp (EVar "bindArm") (EVar "a1")) (EVar "a2")) (arm (PCon "Some" (PVar "r")) () (EApp (EVar "Some") (EVar "r"))) (arm (PCon "None") () (EApp (EApp (EVar "bindArm") (EVar "a2")) (EVar "a1")))))
 (DFunDef false "passthroughOf" (PWild) (EVar "None"))

@@ -21,12 +21,15 @@ import tools.lint_core.{
   Fix(..),
   FixEdit(..),
   Fixability(..),
+  Memo,
   Ratchet(..),
   Rule,
   RuleMeta(..),
   Scope(..),
   StdlibIndex,
   Visitor(..),
+  memoGet,
+  memoNew,
   mkVisitorRule,
 }
 import tools.lint_shared.{
@@ -79,16 +82,22 @@ rulePassthroughArm : StdlibIndex ->
   List Decl ->
   List Visitor
 rulePassthroughArm _ _ facts _ prog =
-  [OnExpr [KMatch] (passthroughAt facts (flatMap declExempt prog))]
+  let exempt = memoNew (_ => flatMap declExempt prog)
+  [OnExpr [KMatch] (passthroughAt facts exempt)]
 
 -- ── the match ────────────────────────────────────────────────────────────────
 
 -- `exempt` holds the span of each match whose success arm is a self-recursive
--- tail.
-passthroughAt : FileFacts -> List (Option Loc) -> Ctx -> Expr -> List Finding
+-- tail.  Finding them walks every body of the file, so the walk waits for the
+-- file's first passthrough match: most files have none.
+passthroughAt : FileFacts ->
+  Memo (List (Option Loc)) ->
+  Ctx ->
+  Expr ->
+  List Finding
 passthroughAt facts exempt ctx e = match passthroughOf e
   Some (kind, _) =>
-    if anyList (== ctx.ctxSpan) exempt then
+    if anyList (== ctx.ctxSpan) (memoGet exempt) then
       []
     else
       [report ctx.ctxSpan kind (passthroughFix facts ctx e)]
