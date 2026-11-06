@@ -221,6 +221,17 @@ main = match page
   Ok b => println b
   Err e => println e
 `,
+  toplevelforce: String.raw`show r = match r
+  Ok body => "ok: " ++ body
+  Err e => "err: " ++ e
+
+page = fetchText "https://stub.test/ok"
+
+main =
+  let _ = println "start"
+  let _ = println (show page)
+  println (show page)
+`,
   bigexit: BIG_LOOP + 'main =\n  let _ = loop 1\n  exit 3\n',
   bigtrap: BIG_LOOP + 'main =\n  let _ = loop 1\n  let z = length [1] - 1\n  println (10 / z)\n',
 };
@@ -988,7 +999,9 @@ console.log(JSON.stringify({ kind: r.kind, out: host.sink.text('stdout'), calls 
     JSON.stringify(got));
 }
 
-// (w) a top-level value that suspends traps at instantiation; the error names the cause.
+// (w) a top-level value whose initializer calls fetchText is lazy
+// (docs/spec/WASM-SEMANTICS.md), so it runs when main first reads it, inside the
+// promising entry, and its suspension is an ordinary one.
 {
   const wasm = build('toplevelfetch', 'wasmgc/edge');
   const runner = join(work, 'toplevel_runner.mjs');
@@ -996,14 +1009,37 @@ console.log(JSON.stringify({ kind: r.kind, out: host.sink.text('stdout'), calls 
 import { createHost, runToResult } from ${JSON.stringify(pathToFileURL(join(here, 'medaka_host.mjs')).href)};
 import { readFileSync } from 'node:fs';
 const r = await runToResult(readFileSync(process.argv[2]), 'wasmgc/edge', { fetch: async () => { throw new TypeError('no net'); } });
+process.stdout.write(r.stdout);
 process.stderr.write(r.stderr);
 process.exit(r.exitCode);
 `);
   const r = spawnSync(process.execPath, ['--experimental-wasm-jspi', runner, wasm], { encoding: 'utf8' });
-  check('(w) a top-level fetchText exits 1 with a message naming the top-level value and main',
-    r.status === 1 && r.stderr.includes('a top-level value called fetchText or sleepMs during initialization')
-      && r.stderr.includes('move the call into main'),
-    JSON.stringify({ status: r.status, stderr: r.stderr }));
+  check('(w1) a top-level fetchText runs inside main: its rejection is the Err the program prints, exit 0',
+    r.status === 0 && r.stdout === 'no net\n' && r.stderr === '',
+    JSON.stringify({ status: r.status, stdout: r.stdout, stderr: r.stderr }));
+  const child = String.raw`
+const { createHost, runProgram } = await import(process.env.MHT_HOST);
+const { readFileSync } = await import('node:fs');
+const calls = [];
+const fetch = (url) => {
+  calls.push(url);
+  return new Promise((resolve) => setTimeout(() => resolve({ ok: true, status: 200, statusText: 'OK',
+    arrayBuffer: async () => new TextEncoder().encode('hello').buffer }), 50));
+};
+const host = createHost('wasmgc/edge', { fetch });
+const r = await runProgram(readFileSync(process.env.MHT_WASM), host);
+console.log(JSON.stringify({ kind: r.kind, out: host.sink.text('stdout'), calls }));
+`;
+  const forced = spawnSync(process.execPath, ['--experimental-wasm-jspi', '--input-type=module', '-e', child], {
+    env: { ...process.env, MHT_HOST: pathToFileURL(join(here, 'medaka_host.mjs')).href,
+      MHT_WASM: build('toplevelforce', 'wasmgc/edge') }, encoding: 'utf8',
+  });
+  let got;
+  try { got = JSON.parse(forced.stdout); } catch (e) { got = { raw: forced.stdout + forced.stderr }; }
+  check('(w2) JSPI: forcing a top-level fetchText inside main suspends after main\'s first line, and the value is fetched once',
+    got.kind === 'done' && got.out === 'start\nok: hello\nok: hello\n'
+      && JSON.stringify(got.calls) === JSON.stringify(['https://stub.test/ok']),
+    JSON.stringify(got));
 }
 
 // Report only: slices no module built above imports a key of.
