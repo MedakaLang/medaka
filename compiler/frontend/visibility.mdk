@@ -245,7 +245,7 @@ writtenImportsOf prog = match aliasImportSites prog
 
 -- The module path and location of one `import m as A`.  Built with record
 -- syntax and read with `.field`: eval represents positional and record
--- construction differently, so one form per type (#TBD).
+-- construction differently, so one form per type (#4923).
 public export data AliasSite = AliasSite { asQuals : List String, asLoc : Loc }
 
 -- The module path and location of each `import m as A` in [prog].

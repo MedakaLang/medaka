@@ -101,7 +101,7 @@ data ImportBind = ImportBind {
 
 -- An interface that declares a method, and the module declaring that interface.
 -- Built with record syntax and read with `.field`: eval represents positional and
--- record construction differently, so one form per type (#TBD).
+-- record construction differently, so one form per type (#4923).
 data MethodOrigin = MethodOrigin { moIface : String, moModule : String }
 
 -- A declaration by its declaring module and the name it is declared under.
