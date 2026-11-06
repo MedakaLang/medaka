@@ -717,7 +717,7 @@ restampExpr name mode ex0 = go ex0
         _ => CApp (go hd) args2 (CallSite old tailPos)
     go (CLet r pat rhs body) = CLet r pat (go rhs) (go body)
     go (CBlock stmts) = CBlock (map (restampStmt name mode) stmts)
-    go (e@(CLit _ | CVar _ _ | CLam _ _ | CLetGroup _ _ | CMatch _ _ | CDecision _ _ _ | CIf _ _ _ | CBinPrim _ _ _ _ _ | CUnOp _ _ | CTuple _ | CList _ | CRecord _ _ | CFieldAccess _ _ _ _ | CRecordUpdate _ _ _ | CVariantUpdate _ _ _ | CArray _ | CRangeList _ _ _ | CRangeArray _ _ _ | CIndex _ _ | CSlice _ _ _ _ | CStringIndex _ _ | CStringSlice _ _ _ _ | CListIndex _ _ | CListSlice _ _ _ _ | CMethod _ _ | CDict _ _)) =
+    go (e@(CLit _ | CVar _ _ | CLam _ _ | CLetGroup _ _ | CMatch _ _ | CDecision _ _ _ | CIf _ _ _ | CBinPrim _ _ _ _ _ | CUnOp _ _ | CTuple _ | CList _ | CRecord _ _ | CFieldAccess _ _ _ _ | CRecordUpdate _ _ _ | CVariantUpdate _ _ _ | CArray _ | CRangeList _ _ _ | CRangeArray _ _ _ | CMethod _ _ | CDict _ _)) =
       e
 
 restampStmt : String -> CallMode -> CStmt -> CStmt
@@ -827,7 +827,7 @@ reflagExpr name flag ex0 = go ex0
         _ => CApp (go hd) args2 (CallSite mode old)
     go (CLet r pat rhs body) = CLet r pat (go rhs) (go body)
     go (CIf c t e) = CIf (go c) (go t) (go e)
-    go (e@(CLit _ | CVar _ _ | CLam _ _ | CLetGroup _ _ | CMatch _ _ | CDecision _ _ _ | CBinPrim _ _ _ _ _ | CUnOp _ _ | CTuple _ | CList _ | CRecord _ _ | CFieldAccess _ _ _ _ | CRecordUpdate _ _ _ | CVariantUpdate _ _ _ | CArray _ | CRangeList _ _ _ | CRangeArray _ _ _ | CIndex _ _ | CSlice _ _ _ _ | CStringIndex _ _ | CStringSlice _ _ _ _ | CListIndex _ _ | CListSlice _ _ _ _ | CBlock _ | CMethod _ _ | CDict _ _)) =
+    go (e@(CLit _ | CVar _ _ | CLam _ _ | CLetGroup _ _ | CMatch _ _ | CDecision _ _ _ | CBinPrim _ _ _ _ _ | CUnOp _ _ | CTuple _ | CList _ | CRecord _ _ | CFieldAccess _ _ _ _ | CRecordUpdate _ _ _ | CVariantUpdate _ _ _ | CArray _ | CRangeList _ _ _ | CRangeArray _ _ _ | CBlock _ | CMethod _ _ | CDict _ _)) =
       e
 
 tailSrc : String
@@ -1242,7 +1242,7 @@ dropRoutesExpr name (CApp hd args site) =
   CApp (dropRoutesExpr name hd) (map (dropRoutesExpr name) args) site
 dropRoutesExpr name (m@(CMethod n (MethodEvidence iface arity route impls _))) =
   if n == name then CMethod n (MethodEvidence iface arity route impls []) else m
-dropRoutesExpr _ (e@(CLit _ | CVar _ _ | CLam _ _ | CLet _ _ _ _ | CLetGroup _ _ | CMatch _ _ | CDecision _ _ _ | CIf _ _ _ | CBinPrim _ _ _ _ _ | CUnOp _ _ | CTuple _ | CList _ | CRecord _ _ | CFieldAccess _ _ _ _ | CRecordUpdate _ _ _ | CVariantUpdate _ _ _ | CArray _ | CRangeList _ _ _ | CRangeArray _ _ _ | CIndex _ _ | CSlice _ _ _ _ | CStringIndex _ _ | CStringSlice _ _ _ _ | CListIndex _ _ | CListSlice _ _ _ _ | CBlock _ | CDict _ _)) =
+dropRoutesExpr _ (e@(CLit _ | CVar _ _ | CLam _ _ | CLet _ _ _ _ | CLetGroup _ _ | CMatch _ _ | CDecision _ _ _ | CIf _ _ _ | CBinPrim _ _ _ _ _ | CUnOp _ _ | CTuple _ | CList _ | CRecord _ _ | CFieldAccess _ _ _ _ | CRecordUpdate _ _ _ | CVariantUpdate _ _ _ | CArray _ | CRangeList _ _ _ | CRangeArray _ _ _ | CBlock _ | CDict _ _)) =
   e
 
 -- [prog] with the leading parameter of every impl entry of method [m] dropped.
@@ -1314,7 +1314,7 @@ addRouteExpr name (m@(CMethod n (MethodEvidence iface arity route impls meths)))
     CMethod n (MethodEvidence iface arity route impls (meths ++ [route]))
   else
     m
-addRouteExpr _ (e@(CLit _ | CVar _ _ | CLam _ _ | CLet _ _ _ _ | CLetGroup _ _ | CMatch _ _ | CDecision _ _ _ | CIf _ _ _ | CBinPrim _ _ _ _ _ | CUnOp _ _ | CTuple _ | CList _ | CRecord _ _ | CFieldAccess _ _ _ _ | CRecordUpdate _ _ _ | CVariantUpdate _ _ _ | CArray _ | CRangeList _ _ _ | CRangeArray _ _ _ | CIndex _ _ | CSlice _ _ _ _ | CStringIndex _ _ | CStringSlice _ _ _ _ | CListIndex _ _ | CListSlice _ _ _ _ | CBlock _ | CDict _ _)) =
+addRouteExpr _ (e@(CLit _ | CVar _ _ | CLam _ _ | CLet _ _ _ _ | CLetGroup _ _ | CMatch _ _ | CDecision _ _ _ | CIf _ _ _ | CBinPrim _ _ _ _ _ | CUnOp _ _ | CTuple _ | CList _ | CRecord _ _ | CFieldAccess _ _ _ _ | CRecordUpdate _ _ _ | CVariantUpdate _ _ _ | CArray _ | CRangeList _ _ _ | CRangeArray _ _ _ | CBlock _ | CDict _ _)) =
   e
 
 -- [prog] with a leading `$dict_<m>_0` parameter on every impl entry of method [m].
@@ -1580,7 +1580,7 @@ dropPrereqsExpr name (m@(CMethod n (MethodEvidence iface arity route impls meths
     CMethod n (MethodEvidence iface arity route impls (map dropReqs meths))
   else
     m
-dropPrereqsExpr _ (e@(CLit _ | CVar _ _ | CLam _ _ | CLet _ _ _ _ | CLetGroup _ _ | CMatch _ _ | CDecision _ _ _ | CIf _ _ _ | CBinPrim _ _ _ _ _ | CUnOp _ _ | CTuple _ | CList _ | CRecord _ _ | CFieldAccess _ _ _ _ | CRecordUpdate _ _ _ | CVariantUpdate _ _ _ | CArray _ | CRangeList _ _ _ | CRangeArray _ _ _ | CIndex _ _ | CSlice _ _ _ _ | CStringIndex _ _ | CStringSlice _ _ _ _ | CListIndex _ _ | CListSlice _ _ _ _ | CBlock _ | CDict _ _)) =
+dropPrereqsExpr _ (e@(CLit _ | CVar _ _ | CLam _ _ | CLet _ _ _ _ | CLetGroup _ _ | CMatch _ _ | CDecision _ _ _ | CIf _ _ _ | CBinPrim _ _ _ _ _ | CUnOp _ _ | CTuple _ | CList _ | CRecord _ _ | CFieldAccess _ _ _ _ | CRecordUpdate _ _ _ | CVariantUpdate _ _ _ | CArray _ | CRangeList _ _ _ | CRangeArray _ _ _ | CBlock _ | CDict _ _)) =
   e
 
 dropReqs : Route -> Route

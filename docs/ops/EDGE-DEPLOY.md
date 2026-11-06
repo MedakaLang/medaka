@@ -105,8 +105,8 @@ To check the loader without workerd, `node hello.mjs`-style use works through
 `{stdout, stderr, exitCode}`. `fetchText` there needs
 `node --experimental-wasm-jspi` and `run({fetch})` to supply the fetch function;
 without JSPI it fails with a message naming JSPI. A top-level value that calls
-`fetchText` or `sleepMs` cannot suspend during initialization: the run ends in exit
-code 1 with a message saying so; call them from `main`.
+`fetchText` or `sleepMs` is lazy: it runs when `main` first reads it, and suspends
+there as a call made in `main` does.
 
 ## Deploy
 
@@ -133,7 +133,7 @@ the program's stdout (`hello from the edge\nafter sleep\n`). A program that
 calls `fetchText` is probed the same way against a route whose content you know:
 with `main` printing `ok: ` and the body of `fetchText "https://<known-host>/data.txt"`,
 the response body must be `ok: <that file's content>`. A `500` with an empty body
-means the program trapped before printing (see the limit on top-level values below); `status=200` with an
+means the program trapped before printing; `status=200` with an
 `err: ...` line means `fetchText` ran and the fetch failed, which is the
 program's result, not a deploy fault.
 
@@ -156,12 +156,6 @@ body; probe `/` and one other path to confirm the route table is what you meant.
   program passes `medaka check` and fails at the call with `CapabilityError: js
   binding ... is not supplied by this host`. `run(opts)` forwards `opts.bindings`;
   `fetch` has no source for them.
-- **A top-level value that reaches `fetchText` or `sleepMs` traps at
-  instantiation.** `page = fetchText "..."` at top level passes `check`,
-  builds, and fails under JSPI with `trying to suspend without WebAssembly.promising`
-  because top-level values run in the wasm start function, which is never
-  promising. On the edge this is a `500` with an empty body. Call `fetchText` and
-  `sleepMs` from inside `main` or functions it calls. Treat `sleepMs` at top level the same.
 - **Sockets are refused.** The `net` module's socket externs are refused by
   `medaka check` on the edge target; only `fetchText` does network I/O.
 - **Withheld or inert:** stdin, environment, files, argv and `exit` are withheld

@@ -1,5 +1,6 @@
 import support.symbol_encoding.{encodePair}
-import frontend.ast.{Addr(..), Pat(..), RecPatField(..)}
+import frontend.ast.{Addr(..), Pat}
+import ir.core_walk.{patBinders}
 import ir.core_ir.{
   CProgram(..), CBind(..), CClause(..), CExpr(..), CImplEntry(..),
   CImplBody(..), CArm(..), CGuard(..), CStmt(..), CField(..),
@@ -106,10 +107,10 @@ walkExternVars f (CProgram groups ca ct impls mc facts) =
     facts
 
 bindPatScope : Pat -> OrdMap Unit -> OrdMap Unit
-bindPatScope pat scope = omFromNames (patNames pat) scope
+bindPatScope pat scope = omFromNames (patBinders pat) scope
 
 bindPatsScope : List Pat -> OrdMap Unit -> OrdMap Unit
-bindPatsScope pats scope = omFromNames (flatMap patNames pats) scope
+bindPatsScope pats scope = omFromNames (flatMap patBinders pats) scope
 
 bindLetScope : Pat -> CExpr -> OrdMap Unit -> OrdMap Unit
 bindLetScope pat _ scope = bindPatScope pat scope
@@ -117,24 +118,6 @@ bindLetScope pat _ scope = bindPatScope pat scope
 bindGroupScope : List CBind -> OrdMap Unit -> OrdMap Unit
 bindGroupScope binds scope =
   omFromNames (map ((CBind n _ _ _) => n) binds) scope
-
-patNames : Pat -> List String
-patNames (PVar n _ _) = [n]
-patNames (PCon _ ps) = flatMap patNames ps
-patNames (PCons a b) = patNames a ++ patNames b
-patNames (PTuple ps) = flatMap patNames ps
-patNames (PList ps) = flatMap patNames ps
-patNames (PAs n _ _ p) = n :: patNames p
-patNames (PRec _ fs _) = flatMap fieldNames fs
-patNames PWild = []
-patNames (PLit _) = []
-patNames (PRng _ _ _) = []
-patNames (POr []) = []
-patNames (POr (p :: _)) = patNames p
-
-fieldNames : RecPatField -> List String
-fieldNames (RecPatField n _ _ None) = [n]
-fieldNames (RecPatField _ _ _ (Some p)) = patNames p
 
 export
 externHeadRows : CProgram -> ExternHeadRows
@@ -247,30 +230,6 @@ walkExpr env scope (CRangeList lo hi incl) =
   CRangeList (walkExpr env scope lo) (walkExpr env scope hi) incl
 walkExpr env scope (CRangeArray lo hi incl) =
   CRangeArray (walkExpr env scope lo) (walkExpr env scope hi) incl
-walkExpr env scope (CIndex a i) =
-  CIndex (walkExpr env scope a) (walkExpr env scope i)
-walkExpr env scope (CSlice a lo hi incl) =
-  CSlice
-    (walkExpr env scope a)
-    (walkExpr env scope lo)
-    (walkExpr env scope hi)
-    incl
-walkExpr env scope (CStringIndex a i) =
-  CStringIndex (walkExpr env scope a) (walkExpr env scope i)
-walkExpr env scope (CStringSlice a lo hi incl) =
-  CStringSlice
-    (walkExpr env scope a)
-    (walkExpr env scope lo)
-    (walkExpr env scope hi)
-    incl
-walkExpr env scope (CListIndex a i) =
-  CListIndex (walkExpr env scope a) (walkExpr env scope i)
-walkExpr env scope (CListSlice a lo hi incl) =
-  CListSlice
-    (walkExpr env scope a)
-    (walkExpr env scope lo)
-    (walkExpr env scope hi)
-    incl
 walkExpr env scope (CBlock stmts) = CBlock (walkStmts env scope stmts)
 walkExpr _ _ (CMethod name (MethodEvidence iface arity r ir mr)) =
   CMethod name (MethodEvidence iface arity r ir mr)

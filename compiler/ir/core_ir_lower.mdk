@@ -16,6 +16,12 @@ import types.symbol_origins.{
 -- is a clean diff, not a rewrite).
 
 import ir.extern_lower.{lowerExterns}
+import ir.core_walk.{patBinders}
+import ir.core_opt_num.{foldNumIntFromInt}
+import ir.core_pass.{
+  CorePass(..), PassConfig(..), PassRun(..), PassFault(..), defaultPassConfig,
+  runPasses
+}
 import frontend.ast.{
   isWildPat,
   letBindName,
@@ -65,7 +71,6 @@ import types.route_key.{
   evDictRoutesIn,
   evMethodRoutesIn,
   evSiteHeadIn,
-  numIntWord,
   numFloatWord,
 }
 import ir.core_ir.{
@@ -427,7 +432,7 @@ cFallsThrough (CDecision scrut arms _) =
   cFallsThrough scrut || any armFallsThrough arms
 cFallsThrough (CMatch scrut arms) =
   cFallsThrough scrut || any armFallsThrough arms
-cFallsThrough (CLit _ | CLam _ _ | CBinPrim _ _ _ _ _ | CUnOp _ _ | CTuple _ | CList _ | CRecord _ _ | CFieldAccess _ _ _ _ | CRecordUpdate _ _ _ | CVariantUpdate _ _ _ | CArray _ | CRangeList _ _ _ | CRangeArray _ _ _ | CIndex _ _ | CSlice _ _ _ _ | CStringIndex _ _ | CStringSlice _ _ _ _ | CListIndex _ _ | CListSlice _ _ _ _ | CMethod _ _ | CDict _ _) =
+cFallsThrough (CLit _ | CLam _ _ | CBinPrim _ _ _ _ _ | CUnOp _ _ | CTuple _ | CList _ | CRecord _ _ | CFieldAccess _ _ _ _ | CRecordUpdate _ _ _ | CVariantUpdate _ _ _ | CArray _ | CRangeList _ _ _ | CRangeArray _ _ _ | CMethod _ _ | CDict _ _) =
   False
 
 stmtFallsThrough : CStmt -> Bool
@@ -1000,10 +1005,16 @@ lowerStmt _ _ = panic "core_ir lower: unsupported block statement"
 export
 lowerProgramWithFacts : ProgramFacts -> List Decl -> CProgram
 lowerProgramWithFacts facts prog =
-  finishLowering
-    UntypedLowering
-    facts.pfBinders
-    (refoldProgram noLetCheck (lowerProgramWith facts None [] prog))
+  runLowering
+    PassCtx {
+      pcFacts = facts,
+      pcDecls = prog,
+      pcSited = prog,
+      pcLowering = UntypedLowering,
+      pcFieldOrders = [],
+    }
+    interpPasses
+    (lowerProgramWith facts None [] prog)
 
 -- Lowering after an elaboration, against the table it published.  Refuses (panics)
 -- when none was published instead of silently lowering every inherited default away.
@@ -1014,17 +1025,21 @@ lowerTypedProgramWith facts prog =
     optionOrPanic
       "disposition table: no elaboration has published one"
       facts.pfDispositions
-  finishLowering
-    TypedLowering
-    facts.pfBinders
-    (refoldProgram
-      noLetCheck
-      (lowerProgramWith facts (Some dispositions) [] prog))
+  runLowering
+    PassCtx {
+      pcFacts = facts,
+      pcDecls = prog,
+      pcSited = prog,
+      pcLowering = TypedLowering,
+      pcFieldOrders = [],
+    }
+    interpPasses
+    (lowerProgramWith facts (Some dispositions) [] prog)
 
 -- [dispositions] is the typechecker's table for [prog] (`None` for an untyped
 -- probe; see `lowerProgramWithFacts`).  Refutable lets are still one-arm decisions here
 -- (`letDecision`); each public lowering decides which of them to keep, and ends
--- with `finishLowering`.
+-- with `finishPasses`.
 lowerProgramWith : ProgramFacts ->
   Option DispositionTable ->
   List (String, String, String) ->
@@ -1175,21 +1190,6 @@ refoldExpr keep (CRangeList lo hi incl) =
   CRangeList (refoldExpr keep lo) (refoldExpr keep hi) incl
 refoldExpr keep (CRangeArray lo hi incl) =
   CRangeArray (refoldExpr keep lo) (refoldExpr keep hi) incl
-refoldExpr keep (CIndex a i) = CIndex (refoldExpr keep a) (refoldExpr keep i)
-refoldExpr keep (CSlice a lo hi incl) =
-  CSlice (refoldExpr keep a) (refoldExpr keep lo) (refoldExpr keep hi) incl
-refoldExpr keep (CStringIndex a i) =
-  CStringIndex (refoldExpr keep a) (refoldExpr keep i)
-refoldExpr keep (CStringSlice a lo hi incl) =
-  CStringSlice
-    (refoldExpr keep a)
-    (refoldExpr keep lo)
-    (refoldExpr keep hi)
-    incl
-refoldExpr keep (CListIndex a i) =
-  CListIndex (refoldExpr keep a) (refoldExpr keep i)
-refoldExpr keep (CListSlice a lo hi incl) =
-  CListSlice (refoldExpr keep a) (refoldExpr keep lo) (refoldExpr keep hi) incl
 refoldExpr keep (CBlock stmts) = CBlock (refoldStmts keep stmts)
 refoldExpr _ (CMethod name (MethodEvidence iface arity r ir mr)) =
   CMethod name (MethodEvidence iface arity r ir mr)
@@ -1265,32 +1265,35 @@ lowerProgramEmitPinnedWith : ProgramFacts ->
   List Decl ->
   CProgram
 lowerProgramEmitPinnedWith facts pins prog =
+  programOrPanic (lowerProgramEmitConfigured defaultPassConfig facts pins prog)
+
+-- The emitting lowering as a pass run: the faults and the dumps the config asked
+-- for come back with the program.
+export
+lowerProgramEmitConfigured : PassConfig ->
+  ProgramFacts ->
+  List (String, String, String) ->
+  List Decl ->
+  PassRun
+lowerProgramEmitConfigured config facts pins prog =
   let sited = siteTrapCalls facts prog
   let dispositions = facts.pfDispositions
-  let lowered = lowerProgramWith facts dispositions pins sited
-  let raw =
-    withDeclFacts
-      (emitDeclFacts facts sited (cprogramSymbolOrigins lowered))
-      lowered
-  let fo = declaredRecordFieldOrders prog
   -- An emitting lowering is untyped exactly when no elaboration published the
   -- disposition table it lowered against (`lowerProgramWith`).
   let lowering = match dispositions
     Some _ => TypedLowering
     None => UntypedLowering
-  -- the let decisions are refolded after the record-pattern rewrite, which
-  -- resolves the record patterns `patCanMiss` reads
-  let rewritten = rewriteProgramRecPats fo raw
-  lowerExterns
-    facts
-    prog
-    (finishLowering
-      lowering
-      facts.pfBinders
-      (hoistNullaryMemo
-        (refoldProgram
-          (patCanMiss (siblingTable (cprogramCtorTypes raw)))
-          rewritten)))
+  runPasses
+    config
+    PassCtx {
+      pcFacts = facts,
+      pcDecls = prog,
+      pcSited = sited,
+      pcLowering = lowering,
+      pcFieldOrders = declaredRecordFieldOrders prog,
+    }
+    emitPasses
+    (lowerProgramWith facts dispositions pins sited)
 
 -- The declaration facts an emitting lowering publishes (see `DeclFacts`): every
 -- instance's `requires` count, and the super count of each of their interfaces.
@@ -1468,17 +1471,80 @@ cprogramCtorTypes (CProgram _ _ ctorTypes _ _ _) = ctorTypes
 -- emits for it: a binding's clause, the impl entry an `RKey` route selects, the
 -- binding an `RLocal` route or a `CDict` names (less the dictionaries the
 -- occurrence supplies), a constructor's field count.  Each public lowering ends
--- with `finishLowering`: one eta pass, which may lengthen a clause, then
+-- with `finishPasses`: one eta pass, which may lengthen a clause, then
 -- `stampCallModes`, which writes the mode into every application from the
 -- clauses the eta pass produced.  `core_validate.validateCalls` reads the same
 -- `definedArityOf`, so the stamp and the check cannot disagree about a table.
 
-finishLowering : Lowering -> Option BinderTypeTable -> CProgram -> CProgram
-finishLowering lowering table prog =
-  stampBinders
-    lowering
-    table
-    (markTailSites (stampCallModes (etaSaturateProgram prog)))
+-- What a pass list reads besides the program: the facts, the declarations as
+-- given and as the site-trap rewrite left them, the lowering mode, and the
+-- declared field order of each record.
+data PassCtx = PassCtx {
+  pcFacts : ProgramFacts,
+  pcDecls : List Decl,
+  pcSited : List Decl,
+  pcLowering : Lowering,
+  pcFieldOrders : List (String, List String),
+}
+
+namedPass : String -> (PassCtx -> CProgram -> CProgram) -> CorePass PassCtx
+namedPass passName f = CorePass { passName = passName, passRun = f }
+
+runLowering : PassCtx -> List (CorePass PassCtx) -> CProgram -> CProgram
+runLowering ctx passes start =
+  programOrPanic
+    (runPasses { defaultPassConfig | lint = False } ctx passes start)
+
+-- A fault is an internal compiler error naming its pass.
+programOrPanic : PassRun -> CProgram
+programOrPanic run = match run.faults
+  [] => run.program
+  fault :: _ => panic "core pass \{fault.faultPass}: \{fault.faultMessage}"
+
+-- The untyped and typed interpreter lowerings keep no refutable-let decision, so
+-- both run this one list.
+interpPasses : List (CorePass PassCtx)
+interpPasses =
+  namedPass "refold-lets" (_ p => refoldProgram noLetCheck p) :: finishPasses
+
+-- The emitting lowering.  Order is the contract:
+-- - the record-pattern rewrite precedes the refold, because `patCanMiss` reads the
+--   record patterns it resolves;
+-- - `finishPasses` end the list before the externs, which only add rows.
+emitPasses : List (CorePass PassCtx)
+emitPasses =
+  [
+      namedPass "decl-facts" (c p =>
+        withDeclFacts
+          (emitDeclFacts c.pcFacts c.pcSited (cprogramSymbolOrigins p))
+          p),
+      namedPass "record-patterns" (c p =>
+        rewriteProgramRecPats c.pcFieldOrders p),
+      namedPass "refold-lets" (_ p =>
+        refoldProgram (patCanMiss (siblingTable (cprogramCtorTypes p))) p),
+      namedPass "hoist-nullary-memo" (_ p => hoistNullaryMemo p),
+      -- optimization slot: passes here run before the stamps below, so eta, call
+      -- modes, tail marks and binder stamps all see their output
+      namedPass "fold-num-int-fromint" (_ p => foldNumIntFromInt p),
+    ]
+    ++ finishPasses
+    ++ [namedPass "lower-externs" (c p => lowerExterns c.pcFacts c.pcDecls p)]
+
+-- The names of `emitPasses`, in order: what a dump request may name.
+export
+emitPassNames : List String
+emitPassNames = map (p => p.passName) emitPasses
+
+-- Call modes are stamped from the clauses the eta pass produced, so eta comes
+-- first; tail marks and binder stamps read the stamped modes.
+finishPasses : List (CorePass PassCtx)
+finishPasses = [
+  namedPass "eta-saturate" (_ p => etaSaturateProgram p),
+  namedPass "call-modes" (_ p => stampCallModes p),
+  namedPass "tail-sites" (_ p => markTailSites p),
+  namedPass "binder-stamps" (c p =>
+    stampBinders c.pcLowering c.pcFacts.pfBinders p),
+]
 
 -- A program's defined arities: each top-level binding's clause pattern count,
 -- each constructor's field count, each impl entry's value arity by method and
@@ -1551,7 +1617,7 @@ definedArityOf env _ (CMethod name (MethodEvidence _ _ (RLocal sym dicts) _ _)) 
   lessDicts (listLen dicts) (topArityOf env (if sym == "" then name else sym))
 definedArityOf env scope (CDict name routes) =
   lessDicts (listLen routes) (definedArityOf env scope (CVar name AGlobal))
-definedArityOf _ _ (CMethod _ _ | CLit _ | CApp _ _ _ | CLam _ _ | CLet _ _ _ _ | CLetGroup _ _ | CMatch _ _ | CDecision _ _ _ | CIf _ _ _ | CBinPrim _ _ _ _ _ | CUnOp _ _ | CTuple _ | CList _ | CRecord _ _ | CFieldAccess _ _ _ _ | CRecordUpdate _ _ _ | CVariantUpdate _ _ _ | CArray _ | CRangeList _ _ _ | CRangeArray _ _ _ | CIndex _ _ | CSlice _ _ _ _ | CStringIndex _ _ | CStringSlice _ _ _ _ | CListIndex _ _ | CListSlice _ _ _ _ | CBlock _) =
+definedArityOf _ _ (CMethod _ _ | CLit _ | CApp _ _ _ | CLam _ _ | CLet _ _ _ _ | CLetGroup _ _ | CMatch _ _ | CDecision _ _ _ | CIf _ _ _ | CBinPrim _ _ _ _ _ | CUnOp _ _ | CTuple _ | CList _ | CRecord _ _ | CFieldAccess _ _ _ _ | CRecordUpdate _ _ _ | CVariantUpdate _ _ _ | CArray _ | CRangeList _ _ _ | CRangeArray _ _ _ | CBlock _) =
   None
 
 lessDicts : Int -> Option Int -> Option Int
@@ -1592,30 +1658,12 @@ bindLetScope pat _ s = bindPatScope pat s
 -- The scope after a pattern: each variable it binds is a non-function local.
 export
 bindPatScope : Pat -> CallScope -> CallScope
-bindPatScope (PVar x _ _) s = omInsert x None s
-bindPatScope PWild s = s
-bindPatScope (PLit _) s = s
-bindPatScope (PCon _ ps) s = bindPatsScope ps s
-bindPatScope (PCons h t) s = bindPatScope t (bindPatScope h s)
-bindPatScope (PTuple ps) s = bindPatsScope ps s
-bindPatScope (PList ps) s = bindPatsScope ps s
-bindPatScope (PAs x _ _ p) s = bindPatScope p (omInsert x None s)
-bindPatScope (PRng _ _ _) s = s
-bindPatScope (PRec _ fields _) s = bindRecFieldsScope fields s
-bindPatScope (POr ps) s = bindPatsScope ps s
+bindPatScope pat s = fold (acc n => omInsert n None acc) s (patBinders pat)
 
 export
 bindPatsScope : List Pat -> CallScope -> CallScope
 bindPatsScope [] s = s
 bindPatsScope (p :: rest) s = bindPatsScope rest (bindPatScope p s)
-
--- A punned field `{x}` binds the field's own name.
-bindRecFieldsScope : List RecPatField -> CallScope -> CallScope
-bindRecFieldsScope [] s = s
-bindRecFieldsScope ((RecPatField f _ _ None) :: rest) s =
-  bindRecFieldsScope rest (omInsert f None s)
-bindRecFieldsScope ((RecPatField _ _ _ (Some p)) :: rest) s =
-  bindRecFieldsScope rest (bindPatScope p s)
 
 -- A let group's functions, each at its clause pattern count.
 export
@@ -1772,9 +1820,13 @@ spineOf (CApp f args _) =
 spineOf e = (e, [])
 
 -- an argument whose evaluation has no effect and does no work worth delaying.  A
--- literal's `fromInt` is one only through the prelude's `Num` at `Int` and
--- `Float`, whose conversions cannot fail: any other impl may panic (a range
--- check), and delaying it would move or drop the panic.
+-- literal's `fromInt` is one only through the prelude's `Num` at `Float`, whose
+-- conversion cannot fail: any other impl may panic (a range check), and delaying it
+-- would move or drop the panic.  `Num Int`'s `fromInt` is not atomic here.  In
+-- `emitPasses` it is already folded to its literal by `fold-num-int-fromint`, which
+-- runs before `eta-saturate` reads this; `interpPasses` runs no
+-- fold, so there a partial application with such an argument stays unsaturated
+-- (a partial call) instead of being eta-expanded.
 isAtomicArg : CExpr -> Bool
 isAtomicArg (CVar _ _) = True
 isAtomicArg (CLit _) = True
@@ -1782,7 +1834,7 @@ isAtomicArg (CLam _ _) = True
 isAtomicArg (CMethod _ _) = True
 isAtomicArg (CDict _ _) = True
 isAtomicArg (CApp (CMethod "fromInt" (MethodEvidence _ _ (RKey key _ _) _ _)) [CLit _] _) =
-  key == numIntWord || key == numFloatWord
+  key == numFloatWord
 isAtomicArg _ = False
 
 isFunctionBind : CBind -> Bool
@@ -1913,30 +1965,6 @@ callsExpr env scope (CRangeList lo hi incl) =
   CRangeList (callsExpr env scope lo) (callsExpr env scope hi) incl
 callsExpr env scope (CRangeArray lo hi incl) =
   CRangeArray (callsExpr env scope lo) (callsExpr env scope hi) incl
-callsExpr env scope (CIndex a i) =
-  CIndex (callsExpr env scope a) (callsExpr env scope i)
-callsExpr env scope (CSlice a lo hi incl) =
-  CSlice
-    (callsExpr env scope a)
-    (callsExpr env scope lo)
-    (callsExpr env scope hi)
-    incl
-callsExpr env scope (CStringIndex a i) =
-  CStringIndex (callsExpr env scope a) (callsExpr env scope i)
-callsExpr env scope (CStringSlice a lo hi incl) =
-  CStringSlice
-    (callsExpr env scope a)
-    (callsExpr env scope lo)
-    (callsExpr env scope hi)
-    incl
-callsExpr env scope (CListIndex a i) =
-  CListIndex (callsExpr env scope a) (callsExpr env scope i)
-callsExpr env scope (CListSlice a lo hi incl) =
-  CListSlice
-    (callsExpr env scope a)
-    (callsExpr env scope lo)
-    (callsExpr env scope hi)
-    incl
 callsExpr env scope (CBlock stmts) = CBlock (callsStmts env scope stmts)
 callsExpr _ _ (CMethod name (MethodEvidence iface arity r ir mr)) =
   CMethod name (MethodEvidence iface arity r ir mr)
@@ -2060,16 +2088,6 @@ tailExpr _ (CRangeList lo hi incl) =
   CRangeList (tailExpr False lo) (tailExpr False hi) incl
 tailExpr _ (CRangeArray lo hi incl) =
   CRangeArray (tailExpr False lo) (tailExpr False hi) incl
-tailExpr _ (CIndex a i) = CIndex (tailExpr False a) (tailExpr False i)
-tailExpr _ (CSlice a lo hi incl) =
-  CSlice (tailExpr False a) (tailExpr False lo) (tailExpr False hi) incl
-tailExpr _ (CStringIndex a i) =
-  CStringIndex (tailExpr False a) (tailExpr False i)
-tailExpr _ (CStringSlice a lo hi incl) =
-  CStringSlice (tailExpr False a) (tailExpr False lo) (tailExpr False hi) incl
-tailExpr _ (CListIndex a i) = CListIndex (tailExpr False a) (tailExpr False i)
-tailExpr _ (CListSlice a lo hi incl) =
-  CListSlice (tailExpr False a) (tailExpr False lo) (tailExpr False hi) incl
 tailExpr tl (CBlock stmts) = CBlock (tailStmts tl stmts)
 tailExpr _ (CMethod name (MethodEvidence iface arity r ir mr)) =
   CMethod name (MethodEvidence iface arity r ir mr)
@@ -2441,25 +2459,6 @@ rewriteExprRP fo (CRangeList lo hi incl) =
   CRangeList (rewriteExprRP fo lo) (rewriteExprRP fo hi) incl
 rewriteExprRP fo (CRangeArray lo hi incl) =
   CRangeArray (rewriteExprRP fo lo) (rewriteExprRP fo hi) incl
-rewriteExprRP fo (CIndex a i) = CIndex (rewriteExprRP fo a) (rewriteExprRP fo i)
-rewriteExprRP fo (CSlice a lo hi incl) =
-  CSlice (rewriteExprRP fo a) (rewriteExprRP fo lo) (rewriteExprRP fo hi) incl
-rewriteExprRP fo (CStringIndex a i) =
-  CStringIndex (rewriteExprRP fo a) (rewriteExprRP fo i)
-rewriteExprRP fo (CStringSlice a lo hi incl) =
-  CStringSlice
-    (rewriteExprRP fo a)
-    (rewriteExprRP fo lo)
-    (rewriteExprRP fo hi)
-    incl
-rewriteExprRP fo (CListIndex a i) =
-  CListIndex (rewriteExprRP fo a) (rewriteExprRP fo i)
-rewriteExprRP fo (CListSlice a lo hi incl) =
-  CListSlice
-    (rewriteExprRP fo a)
-    (rewriteExprRP fo lo)
-    (rewriteExprRP fo hi)
-    incl
 rewriteExprRP fo (CBlock stmts) = CBlock (map (rewriteStmtRP fo) stmts)
 rewriteExprRP _ (CMethod name (MethodEvidence iface arity r ir mr)) =
   CMethod name (MethodEvidence iface arity r ir mr)
@@ -2993,15 +2992,6 @@ hoistExpr st (CRangeList lo hi incl) =
   CRangeList (hoistExpr st lo) (hoistExpr st hi) incl
 hoistExpr st (CRangeArray lo hi incl) =
   CRangeArray (hoistExpr st lo) (hoistExpr st hi) incl
-hoistExpr st (CIndex a i) = CIndex (hoistExpr st a) (hoistExpr st i)
-hoistExpr st (CSlice a lo hi incl) =
-  CSlice (hoistExpr st a) (hoistExpr st lo) (hoistExpr st hi) incl
-hoistExpr st (CStringIndex a i) = CStringIndex (hoistExpr st a) (hoistExpr st i)
-hoistExpr st (CStringSlice a lo hi incl) =
-  CStringSlice (hoistExpr st a) (hoistExpr st lo) (hoistExpr st hi) incl
-hoistExpr st (CListIndex a i) = CListIndex (hoistExpr st a) (hoistExpr st i)
-hoistExpr st (CListSlice a lo hi incl) =
-  CListSlice (hoistExpr st a) (hoistExpr st lo) (hoistExpr st hi) incl
 hoistExpr st (CBlock stmts) = CBlock (map (hoistStmt st) stmts)
 hoistExpr _ (CDict name rs) = CDict name rs
 
@@ -3597,30 +3587,6 @@ specializeRow row (CRangeList lo hi incl) =
   CRangeList (specializeRow row lo) (specializeRow row hi) incl
 specializeRow row (CRangeArray lo hi incl) =
   CRangeArray (specializeRow row lo) (specializeRow row hi) incl
-specializeRow row (CIndex a i) =
-  CIndex (specializeRow row a) (specializeRow row i)
-specializeRow row (CSlice a lo hi incl) =
-  CSlice
-    (specializeRow row a)
-    (specializeRow row lo)
-    (specializeRow row hi)
-    incl
-specializeRow row (CStringIndex a i) =
-  CStringIndex (specializeRow row a) (specializeRow row i)
-specializeRow row (CStringSlice a lo hi incl) =
-  CStringSlice
-    (specializeRow row a)
-    (specializeRow row lo)
-    (specializeRow row hi)
-    incl
-specializeRow row (CListIndex a i) =
-  CListIndex (specializeRow row a) (specializeRow row i)
-specializeRow row (CListSlice a lo hi incl) =
-  CListSlice
-    (specializeRow row a)
-    (specializeRow row lo)
-    (specializeRow row hi)
-    incl
 specializeRow row (CBlock stmts) = CBlock (map (specializeStmt row) stmts)
 
 specializeBind : DefaultRow -> CBind -> CBind

@@ -22,6 +22,7 @@ import backend.wasm_demand.{
 import backend.wasm_demand as WD
 import backend.wasm_demand.{JsImport(..), WasmDemand(..)}
 import backend.trmc_analysis.{TrmcVerdicts, isTrmcFn, isTrmcImpl}
+import ir.core_walk.{patBinders}
 -- lint-disable-file rule-prefer-assign-op
 -- ⚠️ The `setRef r v` -> `r := v` migration DELIBERATELY SKIPS this file (#1746).
 -- `test/wasm/diff_wasm_typed.sh` pins ~60 of this file's `setRef` call sites as
@@ -131,9 +132,9 @@ import backend.trmc_analysis.{TrmcVerdicts, isTrmcFn, isTrmcImpl}
 --     struct $C_Tup<n> {tag + n (ref eq)}.  `CTuple` = struct.new; HTuple n drives the
 --     same (single-slot) br_table; tuple-pattern fields extract via struct.get i+1.
 --   * Array: $arr = (array (mut (ref eq))).  `CArray` = array.new_fixed; `CRangeArray`
---     = a counted fill loop; `CIndex` = a bounds-checked array.get (i<0 || i>=len →
+--     = a counted fill loop; `array index` = a bounds-checked array.get (i<0 || i>=len →
 --     `unreachable`, matching native @mdk_oob's abort — both abort with empty stdout);
---     `CSlice` = array.new + array.copy.  Array temps are (ref null $arr) scratch
+--     `array slice` = array.new + array.copy.  Array temps are (ref null $arr) scratch
 --     locals (`ref.as_non_null` before array ops).
 --   * Record: a named-field ctor is ALREADY a W3 user ctor (its $C_<name> struct is
 --     declared), so `CRecord` = positional struct.new in declared field order;
@@ -1290,7 +1291,7 @@ gapL3P prog reason = gapL3 (progEmit prog) reason
 -- Which collection reps the program actually uses (gates their type-section decls,
 -- peer to `useStr`).  `useList`: any CList/CRangeList or a HCons/HNil match
 -- head → the cons-cell `$C_Cons` + root `$T_List` (Nil is an i31).  `useArray`:
--- any CArray/CRangeArray/CIndex/CSlice → the `$arr` (array (mut (ref eq))) type.
+-- any CArray/CRangeArray/array index/array slice → the `$arr` (array (mut (ref eq))) type.
 -- `useRefBox`: any Ref/setRef/.value → the `$refbox` 1-field mutable struct.
 -- `tupleArities`: the distinct tuple arities present (CTuple / HTuple) → one
 -- per-arity struct `$C_TupN`.  Records reuse the EXISTING per-ctor struct ($C_<ctor>,
@@ -2554,9 +2555,9 @@ entryExports = [
 
 emitRefInit : Prog -> EmitPlan -> List CBind -> List String
 emitRefInit prog plan groups =
-  -- #561 PR-B: only SAFE (statically-orderable) value globals are eager-initialised in
-  -- $__init — byte-identical to the pre-#561 emitter whenever no global is lazy.  A SAFE
-  -- global's whole eager reach is SAFE (the taint is downward-closed over reads), so this
+  -- Only value globals whose initializer is safe to speculate
+  -- (emit_support.speculationSafe) are initialised in $__init.  An eager global's whole
+  -- eager reach is eager (the taint is downward-closed over reads), so this
   -- prologue never calls a $force fn.  LAZY globals are initialised on first use by their
   -- $force_<name> defines (emitRefForceFns); they are excluded from the eager set here.
   let valBinds = plannedValBinds plan groups
@@ -2633,9 +2634,10 @@ emitRefValInit prog (CBind name [CClause [] body] _ _) =
 emitRefValInit prog _ = gapLP prog "value binding must be a nullary clause"
 
 -- ── #561 PR-B: lazy value-global force functions ─────────────────────────────
--- A `$force_<name>` func for every LAZY value global (dispatch-reaching / cyclic — see
--- emit_support.lazyGlobalNames).  A faithful transliteration of the reference engine's
--- forceMemo/blackholeCell (compiler/eval/eval.mdk) and the native @mdk_force_<x>:
+-- A `$force_<name>` func for every LAZY value global (not safe to speculate,
+-- dispatch-reaching, or cyclic — see emit_support.lazyGlobalNames).  A faithful
+-- transliteration of the reference engine's forceMemo/blackholeCell
+-- (compiler/eval/eval.mdk) and the native @mdk_force_<x>:
 --   state 2 FORCED   -> return the memoised $g_<name>
 --   state 1 FORCING  -> re-entered mid-init => E-CYCLIC-VALUE (the black-hole), unreachable
 --   state 0 UNFORCED -> mark FORCING, run the rhs, memoise the value, mark FORCED, return
@@ -2787,7 +2789,7 @@ mainBodyIsUnit prog cafs (CVar fn _) =
     None => False
 mainBodyIsUnit prog _ (CDict fn _) = returnStamp prog envEmpty fn == RTUnit
 mainBodyIsUnit prog cafs (CLet _ pat _ b) =
-  mainBodyIsUnit prog (shadowCafs (patVars pat) cafs) b
+  mainBodyIsUnit prog (shadowCafs (patBinders pat) cafs) b
 -- the native branch-(2) equivalent: an UNANNOTATED `main = match … { … }` whose
 -- Unit-ness is only knowable from its inferred body type (e.g. check_main's
 -- `match args () { [r,c,f] => withFiles … ; _ => ePutStrLn … }`).  Type-erased here,
@@ -2798,7 +2800,7 @@ mainBodyIsUnit prog cafs (CLet _ pat _ b) =
 mainBodyIsUnit prog cafs (CDecision _ arms _) = allArmsUnit prog cafs arms
 mainBodyIsUnit prog cafs (CMatch _ arms) = allArmsUnit prog cafs arms
 mainBodyIsUnit prog cafs (CBlock stmts) = blockTailIsUnit prog cafs stmts
-mainBodyIsUnit _ _ (CLit _ | CLam _ _ | CLetGroup _ _ | CIf _ _ _ | CBinPrim _ _ _ _ _ | CUnOp _ _ | CTuple _ | CList _ | CRecord _ _ | CFieldAccess _ _ _ _ | CRecordUpdate _ _ _ | CVariantUpdate _ _ _ | CArray _ | CRangeList _ _ _ | CRangeArray _ _ _ | CIndex _ _ | CSlice _ _ _ _ | CStringIndex _ _ | CStringSlice _ _ _ _ | CListIndex _ _ | CListSlice _ _ _ _ | CMethod _ _) =
+mainBodyIsUnit _ _ (CLit _ | CLam _ _ | CLetGroup _ _ | CIf _ _ _ | CBinPrim _ _ _ _ _ | CUnOp _ _ | CTuple _ | CList _ | CRecord _ _ | CFieldAccess _ _ _ _ | CRecordUpdate _ _ _ | CVariantUpdate _ _ _ | CArray _ | CRangeList _ _ _ | CRangeArray _ _ _ | CMethod _ _) =
   False
 
 -- True iff every match/decision arm body is itself a Unit main body.  Empty ⇒ False
@@ -2812,7 +2814,7 @@ allArmsUnitGo prog cafs xs0 = go xs0
   where
     go [] = True
     go ((CArm pat _ body) :: rest) =
-      if mainBodyIsUnit prog (shadowCafs (patVars pat) cafs) body then
+      if mainBodyIsUnit prog (shadowCafs (patBinders pat) cafs) body then
         go rest
       else
         False
@@ -2822,7 +2824,7 @@ blockTailIsUnit : Prog -> OrdMap CExpr -> List CStmt -> Bool
 blockTailIsUnit _ _ [] = False
 blockTailIsUnit prog cafs [CSExpr e] = mainBodyIsUnit prog cafs e
 blockTailIsUnit prog cafs ((CSLet _ pat _) :: rest) =
-  blockTailIsUnit prog (shadowCafs (patVars pat) cafs) rest
+  blockTailIsUnit prog (shadowCafs (patBinders pat) cafs) rest
 blockTailIsUnit prog cafs (_ :: rest) = blockTailIsUnit prog cafs rest
 
 -- The top-level nullary value bindings, name -> body (`isValBind`: never `main`).
@@ -3483,7 +3485,7 @@ clauseLocals clauses = flatMap oneClauseLocals clauses
 
 oneClauseLocals : CClause -> List String
 oneClauseLocals (CClause pats body) =
-  flatMap patVars pats ++ collectExprLocals body
+  flatMap patBinders pats ++ collectExprLocals body
 
 clausesMaxDepth : List CClause -> Int
 clausesMaxDepth clauses = foldMaxDepth (flatMap clauseBody clauses)
@@ -4624,10 +4626,6 @@ emitValueW prog env0 d app0 = go env0 app0
       refOnlyValueW prog node (() => emitArrayCreateRef prog env d es)
     go env (node@(CRangeArray lo hi incl)) =
       refOnlyValueW prog node (() => emitRangeArrayRef prog env d lo hi incl)
-    go env (node@(CIndex a i)) =
-      refOnlyValueW prog node (() => emitIndexRef prog env d a i)
-    go env (node@(CSlice a lo hi incl)) =
-      refOnlyValueW prog node (() => emitSliceRef prog env d a lo hi incl)
     go env (node@(CRecord name fields)) =
       refOnlyValueW prog node (() => emitRecordRef prog env d name fields)
     go env (node@(CFieldAccess ex label recName ord)) = refOnlyValueW
@@ -4827,9 +4825,9 @@ emitVarRefPlain prog env d x =
   if envHas x env then
     ["local.get " ++ localTargetW prog env x]
   else if progValMemberW prog x then
-    -- #561 PR-B: a LAZY value global (dispatch-reaching / cyclic) is forced on first use —
-    -- `call $force_<x>` memoises into $<x> and black-holes a re-entrant force into
-    -- E-CYCLIC-VALUE.  A LOCAL of the same name still shadows (env checked first, above).
+    -- #561 PR-B: a LAZY value global (`emit_support.lazyGlobalNames`: it reaches an
+    -- initializer not safe to speculate, a cycle or an eager dispatch) is forced on first use:
+    -- `call $force_<x>` memoises into $<x>; a re-entrant force is E-CYCLIC-VALUE; a local shadows.
     -- The result is a non-null (ref eq), same as the eager `global.get; ref.as_non_null`.
     -- #664: a single memo membership check (was two linear `contains … (progValNames prog)`
     -- scans on this hot path); the lazy/eager choice nests under it, byte-identical.
@@ -8768,9 +8766,9 @@ emitClosure prog env _d pats body =
   let n = freshLamId (progEmit prog)
   let lamName = "$" ++ WN.wasmName (WN.WGenerated WN.WLambda "" n)
   -- W2/cat2: a param may be a destructuring pattern (tuple/ctor); its BOUND vars
-  -- (patVars) — not a single synthetic name — are what the body's free-var set
+  -- (patBinders) — not a single synthetic name — are what the body's free-var set
   -- subtracts, so the captures are computed over the real bound names.
-  let boundVars = flatMap patVars pats
+  let boundVars = flatMap patBinders pats
   let captured =
     filterList
       (c => envHas c env)
@@ -8816,7 +8814,7 @@ emitLamDefine prog lamName pats captured capEnv body =
   let argLoads = flatMap argLoadPosition (rangeList 0 arity)
   let (paramBinds, bodyEnv0) = bindParamPats prog capEnv (zipPatsP pats synthPs)
   let bodyEnv = bodyEnv0
-  let patBoundVars = flatMap patVars pats
+  let patBoundVars = flatMap patBinders pats
   let bodyLocals =
     filterList
       (notIn (captured ++ patBoundVars))
@@ -9163,11 +9161,11 @@ freeVarsExpr bound (CApp f args _) =
   freeVarsExpr bound f ++ flatMap (freeVarsExpr bound) args
 -- A lambda param may be a DESTRUCTURING pattern (tuple/ctor) — e.g. a `do`-bind
 -- with a tuple LHS `(a, b) <- m` desugars to `andThen m (\(a, b) => …)`.  Subtract
--- ALL its bound vars (patVars, like the CLet case), not `map patName` which only
+-- ALL its bound vars (patBinders, like the CLet case), not `map patName` which only
 -- accepts PVar/PWild and gaps on any real pattern.  (emitClosure/emitLamDefine
 -- already destructure such params via bindPatRef; only this free-var walk lagged.)
 freeVarsExpr bound (CLam pats b) =
-  freeVarsExpr (omFromNames (flatMap patVars pats) bound) b
+  freeVarsExpr (omFromNames (flatMap patBinders pats) bound) b
 freeVarsExpr _bound (CLit _) = []
 freeVarsExpr bound (CBinPrim _ l r _ _) =
   freeVarsExpr bound l ++ freeVarsExpr bound r
@@ -9175,7 +9173,7 @@ freeVarsExpr bound (CUnOp _ x) = freeVarsExpr bound x
 freeVarsExpr bound (CIf c t f) =
   freeVarsExpr bound c ++ freeVarsExpr bound t ++ freeVarsExpr bound f
 freeVarsExpr bound (CLet _ pat e1 e2) =
-  freeVarsExpr bound e1 ++ freeVarsExpr (omFromNames (patVars pat) bound) e2
+  freeVarsExpr bound e1 ++ freeVarsExpr (omFromNames (patBinders pat) bound) e2
 freeVarsExpr bound (CBlock stmts) = freeVarsStmts bound stmts
 freeVarsExpr bound (CDecision scrut arms _) =
   freeVarsExpr bound scrut ++ flatMap (freeVarsArm bound) arms
@@ -9202,9 +9200,6 @@ freeVarsExpr bound (CRangeList lo hi _) =
   freeVarsExpr bound lo ++ freeVarsExpr bound hi
 freeVarsExpr bound (CRangeArray lo hi _) =
   freeVarsExpr bound lo ++ freeVarsExpr bound hi
-freeVarsExpr bound (CIndex e i) = freeVarsExpr bound e ++ freeVarsExpr bound i
-freeVarsExpr bound (CSlice e lo hi _) =
-  freeVarsExpr bound e ++ freeVarsExpr bound lo ++ freeVarsExpr bound hi
 -- cat4/W5: a return-position method occurrence (CMethod) and a constrained-fn
 -- occurrence (CDict) carry their dispatch Routes; a route's RDict/RDictFwd names a
 -- dict PARAM that is read at the use site.  Without surfacing it here, a method/
@@ -9216,14 +9211,6 @@ freeVarsExpr bound (CMethod _ (MethodEvidence _ _ route implRoutes methRoutes)) 
   freeGivens bound (route :: implRoutes ++ methRoutes)
 freeVarsExpr bound (CDict name routes) =
   (if omHasKey name bound then [] else [name]) ++ freeGivens bound routes
-freeVarsExpr bound (CStringIndex e i) =
-  freeVarsExpr bound e ++ freeVarsExpr bound i
-freeVarsExpr bound (CStringSlice e lo hi _) =
-  freeVarsExpr bound e ++ freeVarsExpr bound lo ++ freeVarsExpr bound hi
-freeVarsExpr bound (CListIndex e i) =
-  freeVarsExpr bound e ++ freeVarsExpr bound i
-freeVarsExpr bound (CListSlice e lo hi _) =
-  freeVarsExpr bound e ++ freeVarsExpr bound lo ++ freeVarsExpr bound hi
 
 -- free vars of a CLetGroup binding's clauses (each clause's params are locally bound).
 freeVarsClauses : OrdMap Unit -> CBind -> List String
@@ -9232,7 +9219,7 @@ freeVarsClauses bound (CBind _ clauses _ _) =
 
 freeVarsClause : OrdMap Unit -> CClause -> List String
 freeVarsClause bound (CClause pats body) =
-  freeVarsExpr (omFromNames (flatMap patVars pats) bound) body
+  freeVarsExpr (omFromNames (flatMap patBinders pats) bound) body
 
 lgBindName : CBind -> String
 lgBindName (CBind n _ _ _) = n
@@ -9242,15 +9229,16 @@ freeVarsStmts _ [] = []
 freeVarsStmts bound ((CSExpr e) :: rest) =
   freeVarsExpr bound e ++ freeVarsStmts bound rest
 freeVarsStmts bound ((CSLet _ pat e) :: rest) =
-  freeVarsExpr bound e ++ freeVarsStmts (omFromNames (patVars pat) bound) rest
+  freeVarsExpr bound e
+    ++ freeVarsStmts (omFromNames (patBinders pat) bound) rest
 freeVarsStmts bound (_ :: rest) = freeVarsStmts bound rest
 
 freeVarsArm : OrdMap Unit -> CArm -> List String
 freeVarsArm bound (CArm pat guards body) =
-  let bound2 = omFromNames (patVars pat) bound
+  let bound2 = omFromNames (patBinders pat) bound
   flatMap (freeVarsGuard bound2) guards ++ freeVarsExpr bound2 body
 freeVarsArm bound (CArmAlt pat guards _) =
-  flatMap (freeVarsGuard (omFromNames (patVars pat) bound)) guards
+  flatMap (freeVarsGuard (omFromNames (patBinders pat) bound)) guards
 
 freeVarsGuard : OrdMap Unit -> CGuard -> List String
 freeVarsGuard bound (CGBool g) = freeVarsExpr bound g
@@ -9441,150 +9429,6 @@ emitRangeArrayRef prog env d lo hi incl =
     ++ ["local.get " ++ iL, "i32.const 1", "i32.add", "local.set " ++ iL]
     ++ ["br " ++ labelName WN.WLabelRal d, "end", "end"]
     ++ ["local.get " ++ arrL, "ref.as_non_null"]
-
--- CIndex arr i: bounds-check (i<0 or i>=len → trap, matching native @mdk_oob), then
--- array.get.  The trap is `unreachable` (WasmGC has no host-trap call here; an OOB
--- access aborting the module mirrors the native abort).
-emitIndexRef : Prog -> Env -> Int -> CExpr -> CExpr -> List String
-emitIndexRef prog env d a i =
-  let arrL = w7Local (progEmit prog) WN.W7Ixarr d
-  let idxL = w7Local (progEmit prog) WN.W7Ixi d
-  let arrI =
-    emitRefExpr prog env d a ++ ["ref.cast (ref $arr)", "local.set " ++ arrL]
-  let idxI =
-    emitRefExpr prog env d i
-      ++ ["ref.cast (ref i31)", "i31.get_s", "local.set " ++ idxL]
-  arrI
-    ++ idxI
-    -- bounds: idx < 0 || idx >= len → B5 coded [E-INDEX-OOB] trap (peer of native
-    -- @mdk_oob; message matches medaka_rt.c, sans the index value native also omits).
-    ++ ["local.get " ++ idxL, "i32.const 0", "i32.lt_s"]
-    ++ [
-      "local.get " ++ idxL,
-      "local.get " ++ arrL,
-      "ref.as_non_null",
-      "array.len",
-      "i32.ge_s",
-    ]
-    ++ ["i32.or", "if"]
-    ++ indent (wasmTrap (progEmit prog) EIndexOob "index out of bounds")
-    ++ ["end"]
-    ++ [
-      "local.get " ++ arrL,
-      "ref.as_non_null",
-      "local.get " ++ idxL,
-      "array.get $arr",
-      "ref.as_non_null",
-    ]
-
--- CSlice arr lo hi incl: bounds-check, then new array of (end-lo) slots, copy via
--- array.copy.  end = incl ? hi+1 : hi.
---
--- #550: this used to carry NO bounds check — the comment here read "an over-range copy
--- traps in-engine", which was true but is not the contract: the trap is a RAW ENGINE
--- trap, not the coded [E-SLICE-OOB] line `run` produces (sliceArray, eval.mdk).  So wasm
--- was memory-safe but diagnosed wrong, while the LLVM backend (which the comment claimed
--- to "mirror") had no check at all and read out of bounds.  Both are now guarded on the
--- same predicate: `lo < 0 || end > len || end - lo < 0`.  Guarding explicitly rather than
--- leaning on array.new/array.copy's own traps also keeps the two backends' ABORT
--- CONDITION identical instead of merely coincidentally-both-fatal.
---
--- Message parity, and its one REMAINING GAP: this trap line is static bytes (wasmTrap
--- streams them through $mdk_write_err_byte at emit time, no $str value and no data
--- segment), so wasm reports the CODE but not the `[lo..hi]` numbers that eval and
--- native's @mdk_slice_oob both print.
---
--- E-INDEX-OOB does not have this gap: #1787's wasmTrapNum
--- streams a runtime value through $mdk_write_err_int between two fixed byte runs, so
--- all three engines name the offending index.  The same treatment would work here (two
--- numbers instead of one); it is simply not done yet.
---
--- ⚠️ Do NOT read this gap as unobserved.  An earlier version of this comment claimed
--- "nothing compares stderr text across engines: diff_wasm*.sh diff stdout" — that has
--- been FALSE since #531, which made test/wasm/diff_wasm_modules.sh compare stdout,
--- stderr AND exit code (see its `diverges` reporting).  E-SLICE-OOB survives only
--- because no wasm module fixture trips an out-of-range slice; add one and this gate
--- goes red until the numbers match.  (diff_compiler_engines.sh does still classify an
--- interpreter `runtime error [E-` as n/a.)
--- The ABORT CONDITION — which is what soundness turns on — is identical on all three.
-emitSliceRef : Prog ->
-  Env ->
-  Int ->
-  CExpr ->
-  CExpr ->
-  CExpr ->
-  Bool ->
-  List String
-emitSliceRef prog env d a lo hi incl =
-  let srcL = w7Local (progEmit prog) WN.W7Slsrc d
-  let dstL = w7Local (progEmit prog) WN.W7Sldst d
-  let loL = w7Local (progEmit prog) WN.W7Sllo d
-  let lenL = w7Local (progEmit prog) WN.W7Sllen d
-  let arrI =
-    emitRefExpr prog env d a ++ ["ref.cast (ref $arr)", "local.set " ++ srcL]
-  let loI =
-    emitRefExpr prog env d lo
-      ++ ["ref.cast (ref i31)", "i31.get_s", "local.set " ++ loL]
-  let hiI = emitRefExpr prog env d hi ++ ["ref.cast (ref i31)", "i31.get_s"]
-  let adj = if incl then ["i32.const 1", "i32.add"] else []
-  -- `end` is live on the stack after adj; stash it in lenL, guard, then turn it into the
-  -- element count.  Ordering matters: the `end > len` compare needs `end`, and the
-  -- `len < 0` compare needs `end - lo`, so the two uses are sequenced through lenL.
-  let guardI =
-    ["local.set " ++ lenL]
-      -- lo < 0
-      ++ ["local.get " ++ loL, "i32.const 0", "i32.lt_s"]
-      -- end > array.len src
-      ++ [
-        "local.get " ++ lenL,
-        "local.get " ++ srcL,
-        "ref.as_non_null",
-        "array.len",
-        "i32.gt_s",
-        "i32.or",
-      ]
-      -- (end - lo) < 0  (inverted range)
-      ++ [
-        "local.get " ++ lenL,
-        "local.get " ++ loL,
-        "i32.sub",
-        "i32.const 0",
-        "i32.lt_s",
-        "i32.or",
-      ]
-      ++ ["if"]
-      ++ indent (wasmTrap (progEmit prog) ESliceOob "slice out of bounds")
-      ++ ["end"]
-      ++ [
-        "local.get " ++ lenL,
-        "local.get " ++ loL,
-        "i32.sub",
-        "local.set " ++ lenL,
-      ]
-  arrI
-    ++ loI
-    ++ hiI
-    ++ adj
-    ++ guardI
-    ++ [
-      "i32.const 0",
-      "ref.i31",
-      "local.get " ++ lenL,
-      "array.new $arr",
-      "local.set " ++ dstL,
-    ]
-    -- array.copy dst dstoff src srcoff len
-    ++ [
-      "local.get " ++ dstL,
-      "ref.as_non_null",
-      "i32.const 0",
-      "local.get " ++ srcL,
-      "ref.as_non_null",
-      "local.get " ++ loL,
-      "local.get " ++ lenL,
-      "array.copy $arr $arr",
-    ]
-    ++ ["local.get " ++ dstL, "ref.as_non_null"]
 
 -- a named-field record construction: CRecord carries fields in DECLARED order
 -- (lowering preserves it), so emit positionally — identical to a positional ctor
@@ -9807,7 +9651,7 @@ orArmsFrom prefix owners i ((CArm pat guards body) :: rest)
     let a = OrArm {
       oaIndex = i,
       oaLabel = "\{prefix}_\{intToString i}",
-      oaVars = patVars pat ++ flatMap guardVars guards,
+      oaVars = patBinders pat ++ flatMap guardVars guards,
       oaPat = pat,
       oaGuards = guards,
       oaBody = body,
@@ -10438,7 +10282,7 @@ collectExprLocals : CExpr -> List String
 collectExprLocals (CLet _ (PVar x _ _) e1 e2) =
   x :: collectExprLocals e1 ++ collectExprLocals e2
 collectExprLocals (CLet _ pat e1 e2) =
-  patVars pat ++ (collectExprLocals e1 ++ collectExprLocals e2)
+  patBinders pat ++ (collectExprLocals e1 ++ collectExprLocals e2)
 collectExprLocals (CBinPrim _ l r _ _) =
   collectExprLocals l ++ collectExprLocals r
 collectExprLocals (CUnOp _ x) = collectExprLocals x
@@ -10460,10 +10304,6 @@ collectExprLocals (CRangeList lo hi _) =
   collectExprLocals lo ++ collectExprLocals hi
 collectExprLocals (CRangeArray lo hi _) =
   collectExprLocals lo ++ collectExprLocals hi
-collectExprLocals (CIndex base index) =
-  collectExprLocals base ++ collectExprLocals index
-collectExprLocals (CSlice base lo hi _) =
-  collectExprLocals base ++ collectExprLocals lo ++ collectExprLocals hi
 collectExprLocals (CBlock stmts) = flatMap collectStmtLocals stmts
 collectExprLocals (CDecision scrut arms _) =
   collectExprLocals scrut ++ flatMap collectArmLocals arms
@@ -10482,14 +10322,6 @@ collectExprLocals (CLetGroup binds body) =
 -- a method dispatched on a projected super dictionary reads it through a local
 collectExprLocals (CMethod _ (MethodEvidence _ _ (RProj r path) _ _)) =
   [projLocalName r path]
-collectExprLocals (CStringIndex base index) =
-  collectExprLocals base ++ collectExprLocals index
-collectExprLocals (CStringSlice base lo hi _) =
-  collectExprLocals base ++ collectExprLocals lo ++ collectExprLocals hi
-collectExprLocals (CListIndex base index) =
-  collectExprLocals base ++ collectExprLocals index
-collectExprLocals (CListSlice base lo hi _) =
-  collectExprLocals base ++ collectExprLocals lo ++ collectExprLocals hi
 collectExprLocals (CMethod _ _ | CLit _ | CVar _ _ | CLam _ _ | CDict _ _) = []
 
 collectFieldLocals : CField -> List String
@@ -10504,7 +10336,7 @@ collectLgValLocals _ = []
 collectStmtLocals : CStmt -> List String
 collectStmtLocals (CSExpr ex) = collectExprLocals ex
 collectStmtLocals (CSLet _ (PVar x _ _) ex) = x :: collectExprLocals ex
-collectStmtLocals (CSLet _ pat ex) = patVars pat ++ collectExprLocals ex
+collectStmtLocals (CSLet _ pat ex) = patBinders pat ++ collectExprLocals ex
 collectStmtLocals (CSAssign _ ex) = collectExprLocals ex
 
 -- ── W7 scratch-local declarations ────────────────────────────────────────────
@@ -10599,31 +10431,16 @@ w7LocalKinds = [
 -- an arm contributes its pattern's bound vars + its body's locals + guard locals.
 collectArmLocals : CArm -> List String
 collectArmLocals (CArm pat guards body) =
-  patVars pat ++ flatMap collectGuardLocals guards ++ collectExprLocals body
+  patBinders pat ++ flatMap collectGuardLocals guards ++ collectExprLocals body
 collectArmLocals (CArmAlt pat guards _) =
-  patVars pat ++ flatMap collectGuardLocals guards
+  patBinders pat ++ flatMap collectGuardLocals guards
 
 collectGuardLocals : CGuard -> List String
 collectGuardLocals (CGBool g) = collectExprLocals g
 -- #379: `guardStashLocal` is the slot emitGuardChainRef evaluates the RHS into before
 -- refutably matching `p` against it — declared here so it rides the normal body-local
 -- path (dedupKeep collapses the repeats when a function has several such guards).
-collectGuardLocals (CGBind p e) = patVars p ++ collectExprLocals e
-
--- the variables a pattern binds (for local declaration).
-patVars : Pat -> List String
-patVars (PVar x _ _) = [x]
-patVars PWild = []
-patVars (PLit _) = []
-patVars (PCon _ args) = flatMap patVars args
-patVars (PTuple ps) = flatMap patVars ps
-patVars (PCons h t) = patVars h ++ patVars t
-patVars (PList ps) = flatMap patVars ps
-patVars (PAs x _ _ p) = x :: patVars p
--- `PRec` of a declared record is rewritten to `PCon` (`rewriteProgramRecPats`),
--- `POr` is expanded into arm candidates (`lowerOrArms`) and desugar lifts `PAnn`
--- out, so none of them reaches a backend.
-patVars (PRng _ _ _ | PRec _ _ _ | POr _ | PAnn _ _) = []
+collectGuardLocals (CGBind p e) = patBinders p ++ collectExprLocals e
 
 -- ── operator tables (both modes) ─────────────────────────────────────────────
 
@@ -10968,7 +10785,7 @@ maxIndexAt (CBlock stmts) d = foldMaxI (map (s => maxIndexAtStmt s d) stmts)
 maxIndexAt (CLetGroup binds body) d =
   foldMaxI (maxIndexAt body d :: map (b => maxIndexAtLgVal b d) binds)
 -- compound value nodes emit their sub-expressions at depth `d` (no own stash slot);
--- descend so a scratch-using element (e.g. CIndex/CSlice/a nested match) is counted.
+-- descend so a scratch-using element (e.g. array index/slice, a nested match) is counted.
 maxIndexAt (CTuple es) d = foldMaxI (map (x => maxIndexAt x d) es)
 maxIndexAt (CList es) d = foldMaxI (map (x => maxIndexAt x d) es)
 maxIndexAt (CArray es) d = foldMaxI (map (x => maxIndexAt x d) es)
@@ -10999,9 +10816,6 @@ maxIndexAt (CRangeList lo hi _) d =
   maxI d (maxI (maxIndexAt lo d) (maxIndexAt hi d))
 maxIndexAt (CRangeArray lo hi _) d =
   maxI d (maxI (maxIndexAt lo d) (maxIndexAt hi d))
-maxIndexAt (CIndex a i) d = maxI d (maxI (maxIndexAt a d) (maxIndexAt i d))
-maxIndexAt (CSlice a lo hi _) d =
-  maxI d (maxI (maxIndexAt a d) (maxI (maxIndexAt lo d) (maxIndexAt hi d)))
 maxIndexAt _ d = d - 1
 
 -- the deepest switch nesting in a tree (each CTSwitch increments the emit depth by
@@ -11203,8 +11017,6 @@ ctag (CRecordUpdate _ _ _) = "CRecordUpdate (W7)"
 ctag (CVariantUpdate _ _ _) = "CVariantUpdate (W7)"
 ctag (CRangeList _ _ _) = "CRangeList (W7)"
 ctag (CRangeArray _ _ _) = "CRangeArray (W7)"
-ctag (CIndex _ _) = "CIndex (W7)"
-ctag (CSlice _ _ _ _) = "CSlice (W7)"
 ctag (CMethod _ _) = "CMethod (dispatch — W5)"
 ctag (CDict _ _) = "CDict (dispatch — W5)"
 ctag (CLetGroup _ _) = "CLetGroup (where/let-group — W4)"

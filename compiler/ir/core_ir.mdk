@@ -127,26 +127,10 @@ public export data CExpr =
   | CRecordUpdate String CExpr (List CField)
   -- named-field variant (constructor) update: `Con { base | f = v … }` (§2.3)
   | CVariantUpdate String CExpr (List CField)
-  -- array / range / index / slice (slice 3)
+  -- array / range
   | CArray (List CExpr)
   | CRangeList CExpr CExpr Bool
   | CRangeArray CExpr CExpr Bool
-  | CIndex CExpr CExpr
-  | CSlice CExpr CExpr CExpr Bool
-  -- String-receiver index/slice.  No lowering produces these any more (#4261).
-  -- The String runtime rep is a packed UTF-8 cell,
-  -- NOT an i64-element array, so these emit codepoint-indexed char extract /
-  -- substring (via @mdk_string_to_chars / @mdk_string_slice) instead of the
-  -- array GEP path.  CIndex/CSlice stay array-only (byte-identical emit).
-  | CStringIndex CExpr CExpr
-  | CStringSlice CExpr CExpr CExpr Bool
-  -- List-receiver index/slice; likewise produced by no lowering (#4261).
-  -- A List is a chain of Cons cells ([tag|head@8|
-  -- tail@16], Nil = odd immediate), NOT a contiguous i64-element array, so these
-  -- emit a cons-cell walk (via @mdk_list_index / @mdk_list_slice) instead of the
-  -- array GEP path.  CIndex/CSlice stay array-only (byte-identical emit).
-  | CListIndex CExpr CExpr
-  | CListSlice CExpr CExpr CExpr Bool
   -- a bare sequential block (desugar's EBlock — imperative IO / let-sequencing)
   | CBlock (List CStmt)
   -- typeclass dispatch, dicts explicit (slice 5; Route read out of the AST's
@@ -696,27 +680,6 @@ mapExprBinders f (CRangeList lo hi incl) =
 mapExprBinders f (CRangeArray lo hi incl) =
   let lo2 = mapExprBinders f lo
   CRangeArray lo2 (mapExprBinders f hi) incl
-mapExprBinders f (CIndex a i) =
-  let a2 = mapExprBinders f a
-  CIndex a2 (mapExprBinders f i)
-mapExprBinders f (CSlice a lo hi incl) =
-  let a2 = mapExprBinders f a
-  let lo2 = mapExprBinders f lo
-  CSlice a2 lo2 (mapExprBinders f hi) incl
-mapExprBinders f (CStringIndex a i) =
-  let a2 = mapExprBinders f a
-  CStringIndex a2 (mapExprBinders f i)
-mapExprBinders f (CStringSlice a lo hi incl) =
-  let a2 = mapExprBinders f a
-  let lo2 = mapExprBinders f lo
-  CStringSlice a2 lo2 (mapExprBinders f hi) incl
-mapExprBinders f (CListIndex a i) =
-  let a2 = mapExprBinders f a
-  CListIndex a2 (mapExprBinders f i)
-mapExprBinders f (CListSlice a lo hi incl) =
-  let a2 = mapExprBinders f a
-  let lo2 = mapExprBinders f lo
-  CListSlice a2 lo2 (mapExprBinders f hi) incl
 mapExprBinders f (CBlock stmts) = CBlock (map (mapStmtBinders f) stmts)
 mapExprBinders _ (CMethod name ev) = CMethod name ev
 mapExprBinders _ (CDict name rs) = CDict name rs

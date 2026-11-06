@@ -231,20 +231,40 @@ declare void @mdk_enable_run_stdout_flush(i64)
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
-  %t0 = call i64 @mdk_array_make(i64 11, i64 15)
-  store i64 %t0, ptr @mdk.global.6d356635663735373336353732356635665f5f61
-  %t1 = load i64, ptr @mdk.global.6d356635663735373336353732356635665f5f61
-  %t2 = ashr i64 5, 1
-  %t3 = inttoptr i64 %t1 to ptr
-  %t4 = add i64 %t2, 1
-  %t5 = mul i64 %t4, 8
-  %t6 = getelementptr i8, ptr %t3, i64 %t5
-  %t7 = load i64, ptr %t6
-  %t8 = ashr i64 %t7, 1
-  call void @mdk_print_int(i64 %t8)
+  %t0 = call i64 @mdk.force.6d356635663735373336353732356635665f5f61()
+  %t1 = ashr i64 5, 1
+  %t2 = inttoptr i64 %t0 to ptr
+  %t3 = add i64 %t1, 1
+  %t4 = mul i64 %t3, 8
+  %t5 = getelementptr i8, ptr %t2, i64 %t4
+  %t6 = load i64, ptr %t5
+  %t7 = ashr i64 %t6, 1
+  call void @mdk_print_int(i64 %t7)
   ret i32 0
+}
+; mdk-module module.5f5f757365725f5f
+define internal i64 @mdk.force.6d356635663735373336353732356635665f5f61() {
+entry:
+  %t0 = load i8, ptr @mdk.state.6d356635663735373336353732356635665f5f61
+  switch i8 %t0, label %lz_unforced [ i8 2, label %lz_forced i8 1, label %lz_forcing ]
+lz_forced:
+  %t1 = load i64, ptr @mdk.global.6d356635663735373336353732356635665f5f61
+  ret i64 %t1
+lz_forcing:
+  call void @mdk_cyclic_value(ptr @mdk.gen.globalname.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f61.0)
+  unreachable
+lz_unforced:
+  store i8 1, ptr @mdk.state.6d356635663735373336353732356635665f5f61
+  %t2 = call i64 @mdk_array_make(i64 11, i64 15)
+  store i64 %t2, ptr @mdk.global.6d356635663735373336353732356635665f5f61
+  store i8 2, ptr @mdk.state.6d356635663735373336353732356635665f5f61
+  ret i64 %t2
 }
 ; mdk-module program
 @mdk_disc_none = private unnamed_addr constant i64 -1
 ; mdk-module module.5f5f757365725f5f
 @mdk.global.6d356635663735373336353732356635665f5f61 = global i64 0
+; mdk-module module.5f5f757365725f5f
+@mdk.state.6d356635663735373336353732356635665f5f61 = global i8 0
+; mdk-module module.5f5f757365725f5f
+@mdk.gen.globalname.6d6f64756c652e35663566373537333635373235663566.6d356635663735373336353732356635665f5f61.0 = private unnamed_addr constant [21 x i8] c"\6D\35\66\35\66\37\35\37\33\36\35\37\32\35\66\35\66\5F\5F\61\00"

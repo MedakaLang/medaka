@@ -210,12 +210,6 @@ refsE (CVariantUpdate _ base updates) = refsE base ++ flatMap refsField updates
 refsE (CArray es) = flatMap refsE es
 refsE (CRangeList lo hi _) = refsE lo ++ refsE hi
 refsE (CRangeArray lo hi _) = refsE lo ++ refsE hi
-refsE (CIndex a i) = refsE a ++ refsE i
-refsE (CSlice a lo hi _) = refsE a ++ refsE lo ++ refsE hi
-refsE (CStringIndex a i) = refsE a ++ refsE i
-refsE (CStringSlice a lo hi _) = refsE a ++ refsE lo ++ refsE hi
-refsE (CListIndex a i) = refsE a ++ refsE i
-refsE (CListSlice a lo hi _) = refsE a ++ refsE lo ++ refsE hi
 refsE (CBlock stmts) = flatMap refsStmt stmts
 -- a method occurrence names its METHOD KEY; its routes can additionally name a
 -- shadowing standalone (RLocal).

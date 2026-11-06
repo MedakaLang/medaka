@@ -1,5 +1,6 @@
 import ir.core_ir.{CProgram(..), CBind(..), CClause(..)}
-import backend.emit_support.{eagerCalleesMap, methodTaintSet}
+import backend.emit_support.{eagerCalleesMap, taintSourceSet}
+import ir.constructor_facts.{planConstructors}
 import support.scc.{tarjanSCCs}
 import support.ordmap.{
   OrdMap, omEmpty, omInsert, omLookup, omHasKey, omFromNames, omKeys,
@@ -286,7 +287,8 @@ priorityValid g facts cs0 rank0 stack0 = go cs0 rank0 stack0
 
 export
 validateGlobalInit : CProgram -> List String -> GlobalInitPlan -> List String
-validateGlobalInit (CProgram binds _ _ _ _ _) lazy candidate =
+validateGlobalInit prog lazy candidate =
+  let (CProgram binds _ _ _ _ _) = prog
   let names = map nameOf binds
   let values = map nameOf (filterList isValue binds)
   if not (unique names omEmpty) then
@@ -305,7 +307,8 @@ validateGlobalInit (CProgram binds _ _ _ _ _) lazy candidate =
       ["global init: component order"]
     else
       let ranks = rankNames sequence 0 omEmpty
-      let facts = summaries g adj (methodTaintSet binds) names ranks
+      let sources = taintSourceSet (planConstructors prog).arities binds
+      let facts = summaries g adj sources names ranks
       let isLazy n = match omLookup (owner g n) facts
         Some s => s.tainted
         None => False

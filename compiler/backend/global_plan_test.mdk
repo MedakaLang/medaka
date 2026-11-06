@@ -6,6 +6,7 @@ import types.annotate.{annotateProgram}
 import types.program_facts.{emptyFacts}
 import ir.core_ir_lower.{lowerProgramEmitWith}
 import ir.core_ir.{CProgram(..), CBind(..), CClause(..)}
+import ir.constructor_facts.{planConstructors}
 import test.{Expectation, expectEach, expectEqual}
 
 program : String -> CProgram
@@ -15,29 +16,33 @@ program src =
 candidate : CProgram -> GlobalInitPlan
 candidate cp =
   let (CProgram binds _ _ _ _ _) = cp
-  planGlobals cp (lazyGlobalNames binds) (eagerReachMap binds)
+  planGlobals cp (lazyOf cp) (eagerReachMap binds)
+
+lazyOf : CProgram -> List String
+lazyOf cp =
+  let (CProgram binds _ _ _ _ _) = cp
+  lazyGlobalNames (planConstructors cp).arities binds
 
 checkOrder : String -> List String -> List String -> Expectation
 checkOrder src values eager =
   let cp = program src
-  let (CProgram binds _ _ _ _ _) = cp
   let result = candidate cp
   expectEach [
     ("value order", expectEqual values result.valueOrder),
     ("eager order", expectEqual eager result.eagerOrder),
     (
       "Core validation",
-      expectEqual [] (validateGlobalInit cp (lazyGlobalNames binds) result),
+      expectEqual [] (validateGlobalInit cp (lazyOf cp) result),
     ),
   ]
 
 test "ready components use earliest source priority rather than DFS discovery" =
   checkOrder
     """
-    a = c + 1
+    a = (c, 1)
     b = 5
     c = 40
-    main = a + b
+    main = a
     """
     ["b", "c", "a"]
     ["b", "c", "a"]
@@ -49,21 +54,21 @@ test "transitive helper dependencies and diamonds precede users" = expectEach [
       """
     a = f 1
     b = 3
-    c = d + 1
+    c = (d, 1)
     d = 40
-    f n = c + n
-    main = a + b
+    f n = (c, n)
+    main = a
     """
       ["b", "d", "c", "a"]
-      ["b", "d", "c", "a"],
+      ["b", "d", "c"],
   ),
   (
     "diamond",
     checkOrder
       """
-    a = b + c
-    b = d + 1
-    c = d + 2
+    a = (b, c)
+    b = (d, 1)
+    c = (d, 2)
     d = 10
     main = a
     """
@@ -110,14 +115,14 @@ test "scope and deferred lambda bodies do not invent global dependencies" =
     main = a
     """
     ["a", "c", "deferred"]
-    ["a", "deferred"]
+    ["deferred"]
 
 test "membership, SCC, dependency and priority corruptions have named defects" =
   let cp = program """
-    a = f 1
+    a = (c, 1)
     b = 5
     c = 40
-    f n = c + n
+    f n = n
     main = a
     """
   let bad values eager = validateGlobalInit cp [] GlobalInitPlan {
@@ -263,5 +268,34 @@ test "candidate order cannot split or reverse a lazy SCC" =
     (
       "reverse",
       expectEqual ["global init: component order"] (bad ["y", "x", "z"]),
+    ),
+  ]
+
+test "a value global is eager only when its initializer is safe to speculate" =
+  let cp =
+    program
+      """
+    data Box = Box Int | Empty
+    side = exit 3
+    loud = shout ()
+    shout u = putStrLn "BOOM"
+    sum = 1 + 2
+    lit = 7
+    boxed = Box 3
+    empty = Empty
+    cells = (lit, [boxed, empty], "s")
+    fn = n => shout n
+    main = lit
+    """
+  let order = candidate cp
+  expectEach [
+    ("lazy", expectEqual ["side", "loud", "sum"] (lazyOf cp)),
+    (
+      "eager",
+      expectEqual ["lit", "boxed", "empty", "cells", "fn"] order.eagerOrder,
+    ),
+    (
+      "Core validation",
+      expectEqual [] (validateGlobalInit cp (lazyOf cp) order),
     ),
   ]

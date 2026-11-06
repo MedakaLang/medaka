@@ -1,0 +1,180 @@
+-- compiler/ir/core_walk.mdk — exhaustive traversal of Core IR: a bottom-up
+-- rewrite, a pre-order fold, and the pattern-binder collector.
+--
+-- Every `CExpr` constructor is named in `mapChildren` and `children`, and
+-- neither ends in a catch-all, so a constructor added to `ir/core_ir.mdk` cannot
+-- be skipped silently.  The walk visits the expressions a node holds: guard
+-- expressions, arm bodies, let-group clause bodies, block statements and record
+-- fields.  Patterns, decision trees, routes and call sites are data it carries
+-- along unchanged.  A `CDecision` rewrites its scrutinee and its arms; its tree
+-- refers to arms by index, and the walk keeps every arm in place, so the tree
+-- stays valid.
+
+import frontend.ast.{Pat, patBindings}
+import ir.core_ir.{
+  CArm(..),
+  CBind(..),
+  CClause(..),
+  CExpr(..),
+  CField(..),
+  CGuard(..),
+  CImplBody(..),
+  CImplEntry(..),
+  CProgram(..),
+  CStmt(..),
+}
+
+-- Rewrite every node bottom-up: a node's children first, then [f] at the node.
+export
+rewriteExpr : (CExpr -> CExpr) -> CExpr -> CExpr
+rewriteExpr f e = f (mapChildren (rewriteExpr f) e)
+
+-- Rewrite every clause body, impl entry body and local binding of a program.
+export
+rewriteProgram : (CExpr -> CExpr) -> CProgram -> CProgram
+rewriteProgram f (CProgram binds ctorArs ctorTypes impls mctx facts) =
+  CProgram
+    (map (mapBindBodies (rewriteExpr f)) binds)
+    ctorArs
+    ctorTypes
+    (map (rewriteImpl f) impls)
+    mctx
+    facts
+
+-- Fold [f] over every node, a node before its children, children left to right.
+export
+foldExpr : (a -> CExpr -> a) -> a -> CExpr -> a
+foldExpr f acc e = fold (foldExpr f) (f acc e) (children e)
+
+-- Every name a pattern binds, in source order: `PRec` puns included, an or-pattern
+-- by its first alternative.  Total over `Pat`: `ast.patBindings` names every
+-- constructor.
+export
+patBinders : Pat -> List String
+patBinders p = patBindings p
+
+rewriteImpl : (CExpr -> CExpr) -> CImplEntry -> CImplEntry
+rewriteImpl f (CImplEntry n s d (CImplTagged tag key iface sym ps pats body)) =
+  CImplEntry n s d (CImplTagged tag key iface sym ps pats (rewriteExpr f body))
+rewriteImpl f (CImplEntry n s d (CImplDefault ifaceId tag key sym ps pats body)) =
+  CImplEntry
+    n
+    s
+    d
+    (CImplDefault ifaceId tag key sym ps pats (rewriteExpr f body))
+
+-- One-level rebuild: [g] on each immediate sub-expression.
+mapChildren : (CExpr -> CExpr) -> CExpr -> CExpr
+mapChildren _ (CLit l) = CLit l
+mapChildren _ (CVar x addr) = CVar x addr
+mapChildren g (CApp h args site) = CApp (g h) (map g args) site
+mapChildren g (CLam pats body) = CLam pats (g body)
+mapChildren g (CLet r pat rhs body) = CLet r pat (g rhs) (g body)
+mapChildren g (CLetGroup binds body) =
+  CLetGroup (map (mapBindBodies g) binds) (g body)
+mapChildren g (CMatch scrut arms) = CMatch (g scrut) (map (mapArm g) arms)
+mapChildren g (CDecision scrut arms tree) =
+  CDecision (g scrut) (map (mapArm g) arms) tree
+mapChildren g (CIf c t e) = CIf (g c) (g t) (g e)
+mapChildren g (CBinPrim op l r tag site) = CBinPrim op (g l) (g r) tag site
+mapChildren g (CUnOp op x) = CUnOp op (g x)
+mapChildren g (CTuple es) = CTuple (map g es)
+mapChildren g (CList es) = CList (map g es)
+mapChildren g (CRecord name fields) = CRecord name (map (mapField g) fields)
+mapChildren g (CFieldAccess x label name ord) =
+  CFieldAccess (g x) label name ord
+mapChildren g (CRecordUpdate name base fields) =
+  CRecordUpdate name (g base) (map (mapField g) fields)
+mapChildren g (CVariantUpdate con base fields) =
+  CVariantUpdate con (g base) (map (mapField g) fields)
+mapChildren g (CArray es) = CArray (map g es)
+mapChildren g (CRangeList lo hi incl) = CRangeList (g lo) (g hi) incl
+mapChildren g (CRangeArray lo hi incl) = CRangeArray (g lo) (g hi) incl
+mapChildren g (CBlock stmts) = CBlock (map (mapStmt g) stmts)
+mapChildren _ (CMethod name ev) = CMethod name ev
+mapChildren _ (CDict name rs) = CDict name rs
+
+mapBindBodies : (CExpr -> CExpr) -> CBind -> CBind
+mapBindBodies g (CBind n clauses site bid) =
+  CBind n (map (mapClauseBody g) clauses) site bid
+
+mapClauseBody : (CExpr -> CExpr) -> CClause -> CClause
+mapClauseBody g (CClause pats body) = CClause pats (g body)
+
+mapArm : (CExpr -> CExpr) -> CArm -> CArm
+mapArm g (CArm pat guards body) = CArm pat (map (mapGuard g) guards) (g body)
+mapArm g (CArmAlt pat guards owner) =
+  CArmAlt pat (map (mapGuard g) guards) owner
+
+mapGuard : (CExpr -> CExpr) -> CGuard -> CGuard
+mapGuard g (CGBool e) = CGBool (g e)
+mapGuard g (CGBind p e) = CGBind p (g e)
+
+mapStmt : (CExpr -> CExpr) -> CStmt -> CStmt
+mapStmt g (CSExpr e) = CSExpr (g e)
+mapStmt g (CSLet r pat e) = CSLet r pat (g e)
+mapStmt g (CSAssign x e) = CSAssign x (g e)
+
+mapField : (CExpr -> CExpr) -> CField -> CField
+mapField g (CField k o e) = CField k o (g e)
+
+-- The immediate sub-expressions, in the order `mapChildren` rebuilds them.
+children : CExpr -> List CExpr
+children (CLit _) = []
+children (CVar _ _) = []
+children (CApp h args _) = h :: args
+children (CLam _ body) = [body]
+children (CLet _ _ rhs body) = [rhs, body]
+children (CLetGroup binds body) = flatMap bindBodies binds ++ [body]
+children (CMatch scrut arms) = scrut :: flatMap armChildren arms
+children (CDecision scrut arms _) = scrut :: flatMap armChildren arms
+children (CIf c t e) = [c, t, e]
+children (CBinPrim _ l r _ _) = [l, r]
+children (CUnOp _ x) = [x]
+children (CTuple es) = es
+children (CList es) = es
+children (CRecord _ fields) = map fieldExpr fields
+children (CFieldAccess x _ _ _) = [x]
+children (CRecordUpdate _ base fields) = base :: map fieldExpr fields
+children (CVariantUpdate _ base fields) = base :: map fieldExpr fields
+children (CArray es) = es
+children (CRangeList lo hi _) = [lo, hi]
+children (CRangeArray lo hi _) = [lo, hi]
+children (CBlock stmts) = map stmtExpr stmts
+children (CMethod _ _) = []
+children (CDict _ _) = []
+
+bindBodies : CBind -> List CExpr
+bindBodies (CBind _ clauses _ _) = map clauseBody clauses
+
+export
+clauseBody : CClause -> CExpr
+clauseBody (CClause _ body) = body
+
+export
+bindName : CBind -> String
+bindName (CBind n _ _ _) = n
+
+export
+bindNames : List CBind -> List String
+bindNames binds = map bindName binds
+
+export
+implName : CImplEntry -> String
+implName (CImplEntry n _ _ _) = n
+
+armChildren : CArm -> List CExpr
+armChildren (CArm _ guards body) = map guardExpr guards ++ [body]
+armChildren (CArmAlt _ guards _) = map guardExpr guards
+
+guardExpr : CGuard -> CExpr
+guardExpr (CGBool e) = e
+guardExpr (CGBind _ e) = e
+
+stmtExpr : CStmt -> CExpr
+stmtExpr (CSExpr e) = e
+stmtExpr (CSLet _ _ e) = e
+stmtExpr (CSAssign _ e) = e
+
+fieldExpr : CField -> CExpr
+fieldExpr (CField _ _ e) = e
