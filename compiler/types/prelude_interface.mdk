@@ -23,7 +23,7 @@ import list.{mapAccumL, zip}
 import map as M
 import map.{Map(..), entries}
 import support.ordmap.{OrdMap, omEmpty, omHasKey, omFromPairs}
-import support.util.{joinWith, reverseL, isNonEmptyL}
+import support.util.{joinWith, lookupAssoc, reverseL, isNonEmptyL}
 import types.effect_rows.{Atom, atomKey, renderAtom}
 import types.publish.{
   PubScheme(..), freezePub, freezeRows, emptyZonk, zonkMono, ZState
@@ -59,6 +59,7 @@ public export data PreludeInterface = PreludeInterface {
   piCore : List (String, PubScheme),
   piStandaloneNames : OrdMap Unit,
   piInvocationView : PublishedInvocationView,
+  piInitOrder : List String,
 }
 
 -- The four `GraphRun` values a cache hit restores.
@@ -149,7 +150,15 @@ freezeInterface cross run externs core standalone invocation = PreludeInterface 
   piCore = freezeRows core,
   piStandaloneNames = standalone,
   piInvocationView = publishInvocationView invocation,
+  piInitOrder = preludeOrderOf cross,
 }
+
+-- The prelude's initialisation order, which the core pass records before any freeze.
+preludeOrderOf : CrossRun -> List String
+preludeOrderOf cross =
+  optionOrPanic
+    "internal error: the core pass recorded no initialisation order"
+    (lookupAssoc "core" cross.initOrdersRef.value)
 
 -- The first published row per standalone name, as the drive's own
 -- `omFromPairs (reverseL topSchemes)` keeps it: inserting the reversed rows
@@ -203,6 +212,7 @@ thawInterface _ctx pi =
       Ref (mapSlots zonkMethodSlot pi.piMethodPredicateSlotsQual),
     coreSchemeObligationsRef = Ref (contextsOf pi.piCore),
     crossModuleSchemeOblsQualRef = Ref [],
+    initOrdersRef = Ref [("core", pi.piInitOrder)],
   }
   let seed = GraphRunSeed {
     grsCtorExistentials = pi.piCtorExistentials,

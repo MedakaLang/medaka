@@ -161,7 +161,9 @@ public export data ModuleInterface = ModuleInterface {
 --     module's id and so recorded for every such name, with an empty list or `None`
 --     where it takes none; the file bounds of its sites, keyed by the module and the
 --     site; and the authority variables no caller supplies;
---   * the names it promoted, which a later module is marked with, and its `main`.
+--   * the names it promoted, which a later module is marked with, and its `main`;
+--   * its initialisation-order row as its check recorded it, `None` when the check
+--     recorded none, which a replay keeps absent rather than empty.
 public export data ModuleTrees = ModuleTrees {
   mtMarked : List Decl,
   mtEvidence : EvTable,
@@ -174,6 +176,7 @@ public export data ModuleTrees = ModuleTrees {
   mtValueBounds : List (String, List (Mono, List GrantBinder)),
   mtPromoted : List String,
   mtMain : Option PubScheme,
+  mtInitOrder : Option (String, List String),
 }
 
 -- The rows of a graph record a module's check adds to, read at one point: the
@@ -370,6 +373,10 @@ freezeModuleTrees mid marked published before mctx =
       M.entries (M.difference gs.gsValueBounds.value before.mrValueBounds),
     mtPromoted = mctx.mcCells.promotedRef.value,
     mtMain = lookupAssoc "main" published,
+    mtInitOrder =
+      map
+        (order => (mid, order))
+        (lookupAssoc mid mctx.mcGraph.crossRun.initOrdersRef.value),
   }
 
 -- Replays [t] into [g], the record the serving drive continues from, and returns
@@ -403,6 +410,10 @@ applyModuleTrees g t =
   g.promotionHarvestRef := dedup (g.promotionHarvestRef.value ++ t.mtPromoted)
   match t.mtMain
     Some p => g.mainSchemeRef := Some (thawScheme p)
+    None => ()
+  match t.mtInitOrder
+    Some row =>
+      g.crossRun.initOrdersRef := row :: g.crossRun.initOrdersRef.value
     None => ()
   t.mtMarked
 

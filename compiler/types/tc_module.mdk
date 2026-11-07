@@ -85,7 +85,7 @@ import types.tc_occurrence.{
   argDispatchIndicesById, binopDispatchMethod, unopMethod
 }
 import types.tc_init.{
-  InitViolation(..), checkInitRules, initGraphOf, initInputsAt
+  InitViolation(..), initGraphOf, initInputsAt, initOrder, initRulesAndOrder
 }
 import types.tc_solve.{
   determineByUniqueInstance, dropGoalsSince, goalsMark, improveByUniqueImpl,
@@ -2135,14 +2135,18 @@ checkModuleFull : ModuleCtx ->
   List Decl ->
   (ModuleBindings, List Decl, ModuleCtx)
 checkModuleFull prev seedVars accData prog =
-  checkModuleFullImpl
-    prev.mcGraph
-    (checkRunResidue prev)
+  let seed = plainModuleSeed seedVars
+  withPreludeOrder
     ""
-    (plainModuleSeed seedVars)
-    accData
-    prog
-    prog
+    seed
+    (checkModuleFullImpl
+      prev.mcGraph
+      (checkRunResidue prev)
+      ""
+      seed
+      accData
+      prog
+      prog)
 
 -- E5: like checkModuleFull but takes [implDecls] (core + every EARLIER module — NOT this
 -- module: foldModules only grows the accumulator for LATER modules, so a module is never in
@@ -3174,13 +3178,17 @@ checkModuleFullDiags gctx mid seedVars accData accAll prog =
       ordHere
       binopDispatchMethod
       unopMethod
+  let (violations, order) =
+    initRulesAndOrder initInputs (initGraphOf initInputs)
   each
     (v => match v
       ImpureValue name row loc =>
         pushTypeErrorAt mctx TToplevelEffect loc (topLevelEffectMsg name row)
       CyclicValue name path loc =>
         pushTypeErrorAt mctx TCyclicValue loc (cyclicValueMsg name path))
-    (checkInitRules initInputs (initGraphOf initInputs))
+    violations
+  gctx.crossRun.initOrdersRef :=
+    (mid, order) :: gctx.crossRun.initOrdersRef.value
   (
     schemes,
     marked,
@@ -3362,14 +3370,45 @@ elabModuleStamp : ModuleCtx ->
 elabModuleStamp prev mid seedVars accData implDecls prog =
   -- Stampers execute after graph inference via `drainStampQueue`, not here.
   -- See `StampCtx` and `moduleStampOrder` for the replay mechanism.
-  checkModuleFullImpl
-    prev.mcGraph
-    (checkRunResidue prev)
+  let seed = plainModuleSeed seedVars
+  withPreludeOrder
     mid
-    (plainModuleSeed seedVars)
-    accData
-    implDecls
-    prog
+    seed
+    (checkModuleFullImpl
+      prev.mcGraph
+      (checkRunResidue prev)
+      mid
+      seed
+      accData
+      implDecls
+      prog)
+
+-- The core pass's result, with the prelude's initialisation order recorded under its
+-- mangle id `core`, projected as `checkModuleFullDiags` projects a module's.  The core
+-- pass runs neither rule (I2, I3) on the prelude.  [mid] is the pass's module id; a
+-- module that is not the prelude records nothing here.
+withPreludeOrder : String ->
+  ModuleSeed ->
+  (ModuleBindings, List Decl, ModuleCtx) ->
+  (ModuleBindings, List Decl, ModuleCtx)
+withPreludeOrder mid seed (bindings, marked, mctx) =
+  let envs = mctx.mcGraph.declEnvsRef.value
+  let cross = mctx.mcGraph.crossRun
+  if isPreludeMid mid then
+    let inputs =
+      initInputsAt
+        "core"
+        seed
+        bindings
+        marked
+        mctx
+        envs
+        (declEnvsOrdOf "core" envs)
+        binopDispatchMethod
+        unopMethod
+    cross.initOrdersRef :=
+      ("core", initOrder (initGraphOf inputs)) :: cross.initOrdersRef.value
+  (bindings, marked, mctx)
 
 -- #2705: the drain at the core pass's freeze (`checkCoreMemoized`), at a recording
 -- module's end and at a keyed drive's graph end (`diagsServe`).  Nothing is

@@ -102,3 +102,4 @@ useAdmittedRows : (String -> List (String, (String, String))) -> Bool -> List De
 useDefinerRows : (String -> List (String, (String, String))) -> Bool -> UsePath -> List (String, (String, String))
 userExternSchemes : ModuleCtx -> Map String TyConOrigin -> List Decl -> List (String, Scheme)
 wildOverlayDecls : Int -> List DeclEnvModule -> String -> List Decl
+withPreludeOrder : String -> ModuleSeed -> (ModuleBindings, List Decl, ModuleCtx) -> (ModuleBindings, List Decl, ModuleCtx)

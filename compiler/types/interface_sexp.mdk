@@ -89,7 +89,7 @@
 --   (medaka-interface <version> (sources ((<path> <hash>) ...)) (compiler <id>)
 --     (sections <n>) (digest <hex>))
 --   (section (joins (<join> ...)) <interface>)   a join is a list of `atom` nodes
---   (interface <field> x20)                   `PreludeInterface`, field order
+--   (interface <field> x21)                   `PreludeInterface`, field order
 -- `digest` is the SHA-256, in lower-case hex, of the file's bytes after the
 -- header line, the newline that ends it excluded: every section line with its
 -- own newline.  The reader hashes those bytes as they are, so no section is
@@ -1242,7 +1242,7 @@ public export data PreludeInterfaceFile = PreludeInterfaceFile {
 
 export
 interfaceFormatVersion : Int
-interfaceFormatVersion = 4
+interfaceFormatVersion = 5
 
 export
 cacheOfSections : List InterfaceSection ->
@@ -1377,7 +1377,7 @@ invocationViewOfSExp = decInvocationView "invocation-view"
 -- A constructor call over every field, so a field added to the record is a
 -- build error here until it has an arm.
 interfaceNode : PreludeInterface -> SExp
-interfaceNode (PreludeInterface funNames dispatch ctors ctorPop recordPop classes funSlots funSlotsQual declared declaredQual methodSlots methodSlotsQual ctorEx anyEx externs tyvarNext effvarNext core standalone invocation) = tagged
+interfaceNode (PreludeInterface funNames dispatch ctors ctorPop recordPop classes funSlots funSlotsQual declared declaredQual methodSlots methodSlotsQual ctorEx anyEx externs tyvarNext effvarNext core standalone invocation initOrder) = tagged
   "interface"
   [
     ordMapSExp unitSExp funNames,
@@ -1408,6 +1408,7 @@ interfaceNode (PreludeInterface funNames dispatch ctors ctorPop recordPop classe
     listSExp (pairSExp SAtom pubSchemeSExp) core,
     ordMapSExp unitSExp standalone,
     invocationViewSExp invocation,
+    listSExp SAtom initOrder,
   ]
 
 -- The live cells a published row of the interface holds that a frozen row
@@ -1460,7 +1461,7 @@ decPairAtoms : Reader (String, String)
 decPairAtoms = pairOfSExp expectAtom expectAtom
 
 decInterface : Reader PreludeInterface
-decInterface path (SList [SAtom "interface", n1, n2, n3, n4, n5, n6, n7, n8, n9, n10, n11, n12, n13, n14, n15, n16, n17, n18, n19, n20]) =
+decInterface path (SList [SAtom "interface", n1, n2, n3, n4, n5, n6, n7, n8, n9, n10, n11, n12, n13, n14, n15, n16, n17, n18, n19, n20, n21]) =
   do
     let p = at path "interface"
     funNames <- ordMapOfSExp unitOfSExp (p 1) n1
@@ -1520,6 +1521,7 @@ decInterface path (SList [SAtom "interface", n1, n2, n3, n4, n5, n6, n7, n8, n9,
       n18
     standalone <- ordMapOfSExp unitOfSExp (p 19) n19
     invocation <- decInvocationView (p 20) n20
+    initOrder <- listOfSExp expectAtom (p 21) n21
     Ok
       (PreludeInterface
         funNames
@@ -1541,8 +1543,9 @@ decInterface path (SList [SAtom "interface", n1, n2, n3, n4, n5, n6, n7, n8, n9,
         effvarNext
         core
         standalone
-        invocation)
-decInterface path node = misfit path [("interface", 20)] node
+        invocation
+        initOrder)
+decInterface path node = misfit path [("interface", 21)] node
 
 export
 decJoins : Reader (List (List Atom))

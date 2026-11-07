@@ -44,6 +44,7 @@ types.tc_elab
 types.tc_global
 types.tc_stamp
 types.tc_module
+types.tc_init
 types.program_facts
 eval.eval
 tools.check

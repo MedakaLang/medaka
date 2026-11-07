@@ -1,6 +1,7 @@
 import support.diag_codes.{DiagCode(..)}
 import types.invocation_basis.{frozenInvocationView}
 import types.value_main.{mainUseSite, mainUsedMsg}
+import support.util.{reverseL}
 -- The checked main-shape facts published at the end of a typecheck drive.
 
 import frontend.ast.{EvId, TyConOrigin(..), Decl(..), Expr(..), Ty(..), Loc}
@@ -89,6 +90,7 @@ driveOutputsNow mctx outcome = DriveOutputs {
   doFfiAliases = mctx.mcGraph.declEnvsRef.value.deData.deAliases,
   doOrdIndex = mctx.mcGraph.declEnvsRef.value.deOrdIndex,
   doEffvarNext = mctx.mcGraph.graphRun.effvarCounter.value,
+  doInitOrders = reverseL mctx.mcGraph.crossRun.initOrdersRef.value,
 }
 
 -- The interface of `println`'s one-predicate context (`Display a => …`).

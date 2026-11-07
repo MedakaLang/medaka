@@ -777,7 +777,7 @@ emitElaborated sibling outputs requirement asyncDriver emitTail runtimeDecls cor
                 outputs
                 coreW
                 modulesW
-                (factsOfChecked checked)
+                (factsOfChecked outputs checked)
             let (coreD, modules2, table, origins) =
               mangleUnitsEvFor sibling checked.cpEvidence coreW modulesW
             emitTail

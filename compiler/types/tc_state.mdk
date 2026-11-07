@@ -644,6 +644,7 @@ freshCrossRun ctors = CrossRun {
   crossModuleMethodPredicateSlotsQualRef = Ref [],
   coreSchemeObligationsRef = Ref omEmpty,
   crossModuleSchemeOblsQualRef = Ref [],
+  initOrdersRef = Ref [],
 }
 
 -- Source-location attribution: the span of the innermost construct around a check

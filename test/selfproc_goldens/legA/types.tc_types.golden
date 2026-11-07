@@ -1,4 +1,5 @@
 dynFor : ModuleCtx -> DynCtx
+elabFactsOf : DriveOutputs -> Map Int BinderRow -> ElabFacts
 emptyDriveOutputs : Unit -> DriveOutputs
 grantTopKey : String -> String -> String
 manifestDriverFor : DriveInputs -> Option String -> Option EntryKey

@@ -70,7 +70,7 @@ main = ()
       ),
     ]
   let table = elab.erEvidence
-  let checked = option emptyFacts factsOfChecked report.trChecked
+  let checked = option emptyFacts (factsOfChecked outputs) report.trChecked
   let sourceFacts =
     factsOfElabSources checkedFfiExternTypeNamesModules outputs elab table
   let expected = [("entry", "declared", ["Clock"]), ("entry", "main", [])]
@@ -134,7 +134,7 @@ entryOutcomePrelude =
 
 outcomeFacts : (ProgramFacts, ProgramFacts)
 outcomeFacts =
-  let (elab, report, _) =
+  let (elab, report, outputs) =
     elaborateModulesWithReport
       { defaultDriveInputs |
         diManifestRequests = [
@@ -150,7 +150,7 @@ outcomeFacts =
       [("entry", desugar (parseLocated "main = 1"))]
   let table = elab.erEvidence
   let checked = match report.trChecked
-    Some program => factsOfChecked program
+    Some program => factsOfChecked outputs program
     None => emptyFacts
   (checked, factsOfElabWith table elab)
 
@@ -230,4 +230,37 @@ test "source-aware checked facts retain module ownership and checked alias heads
     expectEqual
       [Some (["Int"], "Int"), Some (["Float"], "Float")]
       (map (s => map (a => (a.parameterHeads, a.resultHead)) s.sourceAbi) rows),
+  ]
+
+-- A library whose values read each other out of source order, and an importer
+-- whose value reads the library's.
+initOrderMods : List (String, List Decl)
+initOrderMods =
+  map
+    (m => (fst m, desugar (parseLocated (snd m))))
+    [
+      (
+        "io_lib",
+        "export\ntotal = (base, 1)\nexport\nbase = 41\nlabel = \"x\"\n",
+      ),
+      ("io_user", "import io_lib.{total}\nanswer = [total]\nmain = answer\n"),
+    ]
+
+test "checked and elaborated facts carry each module's init order in drive order" =
+  let (elab, report, outputs) =
+    elaborateModulesWithReport defaultDriveInputs False None [] [] initOrderMods
+  let expected = Some [
+    ("core", []),
+    ("io_lib", ["base", "total", "label"]),
+    ("io_user", ["answer"]),
+  ]
+  expectAll [
+    expectEqual
+      expected
+      (option
+        None
+        (c => (factsOfChecked outputs c).pfInitOrders)
+        report.trChecked),
+    expectEqual expected (factsOfElab elab).pfInitOrders,
+    expectEqual None emptyFacts.pfInitOrders,
   ]

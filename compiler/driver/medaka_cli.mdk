@@ -3038,7 +3038,9 @@ runRunCmd argv =
                       finishRunEval
                         target
                         jsonMode
-                        (withSibling inputs.diSibling (checkedFacts report))
+                        (withSibling
+                          inputs.diSibling
+                          (checkedFacts front.foOutputs report))
                         trees
                         mods
                         (allWarnTriples tsrc target diags)
@@ -3122,7 +3124,9 @@ runRunCmd argv =
                       finishRunEval
                         target
                         jsonMode
-                        (withSibling inputs.diSibling (checkedFacts report))
+                        (withSibling
+                          inputs.diSibling
+                          (checkedFacts front.foOutputs report))
                         trees
                         mods
                         projWarns
@@ -3174,11 +3178,12 @@ runProgramOutput : ProgramFacts ->
 runProgramOutput facts preludeDecls modules =
   evalModulesOutputRunFacts facts preludeDecls modules
 
--- The facts of the checked program [report] judged.  `executedFromReport` has
--- already refused a report without one, so the absent arm is unreachable.
-checkedFacts : TcReport -> ProgramFacts
-checkedFacts report = match report.trChecked
-  Some checked => factsOfChecked checked
+-- The facts of the checked program [report] judged, published by the drive whose
+-- outputs are [outputs].  `executedFromReport` has already refused a report
+-- without one, so the absent arm is unreachable.
+checkedFacts : DriveOutputs -> TcReport -> ProgramFacts
+checkedFacts outputs report = match report.trChecked
+  Some checked => factsOfChecked outputs checked
   None =>
     panic "internal error: the typecheck published no checked program to run"
 

@@ -564,9 +564,9 @@ test "an interface holding a linked core row is reported by row name" =
         (interfaceFaults { pi | piCore = [("linkedRow", row)] })
 
 test "the previous interface format is stale before any old field can decode" =
-  match decodeInterface "(medaka-interface 3 (sources ()))\n"
+  match decodeInterface "(medaka-interface 4 (sources ()))\n"
     Ok _ => fail "old interface decoded"
     Err e => expectAll [
       expectEqual "header/medaka-interface.1" e.sePath,
-      expectTrue (S.contains "format version 3, this compiler reads 4" e.seWhat),
+      expectTrue (S.contains "format version 4, this compiler reads 5" e.seWhat),
     ]

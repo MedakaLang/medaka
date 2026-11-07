@@ -1,5 +1,5 @@
 # META
-source_lines=1099
+source_lines=1100
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_state: mints, copies and carries of the state records (including `emptyShadowDicts`, the
@@ -648,6 +648,7 @@ freshCrossRun ctors = CrossRun {
   crossModuleMethodPredicateSlotsQualRef = Ref [],
   coreSchemeObligationsRef = Ref omEmpty,
   crossModuleSchemeOblsQualRef = Ref [],
+  initOrdersRef = Ref [],
 }
 
 -- Source-location attribution: the span of the innermost construct around a check
@@ -1179,7 +1180,7 @@ mintGraphCtx inputs admitted =
 (DTypeSig true "emptyShadowDicts" (TyCon "ShadowDicts"))
 (DFunDef false "emptyShadowDicts" () (ERecordCreate "ShadowDicts" ((fa "sdMonos" (EListLit)) (fa "sdIfaces" (EListLit)) (fa "sdArgVecs" (EListLit)))))
 (DTypeSig false "freshCrossRun" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Scheme")) (TyCon "CrossRun")))
-(DFunDef false "freshCrossRun" ((PVar "ctors")) (ERecordCreate "CrossRun" ((fa "universeFunNamesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeMethodDispatchIdxByIdRef" (EApp (EVar "Ref") (EListLit))) (fa "universeDataCtors" (EApp (EVar "Ref") (EListLit))) (fa "universeCtorPop" (EApp (EVar "Ref") (EApp (EVar "spFromFloor") (EVar "ctors")))) (fa "universeRecordPop" (EApp (EVar "Ref") (EVar "spEmpty"))) (fa "builtinClassesRef" (EApp (EVar "Ref") (EVar "emptyBuiltinClasses"))) (fa "crossModuleFunPredicateSlotsRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleFunPredicateSlotsQualRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleFunConstraintDeclaredRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleFunConstraintDeclaredQualRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleMethodPredicateSlotsRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleMethodPredicateSlotsQualRef" (EApp (EVar "Ref") (EListLit))) (fa "coreSchemeObligationsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "crossModuleSchemeOblsQualRef" (EApp (EVar "Ref") (EListLit))))))
+(DFunDef false "freshCrossRun" ((PVar "ctors")) (ERecordCreate "CrossRun" ((fa "universeFunNamesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeMethodDispatchIdxByIdRef" (EApp (EVar "Ref") (EListLit))) (fa "universeDataCtors" (EApp (EVar "Ref") (EListLit))) (fa "universeCtorPop" (EApp (EVar "Ref") (EApp (EVar "spFromFloor") (EVar "ctors")))) (fa "universeRecordPop" (EApp (EVar "Ref") (EVar "spEmpty"))) (fa "builtinClassesRef" (EApp (EVar "Ref") (EVar "emptyBuiltinClasses"))) (fa "crossModuleFunPredicateSlotsRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleFunPredicateSlotsQualRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleFunConstraintDeclaredRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleFunConstraintDeclaredQualRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleMethodPredicateSlotsRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleMethodPredicateSlotsQualRef" (EApp (EVar "Ref") (EListLit))) (fa "coreSchemeObligationsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "crossModuleSchemeOblsQualRef" (EApp (EVar "Ref") (EListLit))) (fa "initOrdersRef" (EApp (EVar "Ref") (EListLit))))))
 (DTypeSig true "mctxAt" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "ModuleCtx") (TyCon "ModuleCtx"))))
 (DFunDef false "mctxAt" ((PVar "loc") (PVar "mctx")) (EIf (EApp (EApp (EVar "sameSpan") (EVar "loc")) (EFieldAccess (EVar "mctx") "mcLoc")) (EVar "mctx") (ERecordUpdate (EVar "mctx") ((fa "mcLoc" (EVar "loc"))))))
 (DTypeSig false "sameSpan" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Bool"))))
@@ -1322,7 +1323,7 @@ mintGraphCtx inputs admitted =
 (DTypeSig true "emptyShadowDicts" (TyCon "ShadowDicts"))
 (DFunDef false "emptyShadowDicts" () (ERecordCreate "ShadowDicts" ((fa "sdMonos" (EListLit)) (fa "sdIfaces" (EListLit)) (fa "sdArgVecs" (EListLit)))))
 (DTypeSig false "freshCrossRun" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Scheme")) (TyCon "CrossRun")))
-(DFunDef false "freshCrossRun" ((PVar "ctors")) (ERecordCreate "CrossRun" ((fa "universeFunNamesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeMethodDispatchIdxByIdRef" (EApp (EVar "Ref") (EListLit))) (fa "universeDataCtors" (EApp (EVar "Ref") (EListLit))) (fa "universeCtorPop" (EApp (EVar "Ref") (EApp (EVar "spFromFloor") (EVar "ctors")))) (fa "universeRecordPop" (EApp (EVar "Ref") (EVar "spEmpty"))) (fa "builtinClassesRef" (EApp (EVar "Ref") (EVar "emptyBuiltinClasses"))) (fa "crossModuleFunPredicateSlotsRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleFunPredicateSlotsQualRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleFunConstraintDeclaredRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleFunConstraintDeclaredQualRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleMethodPredicateSlotsRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleMethodPredicateSlotsQualRef" (EApp (EVar "Ref") (EListLit))) (fa "coreSchemeObligationsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "crossModuleSchemeOblsQualRef" (EApp (EVar "Ref") (EListLit))))))
+(DFunDef false "freshCrossRun" ((PVar "ctors")) (ERecordCreate "CrossRun" ((fa "universeFunNamesRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "universeMethodDispatchIdxByIdRef" (EApp (EVar "Ref") (EListLit))) (fa "universeDataCtors" (EApp (EVar "Ref") (EListLit))) (fa "universeCtorPop" (EApp (EVar "Ref") (EApp (EVar "spFromFloor") (EVar "ctors")))) (fa "universeRecordPop" (EApp (EVar "Ref") (EVar "spEmpty"))) (fa "builtinClassesRef" (EApp (EVar "Ref") (EVar "emptyBuiltinClasses"))) (fa "crossModuleFunPredicateSlotsRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleFunPredicateSlotsQualRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleFunConstraintDeclaredRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleFunConstraintDeclaredQualRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleMethodPredicateSlotsRef" (EApp (EVar "Ref") (EListLit))) (fa "crossModuleMethodPredicateSlotsQualRef" (EApp (EVar "Ref") (EListLit))) (fa "coreSchemeObligationsRef" (EApp (EVar "Ref") (EVar "omEmpty"))) (fa "crossModuleSchemeOblsQualRef" (EApp (EVar "Ref") (EListLit))) (fa "initOrdersRef" (EApp (EVar "Ref") (EListLit))))))
 (DTypeSig true "mctxAt" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "ModuleCtx") (TyCon "ModuleCtx"))))
 (DFunDef false "mctxAt" ((PVar "loc") (PVar "mctx")) (EIf (EApp (EApp (EVar "sameSpan") (EVar "loc")) (EFieldAccess (EVar "mctx") "mcLoc")) (EVar "mctx") (ERecordUpdate (EVar "mctx") ((fa "mcLoc" (EVar "loc"))))))
 (DTypeSig false "sameSpan" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Bool"))))
