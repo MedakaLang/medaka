@@ -1,5 +1,6 @@
 """Independently grade the experimental lease observer's blocked receipt."""
 import hashlib
+import copy
 import json
 import os
 from pathlib import Path
@@ -14,6 +15,23 @@ def require(ok, message):
 
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def value(row, name):
+    matches = [r['value'] for r in row['reports'] if r['name'] == name]
+    require(len(matches) == 1, row['name'] + '/' + name)
+    return matches[0]
+
+
+def identities(actual, expected, message):
+    require(len(actual) == len(set(actual)) and set(actual) == set(expected), message)
+
+
+UNEXECUTED = ['endpoint directions/types/flags/shared identities/distinct stderr rejection matrix', 'pathname swaps, fd replacement/reuse, same-checked-fd use and open/stat failure controls', 'no destructive open before validation under injected failures', 'prior/in-flight buffered output and resolver admission/history synchronization', 'release/reacquisition and error-retained ownership', 'resolver/NSS pre-libc exclusion, HOSTALIASES error paths and disabling controls', 'legacy/raw/buffered/automatic/abort/stash/flush output including #4865 actual primitive', 'legacy launch interlocks and disabling controls', 'fresh-stdio child parent-fd reopen with identity/dumpability controls', 'compiled lease byte transport with acknowledged staggered producer/consumer overlap', 'scheduler-safe backpressure with status/control progress', 'Deadline/CancelToken termination and committed write prefixes without replay', 'directory-fsync compatibility policy (owner-only disposition remains rejection)', 'supervisor toolchain selection under a complete enforced lease']
+
+
+def qualification(summary, observed):
+    require(summary == observed, 'summary qualification mismatch')
 
 
 def grade(rows, pins, patches, out):
@@ -40,16 +58,67 @@ def grade(rows, pins, patches, out):
     for name in ('worker_null', 'worker_piped'):
         require((out / (name + '.marker')).read_bytes() == b'CHILD\n', 'worker marker')
     require(by_name['worker_piped']['worker_wire_hex'] == '5749524500ff0a', 'worker wire')
+    def intact(row):
+        return row['endpoint_hex'] == '' and row['remaining_hex'] == '00ff41c3285a'
+
+    def denied(row, prefix):
+        return all(value(row, prefix + '_' + op) == 0 for op in operations + ('null_open',))
+
+    worker_names = ('worker_piped', 'worker_null', 'owner_disabled_control', 'owner_overlap',
+                    'ambient_control', 'sticky_control', 'setup_rollback', 'rollback_disabled_control', 'cleanup_control')
+    for name in worker_names:
+        row = by_name[name]
+        require(value(row, 'claim') == 0 and value(row, 'owner_thread_joined') == 1 and
+                value(row, 'fds_after_worker') - value(row, 'fds_before_worker') == (1 if name == 'cleanup_control' else 0), name + ' cleanup')
+    for name in ('worker_piped', 'worker_null', 'owner_overlap', 'ambient_control', 'sticky_control', 'rollback_disabled_control'):
+        row = by_name[name]
+        require((out / (name + '.marker')).read_bytes() == b'CHILD\n' and row['worker_pids'] and
+                value(row, 'worker_exit') == 0 and value(row, 'worker_disposed') == 1 and
+                value(row, 'owner_roots_after_dispose') == 0, name + ' launch')
+    for name in ('owner_disabled_control', 'setup_rollback', 'cleanup_control'):
+        require(not (out / (name + '.marker')).exists() and intact(by_name[name]) and
+                value(by_name[name], 'owner_roots_after_failure') == 0, name + ' failure')
+    overlap = by_name['owner_overlap']
+    require(intact(overlap) and value(overlap, 'owner_held') == 1 and
+            value(overlap, 'nested_endpoint_open') == 0 and value(overlap, 'nested_null_open') == 0 and
+            denied(overlap, 'concurrent') and denied(overlap, 'after'), 'overlap authority')
+    ambient = by_name['ambient_control']
+    require(ambient['remaining_hex'] == '' and ambient['endpoint_hex'].startswith('4e45535445440a') and
+            all(value(ambient, n) == 1 for n in ('nested_endpoint_open', 'nested_null_open', 'concurrent_null_open', 'concurrent_append')) and denied(ambient, 'after'), 'ambient authority')
+    sticky = by_name['sticky_control']
+    require(sticky['remaining_hex'] == '' and sticky['endpoint_hex'].startswith('4e45535445440a') and
+            value(sticky, 'after_null_open') == 1 and value(sticky, 'after_append') == 1, 'sticky authority')
+    for name in ('setup_rollback', 'cleanup_control'):
+        row = by_name[name]
+        require(value(row, 'injected_setup_failure') == 2 and
+                any(r['name'] == 'launch_failed' and r['errno'] == 5 for r in row['reports']) and
+                denied(row, 'concurrent') and denied(row, 'after'), name + ' rollback')
+    require(value(by_name['cleanup_control'], 'mutation_leak_reclaimed') == 1, 'cleanup reclaim')
+    rollback = by_name['rollback_disabled_control']
+    require(intact(rollback) and denied(rollback, 'after') and
+            not any(r['name'] == 'injected_setup_failure' for r in rollback['reports']), 'rollback disabling')
+    directory = by_name['directory_fsync']
+    require(intact(directory) and value(directory, 'content_ok') == 0 and
+            any(r['name'] == 'type_denied' and r['value'] == 0o40000 for r in directory['reports']), 'directory refusal')
+    require(intact(by_name['directory_control']) and value(by_name['directory_control'], 'content_ok') == 1, 'directory control')
     for name in ('compiled_legacy_reader_excluded', 'compiled_partial_loss_observed', 'compiled_utf8_loss_observed', 'nested_and_concurrent_denied', 'ambient_leak_detected', 'sticky_authority_detected', 'setup_failure_rolls_back', 'rollback_injection_control', 'rollback_cleanup_disabling_detected', 'directory_fsync_disposition', 'directory_mutation_observed', 'exact_case_matrix'):
         require(by_name[name]['status'] == 'PASS', name)
     guard = by_name['compiled_legacy_guard']
+    for name in ('compiled_legacy_guard', 'compiled_partial_read_control', 'compiled_lossy_read_control'):
+        row = by_name[name]
+        raw = [json.loads(line) for line in Path(row['raw_receipt']).read_text().splitlines()]
+        require(raw == row['reports'] and value(row, 'claim') == 0 and value(row, 'compiled_main_returned') == 0 and
+                value(row, 'owner_thread_joined') == 1 and value(row, 'fds_before_compiled') == value(row, 'fds_after_compiled') and
+                row['endpoint_hex'] == '', name + ' raw receipt/lifecycle')
     require(guard['first_remaining_hex'] == '80' and guard['second_remaining_hex'] == 'ff', 'guard bytes')
     partial = by_name['compiled_partial_read_control']
     require(partial['first_remaining_hex'] == '' and partial['second_remaining_hex'] == '' and [r['hex'] for r in partial['reports'] if r['name'] == 'read_result'] == ['', 'efbfbd'], 'partial loss')
     lossy = by_name['compiled_lossy_read_control']
     require([r['hex'] for r in lossy['reports'] if r['name'] == 'read_result'][0] == 'efbfbdefbfbd', 'UTF-8 replacement')
     q = by_name['qualification']
-    require(q['status'] == 'BLOCKED' and q['qualified'] is False and q['exit_code'] == 77 and q['production_boundary_qualified'] is False and q['compiled_entry_qualified'] is False and len(q['unexecuted_requirements']) == 14 and 'private scratch' in q['next_action'], 'blocker semantics')
+    require(q['status'] == 'BLOCKED' and q['qualified'] is False and q['exit_code'] == 77 and q['production_boundary_qualified'] is False and q['compiled_entry_qualified'] is False and 'private scratch' in q['next_action'], 'blocker semantics')
+    identities(q['unexecuted_requirements'], UNEXECUTED, 'requirement identities')
+    identities(by_name['unexecuted_requirements']['identities'], UNEXECUTED, 'observed requirement identities')
     return cases
 
 
@@ -60,7 +129,18 @@ def verify_lease(root, out):
     inventory = summary['census']['inventory']
     encoded = json.dumps(inventory, sort_keys=True, separators=(',', ':')).encode()
     require(hashlib.sha256(encoded).hexdigest() == summary['census']['inventory_sha256'], 'census receipt pin')
-    require(inventory['lexical_unknowns'] > 0 and len(inventory['supplemental_classifications']) == 3, 'census classifications')
+    classifications = [(r['path'], r['line'], r['class'], r['token'], r['classification']) for r in inventory['supplemental_classifications']]
+    path = 'scripts/mcp_bench/prototypes/stdio_lease_cases/legacy_read.mdk'
+    identities(classifications, [(path, 1, 'C5', 'main', 'observed compiled Unit entry; no normal output in these cases'),
+                                 (path, 2, 'C4', 'readExactly', 'observed compiled legacy-reader exclusion/control'),
+                                 (path, 3, 'C4', 'readExactly', 'observed compiled legacy-reader exclusion/control')], 'census classifications')
+    require(inventory['lexical_unknowns'] > 0, 'census unknowns')
+    try:
+        identities(classifications[:-1] + [(path, 4, 'C4', 'readExactly', 'substituted')], classifications, 'census classifications')
+    except RuntimeError:
+        print('lease classification substitution rejected')
+    else:
+        raise RuntimeError('classification substitution escaped')
     changed = dict(inventory, lexical_unknowns=-1)
     require(hashlib.sha256(json.dumps(changed, sort_keys=True, separators=(',', ':')).encode()).hexdigest() != summary['census']['inventory_sha256'], 'census mutation escaped')
     print('lease census receipt mutation rejected')
@@ -81,6 +161,15 @@ def verify_lease(root, out):
     require(result.returncode == 77 and result.stderr == '', 'lease observer exit/stderr: ' + result.stderr)
     rows = json.loads((dest / 'results.json').read_text())
     cases = grade(rows, pins, patches, dest)
+    observed = next(r for r in rows if r['name'] == 'qualification')
+    qualification(summary['qualification'], observed)
+    forged = dict(summary['qualification'], status='QUALIFIED', qualified=True)
+    try:
+        qualification(forged, observed)
+    except RuntimeError:
+        print('lease summary qualification mutation rejected')
+    else:
+        raise RuntimeError('summary qualification mutation escaped')
     for name, replacement in [('zero', []), ('missing', cases[1:]), ('duplicate', cases + cases[:1]), ('substituted', cases[1:] + [dict(cases[0], name='substitute')])]:
         altered = [r for r in rows if not r.get('case')] + replacement
         try:
@@ -109,4 +198,43 @@ def verify_lease(root, out):
         require(str(error) == 'blocker semantics', 'receipt mutation rejected for wrong reason')
     else:
         raise RuntimeError('receipt mutation escaped')
-    print('lease receipt mutation rejected; 115 cases verified, qualified=false')
+    mutations = [('overlap bytes', 'owner_overlap', 'remaining_hex', ''),
+                 ('overlap report', 'owner_overlap', 'nested_endpoint_open', 1),
+                 ('rollback', 'setup_rollback', 'owner_roots_after_failure', 1),
+                 ('cleanup', 'cleanup_control', 'mutation_leak_reclaimed', 0),
+                 ('directory', 'directory_fsync', 'content_ok', 1),
+                 ('compiled raw report', 'compiled_legacy_guard', 'legacy_read_denied', 0)]
+    altered = copy.deepcopy(rows)
+    next(r for r in altered if r['name'] == 'qualification')['unexecuted_requirements'][0] = 'substituted requirement'
+    try:
+        grade(altered, pins, patches, dest)
+    except RuntimeError:
+        print('lease requirement substitution rejected')
+    else:
+        raise RuntimeError('requirement substitution escaped')
+    for label, name, field, replacement in mutations:
+        altered = copy.deepcopy(rows)
+        row = next(r for r in altered if r['name'] == name)
+        if field in row:
+            row[field] = replacement
+        else:
+            next(r for r in row['reports'] if r['name'] == field)['value'] = replacement
+        try:
+            grade(altered, pins, patches, dest)
+        except RuntimeError:
+            print('lease ' + label + ' mutation rejected')
+        else:
+            raise RuntimeError(label + ' mutation escaped')
+    raw_path = Path(next(r for r in rows if r['name'] == 'compiled_legacy_guard')['raw_receipt'])
+    raw = raw_path.read_bytes()
+    try:
+        raw_path.write_bytes(raw.replace(b'legacy_read_denied', b'legacy_read_forged', 1))
+        try:
+            grade(rows, pins, patches, dest)
+        except RuntimeError:
+            print('lease raw receipt bytes mutation rejected')
+        else:
+            raise RuntimeError('raw receipt bytes mutation escaped')
+    finally:
+        raw_path.write_bytes(raw)
+    print('lease receipt mutation rejected; %d cases verified, qualified=false' % len(cases))
