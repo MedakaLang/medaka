@@ -12,7 +12,7 @@ import types.capability_manifest.{EntryKey(..)}
 --
 -- B.10.2b: the compiler AST carries expr-level spans via the transparent
 -- `ELoc` wrapper, and typecheck pairs each error with the span of the innermost
--- enclosing construct at the push site (`checkProgramDiags` returns `(msg, Option Loc)`).  So
+-- enclosing construct at the push site (each error is a `(msg, Option Loc)` pair).  So
 -- `Diag` carries an `Option Loc` — `Some` for type errors (expr-level span),
 -- `None` for resolve / guard / match-exhaustiveness diagnostics, which the
 -- compiler pipeline does not yet attribute to a span (they fall back to the
@@ -297,7 +297,7 @@ fixOfLocRepl (l, r) = Fix l r
 -- THE typecheck-stage WARNING channel.  Converts a `TcDiag` off `matchWarnings`
 -- (whose `msg` is the full "Warning: …" string, carrying its captured loc and any
 -- actionable-fix hint as `help`) to a `SevWarning` Diag.  #159: the hint rides in
--- the TcDiag's `help` field — no `matchWarningHelp` lookup.  The `W-*` code is the
+-- the TcDiag's `help` field — no separate help lookup.  The `W-*` code is the
 -- one the TcDiag ALREADY CARRIES, authored at the push site.  Only the "Warning: "
 -- prefix strip is computed from the message — that is presentation, not identity.
 -- No machine `fix`: the hint has no single mechanical edit.
@@ -381,7 +381,7 @@ ppDiag (Diag sev _ msg _ _ _) = "\{ppSeverity sev}: \{msg}"
 -- Plain-text CLI renderer (Stage-A positioned output, Stage-C carat block).
 -- line is 1-based (matches the oracle's plain-text convention); col is 0-based.
 -- With a loc this reproduces the OCaml oracle's carat diagnostic byte-for-byte
--- (bin/main.ml `show_snippet` :14-24):
+-- (bin/main.ml show_snippet :14-24):
 --
 --     file:line:col: message
 --       |
@@ -391,7 +391,7 @@ ppDiag (Diag sev _ msg _ _ _) = "\{ppSeverity sev}: \{msg}"
 -- None loc → loc-free "severity: message" (resolve errors with no node span,
 -- whole-doc range).  `src` is the target file's source text (to echo the
 -- offending line); when the source line can't be read the carat block is
--- omitted (mirrors `show_snippet`'s `None -> ()`), leaving just the header.
+-- omitted (mirrors the oracle's `None -> ()` arm), leaving just the header.
 export
 ppDiagCli : String -> Diag -> String
 ppDiagCli file diag = ppDiagCliSrc "" file diag
@@ -482,7 +482,7 @@ srcLinesCached file cache = match lookupAssoc file cache
 -- ── ONE FACE for the module-graph resolve channel ────────────────
 --
 -- `frontend.resolve` must not render its own multi-module human output by hand
--- (`ppResErrorLocatedF`, deleted): `file:L:C: msg`, no `error: ` prefix, no
+-- (a bare `file:L:C: msg`, no `error: ` prefix, no
 -- caret — that makes the SAME resolve error print one way single-file and another
 -- way through an import.  Every located resolve error lands here and goes
 -- through `ppDiagCliLines`, the renderer the single-file arm has always used.
@@ -1210,7 +1210,7 @@ analyzeToLines runtimeSrc coreSrc progSrc =
 --     snapshotting the typeErrors/matchWarnings refs after its check (each module
 --     starts with a fresh `ModuleCtx`).  This keeps a private same-named helper in one
 --     module from colliding with a different-typed one in another — the
---     per-module-frame property the OCaml `typecheck_module` has.  Resolve uses
+--     per-module-frame property the OCaml oracle has.  Resolve uses
 --     the exported per-module `resolveModule` directly (it threads exports).
 
 -- A per-file bucket of diagnostics, in dependency order.  Newest pushed last.
@@ -1392,7 +1392,7 @@ openQuery load = ProjectQuery {
 -- `pqAllowInternal`/`pqTrusted` gate the internal-extern guard on the RESOLVE
 -- pass exactly as `resolveModulesErrorsPairsG` (the human `check`/`run`/`build`
 -- multi-module gate) already does: a module is trusted (no internalExterns
--- restriction) when `allowInternal` is set OR its modId is in `trustedMods`
+-- restriction) when `allowInternal` is set OR its modId is in the trusted set
 -- (the stdlib-owned modules, per the loader's owning-root) — see `resolvePass`
 -- below.  #1362: previously `analyzeProject` always called the unguarded
 -- `resolveModule` (implicit `internalGuard = []`), so `check --json`/MCP
@@ -1705,7 +1705,7 @@ boolKey False = "F"
 -- seeded ONCE and each module is checked in its OWN frame via `checkModuleFull`
 -- (only earlier modules' PUBLIC schemes/data carry forward), harvesting that
 -- module's own diagnostics from the typeErrors/matchWarnings refs.  This gives the
--- per-module isolation OCaml's `typecheck_module` has, so a private helper named
+-- per-module isolation the OCaml oracle has, so a private helper named
 -- the same across two modules but with different types never collides.
 -- Guard-exhaustiveness warnings still come from the RAW (pre-desugar) module decls
 -- (checkGuardExhaustiveness needs the surface `EGuards` shape, gone after desugar),
@@ -2504,7 +2504,7 @@ pendingPreludeNotices : Ref (List (String, String))
 pendingPreludeNotices = Ref []
 
 -- Extra top-level members a verb stages for its own aborted-run envelope
--- (`medaka test --json` stages `seed`); appended after the notices above.
+-- (`medaka test --json` stages "seed"); appended after the notices above.
 export
 pendingEnvelopeExtras : Ref (List (String, Json))
 pendingEnvelopeExtras = Ref []
@@ -2971,7 +2971,7 @@ ppMainEntryError src file d = ppDiagCliSrc src file d
 -- `medaka mcp` medaka_check tool.  Both return (jsonString, hasError): the
 -- {"files":[...]} JSON `medaka check --json` emits, plus whether any diagnostic
 -- is a hard error (severity 1).  The caller decides what to do — the CLI prints +
--- `exit 1`; MCP wraps the string in a tool result and sets `isError` — so the
+-- `exit 1`; MCP wraps the string in a tool result and sets its isError flag — so the
 -- serializer + routing live in ONE place, byte-for-byte.
 
 -- True iff the diagnostic is a hard error (severity 1), not a warning.

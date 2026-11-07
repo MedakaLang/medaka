@@ -2,7 +2,7 @@
 -- mcp.mdk (`[P-TEST-SIBLING]`, AGENTS.md).
 --
 -- #2701 leg 3: `rule-duplicate-body` (a `ProjectRule`) never reached
--- `medaka lint --json` or the `medaka_lint` MCP tool — both surfaces looped
+-- `medaka lint --json` or the medaka_lint MCP tool — both surfaces looped
 -- the per-file diag-triple builder alone and never called
 -- `runProjectRules`.  This property pins the gap AND the fix, over the
 -- SHARED `test/lint_crossfile_fixtures` corpus (`[T-SHARED-CORPUS]`):
@@ -10,7 +10,7 @@
 --   1. the OLD per-file-only triple builder (`lintFilesToDiagTriples`, kept
 --      unchanged — it is still `--write-baseline`'s vehicle) has NO
 --      `rule-duplicate-body` diagnostic anywhere in it, for ANY file set —
---      `duplicateBodyRule` is a `ProjectRule`, never a per-file `Rule`, so
+--      the duplicate-body rule is a `ProjectRule`, never a per-file `Rule`, so
 --      this holds independent of the fix below and documents exactly the
 --      shape of the gap `rule-duplicate-body` fell into.
 --   2. the JSON path's OWN internals (`lintFilesToDiagQuads` +
@@ -111,7 +111,7 @@ import tools.mcp.{lintPathsToDiagQuads, projectMcpFindings}
 import tools.lint_baseline.{noExempt}
 
 -- The two-file duplicate pair the multi-clause blind spot (#2651) fixed —
--- `stepA`/`stepB` are each one function split across two clauses, so neither
+-- stepA/stepB are each one function split across two clauses, so neither
 -- clause alone clears `dupComplexityThreshold`, but the two together do.
 -- Picked over the single-clause pair so this property also proves the
 -- cross-file tier's INPUT (the full per-file parse) reaches JSON/MCP intact,

@@ -85,7 +85,7 @@ public export data Codemod = Codemod {
 }
 
 -- ── registry ────────────────────────────────────────────────────────────────
--- Adding a codemod = one `mkX`/`warnX` pair + one entry here.
+-- Adding a codemod = one mkX/warnX pair + one entry here.
 export
 allCodemods : List Codemod
 allCodemods = [effectLabelsCodemod]
@@ -289,7 +289,7 @@ collectKept ((Some a, _) :: rest) = a :: collectKept rest
 -- #242: routed through the canonical O(n·log n) `support.util.dedupBy` (was a
 -- private O(n²) `List`-as-a-set scan).  Both the label and the payload are
 -- unconstrained Strings, so the label is length-prefixed and the `Option` is
--- tagged — the encoding is injective, matching the old `atomEq` exactly.
+-- tagged — the encoding is injective, matching the old equality exactly.
 dedupeAtoms : List EffAtomTy -> List EffAtomTy
 dedupeAtoms xs = dedupBy atomKey xs
 

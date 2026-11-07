@@ -441,7 +441,7 @@ lintCacheCtx True False =
 -- `medaka check --json` emits (via `cjAllToJson`) — one schema for both
 -- surfaces (#249).  Each `Finding` becomes a `Diag` via `findingToDiag`
 -- (inside `lintFileDiagTripleParsed`), which stamps the lint RULE NAME into
--- the diagnostic's `code` field.  Cross-file rules DO participate (#2701
+-- the diagnostic's "code" field.  Cross-file rules DO participate (#2701
 -- leg 3): the per-file pass already parses every target
 -- (`lintFileDiagTripleParsed`), and `--json` summarizes those parses and
 -- evaluates the project rules over them (the human-text path reaches the tier

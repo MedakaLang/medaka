@@ -8,7 +8,7 @@
 
    Selector language (design doc §3, "keep it boring"): a selector is a
    `field:pattern` token, where `field` is one of `name`/`area`/`project`/
-   `tier` and `pattern` is a glob (`*`, `?`). A bare token with no `field:`
+   `tier` and the pattern is a glob (`*`, `?`). A bare token with no `field:`
    prefix is sugar for `name:<token>`. Several selectors on one command line
    are a CONJUNCTION — a gate must match all of them.
 
@@ -106,7 +106,7 @@ import regex.{mustCompile, isFullMatch, escape}
 -- `run` suffix do not match, the same way check 11 pairs `shell:*` with a
 -- `shell-because:` header.  Every pattern-to-gate resolver in the tree
 -- (`test/run_gates.sh`, `test/preflight.sh`, `test/build_oracles.sh --for`,
--- `.github/workflows/ci.yml`'s `plan` step) resolves a `native` entry by
+-- `.github/workflows/ci.yml`'s plan step) resolves a "native" entry by
 -- registry NAME, since there is no `.sh` for its glob to find.
 --
 -- ── `tiers` (S-tier-is-data, #2181) ─────────────────────────────────────────
@@ -116,24 +116,24 @@ import regex.{mustCompile, isFullMatch, escape}
 -- at two tiers at once (`diff_compiler_eval_scaling` on the merge path AND in
 -- nightly's `eval-scaling` job; `diff_compiler_perf_scaling` on the merge path
 -- AND in nightly's `perf-scaling-deep` job with `PERF_DEEP=1`), and the old
--- single `tier : String` could record neither — it recorded `merge` for both
+-- single `tier : String` could record neither — it recorded "merge" for both
 -- and the nightly half of each was invisible to every consumer.
 --
 -- Each element is a RUN TOKEN, `<tier>` or `<tier>/<mode>`:
 --
---   <tier>  `merge` (the PR/merge-queue path), `nightly` (the scheduled
---           workflow), or `ondemand` (nothing invokes it automatically).
+--   <tier>  "merge" (the PR/merge-queue path), "nightly" (the scheduled
+--           workflow), or "ondemand" (nothing invokes it automatically).
 --   <mode>  the INVOCATION DELTA: the comma-joined, sorted `KEY=VALUE`
 --           environment assignments the invoking step sets that change what the
 --           gate does.  It is DATA, not a label — `nightly/PERF_DEEP=1` says
 --           exactly what makes that run different, which is what lets
 --           `test/diff_compiler_tier_drift.sh` CHECK it against the workflow
---           instead of taking a prose word for it.  A bare `nightly` next to a
---           bare `merge` is therefore a positive claim of DUPLICATION: the two
+--           instead of taking a prose word for it.  A bare "nightly" next to a
+--           bare "merge" is therefore a positive claim of DUPLICATION: the two
 --           runs are the identical invocation.
 --
 -- INVARIANTS (checked by `gate verify`, check 9): non-empty; every token's tier
--- part is one of the three; no duplicate tokens; `ondemand` appears only alone
+-- part is one of the three; no duplicate tokens; "ondemand" appears only alone
 -- and never carries a mode (a gate nothing invokes has no invocation to differ
 -- from).  The list is kept in sorted order so a diff of the registry reads as a
 -- change of fact, not a reordering.
@@ -158,11 +158,11 @@ public export data Gate = Gate {
 
 -- ── `link` (#4089) ───────────────────────────────────────────────────────────
 --
--- Which link the `medaka build`s a gate runs take.  `production` is the shipped
--- link (-O2 + ThinLTO); `differential` is plain -O1 with no LTO, for a gate that
+-- Which link the `medaka build`s a gate runs take.  "production" is the shipped
+-- link (-O2 + ThinLTO); "differential" is plain -O1 with no LTO, for a gate that
 -- compares outputs and observes neither speed, code size nor stack depth at -O2.
 -- `test/run_gates.sh` exports MEDAKA_NO_LTO=1 and MEDAKA_CLANG_OPT=-O1 for a
--- `differential` row (`_link_rows`, test/gate_native_rows.sh).  `gate verify`
+-- "differential" row (`_link_rows`, test/gate_native_rows.sh).  `gate verify`
 -- checks the value against these two.
 
 -- ── Registry reading ────────────────────────────────────────────────────────

@@ -87,7 +87,7 @@ import regex.{
 -- de_doc (stripped doc prose, may be "") /
 -- de_kind (S-doc-surface-truth: the ATTRIBUTION facts about the declaration
 -- this entry came from, threaded at extraction time rather than re-derived by
--- parsing `de_sig` back — the sig is a rendering, not a data structure) /
+-- parsing de_sig back — the sig is a rendering, not a data structure) /
 -- de_line (the declaration's source line, which is what places a `-- # Title`
 -- section heading relative to the entries around it).
 export data DocEntry = DocEntry String String String String DocKind Int
@@ -107,7 +107,7 @@ public export data DocKind =
   | KImplOn (Option String)
   | KSection
 
--- One row of the comment table: (source line, text, block).  `block` is the
+-- One row of the comment table: (source line, text, block).  The last component is the
 -- start line of the `{- -}` comment the row came from, or 0 for a line
 -- comment.  It is what lets `markedDoc` stop at the end of a doc block
 -- instead of absorbing a maintainer note written directly under it.
@@ -277,7 +277,7 @@ expandBlockLines baseLine i (line :: rest) =
 -- Hashtbl.replace which keeps the last inserted for a key) ──────────────────
 -- We build an assoc list, then look up by line.  build_comment_tbl iterates
 -- comments in order, replacing per line; for lookup we want the LAST row set
--- for a line.  We keep insertion order and `lookupLast` returns the last match.
+-- for a line.  We keep insertion order and the lookup returns the last match.
 
 buildCommentTbl : List Comment -> List CommentRow
 buildCommentTbl comments = concatMapDoc expandComment comments
@@ -425,7 +425,7 @@ ppIfaceMethod (IfaceMethod mname mty _ _) = "  \{mname} : \{ppTyDoc mty}"
 
 -- Compute (name, sig) for a public decl, or None to skip it.  Mirror render_sig.
 --
--- The leading `Bool` is `docBareExterns` (S-doc-surface-truth hole (c)): when
+-- The leading `Bool` is the doc-bare-externs flag (S-doc-surface-truth hole (c)): when
 -- True, an UNEXPORTED `extern` is documented anyway.  It is set for exactly one
 -- module — `runtime` (`preludeOnlyModule` below) — because `export` status is
 -- MEANINGLESS there, verified first-hand rather than assumed: `stdlib/runtime.mdk`
@@ -1016,7 +1016,7 @@ hasPipeMarker : String -> Bool
 hasPipeMarker line = dlen line >= 2 && dsub 0 2 line == "| " || line == "|"
 
 -- Strip a leading `| ` (or bare `|`) marker from a prose line.  Applied ONLY
--- where a marker can legitimately sit (`markerEligible` below) — never to
+-- where a marker can legitimately sit (`markerEligibleAfter` below) — never to
 -- every prose line, because a `|`-led line deeper in prose is USER CONTENT (a
 -- BNF alternative, a Markdown table row) and deleting its `|` silently
 -- destroys what the author wrote (S2-3).
@@ -1335,7 +1335,7 @@ export
 mdName : ModuleDoc -> String
 mdName (ModuleDoc n _ _ _) = n
 
--- (There is no exported `mdEntries` here.  Nothing outside this file ever
+-- (There is no exported mdEntries here.  Nothing outside this file ever
 -- called it — `grep -rn mdEntries compiler/ | grep -v doc.mdk` is empty — and
 -- nothing inside did either, so it is gone
 -- rather than merely un-exported.  Do not re-add it.)
@@ -1495,7 +1495,7 @@ renderModulePage (ModuleDoc name header entries _) =
 --      named for it and cannot avoid naming it in its own signatures.  The
 --      mention is what makes this evidence rather than a coincidence of
 --      spelling (S2-1 again: a bare name match corroborates nothing — a
---      module named `widget` that never says `Widget` is not its home);
+--      module named "widget" that never says `Widget` is not its home);
 --   3. otherwise: no owner.
 --
 -- An impl entry moves to its head type's owner iff that owner is a DIFFERENT

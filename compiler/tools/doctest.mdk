@@ -333,14 +333,14 @@ synthSrcNamed name ex =
 -- "smoke" example and then fails to parse as Medaka source).  Route each
 -- example through `parseResult` (the LSP's non-panicking parse entry,
 -- `frontend/parser.mdk`) individually, so one bad example becomes a single
--- located `Errored` result (see `oneResult` below) instead of zeroing the
+-- located `Errored` result (see the per-example result builder below) instead of zeroing the
 -- whole file's coverage.
 --
 -- Each example is parsed located, on its own doctest line (the source is padded to
 -- it), so a diagnostic the typechecker raises on the example's binding names the
 -- example (`test_cmd`'s `exampleDiagLines`).
 --
--- `targetDecls` is the tested file's own decls (`userDecls` at the call
+-- `targetDecls` is the tested file's own decls (the user decls at the call
 -- site) — each example is parsed and desugared as its own tiny standalone
 -- program (`__dt_i__ () = <expr>`, no `import … as A` decl of its own), so a
 -- reference like `H.foo` would otherwise never see the target file's alias
@@ -373,7 +373,7 @@ synthOne aliases i ex =
 -- The decls to actually elaborate/run: every example that parsed, concatenated
 -- in order.  A failed example contributes NO decl (and so no `__dt_i__`
 -- binding) — its outcome is reported straight from `synthResults` in
--- `oneResult`, without ever reaching `lookupBinding`.
+-- the per-example result builder, without ever reaching `lookupBinding`.
 export
 buildSynthDecls : List (Result String (List Decl)) -> List Decl
 buildSynthDecls synthResults = concatOkDecls synthResults
@@ -420,7 +420,7 @@ detailsGoFrom (Ok rendered) synthResults examples =
 -- Whole-file error: every example is Errored with that message, UNLESS its
 -- own synth failed to parse — a parse error is reported at its own location
 -- and never conflated with the whole-file failure (mirrors the pre-Stage-1
--- `oneResult`'s `oneResult _ (Err msg) i ex` catch-all, which fired
+-- result builder's `_ (Err msg) i ex` catch-all, which fired
 -- regardless of the env/render outcome).
 detailsGoErr : String ->
   List (Result String (List Decl)) ->

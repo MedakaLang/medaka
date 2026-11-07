@@ -143,7 +143,7 @@ isOrdinaryIdent s
 -- (the SAME algorithm, whose assoc-list version was retired there for being
 -- O(N^2)).  This copy kept the list version and so kept the quadratics: the ref
 -- map was an assoc list rebuilt per clause (`acc ++ [(n, rs)]` copies a GROWING
--- list every element) with an O(names) `lookupAssoc`/`replaceAssoc` on each, and
+-- list every element) with an O(names) assoc lookup/replace on each, and
 -- the BFS tested membership with `contains` over a `visited` LIST.  Now: O(1)-
 -- average membership + O(1) graph lookup -> ~O(names + edges).  Consumed only by
 -- `deadPair`'s membership test, so order and duplicates are irrelevant.
@@ -234,7 +234,7 @@ refsOf refMap n = findWithDefault [] n refMap
 
 -- merge same-named clause ref-lists into one entry per name (union, deduped).
 -- HashMap-backed: the old assoc-list version did an O(names) `lookupAssoc` plus
--- either an O(names) `replaceAssoc` or an `acc ++ [(n, rs)]` — which COPIES the
+-- either an O(names) replace or an `acc ++ [(n, rs)]` — which COPIES the
 -- whole growing accumulator on every element — making map construction O(D^2) in
 -- both time and allocation (the dominant allocator: 56 MB -> 1138 MB across
 -- 400 -> 3200 defs).  Refs feed a membership-only closure, so order is irrelevant.

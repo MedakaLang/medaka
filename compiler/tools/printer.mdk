@@ -129,7 +129,7 @@ public export data Doc =
   -- enclosing group is FLAT it is exactly `sepBy Line items`.  When BROKEN it
   -- packs greedily: each item goes on the current line if it still fits
   -- `defaultWidth`, otherwise it starts a new line at the current indent.
-  -- `sepFirst` says whether a separator precedes the FIRST item of this
+  -- The leading Bool says whether a separator precedes the FIRST item of this
   -- (sub)sequence — the render loop re-pushes the unconsumed tail as
   -- `Fill True rest`.  Items must be BREAK-FREE: they render Flat.
   | Fill Bool (List Doc)
@@ -174,7 +174,7 @@ defaultWidth : Int
 defaultWidth = 80
 
 -- The FLAT expansion of a `Fill` — items separated by a single `Line` (a space
--- in Flat mode), with a leading separator iff `sepFirst`.
+-- in Flat mode), with a leading separator iff the leading Bool is True.
 fillFlatDoc : Bool -> List Doc -> Doc
 fillFlatDoc _ [] = Nil
 fillFlatDoc False ds = sepBy Line ds
@@ -1856,7 +1856,7 @@ docsHaveHardline (d :: ds) = docHasHardline d || docsHaveHardline ds
 
 -- An arm's start is its pattern's position, which a bare constructor pattern
 -- (`None =>`) does not carry — the parser records every arm's start position
--- (`setArmStarts`), and the latest recorded start at or before the arm's first
+-- (the parser's arm-start table), and the latest recorded start at or before the arm's first
 -- located token is the arm's own.
 armPiece : Arm -> Piece
 armPiece arm = match armSpan arm

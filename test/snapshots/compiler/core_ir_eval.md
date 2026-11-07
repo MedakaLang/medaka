@@ -10,7 +10,7 @@ stages=DESUGAR,MARK
 --
 -- It deliberately REUSES eval.mdk's runtime — the host `Value`, environment,
 -- `apply`/dispatch/fall-through machinery, pattern matcher, arithmetic, externs
--- and `pp_value` — exactly the "reuse the host Value/GC/externs" the design
+-- and pp_value — exactly the "reuse the host Value/GC/externs" the design
 -- prescribes (Axis 2/§2.2).  A Core IR closure is a `VClosureF` (the host-fn
 -- closure added to eval.mdk), so multi-clause functions and guard fall-through
 -- run through the SAME `VMulti` + `VFallthrough` path the AST interpreter uses.

@@ -11,7 +11,7 @@
 -- stages TIME cannot. This mirrors tools/refindex.mdk's `opCnt`.
 --
 -- LOAD-BEARING INVARIANT: the counter is write-only for compiler passes (identical rule to
--- timer.mdk's `allocBytes` and llvm_emit.mdk's `returnsSelfTableRef`). It is read ONLY by
+-- timer.mdk's `allocBytes` and llvm_emit.mdk's self-table analysis). It is read ONLY by
 -- the profiler drivers (profile_main / profile_modules_main, via `opSnap`) and by
 -- `medaka run`'s `[perf] eval` row (driver/medaka_cli.mdk `runEvalPerf`), never by a pass.
 -- `Ref`/`setRef` are typed PURE in stdlib/runtime.mdk (no effect row), so a global counter

@@ -410,7 +410,7 @@ emitLoaded runEmit srcs json coreP entry roots mods runtimeD coreD modsD =
 
 -- #1796: `usageModules`' `[root ...]` bracket notation reads as "root args are
 -- optional" — they aren't, the moment the entry graph spans more than one root
--- directory (e.g. both `compiler` and `stdlib`).  Omitting them degrades to a
+-- directory (e.g. both compiler and stdlib).  Omitting them degrades to a
 -- bare loader `unknown module: X` with no hint that ROOT arguments are the
 -- fix.  Same gate + suffix convention as `moduleLoadErrText`'s
 -- `availableModulesHint` (compiler/driver/front_gate.mdk): `unknownModuleIdOf`

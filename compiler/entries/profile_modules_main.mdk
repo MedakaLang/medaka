@@ -1,6 +1,6 @@
 -- Multi-module per-stage timing driver for the self-hosted front-end.
 -- Times each pipeline stage individually over a representative multi-module entry,
--- breaking the `elaborate` composite into separate resolve and typecheck
+-- breaking the elaborate composite into separate resolve and typecheck
 -- phases.
 --
 --   MEDAKA_PERF=1 medaka run compiler/entries/profile_modules_main.mdk \
@@ -105,7 +105,7 @@ runStaged on rsrc csrc entry roots =
         declsOp
         (opSnap () - oD0)
       -- resolve: the multi-module name-binding pass (issue #881). Production
-      -- (medaka_cli) runs resolveModulesErrorsG, which threads `known` (grows
+      -- (medaka_cli) runs resolveModulesErrorsG, which threads known (grows
       -- `exp :: known`) and resolves each import via a LINEAR `findExports` scan —
       -- an O(modules^2) shape on a star/re-export fan-out. This driver never ran it,
       -- so a whole production pass was off the CI map. We measure it via the exported
@@ -146,7 +146,7 @@ runStaged on rsrc csrc entry roots =
 -- desugar: lower surface sugar in all loaded modules
 
 -- resolve: thread import/export bindings across modules; each import scans the
---          growing `known` export list via findExports — O(modules^2) on a star
+--          growing known export list via findExports — O(modules^2) on a star
 --          import or a re-export fan-out (issue #881)
 
 -- typecheck: HM inference over the modules in dependency order

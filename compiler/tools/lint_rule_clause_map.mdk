@@ -163,7 +163,7 @@ clauseMapTransform name headV tailV expected body = match unwrapLoc body
     if mentionsVar name g || mentionsVar tailV g then None else Some g
   _ => None
 
--- one ORDERED attempt: `nil` is the candidate base clause, `cons` the step.
+-- one ORDERED attempt: `nil` is the candidate base clause, the cons clause the step.
 clauseMapPair : String -> (List Pat, Expr) -> (List Pat, Expr) -> Option Expr
 clauseMapPair name (nilPs, nilBody) (consPs, consBody) =
   if not (isNilBody nilBody) || listLen nilPs /= listLen consPs then

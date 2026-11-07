@@ -8,7 +8,7 @@
 
    The ruling that put them here is "manifest-schema accessors do not live in
    a general TOML module", so this file stays correct whichever general module
-   supplies `Toml`/`getString`/`getArray` — `stdlib/toml.mdk` today, `parsec`
+   supplies `Toml`/`getString`/`getArray` — `stdlib/toml.mdk` today, parsec
    if #2240 retires it.
 
    Note that `compiler/driver/loader.mdk` still reads `medaka.toml`'s

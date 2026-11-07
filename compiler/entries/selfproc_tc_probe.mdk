@@ -31,7 +31,7 @@ import types.typecheck.{defaultDriveInputs, checkOneToLines}
 --   * data + record decls, constructor schemes, record create/update/access;
 --   * a signature (sigToScheme), multi-clause match + patterns (tuple, ctor);
 --   * if/then/else, lambdas, recursion (letrec SCC ordering), application;
---   * let-polymorphism + generalize/instantiate (`poly`/`twice`);
+--   * let-polymorphism + generalize/instantiate;
 --   * pp_mono rendering of TApp / TFun / tuple / record types.
 src : String
 src =

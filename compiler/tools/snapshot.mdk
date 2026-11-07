@@ -70,7 +70,7 @@ import types.typecheck.{checkedFfiExternTypeNamesModules}
 -- in one process with no per-stage or per-fixture mode flag to save and restore.
 --
 -- ── crash-resume ─────────────────────────────────────────────────────────────
--- ~12 of 1,461 fixtures genuinely panic (and `stack_overflow_fixtures` SIGSEGVs the C
+-- ~12 of 1,461 fixtures genuinely panic (and stack_overflow_fixtures SIGSEGVs the C
 -- stack — uncatchable in principle).  Forking per fixture to protect 0.8% would cost a
 -- 25x slowdown against a 49ms spawn floor, so instead a SUPERVISOR spawns a WORKER over
 -- a chunk of fixtures.  The worker streams each rendered section to stdout, flushing as
@@ -485,7 +485,7 @@ parseErrText line col msg =
   "parse error at \{intToString line}:\{intToString col}: \{msg}\n"
 
 -- Marked against the DESUGARED prelude, which is exactly what the pipeline does
--- (`marker.mdk` runs after desugar+resolve) and exactly what the old `mark_main` probe
+-- (`marker.mdk` runs after desugar+resolve) and exactly what the old mark_main probe
 -- did (`markWithPrelude (desugar (parse core.mdk)) (desugar (parse target))`).
 markOf : List Decl -> List Decl -> String
 markOf coreDecls d = programToSexp (markWithPrelude coreDecls d)

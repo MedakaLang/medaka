@@ -101,7 +101,7 @@ appArgsRev e = match unwrapLoc e
   _ => []
 
 -- THE join: occurrences (from every file) → findings.  Split out of
--- `ruleDuplicateBody` for #395's `--cache`, which reaches the same join from
+-- the rule entry for #395's `--cache`, which reaches the same join from
 -- occurrences it deserialized rather than from freshly-parsed decls.  Both
 -- callers run THIS function, so a cached run's cross-file findings are computed
 -- by the identical code an uncached one runs.

@@ -1,17 +1,17 @@
 -- compiler/tools/refindex.mdk — cross-file reference index (#254 Stage 0).
 --
--- The LINEAR SUBSTRATE for `references` / `rename`: one whole-project walk that
+-- The LINEAR SUBSTRATE for references / rename: one whole-project walk that
 -- turns the loader's dependency-ordered `(modId, path, decls)` list into two
 -- binder-keyed hash maps —
 --
 --   defIndex : BinderKey -> Ref (List (uri, defLoc))         -- where it is defined
 --   refIndex : BinderKey -> Ref (List (uri, useLoc))         -- everywhere it is used
 --
--- `defIndex` is a LIST, not a single entry, because one binder can have MANY def
+-- defIndex is a LIST, not a single entry, because one binder can have MANY def
 -- sites: a multi-clause top-level function is N separate `DFunDef` decls that all
 -- share one `mkKey mid nsVal n`, so `describe 0 = … / describe 1 = … / describe n
 -- = …` contributes THREE clause heads under one key.  Holding only the last (what
--- a plain `hmSet` does) under-reports `references` and would let a rename orphan
+-- a plain `hmSet` does) under-reports references and would let a rename orphan
 -- every earlier clause under the OLD name — which still compiles, and silently
 -- changes runtime behaviour (#964).  `defsOf` returns them all in source order.
 -- The list is a SET of def sites, never a bag: `pushDef` refuses a (uri, span) it
@@ -146,7 +146,7 @@ nsMethod = "method"
 -- The INTERFACE namespace (#1044).  Deliberately separate from `nsTy`, and it is
 -- NOT a "rarer namespace we hope does not collide" — it is the namespace the
 -- LANGUAGE keeps interfaces in.  `resolve.mdk` carries `expInterfaces` as its own
--- field of `ModuleExports`, built by `expInterfacesDirect` from `DInterface` decls
+-- field of `ModuleExports`, built directly from `DInterface` decls
 -- ONLY, and `checkImplIface` admits an impl header solely on
 -- `contains iface env.interfaces` — so `impl Foo P` where `Foo` is a `data` is
 -- rejected outright ("Unknown interface: Foo"), verified on the binary.  A data
@@ -337,12 +337,12 @@ recordRef ctx key uri loc =
 -- by its `DInterface` and `DImpl` variants).  A plain `hmSet` was idempotent under
 -- that; an unconditional append is not.  Two edits over an IDENTICAL range in one
 -- LSP `WorkspaceEdit` is rejected by strict clients and DOUBLE-APPLIED by lenient
--- ones (`labellabel`) — the exact silent source corruption #964 exists to close.
+-- ones (labellabel) — the exact silent source corruption #964 exists to close.
 -- Dedup HERE rather than in one consumer, so "no key ever holds the same def site
 -- twice" is a property of the index itself and every caller inherits it.
 --
 -- (uri, span) is precisely the observable identity: `defsOf`'s tuple, the dump's
--- `showUL`, and `locationJson`'s `{uri, range}` all project to exactly that, and
+-- `showUL`, and the location JSON's `{uri, range}` all project to exactly that, and
 -- a `Loc`'s embedded uri is always the same `uri` it is recorded under — every
 -- `recordDef` call site passes `withUri uri …`.
 --
@@ -448,7 +448,7 @@ resolveIface (W ctx _ _ useEnv _) name =
 -- `method<TAB><name>` and carries NO interface identity, so two interfaces that
 -- both declare `tag` share that slot.  Keying off it made every `impl Beta Q`
 -- head land on `Alpha`'s key — a *confidently wrong* attribution, strictly worse
--- than the omission it replaced: `references` on `Alpha.tag` would return Beta's
+-- than the omission it replaced: references on `Alpha.tag` would return Beta's
 -- impl head and a rename would edit it, orphaning Beta's own method.  That is the
 -- #1002 failure mode re-created one dimension over.  It also failed the ordinary
 -- spelling: writing an impl does NOT require importing the method name (only the
@@ -457,7 +457,7 @@ resolveIface (W ctx _ _ useEnv _) name =
 --
 -- The interface name resolves through `nsIface` — the namespace the LANGUAGE
 -- keeps interfaces in — so it works under selective import, `as`-alias and
--- re-export chains (all threaded for `nsIface` by `importNs`/`reExportNs`), and it
+-- re-export chains (all threaded for `nsIface` by the import pass and `reExportNs`), and it
 -- needs no import of the method name at all.  `resolveIface` yields
 -- `<mid>\t<ns>\t<name>`; the mid is its first component, and it is exactly the mid
 -- `methodDef` used when the interface's own declaration was recorded, so heads
@@ -490,7 +490,7 @@ resolveIface (W ctx _ _ useEnv _) name =
 --       merge: it binds the impl to the LOCAL interface (control — delete the
 --       local and the language rejects the impl, "Method 'mlocal' is not part of
 --       interface 'Foo'").  refindex binds it to the IMPORTED one, because
---       `indexModule` seeds own defs before imports and `importNs` overwrites.
+--       `indexModule` seeds own defs before imports and the import pass overwrites.
 --       The result is #1044's own failure mode with an imported interface as the
 --       thief: a phantom `<imported>|method|<n>` key, and the local interface's
 --       key losing its impl head.  Fixing it means making `useEnv` prefer a
@@ -864,7 +864,7 @@ collectDefs ctx expSet mid uri xs0 = go xs0
 -- A VALUE's export flag lives on its `export foo : T` SIGNATURE, not on the bare
 -- `foo = …` definition (idiomatic Medaka), so a def's pub is `declPub OR the name
 -- is in the module's sig/def/extern export set` — mirrors resolve's
--- `expValuesDirect` (which lists both `DTypeSig True` and `DFunDef True`).
+-- direct value exports (which lists both `DTypeSig True` and `DFunDef True`).
 valuePub : Ctx -> HashMap String Unit -> Bool -> String -> Bool
 valuePub _ _ True _ = True
 valuePub ctx expSet False n = isSome (hmGetC ctx expSet n)
@@ -1006,9 +1006,9 @@ fieldDef ctx mid uri loc pub (Field fn _) =
 -- An interface method's DECLARATION def site is its OWN name token (#1013).
 --
 -- It must not be the decl's `loc` — the INTERFACE's name-token span — which
--- records `weigh`'s def at `Weighed` for `interface Weighed a where weigh : …`.
--- Against `references` that is a misleading highlight; against `rename` it is
--- source corruption, because renaming `weigh` would overwrite the
+-- records weigh's def at `Weighed` for `interface Weighed a where weigh : …`.
+-- Against references that is a misleading highlight; against `rename` it is
+-- source corruption, because renaming weigh would overwrite the
 -- interface's own type name (`interface newName a`) — the #964 / #1002 class.
 --
 -- Zipped with `declPosChildLocs` POSITIONALLY, which is exact here: the parser
@@ -1103,7 +1103,7 @@ mapChildLoc uri (Some l) = Some (withUri uri l)
 -- An `impl`'s method heads are recorded as NEITHER a def nor a use by default — the
 -- def pass returns `[]` for `DImpl` and the body walk discards the method NAME —
 -- so `impl Sized Box where sizeOf Small = 1 / sizeOf Big = 100` would put nothing at
--- all in the index.  `references` on `sizeOf` would then return the interface
+-- all in the index.  references on sizeOf would then return the interface
 -- declaration and the call sites but NOT the impls, and a rename off that set
 -- would rename the interface method while leaving every `impl` defining the OLD
 -- name — the #964 failure mode, one namespace over.
@@ -1112,7 +1112,7 @@ mapChildLoc uri (Some l) = Some (withUri uri l)
 -- BinderKey as the interface's method declaration, NOT an impl-qualified key.
 -- An impl method is not an independent binder; it is a definition OF that
 -- method, and renaming the method must edit every one of them or the program
--- silently changes meaning.  It is also what `references` should return — the
+-- silently changes meaning.  It is also what references should return — the
 -- LSP convention is that find-references on an interface method includes its
 -- implementations.  Distinguishing WHICH impl a head belongs to stays expressible
 -- from the head's own `Loc`, which is inside exactly one `impl`.
@@ -1157,7 +1157,7 @@ implHeadsGo w ifaceMid loc xs0 xs1 = go xs0 xs1
 -- The `Sized` token of `impl Sized Box` is a USE of the interface (#1014).  The
 -- interface's one recorded binder lives in `nsTy` (see `nsIface`: no def is ever
 -- recorded under `nsIface`), so the use is filed under the `nsTy` twin of the key
--- `resolveIface` found, which is the key `references` on the declaration reads.
+-- `resolveIface` found, which is the key references on the declaration reads.
 -- `None` for a compiler-generated impl (`deriving`), which has no token.
 recordImplIfaceUse : W -> String -> Option Loc -> Unit
 recordImplIfaceUse _ _ None = ()
@@ -1548,7 +1548,7 @@ preludeParseMemo mid src =
 -- we never walk prelude bodies.  A project-local `impl Eq MyType` DOES record its
 -- method clause heads under `core\tmethod\teq` (#1002) — that is a project-local
 -- location joining a prelude key, not a descent into stdlib, and it is what makes
--- `references` on a prelude method show the impls the user actually wrote.
+-- references on a prelude method show the impls the user actually wrote.
 seedPrelude : Ctx -> String -> String -> Unit
 seedPrelude ctx mid src = match preludeParseMemo mid src
   None => ()
@@ -1754,7 +1754,7 @@ noOverride _ = None
 -- ── WHOLE-PROJECT index build (#254 Stage 1.1) ───────────────────────────────
 --
 -- `buildRefIndex` above is ENTRY-ROOTED: `loadProgramFilesLocatedCached` walks
--- only the clicked file's OWN imports (downward), so a `references` query on a
+-- only the clicked file's OWN imports (downward), so a references query on a
 -- leaf module's definition misses every use in a file that IMPORTS it (a
 -- reverse-dependent is never on the entry's own import closure). This section
 -- closes that gap: enumerate every `.mdk` file under the PROJECT ROOT

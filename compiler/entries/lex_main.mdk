@@ -23,7 +23,7 @@ renderToks toks = joinNl (map tokenToString toks)
 -- by Phase 134.  Before that fix an `<IO>` helper called from a `match` arm could
 -- silently produce no output (it returned an un-run partial closure) when its
 -- name collided with a *constrained* same-named function in another module, via
--- the loader's joint dict-pass.  That dict-pass bug is guarded by `test_loader`;
+-- the loader's joint dict-pass.  That dict-pass bug is guarded by test_loader;
 -- lex_scan.mdk's `emit` now carries a concrete signature, so it no longer collides
 -- here.
 emit : String -> <IO> Unit

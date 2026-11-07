@@ -288,7 +288,7 @@ buildAndRun target entryPath outPath tmpDir examples synthResults nonce =
   let emitter = envOr "MEDAKA_EMITTER" (joinPath root "medaka_emitter")
   -- The scratch entry's OWN search roots resolve nothing useful (it sits in a
   -- `mktemp -d`), so the target's real roots are passed as extraRoots — the
-  -- exact case Stage 0 added that parameter for.  `compiler`/`stdlib` are
+  -- exact case Stage 0 added that parameter for.  The compiler and stdlib roots are
   -- appended by `runBuildNativeRoots` itself.
   let extraRoots = entrySearchRoots (dirOf target)
   -- boStrictEmit = True: same reason as the `test` probe's, same seam (#2679) —

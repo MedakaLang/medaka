@@ -1020,7 +1020,7 @@ filterDecls p (d :: rest)
   | otherwise = filterDecls p rest
 
 -- `medaka test --filter <substring>` (#2295): keep only props whose name
--- contains `substring`. `None` (no `--filter` given) is a no-op.
+-- contains that substring. `None` (no `--filter` given) is a no-op.
 export
 filterPropsByName : Option String -> List Decl -> List Decl
 filterPropsByName None decls = decls

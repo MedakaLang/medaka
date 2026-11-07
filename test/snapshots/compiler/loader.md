@@ -180,7 +180,7 @@ findProjectRootOrSelf startDir = optionOr startDir (findProjectRoot startDir)
 -- as the sole non-stdlib root — correct for the dotted case, but it silently
 -- swallows a sibling import once a `medaka.toml` sits above the entry's own
 -- dir (P0-13: `medaka run src/main.mdk` from a project root with
--- `src/helper.mdk` failed with `unknown module: helper`, because `helper`
+-- `src/helper.mdk` failed with `unknown module: helper`, because helper
 -- resolved against the project root, not `src/`).  De-duplicated to a single
 -- root when the entry already sits AT the project root (or no `medaka.toml`
 -- was found, in which case `findProjectRoot` falls back to `entryDir` itself).
@@ -476,7 +476,7 @@ mdkBaseName name =
     None
 
 -- Plain "available modules: array, list, map, string" text (no leading
--- separator) — this is what feeds the structured JSON `help` field.  `[]` (no
+-- separator) — this is what feeds the structured JSON "help" field.  `[]` (no
 -- stdlib dir readable) yields "".
 export
 availableModulesText : String -> <IO> String
@@ -683,7 +683,7 @@ parsedModule parseFn owningRoot path src =
 
 -- ── loaded-source side table ───────────────────────────────────────────────
 -- path -> the EXACT source the loader parsed for it most recently.  Read by the
--- typechecker's module-chain memo (driver/diagnostics.mdk `moduleStepKeys`),
+-- typechecker's module-chain memo (driver/diagnostics.mdk `moduleStepKey`),
 -- which keys a module's memoized check on the content the loader actually
 -- parsed, and by `readDiagSrc`, which renders from it — re-reading the file
 -- after the load could race an edit and key or render the wrong content.
@@ -793,8 +793,8 @@ revLookupRoot cr ((n, dr) :: rest) =
 -- stdlibDir]` (`driver/build_cmd.mdk`, both the LLVM and the WasmGC arm) — FOUR
 -- entries, and stating the invariant over the three-root list alone would assert
 -- it about a list the emitter never receives.  It holds for both: stdlibDir is
--- last either way, and `compilerDir` can only outrank `projRoot` when `projRoot`
--- is an ancestor of `<root>/compiler`, where measuring the id from `compilerDir`
+-- last either way, and the compiler-dir root can only outrank `projRoot` when `projRoot`
+-- is an ancestor of `<root>/compiler`, where measuring the id from that root
 -- is the answer you want anyway (that is how the compiler's own `driver.loader`
 -- ids are spelled).  So taking the last containing root:
 --   * picks projRoot over entryDir for a file under both → the DOTTED spelling
@@ -1404,7 +1404,7 @@ underDir dir path = startsWith "\{dir}/" path
 
 -- Load a root file + transitive deps, dependency-first, WITHOUT the file paths.
 -- A projection of `loadProgramFilesE` (disk-only read, paths dropped) rather than a
--- second DFS: until #100 this had its own `visitMod`/`visitMods`/`readModuleProg`
+-- second DFS: until #100 this had its own DFS helpers, a
 -- twin of the walk below, which is exactly the parallel-driver shape that lets a
 -- fix land in one copy and silently miss the other.  Same order, same cycle
 -- detection — there is only one implementation of either now.

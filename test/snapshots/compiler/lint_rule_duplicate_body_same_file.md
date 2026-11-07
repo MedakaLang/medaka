@@ -62,7 +62,7 @@ dupSameFileComplexityThreshold : Int
 dupSameFileComplexityThreshold = 20
 
 -- ── per-file rule: duplicate-body, SAME FILE (#602) ─────────────────────────────
--- `ruleDuplicateBody` above is cross-file-only by construction (its `check`
+-- The cross-file duplicate-body rule is cross-file-only by construction (its `check`
 -- takes every target file at once and requires ≥2 DISTINCT files per group) —
 -- so two byte-identical top-level bodies in the SAME file (e.g. parser.mdk's
 -- `parseBracketBlock`/`indentedBody`) were structurally invisible to it.  This

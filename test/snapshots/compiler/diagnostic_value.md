@@ -18,13 +18,13 @@ public export data Severity = SevError | SevWarning
 -- authors supply exactly one token.  The CLI text renderers (`ppDiag`/
 -- `ppDiagCliSrc`) deliberately ignore the code (JSON-only for Stage 1), keeping the
 -- human-facing CLI output byte-identical.
--- Stage 2 (DIAGNOSTIC-CODES-DESIGN §6): a Diag optionally carries a human `help`
+-- Stage 2 (DIAGNOSTIC-CODES-DESIGN §6): a Diag optionally carries a human "help"
 -- hint (Option String) and a machine-applicable `fix` (Option Fix).  Both are
 -- surfaced JSON-only (CLI text is unchanged) and are `None` for most diagnostics;
 -- parse and resolve diagnostics may populate them. A `Fix` replaces its
 -- `Loc` span with the replacement string.
--- `FixEdits` is a lint fix: an applicability name (`safe`, `unsafe`,
--- `suggest`) and several span edits that apply together.
+-- `FixEdits` is a lint fix: an applicability name ("safe", "unsafe",
+-- "suggest") and several span edits that apply together.
 public export data Fix = Fix Loc String | FixEdits String (List (Loc, String))
 
 -- A diagnostic id is a compiler code or a lint rule name, two sources that share the one

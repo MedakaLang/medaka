@@ -1833,7 +1833,7 @@ anyMarker (m :: ms) src = strContains m src || anyMarker ms src
 {- | Structural grading evidence: a chunk whose text contains a match arm
    of the shape `Ok (<int literal>, ...) =>` — a spawn result tuple
    destructured directly on its exit code, with no marker string anywhere
-   in sight (`sqlite/test/oracle_support.mdk`'s `spawnRaw`, #3261 item 2).
+   in sight (`sqlite/test/oracle_support.mdk`'s spawnRaw, #3261 item 2).
    Textual markers alone miss this: the code is read, but never through a
    name or comparison `gradeEvidenceMarkers` recognizes.
 
@@ -2236,7 +2236,7 @@ spawningChunk c = c.name /= "import" && liveSpawn c.text
 
    The one relay hop mirrors `relaysFor` on the answering side: a helper
    module routinely exports a thin wrapper and keeps the spawn one call
-   deeper, so a gate importing `spawnOut` never writes the name `spawnRaw`
+   deeper, so a gate importing spawnOut never writes the name spawnRaw
    and would otherwise never LOOK at the binding that spawns. The relaying
    chunk must itself be named by the gate, so reach still stops at what the
    gate wrote; a helper binding no gate names stays out of that gate's
@@ -2273,7 +2273,7 @@ spawnAnswered gateFile cs c =
 
    The one extra hop a followed helper earns, and only a followed helper. An
    import inserts a binding between the spawn primitive and the gate's own
-   code — `boundedInTree` (helper) ← `strictly` (gate) ← `expectWall` (gate,
+   code — `boundedInTree` (helper) ← strictly (gate) ← expectWall (gate,
    grades) — so a helper's spawn sits one level further from its grading than
    an in-module spawn ever does. Within the gate's own module the rule stays
    exactly one level each way, so a gate that could report a site before still
@@ -2671,7 +2671,7 @@ verifyCmdBody argv = match parseVerifyArgs argv
 -- paths rather than two flavours of the same match:
 --
 --   1. REGISTRY-LEVEL POLICY (design doc §2) — the transfer of
---      test/preflight.sh's `mark_full` and of its UNMAPPED fail-open.  A
+--      test/preflight.sh's mark_full and of its UNMAPPED fail-open.  A
 --      blast-radius path selects the WHOLE suite whatever any entry says, and
 --      a non-prose path no entry claims fails OPEN to the whole suite rather
 --      than selecting nothing.  Neither is per-gate data: encoding them as
@@ -2679,7 +2679,7 @@ verifyCmdBody argv = match parseVerifyArgs argv
 --      `stdlib/*` source so it always matches — would make every entry's data
 --      a lie about what that gate actually reads, and would leave nothing able
 --      to answer "is this path mapped at all?".  preflight draws the same
---      line: `mark_full` is its own function, not another `add` case arm.
+--      line: mark_full is its own function, not another `add` case arm.
 --   2. PER-ENTRY MATCHING against `sources` (globs, matched against the whole
 --      path; `*` crosses `/`) and `corpus` (fixture/project DIRECTORIES — a
 --      path matches when it IS the dir or lives under it).
@@ -2698,7 +2698,7 @@ verifyCmdBody argv = match parseVerifyArgs argv
 -- UNMAPPED), so the two derivations can be diffed line-for-line.
 
 -- Layer 1a: the blast-radius prefixes.  These are exactly the paths
--- test/preflight.sh answers with `mark_full` (`compiler/support/*`,
+-- test/preflight.sh answers with mark_full (`compiler/support/*`,
 -- `compiler/entries/*`, `stdlib/*|runtime/*`), and they are policy, not data.
 export
 blastRadiusPrefixes : List String
@@ -2710,7 +2710,7 @@ blastHit [] _ = None
 blastHit (p :: ps) path = if globMatch p path then Some p else blastHit ps path
 
 {- | Layer 1b: is this path PROSE?  The same allowlist
-   `.github/workflows/ci.yml`'s `detect` job applies (its `nondoc` case), kept
+   `.github/workflows/ci.yml`'s `detect` job applies (its nondoc case), kept
    in the same order for the same reason its own comment gives: `test/**` is
    NEVER prose (it holds functional goldens), while `docs/spec/SYNTAX.md`,
    `docs/guide/*.md`, `docs/advanced/*.md` and
@@ -2992,7 +2992,7 @@ explainCmdBody argv = match parseExplainArgs argv
 --      so `parsec = "../parsec"` and `pc = "../parsec"` are ONE edge —
 --      `loader.revLookupRoot` draws exactly the same line for the same reason.
 --   3. CORPUS — a gate whose `corpus` names a PROJECT reads that project's tree
---      as its fixture corpus (`wasm/diff_gzip` -> `gzip`, `wasm/diff_sqlite` ->
+--      as its fixture corpus (`wasm/diff_gzip` -> gzip, `wasm/diff_sqlite` ->
 --      `sqlite`, both owned by `compiler`).  Those are reverse edges no manifest
 --      can show, so a selected corpus project pulls its gates' OWNING project
 --      back in.  Rules 2 and 3 are run to a JOINT fixpoint, not in two passes:
@@ -3159,7 +3159,7 @@ corpusProjectEdges univ (g :: gs) =
   if isEmptyStrs cs then rest else (g.project, cs) :: rest
 
 -- realpath-compare one manifest-resolved dep root against each project dir, so
--- `sqlite/../parsec` and `parsec` are recognised as the same directory.
+-- `sqlite/../parsec` and parsec are recognised as the same directory.
 projectForRoot : String -> List String -> String -> <IO> Option String
 projectForRoot root xs0 dr = go xs0
   where
@@ -3359,7 +3359,7 @@ reachCmdBody argv = match parseReachArgs argv
 -- name rather than through a shard pattern, and the registry cannot say which
 -- job runs which: `shard = "other-job"` is one sentinel covering seven
 -- different jobs (S-1's report §7).  The counterexample is exact —
--- `check_fingerprint_parity` and `check_keyword_sync` carry IDENTICAL values
+-- check_fingerprint_parity and check_keyword_sync carry IDENTICAL values
 -- in every scheduling field (`area = "types"`, `shard = "other-job"`,
 -- `project = "compiler"`, `tiers = ["merge"]`, `cost = "cheap"`,
 -- `kind = "exec"`), yet the first is a step of `compiler-soundness` under that

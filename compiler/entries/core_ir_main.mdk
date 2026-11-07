@@ -4,7 +4,7 @@
 --
 -- parses + desugars the target (self-contained / prelude-free for this slice),
 -- LOWERS it to Core IR (core_ir_lower.mdk), evaluates the Core IR
--- (core_ir_eval.mdk), and prints `pp_value` of the `main` binding.  Diffs
+-- (core_ir_eval.mdk), and prints pp_value of the `main` binding.  Diffs
 -- byte-for-byte against dev/eval_probe.exe (the AST tree-walker) — i.e. the SAME
 -- oracle compiler/entries/eval_main.mdk diffs against.  Equal output over the corpus is
 -- the proof that lowering + Core IR evaluation preserve the AST semantics.

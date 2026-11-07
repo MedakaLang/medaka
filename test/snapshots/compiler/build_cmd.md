@@ -797,7 +797,7 @@ scratchCandidatesFrom tmpdir scratch =
 -- outside the target's own tree.  It carries the target project's own
 -- `[dependencies]`, because dependency names are resolved from the ENTRY's
 -- manifest, never from the module search roots (`loader.mdk`'s `readDeps` ->
--- `resolveModulePath`): a scratch manifest with no `[dependencies]` makes every
+-- path resolution): a scratch manifest with no `[dependencies]` makes every
 -- cross-project import of the target unresolvable in the probe, however many
 -- roots the emitter is handed.
 --
@@ -1449,7 +1449,7 @@ runBuildNativeRootsGo paths tmpDir options frontGate =
   let stdlibDir = joinPath root "stdlib"
   -- P0-13: entrySearchRoots gives BOTH the entry's own dir (resolves a bare
   -- sibling import next to the entry, e.g. `src/main.mdk` importing
-  -- `src/helper.mdk`'s `helper`) and the project root found by walking up from
+  -- `src/helper.mdk`'s helper module) and the project root found by walking up from
   -- there (resolves a dotted cross-package import rooted at the project dir) —
   -- see the loader.mdk doc comment. A single `findProjectRoot` root here would
   -- swallow the sibling-import case whenever a `medaka.toml` sits above the

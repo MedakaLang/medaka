@@ -154,7 +154,7 @@ runSession medakaBin msgs =
       (runCommand "sh" ["-c", stringConcat [medakaBin, " lsp < ", tmp]]))
 
 -- ── byte-accurate frame parser (this IS the integrity check) ────────────────
--- Frame declaredLen body byteValid.  byteValid = exactly `declaredLen` bytes were
+-- Frame declaredLen body byteValid.  byteValid = exactly declaredLen bytes were
 -- consumed landing on a codepoint boundary.
 
 public export data Frame = Frame Int String Bool

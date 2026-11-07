@@ -5,7 +5,7 @@ stages=DESUGAR,MARK
 -- One parse, one desugar and one comment scan of a `medaka test` target per process.
 --
 -- The test verb reads the target's declarations from many sites that each
--- hold only the source text (`tsrc`): the pre-parse, the `test "…"` and `prop`
+-- hold only the source text (tsrc): the pre-parse, the `test "…"` and `prop`
 -- discovery, the native prop planner and `test --json`.  Threading decls
 -- through every one of them would re-sign the whole report/driver surface, so
 -- the located parse and its desugaring are memoized here, keyed on the source

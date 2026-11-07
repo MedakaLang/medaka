@@ -73,7 +73,7 @@ rule =
 -- from):
 --
 --   RECALL comes from NAME RELAXATION.  Matching a hand-curated
---   15-name list EXACTLY makes `listReverse` / `takeN` / `reverseList` — the shapes
+--   15-name list EXACTLY makes listReverse / takeN / reverseList — the shapes
 --   people actually write — invisible.  A candidate is any
 --   top-level def whose lowercased name has some exported stdlib name (length
 --   >= 4, lowercased) as a PREFIX or a SUFFIX.  An exact name match is just the
@@ -112,7 +112,7 @@ rule =
 -- Skip only the TRUE OWNER of a name, not every stdlib file: `stdlib/list.mdk`
 -- defining `reverse` is the canonical definition the rule points other code
 -- at, so it must not fire on itself — but `stdlib/toml.mdk` defining
--- `listReverse` does not OWN `list.reverse`, so a blanket "this path is under
+-- listReverse does not OWN `list.reverse`, so a blanket "this path is under
 -- stdlib/" skip would wrongly exempt it too (#2248 Miss 1).  Ownership is
 -- decided per matched candidate, not per file: `path`'s own module
 -- (`stdlibModuleOf path`) is threaded through so a candidate whose module IS that
@@ -138,7 +138,7 @@ ruleStdlibReimpl idx path facts _ prog =
   let names = stdlibIndexNames idx
   let sigs = sigTyMapOf prog
   -- every NAME this file itself declares in a type-ish namespace (#2327
-  -- finding 2) — see `localTyNamesOf`.
+  -- finding 2) — see `localTyNamesL`.
   let locals = nameSetOf (flatMap localTyNamesL prog)
   -- dedupe by name so a multi-clause function (consecutive DFunDefs) fires once,
   -- keeping the FIRST clause's location.
@@ -350,9 +350,9 @@ localNameForStdlibInPath modName stdName (UseWild path) =
 localNameForStdlibInPath _ _ _ = None
 
 -- `user` is a RELAXATION of the stdlib name `std` iff, case-insensitively, it
--- starts or ends with it (`listReverse` ⊇ `reverse`, `takeN` ⊇ `take`).  The
+-- starts or ends with it (listReverse ⊇ `reverse`, takeN ⊇ `take`).  The
 -- `>= 4` floor is the noise gate: without it `map`, `id`, `at`, `abs`, `not`
--- match half the tree by accident (`mapValues`, `idle`, `absPath`).
+-- match half the tree by accident (mapValues, idle, absPath).
 relaxesOnto : String -> String -> Bool
 relaxesOnto user std =
   let s = stringToLower std

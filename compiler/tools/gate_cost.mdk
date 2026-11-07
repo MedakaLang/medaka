@@ -10,7 +10,7 @@
    makes an otherwise obvious join silently wrong, so it lives here with the
    reader rather than in the caller.
 
-   The baseline is keyed by `run_gates.sh`'s OWN gate label (`gate_name`,
+   The baseline is keyed by `run_gates.sh`'s OWN gate label (gate_name,
    `test/run_gates.sh:149-151`), which it derives from the gate SCRIPT PATH:
    drop `.sh`, turn every `/` into `_`, then drop a leading `test_`.  For the
    ~119 gates under `test/` that is the identity on their registry name
@@ -18,7 +18,7 @@
    why the mismatch hides: it is invisible on 149 of the 202 schedulable
    entries and only bites the 53 that live outside `test/`, where the registry
    name keeps its slashes (`sqlite/test/select_oracle`) and the baseline key
-   does not (`sqlite_test_select_oracle`).
+   does not (sqlite_test_select_oracle).
 
    Joining on `name` therefore does not FAIL — it silently reports "no cost"
    for all 53, including every gate on the `pds` row and 24 of `eval`'s 60,
@@ -92,7 +92,7 @@ public export data GateCost = GateCost {
 
 {- | The baseline's key for a gate, from that gate's `run` script path.
 
-   Mirrors `gate_name` in `test/run_gates.sh` exactly: strip a trailing
+   Mirrors gate_name in `test/run_gates.sh` exactly: strip a trailing
    `_test.mdk` (a `kind = "native"` gate's module) OR a trailing `.sh` (a
    `kind = "exec"` gate's script), replace every `/` with `_`, then strip one
    leading `test_`. A `kind = "native"` gate's `run` is `test/<name>_test.mdk`,
@@ -132,7 +132,7 @@ dropDotSh s
   | otherwise = s
 
 -- A `kind = "native"` gate's `run` ends `_test.mdk`, not `.sh`; strip that
--- suffix FIRST (mirrors `gate_name`'s sed order) so a native gate's key
+-- suffix FIRST (mirrors gate_name's sed order) so a native gate's key
 -- collapses onto the same label its pre-migration `.sh` used.
 dropTestMdk : String -> String
 dropTestMdk s =
@@ -402,7 +402,7 @@ parseOracleCosts src = match parse src
    default.  Four candidate families were compared out-of-sample and the
    median won; the full table, protocol and derivation live in
    `docs/ops/GATE-REGISTRY-DESIGN.md` §8, and `medaka gate balance` prints the
-   retained statistic's own error on every run (`balOosLines`).  The short
+   retained statistic's own error on every run (`balOosBlock`).  The short
    version, because the shape of the answer is easy to get backwards:
 
      * On CENTRAL tendency every alternative beats the median.  It is
@@ -411,7 +411,7 @@ parseOracleCosts src = match parse src
        the lower of the two central samples.
      * On the TAIL the median wins, and that is the axis a packer is
        scheduling on.  One gate in the committed baseline
-       (`pds_test_repo_vectors`, `ms` = [948919, 14082, 18725]) carries a
+       (pds_test_repo_vectors, `ms` = [948919, 14082, 18725]) carries a
        50.7x hiccup sample.  At the baseline's own sample count the median
        prices it at 18725ms — the only candidate that gets it right.  The
        mean says 327242 (17x), the max says 948919 (50x), and
@@ -422,7 +422,7 @@ parseOracleCosts src = match parse src
    taken under the positional run attribution FR-1 replaced with a recorded one
    (`GateCost.sampleRuns`), so `balOosBlock` reports "not derivable" until enough
    attributed ingests have landed to re-take it.  The CHOICE of statistic does not
-   rest on that alignment — the `pds_test_repo_vectors` outlier pricing above is a
+   rest on that alignment — the pds_test_repo_vectors outlier pricing above is a
    fact about one gate's samples, whichever run each came from — but the percentage
    does.
 
@@ -435,7 +435,7 @@ parseOracleCosts src = match parse src
    ingester's awk, so the balancer can recompute the statistic over a SUBSET
    of a gate's samples — which is exactly what stating an out-of-sample error
    requires.  It agrees with `medianMs` by construction on any baseline the
-   current ingester wrote; `balOosLines` counts and reports the rows where it
+   current ingester wrote; `balOosBlock` counts and reports the rows where it
    does not, so a future divergence between the two definitions is visible
    rather than silent.
 
@@ -456,7 +456,7 @@ packStat xs =
   -- test/gate_cost_ingest.sh exactly; the two must never drift.
   costNth ((listLen s + 1) / 2 - 1) s
 
--- Insertion sort.  A gate holds at most `maxSamples` (9) samples, so the
+-- Insertion sort.  A gate holds at most 9 samples, so the
 -- quadratic is nine comparisons and a merge sort would be more code than
 -- the thing it sorts.
 costSortInts : List Int -> List Int
@@ -719,7 +719,7 @@ prop "baselineKey agrees across a native migration" (n : Int) =
 prop "packStat of one sample is that sample" (n : Int) = packStat (n :: []) == n
 
 -- The robustness property the whole choice of statistic rests on: a single
--- wild sample among three cannot move the answer.  `pds_test_repo_vectors`
+-- wild sample among three cannot move the answer.  pds_test_repo_vectors
 -- is this property with real numbers.
 prop "one wild sample among three does not move packStat" (n : Int) =
   packStat (n :: n + 1 :: n + 1000000 :: []) == n + 1

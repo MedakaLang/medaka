@@ -25,7 +25,7 @@ import support.symbol_encoding.{encodePair}
 --
 -- ROOTS = `main` + the references of every EMITTING decl that is not a plain
 -- function: impl-method bodies and interface-default bodies (the only other decls
--- `core_ir_lower` lowers to code — `funClausesOf` pulls just DFunDef, `lowerImpls`
+-- `core_ir_lower` lowers to code — `funClausesOf` pulls just DFunDef, impl lowering
 -- just DImpl/DInterface).  DProp/DTest bodies do NOT emit, so they are NOT
 -- roots — that is exactly what lets `clamp` (referenced only by a core prop) drop.
 -- Reachability is the transitive closure of those roots over DFunDef bodies.
@@ -228,7 +228,7 @@ reachableNames decls =
   seen
 
 -- name -> refs(body) as a HashMap (multi-clause defs merged). O(1)
--- setInPlace/get; replaces the old O(N²) assoc-list `addRefs`. Ref-list order
+-- setInPlace/get; replaces the old O(N²) assoc-list version. Ref-list order
 -- decides only which first reach a name records, never whether it is reached.
 -- Each ref is canonicalized against the defined set so a post-mangle bare
 -- prelude reference (`not`) resolves to `core__not`.

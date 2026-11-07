@@ -347,7 +347,7 @@ editLoop (ac :: acs) bs i (p0 :: prest) =
   editLoop acs bs (i + 1) (i :: editRow ac bs i p0 prest)
 editLoop (_ :: _) _ _ [] = []
 
--- build one new row: `left` = newRow[j-1], `diag` = prev[j-1], `prevRest` = prev[j..]
+-- build one new row: `left` = newRow[j-1], `diag` = prev[j-1], the rest of prev = prev[j..]
 editRow : Char -> List Char -> Int -> Int -> List Int -> List Int
 editRow ac (bc :: bcs) left diag (pj :: pjs) =
   let cost = if ac == bc then 0 else 1

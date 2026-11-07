@@ -69,7 +69,7 @@ missingSigVisitors _ _ _ _ prog =
   -- per def, i.e. O(defs x signs) across the file — and in the common case
   -- where most defs ARE signed, signs grows with defs, so this was quadratic. It
   -- is a PURE SCAN (no extra allocation), so the alloc signal is blind to it and
-  -- only the `manydefs` shape's lint-stage TIME catches it (the issue-#110 class).
+  -- only the manydefs shape's lint-stage TIME catches it (the issue-#110 class).
   let signed = nameSetOf (flatMap topSigNameL prog)
   let seen = new ()
   [OnDecl (missingSigAt signed seen)]

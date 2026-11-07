@@ -1160,7 +1160,7 @@ isDispatching _ = False
 -- (`impl Wrap (Pair Int)` / `impl Wrap (Pair String)` -- one runtime tag, two impls),
 -- the tag has not decided anything and "first wins" is a coin flip reported as an
 -- answer: measured `1|1` where the semantics say `1|2`, exit 0, on `medaka run`, the
--- exact silent fold `emitArgTagRoute`'s guard refuses on the native side.
+-- exact silent fold the emitter's arg-tag guard refuses on the native side.
 --
 -- ⚠️ THE MULTI-SLOT CARVE-OUT IS LOAD-BEARING, NOT A SOFTENING.  A candidate carries a
 -- LIST of dispatching positions, and a multi-parameter interface may legitimately have
@@ -2612,7 +2612,7 @@ declImplEntries dispositions env disp decl0 = go decl0
     -- key, so it is dispatched exactly like the instance's own methods and nothing
     -- chooses a default.
     -- The interface word comes straight off `ifaceOrigin` (resolve stamps it in
-    -- `elaborateModules`' preamble, the seam `run` and the separate `medaka_emitter`
+    -- `elaborateModules`' preamble, the seam `run` and the separate emitter
     -- BUILD process share), the spelling the table's producer keys the slot by.
     go (DInterface { name = ifaceName, ifaceOrigin = o, methods, ... }) =
       match dispositions
@@ -3042,7 +3042,7 @@ currentEvalFile : Ref String
 currentEvalFile = Ref ""
 
 -- #1542: per-module (modId -> file path) map, set once by the run driver from
--- the SAME loader-produced `pathMap` `resolveModulesErrorsByFile` already
+-- the SAME loader-produced path map `resolveModulesErrorsByFile` already
 -- uses for resolve-phase diagnostics (#41/#186/#1360) — reused here so a
 -- RUNTIME error gets the same per-module attribution a resolve error already
 -- gets.  Consulted only at module-env construction (buildModInfos), never on
@@ -3234,7 +3234,7 @@ pDiscard _ = VUnit
 -- interpreter's OWN internal errors (division by zero, etc.) already route
 -- through the real host `panic` (a genuine, unrecoverable abort — no
 -- catchable panics, see AGENTS.md).  Wiring the extern to the same host
--- `panic` fixes both `explicit_panic`/`let_else_fail` fixtures.
+-- `panic` fixes both explicit_panic and let_else_fail fixtures.
 pPanic : Value e -> <e> a
 pPanic v = runtimePanic EPanic (unString v)
 
@@ -3302,7 +3302,7 @@ u64Low30 x = U64.toIntTruncating (U64.bitAnd x 0x3FFFFFFF)
 -- over `rngStateRef` for property-value generation (deliberately unrelated: a
 -- passing prop prints `OK (100 tests)` regardless of the draws, and a failing
 -- prop's shrunk counterexample is engine-specific — see
--- test/diff_compiler_fmt_test.mdk's `testGoldenFailure`).
+-- test/diff_compiler_fmt_test.mdk's testGoldenFailure).
 export
 rngStateRef : Ref Int
 rngStateRef = Ref 123456789
@@ -4917,7 +4917,7 @@ useImports _ _ _ = []
 
 -- `core` is not in `exportsMap` — the prelude is installed straight into the GLOBAL
 -- frame, which is why a core reference through no import needs no frame entry.  An
--- ALIAS needs one: `C.isEven` and a member rename's `even2` are spellings the global
+-- ALIAS needs one: `C.isEven` and a member rename's new name are spellings the global
 -- frame does not hold.  A plain member or dotted name gets one too, pointing at the
 -- global frame's own cell: it is an explicit import, so a wildcard's cell of that name
 -- is left out of the frame (`explicitOverWild`).  A core wildcard binds nothing here;

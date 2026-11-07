@@ -908,7 +908,7 @@ balUnionOrcsGo ((n, ms) :: os) have names
    (2) is `balCurrentLegal`'s argument one layer down and is NOT negotiable:
    cost is what a preference may weigh, and legality is not a cost.  An illegal
    incumbent fails the predicate and is moved, which is what keeps the
-   `wasm_only_row` fixture red-on-regression.
+   wasm_only_row fixture red-on-regression.
 
    WHY THIS IS STILL A FIXED POINT, which is the property #2178 paid for.
    Run the balancer on its own output and every candidate's incumbent IS the row
@@ -1153,10 +1153,10 @@ balRowIsWasm n (r :: rs)
    both adopted permanently by one `medaka gate balance` run, after which
    `--check` reported "already balanced":
 
-     (a) move an unrelated gate ONTO `engines`.  The seed takes it, the packer
+     (a) move an unrelated gate ONTO engines.  The seed takes it, the packer
          repacks the other seven rows around the extra load, and the result is
          a fixed point of itself.
-     (b) move `diff_compiler_engines` OFF `engines`.  Same adoption — and the
+     (b) move `diff_compiler_engines` OFF engines.  Same adoption — and the
          projection printed is BETTER (pole/median 1.005 against 1.073, under
          the metric #2216 retired),
          because idling a whole runner and stacking the suite's heaviest gate
@@ -1617,7 +1617,7 @@ balDefaultTag False = ""
        the runs recorded in `runs[]` puts the bias at -12.6% of a row's
        predicted total.  That is the deliberate price of a statistic one wild
        sample cannot move (`gate_cost.packStat`'s doc-comment carries the
-       comparison that settled it), and `balOosLines` prints the current
+       comparison that settled it), and `balOosBlock` prints the current
        figure on every run rather than leaving this prose to rot; and
      * gates that FAILED, which contribute wall clock to the row but, by the
        ingester's rule, no sample to the baseline.  Whether this is currently
@@ -1814,7 +1814,7 @@ balStabLine cs rows0 ps rows = match balTarget False cs rows0
 -- NOT "gates the two packings disagree about", which is the larger and
 -- misleading number.  Holding one gate shifts the row loads every LATER
 -- placement is measured against, so bare LPT and the stabilized packing can
--- also disagree about gates that were themselves MOVED — `stability_preference`
+-- also disagree about gates that were themselves MOVED — stability_preference
 -- has exactly one of each, and reporting 2 there under the word "held" would be
 -- a count that does not mean what the sentence around it says.
 balHeldCount : List Place -> List Place -> Int
@@ -2174,7 +2174,7 @@ balReport label s cs rs ps runs = stringConcat [
 -- HYSTERESIS MUST NEVER PRESERVE AN ILLEGAL ASSIGNMENT.
 --
 -- This is the first test for a reason, and it was not in the first draft: the
--- `wasm_only_row` fixture caught it.  There, a gate needing wasm-tools sat on
+-- wasm_only_row fixture caught it.  There, a gate needing wasm-tools sat on
 -- a row with `wasm_arm = false`, and moving it to the one legal row changed
 -- the pole by 10ms out of 310 — far inside the 5% band.  So the balancer
 -- reported "unchanged (within the hysteresis band)", exited 0, and left the
@@ -2515,18 +2515,18 @@ balCompute regPath setup gates shs base runs regSrc =
 --       baseline) nor `gate balance`/(a) (only ever ask "does this registry
 --       gate have a price") looks the other way, so a gate deleted from
 --       `test/gates.toml` leaves its cost history behind forever with nothing
---       noticing (`pds_test_unit_suite`, removed in #2723, sat in the
+--       noticing (pds_test_unit_suite, removed in #2723, sat in the
 --       baseline through 11 clean `gate verify` runs).
 --
 -- Any clause may be accepted on purpose with a structured, greppable
 -- acknowledgment: a trailer line on an AUTHORED commit message in the change
--- under test. There is no PR body in a `merge_group` run, so an authored
+-- under test. There is no PR body in a merge_group run, so an authored
 -- commit message is the one thing the queue can always see. The `.sh` gate
 -- script obtains that text and passes it via `--commit-message`; this module
 -- touches no git state itself, so every clause stays testable on plain
 -- strings.
 --
--- With no explicit `ref:` on `pull_request` or `merge_group`, `actions/checkout@v4`
+-- With no explicit `ref:` on pull_request or merge_group, `actions/checkout@v4`
 -- checks out a SYNTHETIC merge commit as HEAD — GitHub boilerplate, never the
 -- author's own text — so `git log -1 --pretty=%B` on HEAD cannot recover the
 -- trailer above. `.github/workflows/ci.yml` resolves the authored commit

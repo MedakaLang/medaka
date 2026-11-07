@@ -1,5 +1,5 @@
 {- | `analyzeToLines` over the resolve, exhaust and check_match fixture
-   corpora, called in-process. Replaces the `diagnostics_main` probe row of
+   corpora, called in-process. Replaces the diagnostics_main probe row of
    `test/diff_compiler_fmt_test.mdk`.
 
    Each fixture's diagnostic lines are sorted and compared with its

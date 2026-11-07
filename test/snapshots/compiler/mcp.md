@@ -1234,8 +1234,8 @@ medakaReferencesSchema = jObject [
 ]
 
 -- Synthesize a `{ position, context: { includeDeclaration } }` params Json —
--- the shape `tools.lsp.referencesResult` expects (`positionLine`/
--- `positionChar` plus `includeDeclarationOf`'s `context.includeDeclaration`).
+-- the shape `tools.lsp.referencesResult` expects (the position line/
+-- character plus `includeDeclarationOf`'s `context.includeDeclaration`).
 referencesParams : Int -> Int -> Bool -> Json
 referencesParams line col includeDecl = jObject [
   ("position", jObject [("line", JInt line), ("character", JInt col)]),

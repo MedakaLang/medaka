@@ -1406,11 +1406,11 @@ spliceLines : List String -> Int -> Int -> String -> List String
 spliceLines lines s e txt = take (s - 1) lines ++ splitNl txt ++ drop e lines
 
 -- ── CLI-flag-style finding filters ────────────────────────────────────────────
--- `--disable`/`--only`/`--deny` (and the `medaka_lint` MCP tool's `disable`/
+-- `--disable`/`--only`/`--deny` (and the medaka_lint MCP tool's `disable`/
 -- `only`/`deny` args) all filter a `List Finding` by rule name, entirely in
 -- terms of `Finding.rule` — no `Rule`-record field access, so these are safe
 -- to run from any caller.  Shared by `medaka_cli.mdk` (the `medaka lint` CLI,
--- both human and `--json` modes) and `mcp.mdk` (`medaka_lint`) so the two
+-- both human and `--json` modes) and `mcp.mdk` (medaka_lint) so the two
 -- surfaces can never apply the flags differently.
 
 -- Parse --prefix=v1,v2,... from argv; returns [] if not present.
@@ -1424,7 +1424,7 @@ parseLintFlagList prefix (x :: rest)
 
 -- Split a comma-separated string.  Uses literal ',' to avoid Char-param issues.
 -- Exported so a caller with an already-split comma-separated value in hand
--- (rather than a raw `--flag=v1,v2` argv token) — e.g. the `medaka_lint` MCP
+-- (rather than a raw `--flag=v1,v2` argv token) — e.g. the medaka_lint MCP
 -- tool's `deny`/`only`/`disable` args — can reuse the exact same splitter
 -- `parseLintFlagList` uses, instead of re-deriving comma-splitting.  NOTE:
 -- `splitLintNames ""` returns `[""]`, not `[]` — callers with an optional,
@@ -1513,10 +1513,10 @@ findingToDiag f =
 -- and return `(path, src, List Diag, Positions, List Decl)` — the per-file
 -- triple `driver.diagnostics.cjAllToJson` expects, PLUS the parse the
 -- project-rule tier (`runProjectRules`) summarizes.
--- Shared by `medaka lint --json` (medaka_cli.mdk) and the `medaka_lint` MCP
+-- Shared by `medaka lint --json` (medaka_cli.mdk) and the medaka_lint MCP
 -- tool (mcp.mdk) so both surfaces serialize through the SAME envelope
 -- `check --json` uses, with the lint rule name landing in each diagnostic's
--- `code` (via `findingToDiag`).  Uses `readFileSafe` (the same ""-on-read-error
+-- "code" (via `findingToDiag`).  Uses `readFileSafe` (the same ""-on-read-error
 -- helper `checkJsonFile` uses), so an unreadable path parses as empty source
 -- and yields `(path, "", [], <positions of "">, [])` — total, no crash, and
 -- consistent with `check --json`'s own file-variant behaviour on a missing
@@ -1525,7 +1525,7 @@ findingToDiag f =
 -- not the enclosing decl's.
 -- `idx` is the stdlib reference index.  It is a PARAMETER rather than something
 -- this function builds, because both callers (`medaka lint --json`'s
--- `runLintJsonCmd` and `mcp.mdk`'s `medaka_lint`) sequence this over a LIST of
+-- `runLintJsonCmd` and `mcp.mdk`'s medaka_lint) sequence this over a LIST of
 -- paths — building the index here would re-parse the whole stdlib once per
 -- target file instead of once per process.
 export
@@ -1779,7 +1779,7 @@ summariesOfRule name ((path, ss) :: rest) =
     ++ summariesOfRule name rest
 
 -- Fold project-rule findings into the per-file `(path, src, List Diag)` triples
--- the JSON envelope (`cjAllToJson`) and the `medaka_lint` MCP tool both
+-- the JSON envelope (`cjAllToJson`) and the medaka_lint MCP tool both
 -- serialize.  Each `Finding` already carries ITS OWN occurrence's file in
 -- `loc` (`emitDupGroup` emits one finding per occurrence), so a finding is
 -- appended to the triple whose path matches that file — never aggregated

@@ -1,7 +1,7 @@
 import support.diag_codes.{DiagCode(..)}
 import driver.parse_diag_adapter.{parseDiagnosticToDiag}
 -- compiler/driver/front_gate.mdk — the front-end error renderers the CLI verbs
--- share, and `build`'s front-end gate, which the `medaka_emitter` child runs
+-- share, and `build`'s front-end gate, which the emitter child runs
 -- when the `build` verb asks for it (`frontGateEnv`).  Nothing here reads the
 -- process environment except `frontGateOfEnv` and `diagJsonPathOfEnv`: the
 -- stdlib directory is a parameter.  So a caller that is not the CLI dispatcher
@@ -81,7 +81,7 @@ ppParseError src file e =
 -- else fall back to the bare message (unchanged behaviour).
 -- F: an `unknown module` message additionally carries an "available modules:
 -- ..." suffix (enumerated from `roots` via loader's `availableModulesHint`) so
--- the CLI-text path — which does not render structured `help` — still surfaces
+-- the CLI-text path — which does not render structured "help" — still surfaces
 -- an actionable fix.  Other loader errors (cycle / unreadable file) are
 -- unaffected: `unknownModuleIdOf` gates the hint to the one message shape it
 -- applies to.
@@ -122,7 +122,7 @@ moduleLoadErrText _ target _ le = match loadErrorSite target le
   None => ""
 
 -- ── the `build` front-end gate ───────────────────────────────────────────────
--- `medaka build` sets this variable on the `medaka_emitter` child it spawns, and
+-- `medaka build` sets this variable on the emitter child it spawns, and
 -- nothing else does: the bootstrap, the fixpoint, the gates that run an emitter
 -- directly and `medaka test --native`'s children start it without the variable
 -- and keep the ungated driver.  Not an argv flag, because the emitter reads

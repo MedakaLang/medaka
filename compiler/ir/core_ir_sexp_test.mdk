@@ -510,7 +510,7 @@ corpusExclusions : List String
 corpusExclusions = [
   -- The typechecker's table of grant-taking bindings is keyed by bare name and
   -- outlives an elaboration, so this fixture's plain `sub` meets the
-  -- grant-taking `sub` of `named_authority` and `residual_delayed_join` and
+  -- grant-taking `sub` of named_authority and residual_delayed_join and
   -- panics the grant pass.  Built alone, it lowers.
   "string_ranges_infix.mdk",
 ]

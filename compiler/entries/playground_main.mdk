@@ -554,7 +554,7 @@ mainShapeError decls = match findMainFunDef decls
 -- and therefore to the `asyncMainShapeError` below.
 -- What retired it is that `mainSchemeRef` acquired a SECOND, equally authoritative
 -- producer on BOTH arms that reach here, after this call site was written:
---   * single module — `analyzeFrom` → `checkOneDiags` → `checkModulesEntryFullSplit`
+--   * single module — `analyzeFrom` → `checkOneDiags` → the module-chain check
 --     (#2155's SET-OR-CLEAR write);
 --   * multi module  — `analyzeProject` → `checkChainReport` → `graphCollect` →
 --     `setMainSchemeIfEntry` (#2246's).

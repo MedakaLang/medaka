@@ -496,11 +496,11 @@ pinIndexForTarget target userDecls = do
 -- ⚠️ It goes to STDERR, not stdout: the doctest/prop/test reports on stdout are
 -- parsed for counts by `test/diff_compiler_ported.sh`, and a line injected into
 -- that stream would be graded as report text.  (The in-language floor gates read
--- `--json`'s `summary.passed`, not this stream.)  `ported` classifies stderr by
+-- `--json`'s `summary.passed`, not this stream.)  The ported gate classifies stderr by
 -- `^runtime error \[E-PANIC\]`, which this note cannot match.
 -- The exemption PREDICATE alone, with no side effect — shared by the printing
 -- CLI arm (`runTest`, which pairs it with `exemptNotice`) and the silent,
--- data-returning arm `runTestReport`/`medaka mcp`'s `medaka_test` uses (#1443).
+-- data-returning arm `runTestReport`/`medaka mcp`'s medaka_test uses (#1443).
 -- Doctest presence still wins over the `test`/`prop` exemption (same precedence
 -- as before the factor-out).
 --
@@ -1984,7 +1984,7 @@ runChosen (DtPair (TestPair _runtimeM _rawCoreM coreM _rawM modsM facts)) exampl
   -- locals-only `rootLocals`: `firstUnresolvedDottedRef` below needs the
   -- import frame visible to find (or fail to find) an alias-qualified name
   -- like `H.foo`, which `rootLocals` never carries (#3206). A `__dt_i__`
-  -- synth binding is always in `localCells`, first in this flattened list
+  -- synth binding is always in the local cells, first in this flattened list
   -- either way, so this changes nothing about what `force` below returns.
   let rendered =
     let env = evalModulesRootEnvFacts facts (testCapableExterns ()) coreM modsM
@@ -2118,7 +2118,7 @@ singleRootId roots target =
   let deps = readDeps (findProjectRootOrSelf (dirOf target))
   canonicalPathId deps roots target
 
--- DRIVER-COLLAPSE Phase 1+3 note on the dict-set: the old `coreDictNames`
+-- DRIVER-COLLAPSE Phase 1+3 note on the dict-set: the old
 -- externally-built dict-set (preludeReturnPosDictNames ++ constrainedSigNames, with
 -- arg-position helpers excluded to keep the `neq`-hang closed) is gone — the
 -- single-file arms route through elaborateModules, which OWNS the
@@ -2601,7 +2601,7 @@ printTestVerdict target line name result =
 -- per property for `target`, WITHOUT printing anything: the human `medaka test`
 -- path (runTest/driveAll above) is left entirely intact.  It reuses the SAME
 -- drivers — `prepareMulti`/`prepareSingle` for the trees, `runChosen` for
--- doctests, `propsReport` for props — so
+-- doctests, `propsReportPinned` for props — so
 -- what medaka_test decides can never diverge from what `medaka test` would
 -- decide, only how it is reported.  The prelude sources are parsed+desugared
 -- here (mirroring runTest), and the module-search roots are derived exactly as
@@ -2623,7 +2623,7 @@ printTestVerdict target line name result =
 -- unqualified pass.
 --
 -- #2295 (d): the return tuple carries a 4th element, the `test "…"` phase's
--- structured results (`testDeclsReport`, above) — §4 of this slice's packet
+-- structured results (`testDeclsReportPinned`, above) — §4 of this slice's packet
 -- licenses extending this shape (not reverting it) — plus a 5th, whether the
 -- module was exempted from typechecking (`typecheckExempt`, F7: #1680/#1443's
 -- skip marker would otherwise be human-arm-stderr-only, invisible to `--json`/MCP).
@@ -3035,7 +3035,7 @@ reportSingle engines runtimeDecls coreDecls stdlibDir target tsrc roots cases fi
   else
     (None, doctestRuns, [], [], exempt)
 
--- `includeTestDecls` (F3) is per-caller: `medaka mcp`'s `medaka_test` passes
+-- `includeTestDecls` (F3) is per-caller: `medaka mcp`'s medaka_test passes
 -- False, so the phase is not EVALUATED at all there — a panicking `test "…"`
 -- decl cannot kill the MCP server through a result it never reports.
 reportTestDecls : Bool ->
@@ -4362,7 +4362,7 @@ pinCasesOr : Int -> TestPin -> Int
 pinCasesOr fallback pin = optionOr fallback pin.pinCases
 
 -- ── test-decl phase as pure data (#2295 (d)) ────────────────────────────────
--- Symmetric with `propsReport` above: the same single-file/multi-module split
+-- Symmetric with `propsReportPinned` above: the same single-file/multi-module split
 -- `runTestDecls` uses, but collecting a `(name, line, ExResult)` per `test
 -- "…"` decl instead of printing.  Exists so `medaka test --json` can report
 -- the SAME `test "…"` counts the human runner does — `runTestReport`'s
@@ -4370,7 +4370,7 @@ pinCasesOr fallback pin = optionOr fallback pin.pinCases
 -- this phase entirely (see `runTestReport`'s `includeTestDecls` parameter),
 -- so this is a second, CLI-only consumer of the same discovery/eval
 -- machinery, not a change to what medaka_test reports.  `filterOpt` mirrors
--- `runTestDecls`' `filterTestsByName` (F1).
+-- `runTestDeclsPinned`'s `filterTestsByName` (F1).
 --
 -- #2588: each result carries the `Engine` that produced it, so `--json` can tag
 -- it.  Under `--engines eval,native` a file's tests appear once per engine —
@@ -4539,7 +4539,7 @@ nativeTestsWithPinnedErrors index file ((name, line, _) :: rest) ordinary pinned
 noSelectedResult : ExResult
 noSelectedResult = Errored "native test runner returned no selected result"
 
--- The `--json` twin of `gatedReportTests`: the capability refusal reaches this
+-- The `--json` twin of the human arm's capability gate: the capability refusal reaches this
 -- surface as one `Errored` per test carrying the same message, so a machine
 -- reader sees `"status":"error"` with the offending extern named rather than a
 -- silently empty `tests` array.
@@ -4718,7 +4718,7 @@ engineOfName "eval" = Some EngInterp
 engineOfName "native" = Some EngNative
 engineOfName _ = None
 
--- `testFlagValue`/`testTargets` are gone: `Args.positionals` is exactly the
+-- The hand-rolled flag and target readers are gone: `Args.positionals` is exactly the
 -- non-flag args minus every value-taking flag's VALUE, and `flagValue` is the
 -- first-occurrence read they performed.  Their final `startsWith "--"` arms
 -- were already unreachable (the flag floor ran first), so nothing that could
@@ -4934,19 +4934,19 @@ cliPrimaryEngineName : List Engine -> String
 cliPrimaryEngineName [] = "unknown"
 cliPrimaryEngineName (e :: _) = engineName e
 
--- The full envelope: doctests + properties (same shape `medaka_test`'s
+-- The full envelope: doctests + properties (same shape medaka_test's
 -- `testReportJson` uses) PLUS a `tests` array for `test "…"` decls, and a
 -- `summary` folding all three phases together — this is the field
 -- `testReportJson` cannot provide (it never runs this phase, by its own
 -- documented scope), and the one this slice's acceptance check depends on.
 --
 -- `engine` names the doctest phase's PRIMARY (first-requested) engine, the
--- same field `medaka_test`'s envelope already carries (#2341) — read
+-- same field medaka_test's envelope already carries (#2341) — read
 -- alongside each `tests[]` entry's own per-result `engine` (#2588) and each
 -- doctest `--engines` block already being labelled on the human arm, this is
 -- shape parity, not new information: under multiple engines the `doctests`
 -- block itself still reports only the primary engine's examples, same as
--- `medaka_test`. No separate `note` caveat is added — unlike `medaka_test`,
+-- medaka_test. No separate `note` caveat is added — unlike medaka_test,
 -- which has no other channel to say so, the CLI's own `--engines` flag is
 -- the caller's own input, and each engine's block is already labelled on the
 -- human arm.

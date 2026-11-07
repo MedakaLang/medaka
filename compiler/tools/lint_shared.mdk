@@ -214,7 +214,7 @@ ruleNamePreludeShadow = "rule-prelude-shadow"
 -- `rule-stdlib-reimpl` does NOT use this: its exemption is per (path, name)
 -- OWNERSHIP, not per path — see `firstMatchingModule` below.  A blanket path skip
 -- would wrongly exempt a stdlib file that only CONSUMES a name it doesn't own
--- (`stdlib/toml.mdk` reimplementing `list.reverse` as `listReverse`) right
+-- (`stdlib/toml.mdk` reimplementing `list.reverse` as listReverse) right
 -- alongside the file that legitimately defines it.
 export
 isStdlibPath : String -> Bool
@@ -428,7 +428,7 @@ paramIndexGo p (pat :: rest) i
 -- one clause: replace the param at position k with the arm pattern, body = arm
 -- rhs.  Special case: a `PWild` arm whose body references the scrutinee `p` is
 -- rendered with `PVar p` instead of `_`, re-binding the scrutinee so the body's
--- reference stays valid (the bail in `matchParamFixVar` has already rejected any
+-- reference stays valid (the bail in the match-param fix has already rejected any
 -- UNSAFE — non-wildcard — mention).
 export
 armToClause : Bool -> String -> String -> List Pat -> Int -> Arm -> Decl

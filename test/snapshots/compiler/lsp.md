@@ -169,7 +169,7 @@ export data Kept =
   | KeptOne String HoverEnv
   | KeptGraph String GraphId PartialAnalysis
 
--- Exported alongside `Docs`/`uriOfPath` so `medaka_references` (mcp.mdk) can
+-- Exported alongside `Docs`/`uriOfPath` so medaka_references (mcp.mdk) can
 -- build a single-buffer table and reuse `referencesResult` verbatim — the
 -- SAME code path the LSP handler runs, per #254's "one code path" design.
 export
@@ -411,8 +411,8 @@ occToHighlight index nlen off = match (
 -- one DocumentSymbol per decl: { name, kind, range, selectionRange, children }.
 -- Consecutive same-name decls (a signature + its clauses, or a multi-clause
 -- function) COLLAPSE to a single outline symbol spanning them (#300 part 3), so a
--- 2-clause `dirGo` is one entry, not three.  `range` is decl-level: (line-1,
--- 0)..(end_line-1, 0).  `selectionRange` is the decl's real NAME-token span
+-- 2-clause dirGo is one entry, not three.  `range` is decl-level: (line-1,
+-- 0)..(end_line-1, 0).  selectionRange is the decl's real NAME-token span
 -- (#331, `DeclPos`'s third field / `declPosNameLoc`) — for `DImpl` this is
 -- its head TYPE's `TyCon` token, falling back to the `impl` keyword for a
 -- fully-parametric head (F4/increment 5) — or the same col-0 `range` on the
@@ -654,7 +654,7 @@ hoverFor runtimeSrc coreSrc uri src params docs = match sourceCursor src params
         Some hit => jHover name (ppHoverScheme hit)
   _ => JNull
 
--- Stateless type-at-point for the `medaka mcp` `medaka_type_at` tool (#251) — and
+-- Stateless type-at-point for the `medaka mcp` medaka_type_at tool (#251) — and
 -- the shared query substrate #255 reuses.  It is `hoverFor` with two differences:
 -- it takes the (0-based, LSP-style) line/col as plain Ints rather than fishing
 -- them out of a synthetic params Json, and it returns the rendered `<name> :
@@ -1089,7 +1089,7 @@ declBindingName d = match innerDecl d
     [] => None
   _ => None
 
--- Whether `prog` carries an explicit DTypeSig for `name` (mirror has_explicit_sig).
+-- Whether the program carries an explicit DTypeSig for `name` (mirror has_explicit_sig).
 hasExplicitSig : List Decl -> String -> Bool
 hasExplicitSig [] _ = False
 hasExplicitSig (d :: rest) name = match innerDecl d
@@ -1315,7 +1315,7 @@ parseContentLength line = do
    `TUpper` (type) from `TIdent` (variable), so server-emitted semantic tokens
    fix it deterministically.
 
-   Legend (index = the `tokenType` int on the wire — keep in lockstep with
+   Legend (index = the "tokenType" int on the wire — keep in lockstep with
    `semanticLegend` / `semanticTokensOptions`):
      0 keyword  1 type  2 function  3 variable  4 string  5 number  6 operator
 
@@ -1330,7 +1330,7 @@ parseContentLength line = do
 -- roles get real contrast in Cursor Dark (the most common case):
 --   * type names → `class` (entity.name.type.class = blue #87c3ff), since plain
 --     `type` shares the warm hue of `function` and would be indistinguishable.
---   * constructors → `macro` (#a8cc7c green), since `enumMember` is a near-default
+--   * constructors → `macro` (#a8cc7c green), since enumMember is a near-default
 --     light grey (#d6d6dd) that reads as plain text.
 --   * typeclasses (interfaces) → `selfParameter` (#cc7c8a rose), so they read apart
 --     from plain types (blue); `interface`/`enum` fall back to the warm `type` hue.
@@ -1362,7 +1362,7 @@ semanticTokensOptions = jObject [
 
 {- Token → semantic role, threaded with a small syntactic CONTEXT so the same
    token SHAPE colors by ROLE: an uppercase name is a `type` in type position but
-   an `enumMember` (constructor) in expression/pattern position; a lowercase name
+   an enumMember (constructor) in expression/pattern position; a lowercase name
    is a `function` only at a definition head (top-level, line start) — references,
    locals and params stay default foreground.  No AST/parse is needed (the AST has
    no per-occurrence spans) and no parser changes: a single ordered pass over the
@@ -2081,7 +2081,7 @@ projectDefinitionPrepared runtimeSrc coreSrc uri src params docs =
           jArray (locationsJson updated (sortBy compareUseLoc (defsOf idx key)))
       (result, updated)
 
--- Exported for `medaka_definition` (#255) — intra-file only: `definitionRange`
+-- Exported for medaka_definition (#255) — intra-file only: the lookup
 -- scans decls in the SAME `src` it's given and never resolves an import, so a
 -- cross-file name simply falls through to `None` → `JNull`, never a wrong
 -- same-file match.  `uri` is echoed VERBATIM into the response's `range`'s
@@ -2153,7 +2153,7 @@ definitionIndexed uri sourceLength index chars parsed line col =
               jArray [jObject [("uri", JString uri), ("range", range)]]
 
 -- textDocument/references → Location[] (cross-file, #254 Stage 1). Shares the
--- MVP substrate with the `medaka_references` MCP tool (mcp.mdk calls this
+-- MVP substrate with the medaka_references MCP tool (mcp.mdk calls this
 -- SAME function): build (or load-and-build) the whole-project reference index
 -- rooted at this buffer's project, resolve the click to a `BinderKey` via
 -- `binderAt`, then emit every recorded use — plus the def site when
@@ -2175,7 +2175,7 @@ handleReferences runtimeSrc coreSrc idJson params docs =
   writeMessage (responseMsg idJson result)
   updated
 
--- Exported for `medaka_references` (#254) — TRUE WHOLE-PROJECT scope, not
+-- Exported for medaka_references (#254) — TRUE WHOLE-PROJECT scope, not
 -- one entry's import closure (#254 Stage 1.1: the entry-rooted
 -- `buildRefIndex` only walks the clicked file's OWN imports downward, so a
 -- query on a leaf module's DEFINITION missed every use in a file that

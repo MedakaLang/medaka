@@ -150,7 +150,7 @@ contentHashOf src = hashStringHex src
 -- the key covers the rule set's identity as well as the file's content.  We hash
 -- the running binary.  Rejected alternatives, all silent-green (#395):
 --   * `medaka --version` — a release string; does not move when a rule changes.
---   * a hand-bumped `lintRulesVersion` — rots the first time someone forgets.
+--   * a hand-bumped rules version — rots the first time someone forgets.
 --   * a hash of `allRules` names/severities — catches added/removed rules and
 --     MISSES logic changes, i.e. exactly the dangerous half.
 -- Hashing the binary is also strictly more conservative than a

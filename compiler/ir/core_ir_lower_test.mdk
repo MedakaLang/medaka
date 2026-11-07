@@ -455,7 +455,7 @@ test "explicit origins group clauses in order without merging equal names" =
 -- Per interface method that carries a method-level `=>` constraint (foldMap's
 -- `Monoid m =>`): the interface name of each such constraint, in slot order —
 -- the same order typecheck's `methodConstraintSlotIds`/`resolveMethodDicts` fill
--- the method occurrence's `methRoutes` list.  This lets the default-body emitter
+-- the method occurrence's methRoutes list.  This lets the default-body emitter
 -- map a cross-interface method (e.g. the `empty` in foldMap's default, a Monoid
 -- method whose dict is threaded per-call by the result type, not the container)
 -- to the threaded method-dict PARAM and dispatch it at run time — so one shared

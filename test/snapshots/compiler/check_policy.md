@@ -570,7 +570,7 @@ lowerFirst s =
 -- (identity is `(origin, name)`), in which case every atom of that spelling
 -- is keyed by its origin, `"mod.Name"` (a builtin keeps the bare name).  A row
 -- with no such collision is byte-identical to the bare-keyed manifest; the
--- policy side accepts both spellings (`atomPermitted`).
+-- policy side accepts both spellings (the policy's permitted-atom check).
 export
 manifestKey : List Atom -> Atom -> String
 manifestKey atoms a =

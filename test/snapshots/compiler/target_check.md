@@ -395,7 +395,7 @@ lastUserStep paths analysis route =
 
 -- A step is the program's own code when the loader mapped its module to a file
 -- and the module is not one the stdlib root owns.  The module's origin, not
--- its path: a user directory may itself be named `stdlib`.
+-- its path: a user directory may itself be named stdlib.
 isUserStep : List (String, String) -> TargetInputs -> (String, String) -> Bool
 isUserStep paths analysis (mid, _) =
   isSome (lookupAssoc mid paths) && not (contains mid analysis.tiStdlibOwned)

@@ -336,7 +336,7 @@ medakaVersion = "0.1.0-preview"
 -- alongside the fingerprint, surfaced via the `buildCommit`/`buildDate`
 -- externs (same empty-on-absent contract as `buildFingerprint`). Degrades to just the bare version when neither is
 -- baked (a dev/interpreted run, or a shipped binary with no provenance).
--- Used by `printVersion` (CLI `--version`) only. MCP's `initialize` handshake
+-- Used by `printVersion` (CLI `--version`) only. MCP's "initialize" handshake
 -- reports the bare `medakaVersion` instead, not this — a per-build string
 -- that changes on every commit is unstable as a protocol field and unpinnable
 -- by any golden.
@@ -430,7 +430,7 @@ sourceStalenessVerdict _ =
 -- envelope; SILENCING it would hide a stale binary from every MCP/LSP consumer,
 -- a severity INCREASE dressed as a fix ([W-QUIETER]).  So on those paths the
 -- verdict is DEFERRED into `pendingStaleNotice` and rides INSIDE the envelope
--- as a `staleBinary` field — the same shape `attachStaleness` already uses for
+-- as a "staleBinary" field — the same shape `attachStaleness` already uses for
 -- MCP results.  Every such arm that leaves WITHOUT an envelope flushes it back
 -- out as prose (`runAbort`, `testDie`, `testExit`), so it is relocated on every
 -- path, dropped on none.
@@ -559,7 +559,7 @@ envelopeOnStderrInvocation _ = False
 -- prose note, so an abort that fires before `armAbortReport` (out of memory or
 -- a stack overflow in the front end, a native-only run, which never arms) still
 -- appends it after the abort line.  `armAbortReport` replaces the slots later,
--- so the envelope carries `staleBinary` and the prose is not printed twice.
+-- so the envelope carries "staleBinary" and the prose is not printed twice.
 -- Only `test` ever stores a report, so the prose flush may clear the slot
 -- whenever it prints a notice.
 registerEarlyNotice : List String -> String -> <IO> Unit
@@ -1448,7 +1448,7 @@ runFlagGiven nm (x :: rest)
 --
 -- The wording is `medaka test`'s (#2316), which is the reference
 -- implementation and the only one that told the reader what to type next.
--- `validateTestFlags` was the per-verb original; it now calls this, so ONE
+-- The per-verb original of this now calls it, so ONE
 -- writer owns the sentence, the exit code and the known-set rendering instead
 -- of ten near-copies drifting apart (the tree carried FIVE wordings for this
 -- one event).
@@ -1461,8 +1461,8 @@ runFlagGiven nm (x :: rest)
 --
 -- S-cli-onto-args (#2355): the scan, the sentences and the `(known: …)`
 -- rendering all live in `stdlib/args.mdk`, and every `<verb>ArgSpec` below is
--- the ONE declaration they are rendered from.  The per-verb `expandEqFlags` /
--- `collapseEqFlags` argv rewrites are gone with it — `args.mdk` accepts both
+-- the ONE declaration they are rendered from.  The per-verb flag-spelling
+-- argv rewrites are gone with it — `args.mdk` accepts both
 -- C1 spellings uniformly, so no verb has to normalise argv into the one
 -- spelling its own parser happened to read.
 
@@ -1509,7 +1509,7 @@ requireArgs sp argv = match parseArgs sp argv
 -- in `checkJsonFile` (driver.diagnostics), shared with the `medaka mcp`
 -- medaka_check tool.  This driver prints the JSON and gates the exit code, and
 -- on a clean program folds in the selected profile's refusal (`checkTargetJson`).
--- #333: `target` is `readFile`'d FIRST (mirrors `medaka_check`'s MCP handler,
+-- #333: `target` is `readFile`'d FIRST (mirrors the medaka_check MCP handler,
 -- `runCheckTool` in tools/mcp.mdk) so a nonexistent/unreadable path reports a
 -- file-not-found diagnostic instead of falling into `checkJsonFile`'s import
 -- loader, which otherwise misreports it as an unknown-module R-MODULE-LOAD
@@ -1790,7 +1790,7 @@ emitHiddenDiagNote n =
 -- (which captures stderr ALONE) caught it.  Deferring the rendering to the emit
 -- site is what lets one carrier serve both.
 --
--- #2400 / F4.  This USED TO BE `cohWarnTriples`, filtering `isCoherenceWarn`; it now
+-- #2400 / F4.  Unlike a coherence-only filter, it
 -- filters `diagIsWarn`, and it is the ONLY place `run`/`build` widen past
 -- `runBuildWarnCodes`.  (Its call site — `run`'s single-file arm — is
 -- single-module, so nothing on the multi-module path lost a filter; those arms
@@ -1991,7 +1991,7 @@ assertFmtNoDashTargets (x :: rest) =
   else
     assertFmtNoDashTargets rest
 
--- The three modes are LAST-WINS (`parseFmtArgs`'s pre-migration behaviour:
+-- The three modes are LAST-WINS (the pre-migration parser's behaviour:
 -- each arm overwrote `mode`).  `Args.given` keeps argv order and records the
 -- CANONICAL name whichever spelling was typed, so `-w` lands here as
 -- `--write`.  Default is `FmtCheck`.
@@ -2099,7 +2099,7 @@ fmtArgSpec = spec "fmt" [
 -- guessing (`snapshotMode`); this mirrors that message.
 -- Reads RAW argv (not the parsed `Args`) on purpose — see `runFmtCmd`'s
 -- ORDER note.  `contains` is the same "appears anywhere in argv" test the
--- retired `hasFlag` performed, spelled with the helper the file already
+-- retired flag-presence helper performed, spelled with the helper the file already
 -- imports.
 fmtModeConflict : List String -> List String
 fmtModeConflict argv =
@@ -2242,7 +2242,7 @@ splitCodemodArgv (tok :: rest) mode cargs paths =
     splitCodemodArgv rest mode cargs (tok :: paths)
 
 -- `--flag=value` split for a codemod flag: ANY `--`-shaped token with an `=`,
--- since the name set is per-codemod (contrast `flagEqSplit`, which is told
+-- since the name set is per-codemod (contrast the shared flag splitter, which is told
 -- which names to split).  A leading `=` (`--=v`) is not a flag name; leave it
 -- to the codemod's own `mk` to reject by name.
 codemodFlagEq : String -> Option (String, String)
@@ -2336,7 +2336,7 @@ emitWarnLines file (w :: ws) =
 newUsageLine : String
 newUsageLine = "Usage: medaka new <name>"
 
--- `new` takes no flags at all, so its roster renders `none`.  Declared as a
+-- `new` takes no flags at all, so its roster renders "none".  Declared as a
 -- spec (rather than an empty name list at the call site) so the sentence has
 -- exactly one writer, like every other verb's.  Not routed through
 -- `requireArgs`: `new` rejects a leading-`-` token and takes a bare NAME, not
@@ -2472,7 +2472,7 @@ runBuildModes a = match flagValue "--emit-rt-obj" a
 -- emit+clang), kept separate from `runBuildJsonEntry` to avoid interleaving
 -- argument-parsing dispatch at the same indent level.  This process reads the
 -- two prelude files, for `readPreludeSources`'s missing-stdlib and prelude
--- parse-error messages, and does no other front-end work: the `medaka_emitter`
+-- parse-error messages, and does no other front-end work: the emitter
 -- child loads, parses, resolves and typechecks the program once, under the
 -- front-end gate `runBuild` asks it for (`driver/front_gate.frontGate`), and a
 -- refusal reaches this process as the child's diagnostic.
@@ -2782,7 +2782,7 @@ finishRunEval target jsonMode facts elaborated mods cohWarns postPerf =
   flushPendingRunDiags jsonMode
 
 -- C4: the envelope now also carries whatever the two deferred human writers
--- staged (`staleBinary`, `perf`), so the emptiness test moved INTO
+-- staged ("staleBinary", "perf"), so the emptiness test moved INTO
 -- `flushRunEnvelope` — "no diagnostics" is no longer the same question as
 -- "nothing to say".  With neither notice staged the bytes are unchanged.
 flushPendingRunDiags : Bool -> <IO> Unit
@@ -2869,7 +2869,7 @@ runRunCmd argv =
   let jsonMode = runFlagGiven "--json" argv
   -- C4: under `--json` stderr is this verb's MACHINE channel, so `MEDAKA_PERF`'s
   -- `[perf]` lines must not be written to it as prose.  Arm `timer.mdk`'s sink
-  -- and they are buffered instead, then folded into the ONE envelope as a `perf`
+  -- and they are buffered instead, then folded into the ONE envelope as a "perf"
   -- array ([W-QUIETER]: routed, not silenced).  Disarmed for plain `run`, which
   -- is what `profile_compiler.sh` and the perf gates invoke.
   perfSinkOn := jsonMode && perfOn
@@ -2877,12 +2877,12 @@ runRunCmd argv =
     [] =>
       runAbort
         "usage: medaka run [--json] [--allow-internal] [--release] [--target <profile>] <file.mdk | -> [args...]"
-    -- #219: a leading-`-` token `dropFlags` didn't recognize (e.g. `-e`) used
+    -- #219: a leading-`-` token the flag scan didn't recognize (e.g. `-e`) used
     -- to fall through as the entry `target`, so the loader rejected it as
     -- "unknown module: -e" — a message that sends the reader debugging a
     -- module path for what is actually a typo'd/unsupported flag. Report it
     -- as a flag error instead, mirroring `runFmtCmd`'s "-"-prefix detection
-    -- (`parseFmtArgs`) and its shared C2 wording. Only the FIRST
+    -- (the fmt argument parser) and its shared C2 wording. Only the FIRST
     -- positional is checked — anything after it is the program's own
     -- passthrough args (ARGS NOTE above), which may legitimately start with
     -- `-`.
@@ -2893,7 +2893,7 @@ runRunCmd argv =
       -- positional only — everything after it is the program's own argv,
       -- `--`-shaped or not (`medaka run argv.mdk -- --foo` must still deliver
       -- ["--", "--foo"]), so `run` must NOT route its whole argv through
-      -- `assertCliFlags` the way the other verbs do.
+      -- the shared flag assertion the way the other verbs do.
       runAbort (unknownFlagMessage runArgSpec target)
     -- #2366: a path-shaped target (a `/`, or a `.mdk` suffix) that names no
     -- file is a filesystem error, not a module the loader failed to find (its
@@ -3218,7 +3218,7 @@ checkedFacts report = match report.trChecked
 
 runTestCmd : List String -> <IO> Unit
 runTestCmd argv0 =
-  -- C1: the old `testFlagValue`/`testTargets` pair read the space form only,
+  -- C1: the old hand-rolled value/target readers read the space form only,
   -- so `--filter=zzz` was rejected as an unknown flag (loud, but still one of
   -- the two spellings C1 requires every value flag to take).  #2316's own
   -- check and that normalisation are both `args.mdk`'s job now.
@@ -3505,7 +3505,7 @@ docArgSpec =
 
 runDocCmd : List String -> <IO> Unit
 runDocCmd argv =
-  -- C2: same AS-FILENAME hole `check` had (the old shared `dropFlags` passed
+  -- C2: same AS-FILENAME hole `check` had (the old shared flag filter passed
   -- an unknown token through as the target).  `--json`/`--types`/`--release`,
   -- which that filter silently ate here (§5c: "accepted and silently
   -- ignored"), are unknown to `doc` and rejected as such.
@@ -4084,7 +4084,7 @@ runLintTargets a =
   -- edge included).  `.githooks/pre-commit:164` uses `--deny=…` and
   -- `test/snapshot_bless.sh` uses the space form `--stages …`; both
   -- still land on the same names.
-  -- C2: `lint`'s SILENT-ACCEPT cell — `lintTargets` skipped every `--`-shaped
+  -- C2: `lint`'s SILENT-ACCEPT cell — the old target scan skipped every `--`-shaped
   -- token, so `medaka lint --zzz ok.mdk` printed nothing and exited 0,
   -- indistinguishable from a clean run.
   let disableNames = lintNamesOf "--disable" a
@@ -4120,8 +4120,8 @@ runLintTargets a =
   -- `indexForRun` builds it from the needs of the rules that survive
   -- `--only`/`--disable`, and it self-disables to empty when the stdlib cannot
   -- be read.  `--cache` builds for the whole roster: it persists
-  -- `lintEntryOf`'s full-roster findings past this process's flag choices
-  -- (under `--cache` `lintEntryOf` runs `allRules`, unfiltered), so an entry
+  -- the entry's full-roster findings past this process's flag choices
+  -- (under `--cache` the entry is computed with `allRules`, unfiltered), so an entry
   -- computed from a degraded index would silently omit a rule's findings for
   -- every later `--cache` read.
   let indexResult = indexForRun (flag "--cache" a) onlyNames disableNames files
@@ -4335,7 +4335,7 @@ isLintParseDiagnostic : Diag -> Bool
 isLintParseDiagnostic (Diag _ code _ _ _ _) = diagIdIsSyntax code
 
 -- #1173 rejected the SPACE form of `--disable`/`--only`/`--deny` outright,
--- because the old `lintTargets` skipped any `--`-prefixed token without
+-- because the old target scan skipped any `--`-prefixed token without
 -- consuming a following value, so `--deny rule-name` left `rule-name` behind
 -- as an ordinary lint TARGET with the flag applied to nothing and no
 -- diagnostic saying so.  CLI-CONFORMANCE.md C1 supersedes that ruling: BOTH
@@ -4517,9 +4517,9 @@ snapshotArgSpec =
 
 runSnapshotCmd : List String -> <IO> Unit
 runSnapshotCmd argv0 =
-  -- C1: the old `snapFlagValue` read only the space form, so `--stages=parse`
+  -- C1: the old flag reader read only the space form, so `--stages=parse`
   -- was SILENTLY DROPPED — every stage rendered and nothing said so.
-  -- C2: `snapshotTargets` skipped every unrecognized `--`-shaped token, so an
+  -- C2: the old target scan skipped every unrecognized `--`-shaped token, so an
   -- unknown flag was either swallowed by the mode-missing usage line
   -- (REJECT-VAGUE) or, WITH a mode present, dropped without a word.
   let a = requireArgs snapshotArgSpec argv0
@@ -4584,9 +4584,9 @@ snapshotStages a = match flagValue "--stages" a
       stageExit 1
       []
 
--- `snapshotTargets`/`snapFlagValue` are gone: `Args.positionals` is exactly
+-- The hand-rolled flag and target scans are gone: `Args.positionals` is exactly
 -- the non-flag args minus every value-taking flag's VALUE, and `flagValue` is
--- the first-occurrence read `snapFlagValue` performed.
+-- the first-occurrence read they performed.
 
 hasSlash : String -> Bool
 hasSlash s = isSome (stringIndexOf "/" s)

@@ -129,7 +129,7 @@ emitStats on ((label, count) :: rest) =
 -- SEPARATE from perfEnabled, and it gates WORK rather than OUTPUT — that is the
 -- whole point. Every other stage is gated only on printing (`emitPhaseAO on ...`),
 -- because every other stage is cheap enough to always run. `wasm-emit` is not: it
--- is ~10x llvm_emit and, sampled at the `xref` shape's resolve-driven N=16000, it
+-- is ~10x llvm_emit and, sampled at the xref shape's resolve-driven N=16000, it
 -- cost the `gates (types)` shard ~277 s per run and made it the CI critical path
 -- at 12 min against engines' 3.7 min.
 --

@@ -325,7 +325,7 @@ lowerMatchErased facts site cscrut arms
 
 -- A non-recursive `let` whose pattern can miss lowers to a one-arm decision whose
 -- miss is E-LET-REFUTE at [site], so a backend tests the whole pattern, nested
--- fields included, through the match machinery.  `refoldLets` turns it back into
+-- fields included, through the match machinery.  The refold pass turns it back into
 -- the plain `CLet` for every lowering that does not use that check.
 letDecision : ProgramFacts -> Loc -> Pat -> CExpr -> CExpr -> CExpr
 letDecision facts site rawPat scrut body =
@@ -467,7 +467,7 @@ patMayFail (PLit _ | PCon _ _ | PCons _ _ | PList _ | POr _ | PRng _ _ _ | PRec 
 -- A block's statements.  A refutable `let` takes the rest of the block as its
 -- decision's body, so the block ends with that decision; a refutable `let` that
 -- ends the block gets the empty block as its body, the Unit a last `let` yields
--- (`refoldLets` reads both back).
+-- (the refold pass reads both back).
 lowerStmts : ProgramFacts -> List DoStmt -> List CStmt
 lowerStmts _ [] = []
 lowerStmts facts ((DoLet _ False pat e site) :: rest)
@@ -543,7 +543,7 @@ initialRows ((Arm pat _ _) :: rest) i =
 -- (only leaf emission differs: bytecode SWITCH vs LLVM switch/br).
 -- The `List Bool` is indexed BY ARM INDEX, and the recursion looks a leaf's arm
 -- up in it — which, as a list, cost O(i) per leaf and O(N²) over an N-arm match
--- (`nthBool`; the second half of #408, see `guardSet`).  The exported entry
+-- (per-leaf list indexing; the second half of #408, see `guardSet`).  The exported entry
 -- keeps the caller-facing `List Bool` and converts it ONCE, at the top, into the
 -- membership set the recursion actually threads.
 -- [site] is what every miss leaf of the tree raises.
@@ -2783,7 +2783,7 @@ distinctImplKeysL xs0 method cap acc0 = go xs0 acc0
 --     (nullary/return-position/dictionary-free impls), computed once in
 --     `hoistNullaryMemo`.  This is one value serving what would otherwise be two: the
 --     `keys` parameter the walk threaded (read by `hoistExpr`'s `memoSelectorOf` gate)
---     and `allMemoKeysRef`, which `hoistNullaryMemo` always assigned that same
+--     and a separate all-keys ref, which `hoistNullaryMemo` always assigned that same
 --     `keys`.  Read by the RDict/RDictFwd MULTI-impl arm of `hoistDictNullary` to
 --     enumerate every impl tag of the method so a `$memo_<selector>_<method>` CAF
 --     is synthesized for each.  The occurrence stays a runtime dispatch; the emit
@@ -3175,7 +3175,7 @@ ifaceImplHeadEntries (DImpl { iface = ifaceName, implOrigin = o, tys = typeArgs,
 ifaceImplHeadEntries _ = []
 
 -- ── emitted impl symbols: the one rule, and its collision guard (#1950) ───────
--- An impl method is emitted as `mdk_impl_<symTag>_<method>`, where `symTag` is the
+-- An impl method is emitted as `mdk_impl_<tag>_<method>`, where `<tag>` is the
 -- encoded head tag when that head is the SOLE impl of (method, head), and otherwise
 -- the encoded canonical dispatch key (the key that tells apart same-head impls whose
 -- type arguments differ).  `stampImplSymbols` is

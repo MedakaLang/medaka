@@ -17,7 +17,7 @@
 --   The fuzzer checks output INVARIANTS, not a fixed golden, so the generator only
 --   needs to emit valid, varied, DETERMINISTIC programs per seed.  Exact byte-parity
 --   with the OCaml generator is impractical for two reasons, both harmless to the
---   fuzzer: (1) the RNG draw differs — OCaml's `rand_below` masks a raw next64() and
+--   fuzzer: (1) the RNG draw differs — OCaml's rand_below masks a raw next64() and
 --   takes `rem n`, whereas this port draws via the shared SplitMix64 `randomInt 0 (n-1)`
 --   extern (same algorithm + seed, different consumption); (2) the printer here is the
 --   compiler tools.printer (width 80, string_of_float floats) vs OCaml's width-200 %g
