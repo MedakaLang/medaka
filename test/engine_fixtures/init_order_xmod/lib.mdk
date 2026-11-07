@@ -1,0 +1,11 @@
+-- The library of `init_order_xmod.mdk`: `answer` is written before the values it
+-- reads, so source order and dependency order disagree inside this module.
+export
+answer : Int
+answer = doubled + 2
+
+doubled : Int
+doubled = base * 2
+
+base : Int
+base = 20

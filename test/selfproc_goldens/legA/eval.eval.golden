@@ -1,4 +1,5 @@
 addrCell : List (String, Ref (Value a)) -> Int -> String -> Ref (Value a)
+afterPrelude : List (String, List String) -> List (String, List String)
 anyAdmits : String -> List String -> <FileRead | a> Bool
 anyTypedImpl : List (Value a) -> Bool
 appSpine : Expr -> List Expr -> (Expr, List Expr)
@@ -22,7 +23,6 @@ arrayToListG : Array a -> List a
 arrayToListGo : Array a -> Int -> Int -> List a
 awaitsArgs : Value a -> Bool
 bindNames : List (String, String) -> List (String, Ref (Value a)) -> List (String, Ref (Value a))
-blackholeCell : String -> Unit -> <a> Value a
 blitGo : Array (Value a) -> Int -> Array (Value a) -> Int -> Int -> <a> Unit
 blockLet : Loc -> EvalEnv (Value a) -> Pat -> Expr -> List DoStmt -> <a> Value a
 blockLetLast : Loc -> EvalEnv (Value a) -> Pat -> Expr -> <a> Value a
@@ -156,9 +156,6 @@ fmtSentinel : String
 fnvFold64 : List Int -> U64 -> U64
 fnvStep64 : U64 -> Int -> U64
 force : Value a -> <a> Value a
-forceCell : Ref (Value a) -> String -> <a> Value a
-forceMemo : Ref (Value a) -> String -> (Unit -> <a> Value a) -> <a> Value a
-forceMemoCell : Ref (Option (Value a)) -> EvalEnv (Value a) -> Expr -> <a> Value a
 frameAtDepth : List (EnvFrame (Value a)) -> Int -> String -> EnvFrame (Value a)
 frameCells : EnvFrame a -> List (String, Ref a)
 funClauseToClause : Loc -> FunClause -> (List Pat, Expr, Loc)
@@ -171,6 +168,8 @@ granted1 : Bool -> Confine -> (Value <IO> -> <IO> Value <IO>) -> Value <IO>
 granted2 : (Value <IO> -> Value <IO> -> <IO> Value <IO>) -> Value <IO>
 granted3 : (Value <IO> -> Value <IO> -> Value <IO> -> <IO> Value <IO>) -> Value <IO>
 grantedPair : (Value <IO> -> Value <IO> -> <IO> Value <IO>) -> Value <IO>
+groupInit : EvalEnv (Value a) -> List (String, Ref (Value a)) -> (String, List (List Pat, Expr, Loc)) -> List (String, (Ref (Value a), Unit -> <a> Value a))
+groupInits : EvalEnv (Value a) -> List (String, Ref (Value a)) -> List (String, List (List Pat, Expr, Loc)) -> List (String, (Ref (Value a), Unit -> <a> Value a))
 groupSite : List (List Pat, Expr, Loc) -> Loc
 groupValue : EvalEnv (Value a) -> List (List Pat, Expr, Loc) -> <a> Value a
 groupsNamedIn : List String -> List (String, List (List Pat, Expr, Loc)) -> List (String, List (List Pat, Expr, Loc))
@@ -198,6 +197,8 @@ inheritedDefaultEntries : EvalEnv (Value a) -> List ((String, String, String), L
 inheritedDefaultReqCounts : DispositionTable -> String -> IfaceMethod -> List ((String, String), Int)
 inheritedEntryRef : Ref (Map String (Map String Int))
 inheritedEntryRows : Option DispositionTable -> Decl -> List ((String, String), Int)
+initProgramValues : ProgramFacts -> List (String, (Ref (Value a), Unit -> <a> Value a)) -> List (ModInfo (Value a)) -> <a> Unit
+initScope : ProgramFacts -> Bool -> String -> List (String, (Ref (Value a), Unit -> <a> Value a)) -> <a> Unit
 insertScore : (Int, Value a) -> List (Int, Value a) -> List (Int, Value a)
 installConsts : List (String, Ref (Value a)) -> List (String, Value a) -> <a> Unit
 installDispatchTables : Option DispositionTable -> List Decl -> List ((String, String, String), List Int)
@@ -255,8 +256,6 @@ matchRecFields : List RecPatField -> List (String, Value a) -> Option (List (Str
 matchesTag : String -> Value a -> Bool
 memberBind : UseMember -> (String, String)
 memberCells : ModExports (Value a) -> UseMember -> List (String, Ref (Value a))
-memoThunk : EvalEnv (Value a) -> Expr -> Value a
-memoThunkOf : Ref (Option (Value a)) -> EvalEnv (Value a) -> Expr -> Value a
 mergeField : List (String, Value a) -> (String, Value a) -> (String, Value a)
 methodAtNarrow : EvalEnv (Value a) -> String -> Value a -> Route -> <a> (Value a, List (Value a))
 methodCell : List (String, Ref (Value a)) -> String -> List (String, Ref (Value a))
@@ -265,7 +264,6 @@ methodReqCountIndex : List ((String, String), Int) -> Map String (Map String Int
 methodReqCountIndexGo : List ((String, String), Int) -> Map String (Map String Int) -> Map String (Map String Int)
 methodReqCountRef : Ref (Map String (Map String Int))
 mkGroup : List (String, (List Pat, Expr, Loc)) -> String -> (String, List (List Pat, Expr, Loc))
-modExportCells : ModExports a -> List (String, Ref a)
 modImplEntries : ProgramFacts -> List ((String, String, String), List Int) -> ModInfo (Value a) -> List (String, (Int, Value a))
 moduleCoreExports : ModExports (Value a) -> List (String, Ref (Value a)) -> List Decl -> ModExports (Value a)
 moduleExports : ExportView -> ModExports (Value a) -> List (String, ModExports (Value a)) -> EnvFrame (Value a) -> EnvFrame (Value a) -> List (String, Ref (Value a)) -> List Decl -> ModExports (Value a)
@@ -279,6 +277,7 @@ narrowedWord : EvalEnv (Value a) -> Route -> Value a -> <a> String
 negFloatIEEE : Float -> Float
 noCandidateMatched : List (Value a) -> Option (Value a)
 noMainMsg : String
+oneModuleFacts : ProgramFacts -> List Decl -> String -> ProgramFacts
 oneOrMulti : List (Value a) -> Value a
 oneOrMultiV : List (Value a) -> List (Value a) -> Value a
 optionToValue : Option (Value a) -> Value a
@@ -482,6 +481,7 @@ qualifyCell : String -> (String, Ref (Value a)) -> (String, Ref (Value a))
 rangeArrayMk : List Int -> Value a
 rangeListMk : List Int -> Value a
 reTag : String -> String -> List Int -> Int -> Value a -> Value a
+readCell : Ref (Value a) -> String -> <a> Value a
 readOutput : Unit -> <a> String
 receiverOf : EvalEnv (Value a) -> Route -> List Route -> <a> Value a
 recordCreateVals : String -> List String -> List (String, Value a) -> List (Value a)
@@ -501,6 +501,8 @@ rootFullEvalEnv : ProgramFacts -> List (ModInfo (Value a)) -> List (String, Ref 
 rootLocals : List (ModInfo (Value a)) -> <a> List (String, Value a)
 routeTag : EvalEnv (Value a) -> Route -> <a> String
 runGuards : EvalEnv (Value a) -> List Guard -> <a> Option (EvalEnv (Value a))
+runInit : Map String (Ref (Value a), Unit -> <a> Value a) -> String -> <a> Unit
+runInits : List (String, (Ref (Value a), Unit -> <a> Value a)) -> List String -> <a> Unit
 runJsonMode : Ref Bool
 runMainForEffect : List (String, Value a) -> <a> Value a
 runRandomState : Value a -> <Env, Rand | a> Value a
@@ -516,7 +518,6 @@ scopedFileBound : Bool -> Value a
 seedRunRng : Int -> Unit
 selectByName : String -> List (String, (Int, Value a)) -> List (Int, Value a)
 selfBind : String -> (String, String)
-seqV : Unit -> Value a -> Value a
 shadowedFun : List String -> Decl -> Bool
 sharedDefaultValue : EvalEnv (Value a) -> List Int -> List Pat -> Expr -> String -> Value a
 signExtend32 : Int -> Int
@@ -525,15 +526,14 @@ sortGo : List (Int, Value a) -> List (Int, Value a) -> List (Int, Value a)
 stampDefiningFile : EvalEnv (Value a) -> <a> Unit
 startsWithAt : String -> Bool
 statTuple : (Int, Bool, Bool, Float) -> Value a
-storeMemo : Ref (Option (Value a)) -> Value a -> <a> Value a
 stripBody : Value a -> Value a -> <a> Value a
 stripModPrefix : String -> String
 stripResolved : Value a -> <a> Value a
 subClampZero : Int -> Int -> Int
 takeN : Int -> List a -> List a
 testCapableExterns : Unit -> List (String, Value <IO>)
-topClausesValue : EvalEnv (Value a) -> List (List Pat, Expr, Loc) -> Value a
-topGroupValue : EvalEnv (Value a) -> List (List Pat, Expr, Loc) -> Value a
+topClausesValue : EvalEnv (Value a) -> String -> List (List Pat, Expr, Loc) -> Value a
+topGroupValue : EvalEnv (Value a) -> String -> List (List Pat, Expr, Loc) -> Value a
 twoDistinctKeys : List (Value a) -> List (String, String) -> Bool
 u64Finalize : U64 -> U64
 u64Golden : U64
@@ -546,6 +546,7 @@ unInt : Value a -> Int
 unIntArray : Value a -> Array Int
 unString : Value a -> String
 undecidableCand : String -> Value a -> Bool
+uninitialisedRead : String -> <a> Value a
 unitResultToValue : Result String Unit -> Value a
 updateEvalLoc : Loc -> Unit
 upperInitialName : String -> Bool

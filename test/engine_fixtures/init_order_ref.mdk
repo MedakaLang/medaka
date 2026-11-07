@@ -1,0 +1,20 @@
+-- Initialisation order observable through a `Ref` (I1): `trace` is written by
+-- `note`, which each of `first` and `second` calls, and `second` reads `first`, so
+-- `first` is initialised before `second` although `second` is written first.  The
+-- trace is read in `main`, after every initialiser ran: expected on every engine
+-- `(0, ab)`.
+trace : Ref String
+trace = Ref ""
+
+note : String -> Int
+note s =
+  let _ = trace := !trace ++ s
+  0
+
+second : Int
+second = note "b" + first
+
+first : Int
+first = note "a"
+
+main = (second, !trace)

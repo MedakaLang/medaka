@@ -1,0 +1,13 @@
+-- Initialisation order across two modules (I1): `lib` initialises before this module
+-- (import order), and inside each module a value is initialised after every value
+-- its initialiser reaches, although `top` is written before `later` and `answer`
+-- before `base`.  Expected on every engine: `(43, 42)`.
+import init_order_xmod.lib as L
+
+top : Int
+top = L.answer + later
+
+later : Int
+later = 1
+
+main = (top, L.answer)

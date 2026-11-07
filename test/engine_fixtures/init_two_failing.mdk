@@ -1,0 +1,10 @@
+-- Two failing initialisers (I1): neither reads the other, so source order breaks the
+-- tie and `second`, written first, is the one that aborts startup.  Expected on
+-- every engine: empty stdout, exit 1, `second` on stderr (never `first`).
+second : Int
+second = panic "second"
+
+first : Int
+first = panic "first"
+
+main = putStrLn (intToString (first + second))

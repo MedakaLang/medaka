@@ -1,12 +1,9 @@
--- #731 item 2: two impls that share a head tycon but differ in type args
+-- Two impls that share a head tycon but differ in type args
 -- (`Foo (MyPair Int Bool)` vs `Foo (MyPair Bool Int)`) are a TYPECHECK-AUDIT C7
--- collision — the RKey route carries the canonical KEY (`Foo|(MyPair Int Bool)|`),
--- not the bare head `MyPair`.  #730 keyed the memo hoist on the bare head, so
--- `isMemoKey` missed on the collision and the effect duplicated on build
--- (`[IB] [IB] ...`).  Keying memo on the same selector the route carries fixes it.
--- BOTH colliding impls are exercised twice here: each fires its effect exactly once
--- (`[IB]` then `[BI]`) and the two memoise INDEPENDENTLY — proof the C7 keys are not
--- collapsed into one CAF.  A run /= build S1 — the engines gate is the pin.
+-- collision: the route carries the canonical KEY (`Foo|(MyPair Int Bool)|`), not the
+-- bare head `MyPair`.  A nullary return-position impl method is evaluated at each
+-- occurrence, so both colliding impls are exercised twice and each effect fires per
+-- occurrence, in occurrence order: `[IB] [IB] [BI] [BI] 4`.
 data MyPair a b = MyPair a b
 
 interface Foo a where
