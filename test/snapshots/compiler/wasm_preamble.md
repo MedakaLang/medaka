@@ -28,7 +28,7 @@ import support.symbol_origin.{SymbolOrigin(..)}
 --   * The value rep for the SCALAR subset is raw `i32` (the §3.2 recommendation:
 --     "for monomorphic Int arithmetic keep values as raw i32").  Ints/Bools are
 --     `i32`.  The i31ref/`(ref eq)` unitype + boxing (§3.1/§3.2) is exercised by
---     W3 (ADTs) — see `recGroupLines` below + the §3.4 per-type struct emission in
+--     W3 (ADTs) — see the rec-group emission below + the §3.4 per-type struct emission in
 --     wasm_emit's `emitTypeSection`.
 --
 -- ── W3 SCOPE (WASMGC-DESIGN §9 slice 3 — ADTs + match) ───────────────────────
@@ -49,7 +49,7 @@ import support.symbol_origin.{SymbolOrigin(..)}
 --   - `env.mdk_write_bool(i32)` — write "true"/"false" + newline
 -- The JS runner (`test/wasm/run.js`) does the int→decimal / bool→text + newline
 -- formatting.  This is a TEMPORARY scaffold the W6 string slice replaces.  The
--- bytes it produces are exactly the native-compiled oracle's `pp_value`.
+-- bytes it produces are exactly the native-compiled oracle's pp_value.
 --
 -- Order is load-bearing: emitted WAT is assembled by `wasm-tools parse` and the
 -- program's stdout is diffed byte-for-byte against the oracle, so these lines stay
@@ -215,7 +215,7 @@ ioByteImportLines = [
 ]
 
 -- the §3.3 String aggregate types — emitted into the rec group only when a program
--- uses strings (`useStrRef`).  `$str` caches the codepoint count so `stringLength`
+-- uses strings.  `$str` caches the codepoint count so `stringLength`
 -- is O(1) (RUNTIME-DESIGN §7 decision 2 / §5 INTRINSIC).  `$u8arr` is the UTF-8 byte
 -- backing store (mutable so `array.new_data` / `array.new` can fill it).
 export
@@ -299,7 +299,7 @@ ioRuntimeLines callW _tailW = [
 ]
 
 -- the STRING-dependent byte-write runtime (references `$str`/`$u8arr`) — emitted only
--- when the program uses strings (`useStrRef`), so a string-free module never names
+-- when the program uses strings, so a string-free module never names
 -- the absent `$str` type.
 --   $mdk_print_str  — write a $str's UTF-8 bytes verbatim (no newline; putStr).
 --   $mdk_print_strln— write a $str's bytes + a trailing '\n' (putStrLn / String main).
@@ -685,7 +685,7 @@ stderrRuntimeLines callW _tailW = [
 -- ── W8 pure-WasmGC string LEAF ops (RUNTIME-DESIGN §5 LEAF / WASMGC-DESIGN §6) ──
 -- All operate over the §3.3 `$str` ($cp_count i32 + $bytes (ref $u8arr)) rep and are
 -- byte-identical to medaka_rt.c.  Emitted only when the program uses strings
--- (`useStrRef`) AND a leaf string op (`useStrLeafRef`).
+-- AND a leaf string op.
 --   $mdk_str_append   — binary `++`: concat two $str, recompute cp_count (== sum of
 --                       both cp_counts, since UTF-8 concat preserves codepoints).
 --   $mdk_char_to_str  — encode one codepoint (i32) to a fresh 1..4-byte $str
@@ -1421,7 +1421,7 @@ valueEqRuntimeLines callW _tailW w =
 -- `div` truncates toward zero (`i64.div_s` / `f64.div`); `%` is sign-of-dividend for Int
 -- (`i64.rem_s`) and fmod for Float (== `$mdk_float_rem` == LLVM `frem` ==
 -- native's `mdk_num_mod`).  Emitted only when a poly-`Num` operand is routed here
--- (`useValueArithRef`); `$mdk_unbox_int`/`$mdk_box_int` are always in scope (ioRuntimeLines).
+-- (value arithmetic in use); `$mdk_unbox_int`/`$mdk_box_int` are always in scope (ioRuntimeLines).
 --
 -- ── #371: poly-`Num` int `/`/`%` divisor-zero guard ──────────────────────────
 -- $mdk_value_div/$mdk_value_mod's int arms must not be bare i64.div_s/rem_s — no
@@ -1840,7 +1840,7 @@ charClassRuntimeLines = [
 -- fallback, floatToString is a HOST IMPORT: the JS host reproduces the SAME
 -- shortest-round-trip algorithm byte-for-byte via `toExponential()` (no arg — JS's own
 -- shortest half-even dtoa) re-formatted through the %.12g-style exponent threshold +
--- trailing-zero trim + the `.0` rule (test/wasm/run.js, function still named `fmt12g`
+-- trailing-zero trim + the `.0` rule (test/wasm/run.js, function still named fmt12g
 -- for history but ported to shortest-round-trip together with medaka_rt.c — see its own
 -- header comment). This is the ONE host-dependent formatter — a clean parallel to the
 -- deferred IO/WASI host surface; a non-JS wedge target would later need the in-WAT

@@ -1,5 +1,5 @@
 -- Self-hosted exhaust stage — standalone
--- `check_guard_exhaustiveness` (Phase 91(2)).  Runs on the RAW (pre-desugar)
+-- `checkGuardExhaustiveness` (Phase 91(2)).  Runs on the RAW (pre-desugar)
 -- AST — function/where guards are still `EGuards` nodes — and warns when a
 -- multi-clause group's guards may fall through with nothing guaranteed to
 -- produce a value, *unless* the non-falling-through clauses' patterns already
@@ -8,7 +8,7 @@
 -- Needs no prelude: the constructor oracle is built from the file's own data
 -- decls plus the syntactic builtins (Bool/List/Unit).  Validated byte-for-byte
 -- against `dev/diagdump.exe --exhaust` (test/diff_compiler_fmt_test.mdk).  The
--- match/clause exhaustiveness (`check_match`) is type-aware and lives in
+-- match/clause exhaustiveness (`checkMatchExhaustive`) is type-aware and lives in
 -- typecheck, so it is out of scope here.
 
 import support.diag_codes.{DiagCode(..)}
@@ -77,7 +77,7 @@ import support.util.{
 -- ── small helpers ─────────────────────────────────────────────────────────
 
 -- ── synthetic tuple constructor names ─────────────────────────────────────
--- (exported so the type-aware `check_match` exhaustiveness in typecheck.mdk can
+-- (exported so the type-aware `checkMatchExhaustive` exhaustiveness in typecheck.mdk can
 -- reuse the same synthetic per-arity tuple constructor names.)
 export
 tupleCtorName : Int -> String
@@ -130,7 +130,7 @@ digitVal c = charCode c - charCode '0'
 -- ── the constructor oracle ────────────────────────────────────────────────
 -- type → its constructors; ctor → arity; ctor → its type.  User data first so
 -- it overrides the builtins (mirrors Hashtbl.replace's last-wins for find).
--- (exported, with `buildOracle`, so typecheck.mdk's `check_match` can reuse the
+-- (exported, with `buildOracle`, so typecheck.mdk's `checkMatchExhaustive` can reuse the
 -- same oracle + matrix machinery — see the note at the top of this file.)
 -- ⚠️ `typeCtors` is the ONE table keyed by DECLARATION IDENTITY, not by a bare
 -- type name (oracle-identity family leaf L1).  Its representation is an assoc

@@ -500,7 +500,7 @@ scanNumber ctx src len pos depth id
 -- this is exactly its complementary malformed shape — the prefix is right,
 -- but `_` (only legal BETWEEN digits, e.g. `0xD_EAD`) sits where the first
 -- digit must be. Caught here, at the source, instead of falling through to
--- `numFinish ctx` (which stops at the lone `0`, leaving `x_FF` to be re-lexed as
+-- `numFinish ctx` (which stops at the lone `0`, leaving x_FF to be re-lexed as
 -- an ordinary identifier and misreported downstream as "Unbound variable:
 -- x_FF").
 isMalformedRadixPrefix : Array Char -> Int -> Int -> Bool
@@ -730,7 +730,7 @@ scanChar ctx src pos depth frame = match readCharacter src pos
 
 -- A `b'` at a token start commits to a byte literal only when a backslash
 -- follows (an escape) or one character, optionally with combining marks,
--- closes with `'`.  Anything else (`b''`, `b'ab'`, `b',b'`, `b'+b'`) is a
+-- closes with `'`.  Anything else (b'', b'ab', b',b', b'+b') is a
 -- primed name and lexes as an identifier.
 opensByteLiteral : Array Char -> Int -> Int -> Bool
 opensByteLiteral src len pos =

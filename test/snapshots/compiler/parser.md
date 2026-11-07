@@ -213,7 +213,7 @@ assignTail lhs = located (assignTailRaw lhs)
 -- dedent"* — §12 item 5's "the lexer heralds it correctly but the parser cannot
 -- consume it" ⇒ a PARSER bug, not a lexer one.  It also made `medaka lint --fix`
 -- DESTROY SOURCE: a fix reprints the whole decl through `tools/printer.mdk`, whose
--- `hangAtSep` legitimately drops a wide def-body below its separator, so any decl
+-- the printer's hang-after-separator layout legitimately drops a wide def-body below its separator, so any decl
 -- whose body was a `:=` with a wide RHS came back unparseable while `--fix`
 -- reported success and exited 0.
 --
@@ -276,7 +276,7 @@ lamTailRaw e = defer
   deferPure (ELam (exprToParams e) body)
 
 -- convert a lambda LHS expression to a parameter-pattern list (mirrors the
--- reference `expr_to_pats`): an EApp spine with a lowercase head is a multi-arg
+-- reference expr_to_pats): an EApp spine with a lowercase head is a multi-arg
 -- lambda (one pattern per spine element); an uppercase head is a single
 -- constructor pattern; anything else is a single pattern.
 exprToParams : Expr -> List Pat
@@ -327,7 +327,7 @@ exprToPat (EListLit es) = PList (map exprToPat es)
 exprToPat (EBinOp "::" a b _) = PCons (exprToPat a) (exprToPat b)
 -- `(x :: _)` in a binding LHS: the `_` was eaten by the left-section rewrite
 -- (parenResult/leftSectionOrExpr); recover it as a cons pattern (mirrors the
--- reference `expr_to_pat`'s `SecLeft (a, "::")` case).
+-- reference expr_to_pat's `SecLeft (a, "::")` case).
 exprToPat (ESection (SecLeft a "::")) = PCons (exprToPat a) PWild
 exprToPat (EAsPat x sub) = PAs x (Loc "" 0 0 0 0) noBinderId (exprToPat sub)
 exprToPat (EOrPat es) = orPatOf (map exprToPat es)
@@ -377,7 +377,7 @@ isCtorChars cs
   | otherwise = isUpper (arrayGetUnsafe 0 cs)
 
 -- Peel transparent ELoc wrappers to expose the underlying expr shape.  Mirrors
--- parser.mly's local `strip` (used before `expr_to_pat`/section detection): the
+-- parser.mly's local strip (used before expr_to_pat/section detection): the
 -- binding-LHS→pattern conversions and section recovery match on the raw node
 -- kind, so they must see through the ELoc the atom level now puts on leaves.
 stripLoc : Expr -> Expr
@@ -391,7 +391,7 @@ stripLoc e = e
 -- back as an atom by its enclosing parens — so at nesting level k the content
 -- handed to `leftSectionOrExpr` already carries k accumulated `ELoc` layers,
 -- and the full `stripLoc` walked all k of them, on EVERY one of the N levels:
--- O(N) work summed N times = O(N^2) (confirmed by `perf`: 44% self-time here).
+-- O(N) work summed N times = O(N^2) (confirmed by perf: 44% self-time here).
 --
 -- A single-layer strip is sufficient here and nowhere else needs to change: an
 -- `EBinOp` node is NEVER itself wrapped in `ELoc` (binop levels stay unwrapped
@@ -656,7 +656,7 @@ appArg head = ParserE (ctx pos => appArgR head ctx pos)
 -- End-of-arguments fast path.  `many (appArg …)` ends every application with a
 -- failing attempt whose error it discards, so for a token that cannot start an
 -- argument the whole chain is a PErr at `pos`.  The one exception is the nesting
--- cap: `parseAtomNestGo` returns PFatal before it looks at the token, so the
+-- cap: the nesting-capped atom parser returns PFatal before it looks at the token, so the
 -- chain runs whenever the depth counter is at the cap.
 appArgR : Expr -> ParseContext -> Int -> PR Expr
 appArgR head ctx pos =
@@ -752,7 +752,7 @@ headIsNumeric (ELit (LInt _)) = True
 headIsNumeric (ELit (LFloat _)) = True
 headIsNumeric _ = False
 
--- the as-pattern operator level (`expr_aspat`): `IDENT AS_AT postfix` → EAsPat
+-- the as-pattern operator level (expr_aspat): `IDENT AS_AT postfix` → EAsPat
 -- (a binding-LHS as-pattern, e.g. a lambda param `xs@rest =>`); else a postfix.
 -- AS_AT is only emitted by the lexer when `@` directly follows an identifier.
 parseAspat : Parser Expr
@@ -887,11 +887,11 @@ nestTooDeepMsg : String
 nestTooDeepMsg =
   "expression nesting too deep (limit \{intToString maxNestDepth}); split this expression into named intermediate bindings"
 
--- Atom level (`expr_atom` + the statement-form productions in parser.mly).
+-- Atom level (expr_atom + the statement-form productions in parser.mly).
 -- Wrapped in a transparent ELoc capturing the atom's token span, mirroring
 -- parser.mly where every atom and every let/if/match/function/do production is
 -- `ELoc (of_pos $startpos $endpos, …)`.  Binop/app/unary/postfix levels stay
--- un-wrapped (exactly like parser.mly's `mkbin`/`EApp` rules), so their span is
+-- un-wrapped (exactly like parser.mly's mkbin/`EApp` rules), so their span is
 -- implicit from their wrapped leaf operands.
 --
 -- The engine restores the shared invocation depth on success and both failure
@@ -988,7 +988,7 @@ braceItemsFor x _ = defer
   deferPure (classifyBrace x items)
 
 -- `IDENT = expr` → field; `key => expr` → map entry; else a bare element.  The
--- key is parsed at the pipe level (like the reference `expr_pipe`) so a `=>`
+-- key is parsed at the pipe level (like the reference expr_pipe) so a `=>`
 -- ends the key rather than starting a lambda.
 parseKvOrE : Parser KvItem
 parseKvOrE = ParserE (ctx pos =>
@@ -1165,7 +1165,7 @@ interpRestFor _ _ = failP "expected interpolation mid/end"
 -- `indentedBody`).  parseBracketBlock is the dedicated, contained reader for it;
 -- parseBracketElem admits it in bracket element positions WITHOUT folding the
 -- bare-INDENT block into parseAtom/parseExpr generally (mirrors parser.mly's
--- `bracket_block`/`bracket_elem`).
+-- bracket_block/bracket_elem).
 -- NOTE (staging): the LEXER does not yet emit INDENT/NEWLINE/DEDENT inside
 -- brackets (Stage 3, pending), so these readers are not reachable on real input
 -- yet — they exist so the grammar has a target the future lexer tokens land on.
@@ -1310,7 +1310,7 @@ parenResult es = ETuple es
 
 -- a single `(e op _)` becomes a left section; otherwise just the inner expr.
 -- The `_` placeholder is a wrapped atom (`ELoc (EVar "_")`), so strip the RHS
--- operand before matching (mirrors parser.mly's local `strip` in this rule).
+-- operand before matching (mirrors parser.mly's local strip in this rule).
 -- On no match we return the ORIGINAL expr untouched (keeping its wrappers).
 -- Both strips are the BOUNDED `stripLoc1` (see its comment) — `e` is where the
 -- O(N^2) lived (its `ELoc` depth grows with paren-nesting level); `rhs` is
@@ -1956,7 +1956,7 @@ upperAtomRest : String -> Token -> Parser Pat
 upperAtomRest c TLBrace = recordPat c
 upperAtomRest c _ = deferPure (PCon c [])
 
--- A function-definition parameter: a `pat_atom`, plus the `@` as-pattern
+-- A function-definition parameter: a pat_atom, plus the `@` as-pattern
 -- (`x@atom`).  `parseOrElse` backtracks, so a plain-ident / non-`@` param falls
 -- through to parsePatAtom.
 parseParamPat : Parser Pat
@@ -2387,7 +2387,7 @@ upperNameFor _ = failP "expected an effect label"
 -- spelling `qualifiedLocal` gives an alias-qualified value and the one the
 -- import machinery enters an aliased module's ctors and interfaces under.
 -- Resolve strips the prefix once it has a module identity to check it against
--- (`unqualAliasCtorName`, frontend/resolve.mdk), so nothing downstream of
+-- (the alias-ctor check, frontend/resolve.mdk), so nothing downstream of
 -- resolve sees a dotted ctor or interface name.
 --
 -- Only `Upper . Upper` folds.  A record FIELD is always lowercase (`TIdent`),
@@ -3889,8 +3889,8 @@ eqGuardShapeP : Parser Bool
 eqGuardShapeP =
   ParserE (ctx pos => POk (eqGuardShapeFrom (contextTokens ctx) pos 0) pos)
 
--- A guard qualifier parses at the `expr_or` level (mirrors the reference
--- `guard_qual`): NOT full `parseExpr`, so a trailing `=>` in a match-arm guard
+-- A guard qualifier parses at the expr_or level (mirrors the reference
+-- guard_qual): NOT full `parseExpr`, so a trailing `=>` in a match-arm guard
 -- isn't swallowed as a lambda, and `<-`/`,` stay as the bind/separator tokens.
 parseGuard : Parser Guard
 parseGuard = ParserE (ctx pos =>
@@ -4252,7 +4252,7 @@ parseNamedPayload = defer
 
 -- The brace-group of a named-field payload: `{ f0 : T0, f1 : T1, … }`.  Shared
 -- by the explicit-name form (`parseNamedPayload`) and the anonymous short form
--- (`data X = { … }`, `dataAnonVariant`).
+-- (`data X = { … }`).
 parseNamedFields : Parser (List Field)
 parseNamedFields = defer
   expectTok TLBrace
@@ -4399,7 +4399,7 @@ whereBindRest name pats TPipe = defer
 whereBindRest _ _ _ = failP "expected a body for the `where` binding"
 
 -- group CONSECUTIVE same-name bindings into one LetBind (mirrors the reference
--- `coalesce_clauses`), so `go … = …` over several lines becomes one entry,
+-- coalesce_clauses), so `go … = …` over several lines becomes one entry,
 -- sited at its first clause
 coalesceClauses : List (String, List Pat, Expr, Loc) -> List LetBind
 coalesceClauses [] = []
@@ -4515,7 +4515,7 @@ blockWord _ = "do"
 -- block (the RHS sits on its own indented line, e.g. `let n =\n    length pairs`
 -- or `g x =>\n  g + x`), or an ordinary expression.  Every herald that opens
 -- such a block is one `canEndExpr` omits — see LAYOUT-SEMANTICS.md §7.1.
--- Mirrors parser.mly's `expr_no_block` including the
+-- Mirrors parser.mly's expr_no_block including the
 -- `INDENT nonempty_list(stmt) DEDENT` production, which lets a let binding's RHS
 -- be an indented block.  Without this the lexer's (correct, oracle-identical)
 -- `LET n EQUAL INDENT … DEDENT` stream had no parser rule and failed to parse.
@@ -4688,7 +4688,7 @@ letTailFor pat e1 TIn = defer
   deferPure (DoExpr (ELet noDeclLoc False pat e1 e2))
 letTailFor pat e1 _ = deferPure (DoLet False False pat e1 noDeclLoc)
 
--- mirror the reference `curry_lam`: one single-arg ELam per param
+-- mirror the reference curry_lam: one single-arg ELam per param
 curryLam : List Pat -> Expr -> Expr
 curryLam [] body = body
 curryLam (p :: ps) body = ELam [p] (curryLam ps body)
@@ -4811,7 +4811,7 @@ parseProgram = defer
 
 -- ── Position side-channel ─────────────────────────────────────────────────
 -- Three channels, surfaced for `medaka fmt`'s
--- comment-interleaving engine (`format_program`):
+-- comment-interleaving engine (`formatProgram`):
 --   * decl_positions  — per top-level decl, a (line, end_line) pair, in source
 --                        order;
 --   * variant_lines   — start line of each `data` variant, flat across the file
@@ -4868,7 +4868,7 @@ parseWithPositions : String -> (List Decl, Positions)
 parseWithPositions src = optionOrPanic "parse error" (parseWithPositionsOpt src)
 
 -- Backward-compatibility alias kept for callers in `compiler/tools/lint.mdk`'s
--- `lintFileDiagTriple` and `compiler/driver/medaka_cli.mdk`'s `lintFileFresh`. See
+-- `lintFileDiagTriple` and `compiler/driver/medaka_cli.mdk`'s lint driver. See
 -- docs/design/SOURCE-POSITION-DESIGN.md § "Increment 3 — unify the parse entry points
 -- (I6)" for why the dual-tokenize design this replaced existed and was retired.
 export

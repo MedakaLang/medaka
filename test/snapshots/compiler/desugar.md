@@ -7,9 +7,9 @@ stages=DESUGAR,MARK
 -- `?`, record puns, `deriving`, interface defaults) into the core AST.  Runs
 -- after the parser, before resolve — purely syntactic, no type info.
 --
--- The reference `desugar_program` runs eight passes in a fixed order; this file
+-- The reference desugarer runs eight passes in a fixed order; this file
 -- ports them incrementally.  `mapExpr`/`mapDecl` are the shared bottom-up
--- traversal engine (mirror of `map_expr`/`map_decl`): a rewrite `f` is applied
+-- traversal engine (mirror of the reference traversal): a rewrite `f` is applied
 -- post-order (children first, then the node).
 
 import support.stage_count.{stageBump}
@@ -699,7 +699,7 @@ outerLocs e acc =
 -- `x <- andThen b f` — a real false-positive shape, reproduced against #894's
 -- first fix) so it can pick the right no-impl message. Tag the synthesized
 -- callee — never the user's — with an `EDoOrigin` wrapper: it is already a
--- transparent marker threaded through every existing pass (`mapKids`, `alpha`,
+-- transparent marker threaded through every existing pass (`mapKids`, the alpha-renaming pass,
 -- `appSpineName`, …), so `inferApp` can recognize it by AST SHAPE alone, off
 -- the exact node it was called for — no ambient/dynamic state, so no risk of
 -- leaking into an unrelated nested application the way a global flag would.
@@ -734,7 +734,7 @@ doCont pat body =
 -- (Record derives, Arbitrary, and newtype Num/Generic remain deferred.  The old
 -- note here claimed they were "not exercised by the corpus"; that was FALSE —
 -- test/ported/test_eval_ported.mdk derives `Num` AND `Generic` on newtypes and
--- only passes because the bindings that use them (`distRN`, `genNewtypeName`)
+-- only passes because the bindings that use them (the generated newtype bindings)
 -- are dead: no test forces them, and a top-level nullary is lazy.  `checkDerives`
 -- below now reports those sites instead of dropping them silently — #421.)
 expandDecl : Decl -> List Decl

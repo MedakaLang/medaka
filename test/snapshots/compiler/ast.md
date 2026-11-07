@@ -199,7 +199,7 @@ defaultReceiverDict method = "$self_\{method}"
 -- `compiler/types/typecheck.mdk` selects, so the new module costs a later
 -- A-2 unit NOTHING (each such unit edits `typecheck.mdk` anyway).
 -- `compiler/support/util.mdk` selects **103** (`test/preflight.sh`'s
--- `mark_full` blast-radius arm), which is the actual reason the combinators
+-- mark_full blast-radius arm), which is the actual reason the combinators
 -- are not in `compiler/support/`.
 -- 🚨 An earlier draft of this comment called `ast.mdk` a "~26-gate import
 -- surface" and `types/registry.mdk` "narrower".  Both numbers were invented
@@ -393,8 +393,8 @@ mkIdent ns origin name = map (io => Ident ns io name) (identOriginOf origin)
 -- ── TabKey: the key for a table that KEEPS its assoc-list representation ──
 -- The three registries above replace a table's REPRESENTATION as well as its
 -- key. `TabKey` is for the conversions that must keep the assoc list and
--- change ONLY the key, and A-2.3 (`universeAliasTable`,
--- `universeDataParamKinds`, `types/typecheck.mdk`) is the first of them.
+-- change ONLY the key, and A-2.3 (the universe alias and data-param-kind tables,
+-- `types/typecheck.mdk`) is the first of them.
 -- Two independent reasons, both measured or cited rather than asserted:
 --
 -- ⚠️ "THE CONVERSIONS THAT KEEP THE ASSOC LIST" IS WHY THIS TYPE EXISTS, NOT
@@ -582,7 +582,7 @@ tabHasName n ((k, _) :: rest) = tabKeyName k == n || tabHasName n rest
 -- furnish one, and no experiment here establishes that no other shape can.  What
 -- was measured on this tree, before and after:
 --   * the DIRECT form was already CLOSED — `unwrapEvil (Some 1)`, where
---     `unwrapEvil` takes another module's own `Option`, is rejected with a
+--     unwrapEvil takes another module's own `Option`, is rejected with a
 --     `T-TYPE-MISMATCH` naming both modules;
 --   * the INDIRECT form was NOT.  `mid = stringIndexOf "zz" "a"` gave an
 --     `Option Int` head with NO origin; `isSome mid` linked it to `Option@core`,
@@ -663,7 +663,7 @@ public export data Ty =
   -- by every renderer, so structural dumps and printed source are byte-identical
   -- to the pre-#1110 tree.
   --
-  -- 🚨 The `tyCon` PREFIX on all three field names is LOAD-BEARING, not style.
+  -- The tyCon PREFIX on all three field names is LOAD-BEARING, not style.
   -- Field names are a PROGRAM-GLOBAL namespace, and a record field whose name
   -- another module's record also uses AT A DIFFERENT INDEX makes the native
   -- emitter read the wrong slot — `medaka run` stays correct while the BUILT
@@ -671,7 +671,7 @@ public export data Ty =
   -- hypothetical: naming this record's fields `name`/`loc`/`origin` puts a plain
   -- `loc` at index 1, while `Finding`'s `loc` (`tools/lint.mdk`) sits at index 3.
   -- Nothing in `compiler/` reads `Ty`'s fields at all, yet `medaka lint --cache`
-  -- does read `f.loc` (`encFinding`, `tools/lint_cache.mdk`), so that is where the
+  -- does read `f.loc` (`encLoc`, `tools/lint_cache.mdk`), so that is where the
   -- mis-resolved slot surfaces — and `diff_compiler_lint_cache` is the only gate
   -- covering it.  So: prefix every field on a widely
   -- imported AST node, and never add a bare `name`/`loc`/`kind`/`id` field here.
@@ -1188,7 +1188,7 @@ tyConBuiltin n l =
 -- in `types/typecheck.mdk`) exactly the way `ELoc` is, so dumps and printed
 -- source are byte-identical to the pre-#1110 tree.
 --
--- 🚨 Named-field record, and the `constraint` PREFIX is LOAD-BEARING — the
+-- Named-field record, and the constraint PREFIX is LOAD-BEARING — the
 -- field-namespace rule stated in full on `Ty.TyCon` above.  A bare `head`/`args`
 -- would collide across records, which is the emitter wrong-slot hazard that rule
 -- exists for.  (It would NOT also make this type's patterns match a `Require`:
@@ -1323,8 +1323,8 @@ tyParamSources (p :: ps) [] = p :: tyParamSources ps []
 -- infrastructure every stage needs: `resolve` locates a duplicate signature,
 -- `typecheck` locates an effect/kind/coherence error, all from the same
 -- judgment.  They must not fork into module-private copies of the `Ty` walk
--- (`firstTyLoc` in resolve, `firstTyConLoc` and `tyFirstLoc` in typecheck) or
--- of the combinator (`orElseLoc`/`orElseLocL`), which is exactly how the
+-- (such as `firstTyLoc` in resolve, or a typecheck-private walk) or
+-- of the combinator (`orElseLoc`), which is exactly how the
 -- next one gets written slightly differently.  `rule-duplicate-body` cannot
 -- see that class: its floor is 10 nodes and these bodies are smaller.
 --
@@ -1385,7 +1385,7 @@ firstTyLocList (t :: rest) = orElseLoc (firstTyLoc t) (firstTyLocList rest)
 -- RDictFwd = like RDict but for return-position sites: also forward the structured
 --   dict's own requires into the selected impl body (Phase 83/84 #5).
 -- RProj = the dictionary a route denotes, projected along a path of direct-super
---   indices (DICT-SEMANTICS §3 `super`).  A dictionary stores its supers before its
+--   indices (DICT-SEMANTICS §3 super).  A dictionary stores its supers before its
 --   requires, so an index names the same slot whichever instance the dictionary is.
 --   An index past the supers names a `requires` dictionary, which only a projection
 --   of a dictionary whose instance is known may use (an inherited default's body
@@ -1396,7 +1396,7 @@ firstTyLocList (t :: rest) = orElseLoc (firstTyLoc t) (firstTyLocList rest)
 --   VMulti dispatch and evaluates the bound name as the plain standalone (no
 --   narrowing).  The carried String is the standalone SYMBOL to call.
 --   A definer-shadow occurrence is marked `EMethodAt` with the BARE dispatch name
---   (P0-18, so `implFor` finds the impl when the receiver DOES have one), and its
+--   (P0-18, so `implForSite` finds the impl when the receiver DOES have one), and its
 --   RLocal fallback carries the symbol separately.  Since #2809 that symbol is
 --   populated on EVERY path: typecheck seeds it with the bare standalone name, and
 --   `private_mangle.mangleRoute` rewrites it to `<mid>__name` when the emit path
@@ -1665,7 +1665,7 @@ public export data Pat =
   -- `(p : T)` in a binding LHS (a lambda parameter, a do-bind or guard-bind
   -- pattern): matches what [p] matches, and the value has the written type.
   -- The parser builds it (`exprToPat`) so the printer and the tools keep the
-  -- written type; desugar (`eraseAnnotPats`) turns it into an expression
+  -- written type; desugar turns it into an expression
   -- annotation on the bound value, so no pass from resolve on sees one.
   | PAnn Pat Ty
 
@@ -1877,7 +1877,7 @@ public export data Expr =
   -- publishes this occurrence's routes, one per `=>` constraint.  Eval applies the
   -- matching dictionaries as leading args, lining up with the dict params
   -- dict_pass prepended to f's definition; it resolves the id through the table
-  -- `elaborateModules`/`elaborateDict` publish (`evDictRoutesIn`,
+  -- `elaborateModules` publishes (`evDictRoutesIn`,
   -- `compiler/types/route_key.mdk`) rather than through a cell, because the
   -- interpreter cannot reach a typechecker-private ref.
   | EDictAt String EvId
@@ -2055,7 +2055,7 @@ public export data ImplMethod = ImplMethod String (List Pat) Expr
 public export data DataVis = VisPrivate | VisAbstract | VisPublic
 public export data Field = Field String Ty
 -- `ConNamed fields nameOmitted`: named-field (record-style) constructor
--- payload.  `nameOmitted` is a pure surface marker — True when the ctor name
+-- payload.  nameOmitted is a pure surface marker — True when the ctor name
 -- was omitted in the source short form `data X = { … }` (the synthesized ctor
 -- name equals the tycon name).  It changes nothing downstream (typecheck / eval
 -- / emit / deriving all use the stored name); only the printer/fmt consults it
@@ -2083,7 +2083,7 @@ deriveRefName : DeriveRef -> String
 deriveRefName (DeriveRef n _) = n
 
 -- One `extern name : ty` declaration.  `edLoc` spans the name through the end of
--- the type.  `edBinds` lists the per-host `bind` clauses; plain data, so a
+-- the type.  `edBinds` lists the per-host bind clauses; plain data, so a
 -- module interface can serialize it as a field.
 public export data ExternDecl = ExternDecl {
   edPub : Bool,
@@ -2107,7 +2107,7 @@ externDecls ((DExtern d) :: rest) = d :: externDecls rest
 externDecls ((DAttrib _ d) :: rest) = externDecls (d :: rest)
 externDecls (_ :: rest) = externDecls rest
 
--- The host bindings an extern declares: its `bind` clauses as written, or,
+-- The host bindings an extern declares: its bind clauses as written, or,
 -- with none, a `c` binding under its Medaka name.  A `js` binding is never
 -- implied.  The declaration rules, the target walls and both emitters read an
 -- extern's bindings through this function and nowhere else.
@@ -2118,7 +2118,7 @@ externBindings d = match d.edBinds
   bs => bs
 
 -- Prepends an extern's (Medaka name, ((host, symbol) bindings, signature)) row
--- to `more`, unless the declaration is `skip`ped (a builtin name).  Both FFI
+-- to `more`, unless the declaration is skipped (a builtin name).  Both FFI
 -- row producers build their rows through this one rule.
 export
 externRowCons : Bool ->

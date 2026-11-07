@@ -1,5 +1,5 @@
 # META
-source_lines=6441
+source_lines=6409
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted resolve stage (single-file
@@ -376,7 +376,7 @@ public export data ResError =
 
 -- The did-you-mean pair (misspelled name, suggested name) for a resolve error,
 -- or None.  Only an error that carries a suggestion qualifies.
--- Consumed by diagnostics.mdk (Stage 2) to build the structured `help`/`fix`
+-- Consumed by diagnostics.mdk (Stage 2) to build the structured help/fix
 -- JSON fields — the fix span is the misspelled name's own loc-start + its length.
 export
 resErrorDidYouMean : ResError -> Option (String, String)
@@ -546,7 +546,7 @@ indexOwners ((f, owner) :: rest) m = match omLookup f m
 -- the owners registered for a field name in the field-owner multimap.
 -- O(log fields) index probe (see `buildFieldOwnerIndex`), NOT the per-mention
 -- O(fields) scan (#984).  `opBump` makes this probe VISIBLE to the
--- perf gate's op-count arm (#884): the `widerecords` shape's resolve-op grade now
+-- perf gate's op-count arm (#884): the widerecords shape's resolve-op grade now
 -- covers `ownersOf` — one counted op per field mention, so the FIXED path reads
 -- LINEAR, while a regression that scans (or returns a superlinear owners list)
 -- lifts the resolve-op ratio superlinear and the gate goes red (#880).
@@ -798,7 +798,7 @@ ambiguousCtorErrors env n loc = match aliasShadowedCtorMod env n
 -- in BOTH ambiguity sets and concatenating reports one collision twice.  Emitting a
 -- duplicate diagnostic where one was emitted before would be a diagnostic-quality
 -- regression riding along with a soundness fix; measured on
--- `test/resolve_module_fixtures/ambiguous_type_iface`, whose `t_recpat` / `t_reclit`
+-- `test/resolve_module_fixtures/ambiguous_type_iface`, whose t_recpat / t_reclit
 -- cells are exactly that shape.
 --
 -- TYPE FIRST because it is the more specific reading of a head that IS a type name;
@@ -965,7 +965,7 @@ recFieldSub cur env (Some p) = checkPat cur env p
 --   * `mem`   — the O(log n) membership set (`omHasKey`), which every
 --     `contains n scope` now consults instead.  (`omHasKey` also does not bump
 --     the perf op-counter the way `contains` does, so the #78 scan drops off
---     the OP arm of diff_compiler_perf_scaling.sh too — see its `scoperefs` shape.)
+--     the OP arm of diff_compiler_perf_scaling.sh too — see its scoperefs shape.)
 data Scope = Scope (List String) (OrdMap Unit)
 
 emptyScope : Scope
@@ -1477,7 +1477,7 @@ suggestCtor n = lookupAssoc n haskellCtorAliases
 --     (insert +1, delete -1, substitute 0), so `|len a - len b| <= d`.  A
 --     candidate whose length is outside `[len n - lim, len n + lim]` therefore
 --     has `ed > lim` and would have been discarded anyway.
---   * `mask` — bit `hashChar c & 31` set for each character `c` of the name.
+--   * mask — bit `hashChar c & 31` set for each character `c` of the name.
 --     PROOF, in two steps.  (1) `ed a b <= k` implies the character SETS differ
 --     in at most `2k` members: along the optimal edit path `a = x0 -> … -> xd = b`
 --     (`d <= k`), one operation changes the set by at most one addition and one
@@ -1500,7 +1500,7 @@ suggestCtor n = lookupAssoc n haskellCtorAliases
 --     alone collides down to 15-18 DISTINCT slots (measured, per projection —
 --     plain birthday collisions), so one mask on a realistic 8-12 character
 --     identifier saturates and admits a large slice of the pool.  Mean
---     Levenshtein scorings per unbound name on the perf gate's `typos` shape at
+--     Levenshtein scorings per unbound name on the perf gate's typos shape at
 --     N=1000 (pool 2373): one mask 207, two 71, three 58.  The 2→3 gain is
 --     small, which is the signal to stop adding projections: what survives is
 --     converging on the IRREDUCIBLE set — candidates whose character sets really
@@ -1509,7 +1509,7 @@ suggestCtor n = lookupAssoc n haskellCtorAliases
 --     program's own names), so it does not restore the quadratic.
 --
 --   * `up` — does the name start uppercase.  Not a distance filter: it is the
---     pre-existing `sameCaseClass` reject (see `startsUpper`), precomputed
+--     pre-existing same-case-class reject (see `startsUpper`), precomputed
 --     because deriving it needs `stringSlice`, which ALLOCATES.  Re-deriving it
 --     per candidate per unbound name is itself an O(unbound × in-scope)
 --     ALLOCATION, so leaving it out defeats the whole rewrite (measured: it alone
@@ -1528,7 +1528,7 @@ suggestCtor n = lookupAssoc n haskellCtorAliases
 -- BK-tree) was rejected: it costs O(pool × len²) STRINGS to build, on every
 -- compile, to speed up a path that most compiles never take.  What the rewrite
 -- removes is the ALLOCATING O(len²) DP from the inner loop, which was ~99.9% of
--- the cost.  The perf gate's `typos` shape grades that; nothing grades the
+-- the cost.  The perf gate's typos shape grades that; nothing grades the
 -- residual scan, on purpose.
 data SugCand = SugCand String Int Int Int Int Bool
 
@@ -1719,7 +1719,7 @@ scoreCand (SugQuery n lim _ _ _ _ _) c acc =
 -- (constructors start uppercase, values/types-in-scope-of-a-value-query start
 -- lowercase), so a candidate whose case class differs from the query's is
 -- never the intended correction — surfacing one is worse than suggesting
--- nothing (#514 sub-finding: `string`/`toString`, both lowercase queries,
+-- nothing (#514 sub-finding: string/toString, both lowercase queries,
 -- surfaced the unrelated prelude constructor `RString`).
 -- (`stringSlice` ALLOCATES, so this is precomputed into `SugCand`/`SugQuery`
 -- rather than re-derived per candidate — see `SugCand`.)
@@ -2187,7 +2187,7 @@ useStubNames (UseAlias _ _) = []
 -- prelude is prepended to every module, so every core name is already in scope under
 -- its OWN spelling and re-binding it would be a no-op.  An alias is the exception,
 -- because it introduces a spelling the prelude did NOT supply — `import core as C`
--- asks for `C.isEven`, `import core.{isEven as even2}` asks for `even2`, and neither
+-- asks for `C.isEven`, `import core.{isEven as even2}` asks for even2, and neither
 -- name is anywhere in scope.  These two functions are the whole of what a core
 -- use-path contributes; the unaliased forms still contribute nothing.
 --
@@ -2494,7 +2494,7 @@ contiguityErrors prog = contigGo omEmpty [] prog
 -- name in the file and is only ever probed for membership (order is irrelevant —
 -- error order comes from `ns`).  As a list it made this walk O(N²) in both time
 -- and allocation, since every decl rebuilt the whole accumulator (`unionStr`'s
--- `acc ++ [x]`, then `removeAll`'s full copy).  That was ~100% of the resolve
+-- `acc ++ [x]`, then a remove-all full copy).  That was ~100% of the resolve
 -- stage's cost on a large file.  `opened` stays a list — by construction it never
 -- holds more than a single decl's binders (opened2 ⊆ ns), so it is O(1)-sized.
 contigGo : OrdMap Unit -> List String -> List Decl -> List ResError
@@ -4073,8 +4073,8 @@ ownedFieldOwners exp owners =
 -- actually binds (`importNamesIn nsInterfaces known path` — the same per-path
 -- provenance `ifaceAmbiguousSet` already uses to decide real ambiguity)
 -- instead of the flattened whole-program set.  `import gmod.{gdummy}`
--- contributes nothing to `impIfaceMethods` no matter what else `gmod`
--- exports; `import pmod.{Same, pmth}` contributes exactly `pmod`'s `Same`.
+-- contributes nothing to `impIfaceMethods` no matter what else gmod
+-- exports; `import pmod.{Same, pmth}` contributes exactly pmod's `Same`.
 -- No import statement's contribution depends on what any OTHER import
 -- statement named — but the table underneath is still bare-name-keyed and
 -- `ifaceMethodsOf` is still first-match, so when TWO import paths genuinely
@@ -4503,7 +4503,7 @@ resolveModulesErrors rt pre known mods =
 -- Guarded variant: trust is decided per module by the `ResolveWalk`.
 --
 -- The ONE recursive walker (#1440 dedup): `resolveModulesErrorsG` and
--- `resolveModulesErrorsByPathGo` must not fork into two verbatim-identical copies of
+-- the by-path walker must not fork into two verbatim-identical copies of
 -- this recursion, differing only in how each module's errors get rendered.
 -- There is one walker returning each module's RAW `(modId, errs)` pair;
 -- the two renderers (flat union of raw errors vs per-module `file:L:C:`
@@ -4554,45 +4554,13 @@ resolveModulesToLines runtimeDecls preludeDecls mods =
       resErrorSexp
       (resolveModulesErrors runtimeDecls preludeDecls omEmpty mods))
 
--- (REMOVED, #2705) `resolveModulesToLinesG` was the S-expr renderer for the
--- `medaka check` exit-code predicate `checkModulesHasErrors`.  That predicate is
--- gone — the multi-module `check` route reaches its report through
--- `entryReportFromDiags` over `checkModulesDiagsChain` (`compiler/tools/check.mdk`)
--- — so the guarded renderer had zero callers.  `resolveModulesErrorsG`, which it
--- wrapped, is still live under `resolveModulesErrors`.
-
--- (REMOVED, #1440) `resolveModulesToHumane` had zero callers — it was
--- imported by `compiler/tools/check.mdk` and `compiler/driver/medaka_cli.mdk`
--- but never invoked from either.  `resolveModulesToHumaneG`'s own remaining
--- call has also been removed — see the note at the `resolveModulesErrorsByFile`
--- block below for why that call could only ever return `""`.
-
--- (REMOVED, #186/#1360) `resolveModulesToHumaneGF` took a single fallback FILE
--- and stamped it on EVERY module's located resolve errors whose own Loc carried
--- an empty `file` — which, on the multi-module loader, is all of them.  `check`
--- stopped using it in #41; `run`/`build` kept it until #186, which is exactly
--- how an imported module's error kept printing under the entry file's path.  It
--- is wrong by construction for any graph with more than one module, so it is
--- gone rather than deprecated: use `resolveModulesErrorsByFile` below, which
--- takes the loader's modId → path map and attributes each module to its own file.
-
--- (REMOVED) `resolveModulesToHumaneByPath` / `ppResErrorLocatedF` /
--- `ppResErrorLocated` / `renderModuleErrorsByPath` / `resolveModulesErrorsByPathGo`
--- were a SECOND human renderer: they hand-built `"\{file}:\{sl}:\{sc}: \{msg}"`
--- with no `error: ` severity prefix and no caret block, so the SAME unbound name
--- printed one way through the single-file arm (which has always gone through
--- `driver.diagnostics.ppDiagCliLines`) and another way through the module graph.
--- They are DELETED rather than deprecated — a dead second face is how a third
--- call site gets written.  Rendering now lives at ONE place,
--- `driver.diagnostics.ppResolveErrorsByFile`, which walks the pairs
--- `resolveModulesErrorsByFile` below hands it and formats each `ResError`
--- through `diagOfResError` + `ppDiagCliLines`.  Rendering could not stay HERE:
+-- Rendering lives at ONE place, `driver.diagnostics.ppResolveErrorsByFile`, which
+-- walks the pairs `resolveModulesErrorsByFile` below hands it and formats each
+-- `ResError` through `diagOfResError` + `ppDiagCliLines`.  It cannot live HERE:
 -- the caret block needs the module's SOURCE TEXT (resolve is pure, and the
 -- loader drops source after parsing), and `diagnostics.mdk` imports THIS module,
--- so the dependency only runs one way.
---
--- The per-module ATTRIBUTION this file owns is unchanged and stays here — see
--- `resolveModulesErrorsByFile`.
+-- so the dependency only runs one way.  The per-module ATTRIBUTION is owned here:
+-- see `resolveModulesErrorsByFile`.
 
 -- Attributes each module's resolve errors to that module's OWN file, looked up
 -- in `modPaths` (a modId → real file path assoc the loader carries), and stops
@@ -4635,8 +4603,8 @@ fileOfModuleErrors modPaths (mid, errs) =
 -- binders are inserted into scope at the sentinel id 0 so SHADOWING is correct
 -- (an inner `g` still hides a top-level `g`), but their occurrences carry the
 -- sentinel id 0 and typecheck reads those through the bare-name fallback (exactly
--- today's behaviour).  `bodyLocalSchemesRef` / `isBodyLocalScheme` were retired
--- separately (incr2, PR #861) via a `TcEnv` is-local flag — NOT local-id minting.
+-- today's behaviour).  Body-locality is decided in typecheck
+-- through a `TcEnv` is-local flag — NOT by local-id minting.
 -- Minting real local ids to retire the id-0 fallback (#837 Axis B) stays deferred:
 -- the fallback is provably sound (substMonos can only drop, never mis-attribute)
 -- and the change is byte-identical — pure precision, see #837.
@@ -4653,7 +4621,7 @@ fileOfModuleErrors modPaths (mid, errs) =
 -- but a lookup is O(log n) regardless of how many scopes deep the reference sits.
 -- A `List BScope` (SLocal frame :: ... :: STop top) makes a DEEP local
 -- nesting (N sequential lets, references to an outer binding) an O(depth) walk
--- per EVar — O(depth²) over the body (the `scoperefs` shape, #1031).
+-- per EVar — O(depth²) over the body (the scoperefs shape, #1031).
 lookupBindId : OrdMap Int -> String -> Int
 lookupBindId env n = optionOr 0 (omLookup n env)
 
@@ -4853,7 +4821,7 @@ stampImplMethod top (ImplMethod nm pats body) =
   ImplMethod nm pats (stampExpr (insertParams pats top) body)
 
 -- Mint per-top-level-binder ids and stamp all occurrences.  Returns the stamped
--- program AND `defIds` (each minted top-level binder → its id), which typecheck's
+-- program AND the defIds list (each minted top-level binder → its id), which typecheck's
 -- `registerSchemeObligations` reads to key a top-level member's obligations.
 -- #907/#1031: the whole scope env — top-level AND every local nesting depth — is
 -- ONE threaded OrdMap, so `lookupBindId` is O(log n) regardless of decl count OR
@@ -4866,7 +4834,7 @@ stampBindingIds decls =
   (map (stampDecl top) decls, ids)
 
 -- The two halves of `stampBindingIds`, for a driver that stamps one binding group
--- at a time: the top-level scope (name → minted id) plus the `defIds` pair list,
+-- at a time: the top-level scope (name → minted id) plus the defIds pair list,
 -- and the per-declaration / per-clause walks over that scope.  A clause is stamped
 -- under its own params shadow-inserted over `top`, exactly as `stampDecl`'s
 -- `DFunDef` arm does; the id table is a pure function of the declaration heads, so
@@ -4974,7 +4942,7 @@ stampClauseWith top (pats, body) =
 -- Draining `OriginUnresolved` entirely needs the distinct pre-resolve type §8
 -- I6.3 really asks for (A-1's option 1), which is not reachable from a
 -- byte-identical PR.  The producer set is pinned by
--- `test/typecheck_compiler_source.sh` (the `soundness` job).
+-- `test/typecheck_compiler_source.sh` (the soundness job).
 
 -- ── THE ONE PRECEDENCE RULE (#1245) ─────────────────────────────────────────
 -- Type/interface identity in this file is decided in exactly one way, and both
@@ -5127,7 +5095,7 @@ builtinTyOrigins = map builtinTyOrigin (primitiveTypes ++ tupleCtorTyNames)
 builtinTyOrigin : String -> (String, TyConOrigin)
 builtinTyOrigin n = (n, OriginBuiltin)
 
--- The TYPE peer of `ctorProvenance` (#674): which type names a
+-- The TYPE peer of the constructor provenance table (#674): which type names a
 -- module exports, and which module DECLARED each.
 --
 -- ⚠️ This is the half `ModuleExports.expTypes` structurally CANNOT answer, and the
@@ -5323,7 +5291,7 @@ useMemberBinding (m@(UseMember name _ _ _)) = (name, useMemberLocal m)
 --   * a source module that ALSO DECLARES the name yields ITSELF.  That is not a
 --     leak, it is correct: its own declaration is what a consumer's
 --     `import m.{Foo}` actually binds.
--- Measured, not argued: the retired interface-origin fixture chained `deep` -> `mid` ->
+-- Measured, not argued: the retired interface-origin fixture chained deep -> `mid` ->
 -- `main` with `mid` doing both, and its golden read `Baton 1 mod:mid` /
 -- `iface:Relay 1 mod:mid`.
 keepTypeOrigins : List (String, String) ->
@@ -5787,7 +5755,7 @@ unqualSection ctx (SecLeft e op) = SecLeft (unqualExpr ctx e) op
 --
 -- ⚠️ AND IT CANNOT COME FROM AMBIENT STATE AT THE CONSUMER.  `typecheck.mdk` holds
 -- no current-module ref, and inventing one would be WRONG rather than merely
--- absent: `registerAllData` runs over `importedCtorTypeDecls` — OTHER modules'
+-- absent: `registerAllData` runs over the imported constructor type declarations — OTHER modules'
 -- declarations — so an ambient id attributes every imported type to the IMPORTER.
 -- That is the exact wrongness class #1219 removed from the flat path.  Identity is
 -- acquired HERE, where the module id is a fact, and travels with the tree.
@@ -5805,18 +5773,18 @@ unqualSection ctx (SecLeft e op) = SecLeft (unqualExpr ctx e) op
 --
 -- ⚠️ #1227 NARROWED THIS: it used to read "FLAT (loader-less) DRIVERS GET NOTHING
 -- HERE" outright.  That is no longer true for the ONE flat call site that has a
--- real module id in hand: `checkProgramSeededSplit` (`types/typecheck.mdk`) already
--- knows its `coreProg0` argument is the prelude — that is the same fact
+-- real module id in hand: the flat driver's prelude half, which already
+-- knows its core program argument is the prelude — that is the same fact
 -- `stampFlatTyOrigins coreProg0 coreProg0` relies on for the OCCURRENCE layer — so
 -- it now also calls `stampDeclOrigins "core" coreProgTy` here (the occurrence-
--- stamped prelude, `coreProg` is the name bound to THIS call's result), stamping
+-- stamped prelude, as returned by that call), stamping
 -- the prelude's OWN `DData`/`DNewtype`/`DTypeAlias`/`DInterface` declarations.
 --
 -- What is still true, and will not stop being true without a loader-derived id:
--- the flat driver's USER half (`userProg0`) has no module id and gets no call to
+-- the flat driver's USER half has no module id and gets no call to
 -- this function.  Every other flat driver (any caller that hands
--- `checkProgramSeededSplit` an empty `coreProg0` because it has already flattened
--- prelude+user together — `checkProgramSeeded`, or an explicit `[]` prelude-free
+-- the flat driver an empty prelude because it has already flattened
+-- prelude+user together, or an explicit `[]` prelude-free
 -- caller) still gets nothing, for the reason the rest of this comment gives: they
 -- have no module id, an invented one is made PERMANENT by the immunity rule, and
 -- `medaka run` on a no-import file reaches both the flat and the graph arm in ONE
@@ -5886,7 +5854,7 @@ fillDeclOrigin _ (o@(OriginModule _)) = o
 --   `Require`      `impl I (T a) requires Eq a`.
 --   `DImpl.iface`  the interface an `impl` is an impl OF.  An `impl` is a USE of
 --                  an interface, not a declaration of one, which is why this is an
---                  occurrence carrier and why `declHeadOf` (the agreement probe)
+--                  occurrence carrier and why the agreement probe
 --                  has no `DImpl` arm.
 --
 -- ⚠️ THREE OF THE FOUR ARE UNREAD.  `implOrigin` IS READ — do not extend the
@@ -5929,7 +5897,7 @@ fillDeclOrigin _ (o@(OriginModule _)) = o
 -- `fIface carrier name origin` returns the origin an interface occurrence should
 -- carry.
 --
--- `carrier` is the AST FIELD NAME the occurrence was read from — one of
+-- carrier is the AST FIELD NAME the occurrence was read from — one of
 -- `"constraintOrigin"` / `"superOrigin"` / `"requireOrigin"` / `"implOrigin"`.  The
 -- stamper ignores it (identity does not depend on which syntactic position spelled
 -- the interface).  It is here for the AGREEMENT PROBE, which uses it to assert on
@@ -6055,7 +6023,7 @@ mapIfaceOccDeclLocal _ (d@(DTypeSig _ _ _ _ | DExtern _ | DFunDef _ _ _ _ _ _ | 
   d
 
 -- The interface peer of `stampHeadWith`/`fillDeclOrigin`: fill in ONLY a
--- still-unresolved origin.  The `carrier` tag is IGNORED here on purpose — which
+-- still-unresolved origin.  The carrier tag is IGNORED here on purpose — which
 -- syntactic position spelled an interface name has no bearing on which module
 -- declared it, and a stamper that behaved differently per position would be a bug.
 -- Only the probe reads the tag.
@@ -6097,7 +6065,7 @@ fillIfaceOccOrigin _ _ _ (o@(OriginModule _)) = o
 -- `tyOriginScope` (two PINNED signatures) and the `go` walk inside
 -- `stampGraphTyOrigins`, for plumbing.
 -- The tag gets the same separation with no signature movement — and it is the same
--- shape `insertIfaceParamKinds`'s `<iface>@<slot>` key already uses in
+-- shape the interface param-kind table's `<iface>@<slot>` key already uses in
 -- `types/typecheck.mdk` for exactly this reason.
 --
 -- `:` cannot occur in a Medaka identifier, so a tagged key can never collide with a
@@ -6160,7 +6128,7 @@ interfaceNamesOf (_ :: rest) = interfaceNamesOf rest
 -- (#837, above) is called from `checkBodyImpl`.
 --
 -- ⚠️ Why a CALL-THROUGH and not decls threaded through the drivers: `medaka build`
--- shells out to a separate `medaka_emitter` process whose pipeline
+-- shells out to a separate emitter process whose pipeline
 -- (`driveModules → runEmitWith → elaborateModules → mangleUnitsEv`) never runs
 -- resolve at all — resolve's resolution pass is DCE'd out of that binary.  Data
 -- threaded from a `check`-path driver cannot reach it, so identity acquired that
@@ -6222,8 +6190,8 @@ stampOneModule coreTypes known mid prog =
 -- `check-policy`/`manifest` (deliberately parked — `--fn <name>` is arbitrary user
 -- input looked up directly in the effect table, so it needs prelude schemes), the
 -- playground buffer, and the probe entries (`typecheck_main`, `check_batch`,
--- `check_match_main`, `origin_agreement_main`, `selfproc_tc_probe`,
--- `check_flat_diags_main`).  Do not trust this sentence over
+-- `check_match_main`, `selfproc_tc_probe`,
+-- and the like).  Do not trust this sentence over
 -- `test/CHECK-WRAPPER-CALLERS.txt`, which is the gated ledger.
 --
 -- 🚨 IT STAMPS ONLY WHAT A DRIVER WITH NO LOADER ACTUALLY KNOWS: builtin heads, and
@@ -6237,7 +6205,7 @@ stampOneModule coreTypes known mid prog =
 -- all.  Contrast the GRAPH path's `tyOriginScope`, which does walk `prog`'s real
 -- imports (`flatMap (importedTypeOrigins known) (usePathsOf prog)`) — that machinery
 -- is exactly what is absent here, which is why flat's claims are a strict subset of
--- graph's.  It matters because `checkProgramSchemesWithRuntime` serves the LSP,
+-- graph's.  It matters because the flat schemes driver serves the LSP,
 -- `check-policy`/`manifest`, and the playground on buffers that may well have
 -- imports (`doc` moved OFF it 2026-08-26 — see the consumer note at the top of
 -- this comment), so what this function leaves unstamped reaches further than
@@ -6262,7 +6230,7 @@ stampOneModule coreTypes known mid prog =
 -- user module.  Its one genuine second module is the prelude, and that IS stamped
 -- (`core`) whenever its boundary is given.  ⚠️ When it is NOT given (`coreDecls =
 -- []` while the caller has flattened the prelude into `prog` — the internal
--- `checkProgramSeeded` discovery passes), the boundary is unknown, so the prelude's
+-- internal discovery passes), the boundary is unknown, so the prelude's
 -- types are left unstamped rather than being claimed by the user's module.
 -- Claiming them instead attributes `Option`/`Result`/
 -- `Ordering` to the user module.
@@ -6392,7 +6360,7 @@ runtimeExternTyOriginScope coreDecls =
 --
 -- The GRAPH drivers need no tap: `elaborateModules` RETURNS the stamped trees, so a
 -- probe reads them straight out of its own call.  The FLAT driver
--- (`checkProgramSeededSplit`) returns SCHEMES, not decl trees, so the trees it
+-- (the schemes entry point) returns SCHEMES, not decl trees, so the trees it
 -- stamped are otherwise unobservable from outside.  Hence this, and only this.
 -- (`Mono.TCon` has carried an origin since #1110 unit D, so the schemes are no
 -- longer origin-free — but they only cover heads reaching a top-level binding's

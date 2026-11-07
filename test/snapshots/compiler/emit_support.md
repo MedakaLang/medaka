@@ -62,7 +62,7 @@ import support.symbol_origin.{SymbolOrigin(..)}
 -- choice.  It answers exactly one question ("is this name bound in the enclosing
 -- local scope?"), which is the #1031 question, and it is asked once per variable
 -- occurrence while the scope grows one frame per `let`.  As a `List` that is
--- O(depth) per occurrence = O(depth²) per body: on the `scoperefs` shape (N
+-- O(depth) per occurrence = O(depth²) per body: on the scoperefs shape (N
 -- sequential lets whose tail references all N names) the `emit` stage measured
 -- 1,457,967 ops at N=1200 with doubling ratios 3.57/3.88 — quadratic, and ABOVE
 -- diff_compiler_ir_scaling.sh's 3.0 threshold.  #1031's fix converted the four
@@ -243,7 +243,7 @@ eagerReachMap binds =
 --
 -- ⚠️ WHY THE PAIR: the old form recomputed the union as
 -- `dedup (dvals ++ unionLookup direct acc)`, which COPIES every callee's reach
--- list and then rebuilds a fresh `seen` tree of that size, once per SCC —
+-- list and then rebuilds a fresh seen tree of that size, once per SCC —
 -- O(|reach| · log |reach|) tree-node ALLOCATIONS per SCC, so O(V² log V) over a
 -- long eager value-global chain (V = the value-global count).  Carrying the set
 -- alongside lets `mergeReach` SHARE the last callee's list as the result's tail
@@ -253,7 +253,7 @@ eagerReachMap binds =
 -- function, netted against the same shape at N=1, N=125/250/500): before
 -- 63.4M → 297.5M → 1371.6M (×4.69, ×4.61); after 3.3M → 7.5M → 17.0M
 -- (×2.31, ×2.26).  `emit` as a whole went ×3.60/×3.98 → ×2.16/×2.15 on the
--- same ladder — that is the `vchain` shape in test/diff_compiler_stage_ir_scaling.sh.
+-- same ladder — that is the vchain shape in test/diff_compiler_stage_ir_scaling.sh.
 --
 -- ⚠️ This does NOT make the reach TABLE sub-quadratic, and cannot: on that chain
 -- Σᵥ|reach(v)| is Θ(V²) by construction, so materializing it as one list per name
@@ -341,13 +341,13 @@ bindEagerReach rm (CBind name [CClause [] _] _ _) =
 bindEagerReach _ _ = []
 
 -- #623: the value-init topo sort must not carry the SAME binding list twice — as
--- `all : List CBind` (scanned linearly by a `findBind` per dep) and as
+-- `all : List CBind` (scanned linearly by a find per dep) and as
 -- `names : List String` (scanned by `contains` per dep).  Both collapse into ONE
 -- name→bind map, shared by both emitters.
 --
 -- ⚠️ Built RIGHT-to-LEFT ON PURPOSE: `omInsert` is last-write-wins, so recursing
 -- first and inserting `b` afterwards makes an EARLIER binding overwrite a later
--- one of the same name — exactly the FIRST-match semantics the linear `findBind`
+-- one of the same name — exactly the FIRST-match semantics the linear find
 -- had.  Its key SET is `map bindName binds`, so `omHasKey n` is the same test as
 -- the old `contains n names`.
 export
@@ -383,7 +383,7 @@ nthArm [] _ = None
 -- (eval.mdk forceMemo/blackholeCell), and docs/spec/WASM-SEMANTICS.md rules that
 -- canonical.  The emitters run a value's initializer before `main` only when doing
 -- so cannot be observed, which is when the initializer is safe to speculate (GHC's
--- `exprOkForSpeculation`): it calls nothing, so it can neither perform an effect,
+-- exprOkForSpeculation): it calls nothing, so it can neither perform an effect,
 -- fail, nor diverge.  `speculationSafe` is that grammar: literals, lambdas, name
 -- references, and constructor, tuple, list, array and record cells built from them.
 -- Every other value global is a taint source and is LAZY.

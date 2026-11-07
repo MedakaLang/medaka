@@ -734,7 +734,7 @@ ctorTailSelfIdx ex = match flattenApp ex []
 -- the cons-target is the single dispatcher `scan`, NOT the leaf itself, so the
 -- self-recursive analysis above never fires across the dispatch boundary.  A "TMC
 -- group" is a set of functions tail-connected under an EXTERNAL-ENTRY root `R`
--- (`scan`, the layout family's `layout`), where every tail leaf is either
+-- (`scan`, the layout family's entry), where every tail leaf is either
 --   (1) a base case (no call to a group member), or
 --   (2) a SPINE cons — a peeled chain of 1..N member-free heads bottoming in a
 --       saturated call to ANY group member (the overflow site), or
@@ -1114,7 +1114,7 @@ dispEntryRefs memberSet innerSet (name, heads) =
   else
     anyList (h => omHasKey h innerSet) heads
 
--- transitive closure of `work` over the top-level referenced-heads graph, capped
+-- transitive closure of the work set over the top-level referenced-heads graph, capped
 -- (the caller treats a past-cap closure as un-provable and rejects the group).
 dispBfs : OrdMap (List String) -> List String -> List String -> List String
 dispBfs _ [] visited = visited
@@ -1267,7 +1267,7 @@ allCallHeadsStmt _ _ = []
 dispFieldExpr : CField -> CExpr
 dispFieldExpr (CField _ _ e) = e
 
--- grow the group.  The worklist is a two-list FIFO queue (`front`/`back`, back held
+-- grow the group.  The worklist is a two-list FIFO queue (front/back, back held
 -- reversed) and the accepted-member list is built by PREPEND (`accRev`, reversed once
 -- at the end) with `accSet` as its membership index — #1029.  All three replace the
 -- old `rest ++ toAdd` / `acc ++ toAdd` / `contains n acc` trio, which made every
@@ -1276,7 +1276,7 @@ dispFieldExpr (CField _ _ e) = e
 -- order exactly as `dedup (filterList …)` did.
 -- For each member, every tail leaf must be (1) base, (2) a peeled spine cons bottoming
 -- in a saturated group-fn call, or (3) a saturated tail-call to a group fn (NEW group
--- members are enqueued).  Any other tail leaf shape ⇒ reject (None).  `fuel` via the
+-- members are enqueued).  Any other tail leaf shape ⇒ reject (None).  Termination is via the
 -- worklist (finite # fns).
 -- `parents` records, per added member, WHICH member pulled it in (the BFS tree); it
 -- exists only so a v7 bail can mark the whole discovery path doomed.  Returns the
@@ -1320,7 +1320,7 @@ dispGrow cf isFn fa bindIx fnSet claimed root (m :: rest) back accRev accSet par
     Some (CBind _ clauses _ _) =>
       -- a non-root member must be non-dict (it is emitted via the normal clause
       -- machinery with redirected leaves); it MAY have literal- or ctor-pattern
-      -- clauses (singleOp dispatch on a Char, `layout` dispatch on the RawTok
+      -- clauses (singleOp dispatch on a Char, layout dispatch on the RawTok
       -- head) — the clause-chain emit handles them and the context redirect
       -- reaches each arm's leaves.
       if not (dispNonDict clauses) then

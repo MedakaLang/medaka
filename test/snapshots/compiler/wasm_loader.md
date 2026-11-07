@@ -41,7 +41,7 @@ urlPathChar c
   | isUrlSafe (charCode c) = charToStr c
   | otherwise = "%" ++ escOneHex2 (charCode c)
 
--- Letters, digits and the marks `encodeURIComponent` leaves alone, plus `/`.
+-- Letters, digits and the marks encodeURIComponent leaves alone, plus `/`.
 isUrlSafe : Int -> Bool
 isUrlSafe n =
   n >= 48 && n <= 57

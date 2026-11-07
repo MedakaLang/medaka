@@ -14,7 +14,7 @@ stages=DESUGAR,MARK
 -- target program, mirroring the reference's `[Prelude.program; prog]`.  The
 -- bottom-up traversal engine is reused from desugar (mapProg).
 --
--- Validated by the `parse_fixtures` family's `mark` stage (test/diff_compiler_snapshot_frontend_test.mdk).
+-- Validated by the parse_fixtures family's `mark` stage (test/diff_compiler_snapshot_frontend_test.mdk).
 -- NOTE: the prelude-shadowing logic (Phase 78a/78b) is not yet ported — it is
 -- added incrementally for the corpus files that shadow prelude names.
 
@@ -320,8 +320,8 @@ collectVars (EIf c t el) = collectVars c ++ collectVars t ++ collectVars el
 collectVars (EBinOp _ a b _) = collectVars a ++ collectVars b
 collectVars (EUnOp _ a _) = collectVars a
 -- The operator name IS a reference: a backtick infix `a `divide` b` names the
--- plain top-level function `divide` (marker leaves it EInfix when `divide` is
--- neither a method nor a constrained fn), so DCE must see `divide` as reachable
+-- plain top-level function divide (marker leaves it EInfix when divide is
+-- neither a method nor a constrained fn), so DCE must see divide as reachable
 -- or it drops the def and the emitter hits `unbound variable 'divide'`. Built-in
 -- operator symbols (`+`/`==`) never name a DFunDef, so adding them is inert.
 collectVars (EInfix op a b) = op :: collectVars a ++ collectVars b

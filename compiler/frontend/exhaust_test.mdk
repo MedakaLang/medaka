@@ -1,5 +1,5 @@
 {- | Guard exhaustiveness over `test/exhaust_fixtures`, calling the stage
-   in-process. Replaces the `exhaust_main` probe row of
+   in-process. Replaces the exhaust probe row of
    `test/diff_compiler_fmt_test.mdk`.
 
    Runs on the RAW parse (no desugar, before `EGuards` is lowered). Each

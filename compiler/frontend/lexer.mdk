@@ -80,7 +80,7 @@ tokenizeWithOffsetPairs s =
   (toks, pairs)
 
 -- Convert a 0-based char offset into `s` to a (1-based line, 0-based column)
--- pair, mirroring the OCaml `pos_lnum` / `pos_cnum - pos_bol` reported by the
+-- pair, mirroring the OCaml pos_lnum / pos_cnum - pos_bol reported by the
 -- parse-error oracle.  Reuses `posLineColFrom` (the comment side-channel's
 -- offset→line/col walk).  Used by `parseResult` to locate a structured error.
 export
@@ -90,7 +90,7 @@ offsetToLineCol s off = posLineColFrom (stringToChars s) off 0 1 0
 -- Convert a list of char offsets (in non-decreasing-ish source order — the
 -- synthetic tail tokens all share the EOF offset, which is monotone) to 1-based
 -- source lines in a single left-to-right walk over the source, mirroring
--- `posToLineCol`'s amortized-linear strategy for comments.
+-- `posLineColFrom`'s amortized-linear strategy for comments.
 export
 offsetsToLines : Array Char -> List Int -> List Int
 offsetsToLines src offs = offsetsToLinesGo src offs 0 1
@@ -123,9 +123,9 @@ advanceLine src target p0 line0 = go p0 line0
 -- comment carries its 1-based start line, 0-based start column, and full
 -- lexeme text (the `--…` / `{- … -}`, delimiters included).  Surfaced in
 -- SOURCE ORDER.
--- `format_program`/the comment-preserving printer consume this
+-- `formatProgram`/the comment-preserving printer consume this
 -- list keyed by position; the parser is unaffected (the layout pass skips
--- comment markers — see `layout`).
+-- comment markers — see `layoutWith`).
 export data Comment = Comment Int Int String
 
 export
@@ -143,7 +143,7 @@ commentText (Comment _ _ t) = t
 -- Convert a source char offset to (1-based line, 0-based column) by scanning
 -- the preceding characters.  `lineStart` is the offset of the current line's
 -- first char; `line` its 1-based number.  O(pos) per call, but only invoked
--- once per comment in a single left-to-right walk (see `posToLineCol`).
+-- once per comment in a single left-to-right walk.
 posLineColFrom : Array Char -> Int -> Int -> Int -> Int -> (Int, Int)
 -- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds); inlined hot path (hot-list).
 -- lint-disable-next-line rule-threaded-invariant

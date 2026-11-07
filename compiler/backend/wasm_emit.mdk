@@ -1140,7 +1140,7 @@ fnParamCountW prog n =
 -- canonRef + the LLVM emitter's canonFnName.  Mangling renames prelude defs to
 -- `core__<name>` AND rewrites the uses it can see; under the old mangle-first order it
 -- ran before the passes that SYNTHESIZE bare prelude references (notably string-interp
--- `\{e}` → `debug`/`debugStringLit`/`displayListItems`, and `/=` → `not`), so such a
+-- `\{e}` → `debug`/`debugStringLit` and the list-item display helper, and `/=` → `not`), so such a
 -- bare ref did not match its `core__`-mangled def by string equality.  The repair: if
 -- the bare name isn't a defined fn but its `core__` form is, use the mangled name.
 -- Since #2809 the emit drivers elaborate FIRST and mangle after, so those synthesized
@@ -1329,7 +1329,7 @@ isLazyGlobalW prog x = omHasKey x (indexLazyGlobalsW (progIndex prog))
 -- A1 (poly-`Num`-on-Float): the pattern-var names bound at the CURRENT function's
 -- POLYMORPHIC `Num`/`Ord` param positions — a param whose declared type head is a type
 -- VARIABLE (lowercase-initial) used arithmetically, OR (no declared sig) any param used
--- arithmetically.  The wasm peer of native's `isNumPolyParam`/LTNum seed.  A binop with
+-- arithmetically.  The wasm peer of native's LTNum seed.  A binop with
 -- such an operand routes to the runtime value-dispatch helper instead of the trapping
 -- inline int primitive; the static Int/Float fast paths (declared `Int`/`Float`, literals,
 -- structural Float) are unchanged.  Seeded (and reset to []) per fn in emitRefFnBind.
@@ -1649,7 +1649,7 @@ hoistConstW prog ty initBody =
       [globalW prog "global.get" g]
 
 -- the hoisted globals, in emission order.  Drained by emitRefProgram AFTER every body
--- has been emitted (the same after-body discipline `dataSegs` / `trapImport` use), so
+-- has been emitted (the same after-body discipline the data segments and trap import use), so
 -- this must be bound late even though the lines are placed with the other globals.
 wConstClosGlobalLines : WasmEmit -> List String
 wConstClosGlobalLines emit =
@@ -2222,7 +2222,7 @@ emitRefProgram prog plan groups =
   let imports = plannedImportLines physical.imports
   let valNames = progValNames prog
   -- Stage-2/3 (b′) WASMGC-TRMC: the plan's dispatch-graph TMC groups (the lexer's
-  -- `scan` token spine, the offside-rule `layout` family, `intersperse`), installed
+  -- `scan` token spine, the offside-rule layout family, `intersperse`), installed
   -- BEFORE emitting fns, so emitRefFnBind can route a group member to the
   -- dest-passing reset-wrapper + inner-loop emit.
   let dispGroups = plan.dispGroups
@@ -2280,7 +2280,7 @@ emitRefProgram prog plan groups =
   let dataSegs = emitDataSegs (progEmit prog)
   -- S-4: the capture-free closure globals (wConstClos), accumulated during fn / impl /
   -- default / init body emission.  Bound HERE, after every body-emit binding above, for
-  -- the same reason `trapImport` and `dataSegs` are; their LINES are placed with the
+  -- the same reason the trap import and data segments are; their LINES are placed with the
   -- other globals below, which the text format permits independently of binding order.
   let constClosGlobals = wConstClosGlobalLines (progEmit prog)
   -- the `$trapmsg_K` helpers, bound last of all: every coded trap they hold was
@@ -2940,7 +2940,7 @@ emitRefFnBind outer (CBind name clauses bindLoc _) =
       clauseParamNames clauses arity
   -- Stage-2/3 (b′): a member of a detected dispatch-TMC group emits via the dest-passing
   -- reset-wrapper (root) / inner-loop or redirected-leaf member path.  The group takes
-  -- PRECEDENCE over Stage-1: a group root like the lexer's `layout` is Stage-1-eligible
+  -- PRECEDENCE over Stage-1: a group root like the lexer's layout is Stage-1-eligible
   -- for its SELF-cons arm, but only the group transform linearizes the cross-member
   -- edges (`layout ↔ flushCloseGo ↔ …`) — and a Stage-1-emitted member inside a group
   -- would return its own locally-built spine instead of closing the group's shared dest
@@ -3504,7 +3504,7 @@ needsClosWrapper prog name =
     && omHasKey name (indexFnsUsedAsValuesW (progIndex prog))
 
 -- the closure wrapper for a top-level fn: `$mdk_w_<name>` is a $codety that unpacks
--- the args array and calls $name; `$name__clos` is built by `mkFnClos` at each value
+-- the args array and calls $name; `$name__clos` is built at each value
 -- ref.  Here we emit only the wrapper CODE function; the $clos struct is built inline
 -- at the value-reference site (emitVarRef) so partial application threads its arity.
 emitFnClosWrapper : Prog -> String -> Int -> List String
@@ -6392,7 +6392,7 @@ emitLeafExternRef prog env d name0 args0 = go name0 args0
     go "fetchText" _ = gapLP prog "wasm: fetchText takes exactly one argument"
     -- ioPoll: no wasm host binds descriptor readiness, so a call stops with a coded
     -- runtime error.  It traps at run time, not at build time, because the async
-    -- scheduler (`systemPoller`) names ioPoll and calls it only when a task waits on
+    -- scheduler's poller names ioPoll and calls it only when a task waits on
     -- a descriptor; a clock-only async program must still build.  The arguments are
     -- evaluated left to right first, as native evaluates them.
     go "ioPoll" [fds, interests, timeout] =
@@ -7977,7 +7977,7 @@ emitWasmTrmcCore prog funcSym self lblRoot arity clauses ctorSet =
 --
 -- Fix (emitter-only, reuses Stage-1's cons-cell + dest mechanism): identify a "TMC
 -- group" = a set of functions tail-connected under an EXTERNAL-ENTRY root `R`
--- (`scan`, the layout family's `layout`), where every tail leaf is either
+-- (`scan`, the layout family's entry), where every tail leaf is either
 --   (1) a base case (no call to a group member), or
 --   (2) a SPINE cons — a peeled chain of 1..N member-free heads bottoming in a
 --       saturated call to ANY group member (the overflow site), or
@@ -8949,7 +8949,7 @@ emitSelfRecLocalBind prog env x bid pats body =
   useSiteRebuilds prog gid groupCaps [bind]
 
 -- A let-group: its members, then `body` emitted by `emitBody` with every member
--- bound (`emitLetWith`'s contract).
+-- bound (the let-group contract).
 emitLetGroupWith : Prog ->
   Env ->
   Int ->
@@ -10437,7 +10437,7 @@ collectArmLocals (CArmAlt pat guards _) =
 
 collectGuardLocals : CGuard -> List String
 collectGuardLocals (CGBool g) = collectExprLocals g
--- #379: `guardStashLocal` is the slot emitGuardChainRef evaluates the RHS into before
+-- #379: the guard stash local is the slot emitGuardChainRef evaluates the RHS into before
 -- refutably matching `p` against it — declared here so it rides the normal body-local
 -- path (dedupKeep collapses the repeats when a function has several such guards).
 collectGuardLocals (CGBind p e) = patBinders p ++ collectExprLocals e
@@ -10449,11 +10449,11 @@ collectGuardLocals (CGBind p e) = patBinders p ++ collectExprLocals e
 -- i64 signed (i64.div_s/i64.rem_s) — matching native's truncated-toward-zero div and
 -- sign-of-dividend rem (medaka_rt.c).
 --
--- (The i32 peer `wasmBinOp` was removed with #305: its last two callers were the
--- ordering arms of emitValueCmpRef/emitValueCmpNumRef, which compared a 3-way
--- -1/0/1 against 0 — the derivation that could not express NaN's unorderedness.
--- Those now call the per-op IEEE $mdk_value_lt/le/gt/ge(_num) instead, and every
--- surviving caller was already on wasmBinOp64.)
+-- Why there is no i32 peer: the ordering arms of emitValueCmpRef and
+-- emitValueCmpNumRef cannot compare a 3-way -1/0/1 against 0, because that
+-- derivation cannot express NaN's unorderedness.  They call the per-op IEEE
+-- $mdk_value_lt/le/gt/ge(_num) instead, so every surviving caller is on
+-- wasmBinOp64.
 wasmBinOp64 : WasmEmit -> String -> String
 wasmBinOp64 _ "+" = "i64.add"
 wasmBinOp64 _ "-" = "i64.sub"

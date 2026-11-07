@@ -476,11 +476,11 @@ siteFtBody e site body = match siteFtLabel e site
 
 -- ── TRMC (tail-recursion-modulo-cons) context (PLAN #56, TRMC-DESIGN.md) ─────
 -- When a top-level NON-DICT self-recursive define is `trmcEligible` — its tail
--- leaves are `head :: self-call` cons-tails (`upto`/`replicate`/`myMap`) — it is
+-- leaves are `head :: self-call` cons-tails (`upto`/`replicate`/a list `map`) — it is
 -- emitted in destination-passing form: an O(1)-stack loop with a MUTABLE
 -- destination slot (`%trmc_dest`, an `alloca ptr` holding the address of the i64
 -- to fill next).  A cons leaf allocates the cell, links it into `*dest`, advances
--- `dest` to the cell's tail slot, recomputes the recursion args into the param
+-- the destination pointer to the cell's tail slot, recomputes the recursion args into the param
 -- slots, and branches back to the loop head; a base leaf stores its value into
 -- `*dest` and branches to the exit, which loads `%trmc_hole` (the final list head)
 -- and rets.  The self-call is NEVER emitted as a `call` — only its arg
@@ -677,7 +677,7 @@ gapStr e reason = match e.gapMode
 -- recovered (the runtime-dispatched @mdk_append fallback below).  Its VALUE is
 -- always correct (mdk_append inspects the cell header: String → string append,
 -- list → list append), but its static kind is genuinely unknown — it may be a
--- String (the dominant `scanTriple`/`splitLines` string-builder case) OR a list
+-- String (the dominant `splitLines`-style string-builder case) OR a list
 -- (e.g. typecheck.mdk's `freeEffvars a ++ rowFreeEffvars r ++ freeEffvars b`,
 -- `List Int`).  Crucially it must NOT be treated as a guaranteed String: a
 -- CHAINED `++` over an LTUnknown left operand re-routes through @mdk_append
@@ -760,7 +760,7 @@ data LTy =
 -- runtime `RDict`/`RDictFwd` site switches over by the dict's head tag.  The
 -- NINTH ref (arg-position dispatch) is the CTOR→TYPE map (read out of
 -- `CProgram`'s 3rd field): a method dispatched on its argument's runtime tag
--- (`eq`/`compare`/`show`) lowers to a bare `CVar` applied to args; the call site
+-- (eq, compare, show) lowers to a bare `CVar` applied to args; the call site
 -- loads the discriminating argument's constructor tag and selects the impl whose
 -- TYPE owns that constructor — this map turns the loaded ctor tag into its type.
 -- The TENTH ref (top-level value/`Ref` globals) is the GLOBALS
@@ -863,7 +863,7 @@ data Emit = Emit {
   trmc : TrmcVerdicts,
   methodResults : OrdMap (OrdMap MethodResultFact),
   -- the scope every lifted name minted right now is attributed to, and the value
-  -- the `; mdk-module` marker carries: a module id (`frontend_lexer`), an impl
+  -- the `; mdk-module` marker carries: a module id (frontend_lexer), an impl
   -- group's own key (`impl:List_eq`), or `program`.
   curModule : Ref String,
   -- one gensym counter PER scope, keyed by `curModule`'s word.
@@ -985,13 +985,13 @@ data FnSig = FnSig (List LTy) LTy
 --     `@mdk_methval_*`, …).  A scope is an emitting MODULE id, an impl group's
 --     own key, or `program` (`setScope*` below).  Uniqueness comes from the
 --     (scope, N) PAIR, which is why every minted name carries both;
---     `mangleScoped` is the one place that spelling lives and all 20 mint sites
+--     `LGeneratedName` is the one place that spelling lives and all 20 mint sites
 --     call it.  Each scope's counter starts at `e.counter0` and counts up within
 --     the scope; it is never reset within one emission.
 --
 --     THE PARSE RULE, and why the separator is `.`: a minted name is
 --     `<family>[_<subject>] "." <scope> "." <N>`.  Both `<family>_<subject>` and
---     `<scope>` contain `_` freely (`mdk_eta_core__fst`, `frontend_lexer`), so an
+--     `<scope>` contain `_` freely (`mdk_eta_core__fst`, frontend_lexer), so an
 --     `_` separator would not be injective — `mdk_eta_a_b_c_1` could split three
 --     ways.  `.` is legal in an unquoted LLVM identifier and is OUTSIDE the
 --     mangled alphabet: `private_mangle.safeChar` admits only `[A-Za-z0-9_]`, so
@@ -1007,7 +1007,7 @@ data FnSig = FnSig (List LTy) LTy
 --
 -- Reset by `beginDefine` at the top of every `define`; saved+restored by
 -- `endDefine` around the side-buffer swap that emits a lifted define INSIDE
--- another define's emission (see `defineScope` below).
+-- another define's emission (see `DefScope`).
 --
 -- #2726: scoping `freshId` per module is what makes a one-module source edit a
 -- one-module text edit.  With ONE never-reset counter, adding a lambda to
@@ -1361,7 +1361,7 @@ isCtor e name = isSome (declaredCtorArity e.constructorFacts name)
 
 -- ── impl table ────────────────────────────────────────────────────
 -- the program's CImplEntry list (set once in emitProgram).  A CMethod site reads
--- it two ways: `implFor` resolves an RKey-narrowed route to the ONE concrete impl
+-- it two ways: `implForSite` resolves an RKey-narrowed route to the ONE concrete impl
 -- it names (a direct call to that impl's lifted fn); `implsOf` returns every
 -- tagged impl of a method (the candidates a call site's route narrows).
 -- ── impl INDEX by method name (perf #990 — the LLVM twin of #382/#985's wasm scan) ─
@@ -1377,7 +1377,7 @@ isCtor e name = isSome (declaredCtorArity e.constructorFacts name)
 -- unchanged (fixpoint C3a/C3b).  `installImplIndex` builds it once in
 -- `buildEmitState`, the ONE `Emit` construction path shared by emitProgram and
 -- emitProgramGaps.  There is no fall-back scan of the full entry list: a second
--- path would have to agree with the index.  Mirrors wasm_emit's `implsByMethodW`.
+-- path would have to agree with the index.  Mirrors the wasm emitter's per-method impl index.
 
 -- the interface method an impl entry implements (field 0).
 implEntryMethodOf : CImplEntry -> String
@@ -1420,7 +1420,7 @@ methodEntries e method = match !e.implsByMethod
 -- same iface — e.g. one impl reachable via >1 re-export path), which
 -- `filterTagged` alone does not collapse; every duplicate is one more candidate
 -- for `implForSite`'s scan of this list. Dedup
--- mirrors `ifaceTags`'s `dedupS` (reverse, keeps-FIRST dedup, reverse — so
+-- mirrors the interface-tag dedup (reverse, keeps-FIRST dedup, reverse — so
 -- the SURVIVING occurrence is the LAST one in program order, same contract).
 implsOf : Emit -> String -> List CImplEntry
 implsOf e method =
@@ -3403,7 +3403,7 @@ emitBitExtern e env name0 args = go name0
     go name = gapE e ("unsupported bit extern " ++ name)
 
 -- Fixed-width integer conversions (PURE).  A `U8`/`U16`/`U32` is Int's tagged
--- word, so `uNToInt` is the identity on it, and `uNTruncate` keeps the low `n`
+-- word, so the ToInt externs are the identity on it, and the Truncate externs keep the low `n`
 -- bits of the payload with one `and` on the TAGGED word: the mask shifted over
 -- the tag bit, tag bit kept (`(2^n - 1) << 1 | 1`), which is exact for a
 -- negative payload too.  An `I32` is the same word held sign-extended:
@@ -4637,7 +4637,7 @@ emitDebugLitExtern e _ name _ = gapE e ("unsupported debug-lit extern " ++ name)
 -- The extern catalog (`backend.extern_catalog`) names, per runtime extern, the
 -- family whose emitter lowers it; `externEmitter` maps each family to that
 -- emitter, so selection is one keyed lookup plus one `case`.  The per-name
--- clause bodies inside `emitXExtern` stay where they are.  `isAnyExtern` and
+-- clause bodies inside the per-family emitters stay where they are.  `isAnyExtern` and
 -- `emitExternApplied` both read the catalog, so they cannot disagree about what
 -- counts as an extern.
 type ExternEmitter = Emit -> OrdMap (String, LTy) -> String -> List CExpr -> (String, LTy)
@@ -7391,7 +7391,7 @@ emitMethod e env name _ _ (RLocal sym dicts) _implRoutes _methRoutes argOps mode
 -- method name.  Emit a DIRECT call to that standalone top-level fn (`mdk_<target>`),
 -- exactly as emitApp's isKnownFn branch would for a plain call — no dispatch, no
 -- dicts.  P0-18: `target` is the symbol the route CARRIES, and the `EMethodAt` beside
--- it keeps the BARE dispatch name so `implFor` still finds the impl for a receiver
+-- it keeps the BARE dispatch name so `implForSite` still finds the impl for a receiver
 -- that has one.  Since #2809 the route names its symbol on EVERY path: typecheck seeds
 -- a definer-shadow occurrence with the bare standalone name, and `private_mangle`'s
 -- `mangleRoute` renames it on the emit path — so `target` reads `<mid>__name` in an
@@ -7672,7 +7672,7 @@ emitArityCall e sym argOps arity resTy =
   emitCallMode e sym argOps (callModeFor (Some arity) (lengthS argOps)) resTy
 
 -- OVER-APPLICATION: a known fn of arity N applied to >N args (`makeAdder 10 5` —
--- `makeAdder` returns a closure that consumes the extra arg).  Saturate the direct
+-- makeAdder returns a closure that consumes the extra arg).  Saturate the direct
 -- call with the FIRST N args, then apply the residual VALUE (a closure) to each
 -- remaining arg through an indirect call (the same load-code_ptr / call-(closure,
 -- arg) shape as emitIndirect).
@@ -8087,7 +8087,7 @@ emitHalfProgram = 2
 -- most of its compile time.  The two halves of a prelude-object build call each
 -- other's symbols, so their defines keep external linkage.  A text partitioner
 -- that splits a whole-mode module (`test/lib/pcg_partition.sh`) must promote
--- these to `hidden`, as it does `internal` globals.
+-- these to hidden visibility, as it does `internal` globals.
 defineHead : Emit -> String
 defineHead e =
   if e.input.emitHalf == emitHalfWhole then "define internal" else "define"
@@ -8902,7 +8902,7 @@ groupClauses (ImplGroup _ _ _ _ _ _ clauses _) = clauses
 
 -- #1818: the arity resolved for this group's `define` — the single
 -- number every F10 call site should consult rather than re-derive.  See
--- `armArityOfEntry` below, the one caller that must not recompute it.
+-- Callers read this field and never recompute it.
 groupArity : ImplGroup -> Int
 groupArity (ImplGroup _ _ _ _ _ arity _ _) = arity
 
@@ -9154,7 +9154,7 @@ data ImplGroup =
 
 -- #2726: the gensym scope of an impl group — its OWN emitted symbol, prefixed so
 -- the marker reads as what it is (`impl:List_eq`) and can never be confused with
--- a module id.  `scopeWordOf` maps the `:` out again for the LLVM name form.
+-- a module id.  The LLVM name form uses `.` in place of the `:`.
 implGroupScope : ImplGroup -> String
 implGroupScope (ImplGroup method _ key _ _ _ _ _) =
   "impl.\{encodeComponent key}.\{encodeComponent method}"
@@ -9530,7 +9530,7 @@ ftClause "" c = c
 ftClause lbl (pats, body) = (pats, labelFallthrough body lbl)
 
 -- the next clause's entry label: the outer fallthrough when this is the last
--- clause, else a fresh `clauseN` block label.
+-- clause, else a fresh clause block label.
 chainNextLabel : Emit -> List (List Pat, CExpr) -> String -> String
 chainNextLabel _ [] outer = outer
 chainNextLabel e _ _ = "clause" ++ intToString (freshLocal e)
@@ -9620,8 +9620,8 @@ firstClausePats [] = []
 -- code_ptr, captured… }` and the slice-3 ADT header — NOT code_ptr-at-offset-0.
 -- This lets the closure cell reuse `emitCtorAlloc`/`storeFields`/`loadField`
 -- VERBATIM: it is allocated exactly like a constructor whose "fields" are
--- `[code_ptr, capt0, capt1, …]`, so `code_ptr` is field 0 and capture i is field
--- i+1.  The CALLING CONVENTION (§8.5): load `code_ptr`, then call passing the
+-- `[code_ptr, capt0, capt1, …]`, so code_ptr is field 0 and capture i is field
+-- i+1.  The CALLING CONVENTION (§8.5): load code_ptr, then call passing the
 -- closure pointer as a LEADING argument (`@mdk_lamN(i64 %clos, i64 %arg0, …)`).
 --
 -- Each CLam is LAMBDA-LIFTED to a top-level `define @mdk_lamN` (LLVM has no nested
@@ -9636,7 +9636,7 @@ firstClausePats [] = []
 -- allocate a closure cell {arity, code_ptr, captured…}.  Field 0 is the closure's
 -- callable ARITY (the value-arg count of its lifted `@mdk_lamN` define, i.e. the
 -- args AFTER the leading `%clos` word) — the runtime reads it (mdk_apply) to decide
--- exact / partial / over application.  `code_ptr` is a constant-expression operand
+-- exact / partial / over application.  code_ptr is a constant-expression operand
 -- (`ptrtoint (ptr @mdk_lamN to i64)`).  The arity MUST equal the emitted define's
 -- param count (the E22 hazard): an inline exact call trusts field 0, so a mismatch
 -- would divert a saturated call to the PAP path.  Result is the cell pointer word,
@@ -9716,7 +9716,7 @@ emitConstClosure e lamName arity =
 -- emit a CLam: compute its captured set, lift its body to a top-level define, and
 -- allocate the closure cell capturing the live operand words.
 -- E2b — a CLam whose params are NOT all plain `PVar` (a tuple/constructor
--- destructuring lambda) routes through `emitLamPatDefine`: the SAME lifted-frame
+-- destructuring lambda) routes through `emitLamPat`: the SAME lifted-frame
 -- machinery as `emitLamGo`, but the patterned params are bound by a single-clause
 -- decision tree (`emitClauseTree`) over the `%argK` words instead of a verbatim
 -- `paramEnv`.  Capture computation is identical — `patBinders` already collects
@@ -10241,7 +10241,7 @@ loadCaptures e env xs0 i0 = go xs0 i0
 -- (the uniform-i64 default), so non-float captures are unaffected → zero
 -- regression surface.
 -- Fixes the closure-float-capture arith soundness bug (`map (x => x * scale)`
--- with a captured float `scale`, `(z => z + k)` etc., which previously did
+-- with a captured float named scale, `(z => z + k)` etc., which previously did
 -- INTEGER arith on boxed-float pointers → garbage).
 capTypeOf : OrdMap (String, LTy) -> String -> LTy
 capTypeOf env c = match omLookup c env
@@ -11964,7 +11964,7 @@ clausePairs ((CClause pats body) :: rest) = (pats, body) :: clausePairs rest
 -- ORDINARY param dispatch (single-clause: CIf-tail descent; multi-clause: the
 -- decision-tree clause chain) whose LEAVES are redirected via `e.trmcCtx`:
 --   • cons leaf:  alloc Cons cell, store head, link cell into `*dest`, advance
---                 `dest` to the cell's tail slot (+16), recompute the recursion
+--                 the destination pointer to the cell's tail slot (+16), recompute the recursion
 --                 args into the param slots, br loop.
 --   • base leaf:  store the value into `*dest`, br exit.
 -- exit loads the hole (the final list head) and rets it.  destSlot holds the
@@ -12377,7 +12377,7 @@ emitTrmcBase e env ex destSlot exitL =
 -- Dispatch-graph (b′) TMC — the LLVM group emit (TMC-parity arc, TRMC-DESIGN
 -- §Phase 3).  The shared detection (backend/trmc_analysis.mdk) finds a family of
 -- mutually tail-calling fns rooted at ONE external entry (the lexer's `scan`
--- token spine, the offside-rule `layout` family), whose spine conses bottom in
+-- token spine, the offside-rule layout family), whose spine conses bottom in
 -- saturated member calls.  The WasmGC emit keeps members as separate funcs and
 -- loops via `return_call` + per-group dest GLOBALS; LLVM has no `return_call`
 -- and `musttail` demands caller/callee prototype equality — but the detection's
@@ -13685,8 +13685,8 @@ valBinds (b :: rest) = if isFnBind b then valBinds rest else b :: valBinds rest
 -- other solely through their closures (`stmtsLoop = orElse stmtsCons (pure [])` ←
 -- eager; `stmtsCons = do … stmtsLoop` ← back-ref inside a `do` closure, lazy).
 
--- #623: `findBind` (linear scan of `all`) and `intersectStr` (`contains` per
--- element against `names`) were the only two consumers of the topo sort's two
+-- #623: the linear scan of `all` and the `contains` per
+-- element against `names` were the only two consumers of the topo sort's two
 -- `List` views of the same bindings.  `bindNameMap` + `omHasKey`/`omLookup`
 -- replace both, so they are gone.
 
@@ -15073,7 +15073,7 @@ emitLazyForcesGo : Emit -> List CBind -> Unit
 emitLazyForcesGo _ [] = ()
 emitLazyForcesGo e ((CBind name [CClause [] body] site _) :: rest) =
   -- an ordinary forcer is its bind's module; the synthesized `$memo_<Tag>_<m>`
-  -- cells carry no `__` and fall to `program` through `moduleIdOf`.
+  -- cells carry no `__` and fall to `program` through the module-id lookup.
   setScopeOfBind e name
   setSymOrigin e name site
   emitForceFn e name body

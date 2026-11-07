@@ -319,10 +319,10 @@ describeToken (TLexError s) = renderParseProblem s
 -- ── Raw scanner output ──────────────────────────────────────────────────
 -- The scanner produces real tokens interleaved with `RNewline col` markers
 -- (one per significant source line break, carrying the indentation of the
--- following line). A second `layout` pass turns those markers into
--- INDENT/DEDENT/NEWLINE per the OCaml `handle_indent` algorithm.
--- `RComment startPos endPos` carries a captured comment out-of-band: `startPos`
--- is the source char offset of the opening `--`/`{-`, `endPos` one past its last
+-- following line). A second layout pass turns those markers into
+-- INDENT/DEDENT/NEWLINE per the OCaml reference's indent-handling algorithm.
+-- `RComment startPos endPos` carries a captured comment out-of-band: startPos
+-- is the source char offset of the opening `--`/`{-`, endPos one past its last
 -- char, so the lexeme is `[startPos, endPos)` (delimiters included).  The text
 -- is materialised only by `rawToComments`; `tokenize` never builds it.  These
 -- markers are produced by the comment arms of `scanAt` and
@@ -330,15 +330,15 @@ describeToken (TLexError s) = renderParseProblem s
 -- parser consumes is byte-identical to before — comments are purely a side
 -- channel.  `collectComments` re-reads the raw stream to surface them.
 -- `RTok tok startOff endOff` carries the source char offsets of the token's
--- lexeme: `startOff` is the first char (0-based), `endOff` is one past the last
+-- lexeme: startOff is the first char (0-based), endOff is one past the last
 -- char (= the next scan position), so `end - start = token length in chars`.
 -- `tokenize` discards both offsets (token stream byte-identical). `tokenizeWithLines`
--- uses only `startOff` (to derive a 1-based line).
+-- uses only startOff (to derive a 1-based line).
 -- `RNewline col off` carries the offset of the newline char that ended
 -- the preceding line, so synthetic NEWLINE/INDENT/DEDENT tokens inserted by the
 -- layout pass get a source line too.
 -- `RClauseNl col off` is an `RNewline` that `externClauseBreaks` found before an
--- extern's second or later `bind` clause line.  `RClauseOpen col off base` is
+-- extern's second or later bind clause line.  `RClauseOpen col off base` is
 -- the one before its first: it also closes every layout context deeper than
 -- `base`, the column of the extern's own line.
 public export data RawTok =

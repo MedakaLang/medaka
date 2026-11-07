@@ -92,7 +92,7 @@ import backend.trmc_analysis.{
 -- `env` host imports its externs' wasm lowerings call (`wasmHostKeys`), sorted
 -- and distinct; the wasm emitter declares exactly these imports.  `jsImports` are
 -- the user externs with a `js` binding that the program reaches, one each, in
--- Medaka-name order; the wasm emitter imports exactly these from `jsffi`.  All
+-- Medaka-name order; the wasm emitter imports exactly these from the jsffi module.  All
 -- three are empty on an LLVM plan.
 import types.capability_manifest.{ManifestRequest, CapabilityManifest}
 
