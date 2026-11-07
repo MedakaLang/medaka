@@ -1,5 +1,5 @@
 # META
-source_lines=267
+source_lines=239
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rules rule-comment-history, rule-comment-ruling, rule-comment-tombstone, rule-comment-emoji, rule-comment-draft, rule-comment-deictic, rule-comment-dead-path, rule-comment-shout: comment lines in a register that goes stale.
@@ -7,21 +7,20 @@ stages=DESUGAR,MARK
 import frontend.ast.{Loc(..)}
 import driver.diagnostics.{Severity(..)}
 import support.util.{anyList, filterList, splitNl}
-import string.{contains, startsWith, trim}
-import list.{partition}
+import string.{contains}
 import regex.{Regex, mustCompile, isMatch}
-import frontend.lexer.{Comment, commentCol, commentLine, commentText}
+import frontend.lexer.{Comment, commentLine, commentText}
 import tools.lint_core.{
   Category(..),
   FileFacts(..),
   Finding(..),
   Fixability(..),
+  ProseComments(..),
   Ratchet(..),
   Rule,
   RuleMeta(..),
   Scope(..),
-  factComments,
-  factLines,
+  factProseComments,
   mkRule,
   noFix,
 }
@@ -119,25 +118,11 @@ commentLineFindings : String ->
   FileFacts ->
   List Finding
 commentLineFindings name coarse hit facts =
-  let (blockCs, lineCs) = partition isBlockComment (factComments facts)
-  let lineHits = filterList (c => hit (commentText c)) lineCs
-  let blocks = filterList (c => coarse (commentText c)) blockCs
-  flatMap (blockFindings name hit) blocks ++ ownLineFindings name facts lineHits
-
--- The opener is joined from two pieces: the shell census reads a literal one
--- inside a string as an unterminated block comment, and fmt rewrites an escape
--- back to the literal.
-blockOpener : String
-blockOpener = "{" ++ "-"
-
-isBlockComment : Comment -> Bool
-isBlockComment c = startsWith blockOpener (commentText c)
-
-ownLineFindings : String -> FileFacts -> List Comment -> List Finding
-ownLineFindings name facts hits =
-  hits
-    |> filterList (ownLine facts)
-    |> map (c => lineFinding name (commentLine c))
+  let prose = factProseComments facts
+  let lineHits = filterList (c => hit (commentText c)) prose.proseLines
+  let blocks = filterList (c => coarse (commentText c)) prose.proseBlocks
+  flatMap (blockFindings name hit) blocks
+    ++ map (c => lineFinding name (commentLine c)) lineHits
 
 blockFindings : String -> (String -> Bool) -> Comment -> List Finding
 blockFindings name hit c = go (commentLine c) (splitNl (commentText c))
@@ -145,19 +130,6 @@ blockFindings name hit c = go (commentLine c) (splitNl (commentText c))
     go _ [] = []
     go n (l :: rest) =
       if hit l then lineFinding name n :: go (n + 1) rest else go (n + 1) rest
-
--- Nothing but blanks before the comment on its source line. A comment in
--- column 0 needs no look at the source, so the file's line array is built
--- only for a file with an indented `--` hit.
-ownLine : FileFacts -> Comment -> Bool
-ownLine facts c = commentCol c == 0 || blankBefore (factLines facts) c
-
-blankBefore : Array String -> Comment -> Bool
-blankBefore srcLines c =
-  let i = commentLine c - 1
-  i >= 0
-    && i < arrayLength srcLines
-    && trim (stringSlice 0 (commentCol c) (arrayGetUnsafe i srcLines)) == ""
 
 lineFinding : String -> Int -> Finding
 lineFinding name line = Finding {
@@ -274,11 +246,10 @@ isUpperAt arr i =
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "filterList" false) (mem "splitNl" false))))
-(DUse false (UseGroup ("string") ((mem "contains" false) (mem "startsWith" false) (mem "trim" false))))
-(DUse false (UseGroup ("list") ((mem "partition" false))))
+(DUse false (UseGroup ("string") ((mem "contains" false))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "mustCompile" false) (mem "isMatch" false))))
-(DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "commentCol" false) (mem "commentLine" false) (mem "commentText" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "factComments" false) (mem "factLines" false) (mem "mkRule" false) (mem "noFix" false))))
+(DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "commentLine" false) (mem "commentText" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "ProseComments" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "factProseComments" false) (mem "mkRule" false) (mem "noFix" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "ruleNameCommentDeadPath" false) (mem "ruleNameCommentDeictic" false) (mem "ruleNameCommentDraft" false) (mem "ruleNameCommentEmoji" false) (mem "ruleNameCommentHistory" false) (mem "ruleNameCommentRuling" false) (mem "ruleNameCommentShout" false) (mem "ruleNameCommentTombstone" false))))
 (DTypeSig true "rules" (TyApp (TyCon "List") (TyCon "Rule")))
 (DFunDef false "rules" () (EListLit (EApp (EApp (EApp (EApp (EApp (EVar "classRuleCoarse") (EVar "ruleNameCommentHistory")) (ELit (LString "comment line narrates history (\"formerly\", \"used to\", \"The old \", \"Until 2026-\")"))) (ELit (LString "A comment line that narrates what the code used to be (\"formerly\", \"used to\", \"withdrawn\", \"The old \", \"Until 2026-\") goes stale the day it is written; state the constraint the code carries now.\n\nBefore:\n  -- formerly a list, now a map\nAfter:\n  -- keyed by name so lookups stay O(log n)"))) (EVar "hasHistoryPhrase")) (EVar "isHistoryLine")) (EApp (EApp (EApp (EApp (EVar "classRule") (EVar "ruleNameCommentRuling")) (ELit (LString "comment line uses reviewer-addressed ruling vocabulary (\"refuted\", \"ratified\", \"withdrawn\")"))) (ELit (LString "Ruling vocabulary (\"refuted\", \"ratified\", \"withdrawn\", \"ruling\") addresses a reviewer; it belongs on the PR or issue, not in the source.\n\nBefore:\n  -- ratified in review\nAfter:\n  -- the invariant the review settled, stated directly"))) (EVar "isRulingLine")) (EApp (EApp (EApp (EApp (EVar "classRule") (EVar "ruleNameCommentTombstone")) (ELit (LString "comment line is a tombstone for code that no longer exists"))) (ELit (LString "A tombstone (\"was HERE and is RETIRED\", \"do not re-add\", \"now lives in\", \"moved to\", \"now comes from\") points at code that is gone.\n\nBefore:\n  -- moved to util.mdk\nAfter:\n  delete the comment"))) (EVar "isTombstoneLine")) (EApp (EApp (EApp (EApp (EVar "classRule") (EVar "ruleNameCommentEmoji")) (ELit (LString "comment line carries an emoji shout"))) (ELit (LString "An emoji shout (a siren, a warning sign or a lock) in a comment; state the constraint in words.\n\nBefore:\n  -- (siren) never edit this\nAfter:\n  -- byte-pinned by a gate: edits break its golden"))) (EVar "isEmojiLine")) (EApp (EApp (EApp (EApp (EVar "classRule") (EVar "ruleNameCommentDraft")) (ELit (LString "comment line narrates a draft (\"earlier cut\", \"first cut\", \"earlier revision\")"))) (ELit (LString "Draft self-narration (\"earlier cut\", \"first cut\", \"earlier revision\") describes the author's process, not the code.\n\nBefore:\n  -- the first cut used a list\nAfter:\n  delete the comment"))) (EVar "isDraftLine")) (EApp (EApp (EApp (EApp (EVar "classRule") (EVar "ruleNameCommentDeictic")) (ELit (LString "comment line points at \"this PR\""))) (ELit (LString "A comment that says \"this PR\" does not survive the PR merging.\n\nBefore:\n  -- added in this PR\nAfter:\n  delete the comment"))) (EVar "isDeicticLine")) (EApp (EApp (EApp (EApp (EVar "classRule") (EVar "ruleNameCommentDeadPath")) (ELit (LString "comment line cites a dead OCaml path (lib/*.ml)"))) (ELit (LString "A comment that cites a path under lib/ ending in .ml points at the removed OCaml compiler.\n\nBefore:\n  -- see lib/typecheck.ml\nAfter:\n  cite the Medaka module that holds the code"))) (EVar "isDeadPathLine")) (EApp (EApp (EApp (EApp (EVar "classRule") (EVar "ruleNameCommentShout")) (ELit (LString "comment line has three consecutive capitalised words"))) (ELit (LString "Three consecutive words in capitals read as shouting; state the constraint in plain words.\n\nBefore:\n  -- (caps) do not edit this\nAfter:\n  -- byte-pinned by a gate"))) (EVar "isShoutLine"))))
@@ -287,19 +258,9 @@ isUpperAt arr i =
 (DTypeSig false "classRuleCoarse" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyCon "Rule")))))))
 (DFunDef false "classRuleCoarse" ((PVar "name") (PVar "summary") (PVar "doc") (PVar "coarse") (PVar "hit")) (EApp (EApp (EApp (EVar "mkRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "name")) (fa "summary" (EVar "summary")) (fa "doc" (EVar "doc")) (fa "category" (EVar "Style")) (fa "scope" (EVar "Internal")) (fa "ratchet" (EVar "Baselined")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "NotFixable")) (fa "needs" (EListLit))))) (ELam (PWild PWild (PVar "facts") PWild PWild) (EApp (EApp (EApp (EApp (EVar "commentLineFindings") (EVar "name")) (EVar "coarse")) (EVar "hit")) (EVar "facts")))) (EVar "None")))
 (DTypeSig false "commentLineFindings" (TyFun (TyCon "String") (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyCon "FileFacts") (TyApp (TyCon "List") (TyCon "Finding")))))))
-(DFunDef false "commentLineFindings" ((PVar "name") (PVar "coarse") (PVar "hit") (PVar "facts")) (EBlock (DoLet false false (PTuple (PVar "blockCs") (PVar "lineCs")) (EApp (EApp (EVar "partition") (EVar "isBlockComment")) (EApp (EVar "factComments") (EVar "facts")))) (DoLet false false (PVar "lineHits") (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EApp (EVar "hit") (EApp (EVar "commentText") (EVar "c"))))) (EVar "lineCs"))) (DoLet false false (PVar "blocks") (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EApp (EVar "coarse") (EApp (EVar "commentText") (EVar "c"))))) (EVar "blockCs"))) (DoExpr (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "blockFindings") (EVar "name")) (EVar "hit"))) (EVar "blocks")) (EApp (EApp (EApp (EVar "ownLineFindings") (EVar "name")) (EVar "facts")) (EVar "lineHits"))))))
-(DTypeSig false "blockOpener" (TyCon "String"))
-(DFunDef false "blockOpener" () (EBinOp "++" (ELit (LString "{")) (ELit (LString "-"))))
-(DTypeSig false "isBlockComment" (TyFun (TyCon "Comment") (TyCon "Bool")))
-(DFunDef false "isBlockComment" ((PVar "c")) (EApp (EApp (EVar "startsWith") (EVar "blockOpener")) (EApp (EVar "commentText") (EVar "c"))))
-(DTypeSig false "ownLineFindings" (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyApp (TyCon "List") (TyCon "Finding"))))))
-(DFunDef false "ownLineFindings" ((PVar "name") (PVar "facts") (PVar "hits")) (EBinOp "|>" (EBinOp "|>" (EVar "hits") (EApp (EVar "filterList") (EApp (EVar "ownLine") (EVar "facts")))) (EApp (EVar "map") (ELam ((PVar "c")) (EApp (EApp (EVar "lineFinding") (EVar "name")) (EApp (EVar "commentLine") (EVar "c")))))))
+(DFunDef false "commentLineFindings" ((PVar "name") (PVar "coarse") (PVar "hit") (PVar "facts")) (EBlock (DoLet false false (PVar "prose") (EApp (EVar "factProseComments") (EVar "facts"))) (DoLet false false (PVar "lineHits") (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EApp (EVar "hit") (EApp (EVar "commentText") (EVar "c"))))) (EFieldAccess (EVar "prose") "proseLines"))) (DoLet false false (PVar "blocks") (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EApp (EVar "coarse") (EApp (EVar "commentText") (EVar "c"))))) (EFieldAccess (EVar "prose") "proseBlocks"))) (DoExpr (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "blockFindings") (EVar "name")) (EVar "hit"))) (EVar "blocks")) (EApp (EApp (EVar "map") (ELam ((PVar "c")) (EApp (EApp (EVar "lineFinding") (EVar "name")) (EApp (EVar "commentLine") (EVar "c"))))) (EVar "lineHits"))))))
 (DTypeSig false "blockFindings" (TyFun (TyCon "String") (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyCon "Comment") (TyApp (TyCon "List") (TyCon "Finding"))))))
 (DFunDef false "blockFindings" ((PVar "name") (PVar "hit") (PVar "c")) (ELetGroup ((lgb "go" (clause (PWild (PList)) (EListLit)) (clause ((PVar "n") (PCons (PVar "l") (PVar "rest"))) (EIf (EApp (EVar "hit") (EVar "l")) (EBinOp "::" (EApp (EApp (EVar "lineFinding") (EVar "name")) (EVar "n")) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EVar "rest"))) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EVar "rest")))))) (EApp (EApp (EVar "go") (EApp (EVar "commentLine") (EVar "c"))) (EApp (EVar "splitNl") (EApp (EVar "commentText") (EVar "c"))))))
-(DTypeSig false "ownLine" (TyFun (TyCon "FileFacts") (TyFun (TyCon "Comment") (TyCon "Bool"))))
-(DFunDef false "ownLine" ((PVar "facts") (PVar "c")) (EBinOp "||" (EBinOp "==" (EApp (EVar "commentCol") (EVar "c")) (ELit (LInt 0))) (EApp (EApp (EVar "blankBefore") (EApp (EVar "factLines") (EVar "facts"))) (EVar "c"))))
-(DTypeSig false "blankBefore" (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyCon "Comment") (TyCon "Bool"))))
-(DFunDef false "blankBefore" ((PVar "srcLines") (PVar "c")) (EBlock (DoLet false false (PVar "i") (EBinOp "-" (EApp (EVar "commentLine") (EVar "c")) (ELit (LInt 1)))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "i") (ELit (LInt 0))) (EBinOp "<" (EVar "i") (EApp (EVar "arrayLength") (EVar "srcLines")))) (EBinOp "==" (EApp (EVar "trim") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EApp (EVar "commentCol") (EVar "c"))) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "srcLines")))) (ELit (LString "")))))))
 (DTypeSig false "lineFinding" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "Finding"))))
 (DFunDef false "lineFinding" ((PVar "name") (PVar "line")) (ERecordCreate "Finding" ((fa "rule" (EVar "name")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "comment line in the `")) (EApp (EVar "$core.display") (EVar "name"))) (ELit (LString "` register")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (EVar "line")) (ELit (LInt 1))) (EVar "line")) (ELit (LInt 1))))) (fa "fix" (EVar "noFix")))))
 (DTypeSig false "anyInfix" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyCon "Bool"))))
@@ -345,11 +306,10 @@ isUpperAt arr i =
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "filterList" false) (mem "splitNl" false))))
-(DUse false (UseGroup ("string") ((mem "contains" false) (mem "startsWith" false) (mem "trim" false))))
-(DUse false (UseGroup ("list") ((mem "partition" false))))
+(DUse false (UseGroup ("string") ((mem "contains" false))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "mustCompile" false) (mem "isMatch" false))))
-(DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "commentCol" false) (mem "commentLine" false) (mem "commentText" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "factComments" false) (mem "factLines" false) (mem "mkRule" false) (mem "noFix" false))))
+(DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "commentLine" false) (mem "commentText" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "ProseComments" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "factProseComments" false) (mem "mkRule" false) (mem "noFix" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "ruleNameCommentDeadPath" false) (mem "ruleNameCommentDeictic" false) (mem "ruleNameCommentDraft" false) (mem "ruleNameCommentEmoji" false) (mem "ruleNameCommentHistory" false) (mem "ruleNameCommentRuling" false) (mem "ruleNameCommentShout" false) (mem "ruleNameCommentTombstone" false))))
 (DTypeSig true "rules" (TyApp (TyCon "List") (TyCon "Rule")))
 (DFunDef false "rules" () (EListLit (EApp (EApp (EApp (EApp (EApp (EVar "classRuleCoarse") (EVar "ruleNameCommentHistory")) (ELit (LString "comment line narrates history (\"formerly\", \"used to\", \"The old \", \"Until 2026-\")"))) (ELit (LString "A comment line that narrates what the code used to be (\"formerly\", \"used to\", \"withdrawn\", \"The old \", \"Until 2026-\") goes stale the day it is written; state the constraint the code carries now.\n\nBefore:\n  -- formerly a list, now a map\nAfter:\n  -- keyed by name so lookups stay O(log n)"))) (EVar "hasHistoryPhrase")) (EVar "isHistoryLine")) (EApp (EApp (EApp (EApp (EVar "classRule") (EVar "ruleNameCommentRuling")) (ELit (LString "comment line uses reviewer-addressed ruling vocabulary (\"refuted\", \"ratified\", \"withdrawn\")"))) (ELit (LString "Ruling vocabulary (\"refuted\", \"ratified\", \"withdrawn\", \"ruling\") addresses a reviewer; it belongs on the PR or issue, not in the source.\n\nBefore:\n  -- ratified in review\nAfter:\n  -- the invariant the review settled, stated directly"))) (EVar "isRulingLine")) (EApp (EApp (EApp (EApp (EVar "classRule") (EVar "ruleNameCommentTombstone")) (ELit (LString "comment line is a tombstone for code that no longer exists"))) (ELit (LString "A tombstone (\"was HERE and is RETIRED\", \"do not re-add\", \"now lives in\", \"moved to\", \"now comes from\") points at code that is gone.\n\nBefore:\n  -- moved to util.mdk\nAfter:\n  delete the comment"))) (EVar "isTombstoneLine")) (EApp (EApp (EApp (EApp (EVar "classRule") (EVar "ruleNameCommentEmoji")) (ELit (LString "comment line carries an emoji shout"))) (ELit (LString "An emoji shout (a siren, a warning sign or a lock) in a comment; state the constraint in words.\n\nBefore:\n  -- (siren) never edit this\nAfter:\n  -- byte-pinned by a gate: edits break its golden"))) (EVar "isEmojiLine")) (EApp (EApp (EApp (EApp (EVar "classRule") (EVar "ruleNameCommentDraft")) (ELit (LString "comment line narrates a draft (\"earlier cut\", \"first cut\", \"earlier revision\")"))) (ELit (LString "Draft self-narration (\"earlier cut\", \"first cut\", \"earlier revision\") describes the author's process, not the code.\n\nBefore:\n  -- the first cut used a list\nAfter:\n  delete the comment"))) (EVar "isDraftLine")) (EApp (EApp (EApp (EApp (EVar "classRule") (EVar "ruleNameCommentDeictic")) (ELit (LString "comment line points at \"this PR\""))) (ELit (LString "A comment that says \"this PR\" does not survive the PR merging.\n\nBefore:\n  -- added in this PR\nAfter:\n  delete the comment"))) (EVar "isDeicticLine")) (EApp (EApp (EApp (EApp (EVar "classRule") (EVar "ruleNameCommentDeadPath")) (ELit (LString "comment line cites a dead OCaml path (lib/*.ml)"))) (ELit (LString "A comment that cites a path under lib/ ending in .ml points at the removed OCaml compiler.\n\nBefore:\n  -- see lib/typecheck.ml\nAfter:\n  cite the Medaka module that holds the code"))) (EVar "isDeadPathLine")) (EApp (EApp (EApp (EApp (EVar "classRule") (EVar "ruleNameCommentShout")) (ELit (LString "comment line has three consecutive capitalised words"))) (ELit (LString "Three consecutive words in capitals read as shouting; state the constraint in plain words.\n\nBefore:\n  -- (caps) do not edit this\nAfter:\n  -- byte-pinned by a gate"))) (EVar "isShoutLine"))))
@@ -358,19 +318,9 @@ isUpperAt arr i =
 (DTypeSig false "classRuleCoarse" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyCon "Rule")))))))
 (DFunDef false "classRuleCoarse" ((PVar "name") (PVar "summary") (PVar "doc") (PVar "coarse") (PVar "hit")) (EApp (EApp (EApp (EVar "mkRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "name")) (fa "summary" (EVar "summary")) (fa "doc" (EVar "doc")) (fa "category" (EVar "Style")) (fa "scope" (EVar "Internal")) (fa "ratchet" (EVar "Baselined")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "NotFixable")) (fa "needs" (EListLit))))) (ELam (PWild PWild (PVar "facts") PWild PWild) (EApp (EApp (EApp (EApp (EVar "commentLineFindings") (EVar "name")) (EVar "coarse")) (EVar "hit")) (EVar "facts")))) (EVar "None")))
 (DTypeSig false "commentLineFindings" (TyFun (TyCon "String") (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyCon "FileFacts") (TyApp (TyCon "List") (TyCon "Finding")))))))
-(DFunDef false "commentLineFindings" ((PVar "name") (PVar "coarse") (PVar "hit") (PVar "facts")) (EBlock (DoLet false false (PTuple (PVar "blockCs") (PVar "lineCs")) (EApp (EApp (EVar "partition") (EVar "isBlockComment")) (EApp (EVar "factComments") (EVar "facts")))) (DoLet false false (PVar "lineHits") (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EApp (EVar "hit") (EApp (EVar "commentText") (EVar "c"))))) (EVar "lineCs"))) (DoLet false false (PVar "blocks") (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EApp (EVar "coarse") (EApp (EVar "commentText") (EVar "c"))))) (EVar "blockCs"))) (DoExpr (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "blockFindings") (EVar "name")) (EVar "hit"))) (EVar "blocks")) (EApp (EApp (EApp (EVar "ownLineFindings") (EVar "name")) (EVar "facts")) (EVar "lineHits"))))))
-(DTypeSig false "blockOpener" (TyCon "String"))
-(DFunDef false "blockOpener" () (EBinOp "++" (ELit (LString "{")) (ELit (LString "-"))))
-(DTypeSig false "isBlockComment" (TyFun (TyCon "Comment") (TyCon "Bool")))
-(DFunDef false "isBlockComment" ((PVar "c")) (EApp (EApp (EVar "startsWith") (EVar "blockOpener")) (EApp (EVar "commentText") (EVar "c"))))
-(DTypeSig false "ownLineFindings" (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyApp (TyCon "List") (TyCon "Finding"))))))
-(DFunDef false "ownLineFindings" ((PVar "name") (PVar "facts") (PVar "hits")) (EBinOp "|>" (EBinOp "|>" (EVar "hits") (EApp (EVar "filterList") (EApp (EVar "ownLine") (EVar "facts")))) (EApp (EMethodRef "map") (ELam ((PVar "c")) (EApp (EApp (EVar "lineFinding") (EVar "name")) (EApp (EVar "commentLine") (EVar "c")))))))
+(DFunDef false "commentLineFindings" ((PVar "name") (PVar "coarse") (PVar "hit") (PVar "facts")) (EBlock (DoLet false false (PVar "prose") (EApp (EVar "factProseComments") (EVar "facts"))) (DoLet false false (PVar "lineHits") (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EApp (EVar "hit") (EApp (EVar "commentText") (EVar "c"))))) (EFieldAccess (EVar "prose") "proseLines"))) (DoLet false false (PVar "blocks") (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EApp (EVar "coarse") (EApp (EVar "commentText") (EVar "c"))))) (EFieldAccess (EVar "prose") "proseBlocks"))) (DoExpr (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "blockFindings") (EVar "name")) (EVar "hit"))) (EVar "blocks")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "c")) (EApp (EApp (EVar "lineFinding") (EVar "name")) (EApp (EVar "commentLine") (EVar "c"))))) (EVar "lineHits"))))))
 (DTypeSig false "blockFindings" (TyFun (TyCon "String") (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyCon "Comment") (TyApp (TyCon "List") (TyCon "Finding"))))))
 (DFunDef false "blockFindings" ((PVar "name") (PVar "hit") (PVar "c")) (ELetGroup ((lgb "go" (clause (PWild (PList)) (EListLit)) (clause ((PVar "n") (PCons (PVar "l") (PVar "rest"))) (EIf (EApp (EVar "hit") (EVar "l")) (EBinOp "::" (EApp (EApp (EVar "lineFinding") (EVar "name")) (EVar "n")) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EVar "rest"))) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EVar "rest")))))) (EApp (EApp (EVar "go") (EApp (EVar "commentLine") (EVar "c"))) (EApp (EVar "splitNl") (EApp (EVar "commentText") (EVar "c"))))))
-(DTypeSig false "ownLine" (TyFun (TyCon "FileFacts") (TyFun (TyCon "Comment") (TyCon "Bool"))))
-(DFunDef false "ownLine" ((PVar "facts") (PVar "c")) (EBinOp "||" (EBinOp "==" (EApp (EVar "commentCol") (EVar "c")) (ELit (LInt 0))) (EApp (EApp (EVar "blankBefore") (EApp (EVar "factLines") (EVar "facts"))) (EVar "c"))))
-(DTypeSig false "blankBefore" (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyCon "Comment") (TyCon "Bool"))))
-(DFunDef false "blankBefore" ((PVar "srcLines") (PVar "c")) (EBlock (DoLet false false (PVar "i") (EBinOp "-" (EApp (EVar "commentLine") (EVar "c")) (ELit (LInt 1)))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "i") (ELit (LInt 0))) (EBinOp "<" (EVar "i") (EApp (EVar "arrayLength") (EVar "srcLines")))) (EBinOp "==" (EApp (EVar "trim") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EApp (EVar "commentCol") (EVar "c"))) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "srcLines")))) (ELit (LString "")))))))
 (DTypeSig false "lineFinding" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "Finding"))))
 (DFunDef false "lineFinding" ((PVar "name") (PVar "line")) (ERecordCreate "Finding" ((fa "rule" (EVar "name")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "comment line in the `")) (EApp (EVar "$core.display") (EVar "name"))) (ELit (LString "` register")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (EVar "line")) (ELit (LInt 1))) (EVar "line")) (ELit (LInt 1))))) (fa "fix" (EVar "noFix")))))
 (DTypeSig false "anyInfix" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyCon "Bool"))))

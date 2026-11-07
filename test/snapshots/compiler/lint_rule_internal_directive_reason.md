@@ -1,5 +1,5 @@
 # META
-source_lines=273
+source_lines=270
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-directive-reason: a `-- lint-disable-*` directive with no comment in its own comment block stating the constraint that forced it. An issue number alone is not a reason.
@@ -13,7 +13,7 @@ import frontend.parser.{
   declPosEndLine,
 }
 import driver.diagnostics.{Severity(..)}
-import support.util.{contains, anyList, filterList, splitNl}
+import support.util.{contains, anyList, filterList}
 import string.{toLower, words}
 import regex.{Regex, mustCompile, isMatch}
 import frontend.lexer.{Comment, commentLine, commentText}
@@ -29,14 +29,13 @@ import tools.lint_core.{
   RuleMeta(..),
   Scope(..),
   StdlibIndex,
+  CommentBlock(..),
   factComments,
+  factCommentBlocks,
   mkRule,
   noFix,
 }
 import tools.lint_shared.{
-  CommentBlock(..),
-  codePortions,
-  commentBlocks,
   parseDirective,
   ruleNameDirectiveReason,
   zipDeclPos,
@@ -67,8 +66,8 @@ rule =
 -- sprint found only by hand.
 --
 -- The reason must live in the SAME contiguous comment block as the directive
--- (`commentBlocks`/`codePortions`, rule-promissory-reader's helpers, reused
--- unmodified above) — above it, below it, or beside another directive in the
+-- (`factCommentBlocks`, the grouping rule-promissory-reader reads too) —
+-- above it, below it, or beside another directive in the
 -- same block. Several existing file-scope directives sit on line 1, where
 -- nothing can precede them, and state their reason in the lines that follow
 -- instead (`compiler/tools/lsp.mdk`, `compiler/backend/wasm_emit.mdk`); the
@@ -99,9 +98,7 @@ ruleDirectiveReason : StdlibIndex ->
   List Finding
 ruleDirectiveReason _ _ facts pos prog =
   let comments = factComments facts
-  let ls = splitNl facts.ffSrc
-  let codeLines = arrayFromList (codePortions ls comments 1)
-  let blocks = commentBlocks comments codeLines
+  let blocks = factCommentBlocks facts
   let declZips = zipDeclPos prog (positionsDecls pos)
   let dirCmts = filterList (c => isSome (parseDirective c)) comments
   flatMap (directiveReasonCheck comments blocks declZips) dirCmts
@@ -280,16 +277,16 @@ directiveReasonFinding c = Finding {
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false) (mem "declPosEndLine" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "anyList" false) (mem "filterList" false) (mem "splitNl" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "anyList" false) (mem "filterList" false))))
 (DUse false (UseGroup ("string") ((mem "toLower" false) (mem "words" false))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "mustCompile" false) (mem "isMatch" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "commentLine" false) (mem "commentText" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "DirScope" true) (mem "Directive" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "factComments" false) (mem "mkRule" false) (mem "noFix" false))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "CommentBlock" true) (mem "codePortions" false) (mem "commentBlocks" false) (mem "parseDirective" false) (mem "ruleNameDirectiveReason" false) (mem "zipDeclPos" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "DirScope" true) (mem "Directive" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "CommentBlock" true) (mem "factComments" false) (mem "factCommentBlocks" false) (mem "mkRule" false) (mem "noFix" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "parseDirective" false) (mem "ruleNameDirectiveReason" false) (mem "zipDeclPos" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameDirectiveReason")) (fa "summary" (ELit (LString "a `-- lint-disable-*` directive with no comment in its own comment block stating the constraint that forced it — an issue number alone is not a reason (#2862)"))) (fa "doc" (ELit (LString "A `-- lint-disable-*` directive needs a comment in its own comment block stating the constraint that forced it; an issue number alone is not a reason (#2862). This enforces the repository suppression convention.\n\nBefore:\n  -- lint-disable-next-line rule-x\nAfter:\n  -- bounded: at most 3 fields, so a list lookup is cheaper\n  -- lint-disable-next-line rule-x"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Internal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "NotFixable")) (fa "needs" (EListLit))))) (EVar "ruleDirectiveReason")) (EVar "None")))
 (DTypeSig false "ruleDirectiveReason" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "ruleDirectiveReason" (PWild PWild (PVar "facts") (PVar "pos") (PVar "prog")) (EBlock (DoLet false false (PVar "comments") (EApp (EVar "factComments") (EVar "facts"))) (DoLet false false (PVar "ls") (EApp (EVar "splitNl") (EFieldAccess (EVar "facts") "ffSrc"))) (DoLet false false (PVar "codeLines") (EApp (EVar "arrayFromList") (EApp (EApp (EApp (EVar "codePortions") (EVar "ls")) (EVar "comments")) (ELit (LInt 1))))) (DoLet false false (PVar "blocks") (EApp (EApp (EVar "commentBlocks") (EVar "comments")) (EVar "codeLines"))) (DoLet false false (PVar "declZips") (EApp (EApp (EVar "zipDeclPos") (EVar "prog")) (EApp (EVar "positionsDecls") (EVar "pos")))) (DoLet false false (PVar "dirCmts") (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EApp (EVar "isSome") (EApp (EVar "parseDirective") (EVar "c"))))) (EVar "comments"))) (DoExpr (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "directiveReasonCheck") (EVar "comments")) (EVar "blocks")) (EVar "declZips"))) (EVar "dirCmts")))))
+(DFunDef false "ruleDirectiveReason" (PWild PWild (PVar "facts") (PVar "pos") (PVar "prog")) (EBlock (DoLet false false (PVar "comments") (EApp (EVar "factComments") (EVar "facts"))) (DoLet false false (PVar "blocks") (EApp (EVar "factCommentBlocks") (EVar "facts"))) (DoLet false false (PVar "declZips") (EApp (EApp (EVar "zipDeclPos") (EVar "prog")) (EApp (EVar "positionsDecls") (EVar "pos")))) (DoLet false false (PVar "dirCmts") (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EApp (EVar "isSome") (EApp (EVar "parseDirective") (EVar "c"))))) (EVar "comments"))) (DoExpr (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "directiveReasonCheck") (EVar "comments")) (EVar "blocks")) (EVar "declZips"))) (EVar "dirCmts")))))
 (DTypeSig false "directiveReasonCheck" (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyFun (TyApp (TyCon "List") (TyCon "CommentBlock")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "DeclPos"))) (TyFun (TyCon "Comment") (TyApp (TyCon "List") (TyCon "Finding")))))))
 (DFunDef false "directiveReasonCheck" ((PVar "comments") (PVar "blocks") (PVar "declZips") (PVar "c")) (EIf (EApp (EApp (EApp (EApp (EVar "directiveReasoned") (EVar "comments")) (EVar "blocks")) (EVar "declZips")) (EVar "c")) (EListLit) (EListLit (EApp (EVar "directiveReasonFinding") (EVar "c")))))
 (DTypeSig false "directiveReasoned" (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyFun (TyApp (TyCon "List") (TyCon "CommentBlock")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "DeclPos"))) (TyFun (TyCon "Comment") (TyCon "Bool"))))))
@@ -344,16 +341,16 @@ directiveReasonFinding c = Finding {
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false) (mem "declPosEndLine" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "anyList" false) (mem "filterList" false) (mem "splitNl" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "anyList" false) (mem "filterList" false))))
 (DUse false (UseGroup ("string") ((mem "toLower" false) (mem "words" false))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "mustCompile" false) (mem "isMatch" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "commentLine" false) (mem "commentText" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "DirScope" true) (mem "Directive" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "factComments" false) (mem "mkRule" false) (mem "noFix" false))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "CommentBlock" true) (mem "codePortions" false) (mem "commentBlocks" false) (mem "parseDirective" false) (mem "ruleNameDirectiveReason" false) (mem "zipDeclPos" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "DirScope" true) (mem "Directive" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "CommentBlock" true) (mem "factComments" false) (mem "factCommentBlocks" false) (mem "mkRule" false) (mem "noFix" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "parseDirective" false) (mem "ruleNameDirectiveReason" false) (mem "zipDeclPos" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameDirectiveReason")) (fa "summary" (ELit (LString "a `-- lint-disable-*` directive with no comment in its own comment block stating the constraint that forced it — an issue number alone is not a reason (#2862)"))) (fa "doc" (ELit (LString "A `-- lint-disable-*` directive needs a comment in its own comment block stating the constraint that forced it; an issue number alone is not a reason (#2862). This enforces the repository suppression convention.\n\nBefore:\n  -- lint-disable-next-line rule-x\nAfter:\n  -- bounded: at most 3 fields, so a list lookup is cheaper\n  -- lint-disable-next-line rule-x"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Internal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "NotFixable")) (fa "needs" (EListLit))))) (EVar "ruleDirectiveReason")) (EVar "None")))
 (DTypeSig false "ruleDirectiveReason" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "ruleDirectiveReason" (PWild PWild (PVar "facts") (PVar "pos") (PVar "prog")) (EBlock (DoLet false false (PVar "comments") (EApp (EVar "factComments") (EVar "facts"))) (DoLet false false (PVar "ls") (EApp (EVar "splitNl") (EFieldAccess (EVar "facts") "ffSrc"))) (DoLet false false (PVar "codeLines") (EApp (EVar "arrayFromList") (EApp (EApp (EApp (EVar "codePortions") (EVar "ls")) (EVar "comments")) (ELit (LInt 1))))) (DoLet false false (PVar "blocks") (EApp (EApp (EVar "commentBlocks") (EVar "comments")) (EVar "codeLines"))) (DoLet false false (PVar "declZips") (EApp (EApp (EVar "zipDeclPos") (EVar "prog")) (EApp (EVar "positionsDecls") (EVar "pos")))) (DoLet false false (PVar "dirCmts") (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EApp (EVar "isSome") (EApp (EVar "parseDirective") (EVar "c"))))) (EVar "comments"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "directiveReasonCheck") (EVar "comments")) (EVar "blocks")) (EVar "declZips"))) (EVar "dirCmts")))))
+(DFunDef false "ruleDirectiveReason" (PWild PWild (PVar "facts") (PVar "pos") (PVar "prog")) (EBlock (DoLet false false (PVar "comments") (EApp (EVar "factComments") (EVar "facts"))) (DoLet false false (PVar "blocks") (EApp (EVar "factCommentBlocks") (EVar "facts"))) (DoLet false false (PVar "declZips") (EApp (EApp (EVar "zipDeclPos") (EVar "prog")) (EApp (EVar "positionsDecls") (EVar "pos")))) (DoLet false false (PVar "dirCmts") (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EApp (EVar "isSome") (EApp (EVar "parseDirective") (EVar "c"))))) (EVar "comments"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "directiveReasonCheck") (EVar "comments")) (EVar "blocks")) (EVar "declZips"))) (EVar "dirCmts")))))
 (DTypeSig false "directiveReasonCheck" (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyFun (TyApp (TyCon "List") (TyCon "CommentBlock")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "DeclPos"))) (TyFun (TyCon "Comment") (TyApp (TyCon "List") (TyCon "Finding")))))))
 (DFunDef false "directiveReasonCheck" ((PVar "comments") (PVar "blocks") (PVar "declZips") (PVar "c")) (EIf (EApp (EApp (EApp (EApp (EVar "directiveReasoned") (EVar "comments")) (EVar "blocks")) (EVar "declZips")) (EVar "c")) (EListLit) (EListLit (EApp (EVar "directiveReasonFinding") (EVar "c")))))
 (DTypeSig false "directiveReasoned" (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyFun (TyApp (TyCon "List") (TyCon "CommentBlock")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "DeclPos"))) (TyFun (TyCon "Comment") (TyCon "Bool"))))))

@@ -3,21 +3,20 @@
 import frontend.ast.{Loc(..)}
 import driver.diagnostics.{Severity(..)}
 import support.util.{anyList, filterList, splitNl}
-import string.{contains, startsWith, trim}
-import list.{partition}
+import string.{contains}
 import regex.{Regex, mustCompile, isMatch}
-import frontend.lexer.{Comment, commentCol, commentLine, commentText}
+import frontend.lexer.{Comment, commentLine, commentText}
 import tools.lint_core.{
   Category(..),
   FileFacts(..),
   Finding(..),
   Fixability(..),
+  ProseComments(..),
   Ratchet(..),
   Rule,
   RuleMeta(..),
   Scope(..),
-  factComments,
-  factLines,
+  factProseComments,
   mkRule,
   noFix,
 }
@@ -115,25 +114,11 @@ commentLineFindings : String ->
   FileFacts ->
   List Finding
 commentLineFindings name coarse hit facts =
-  let (blockCs, lineCs) = partition isBlockComment (factComments facts)
-  let lineHits = filterList (c => hit (commentText c)) lineCs
-  let blocks = filterList (c => coarse (commentText c)) blockCs
-  flatMap (blockFindings name hit) blocks ++ ownLineFindings name facts lineHits
-
--- The opener is joined from two pieces: the shell census reads a literal one
--- inside a string as an unterminated block comment, and fmt rewrites an escape
--- back to the literal.
-blockOpener : String
-blockOpener = "{" ++ "-"
-
-isBlockComment : Comment -> Bool
-isBlockComment c = startsWith blockOpener (commentText c)
-
-ownLineFindings : String -> FileFacts -> List Comment -> List Finding
-ownLineFindings name facts hits =
-  hits
-    |> filterList (ownLine facts)
-    |> map (c => lineFinding name (commentLine c))
+  let prose = factProseComments facts
+  let lineHits = filterList (c => hit (commentText c)) prose.proseLines
+  let blocks = filterList (c => coarse (commentText c)) prose.proseBlocks
+  flatMap (blockFindings name hit) blocks
+    ++ map (c => lineFinding name (commentLine c)) lineHits
 
 blockFindings : String -> (String -> Bool) -> Comment -> List Finding
 blockFindings name hit c = go (commentLine c) (splitNl (commentText c))
@@ -141,19 +126,6 @@ blockFindings name hit c = go (commentLine c) (splitNl (commentText c))
     go _ [] = []
     go n (l :: rest) =
       if hit l then lineFinding name n :: go (n + 1) rest else go (n + 1) rest
-
--- Nothing but blanks before the comment on its source line. A comment in
--- column 0 needs no look at the source, so the file's line array is built
--- only for a file with an indented `--` hit.
-ownLine : FileFacts -> Comment -> Bool
-ownLine facts c = commentCol c == 0 || blankBefore (factLines facts) c
-
-blankBefore : Array String -> Comment -> Bool
-blankBefore srcLines c =
-  let i = commentLine c - 1
-  i >= 0
-    && i < arrayLength srcLines
-    && trim (stringSlice 0 (commentCol c) (arrayGetUnsafe i srcLines)) == ""
 
 lineFinding : String -> Int -> Finding
 lineFinding name line = Finding {

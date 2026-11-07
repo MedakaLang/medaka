@@ -1,5 +1,5 @@
 # META
-source_lines=347
+source_lines=344
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-promissory-reader: a comment says a symbol has no reader yet, but the file reads it (#2550).
@@ -24,15 +24,14 @@ import tools.lint_core.{
   RuleMeta(..),
   Scope(..),
   StdlibIndex,
-  factComments,
+  CommentBlock(..),
+  factCodeLines,
+  factCommentBlocks,
   mkRule,
   noFix,
 }
 import tools.lint_shared.{
-  CommentBlock(..),
   codeLineAt,
-  codePortions,
-  commentBlocks,
   ruleNamePromissoryReader,
   trimWs,
 }
@@ -85,12 +84,10 @@ rulePromissoryReader : StdlibIndex ->
   List Decl ->
   List Finding
 rulePromissoryReader _ path facts _ _ =
-  let ls = splitNl facts.ffSrc
-  let comments = factComments facts
-  let codeLines = arrayFromList (codePortions ls comments 1)
+  let codeLines = factCodeLines facts
   flatMap
     (promissoryFinding path codeLines)
-    (promissoryClaims (commentBlocks comments codeLines))
+    (promissoryClaims (factCommentBlocks facts))
 
 -- Blocks whose (quote-stripped, lowercased) text makes a promissory claim, as
 -- (claim line, its raw text, the block).
@@ -358,12 +355,12 @@ assignFollows cs n i0 = go i0
 (DUse false (UseGroup ("list") ((mem "last" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isAlnum" false))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "Match" false) (mem "mustCompile" false) (mem "isMatch" false) (mem "find" false "reFind") (mem "findAll" false "reFindAll") (mem "replaceAll" false) (mem "escape" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "factComments" false) (mem "mkRule" false) (mem "noFix" false))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "CommentBlock" true) (mem "codeLineAt" false) (mem "codePortions" false) (mem "commentBlocks" false) (mem "ruleNamePromissoryReader" false) (mem "trimWs" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "CommentBlock" true) (mem "factCodeLines" false) (mem "factCommentBlocks" false) (mem "mkRule" false) (mem "noFix" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "codeLineAt" false) (mem "ruleNamePromissoryReader" false) (mem "trimWs" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNamePromissoryReader")) (fa "summary" (ELit (LString "comment claims a symbol has no reader yet (\"nothing reads this yet\", \"no reader yet\", \"do not add a reader\") but the file reads it (#2550)"))) (fa "doc" (ELit (LString "A comment claiming a symbol has no reader yet (\"nothing reads this yet\", \"no reader yet\", \"do not add a reader\") while the file reads it is stale and misleads the next editor (#2550). This enforces the repository comment register.\n\nBefore:\n  -- nothing reads this yet\n  cache = ...   -- read two screens down\nAfter:\n  delete or correct the comment"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Internal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "NotFixable")) (fa "needs" (EListLit))))) (EVar "rulePromissoryReader")) (EVar "None")))
 (DTypeSig false "rulePromissoryReader" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "rulePromissoryReader" (PWild (PVar "path") (PVar "facts") PWild PWild) (EBlock (DoLet false false (PVar "ls") (EApp (EVar "splitNl") (EFieldAccess (EVar "facts") "ffSrc"))) (DoLet false false (PVar "comments") (EApp (EVar "factComments") (EVar "facts"))) (DoLet false false (PVar "codeLines") (EApp (EVar "arrayFromList") (EApp (EApp (EApp (EVar "codePortions") (EVar "ls")) (EVar "comments")) (ELit (LInt 1))))) (DoExpr (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "promissoryFinding") (EVar "path")) (EVar "codeLines"))) (EApp (EVar "promissoryClaims") (EApp (EApp (EVar "commentBlocks") (EVar "comments")) (EVar "codeLines")))))))
+(DFunDef false "rulePromissoryReader" (PWild (PVar "path") (PVar "facts") PWild PWild) (EBlock (DoLet false false (PVar "codeLines") (EApp (EVar "factCodeLines") (EVar "facts"))) (DoExpr (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "promissoryFinding") (EVar "path")) (EVar "codeLines"))) (EApp (EVar "promissoryClaims") (EApp (EVar "factCommentBlocks") (EVar "facts")))))))
 (DTypeSig false "promissoryClaims" (TyFun (TyApp (TyCon "List") (TyCon "CommentBlock")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String") (TyCon "CommentBlock")))))
 (DFunDef false "promissoryClaims" ((PVar "blocks")) (EApp (EApp (EVar "flatMap") (EVar "promissoryClaimOf")) (EVar "blocks")))
 (DTypeSig false "promissoryClaimOf" (TyFun (TyCon "CommentBlock") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String") (TyCon "CommentBlock")))))
@@ -440,12 +437,12 @@ assignFollows cs n i0 = go i0
 (DUse false (UseGroup ("list") ((mem "last" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isAlnum" false))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "Match" false) (mem "mustCompile" false) (mem "isMatch" false) (mem "find" false "reFind") (mem "findAll" false "reFindAll") (mem "replaceAll" false) (mem "escape" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "factComments" false) (mem "mkRule" false) (mem "noFix" false))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "CommentBlock" true) (mem "codeLineAt" false) (mem "codePortions" false) (mem "commentBlocks" false) (mem "ruleNamePromissoryReader" false) (mem "trimWs" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "CommentBlock" true) (mem "factCodeLines" false) (mem "factCommentBlocks" false) (mem "mkRule" false) (mem "noFix" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "codeLineAt" false) (mem "ruleNamePromissoryReader" false) (mem "trimWs" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNamePromissoryReader")) (fa "summary" (ELit (LString "comment claims a symbol has no reader yet (\"nothing reads this yet\", \"no reader yet\", \"do not add a reader\") but the file reads it (#2550)"))) (fa "doc" (ELit (LString "A comment claiming a symbol has no reader yet (\"nothing reads this yet\", \"no reader yet\", \"do not add a reader\") while the file reads it is stale and misleads the next editor (#2550). This enforces the repository comment register.\n\nBefore:\n  -- nothing reads this yet\n  cache = ...   -- read two screens down\nAfter:\n  delete or correct the comment"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Internal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "NotFixable")) (fa "needs" (EListLit))))) (EVar "rulePromissoryReader")) (EVar "None")))
 (DTypeSig false "rulePromissoryReader" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "rulePromissoryReader" (PWild (PVar "path") (PVar "facts") PWild PWild) (EBlock (DoLet false false (PVar "ls") (EApp (EVar "splitNl") (EFieldAccess (EVar "facts") "ffSrc"))) (DoLet false false (PVar "comments") (EApp (EVar "factComments") (EVar "facts"))) (DoLet false false (PVar "codeLines") (EApp (EVar "arrayFromList") (EApp (EApp (EApp (EVar "codePortions") (EVar "ls")) (EVar "comments")) (ELit (LInt 1))))) (DoExpr (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "promissoryFinding") (EVar "path")) (EVar "codeLines"))) (EApp (EVar "promissoryClaims") (EApp (EApp (EVar "commentBlocks") (EVar "comments")) (EVar "codeLines")))))))
+(DFunDef false "rulePromissoryReader" (PWild (PVar "path") (PVar "facts") PWild PWild) (EBlock (DoLet false false (PVar "codeLines") (EApp (EVar "factCodeLines") (EVar "facts"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "promissoryFinding") (EVar "path")) (EVar "codeLines"))) (EApp (EVar "promissoryClaims") (EApp (EVar "factCommentBlocks") (EVar "facts")))))))
 (DTypeSig false "promissoryClaims" (TyFun (TyApp (TyCon "List") (TyCon "CommentBlock")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String") (TyCon "CommentBlock")))))
 (DFunDef false "promissoryClaims" ((PVar "blocks")) (EApp (EApp (EDictApp "flatMap") (EVar "promissoryClaimOf")) (EVar "blocks")))
 (DTypeSig false "promissoryClaimOf" (TyFun (TyCon "CommentBlock") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String") (TyCon "CommentBlock")))))

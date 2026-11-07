@@ -146,8 +146,11 @@ import tools.lint_scope.{
   wildImports,
 }
 import tools.lint_shared.{
+  codePortions,
   collectDirectives,
+  commentBlocks,
   declLocList,
+  proseComments,
   sortUniqS,
   zipDeclPos,
 }
@@ -161,9 +164,19 @@ export
 mkFileFacts : String -> List Decl -> Positions -> FileFacts
 mkFileFacts src prog pos =
   let declLocs = memoNew (_ => declLocList pos prog)
+  let comments = memoNew (_ => collectComments src)
+  let srcLineList = memoNew (_ => splitNl src)
+  let srcLines = memoMap fromList srcLineList
+  let codeLines = memoNew (_ =>
+    fromList (codePortions (memoGet srcLineList) (memoGet comments) 1))
   FileFacts {
     ffSrc = src,
-    ffComments = memoNew (_ => collectComments src),
+    ffComments = comments,
+    ffCodeLines = codeLines,
+    ffCommentBlocks =
+      memoNew (_ => commentBlocks (memoGet comments) (memoGet codeLines)),
+    ffProseComments =
+      memoNew (_ => proseComments (memoGet srcLines) (memoGet comments)),
     ffOracle = memoNew (_ => buildOracle prog),
     ffDeclLocs = declLocs,
     ffDupClauses = memoNew (_ => flatMap dupClauseOfDecl (memoGet declLocs)),

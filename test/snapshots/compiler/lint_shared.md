@@ -1,5 +1,5 @@
 # META
-source_lines=1154
+source_lines=1174
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_shared.mdk — helpers used by more than one lint module:
@@ -16,16 +16,17 @@ import support.util.{
   contains, filterList, splitOnChar, joinWith, startsWith, listLen, anyList,
   joinNl, dedupBy
 }
-import list.{sortBy, last, reverse, findMap}
+import list.{sortBy, last, reverse, findMap, partition}
 import array.{get as arrayGet}
 import string.{split, isUpper, words, unwords, trim, trimLeft}
 import support.path.{stripMdk}
 import regex.{Regex, mustCompile, find as reFind, escape, isMatch}
 import frontend.lexer.{Comment, commentLine, commentText, commentCol}
 import tools.lint_core.{
-  Applicability(..), Ctx(..), DirScope(..), Directive(..), FileFacts(..),
-  Finding(..), Fix(..), FixEdit(..), Memo, StdlibIndex, Visitor(..), factLines,
-  factScopes, fixLater, stdlibKnowsModule, stdlibSigIn
+  Applicability(..), CommentBlock(..), Ctx(..), DirScope(..), Directive(..),
+  FileFacts(..), ProseComments(..), Finding(..), Fix(..), FixEdit(..), Memo,
+  StdlibIndex, Visitor(..), factLines, factScopes, fixLater, stdlibKnowsModule,
+  stdlibSigIn
 }
 import tools.lint_fix.{Binding(..), parenIfNeeded}
 import tools.lint_scope.{
@@ -1027,11 +1028,7 @@ codePortions (l :: rest) (c :: cs) n
     stringSlice 0 (commentCol c) l :: codePortions rest cs (n + 1)
   | otherwise = l :: codePortions rest (c :: cs) (n + 1)
 
--- One claim candidate per comment BLOCK: consecutive full-line comments form a
--- block; a trailing comment (code before it on its line) is a block of its own.
--- Fields: first line, last line, trailing?, the joined comment text.
-public export data CommentBlock = CommentBlock Int Int Bool String
-
+-- The comments grouped into `CommentBlock`s against the code portion of each line.
 export
 commentBlocks : List Comment -> Array String -> List CommentBlock
 commentBlocks [] _ = []
@@ -1055,6 +1052,29 @@ commentBlockExtend (c :: rest) codeLines last text
     && trimWs (codeLineAt codeLines (last + 1)) == "" =
     commentBlockExtend rest codeLines (last + 1) "\{text}\n\{commentText c}"
   | otherwise = (last, text, c :: rest)
+
+-- The comments split into the block comments and the `--` comments with only
+-- blanks before them on their line, against `srcLines`, the source split on
+-- `\n`.  A comment in column 0 needs no look at its line.
+export
+proseComments : Array String -> List Comment -> ProseComments
+proseComments srcLines comments =
+  let (blocks, dashes) = partition isBlockComment comments
+  ProseComments {
+    proseBlocks = blocks,
+    proseLines = filterList (ownLine srcLines) dashes,
+  }
+
+isBlockComment : Comment -> Bool
+isBlockComment c = startsWith "{-" (commentText c)
+
+ownLine : Array String -> Comment -> Bool
+ownLine srcLines c =
+  let i = commentLine c - 1
+  commentCol c == 0
+    || i >= 0
+      && i < arrayLength srcLines
+      && trim (stringSlice 0 (commentCol c) (arrayGetUnsafe i srcLines)) == ""
 
 export
 codeLineAt : Array String -> Int -> String
@@ -1161,13 +1181,13 @@ isCodeText l = not (trim l == "" || startsWith "--" (trim l))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Expr" true) (mem "Decl" true) (mem "noBinderId" false) (mem "noDeclLoc" false) (mem "Ty" true) (mem "Pat" true) (mem "UseMember" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "joinWith" false) (mem "startsWith" false) (mem "listLen" false) (mem "anyList" false) (mem "joinNl" false) (mem "dedupBy" false))))
-(DUse false (UseGroup ("list") ((mem "sortBy" false) (mem "last" false) (mem "reverse" false) (mem "findMap" false))))
+(DUse false (UseGroup ("list") ((mem "sortBy" false) (mem "last" false) (mem "reverse" false) (mem "findMap" false) (mem "partition" false))))
 (DUse false (UseGroup ("array") ((mem "get" false "arrayGet"))))
 (DUse false (UseGroup ("string") ((mem "split" false) (mem "isUpper" false) (mem "words" false) (mem "unwords" false) (mem "trim" false) (mem "trimLeft" false))))
 (DUse false (UseGroup ("support" "path") ((mem "stripMdk" false))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "mustCompile" false) (mem "find" false "reFind") (mem "escape" false) (mem "isMatch" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "commentLine" false) (mem "commentText" false) (mem "commentCol" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Ctx" true) (mem "DirScope" true) (mem "Directive" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" true) (mem "FixEdit" true) (mem "Memo" false) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "factLines" false) (mem "factScopes" false) (mem "fixLater" false) (mem "stdlibKnowsModule" false) (mem "stdlibSigIn" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "CommentBlock" true) (mem "Ctx" true) (mem "DirScope" true) (mem "Directive" true) (mem "FileFacts" true) (mem "ProseComments" true) (mem "Finding" true) (mem "Fix" true) (mem "FixEdit" true) (mem "Memo" false) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "factLines" false) (mem "factScopes" false) (mem "fixLater" false) (mem "stdlibKnowsModule" false) (mem "stdlibSigIn" false))))
 (DUse false (UseGroup ("tools" "lint_fix") ((mem "Binding" true) (mem "parenIfNeeded" false))))
 (DUse false (UseGroup ("tools" "lint_scope") ((mem "BinderKind" true) (mem "Binder" true) (mem "binderOf" false) (mem "bindersNamed" false) (mem "wildImports" false))))
 (DUse true (UseGroup ("frontend" "ast_walk") ((mem "childExprs" false) (mem "mapChildExprs" false) (mem "stmtExprs" false))))
@@ -1495,13 +1515,18 @@ isCodeText l = not (trim l == "" || startsWith "--" (trim l))
 (DFunDef false "codePortions" ((PList) PWild PWild) (EListLit))
 (DFunDef false "codePortions" ((PCons (PVar "l") (PVar "rest")) (PList) (PVar "n")) (EBinOp "::" (EVar "l") (EApp (EApp (EApp (EVar "codePortions") (EVar "rest")) (EListLit)) (EBinOp "+" (EVar "n") (ELit (LInt 1))))))
 (DFunDef false "codePortions" ((PCons (PVar "l") (PVar "rest")) (PCons (PVar "c") (PVar "cs")) (PVar "n")) (EIf (EBinOp "<" (EApp (EVar "commentLine") (EVar "c")) (EVar "n")) (EApp (EApp (EApp (EVar "codePortions") (EBinOp "::" (EVar "l") (EVar "rest"))) (EVar "cs")) (EVar "n")) (EIf (EBinOp "==" (EApp (EVar "commentLine") (EVar "c")) (EVar "n")) (EBinOp "::" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EApp (EVar "commentCol") (EVar "c"))) (EVar "l")) (EApp (EApp (EApp (EVar "codePortions") (EVar "rest")) (EVar "cs")) (EBinOp "+" (EVar "n") (ELit (LInt 1))))) (EIf (EVar "otherwise") (EBinOp "::" (EVar "l") (EApp (EApp (EApp (EVar "codePortions") (EVar "rest")) (EBinOp "::" (EVar "c") (EVar "cs"))) (EBinOp "+" (EVar "n") (ELit (LInt 1))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DData Public "CommentBlock" () ((variant "CommentBlock" (ConPos (TyCon "Int") (TyCon "Int") (TyCon "Bool") (TyCon "String")))) ())
 (DTypeSig true "commentBlocks" (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyApp (TyCon "List") (TyCon "CommentBlock")))))
 (DFunDef false "commentBlocks" ((PList) PWild) (EListLit))
 (DFunDef false "commentBlocks" ((PCons (PVar "c") (PVar "rest")) (PVar "codeLines")) (EBlock (DoLet false false (PVar "line") (EApp (EVar "commentLine") (EVar "c"))) (DoLet false false (PVar "trailing") (EBinOp "/=" (EApp (EVar "trimWs") (EApp (EApp (EVar "codeLineAt") (EVar "codeLines")) (EVar "line"))) (ELit (LString "")))) (DoExpr (EIf (EVar "trailing") (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "CommentBlock") (EVar "line")) (EVar "line")) (EVar "True")) (EApp (EVar "commentText") (EVar "c"))) (EApp (EApp (EVar "commentBlocks") (EVar "rest")) (EVar "codeLines"))) (EMatch (EApp (EApp (EApp (EApp (EVar "commentBlockExtend") (EVar "rest")) (EVar "codeLines")) (EVar "line")) (EApp (EVar "commentText") (EVar "c"))) (arm (PTuple (PVar "lastLine") (PVar "text") (PVar "rest2")) () (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "CommentBlock") (EVar "line")) (EVar "lastLine")) (EVar "False")) (EVar "text")) (EApp (EApp (EVar "commentBlocks") (EVar "rest2")) (EVar "codeLines")))))))))
 (DTypeSig false "commentBlockExtend" (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyTuple (TyCon "Int") (TyCon "String") (TyApp (TyCon "List") (TyCon "Comment"))))))))
 (DFunDef false "commentBlockExtend" ((PList) PWild (PVar "last") (PVar "text")) (ETuple (EVar "last") (EVar "text") (EListLit)))
 (DFunDef false "commentBlockExtend" ((PCons (PVar "c") (PVar "rest")) (PVar "codeLines") (PVar "last") (PVar "text")) (EIf (EBinOp "&&" (EBinOp "==" (EApp (EVar "commentLine") (EVar "c")) (EBinOp "+" (EVar "last") (ELit (LInt 1)))) (EBinOp "==" (EApp (EVar "trimWs") (EApp (EApp (EVar "codeLineAt") (EVar "codeLines")) (EBinOp "+" (EVar "last") (ELit (LInt 1))))) (ELit (LString "")))) (EApp (EApp (EApp (EApp (EVar "commentBlockExtend") (EVar "rest")) (EVar "codeLines")) (EBinOp "+" (EVar "last") (ELit (LInt 1)))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "text"))) (ELit (LString "\n"))) (EApp (EVar "$core.display") (EApp (EVar "commentText") (EVar "c")))) (ELit (LString "")))) (EIf (EVar "otherwise") (ETuple (EVar "last") (EVar "text") (EBinOp "::" (EVar "c") (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig true "proseComments" (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyCon "ProseComments"))))
+(DFunDef false "proseComments" ((PVar "srcLines") (PVar "comments")) (EBlock (DoLet false false (PTuple (PVar "blocks") (PVar "dashes")) (EApp (EApp (EVar "partition") (EVar "isBlockComment")) (EVar "comments"))) (DoExpr (ERecordCreate "ProseComments" ((fa "proseBlocks" (EVar "blocks")) (fa "proseLines" (EApp (EApp (EVar "filterList") (EApp (EVar "ownLine") (EVar "srcLines"))) (EVar "dashes"))))))))
+(DTypeSig false "isBlockComment" (TyFun (TyCon "Comment") (TyCon "Bool")))
+(DFunDef false "isBlockComment" ((PVar "c")) (EApp (EApp (EVar "startsWith") (ELit (LString "{-"))) (EApp (EVar "commentText") (EVar "c"))))
+(DTypeSig false "ownLine" (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyCon "Comment") (TyCon "Bool"))))
+(DFunDef false "ownLine" ((PVar "srcLines") (PVar "c")) (EBlock (DoLet false false (PVar "i") (EBinOp "-" (EApp (EVar "commentLine") (EVar "c")) (ELit (LInt 1)))) (DoExpr (EBinOp "||" (EBinOp "==" (EApp (EVar "commentCol") (EVar "c")) (ELit (LInt 0))) (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "i") (ELit (LInt 0))) (EBinOp "<" (EVar "i") (EApp (EVar "arrayLength") (EVar "srcLines")))) (EBinOp "==" (EApp (EVar "trim") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EApp (EVar "commentCol") (EVar "c"))) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "srcLines")))) (ELit (LString ""))))))))
 (DTypeSig true "codeLineAt" (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyCon "Int") (TyCon "String"))))
 (DFunDef false "codeLineAt" ((PVar "codeLines") (PVar "line")) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "line") (ELit (LInt 1))) (EBinOp "<=" (EVar "line") (EApp (EVar "arrayLength") (EVar "codeLines")))) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "line") (ELit (LInt 1)))) (EVar "codeLines")) (EIf (EVar "otherwise") (ELit (LString "")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "nameSetOf" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit"))))
@@ -1549,13 +1574,13 @@ isCodeText l = not (trim l == "" || startsWith "--" (trim l))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Expr" true) (mem "Decl" true) (mem "noBinderId" false) (mem "noDeclLoc" false) (mem "Ty" true) (mem "Pat" true) (mem "UseMember" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "joinWith" false) (mem "startsWith" false) (mem "listLen" false) (mem "anyList" false) (mem "joinNl" false) (mem "dedupBy" false))))
-(DUse false (UseGroup ("list") ((mem "sortBy" false) (mem "last" false) (mem "reverse" false) (mem "findMap" false))))
+(DUse false (UseGroup ("list") ((mem "sortBy" false) (mem "last" false) (mem "reverse" false) (mem "findMap" false) (mem "partition" false))))
 (DUse false (UseGroup ("array") ((mem "get" false "arrayGet"))))
 (DUse false (UseGroup ("string") ((mem "split" false) (mem "isUpper" false) (mem "words" false) (mem "unwords" false) (mem "trim" false) (mem "trimLeft" false))))
 (DUse false (UseGroup ("support" "path") ((mem "stripMdk" false))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "mustCompile" false) (mem "find" false "reFind") (mem "escape" false) (mem "isMatch" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "commentLine" false) (mem "commentText" false) (mem "commentCol" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Ctx" true) (mem "DirScope" true) (mem "Directive" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" true) (mem "FixEdit" true) (mem "Memo" false) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "factLines" false) (mem "factScopes" false) (mem "fixLater" false) (mem "stdlibKnowsModule" false) (mem "stdlibSigIn" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "CommentBlock" true) (mem "Ctx" true) (mem "DirScope" true) (mem "Directive" true) (mem "FileFacts" true) (mem "ProseComments" true) (mem "Finding" true) (mem "Fix" true) (mem "FixEdit" true) (mem "Memo" false) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "factLines" false) (mem "factScopes" false) (mem "fixLater" false) (mem "stdlibKnowsModule" false) (mem "stdlibSigIn" false))))
 (DUse false (UseGroup ("tools" "lint_fix") ((mem "Binding" true) (mem "parenIfNeeded" false))))
 (DUse false (UseGroup ("tools" "lint_scope") ((mem "BinderKind" true) (mem "Binder" true) (mem "binderOf" false) (mem "bindersNamed" false) (mem "wildImports" false))))
 (DUse true (UseGroup ("frontend" "ast_walk") ((mem "childExprs" false) (mem "mapChildExprs" false) (mem "stmtExprs" false))))
@@ -1883,13 +1908,18 @@ isCodeText l = not (trim l == "" || startsWith "--" (trim l))
 (DFunDef false "codePortions" ((PList) PWild PWild) (EListLit))
 (DFunDef false "codePortions" ((PCons (PVar "l") (PVar "rest")) (PList) (PVar "n")) (EBinOp "::" (EVar "l") (EApp (EApp (EApp (EVar "codePortions") (EVar "rest")) (EListLit)) (EBinOp "+" (EVar "n") (ELit (LInt 1))))))
 (DFunDef false "codePortions" ((PCons (PVar "l") (PVar "rest")) (PCons (PVar "c") (PVar "cs")) (PVar "n")) (EIf (EBinOp "<" (EApp (EVar "commentLine") (EVar "c")) (EVar "n")) (EApp (EApp (EApp (EVar "codePortions") (EBinOp "::" (EVar "l") (EVar "rest"))) (EVar "cs")) (EVar "n")) (EIf (EBinOp "==" (EApp (EVar "commentLine") (EVar "c")) (EVar "n")) (EBinOp "::" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EApp (EVar "commentCol") (EVar "c"))) (EVar "l")) (EApp (EApp (EApp (EVar "codePortions") (EVar "rest")) (EVar "cs")) (EBinOp "+" (EVar "n") (ELit (LInt 1))))) (EIf (EVar "otherwise") (EBinOp "::" (EVar "l") (EApp (EApp (EApp (EVar "codePortions") (EVar "rest")) (EBinOp "::" (EVar "c") (EVar "cs"))) (EBinOp "+" (EVar "n") (ELit (LInt 1))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DData Public "CommentBlock" () ((variant "CommentBlock" (ConPos (TyCon "Int") (TyCon "Int") (TyCon "Bool") (TyCon "String")))) ())
 (DTypeSig true "commentBlocks" (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyApp (TyCon "List") (TyCon "CommentBlock")))))
 (DFunDef false "commentBlocks" ((PList) PWild) (EListLit))
 (DFunDef false "commentBlocks" ((PCons (PVar "c") (PVar "rest")) (PVar "codeLines")) (EBlock (DoLet false false (PVar "line") (EApp (EVar "commentLine") (EVar "c"))) (DoLet false false (PVar "trailing") (EBinOp "/=" (EApp (EVar "trimWs") (EApp (EApp (EVar "codeLineAt") (EVar "codeLines")) (EVar "line"))) (ELit (LString "")))) (DoExpr (EIf (EVar "trailing") (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "CommentBlock") (EVar "line")) (EVar "line")) (EVar "True")) (EApp (EVar "commentText") (EVar "c"))) (EApp (EApp (EVar "commentBlocks") (EVar "rest")) (EVar "codeLines"))) (EMatch (EApp (EApp (EApp (EApp (EVar "commentBlockExtend") (EVar "rest")) (EVar "codeLines")) (EVar "line")) (EApp (EVar "commentText") (EVar "c"))) (arm (PTuple (PVar "lastLine") (PVar "text") (PVar "rest2")) () (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "CommentBlock") (EVar "line")) (EVar "lastLine")) (EVar "False")) (EVar "text")) (EApp (EApp (EVar "commentBlocks") (EVar "rest2")) (EVar "codeLines")))))))))
 (DTypeSig false "commentBlockExtend" (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyTuple (TyCon "Int") (TyCon "String") (TyApp (TyCon "List") (TyCon "Comment"))))))))
 (DFunDef false "commentBlockExtend" ((PList) PWild (PVar "last") (PVar "text")) (ETuple (EVar "last") (EVar "text") (EListLit)))
 (DFunDef false "commentBlockExtend" ((PCons (PVar "c") (PVar "rest")) (PVar "codeLines") (PVar "last") (PVar "text")) (EIf (EBinOp "&&" (EBinOp "==" (EApp (EVar "commentLine") (EVar "c")) (EBinOp "+" (EVar "last") (ELit (LInt 1)))) (EBinOp "==" (EApp (EVar "trimWs") (EApp (EApp (EVar "codeLineAt") (EVar "codeLines")) (EBinOp "+" (EVar "last") (ELit (LInt 1))))) (ELit (LString "")))) (EApp (EApp (EApp (EApp (EVar "commentBlockExtend") (EVar "rest")) (EVar "codeLines")) (EBinOp "+" (EVar "last") (ELit (LInt 1)))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "text"))) (ELit (LString "\n"))) (EApp (EVar "$core.display") (EApp (EVar "commentText") (EVar "c")))) (ELit (LString "")))) (EIf (EVar "otherwise") (ETuple (EVar "last") (EVar "text") (EBinOp "::" (EVar "c") (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig true "proseComments" (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyCon "ProseComments"))))
+(DFunDef false "proseComments" ((PVar "srcLines") (PVar "comments")) (EBlock (DoLet false false (PTuple (PVar "blocks") (PVar "dashes")) (EApp (EApp (EVar "partition") (EVar "isBlockComment")) (EVar "comments"))) (DoExpr (ERecordCreate "ProseComments" ((fa "proseBlocks" (EVar "blocks")) (fa "proseLines" (EApp (EApp (EVar "filterList") (EApp (EVar "ownLine") (EVar "srcLines"))) (EVar "dashes"))))))))
+(DTypeSig false "isBlockComment" (TyFun (TyCon "Comment") (TyCon "Bool")))
+(DFunDef false "isBlockComment" ((PVar "c")) (EApp (EApp (EVar "startsWith") (ELit (LString "{-"))) (EApp (EVar "commentText") (EVar "c"))))
+(DTypeSig false "ownLine" (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyCon "Comment") (TyCon "Bool"))))
+(DFunDef false "ownLine" ((PVar "srcLines") (PVar "c")) (EBlock (DoLet false false (PVar "i") (EBinOp "-" (EApp (EVar "commentLine") (EVar "c")) (ELit (LInt 1)))) (DoExpr (EBinOp "||" (EBinOp "==" (EApp (EVar "commentCol") (EVar "c")) (ELit (LInt 0))) (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "i") (ELit (LInt 0))) (EBinOp "<" (EVar "i") (EApp (EVar "arrayLength") (EVar "srcLines")))) (EBinOp "==" (EApp (EVar "trim") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EApp (EVar "commentCol") (EVar "c"))) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "srcLines")))) (ELit (LString ""))))))))
 (DTypeSig true "codeLineAt" (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyCon "Int") (TyCon "String"))))
 (DFunDef false "codeLineAt" ((PVar "codeLines") (PVar "line")) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "line") (ELit (LInt 1))) (EBinOp "<=" (EVar "line") (EApp (EVar "arrayLength") (EVar "codeLines")))) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "line") (ELit (LInt 1)))) (EVar "codeLines")) (EIf (EVar "otherwise") (ELit (LString "")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "nameSetOf" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit"))))

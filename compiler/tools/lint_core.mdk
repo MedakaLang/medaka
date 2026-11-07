@@ -122,6 +122,18 @@ export
 findingFixOf : Finding -> Option Fix
 findingFixOf f = memoGet f.fix
 
+-- One comment block: consecutive full-line comments form a block; a trailing
+-- comment (code before it on its line) is a block of its own.  Fields: first
+-- line, last line, trailing?, the joined comment text.
+public export data CommentBlock = CommentBlock Int Int Bool String
+
+-- The comments a reader meets as prose, each list in source order: every block
+-- comment, and every `--` comment with nothing but blanks before it on its line.
+public export data ProseComments = ProseComments {
+  proseBlocks : List Comment,
+  proseLines : List Comment,
+}
+
 -- What every rule may ask of the one file being linted, each derived at most
 -- once per file and only if some active rule asks: the source text, its comment
 -- side channel, the constructor `Oracle`, every top-level decl paired with its
@@ -135,9 +147,16 @@ findingFixOf f = memoGet f.fix
 -- `ffCanonPath` is the file's canonical path, filled the same way (`withCanonPath`)
 -- and empty when the caller did not look: the declaration index keys files by
 -- canonical path, which a path typed with `..` or through a symlink is not.
+-- The comment-reading rules share one pass over the comments against the source
+-- split on `\n`: `ffCodeLines` is each line's code portion (`codePortions`),
+-- `ffCommentBlocks` the comments grouped into blocks (`commentBlocks`), and
+-- `ffProseComments` the comments a reader meets as prose (`proseComments`).
 public export data FileFacts = FileFacts {
   ffSrc : String,
   ffComments : Memo (List Comment),
+  ffCodeLines : Memo (Array String),
+  ffCommentBlocks : Memo (List CommentBlock),
+  ffProseComments : Memo ProseComments,
   ffOracle : Memo Oracle,
   ffDeclLocs : Memo (List (Decl, Option Loc)),
   ffDupClauses : Memo (List DupClause),
@@ -150,6 +169,18 @@ public export data FileFacts = FileFacts {
 export
 factComments : FileFacts -> List Comment
 factComments ff = memoGet ff.ffComments
+
+export
+factCodeLines : FileFacts -> Array String
+factCodeLines ff = memoGet ff.ffCodeLines
+
+export
+factCommentBlocks : FileFacts -> List CommentBlock
+factCommentBlocks ff = memoGet ff.ffCommentBlocks
+
+export
+factProseComments : FileFacts -> ProseComments
+factProseComments ff = memoGet ff.ffProseComments
 
 export
 factOracle : FileFacts -> Oracle

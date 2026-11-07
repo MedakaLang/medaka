@@ -12,16 +12,17 @@ import support.util.{
   contains, filterList, splitOnChar, joinWith, startsWith, listLen, anyList,
   joinNl, dedupBy
 }
-import list.{sortBy, last, reverse, findMap}
+import list.{sortBy, last, reverse, findMap, partition}
 import array.{get as arrayGet}
 import string.{split, isUpper, words, unwords, trim, trimLeft}
 import support.path.{stripMdk}
 import regex.{Regex, mustCompile, find as reFind, escape, isMatch}
 import frontend.lexer.{Comment, commentLine, commentText, commentCol}
 import tools.lint_core.{
-  Applicability(..), Ctx(..), DirScope(..), Directive(..), FileFacts(..),
-  Finding(..), Fix(..), FixEdit(..), Memo, StdlibIndex, Visitor(..), factLines,
-  factScopes, fixLater, stdlibKnowsModule, stdlibSigIn
+  Applicability(..), CommentBlock(..), Ctx(..), DirScope(..), Directive(..),
+  FileFacts(..), ProseComments(..), Finding(..), Fix(..), FixEdit(..), Memo,
+  StdlibIndex, Visitor(..), factLines, factScopes, fixLater, stdlibKnowsModule,
+  stdlibSigIn
 }
 import tools.lint_fix.{Binding(..), parenIfNeeded}
 import tools.lint_scope.{
@@ -1023,11 +1024,7 @@ codePortions (l :: rest) (c :: cs) n
     stringSlice 0 (commentCol c) l :: codePortions rest cs (n + 1)
   | otherwise = l :: codePortions rest (c :: cs) (n + 1)
 
--- One claim candidate per comment BLOCK: consecutive full-line comments form a
--- block; a trailing comment (code before it on its line) is a block of its own.
--- Fields: first line, last line, trailing?, the joined comment text.
-public export data CommentBlock = CommentBlock Int Int Bool String
-
+-- The comments grouped into `CommentBlock`s against the code portion of each line.
 export
 commentBlocks : List Comment -> Array String -> List CommentBlock
 commentBlocks [] _ = []
@@ -1051,6 +1048,29 @@ commentBlockExtend (c :: rest) codeLines last text
     && trimWs (codeLineAt codeLines (last + 1)) == "" =
     commentBlockExtend rest codeLines (last + 1) "\{text}\n\{commentText c}"
   | otherwise = (last, text, c :: rest)
+
+-- The comments split into the block comments and the `--` comments with only
+-- blanks before them on their line, against `srcLines`, the source split on
+-- `\n`.  A comment in column 0 needs no look at its line.
+export
+proseComments : Array String -> List Comment -> ProseComments
+proseComments srcLines comments =
+  let (blocks, dashes) = partition isBlockComment comments
+  ProseComments {
+    proseBlocks = blocks,
+    proseLines = filterList (ownLine srcLines) dashes,
+  }
+
+isBlockComment : Comment -> Bool
+isBlockComment c = startsWith "{-" (commentText c)
+
+ownLine : Array String -> Comment -> Bool
+ownLine srcLines c =
+  let i = commentLine c - 1
+  commentCol c == 0
+    || i >= 0
+      && i < arrayLength srcLines
+      && trim (stringSlice 0 (commentCol c) (arrayGetUnsafe i srcLines)) == ""
 
 export
 codeLineAt : Array String -> Int -> String

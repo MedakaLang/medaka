@@ -20,15 +20,14 @@ import tools.lint_core.{
   RuleMeta(..),
   Scope(..),
   StdlibIndex,
-  factComments,
+  CommentBlock(..),
+  factCodeLines,
+  factCommentBlocks,
   mkRule,
   noFix,
 }
 import tools.lint_shared.{
-  CommentBlock(..),
   codeLineAt,
-  codePortions,
-  commentBlocks,
   ruleNamePromissoryReader,
   trimWs,
 }
@@ -81,12 +80,10 @@ rulePromissoryReader : StdlibIndex ->
   List Decl ->
   List Finding
 rulePromissoryReader _ path facts _ _ =
-  let ls = splitNl facts.ffSrc
-  let comments = factComments facts
-  let codeLines = arrayFromList (codePortions ls comments 1)
+  let codeLines = factCodeLines facts
   flatMap
     (promissoryFinding path codeLines)
-    (promissoryClaims (commentBlocks comments codeLines))
+    (promissoryClaims (factCommentBlocks facts))
 
 -- Blocks whose (quote-stripped, lowercased) text makes a promissory claim, as
 -- (claim line, its raw text, the block).

@@ -1,5 +1,5 @@
 # META
-source_lines=671
+source_lines=702
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_core.mdk — the lint framework's data types: `Finding`,
@@ -126,6 +126,18 @@ export
 findingFixOf : Finding -> Option Fix
 findingFixOf f = memoGet f.fix
 
+-- One comment block: consecutive full-line comments form a block; a trailing
+-- comment (code before it on its line) is a block of its own.  Fields: first
+-- line, last line, trailing?, the joined comment text.
+public export data CommentBlock = CommentBlock Int Int Bool String
+
+-- The comments a reader meets as prose, each list in source order: every block
+-- comment, and every `--` comment with nothing but blanks before it on its line.
+public export data ProseComments = ProseComments {
+  proseBlocks : List Comment,
+  proseLines : List Comment,
+}
+
 -- What every rule may ask of the one file being linted, each derived at most
 -- once per file and only if some active rule asks: the source text, its comment
 -- side channel, the constructor `Oracle`, every top-level decl paired with its
@@ -139,9 +151,16 @@ findingFixOf f = memoGet f.fix
 -- `ffCanonPath` is the file's canonical path, filled the same way (`withCanonPath`)
 -- and empty when the caller did not look: the declaration index keys files by
 -- canonical path, which a path typed with `..` or through a symlink is not.
+-- The comment-reading rules share one pass over the comments against the source
+-- split on `\n`: `ffCodeLines` is each line's code portion (`codePortions`),
+-- `ffCommentBlocks` the comments grouped into blocks (`commentBlocks`), and
+-- `ffProseComments` the comments a reader meets as prose (`proseComments`).
 public export data FileFacts = FileFacts {
   ffSrc : String,
   ffComments : Memo (List Comment),
+  ffCodeLines : Memo (Array String),
+  ffCommentBlocks : Memo (List CommentBlock),
+  ffProseComments : Memo ProseComments,
   ffOracle : Memo Oracle,
   ffDeclLocs : Memo (List (Decl, Option Loc)),
   ffDupClauses : Memo (List DupClause),
@@ -154,6 +173,18 @@ public export data FileFacts = FileFacts {
 export
 factComments : FileFacts -> List Comment
 factComments ff = memoGet ff.ffComments
+
+export
+factCodeLines : FileFacts -> Array String
+factCodeLines ff = memoGet ff.ffCodeLines
+
+export
+factCommentBlocks : FileFacts -> List CommentBlock
+factCommentBlocks ff = memoGet ff.ffCommentBlocks
+
+export
+factProseComments : FileFacts -> ProseComments
+factProseComments ff = memoGet ff.ffProseComments
 
 export
 factOracle : FileFacts -> Oracle
@@ -712,9 +743,17 @@ public export data DupClause = DupClause {
 (DFunDef false "fixLater" () (EVar "memoNew"))
 (DTypeSig true "findingFixOf" (TyFun (TyCon "Finding") (TyApp (TyCon "Option") (TyCon "Fix"))))
 (DFunDef false "findingFixOf" ((PVar "f")) (EApp (EVar "memoGet") (EFieldAccess (EVar "f") "fix")))
-(DData Public "FileFacts" () ((variant "FileFacts" (ConNamed (field "ffSrc" (TyCon "String")) (field "ffComments" (TyApp (TyCon "Memo") (TyApp (TyCon "List") (TyCon "Comment")))) (field "ffOracle" (TyApp (TyCon "Memo") (TyCon "Oracle"))) (field "ffDeclLocs" (TyApp (TyCon "Memo") (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc")))))) (field "ffDupClauses" (TyApp (TyCon "Memo") (TyApp (TyCon "List") (TyCon "DupClause")))) (field "ffScopes" (TyApp (TyCon "Memo") (TyCon "FileScopes"))) (field "ffLines" (TyApp (TyCon "Memo") (TyApp (TyCon "Array") (TyCon "String")))) (field "ffLocalMods" (TyApp (TyCon "List") (TyCon "String"))) (field "ffCanonPath" (TyCon "String"))))) ())
+(DData Public "CommentBlock" () ((variant "CommentBlock" (ConPos (TyCon "Int") (TyCon "Int") (TyCon "Bool") (TyCon "String")))) ())
+(DData Public "ProseComments" () ((variant "ProseComments" (ConNamed (field "proseBlocks" (TyApp (TyCon "List") (TyCon "Comment"))) (field "proseLines" (TyApp (TyCon "List") (TyCon "Comment")))))) ())
+(DData Public "FileFacts" () ((variant "FileFacts" (ConNamed (field "ffSrc" (TyCon "String")) (field "ffComments" (TyApp (TyCon "Memo") (TyApp (TyCon "List") (TyCon "Comment")))) (field "ffCodeLines" (TyApp (TyCon "Memo") (TyApp (TyCon "Array") (TyCon "String")))) (field "ffCommentBlocks" (TyApp (TyCon "Memo") (TyApp (TyCon "List") (TyCon "CommentBlock")))) (field "ffProseComments" (TyApp (TyCon "Memo") (TyCon "ProseComments"))) (field "ffOracle" (TyApp (TyCon "Memo") (TyCon "Oracle"))) (field "ffDeclLocs" (TyApp (TyCon "Memo") (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc")))))) (field "ffDupClauses" (TyApp (TyCon "Memo") (TyApp (TyCon "List") (TyCon "DupClause")))) (field "ffScopes" (TyApp (TyCon "Memo") (TyCon "FileScopes"))) (field "ffLines" (TyApp (TyCon "Memo") (TyApp (TyCon "Array") (TyCon "String")))) (field "ffLocalMods" (TyApp (TyCon "List") (TyCon "String"))) (field "ffCanonPath" (TyCon "String"))))) ())
 (DTypeSig true "factComments" (TyFun (TyCon "FileFacts") (TyApp (TyCon "List") (TyCon "Comment"))))
 (DFunDef false "factComments" ((PVar "ff")) (EApp (EVar "memoGet") (EFieldAccess (EVar "ff") "ffComments")))
+(DTypeSig true "factCodeLines" (TyFun (TyCon "FileFacts") (TyApp (TyCon "Array") (TyCon "String"))))
+(DFunDef false "factCodeLines" ((PVar "ff")) (EApp (EVar "memoGet") (EFieldAccess (EVar "ff") "ffCodeLines")))
+(DTypeSig true "factCommentBlocks" (TyFun (TyCon "FileFacts") (TyApp (TyCon "List") (TyCon "CommentBlock"))))
+(DFunDef false "factCommentBlocks" ((PVar "ff")) (EApp (EVar "memoGet") (EFieldAccess (EVar "ff") "ffCommentBlocks")))
+(DTypeSig true "factProseComments" (TyFun (TyCon "FileFacts") (TyCon "ProseComments")))
+(DFunDef false "factProseComments" ((PVar "ff")) (EApp (EVar "memoGet") (EFieldAccess (EVar "ff") "ffProseComments")))
 (DTypeSig true "factOracle" (TyFun (TyCon "FileFacts") (TyCon "Oracle")))
 (DFunDef false "factOracle" ((PVar "ff")) (EApp (EVar "memoGet") (EFieldAccess (EVar "ff") "ffOracle")))
 (DTypeSig true "factDeclLocs" (TyFun (TyCon "FileFacts") (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))))))
@@ -881,9 +920,17 @@ public export data DupClause = DupClause {
 (DFunDef false "fixLater" () (EVar "memoNew"))
 (DTypeSig true "findingFixOf" (TyFun (TyCon "Finding") (TyApp (TyCon "Option") (TyCon "Fix"))))
 (DFunDef false "findingFixOf" ((PVar "f")) (EApp (EVar "memoGet") (EFieldAccess (EVar "f") "fix")))
-(DData Public "FileFacts" () ((variant "FileFacts" (ConNamed (field "ffSrc" (TyCon "String")) (field "ffComments" (TyApp (TyCon "Memo") (TyApp (TyCon "List") (TyCon "Comment")))) (field "ffOracle" (TyApp (TyCon "Memo") (TyCon "Oracle"))) (field "ffDeclLocs" (TyApp (TyCon "Memo") (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc")))))) (field "ffDupClauses" (TyApp (TyCon "Memo") (TyApp (TyCon "List") (TyCon "DupClause")))) (field "ffScopes" (TyApp (TyCon "Memo") (TyCon "FileScopes"))) (field "ffLines" (TyApp (TyCon "Memo") (TyApp (TyCon "Array") (TyCon "String")))) (field "ffLocalMods" (TyApp (TyCon "List") (TyCon "String"))) (field "ffCanonPath" (TyCon "String"))))) ())
+(DData Public "CommentBlock" () ((variant "CommentBlock" (ConPos (TyCon "Int") (TyCon "Int") (TyCon "Bool") (TyCon "String")))) ())
+(DData Public "ProseComments" () ((variant "ProseComments" (ConNamed (field "proseBlocks" (TyApp (TyCon "List") (TyCon "Comment"))) (field "proseLines" (TyApp (TyCon "List") (TyCon "Comment")))))) ())
+(DData Public "FileFacts" () ((variant "FileFacts" (ConNamed (field "ffSrc" (TyCon "String")) (field "ffComments" (TyApp (TyCon "Memo") (TyApp (TyCon "List") (TyCon "Comment")))) (field "ffCodeLines" (TyApp (TyCon "Memo") (TyApp (TyCon "Array") (TyCon "String")))) (field "ffCommentBlocks" (TyApp (TyCon "Memo") (TyApp (TyCon "List") (TyCon "CommentBlock")))) (field "ffProseComments" (TyApp (TyCon "Memo") (TyCon "ProseComments"))) (field "ffOracle" (TyApp (TyCon "Memo") (TyCon "Oracle"))) (field "ffDeclLocs" (TyApp (TyCon "Memo") (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc")))))) (field "ffDupClauses" (TyApp (TyCon "Memo") (TyApp (TyCon "List") (TyCon "DupClause")))) (field "ffScopes" (TyApp (TyCon "Memo") (TyCon "FileScopes"))) (field "ffLines" (TyApp (TyCon "Memo") (TyApp (TyCon "Array") (TyCon "String")))) (field "ffLocalMods" (TyApp (TyCon "List") (TyCon "String"))) (field "ffCanonPath" (TyCon "String"))))) ())
 (DTypeSig true "factComments" (TyFun (TyCon "FileFacts") (TyApp (TyCon "List") (TyCon "Comment"))))
 (DFunDef false "factComments" ((PVar "ff")) (EApp (EVar "memoGet") (EFieldAccess (EVar "ff") "ffComments")))
+(DTypeSig true "factCodeLines" (TyFun (TyCon "FileFacts") (TyApp (TyCon "Array") (TyCon "String"))))
+(DFunDef false "factCodeLines" ((PVar "ff")) (EApp (EVar "memoGet") (EFieldAccess (EVar "ff") "ffCodeLines")))
+(DTypeSig true "factCommentBlocks" (TyFun (TyCon "FileFacts") (TyApp (TyCon "List") (TyCon "CommentBlock"))))
+(DFunDef false "factCommentBlocks" ((PVar "ff")) (EApp (EVar "memoGet") (EFieldAccess (EVar "ff") "ffCommentBlocks")))
+(DTypeSig true "factProseComments" (TyFun (TyCon "FileFacts") (TyCon "ProseComments")))
+(DFunDef false "factProseComments" ((PVar "ff")) (EApp (EVar "memoGet") (EFieldAccess (EVar "ff") "ffProseComments")))
 (DTypeSig true "factOracle" (TyFun (TyCon "FileFacts") (TyCon "Oracle")))
 (DFunDef false "factOracle" ((PVar "ff")) (EApp (EVar "memoGet") (EFieldAccess (EVar "ff") "ffOracle")))
 (DTypeSig true "factDeclLocs" (TyFun (TyCon "FileFacts") (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))))))

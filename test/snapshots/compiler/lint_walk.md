@@ -1,5 +1,5 @@
 # META
-source_lines=1805
+source_lines=1818
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_walk.mdk — the lint runner: `lintProgram*` and the one
@@ -150,8 +150,11 @@ import tools.lint_scope.{
   wildImports,
 }
 import tools.lint_shared.{
+  codePortions,
   collectDirectives,
+  commentBlocks,
   declLocList,
+  proseComments,
   sortUniqS,
   zipDeclPos,
 }
@@ -165,9 +168,19 @@ export
 mkFileFacts : String -> List Decl -> Positions -> FileFacts
 mkFileFacts src prog pos =
   let declLocs = memoNew (_ => declLocList pos prog)
+  let comments = memoNew (_ => collectComments src)
+  let srcLineList = memoNew (_ => splitNl src)
+  let srcLines = memoMap fromList srcLineList
+  let codeLines = memoNew (_ =>
+    fromList (codePortions (memoGet srcLineList) (memoGet comments) 1))
   FileFacts {
     ffSrc = src,
-    ffComments = memoNew (_ => collectComments src),
+    ffComments = comments,
+    ffCodeLines = codeLines,
+    ffCommentBlocks =
+      memoNew (_ => commentBlocks (memoGet comments) (memoGet codeLines)),
+    ffProseComments =
+      memoNew (_ => proseComments (memoGet srcLines) (memoGet comments)),
     ffOracle = memoNew (_ => buildOracle prog),
     ffDeclLocs = declLocs,
     ffDupClauses = memoNew (_ => flatMap dupClauseOfDecl (memoGet declLocs)),
@@ -1830,12 +1843,12 @@ appendIfPath file diag (path, src, diags) =
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "collectComments" false) (mem "tokenizeWithOffsetPairs" false) (mem "commentLine" false) (mem "commentText" false))))
 (DUse false (UseGroup ("tools" "lint_core") ((mem "Ctx" true) (mem "DirScope" true) (mem "Directive" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" true) (mem "Fixability" true) (mem "ProjectRule" true) (mem "Rule" true) (mem "RuleCheck" true) (mem "RuleMeta" false) (mem "StdlibIndex" true) (mem "Summary" false) (mem "StdlibIndexError" true) (mem "Visitor" true) (mem "factComments" false) (mem "factDeclLocs" false) (mem "fixToDiagFix" false) (mem "findingFixOf" false) (mem "factScopes" false) (mem "clampApplicability" false) (mem "emptyStdlibIndex" false) (mem "maxApplicability" false) (mem "memoGet" false) (mem "memoMap" false) (mem "memoNew" false) (mem "mkStdlibIndex" false) (mem "projectIndexOf" false) (mem "stdlibIndexFingerprint" false) (mem "stdlibLocalModAsked" false) (mem "withStdlibLocalMods" false) (mem "needsProjectIndex" false) (mem "needsScopes" false) (mem "needsStdlibIndex" false) (mem "needsWildIndex" false) (mem "readsIndex" false))))
 (DUse false (UseGroup ("tools" "lint_scope") ((mem "Binder" true) (mem "BinderKind" true) (mem "FileScopes" false) (mem "Use" true) (mem "bindersNamed" false) (mem "bindersNamedIn" false) (mem "buildScopes" false) (mem "usesNamedIn" false) (mem "wildImports" false))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "collectDirectives" false) (mem "declLocList" false) (mem "sortUniqS" false) (mem "zipDeclPos" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "codePortions" false) (mem "collectDirectives" false) (mem "commentBlocks" false) (mem "declLocList" false) (mem "proseComments" false) (mem "sortUniqS" false) (mem "zipDeclPos" false))))
 (DUse false (UseGroup ("tools" "lint_fix") ((mem "demoteOverComments" false))))
 (DUse false (UseGroup ("tools" "lint_dup") ((mem "dupClauseOfDecl" false))))
 (DUse false (UseGroup ("tools" "lint_registry") ((mem "allProjectRules" false) (mem "allRules" false) (mem "projectRuleActive" false) (mem "selectRules" false))))
 (DTypeSig true "mkFileFacts" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Positions") (TyCon "FileFacts")))))
-(DFunDef false "mkFileFacts" ((PVar "src") (PVar "prog") (PVar "pos")) (EBlock (DoLet false false (PVar "declLocs") (EApp (EVar "memoNew") (ELam (PWild) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))) (DoExpr (ERecordCreate "FileFacts" ((fa "ffSrc" (EVar "src")) (fa "ffComments" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "collectComments") (EVar "src"))))) (fa "ffOracle" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "buildOracle") (EVar "prog"))))) (fa "ffDeclLocs" (EVar "declLocs")) (fa "ffDupClauses" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EApp (EVar "flatMap") (EVar "dupClauseOfDecl")) (EApp (EVar "memoGet") (EVar "declLocs")))))) (fa "ffScopes" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "buildScopes") (EVar "prog"))))) (fa "ffLines" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "fromList") (EApp (EVar "lines") (EVar "src")))))) (fa "ffLocalMods" (EListLit)) (fa "ffCanonPath" (ELit (LString ""))))))))
+(DFunDef false "mkFileFacts" ((PVar "src") (PVar "prog") (PVar "pos")) (EBlock (DoLet false false (PVar "declLocs") (EApp (EVar "memoNew") (ELam (PWild) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))) (DoLet false false (PVar "comments") (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "collectComments") (EVar "src"))))) (DoLet false false (PVar "srcLineList") (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "splitNl") (EVar "src"))))) (DoLet false false (PVar "srcLines") (EApp (EApp (EVar "memoMap") (EVar "fromList")) (EVar "srcLineList"))) (DoLet false false (PVar "codeLines") (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "fromList") (EApp (EApp (EApp (EVar "codePortions") (EApp (EVar "memoGet") (EVar "srcLineList"))) (EApp (EVar "memoGet") (EVar "comments"))) (ELit (LInt 1))))))) (DoExpr (ERecordCreate "FileFacts" ((fa "ffSrc" (EVar "src")) (fa "ffComments" (EVar "comments")) (fa "ffCodeLines" (EVar "codeLines")) (fa "ffCommentBlocks" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EApp (EVar "commentBlocks") (EApp (EVar "memoGet") (EVar "comments"))) (EApp (EVar "memoGet") (EVar "codeLines")))))) (fa "ffProseComments" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EApp (EVar "proseComments") (EApp (EVar "memoGet") (EVar "srcLines"))) (EApp (EVar "memoGet") (EVar "comments")))))) (fa "ffOracle" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "buildOracle") (EVar "prog"))))) (fa "ffDeclLocs" (EVar "declLocs")) (fa "ffDupClauses" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EApp (EVar "flatMap") (EVar "dupClauseOfDecl")) (EApp (EVar "memoGet") (EVar "declLocs")))))) (fa "ffScopes" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "buildScopes") (EVar "prog"))))) (fa "ffLines" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "fromList") (EApp (EVar "lines") (EVar "src")))))) (fa "ffLocalMods" (EListLit)) (fa "ffCanonPath" (ELit (LString ""))))))))
 (DTypeSig true "projectWildMods" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "projectWildMods" ((PVar "path") (PVar "prog")) (EMatch (EApp (EVar "wildModsOf") (EVar "prog")) (arm (PList) () (EListLit)) (arm (PVar "wild") () (EApp (EApp (EVar "localModsIn") (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf") (EVar "path")))) (EVar "wild")))))
 (DTypeSig true "wildModsOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
@@ -2231,12 +2244,12 @@ appendIfPath file diag (path, src, diags) =
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "collectComments" false) (mem "tokenizeWithOffsetPairs" false) (mem "commentLine" false) (mem "commentText" false))))
 (DUse false (UseGroup ("tools" "lint_core") ((mem "Ctx" true) (mem "DirScope" true) (mem "Directive" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" true) (mem "Fixability" true) (mem "ProjectRule" true) (mem "Rule" true) (mem "RuleCheck" true) (mem "RuleMeta" false) (mem "StdlibIndex" true) (mem "Summary" false) (mem "StdlibIndexError" true) (mem "Visitor" true) (mem "factComments" false) (mem "factDeclLocs" false) (mem "fixToDiagFix" false) (mem "findingFixOf" false) (mem "factScopes" false) (mem "clampApplicability" false) (mem "emptyStdlibIndex" false) (mem "maxApplicability" false) (mem "memoGet" false) (mem "memoMap" false) (mem "memoNew" false) (mem "mkStdlibIndex" false) (mem "projectIndexOf" false) (mem "stdlibIndexFingerprint" false) (mem "stdlibLocalModAsked" false) (mem "withStdlibLocalMods" false) (mem "needsProjectIndex" false) (mem "needsScopes" false) (mem "needsStdlibIndex" false) (mem "needsWildIndex" false) (mem "readsIndex" false))))
 (DUse false (UseGroup ("tools" "lint_scope") ((mem "Binder" true) (mem "BinderKind" true) (mem "FileScopes" false) (mem "Use" true) (mem "bindersNamed" false) (mem "bindersNamedIn" false) (mem "buildScopes" false) (mem "usesNamedIn" false) (mem "wildImports" false))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "collectDirectives" false) (mem "declLocList" false) (mem "sortUniqS" false) (mem "zipDeclPos" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "codePortions" false) (mem "collectDirectives" false) (mem "commentBlocks" false) (mem "declLocList" false) (mem "proseComments" false) (mem "sortUniqS" false) (mem "zipDeclPos" false))))
 (DUse false (UseGroup ("tools" "lint_fix") ((mem "demoteOverComments" false))))
 (DUse false (UseGroup ("tools" "lint_dup") ((mem "dupClauseOfDecl" false))))
 (DUse false (UseGroup ("tools" "lint_registry") ((mem "allProjectRules" false) (mem "allRules" false) (mem "projectRuleActive" false) (mem "selectRules" false))))
 (DTypeSig true "mkFileFacts" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Positions") (TyCon "FileFacts")))))
-(DFunDef false "mkFileFacts" ((PVar "src") (PVar "prog") (PVar "pos")) (EBlock (DoLet false false (PVar "declLocs") (EApp (EVar "memoNew") (ELam (PWild) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))) (DoExpr (ERecordCreate "FileFacts" ((fa "ffSrc" (EVar "src")) (fa "ffComments" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "collectComments") (EVar "src"))))) (fa "ffOracle" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "buildOracle") (EVar "prog"))))) (fa "ffDeclLocs" (EVar "declLocs")) (fa "ffDupClauses" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EApp (EDictApp "flatMap") (EVar "dupClauseOfDecl")) (EApp (EVar "memoGet") (EVar "declLocs")))))) (fa "ffScopes" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "buildScopes") (EVar "prog"))))) (fa "ffLines" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "fromList") (EApp (EVar "lines") (EVar "src")))))) (fa "ffLocalMods" (EListLit)) (fa "ffCanonPath" (ELit (LString ""))))))))
+(DFunDef false "mkFileFacts" ((PVar "src") (PVar "prog") (PVar "pos")) (EBlock (DoLet false false (PVar "declLocs") (EApp (EVar "memoNew") (ELam (PWild) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))) (DoLet false false (PVar "comments") (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "collectComments") (EVar "src"))))) (DoLet false false (PVar "srcLineList") (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "splitNl") (EVar "src"))))) (DoLet false false (PVar "srcLines") (EApp (EApp (EVar "memoMap") (EVar "fromList")) (EVar "srcLineList"))) (DoLet false false (PVar "codeLines") (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "fromList") (EApp (EApp (EApp (EVar "codePortions") (EApp (EVar "memoGet") (EVar "srcLineList"))) (EApp (EVar "memoGet") (EVar "comments"))) (ELit (LInt 1))))))) (DoExpr (ERecordCreate "FileFacts" ((fa "ffSrc" (EVar "src")) (fa "ffComments" (EVar "comments")) (fa "ffCodeLines" (EVar "codeLines")) (fa "ffCommentBlocks" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EApp (EVar "commentBlocks") (EApp (EVar "memoGet") (EVar "comments"))) (EApp (EVar "memoGet") (EVar "codeLines")))))) (fa "ffProseComments" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EApp (EVar "proseComments") (EApp (EVar "memoGet") (EVar "srcLines"))) (EApp (EVar "memoGet") (EVar "comments")))))) (fa "ffOracle" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "buildOracle") (EVar "prog"))))) (fa "ffDeclLocs" (EVar "declLocs")) (fa "ffDupClauses" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EApp (EDictApp "flatMap") (EVar "dupClauseOfDecl")) (EApp (EVar "memoGet") (EVar "declLocs")))))) (fa "ffScopes" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "buildScopes") (EVar "prog"))))) (fa "ffLines" (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "fromList") (EApp (EVar "lines") (EVar "src")))))) (fa "ffLocalMods" (EListLit)) (fa "ffCanonPath" (ELit (LString ""))))))))
 (DTypeSig true "projectWildMods" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "projectWildMods" ((PVar "path") (PVar "prog")) (EMatch (EApp (EVar "wildModsOf") (EVar "prog")) (arm (PList) () (EListLit)) (arm (PVar "wild") () (EApp (EApp (EVar "localModsIn") (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf") (EVar "path")))) (EVar "wild")))))
 (DTypeSig true "wildModsOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))

@@ -9,7 +9,7 @@ import frontend.parser.{
   declPosEndLine,
 }
 import driver.diagnostics.{Severity(..)}
-import support.util.{contains, anyList, filterList, splitNl}
+import support.util.{contains, anyList, filterList}
 import string.{toLower, words}
 import regex.{Regex, mustCompile, isMatch}
 import frontend.lexer.{Comment, commentLine, commentText}
@@ -25,14 +25,13 @@ import tools.lint_core.{
   RuleMeta(..),
   Scope(..),
   StdlibIndex,
+  CommentBlock(..),
   factComments,
+  factCommentBlocks,
   mkRule,
   noFix,
 }
 import tools.lint_shared.{
-  CommentBlock(..),
-  codePortions,
-  commentBlocks,
   parseDirective,
   ruleNameDirectiveReason,
   zipDeclPos,
@@ -63,8 +62,8 @@ rule =
 -- sprint found only by hand.
 --
 -- The reason must live in the SAME contiguous comment block as the directive
--- (`commentBlocks`/`codePortions`, rule-promissory-reader's helpers, reused
--- unmodified above) — above it, below it, or beside another directive in the
+-- (`factCommentBlocks`, the grouping rule-promissory-reader reads too) —
+-- above it, below it, or beside another directive in the
 -- same block. Several existing file-scope directives sit on line 1, where
 -- nothing can precede them, and state their reason in the lines that follow
 -- instead (`compiler/tools/lsp.mdk`, `compiler/backend/wasm_emit.mdk`); the
@@ -95,9 +94,7 @@ ruleDirectiveReason : StdlibIndex ->
   List Finding
 ruleDirectiveReason _ _ facts pos prog =
   let comments = factComments facts
-  let ls = splitNl facts.ffSrc
-  let codeLines = arrayFromList (codePortions ls comments 1)
-  let blocks = commentBlocks comments codeLines
+  let blocks = factCommentBlocks facts
   let declZips = zipDeclPos prog (positionsDecls pos)
   let dirCmts = filterList (c => isSome (parseDirective c)) comments
   flatMap (directiveReasonCheck comments blocks declZips) dirCmts
