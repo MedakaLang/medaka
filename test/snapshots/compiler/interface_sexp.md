@@ -1,5 +1,5 @@
 # META
-source_lines=1664
+source_lines=1666
 stages=DESUGAR,MARK
 # SOURCE
 -- The scheme-level interface codec: every type a published scheme is built
@@ -580,6 +580,8 @@ decItems : (ZState -> String -> SExp -> Dec a) ->
   Int ->
   List SExp ->
   Dec (List a)
+-- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 decItems _ z _ _ [] = Ok (z, [])
 decItems f z path i (x :: rest) = do
   (z1, y) <- f z "\{path}/\{i}" x

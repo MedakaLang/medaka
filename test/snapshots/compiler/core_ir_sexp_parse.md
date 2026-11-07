@@ -1,5 +1,5 @@
 # META
-source_lines=866
+source_lines=870
 stages=DESUGAR,MARK
 # SOURCE
 import types.symbol_origins.{SymbolOrigin(..), CoreSymbolOrigins(..)}
@@ -82,6 +82,8 @@ buildSlice : Array Char -> Int -> Int -> String
 buildSlice cs i end = stringConcat (sliceChars cs i end)
 
 sliceChars : Array Char -> Int -> Int -> List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 sliceChars cs i end
   | i >= end = []
   | otherwise = charToStr (arrayGetUnsafe i cs) :: sliceChars cs (i + 1) end
@@ -110,18 +112,20 @@ tokFrom cs i
       tokWord cs i (i + 1)
 
 tokWord : Array Char -> Int -> Int -> List SToken
-tokWord cs start i
-  | i >= arrayLength cs = [TAtom (buildSlice cs start i)]
-  | otherwise =
-    let c = arrayGetUnsafe i cs
-    if c == '(' then
-      TAtom (buildSlice cs start i) :: TOpen :: tokFrom cs (i + 1)
-    else if c == ')' then
-      TAtom (buildSlice cs start i) :: TClose :: tokFrom cs (i + 1)
-    else if isSpaceChar c then
-      TAtom (buildSlice cs start i) :: tokFrom cs (i + 1)
-    else
-      tokWord cs start (i + 1)
+tokWord cs start i0 = go i0
+  where
+    go i
+      | i >= arrayLength cs = [TAtom (buildSlice cs start i)]
+      | otherwise =
+        let c = arrayGetUnsafe i cs
+        if c == '(' then
+          TAtom (buildSlice cs start i) :: TOpen :: tokFrom cs (i + 1)
+        else if c == ')' then
+          TAtom (buildSlice cs start i) :: TClose :: tokFrom cs (i + 1)
+        else if isSpaceChar c then
+          TAtom (buildSlice cs start i) :: tokFrom cs (i + 1)
+        else
+          go (i + 1)
 
 -- tokQuoted: accumulate a quoted string (without the outer quotes, which we
 -- add back so unquote can strip them; this preserves the escStr-escaped form).
@@ -183,6 +187,8 @@ unquote s =
   if n < 2 then s else stringConcat (unqFrom cs 1 (n - 1))
 
 unqFrom : Array Char -> Int -> Int -> List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 unqFrom cs i lim
   | i >= lim = []
   | otherwise =
@@ -228,14 +234,12 @@ parseIntStr s =
 -- The digits of [cs] from [i], negated.  It accumulates downward because the
 -- least Int has no positive counterpart.
 negDigits : Array Char -> Int -> Int -> Int -> Int
-negDigits cs i n acc
-  | i >= n = acc
-  | otherwise =
-    negDigits
-      cs
-      (i + 1)
-      n
-      (acc * 10 - (charCode (arrayGetUnsafe i cs) - charCode '0'))
+negDigits cs i0 n acc0 = go i0 acc0
+  where
+    go i acc
+      | i >= n = acc
+      | otherwise =
+        go (i + 1) (acc * 10 - (charCode (arrayGetUnsafe i cs) - charCode '0'))
 
 toInt : SExp -> Int
 toInt (SAtom s) = parseIntStr s
@@ -900,7 +904,7 @@ toManifestString other =
 (DTypeSig false "tokFrom" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "SToken")))))
 (DFunDef false "tokFrom" ((PVar "cs") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "cs"))) (EListLit) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))) (DoExpr (EIf (EBinOp "==" (EVar "c") (ELit (LChar "("))) (EBinOp "::" (EVar "TOpen") (EApp (EApp (EVar "tokFrom") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EIf (EBinOp "==" (EVar "c") (ELit (LChar ")"))) (EBinOp "::" (EVar "TClose") (EApp (EApp (EVar "tokFrom") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\""))) (EApp (EApp (EApp (EVar "tokQuoted") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EListLit)) (EIf (EApp (EVar "isSpaceChar") (EVar "c")) (EApp (EApp (EVar "tokFrom") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EApp (EApp (EVar "tokWord") (EVar "cs")) (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "tokWord" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "SToken"))))))
-(DFunDef false "tokWord" ((PVar "cs") (PVar "start") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "cs"))) (EListLit (EApp (EVar "TAtom") (EApp (EApp (EApp (EVar "buildSlice") (EVar "cs")) (EVar "start")) (EVar "i")))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))) (DoExpr (EIf (EBinOp "==" (EVar "c") (ELit (LChar "("))) (EBinOp "::" (EApp (EVar "TAtom") (EApp (EApp (EApp (EVar "buildSlice") (EVar "cs")) (EVar "start")) (EVar "i"))) (EBinOp "::" (EVar "TOpen") (EApp (EApp (EVar "tokFrom") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))) (EIf (EBinOp "==" (EVar "c") (ELit (LChar ")"))) (EBinOp "::" (EApp (EVar "TAtom") (EApp (EApp (EApp (EVar "buildSlice") (EVar "cs")) (EVar "start")) (EVar "i"))) (EBinOp "::" (EVar "TClose") (EApp (EApp (EVar "tokFrom") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))) (EIf (EApp (EVar "isSpaceChar") (EVar "c")) (EBinOp "::" (EApp (EVar "TAtom") (EApp (EApp (EApp (EVar "buildSlice") (EVar "cs")) (EVar "start")) (EVar "i"))) (EApp (EApp (EVar "tokFrom") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EApp (EApp (EApp (EVar "tokWord") (EVar "cs")) (EVar "start")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "tokWord" ((PVar "cs") (PVar "start") (PVar "i0")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "cs"))) (EListLit (EApp (EVar "TAtom") (EApp (EApp (EApp (EVar "buildSlice") (EVar "cs")) (EVar "start")) (EVar "i")))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))) (DoExpr (EIf (EBinOp "==" (EVar "c") (ELit (LChar "("))) (EBinOp "::" (EApp (EVar "TAtom") (EApp (EApp (EApp (EVar "buildSlice") (EVar "cs")) (EVar "start")) (EVar "i"))) (EBinOp "::" (EVar "TOpen") (EApp (EApp (EVar "tokFrom") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))) (EIf (EBinOp "==" (EVar "c") (ELit (LChar ")"))) (EBinOp "::" (EApp (EVar "TAtom") (EApp (EApp (EApp (EVar "buildSlice") (EVar "cs")) (EVar "start")) (EVar "i"))) (EBinOp "::" (EVar "TClose") (EApp (EApp (EVar "tokFrom") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))) (EIf (EApp (EVar "isSpaceChar") (EVar "c")) (EBinOp "::" (EApp (EVar "TAtom") (EApp (EApp (EApp (EVar "buildSlice") (EVar "cs")) (EVar "start")) (EVar "i"))) (EApp (EApp (EVar "tokFrom") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1))))))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EVar "go") (EVar "i0"))))
 (DTypeSig false "tokQuoted" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "SToken"))))))
 (DFunDef false "tokQuoted" ((PVar "cs") (PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "cs"))) (EListLit (EApp (EVar "TAtom") (EBinOp "++" (EBinOp "++" (ELit (LString "\"")) (EApp (EVar "stringConcat") (EApp (EVar "reverseL") (EVar "acc")))) (ELit (LString "\""))))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))) (DoExpr (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\""))) (EBinOp "::" (EApp (EVar "TAtom") (EBinOp "++" (EBinOp "++" (ELit (LString "\"")) (EApp (EVar "stringConcat") (EApp (EVar "reverseL") (EVar "acc")))) (ELit (LString "\"")))) (EApp (EApp (EVar "tokFrom") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "c") (ELit (LChar "\\"))) (EBinOp "<" (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EApp (EVar "arrayLength") (EVar "cs")))) (EBlock (DoLet false false (PVar "next") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "cs"))) (DoExpr (EApp (EApp (EApp (EVar "tokQuoted") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EBinOp "::" (EApp (EVar "escPair") (EVar "next")) (EVar "acc"))))) (EApp (EApp (EApp (EVar "tokQuoted") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "::" (EApp (EVar "charToStr") (EVar "c")) (EVar "acc"))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "escPair" (TyFun (TyCon "Char") (TyCon "String")))
@@ -942,7 +946,7 @@ toManifestString other =
 (DTypeSig false "parseIntStr" (TyFun (TyCon "String") (TyCon "Int")))
 (DFunDef false "parseIntStr" ((PVar "s")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "s"))) (DoLet false false (PVar "n") (EApp (EVar "arrayLength") (EVar "cs"))) (DoExpr (EIf (EBinOp "==" (EVar "n") (ELit (LInt 0))) (EApp (EVar "panic") (ELit (LString "core_ir_sexp_parse: empty int"))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "cs")) (ELit (LChar "-"))) (EApp (EApp (EApp (EApp (EVar "negDigits") (EVar "cs")) (ELit (LInt 1))) (EVar "n")) (ELit (LInt 0))) (EBinOp "-" (ELit (LInt 0)) (EApp (EApp (EApp (EApp (EVar "negDigits") (EVar "cs")) (ELit (LInt 0))) (EVar "n")) (ELit (LInt 0)))))))))
 (DTypeSig false "negDigits" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
-(DFunDef false "negDigits" ((PVar "cs") (PVar "i") (PVar "n") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "acc") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "negDigits") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EBinOp "-" (EBinOp "*" (EVar "acc") (ELit (LInt 10))) (EBinOp "-" (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))) (EApp (EVar "charCode") (ELit (LChar "0")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "negDigits" ((PVar "cs") (PVar "i0") (PVar "n") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "acc") (EIf (EVar "otherwise") (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EBinOp "*" (EVar "acc") (ELit (LInt 10))) (EBinOp "-" (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))) (EApp (EVar "charCode") (ELit (LChar "0")))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EApp (EVar "go") (EVar "i0")) (EVar "acc0"))))
 (DTypeSig false "toInt" (TyFun (TyCon "SExp") (TyCon "Int")))
 (DFunDef false "toInt" ((PCon "SAtom" (PVar "s"))) (EApp (EVar "parseIntStr") (EVar "s")))
 (DFunDef false "toInt" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: expected int atom: ")) (EApp (EVar "sexprToStr") (EVar "other")))))
@@ -1211,7 +1215,7 @@ toManifestString other =
 (DTypeSig false "tokFrom" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "SToken")))))
 (DFunDef false "tokFrom" ((PVar "cs") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "cs"))) (EListLit) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))) (DoExpr (EIf (EBinOp "==" (EVar "c") (ELit (LChar "("))) (EBinOp "::" (EVar "TOpen") (EApp (EApp (EVar "tokFrom") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EIf (EBinOp "==" (EVar "c") (ELit (LChar ")"))) (EBinOp "::" (EVar "TClose") (EApp (EApp (EVar "tokFrom") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\""))) (EApp (EApp (EApp (EVar "tokQuoted") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EListLit)) (EIf (EApp (EVar "isSpaceChar") (EVar "c")) (EApp (EApp (EVar "tokFrom") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EApp (EApp (EVar "tokWord") (EVar "cs")) (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "tokWord" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "SToken"))))))
-(DFunDef false "tokWord" ((PVar "cs") (PVar "start") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "cs"))) (EListLit (EApp (EVar "TAtom") (EApp (EApp (EApp (EVar "buildSlice") (EVar "cs")) (EVar "start")) (EVar "i")))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))) (DoExpr (EIf (EBinOp "==" (EVar "c") (ELit (LChar "("))) (EBinOp "::" (EApp (EVar "TAtom") (EApp (EApp (EApp (EVar "buildSlice") (EVar "cs")) (EVar "start")) (EVar "i"))) (EBinOp "::" (EVar "TOpen") (EApp (EApp (EVar "tokFrom") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))) (EIf (EBinOp "==" (EVar "c") (ELit (LChar ")"))) (EBinOp "::" (EApp (EVar "TAtom") (EApp (EApp (EApp (EVar "buildSlice") (EVar "cs")) (EVar "start")) (EVar "i"))) (EBinOp "::" (EVar "TClose") (EApp (EApp (EVar "tokFrom") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))) (EIf (EApp (EVar "isSpaceChar") (EVar "c")) (EBinOp "::" (EApp (EVar "TAtom") (EApp (EApp (EApp (EVar "buildSlice") (EVar "cs")) (EVar "start")) (EVar "i"))) (EApp (EApp (EVar "tokFrom") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EApp (EApp (EApp (EVar "tokWord") (EVar "cs")) (EVar "start")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "tokWord" ((PVar "cs") (PVar "start") (PVar "i0")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "cs"))) (EListLit (EApp (EVar "TAtom") (EApp (EApp (EApp (EVar "buildSlice") (EVar "cs")) (EVar "start")) (EVar "i")))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))) (DoExpr (EIf (EBinOp "==" (EVar "c") (ELit (LChar "("))) (EBinOp "::" (EApp (EVar "TAtom") (EApp (EApp (EApp (EVar "buildSlice") (EVar "cs")) (EVar "start")) (EVar "i"))) (EBinOp "::" (EVar "TOpen") (EApp (EApp (EVar "tokFrom") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))) (EIf (EBinOp "==" (EVar "c") (ELit (LChar ")"))) (EBinOp "::" (EApp (EVar "TAtom") (EApp (EApp (EApp (EVar "buildSlice") (EVar "cs")) (EVar "start")) (EVar "i"))) (EBinOp "::" (EVar "TClose") (EApp (EApp (EVar "tokFrom") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))) (EIf (EApp (EVar "isSpaceChar") (EVar "c")) (EBinOp "::" (EApp (EVar "TAtom") (EApp (EApp (EApp (EVar "buildSlice") (EVar "cs")) (EVar "start")) (EVar "i"))) (EApp (EApp (EVar "tokFrom") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1))))))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EVar "go") (EVar "i0"))))
 (DTypeSig false "tokQuoted" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "SToken"))))))
 (DFunDef false "tokQuoted" ((PVar "cs") (PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "cs"))) (EListLit (EApp (EVar "TAtom") (EBinOp "++" (EBinOp "++" (ELit (LString "\"")) (EApp (EVar "stringConcat") (EApp (EVar "reverseL") (EVar "acc")))) (ELit (LString "\""))))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))) (DoExpr (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\""))) (EBinOp "::" (EApp (EVar "TAtom") (EBinOp "++" (EBinOp "++" (ELit (LString "\"")) (EApp (EVar "stringConcat") (EApp (EVar "reverseL") (EVar "acc")))) (ELit (LString "\"")))) (EApp (EApp (EVar "tokFrom") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "c") (ELit (LChar "\\"))) (EBinOp "<" (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EApp (EVar "arrayLength") (EVar "cs")))) (EBlock (DoLet false false (PVar "next") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "cs"))) (DoExpr (EApp (EApp (EApp (EVar "tokQuoted") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EBinOp "::" (EApp (EVar "escPair") (EVar "next")) (EVar "acc"))))) (EApp (EApp (EApp (EVar "tokQuoted") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "::" (EApp (EVar "charToStr") (EVar "c")) (EVar "acc"))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "escPair" (TyFun (TyCon "Char") (TyCon "String")))
@@ -1253,7 +1257,7 @@ toManifestString other =
 (DTypeSig false "parseIntStr" (TyFun (TyCon "String") (TyCon "Int")))
 (DFunDef false "parseIntStr" ((PVar "s")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "s"))) (DoLet false false (PVar "n") (EApp (EVar "arrayLength") (EVar "cs"))) (DoExpr (EIf (EBinOp "==" (EVar "n") (ELit (LInt 0))) (EApp (EVar "panic") (ELit (LString "core_ir_sexp_parse: empty int"))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "cs")) (ELit (LChar "-"))) (EApp (EApp (EApp (EApp (EVar "negDigits") (EVar "cs")) (ELit (LInt 1))) (EVar "n")) (ELit (LInt 0))) (EBinOp "-" (ELit (LInt 0)) (EApp (EApp (EApp (EApp (EVar "negDigits") (EVar "cs")) (ELit (LInt 0))) (EVar "n")) (ELit (LInt 0)))))))))
 (DTypeSig false "negDigits" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
-(DFunDef false "negDigits" ((PVar "cs") (PVar "i") (PVar "n") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "acc") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "negDigits") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EBinOp "-" (EBinOp "*" (EVar "acc") (ELit (LInt 10))) (EBinOp "-" (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))) (EApp (EVar "charCode") (ELit (LChar "0")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "negDigits" ((PVar "cs") (PVar "i0") (PVar "n") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "acc") (EIf (EVar "otherwise") (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EBinOp "*" (EVar "acc") (ELit (LInt 10))) (EBinOp "-" (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))) (EApp (EVar "charCode") (ELit (LChar "0")))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EApp (EVar "go") (EVar "i0")) (EVar "acc0"))))
 (DTypeSig false "toInt" (TyFun (TyCon "SExp") (TyCon "Int")))
 (DFunDef false "toInt" ((PCon "SAtom" (PVar "s"))) (EApp (EVar "parseIntStr") (EVar "s")))
 (DFunDef false "toInt" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: expected int atom: ")) (EApp (EVar "sexprToStr") (EVar "other")))))

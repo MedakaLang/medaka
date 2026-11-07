@@ -1,5 +1,5 @@
 # META
-source_lines=1517
+source_lines=1520
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_init: the initialisation graph of one module's top-level values, the two rules read off
@@ -280,9 +280,9 @@ cycleViolation : Option MayReach ->
   InitNode ->
   List InitViolation
 cycleViolation reach valueNames labels n =
-  let c = match reach
-    Some r => omLookup n.inodeName r.mrComp
-    None => None
+  let c = do
+    r <- reach
+    omLookup n.inodeName r.mrComp
   let inGroup t = match reach
     Some r => omLookup t r.mrComp == c
     None => t == n.inodeName
@@ -329,26 +329,28 @@ searchBack : MayReach ->
   List String ->
   OrdMap (Option String) ->
   List String
-searchBack _ _ goal [] _ = [goal]
-searchBack reach c goal frontier parents =
-  let (next, seen) =
-    fold
-      (st x =>
+searchBack reach c goal frontier0 parents0 = go frontier0 parents0
+  where
+    go [] _ = [goal]
+    go frontier parents =
+      let (next, seen) =
         fold
-          (st2 t => match st2
-            (nx, ps) =>
-              if omLookup t reach.mrComp == c && not (omHasKey t ps) then
-                (t :: nx, omInsert t (Some x) ps)
-              else
-                (nx, ps))
-          st
-          (optionOr [] (omLookup x reach.mrAdj)))
-      ([], parents)
-      frontier
-  if omHasKey goal seen then
-    unwindPath seen goal []
-  else
-    searchBack reach c goal (reverseL next) seen
+          (st x =>
+            fold
+              (st2 t => match st2
+                (nx, ps) =>
+                  if omLookup t reach.mrComp == c && not (omHasKey t ps) then
+                    (t :: nx, omInsert t (Some x) ps)
+                  else
+                    (nx, ps))
+              st
+              (optionOr [] (omLookup x reach.mrAdj)))
+          ([], parents)
+          frontier
+      if omHasKey goal seen then
+        unwindPath seen goal []
+      else
+        go (reverseL next) seen
 
 unwindPath : OrdMap (Option String) -> String -> List String -> List String
 unwindPath parents x acc = match omLookup x parents
@@ -725,28 +727,28 @@ walkNodes : InitWalk ->
   List RawNode ->
   List InitNode ->
   List InitNode
-walkNodes _ _ _ [] acc = reverseL acc
-walkNodes w defaults k (n :: rest) acc =
-  let own = walkBodies w n.rnodeBodies []
-  let mentions =
-    if n.rnodeKind == ImplNode then
-      walkBodies w (optionOr [] (omLookup n.rnodeKey defaults)) own
-    else
-      own
-  walkNodes
-    w
-    defaults
-    (k + 1)
-    rest
-    (InitNode {
-        inodeName = n.rnodeName,
-        inodeLabel = n.rnodeLabel,
-        inodeKind = n.rnodeKind,
-        inodeOrder = k,
-        inodeLoc = n.rnodeLoc,
-        inodeMentions = reverseL mentions,
-      }
-      :: acc)
+walkNodes w defaults k0 xs0 acc0 = go k0 xs0 acc0
+  where
+    go _ [] acc = reverseL acc
+    go k (n :: rest) acc =
+      let own = walkBodies w n.rnodeBodies []
+      let mentions =
+        if n.rnodeKind == ImplNode then
+          walkBodies w (optionOr [] (omLookup n.rnodeKey defaults)) own
+        else
+          own
+      go
+        (k + 1)
+        rest
+        (InitNode {
+            inodeName = n.rnodeName,
+            inodeLabel = n.rnodeLabel,
+            inodeKind = n.rnodeKind,
+            inodeOrder = k,
+            inodeLoc = n.rnodeLoc,
+            inodeMentions = reverseL mentions,
+          }
+          :: acc)
 
 walkBodies : InitWalk ->
   List (List Pat, Expr) ->
@@ -990,11 +992,13 @@ walkGuarded : InitWalk ->
   Expr ->
   List InitMention ->
   List InitMention
-walkGuarded w ctx bound [] body acc = walk w ctx bound body acc
-walkGuarded w ctx bound ((GBool e) :: gs) body acc =
-  walkGuarded w ctx bound gs body (walk w (evalCtx ctx) bound e acc)
-walkGuarded w ctx bound ((GBind p e) :: gs) body acc =
-  walkGuarded w ctx (bindPat p bound) gs body (walk w (evalCtx ctx) bound e acc)
+walkGuarded w ctx bound0 xs0 body acc0 = go bound0 xs0 acc0
+  where
+    go bound [] acc = walk w ctx bound body acc
+    go bound ((GBool e) :: gs) acc =
+      go bound gs (walk w (evalCtx ctx) bound e acc)
+    go bound ((GBind p e) :: gs) acc =
+      go (bindPat p bound) gs (walk w (evalCtx ctx) bound e acc)
 
 -- A block's last statement is its result and keeps [ctx]; every earlier one is evaluated.
 walkStmts : InitWalk ->
@@ -1003,24 +1007,21 @@ walkStmts : InitWalk ->
   List DoStmt ->
   List InitMention ->
   List InitMention
-walkStmts _ _ _ [] acc = acc
-walkStmts w ctx bound [DoExpr e] acc = walk w ctx bound e acc
-walkStmts w ctx bound ((DoExpr e) :: rest) acc =
-  walkStmts w ctx bound rest (walk w (evalCtx ctx) bound e acc)
-walkStmts w ctx bound ((DoBind p e) :: rest) acc =
-  walkStmts w ctx (bindPat p bound) rest (walk w (evalCtx ctx) bound e acc)
-walkStmts w ctx bound ((DoLet _ r p e _) :: rest) acc =
-  let after = bindPat p bound
-  walkStmts
-    w
-    ctx
-    after
-    rest
-    (walk w (evalCtx ctx) (if r then after else bound) e acc)
-walkStmts w ctx bound ((DoAssign x e) :: rest) acc =
-  walkStmts w ctx (omInsert x () bound) rest (walk w (evalCtx ctx) bound e acc)
-walkStmts w ctx bound ((DoFieldAssign _ _ e) :: rest) acc =
-  walkStmts w ctx bound rest (walk w (evalCtx ctx) bound e acc)
+walkStmts w ctx bound0 xs0 acc0 = go bound0 xs0 acc0
+  where
+    go _ [] acc = acc
+    go bound [DoExpr e] acc = walk w ctx bound e acc
+    go bound ((DoExpr e) :: rest) acc =
+      go bound rest (walk w (evalCtx ctx) bound e acc)
+    go bound ((DoBind p e) :: rest) acc =
+      go (bindPat p bound) rest (walk w (evalCtx ctx) bound e acc)
+    go bound ((DoLet _ r p e _) :: rest) acc =
+      let after = bindPat p bound
+      go after rest (walk w (evalCtx ctx) (if r then after else bound) e acc)
+    go bound ((DoAssign x e) :: rest) acc =
+      go (omInsert x () bound) rest (walk w (evalCtx ctx) bound e acc)
+    go bound ((DoFieldAssign _ _ e) :: rest) acc =
+      go bound rest (walk w (evalCtx ctx) bound e acc)
 
 walkSection : InitWalk ->
   WalkCtx ->
@@ -1492,6 +1493,8 @@ kahn : InitGraph ->
   M.Map Int Int ->
   List String ->
   List String
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
 kahn g members dependents indegree ready out = match M.minView ready
   None => out
   Some (_, s, rest) =>
@@ -1565,12 +1568,11 @@ kahn g members dependents indegree ready out = match M.minView ready
 (DTypeSig false "purityViolation" (TyFun (TyCon "InitInputs") (TyFun (TyCon "InitNode") (TyApp (TyCon "List") (TyCon "InitViolation")))))
 (DFunDef false "purityViolation" ((PVar "inputs") (PVar "n")) (EMatch (EApp (EApp (EVar "omLookup") (EFieldAccess (EVar "n") "inodeName")) (EFieldAccess (EVar "inputs") "iiSchemes")) (arm (PCon "Some" (PCon "Forall" PWild PWild PWild PWild (PVar "force") PWild)) () (EMatch (EApp (EVar "fst") (EApp (EVar "rowFlat") (EVar "force"))) (arm (PList) () (EListLit)) (arm (PVar "labels") () (EListLit (EApp (EApp (EApp (EVar "ImpureValue") (EFieldAccess (EVar "n") "inodeName")) (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EVar "$core.display") (EApp (EVar "renderAtoms") (EVar "labels")))) (ELit (LString ">")))) (EFieldAccess (EVar "n") "inodeLoc")))))) (arm (PCon "None") () (EListLit))))
 (DTypeSig false "cycleViolation" (TyFun (TyApp (TyCon "Option") (TyCon "MayReach")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "InitNode") (TyApp (TyCon "List") (TyCon "InitViolation")))))))
-(DFunDef false "cycleViolation" ((PVar "reach") (PVar "valueNames") (PVar "labels") (PVar "n")) (EBlock (DoLet false false (PVar "c") (EMatch (EVar "reach") (arm (PCon "Some" (PVar "r")) () (EApp (EApp (EVar "omLookup") (EFieldAccess (EVar "n") "inodeName")) (EFieldAccess (EVar "r") "mrComp"))) (arm (PCon "None") () (EVar "None")))) (DoLet false true (PVar "inGroup") (ELam ((PVar "t")) (EMatch (EVar "reach") (arm (PCon "Some" (PVar "r")) () (EBinOp "==" (EApp (EApp (EVar "omLookup") (EVar "t")) (EFieldAccess (EVar "r") "mrComp")) (EVar "c"))) (arm (PCon "None") () (EBinOp "==" (EVar "t") (EFieldAccess (EVar "n") "inodeName")))))) (DoLet false false (PVar "starts") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "m")) (EIf (EBinOp "&&" (EApp (EApp (EVar "readsAtInit") (EVar "valueNames")) (EVar "m")) (EApp (EVar "inGroup") (EFieldAccess (EVar "m") "mentionTarget"))) (EBinOp "::" (EFieldAccess (EVar "m") "mentionTarget") (EVar "acc")) (EVar "acc")))) (EListLit)) (EFieldAccess (EVar "n") "inodeMentions"))) (DoExpr (EMatch (EVar "starts") (arm (PList) () (EListLit)) (arm PWild () (EBlock (DoLet false false (PVar "path") (EMatch (EVar "reach") (arm (PCon "Some" (PVar "r")) () (EApp (EApp (EApp (EApp (EVar "pathBack") (EVar "r")) (EVar "c")) (EFieldAccess (EVar "n") "inodeName")) (EApp (EVar "reverseL") (EVar "starts")))) (arm (PCon "None") () (EListLit (EFieldAccess (EVar "n") "inodeName"))))) (DoExpr (EListLit (EApp (EApp (EApp (EVar "CyclicValue") (EFieldAccess (EVar "n") "inodeName")) (EApp (EApp (EVar "map") (ELam ((PVar "x")) (EApp (EApp (EVar "optionOr") (EVar "x")) (EApp (EApp (EVar "omLookup") (EVar "x")) (EVar "labels"))))) (EBinOp "::" (EFieldAccess (EVar "n") "inodeName") (EVar "path")))) (EFieldAccess (EVar "n") "inodeLoc"))))))))))
+(DFunDef false "cycleViolation" ((PVar "reach") (PVar "valueNames") (PVar "labels") (PVar "n")) (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "$core.andThen") (EVar "reach")) (ELam ((PVar "r")) (EApp (EApp (EVar "omLookup") (EFieldAccess (EVar "n") "inodeName")) (EFieldAccess (EVar "r") "mrComp"))))) (DoLet false true (PVar "inGroup") (ELam ((PVar "t")) (EMatch (EVar "reach") (arm (PCon "Some" (PVar "r")) () (EBinOp "==" (EApp (EApp (EVar "omLookup") (EVar "t")) (EFieldAccess (EVar "r") "mrComp")) (EVar "c"))) (arm (PCon "None") () (EBinOp "==" (EVar "t") (EFieldAccess (EVar "n") "inodeName")))))) (DoLet false false (PVar "starts") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "m")) (EIf (EBinOp "&&" (EApp (EApp (EVar "readsAtInit") (EVar "valueNames")) (EVar "m")) (EApp (EVar "inGroup") (EFieldAccess (EVar "m") "mentionTarget"))) (EBinOp "::" (EFieldAccess (EVar "m") "mentionTarget") (EVar "acc")) (EVar "acc")))) (EListLit)) (EFieldAccess (EVar "n") "inodeMentions"))) (DoExpr (EMatch (EVar "starts") (arm (PList) () (EListLit)) (arm PWild () (EBlock (DoLet false false (PVar "path") (EMatch (EVar "reach") (arm (PCon "Some" (PVar "r")) () (EApp (EApp (EApp (EApp (EVar "pathBack") (EVar "r")) (EVar "c")) (EFieldAccess (EVar "n") "inodeName")) (EApp (EVar "reverseL") (EVar "starts")))) (arm (PCon "None") () (EListLit (EFieldAccess (EVar "n") "inodeName"))))) (DoExpr (EListLit (EApp (EApp (EApp (EVar "CyclicValue") (EFieldAccess (EVar "n") "inodeName")) (EApp (EApp (EVar "map") (ELam ((PVar "x")) (EApp (EApp (EVar "optionOr") (EVar "x")) (EApp (EApp (EVar "omLookup") (EVar "x")) (EVar "labels"))))) (EBinOp "::" (EFieldAccess (EVar "n") "inodeName") (EVar "path")))) (EFieldAccess (EVar "n") "inodeLoc"))))))))))
 (DTypeSig false "pathBack" (TyFun (TyCon "MayReach") (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "pathBack" ((PVar "reach") (PVar "c") (PVar "goal") (PVar "starts")) (EIf (EApp (EApp (EVar "any") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "goal")))) (EVar "starts")) (EListLit (EVar "goal")) (EApp (EApp (EApp (EApp (EApp (EVar "searchBack") (EVar "reach")) (EVar "c")) (EVar "goal")) (EVar "starts")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "s")) (EApp (EApp (EApp (EVar "omInsert") (EVar "s")) (EVar "None")) (EVar "acc")))) (EVar "omEmpty")) (EVar "starts")))))
 (DTypeSig false "searchBack" (TyFun (TyCon "MayReach") (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "Option") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "searchBack" (PWild PWild (PVar "goal") (PList) PWild) (EListLit (EVar "goal")))
-(DFunDef false "searchBack" ((PVar "reach") (PVar "c") (PVar "goal") (PVar "frontier") (PVar "parents")) (EBlock (DoLet false false (PTuple (PVar "next") (PVar "seen")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "st") (PVar "x")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "st2") (PVar "t")) (EMatch (EVar "st2") (arm (PTuple (PVar "nx") (PVar "ps")) () (EIf (EBinOp "&&" (EBinOp "==" (EApp (EApp (EVar "omLookup") (EVar "t")) (EFieldAccess (EVar "reach") "mrComp")) (EVar "c")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "t")) (EVar "ps")))) (ETuple (EBinOp "::" (EVar "t") (EVar "nx")) (EApp (EApp (EApp (EVar "omInsert") (EVar "t")) (EApp (EVar "Some") (EVar "x"))) (EVar "ps"))) (ETuple (EVar "nx") (EVar "ps"))))))) (EVar "st")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "x")) (EFieldAccess (EVar "reach") "mrAdj")))))) (ETuple (EListLit) (EVar "parents"))) (EVar "frontier"))) (DoExpr (EIf (EApp (EApp (EVar "omHasKey") (EVar "goal")) (EVar "seen")) (EApp (EApp (EApp (EVar "unwindPath") (EVar "seen")) (EVar "goal")) (EListLit)) (EApp (EApp (EApp (EApp (EApp (EVar "searchBack") (EVar "reach")) (EVar "c")) (EVar "goal")) (EApp (EVar "reverseL") (EVar "next"))) (EVar "seen"))))))
+(DFunDef false "searchBack" ((PVar "reach") (PVar "c") (PVar "goal") (PVar "frontier0") (PVar "parents0")) (ELetGroup ((lgb "go" (clause ((PList) PWild) (EListLit (EVar "goal"))) (clause ((PVar "frontier") (PVar "parents")) (EBlock (DoLet false false (PTuple (PVar "next") (PVar "seen")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "st") (PVar "x")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "st2") (PVar "t")) (EMatch (EVar "st2") (arm (PTuple (PVar "nx") (PVar "ps")) () (EIf (EBinOp "&&" (EBinOp "==" (EApp (EApp (EVar "omLookup") (EVar "t")) (EFieldAccess (EVar "reach") "mrComp")) (EVar "c")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "t")) (EVar "ps")))) (ETuple (EBinOp "::" (EVar "t") (EVar "nx")) (EApp (EApp (EApp (EVar "omInsert") (EVar "t")) (EApp (EVar "Some") (EVar "x"))) (EVar "ps"))) (ETuple (EVar "nx") (EVar "ps"))))))) (EVar "st")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "x")) (EFieldAccess (EVar "reach") "mrAdj")))))) (ETuple (EListLit) (EVar "parents"))) (EVar "frontier"))) (DoExpr (EIf (EApp (EApp (EVar "omHasKey") (EVar "goal")) (EVar "seen")) (EApp (EApp (EApp (EVar "unwindPath") (EVar "seen")) (EVar "goal")) (EListLit)) (EApp (EApp (EVar "go") (EApp (EVar "reverseL") (EVar "next"))) (EVar "seen")))))))) (EApp (EApp (EVar "go") (EVar "frontier0")) (EVar "parents0"))))
 (DTypeSig false "unwindPath" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "unwindPath" ((PVar "parents") (PVar "x") (PVar "acc")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "x")) (EVar "parents")) (arm (PCon "Some" (PCon "Some" (PVar "p"))) () (EApp (EApp (EApp (EVar "unwindPath") (EVar "parents")) (EVar "p")) (EBinOp "::" (EVar "x") (EVar "acc")))) (arm PWild () (EBinOp "::" (EVar "x") (EVar "acc")))))
 (DTypeSig true "initInputsAt" (TyFun (TyCon "String") (TyFun (TyCon "ModuleSeed") (TyFun (TyCon "ModuleBindings") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "DeclEnvs") (TyFun (TyCon "Int") (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyCon "InitInputs")))))))))))
@@ -1663,8 +1665,7 @@ kahn g members dependents indegree ready out = match M.minView ready
 (DTypeSig false "classify" (TyFun (TyCon "InitInputs") (TyFun (TyCon "RawNode") (TyCon "RawNode"))))
 (DFunDef false "classify" ((PVar "inputs") (PVar "n")) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "n") "rnodeKind") (EVar "FunctionNode")) (EBinOp "==" (EFieldAccess (EVar "n") "rnodeArity") (ELit (LInt 0)))) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EFieldAccess (EVar "n") "rnodeName")) (EFieldAccess (EVar "inputs") "iiConstrained")))) (ERecordUpdate (EVar "n") ((fa "rnodeKind" (EVar "ValueNode")))) (EVar "n")))
 (DTypeSig false "walkNodes" (TyFun (TyCon "InitWalk") (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "RawNode")) (TyFun (TyApp (TyCon "List") (TyCon "InitNode")) (TyApp (TyCon "List") (TyCon "InitNode"))))))))
-(DFunDef false "walkNodes" (PWild PWild PWild (PList) (PVar "acc")) (EApp (EVar "reverseL") (EVar "acc")))
-(DFunDef false "walkNodes" ((PVar "w") (PVar "defaults") (PVar "k") (PCons (PVar "n") (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "own") (EApp (EApp (EApp (EVar "walkBodies") (EVar "w")) (EFieldAccess (EVar "n") "rnodeBodies")) (EListLit))) (DoLet false false (PVar "mentions") (EIf (EBinOp "==" (EFieldAccess (EVar "n") "rnodeKind") (EVar "ImplNode")) (EApp (EApp (EApp (EVar "walkBodies") (EVar "w")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EFieldAccess (EVar "n") "rnodeKey")) (EVar "defaults")))) (EVar "own")) (EVar "own"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "walkNodes") (EVar "w")) (EVar "defaults")) (EBinOp "+" (EVar "k") (ELit (LInt 1)))) (EVar "rest")) (EBinOp "::" (ERecordCreate "InitNode" ((fa "inodeName" (EFieldAccess (EVar "n") "rnodeName")) (fa "inodeLabel" (EFieldAccess (EVar "n") "rnodeLabel")) (fa "inodeKind" (EFieldAccess (EVar "n") "rnodeKind")) (fa "inodeOrder" (EVar "k")) (fa "inodeLoc" (EFieldAccess (EVar "n") "rnodeLoc")) (fa "inodeMentions" (EApp (EVar "reverseL") (EVar "mentions"))))) (EVar "acc"))))))
+(DFunDef false "walkNodes" ((PVar "w") (PVar "defaults") (PVar "k0") (PVar "xs0") (PVar "acc0")) (ELetGroup ((lgb "go" (clause (PWild (PList) (PVar "acc")) (EApp (EVar "reverseL") (EVar "acc"))) (clause ((PVar "k") (PCons (PVar "n") (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "own") (EApp (EApp (EApp (EVar "walkBodies") (EVar "w")) (EFieldAccess (EVar "n") "rnodeBodies")) (EListLit))) (DoLet false false (PVar "mentions") (EIf (EBinOp "==" (EFieldAccess (EVar "n") "rnodeKind") (EVar "ImplNode")) (EApp (EApp (EApp (EVar "walkBodies") (EVar "w")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EFieldAccess (EVar "n") "rnodeKey")) (EVar "defaults")))) (EVar "own")) (EVar "own"))) (DoExpr (EApp (EApp (EApp (EVar "go") (EBinOp "+" (EVar "k") (ELit (LInt 1)))) (EVar "rest")) (EBinOp "::" (ERecordCreate "InitNode" ((fa "inodeName" (EFieldAccess (EVar "n") "rnodeName")) (fa "inodeLabel" (EFieldAccess (EVar "n") "rnodeLabel")) (fa "inodeKind" (EFieldAccess (EVar "n") "rnodeKind")) (fa "inodeOrder" (EVar "k")) (fa "inodeLoc" (EFieldAccess (EVar "n") "rnodeLoc")) (fa "inodeMentions" (EApp (EVar "reverseL") (EVar "mentions"))))) (EVar "acc")))))))) (EApp (EApp (EApp (EVar "go") (EVar "k0")) (EVar "xs0")) (EVar "acc0"))))
 (DTypeSig false "walkBodies" (TyFun (TyCon "InitWalk") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))) (TyFun (TyApp (TyCon "List") (TyCon "InitMention")) (TyApp (TyCon "List") (TyCon "InitMention"))))))
 (DFunDef false "walkBodies" ((PVar "w") (PVar "bodies") (PVar "acc")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc2") (PVar "b")) (EMatch (EVar "b") (arm (PTuple (PVar "ps") (PVar "body")) () (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "w")) (EVar "CtxReturn")) (EApp (EApp (EVar "bindPats") (EVar "ps")) (EVar "omEmpty"))) (EVar "body")) (EVar "acc2")))))) (EVar "acc")) (EVar "bodies")))
 (DData Private "WalkCtx" () ((variant "CtxReturn" (ConPos)) (variant "CtxGuard" (ConPos)) (variant "CtxGuardBody" (ConPos)) (variant "CtxDeref" (ConPos)) (variant "CtxDelay" (ConPos))) ())
@@ -1751,17 +1752,9 @@ kahn g members dependents indegree ready out = match M.minView ready
 (DTypeSig false "walkArms" (TyFun (TyCon "InitWalk") (TyFun (TyCon "WalkCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyFun (TyApp (TyCon "List") (TyCon "InitMention")) (TyApp (TyCon "List") (TyCon "InitMention"))))))))
 (DFunDef false "walkArms" ((PVar "w") (PVar "ctx") (PVar "bound") (PVar "arms") (PVar "acc")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc2") (PVar "a")) (EMatch (EVar "a") (arm (PCon "Arm" (PVar "p") (PVar "gs") (PVar "body")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "walkGuarded") (EVar "w")) (EVar "ctx")) (EApp (EApp (EVar "bindPat") (EVar "p")) (EVar "bound"))) (EVar "gs")) (EVar "body")) (EVar "acc2")))))) (EVar "acc")) (EVar "arms")))
 (DTypeSig false "walkGuarded" (TyFun (TyCon "InitWalk") (TyFun (TyCon "WalkCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "Guard")) (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "InitMention")) (TyApp (TyCon "List") (TyCon "InitMention")))))))))
-(DFunDef false "walkGuarded" ((PVar "w") (PVar "ctx") (PVar "bound") (PList) (PVar "body") (PVar "acc")) (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "w")) (EVar "ctx")) (EVar "bound")) (EVar "body")) (EVar "acc")))
-(DFunDef false "walkGuarded" ((PVar "w") (PVar "ctx") (PVar "bound") (PCons (PCon "GBool" (PVar "e")) (PVar "gs")) (PVar "body") (PVar "acc")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "walkGuarded") (EVar "w")) (EVar "ctx")) (EVar "bound")) (EVar "gs")) (EVar "body")) (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "w")) (EApp (EVar "evalCtx") (EVar "ctx"))) (EVar "bound")) (EVar "e")) (EVar "acc"))))
-(DFunDef false "walkGuarded" ((PVar "w") (PVar "ctx") (PVar "bound") (PCons (PCon "GBind" (PVar "p") (PVar "e")) (PVar "gs")) (PVar "body") (PVar "acc")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "walkGuarded") (EVar "w")) (EVar "ctx")) (EApp (EApp (EVar "bindPat") (EVar "p")) (EVar "bound"))) (EVar "gs")) (EVar "body")) (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "w")) (EApp (EVar "evalCtx") (EVar "ctx"))) (EVar "bound")) (EVar "e")) (EVar "acc"))))
+(DFunDef false "walkGuarded" ((PVar "w") (PVar "ctx") (PVar "bound0") (PVar "xs0") (PVar "body") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PVar "bound") (PList) (PVar "acc")) (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "w")) (EVar "ctx")) (EVar "bound")) (EVar "body")) (EVar "acc"))) (clause ((PVar "bound") (PCons (PCon "GBool" (PVar "e")) (PVar "gs")) (PVar "acc")) (EApp (EApp (EApp (EVar "go") (EVar "bound")) (EVar "gs")) (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "w")) (EApp (EVar "evalCtx") (EVar "ctx"))) (EVar "bound")) (EVar "e")) (EVar "acc")))) (clause ((PVar "bound") (PCons (PCon "GBind" (PVar "p") (PVar "e")) (PVar "gs")) (PVar "acc")) (EApp (EApp (EApp (EVar "go") (EApp (EApp (EVar "bindPat") (EVar "p")) (EVar "bound"))) (EVar "gs")) (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "w")) (EApp (EVar "evalCtx") (EVar "ctx"))) (EVar "bound")) (EVar "e")) (EVar "acc")))))) (EApp (EApp (EApp (EVar "go") (EVar "bound0")) (EVar "xs0")) (EVar "acc0"))))
 (DTypeSig false "walkStmts" (TyFun (TyCon "InitWalk") (TyFun (TyCon "WalkCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyFun (TyApp (TyCon "List") (TyCon "InitMention")) (TyApp (TyCon "List") (TyCon "InitMention"))))))))
-(DFunDef false "walkStmts" (PWild PWild PWild (PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "walkStmts" ((PVar "w") (PVar "ctx") (PVar "bound") (PList (PCon "DoExpr" (PVar "e"))) (PVar "acc")) (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "w")) (EVar "ctx")) (EVar "bound")) (EVar "e")) (EVar "acc")))
-(DFunDef false "walkStmts" ((PVar "w") (PVar "ctx") (PVar "bound") (PCons (PCon "DoExpr" (PVar "e")) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EApp (EApp (EVar "walkStmts") (EVar "w")) (EVar "ctx")) (EVar "bound")) (EVar "rest")) (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "w")) (EApp (EVar "evalCtx") (EVar "ctx"))) (EVar "bound")) (EVar "e")) (EVar "acc"))))
-(DFunDef false "walkStmts" ((PVar "w") (PVar "ctx") (PVar "bound") (PCons (PCon "DoBind" (PVar "p") (PVar "e")) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EApp (EApp (EVar "walkStmts") (EVar "w")) (EVar "ctx")) (EApp (EApp (EVar "bindPat") (EVar "p")) (EVar "bound"))) (EVar "rest")) (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "w")) (EApp (EVar "evalCtx") (EVar "ctx"))) (EVar "bound")) (EVar "e")) (EVar "acc"))))
-(DFunDef false "walkStmts" ((PVar "w") (PVar "ctx") (PVar "bound") (PCons (PCon "DoLet" PWild (PVar "r") (PVar "p") (PVar "e") PWild) (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "after") (EApp (EApp (EVar "bindPat") (EVar "p")) (EVar "bound"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "walkStmts") (EVar "w")) (EVar "ctx")) (EVar "after")) (EVar "rest")) (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "w")) (EApp (EVar "evalCtx") (EVar "ctx"))) (EIf (EVar "r") (EVar "after") (EVar "bound"))) (EVar "e")) (EVar "acc"))))))
-(DFunDef false "walkStmts" ((PVar "w") (PVar "ctx") (PVar "bound") (PCons (PCon "DoAssign" (PVar "x") (PVar "e")) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EApp (EApp (EVar "walkStmts") (EVar "w")) (EVar "ctx")) (EApp (EApp (EApp (EVar "omInsert") (EVar "x")) (ELit LUnit)) (EVar "bound"))) (EVar "rest")) (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "w")) (EApp (EVar "evalCtx") (EVar "ctx"))) (EVar "bound")) (EVar "e")) (EVar "acc"))))
-(DFunDef false "walkStmts" ((PVar "w") (PVar "ctx") (PVar "bound") (PCons (PCon "DoFieldAssign" PWild PWild (PVar "e")) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EApp (EApp (EVar "walkStmts") (EVar "w")) (EVar "ctx")) (EVar "bound")) (EVar "rest")) (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "w")) (EApp (EVar "evalCtx") (EVar "ctx"))) (EVar "bound")) (EVar "e")) (EVar "acc"))))
+(DFunDef false "walkStmts" ((PVar "w") (PVar "ctx") (PVar "bound0") (PVar "xs0") (PVar "acc0")) (ELetGroup ((lgb "go" (clause (PWild (PList) (PVar "acc")) (EVar "acc")) (clause ((PVar "bound") (PList (PCon "DoExpr" (PVar "e"))) (PVar "acc")) (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "w")) (EVar "ctx")) (EVar "bound")) (EVar "e")) (EVar "acc"))) (clause ((PVar "bound") (PCons (PCon "DoExpr" (PVar "e")) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "go") (EVar "bound")) (EVar "rest")) (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "w")) (EApp (EVar "evalCtx") (EVar "ctx"))) (EVar "bound")) (EVar "e")) (EVar "acc")))) (clause ((PVar "bound") (PCons (PCon "DoBind" (PVar "p") (PVar "e")) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "go") (EApp (EApp (EVar "bindPat") (EVar "p")) (EVar "bound"))) (EVar "rest")) (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "w")) (EApp (EVar "evalCtx") (EVar "ctx"))) (EVar "bound")) (EVar "e")) (EVar "acc")))) (clause ((PVar "bound") (PCons (PCon "DoLet" PWild (PVar "r") (PVar "p") (PVar "e") PWild) (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "after") (EApp (EApp (EVar "bindPat") (EVar "p")) (EVar "bound"))) (DoExpr (EApp (EApp (EApp (EVar "go") (EVar "after")) (EVar "rest")) (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "w")) (EApp (EVar "evalCtx") (EVar "ctx"))) (EIf (EVar "r") (EVar "after") (EVar "bound"))) (EVar "e")) (EVar "acc")))))) (clause ((PVar "bound") (PCons (PCon "DoAssign" (PVar "x") (PVar "e")) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "go") (EApp (EApp (EApp (EVar "omInsert") (EVar "x")) (ELit LUnit)) (EVar "bound"))) (EVar "rest")) (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "w")) (EApp (EVar "evalCtx") (EVar "ctx"))) (EVar "bound")) (EVar "e")) (EVar "acc")))) (clause ((PVar "bound") (PCons (PCon "DoFieldAssign" PWild PWild (PVar "e")) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "go") (EVar "bound")) (EVar "rest")) (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "w")) (EApp (EVar "evalCtx") (EVar "ctx"))) (EVar "bound")) (EVar "e")) (EVar "acc")))))) (EApp (EApp (EApp (EVar "go") (EVar "bound0")) (EVar "xs0")) (EVar "acc0"))))
 (DTypeSig false "walkSection" (TyFun (TyCon "InitWalk") (TyFun (TyCon "WalkCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Section") (TyFun (TyApp (TyCon "List") (TyCon "InitMention")) (TyApp (TyCon "List") (TyCon "InitMention"))))))))
 (DFunDef false "walkSection" ((PVar "w") (PVar "ctx") (PVar "bound") (PCon "SecBare" (PVar "op")) (PVar "acc")) (EApp (EApp (EApp (EApp (EApp (EVar "sectionOp") (EVar "w")) (EVar "ctx")) (EVar "bound")) (EVar "op")) (EVar "acc")))
 (DFunDef false "walkSection" ((PVar "w") (PVar "ctx") (PVar "bound") (PCon "SecRight" (PVar "op") (PVar "e")) (PVar "acc")) (EApp (EApp (EApp (EApp (EApp (EVar "sectionOp") (EVar "w")) (EVar "ctx")) (EVar "bound")) (EVar "op")) (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "w")) (EApp (EVar "evalCtx") (EVar "ctx"))) (EVar "bound")) (EVar "e")) (EVar "acc"))))
@@ -1915,12 +1908,11 @@ kahn g members dependents indegree ready out = match M.minView ready
 (DTypeSig false "purityViolation" (TyFun (TyCon "InitInputs") (TyFun (TyCon "InitNode") (TyApp (TyCon "List") (TyCon "InitViolation")))))
 (DFunDef false "purityViolation" ((PVar "inputs") (PVar "n")) (EMatch (EApp (EApp (EVar "omLookup") (EFieldAccess (EVar "n") "inodeName")) (EFieldAccess (EVar "inputs") "iiSchemes")) (arm (PCon "Some" (PCon "Forall" PWild PWild PWild PWild (PVar "force") PWild)) () (EMatch (EApp (EVar "fst") (EApp (EVar "rowFlat") (EVar "force"))) (arm (PList) () (EListLit)) (arm (PVar "labels") () (EListLit (EApp (EApp (EApp (EVar "ImpureValue") (EFieldAccess (EVar "n") "inodeName")) (EBinOp "++" (EBinOp "++" (ELit (LString "<")) (EApp (EVar "$core.display") (EApp (EVar "renderAtoms") (EVar "labels")))) (ELit (LString ">")))) (EFieldAccess (EVar "n") "inodeLoc")))))) (arm (PCon "None") () (EListLit))))
 (DTypeSig false "cycleViolation" (TyFun (TyApp (TyCon "Option") (TyCon "MayReach")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "InitNode") (TyApp (TyCon "List") (TyCon "InitViolation")))))))
-(DFunDef false "cycleViolation" ((PVar "reach") (PVar "valueNames") (PVar "labels") (PVar "n")) (EBlock (DoLet false false (PVar "c") (EMatch (EVar "reach") (arm (PCon "Some" (PVar "r")) () (EApp (EApp (EVar "omLookup") (EFieldAccess (EVar "n") "inodeName")) (EFieldAccess (EVar "r") "mrComp"))) (arm (PCon "None") () (EVar "None")))) (DoLet false true (PVar "inGroup") (ELam ((PVar "t")) (EMatch (EVar "reach") (arm (PCon "Some" (PVar "r")) () (EBinOp "==" (EApp (EApp (EVar "omLookup") (EVar "t")) (EFieldAccess (EVar "r") "mrComp")) (EVar "c"))) (arm (PCon "None") () (EBinOp "==" (EVar "t") (EFieldAccess (EVar "n") "inodeName")))))) (DoLet false false (PVar "starts") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "m")) (EIf (EBinOp "&&" (EApp (EApp (EVar "readsAtInit") (EVar "valueNames")) (EVar "m")) (EApp (EVar "inGroup") (EFieldAccess (EVar "m") "mentionTarget"))) (EBinOp "::" (EFieldAccess (EVar "m") "mentionTarget") (EVar "acc")) (EVar "acc")))) (EListLit)) (EFieldAccess (EVar "n") "inodeMentions"))) (DoExpr (EMatch (EVar "starts") (arm (PList) () (EListLit)) (arm PWild () (EBlock (DoLet false false (PVar "path") (EMatch (EVar "reach") (arm (PCon "Some" (PVar "r")) () (EApp (EApp (EApp (EApp (EVar "pathBack") (EVar "r")) (EVar "c")) (EFieldAccess (EVar "n") "inodeName")) (EApp (EVar "reverseL") (EVar "starts")))) (arm (PCon "None") () (EListLit (EFieldAccess (EVar "n") "inodeName"))))) (DoExpr (EListLit (EApp (EApp (EApp (EVar "CyclicValue") (EFieldAccess (EVar "n") "inodeName")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "x")) (EApp (EApp (EVar "optionOr") (EVar "x")) (EApp (EApp (EVar "omLookup") (EVar "x")) (EVar "labels"))))) (EBinOp "::" (EFieldAccess (EVar "n") "inodeName") (EVar "path")))) (EFieldAccess (EVar "n") "inodeLoc"))))))))))
+(DFunDef false "cycleViolation" ((PVar "reach") (PVar "valueNames") (PVar "labels") (PVar "n")) (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "$core.andThen") (EVar "reach")) (ELam ((PVar "r")) (EApp (EApp (EVar "omLookup") (EFieldAccess (EVar "n") "inodeName")) (EFieldAccess (EVar "r") "mrComp"))))) (DoLet false true (PVar "inGroup") (ELam ((PVar "t")) (EMatch (EVar "reach") (arm (PCon "Some" (PVar "r")) () (EBinOp "==" (EApp (EApp (EVar "omLookup") (EVar "t")) (EFieldAccess (EVar "r") "mrComp")) (EVar "c"))) (arm (PCon "None") () (EBinOp "==" (EVar "t") (EFieldAccess (EVar "n") "inodeName")))))) (DoLet false false (PVar "starts") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "m")) (EIf (EBinOp "&&" (EApp (EApp (EVar "readsAtInit") (EVar "valueNames")) (EVar "m")) (EApp (EVar "inGroup") (EFieldAccess (EVar "m") "mentionTarget"))) (EBinOp "::" (EFieldAccess (EVar "m") "mentionTarget") (EVar "acc")) (EVar "acc")))) (EListLit)) (EFieldAccess (EVar "n") "inodeMentions"))) (DoExpr (EMatch (EVar "starts") (arm (PList) () (EListLit)) (arm PWild () (EBlock (DoLet false false (PVar "path") (EMatch (EVar "reach") (arm (PCon "Some" (PVar "r")) () (EApp (EApp (EApp (EApp (EVar "pathBack") (EVar "r")) (EVar "c")) (EFieldAccess (EVar "n") "inodeName")) (EApp (EVar "reverseL") (EVar "starts")))) (arm (PCon "None") () (EListLit (EFieldAccess (EVar "n") "inodeName"))))) (DoExpr (EListLit (EApp (EApp (EApp (EVar "CyclicValue") (EFieldAccess (EVar "n") "inodeName")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "x")) (EApp (EApp (EVar "optionOr") (EVar "x")) (EApp (EApp (EVar "omLookup") (EVar "x")) (EVar "labels"))))) (EBinOp "::" (EFieldAccess (EVar "n") "inodeName") (EVar "path")))) (EFieldAccess (EVar "n") "inodeLoc"))))))))))
 (DTypeSig false "pathBack" (TyFun (TyCon "MayReach") (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "pathBack" ((PVar "reach") (PVar "c") (PVar "goal") (PVar "starts")) (EIf (EApp (EApp (EDictApp "any") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "goal")))) (EVar "starts")) (EListLit (EVar "goal")) (EApp (EApp (EApp (EApp (EApp (EVar "searchBack") (EVar "reach")) (EVar "c")) (EVar "goal")) (EVar "starts")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "s")) (EApp (EApp (EApp (EVar "omInsert") (EVar "s")) (EVar "None")) (EVar "acc")))) (EVar "omEmpty")) (EVar "starts")))))
 (DTypeSig false "searchBack" (TyFun (TyCon "MayReach") (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "Option") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "searchBack" (PWild PWild (PVar "goal") (PList) PWild) (EListLit (EVar "goal")))
-(DFunDef false "searchBack" ((PVar "reach") (PVar "c") (PVar "goal") (PVar "frontier") (PVar "parents")) (EBlock (DoLet false false (PTuple (PVar "next") (PVar "seen")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "st") (PVar "x")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "st2") (PVar "t")) (EMatch (EVar "st2") (arm (PTuple (PVar "nx") (PVar "ps")) () (EIf (EBinOp "&&" (EBinOp "==" (EApp (EApp (EVar "omLookup") (EVar "t")) (EFieldAccess (EVar "reach") "mrComp")) (EVar "c")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "t")) (EVar "ps")))) (ETuple (EBinOp "::" (EVar "t") (EVar "nx")) (EApp (EApp (EApp (EVar "omInsert") (EVar "t")) (EApp (EVar "Some") (EVar "x"))) (EVar "ps"))) (ETuple (EVar "nx") (EVar "ps"))))))) (EVar "st")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "x")) (EFieldAccess (EVar "reach") "mrAdj")))))) (ETuple (EListLit) (EVar "parents"))) (EVar "frontier"))) (DoExpr (EIf (EApp (EApp (EVar "omHasKey") (EVar "goal")) (EVar "seen")) (EApp (EApp (EApp (EVar "unwindPath") (EVar "seen")) (EVar "goal")) (EListLit)) (EApp (EApp (EApp (EApp (EApp (EVar "searchBack") (EVar "reach")) (EVar "c")) (EVar "goal")) (EApp (EVar "reverseL") (EVar "next"))) (EVar "seen"))))))
+(DFunDef false "searchBack" ((PVar "reach") (PVar "c") (PVar "goal") (PVar "frontier0") (PVar "parents0")) (ELetGroup ((lgb "go" (clause ((PList) PWild) (EListLit (EVar "goal"))) (clause ((PVar "frontier") (PVar "parents")) (EBlock (DoLet false false (PTuple (PVar "next") (PVar "seen")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "st") (PVar "x")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "st2") (PVar "t")) (EMatch (EVar "st2") (arm (PTuple (PVar "nx") (PVar "ps")) () (EIf (EBinOp "&&" (EBinOp "==" (EApp (EApp (EVar "omLookup") (EVar "t")) (EFieldAccess (EVar "reach") "mrComp")) (EVar "c")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "t")) (EVar "ps")))) (ETuple (EBinOp "::" (EVar "t") (EVar "nx")) (EApp (EApp (EApp (EVar "omInsert") (EVar "t")) (EApp (EVar "Some") (EVar "x"))) (EVar "ps"))) (ETuple (EVar "nx") (EVar "ps"))))))) (EVar "st")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "x")) (EFieldAccess (EVar "reach") "mrAdj")))))) (ETuple (EListLit) (EVar "parents"))) (EVar "frontier"))) (DoExpr (EIf (EApp (EApp (EVar "omHasKey") (EVar "goal")) (EVar "seen")) (EApp (EApp (EApp (EVar "unwindPath") (EVar "seen")) (EVar "goal")) (EListLit)) (EApp (EApp (EVar "go") (EApp (EVar "reverseL") (EVar "next"))) (EVar "seen")))))))) (EApp (EApp (EVar "go") (EVar "frontier0")) (EVar "parents0"))))
 (DTypeSig false "unwindPath" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "unwindPath" ((PVar "parents") (PVar "x") (PVar "acc")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "x")) (EVar "parents")) (arm (PCon "Some" (PCon "Some" (PVar "p"))) () (EApp (EApp (EApp (EVar "unwindPath") (EVar "parents")) (EVar "p")) (EBinOp "::" (EVar "x") (EVar "acc")))) (arm PWild () (EBinOp "::" (EVar "x") (EVar "acc")))))
 (DTypeSig true "initInputsAt" (TyFun (TyCon "String") (TyFun (TyCon "ModuleSeed") (TyFun (TyCon "ModuleBindings") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "DeclEnvs") (TyFun (TyCon "Int") (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyCon "InitInputs")))))))))))
@@ -2013,8 +2005,7 @@ kahn g members dependents indegree ready out = match M.minView ready
 (DTypeSig false "classify" (TyFun (TyCon "InitInputs") (TyFun (TyCon "RawNode") (TyCon "RawNode"))))
 (DFunDef false "classify" ((PVar "inputs") (PVar "n")) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "n") "rnodeKind") (EVar "FunctionNode")) (EBinOp "==" (EFieldAccess (EVar "n") "rnodeArity") (ELit (LInt 0)))) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EFieldAccess (EVar "n") "rnodeName")) (EFieldAccess (EVar "inputs") "iiConstrained")))) (ERecordUpdate (EVar "n") ((fa "rnodeKind" (EVar "ValueNode")))) (EVar "n")))
 (DTypeSig false "walkNodes" (TyFun (TyCon "InitWalk") (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "RawNode")) (TyFun (TyApp (TyCon "List") (TyCon "InitNode")) (TyApp (TyCon "List") (TyCon "InitNode"))))))))
-(DFunDef false "walkNodes" (PWild PWild PWild (PList) (PVar "acc")) (EApp (EVar "reverseL") (EVar "acc")))
-(DFunDef false "walkNodes" ((PVar "w") (PVar "defaults") (PVar "k") (PCons (PVar "n") (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "own") (EApp (EApp (EApp (EVar "walkBodies") (EVar "w")) (EFieldAccess (EVar "n") "rnodeBodies")) (EListLit))) (DoLet false false (PVar "mentions") (EIf (EBinOp "==" (EFieldAccess (EVar "n") "rnodeKind") (EVar "ImplNode")) (EApp (EApp (EApp (EVar "walkBodies") (EVar "w")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EFieldAccess (EVar "n") "rnodeKey")) (EVar "defaults")))) (EVar "own")) (EVar "own"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "walkNodes") (EVar "w")) (EVar "defaults")) (EBinOp "+" (EVar "k") (ELit (LInt 1)))) (EVar "rest")) (EBinOp "::" (ERecordCreate "InitNode" ((fa "inodeName" (EFieldAccess (EVar "n") "rnodeName")) (fa "inodeLabel" (EFieldAccess (EVar "n") "rnodeLabel")) (fa "inodeKind" (EFieldAccess (EVar "n") "rnodeKind")) (fa "inodeOrder" (EVar "k")) (fa "inodeLoc" (EFieldAccess (EVar "n") "rnodeLoc")) (fa "inodeMentions" (EApp (EVar "reverseL") (EVar "mentions"))))) (EVar "acc"))))))
+(DFunDef false "walkNodes" ((PVar "w") (PVar "defaults") (PVar "k0") (PVar "xs0") (PVar "acc0")) (ELetGroup ((lgb "go" (clause (PWild (PList) (PVar "acc")) (EApp (EVar "reverseL") (EVar "acc"))) (clause ((PVar "k") (PCons (PVar "n") (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "own") (EApp (EApp (EApp (EVar "walkBodies") (EVar "w")) (EFieldAccess (EVar "n") "rnodeBodies")) (EListLit))) (DoLet false false (PVar "mentions") (EIf (EBinOp "==" (EFieldAccess (EVar "n") "rnodeKind") (EVar "ImplNode")) (EApp (EApp (EApp (EVar "walkBodies") (EVar "w")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EFieldAccess (EVar "n") "rnodeKey")) (EVar "defaults")))) (EVar "own")) (EVar "own"))) (DoExpr (EApp (EApp (EApp (EVar "go") (EBinOp "+" (EVar "k") (ELit (LInt 1)))) (EVar "rest")) (EBinOp "::" (ERecordCreate "InitNode" ((fa "inodeName" (EFieldAccess (EVar "n") "rnodeName")) (fa "inodeLabel" (EFieldAccess (EVar "n") "rnodeLabel")) (fa "inodeKind" (EFieldAccess (EVar "n") "rnodeKind")) (fa "inodeOrder" (EVar "k")) (fa "inodeLoc" (EFieldAccess (EVar "n") "rnodeLoc")) (fa "inodeMentions" (EApp (EVar "reverseL") (EVar "mentions"))))) (EVar "acc")))))))) (EApp (EApp (EApp (EVar "go") (EVar "k0")) (EVar "xs0")) (EVar "acc0"))))
 (DTypeSig false "walkBodies" (TyFun (TyCon "InitWalk") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))) (TyFun (TyApp (TyCon "List") (TyCon "InitMention")) (TyApp (TyCon "List") (TyCon "InitMention"))))))
 (DFunDef false "walkBodies" ((PVar "w") (PVar "bodies") (PVar "acc")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc2") (PVar "b")) (EMatch (EVar "b") (arm (PTuple (PVar "ps") (PVar "body")) () (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "w")) (EVar "CtxReturn")) (EApp (EApp (EVar "bindPats") (EVar "ps")) (EVar "omEmpty"))) (EVar "body")) (EVar "acc2")))))) (EVar "acc")) (EVar "bodies")))
 (DData Private "WalkCtx" () ((variant "CtxReturn" (ConPos)) (variant "CtxGuard" (ConPos)) (variant "CtxGuardBody" (ConPos)) (variant "CtxDeref" (ConPos)) (variant "CtxDelay" (ConPos))) ())
@@ -2101,17 +2092,9 @@ kahn g members dependents indegree ready out = match M.minView ready
 (DTypeSig false "walkArms" (TyFun (TyCon "InitWalk") (TyFun (TyCon "WalkCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyFun (TyApp (TyCon "List") (TyCon "InitMention")) (TyApp (TyCon "List") (TyCon "InitMention"))))))))
 (DFunDef false "walkArms" ((PVar "w") (PVar "ctx") (PVar "bound") (PVar "arms") (PVar "acc")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc2") (PVar "a")) (EMatch (EVar "a") (arm (PCon "Arm" (PVar "p") (PVar "gs") (PVar "body")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "walkGuarded") (EVar "w")) (EVar "ctx")) (EApp (EApp (EVar "bindPat") (EVar "p")) (EVar "bound"))) (EVar "gs")) (EVar "body")) (EVar "acc2")))))) (EVar "acc")) (EVar "arms")))
 (DTypeSig false "walkGuarded" (TyFun (TyCon "InitWalk") (TyFun (TyCon "WalkCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "Guard")) (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "InitMention")) (TyApp (TyCon "List") (TyCon "InitMention")))))))))
-(DFunDef false "walkGuarded" ((PVar "w") (PVar "ctx") (PVar "bound") (PList) (PVar "body") (PVar "acc")) (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "w")) (EVar "ctx")) (EVar "bound")) (EVar "body")) (EVar "acc")))
-(DFunDef false "walkGuarded" ((PVar "w") (PVar "ctx") (PVar "bound") (PCons (PCon "GBool" (PVar "e")) (PVar "gs")) (PVar "body") (PVar "acc")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "walkGuarded") (EVar "w")) (EVar "ctx")) (EVar "bound")) (EVar "gs")) (EVar "body")) (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "w")) (EApp (EVar "evalCtx") (EVar "ctx"))) (EVar "bound")) (EVar "e")) (EVar "acc"))))
-(DFunDef false "walkGuarded" ((PVar "w") (PVar "ctx") (PVar "bound") (PCons (PCon "GBind" (PVar "p") (PVar "e")) (PVar "gs")) (PVar "body") (PVar "acc")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "walkGuarded") (EVar "w")) (EVar "ctx")) (EApp (EApp (EVar "bindPat") (EVar "p")) (EVar "bound"))) (EVar "gs")) (EVar "body")) (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "w")) (EApp (EVar "evalCtx") (EVar "ctx"))) (EVar "bound")) (EVar "e")) (EVar "acc"))))
+(DFunDef false "walkGuarded" ((PVar "w") (PVar "ctx") (PVar "bound0") (PVar "xs0") (PVar "body") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PVar "bound") (PList) (PVar "acc")) (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "w")) (EVar "ctx")) (EVar "bound")) (EVar "body")) (EVar "acc"))) (clause ((PVar "bound") (PCons (PCon "GBool" (PVar "e")) (PVar "gs")) (PVar "acc")) (EApp (EApp (EApp (EVar "go") (EVar "bound")) (EVar "gs")) (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "w")) (EApp (EVar "evalCtx") (EVar "ctx"))) (EVar "bound")) (EVar "e")) (EVar "acc")))) (clause ((PVar "bound") (PCons (PCon "GBind" (PVar "p") (PVar "e")) (PVar "gs")) (PVar "acc")) (EApp (EApp (EApp (EVar "go") (EApp (EApp (EVar "bindPat") (EVar "p")) (EVar "bound"))) (EVar "gs")) (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "w")) (EApp (EVar "evalCtx") (EVar "ctx"))) (EVar "bound")) (EVar "e")) (EVar "acc")))))) (EApp (EApp (EApp (EVar "go") (EVar "bound0")) (EVar "xs0")) (EVar "acc0"))))
 (DTypeSig false "walkStmts" (TyFun (TyCon "InitWalk") (TyFun (TyCon "WalkCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyFun (TyApp (TyCon "List") (TyCon "InitMention")) (TyApp (TyCon "List") (TyCon "InitMention"))))))))
-(DFunDef false "walkStmts" (PWild PWild PWild (PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "walkStmts" ((PVar "w") (PVar "ctx") (PVar "bound") (PList (PCon "DoExpr" (PVar "e"))) (PVar "acc")) (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "w")) (EVar "ctx")) (EVar "bound")) (EVar "e")) (EVar "acc")))
-(DFunDef false "walkStmts" ((PVar "w") (PVar "ctx") (PVar "bound") (PCons (PCon "DoExpr" (PVar "e")) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EApp (EApp (EVar "walkStmts") (EVar "w")) (EVar "ctx")) (EVar "bound")) (EVar "rest")) (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "w")) (EApp (EVar "evalCtx") (EVar "ctx"))) (EVar "bound")) (EVar "e")) (EVar "acc"))))
-(DFunDef false "walkStmts" ((PVar "w") (PVar "ctx") (PVar "bound") (PCons (PCon "DoBind" (PVar "p") (PVar "e")) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EApp (EApp (EVar "walkStmts") (EVar "w")) (EVar "ctx")) (EApp (EApp (EVar "bindPat") (EVar "p")) (EVar "bound"))) (EVar "rest")) (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "w")) (EApp (EVar "evalCtx") (EVar "ctx"))) (EVar "bound")) (EVar "e")) (EVar "acc"))))
-(DFunDef false "walkStmts" ((PVar "w") (PVar "ctx") (PVar "bound") (PCons (PCon "DoLet" PWild (PVar "r") (PVar "p") (PVar "e") PWild) (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "after") (EApp (EApp (EVar "bindPat") (EVar "p")) (EVar "bound"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "walkStmts") (EVar "w")) (EVar "ctx")) (EVar "after")) (EVar "rest")) (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "w")) (EApp (EVar "evalCtx") (EVar "ctx"))) (EIf (EVar "r") (EVar "after") (EVar "bound"))) (EVar "e")) (EVar "acc"))))))
-(DFunDef false "walkStmts" ((PVar "w") (PVar "ctx") (PVar "bound") (PCons (PCon "DoAssign" (PVar "x") (PVar "e")) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EApp (EApp (EVar "walkStmts") (EVar "w")) (EVar "ctx")) (EApp (EApp (EApp (EVar "omInsert") (EVar "x")) (ELit LUnit)) (EVar "bound"))) (EVar "rest")) (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "w")) (EApp (EVar "evalCtx") (EVar "ctx"))) (EVar "bound")) (EVar "e")) (EVar "acc"))))
-(DFunDef false "walkStmts" ((PVar "w") (PVar "ctx") (PVar "bound") (PCons (PCon "DoFieldAssign" PWild PWild (PVar "e")) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EApp (EApp (EVar "walkStmts") (EVar "w")) (EVar "ctx")) (EVar "bound")) (EVar "rest")) (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "w")) (EApp (EVar "evalCtx") (EVar "ctx"))) (EVar "bound")) (EVar "e")) (EVar "acc"))))
+(DFunDef false "walkStmts" ((PVar "w") (PVar "ctx") (PVar "bound0") (PVar "xs0") (PVar "acc0")) (ELetGroup ((lgb "go" (clause (PWild (PList) (PVar "acc")) (EVar "acc")) (clause ((PVar "bound") (PList (PCon "DoExpr" (PVar "e"))) (PVar "acc")) (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "w")) (EVar "ctx")) (EVar "bound")) (EVar "e")) (EVar "acc"))) (clause ((PVar "bound") (PCons (PCon "DoExpr" (PVar "e")) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "go") (EVar "bound")) (EVar "rest")) (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "w")) (EApp (EVar "evalCtx") (EVar "ctx"))) (EVar "bound")) (EVar "e")) (EVar "acc")))) (clause ((PVar "bound") (PCons (PCon "DoBind" (PVar "p") (PVar "e")) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "go") (EApp (EApp (EVar "bindPat") (EVar "p")) (EVar "bound"))) (EVar "rest")) (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "w")) (EApp (EVar "evalCtx") (EVar "ctx"))) (EVar "bound")) (EVar "e")) (EVar "acc")))) (clause ((PVar "bound") (PCons (PCon "DoLet" PWild (PVar "r") (PVar "p") (PVar "e") PWild) (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "after") (EApp (EApp (EVar "bindPat") (EVar "p")) (EVar "bound"))) (DoExpr (EApp (EApp (EApp (EVar "go") (EVar "after")) (EVar "rest")) (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "w")) (EApp (EVar "evalCtx") (EVar "ctx"))) (EIf (EVar "r") (EVar "after") (EVar "bound"))) (EVar "e")) (EVar "acc")))))) (clause ((PVar "bound") (PCons (PCon "DoAssign" (PVar "x") (PVar "e")) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "go") (EApp (EApp (EApp (EVar "omInsert") (EVar "x")) (ELit LUnit)) (EVar "bound"))) (EVar "rest")) (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "w")) (EApp (EVar "evalCtx") (EVar "ctx"))) (EVar "bound")) (EVar "e")) (EVar "acc")))) (clause ((PVar "bound") (PCons (PCon "DoFieldAssign" PWild PWild (PVar "e")) (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "go") (EVar "bound")) (EVar "rest")) (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "w")) (EApp (EVar "evalCtx") (EVar "ctx"))) (EVar "bound")) (EVar "e")) (EVar "acc")))))) (EApp (EApp (EApp (EVar "go") (EVar "bound0")) (EVar "xs0")) (EVar "acc0"))))
 (DTypeSig false "walkSection" (TyFun (TyCon "InitWalk") (TyFun (TyCon "WalkCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Section") (TyFun (TyApp (TyCon "List") (TyCon "InitMention")) (TyApp (TyCon "List") (TyCon "InitMention"))))))))
 (DFunDef false "walkSection" ((PVar "w") (PVar "ctx") (PVar "bound") (PCon "SecBare" (PVar "op")) (PVar "acc")) (EApp (EApp (EApp (EApp (EApp (EVar "sectionOp") (EVar "w")) (EVar "ctx")) (EVar "bound")) (EVar "op")) (EVar "acc")))
 (DFunDef false "walkSection" ((PVar "w") (PVar "ctx") (PVar "bound") (PCon "SecRight" (PVar "op") (PVar "e")) (PVar "acc")) (EApp (EApp (EApp (EApp (EApp (EVar "sectionOp") (EVar "w")) (EVar "ctx")) (EVar "bound")) (EVar "op")) (EApp (EApp (EApp (EApp (EApp (EVar "walk") (EVar "w")) (EApp (EVar "evalCtx") (EVar "ctx"))) (EVar "bound")) (EVar "e")) (EVar "acc"))))

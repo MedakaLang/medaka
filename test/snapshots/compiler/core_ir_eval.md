@@ -1,5 +1,5 @@
 # META
-source_lines=907
+source_lines=914
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR evaluator — STAGE2-DESIGN §2.1's "trivial Core-IR tree-walker" that
@@ -213,14 +213,16 @@ cevalMatchFrom : EvalEnv (Value e) ->
   List CArm ->
   List CArm ->
   <e> Value e
-cevalMatchFrom _ _ _ [] = panic "no matching clause in match"
-cevalMatchFrom env sv arms (arm :: rest) = match cArmParts arms arm
-  Some (pat, guards, body) => match matchPat pat sv
-    None => cevalMatchFrom env sv arms rest
-    Some binds => match cevalGuards (extendEnv env binds) guards
-      Some env2 => ceval env2 body
-      None => cevalMatchFrom env sv arms rest
-  None => panic "core_ir match: or-pattern candidate names no arm"
+cevalMatchFrom env sv arms rest0 = go rest0
+  where
+    go [] = panic "no matching clause in match"
+    go (arm :: rest) = match cArmParts arms arm
+      Some (pat, guards, body) => match matchPat pat sv
+        None => go rest
+        Some binds => match cevalGuards (extendEnv env binds) guards
+          Some env2 => ceval env2 body
+          None => go rest
+      None => panic "core_ir match: or-pattern candidate names no arm"
 
 -- An arm's pattern, guards and body; a `CArmAlt` candidate's body is the one its
 -- index names in [arms].
@@ -261,16 +263,16 @@ cevalTree : EvalEnv (Value e) ->
   List (Value e) ->
   CTree ->
   <e> Value e
--- a refutable `let` reaches here only through a lowering that keeps its decision
-cevalTree _ _ _ _ (CTFail (LetRefuted _)) = panic "let pattern match failure"
-cevalTree _ _ _ _ (CTFail (NoArm _)) = panic "no matching clause in match"
-cevalTree env root arms _ (CTLeaf i) = cevalArm env root arms i
-cevalTree env root arms occs (CTGuard i fail) =
-  cevalGuardedArm env root arms occs i fail
-cevalTree env root arms occs (CTDrop sub) =
-  cevalTree env root arms (cOccsTail occs) sub
-cevalTree env root arms occs (CTSwitch branches dft) =
-  cevalSwitch env root arms occs branches dft
+cevalTree env root arms occs0 tree0 = go occs0 tree0
+  where
+    -- a refutable `let` reaches here only through a lowering that keeps its decision
+    go _ (CTFail (LetRefuted _)) = panic "let pattern match failure"
+    go _ (CTFail (NoArm _)) = panic "no matching clause in match"
+    go _ (CTLeaf i) = cevalArm env root arms i
+    go occs (CTGuard i fail) = cevalGuardedArm env root arms occs i fail
+    go occs (CTDrop sub) = go (cOccsTail occs) sub
+    go occs (CTSwitch branches dft) =
+      cevalSwitch env root arms occs branches dft
 
 cOccsTail : List (Value e) -> List (Value e)
 cOccsTail [] = []
@@ -285,9 +287,9 @@ cevalArm env root arms i = match nthArmParts arms i
   None => panic "core_ir decision tree: arm index out of range"
 
 nthArmParts : List CArm -> Int -> Option (Pat, List CGuard, CExpr)
-nthArmParts arms i = match nthArm arms i
-  Some arm => cArmParts arms arm
-  None => None
+nthArmParts arms i = do
+  arm <- nthArm arms i
+  cArmParts arms arm
 
 cevalArmBody : EvalEnv (Value e) -> Value e -> Pat -> CExpr -> <e> Value e
 cevalArmBody env root pat body = match matchPat pat root
@@ -355,11 +357,12 @@ cevalSwitchOn : EvalEnv (Value e) ->
   List CTBranch ->
   CTree ->
   <e> Value e
-cevalSwitchOn env root arms _ rest [] dft = cevalTree env root arms rest dft
-cevalSwitchOn env root arms v rest ((CTBranch head sub) :: more) dft =
-  match headExtract head v
-    Some subs => cevalTree env root arms (subs ++ rest) sub
-    None => cevalSwitchOn env root arms v rest more dft
+cevalSwitchOn env root arms v rest branches0 dft = go branches0
+  where
+    go [] = cevalTree env root arms rest dft
+    go ((CTBranch head sub) :: more) = match headExtract head v
+      Some subs => cevalTree env root arms (subs ++ rest) sub
+      None => go more
 
 -- test a head against a value, returning its decomposed sub-values when it
 -- matches.  Reuses matchPat (with fresh binders) for BOTH the test and the
@@ -473,10 +476,12 @@ cInstallGroup : EvalEnv (Value e) ->
   List (String, Ref (Value e)) ->
   List CBind ->
   <e> Unit
-cInstallGroup _ _ [] = ()
-cInstallGroup env cells ((CBind name clauses _ _) :: rest) =
-  findCell cells name := cGroupValue env clauses
-  cInstallGroup env cells rest
+cInstallGroup env cells binds0 = go binds0
+  where
+    go [] = ()
+    go ((CBind name clauses _ _) :: rest) =
+      findCell cells name := cGroupValue env clauses
+      go rest
 
 -- let-group binding value: a nullary single clause is eager (recursive let);
 -- multi-clause coalesces into a VMulti dispatched by arg pattern + fall-through.
@@ -588,10 +593,12 @@ cInstallTopGroups : EvalEnv (Value e) ->
   List (String, Ref (Value e)) ->
   List CBind ->
   <e> Unit
-cInstallTopGroups _ _ [] = ()
-cInstallTopGroups env cells ((CBind n clauses _ _) :: rest) =
-  findCell cells n := cTopGroupValue env n clauses
-  cInstallTopGroups env cells rest
+cInstallTopGroups env cells binds0 = go binds0
+  where
+    go [] = ()
+    go ((CBind n clauses _ _) :: rest) =
+      findCell cells n := cTopGroupValue env n clauses
+      go rest
 
 cTopGroupValue : EvalEnv (Value e) -> String -> List CClause -> Value e
 cTopGroupValue env name [CClause pats body]
@@ -910,6 +917,7 @@ cevalModulesOutputFacts facts preludeDecls modules =
   let _ = cRunMainForEffect binds
   readOutput ()
 # DESUGAR
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("frontend" "visibility") ((mem "ExportView" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "Decl" false) (mem "Loc" true) (mem "noBinderId" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CProgram" true) (mem "mkApp" false) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true))))
@@ -971,8 +979,7 @@ cevalModulesOutputFacts facts preludeDecls modules =
 (DTypeSig false "cevalMatch" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "cevalMatch" ((PVar "env") (PVar "sv") (PVar "arms")) (EApp (EApp (EApp (EApp (EVar "cevalMatchFrom") (EVar "env")) (EVar "sv")) (EVar "arms")) (EVar "arms")))
 (DTypeSig false "cevalMatchFrom" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))))
-(DFunDef false "cevalMatchFrom" (PWild PWild PWild (PList)) (EApp (EVar "panic") (ELit (LString "no matching clause in match"))))
-(DFunDef false "cevalMatchFrom" ((PVar "env") (PVar "sv") (PVar "arms") (PCons (PVar "arm") (PVar "rest"))) (EMatch (EApp (EApp (EVar "cArmParts") (EVar "arms")) (EVar "arm")) (arm (PCon "Some" (PTuple (PVar "pat") (PVar "guards") (PVar "body"))) () (EMatch (EApp (EApp (EVar "matchPat") (EVar "pat")) (EVar "sv")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "cevalMatchFrom") (EVar "env")) (EVar "sv")) (EVar "arms")) (EVar "rest"))) (arm (PCon "Some" (PVar "binds")) () (EMatch (EApp (EApp (EVar "cevalGuards") (EApp (EApp (EVar "extendEnv") (EVar "env")) (EVar "binds"))) (EVar "guards")) (arm (PCon "Some" (PVar "env2")) () (EApp (EApp (EVar "ceval") (EVar "env2")) (EVar "body"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "cevalMatchFrom") (EVar "env")) (EVar "sv")) (EVar "arms")) (EVar "rest"))))))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "core_ir match: or-pattern candidate names no arm"))))))
+(DFunDef false "cevalMatchFrom" ((PVar "env") (PVar "sv") (PVar "arms") (PVar "rest0")) (ELetGroup ((lgb "go" (clause ((PList)) (EApp (EVar "panic") (ELit (LString "no matching clause in match")))) (clause ((PCons (PVar "arm") (PVar "rest"))) (EMatch (EApp (EApp (EVar "cArmParts") (EVar "arms")) (EVar "arm")) (arm (PCon "Some" (PTuple (PVar "pat") (PVar "guards") (PVar "body"))) () (EMatch (EApp (EApp (EVar "matchPat") (EVar "pat")) (EVar "sv")) (arm (PCon "None") () (EApp (EVar "go") (EVar "rest"))) (arm (PCon "Some" (PVar "binds")) () (EMatch (EApp (EApp (EVar "cevalGuards") (EApp (EApp (EVar "extendEnv") (EVar "env")) (EVar "binds"))) (EVar "guards")) (arm (PCon "Some" (PVar "env2")) () (EApp (EApp (EVar "ceval") (EVar "env2")) (EVar "body"))) (arm (PCon "None") () (EApp (EVar "go") (EVar "rest"))))))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "core_ir match: or-pattern candidate names no arm")))))))) (EApp (EVar "go") (EVar "rest0"))))
 (DTypeSig false "cArmParts" (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "CArm") (TyApp (TyCon "Option") (TyTuple (TyCon "Pat") (TyApp (TyCon "List") (TyCon "CGuard")) (TyCon "CExpr"))))))
 (DFunDef false "cArmParts" (PWild (PCon "CArm" (PVar "pat") (PVar "guards") (PVar "body"))) (EApp (EVar "Some") (ETuple (EVar "pat") (EVar "guards") (EVar "body"))))
 (DFunDef false "cArmParts" ((PVar "arms") (PCon "CArmAlt" (PVar "pat") (PVar "guards") (PVar "owner"))) (EMatch (EApp (EApp (EVar "nthArm") (EVar "arms")) (EVar "owner")) (arm (PCon "Some" (PCon "CArm" PWild PWild (PVar "body"))) () (EApp (EVar "Some") (ETuple (EVar "pat") (EVar "guards") (EVar "body")))) (arm PWild () (EVar "None"))))
@@ -983,19 +990,14 @@ cevalModulesOutputFacts facts preludeDecls modules =
 (DTypeSig false "cevalDecision" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "CTree") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))))
 (DFunDef false "cevalDecision" ((PVar "env") (PVar "root") (PVar "arms") (PVar "tree")) (EApp (EApp (EApp (EApp (EApp (EVar "cevalTree") (EVar "env")) (EVar "root")) (EVar "arms")) (EListLit (EVar "root"))) (EVar "tree")))
 (DTypeSig false "cevalTree" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "CTree") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))))
-(DFunDef false "cevalTree" (PWild PWild PWild PWild (PCon "CTFail" (PCon "LetRefuted" PWild))) (EApp (EVar "panic") (ELit (LString "let pattern match failure"))))
-(DFunDef false "cevalTree" (PWild PWild PWild PWild (PCon "CTFail" (PCon "NoArm" PWild))) (EApp (EVar "panic") (ELit (LString "no matching clause in match"))))
-(DFunDef false "cevalTree" ((PVar "env") (PVar "root") (PVar "arms") PWild (PCon "CTLeaf" (PVar "i"))) (EApp (EApp (EApp (EApp (EVar "cevalArm") (EVar "env")) (EVar "root")) (EVar "arms")) (EVar "i")))
-(DFunDef false "cevalTree" ((PVar "env") (PVar "root") (PVar "arms") (PVar "occs") (PCon "CTGuard" (PVar "i") (PVar "fail"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "cevalGuardedArm") (EVar "env")) (EVar "root")) (EVar "arms")) (EVar "occs")) (EVar "i")) (EVar "fail")))
-(DFunDef false "cevalTree" ((PVar "env") (PVar "root") (PVar "arms") (PVar "occs") (PCon "CTDrop" (PVar "sub"))) (EApp (EApp (EApp (EApp (EApp (EVar "cevalTree") (EVar "env")) (EVar "root")) (EVar "arms")) (EApp (EVar "cOccsTail") (EVar "occs"))) (EVar "sub")))
-(DFunDef false "cevalTree" ((PVar "env") (PVar "root") (PVar "arms") (PVar "occs") (PCon "CTSwitch" (PVar "branches") (PVar "dft"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "cevalSwitch") (EVar "env")) (EVar "root")) (EVar "arms")) (EVar "occs")) (EVar "branches")) (EVar "dft")))
+(DFunDef false "cevalTree" ((PVar "env") (PVar "root") (PVar "arms") (PVar "occs0") (PVar "tree0")) (ELetGroup ((lgb "go" (clause (PWild (PCon "CTFail" (PCon "LetRefuted" PWild))) (EApp (EVar "panic") (ELit (LString "let pattern match failure")))) (clause (PWild (PCon "CTFail" (PCon "NoArm" PWild))) (EApp (EVar "panic") (ELit (LString "no matching clause in match")))) (clause (PWild (PCon "CTLeaf" (PVar "i"))) (EApp (EApp (EApp (EApp (EVar "cevalArm") (EVar "env")) (EVar "root")) (EVar "arms")) (EVar "i"))) (clause ((PVar "occs") (PCon "CTGuard" (PVar "i") (PVar "fail"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "cevalGuardedArm") (EVar "env")) (EVar "root")) (EVar "arms")) (EVar "occs")) (EVar "i")) (EVar "fail"))) (clause ((PVar "occs") (PCon "CTDrop" (PVar "sub"))) (EApp (EApp (EVar "go") (EApp (EVar "cOccsTail") (EVar "occs"))) (EVar "sub"))) (clause ((PVar "occs") (PCon "CTSwitch" (PVar "branches") (PVar "dft"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "cevalSwitch") (EVar "env")) (EVar "root")) (EVar "arms")) (EVar "occs")) (EVar "branches")) (EVar "dft"))))) (EApp (EApp (EVar "go") (EVar "occs0")) (EVar "tree0"))))
 (DTypeSig false "cOccsTail" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "cOccsTail" ((PList)) (EListLit))
 (DFunDef false "cOccsTail" ((PCons PWild (PVar "xs"))) (EVar "xs"))
 (DTypeSig false "cevalArm" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))))
 (DFunDef false "cevalArm" ((PVar "env") (PVar "root") (PVar "arms") (PVar "i")) (EMatch (EApp (EApp (EVar "nthArmParts") (EVar "arms")) (EVar "i")) (arm (PCon "Some" (PTuple (PVar "pat") PWild (PVar "body"))) () (EApp (EApp (EApp (EApp (EVar "cevalArmBody") (EVar "env")) (EVar "root")) (EVar "pat")) (EVar "body"))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "core_ir decision tree: arm index out of range"))))))
 (DTypeSig false "nthArmParts" (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyTuple (TyCon "Pat") (TyApp (TyCon "List") (TyCon "CGuard")) (TyCon "CExpr"))))))
-(DFunDef false "nthArmParts" ((PVar "arms") (PVar "i")) (EMatch (EApp (EApp (EVar "nthArm") (EVar "arms")) (EVar "i")) (arm (PCon "Some" (PVar "arm")) () (EApp (EApp (EVar "cArmParts") (EVar "arms")) (EVar "arm"))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "nthArmParts" ((PVar "arms") (PVar "i")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "nthArm") (EVar "arms")) (EVar "i"))) (ELam ((PVar "arm")) (EApp (EApp (EVar "cArmParts") (EVar "arms")) (EVar "arm")))))
 (DTypeSig false "cevalArmBody" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyCon "Pat") (TyFun (TyCon "CExpr") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))))
 (DFunDef false "cevalArmBody" ((PVar "env") (PVar "root") (PVar "pat") (PVar "body")) (EMatch (EApp (EApp (EVar "matchPat") (EVar "pat")) (EVar "root")) (arm (PCon "Some" (PVar "binds")) () (EApp (EApp (EVar "ceval") (EApp (EApp (EVar "extendEnv") (EVar "env")) (EVar "binds"))) (EVar "body"))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "core_ir decision tree: leaf pattern did not match scrutinee"))))))
 (DTypeSig false "cevalGuardedArm" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Int") (TyFun (TyCon "CTree") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))))))
@@ -1006,8 +1008,7 @@ cevalModulesOutputFacts facts preludeDecls modules =
 (DFunDef false "cevalSwitch" ((PVar "env") (PVar "root") (PVar "arms") (PList) (PVar "_branches") (PVar "dft")) (EApp (EApp (EApp (EApp (EApp (EVar "cevalTree") (EVar "env")) (EVar "root")) (EVar "arms")) (EListLit)) (EVar "dft")))
 (DFunDef false "cevalSwitch" ((PVar "env") (PVar "root") (PVar "arms") (PCons (PVar "v") (PVar "rest")) (PVar "branches") (PVar "dft")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "cevalSwitchOn") (EVar "env")) (EVar "root")) (EVar "arms")) (EVar "v")) (EVar "rest")) (EVar "branches")) (EVar "dft")))
 (DTypeSig false "cevalSwitchOn" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyCon "CTBranch")) (TyFun (TyCon "CTree") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))))))
-(DFunDef false "cevalSwitchOn" ((PVar "env") (PVar "root") (PVar "arms") PWild (PVar "rest") (PList) (PVar "dft")) (EApp (EApp (EApp (EApp (EApp (EVar "cevalTree") (EVar "env")) (EVar "root")) (EVar "arms")) (EVar "rest")) (EVar "dft")))
-(DFunDef false "cevalSwitchOn" ((PVar "env") (PVar "root") (PVar "arms") (PVar "v") (PVar "rest") (PCons (PCon "CTBranch" (PVar "head") (PVar "sub")) (PVar "more")) (PVar "dft")) (EMatch (EApp (EApp (EVar "headExtract") (EVar "head")) (EVar "v")) (arm (PCon "Some" (PVar "subs")) () (EApp (EApp (EApp (EApp (EApp (EVar "cevalTree") (EVar "env")) (EVar "root")) (EVar "arms")) (EBinOp "++" (EVar "subs") (EVar "rest"))) (EVar "sub"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "cevalSwitchOn") (EVar "env")) (EVar "root")) (EVar "arms")) (EVar "v")) (EVar "rest")) (EVar "more")) (EVar "dft")))))
+(DFunDef false "cevalSwitchOn" ((PVar "env") (PVar "root") (PVar "arms") (PVar "v") (PVar "rest") (PVar "branches0") (PVar "dft")) (ELetGroup ((lgb "go" (clause ((PList)) (EApp (EApp (EApp (EApp (EApp (EVar "cevalTree") (EVar "env")) (EVar "root")) (EVar "arms")) (EVar "rest")) (EVar "dft"))) (clause ((PCons (PCon "CTBranch" (PVar "head") (PVar "sub")) (PVar "more"))) (EMatch (EApp (EApp (EVar "headExtract") (EVar "head")) (EVar "v")) (arm (PCon "Some" (PVar "subs")) () (EApp (EApp (EApp (EApp (EApp (EVar "cevalTree") (EVar "env")) (EVar "root")) (EVar "arms")) (EBinOp "++" (EVar "subs") (EVar "rest"))) (EVar "sub"))) (arm (PCon "None") () (EApp (EVar "go") (EVar "more"))))))) (EApp (EVar "go") (EVar "branches0"))))
 (DTypeSig false "headExtract" (TyFun (TyCon "CHead") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "headExtract" ((PCon "HCon" (PVar "c") (PVar "a")) (PVar "v")) (EApp (EApp (EVar "extractWith") (EApp (EApp (EVar "PCon") (EVar "c")) (EApp (EVar "cBinders") (EVar "a")))) (EVar "v")))
 (DFunDef false "headExtract" ((PCon "HTuple" (PVar "n")) (PVar "v")) (EApp (EApp (EVar "extractWith") (EApp (EVar "PTuple") (EApp (EVar "cBinders") (EVar "n")))) (EVar "v")))
@@ -1050,8 +1051,7 @@ cevalModulesOutputFacts facts preludeDecls modules =
 (DTypeSig false "cBindCell" (TyFun (TyCon "CBind") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "cBindCell" ((PCon "CBind" (PVar "name") PWild PWild PWild)) (ETuple (EVar "name") (EApp (EVar "Ref") (EVar "VUnit"))))
 (DTypeSig false "cInstallGroup" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyEffect () (Some "e") (TyCon "Unit"))))))
-(DFunDef false "cInstallGroup" (PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "cInstallGroup" ((PVar "env") (PVar "cells") (PCons (PCon "CBind" (PVar "name") (PVar "clauses") PWild PWild) (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EApp (EApp (EVar "findCell") (EVar "cells")) (EVar "name"))) (EApp (EApp (EVar "cGroupValue") (EVar "env")) (EVar "clauses")))) (DoExpr (EApp (EApp (EApp (EVar "cInstallGroup") (EVar "env")) (EVar "cells")) (EVar "rest")))))
+(DFunDef false "cInstallGroup" ((PVar "env") (PVar "cells") (PVar "binds0")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PCon "CBind" (PVar "name") (PVar "clauses") PWild PWild) (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EApp (EApp (EVar "findCell") (EVar "cells")) (EVar "name"))) (EApp (EApp (EVar "cGroupValue") (EVar "env")) (EVar "clauses")))) (DoExpr (EApp (EVar "go") (EVar "rest"))))))) (EApp (EVar "go") (EVar "binds0"))))
 (DTypeSig false "cGroupValue" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "cGroupValue" ((PVar "env") (PList (PCon "CClause" (PVar "pats") (PVar "body")))) (EIf (EApp (EVar "isNullary") (EVar "pats")) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "body")) (EIf (EVar "otherwise") (EApp (EApp (EVar "cClauseClosure") (EVar "env")) (EApp (EApp (EVar "CClause") (EVar "pats")) (EVar "body"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "cGroupValue" ((PVar "env") (PVar "clauses")) (EApp (EVar "VMulti") (EApp (EApp (EVar "map") (EApp (EVar "cClauseClosure") (EVar "env"))) (EVar "clauses"))))
@@ -1081,8 +1081,7 @@ cevalModulesOutputFacts facts preludeDecls modules =
 (DTypeSig false "cBindName" (TyFun (TyCon "CBind") (TyCon "String")))
 (DFunDef false "cBindName" ((PCon "CBind" (PVar "n") PWild PWild PWild)) (EVar "n"))
 (DTypeSig false "cInstallTopGroups" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyEffect () (Some "e") (TyCon "Unit"))))))
-(DFunDef false "cInstallTopGroups" (PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "cInstallTopGroups" ((PVar "env") (PVar "cells") (PCons (PCon "CBind" (PVar "n") (PVar "clauses") PWild PWild) (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EApp (EApp (EVar "findCell") (EVar "cells")) (EVar "n"))) (EApp (EApp (EApp (EVar "cTopGroupValue") (EVar "env")) (EVar "n")) (EVar "clauses")))) (DoExpr (EApp (EApp (EApp (EVar "cInstallTopGroups") (EVar "env")) (EVar "cells")) (EVar "rest")))))
+(DFunDef false "cInstallTopGroups" ((PVar "env") (PVar "cells") (PVar "binds0")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PCon "CBind" (PVar "n") (PVar "clauses") PWild PWild) (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EApp (EApp (EVar "findCell") (EVar "cells")) (EVar "n"))) (EApp (EApp (EApp (EVar "cTopGroupValue") (EVar "env")) (EVar "n")) (EVar "clauses")))) (DoExpr (EApp (EVar "go") (EVar "rest"))))))) (EApp (EVar "go") (EVar "binds0"))))
 (DTypeSig false "cTopGroupValue" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "cTopGroupValue" ((PVar "env") (PVar "name") (PList (PCon "CClause" (PVar "pats") (PVar "body")))) (EIf (EApp (EVar "isNullary") (EVar "pats")) (EIf (EBinOp "==" (EVar "name") (ELit (LString "main"))) (EApp (EVar "VThunk") (ELam (PWild) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "body")))) (EVar "VUninit")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "VClosureF") (EVar "env")) (EVar "pats")) (ELam ((PVar "e")) (EApp (EApp (EVar "ceval") (EVar "e")) (EVar "body")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "cTopGroupValue" ((PVar "env") PWild (PVar "clauses")) (EApp (EVar "VMulti") (EApp (EApp (EVar "map") (EApp (EVar "cClauseClosure") (EVar "env"))) (EVar "clauses"))))
@@ -1122,6 +1121,7 @@ cevalModulesOutputFacts facts preludeDecls modules =
 (DTypeSig true "cevalModulesOutputFacts" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String")))))
 (DFunDef false "cevalModulesOutputFacts" ((PVar "facts") (PVar "preludeDecls") (PVar "modules")) (EBlock (DoExpr (EApp (EVar "resetOutput") (ELit LUnit))) (DoLet false false (PVar "binds") (EApp (EApp (EApp (EVar "cevalModules") (EVar "facts")) (EVar "preludeDecls")) (EVar "modules"))) (DoLet false false PWild (EApp (EVar "cRunMainForEffect") (EVar "binds"))) (DoExpr (EApp (EVar "readOutput") (ELit LUnit)))))
 # MARK
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("frontend" "visibility") ((mem "ExportView" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "Decl" false) (mem "Loc" true) (mem "noBinderId" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CProgram" true) (mem "mkApp" false) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true))))
@@ -1183,8 +1183,7 @@ cevalModulesOutputFacts facts preludeDecls modules =
 (DTypeSig false "cevalMatch" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "cevalMatch" ((PVar "env") (PVar "sv") (PVar "arms")) (EApp (EApp (EApp (EApp (EVar "cevalMatchFrom") (EVar "env")) (EVar "sv")) (EVar "arms")) (EVar "arms")))
 (DTypeSig false "cevalMatchFrom" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))))
-(DFunDef false "cevalMatchFrom" (PWild PWild PWild (PList)) (EApp (EVar "panic") (ELit (LString "no matching clause in match"))))
-(DFunDef false "cevalMatchFrom" ((PVar "env") (PVar "sv") (PVar "arms") (PCons (PVar "arm") (PVar "rest"))) (EMatch (EApp (EApp (EVar "cArmParts") (EVar "arms")) (EVar "arm")) (arm (PCon "Some" (PTuple (PVar "pat") (PVar "guards") (PVar "body"))) () (EMatch (EApp (EApp (EVar "matchPat") (EVar "pat")) (EVar "sv")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "cevalMatchFrom") (EVar "env")) (EVar "sv")) (EVar "arms")) (EVar "rest"))) (arm (PCon "Some" (PVar "binds")) () (EMatch (EApp (EApp (EVar "cevalGuards") (EApp (EApp (EVar "extendEnv") (EVar "env")) (EVar "binds"))) (EVar "guards")) (arm (PCon "Some" (PVar "env2")) () (EApp (EApp (EVar "ceval") (EVar "env2")) (EVar "body"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "cevalMatchFrom") (EVar "env")) (EVar "sv")) (EVar "arms")) (EVar "rest"))))))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "core_ir match: or-pattern candidate names no arm"))))))
+(DFunDef false "cevalMatchFrom" ((PVar "env") (PVar "sv") (PVar "arms") (PVar "rest0")) (ELetGroup ((lgb "go" (clause ((PList)) (EApp (EVar "panic") (ELit (LString "no matching clause in match")))) (clause ((PCons (PVar "arm") (PVar "rest"))) (EMatch (EApp (EApp (EVar "cArmParts") (EVar "arms")) (EVar "arm")) (arm (PCon "Some" (PTuple (PVar "pat") (PVar "guards") (PVar "body"))) () (EMatch (EApp (EApp (EVar "matchPat") (EVar "pat")) (EVar "sv")) (arm (PCon "None") () (EApp (EVar "go") (EVar "rest"))) (arm (PCon "Some" (PVar "binds")) () (EMatch (EApp (EApp (EVar "cevalGuards") (EApp (EApp (EVar "extendEnv") (EVar "env")) (EVar "binds"))) (EVar "guards")) (arm (PCon "Some" (PVar "env2")) () (EApp (EApp (EVar "ceval") (EVar "env2")) (EVar "body"))) (arm (PCon "None") () (EApp (EVar "go") (EVar "rest"))))))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "core_ir match: or-pattern candidate names no arm")))))))) (EApp (EVar "go") (EVar "rest0"))))
 (DTypeSig false "cArmParts" (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "CArm") (TyApp (TyCon "Option") (TyTuple (TyCon "Pat") (TyApp (TyCon "List") (TyCon "CGuard")) (TyCon "CExpr"))))))
 (DFunDef false "cArmParts" (PWild (PCon "CArm" (PVar "pat") (PVar "guards") (PVar "body"))) (EApp (EVar "Some") (ETuple (EVar "pat") (EVar "guards") (EVar "body"))))
 (DFunDef false "cArmParts" ((PVar "arms") (PCon "CArmAlt" (PVar "pat") (PVar "guards") (PVar "owner"))) (EMatch (EApp (EApp (EVar "nthArm") (EVar "arms")) (EVar "owner")) (arm (PCon "Some" (PCon "CArm" PWild PWild (PVar "body"))) () (EApp (EVar "Some") (ETuple (EVar "pat") (EVar "guards") (EVar "body")))) (arm PWild () (EVar "None"))))
@@ -1195,19 +1194,14 @@ cevalModulesOutputFacts facts preludeDecls modules =
 (DTypeSig false "cevalDecision" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "CTree") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))))
 (DFunDef false "cevalDecision" ((PVar "env") (PVar "root") (PVar "arms") (PVar "tree")) (EApp (EApp (EApp (EApp (EApp (EVar "cevalTree") (EVar "env")) (EVar "root")) (EVar "arms")) (EListLit (EVar "root"))) (EVar "tree")))
 (DTypeSig false "cevalTree" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "CTree") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))))
-(DFunDef false "cevalTree" (PWild PWild PWild PWild (PCon "CTFail" (PCon "LetRefuted" PWild))) (EApp (EVar "panic") (ELit (LString "let pattern match failure"))))
-(DFunDef false "cevalTree" (PWild PWild PWild PWild (PCon "CTFail" (PCon "NoArm" PWild))) (EApp (EVar "panic") (ELit (LString "no matching clause in match"))))
-(DFunDef false "cevalTree" ((PVar "env") (PVar "root") (PVar "arms") PWild (PCon "CTLeaf" (PVar "i"))) (EApp (EApp (EApp (EApp (EVar "cevalArm") (EVar "env")) (EVar "root")) (EVar "arms")) (EVar "i")))
-(DFunDef false "cevalTree" ((PVar "env") (PVar "root") (PVar "arms") (PVar "occs") (PCon "CTGuard" (PVar "i") (PVar "fail"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "cevalGuardedArm") (EVar "env")) (EVar "root")) (EVar "arms")) (EVar "occs")) (EVar "i")) (EVar "fail")))
-(DFunDef false "cevalTree" ((PVar "env") (PVar "root") (PVar "arms") (PVar "occs") (PCon "CTDrop" (PVar "sub"))) (EApp (EApp (EApp (EApp (EApp (EVar "cevalTree") (EVar "env")) (EVar "root")) (EVar "arms")) (EApp (EVar "cOccsTail") (EVar "occs"))) (EMethodRef "sub")))
-(DFunDef false "cevalTree" ((PVar "env") (PVar "root") (PVar "arms") (PVar "occs") (PCon "CTSwitch" (PVar "branches") (PVar "dft"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "cevalSwitch") (EVar "env")) (EVar "root")) (EVar "arms")) (EVar "occs")) (EVar "branches")) (EVar "dft")))
+(DFunDef false "cevalTree" ((PVar "env") (PVar "root") (PVar "arms") (PVar "occs0") (PVar "tree0")) (ELetGroup ((lgb "go" (clause (PWild (PCon "CTFail" (PCon "LetRefuted" PWild))) (EApp (EVar "panic") (ELit (LString "let pattern match failure")))) (clause (PWild (PCon "CTFail" (PCon "NoArm" PWild))) (EApp (EVar "panic") (ELit (LString "no matching clause in match")))) (clause (PWild (PCon "CTLeaf" (PVar "i"))) (EApp (EApp (EApp (EApp (EVar "cevalArm") (EVar "env")) (EVar "root")) (EVar "arms")) (EVar "i"))) (clause ((PVar "occs") (PCon "CTGuard" (PVar "i") (PVar "fail"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "cevalGuardedArm") (EVar "env")) (EVar "root")) (EVar "arms")) (EVar "occs")) (EVar "i")) (EVar "fail"))) (clause ((PVar "occs") (PCon "CTDrop" (PVar "sub"))) (EApp (EApp (EVar "go") (EApp (EVar "cOccsTail") (EVar "occs"))) (EMethodRef "sub"))) (clause ((PVar "occs") (PCon "CTSwitch" (PVar "branches") (PVar "dft"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "cevalSwitch") (EVar "env")) (EVar "root")) (EVar "arms")) (EVar "occs")) (EVar "branches")) (EVar "dft"))))) (EApp (EApp (EVar "go") (EVar "occs0")) (EVar "tree0"))))
 (DTypeSig false "cOccsTail" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "cOccsTail" ((PList)) (EListLit))
 (DFunDef false "cOccsTail" ((PCons PWild (PVar "xs"))) (EVar "xs"))
 (DTypeSig false "cevalArm" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))))
 (DFunDef false "cevalArm" ((PVar "env") (PVar "root") (PVar "arms") (PVar "i")) (EMatch (EApp (EApp (EVar "nthArmParts") (EVar "arms")) (EVar "i")) (arm (PCon "Some" (PTuple (PVar "pat") PWild (PVar "body"))) () (EApp (EApp (EApp (EApp (EVar "cevalArmBody") (EVar "env")) (EVar "root")) (EVar "pat")) (EVar "body"))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "core_ir decision tree: arm index out of range"))))))
 (DTypeSig false "nthArmParts" (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyTuple (TyCon "Pat") (TyApp (TyCon "List") (TyCon "CGuard")) (TyCon "CExpr"))))))
-(DFunDef false "nthArmParts" ((PVar "arms") (PVar "i")) (EMatch (EApp (EApp (EVar "nthArm") (EVar "arms")) (EVar "i")) (arm (PCon "Some" (PVar "arm")) () (EApp (EApp (EVar "cArmParts") (EVar "arms")) (EVar "arm"))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "nthArmParts" ((PVar "arms") (PVar "i")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "nthArm") (EVar "arms")) (EVar "i"))) (ELam ((PVar "arm")) (EApp (EApp (EVar "cArmParts") (EVar "arms")) (EVar "arm")))))
 (DTypeSig false "cevalArmBody" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyCon "Pat") (TyFun (TyCon "CExpr") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))))
 (DFunDef false "cevalArmBody" ((PVar "env") (PVar "root") (PVar "pat") (PVar "body")) (EMatch (EApp (EApp (EVar "matchPat") (EVar "pat")) (EVar "root")) (arm (PCon "Some" (PVar "binds")) () (EApp (EApp (EVar "ceval") (EApp (EApp (EVar "extendEnv") (EVar "env")) (EVar "binds"))) (EVar "body"))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "core_ir decision tree: leaf pattern did not match scrutinee"))))))
 (DTypeSig false "cevalGuardedArm" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Int") (TyFun (TyCon "CTree") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))))))
@@ -1218,8 +1212,7 @@ cevalModulesOutputFacts facts preludeDecls modules =
 (DFunDef false "cevalSwitch" ((PVar "env") (PVar "root") (PVar "arms") (PList) (PVar "_branches") (PVar "dft")) (EApp (EApp (EApp (EApp (EApp (EVar "cevalTree") (EVar "env")) (EVar "root")) (EVar "arms")) (EListLit)) (EVar "dft")))
 (DFunDef false "cevalSwitch" ((PVar "env") (PVar "root") (PVar "arms") (PCons (PVar "v") (PVar "rest")) (PVar "branches") (PVar "dft")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "cevalSwitchOn") (EVar "env")) (EVar "root")) (EVar "arms")) (EVar "v")) (EVar "rest")) (EVar "branches")) (EVar "dft")))
 (DTypeSig false "cevalSwitchOn" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyCon "CTBranch")) (TyFun (TyCon "CTree") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))))))
-(DFunDef false "cevalSwitchOn" ((PVar "env") (PVar "root") (PVar "arms") PWild (PVar "rest") (PList) (PVar "dft")) (EApp (EApp (EApp (EApp (EApp (EVar "cevalTree") (EVar "env")) (EVar "root")) (EVar "arms")) (EVar "rest")) (EVar "dft")))
-(DFunDef false "cevalSwitchOn" ((PVar "env") (PVar "root") (PVar "arms") (PVar "v") (PVar "rest") (PCons (PCon "CTBranch" (PVar "head") (PVar "sub")) (PVar "more")) (PVar "dft")) (EMatch (EApp (EApp (EVar "headExtract") (EVar "head")) (EVar "v")) (arm (PCon "Some" (PVar "subs")) () (EApp (EApp (EApp (EApp (EApp (EVar "cevalTree") (EVar "env")) (EVar "root")) (EVar "arms")) (EBinOp "++" (EVar "subs") (EVar "rest"))) (EMethodRef "sub"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "cevalSwitchOn") (EVar "env")) (EVar "root")) (EVar "arms")) (EVar "v")) (EVar "rest")) (EVar "more")) (EVar "dft")))))
+(DFunDef false "cevalSwitchOn" ((PVar "env") (PVar "root") (PVar "arms") (PVar "v") (PVar "rest") (PVar "branches0") (PVar "dft")) (ELetGroup ((lgb "go" (clause ((PList)) (EApp (EApp (EApp (EApp (EApp (EVar "cevalTree") (EVar "env")) (EVar "root")) (EVar "arms")) (EVar "rest")) (EVar "dft"))) (clause ((PCons (PCon "CTBranch" (PVar "head") (PVar "sub")) (PVar "more"))) (EMatch (EApp (EApp (EVar "headExtract") (EVar "head")) (EVar "v")) (arm (PCon "Some" (PVar "subs")) () (EApp (EApp (EApp (EApp (EApp (EVar "cevalTree") (EVar "env")) (EVar "root")) (EVar "arms")) (EBinOp "++" (EVar "subs") (EVar "rest"))) (EMethodRef "sub"))) (arm (PCon "None") () (EApp (EVar "go") (EVar "more"))))))) (EApp (EVar "go") (EVar "branches0"))))
 (DTypeSig false "headExtract" (TyFun (TyCon "CHead") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "headExtract" ((PCon "HCon" (PVar "c") (PVar "a")) (PVar "v")) (EApp (EApp (EVar "extractWith") (EApp (EApp (EVar "PCon") (EVar "c")) (EApp (EVar "cBinders") (EVar "a")))) (EVar "v")))
 (DFunDef false "headExtract" ((PCon "HTuple" (PVar "n")) (PVar "v")) (EApp (EApp (EVar "extractWith") (EApp (EVar "PTuple") (EApp (EVar "cBinders") (EVar "n")))) (EVar "v")))
@@ -1262,8 +1255,7 @@ cevalModulesOutputFacts facts preludeDecls modules =
 (DTypeSig false "cBindCell" (TyFun (TyCon "CBind") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "cBindCell" ((PCon "CBind" (PVar "name") PWild PWild PWild)) (ETuple (EVar "name") (EApp (EVar "Ref") (EVar "VUnit"))))
 (DTypeSig false "cInstallGroup" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyEffect () (Some "e") (TyCon "Unit"))))))
-(DFunDef false "cInstallGroup" (PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "cInstallGroup" ((PVar "env") (PVar "cells") (PCons (PCon "CBind" (PVar "name") (PVar "clauses") PWild PWild) (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EApp (EApp (EVar "findCell") (EVar "cells")) (EVar "name"))) (EApp (EApp (EVar "cGroupValue") (EVar "env")) (EVar "clauses")))) (DoExpr (EApp (EApp (EApp (EVar "cInstallGroup") (EVar "env")) (EVar "cells")) (EVar "rest")))))
+(DFunDef false "cInstallGroup" ((PVar "env") (PVar "cells") (PVar "binds0")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PCon "CBind" (PVar "name") (PVar "clauses") PWild PWild) (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EApp (EApp (EVar "findCell") (EVar "cells")) (EVar "name"))) (EApp (EApp (EVar "cGroupValue") (EVar "env")) (EVar "clauses")))) (DoExpr (EApp (EVar "go") (EVar "rest"))))))) (EApp (EVar "go") (EVar "binds0"))))
 (DTypeSig false "cGroupValue" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "cGroupValue" ((PVar "env") (PList (PCon "CClause" (PVar "pats") (PVar "body")))) (EIf (EApp (EVar "isNullary") (EVar "pats")) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "body")) (EIf (EVar "otherwise") (EApp (EApp (EVar "cClauseClosure") (EVar "env")) (EApp (EApp (EVar "CClause") (EVar "pats")) (EVar "body"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "cGroupValue" ((PVar "env") (PVar "clauses")) (EApp (EVar "VMulti") (EApp (EApp (EMethodRef "map") (EApp (EVar "cClauseClosure") (EVar "env"))) (EVar "clauses"))))
@@ -1293,8 +1285,7 @@ cevalModulesOutputFacts facts preludeDecls modules =
 (DTypeSig false "cBindName" (TyFun (TyCon "CBind") (TyCon "String")))
 (DFunDef false "cBindName" ((PCon "CBind" (PVar "n") PWild PWild PWild)) (EVar "n"))
 (DTypeSig false "cInstallTopGroups" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyEffect () (Some "e") (TyCon "Unit"))))))
-(DFunDef false "cInstallTopGroups" (PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "cInstallTopGroups" ((PVar "env") (PVar "cells") (PCons (PCon "CBind" (PVar "n") (PVar "clauses") PWild PWild) (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EApp (EApp (EVar "findCell") (EVar "cells")) (EVar "n"))) (EApp (EApp (EApp (EVar "cTopGroupValue") (EVar "env")) (EVar "n")) (EVar "clauses")))) (DoExpr (EApp (EApp (EApp (EVar "cInstallTopGroups") (EVar "env")) (EVar "cells")) (EVar "rest")))))
+(DFunDef false "cInstallTopGroups" ((PVar "env") (PVar "cells") (PVar "binds0")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PCon "CBind" (PVar "n") (PVar "clauses") PWild PWild) (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EApp (EApp (EVar "findCell") (EVar "cells")) (EVar "n"))) (EApp (EApp (EApp (EVar "cTopGroupValue") (EVar "env")) (EVar "n")) (EVar "clauses")))) (DoExpr (EApp (EVar "go") (EVar "rest"))))))) (EApp (EVar "go") (EVar "binds0"))))
 (DTypeSig false "cTopGroupValue" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "cTopGroupValue" ((PVar "env") (PVar "name") (PList (PCon "CClause" (PVar "pats") (PVar "body")))) (EIf (EApp (EVar "isNullary") (EVar "pats")) (EIf (EBinOp "==" (EVar "name") (ELit (LString "main"))) (EApp (EVar "VThunk") (ELam (PWild) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "body")))) (EVar "VUninit")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "VClosureF") (EVar "env")) (EVar "pats")) (ELam ((PVar "e")) (EApp (EApp (EVar "ceval") (EVar "e")) (EVar "body")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "cTopGroupValue" ((PVar "env") PWild (PVar "clauses")) (EApp (EVar "VMulti") (EApp (EApp (EMethodRef "map") (EApp (EVar "cClauseClosure") (EVar "env"))) (EVar "clauses"))))
