@@ -35,10 +35,10 @@
 #      assigned anywhere in the compiler -- `setRef <path>.<field> v` or
 #      `<path>.<field> := v`, both live, whatever the receiver -- pinned by FIELD,
 #      plus a collision test against every other record's field names (load-bearing)
-#   3. the THREE parallel engine module-state builders' frame-seeding parity,
-#      plus exact delegation by the two root-environment wrappers
-#      (evalModulesWith / buildRootModuleStateWith / cevalModules;
-#      evalModulesRootEnvFacts / evalModulesRootEvalEnvFacts)
+#   3. the TWO parallel engine module-state builders' frame-seeding parity,
+#      plus exact delegation by the three wrappers
+#      (buildRootModuleStateWith / cevalModules;
+#      evalModulesWith / evalModulesRootEnvFacts / evalModulesRootEvalEnvFacts)
 #   4. #1112 A-3.4 the IE namespace ratchet
 #   5. #1519 A-3.3 the CE construction ratchet
 #   6. #2796 Module-mode ENTRY PARITY: `checkModulesPreambleK` and
@@ -557,22 +557,22 @@ fi
 echo "  ok: $cross_write_n CrossRun field(s) and $driver_write_n GraphCtx field(s) assigned (of $(printf '%s\n' "$graph_assigned" | grep -c .) assigned field name(s) in the compiler), no rogue writer, no field name shared with another record ($graph_other_n checked)"
 
 # ═══════════════════════════════════════════════════════════════════════════
-# CHECK 3 — the engine frame ratchet (THREE parallel module-state builders)
+# CHECK 3 — the engine frame ratchet (TWO parallel module-state builders)
 # ═══════════════════════════════════════════════════════════════════════════
-# There are three state builders: evalModulesWith / buildRootModuleStateWith
+# There are two state builders: buildRootModuleStateWith
 # (compiler/eval/eval.mdk) and cevalModules (compiler/ir/core_ir_eval.mdk).
-# The two root-environment APIs are intentionally wrappers over the shared
-# builder, so they must forward their original inputs once and must not grow a
+# evalModulesWith and the two root-environment APIs are intentionally wrappers
+# over the shared builder, so they must forward their original inputs once and must not grow a
 # second frame initialization. This check turns both requirements into a gate:
 # each builder seeds the SAME four operations (the ctorToTypeRef seed,
 # installDispatchTables dispositions allDecls, collectCtors allDecls -> globalNames, and the
 # globalCells construction). A fix absent from any builder is the recurring
 # P0-9 shape; copied initialization in a wrapper recreates the parallel-driver
 # drift the shared builder was introduced to prevent.
-echo "checking #1111 three-way engine module-state builder parity ..."
+echo "checking #1111 two-way engine module-state builder parity ..."
 
 ceval_body=$(body_of "$CIE" '^cevalModules facts preludeDecls0 modules0 =')
-withA_body=$(body_of "$EV" '^evalModulesWith facts extraExterns preludeDecls0 modules0 =')
+withA_body=$(body_of "$EV" '^evalModulesWith facts extraExterns preludeDecls modules =')
 root_builder_body=$(body_of "$EV" '^buildRootModuleStateWith facts extraExterns preludeDecls0 modules0 =')
 root_env_body=$(body_of "$EV" '^evalModulesRootEnvFacts facts extraExterns preludeDecls modules =')
 root_eval_env_body=$(body_of "$EV" '^evalModulesRootEvalEnvFacts facts extraExterns preludeDecls modules =')
@@ -605,7 +605,6 @@ frame_check() {
 }
 
 frame_check "cevalModules (core_ir_eval.mdk)" "$ceval_body"
-frame_check "evalModulesWith (eval.mdk)" "$withA_body"
 frame_check "buildRootModuleStateWith (eval.mdk)" "$root_builder_body"
 
 root_wrapper_check() {
@@ -616,7 +615,7 @@ root_wrapper_check() {
   code=$(printf '%s\n' "$body" | strip_comments)
   delegates=$(printf '%s\n' "$code" | grep -Fc 'buildRootModuleStateWith')
   original_args=$(printf '%s\n' "$code" | grep -Fc 'buildRootModuleStateWith facts extraExterns preludeDecls modules')
-  final_calls=$(printf '%s\n' "$code" | grep -Fc "$final facts mods globalCells")
+  final_calls=$(printf '%s\n' "$code" | grep -Fc "$final")
   if [ "$delegates" -ne 1 ] || [ "$original_args" -ne 1 ] || [ "$final_calls" -ne 1 ]; then
     echo "FAIL: $label must delegate exactly once to buildRootModuleStateWith"
     echo "  with its original extraExterns/preludeDecls/modules arguments, then"
@@ -644,8 +643,9 @@ root_wrapper_check() {
   return 0
 }
 
-root_wrapper_check "evalModulesRootEnvFacts (eval.mdk)" "$root_env_body" "rootFullEnv"
-root_wrapper_check "evalModulesRootEvalEnvFacts (eval.mdk)" "$root_eval_env_body" "rootFullEvalEnv"
+root_wrapper_check "evalModulesWith (eval.mdk)" "$withA_body" "rootLocals mods"
+root_wrapper_check "evalModulesRootEnvFacts (eval.mdk)" "$root_env_body" "rootFullEnv facts mods globalCells"
+root_wrapper_check "evalModulesRootEvalEnvFacts (eval.mdk)" "$root_eval_env_body" "rootFullEvalEnv facts mods globalCells"
 
 # "exactly these three" -- a whole-file total (not body-scoped) catches a
 # phantom fourth state builder anywhere else in either file. Uses the SAME binder
@@ -661,9 +661,9 @@ total_globalcells=$(grep -F -c 'let globalCells = map (n => (n, Ref VUnit)) glob
 for pair in "ctorToTypeRef seed:$total_ctortotype" "installDispatchTables call:$total_disp" "collectCtors call:$total_ctors" "globalCells construction:$total_globalcells"; do
   what="${pair%%:*}"
   cnt="${pair##*:}"
-  if [ "$cnt" -ne 3 ]; then
-    echo "FAIL: expected the $what to appear in EXACTLY 3 places across"
-    echo "  eval.mdk + core_ir_eval.mdk (the three known module-state builders), found $cnt."
+  if [ "$cnt" -ne 2 ]; then
+    echo "FAIL: expected the $what to appear in EXACTLY 2 places across"
+    echo "  eval.mdk + core_ir_eval.mdk (the two known module-state builders), found $cnt."
     echo "  Either a state builder is missing it (see the per-builder check above"
     echo "  for which one) or a FOURTH place now has it -- a phantom parallel"
     echo "  builder this ratchet was not told about. Add it to the frame_check"
@@ -671,7 +671,7 @@ for pair in "ctorToTypeRef seed:$total_ctortotype" "installDispatchTables call:$
     exit 1
   fi
 done
-echo "  ok: all 4 frame operations appear in exactly 3 places total (no phantom builder)"
+echo "  ok: all 4 frame operations appear in exactly 2 places total (no phantom builder)"
 
 # ⚠️ ONE KNOWN, DELIBERATE ASYMMETRY: ctorFieldOrdersRef is seeded ONLY by the
 # INTERPRETER drivers, never by either eval.mdk tree-walk driver. Since #1954
@@ -1422,4 +1422,4 @@ if [ -n "$collisions" ]; then
 fi
 echo "  ok: $modulectx_n ModuleCtx field(s), $modulectx_written_n assigned outside the mint (of $all_assigned_n assigned field name(s) in the compiler), no field name shared with another record ($other_names_n checked)"
 
-echo "PASS: #1111 registry keying ratchet (CrossRun/GraphCtx/DeclEnvs fields, writer sites, #4332 ModuleCtx fields/writers/collisions, three-builder frame parity plus root-wrapper delegation, #1112 A-3.4 IE namespace, #1519 A-3.3 CE construction, #2796 single Module-mode entry, parent/child driver-state parity)."
+echo "PASS: #1111 registry keying ratchet (CrossRun/GraphCtx/DeclEnvs fields, writer sites, #4332 ModuleCtx fields/writers/collisions, two-builder frame parity plus wrapper delegation, #1112 A-3.4 IE namespace, #1519 A-3.3 CE construction, #2796 single Module-mode entry, parent/child driver-state parity)."

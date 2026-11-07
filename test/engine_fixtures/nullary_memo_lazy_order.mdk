@@ -1,10 +1,7 @@
--- #731 item 3: the nullary-CAF side effect must fire at FIRST USE, exactly once,
--- and NOT eagerly at program init.  #730's own pins only assert the effect COUNT and
--- same-type sharing, never WHEN it fires — a regression to eager forcing would pass
--- them.  This fixture prints `start ` BEFORE the first reference: the memo's effect
--- (`[force] `) must appear AFTER it (lazy, driven by the #561 lazy-value-global
--- machinery), and NOT again at `mid ` (memoised).  Expected on all three engines:
--- `start [force] mid end`.  Eager forcing would print `[force] start ...`.
+-- A nullary return-position impl method runs at each occurrence, not at program
+-- init and not once: `start ` prints BEFORE the first reference, the effect
+-- (`[force] `) follows it, and fires again at the second reference.  Expected on all
+-- three engines: `start [force] mid [force] end`.
 interface HasUnit a where
   theUnit : <Stdout> a
 

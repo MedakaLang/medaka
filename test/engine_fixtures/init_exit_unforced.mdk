@@ -1,0 +1,7 @@
+-- An initialiser that exits aborts startup (I5) although nothing reads it: `side` is
+-- never reached from `main`, yet the program stops with exit code 3 before `main`
+-- prints anything.  Expected on every engine: empty stdout, exit 3.
+side : Unit
+side = exit 3
+
+main = putStrLn "ok"

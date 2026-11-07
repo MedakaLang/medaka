@@ -1,0 +1,10 @@
+-- The orphan-impl hazard (I1): `a.x` dispatches to the impl declared in the later
+-- module `b`, whose method reads `b.greeting`.  `check` admits the program (until
+-- the check-time rule lands), and `a` initialises before `b`, so the read finds
+-- `greeting` uninitialised.  The expected result is an internal-error panic naming
+-- `greeting`, never a silent value; the `expectedPanics` row in
+-- `test/diff_compiler_eval_test.mdk` pins it.
+import a.{x}
+import b
+
+main = putStrLn x

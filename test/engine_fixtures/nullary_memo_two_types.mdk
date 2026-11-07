@@ -1,7 +1,6 @@
--- #719 guard (criterion 3): two DIFFERENT concrete types' nullary return-position
--- impl methods memoise INDEPENDENTLY — no cross-instance sharing.  Each side effect
--- fires exactly once (`[box]` then `[cup]`), and the two occurrences of each reuse
--- their own per-instance CAF, on all three engines.
+-- Two DIFFERENT concrete types' nullary return-position impl methods evaluate
+-- independently, at each occurrence: the effects fire in occurrence order,
+-- `[box] [cup] [box] [cup] BCBC`, on all three engines.
 interface HasUnit a where
   theUnit : <Stdout> a
 

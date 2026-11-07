@@ -1,0 +1,9 @@
+-- A failing initialiser fires before `main` runs (I5): `boom` is read only after
+-- `main` prints `before`, yet startup aborts first, so stdout is empty and the exit
+-- code is 1 with `boom` on stderr.
+boom : Int
+boom = panic "boom"
+
+main =
+  let _ = putStrLn "before"
+  putStrLn (intToString boom)

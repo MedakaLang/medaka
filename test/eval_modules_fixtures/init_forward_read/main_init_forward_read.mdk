@@ -1,0 +1,9 @@
+-- An untyped run initialises in source order (no checked order is carried), so `x`
+-- reads `y` before `y` is initialised.  Both untyped drivers answer with an
+-- internal-error panic naming `y`, never a silent value; the `expectedPanics` rows
+-- in `test/diff_compiler_eval_test.mdk` pin it.
+x = y + 1
+
+y = 2
+
+main = putStrLn (intToString x)

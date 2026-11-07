@@ -1,0 +1,7 @@
+import a.{Desc(..), T(..)}
+
+greeting : String
+greeting = "hi from b"
+
+impl Desc T where
+  desc _ = greeting
