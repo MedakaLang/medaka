@@ -7,9 +7,11 @@
     "runtime/medaka_process.h": "26c92d0355c48a996d20f7d43549100561b55fa50ed05a096b2d84316f1e2c09",
     "runtime/medaka_abi.h": "c0e087ec753d0108e2faf05f625e1aafc97c459cabf589529f6133560922e35b",
     "scripts/mcp_bench/prototypes/stdio_lease_fixture.c": "718ae92ae2d7d79a9a264c8db8a64f2990558608456d08d88b92264976861600",
-    "scripts/mcp_bench/prototypes/stdio_lease_probe.py": "a124fb7e6aa4d66a61df80fc0cea06d4fce60086cfaf4b9f68ed8a12c766b9fd",
+    "scripts/mcp_bench/prototypes/stdio_lease_probe.py": "567a8d14220ef4ff2dd37555111f126c429e5ae56d956eabbec71f9ee90dc6ff",
     "scripts/mcp_bench/prototypes/stdio_descriptor_census.py": "a462ef03e8026cb80873da3a3885fe9f620cc6299fae3b87647ac5217dc5959d",
-    "scripts/mcp_bench/prototypes/stdio_lease_cases/legacy_read.mdk": "69be3f31c63621884395553167019b810e39ad5bffbf0a7c62aaa60f714752b7"
+    "scripts/mcp_bench/prototypes/stdio_lease_cases/legacy_read.mdk": "69be3f31c63621884395553167019b810e39ad5bffbf0a7c62aaa60f714752b7",
+    "stdlib/core.mdk": "1287a1e1f41d960f8328f2dde3d999aefb3edd216bc5f64e03a5c697374841db",
+    "compiler/medaka.toml": "71e3b0f835a66dbbbd249d91241c006a978d0e5f0f9b760b4eff9f98cf31a5e1"
   },
   "patches": {
     "stdio_lease_runtime.c": {
@@ -50,23 +52,23 @@
   },
   "census": {
     "inventory": {
-      "raw_snapshot_sha256": "220860c255e3397825795122d8ff7c27406a7e3495410e9749239383a5e8255a",
+      "raw_snapshot_sha256": "428c0cb797bb82ba3b86711a67b591d8e962d2ef112e56fc99e47de4298c1751",
       "receipt_exclusions": [
         "docs/findings/mcp-runtime-stdio-lease/REPORT.md",
         "docs/findings/mcp-runtime-stdio-lease/summary.json"
       ],
       "carrier_count": 11768,
-      "carrier_pins_sha256": "eacbd743f901516a486db1f73d07c00c8a03de90d3f75cb9c6a86a5b439a9cb5",
+      "carrier_pins_sha256": "5663f7db0c3a808cfe7bbcc96e8613807ace1719f0161dc84a75ef0a670c5dd8",
       "candidate_counts": {
-        "C1": 3152,
+        "C1": 3157,
         "C2": 28,
-        "C3": 324,
-        "C4": 3553,
-        "C5": 36690,
+        "C3": 325,
+        "C4": 3556,
+        "C5": 36699,
         "C6": 987,
         "C7": 1551
       },
-      "lexical_unknowns": 46269,
+      "lexical_unknowns": 46287,
       "supplemental_classifications": [
         {
           "class": "C5",
@@ -103,6 +105,6 @@
         "No count proves compatibility or route enforcement; resolver/NSS and descriptor history require executable controls."
       ]
     },
-    "inventory_sha256": "901a701011ace7cd310234b038b7cdee1eb384d03fa28c874d5e3f201e05d0e3"
+    "inventory_sha256": "14a08ebe431d36bc044b31fda40edbba5eeb35a89e46f64f63e2e0b0d3a39b8a"
   }
 }
