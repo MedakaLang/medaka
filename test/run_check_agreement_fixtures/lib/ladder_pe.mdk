@@ -1,0 +1,9 @@
+public export data P = P (Int -> Int)
+
+export
+orElse : P -> P -> P
+orElse (P f) (P g) = P (x => f x + g x)
+
+export
+runP : P -> Int -> Int
+runP (P f) x = f x

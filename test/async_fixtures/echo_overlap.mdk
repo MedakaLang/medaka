@@ -12,7 +12,7 @@ import net_async as A
 import list.{reverse}
 import time.{millis}
 import string.{fromUtf8, join}
-import bytes.{Bytes, isEmpty, toArray}
+import bytes.{Bytes, isEmpty as bytesEmpty, toArray}
 
 log : Ref (List String)
 log = Ref []
@@ -35,7 +35,7 @@ echo conn = deferThen (A.recv conn 64) (r => echoStep conn r)
 
 echoStep : Connection * -> Result String Bytes -> Async <Clock, Net | e> (Result String Unit)
 echoStep conn (Ok bs) =
-  if isEmpty bs then deferPure (Ok ())
+  if bytesEmpty bs then deferPure (Ok ())
   else deferThen (A.sendAll conn bs) (_ => echo conn)
 echoStep _ (Err e) = deferPure (Err e)
 

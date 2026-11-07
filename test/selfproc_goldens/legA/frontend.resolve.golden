@@ -25,7 +25,6 @@ ambigMods : Env -> String -> List String
 ambiguousCtorErrors : Env -> String -> Option Loc -> List ResError
 ambiguousHeadErrors : Env -> String -> Option Loc -> List ResError
 ambiguousIfaceErrors : Env -> String -> Option Loc -> List ResError
-ambiguousSet : Map String ModuleExports -> List Decl -> List (String, List String)
 ambiguousTypeErrors : Env -> String -> Option Loc -> List ResError
 authorityParams : List String -> List (Option KindAnn) -> List String
 bestInNames : SugQuery -> List String -> Option (String, Int) -> Option (String, Int)
@@ -167,9 +166,7 @@ foldEffectProvenance : Map String ModuleExports -> Map String (List String) -> L
 foldImports : Map String ModuleExports -> List (UsePath, Loc) -> ImportAdds
 foldMergedProvenance : (UsePath -> String -> String) -> ExpNs String -> ExpNs (String, String) -> Map String ModuleExports -> (Map String (List String), Map String Unit) -> List UsePath -> (Map String (List String), Map String Unit)
 foreignKeywordNotes : List (String, String)
-hasFoldable : List Decl -> Bool
 hasNullaryClause : List FunClause -> Bool
-hasOrdering : List Decl -> Bool
 haskellCtorAliases : List (String, String)
 haskellNote : String -> String -> String
 haskellTypeAliases : List (String, String)
@@ -187,8 +184,7 @@ ifaceMethodErrs : String -> Map String String -> List String -> List ResError
 importChoices : String -> List String -> String
 importNameOrigins : ExpNs String -> ExpNs (String, String) -> Map String ModuleExports -> UsePath -> List (String, String, List String)
 importNamesIn : ExpNs String -> Map String ModuleExports -> UsePath -> List String
-importValueBindings : UsePath -> ModuleExports -> List (String, String)
-importValueDecls : Map String ModuleExports -> UsePath -> List (String, String)
+importOwnNameErrors : NameScope -> List ResError
 importedCtorDecls : List Decl -> List SiblingPair -> List (String, List Decl) -> List (String, List Decl) -> List (String, List Decl)
 importedCtorDeclsStep : ModuleExports -> Map String (List Decl) -> Option (String, List Decl) -> Map String ModuleExports -> (String, List Decl) -> (List Decl, ModuleExports)
 importedEffectOrigins : Map String (List (String, String)) -> UsePath -> List (String, String)
@@ -240,6 +236,7 @@ mapRequireOcc : (String -> String -> TyConOrigin -> TyConOrigin) -> Require -> R
 mapSuperOcc : (String -> String -> TyConOrigin -> TyConOrigin) -> Super -> Super
 matchesExport : String -> (String, List String) -> List String
 mergeAdds : ImportAdds -> ImportAdds -> ImportAdds
+methodValueCollisions : ModuleExports -> List Decl -> List ResError
 mkScope : List String -> Scope
 moduleAliasNames : List Decl -> List String
 moduleTrusted : Bool -> List String -> String -> Bool
@@ -281,7 +278,6 @@ primitiveConstructors : List String
 primitiveTypes : List String
 privateAmbiguity : Map String ModuleExports -> Option (String, List Decl) -> ResError -> ResError
 privilegedReexportErrors : Map String ModuleExports -> Map String ModuleExports -> Option (String, List Decl) -> List Decl -> List ResError
-programIsCore : List Decl -> Bool
 provMidsOf : String -> Map String (List String) -> List String
 provToPairs : Map String (List String) -> List (String, List String)
 pubErr : ModuleExports -> String -> List ResError
@@ -381,6 +377,7 @@ suggestName : Env -> Scope -> String -> Option String
 suggestNameFuzzy : Env -> Scope -> String -> Option String
 suggestType : Env -> String -> Option String
 suggestTypeFuzzy : Env -> String -> Option String
+surfaceOfModule : PreludeScope -> Map String ModuleExports -> String -> Option ModuleExports
 taggedOriginBaseNames : List (String, String) -> List String
 takeOriginTrace : Unit -> List (String, List Decl)
 topBinderNames : List Decl -> List String
@@ -431,7 +428,6 @@ usePathsOf : List Decl -> List UsePath
 useStubNames : UsePath -> List String
 userValueNames : List Decl -> List String
 valueBinderNames : Decl -> List String
-valueProvenance : Map String ModuleExports -> List UsePath -> Map String (List String)
 whenL : Bool -> List a -> List a
 withResErrorLoc : Loc -> ResError -> ResError
 withStdlibExports : List (String, List String) -> List ResError -> List ResError

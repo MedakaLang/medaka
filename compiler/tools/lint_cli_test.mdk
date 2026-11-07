@@ -32,7 +32,7 @@ lintIn : String ->
   List String ->
   <Exec, Env "MEDAKA_ROOT", Env "MEDAKA", FileRead> Result String (Int, String)
 lintIn dir args =
-  let bin = canonicalizePath medakaBin
+  let bin = canonicalizePath (medakaBin ())
   let cmd = "cd \{dir} && exec \{bin} lint \{unwords args} 2>&1"
   map ((code, out, _) => (code, out)) (boundedVerb "sh" ["-c", cmd])
 

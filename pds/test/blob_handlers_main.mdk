@@ -90,8 +90,8 @@ server =
     "blob_handlers: server setup failed"
     (pdsServer account serverLinksEmpty "test-driver")
 
-accessToken : String
-accessToken =
+accessToken : Unit -> <Mint "access"> String
+accessToken () =
   mintAccessToken
     testKey
     accountDidText
@@ -102,11 +102,11 @@ accessToken =
 
 -- | An empty store carrying the session this driver's uploads authenticate
 -- with. No repository: no blob route touches the repository half.
-authorizedStore : Store
-authorizedStore =
+authorizedStore : Unit -> <Mint "access"> Store
+authorizedStore () =
   let next = storeWithServerSecret testKey storeEmpty
   storeSessionOpen
-    (sessionFingerprint accessToken)
+    (sessionFingerprint (accessToken ()))
     (sessionFingerprint "blob_handlers: no refresh token in this fixture")
     (testInstant + 3600)
     next
@@ -116,7 +116,7 @@ authorizedStore =
 postRaw : String -> Bytes -> <Mint "access"> Bytes
 postRaw mimeType body =
   encodeUtf8
-      "POST /xrpc/\{uploadBlobNsid} HTTP/1.1\r\nHost: \{accountHostText}\r\nAuthorization: Bearer \{accessToken}\r\nContent-Type: \{mimeType}\r\nContent-Length: \{intToString (B.length body)}\r\n\r\n"
+      "POST /xrpc/\{uploadBlobNsid} HTTP/1.1\r\nHost: \{accountHostText}\r\nAuthorization: Bearer \{accessToken ()}\r\nContent-Type: \{mimeType}\r\nContent-Length: \{intToString (B.length body)}\r\n\r\n"
     ++ body
 
 getQuery : String -> String -> Bytes
@@ -230,7 +230,7 @@ runRows : List (List String) ->
 runRows [] = panic "blob_handlers: corpus carries no rows"
 runRows rows =
   let expected = length rows
-  let (uploaded, external) = uploadRows rows authorizedStore 0
+  let (uploaded, external) = uploadRows rows (authorizedStore ()) 0
   let () =
     println
       "external: \{intToString external}/\{intToString expected} official-atproto blob checks"

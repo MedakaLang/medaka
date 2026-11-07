@@ -75,8 +75,8 @@ server : Server <Sign "commit">
 server =
   resultOrPanic "lexicon_write_test: server setup failed" (recordServer account)
 
-token : String
-token =
+token : Unit -> <Mint "access"> String
+token () =
   mintAccessToken
     testKey
     accountDidText
@@ -86,8 +86,8 @@ token =
     (testInstant + 3600)
 
 -- A configured repository, and the open session `token` belongs to.
-initialStore : Store
-initialStore =
+initialStore : Unit -> <Mint "access", Sign "commit"> Store
+initialStore () =
   let secret =
     resultOrPanic "lexicon_write_test: malformed secret" (decode secretHex)
   let rev =
@@ -98,7 +98,7 @@ initialStore =
       (repoInitFromKeyBytes accountDidText secret rev)
   let store = storeWithServerSecret testKey (storeFromRepo repo)
   storeSessionOpen
-    (sessionFingerprint token)
+    (sessionFingerprint (token ()))
     (sessionFingerprint "lexicon_write_test: no refresh token")
     (testInstant + 3600)
     store
@@ -117,7 +117,7 @@ send store nsid fields =
       server
       testContext
       store
-      (procedureRequest hostText token nsid (stringify (jObject fields)))
+      (procedureRequest hostText (token ()) nsid (stringify (jObject fields)))
   Answer {
     store = next,
     body =
@@ -133,7 +133,7 @@ createRecord : String ->
   <Mint "access", Sign "commit"> Answer
 createRecord collection rkey record flags =
   send
-    initialStore
+    (initialStore ())
     "com.atproto.repo.createRecord"
     ([
         ("repo", JString accountDidText),
@@ -153,7 +153,7 @@ putRecordWith : String ->
   <Mint "access", Sign "commit"> Answer
 putRecordWith collection rkey record flags =
   send
-    initialStore
+    (initialStore ())
     "com.atproto.repo.putRecord"
     ([
         ("repo", JString accountDidText),
@@ -176,7 +176,7 @@ applyWrites : List Json ->
   <Mint "access", Sign "commit"> Answer
 applyWrites writes flags =
   send
-    initialStore
+    (initialStore ())
     "com.atproto.repo.applyWrites"
     ([("repo", JString accountDidText), ("writes", jArray writes)] ++ flags)
 
@@ -215,7 +215,7 @@ errorOf answer = fieldText "error" answer.body
 
 unchanged : Answer -> <Mint "access", Sign "commit"> Bool
 unchanged answer =
-  storeFingerprint answer.store == storeFingerprint initialStore
+  storeFingerprint answer.store == storeFingerprint (initialStore ())
 
 -- A refusal: the error code, whether its message begins as the reference's
 -- does, and whether the store was left as it was.
@@ -725,11 +725,11 @@ updateHandleOutcome fields =
       (parseRequest
         (procedureRequest
           hostText
-          token
+          (token ())
           "com.atproto.identity.updateHandle"
           (stringify (jObject fields))))
   let (_, response, announced, _) =
-    handleAnnouncing fullServer testContext initialStore request
+    handleAnnouncing fullServer testContext (initialStore ()) request
   let error = match parse (bodyText (serializeResponse response))
     Ok body => fieldText "error" body
     Err _ => ""
@@ -797,7 +797,7 @@ updateHandleCharge bearer bodyJson =
       (parseRequest
         (postJson hostText bearer "com.atproto.identity.updateHandle" bodyJson))
   let (_, _, _, charge) =
-    handleAnnouncing fullServer testContext initialStore request
+    handleAnnouncing fullServer testContext (initialStore ()) request
   charge
 
 handleBody : String -> String
@@ -818,34 +818,34 @@ test "updateHandle charges the DID once handle syntax passes, and not before" = 
         None
         (updateHandleCharge "not-a-token" (handleBody currentHandle)),
     ),
-    ("no handle field", expectEqual None (updateHandleCharge token "{}")),
+    ("no handle field", expectEqual None (updateHandleCharge (token ()) "{}")),
     (
       "a handle that is not a string",
-      expectEqual None (updateHandleCharge token "{\"handle\":5}"),
+      expectEqual None (updateHandleCharge (token ()) "{\"handle\":5}"),
     ),
     (
       "a handle that fails syntax",
       expectEqual
         None
-        (updateHandleCharge token (handleBody "\{currentHandle}.")),
+        (updateHandleCharge (token ()) (handleBody "\{currentHandle}.")),
     ),
     (
       "a reserved TLD",
       expectEqual
         (Some accountDidText)
-        (updateHandleCharge token (handleBody "medaka.local")),
+        (updateHandleCharge (token ()) (handleBody "medaka.local")),
     ),
     (
       "another valid handle",
       expectEqual
         (Some accountDidText)
-        (updateHandleCharge token (handleBody "other.dev")),
+        (updateHandleCharge (token ()) (handleBody "other.dev")),
     ),
     (
       "the current handle",
       expectEqual
         (Some accountDidText)
-        (updateHandleCharge token (handleBody currentHandle)),
+        (updateHandleCharge (token ()) (handleBody currentHandle)),
     ),
   ]
 

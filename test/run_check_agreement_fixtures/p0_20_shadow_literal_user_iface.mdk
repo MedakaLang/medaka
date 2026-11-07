@@ -1,18 +1,5 @@
--- ⚠️ RE-PINNED 2026-07-14 — THE S2 INVERSION.  `size 3` now prints 4, was "IMPL".
--- The definer shadow `size : Int -> Int` wins over `impl Sz Int`; the impl universe is
--- not consulted.  Everything below describes the OLD rule (kept for the history).
---
--- P0-20 (peer of p0_20_shadow_literal_receiver, with a USER interface so the cell is
--- readable without prelude knowledge, and with a method whose RESULT TYPE DIFFERS from
--- the standalone's — which is what makes the disagreement observable rather than merely
--- theoretical).
---
--- `size` is a definer shadow whose declared domain (`Int`) is ALSO the head of a live
--- impl (`impl Sz Int`).  Per SHADOW-SEMANTICS S2 a grounded receiver with a visible impl
--- DISPATCHES, so `size 3` is the method: `"IMPL"`, not `4`.
---
--- Before the fix: check typed it Int (standalone), run panicked, build printed a raw
--- POINTER (`47059475956112`) — a String cell read as an Int.
+-- L3 (F-R4): an interface method and a top-level function of one name in one module is a
+-- located duplicate-declaration error; a literal receiver changes nothing (L1).
 interface Sz a where
   size : a -> String
 

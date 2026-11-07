@@ -1,5 +1,9 @@
--- A top-level value is lazy: `side` is never forced, so its effect never runs
--- and the program prints only "ok", as under `medaka run`.
+-- Since top-level initialisation rule I2, `medaka check`, `run` and `build` refuse this
+-- program with T-TOPLEVEL-EFFECT before any engine runs: `side` is a top-level value
+-- whose initialiser performs <Stdout>, and a value is initialised once at startup with
+-- an empty effect row (test/rejection_parity_fixtures.txt pins that on native and wasm).
+-- The prelude-free llvm probe runs no typechecker, so it still emits the program with
+-- its old lazy meaning (`side` never forced, prints "ok") and keeps that golden.
 main = if False then side else putStrLn "ok"
 
 side = putStrLn "BOOM"

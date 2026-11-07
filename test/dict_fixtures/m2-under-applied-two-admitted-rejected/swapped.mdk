@@ -1,5 +1,5 @@
--- `main.mdk` with the two interface import clauses swapped; the same reject
--- (S2-DECL (e)).
+-- C6, L2 rung 3: the interface imports bind no bare method name, so the explicit fmodI.mth
+-- answers: 99.
 import fmodI.{mth}
 import zmodI.{IZ, zf}
 import amodI.{IA, af}

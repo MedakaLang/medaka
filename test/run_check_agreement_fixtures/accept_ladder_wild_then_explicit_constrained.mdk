@@ -1,0 +1,8 @@
+-- A wildcard and an explicit import of two `foo : Int` declarations, the
+-- wildcard first.  The explicit import binds `foo` (docs/spec/SHADOW-SEMANTICS.md
+-- L2, L3), so its type carries the `Display` constraint `println` places on it
+-- and the program prints `ladder_a`'s `1`.
+import lib.ladder_b2.*
+import lib.ladder_a.{foo}
+
+main = println (foo, bar)

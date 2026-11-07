@@ -1,0 +1,1449 @@
+-- tc_init: the initialisation graph of one module's top-level values, the two rules read off
+-- it (purity, value cycles) and the order it implies.
+-- The nodes are the module's top-level bindings and one node per local `impl`; a node's
+-- mentions are what its bodies may reach, each with the position the cycle rule reads.
+--
+-- Spec: language-design "Top-level initialisation (L1)", I1 (order), I2 (purity), I3 (value
+-- cycles), I6 (constrained nullary bindings).  The position split is OCaml `Rec_check`'s
+-- Dereference/Guard/Delay modes lifted to the module graph, with Guard split in two: a value
+-- has no pre-allocated block to backpatch, so a stored component is read at initialisation
+-- and only a guarded lambda body is not.
+--
+-- The walk over-approximates by construction: a missing mention becomes an uninitialised read
+-- once initialisation is strict, so every `Expr` and `Pat` arm is handled explicitly and an
+-- unknown name or interface widens to every local impl rather than to nothing.
+--
+-- Closure rule: this module may import `tc_types`, `tc_env` and the leaves below them; it may
+-- not import `tc_module`, `tc_stamp`, `tc_global`, `typecheck`, or anything in `backend/`,
+-- `ir/`, `eval/`, `driver/` or `tools/`.
+
+import frontend.ast.{
+  Arm(..),
+  Constraint(..),
+  Decl(..),
+  DoStmt(..),
+  Expr(..),
+  FieldAssign(..),
+  FunClause(..),
+  Guard(..),
+  GuardArm(..),
+  IfaceMethod(..),
+  ImplMethod(..),
+  InterpPart(..),
+  LetBind(..),
+  Loc,
+  MethodDefault(..),
+  Pat(..),
+  Require(..),
+  Section(..),
+  Super(..),
+  Ty(..),
+  TyConOrigin(..),
+  ifaceIdentity,
+  patBoundNames,
+}
+import list.{last}
+import map as M
+import string.{nextChar, split, startCursor, stripPrefix}
+import support.ordmap.{
+  OrdMap, omEmpty, omFromNames, omFromPairs, omHasKey, omInsert, omLookup,
+  omMapValues
+}
+import support.scc.{tarjanSCCs}
+import support.util.{isEmptyL, isNonEmptyL, joinWith, reverseL}
+import types.effect_rows.{renderAtoms, rowFlat}
+import types.repr.{IfaceRef(..), Scheme(..), VecObl(..), ppTyAtom}
+import types.tc_env.{
+  ceRowIface, ceRowMethods, ceRowSupers, ieRowTriple, ieRowsVisibleAt,
+  methodRowIface
+}
+import types.tc_types.{
+  ClassEnv(..),
+  DeclEnvs(..),
+  MethodEnv(..),
+  ModuleBindings(..),
+  ModuleCtx(..),
+  ModuleSeed(..),
+}
+
+-- What the graph is built from, projected from the module's check by `initInputsAt`.
+-- Interface keys are `ifaceIdentity` strings; `""` is an unknown interface, which reaches
+-- every local impl.  The dispatch tables are empty for a module that declares no impl,
+-- since every dispatch edge ends at a local impl.
+public export data InitInputs = InitInputs {
+  iiModule : String,
+  -- the marked, unstamped declarations
+  iiDecls : List Decl,
+  -- the module's own standalone schemes; their forcing rows are the purity rule's input
+  iiSchemes : OrdMap Scheme,
+  -- method spelling -> the interface keys that declare it, whole graph
+  iiMethodIfaces : OrdMap (List String),
+  -- interface key -> its reflexive-transitive dispatch closure: supers, the `requires` of
+  -- every impl row of it, and the method-level constraints of its methods
+  iiDispatchClosure : OrdMap (List String),
+  -- constrained callee spelling -> its constraint interface keys (imported, then prelude)
+  iiCalleeIfaces : OrdMap (List String),
+  -- the method a binary or unary operator dispatches through
+  iiBinopMethod : String -> Option String,
+  iiUnopMethod : String -> Option String,
+  -- every value name an import of the module binds, the reserved `$core` alias's included;
+  -- the prelude's bare names are not in it
+  iiImportedValues : OrdMap Unit,
+  -- nullary top-level bindings with a class constraint (I6)
+  iiConstrained : OrdMap Unit,
+  -- bindings that are never initialised (`main`, I4)
+  iiExempt : OrdMap Unit,
+}
+
+-- How a later rule may use a mention.  `AtDeref` is evaluated when the node runs (an
+-- application head or argument, a scrutinee, a `let` right-hand side, an operand);
+-- `AtStore` is stored when the node runs (a constructor, tuple, list or record component, or
+-- an argument of an under-saturated local call), so a value it names is read then and a
+-- function or impl it names is not run; `AtGuard` is inside a lambda in such a position or
+-- as the whole right-hand side, read only when the lambda is called; `AtDelay` is inside a
+-- direct lambda argument of a `Deferred*` call in guarded position, which the effect checker
+-- proves the call does not run.
+public export data InitPosition =
+  | AtDeref
+  | AtStore
+  | AtGuard
+  | AtDelay
+  deriving (Eq, Debug)
+
+-- What makes the edge: a top-level name; a method occurrence or constrained call on the
+-- target impl's own interface; an operator or literal on it; an imported value reaching a
+-- local orphan impl; or an interface of the site's dispatch closure other than its own.
+public export data InitEdgeKind =
+  | ByName
+  | ByDispatch
+  | ByOperator
+  | ByOrphan
+  | ByClosure
+  deriving (Eq, Debug)
+
+public export data InitMention = InitMention {
+  mentionTarget : String,
+  mentionKind : InitEdgeKind,
+  mentionPosition : InitPosition,
+} deriving (Eq, Debug)
+
+-- A function node's body runs when it is called and a constrained nullary binding is a
+-- function of its dictionaries (I6), so only a `ValueNode` is initialised.
+public export data InitNodeKind =
+  | ValueNode
+  | FunctionNode
+  | ImplNode
+  deriving (Eq, Debug)
+
+-- [inodeOrder] is the node's source position among the module's nodes; [inodeLabel] is
+-- how a diagnostic spells the node, `impl I T` for an impl.
+public export data InitNode = InitNode {
+  inodeName : String,
+  inodeLabel : String,
+  inodeKind : InitNodeKind,
+  inodeOrder : Int,
+  inodeLoc : Option Loc,
+  inodeMentions : List InitMention,
+}
+
+-- [igraphNotInitialised] holds the value nodes I4 and I6 exempt from initialisation.
+public export data InitGraph = InitGraph {
+  igraphNodes : List InitNode,
+  igraphNotInitialised : OrdMap Unit,
+}
+
+-- ── the rules ────────────────────────────────────────────────────────────────
+
+-- A top-level value that breaks a rule, with the value's name and its binding's location:
+-- I2 with the row it performs, as a signature would write it; I3 with the labels of the path
+-- from the value back to itself.
+public export data InitViolation =
+  | ImpureValue String String (Option Loc)
+  | CyclicValue String (List String) (Option Loc)
+
+-- The rules over every initialised value node (not a function, an impl, `main` or a
+-- constrained nullary binding), purity before cycles for each.
+export
+checkInitRules : InitInputs -> InitGraph -> List InitViolation
+checkInitRules inputs g =
+  let values =
+    filter
+      (n =>
+        n.inodeKind == ValueNode
+          && not (omHasKey n.inodeName g.igraphNotInitialised))
+      g.igraphNodes
+  let valueNames =
+    fold
+      (acc n =>
+        if n.inodeKind == ValueNode then omInsert n.inodeName () acc else acc)
+      omEmpty
+      g.igraphNodes
+  let reach = valueReach g valueNames values
+  let labels =
+    fold
+      (acc n =>
+        if n.inodeKind == ImplNode then
+          omInsert n.inodeName n.inodeLabel acc
+        else
+          acc)
+      omEmpty
+      g.igraphNodes
+  flatMap
+    (n => purityViolation inputs n ++ cycleViolation reach valueNames labels n)
+    values
+
+-- Whether a mention reads its target while the node initialises: an evaluation, or a stored
+-- value.  [values] holds every value node's name.
+readsAtInit : OrdMap Unit -> InitMention -> Bool
+readsAtInit values m = match m.mentionPosition
+  AtDeref => True
+  AtStore => omHasKey m.mentionTarget values
+  AtGuard => False
+  AtDelay => False
+
+-- The may-reach components I3 reads, or `None` when every value is alone in its own.  A
+-- value that reads no node at initialisation, or that no other node mentions, is alone in
+-- its component, so the components are computed only when some node mentions a value that
+-- reads one.
+valueReach : InitGraph -> OrdMap Unit -> List InitNode -> Option MayReach
+valueReach g valueNames values =
+  let evaluating =
+    fold
+      (acc n =>
+        if any (readsAtInit valueNames) n.inodeMentions then
+          omInsert n.inodeName () acc
+        else
+          acc)
+      omEmpty
+      values
+  let entered =
+    isNonEmptyL values
+      && any
+        (n =>
+          any
+            (m =>
+              m.mentionTarget /= n.inodeName
+                && omHasKey m.mentionTarget evaluating)
+            n.inodeMentions)
+        g.igraphNodes
+  if entered then Some (mayReach g) else None
+
+-- I2: the value's inferred scheme must have an empty forcing row.  A row tail that is
+-- unsolved counts as empty: only labels make a row non-empty.  The source annotation is not
+-- read, so a row-less signature over an effectful body is rejected.
+purityViolation : InitInputs -> InitNode -> List InitViolation
+purityViolation inputs n = match omLookup n.inodeName inputs.iiSchemes
+  Some (Forall _ _ _ _ force _) => match fst (rowFlat force)
+    [] => []
+    labels => [ImpureValue n.inodeName "<\{renderAtoms labels}>" n.inodeLoc]
+  None => []
+
+-- I3: the value is rejected when it reads a node of its own may-reach component, itself
+-- included, while it initialises: it evaluates the node (`AtDeref`), or it stores the node
+-- and the node is a value (`AtStore`).  A stored function or impl is not run, and an
+-- `AtGuard` or `AtDelay` mention is not read until called.  The path is the shortest one
+-- back to the value whose first hop is such a read; a later hop is any mention inside the
+-- component, since a function or impl node's body may run when called.
+cycleViolation : Option MayReach ->
+  OrdMap Unit ->
+  OrdMap String ->
+  InitNode ->
+  List InitViolation
+cycleViolation reach valueNames labels n =
+  let c = match reach
+    Some r => omLookup n.inodeName r.mrComp
+    None => None
+  let inGroup t = match reach
+    Some r => omLookup t r.mrComp == c
+    None => t == n.inodeName
+  let starts =
+    fold
+      (acc m =>
+        if readsAtInit valueNames m && inGroup m.mentionTarget then
+          m.mentionTarget :: acc
+        else
+          acc)
+      []
+      n.inodeMentions
+  match starts
+    [] => []
+    _ =>
+      let path = match reach
+        Some r => pathBack r c n.inodeName (reverseL starts)
+        None => [n.inodeName]
+      [
+        CyclicValue
+          n.inodeName
+          (map (x => optionOr x (omLookup x labels)) (n.inodeName :: path))
+          n.inodeLoc,
+      ]
+
+-- The shortest path from one of [starts] to [goal] inside component [c], [goal] last.
+pathBack : MayReach -> Option Int -> String -> List String -> List String
+pathBack reach c goal starts =
+  if any (== goal) starts then
+    [goal]
+  else
+    searchBack
+      reach
+      c
+      goal
+      starts
+      (fold (acc s => omInsert s None acc) omEmpty starts)
+
+-- Breadth-first from [frontier]; [parents] maps each node seen to the node it was reached
+-- from, `None` for a start.
+searchBack : MayReach ->
+  Option Int ->
+  String ->
+  List String ->
+  OrdMap (Option String) ->
+  List String
+searchBack _ _ goal [] _ = [goal]
+searchBack reach c goal frontier parents =
+  let (next, seen) =
+    fold
+      (st x =>
+        fold
+          (st2 t => match st2
+            (nx, ps) =>
+              if omLookup t reach.mrComp == c && not (omHasKey t ps) then
+                (t :: nx, omInsert t (Some x) ps)
+              else
+                (nx, ps))
+          st
+          (optionOr [] (omLookup x reach.mrAdj)))
+      ([], parents)
+      frontier
+  if omHasKey goal seen then
+    unwindPath seen goal []
+  else
+    searchBack reach c goal (reverseL next) seen
+
+unwindPath : OrdMap (Option String) -> String -> List String -> List String
+unwindPath parents x acc = match omLookup x parents
+  Some (Some p) => unwindPath parents p (x :: acc)
+  _ => x :: acc
+
+-- ── the input projection ─────────────────────────────────────────────────────
+
+-- The inputs at the end of a module's check: [marked] is the tree `checkModuleFullDiags`
+-- returns, [envs] the whole-graph declaration envelope and [ord] the module's ordinal.
+export
+initInputsAt : String ->
+  ModuleSeed ->
+  ModuleBindings ->
+  List Decl ->
+  ModuleCtx ->
+  DeclEnvs ->
+  Int ->
+  (String -> Option String) ->
+  (String -> Option String) ->
+  InitInputs
+initInputsAt mid seed bindings marked mctx envs ord binop unop =
+  let dispatching = declaresImpl marked
+  InitInputs {
+    iiModule = mid,
+    iiDecls = marked,
+    iiSchemes = bindings.mbStandaloneSchemes,
+    iiMethodIfaces =
+      if dispatching then methodIfacesOf envs.deMethods else omEmpty,
+    iiDispatchClosure =
+      if dispatching then dispatchClosureOf envs ord else omEmpty,
+    iiCalleeIfaces = if dispatching then calleeIfacesOf mctx else omEmpty,
+    iiBinopMethod = binop,
+    iiUnopMethod = unop,
+    iiImportedValues = seed.msImportedNames,
+    iiConstrained = constrainedOf mctx,
+    iiExempt = omInsert "main" () omEmpty,
+  }
+
+declaresImpl : List Decl -> Bool
+declaresImpl [] = False
+declaresImpl ((DAttrib _ d) :: rest) = declaresImpl (d :: rest)
+declaresImpl ((DImpl { implOrigin = _ }) :: _) = True
+declaresImpl (_ :: rest) = declaresImpl rest
+
+refKey : IfaceRef -> String
+refKey r = ifaceIdentity r.irOrigin r.irName
+
+methodIfacesOf : MethodEnv -> OrdMap (List String)
+methodIfacesOf env =
+  omMapValues (rows => map (r => refKey (methodRowIface r)) rows) env.meByName
+
+calleeIfacesOf : ModuleCtx -> OrdMap (List String)
+calleeIfacesOf mctx =
+  let keysOf obls = map (o => refKey o.voIface) obls
+  let core =
+    omMapValues keysOf mctx.mcGraph.crossRun.coreSchemeObligationsRef.value
+  M.foldlWithKey
+    (acc n obls => omInsert n (keysOf obls) acc)
+    core
+    mctx.mcCells.importedSchemeOblsRef.value
+
+-- The top-level names whose scheme carries a class obligation, read under the binding id
+-- of the top-level binder so a local helper of the same spelling does not count.
+constrainedOf : ModuleCtx -> OrdMap Unit
+constrainedOf mctx =
+  let ids = mctx.mcCells.schemeDefIdsRef.value
+  fold
+    (acc row => match row
+      ((n, bid), obls) =>
+        if isNonEmptyL obls && omLookup n ids == Some bid then
+          omInsert n () acc
+        else
+          acc)
+    omEmpty
+    mctx.mcCells.schemeObligationsRef.value
+
+-- One step of the dispatch closure from each interface key, then its reflexive-transitive
+-- closure for every key that has a step.  The impl rows are the whole graph's (instance
+-- candidacy is graph-global), and so are the interface rows: a `requires` may name an
+-- interface declared after this module.
+dispatchClosureOf : DeclEnvs -> Int -> OrdMap (List String)
+dispatchClosureOf envs ord =
+  let withSupers =
+    fold
+      (acc row =>
+        addSteps
+          (refKey (ceRowIface row))
+          (map (s => ifaceIdentity s.superOrigin s.superHead) (ceRowSupers row)
+            ++ flatMap
+              (m => match m
+                (_, ty, _) => tyConstraintKeys ty [])
+              (ceRowMethods row))
+          acc)
+      omEmpty
+      envs.deIfaces.ceRows
+  let steps =
+    fold
+      (acc row => match ieRowTriple row
+        (ir, _, reqs) =>
+          addSteps
+            (refKey ir)
+            (map (q => ifaceIdentity q.requireOrigin q.requireHead) reqs)
+            acc)
+      withSupers
+      (ieRowsVisibleAt ord envs.deImpls)
+  M.foldlWithKey
+    (acc k _ => omInsert k (closureFrom steps [k] omEmpty []) acc)
+    omEmpty
+    steps
+
+addSteps : String -> List String -> OrdMap (List String) -> OrdMap (List String)
+addSteps _ [] acc = acc
+addSteps k ks acc = match omLookup k acc
+  Some old => omInsert k (ks ++ old) acc
+  None => omInsert k ks acc
+
+closureFrom : OrdMap (List String) ->
+  List String ->
+  OrdMap Unit ->
+  List String ->
+  List String
+closureFrom _ [] _ out = out
+closureFrom steps (k :: rest) seen out
+  | omHasKey k seen = closureFrom steps rest seen out
+  | otherwise =
+    let next = optionOr [] (omLookup k steps)
+    closureFrom
+      steps
+      (fold (acc n => n :: acc) rest next)
+      (omInsert k () seen)
+      (k :: out)
+
+-- The interface keys of every constraint written anywhere in [ty].
+tyConstraintKeys : Ty -> List String -> List String
+tyConstraintKeys (TyCon { tyConName = _ }) acc = acc
+tyConstraintKeys (TyVar _) acc = acc
+tyConstraintKeys (TyApp a b) acc = tyConstraintKeys a (tyConstraintKeys b acc)
+tyConstraintKeys (TyFun a b) acc = tyConstraintKeys a (tyConstraintKeys b acc)
+tyConstraintKeys (TyTuple ts) acc =
+  fold (acc2 t => tyConstraintKeys t acc2) acc ts
+tyConstraintKeys (TyEffect _ _ t) acc = tyConstraintKeys t acc
+tyConstraintKeys (TyConstrained cs t) acc =
+  tyConstraintKeys
+    t
+    (fold
+      (acc2 c => ifaceIdentity c.constraintOrigin c.constraintHead :: acc2)
+      acc
+      cs)
+tyConstraintKeys (TyNamed _ t _) acc = tyConstraintKeys t acc
+tyConstraintKeys (TyQual t _ _) acc = tyConstraintKeys t acc
+tyConstraintKeys (TyRow _ _ _) acc = acc
+tyConstraintKeys (TyAuth _ _) acc = acc
+
+-- ── nodes ────────────────────────────────────────────────────────────────────
+
+-- One node before its walk: [rnodeArity] is the declared parameter count, [rnodeKey] an
+-- impl's interface key and [rnodeOrphan] whether neither the impl's interface nor its head
+-- type is declared here.
+data RawNode = RawNode {
+  rnodeName : String,
+  rnodeLabel : String,
+  rnodeKind : InitNodeKind,
+  rnodeArity : Int,
+  rnodeLoc : Option Loc,
+  rnodeBodies : List (List Pat, Expr),
+  rnodeKey : String,
+  rnodeOrphan : Bool,
+}
+
+-- The walk's fixed context: the inputs, each local top-level binding's arity, the local
+-- impl nodes (all, by interface key, and the orphans), and the prefix of a mangled seed
+-- this module defines.
+data InitWalk = InitWalk {
+  iwInputs : InitInputs,
+  iwTop : OrdMap Int,
+  iwImpls : List String,
+  iwImplsByKey : OrdMap (List String),
+  iwOrphans : List String,
+  iwSeedPrefix : String,
+  iwLocalMethods : OrdMap Unit,
+}
+
+-- The source-ordered raw nodes of [decls], a multi-clause function's run of `DFunDef`s
+-- folded into one node.
+rawNodes : String -> List Decl -> List RawNode
+rawNodes mid decls = reverseL (rawNodesGo mid 0 decls [])
+
+rawNodesGo : String -> Int -> List Decl -> List RawNode -> List RawNode
+rawNodesGo _ _ [] acc = acc
+rawNodesGo mid k ((DAttrib _ d) :: rest) acc = rawNodesGo mid k (d :: rest) acc
+rawNodesGo mid k ((DFunDef _ n ps body site _) :: rest) acc =
+  rawNodesGo mid k rest (addClause n ps body site acc)
+rawNodesGo mid k ((DLetGroup _ binds) :: rest) acc =
+  rawNodesGo
+    mid
+    k
+    rest
+    (fold
+      (acc2 b => match b
+        LetBind n clauses site _ =>
+          bindingNode
+              n
+              (map
+                (c => match c
+                  FunClause ps body => (ps, body))
+                clauses)
+              (Some site)
+            :: acc2)
+      acc
+      binds)
+rawNodesGo mid k ((DImpl { iface, tys, methods, implOrigin }) :: rest) acc =
+  let node = RawNode {
+    rnodeName = "impl#\{intToString k}:\{iface}",
+    rnodeLabel = joinWith " " ("impl" :: iface :: map ppTyAtom tys),
+    rnodeKind = ImplNode,
+    rnodeArity = 0,
+    rnodeLoc = None,
+    rnodeBodies =
+      map
+        (m => match m
+          ImplMethod _ ps body => (ps, body))
+        methods,
+    rnodeKey = ifaceIdentity implOrigin iface,
+    rnodeOrphan =
+      not (declaredIn mid implOrigin) && not (any (headDeclaredIn mid) tys),
+  }
+  rawNodesGo mid (k + 1) rest (node :: acc)
+rawNodesGo mid k ((DTypeSig _ _ _ _) :: rest) acc = rawNodesGo mid k rest acc
+rawNodesGo mid k ((DExtern _) :: rest) acc = rawNodesGo mid k rest acc
+rawNodesGo mid k ((DData { dataName = _ }) :: rest) acc =
+  rawNodesGo mid k rest acc
+rawNodesGo mid k ((DUse _ _ _) :: rest) acc = rawNodesGo mid k rest acc
+rawNodesGo mid k ((DEffect _ _ _ _ _ _) :: rest) acc = rawNodesGo mid k rest acc
+rawNodesGo mid k ((DProp _ _ _ _) :: rest) acc = rawNodesGo mid k rest acc
+rawNodesGo mid k ((DTest _ _ _) :: rest) acc = rawNodesGo mid k rest acc
+rawNodesGo mid k ((DInterface { ifaceOrigin = _ }) :: rest) acc =
+  rawNodesGo mid k rest acc
+rawNodesGo mid k ((DTypeAlias { tyAliasName = _ }) :: rest) acc =
+  rawNodesGo mid k rest acc
+rawNodesGo mid k ((DNewtype { newtypeName = _ }) :: rest) acc =
+  rawNodesGo mid k rest acc
+
+-- A clause continuing the run of its function's clauses joins that node.
+addClause : String -> List Pat -> Expr -> Loc -> List RawNode -> List RawNode
+addClause n ps body _ (prev :: older)
+  | prev.rnodeName == n && prev.rnodeKind /= ImplNode =
+    -- Bound: one step per clause of one function.
+    -- lint-disable-next-line rule-accumulator-append
+    { prev | rnodeBodies = prev.rnodeBodies ++ [(ps, body)] } :: older
+addClause n ps body site acc = bindingNode n [(ps, body)] (Some site) :: acc
+
+bindingNode : String -> List (List Pat, Expr) -> Option Loc -> RawNode
+bindingNode n bodies loc = RawNode {
+  rnodeName = n,
+  rnodeLabel = n,
+  rnodeKind = FunctionNode,
+  rnodeArity = match bodies
+    (ps, _) :: _ => length ps
+    [] => 0,
+  rnodeLoc = loc,
+  rnodeBodies = bodies,
+  rnodeKey = "",
+  rnodeOrphan = False,
+}
+
+declaredIn : String -> TyConOrigin -> Bool
+declaredIn mid (OriginModule m) = m == mid
+declaredIn _ _ = False
+
+-- Whether the head type constructor of [ty] is declared in [mid]; an unresolved or
+-- headless type is not, so an impl over it counts as an orphan.
+headDeclaredIn : String -> Ty -> Bool
+headDeclaredIn mid (TyCon { tyConOrigin }) = declaredIn mid tyConOrigin
+headDeclaredIn mid (TyApp f _) = headDeclaredIn mid f
+headDeclaredIn _ (TyVar _) = False
+headDeclaredIn _ (TyFun _ _) = False
+headDeclaredIn _ (TyTuple _) = False
+headDeclaredIn mid (TyEffect _ _ t) = headDeclaredIn mid t
+headDeclaredIn mid (TyConstrained _ t) = headDeclaredIn mid t
+headDeclaredIn mid (TyNamed _ t _) = headDeclaredIn mid t
+headDeclaredIn mid (TyQual t _ _) = headDeclaredIn mid t
+headDeclaredIn _ (TyRow _ _ _) = False
+headDeclaredIn _ (TyAuth _ _) = False
+
+-- A local interface's default bodies, by interface key: they run as part of every local
+-- impl of that interface.
+localDefaults : List Decl ->
+  OrdMap (List (List Pat, Expr)) ->
+  OrdMap (List (List Pat, Expr))
+localDefaults [] acc = acc
+localDefaults ((DAttrib _ d) :: rest) acc = localDefaults (d :: rest) acc
+localDefaults ((DInterface { name, methods, ifaceOrigin }) :: rest) acc =
+  let bodies =
+    flatMap
+      (m => match m
+        IfaceMethod _ _ (Some (MethodDefault ps body)) _ => [(ps, body)]
+        IfaceMethod _ _ None _ => [])
+      methods
+  localDefaults rest (omInsert (ifaceIdentity ifaceOrigin name) bodies acc)
+localDefaults (_ :: rest) acc = localDefaults rest acc
+
+localMethodNames : List Decl -> OrdMap Unit -> OrdMap Unit
+localMethodNames [] acc = acc
+localMethodNames ((DAttrib _ d) :: rest) acc = localMethodNames (d :: rest) acc
+localMethodNames ((DInterface { methods, ifaceOrigin = _ }) :: rest) acc =
+  localMethodNames
+    rest
+    (fold
+      (a m => match m
+        IfaceMethod n _ _ _ => omInsert n () a)
+      acc
+      methods)
+localMethodNames (_ :: rest) acc = localMethodNames rest acc
+
+-- ── the graph ────────────────────────────────────────────────────────────────
+
+export
+initGraphOf : InitInputs -> InitGraph
+initGraphOf inputs =
+  let raw = map (classify inputs) (rawNodes inputs.iiModule inputs.iiDecls)
+  let impls = filter (n => n.rnodeKind == ImplNode) raw
+  let w = InitWalk {
+    iwInputs = inputs,
+    iwTop =
+      fold
+        (acc n =>
+          if n.rnodeKind == ImplNode then
+            acc
+          else
+            omInsert n.rnodeName n.rnodeArity acc)
+        omEmpty
+        raw,
+    iwImpls = map (n => n.rnodeName) impls,
+    iwImplsByKey =
+      fold
+        (acc n => addSteps n.rnodeKey [n.rnodeName] acc)
+        omEmpty
+        (reverseL impls),
+    iwOrphans = map (n => n.rnodeName) (filter (n => n.rnodeOrphan) impls),
+    iwSeedPrefix = "\{inputs.iiModule}__",
+    iwLocalMethods = localMethodNames inputs.iiDecls omEmpty,
+  }
+  let defaults = localDefaults inputs.iiDecls omEmpty
+  InitGraph {
+    igraphNodes = walkNodes w defaults 0 raw [],
+    igraphNotInitialised =
+      fold
+        (acc n =>
+          if n.rnodeArity == 0
+            && n.rnodeKind /= ImplNode
+            && (omHasKey n.rnodeName inputs.iiExempt
+              || omHasKey n.rnodeName inputs.iiConstrained) then
+            omInsert n.rnodeName () acc
+          else
+            acc)
+        omEmpty
+        raw,
+  }
+
+-- A nullary binding is a value unless it carries a class constraint (I6).
+classify : InitInputs -> RawNode -> RawNode
+classify inputs n =
+  if n.rnodeKind == FunctionNode
+    && n.rnodeArity == 0
+    && not (omHasKey n.rnodeName inputs.iiConstrained) then
+    { n | rnodeKind = ValueNode }
+  else
+    n
+
+walkNodes : InitWalk ->
+  OrdMap (List (List Pat, Expr)) ->
+  Int ->
+  List RawNode ->
+  List InitNode ->
+  List InitNode
+walkNodes _ _ _ [] acc = reverseL acc
+walkNodes w defaults k (n :: rest) acc =
+  let own = walkBodies w n.rnodeBodies []
+  let mentions =
+    if n.rnodeKind == ImplNode then
+      walkBodies w (optionOr [] (omLookup n.rnodeKey defaults)) own
+    else
+      own
+  walkNodes
+    w
+    defaults
+    (k + 1)
+    rest
+    (InitNode {
+        inodeName = n.rnodeName,
+        inodeLabel = n.rnodeLabel,
+        inodeKind = n.rnodeKind,
+        inodeOrder = k,
+        inodeLoc = n.rnodeLoc,
+        inodeMentions = reverseL mentions,
+      }
+      :: acc)
+
+walkBodies : InitWalk ->
+  List (List Pat, Expr) ->
+  List InitMention ->
+  List InitMention
+walkBodies w bodies acc =
+  fold
+    (acc2 b => match b
+      (ps, body) => walk w CtxReturn (bindPats ps omEmpty) body acc2)
+    acc
+    bodies
+
+-- ── the walk ─────────────────────────────────────────────────────────────────
+
+-- Where an expression sits: the whole right-hand side; a stored component; anywhere inside
+-- a guarded lambda; an evaluated position; a delayed lambda.  The last three absorb
+-- everything below them.
+data WalkCtx = CtxReturn | CtxGuard | CtxGuardBody | CtxDeref | CtxDelay
+
+-- The position of a name read at [ctx].
+namePos : WalkCtx -> InitPosition
+namePos CtxReturn = AtDeref
+namePos CtxGuard = AtStore
+namePos CtxGuardBody = AtGuard
+namePos CtxDeref = AtDeref
+namePos CtxDelay = AtDelay
+
+-- The context of a subexpression that is evaluated when its parent is.
+evalCtx : WalkCtx -> WalkCtx
+evalCtx CtxReturn = CtxDeref
+evalCtx CtxGuard = CtxDeref
+evalCtx CtxGuardBody = CtxGuardBody
+evalCtx CtxDeref = CtxDeref
+evalCtx CtxDelay = CtxDelay
+
+-- The context of a component its parent stores without inspecting.
+componentCtx : WalkCtx -> WalkCtx
+componentCtx CtxReturn = CtxGuard
+componentCtx CtxGuard = CtxGuard
+componentCtx CtxGuardBody = CtxGuardBody
+componentCtx CtxDeref = CtxDeref
+componentCtx CtxDelay = CtxDelay
+
+-- The context of a lambda body: a guarded lambda is not called during initialisation; a
+-- lambda in an evaluated position may be.
+lambdaCtx : WalkCtx -> WalkCtx
+lambdaCtx CtxReturn = CtxGuardBody
+lambdaCtx CtxGuard = CtxGuardBody
+lambdaCtx CtxGuardBody = CtxGuardBody
+lambdaCtx CtxDeref = CtxDeref
+lambdaCtx CtxDelay = CtxDelay
+
+isGuarded : WalkCtx -> Bool
+isGuarded CtxReturn = True
+isGuarded CtxGuard = True
+isGuarded CtxGuardBody = False
+isGuarded CtxDeref = False
+isGuarded CtxDelay = False
+
+walk : InitWalk ->
+  WalkCtx ->
+  OrdMap Unit ->
+  Expr ->
+  List InitMention ->
+  List InitMention
+walk _ _ _ (ELit _) acc = acc
+walk w ctx bound (EVar n) acc = nameRef w ctx bound n acc
+walk w ctx bound (EApp f x) acc = walkApp w ctx bound (EApp f x) acc
+walk w ctx bound (ELam ps body) acc =
+  walk w (lambdaCtx ctx) (bindPats ps bound) body acc
+walk w ctx bound (ELet _ r p e1 e2) acc =
+  let after = bindPat p bound
+  walk w ctx after e2 (walk w (evalCtx ctx) (if r then after else bound) e1 acc)
+walk w ctx bound (EMatch e0 arms) acc =
+  walkArms w ctx bound arms (walk w (evalCtx ctx) bound e0 acc)
+walk w ctx bound (EIf c t e) acc =
+  walk w ctx bound e (walk w ctx bound t (walk w (evalCtx ctx) bound c acc))
+walk w ctx bound (EBinOp op l r _) acc =
+  if op == "::" then
+    walk w (componentCtx ctx) bound r (walk w (componentCtx ctx) bound l acc)
+  else
+    operatorRef
+      w
+      ctx
+      (w.iwInputs.iiBinopMethod op)
+      (walk w (evalCtx ctx) bound r (walk w (evalCtx ctx) bound l acc))
+walk w ctx bound (EUnOp op x _) acc =
+  operatorRef
+    w
+    ctx
+    (w.iwInputs.iiUnopMethod op)
+    (walk w (evalCtx ctx) bound x acc)
+walk w ctx bound (EInfix op l r) acc =
+  nameRef
+    w
+    (evalCtx ctx)
+    bound
+    op
+    (walk w (evalCtx ctx) bound r (walk w (evalCtx ctx) bound l acc))
+walk w ctx bound (EFieldAccess e0 _ _) acc = walk w (evalCtx ctx) bound e0 acc
+walk w ctx bound (ETuple es) acc = walkAll w (componentCtx ctx) bound es acc
+walk w ctx bound (EListLit es) acc = walkAll w (componentCtx ctx) bound es acc
+walk w ctx bound (EArrayLit es) acc = walkAll w (componentCtx ctx) bound es acc
+walk w ctx bound (ERangeList a b _) acc =
+  walk w (evalCtx ctx) bound b (walk w (evalCtx ctx) bound a acc)
+walk w ctx bound (ERangeArray a b _) acc =
+  walk w (evalCtx ctx) bound b (walk w (evalCtx ctx) bound a acc)
+walk w ctx bound (ESlice a lo hi _) acc =
+  sugarMethodRef w ctx "slice" (walkAll w (evalCtx ctx) bound [a, lo, hi] acc)
+walk w ctx bound (ELetGroup binds body) acc =
+  let inner =
+    fold
+      (b2 lb => match lb
+        LetBind n _ _ _ => omInsert n () b2)
+      bound
+      binds
+  walk w ctx inner body (walkLetBinds w (evalCtx ctx) inner binds acc)
+walk w ctx bound (ESection s) acc = walkSection w ctx bound s acc
+walk w ctx bound (EIndex a i) acc =
+  sugarMethodRef w ctx "index" (walkAll w (evalCtx ctx) bound [a, i] acc)
+walk w ctx bound (EAnnot e0 _) acc = walk w ctx bound e0 acc
+walk w ctx bound (EHeadAnnot e0 _) acc = walk w ctx bound e0 acc
+walk w ctx bound (EBlock stmts) acc = walkStmts w ctx bound stmts acc
+walk w ctx bound (EDo deferred stmts) acc =
+  sugarMethodRef
+    w
+    ctx
+    (if deferred then "deferThen" else "andThen")
+    (walkStmts w (evalCtx ctx) bound stmts acc)
+walk w ctx bound (EStringInterp parts) acc =
+  sugarMethodRef
+    w
+    ctx
+    "display"
+    (fold
+      (acc2 p => match p
+        InterpStr _ => acc2
+        InterpExpr e0 => walk w (evalCtx ctx) bound e0 acc2)
+      acc
+      parts)
+walk w ctx bound (EGuards arms) acc =
+  fold
+    (acc2 a => match a
+      GuardArm gs body => walkGuarded w ctx bound gs body acc2)
+    acc
+    arms
+walk w ctx bound (ERecordCreate _ fs) acc =
+  walkFields w (componentCtx ctx) bound fs acc
+walk w ctx bound (ERecordUpdate e0 fs _) acc =
+  walkFields w (componentCtx ctx) bound fs (walk w (evalCtx ctx) bound e0 acc)
+walk w ctx bound (EVariantUpdate _ e0 fs) acc =
+  walkFields w (componentCtx ctx) bound fs (walk w (evalCtx ctx) bound e0 acc)
+walk w ctx bound (EMapLit _ kvs) acc =
+  sugarMethodRef
+    w
+    ctx
+    "fromEntries"
+    (fold
+      (acc2 kv =>
+        walk
+          w
+          (evalCtx ctx)
+          bound
+          (snd kv)
+          (walk w (evalCtx ctx) bound (fst kv) acc2))
+      acc
+      kvs)
+walk w ctx bound (ESetLit _ es) acc =
+  sugarMethodRef w ctx "fromEntries" (walkAll w (evalCtx ctx) bound es acc)
+walk w ctx bound (EAsPat _ e0) acc = walk w (evalCtx ctx) bound e0 acc
+walk w ctx bound (EOrPat es) acc = walkAll w (evalCtx ctx) bound es acc
+walk w ctx bound (EMethodRef n) acc = methodRef w ctx bound n "" acc
+walk w ctx bound (EDictApp n) acc = dictRef w ctx bound n acc
+walk w ctx bound (EVarAt n _) acc = nameRef w ctx bound n acc
+walk w ctx bound (EVarId n _) acc = nameRef w ctx bound n acc
+walk w ctx bound (EMethodAt m seed _) acc = methodRef w ctx bound m seed acc
+walk w ctx bound (EDictAt n _) acc = dictRef w ctx bound n acc
+walk w ctx bound (ELoc _ e0) acc = walk w ctx bound e0 acc
+walk w ctx bound (EDoOrigin _ e0) acc = walk w ctx bound e0 acc
+walk w ctx _ (ENumLit _ _ _) acc = operatorRef w ctx (Some "fromInt") acc
+walk w ctx _ (EWideLit _ _ _ _) acc = operatorRef w ctx (Some "fromInt") acc
+
+walkAll : InitWalk ->
+  WalkCtx ->
+  OrdMap Unit ->
+  List Expr ->
+  List InitMention ->
+  List InitMention
+walkAll w ctx bound es acc = fold (acc2 e => walk w ctx bound e acc2) acc es
+
+walkFields : InitWalk ->
+  WalkCtx ->
+  OrdMap Unit ->
+  List FieldAssign ->
+  List InitMention ->
+  List InitMention
+walkFields w ctx bound fs acc =
+  fold
+    (acc2 f => match f
+      FieldAssign _ e => walk w ctx bound e acc2)
+    acc
+    fs
+
+-- A local function's body is walked as called: a binding group in an evaluated
+-- position can run it.
+walkLetBinds : InitWalk ->
+  WalkCtx ->
+  OrdMap Unit ->
+  List LetBind ->
+  List InitMention ->
+  List InitMention
+walkLetBinds w ctx bound binds acc =
+  fold
+    (acc2 b => match b
+      LetBind _ clauses _ _ =>
+        fold
+          (acc3 c => match c
+            FunClause ps body => walk w ctx (bindPats ps bound) body acc3)
+          acc2
+          clauses)
+    acc
+    binds
+
+walkArms : InitWalk ->
+  WalkCtx ->
+  OrdMap Unit ->
+  List Arm ->
+  List InitMention ->
+  List InitMention
+walkArms w ctx bound arms acc =
+  fold
+    (acc2 a => match a
+      Arm p gs body => walkGuarded w ctx (bindPat p bound) gs body acc2)
+    acc
+    arms
+
+walkGuarded : InitWalk ->
+  WalkCtx ->
+  OrdMap Unit ->
+  List Guard ->
+  Expr ->
+  List InitMention ->
+  List InitMention
+walkGuarded w ctx bound [] body acc = walk w ctx bound body acc
+walkGuarded w ctx bound ((GBool e) :: gs) body acc =
+  walkGuarded w ctx bound gs body (walk w (evalCtx ctx) bound e acc)
+walkGuarded w ctx bound ((GBind p e) :: gs) body acc =
+  walkGuarded w ctx (bindPat p bound) gs body (walk w (evalCtx ctx) bound e acc)
+
+-- A block's last statement is its result and keeps [ctx]; every earlier one is evaluated.
+walkStmts : InitWalk ->
+  WalkCtx ->
+  OrdMap Unit ->
+  List DoStmt ->
+  List InitMention ->
+  List InitMention
+walkStmts _ _ _ [] acc = acc
+walkStmts w ctx bound [DoExpr e] acc = walk w ctx bound e acc
+walkStmts w ctx bound ((DoExpr e) :: rest) acc =
+  walkStmts w ctx bound rest (walk w (evalCtx ctx) bound e acc)
+walkStmts w ctx bound ((DoBind p e) :: rest) acc =
+  walkStmts w ctx (bindPat p bound) rest (walk w (evalCtx ctx) bound e acc)
+walkStmts w ctx bound ((DoLet _ r p e _) :: rest) acc =
+  let after = bindPat p bound
+  walkStmts
+    w
+    ctx
+    after
+    rest
+    (walk w (evalCtx ctx) (if r then after else bound) e acc)
+walkStmts w ctx bound ((DoAssign x e) :: rest) acc =
+  walkStmts w ctx (omInsert x () bound) rest (walk w (evalCtx ctx) bound e acc)
+walkStmts w ctx bound ((DoFieldAssign _ _ e) :: rest) acc =
+  walkStmts w ctx bound rest (walk w (evalCtx ctx) bound e acc)
+
+walkSection : InitWalk ->
+  WalkCtx ->
+  OrdMap Unit ->
+  Section ->
+  List InitMention ->
+  List InitMention
+walkSection w ctx bound (SecBare op) acc = sectionOp w ctx bound op acc
+walkSection w ctx bound (SecRight op e) acc =
+  sectionOp w ctx bound op (walk w (evalCtx ctx) bound e acc)
+walkSection w ctx bound (SecLeft e op) acc =
+  sectionOp w ctx bound op (walk w (evalCtx ctx) bound e acc)
+
+-- A section's operator is a name or a builtin operator; it may dispatch either way.
+sectionOp : InitWalk ->
+  WalkCtx ->
+  OrdMap Unit ->
+  String ->
+  List InitMention ->
+  List InitMention
+sectionOp w ctx bound op acc =
+  nameRef
+    w
+    (evalCtx ctx)
+    bound
+    op
+    (operatorRef
+      w
+      ctx
+      (w.iwInputs.iiBinopMethod op)
+      (operatorRef w ctx (w.iwInputs.iiUnopMethod op) acc))
+
+-- ── applications ─────────────────────────────────────────────────────────────
+
+-- How an application at a guarded position evaluates.  A constructor application stores
+-- its arguments; an under-saturated call of a local function builds a closure; a
+-- `Deferred*` call delays its direct lambda arguments; anything else is a call.
+data AppShape = ShapeCtor | ShapePartial | ShapeDefer | ShapeCall
+
+-- The application head and its arguments, through the transparent wrappers on the head.
+spine : Expr -> List Expr -> (Expr, List Expr)
+spine (EApp f x) args = spine f (x :: args)
+spine (ELoc _ e) args = spine e args
+spine (EDoOrigin _ e) args = spine e args
+spine (EHeadAnnot e _) args = spine e args
+spine (EAnnot e _) args = spine e args
+spine e args = (e, args)
+
+walkApp : InitWalk ->
+  WalkCtx ->
+  OrdMap Unit ->
+  Expr ->
+  List InitMention ->
+  List InitMention
+walkApp w ctx bound e acc =
+  let (hd, args) = spine e []
+  match appShape w ctx bound hd (length args)
+    ShapeCtor => walkAll w (componentCtx ctx) bound args acc
+    ShapePartial =>
+      walkAll
+        w
+        (componentCtx ctx)
+        bound
+        args
+        (walk w (componentCtx ctx) bound hd acc)
+    ShapeDefer =>
+      fold
+        (acc2 a => walkDeferArg w bound a acc2)
+        (walk w (evalCtx ctx) bound hd acc)
+        args
+    ShapeCall =>
+      walkAll w (evalCtx ctx) bound args (walk w (evalCtx ctx) bound hd acc)
+
+-- A direct lambda argument of a `Deferred*` call is delayed; any other argument, the
+-- receiver included, is evaluated.
+walkDeferArg : InitWalk ->
+  OrdMap Unit ->
+  Expr ->
+  List InitMention ->
+  List InitMention
+walkDeferArg w bound a acc = match directLambda a
+  Some (ps, body) => walk w CtxDelay (bindPats ps bound) body acc
+  None => walk w CtxDeref bound a acc
+
+directLambda : Expr -> Option (List Pat, Expr)
+directLambda (ELam ps body) = Some (ps, body)
+directLambda (ELoc _ e) = directLambda e
+directLambda (EAnnot e _) = directLambda e
+directLambda _ = None
+
+appShape : InitWalk -> WalkCtx -> OrdMap Unit -> Expr -> Int -> AppShape
+appShape w ctx bound (EVar n) nargs = nameShape w ctx bound n nargs
+appShape w ctx bound (EVarId n _) nargs = nameShape w ctx bound n nargs
+appShape w ctx bound (EVarAt n _) nargs = nameShape w ctx bound n nargs
+appShape w ctx bound (EDictAt n _) nargs = nameShape w ctx bound n nargs
+appShape w ctx bound (EMethodAt m "" _) _ =
+  if isGuarded ctx && isPreludeDefer w bound m then ShapeDefer else ShapeCall
+appShape _ _ _ _ _ = ShapeCall
+
+nameShape : InitWalk -> WalkCtx -> OrdMap Unit -> String -> Int -> AppShape
+nameShape w ctx bound n nargs
+  | omHasKey n bound = ShapeCall
+  | otherwise = match omLookup n w.iwTop
+    Some arity =>
+      if isGuarded ctx && nargs < arity then ShapePartial else ShapeCall
+    None =>
+      if isCtorName n then
+        ShapeCtor
+      else if isGuarded ctx && isPreludeDefer w bound n then
+        ShapeDefer
+      else
+        ShapeCall
+
+-- Whether [n] names the prelude's `Deferred*` method.  The spelling desugar generates for a
+-- `defer` block, `$core.deferThen`, reaches the prelude through the reserved alias the
+-- module's imports bind and no binding can shadow (docs/spec/SHADOW-SEMANTICS.md L6).  A
+-- bare spelling names it when neither a local binder, a local top-level binding, a local
+-- interface's method nor an import of the module binds it.  This is the spelling plus a
+-- shadow check, not a resolved identity.
+isPreludeDefer : InitWalk -> OrdMap Unit -> String -> Bool
+isPreludeDefer w bound n = match stripPrefix "$core." n
+  Some bare => isDeferSpelling bare
+  None =>
+    isDeferSpelling n
+      && not (omHasKey n bound)
+      && not (omHasKey n w.iwTop)
+      && not (omHasKey n w.iwLocalMethods)
+      && not (omHasKey n w.iwInputs.iiImportedValues)
+
+isDeferSpelling : String -> Bool
+isDeferSpelling "deferThen" = True
+isDeferSpelling "deferMap" = True
+isDeferSpelling "deferAp" = True
+isDeferSpelling "deferFlatMap" = True
+isDeferSpelling _ = False
+
+-- A constructor spelling: its last dotted segment starts with an upper-case letter.
+isCtorName : String -> Bool
+isCtorName n = match nextChar (startCursor n)
+  None => False
+  Some (c, _) =>
+    if not (charIsUpper c) then
+      False
+    else match stringIndexOf "." n
+      None => True
+      Some _ => match last (split "." n)
+        Some seg => isCtorName seg
+        None => False
+
+bareSpelling : String -> String
+bareSpelling n = optionOr n (stripPrefix "$core." n)
+
+-- ── references ───────────────────────────────────────────────────────────────
+
+mention : String -> InitEdgeKind -> InitPosition -> InitMention
+mention t k p = InitMention {
+  mentionTarget = t,
+  mentionKind = k,
+  mentionPosition = p,
+}
+
+-- A plain name: a local binder reaches nothing, a top-level binding is a node, and any
+-- other value may be a method or reach a local orphan impl.
+nameRef : InitWalk ->
+  WalkCtx ->
+  OrdMap Unit ->
+  String ->
+  List InitMention ->
+  List InitMention
+nameRef w ctx bound n acc
+  | omHasKey n bound = acc
+  | omHasKey n w.iwTop = mention n ByName (namePos ctx) :: acc
+  | otherwise =
+    let pos = namePos ctx
+    let viaMethod = match methodKeys w n
+      Some keys => dispatchTo w ByDispatch pos keys acc
+      None => acc
+    foreignRef w pos n viaMethod
+
+-- A constrained call (`EDictAt`): a local callee is a node; another reaches the local
+-- impls of its constraints' dispatch closures, every local impl when its constraints are
+-- unknown, and the local orphans.
+dictRef : InitWalk ->
+  WalkCtx ->
+  OrdMap Unit ->
+  String ->
+  List InitMention ->
+  List InitMention
+dictRef w ctx bound n acc
+  | omHasKey n bound = acc
+  | omHasKey n w.iwTop = mention n ByName (namePos ctx) :: acc
+  | otherwise =
+    let pos = namePos ctx
+    let viaDict = match omLookup n w.iwInputs.iiCalleeIfaces
+      Some keys => dispatchTo w ByDispatch pos keys acc
+      None => toEvery w ByDispatch pos acc
+    foreignRef w pos n viaDict
+
+-- A method occurrence: its seed names a standalone shadow, and a top-level binding may
+-- share the method's spelling; the method reaches every local impl when its spelling is
+-- unknown.
+methodRef : InitWalk ->
+  WalkCtx ->
+  OrdMap Unit ->
+  String ->
+  String ->
+  List InitMention ->
+  List InitMention
+methodRef w ctx bound m seed acc =
+  let pos = namePos ctx
+  let asName =
+    if omHasKey m w.iwTop && not (omHasKey m bound) then
+      mention m ByName pos :: acc
+    else
+      acc
+  let viaSeed =
+    if seed == "" then
+      asName
+    else match stripPrefix w.iwSeedPrefix seed
+      Some local if omHasKey local w.iwTop => mention local ByName pos :: asName
+      _ => foreignRef w pos seed asName
+  match methodKeys w m
+    Some keys => dispatchTo w ByDispatch pos keys viaSeed
+    None => toEvery w ByDispatch pos viaSeed
+
+-- A method the desugarer introduced for sugar that survived to this tree.
+sugarMethodRef : InitWalk ->
+  WalkCtx ->
+  String ->
+  List InitMention ->
+  List InitMention
+sugarMethodRef w ctx m acc = match methodKeys w m
+  Some keys => dispatchTo w ByDispatch (namePos (evalCtx ctx)) keys acc
+  None => toEvery w ByDispatch (namePos (evalCtx ctx)) acc
+
+-- An operator or literal runs its method where it is evaluated.  A method no interface
+-- declares has no impl to reach.
+operatorRef : InitWalk ->
+  WalkCtx ->
+  Option String ->
+  List InitMention ->
+  List InitMention
+operatorRef _ _ None acc = acc
+operatorRef w ctx (Some m) acc = match methodKeys w m
+  Some keys => dispatchTo w ByOperator (namePos (evalCtx ctx)) keys acc
+  None => acc
+
+-- An imported or prelude value reaches the local orphan impls (constructors are not
+-- values that run code).
+foreignRef : InitWalk ->
+  InitPosition ->
+  String ->
+  List InitMention ->
+  List InitMention
+foreignRef w pos n acc =
+  if isEmptyL w.iwOrphans || isCtorName n then
+    acc
+  else
+    fold (acc2 o => mention o ByOrphan pos :: acc2) acc w.iwOrphans
+
+methodKeys : InitWalk -> String -> Option (List String)
+methodKeys w n =
+  let table = w.iwInputs.iiMethodIfaces
+  let bare = bareSpelling n
+  match omLookup bare table
+    Some keys => Some keys
+    None => match last (split "." bare)
+      Some seg if seg /= bare => omLookup seg table
+      _ => None
+
+-- The local impls a site dispatching on [keys] reaches: for each key, the impls of every
+-- interface of its dispatch closure, and the impls whose interface is unknown.
+dispatchTo : InitWalk ->
+  InitEdgeKind ->
+  InitPosition ->
+  List String ->
+  List InitMention ->
+  List InitMention
+dispatchTo w kind pos keys acc =
+  if isEmptyL w.iwImpls then
+    acc
+  else
+    fold (acc2 key => dispatchKey w kind pos key acc2) acc keys
+
+dispatchKey : InitWalk ->
+  InitEdgeKind ->
+  InitPosition ->
+  String ->
+  List InitMention ->
+  List InitMention
+dispatchKey w kind pos key acc
+  | key == "" = toEvery w kind pos acc
+  | otherwise =
+    let closure = optionOr [key] (omLookup key w.iwInputs.iiDispatchClosure)
+    fold
+      (acc2 k =>
+        if k == "" then
+          toEvery w kind pos acc2
+        else
+          toImpls
+            (if k == key then kind else ByClosure)
+            pos
+            (optionOr [] (omLookup k w.iwImplsByKey))
+            acc2)
+      (toImpls kind pos (optionOr [] (omLookup "" w.iwImplsByKey)) acc)
+      closure
+
+toEvery : InitWalk ->
+  InitEdgeKind ->
+  InitPosition ->
+  List InitMention ->
+  List InitMention
+toEvery w kind pos acc = toImpls kind pos w.iwImpls acc
+
+toImpls : InitEdgeKind ->
+  InitPosition ->
+  List String ->
+  List InitMention ->
+  List InitMention
+toImpls kind pos impls acc =
+  fold (acc2 i => mention i kind pos :: acc2) acc impls
+
+-- ── binders ──────────────────────────────────────────────────────────────────
+
+bindPats : List Pat -> OrdMap Unit -> OrdMap Unit
+bindPats ps bound = omFromNames (flatMap patBoundNames ps) bound
+
+bindPat : Pat -> OrdMap Unit -> OrdMap Unit
+bindPat p bound = omFromNames (patBoundNames p) bound
+
+-- ── the order ────────────────────────────────────────────────────────────────
+
+-- I1: the value nodes, dependency-first, ties by source position, over every mention.
+-- A value's initialiser can call a function or a closure it reads, so what the initialiser
+-- reaches is the whole may-reach relation, not its evaluated positions alone.  A
+-- strongly connected component is emitted when every component it reaches has been, the
+-- ready component with the earliest member first, and its members in source order.
+export
+initOrder : InitGraph -> List String
+initOrder g =
+  let nodes = g.igraphNodes
+  let compOf = (mayReach g).mrComp
+  let members = componentMembers compOf (reverseL nodes) empty
+  let deps = componentDeps compOf nodes empty
+  let indegree = M.mapWithKey (_ ds => M.size ds) deps
+  let dependents =
+    M.foldrWithKey
+      (s ds acc =>
+        M.foldrWithKey
+          (d _ acc2 => M.set d (s :: optionOr [] (M.get d acc2)) acc2)
+          acc
+          ds)
+      empty
+      deps
+  let ready =
+    M.foldrWithKey
+      (s ms acc =>
+        if optionOr 0 (M.get s indegree) == 0 then
+          M.set (firstOrder ms) s acc
+        else
+          acc)
+      empty
+      members
+  reverseL (kahn g members dependents indegree ready [])
+
+-- The may-reach relation, every mention of every node, and its strongly connected
+-- components: [mrComp] numbers each node's component.
+data MayReach = MayReach { mrAdj : OrdMap (List String), mrComp : OrdMap Int }
+
+mayReach : InitGraph -> MayReach
+mayReach g =
+  let adj =
+    omFromPairs
+      (map
+        (n => (n.inodeName, map (m => m.mentionTarget) n.inodeMentions))
+        g.igraphNodes)
+      omEmpty
+  MayReach {
+    mrAdj = adj,
+    mrComp =
+      componentIndex
+        (tarjanSCCs (map (n => n.inodeName) g.igraphNodes) adj)
+        0
+        omEmpty,
+  }
+
+componentIndex : List (List String) -> Int -> OrdMap Int -> OrdMap Int
+componentIndex [] _ acc = acc
+componentIndex (c :: rest) i acc =
+  componentIndex rest (i + 1) (fold (a n => omInsert n i a) acc c)
+
+-- Each component's member nodes, in source order ([nodes] arrives reversed).
+componentMembers : OrdMap Int ->
+  List InitNode ->
+  M.Map Int (List InitNode) ->
+  M.Map Int (List InitNode)
+componentMembers _ [] acc = acc
+componentMembers compOf (n :: rest) acc =
+  let c = optionOr 0 (omLookup n.inodeName compOf)
+  componentMembers compOf rest (M.set c (n :: optionOr [] (M.get c acc)) acc)
+
+-- Each component's set of other components it reaches.
+componentDeps : OrdMap Int ->
+  List InitNode ->
+  M.Map Int (M.Map Int Unit) ->
+  M.Map Int (M.Map Int Unit)
+componentDeps _ [] acc = acc
+componentDeps compOf (n :: rest) acc =
+  let c = optionOr 0 (omLookup n.inodeName compOf)
+  let mine =
+    fold
+      (s m => match omLookup m.mentionTarget compOf
+        Some d => if d == c then s else M.set d () s
+        None => s)
+      (optionOr empty (M.get c acc))
+      n.inodeMentions
+  componentDeps compOf rest (M.set c mine acc)
+
+firstOrder : List InitNode -> Int
+firstOrder [] = 0
+firstOrder (n :: _) = n.inodeOrder
+
+kahn : InitGraph ->
+  M.Map Int (List InitNode) ->
+  M.Map Int (List Int) ->
+  M.Map Int Int ->
+  M.Map Int Int ->
+  List String ->
+  List String
+kahn g members dependents indegree ready out = match M.minView ready
+  None => out
+  Some (_, s, rest) =>
+    let ms = optionOr [] (M.get s members)
+    let out2 =
+      fold
+        (acc n =>
+          if n.inodeKind == ValueNode
+            && not (omHasKey n.inodeName g.igraphNotInitialised) then
+            n.inodeName :: acc
+          else
+            acc)
+        out
+        ms
+    let (indegree2, ready2) =
+      fold
+        (st d => match st
+          (deg, rdy) =>
+            let left = optionOr 0 (M.get d deg) - 1
+            let deg2 = M.set d left deg
+            if left == 0 then
+              (deg2, M.set (firstOrder (optionOr [] (M.get d members))) d rdy)
+            else
+              (deg2, rdy))
+        (indegree, rest)
+        (optionOr [] (M.get s dependents))
+    kahn g members dependents indegree2 ready2 out2

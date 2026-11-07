@@ -37,8 +37,8 @@ import string.{
 }
 import list.{zip}
 
-fixDir : <IO> String
-fixDir = underRoot "test/build_diff_fixtures"
+fixDir : Unit -> <IO> String
+fixDir () = underRoot "test/build_diff_fixtures"
 
 -- The script's six multi-module specials: (label, entry file under fixDir).
 specials : List (String, String)
@@ -75,12 +75,13 @@ sameModuloNl a b = match stripSuffix "\n" a
     None => a == b
 
 -- Tops (floor-checked) and specials, as (label, src) rows.
-worklist : <IO, FileRead> Result String (List (String, String), List (String, String))
-worklist = match fixtureFiles fixDir
-  Err e => Err "could not list \{fixDir}: \{e}"
+worklist : Unit ->
+  <IO, FileRead> Result String (List (String, String), List (String, String))
+worklist () = match fixtureFiles (fixDir ())
+  Err e => Err "could not list \{fixDir ()}: \{e}"
   Ok paths => Ok (
-    topRows fixDir paths,
-    map ((l, rel) => (l, "\{fixDir}/\{rel}")) specials,
+    topRows (fixDir ()) paths,
+    map ((l, rel) => (l, "\{fixDir ()}/\{rel}")) specials,
   )
 
 binOf : String -> String -> String
@@ -136,17 +137,17 @@ gate : String ->
   List (String, String) ->
   <Exec, IO, FileRead, FileWrite> Expectation
 gate dir medaka rows =
-  let root = medakaRoot
+  let root = medakaRoot ()
   let emitter = getEnvOr "MEDAKA_EMITTER" "\{root}/medaka_emitter"
   let argvs =
     map
       ((label, src) => buildArgv root emitter (binOf dir label) src medaka)
       rows
-  let builds = runCommandBatch "env" testJobs argvs
+  let builds = runCommandBatch "env" (testJobs ()) argvs
   let runs =
     runCommandBatch
       "sh"
-      testJobs
+      (testJobs ())
       (map
         ((label, _) => ["-c", "exec \"$0\" 2>/dev/null", binOf dir label])
         rows)
@@ -167,17 +168,17 @@ gate dir medaka rows =
       (Ok failures),
   ]
 
-check : <Exec, IO, FileRead, FileWrite> Expectation
-check = match worklist
+check : Unit -> <Exec, IO, FileRead, FileWrite> Expectation
+check () = match worklist ()
   Err e => fail e
   Ok (tops, sp) => withScratchDir (dir => expectAll [
     expectAtLeast 86 (length tops),
     expectAtLeast 6 (length sp),
-    gate dir medakaBin (tops ++ sp),
+    gate dir (medakaBin ()) (tops ++ sp),
   ])
 
 test "diff_compiler_build: native build of every build_diff fixture matches its golden stdout" =
-  check
+  check ()
 
 -- ---- libgc linkage -----------------------------------------------------------
 -- `medaka build` links libgc's archive when the install has one and the shared
@@ -189,12 +190,12 @@ test "diff_compiler_build: native build of every build_diff fixture matches its 
 -- Losing the archive slows every allocation (#503) while every output stays
 -- the same, so no golden would notice.
 
-gcFixture : <IO> String
-gcFixture = underRoot "test/build_diff_fixtures/comp_list.mdk"
+gcFixture : Unit -> <IO> String
+gcFixture () = underRoot "test/build_diff_fixtures/comp_list.mdk"
 
 -- The installed libgc as (include dir holding gc.h, lib dir).
-gcInstall : <Exec, IO> Result String (String, String)
-gcInstall = match runCommand "pkg-config" ["--variable=libdir", "bdw-gc"]
+gcInstall : Unit -> <Exec, IO> Result String (String, String)
+gcInstall () = match runCommand "pkg-config" ["--variable=libdir", "bdw-gc"]
   Ok (0, lib, _) =>
     match runCommand "pkg-config" ["--variable=includedir", "bdw-gc"]
       Ok (0, inc, _) => Ok (trim inc, trim lib)
@@ -253,10 +254,11 @@ gcBuildType : String ->
   String ->
   <Exec, IO, FileRead, FileWrite> Result String String
 gcBuildType bin prefix =
-  let root = medakaRoot
+  let root = medakaRoot ()
   let emitter = getEnvOr "MEDAKA_EMITTER" "\{root}/medaka_emitter"
-  let src = gcFixture
-  let argv = "GC_PREFIX=\{prefix}" :: buildArgv root emitter bin src medakaBin
+  let src = gcFixture ()
+  let argv =
+    "GC_PREFIX=\{prefix}" :: buildArgv root emitter bin src (medakaBin ())
   match runCommand "env" argv
     Err e => Err "medaka build could not run: \{e}"
     Ok (bc, _, berr) =>
@@ -277,8 +279,8 @@ gcRunAndInspect bin src = match (runCommand bin [], readFile (goldenOf src))
       Ok (code, _, err) => Err "nm -P exited \{intToString code}: \{err}"
       Err e => Err "nm: \{e}"
 
-gcLinkCheck : <Exec, IO, FileRead, FileWrite> Expectation
-gcLinkCheck = match gcInstall
+gcLinkCheck : Unit -> <Exec, IO, FileRead, FileWrite> Expectation
+gcLinkCheck () = match gcInstall ()
   Err e => fail e
   Ok (inc, lib) => withScratchDir (dir => match (
     gcPrefix
@@ -311,4 +313,4 @@ gcLinkCheck = match gcInstall
     ])
 
 test "diff_compiler_build: libgc links from its archive when the prefix has one, else shared" =
-  gcLinkCheck
+  gcLinkCheck ()

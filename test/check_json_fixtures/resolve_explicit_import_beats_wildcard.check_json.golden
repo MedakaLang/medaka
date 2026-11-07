@@ -1,0 +1,1 @@
+{"files":[{"file":"stdlib/list.mdk","diagnostics":[]},{"file":"stdlib/string.mdk","diagnostics":[]},{"file":"test/check_json_fixtures/resolve_explicit_import_beats_wildcard.mdk","diagnostics":[]}]}

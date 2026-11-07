@@ -112,29 +112,29 @@ withContents (p :: rest) = match readFile p
 sourceFile : String -> <FileRead> Result String (List (String, String))
 sourceFile path = withContents [path]
 
-libDir : <IO> String
-libDir = underRoot "pds/lib"
+libDir : Unit -> <IO> String
+libDir () = underRoot "pds/lib"
 
-shellDir : <IO> String
-shellDir = underRoot "pds/shell"
+shellDir : Unit -> <IO> String
+shellDir () = underRoot "pds/shell"
 
-pdsDir : <IO> String
-pdsDir = underRoot "pds"
+pdsDir : Unit -> <IO> String
+pdsDir () = underRoot "pds"
 
-entryPath : <IO> String
-entryPath = underRoot "pds/serve.mdk"
+entryPath : Unit -> <IO> String
+entryPath () = underRoot "pds/serve.mdk"
 
-libSources : <FileRead, IO> Result String (List (String, String))
-libSources = sourcesUnder libDir
+libSources : Unit -> <FileRead, IO> Result String (List (String, String))
+libSources () = sourcesUnder (libDir ())
 
-shellSources : <FileRead, IO> Result String (List (String, String))
-shellSources = sourcesUnder shellDir
+shellSources : Unit -> <FileRead, IO> Result String (List (String, String))
+shellSources () = sourcesUnder (shellDir ())
 
-pdsSources : <FileRead, IO> Result String (List (String, String))
-pdsSources = sourcesUnder pdsDir
+pdsSources : Unit -> <FileRead, IO> Result String (List (String, String))
+pdsSources () = sourcesUnder (pdsDir ())
 
-entrySources : <FileRead, IO> Result String (List (String, String))
-entrySources = sourceFile entryPath
+entrySources : Unit -> <FileRead, IO> Result String (List (String, String))
+entrySources () = sourceFile (entryPath ())
 
 {- | The two source sets checks 4 and 5 sweep: a directory plus the entry
    point.
@@ -145,7 +145,7 @@ entrySources = sourceFile entryPath
 plusEntry : Result String (List (String, String)) ->
   <FileRead, IO> Result String (List (String, String))
 plusEntry (Err e) = Err e
-plusEntry (Ok sources) = map (sources ++ _) entrySources
+plusEntry (Ok sources) = map (sources ++ _) (entrySources ())
 
 -- # Character predicates
 
@@ -634,8 +634,8 @@ rawSignerLedger = [
 ]
 
 -- | The prefix `repoRelative` strips: the repository root and a separator.
-rootPrefix : <IO> String
-rootPrefix = underRoot ""
+rootPrefix : Unit -> <IO> String
+rootPrefix () = underRoot ""
 
 -- | `path` relative to `root`, as the rule tables spell it.
 repoRelative : String -> String -> String
@@ -778,27 +778,27 @@ overFiles check sources = flatMap check sources
 test "no pds/lib module imports pds/shell" =
   expectNoFindings
     "real tree: pds/lib imports pds/shell"
-    (sweep (overFiles shellImportHits) libSources)
+    (sweep (overFiles shellImportHits) (libSources ()))
 
 test "no pds/lib export declares a row naming a host label" =
   expectNoFindings
     "real tree: pds/lib exports a signature whose row names a host label"
-    (sweep (overFiles effectExportHits) libSources)
+    (sweep (overFiles effectExportHits) (libSources ()))
 
 test "every pds/lib export carries an explicit type signature" =
   expectNoFindings
     "real tree: pds/lib export carries no type signature"
-    (sweep (overFiles unsignedExportHits) libSources)
+    (sweep (overFiles unsignedExportHits) (libSources ()))
 
 test "no secret is interpolated into a string in pds/lib or pds/serve.mdk" =
   expectNoFindings
     "real tree: a secret is interpolated into a string"
-    (sweep (overFiles secretInterpolationHits) (plusEntry libSources))
+    (sweep (overFiles secretInterpolationHits) (plusEntry (libSources ())))
 
 test "no secret reaches the access log from pds/lib or pds/serve.mdk" =
   expectNoFindings
     "real tree: a secret reaches the access log"
-    (sweep (overFiles accessLogHits) (plusEntry libSources))
+    (sweep (overFiles accessLogHits) (plusEntry (libSources ())))
 
 -- The shell half of checks 4 and 5, run against the directory that
 -- actually holds every `logAccess` call site — which is also where the
@@ -807,22 +807,22 @@ test "no secret reaches the access log from pds/lib or pds/serve.mdk" =
 test "no secret is interpolated into a string in pds/shell" =
   expectNoFindings
     "real tree: a secret is interpolated into a string in pds/shell"
-    (sweep (overFiles secretInterpolationHits) (plusEntry shellSources))
+    (sweep (overFiles secretInterpolationHits) (plusEntry (shellSources ())))
 
 test "no secret reaches the access log in pds/shell" =
   expectNoFindings
     "real tree: a secret reaches the access log in pds/shell"
-    (sweep (overFiles accessLogHits) (plusEntry shellSources))
+    (sweep (overFiles accessLogHits) (plusEntry (shellSources ())))
 
 test "no module outside lib.sign, lib.secp256k1 and lib.jwt imports a raw signer" =
   expectNoFindings
     "real tree: a raw signer is imported outside its labelled wrapper"
-    (sweep (overFiles (rawSignerHits rootPrefix)) pdsSources)
+    (sweep (overFiles (rawSignerHits (rootPrefix ()))) (pdsSources ()))
 
 test "every raw-signer ledger row is still used" =
   expectNoFindings
     "real tree: a raw-signer ledger row allows an import nothing makes"
-    (sweep (staleLedgerRows rootPrefix) pdsSources)
+    (sweep (staleLedgerRows (rootPrefix ())) (pdsSources ()))
 
 -- # Mutation controls
 --
@@ -833,11 +833,11 @@ test "every raw-signer ledger row is still used" =
 -- above, and it is sharper: a hit can only have come from the injection.
 -- Nothing is written to the source tree.
 
-repoPath : <IO> String
-repoPath = underRoot "pds/lib/repo.mdk"
+repoPath : Unit -> <IO> String
+repoPath () = underRoot "pds/lib/repo.mdk"
 
-serverPath : <IO> String
-serverPath = underRoot "pds/shell/server.mdk"
+serverPath : Unit -> <IO> String
+serverPath () = underRoot "pds/shell/server.mdk"
 
 -- | `path`'s real content with `extra` appended as whole lines, as the
 -- retired script's `printf … >>` did, as a one-element source set.
@@ -855,7 +855,7 @@ test "mutation control: an injected pds/shell import is caught" =
     "injected shell import"
     (sweep
       (overFiles shellImportHits)
-      (injected repoPath ["import shell.persist.{persistSave}"]))
+      (injected (repoPath ()) ["import shell.persist.{persistSave}"]))
 
 effectProbe : List String
 effectProbe = [
@@ -868,7 +868,7 @@ effectProbe = [
 test "mutation control: an injected effect-bearing export is caught" =
   expectFindings
     "injected effect-bearing export"
-    (sweep (overFiles effectExportHits) (injected repoPath effectProbe))
+    (sweep (overFiles effectExportHits) (injected (repoPath ()) effectProbe))
 
 -- A host label beside the core's own labels, in a row that also carries a
 -- set-valued parameter: the core labels do not launder the host one.
@@ -884,7 +884,7 @@ mixedProbe = [
 test "mutation control: a host label beside the core labels is caught" =
   expectFindings
     "injected export naming FileRead beside Kdf and Mint"
-    (sweep (overFiles effectExportHits) (injected repoPath mixedProbe))
+    (sweep (overFiles effectExportHits) (injected (repoPath ()) mixedProbe))
 
 -- A host row written as a type argument rather than on an arrow.
 typeArgumentProbe : List String
@@ -898,7 +898,9 @@ typeArgumentProbe = [
 test "mutation control: a host label in a type-argument row is caught" =
   expectFindings
     "injected export naming Stdout in a type-argument row"
-    (sweep (overFiles effectExportHits) (injected repoPath typeArgumentProbe))
+    (sweep
+      (overFiles effectExportHits)
+      (injected (repoPath ()) typeArgumentProbe))
 
 -- The allowed side: every core label, parameterized and bare, on an arrow
 -- and as a type argument, and a row variable.
@@ -915,17 +917,17 @@ coreLabelProbe = [
 test "mutation control: rows naming only Sign, Mint and Kdf are allowed" =
   expectNoFindings
     "a row naming only the core labels and a row variable was flagged"
-    (sweep (overFiles effectExportHits) (injected repoPath coreLabelProbe))
+    (sweep (overFiles effectExportHits) (injected (repoPath ()) coreLabelProbe))
 
 {- | The same violation one directory below a populated `pds/lib`-shaped
    tree, which is the shape #3140 was about.
 
    This is the only control that needs real files: it grades the WALK, and a
    walk that stopped at the top level would see `top.mdk` and miss
-   `nested/probe.mdk`. `scratchDir` hands out a name nothing else holds, so
+   `nested/probe.mdk`. `scratchDir ()` hands out a name nothing else holds, so
    concurrent gate runs do not write over each other. -}
-nestedTree : <Exec, FileRead, FileWrite> Result String String
-nestedTree = match scratchDir
+nestedTree : Unit -> <Exec, FileRead, FileWrite> Result String String
+nestedTree () = match scratchDir ()
   Err e => Err "could not make a scratch directory: \{e}"
   Ok dir =>
     let root = "\{dir}/lib"
@@ -940,15 +942,16 @@ nestedTree = match scratchDir
 cleanProbe : List String
 cleanProbe = ["export", "topProbeForTest : Int -> Int", "topProbeForTest x = x"]
 
-nestedSources : <Exec, FileRead, FileWrite> Result String (List (String, String))
-nestedSources = match nestedTree
+nestedSources : Unit ->
+  <Exec, FileRead, FileWrite> Result String (List (String, String))
+nestedSources () = match nestedTree ()
   Err e => Err e
   Ok root => sourcesUnder root
 
 test "mutation control: an effect-bearing export in a nested directory is caught" =
   expectFindings
     "injected nested effect-bearing export"
-    (sweep (overFiles effectExportHits) nestedSources)
+    (sweep (overFiles effectExportHits) (nestedSources ()))
 
 {- | An unannotated export whose effect row the typechecker would infer.
 
@@ -962,18 +965,18 @@ unsignedProbe = [
   "boundaryUnsignedProbeForTest x = println x",
 ]
 
-unsignedMutant : <FileRead, IO> Result String (List (String, String))
-unsignedMutant = injected repoPath unsignedProbe
+unsignedMutant : Unit -> <FileRead, IO> Result String (List (String, String))
+unsignedMutant () = injected (repoPath ()) unsignedProbe
 
 test "mutation control: the effect check misses an unannotated export" =
   expectNoFindings
     "the effect check was expected to MISS an unannotated export"
-    (sweep (overFiles effectExportHits) unsignedMutant)
+    (sweep (overFiles effectExportHits) (unsignedMutant ()))
 
 test "mutation control: an injected unannotated export is caught" =
   expectFindings
     "injected unannotated effect-bearing export"
-    (sweep (overFiles unsignedExportHits) unsignedMutant)
+    (sweep (overFiles unsignedExportHits) (unsignedMutant ()))
 
 -- A secret interpolated into a diagnostic string — the shape that turns an
 -- error message into a credential disclosure.
@@ -982,7 +985,7 @@ test "mutation control: an injected secret interpolation is caught" =
     "injected secret interpolation"
     (sweep
       (overFiles secretInterpolationHits)
-      (injected repoPath [
+      (injected (repoPath ()) [
         "",
         "secretProbeForTest : String -> String",
         "secretProbeForTest password = \"login failed for \\{password}\"",
@@ -996,7 +999,7 @@ test "mutation control: the ledger is per-file, not a blanket exemption" =
     "the ledger exempted a site it does not name"
     (sweep
       (overFiles secretInterpolationHits)
-      (injected repoPath [
+      (injected (repoPath ()) [
         "",
         "ledgerProbeForTest : String -> String",
         "ledgerProbeForTest secret = \"\\{hs256Signature secret signingInput}\"",
@@ -1015,18 +1018,18 @@ argumentProbe = [
   "accessLogProbeForTest password = accessLogLine password",
 ]
 
-argumentMutant : <FileRead, IO> Result String (List (String, String))
-argumentMutant = injected repoPath argumentProbe
+argumentMutant : Unit -> <FileRead, IO> Result String (List (String, String))
+argumentMutant () = injected (repoPath ()) argumentProbe
 
 test "mutation control: the interpolation check misses a secret passed as an argument" =
   expectNoFindings
     "the interpolation check was expected to MISS a secret passed as an argument"
-    (sweep (overFiles secretInterpolationHits) argumentMutant)
+    (sweep (overFiles secretInterpolationHits) (argumentMutant ()))
 
 test "mutation control: a secret passed to the access log is caught" =
   expectFindings
     "a secret passed to the access log"
-    (sweep (overFiles accessLogHits) argumentMutant)
+    (sweep (overFiles accessLogHits) (argumentMutant ()))
 
 {- | The same leak inside an `AccessEvent` record literal, where the
    offending field is on a DIFFERENT line from the constructor.
@@ -1038,7 +1041,7 @@ test "mutation control: a secret in an AccessEvent record field is caught" =
     "a secret in an AccessEvent field"
     (sweep
       (overFiles accessLogHits)
-      (injected repoPath [
+      (injected (repoPath ()) [
         "",
         "accessRecordProbeForTest : String -> AccessEvent",
         "accessRecordProbeForTest sessionSecret =",
@@ -1061,30 +1064,30 @@ test "mutation control: a secret in an AccessEvent record field is caught" =
 realCallSite : String
 realCallSite = "logAccessBytes trace responseBytes"
 
-serverContent : <FileRead, IO> Result String String
-serverContent = match readFile serverPath
-  Err e => Err "could not read \{serverPath}: \{e}"
+serverContent : Unit -> <FileRead, IO> Result String String
+serverContent () = match readFile (serverPath ())
+  Err e => Err "could not read \{serverPath ()}: \{e}"
   Ok content => Ok content
 
 test "mutation control: the pds/shell call site this control mutates is still there" = expectNoFindings
   "the pds/shell call site this control mutates has moved — repoint it"
-  (match serverContent
+  (match serverContent ()
     Err e => Err e
     Ok content =>
       if contains realCallSite content then
         Ok []
       else
-        Ok ["\{serverPath}: no `\{realCallSite}` call site"])
+        Ok ["\{serverPath ()}: no `\{realCallSite}` call site"])
 
 test "mutation control: a secret at a real pds/shell call site is caught" =
   expectFindings
     "a secret at a real pds/shell access-log call site"
     (map
       (content => accessLogHits (
-        serverPath,
+        serverPath (),
         replaceAll realCallSite "logAccessBytes trace sessionSecret" content,
       ))
-      serverContent)
+      (serverContent ()))
 
 {- | The forging probe from the sprint review, in the import position of a
    real `pds/shell` module: with `scFromBytes` and `ecdsaSignDigest` in
@@ -1109,23 +1112,25 @@ withImports path extra = match readFile path
 
 rawSignerSweep : Result String (List (String, String)) ->
   <IO> Result String (List String)
-rawSignerSweep sources = sweep (overFiles (rawSignerHits rootPrefix)) sources
+rawSignerSweep sources =
+  sweep (overFiles (rawSignerHits (rootPrefix ()))) sources
 
 test "mutation control: the raw ECDSA signer imported into pds/shell is caught" =
   expectFindings
     "the forging probe's imports in pds/shell/server.mdk"
-    (rawSignerSweep (withImports serverPath rawSignImports))
+    (rawSignerSweep (withImports (serverPath ()) rawSignImports))
 
 test "mutation control: hs256Signature imported into pds/serve.mdk is caught" =
   expectFindings
     "hs256Signature imported into the entry point"
-    (rawSignerSweep (withImports entryPath ["import lib.jwt.{hs256Signature}"]))
+    (rawSignerSweep
+      (withImports (entryPath ()) ["import lib.jwt.{hs256Signature}"]))
 
 -- A wildcard reaches every export, the raw signer included.
 test "mutation control: a wildcard import of lib.secp256k1 is caught" =
   expectFindings
     "a wildcard import of lib.secp256k1 in pds/shell/server.mdk"
-    (rawSignerSweep (withImports serverPath ["import lib.secp256k1.*"]))
+    (rawSignerSweep (withImports (serverPath ()) ["import lib.secp256k1.*"]))
 
 -- The module that wraps the raw signer may import it.
 test "mutation control: lib.sign importing scFromBytes is allowed" =
@@ -1154,16 +1159,16 @@ test "mutation control: the raw-signer ledger is per name, not per file" =
    one file out of thirty-five would report every check clean. The floor is
    the count at the time of writing, less a small margin for a module being
    deleted. -}
-sourceCount : <FileRead, IO> Result String Int
-sourceCount = match plusEntry libSources
+sourceCount : Unit -> <FileRead, IO> Result String Int
+sourceCount () = match plusEntry (libSources ())
   Err e => Err e
-  Ok lib => map (shell => length lib + length shell) shellSources
+  Ok lib => map (shell => length lib + length shell) (shellSources ())
 
 fileFloor : Int
 fileFloor = 40
 
 test "lib_boundary scanned at least FILE_FLOOR=40 source files" =
-  match sourceCount
+  match sourceCount ()
     Err e => Fail e ">= \{intToString fileFloor} files" "the walk failed"
     Ok n =>
       if n >= fileFloor then

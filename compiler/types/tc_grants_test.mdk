@@ -29,6 +29,7 @@ import types.tc_types.{
   MethodPredicateTemplate(..),
   MethodSchemeRow(..),
   ModuleCtx(..),
+  ScopeClass(..),
 }
 import types.tc_grants.{
   appSpineArgCount,
@@ -333,6 +334,7 @@ grantingGraph _ =
     msCoreShadowMap = [],
     msBareDictNames = [],
     msUnits = [],
+    msScopeClass = _ _ => ScopeOther,
   }
   gctx
 

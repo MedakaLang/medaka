@@ -18,12 +18,12 @@ import fs.{mkdirAll}
 import io.{getEnvOr}
 import string.{replaceAll, trimRight}
 
-fixtures : <IO> String
-fixtures = underRoot "test/build_cmd_fixtures"
+fixtures : Unit -> <IO> String
+fixtures () = underRoot "test/build_cmd_fixtures"
 
 -- Build one fixture natively, run it, and pin its stdout to the golden.
 row : String -> String -> String -> <Exec, IO, FileRead> Expectation
-row work label stem = match boundedInTree 600 medakaBin [
+row work label stem = match boundedInTree 600 (medakaBin ()) [
   "build",
   fixtureSrc stem,
   "-o",
@@ -43,10 +43,10 @@ row work label stem = match boundedInTree 600 medakaBin [
           Ok golden => expectEqualText (trimRight golden) (trimRight out)
 
 fixtureSrc : String -> <IO> String
-fixtureSrc stem = "\{fixtures}/\{stem}.mdk"
+fixtureSrc stem = "\{fixtures ()}/\{stem}.mdk"
 
 goldenOf : String -> <IO> String
-goldenOf stem = "\{fixtures}/\{stem}.build.golden"
+goldenOf stem = "\{fixtures ()}/\{stem}.build.golden"
 
 binOf : String -> String -> String
 binOf work stem = "\{work}/\{replaceAll "/" "_" stem}.bin"
@@ -81,7 +81,7 @@ sweep work old new = expectAll [sweepBody work old new, removeSweep old new]
 sweepBody : String -> String -> String -> <Exec, IO, FileWrite> Expectation
 sweepBody work old new = match setup old new
   Err e => fail "tempdir_sweep: setup failed: \{e}"
-  Ok _ => match boundedInTree 600 medakaBin [
+  Ok _ => match boundedInTree 600 (medakaBin ()) [
     "build",
     fixtureSrc "arith",
     "-o",
@@ -122,7 +122,7 @@ sweepBin : String -> String
 sweepBin work = "\{work}/tempdir_sweep.bin"
 
 test "build_cmd: each top-level fixture builds natively and matches its golden" = withScratchDir
-  (work => match fixtureStems fixtures
+  (work => match fixtureStems (fixtures ())
     Err e => fail "could not list fixtures: \{e}"
     Ok stems => expectAll [
       expectAtLeast 12 (length stems),
@@ -144,8 +144,8 @@ test "build_cmd: a real build sweeps stale build dirs under the scratch root" =
 -- The scratch root a real build stages under.  test/ cannot import
 -- driver.build_cmd, so this restates its rule: an explicit TMPDIR other than
 -- /tmp wins, else a non-empty MEDAKA_SCRATCH, else the default.
-scratchRootOf : <IO> String
-scratchRootOf =
+scratchRootOf : Unit -> <IO> String
+scratchRootOf () =
   let t = getEnvOr "TMPDIR" ""
   let s = getEnvOr "MEDAKA_SCRATCH" ""
   if t /= "" && t /= "/tmp" && t /= "/tmp/" then
@@ -157,7 +157,7 @@ scratchRootOf =
 
 sweepUnderScratch : String -> <Exec, IO, FileWrite> Expectation
 sweepUnderScratch work =
-  let root = scratchRootOf
+  let root = scratchRootOf ()
   sweep work (sweepOld root work) (sweepNew root work)
 
 -- The sweep must read find's output one path per line.  Splitting on whitespace
@@ -174,7 +174,7 @@ spaceSweep work =
     Err e => fail "tempdir_space: setup failed: \{e}"
     Ok _ => match boundedInTree 600 "env" [
       "TMPDIR=\{root}",
-      medakaBin,
+      medakaBin (),
       "build",
       fixtureSrc "arith",
       "-o",

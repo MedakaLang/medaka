@@ -35,8 +35,8 @@ import list.{drop}
 -- The emit probes the census reads. Each is checked and, if missing, provisioned
 -- from its actual producer (build_oracles.sh for llvm_emit_main; build_wasm_oracle.sh
 -- for the two wasm probes).
-probes : <IO> List (String, String)
-probes = [
+probes : Unit -> <IO> List (String, String)
+probes () = [
   ("llvm_emit_main", underRoot "test/bin/llvm_emit_main"),
   ("wasm_emit_main", underRoot "test/bin/wasm_emit_main"),
   ("wasm_emit_modules_main", underRoot "test/bin/wasm_emit_modules_main"),
@@ -160,7 +160,7 @@ census out = match runCommand "sh" [underRoot "test/tmc_census.sh", out]
     if code /= 0 then censusFailed out code (o ++ err) else summary out
 
 afterBuild : String -> <Exec, IO, FileRead, FileWrite> Expectation
-afterBuild out = match missingProbes probes
+afterBuild out = match missingProbes (probes ())
   [] => census out
   still => stillMissing still
 
@@ -171,7 +171,7 @@ stillMissing still =
     "emit probes still missing after provisioning: \{names} (toolchain missing: exit 2)"
 
 gate : String -> <Exec, IO, FileRead, FileWrite> Expectation
-gate out = match missingProbes probes
+gate out = match missingProbes (probes ())
   [] => census out
   need => match buildAll need
     Err e => fail "toolchain missing (exit 2): \{e}"

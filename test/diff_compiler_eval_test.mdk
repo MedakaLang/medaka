@@ -114,7 +114,7 @@ data Shape = FileStem | FileSection | DirFixture String String
 {- | One retired gate: an oracle, a corpus, and how to read the two apart.
 
    `oracle` and `prelude` are spelled repo-relative and interpolated onto
-   `medakaRoot` at spawn time. The `test/bin/<name>` spelling is load-bearing
+   `medakaRoot ()` at spawn time. The `test/bin/<name>` spelling is load-bearing
    beyond readability: `test/build_oracles.sh --for` derives which oracles a
    gate needs by grepping the gate's own source for that literal, so an
    oracle assembled from fragments would be invisible to it and the gate
@@ -293,7 +293,7 @@ rows = [
    directory-shaped one. -}
 entriesOf : Row -> <FileRead, IO> Result String (List String)
 entriesOf r =
-  let dir = "\{medakaRoot}/\{r.corpus}"
+  let dir = "\{medakaRoot ()}/\{r.corpus}"
   match r.shape
     DirFixture spec _ => dirEntries dir spec
     _ => flatEntries r dir
@@ -495,7 +495,7 @@ perFixture r paths = somes (map (oneFixture r) paths)
 
 oneFixture : Row -> String -> <Exec, FileRead, IO> Option String
 oneFixture r path =
-  match boundedVerb "\{medakaRoot}/\{r.oracle}" (argsFor r path)
+  match boundedVerb "\{medakaRoot ()}/\{r.oracle}" (argsFor r path)
     Err e => Some "\{labelOf r path}: could not spawn \{r.oracle}: \{e}"
     Ok (code, out, err) =>
       match processFailurePinned r.oracle (unitOf r path) code err
@@ -511,7 +511,7 @@ oneFixture r path =
    sitting beside it. -}
 argsFor : Row -> String -> <IO> List String
 argsFor r path =
-  let prefix = map (p => "\{medakaRoot}/\{p}") r.prelude
+  let prefix = map (p => "\{medakaRoot ()}/\{p}") r.prelude
   match r.shape
     DirFixture _ _ => prefix ++ [path, dirname path]
     _ => prefix ++ [path]
@@ -521,8 +521,8 @@ argsFor r path =
    since a leak between two fixtures needs both of them in one heap. -}
 batchedRow : Row -> List String -> <Exec, FileRead, IO> List String
 batchedRow r paths =
-  let args = map (p => "\{medakaRoot}/\{p}") r.prelude ++ paths
-  match boundedVerb "\{medakaRoot}/\{r.oracle}" args
+  let args = map (p => "\{medakaRoot ()}/\{p}") r.prelude ++ paths
+  match boundedVerb "\{medakaRoot ()}/\{r.oracle}" args
     Err e => ["\{r.corpus}: could not spawn \{r.oracle}: \{e}"]
     Ok (code, out, err) =>
       let all = chompNewlines (stripUnitAutoPrint out)
@@ -628,13 +628,13 @@ expectWall label cmd args = match strictly cmd args
 expectStateReset : String -> <Exec, IO> Option String
 expectStateReset scratch =
   let args = [
-    "\{medakaRoot}/\{coreMod}",
+    "\{medakaRoot ()}/\{coreMod}",
     "--ffi-reset-control",
     "\{scratch}/ffi_unreachable.mdk",
     "\{scratch}/pure.mdk",
     scratch,
   ]
-  match strictly "\{medakaRoot}/\{coreIrModulesOracle}" args
+  match strictly "\{medakaRoot ()}/\{coreIrModulesOracle}" args
     Err e => Some "ffi-state-reset-same-process: could not spawn: \{e}"
     Ok (code, out, err) =>
       let text = chompNewlines (out ++ err)
@@ -652,19 +652,26 @@ writeAll ((path, src) :: rest) = match writeFile path src
 
 {- | A directory of this test's own, under the process's scratch root.
 
-   `test_process.scratchDir` is a top-level nullary, so it is evaluated ONCE
-   per process and every test in this module is handed the same path. Nothing
-   in this module removes the root; `mkdirAll` keeps each test independent of
-   it. -}
-ffiScratch : <Exec, FileWrite> Result String String
-ffiScratch = match scratchDir
-  Err e => Err e
-  Ok root =>
-    let dir = "\{root}/ffi"
-    map (() => dir) (mkdirAll dir)
+   `scratchDir ()` makes one root per call; the once-cell below makes it
+   once per process. Nothing in this module removes the root;
+   `mkdirAll` keeps each test independent of it. -}
+ffiScratchCell : Ref (Option (Result String String))
+ffiScratchCell = Ref None
 
-ffiEngineWall : <Exec, FileWrite, IO> Expectation
-ffiEngineWall = match ffiScratch
+ffiScratch : Unit -> <Exec, FileWrite> Result String String
+ffiScratch () = match !ffiScratchCell
+  Some v => v
+  None =>
+    let v = match scratchDir ()
+      Err e => Err e
+      Ok root =>
+        let dir = "\{root}/ffi"
+        map (() => dir) (mkdirAll dir)
+    ffiScratchCell := Some v
+    v
+
+ffiEngineWall : Unit -> <Exec, FileWrite, IO> Expectation
+ffiEngineWall () = match ffiScratch ()
   Err e => fail "could not make a scratch directory: \{e}"
   Ok scratch =>
     let reached = "\{scratch}/ffi_reached.mdk"
@@ -679,12 +686,12 @@ ffiEngineWall = match ffiScratch
         let findings = somes [
           expectWall
             "ffi-engine-wall-ast"
-            "\{medakaRoot}/\{evalModulesOracle}"
-            ["\{medakaRoot}/\{coreMod}", reached, scratch],
+            "\{medakaRoot ()}/\{evalModulesOracle}"
+            ["\{medakaRoot ()}/\{coreMod}", reached, scratch],
           expectWall
             "ffi-engine-wall-core-ir"
-            "\{medakaRoot}/\{coreIrModulesOracle}"
-            ["\{medakaRoot}/\{coreMod}", reached, scratch],
+            "\{medakaRoot ()}/\{coreIrModulesOracle}"
+            ["\{medakaRoot ()}/\{coreMod}", reached, scratch],
           expectStateReset scratch,
         ]
         let _ = runVerb "rm" ["-rf", scratch]
@@ -695,4 +702,4 @@ ffiEngineWall = match ffiScratch
               "\{intToString (length fs)} FFI engine-wall findings:\n\{unlines fs}"
 
 test "a reached FFI extern walls off both engines, and resets between fixtures" =
-  ffiEngineWall
+  ffiEngineWall ()

@@ -1,0 +1,7 @@
+export interface Ix a i where
+  get : a -> i -> Int
+
+public export data Box = Box Int
+
+export impl Ix Box Int where
+  get (Box n) i = n + i

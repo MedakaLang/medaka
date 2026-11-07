@@ -1,48 +1,5 @@
--- SHADOW-SEMANTICS cell I22: the interface's method arrives under a MEMBER ALIAS.
---
--- 🚨 THIS ROW PINS A KNOWN-WRONG ANSWER. It is not a claim that 7 is correct. Under
--- S1-NS (a)(ii) the VALUE arm admits a method when the import path admits `n` "as a
--- callable method" -- and the only name this module can write for that method is `sz`.
--- It cannot write `size` for it at all. So `size` here unambiguously denotes the
--- standalone imported from `fmod`, and the correct answer is 99. It prints 7.
---
--- MECHANISM: `selectIfaceRows` narrows by the member ORIGIN spelling (`map fst bs`), so
--- `{size as sz}` admits `size` -- the name in the DEPENDENCY -- rather than `sz`, the name
--- this module can call.
---
--- THE FIX SHAPE IS NOT KNOWN. Since #3708 a member alias is no longer de-aliased before
--- inference: `renameAliasedMethodsIn` rewrites only a MODULE alias (`import m as A`), so
--- `import ifc.{size as sz}` reaches `selectIfaceRows` as written on every driver, and
--- `fst b` and `snd b` differ for the aliased member there. Keying the VALUE arm on `snd`
--- (the local spelling) while the TYPE arm keeps `fst` is therefore no longer inert by
--- construction, as it was while the import was rewritten to `import ifc.{size}` upstream.
---
--- What that re-keying would decide is what a standalone-bound spelling means: here the
--- bare `size` is bound by `fmod`'s standalone and the interface is reachable only as `sz`.
--- No ruling covers that yet (SHADOW-SEMANTICS S2-DECL (d), unruled), so the cell stays
--- pinned at its current value rather than re-keyed here.
---
--- After inference, `resolveAliasMethodSpellings` (compiler/types/typecheck.mdk) restores
--- each marked `sz` occurrence to `size` and drops the alias from the import, so every
--- stage downstream of elaboration still keys the method by its origin name.
---
--- The PINNED VALUES below are correct and this cell is verified fail-capable: under a
--- genuine fix main.mdk moves 7 -> 99 while bare.mdk stays 99, and a re-keying that moves
--- it is graded here rather than discovered afterwards.
---
--- ⚠️ NOT A REGRESSION, AND THAT IS WHY IT IS PINNED RATHER THAN FIXED HERE. The base
--- compiler prints 7 too -- the member-alias arm is exactly where this unit changes nothing.
--- Re-keying it is a behaviour change on an axis no ruling covers, and this cell exists so
--- that change is graded when someone makes it rather than discovered afterwards.
---
--- The DISCRIMINATOR is the second import line, and `bare.mdk` beside this file is the same
--- program with `import ifc.{size as sz}` replaced by a bare `import ifc`: that one prints
--- 99, correctly, because a bare import binds no names at all. Two spellings that admit the
--- same amount of the interface -- nothing writable -- and only one of them answers right.
---
--- An earlier source comment claimed this deviation was "unobservable today because
--- member-aliased method imports are independently broken". Both halves are false: `sz "ab"`
--- prints 7, so they work; and this pair reaches the difference.
+-- L8: `import ifc.{size as sz}` binds `sz`, not `size`, so the explicit `fmod.size` answers
+-- 99
 import fmod.{size}
 import ifc.{size as sz}
 

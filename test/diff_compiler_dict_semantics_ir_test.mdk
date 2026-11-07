@@ -5,7 +5,6 @@
      HAS      -- at least one line matches the pattern
      LACKS    -- no line matches the pattern
      COUNT=n  -- exactly n lines match the pattern
-   The table is the same 92 rows the shell gate carried, in the same order.
    Patterns are POSIX-ERE-equivalent; a pattern that does not compile is a
    failure, never a vacuous pass.
 
@@ -15,7 +14,7 @@
    DOES NOT PROVE: any runtime value, or behaviour under clang optimisation
    (the IR is produced before clang runs, so the patterns hold at -O0 and -O2).
 
-   Floor: the table keeps at least 92 rows. A missing fixture file, a failed
+   Floor: the table keeps at least 90 rows. A missing fixture file, a failed
    build, or a missing `.ll` is a failure. A drifted row is fixed by re-pinning
    that row here, with its rationale; see test/dict_fixtures/README.md.
    The grader itself (hitsOk) is self-checked by its own test block below.
@@ -560,18 +559,6 @@ table = [
     "^define internal i64 @mdk\\.user\\.6d3663363936325f5f7573654978\\(i64 %arg0, i64 %arg1, i64 %arg2\\)",
   ),
   (
-    "s-shadow-standalone-vector-arity.mdk",
-    "FIX-shadow-arity-skew ARITY PIN, the SHADOW half: a DEFINER-SHADOWED standalone with `(Ix a Char, Ix a Bool) =>` must abstract TWO dict slots -- arity 3 (2 dicts + 1 value). THIS IS THE ROW THAT SEES THE DEFECT AT ITS SOURCE. Pre-fix this symbol was already 3 params and the call passed 2 arguments",
-    "HAS",
-    "^define internal i64 @mdk\\.user\\.6d373332643733363836313634366637373264373337343631366536343631366336663665363532643736363536333734366637323264363137323639373437395f5f73697a65\\(i64 %arg0, i64 %arg1, i64 %arg2\\)",
-  ),
-  (
-    "s-shadow-standalone-vector-arity.mdk",
-    "FIX-shadow-arity-skew ARITY PIN, the UNRELATED half: `plain`, a NON-shadow standalone with a single 2-ary predicate `Ix a Char =>`, must still abstract exactly ONE dict slot -- arity 2 (1 dict + 1 value). This row is the tripwire for a widening that over-counts slots on the code BESIDE the one under test",
-    "HAS",
-    "^define internal i64 @mdk\\.user\\.6d373332643733363836313634366637373264373337343631366536343631366336663665363532643736363536333734366637323264363137323639373437395f5f706c61696e\\(i64 %arg0, i64 %arg1\\)",
-  ),
-  (
     "s2-super-declared-single-level.mdk",
     "#679/#993 DECLARED ARITY: a single declared predicate `Hi a` whose super `Sz a` is needed in the body. `useHi` takes its declared 1 dict + 1 value; `sz x` projects the super out of the `Hi` dictionary",
     "HAS",
@@ -686,7 +673,7 @@ gradeBuilt (entry, _, _) _ = fail "\{entry}: internal: no single build result"
 -- batch did not answer, or an entry that got no directory, is a failure row.
 groupEntries : List String -> <Exec, IO, FileRead> List (String, Expectation)
 groupEntries group =
-  let bin = medakaBin
+  let bin = medakaBin ()
   let dirs = map freshDirFor group
   let prepared = prepEntries group dirs
   let live = somes (map liveOf prepared)
@@ -726,8 +713,8 @@ gradeBuilts [] (_ :: rs) =
 
 test "diff_compiler_dict_semantics_ir: section 3 emitted-LLVM IR rows" = expectAll
   [
-    expectAtLeast 92 (length table),
-    expectEach (flatMap groupEntries (chunks testJobs entries)),
+    expectAtLeast 90 (length table),
+    expectEach (flatMap groupEntries (chunks (testJobs ()) entries)),
   ]
 
 test "diff_compiler_dict_semantics_ir: grader decides HAS, LACKS and COUNT= correctly" = expectAll

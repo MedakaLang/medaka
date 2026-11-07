@@ -12,10 +12,9 @@
 
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
-import driver.loader.{loadProgram}
 import eval.eval.{evalModulesOutputFacts}
 import types.program_facts.{emptyFacts}
-import entries.entry_support.{rootsOrDefault, desugarPair}
+import entries.entry_support.{rootsOrDefault, desugarPair, loadModulesLocated}
 
 export
 oracleMain : Unit -> <IO> Unit
@@ -28,7 +27,7 @@ oracleMain () = match args ()
 run : String -> String -> List String -> <IO> Unit
 run coreP entry roots = match readFile coreP
   Err e => ePutStrLn e
-  Ok csrc => match loadProgram entry roots
+  Ok csrc => match loadModulesLocated entry roots
     Err e => ePutStrLn e
     Ok mods =>
       putStr

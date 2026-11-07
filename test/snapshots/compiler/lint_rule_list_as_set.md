@@ -645,6 +645,7 @@ lookupFix : String
 lookupFix =
   "Keep the pairs in a `Map` beside the list (`get`, `insert`), or build the map once before the loop"
 # DESUGAR
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Arm" true) (mem "Decl" true) (mem "DoStmt" true) (mem "Expr" true) (mem "GuardArm" true) (mem "Loc" false) (mem "Pat" true) (mem "Ty" true) (mem "orElseLoc" false))))
 (DUse false (UseGroup ("frontend" "ast_walk") ((mem "ExprKind" true) (mem "childExprs" false) (mem "stmtExprs" false))))
@@ -791,8 +792,8 @@ lookupFix =
 (DTypeSig false "containerName" (TyFun (TyCon "Expr") (TyCon "String")))
 (DFunDef false "containerName" ((PVar "c")) (EMatch (EApp (EVar "unwrapLoc") (EVar "c")) (arm (PCon "EVar" (PVar "n")) () (EVar "n")) (arm PWild () (ELit (LString "the list")))))
 (DTypeSig false "message" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyCon "String")))))
-(DFunDef false "message" ((PVar "callee") (PCon "None") (PVar "v")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "display") (EVar "callee"))) (ELit (LString "` on `"))) (EApp (EVar "display") (EVar "v"))) (ELit (LString "`, which this loop grows on every step, walks the whole list each time, so the loop is quadratic. "))) (EApp (EVar "display") (EApp (EVar "fixFor") (EVar "callee")))) (ELit (LString ""))))
-(DFunDef false "message" ((PVar "callee") (PCon "Some" (PVar "helper")) (PVar "v")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "display") (EVar "helper"))) (ELit (LString "` tests `"))) (EApp (EVar "display") (EVar "v"))) (ELit (LString "` with `"))) (EApp (EVar "display") (EVar "callee"))) (ELit (LString "`, and this loop grows `"))) (EApp (EVar "display") (EVar "v"))) (ELit (LString "` on every step, so each call walks the whole list and the loop is quadratic. "))) (EApp (EVar "display") (EApp (EVar "fixFor") (EVar "callee")))) (ELit (LString ""))))
+(DFunDef false "message" ((PVar "callee") (PCon "None") (PVar "v")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "$core.display") (EVar "callee"))) (ELit (LString "` on `"))) (EApp (EVar "$core.display") (EVar "v"))) (ELit (LString "`, which this loop grows on every step, walks the whole list each time, so the loop is quadratic. "))) (EApp (EVar "$core.display") (EApp (EVar "fixFor") (EVar "callee")))) (ELit (LString ""))))
+(DFunDef false "message" ((PVar "callee") (PCon "Some" (PVar "helper")) (PVar "v")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "$core.display") (EVar "helper"))) (ELit (LString "` tests `"))) (EApp (EVar "$core.display") (EVar "v"))) (ELit (LString "` with `"))) (EApp (EVar "$core.display") (EVar "callee"))) (ELit (LString "`, and this loop grows `"))) (EApp (EVar "$core.display") (EVar "v"))) (ELit (LString "` on every step, so each call walks the whole list and the loop is quadratic. "))) (EApp (EVar "$core.display") (EApp (EVar "fixFor") (EVar "callee")))) (ELit (LString ""))))
 (DTypeSig false "fixFor" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "fixFor" ((PLit (LString "lookupAssoc"))) (EVar "lookupFix"))
 (DFunDef false "fixFor" ((PLit (LString "lookup"))) (EVar "lookupFix"))
@@ -800,6 +801,7 @@ lookupFix =
 (DTypeSig false "lookupFix" (TyCon "String"))
 (DFunDef false "lookupFix" () (ELit (LString "Keep the pairs in a `Map` beside the list (`get`, `insert`), or build the map once before the loop")))
 # MARK
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Arm" true) (mem "Decl" true) (mem "DoStmt" true) (mem "Expr" true) (mem "GuardArm" true) (mem "Loc" false) (mem "Pat" true) (mem "Ty" true) (mem "orElseLoc" false))))
 (DUse false (UseGroup ("frontend" "ast_walk") ((mem "ExprKind" true) (mem "childExprs" false) (mem "stmtExprs" false))))
@@ -946,8 +948,8 @@ lookupFix =
 (DTypeSig false "containerName" (TyFun (TyCon "Expr") (TyCon "String")))
 (DFunDef false "containerName" ((PVar "c")) (EMatch (EApp (EVar "unwrapLoc") (EVar "c")) (arm (PCon "EVar" (PVar "n")) () (EVar "n")) (arm PWild () (ELit (LString "the list")))))
 (DTypeSig false "message" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyCon "String")))))
-(DFunDef false "message" ((PVar "callee") (PCon "None") (PVar "v")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EMethodRef "display") (EVar "callee"))) (ELit (LString "` on `"))) (EApp (EMethodRef "display") (EVar "v"))) (ELit (LString "`, which this loop grows on every step, walks the whole list each time, so the loop is quadratic. "))) (EApp (EMethodRef "display") (EApp (EVar "fixFor") (EVar "callee")))) (ELit (LString ""))))
-(DFunDef false "message" ((PVar "callee") (PCon "Some" (PVar "helper")) (PVar "v")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EMethodRef "display") (EVar "helper"))) (ELit (LString "` tests `"))) (EApp (EMethodRef "display") (EVar "v"))) (ELit (LString "` with `"))) (EApp (EMethodRef "display") (EVar "callee"))) (ELit (LString "`, and this loop grows `"))) (EApp (EMethodRef "display") (EVar "v"))) (ELit (LString "` on every step, so each call walks the whole list and the loop is quadratic. "))) (EApp (EMethodRef "display") (EApp (EVar "fixFor") (EVar "callee")))) (ELit (LString ""))))
+(DFunDef false "message" ((PVar "callee") (PCon "None") (PVar "v")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "$core.display") (EVar "callee"))) (ELit (LString "` on `"))) (EApp (EVar "$core.display") (EVar "v"))) (ELit (LString "`, which this loop grows on every step, walks the whole list each time, so the loop is quadratic. "))) (EApp (EVar "$core.display") (EApp (EVar "fixFor") (EVar "callee")))) (ELit (LString ""))))
+(DFunDef false "message" ((PVar "callee") (PCon "Some" (PVar "helper")) (PVar "v")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "$core.display") (EVar "helper"))) (ELit (LString "` tests `"))) (EApp (EVar "$core.display") (EVar "v"))) (ELit (LString "` with `"))) (EApp (EVar "$core.display") (EVar "callee"))) (ELit (LString "`, and this loop grows `"))) (EApp (EVar "$core.display") (EVar "v"))) (ELit (LString "` on every step, so each call walks the whole list and the loop is quadratic. "))) (EApp (EVar "$core.display") (EApp (EVar "fixFor") (EVar "callee")))) (ELit (LString ""))))
 (DTypeSig false "fixFor" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "fixFor" ((PLit (LString "lookupAssoc"))) (EVar "lookupFix"))
 (DFunDef false "fixFor" ((PLit (LString "lookup"))) (EVar "lookupFix"))

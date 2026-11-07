@@ -100,7 +100,7 @@ import types.program_facts.{ProgramFacts, factsOfElab, withSibling}
 import frontend.ast.{SiblingPair}
 import frontend.marker.{declRefs}
 import eval.eval.{
-  Value,
+  Value(..),
   EvalEnv,
   evalOneRootEnvFacts,
   evalModulesRootEvalEnvFacts,
@@ -112,6 +112,7 @@ import eval.eval.{
   runJsonMode,
   lookupBinding,
   force,
+  applyValue,
   ppValue,
 }
 import tools.doctest.{
@@ -952,11 +953,10 @@ data Prepared =
 -- the module type-checks, or is exempt) beside the trees the three phases share.
 --
 -- THE GATE MUST NOT READ THE DOCTEST-INJECTED TREE.  A doctest EXPRESSION is not
--- required to type-check as a pure top-level binding — `stdlib/async.mdk`'s
--- `runAsync (sleep …)` examples perform `<Clock>`, so the synthesized
--- `__dt_i__ = debug (…)` bindings are an effectful value where `<>` is allowed —
--- and a module's doctests are not part of what `medaka check` accepts.  Reading
--- the injected tree would therefore reject modules `check` accepts.
+-- part of what `medaka check` accepts: an example need not type-check, and
+-- `stdlib/async.mdk`'s `runAsync (sleep …)` examples perform `<Clock>` inside
+-- the synthesized `__dt_i__ () = debug (…)` functions.  Reading the injected
+-- tree would therefore reject modules `check` accepts.
 --
 -- So the gate's source depends on whether the module has doctests:
 --
@@ -1613,9 +1613,10 @@ singlePhaseTrees engines runtimeDecls coreDecls target roots userDecls held =
 -- file is not the prelude, and its arms would otherwise build two probes or
 -- more.  The prelude keeps one probe per arm: its doctest arm is never built
 -- (`nativeSkipReason`) and its property arm drops the spliced source.  A file
--- with a smoke example also keeps them: the native backend forces the smoke
--- binding at startup, so in the merged binary its side effect would repeat in
--- every section.  Under a second engine the property plan would be made before the
+-- with a smoke example also keeps them.  A smoke example is a unit function its
+-- own section calls (`native_doctest.mdk` `valueLine`), so a merged binary would
+-- run it once; the split stands only because no gate measures the merged probe
+-- for such a file.  Under a second engine the property plan would be made before the
 -- interpreter's doctest elaboration, between it and the later reads of the
 -- pair, so those runs keep one probe per arm.
 mergesNativeArms : List Engine ->
@@ -2022,8 +2023,8 @@ runChosen (DtSingle runtimeDecls coreDecls target roots userDecls) examples synt
 -- ── The interpreter's adapter onto doctest.mdk's buildDetailsFrom seam ──────
 -- buildDetailsFrom (Stage 1) wants "one rendered actual per example, or one
 -- whole-file error" — not a raw interpreter env. This is the thin adapter:
--- for each example i, look up its synthesized `__dt_i__` binding in the post-
--- run env and render it, exactly as the pre-Stage-1 `oneResult` did inline.
+-- for each example i, look up its synthesized `__dt_i__` unit function in the
+-- post-run env, apply it to `()`, and render the result.
 renderExamples : List (String, Value e) ->
   OrdMap String ->
   List (Result String (List Decl)) ->
@@ -2076,7 +2077,7 @@ renderOneExample env diags sr i ex =
       Some v => match firstUnresolvedDottedRef env sr
         Some name =>
           Err "could not evaluate: \{exampleInput ex} (unresolved: \{name})"
-        None => Ok (ppValue (force v))
+        None => Ok (ppValue (force (applyValue (force v) VUnit)))
 
 firstUnresolvedDottedRef : List (String, Value e) ->
   Result String (List Decl) ->
@@ -2122,7 +2123,7 @@ singleRootId roots target =
 -- equivalent return-position dict-set via its own `moduleDictNames`.  The
 -- `medaka test stdlib/core.mdk` canary guards the neq-hang.
 
--- Mirror of compiler/frontend/resolve.mdk's
+-- Mirror of compiler/frontend/ast.mdk's
 -- programIsCore: the prelude is the unique program declaring BOTH the
 -- `Ordering` data type and the `Foldable` interface.
 programIsCore : List Decl -> Bool
@@ -3406,7 +3407,7 @@ export
 runEvalPropsWorker : String -> List PropRequest -> <IO> Unit
 runEvalPropsWorker target requests =
   let nonce = startEvalPropWorker ()
-  let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
+  let root = envOr "MEDAKA_ROOT" (defaultMedakaRoot ())
   let stdlibDir = joinPath root "stdlib"
   match readPreludeSources stdlibDir
     Err message => evalWorkerDie "could not read the prelude: \{message}"
@@ -4779,7 +4780,7 @@ dropSeedLine out = match !testSeedRef
 export
 runTestOne : List Engine -> Int -> Option String -> String -> <IO> Unit
 runTestOne engines cases filterOpt target =
-  let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
+  let root = envOr "MEDAKA_ROOT" (defaultMedakaRoot ())
   let rtPath = root ++ "/stdlib/runtime.mdk"
   let corePath = root ++ "/stdlib/core.mdk"
   let stdlibDir = root ++ "/stdlib"
@@ -5239,7 +5240,7 @@ testFilesGo _ _ _ _ _ _ _ [] acc = acc
 testFilesGo engines _ _ _ cases filterOpt seedOpt files acc =
   let medaka = envOr "MEDAKA" (executablePath ())
   let childArgvs = map (testChildArgs engines cases filterOpt seedOpt) files
-  let jobs = testJobs
+  let jobs = testJobs ()
   let prefix =
     childJobsPrefix (min jobs (length files)) jobs
       ++ childGcMarkersPrefix (envOr "GC_MARKERS" "") jobs

@@ -555,7 +555,7 @@ done | awk -v base="$ROOT/test/gate_cost_baseline.json" '
 
 # How many `medaka test` children a roster gate-test runs at once
 # (test_process.testAssertionCounts) and how wide each fixture sweep in
-# test/compiler_cli_test_support.mdk batches; both read test_process.testJobs.
+# test/compiler_cli_test_support.mdk batches; both read test_process.testJobs ().
 # Its own default is every core, so an UNSET knob is divided between the gates
 # that can run at once: min(JOBS, selected gates), which is read here because it
 # is only known after selection. A one-gate row hands its gate every core. A SET

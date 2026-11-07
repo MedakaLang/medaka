@@ -1,6 +1,8 @@
 frontend.ast
+frontend.ast_walk
 frontend.desugar
 frontend.exhaust
+frontend.name_scope
 frontend.resolve
 frontend.visibility
 support.diag_codes

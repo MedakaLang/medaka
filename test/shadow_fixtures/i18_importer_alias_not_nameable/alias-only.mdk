@@ -1,0 +1,5 @@
+-- L2: `import smod as S` binds no bare name, and nothing else binds `size`, so the bare
+-- `size` is unbound; only `S.size` reaches the method
+import smod as S
+
+main = println (size "abc")

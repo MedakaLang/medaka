@@ -321,7 +321,7 @@ runSection : String ->
   String ->
   <IO> ArmOut
 runSection target tsrc userDecls nonce outPath k arm prefix =
-  let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
+  let root = envOr "MEDAKA_ROOT" (defaultMedakaRoot ())
   match runUnderSeed [
     "MEDAKA_ROOT=" ++ root,
     "MEDAKA=" ++ envOr "MEDAKA" (joinPath root "medaka"),

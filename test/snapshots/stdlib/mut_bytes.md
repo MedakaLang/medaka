@@ -239,6 +239,7 @@ export impl Debug MutBytes where
   -- and the byte-to-hex walk is not written a second time.
   debug (MutBytes bb) = "Mut\{debug (B.adoptByteBlockUnsafe bb)}"
 # DESUGAR
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("core") ((mem "Debug" false) (mem "Index" false) (mem "Option" false))))
 (DUse false (UseAlias ("bytes") "B"))
 (DUse false (UseGroup ("bytes") ((mem "Bytes" false) (mem "encodeUtf8" false) (mem "toArray" false))))
@@ -267,8 +268,9 @@ export impl Debug MutBytes where
 (DFunDef false "adoptByteBlockUnsafe" ((PVar "bb")) (EApp (EVar "MutBytes") (EVar "bb")))
 (DTypeSig true "lendByteBlockUnsafe" (TyFun (TyCon "MutBytes") (TyCon "ByteBlock")))
 (DFunDef false "lendByteBlockUnsafe" ((PCon "MutBytes" (PVar "bb"))) (EVar "bb"))
-(DImpl true "Debug" ((TyCon "MutBytes")) () ((im "debug" ((PCon "MutBytes" (PVar "bb"))) (EBinOp "++" (EBinOp "++" (ELit (LString "Mut")) (EApp (EVar "display") (EApp (EVar "debug") (EApp (EVar "B.adoptByteBlockUnsafe") (EVar "bb"))))) (ELit (LString ""))))))
+(DImpl true "Debug" ((TyCon "MutBytes")) () ((im "debug" ((PCon "MutBytes" (PVar "bb"))) (EBinOp "++" (EBinOp "++" (ELit (LString "Mut")) (EApp (EVar "$core.display") (EApp (EVar "debug") (EApp (EVar "B.adoptByteBlockUnsafe") (EVar "bb"))))) (ELit (LString ""))))))
 # MARK
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("core") ((mem "Debug" false) (mem "Index" false) (mem "Option" false))))
 (DUse false (UseAlias ("bytes") "B"))
 (DUse false (UseGroup ("bytes") ((mem "Bytes" false) (mem "encodeUtf8" false) (mem "toArray" false))))
@@ -297,4 +299,4 @@ export impl Debug MutBytes where
 (DFunDef false "adoptByteBlockUnsafe" ((PVar "bb")) (EApp (EVar "MutBytes") (EVar "bb")))
 (DTypeSig true "lendByteBlockUnsafe" (TyFun (TyCon "MutBytes") (TyCon "ByteBlock")))
 (DFunDef false "lendByteBlockUnsafe" ((PCon "MutBytes" (PVar "bb"))) (EVar "bb"))
-(DImpl true "Debug" ((TyCon "MutBytes")) () ((im "debug" ((PCon "MutBytes" (PVar "bb"))) (EBinOp "++" (EBinOp "++" (ELit (LString "Mut")) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EApp (EVar "B.adoptByteBlockUnsafe") (EVar "bb"))))) (ELit (LString ""))))))
+(DImpl true "Debug" ((TyCon "MutBytes")) () ((im "debug" ((PCon "MutBytes" (PVar "bb"))) (EBinOp "++" (EBinOp "++" (ELit (LString "Mut")) (EApp (EVar "$core.display") (EApp (EMethodRef "debug") (EApp (EVar "B.adoptByteBlockUnsafe") (EVar "bb"))))) (ELit (LString ""))))))

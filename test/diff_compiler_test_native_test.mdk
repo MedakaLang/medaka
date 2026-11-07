@@ -49,19 +49,23 @@ runVerb secs args =
   boundedVerbSeconds
     secs
     "sh"
-    (["-c", plainRunScript, "medaka", medakaRoot, medakaBin] ++ args)
+    (["-c", plainRunScript, "medaka", medakaRoot (), medakaBin ()] ++ args)
 
 prebuild : String -> <Exec, IO, FileRead> Result String String
-prebuild dir =
-  match (boundedVerbSeconds 300 "sh" [
-    "-c", prebuildScript, "medaka", medakaBin, dir, medakaRoot
-  ])
-    Err e => Err "prebuild spawn: \{e}"
-    Ok (code, _, err) =>
-      if code /= 0 then
-        Err "prebuild of the prelude object exited \{intToString code}: \{err}"
-      else
-        Ok dir
+prebuild dir = match boundedVerbSeconds 300 "sh" [
+  "-c",
+  prebuildScript,
+  "medaka",
+  medakaBin (),
+  dir,
+  medakaRoot (),
+]
+  Err e => Err "prebuild spawn: \{e}"
+  Ok (code, _, err) =>
+    if code /= 0 then
+      Err "prebuild of the prelude object exited \{intToString code}: \{err}"
+    else
+      Ok dir
 
 -- Matches the hand-written "<target>: P/T passed" summary line for one module.
 countRe : String -> R.Regex
@@ -86,11 +90,19 @@ checkHits mod expected hits =
 
 doctestRow : String -> String -> String -> <Exec, IO, FileRead> Expectation
 doctestRow dir mod expected =
-  let target = "\{medakaRoot}/\{mod}"
-  match (boundedVerbSeconds 120 "sh" [
-    "-c", fastRunScript, "medaka", medakaBin, dir, medakaRoot, "test",
-    "--engines", "eval,native", target
-  ])
+  let target = "\{medakaRoot ()}/\{mod}"
+  match boundedVerbSeconds 120 "sh" [
+    "-c",
+    fastRunScript,
+    "medaka",
+    medakaBin (),
+    dir,
+    medakaRoot (),
+    "test",
+    "--engines",
+    "eval,native",
+    target,
+  ]
     Err e => fail "\{mod}: could not spawn: \{e}"
     Ok (code, out, err) =>
       if code /= 0 then
@@ -117,14 +129,14 @@ preludeRow label flags =
   match (boundedVerbSeconds
     120
     "sh"
-    (["-c", plainRunScript, "medaka", medakaRoot, medakaBin]
+    (["-c", plainRunScript, "medaka", medakaRoot (), medakaBin ()]
       ++ flags
-      ++ ["\{medakaRoot}/stdlib/core.mdk"]))
+      ++ ["\{medakaRoot ()}/stdlib/core.mdk"]))
     Err e => fail "\{label}: could not spawn: \{e}"
     Ok (code, out, err) =>
       if code /= 0 then
         expectTextContainsAll
-          ["SKIPPED \{medakaRoot}/stdlib/core.mdk", "#1334"]
+          ["SKIPPED \{medakaRoot ()}/stdlib/core.mdk", "#1334"]
           (out ++ err)
       else
         fail
@@ -163,8 +175,8 @@ fixture name = underRoot "test/compiler_test_fixtures/\{name}"
 
 -- ── check 6-7: the exceptions ledger self-drains ──────────────────────────────
 
-ledgerPath : <IO> String
-ledgerPath = underRoot "test/NATIVE-DOCTEST-EXCEPTIONS.txt"
+ledgerPath : Unit -> <IO> String
+ledgerPath () = underRoot "test/NATIVE-DOCTEST-EXCEPTIONS.txt"
 
 -- A row header is exactly two leading spaces then an uppercase/hyphen tag; the
 -- prose continuation lines are indented six spaces and never match.
@@ -207,7 +219,7 @@ preludeTargetCheck text =
 
 drainCheck : String -> String -> <Exec, IO, FileRead> Expectation
 drainCheck scope issue =
-  match runVerb 120 ["test", "--native", "\{medakaRoot}/\{scope}"]
+  match runVerb 120 ["test", "--native", "\{medakaRoot ()}/\{scope}"]
     Err e => fail "ledger row PRELUDE-TARGET \{scope}: could not spawn: \{e}"
     Ok (code, out, err) =>
       if code /= 0 then
@@ -215,7 +227,7 @@ drainCheck scope issue =
           requireText
             "ledger row PRELUDE-TARGET \{scope}"
             (out ++ err)
-            "SKIPPED \{medakaRoot}/\{scope}",
+            "SKIPPED \{medakaRoot ()}/\{scope}",
           requireText "ledger row PRELUDE-TARGET \{scope}" (out ++ err) issue,
         ]
       else
@@ -223,7 +235,7 @@ drainCheck scope issue =
           "ledger row PRELUDE-TARGET \{scope} \{issue} no longer reproduces: 'medaka test --native \{scope}' now exits 0. The row's DRAINS WHEN condition appears met — remove the arm in native_doctest.mdk's nativeSkipReason AND this row from test/NATIVE-DOCTEST-EXCEPTIONS.txt, and close \{issue}."
 
 test "ledger self-drain: row tags are known and PRELUDE-TARGET still reproduces (checks 6-7)" =
-  match readFile ledgerPath
+  match readFile (ledgerPath ())
     Err e => fail "could not read the ledger: \{e}"
     Ok text => expectEach [
       ("PRELUDE-TARGET", preludeTargetCheck text),
@@ -432,7 +444,15 @@ execRun subj args =
   boundedVerbSeconds
     120
     "sh"
-    (["-c", envRunScript, "medaka", medakaBin, subj, medakaRoot, medakaBin]
+    ([
+        "-c",
+        envRunScript,
+        "medaka",
+        medakaBin (),
+        subj,
+        medakaRoot (),
+        medakaBin (),
+      ]
       ++ args)
 
 execPassRow : String ->
@@ -594,14 +614,14 @@ envProbeSrc expected =
 
 envProbeRow : String -> <Exec, IO, FileRead, FileWrite> Expectation
 envProbeRow dir =
-  match writeFile "\{dir}/env_probe.mdk" (envProbeSrc "\{medakaRoot}/medaka")
+  match writeFile "\{dir}/env_probe.mdk" (envProbeSrc "\{medakaRoot ()}/medaka")
     Err e => fail "could not write env_probe.mdk: \{e}"
     Ok _ => match boundedVerbSeconds 120 "sh" [
       "-c",
       unsetMedakaScript,
       "medaka",
-      medakaRoot,
-      medakaBin,
+      medakaRoot (),
+      medakaBin (),
       "test",
       "--native",
       "\{dir}/env_probe.mdk",
@@ -628,6 +648,13 @@ test "native doctest probe: MEDAKA reaches the probe as the test probes set it (
 mergedBuildFailSrc : String
 mergedBuildFailSrc =
   "import test.{expectEqual}\n\n-- > double \"x\"\n-- 0\nexport\ndouble : Int -> Int\ndouble x = x * 2\n\ntest \"double one\" =\n  expectEqual (double 1) 2\n\nprop \"double is even\" (n : Int) =\n  double n % 2 == 0\n"
+
+-- A synthesized example is a unit function called in example order, so a smoke
+-- example that panics ends the doctest run at its own turn: the example before
+-- it is reported, it errors, and the tests still pass on their own probe.
+mergedStartupSrc : String
+mergedStartupSrc =
+  "import test.{expectEqual}\n\n-- > double 2\n-- 4\n-- > panic \"startup boom\"\nexport\ndouble : Int -> Int\ndouble x = x * 2\n\ntest \"double one\" =\n  expectEqual (double 1) 2\n"
 
 -- One line per graded row of a `--json` report: the phase, the row's name (a
 -- doctest's line) and its status.
@@ -691,29 +718,12 @@ test "merged native probe: a build failure falls back to one probe per arm" = wi
     "doctest 3 error", "prop double is even pass", "test double one pass"
   ])
 
--- A smoke example that panics is a binding whose initializer calls, so its
--- doctest probe forces it only when it reaches that example: the example before
--- it is still reported, and the tests pass on their own probe.  No top-level
--- binding can end a native probe before `main`: the prologue runs only
--- initializers that call nothing (`emit_support.speculationSafe`).  (A file with
--- a smoke example keeps a probe per arm, `test_cmd.mergesNativeArms`.)
-smokePanicSrc : String
-smokePanicSrc =
-  "import test.{expectEqual}\n\n-- > double 2\n-- 4\n-- > panic \"smoke boom\"\nexport\ndouble : Int -> Int\ndouble x = x * 2\n\ntest \"double one\" =\n  expectEqual (double 1) 2\n"
+test "native probe: a panicking smoke example errors at its own turn" = withScratchDir
+  (dir => mergedFallbackRow dir "merged_startup" mergedStartupSrc [
+    "doctest 3 pass", "doctest 5 error", "test double one pass"
+  ])
 
-smokePanicRow : String -> <Exec, IO, FileRead, FileWrite> Expectation
-smokePanicRow dir =
-  let path = "\{dir}/smoke_panic.mdk"
-  match writeFile path smokePanicSrc
-    Err e => fail "could not write smoke_panic.mdk: \{e}"
-    Ok _ => expectReportRows "smoke_panic" path [
-      "doctest 3 pass", "doctest 5 error", "test double one pass"
-    ]
-
-test "native doctest probe: a smoke example that panics fails only its own example" =
-  withScratchDir smokePanicRow
-
--- A smoke example (no expected block) is a binding its doctest section forces.
+-- A smoke example (no expected block) is a unit function its doctest section calls.
 -- Its side effect must run once, not once per section of a merged probe, so a
 -- file with one keeps a probe per arm.
 smokeSideEffectSrc : String -> String

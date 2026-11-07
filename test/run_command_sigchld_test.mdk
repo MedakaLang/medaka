@@ -28,8 +28,8 @@ expected = unlines [
   "runCommandBatch missing program: [\"127\"]",
 ]
 
-fixture : <IO> String
-fixture = underRoot "test/run_command_sigchld_fixtures/exit_codes.mdk"
+fixture : Unit -> <IO> String
+fixture () = underRoot "test/run_command_sigchld_fixtures/exit_codes.mdk"
 
 -- The exit code and stdout of one run of the fixture binary.
 runOf : String -> List String -> <Exec> Result String (Int, String)
@@ -39,7 +39,7 @@ runOf cmd args = map ((code, out, _) => (code, out)) (boundedVerb cmd args)
 buildAndRun : String -> <Exec, IO, FileRead, FileWrite> Expectation
 buildAndRun dir =
   let bin = "\{dir}/exit_codes.bin"
-  match boundedVerbSeconds 600 medakaBin ["build", fixture, "-o", bin]
+  match boundedVerbSeconds 600 (medakaBin ()) ["build", fixture (), "-o", bin]
     Err e => fail "could not spawn medaka build: \{e}"
     Ok (code, out, err) =>
       if code /= 0 then

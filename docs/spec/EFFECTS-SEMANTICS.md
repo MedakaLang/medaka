@@ -438,9 +438,10 @@ by these same rules:
 Reading:
 
 - **`var`/`lam`** distinguish a value from a computation producing that value.
-  Looking up a strict local or an already-constructed function is pure. A lazy
-  top-level binding incurs its initializer's forcing row, even when its result
-  is a function. A function's latent row lives on its arrow and is released by **`app`**,
+  Looking up a strict local, a top-level value or an already-constructed function is
+  pure (language-design § Top-level initialisation, I2): a non-`main` top-level
+  value has an empty forcing row, so there is no initializer row to charge at a use.
+  A function's latent row lives on its arrow and is released by **`app`**,
   which **unions** the function-expression's, argument's, and latent effects. This
   is what makes effects flow through ordinary application without explicit
   threading.
@@ -461,11 +462,10 @@ Reading:
 actually perform, with the most specific parameters `α` can justify). `var`
 contributes the binding's forcing row; `lam` contributes nothing; `app`/`let` join;
 `prim` contributes its declared instantiated row; `sub`
-is applied only where a bound forces it. Runtime memoization does not remove a
-potential force from a static may-effect: no proof assumes some other caller
-already evaluated the binding. Strict `let` charges its RHS immediately and
-binds a pure lookup; a top-level thunk binds the RHS's full row for later lookup.
-An annotation on the resulting value cannot erase this separate forcing row.
+is applied only where a bound forces it. Strict `let` charges its RHS immediately and
+binds a pure lookup. A top-level value is initialised at startup under a rowless
+initializer (I2), so it binds a pure lookup too; an initializer with a non-empty row
+is rejected rather than deferred to its first use.
 This least-row target is relative to the chosen abstraction and declared
 contracts. The host invocation protocol and its conservative treatment of
 unknowns (§7) can widen the manifest further; a sound manifest need not be the

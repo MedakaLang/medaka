@@ -1,0 +1,5 @@
+-- `accept_ladder_core_member_over_wildcard` with the two imports swapped.
+import lib.ladder_clamp.*
+import core.{clamp}
+
+main = println (clamp 0 10 5)

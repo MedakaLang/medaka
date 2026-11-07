@@ -324,7 +324,7 @@ encodedSections pis = encodeInterface PreludeInterfaceFile {
 }
 
 test "a prelude interface holds exactly the externs its own runtime declares" =
-  match prelude
+  match prelude ()
     Err e => fail e
     Ok real =>
       let _ = keyedDrive 1 (foreignPrelude "zzForeignExternA")
@@ -333,7 +333,7 @@ test "a prelude interface holds exactly the externs its own runtime declares" =
         (map (pi => omKeys pi.piExternNames) (keyedDrive 2 real))
 
 test "the encoded real prelude does not depend on a runtime driven before it" =
-  match prelude
+  match prelude ()
     Err e => fail e
     Ok real =>
       let before = encodedSections (keyedDrive 3 real)
@@ -343,7 +343,7 @@ test "the encoded real prelude does not depend on a runtime driven before it" =
 -- The second keyed drive of the real prelude hits the interface the first one
 -- cached, after an unkeyed drive of another runtime that left the cache alone.
 test "a prelude interface hit keeps the externs of a runtime driven before it" =
-  match prelude
+  match prelude ()
     Err e => fail e
     Ok real =>
       let _ = keyedDrive 6 real

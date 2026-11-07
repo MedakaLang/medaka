@@ -1,0 +1,463 @@
+{
+  "schema": 1,
+  "source": {
+    "name": "source_pins",
+    "status": "OBSERVED",
+    "sha256": {
+      "runtime/medaka_rt.c": "58f181d69091a7722bc845329035f9389cd02767c9db4aab3dc0402e7b4558bd",
+      "runtime/medaka_process.c": "63f394aabd70597d8a343620b80da1731ad91d382061fec541f07647b1558242",
+      "scripts/mcp_bench/prototypes/stdio_descriptor_fixture.c": "5ca6b373abe6c864eaba8eb1ac2a585743cb154160ba169b676037abe1ec609d",
+      "scripts/mcp_bench/prototypes/stdio_descriptor_probe.py": "522ff9ff1ed3827f11f69a35f2236e578924afeb341946d6e1dd929fd1d2f13e",
+      "scripts/mcp_bench/prototypes/stdio_descriptor_census.py": "a462ef03e8026cb80873da3a3885fe9f620cc6299fae3b87647ac5217dc5959d"
+    },
+    "head": "e52feb86bd97f80f4db5af509a5eacbc7628b17c"
+  },
+  "identity": {
+    "name": "identity",
+    "status": "OBSERVED",
+    "uid": 0,
+    "euid": 0,
+    "process_status": [
+      "Uid:\t0\t0\t0\t0",
+      "Gid:\t0\t0\t0\t0",
+      "CapEff:\t0000000000000000",
+      "NoNewPrivs:\t1"
+    ],
+    "assumptions": "No hostile external descriptor holder or privileged tracer excluded by this experiment; parent-fd protection unsupported."
+  },
+  "transformation": {
+    "name": "experimental_transformation",
+    "status": "OBSERVED",
+    "files": [
+      {
+        "source": "runtime/medaka_rt.c",
+        "transformed": "stdio_descriptor_runtime.c",
+        "open_replacements": 5,
+        "fopen_replacements": 7,
+        "sha256": "40414a81c132ea9201ab98f8acfc6e991a06536524df90b6682ce58f33d82d25",
+        "patch_sha256": "3ccf2dc3fae9f7b8c392a8e9386489e169419d0fb718890f7fdd1084d1773fd5"
+      },
+      {
+        "source": "runtime/medaka_process.c",
+        "transformed": "stdio_descriptor_process.c",
+        "open_replacements": 1,
+        "fopen_replacements": 0,
+        "sha256": "c1147e9bf998fa14e1fe847bb619c6973066236836da6d5bd6d288201dc9fd53",
+        "patch_sha256": "611340532c83562d157b2bce9997a9deee7ea49cc6182d3bc5c45743a27a6e92"
+      }
+    ],
+    "scope": "All lexical open/fopen sites in scratch runtime and process owner, including comments; production files unchanged. Other routes are not interlocked."
+  },
+  "build": {
+    "name": "build",
+    "status": "PASS",
+    "argv": [
+      "clang",
+      "-O1",
+      "-std=c11",
+      "-DMDK_PROCESS_TESTING",
+      "-ffunction-sections",
+      "-fdata-sections",
+      "-I/var/tmp/medaka-scratch/sprints/mcp-runtime-enablement/mcp-runtime-03b-stdio/review-fix-raw",
+      "-I/var/tmp/medaka-scratch/sprints/mcp-runtime-enablement/mcp-runtime-03b-stdio/fix-worktree/runtime",
+      "/var/tmp/medaka-scratch/sprints/mcp-runtime-enablement/mcp-runtime-03b-stdio/fix-worktree/scripts/mcp_bench/prototypes/stdio_descriptor_fixture.c",
+      "-Wl,--gc-sections",
+      "-lgc",
+      "-lm",
+      "-pthread",
+      "-o",
+      "/var/tmp/medaka-scratch/sprints/mcp-runtime-enablement/mcp-runtime-03b-stdio/review-fix-raw/stdio-descriptor-fixture"
+    ],
+    "rc": 0,
+    "stdout_hex": "",
+    "stderr_hex": ""
+  },
+  "raw_directory": "/var/tmp/medaka-scratch/sprints/mcp-runtime-enablement/mcp-runtime-03b-stdio/review-fix-raw",
+  "raw_results_sha256": "4d6b3b896c4f2cdc3292ed4bf4a25448d5cec158e070e452c96edc3d189f301f",
+  "replay_command": [
+    "python3",
+    "/var/tmp/medaka-scratch/sprints/mcp-runtime-enablement/mcp-runtime-03b-stdio/fix-worktree/scripts/mcp_bench/prototypes/stdio_descriptor_probe.py",
+    "--root",
+    "/var/tmp/medaka-scratch/sprints/mcp-runtime-enablement/mcp-runtime-03b-stdio/fix-worktree",
+    "--out",
+    "/var/tmp/medaka-scratch/sprints/mcp-runtime-enablement/mcp-runtime-03b-stdio/review-fix-raw"
+  ],
+  "expected_exit": 77,
+  "actual_exit": 77,
+  "row_status_counts": {
+    "OBSERVED": 89,
+    "PASS": 86,
+    "UNSUPPORTED": 11,
+    "BLOCKED": 1
+  },
+  "fixture_cases": 85,
+  "endpoint_alias_cases": 72,
+  "compiler_version": "Debian clang version 19.1.7 (3+b1)\nTarget: x86_64-pc-linux-gnu\nThread model: posix\nInstalledDir: /usr/lib/llvm-19/bin\n",
+  "observer_python": "3.13.5 (main, Aug 10 2026, 12:06:59) [GCC 14.2.0]",
+  "platform": "Linux-6.12.95+deb13-amd64-x86_64-with-glibc2.41",
+  "evidence": {
+    "required_read_stdlib_core.mdk": {
+      "name": "required_read_stdlib_core.mdk",
+      "status": "OBSERVED",
+      "argv": [
+        "/var/tmp/medaka-scratch/sprints/mcp-runtime-enablement/mcp-runtime-03b-stdio/review-fix-raw/stdio-descriptor-fixture",
+        "4",
+        "content",
+        "read",
+        "/var/tmp/medaka-scratch/sprints/mcp-runtime-enablement/mcp-runtime-03b-stdio/fix-worktree/stdlib/core.mdk",
+        "none"
+      ],
+      "mutation": "none",
+      "rc": 0,
+      "input_hex": "00ff41c3285a",
+      "endpoint_hex": "",
+      "remaining_hex": "00ff41c3285a",
+      "stderr_hex": "",
+      "reports": [
+        {
+          "name": "claim",
+          "value": 0,
+          "errno": 0
+        },
+        {
+          "name": "content_ok",
+          "value": 1,
+          "errno": 0
+        },
+        {
+          "name": "read_length",
+          "value": 82767,
+          "errno": 0
+        }
+      ],
+      "fixture_reaped": true,
+      "worker_pids": [],
+      "worker_pids_absent": true,
+      "read_receipt": "/var/tmp/medaka-scratch/sprints/mcp-runtime-enablement/mcp-runtime-03b-stdio/review-fix-raw/case-001.read"
+    },
+    "required_read_compiler_medaka.toml": {
+      "name": "required_read_compiler_medaka.toml",
+      "status": "OBSERVED",
+      "argv": [
+        "/var/tmp/medaka-scratch/sprints/mcp-runtime-enablement/mcp-runtime-03b-stdio/review-fix-raw/stdio-descriptor-fixture",
+        "4",
+        "content",
+        "read",
+        "/var/tmp/medaka-scratch/sprints/mcp-runtime-enablement/mcp-runtime-03b-stdio/fix-worktree/compiler/medaka.toml",
+        "none"
+      ],
+      "mutation": "none",
+      "rc": 0,
+      "input_hex": "00ff41c3285a",
+      "endpoint_hex": "",
+      "remaining_hex": "00ff41c3285a",
+      "stderr_hex": "",
+      "reports": [
+        {
+          "name": "claim",
+          "value": 0,
+          "errno": 0
+        },
+        {
+          "name": "content_ok",
+          "value": 1,
+          "errno": 0
+        },
+        {
+          "name": "read_length",
+          "value": 716,
+          "errno": 0
+        }
+      ],
+      "fixture_reaped": true,
+      "worker_pids": [],
+      "worker_pids_absent": true,
+      "read_receipt": "/var/tmp/medaka-scratch/sprints/mcp-runtime-enablement/mcp-runtime-03b-stdio/review-fix-raw/case-002.read"
+    },
+    "identity_mutation_write": {
+      "name": "identity_mutation_write",
+      "status": "OBSERVED",
+      "argv": [
+        "/var/tmp/medaka-scratch/sprints/mcp-runtime-enablement/mcp-runtime-03b-stdio/review-fix-raw/stdio-descriptor-fixture",
+        "4",
+        "content",
+        "append",
+        "/proc/self/fd/1",
+        "identity"
+      ],
+      "mutation": "identity",
+      "rc": 0,
+      "input_hex": "00ff41c3285a",
+      "endpoint_hex": "42595445530a",
+      "remaining_hex": "00ff41c3285a",
+      "stderr_hex": "",
+      "reports": [
+        {
+          "name": "claim",
+          "value": 0,
+          "errno": 0
+        },
+        {
+          "name": "content_ok",
+          "value": 1,
+          "errno": 0
+        }
+      ],
+      "fixture_reaped": true,
+      "worker_pids": [],
+      "worker_pids_absent": true,
+      "read_receipt": null
+    },
+    "identity_mutation_read": {
+      "name": "identity_mutation_read",
+      "status": "OBSERVED",
+      "argv": [
+        "/var/tmp/medaka-scratch/sprints/mcp-runtime-enablement/mcp-runtime-03b-stdio/review-fix-raw/stdio-descriptor-fixture",
+        "4",
+        "content",
+        "hash",
+        "/proc/self/fd/0",
+        "identity"
+      ],
+      "mutation": "identity",
+      "rc": 0,
+      "input_hex": "00ff41c3285a",
+      "endpoint_hex": "",
+      "remaining_hex": "",
+      "stderr_hex": "",
+      "reports": [
+        {
+          "name": "claim",
+          "value": 0,
+          "errno": 0
+        },
+        {
+          "name": "content_ok",
+          "value": 1,
+          "errno": 0
+        }
+      ],
+      "fixture_reaped": true,
+      "worker_pids": [],
+      "worker_pids_absent": true,
+      "read_receipt": null
+    },
+    "shared_policy_piped_worker": {
+      "name": "shared_policy_piped_worker",
+      "status": "OBSERVED",
+      "argv": [
+        "/var/tmp/medaka-scratch/sprints/mcp-runtime-enablement/mcp-runtime-03b-stdio/review-fix-raw/stdio-descriptor-fixture",
+        "4",
+        "worker",
+        "piped",
+        "/var/tmp/medaka-scratch/sprints/mcp-runtime-enablement/mcp-runtime-03b-stdio/review-fix-raw/worker-marker",
+        "none"
+      ],
+      "mutation": "none",
+      "rc": 0,
+      "input_hex": "00ff41c3285a",
+      "endpoint_hex": "",
+      "remaining_hex": "00ff41c3285a",
+      "stderr_hex": "",
+      "reports": [
+        {
+          "name": "claim",
+          "value": 0,
+          "errno": 0
+        },
+        {
+          "name": "worker_pid",
+          "value": 106,
+          "errno": 0
+        },
+        {
+          "name": "worker_exit",
+          "value": 0,
+          "errno": 0
+        },
+        {
+          "name": "worker_disposed",
+          "value": 1,
+          "errno": 0
+        },
+        {
+          "name": "owner_roots_after_dispose",
+          "value": 0,
+          "errno": 0
+        }
+      ],
+      "fixture_reaped": true,
+      "worker_pids": [
+        106
+      ],
+      "worker_pids_absent": true,
+      "read_receipt": null
+    },
+    "shared_policy_null_worker": {
+      "name": "shared_policy_null_worker",
+      "status": "OBSERVED",
+      "argv": [
+        "/var/tmp/medaka-scratch/sprints/mcp-runtime-enablement/mcp-runtime-03b-stdio/review-fix-raw/stdio-descriptor-fixture",
+        "4",
+        "worker",
+        "null",
+        "/var/tmp/medaka-scratch/sprints/mcp-runtime-enablement/mcp-runtime-03b-stdio/review-fix-raw/worker-marker",
+        "none"
+      ],
+      "mutation": "none",
+      "rc": 77,
+      "input_hex": "00ff41c3285a",
+      "endpoint_hex": "",
+      "remaining_hex": "00ff41c3285a",
+      "stderr_hex": "",
+      "reports": [
+        {
+          "name": "claim",
+          "value": 0,
+          "errno": 0
+        },
+        {
+          "name": "type_denied",
+          "value": 8192,
+          "errno": 22
+        },
+        {
+          "name": "launch_failed",
+          "value": 1,
+          "errno": 22
+        },
+        {
+          "name": "owner_roots_after_failure",
+          "value": 0,
+          "errno": 0
+        }
+      ],
+      "fixture_reaped": true,
+      "worker_pids": [],
+      "worker_pids_absent": true,
+      "read_receipt": null
+    },
+    "type_mutation_worker": {
+      "name": "type_mutation_worker",
+      "status": "OBSERVED",
+      "argv": [
+        "/var/tmp/medaka-scratch/sprints/mcp-runtime-enablement/mcp-runtime-03b-stdio/review-fix-raw/stdio-descriptor-fixture",
+        "4",
+        "worker",
+        "null",
+        "/var/tmp/medaka-scratch/sprints/mcp-runtime-enablement/mcp-runtime-03b-stdio/review-fix-raw/worker-marker",
+        "types"
+      ],
+      "mutation": "types",
+      "rc": 0,
+      "input_hex": "00ff41c3285a",
+      "endpoint_hex": "",
+      "remaining_hex": "00ff41c3285a",
+      "stderr_hex": "",
+      "reports": [
+        {
+          "name": "claim",
+          "value": 0,
+          "errno": 0
+        },
+        {
+          "name": "worker_pid",
+          "value": 133,
+          "errno": 0
+        },
+        {
+          "name": "worker_exit",
+          "value": 0,
+          "errno": 0
+        },
+        {
+          "name": "worker_disposed",
+          "value": 1,
+          "errno": 0
+        },
+        {
+          "name": "owner_roots_after_dispose",
+          "value": 0,
+          "errno": 0
+        }
+      ],
+      "fixture_reaped": true,
+      "worker_pids": [
+        133
+      ],
+      "worker_pids_absent": true,
+      "read_receipt": null
+    },
+    "cleanup": {
+      "name": "cleanup",
+      "status": "OBSERVED",
+      "fixture_cases": 85,
+      "exact_fixtures_waited": true,
+      "worker": "failed launch terminated before marker; type mutation reached worker_disposed; no child ownership timeout",
+      "scope": "Observer fds closed; candidate pins closed; private content files removed; raw evidence and symlinks retained."
+    },
+    "qualification": {
+      "name": "qualification",
+      "status": "BLOCKED",
+      "exit_code": 77,
+      "supported": [
+        "all nine runtime file families reject both endpoints via proc/dev/symlink aliases",
+        "prequeued non-UTF-8 input remains exact",
+        "regular source/config exact reads",
+        "telemetry append and scratch create/write/mode exact effects",
+        "independent identity mutation produces bytes/consumes input",
+        "real piped owner submits/reaps/disposes marker worker; shared content type policy blocks Null mode and type-only mutation restores it"
+      ],
+      "unsupported": [
+        "fragmented arrival across consumer reads",
+        "pathname swap during open and fd replacement/reuse races",
+        "wrong endpoint types/flags, shared endpoints or stderr and injected open/stat/identity errors",
+        "directories for fsync and other special-file compatibility",
+        "acquisition/release/reacquisition, historical/in-flight use and synchronization",
+        "all four resolver/NSS routes, HOSTALIASES on Err and resolver acquisition races",
+        "legacy launch and buffered/raw/automatic/abort/stash/flush output interlocks",
+        "parent-fd reopen, dumpability enforcement and hostile external descriptor holders",
+        "bounded backpressure, no-progress/blocking, cancellation/deadline and prefix/no-replay",
+        "compiled Medaka entry enforcement and full census semantic classification",
+        "independent disabling mutations for acquisition/type-validation/order/lifetime; only identity and type policy controls executed"
+      ],
+      "production_boundary_qualified": false,
+      "compiled_entry_qualified": false,
+      "blocker": "A common descriptor content type policy reaches the real owner /dev/null opens and prevents Null-mode worker creation. Piped worker creation succeeds; this is a placement/type-policy compatibility blocker, not impossibility of the narrower design.",
+      "next_action": "Recut an experimental boundary with explicit provenance for trusted owner /dev/null opens, without pathname exemptions for caller-controlled content, then implement and attack all unsupported rows."
+    }
+  },
+  "census": {
+    "inventory": {
+      "checked_at_census_sha256": "28067a8553cdeff46233c6651ae46a9b172a68b2e2baaae433b2d03d54c7412b",
+      "carrier_count": 11761,
+      "candidate_counts": {
+        "C1": 3138,
+        "C2": 23,
+        "C3": 323,
+        "C4": 3553,
+        "C5": 36858,
+        "C6": 987,
+        "C7": 1539
+      },
+      "receipt_exclusions": [
+        "docs/findings/mcp-runtime-stdio-descriptor/REPORT.md",
+        "docs/findings/mcp-runtime-stdio-descriptor/summary.json"
+      ],
+      "unknowns": [
+        "Uninspected lexical hits, including comments and strings, require semantic inspection; unknown dynamic uses have no defensible count.",
+        "Indirect calls, imported aliases, generated programs, dynamic paths and external native code are not resolved by lexical scanning.",
+        "Every native main may print automatically or flush on abort, including programs without a matching token.",
+        "No count proves compatibility or route enforcement; resolver/NSS and descriptor history require executable controls."
+      ],
+      "candidate_source_pins": {
+        "runtime/medaka_rt.c": "58f181d69091a7722bc845329035f9389cd02767c9db4aab3dc0402e7b4558bd",
+        "runtime/medaka_process.c": "63f394aabd70597d8a343620b80da1731ad91d382061fec541f07647b1558242",
+        "scripts/mcp_bench/prototypes/stdio_descriptor_fixture.c": "5ca6b373abe6c864eaba8eb1ac2a585743cb154160ba169b676037abe1ec609d",
+        "scripts/mcp_bench/prototypes/stdio_descriptor_probe.py": "522ff9ff1ed3827f11f69a35f2236e578924afeb341946d6e1dd929fd1d2f13e",
+        "scripts/mcp_bench/prototypes/stdio_descriptor_census.py": "a462ef03e8026cb80873da3a3885fe9f620cc6299fae3b87647ac5217dc5959d"
+      }
+    },
+    "inventory_sha256": "d1f6b69a1fed9ae916e7673bf277ad5246788bf4a5aa50409c0eee295ce2dc1f"
+  }
+}

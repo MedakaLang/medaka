@@ -852,6 +852,8 @@ to the unsafe direction, both unchallenged for months:
    `x = x + 1` is a two-line counterexample: eval raises `E-CYCLIC-VALUE` and exits 1; native
    silently prints `1` and exits 0. The interpreter does **not** hold 0 — it black-holes and
    raises. The comment has been corrected in place.
+   (Since I3, `check` rejects `x = x + 1` with `T-CYCLIC-VALUE`; only the prelude-free probe
+   still reaches the runtime trap.)
 
 ### The law
 
@@ -865,6 +867,9 @@ references, with edges from `eagerVars`.
 a zero word and returns a plausible wrong answer at **exit 0**; a boxed value dereferences
 null and **SIGSEGVs (exit 139)**. Wasm traps loudly at instantiate. **Only the loud arm was
 ever noticed** (#543, via the playground) — the silent arm is the S0.
+
+⚠️ **Superseded:** top-level values now initialise strictly in dependency order (language-design
+I1 to I5); the next paragraph is the pre-L1 account.
 
 ⚠️ **This is a DEVIATION from a decided invariant, not the design.** `lazy top-level nullary
 canonical` is settled, and `eval/eval.mdk` implements it (`VThunk`/`forceCell`/`blackholeCell`).

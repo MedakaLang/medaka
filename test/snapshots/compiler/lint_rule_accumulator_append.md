@@ -223,6 +223,7 @@ foldMessage : String
 foldMessage =
   "A fold lambda that returns `acc ++ ...` copies the whole accumulator on every step, so the fold is quadratic. \{fixes OpUnknown}"
 # DESUGAR
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "Expr" true) (mem "Lit" true) (mem "Loc" false) (mem "orElseLoc" false))))
 (DUse false (UseGroup ("frontend" "ast_walk") ((mem "BodyOwner" true) (mem "DeclBody" true) (mem "ExprKind" true) (mem "childExprs" false) (mem "declBodies" false))))
@@ -283,12 +284,13 @@ foldMessage =
 (DFunDef false "fixes" ((PCon "OpList")) (ELit (LString "Cons the element onto the accumulator and `reverse` once at the end, or collect the pieces and `concat` once")))
 (DFunDef false "fixes" ((PCon "OpUnknown")) (ELit (LString "Cons onto the accumulator and `reverse` once at the end, collect the pieces and join them once, or use a builder")))
 (DTypeSig false "callMessage" (TyFun (TyCon "Operand") (TyCon "String")))
-(DFunDef false "callMessage" ((PVar "op")) (EBinOp "++" (EBinOp "++" (ELit (LString "`acc ++ e` passed to a self-call copies the whole accumulator on every step, so the loop is quadratic. ")) (EApp (EVar "display") (EApp (EVar "fixes") (EVar "op")))) (ELit (LString ""))))
+(DFunDef false "callMessage" ((PVar "op")) (EBinOp "++" (EBinOp "++" (ELit (LString "`acc ++ e` passed to a self-call copies the whole accumulator on every step, so the loop is quadratic. ")) (EApp (EVar "$core.display") (EApp (EVar "fixes") (EVar "op")))) (ELit (LString ""))))
 (DTypeSig false "refMessage" (TyFun (TyCon "Operand") (TyCon "String")))
-(DFunDef false "refMessage" ((PVar "op")) (EBinOp "++" (EBinOp "++" (ELit (LString "`r := !r ++ e` in a self-recursive function copies the whole value on every step, so the loop is quadratic. ")) (EApp (EVar "display") (EApp (EVar "fixes") (EVar "op")))) (ELit (LString ""))))
+(DFunDef false "refMessage" ((PVar "op")) (EBinOp "++" (EBinOp "++" (ELit (LString "`r := !r ++ e` in a self-recursive function copies the whole value on every step, so the loop is quadratic. ")) (EApp (EVar "$core.display") (EApp (EVar "fixes") (EVar "op")))) (ELit (LString ""))))
 (DTypeSig false "foldMessage" (TyCon "String"))
-(DFunDef false "foldMessage" () (EBinOp "++" (EBinOp "++" (ELit (LString "A fold lambda that returns `acc ++ ...` copies the whole accumulator on every step, so the fold is quadratic. ")) (EApp (EVar "display") (EApp (EVar "fixes") (EVar "OpUnknown")))) (ELit (LString ""))))
+(DFunDef false "foldMessage" () (EBinOp "++" (EBinOp "++" (ELit (LString "A fold lambda that returns `acc ++ ...` copies the whole accumulator on every step, so the fold is quadratic. ")) (EApp (EVar "$core.display") (EApp (EVar "fixes") (EVar "OpUnknown")))) (ELit (LString ""))))
 # MARK
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "Expr" true) (mem "Lit" true) (mem "Loc" false) (mem "orElseLoc" false))))
 (DUse false (UseGroup ("frontend" "ast_walk") ((mem "BodyOwner" true) (mem "DeclBody" true) (mem "ExprKind" true) (mem "childExprs" false) (mem "declBodies" false))))
@@ -349,8 +351,8 @@ foldMessage =
 (DFunDef false "fixes" ((PCon "OpList")) (ELit (LString "Cons the element onto the accumulator and `reverse` once at the end, or collect the pieces and `concat` once")))
 (DFunDef false "fixes" ((PCon "OpUnknown")) (ELit (LString "Cons onto the accumulator and `reverse` once at the end, collect the pieces and join them once, or use a builder")))
 (DTypeSig false "callMessage" (TyFun (TyCon "Operand") (TyCon "String")))
-(DFunDef false "callMessage" ((PVar "op")) (EBinOp "++" (EBinOp "++" (ELit (LString "`acc ++ e` passed to a self-call copies the whole accumulator on every step, so the loop is quadratic. ")) (EApp (EMethodRef "display") (EApp (EVar "fixes") (EVar "op")))) (ELit (LString ""))))
+(DFunDef false "callMessage" ((PVar "op")) (EBinOp "++" (EBinOp "++" (ELit (LString "`acc ++ e` passed to a self-call copies the whole accumulator on every step, so the loop is quadratic. ")) (EApp (EVar "$core.display") (EApp (EVar "fixes") (EVar "op")))) (ELit (LString ""))))
 (DTypeSig false "refMessage" (TyFun (TyCon "Operand") (TyCon "String")))
-(DFunDef false "refMessage" ((PVar "op")) (EBinOp "++" (EBinOp "++" (ELit (LString "`r := !r ++ e` in a self-recursive function copies the whole value on every step, so the loop is quadratic. ")) (EApp (EMethodRef "display") (EApp (EVar "fixes") (EVar "op")))) (ELit (LString ""))))
+(DFunDef false "refMessage" ((PVar "op")) (EBinOp "++" (EBinOp "++" (ELit (LString "`r := !r ++ e` in a self-recursive function copies the whole value on every step, so the loop is quadratic. ")) (EApp (EVar "$core.display") (EApp (EVar "fixes") (EVar "op")))) (ELit (LString ""))))
 (DTypeSig false "foldMessage" (TyCon "String"))
-(DFunDef false "foldMessage" () (EBinOp "++" (EBinOp "++" (ELit (LString "A fold lambda that returns `acc ++ ...` copies the whole accumulator on every step, so the fold is quadratic. ")) (EApp (EMethodRef "display") (EApp (EVar "fixes") (EVar "OpUnknown")))) (ELit (LString ""))))
+(DFunDef false "foldMessage" () (EBinOp "++" (EBinOp "++" (ELit (LString "A fold lambda that returns `acc ++ ...` copies the whole accumulator on every step, so the fold is quadratic. ")) (EApp (EVar "$core.display") (EApp (EVar "fixes") (EVar "OpUnknown")))) (ELit (LString ""))))

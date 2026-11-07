@@ -1,0 +1,453 @@
+-- Sibling test module for `compiler/frontend/name_scope.mdk` ([P-TEST-SIBLING]).
+--
+-- Each row builds the export surfaces of a few small modules, scopes a main
+-- module against them and reads `bareBinding` or `scopeCollisions`.  The
+-- expected answers are the ladder's clauses (docs/spec/SHADOW-SEMANTICS.md,
+-- L2 to L5) and the classes of its decision table, section 3.
+
+import test.{expectEach, expectEqual}
+import frontend.ast.{Decl(..), Loc(..)}
+import frontend.desugar.{desugar}
+import frontend.name_scope.{
+  ImportedSurface(..),
+  NameBinding(..),
+  NameCollision(..),
+  NameRung(..),
+  NameScope,
+  NameTarget(..),
+  bareBinding,
+  bindingImporters,
+  importedSurfaces,
+  nameScopeOf,
+  scopeCollisions,
+}
+import frontend.parser.{parseLocated}
+import frontend.visibility.{
+  ModuleExports,
+  buildExportsWith,
+  coreExports,
+  findExports,
+  pubIfaceMethodSets,
+}
+import support.ordmap.{OrdMap, omEmpty, omInsert}
+
+declsOf : String -> List Decl
+declsOf src = desugar (parseLocated src)
+
+preludeSrc : String
+preludeSrc =
+  """
+interface Filterable f where
+  filter : (a -> Bool) -> f a -> f a
+  filterMap : (a -> Option b) -> f a -> f b
+interface Foldable t where
+  length : t a -> Int
+optionOr : a -> Option a -> a
+optionOr d _ = d
+"""
+
+prelude : ModuleExports
+prelude = coreExports (declsOf preludeSrc)
+
+-- The surfaces of [mods], each an (id, source) pair after the modules it
+-- imports, with every exported interface's methods bound as values.
+knownOf : List (String, String) -> OrdMap ModuleExports
+knownOf mods =
+  fold
+    (known (mid, src) =>
+      let ds = declsOf src
+      let methods = flatMap (ms => ms) (pubIfaceMethodSets ds)
+      omInsert mid (buildExportsWith prelude known mid ds methods) known)
+    omEmpty
+    mods
+
+surfacesOf : OrdMap ModuleExports -> List Decl -> List ImportedSurface
+surfacesOf known prog = flatMap (importedSurfaces surfaceOfModule) prog
+  where
+    surfaceOfModule mid
+      | mid == "core" = Some prelude
+      | otherwise = findExports mid known
+
+scopeOf : List (String, String) -> String -> NameScope
+scopeOf mods src =
+  let prog = declsOf src
+  nameScopeOf prog (surfacesOf (knownOf mods) prog) prelude
+
+-- A collision as (name, rungs, line of its span).
+collisionRows : NameScope -> List (String, (NameRung, NameRung), Int)
+collisionRows scope =
+  map
+    (c => (c.ncName, c.ncRungs, optionOr 0 (map locLine c.ncLoc)))
+    (scopeCollisions scope)
+
+locLine : Loc -> Int
+locLine (Loc _ line _ _ _) = line
+
+valueA : String
+valueA = """
+export
+foo : Int
+foo = 1
+"""
+
+valueB : String
+valueB = """
+export
+foo : Int
+foo = 2
+export
+bar : Int
+bar = 3
+"""
+
+sizedIfc : String
+sizedIfc = """
+export interface Sized a where
+  sz : a -> Int
+"""
+
+test "L2: own beats explicit beats wildcard beats prelude" =
+  let scope =
+    scopeOf
+      [("a", valueA), ("b", valueB)]
+      """
+import a.{foo}
+import b.*
+baz = 0
+main = baz
+"""
+  expectEach [
+    (
+      "own",
+      expectEqual
+        (Some (Bound RungOwn (TargetValue "" "baz")))
+        (bareBinding scope "baz"),
+    ),
+    (
+      "explicit",
+      expectEqual
+        (Some (Bound RungExplicit (TargetValue "a" "foo")))
+        (bareBinding scope "foo"),
+    ),
+    (
+      "wildcard",
+      expectEqual
+        (Some (Bound RungWild (TargetValue "b" "bar")))
+        (bareBinding scope "bar"),
+    ),
+    (
+      "prelude",
+      expectEqual
+        (Some (Bound RungPrelude (TargetMethod "core" "Foldable" "length")))
+        (bareBinding scope "length"),
+    ),
+    ("unbound", expectEqual None (bareBinding scope "nothing")),
+  ]
+
+test "L2: an interface member import and a module alias bind no bare method name" = expectEach
+  [
+    (
+      "import m.{I}",
+      expectEqual
+        None
+        (bareBinding
+          (scopeOf [("m", sizedIfc)] """
+import m.{Sized}
+main = 0
+""")
+          "sz"),
+    ),
+    (
+      "import m as A",
+      expectEqual
+        None
+        (bareBinding
+          (scopeOf [("m", sizedIfc)] """
+import m as A
+main = 0
+""")
+          "sz"),
+    ),
+    (
+      "import m.* binds the method",
+      expectEqual
+        (Some (Bound RungWild (TargetMethod "m" "Sized" "sz")))
+        (bareBinding (scopeOf [("m", sizedIfc)] """
+import m.*
+main = 0
+""") "sz"),
+    ),
+  ]
+
+test "L3: two declarations at one rung are ambiguous, one declaration by two paths is one binding" =
+  let mods = [("a", valueA), ("b", valueB), ("ra", """
+export import a.*
+""")]
+  let two = scopeOf mods """
+import a.*
+import b.*
+main = 0
+"""
+  let one = scopeOf mods """
+import a.*
+import ra.*
+main = 0
+"""
+  let explicitTwo = scopeOf mods """
+import a.{foo}
+import b.{foo}
+main = 0
+"""
+  expectEach [
+    (
+      "two wildcards",
+      expectEqual
+        (Some
+          (Ambiguous RungWild [TargetValue "a" "foo", TargetValue "b" "foo"]))
+        (bareBinding two "foo"),
+    ),
+    (
+      "importers in import order",
+      expectEqual ["a", "b"] (bindingImporters two "foo"),
+    ),
+    (
+      "one declaration, two paths",
+      expectEqual
+        (Some (Bound RungWild (TargetValue "a" "foo")))
+        (bareBinding one "foo"),
+    ),
+    (
+      "two explicit members",
+      expectEqual
+        (Some
+          (Ambiguous RungExplicit [
+            TargetValue "a" "foo",
+            TargetValue "b" "foo",
+          ]))
+        (bareBinding explicitTwo "foo"),
+    ),
+  ]
+
+test "L4: an explicit import of an own name collides at the member, a wildcard one is silent" =
+  let explicit =
+    scopeOf [("lib", valueA)] """
+import lib.{foo}
+
+foo = 2
+
+main = foo
+"""
+  let wild = scopeOf [("lib", valueA)] """
+import lib.*
+
+foo = 2
+
+main = foo
+"""
+  expectEach [
+    (
+      "explicit answer",
+      expectEqual
+        (Some (Bound RungOwn (TargetValue "" "foo")))
+        (bareBinding explicit "foo"),
+    ),
+    (
+      "explicit collision",
+      expectEqual [("foo", (RungOwn, RungExplicit), 1)] (collisionRows explicit),
+    ),
+    (
+      "wildcard answer",
+      expectEqual
+        (Some (Bound RungOwn (TargetValue "" "foo")))
+        (bareBinding wild "foo"),
+    ),
+    ("wildcard is silent", expectEqual [] (collisionRows wild)),
+    (
+      "the importer is not reported for an own answer",
+      expectEqual [] (bindingImporters explicit "foo"),
+    ),
+  ]
+
+test "L5: a name bound to an interface method is a method target, any other a value" =
+  let mods = [("m", sizedIfc ++ """
+export
+helper : Int -> Int
+helper n = n
+""")]
+  let scope = scopeOf mods """
+import m.{sz, helper}
+main = 0
+"""
+  expectEach [
+    (
+      "method",
+      expectEqual
+        (Some (Bound RungExplicit (TargetMethod "m" "Sized" "sz")))
+        (bareBinding scope "sz"),
+    ),
+    (
+      "value",
+      expectEqual
+        (Some (Bound RungExplicit (TargetValue "m" "helper")))
+        (bareBinding scope "helper"),
+    ),
+  ]
+
+test "C3: a member alias binding an own name collides at the member" =
+  let scope =
+    scopeOf [("lib", valueB)] """
+import lib.{
+  bar as foo,
+}
+
+foo = 2
+"""
+  expectEach [
+    (
+      "collision",
+      expectEqual [("foo", (RungOwn, RungExplicit), 2)] (collisionRows scope),
+    ),
+    (
+      "answer",
+      expectEqual
+        (Some (Bound RungOwn (TargetValue "" "foo")))
+        (bareBinding scope "foo"),
+    ),
+  ]
+
+test "C4: an interface method and a function of one module collide at the later declaration" =
+  let scope =
+    scopeOf
+      []
+      """
+interface Sized a where
+  size : a -> Int
+impl Sized Int where
+  size _ = 7
+size : Int -> Int
+size n = n
+"""
+  expectEach [
+    (
+      "collision",
+      expectEqual [("size", (RungOwn, RungOwn), 5)] (collisionRows scope),
+    ),
+    (
+      "answer",
+      expectEqual
+        (Some
+          (Ambiguous RungOwn [
+            TargetMethod "" "Sized" "size",
+            TargetValue "" "size",
+          ]))
+        (bareBinding scope "size"),
+    ),
+  ]
+
+test "C8: an explicit import beats a wildcard of a different declaration, in either order" =
+  let mods = [("a", valueA), ("b", valueB)]
+  let first = scopeOf mods """
+import a.{foo}
+import b.*
+main = 0
+"""
+  let second = scopeOf mods """
+import b.*
+import a.{foo}
+main = 0
+"""
+  expectEach [
+    (
+      "explicit first",
+      expectEqual
+        (Some (Bound RungExplicit (TargetValue "a" "foo")))
+        (bareBinding first "foo"),
+    ),
+    (
+      "wildcard first",
+      expectEqual
+        (Some (Bound RungExplicit (TargetValue "a" "foo")))
+        (bareBinding second "foo"),
+    ),
+    (
+      "no collision",
+      expectEqual [] (collisionRows first ++ collisionRows second),
+    ),
+  ]
+
+test "#2017: a hub re-exporting two declarations under one name is ambiguous at the import rung" =
+  let pa =
+    """
+export interface IA a where
+  mth : a -> Int
+impl IA Int where
+  mth n = n + 1
+"""
+  let pb =
+    """
+export interface IB a where
+  mth : a -> Int
+impl IB Int where
+  mth n = n * 10
+"""
+  let hub = """
+export import lib.pa.{IA, mth}
+export import lib.pb.{IB, mth}
+"""
+  let scope =
+    scopeOf
+      [("lib.pa", pa), ("lib.pb", pb), ("lib.hub", hub)]
+      """
+import lib.hub.{IA, IB, mth}
+main = 0
+"""
+  expectEach [
+    (
+      "binding",
+      expectEqual
+        (Some
+          (Ambiguous RungExplicit [
+            TargetMethod "lib.pa" "IA" "mth",
+            TargetMethod "lib.pb" "IB" "mth",
+          ]))
+        (bareBinding scope "mth"),
+    ),
+    (
+      "importers",
+      expectEqual ["lib.hub", "lib.hub"] (bindingImporters scope "mth"),
+    ),
+  ]
+
+test "a prelude method re-exported by another module stays a method of its declaring module" =
+  let withIface =
+    scopeOf
+      [("list", """
+export import core.{Filterable, filter, filterMap}
+""")]
+      """
+import list.*
+main = 0
+"""
+  let bare =
+    scopeOf
+      [("list", """
+export import core.{filterMap}
+""")]
+      """
+import list.*
+main = 0
+"""
+  expectEach [
+    (
+      "with its interface",
+      expectEqual
+        (Some (Bound RungWild (TargetMethod "core" "Filterable" "filterMap")))
+        (bareBinding withIface "filterMap"),
+    ),
+    (
+      "without its interface",
+      expectEqual
+        (Some (Bound RungWild (TargetMethod "core" "Filterable" "filterMap")))
+        (bareBinding bare "filterMap"),
+    ),
+  ]

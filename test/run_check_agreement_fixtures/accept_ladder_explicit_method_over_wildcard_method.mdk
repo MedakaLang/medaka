@@ -1,0 +1,7 @@
+-- A wildcard import of one interface's method `sz` and an explicit import of
+-- another interface's `sz`.  The explicit import binds the method
+-- (docs/spec/SHADOW-SEMANTICS.md L2, L3), so `sz 1` is `Sz`'s and prints `1001`.
+import lib.ladder_tz.*
+import lib.ladder_sz.{sz}
+
+main = println (sz 1)

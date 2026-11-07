@@ -90,6 +90,8 @@ curry|PASS
 deferFlatMap|PASS
 deferUnless|PASS
 deferWhen|PASS
+derivedHashStep|PASS
+derivedShowWrap|PASS
 discard|PASS
 each|PASS
 elem|PASS
@@ -137,6 +139,7 @@ product|PASS
 repeatThen|PASS
 mapConst|PASS
 runEach|PASS
+sliceInclusiveEnd|PASS
 snd|PASS
 sum|PASS
 toResult|PASS

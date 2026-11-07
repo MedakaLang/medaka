@@ -1,6 +1,5 @@
 applyExprs : Expr -> List Expr -> Expr
 armDictSites : PassEvidence -> Arm -> List String
-binopDispatchMethod : String -> Option String
 binopMethodApp : ModuleCtx -> PassEvidence -> String -> Expr -> Expr -> Route -> Expr
 binopRouteSplit : Route -> (Route, List Route)
 bottomGrant : Expr

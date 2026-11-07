@@ -23,7 +23,9 @@ fixture rel = underRoot "test/check_policy_fixtures/\{rel}"
 -- Both streams joined, as the script's `2>&1` saw them.
 spawnBoth : List String -> <Exec, IO> Result String (Int, String)
 spawnBoth args =
-  map ((code, out, err) => (code, out ++ err)) (boundedInTree 90 medakaBin args)
+  map
+    ((code, out, err) => (code, out ++ err))
+    (boundedInTree 90 (medakaBin ()) args)
 
 manifestArgs : String -> String -> List String
 manifestArgs target fn =
@@ -129,22 +131,23 @@ roundTrip rel fn want = match spawnBoth ["manifest", fixture rel, "--fn", fn]
 
 -- Refused target: exit 1, empty stdout, diagnostics on stderr.
 refuse : String -> String -> <Exec, IO> Expectation
-refuse rel fn = match boundedInTree 90 medakaBin (manifestArgs (fixture rel) fn)
-  Err e => fail "could not spawn manifest on \{rel}: \{e}"
-  Ok (code, out, err) =>
-    if code /= 1 then
-      fail "\{rel}: manifest exited \{intToString code}, want 1"
-    else if out /= "" then
-      fail "\{rel}: stdout not empty: \{out}"
-    else if err == "" then
-      fail "\{rel}: no stderr diagnostics"
-    else
-      pass
+refuse rel fn =
+  match boundedInTree 90 (medakaBin ()) (manifestArgs (fixture rel) fn)
+    Err e => fail "could not spawn manifest on \{rel}: \{e}"
+    Ok (code, out, err) =>
+      if code /= 1 then
+        fail "\{rel}: manifest exited \{intToString code}, want 1"
+      else if out /= "" then
+        fail "\{rel}: stdout not empty: \{out}"
+      else if err == "" then
+        fail "\{rel}: no stderr diagnostics"
+      else
+        pass
 
 -- An ill-typed import is located in the import's own file, not the entry's.
 importLocated : String -> <Exec, IO> Expectation
 importLocated rel =
-  match boundedInTree 90 medakaBin (manifestArgs (fixture rel) "transform")
+  match boundedInTree 90 (medakaBin ()) (manifestArgs (fixture rel) "transform")
     Err e => fail "could not spawn manifest on \{rel}: \{e}"
     Ok (code, _, err) =>
       if code /= 1 then
@@ -230,9 +233,11 @@ test "manifest_emit: manifest refuses what check refuses" = expectEach [
 test "manifest_emit: a user module called core retains its own checked Clock row" = withScratchDir
   (dir => do
     let path = dir ++ "/core.mdk"
-    let _ = writeFile path "not : <Clock> Unit\nnot = ()\nmain = ()\n"
-    let manifest = boundedInTree 90 medakaBin ["manifest", path, "--fn", "not"]
-    let policy = boundedInTree 90 medakaBin [
+    let _ =
+      writeFile path "not : Unit -> <Clock> Unit\nnot () = ()\nmain = ()\n"
+    let manifest =
+      boundedInTree 90 (medakaBin ()) ["manifest", path, "--fn", "not"]
+    let policy = boundedInTree 90 (medakaBin ()) [
       "check-policy", path, "--fn", "not", "--allow", "Log"
     ]
     expectEach [

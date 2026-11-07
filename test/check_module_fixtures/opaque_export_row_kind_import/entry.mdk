@@ -19,14 +19,14 @@ export interface Speak s where
 -- CLI paths the same line instead drew a false-positive T-EFFECT-KIND-MISMATCH claiming the
 -- slot "isn't row-kinded"; that is the loud face of this identical defect.)
 wrote : Asy <Stdout> Int
-wrote = wrote
+wrote = panic "scheme probe"
 
 -- The same row in its pre-#997 parenthesized spelling.  This one failed
 -- SILENTLY: it typechecked with the row erased to the wrapped type, so the
 -- golden below would read `Asy Unit Int` — indistinguishable, to the reader of a
 -- scheme dump, from a genuinely dropped effect.
 seeded : Asy (<Stdout> Unit) Int
-seeded = seeded
+seeded = panic "scheme probe"
 
 -- The same bug's FOURTH face, NOT a control — do not delete this as redundant.
 -- A bare tyvar in the row slot propagates cross-module for a `public export` type

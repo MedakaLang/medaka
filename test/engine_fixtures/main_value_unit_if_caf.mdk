@@ -1,4 +1,4 @@
--- A Unit main whose if-branches both reference a Unit CAF (#3792).
-go = println "x"
+-- A Unit main whose if-branches both call a Unit function (#3792).
+go () = println "x"
 
-main = if True then go else go
+main = if True then go () else go ()

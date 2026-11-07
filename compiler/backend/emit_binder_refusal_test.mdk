@@ -171,7 +171,7 @@ refusedBy backend =
     "env"
     [
       "\{probeVar}=\{backend}",
-      medakaBin,
+      medakaBin (),
       "test",
       "--filter",
       "probe:",
@@ -191,7 +191,7 @@ test "both renderers refuse paired manifest omission against an external checked
           "env"
           [
             "\{probeVar}=manifest-\{backend}",
-            medakaBin,
+            medakaBin (),
             "test",
             "--filter",
             "probe:",
@@ -209,11 +209,11 @@ import types.capability_manifest.{CapabilityManifest(..), ManifestRequest(..), I
 import types.effect_domain.{Param(..)}
 import frontend.ast.{TyConOrigin(..)}
 
-manifestMutation : <Env> String
-manifestMutation = optionOr "valid" (getEnv "MEDAKA_MANIFEST_VICTIM")
+manifestMutation : Unit -> <Env> String
+manifestMutation () = optionOr "valid" (getEnv "MEDAKA_MANIFEST_VICTIM")
 
 mutatePublished : CapabilityManifest -> <Env> CapabilityManifest
-mutatePublished m = match manifestMutation
+mutatePublished m = match manifestMutation ()
   "wrong-binding" => { m | request = { m.request | entry = { m.request.entry | binding = "neighbor" } } }
   "wrong-module" => { m | request = { m.request | entry = { m.request.entry | moduleId = "unrelated" } } }
   "wrong-protocol" => { m | request = { m.request | protocol = HostInvocation }, atoms = [] }
@@ -222,11 +222,11 @@ mutatePublished m = match manifestMutation
 
 mutateCore : CProgram -> <Env> CProgram
 mutateCore (CProgram binds ca ct impls mc facts) =
-  let manifests = if manifestMutation == "core-missing" || manifestMutation == "both-missing" then [] else map mutatePublished facts.factManifests
+  let manifests = if manifestMutation () == "core-missing" || manifestMutation () == "both-missing" then [] else map mutatePublished facts.factManifests
   CProgram binds ca ct impls mc { facts | factManifests = manifests }
 
 mutatePlan : ManifestRequirement -> EmitPlan -> <Env> EmitPlan
-mutatePlan requirement plan = match (manifestMutation, requirement)
+mutatePlan requirement plan = match (manifestMutation (), requirement)
   ("core-missing", CheckedEntry key protocol) => { plan | manifestIndex = [ManifestRequest { entry = key, protocol = protocol }] }
   ("plan-missing", _) => { plan | manifestIndex = [] }
   _ => plan
@@ -341,8 +341,8 @@ main = 6.0
           (_, Err e) => fail e
           _ => match (runBuildNativeRoots
             BuildPaths {
-              bpRoot = medakaRoot,
-              bpMedaka = medakaBin,
+              bpRoot = medakaRoot (),
+              bpMedaka = medakaBin (),
               bpCc = envOr "CC" "clang",
               bpInput = probe,
               bpOut = binary,

@@ -1,5 +1,6 @@
--- `main.mdk` through `hubswap`, whose two `export import` lines are swapped: the
--- same located `T-AMBIGUOUS-METHOD` at `mth` (S2-DECL (e)).
+-- C7, L3: the hub re-exports two distinct declarations of `mth`, so the explicit import
+-- binds it to both: a located ambiguity at the occurrence, whatever the receiver, types or
+-- import order.
 import hubswap.{IA, IB, mth}
 import dflt.{Dflt, dflt}
 

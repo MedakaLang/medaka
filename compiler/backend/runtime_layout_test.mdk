@@ -15,5 +15,5 @@ test "native ABI facts and generated header agree" = expectAll [
   expectEqual 281492156579840 (reservedCellTag 4 0),
   expectOkThen
     (header => expectEqual (renderAbiHeader ()) header)
-    (readFile "\{medakaRoot}/runtime/medaka_abi.h"),
+    (readFile "\{medakaRoot ()}/runtime/medaka_abi.h"),
 ]

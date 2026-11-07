@@ -1,0 +1,6 @@
+-- C7, L3: the hub re-exports two distinct declarations of `mth`, so the explicit import
+-- binds it to both: a located ambiguity at the occurrence, whatever the receiver, types or
+-- import order.
+import live_double.{r}
+
+main = println (r 4)

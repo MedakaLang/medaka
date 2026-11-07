@@ -46,18 +46,18 @@ pinPrograms = [
 ]
 
 {- | The verdict of every pin program, in `pinPrograms` order, each as
-   `checkCodes` reports it. The checks run side by side, at most `testJobs`
+   `checkCodes` reports it. The checks run side by side, at most `testJobs ()`
    at once. Each is wrapped the way `boundedVerb` wraps one (the same
    `alarm`), so a hung check still fails its own row. -}
-pinVerdicts : <Exec, IO> List (String, Result String (Int, List String))
-pinVerdicts =
-  let bin = medakaBin
+pinVerdicts : Unit -> <Exec, IO> List (String, Result String (Int, List String))
+pinVerdicts () =
+  let bin = medakaBin ()
   let base = underRoot "pds/test/authority_pins"
   let argvs = map (checkArgv bin base) pinPrograms
   zipWith
     (name run => (name, checkGraded name run))
     pinPrograms
-    (runCommandBatch "perl" testJobs argvs)
+    (runCommandBatch "perl" (testJobs ()) argvs)
 
 -- | The arguments to `perl` that run `bin check --json` on pin program `name`
 -- under the same `alarm` wrapper `boundedVerb` gives each spawn.
@@ -76,7 +76,7 @@ checkArgv bin base name = [
    `pds/test/authority_pins/<name>.mdk`, and the codes of the errors it
    reports against that file, in report order. -}
 checkCodes : String -> <Exec, IO> Result String (Int, List String)
-checkCodes name = match lookup name pinVerdicts
+checkCodes name = match lookup name (pinVerdicts ())
   Some verdict => verdict
   None => Err "no pin program named \{name}"
 

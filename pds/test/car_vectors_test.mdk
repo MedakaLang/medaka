@@ -153,7 +153,7 @@ scalingFindings bin = match timedCar bin 1000
 resourceFindings : String -> <Clock, Exec, IO> List String
 resourceFindings scratch =
   let bin = "\{scratch}/performance_resource"
-  let driver = "\{medakaRoot}/pds/test/performance_resource_main.mdk"
+  let driver = "\{medakaRoot ()}/pds/test/performance_resource_main.mdk"
   let label = "\{gate} (native limits)"
   match buildNative label driver bin
     [] =>

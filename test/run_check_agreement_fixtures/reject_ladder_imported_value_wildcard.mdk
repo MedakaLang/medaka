@@ -1,0 +1,6 @@
+-- `reject_ladder_imported_value_member` through a wildcard import: `length` is
+-- still the imported standalone (rung 4 over the prelude's rung 5), so
+-- `length [1, 2]` is a type mismatch.
+import lib.ladder_strlen.*
+
+main = println (length "abc", length [1, 2])

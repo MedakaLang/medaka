@@ -1,0 +1,8 @@
+-- L4 (F-R3): a wildcard import loses silently to the module's own `get`; L2 rung 2 and L5
+-- make `get 3 1` the own function
+import ifc.*
+
+get : Int -> Int -> Int
+get n i = n * i
+
+main = println (get 3 1)

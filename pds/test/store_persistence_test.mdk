@@ -79,16 +79,24 @@ secretHex = "c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721"
 
 -- # Running the driver
 
--- The driver, built once per test process: a top-level nullary binding is
--- evaluated once, so every test below shares the one build.
-built : <Exec, IO> Result String String
-built = match freshScratch ()
-  Err e => Err "could not make a scratch directory for the build: \{e}"
-  Ok dir =>
-    let bin = "\{dir}/store_persistence"
-    match buildNative "\{gate} (native)" "\{medakaRoot}/\{driver}" bin
-      [] => Ok bin
-      f :: _ => Err f
+-- The driver, built once per test process: a once-cell holds the build, so
+-- every test below shares it.
+builtCell : Ref (Option (Result String String))
+builtCell = Ref None
+
+built : Unit -> <Exec, IO> Result String String
+built () = match !builtCell
+  Some v => v
+  None =>
+    let v = match freshScratch ()
+      Err e => Err "could not make a scratch directory for the build: \{e}"
+      Ok dir =>
+        let bin = "\{dir}/store_persistence"
+        match buildNative "\{gate} (native)" "\{medakaRoot ()}/\{driver}" bin
+          [] => Ok bin
+          f :: _ => Err f
+    builtCell := Some v
+    v
 
 -- The stdout of one spawn that exited 0 and wrote nothing to stderr, or the
 -- first finding against it.
@@ -130,7 +138,7 @@ copyTree src dst =
    which is removed afterwards. `Err` is the first failed assertion. -}
 inScratch : (String -> String -> <Exec, FileRead, FileWrite, IO> Result String Unit) ->
   <Exec, FileRead, FileWrite, IO> Expectation
-inScratch body = match built
+inScratch body = match built ()
   Err e => fail "\{gate}: \{e}"
   Ok bin => match freshScratch ()
     Err e => fail "\{gate}: could not make a scratch directory: \{e}"

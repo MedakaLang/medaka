@@ -413,33 +413,41 @@ moduleRows =
       zeroAssertionModules
 
 {- | Every module run exactly once, all of them in one batch of spawns,
-   shared by every assertion below — top-level nullary bindings are
-   memoized, so a spawn placed here and read from two `test` decls executes
-   once, not twice. -}
-graded : <Exec, IO> List (RowKind, (String, (Int, Result String Int)))
-graded =
-  let spawns = flatMap moduleSpawns moduleRows
-  gradeRows
-    moduleRows
-    (zipWith
-      ((name, _) counted => (name, counted))
-      spawns
-      (testAssertionCounts (map snd spawns)))
+   shared by every assertion below — `graded` memoizes the batch in a
+   once-cell, so a spawn read from two `test` decls executes once, not
+   twice. -}
+gradedCell : Ref (Option (List (RowKind, (String, (Int, Result String Int)))))
+gradedCell = Ref None
+
+graded : Unit -> <Exec, IO> List (RowKind, (String, (Int, Result String Int)))
+graded () = match !gradedCell
+  Some v => v
+  None =>
+    let v =
+      let spawns = flatMap moduleSpawns moduleRows
+      gradeRows
+        moduleRows
+        (zipWith
+          ((name, _) counted => (name, counted))
+          spawns
+          (testAssertionCounts (map snd spawns)))
+    gradedCell := Some v
+    v
 
 -- The `graded` rows of one kind, in roster order.
 gradedOfKind : RowKind -> <Exec, IO> List (String, (Int, Result String Int))
-gradedOfKind kind = map snd (filter ((k, _) => k == kind) graded)
+gradedOfKind kind = map snd (filter ((k, _) => k == kind) (graded ()))
 
 -- Every rostered module's floor and graded count.
-results : <Exec, IO> List (String, (Int, Result String Int))
-results = gradedOfKind SuiteRow
+results : Unit -> <Exec, IO> List (String, (Int, Result String Int))
+results () = gradedOfKind SuiteRow
 
 {- | Grades one module's floor. The message names the module and both
    numbers on a miss; a run that failed outright reports the spawn's own
    text instead, so a broken assertion inside a module is never mistaken for
    a count that merely fell short. -}
 floorExpectation : String -> <Exec, IO> Expectation
-floorExpectation name = match lookup name results
+floorExpectation name = match lookup name (results ())
   None => Fail "stdlib/\{name}.mdk has no `results` entry" "" ""
   Some (floor, counted) => expectFloor "stdlib/\{name}.mdk" floor counted
 
@@ -595,15 +603,15 @@ test "stdlib/vector_test.mdk executed >= 7 assertions" =
 
 -- # The zero-assertion pins
 
-zeroResults : <Exec, IO> List (String, Result String Int)
-zeroResults =
+zeroResults : Unit -> <Exec, IO> List (String, Result String Int)
+zeroResults () =
   map ((name, (_, counted)) => (name, counted)) (gradedOfKind ZeroPinRow)
 
 {- | Grades one exempt-because-empty module: its count must be exactly 0,
    never merely at least 0. A module that has grown an assertion fails here
    with the count to commit as its new floor. -}
 zeroExpectation : String -> <Exec, IO> Expectation
-zeroExpectation name = match lookup name zeroResults
+zeroExpectation name = match lookup name (zeroResults ())
   None => Fail "stdlib/\{name}.mdk has no `zeroResults` entry" "" ""
   Some (Err e) => Fail e "0 assertions" "spawn/run error"
   Some (Ok ran) =>
@@ -632,12 +640,12 @@ ranCountOf : (String, (Int, Result String Int)) -> Int
 ranCountOf (_, (_, Ok n)) = n
 ranCountOf (_, (_, Err _)) = 0
 
-totalRan : <Exec, IO> Int
-totalRan = sum (map ranCountOf results)
+totalRan : Unit -> <Exec, IO> Int
+totalRan () = sum (map ranCountOf (results ()))
 
 test "stdlib in-language suite ran at least one assertion" =
-  if totalRan > 0 then
-    Pass "> 0 assertions" "\{intToString totalRan} assertions"
+  if totalRan () > 0 then
+    Pass "> 0 assertions" "\{intToString (totalRan ())} assertions"
   else
     Fail
       "no assertions ran at all across the stdlib in-language suite"
@@ -663,8 +671,8 @@ test "stdlib in-language suite ran at least one assertion" =
 
 -- Every `stdlib/` entry, with a subdirectory replaced by its own entries
 -- spelled `dir/name`, so `crypto/hmac.mdk` names the unit `crypto/hmac`.
-stdlibEntries : <FileRead, IO> Result String (List String)
-stdlibEntries = match listDir (underRoot "stdlib")
+stdlibEntries : Unit -> <FileRead, IO> Result String (List String)
+stdlibEntries () = match listDir (underRoot "stdlib")
   Err e => Err "could not list stdlib: \{e}"
   Ok names => Ok (flatMap subdirEntriesOrSelf names)
 
@@ -673,12 +681,14 @@ subdirEntriesOrSelf name = match listDir (underRoot "stdlib/\{name}")
   Ok inner => map (n => "\{name}/\{n}") inner
   Err _ => [name]
 
-unrosteredModules : <FileRead, IO> Result String (List String)
-unrosteredModules =
-  map (unrosteredUnits mdkModuleStem (rosterNames ++ exemptNames)) stdlibEntries
+unrosteredModules : Unit -> <FileRead, IO> Result String (List String)
+unrosteredModules () =
+  map
+    (unrosteredUnits mdkModuleStem (rosterNames ++ exemptNames))
+    (stdlibEntries ())
 
 test "every stdlib/*.mdk module has a `suites` or `exempt` row" =
-  match unrosteredModules
+  match unrosteredModules ()
     Err e => Fail e "no unrostered modules" "listDir failed"
     Ok [] => Pass "no unrostered modules" "no unrostered modules"
     Ok extras =>
@@ -687,17 +697,19 @@ test "every stdlib/*.mdk module has a `suites` or `exempt` row" =
         "no unrostered modules"
         "\{debug extras}"
 
-phantomExemptions : <FileRead, IO> Result String (List String)
-phantomExemptions = map (missingUnits mdkModuleStem exemptNames) stdlibEntries
+phantomExemptions : Unit -> <FileRead, IO> Result String (List String)
+phantomExemptions () =
+  map (missingUnits mdkModuleStem exemptNames) (stdlibEntries ())
 
-test "every `exempt` row names a module that exists" = match phantomExemptions
-  Err e => Fail e "no phantom exemptions" "listDir failed"
-  Ok [] => Pass "no phantom exemptions" "no phantom exemptions"
-  Ok extras =>
-    Fail
-      "`exempt` names stdlib module(s) that do not exist: \{debug extras} — a stale exemption re-opens the roster to a module of that name"
-      "no phantom exemptions"
-      "\{debug extras}"
+test "every `exempt` row names a module that exists" =
+  match phantomExemptions ()
+    Err e => Fail e "no phantom exemptions" "listDir failed"
+    Ok [] => Pass "no phantom exemptions" "no phantom exemptions"
+    Ok extras =>
+      Fail
+        "`exempt` names stdlib module(s) that do not exist: \{debug extras} — a stale exemption re-opens the roster to a module of that name"
+        "no phantom exemptions"
+        "\{debug extras}"
 
 {- | A module carrying both a `suites` row and an `exempt` row.
 
@@ -747,16 +759,16 @@ test "every `zeroAssertionModules` row is also an `exempt` row" =
 floorCallOpen : String
 floorCallOpen = "floorExpectation \""
 
-ownSourceLines : <IO> Result String (List String)
-ownSourceLines = readLines (underRoot "test/stdlib_suite_test.mdk")
+ownSourceLines : Unit -> <IO> Result String (List String)
+ownSourceLines () = readLines (underRoot "test/stdlib_suite_test.mdk")
 
-uncheckedRows : <IO> Result String (List String)
-uncheckedRows =
+uncheckedRows : Unit -> <IO> Result String (List String)
+uncheckedRows () =
   map
     (ls => ungradedRosterRows "stdlib/" floorCallOpen rosterNames ls)
-    ownSourceLines
+    (ownSourceLines ())
 
-test "every `suites` row has a matching `test` block" = match uncheckedRows
+test "every `suites` row has a matching `test` block" = match uncheckedRows ()
   Err e => Fail e "no unchecked rows" "read failed"
   Ok [] => Pass "no unchecked rows" "no unchecked rows"
   Ok extras =>
@@ -765,12 +777,14 @@ test "every `suites` row has a matching `test` block" = match uncheckedRows
       "no unchecked rows"
       "\{debug extras}"
 
-disagreeingBlocks : <IO> Result String (List String)
-disagreeingBlocks =
-  map (ls => disagreeingFloorBlocks "stdlib/" floorCallOpen ls) ownSourceLines
+disagreeingBlocks : Unit -> <IO> Result String (List String)
+disagreeingBlocks () =
+  map
+    (ls => disagreeingFloorBlocks "stdlib/" floorCallOpen ls)
+    (ownSourceLines ())
 
 test "every floor assertion grades the module its own title names" =
-  match disagreeingBlocks
+  match disagreeingBlocks ()
     Err e => Fail e "no title/argument disagreements" "read failed"
     Ok [] =>
       Pass "no title/argument disagreements" "no title/argument disagreements"

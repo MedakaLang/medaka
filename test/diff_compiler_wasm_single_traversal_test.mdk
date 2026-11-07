@@ -195,7 +195,7 @@ strictArgs exe argv =
       "MEDAKA_STRICT=1",
       "MEDAKA_CLANG_OPT=-O0",
       "MEDAKA_NO_LTO=1",
-      "MEDAKA_ROOT=" ++ medakaRoot,
+      "MEDAKA_ROOT=" ++ medakaRoot (),
       "MEDAKA_EMITTER=" ++ underRoot "medaka_emitter",
       "perl",
       "-e",
@@ -245,14 +245,14 @@ execVehicleJudge dir =
       ],
       expectSpawnOk
         "env"
-        (strictArgs medakaBin ["test", dir ++ "/exec_vehicle_test.mdk"]),
+        (strictArgs (medakaBin ()) ["test", dir ++ "/exec_vehicle_test.mdk"]),
     ]
 
 buildEntry : String -> String -> <IO, Exec> Expectation
 buildEntry dir name =
   expectSpawnOk
     "env"
-    (strictArgs medakaBin [
+    (strictArgs (medakaBin ()) [
       "build",
       "--allow-internal",
       underRoot ("compiler/entries/" ++ name ++ ".mdk"),
@@ -564,14 +564,14 @@ fallthroughControls dir =
       let built =
         expectSpawnOk
           "env"
-          (strictArgs medakaBin ["build", source, "-o", binary])
+          (strictArgs (medakaBin ()) ["build", source, "-o", binary])
       if expectationTag built == "Fail" then
         built
       else
         expectAll [
           expectSpawnOkLine
             "env"
-            (strictArgs medakaBin ["run", source])
+            (strictArgs (medakaBin ()) ["run", source])
             "(42, 1)",
           expectSpawnOkLine "env" (strictArgs binary []) "(42, 1)",
           valueRow
@@ -703,12 +703,17 @@ primitiveControl dir name source =
     Err e => fail e
     Ok _ =>
       let built =
-        expectSpawnOk "env" (strictArgs medakaBin ["build", path, "-o", binary])
+        expectSpawnOk
+          "env"
+          (strictArgs (medakaBin ()) ["build", path, "-o", binary])
       if expectationTag built == "Fail" then
         built
       else
         expectAll [
-          expectSpawnOkLine "env" (strictArgs medakaBin ["run", path]) "0.12",
+          expectSpawnOkLine
+            "env"
+            (strictArgs (medakaBin ()) ["run", path])
+            "0.12",
           expectSpawnOkLine "env" (strictArgs binary []) "0.12",
           valueRow
             dir
@@ -733,9 +738,12 @@ main =
         built
       else
         expectAll [
-          expectSpawnOk "env" (strictArgs medakaBin ["check", source]),
-          expectSpawnOkLine "env" (strictArgs medakaBin ["run", source]) "0.12",
-          expectSpawnFailsAll "env" (strictArgs medakaBin [
+          expectSpawnOk "env" (strictArgs (medakaBin ()) ["check", source]),
+          expectSpawnOkLine
+            "env"
+            (strictArgs (medakaBin ()) ["run", source])
+            "0.12",
+          expectSpawnFailsAll "env" (strictArgs (medakaBin ()) [
             "build", source, "-o", binary
           ]) [
             "E-PANIC", "llvm: floatToFixed takes exactly two arguments"
@@ -770,7 +778,7 @@ interpretedEmitterWitness dir =
         (map
           (backend => (
             backend,
-            expectSpawnFailsAll "env" (strictArgs medakaBin [
+            expectSpawnFailsAll "env" (strictArgs (medakaBin ()) [
               "run",
               underRoot
                 ("compiler/entries/" ++ backend ++ "_emit_typed_main.mdk"),
@@ -1032,33 +1040,34 @@ manifestProbe = join "\n" [
 ]
 
 test "unknown helper manifests refuse by name" = withScratchDir
-  (dir =>
-    match (runVerb "sh" [
-      "-c",
-      "root=$(cd \"$1\" && pwd -P) || exit 1; for d in backend frontend types ir support driver eval tools; do ln -s \"$root/compiler/$d\" \"$2/$d\" || exit 1; done; cp \"$root/compiler/medaka.toml\" \"$2/medaka.toml\"",
-      "sh", medakaRoot, dir
-    ])
-      Err e => fail e
-      Ok (code, _, err) =>
-        if code /= 0 then
-          fail err
-        else match (
-          writeFile (dir ++ "/probe.mdk") manifestProbe,
-          writeFile (dir ++ "/good.mdk") "main = 1",
-        )
-          (Ok _, Ok _) => expectAll [
-            expectSpawnFailsAll "env" (strictArgs medakaBin [
-              "run",
-              dir ++ "/probe.mdk",
-            ]) [
-              "unknown-wasm-helper-manifest: notAHelper",
-            ],
-            expectSpawnOkLine
-              "env"
-              (strictArgs medakaBin ["run", dir ++ "/good.mdk"])
-              "1",
-          ]
-          _ => fail "could not write manifest probes")
+  (dir => match runVerb "sh" [
+    "-c",
+    "root=$(cd \"$1\" && pwd -P) || exit 1; for d in backend frontend types ir support driver eval tools; do ln -s \"$root/compiler/$d\" \"$2/$d\" || exit 1; done; cp \"$root/compiler/medaka.toml\" \"$2/medaka.toml\"",
+    "sh",
+    medakaRoot (),
+    dir,
+  ]
+    Err e => fail e
+    Ok (code, _, err) =>
+      if code /= 0 then
+        fail err
+      else match (
+        writeFile (dir ++ "/probe.mdk") manifestProbe,
+        writeFile (dir ++ "/good.mdk") "main = 1",
+      )
+        (Ok _, Ok _) => expectAll [
+          expectSpawnFailsAll "env" (strictArgs (medakaBin ()) [
+            "run",
+            dir ++ "/probe.mdk",
+          ]) [
+            "unknown-wasm-helper-manifest: notAHelper",
+          ],
+          expectSpawnOkLine
+            "env"
+            (strictArgs (medakaBin ()) ["run", dir ++ "/good.mdk"])
+            "1",
+        ]
+        _ => fail "could not write manifest probes")
 
 -- Copy the compiler project so that both census consumers see the same
 -- deliberately incomplete producer result, after the unchanged plan gateway.
@@ -1101,11 +1110,14 @@ censusOmission dir original target replacement =
     Ok mutated => match writeFile (dir ++ "/backend/wasm_demand.mdk") mutated
       Err e => fail e
       Ok _ =>
-        expectSpawnOkLine medakaBin ["run", dir ++ "/census_probe.mdk"] "513"
+        expectSpawnOkLine
+          (medakaBin ())
+          ["run", dir ++ "/census_probe.mdk"]
+          "513"
 
 censusDisagreement : String -> <IO, Exec, FileRead, FileWrite> Expectation
 censusDisagreement dir =
-  match runVerb "cp" ["-R", medakaRoot ++ "/compiler", dir ++ "/compiler"]
+  match runVerb "cp" ["-R", medakaRoot () ++ "/compiler", dir ++ "/compiler"]
     Err e => fail e
     Ok (code, _, err) =>
       if code /= 0 then

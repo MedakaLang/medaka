@@ -26,7 +26,7 @@ runHumanReport : String ->
   String ->
   <Exec, IO> Result String (Int, String, String)
 runHumanReport dir file =
-  boundedVerbSeconds 120 medakaBin ["test", "--native", "\{dir}/\{file}"]
+  boundedVerbSeconds 120 (medakaBin ()) ["test", "--native", "\{dir}/\{file}"]
 
 humanReportLedger : String
 humanReportLedger =
@@ -103,7 +103,7 @@ test "human property failures retain replay metadata for each selected engine" =
   withReportFixture replayFailureFixtures replayFailureReport
 
 replayFailureReport : String -> <Exec, IO> Expectation
-replayFailureReport dir = match boundedVerbSeconds 120 medakaBin [
+replayFailureReport dir = match boundedVerbSeconds 120 (medakaBin ()) [
   "test",
   "--engines",
   "eval,native",

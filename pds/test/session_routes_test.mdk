@@ -104,8 +104,8 @@ cheapIterations : Int
 cheapIterations = 4
 
 -- | The account credential.
-credential : CredentialRecord
-credential =
+credential : Unit -> <Kdf> CredentialRecord
+credential () =
   let derived =
     makeCredential
       (fromU8Array (arrayMakeWith 16 (i => U8.truncate (i * 13 + 3))))
@@ -117,35 +117,51 @@ credential =
 
 -- | A configured server's store: session secret and account credential, no
 -- repository. No session route touches the repository.
-configuredStore : Store
-configuredStore =
-  let withSecret = storeWithServerSecret altTestKey storeEmpty
-  storeWithCredential credential withSecret
+configuredStoreCell : Ref (Option Store)
+configuredStoreCell = Ref None
+
+configuredStore : Unit -> <Kdf> Store
+configuredStore () = match !configuredStoreCell
+  Some v => v
+  None =>
+    let v =
+      let withSecret = storeWithServerSecret altTestKey storeEmpty
+      storeWithCredential (credential ()) withSecret
+    configuredStoreCell := Some v
+    v
 
 -- | The same store holding a credential for the same password under another
 -- salt, which a successful login offered an upgrade moves onto the shipped
 -- count.
-outdatedStore : Store
-outdatedStore =
-  let older =
-    makeCredential
-      (fromU8Array (arrayMakeWith 16 (i => U8.truncate (i * 5 + 9))))
-      cheapIterations
-      (passwordFromText password)
-  match older
-    Ok made => storeWithCredential made configuredStore
-    Err message => panic "session_routes_test: older credential: \{message}"
+outdatedStoreCell : Ref (Option Store)
+outdatedStoreCell = Ref None
+
+outdatedStore : Unit -> <Kdf> Store
+outdatedStore () = match !outdatedStoreCell
+  Some v => v
+  None =>
+    let v =
+      let older =
+        makeCredential
+          (fromU8Array (arrayMakeWith 16 (i => U8.truncate (i * 5 + 9))))
+          cheapIterations
+          (passwordFromText password)
+      match older
+        Ok made => storeWithCredential made (configuredStore ())
+        Err message => panic "session_routes_test: older credential: \{message}"
+    outdatedStoreCell := Some v
+    v
 
 -- | The same store after the account's password changed.
-changedPasswordStore : Store
-changedPasswordStore =
+changedPasswordStore : Unit -> <Kdf> Store
+changedPasswordStore () =
   let changed =
     makeCredential
       (fromU8Array (arrayMakeWith 16 (i => U8.truncate (i * 13 + 3))))
       cheapIterations
       (passwordFromText "a different password")
   match changed
-    Ok made => storeWithCredential made configuredStore
+    Ok made => storeWithCredential made (configuredStore ())
     Err message => panic "session_routes_test: changed credential: \{message}"
 
 -- | The verdict the shell would derive for `bytes` against `store`, offering
@@ -269,45 +285,58 @@ login instant seed store =
 
 {- | A logged-in session: the store holding it, its access token, and its
    refresh token. Every cell below starts from one of these. -}
-loggedIn : (Store, String, String)
-loggedIn =
-  let (store, response) = login testInstant 1 configuredStore
-  (store, stringField "accessJwt" response, stringField "refreshJwt" response)
+loggedInCell : Ref (Option (Store, String, String))
+loggedInCell = Ref None
 
-sessionStore : Store
-sessionStore = match loggedIn
+loggedIn : Unit ->
+  <Kdf, Mint {"access", "refresh"}, Sign "commit"> (Store, String, String)
+loggedIn () = match !loggedInCell
+  Some v => v
+  None =>
+    let v =
+      let (store, response) = login testInstant 1 (configuredStore ())
+      (
+        store,
+        stringField "accessJwt" response,
+        stringField "refreshJwt" response,
+      )
+    loggedInCell := Some v
+    v
+
+sessionStore : Unit -> <Kdf, Mint {"access", "refresh"}, Sign "commit"> Store
+sessionStore () = match loggedIn ()
   (store, _, _) => store
 
-accessToken : String
-accessToken = match loggedIn
+accessToken : Unit -> <Kdf, Mint {"access", "refresh"}, Sign "commit"> String
+accessToken () = match loggedIn ()
   (_, token, _) => token
 
-refreshToken : String
-refreshToken = match loggedIn
+refreshToken : Unit -> <Kdf, Mint {"access", "refresh"}, Sign "commit"> String
+refreshToken () = match loggedIn ()
   (_, _, token) => token
 
 -- # createSession
 
 test "a login with the right password is 200" =
-  let (_, response) = login testInstant 1 configuredStore
+  let (_, response) = login testInstant 1 (configuredStore ())
   expectEqual (outcome response) "200 OK"
 
 test "a login is answered with the account's DID and handle" =
-  let (_, response) = login testInstant 1 configuredStore
+  let (_, response) = login testInstant 1 (configuredStore ())
   expectEqual
     "\{stringField "did" response} \{stringField "handle" response}"
     "\{accountDidText} \{accountHandleText}"
 
 test "a login is answered with an active session" =
-  let (_, response) = login testInstant 1 configuredStore
+  let (_, response) = login testInstant 1 (configuredStore ())
   expectEqual (fieldBool "active" response) (Some True)
 
 test "a login issues two different tokens" = expectEach [
-  ("the access token is not empty", expectNotEqual "" accessToken),
-  ("the refresh token is not empty", expectNotEqual "" refreshToken),
+  ("the access token is not empty", expectNotEqual "" (accessToken ())),
+  ("the refresh token is not empty", expectNotEqual "" (refreshToken ())),
   (
     "the two tokens differ from one another",
-    expectNotEqual accessToken refreshToken,
+    expectNotEqual (accessToken ()) (refreshToken ()),
   ),
 ]
 
@@ -315,7 +344,7 @@ test "a login by DID is accepted as well as by handle" =
   let (_, response) =
     send
       (contextAt testInstant 1)
-      configuredStore
+      (configuredStore ())
       (postJson
         accountHostText
         ""
@@ -328,7 +357,7 @@ test "a login by handle is case-insensitive" =
   let (_, response) =
     send
       (contextAt testInstant 1)
-      configuredStore
+      (configuredStore ())
       (postJson
         accountHostText
         ""
@@ -340,7 +369,7 @@ test "a login with the wrong password is refused" =
   let (_, response) =
     send
       (contextAt testInstant 1)
-      configuredStore
+      (configuredStore ())
       (postJson
         accountHostText
         ""
@@ -368,13 +397,13 @@ test "a login verdict computed against a replaced credential is refused" =
       ""
       createSessionNsid
       (loginJson accountHandleText password)
-  let upgrading = verdictFor upgradeSalt loginBytes outdatedStore
-  let (raced, first) = sendWithVerdict upgrading outdatedStore loginBytes
+  let upgrading = verdictFor upgradeSalt loginBytes (outdatedStore ())
+  let (raced, first) = sendWithVerdict upgrading (outdatedStore ()) loginBytes
   let (_, second) = sendWithVerdict upgrading raced loginBytes
   let (_, afterChange) =
     sendWithVerdict
-      (verdictFor noUpgradeSalt loginBytes configuredStore)
-      changedPasswordStore
+      (verdictFor noUpgradeSalt loginBytes (configuredStore ()))
+      (changedPasswordStore ())
       loginBytes
   let (_, fresh) =
     sendWithVerdict (verdictFor upgradeSalt loginBytes raced) raced loginBytes
@@ -416,8 +445,8 @@ test "a login naming another identifier is offered no upgrade" =
       ""
       createSessionNsid
       (loginJson "someone-else.test" password)
-  let verdict = verdictFor upgradeSalt loginBytes outdatedStore
-  let (after, response) = sendWithVerdict verdict outdatedStore loginBytes
+  let verdict = verdictFor upgradeSalt loginBytes (outdatedStore ())
+  let (after, response) = sendWithVerdict verdict (outdatedStore ()) loginBytes
   expectEach [
     (
       "the login is refused",
@@ -431,7 +460,7 @@ test "a login naming another identifier is offered no upgrade" =
     ),
     (
       "the verdict carries no upgrade",
-      expectEqual "accepted" (verdictReading verdict outdatedStore),
+      expectEqual "accepted" (verdictReading verdict (outdatedStore ())),
     ),
   ]
 
@@ -450,7 +479,7 @@ test "a login that carries no verdict is refused" =
   let (_, response) =
     sendWithVerdict
       None
-      configuredStore
+      (configuredStore ())
       (postJson
         accountHostText
         ""
@@ -466,7 +495,7 @@ test "a wrong password and an unknown identifier are the same refusal" =
   let (_, wrongPassword) =
     send
       (contextAt testInstant 1)
-      configuredStore
+      (configuredStore ())
       (postJson
         accountHostText
         ""
@@ -475,7 +504,7 @@ test "a wrong password and an unknown identifier are the same refusal" =
   let (_, unknownIdentifier) =
     send
       (contextAt testInstant 1)
-      configuredStore
+      (configuredStore ())
       (postJson
         accountHostText
         ""
@@ -496,7 +525,7 @@ test "a login against a server with no credential is the same refusal" =
   let (_, wrongPassword) =
     send
       (contextAt testInstant 1)
-      configuredStore
+      (configuredStore ())
       (postJson
         accountHostText
         ""
@@ -510,7 +539,7 @@ test "a refusal repeats neither the password nor the identifier" =
   let (_, response) =
     send
       (contextAt testInstant 1)
-      configuredStore
+      (configuredStore ())
       (postJson
         accountHostText
         ""
@@ -535,8 +564,8 @@ test "a refusal repeats neither the password nor the identifier" =
   ]
 
 test "two logins in the same second issue different tokens" =
-  let (_, first) = login testInstant 1 configuredStore
-  let (_, second) = login testInstant 2 configuredStore
+  let (_, first) = login testInstant 1 (configuredStore ())
+  let (_, second) = login testInstant 2 (configuredStore ())
   expectNotEqual
     (stringField "accessJwt" first)
     (stringField "accessJwt" second)
@@ -547,24 +576,24 @@ test "the access token reaches a gated route" =
   let (_, response) =
     send
       (contextAt testInstant 3)
-      sessionStore
-      (getQuery accessToken getSessionNsid)
+      (sessionStore ())
+      (getQuery (accessToken ()) getSessionNsid)
   expectEqual (outcome response) "200 OK"
 
 test "getSession names the account the token belongs to" =
   let (_, response) =
     send
       (contextAt testInstant 3)
-      sessionStore
-      (getQuery accessToken getSessionNsid)
+      (sessionStore ())
+      (getQuery (accessToken ()) getSessionNsid)
   expectEqual (stringField "did" response) accountDidText
 
 test "getSession reports the session as active" =
   let (_, response) =
     send
       (contextAt testInstant 3)
-      sessionStore
-      (getQuery accessToken getSessionNsid)
+      (sessionStore ())
+      (getQuery (accessToken ()) getSessionNsid)
   expectEqual (fieldBool "active" response) (Some True)
 
 {- | An access token that was never issued by this server is refused even
@@ -575,7 +604,7 @@ test "an invented token is refused" =
   let (_, response) =
     send
       (contextAt testInstant 3)
-      sessionStore
+      (sessionStore ())
       (getQuery "not.a.token" getSessionNsid)
   expectEqual (outcome response) "401 Unauthorized InvalidToken"
 
@@ -583,8 +612,8 @@ test "a session opened on one store is unknown to another" =
   let (_, response) =
     send
       (contextAt testInstant 3)
-      configuredStore
-      (getQuery accessToken getSessionNsid)
+      (configuredStore ())
+      (getQuery (accessToken ()) getSessionNsid)
   expectEqual (outcome response) "401 Unauthorized InvalidToken"
 
 {- | Two hours on, the access token's own window has closed, and an open
@@ -597,43 +626,47 @@ test "the access token is refused after its window closes" =
   let (_, response) =
     send
       (contextAt (testInstant + 7201) 3)
-      sessionStore
-      (getQuery accessToken getSessionNsid)
+      (sessionStore ())
+      (getQuery (accessToken ()) getSessionNsid)
   expectEqual (outcome response) "401 Unauthorized ExpiredToken"
 
 -- # refreshSession
 
-refreshed : (Store, Bytes)
-refreshed =
+refreshed : Unit ->
+  <Kdf, Mint {"access", "refresh"}, Sign "commit"> (Store, Bytes)
+refreshed () =
   send
     (contextAt (testInstant + 60) 4)
-    sessionStore
-    (postNoInput refreshToken refreshSessionNsid)
+    (sessionStore ())
+    (postNoInput (refreshToken ()) refreshSessionNsid)
 
-rotatedStore : Store
-rotatedStore = match refreshed
+rotatedStore : Unit -> <Kdf, Mint {"access", "refresh"}, Sign "commit"> Store
+rotatedStore () = match refreshed ()
   (store, _) => store
 
-rotatedAccess : String
-rotatedAccess = match refreshed
+rotatedAccess : Unit -> <Kdf, Mint {"access", "refresh"}, Sign "commit"> String
+rotatedAccess () = match refreshed ()
   (_, response) => stringField "accessJwt" response
 
-rotatedRefresh : String
-rotatedRefresh = match refreshed
+rotatedRefresh : Unit -> <Kdf, Mint {"access", "refresh"}, Sign "commit"> String
+rotatedRefresh () = match refreshed ()
   (_, response) => stringField "refreshJwt" response
 
-test "a refresh with the session's refresh token is 200" = match refreshed
+test "a refresh with the session's refresh token is 200" = match refreshed ()
   (_, response) => expectEqual (outcome response) "200 OK"
 
-test "a refresh reports the rotated session as active" = match refreshed
+test "a refresh reports the rotated session as active" = match refreshed ()
   (_, response) => expectEqual (fieldBool "active" response) (Some True)
 
 test "a refresh issues a token pair that is not the one it replaced" = expectEach
   [
-    ("rotatedAccess /= accessToken", expectNotEqual accessToken rotatedAccess),
+    (
+      "rotatedAccess /= accessToken",
+      expectNotEqual (accessToken ()) (rotatedAccess ()),
+    ),
     (
       "rotatedRefresh /= refreshToken",
-      expectNotEqual refreshToken rotatedRefresh,
+      expectNotEqual (refreshToken ()) (rotatedRefresh ()),
     ),
   ]
 
@@ -641,8 +674,8 @@ test "the rotated access token reaches a gated route" =
   let (_, response) =
     send
       (contextAt (testInstant + 60) 5)
-      rotatedStore
-      (getQuery rotatedAccess getSessionNsid)
+      (rotatedStore ())
+      (getQuery (rotatedAccess ()) getSessionNsid)
   expectEqual (outcome response) "200 OK"
 
 {- | The rotation invalidates the token it consumed once the grace window has
@@ -652,8 +685,8 @@ test "the consumed refresh token is refused once the grace window has passed" =
   let (_, response) =
     send
       (contextAt (testInstant + 60 + 7201) 6)
-      rotatedStore
-      (postNoInput refreshToken refreshSessionNsid)
+      (rotatedStore ())
+      (postNoInput (refreshToken ()) refreshSessionNsid)
   expectEqual (outcome response) "401 Unauthorized InvalidToken"
 
 -- The rotation replaced the whole session, access half included: a client
@@ -662,31 +695,31 @@ test "the access token from before the rotation is refused after it" =
   let (_, response) =
     send
       (contextAt (testInstant + 120) 6)
-      rotatedStore
-      (getQuery accessToken getSessionNsid)
+      (rotatedStore ())
+      (getQuery (accessToken ()) getSessionNsid)
   expectEqual (outcome response) "401 Unauthorized InvalidToken"
 
 test "an access token is refused on the refresh route" =
   let (_, response) =
     send
       (contextAt (testInstant + 60) 4)
-      sessionStore
-      (postNoInput accessToken refreshSessionNsid)
+      (sessionStore ())
+      (postNoInput (accessToken ()) refreshSessionNsid)
   expectEqual (outcome response) "401 Unauthorized InvalidToken"
 
 test "a refresh token is refused on an access-gated route" =
   let (_, response) =
     send
       (contextAt (testInstant + 60) 4)
-      sessionStore
-      (getQuery refreshToken getSessionNsid)
+      (sessionStore ())
+      (getQuery (refreshToken ()) getSessionNsid)
   expectEqual (outcome response) "401 Unauthorized InvalidToken"
 
 test "a refresh with no Authorization header is refused" =
   let (_, response) =
     send
       (contextAt (testInstant + 60) 4)
-      sessionStore
+      (sessionStore ())
       (postNoInput "" refreshSessionNsid)
   expectEqual (outcome response) "401 Unauthorized AuthenticationRequired"
 
@@ -710,16 +743,21 @@ rotateAt instant seed store refresh =
 {- | A family rotated three times, the last only ten minutes before the ninety
    days since its login run out: every token in it is freshly minted, and the
    refresh token's own signed window runs for another ninety days. -}
-lateChain : (Store, String, String)
-lateChain =
+lateChain : Unit ->
+  <Kdf, Mint {"access", "refresh"}, Sign "commit"> (Store, String, String)
+lateChain () =
   let (first, _, firstRefresh) =
-    rotateAt (testInstant + 30 * daySeconds) 20 sessionStore refreshToken
+    rotateAt
+      (testInstant + 30 * daySeconds)
+      20
+      (sessionStore ())
+      (refreshToken ())
   let (second, _, secondRefresh) =
     rotateAt (testInstant + 60 * daySeconds) 21 first firstRefresh
   rotateAt (testInstant + 90 * daySeconds - 600) 22 second secondRefresh
 
 test "a family is refused past ninety days however recently it rotated" =
-  let (store, access, refresh) = lateChain
+  let (store, access, refresh) = lateChain ()
   let before = testInstant + 90 * daySeconds - 300
   let after = testInstant + 90 * daySeconds + 60
   let (_, liveResponse) =
@@ -757,7 +795,7 @@ test "a refresh token lasts at least as long as its family" =
    that works, and the first answer's pair keeps working beside it. -}
 test "a consumed refresh token replayed within the grace window still works" =
   let (store, access, refresh) =
-    rotateAt (testInstant + 120) 26 rotatedStore refreshToken
+    rotateAt (testInstant + 120) 26 (rotatedStore ()) (refreshToken ())
   let (_, replayed) =
     send
       (contextAt (testInstant + 121) 27)
@@ -767,12 +805,12 @@ test "a consumed refresh token replayed within the grace window still works" =
     send
       (contextAt (testInstant + 121) 28)
       store
-      (getQuery rotatedAccess getSessionNsid)
+      (getQuery (rotatedAccess ()) getSessionNsid)
   expectEach [
     ("the replay issued a refresh token", expectNotEqual "" refresh),
     (
       "the replay issued a pair unlike the first rotation's",
-      expectNotEqual rotatedAccess access,
+      expectNotEqual (rotatedAccess ()) access,
     ),
     (
       "the replay's access token reaches a gated route",
@@ -798,7 +836,7 @@ replayBurst step count store =
       send
         (contextAt (testInstant + 120 + step) (40 + step))
         store
-        (postNoInput refreshToken refreshSessionNsid)
+        (postNoInput (refreshToken ()) refreshSessionNsid)
     let (final, rest) = replayBurst (step + 1) count next
     (final, response :: rest)
 
@@ -816,9 +854,9 @@ answerTo context store bytes = match send context store bytes
    burst, one replay-issued session is left open, beside the one the rotation
    itself issued, rather than one per presentation. -}
 test "a burst of replays inside the grace window leaves one of its pairs open" =
-  let (store, responses) = replayBurst 0 6 rotatedStore
+  let (store, responses) = replayBurst 0 6 (rotatedStore ())
   let at = contextAt (testInstant + 130) 50
-  let (_, rotation) = send at store (getQuery rotatedAccess getSessionNsid)
+  let (_, rotation) = send at store (getQuery (rotatedAccess ()) getSessionNsid)
   let served = "200 OK"
   let refused = "401 Unauthorized InvalidToken"
   expectEach [
@@ -863,16 +901,17 @@ test "a burst of replays inside the grace window leaves one of its pairs open" =
    when the original refresh token is replayed at +7261, past the grace window
    of its consumption at +60. Family B: a second login at +7000, which that
    replay must not touch. -}
-revocation : (Store, Store, String, String, String, String, Bytes)
-revocation =
+revocation : Unit ->
+  <Kdf, Mint {"access", "refresh"}, Sign "commit"> (Store, Store, String, String, String, String, Bytes)
+revocation () =
   let (familyA, currentAccess, currentRefresh) =
-    rotateAt (testInstant + 7000) 31 rotatedStore rotatedRefresh
+    rotateAt (testInstant + 7000) 31 (rotatedStore ()) (rotatedRefresh ())
   let (twoFamilies, siblingResponse) = login (testInstant + 7000) 32 familyA
   let (revoked, replay) =
     send
       (contextAt (testInstant + 7261) 33)
       twoFamilies
-      (postNoInput refreshToken refreshSessionNsid)
+      (postNoInput (refreshToken ()) refreshSessionNsid)
   (
     twoFamilies,
     revoked,
@@ -884,7 +923,7 @@ revocation =
   )
 
 test "a replay past the grace window revokes its whole family at once" =
-  let (before, revoked, access, refresh, _, _, replay) = revocation
+  let (before, revoked, access, refresh, _, _, replay) = revocation ()
   let at = contextAt (testInstant + 7262) 34
   let (_, beforeResponse) = send at before (getQuery access getSessionNsid)
   let (_, accessResponse) = send at revoked (getQuery access getSessionNsid)
@@ -910,7 +949,7 @@ test "a replay past the grace window revokes its whole family at once" =
   ]
 
 test "a revocation leaves a sibling family on the same account open" =
-  let (_, revoked, _, _, siblingAccess, siblingRefresh, _) = revocation
+  let (_, revoked, _, _, siblingAccess, siblingRefresh, _) = revocation ()
   let (_, accessResponse) =
     send
       (contextAt (testInstant + 7262) 35)
@@ -934,18 +973,18 @@ test "a revocation leaves a sibling family on the same account open" =
 
 -- # deleteSession
 
-closed : (Store, Bytes)
-closed =
+closed : Unit -> <Kdf, Mint {"access", "refresh"}, Sign "commit"> (Store, Bytes)
+closed () =
   send
     (contextAt (testInstant + 60) 7)
-    sessionStore
-    (postNoInput refreshToken deleteSessionNsid)
+    (sessionStore ())
+    (postNoInput (refreshToken ()) deleteSessionNsid)
 
-closedStore : Store
-closedStore = match closed
+closedStore : Unit -> <Kdf, Mint {"access", "refresh"}, Sign "commit"> Store
+closedStore () = match closed ()
   (store, _) => store
 
-test "deleting the session is 200" = match closed
+test "deleting the session is 200" = match closed ()
   (_, response) => expectEqual (outcome response) "200 OK"
 
 {- | THE revocation property, and the reason a session list exists at all: the
@@ -956,24 +995,24 @@ test "the access token is refused after the session is deleted" =
   let (_, response) =
     send
       (contextAt (testInstant + 61) 8)
-      closedStore
-      (getQuery accessToken getSessionNsid)
+      (closedStore ())
+      (getQuery (accessToken ()) getSessionNsid)
   expectEqual (outcome response) "401 Unauthorized InvalidToken"
 
 test "the refresh token is refused after the session is deleted" =
   let (_, response) =
     send
       (contextAt (testInstant + 61) 8)
-      closedStore
-      (postNoInput refreshToken refreshSessionNsid)
+      (closedStore ())
+      (postNoInput (refreshToken ()) refreshSessionNsid)
   expectEqual (outcome response) "401 Unauthorized InvalidToken"
 
 test "deleting the same session twice is refused the second time" =
   let (_, response) =
     send
       (contextAt (testInstant + 61) 8)
-      closedStore
-      (postNoInput refreshToken deleteSessionNsid)
+      (closedStore ())
+      (postNoInput (refreshToken ()) deleteSessionNsid)
   expectEqual (outcome response) "401 Unauthorized InvalidToken"
 
 {- | A write is gated on the ACCESS token, so logging out closes the account's
@@ -984,10 +1023,10 @@ test "a write with the deleted session's access token is refused first" =
   let (_, response) =
     send
       (contextAt (testInstant + 61) 8)
-      closedStore
+      (closedStore ())
       (postJson
         accountHostText
-        accessToken
+        (accessToken ())
         createRecordNsid
         (stringify
           (jObject [
@@ -1000,26 +1039,29 @@ test "a write with the deleted session's access token is refused first" =
 {- | Logging out with the original refresh token after the rotation at +60
    consumed it, inside the grace window. The token is still admitted, since a
    replay of it would be, and it ends the family it was consumed in. -}
-consumedClosed : (Store, Bytes)
-consumedClosed =
+consumedClosed : Unit ->
+  <Kdf, Mint {"access", "refresh"}, Sign "commit"> (Store, Bytes)
+consumedClosed () =
   send
     (contextAt (testInstant + 120) 60)
-    rotatedStore
-    (postNoInput refreshToken deleteSessionNsid)
+    (rotatedStore ())
+    (postNoInput (refreshToken ()) deleteSessionNsid)
 
-consumedClosedStore : Store
-consumedClosedStore = match consumedClosed
+consumedClosedStore : Unit ->
+  <Kdf, Mint {"access", "refresh"}, Sign "commit"> Store
+consumedClosedStore () = match consumedClosed ()
   (store, _) => store
 
-test "logging out with a consumed refresh token is 200" = match consumedClosed
-  (_, response) => expectEqual "200 OK" (outcome response)
+test "logging out with a consumed refresh token is 200" =
+  match consumedClosed ()
+    (_, response) => expectEqual "200 OK" (outcome response)
 
 test "logging out with a consumed refresh token closes the rotated session" =
   let (_, response) =
     send
       (contextAt (testInstant + 121) 61)
-      consumedClosedStore
-      (getQuery rotatedAccess getSessionNsid)
+      (consumedClosedStore ())
+      (getQuery (rotatedAccess ()) getSessionNsid)
   expectEqual "401 Unauthorized InvalidToken" (outcome response)
 
 -- The consumed token is forgotten with its family, so presenting it again
@@ -1028,32 +1070,33 @@ test "a consumed refresh token logged out with is not replayed afterwards" =
   let (_, response) =
     send
       (contextAt (testInstant + 121) 62)
-      consumedClosedStore
-      (postNoInput refreshToken refreshSessionNsid)
+      (consumedClosedStore ())
+      (postNoInput (refreshToken ()) refreshSessionNsid)
   expectEqual "401 Unauthorized InvalidToken" (outcome response)
 
 {- | The same logout past the grace window. Family A is rotated a second time
    at +7000, so its current access token is still inside its own two hours when
    the original refresh token is presented at +7261; family B is a second login
    at +7000, which the logout must not touch. -}
-lateConsumedClosed : (Store, String, String, Bytes)
-lateConsumedClosed =
+lateConsumedClosed : Unit ->
+  <Kdf, Mint {"access", "refresh"}, Sign "commit"> (Store, String, String, Bytes)
+lateConsumedClosed () =
   let (familyA, currentAccess, _) =
-    rotateAt (testInstant + 7000) 63 rotatedStore rotatedRefresh
+    rotateAt (testInstant + 7000) 63 (rotatedStore ()) (rotatedRefresh ())
   let (twoFamilies, siblingResponse) = login (testInstant + 7000) 64 familyA
   let (store, response) =
     send
       (contextAt (testInstant + 60 + 7201) 65)
       twoFamilies
-      (postNoInput refreshToken deleteSessionNsid)
+      (postNoInput (refreshToken ()) deleteSessionNsid)
   (store, currentAccess, stringField "accessJwt" siblingResponse, response)
 
 test "logging out with a consumed refresh token past its grace is 200" =
-  let (_, _, _, response) = lateConsumedClosed
+  let (_, _, _, response) = lateConsumedClosed ()
   expectEqual "200 OK" (outcome response)
 
 test "logging out past the grace window closes the family's current session" =
-  let (store, access, _, _) = lateConsumedClosed
+  let (store, access, _, _) = lateConsumedClosed ()
   let (_, response) =
     send
       (contextAt (testInstant + 7262) 66)
@@ -1062,7 +1105,7 @@ test "logging out past the grace window closes the family's current session" =
   expectEqual "401 Unauthorized InvalidToken" (outcome response)
 
 test "logging out with a consumed refresh token leaves a sibling family open" =
-  let (store, _, siblingAccess, _) = lateConsumedClosed
+  let (store, _, siblingAccess, _) = lateConsumedClosed ()
   let (_, response) =
     send
       (contextAt (testInstant + 7262) 67)
@@ -1074,16 +1117,17 @@ test "logging out with a consumed refresh token leaves a sibling family open" =
    +110. The second replay's pair supersedes the first's, so the first
    replay's refresh token is left naming no open session, and it still belongs
    to the family. -}
-superseded : (Store, String, String)
-superseded =
+superseded : Unit ->
+  <Kdf, Mint {"access", "refresh"}, Sign "commit"> (Store, String, String)
+superseded () =
   let (once, _, firstReplay) =
-    rotateAt (testInstant + 100) 70 rotatedStore refreshToken
+    rotateAt (testInstant + 100) 70 (rotatedStore ()) (refreshToken ())
   let (twice, secondAccess, _) =
-    rotateAt (testInstant + 110) 71 once refreshToken
+    rotateAt (testInstant + 110) 71 once (refreshToken ())
   (twice, firstReplay, secondAccess)
 
 test "logging out with a superseded refresh token ends its family" =
-  let (store, supersededRefresh, replayAccess) = superseded
+  let (store, supersededRefresh, replayAccess) = superseded ()
   let (closedFamily, logout) =
     send
       (contextAt (testInstant + 120) 72)
@@ -1103,7 +1147,7 @@ test "logging out with a superseded refresh token ends its family" =
       "the rotated sibling is refused",
       expectEqual
         refused
-        (answerTo at closedFamily (getQuery rotatedAccess getSessionNsid)),
+        (answerTo at closedFamily (getQuery (rotatedAccess ()) getSessionNsid)),
     ),
   ]
 
@@ -1111,7 +1155,7 @@ test "logging out with a superseded refresh token ends its family" =
    keeps the store it was handed, so the family stays open and the token can
    still end it. -}
 test "a superseded refresh token is refused a refresh and leaves its family open" =
-  let (store, supersededRefresh, replayAccess) = superseded
+  let (store, supersededRefresh, replayAccess) = superseded ()
   let (after, refresh) =
     send
       (contextAt (testInstant + 120) 74)
@@ -1143,7 +1187,7 @@ test "a superseded refresh token is refused a refresh and leaves its family open
    single-session server would answer this cell the same way as a correct one
    right up until an account signed in twice. -}
 test "logging out of one session leaves another open" =
-  let (afterFirst, _) = login testInstant 1 configuredStore
+  let (afterFirst, _) = login testInstant 1 (configuredStore ())
   let (twoSessions, secondResponse) = login testInstant 9 afterFirst
   let secondAccess = stringField "accessJwt" secondResponse
   let secondRefresh = stringField "refreshJwt" secondResponse
@@ -1151,7 +1195,7 @@ test "logging out of one session leaves another open" =
     send
       (contextAt (testInstant + 1) 10)
       twoSessions
-      (postNoInput refreshToken deleteSessionNsid)
+      (postNoInput (refreshToken ()) deleteSessionNsid)
   let (_, response) =
     send
       (contextAt (testInstant + 1) 11)
@@ -1160,7 +1204,7 @@ test "logging out of one session leaves another open" =
   expectEach [
     (
       "secondRefresh /= refreshToken",
-      expectNotEqual refreshToken secondRefresh,
+      expectNotEqual (refreshToken ()) secondRefresh,
     ),
     ("outcome response == \"200 OK\"", expectEqual "200 OK" (outcome response)),
   ]

@@ -1,0 +1,2 @@
+export interface Hh a where
+  h : a -> a

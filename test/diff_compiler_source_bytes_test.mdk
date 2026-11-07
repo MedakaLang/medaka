@@ -94,19 +94,22 @@ quotedScan : List String -> List String -> List String
 quotedScan [] found = found
 quotedScan (l :: rest) found = quotedScan rest (addQuoted l found)
 
-check : <Exec, IO, FileRead> Expectation
-check =
-  match (boundedVerb "git" [
-    "-C", medakaRoot, "-c", "core.quotePath=false", "ls-files"
-  ])
-    Err e => fail "could not spawn git ls-files: \{e}"
-    Ok (code, out, _) =>
-      if code /= 0 then
-        fail "git ls-files exited \{intToString code}"
-      else
-        let entries = filter (/= "") (lines out)
-        let files = filter isSource entries
-        scanCheck (scanAll medakaRoot files 0 []) (quotedScan entries [])
+check : Unit -> <Exec, IO, FileRead> Expectation
+check () = match boundedVerb "git" [
+  "-C",
+  medakaRoot (),
+  "-c",
+  "core.quotePath=false",
+  "ls-files",
+]
+  Err e => fail "could not spawn git ls-files: \{e}"
+  Ok (code, out, _) =>
+    if code /= 0 then
+      fail "git ls-files exited \{intToString code}"
+    else
+      let entries = filter (/= "") (lines out)
+      let files = filter isSource entries
+      scanCheck (scanAll (medakaRoot ()) files 0 []) (quotedScan entries [])
 
 -- Grade the scan: a floor on the file count, then no bad bytes, then no
 -- quoted source path. The floor (about 80% of the 1909 files scanned on
@@ -122,4 +125,4 @@ scanCheck (n, bad) quoted = expectAll [
 ]
 
 test "diff_compiler_source_bytes: no tracked source file has a raw control byte" =
-  check
+  check ()

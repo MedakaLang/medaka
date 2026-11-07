@@ -58,6 +58,7 @@ import frontend.ast.{
   useMemberOrigin,
   useMemberAlias,
   qualifiedLocal,
+  programIsCore,
   PropParam(..),
   MethodDefault(..),
   IfaceMethod(..),
@@ -141,21 +142,31 @@ import frontend.visibility.{
   nsIfaceOrigins,
   nsTypeOrigins,
   nsCtorOrigins,
-  valueDeclsOf,
-  valueDeclOf,
   nsEffects,
   nsNewtypeCtors,
   exportsIn,
   directIn,
   buildExportsWith,
   pubIfaceMethodSets,
-  reexportBindings,
   withSubjectView,
   subjectOf,
   privilegedCarry,
   ExportView(..),
   directUnder,
   carriedPaths,
+}
+import frontend.name_scope.{
+  ImportedSurface(..),
+  NameBinding(..),
+  NameCollision(..),
+  NameRung(..),
+  NameScope,
+  NameTarget(..),
+  bareBinding,
+  bindingImporters,
+  importedSurfaces,
+  nameScopeOf,
+  scopeCollisions,
 }
 import test.{expectAll, expectNone, expectTrue}
 
@@ -350,6 +361,14 @@ public export data ResError =
   -- `DInterface` carries no `Loc` (declLoc sends it to `None`) and `IfaceMethod`
   -- has none either, so there is no span to point at and none is fabricated.
   | DuplicateInterfaceMethod String String String (Option Loc)
+  -- An interface method and a top-level function, value or extern of one name
+  -- declared in one module.  Fields: the name, the interface, the span of the
+  -- later of the two declarations.
+  | DuplicateMethodValue String String (Option Loc)
+  -- An explicit import binding a name the module also declares at top level.
+  -- Fields: the bound name, the span of the import member.  A wildcard import
+  -- of the name is not an error: the module's own declaration answers.
+  | ImportOwnName String (Option Loc)
 
 -- The did-you-mean pair (misspelled name, suggested name) for a resolve error,
 -- or None.  Only an error that carries a suggestion qualifies.
@@ -418,6 +437,8 @@ resErrorLoc (MisplacedAuthorityBinder _ l) = l
 resErrorLoc (InternalExternAccess _ l) = l
 resErrorLoc (ReassignImmutable _ l) = l
 resErrorLoc (DuplicateInterfaceMethod _ _ _ l) = l
+resErrorLoc (DuplicateMethodValue _ _ l) = l
+resErrorLoc (ImportOwnName _ l) = l
 
 -- ── The name environment ──────────────────────────────────────────────────
 -- `values`/`types`/`ctors`/`imported`/`internalGuard` are membership-tested on
@@ -439,7 +460,7 @@ public export data Env = Env {
   effects : List String,  -- to do per field mention — the wide-record resolve quadratic (#984).  The
   imported : OrdMap Unit,  -- plain `fieldOwners` list is kept only for the rare `ownsAnyField` error path.
   importedModuleValues : List (String, List String),
-  ambiguous : List (String, List String),
+  bareScope : Option NameScope,  -- multi-module path only; the bare-name ladder
   ctorAmbiguous : List (String, List String),
   ctorAliasShadow : List (String, String),
   aliasAbstractCtor : List (String, String),
@@ -1174,12 +1195,17 @@ isImportedModuleName env n = anyList (isModId n) env.importedModuleValues
 isModId : String -> (String, List String) -> Bool
 isModId n (mid, _) = mid == n
 
+-- Is bare [n] bound by its answering import rung to two declarations?  Two at
+-- the module's own rung are a declaration error, reported where declared.
 isAmbiguous : Env -> String -> Bool
-isAmbiguous env n = isSome (lookupAssoc n env.ambiguous)
+isAmbiguous env n = match flatMap (s => bareBinding s n) env.bareScope
+  Some (Ambiguous RungExplicit _) => True
+  Some (Ambiguous RungWild _) => True
+  _ => False
 
 ambigMods : Env -> String -> List String
-ambigMods env n = match lookupAssoc n env.ambiguous
-  Some mods => mods
+ambigMods env n = match env.bareScope
+  Some s => bindingImporters s n
   None => []
 
 -- constructor peer of isAmbiguous/ambigMods (#674): is this ctor name brought in
@@ -2188,20 +2214,6 @@ lastOf [] = ""
 lastOf [x] = x
 lastOf (_ :: rest) = lastOf rest
 
-export
-programIsCore : List Decl -> Bool
-programIsCore prog = hasOrdering prog && hasFoldable prog
-
-hasOrdering : List Decl -> Bool
-hasOrdering [] = False
-hasOrdering ((DData { dataName = "Ordering" }) :: _) = True
-hasOrdering (_ :: rest) = hasOrdering rest
-
-hasFoldable : List Decl -> Bool
-hasFoldable [] = False
-hasFoldable ((DInterface { name = "Foldable", ... }) :: _) = True
-hasFoldable (_ :: rest) = hasFoldable rest
-
 -- ── build_env ─────────────────────────────────────────────────────────────
 buildEnv : List Decl -> List Decl -> List Decl -> List String -> Env
 buildEnv runtimeDecls preludeDecls prog internalGuard =
@@ -2238,7 +2250,7 @@ buildEnv runtimeDecls preludeDecls prog internalGuard =
     effects = effectNames prog,
     imported = importedM,
     importedModuleValues = [],
-    ambiguous = [],
+    bareScope = None,
     ctorAmbiguous = [],
     ctorAliasShadow = [],
     aliasAbstractCtor = [],
@@ -2279,6 +2291,7 @@ buildErrors preludeDecls coreExp prog =
   let contigErrs = filterOutNamesIn sigDupNames dbName (contiguityErrors prog)
   externWithBodyErrors (externNames prog) prog
     ++ duplicateErrors preludeDecls prog
+    ++ methodValueCollisions coreExp prog
     ++ coreUseErrors coreExp prog
     ++ sigDups
     ++ orphanSignatureErrors prog
@@ -2736,6 +2749,21 @@ addIfaceMethods iname (m :: rest) seen
   | omHasKey m seen = addIfaceMethods iname rest seen
   | otherwise = addIfaceMethods iname rest (omInsert m iname seen)
 
+-- An interface method and a top-level binding of one name in one module, at
+-- the later declaration (`frontend/name_scope.mdk`, two declarations at the
+-- module's own rung).  Imports never enter, so the single-file path reports it
+-- too.
+methodValueCollisions : ModuleExports -> List Decl -> List ResError
+methodValueCollisions coreExp prog =
+  flatMap
+    (c => match (c.ncRungs, c.ncFirst, c.ncSecond)
+      ((RungOwn, RungOwn), TargetMethod _ i _, _) =>
+        [DuplicateMethodValue c.ncName i c.ncLoc]
+      ((RungOwn, RungOwn), _, TargetMethod _ i _) =>
+        [DuplicateMethodValue c.ncName i c.ncLoc]
+      _ => [])
+    (scopeCollisions (nameScopeOf prog [] coreExp))
+
 -- `interfaceList`, made attribute-aware — see ifaceMethodCollisions for why this
 -- is a separate walk and not an arm added to `interfaceList`.
 ownInterfaceMethods : List Decl -> List (String, List String)
@@ -2847,6 +2875,9 @@ resErrorSexp (MisplacedAuthorityBinder n _) =
 resErrorSexp (ReassignImmutable n _) = "(ReassignImmutable " ++ escStr n ++ ")"
 resErrorSexp (DuplicateInterfaceMethod m a b _) =
   "(DuplicateInterfaceMethod \{escStr m} \{escStr a} \{escStr b})"
+resErrorSexp (DuplicateMethodValue n i _) =
+  "(DuplicateMethodValue \{escStr n} \{escStr i})"
+resErrorSexp (ImportOwnName n _) = "(ImportOwnName \{escStr n})"
 
 -- String key for an `Option Loc`, used only to distinguish dedup candidates
 -- (NOT a serialization contract like resErrorSexp): `None` collapses to a
@@ -3062,6 +3093,10 @@ ppResError (InternalExternAccess n _) =
 -- docs/spec/SHADOW-SEMANTICS.md S1-PRELUDE (#1499), and is NOT what this fires on.
 ppResError (DuplicateInterfaceMethod m a b _) =
   "method `\{m}` is declared by two interfaces in this module, `\{a}` and `\{b}`; rename it in one of them"
+ppResError (DuplicateMethodValue n i _) =
+  "duplicate definition of `\{n}`: this module declares it as a method of interface `\{i}` and as a top-level binding; rename one of them"
+ppResError (ImportOwnName n _) =
+  "`\{n}` is imported here and also declared in this module; rename one of them"
 ppResError (ReassignImmutable n _) =
   "cannot reassign `\{n}`: bindings are immutable; shadow it with `let \{n} = ...`, or make it a `Ref` and write `\{n} := ...`"
 
@@ -3114,6 +3149,8 @@ resErrorCode (MisplacedAuthorityBinder _ _) = RMisplacedAuthorityBinder
 resErrorCode (InternalExternAccess _ _) = RInternalExtern
 resErrorCode (ReassignImmutable _ _) = RImmutableAssign
 resErrorCode (DuplicateInterfaceMethod _ _ _ _) = RDuplicateIfaceMethod
+resErrorCode (DuplicateMethodValue _ _ _) = RDuplicateMethodValue
+resErrorCode (ImportOwnName _ _) = RImportOwnName
 
 -- Two modules → "both `a` and `b`";
 -- otherwise a comma-separated list of backtick-quoted module names.
@@ -3347,22 +3384,6 @@ collectImports : OrdMap ModuleExports -> List Decl -> ImportAdds
 collectImports known prog = foldImports known (usePathLocsOf prog)
 
 -- ── use-time ambiguity (MAP-SET-AMBIGUITY-DESIGN.md) ───────────────────────
--- The value bindings one import makes, each as (origin, local): the name the
--- imported module exports and the name this file binds it under.  They differ
--- only under a member alias (`import m.{a as b}`), so a binding is tested
--- against the value exports by its ORIGIN, never its local, and two members
--- binding one local (`{a as b, b}`) stay two bindings.
---
--- An alias-qualified path (`import m as A`) contributes nothing here, unlike
--- `importNamesIn`, which unaliases each dotted name.  That difference is to be
--- settled on purpose rather than merged by tidying.
-importValueBindings : UsePath -> ModuleExports -> List (String, String)
-importValueBindings path exp =
-  -- The value export list grows with re-export depth, so membership is a set
-  -- built once per path, not a list scan per name.
-  let values = omFromNames (exportsIn nsValues exp) omEmpty
-  filterList (b => omHasKey (fst b) values) (reexportBindings path exp)
-
 -- Register one (name, mid) into a name→[mid] MAP, deduping mids (mids kept in
 -- append order).  #925/#926: this was a `List (String, List String)` assoc rescanned
 -- per name (`addProvenance rest` rebuilds the spine to find the key) → O(names^2) per
@@ -3377,12 +3398,6 @@ addProvenance prov n mid = match omLookup n prov
   None => omInsert n [mid] prov
   Some mids =>
     if contains mid mids then prov else omInsert n (mids ++ [mid]) prov
-
--- Provenance over every non-core import in the program, in decl order
--- (left-to-right, so mod-id order matches declaration order).
-valueProvenance : OrdMap ModuleExports -> List UsePath -> OrdMap (List String)
-valueProvenance known paths =
-  fst (foldDeclProvenance importValueDecls known (omEmpty, omEmpty) paths)
 
 -- Provenance keyed by DECLARATION: each import contributes (local name,
 -- declaration key) pairs, and an import is recorded against a name only when it
@@ -3421,23 +3436,11 @@ addDeclProvenance (prov, seen) mid ((n, decl) :: rest) =
       None => [mid]
     addDeclProvenance (omInsert n mids prov, omInsert k () seen) mid rest
 
--- The value names one import binds, each with the key of the declaration it
--- denotes in the imported module (`expValueOrigins`).  A member alias
--- (`import m.{a as b}`) binds `b` to `a`'s declaration.
-importValueDecls : OrdMap ModuleExports -> UsePath -> List (String, String)
-importValueDecls known path = match findExports (useModId path) known
-  None => []
-  Some exp =>
-    let decls = valueDeclsOf exp
-    map
-      ((o, l) => (l, declKey (valueDeclOf exp decls o)))
-      (importValueBindings path exp)
-
 declKey : (String, String) -> String
 declKey (m, n) = "\{lenKey m}\{n}"
 
 -- Materialize the name→mids provenance map into the (name, mids) assoc that
--- `keepAmbiguous` filters and `env.ambiguous`/`env.ctorAmbiguous` store.  Key order is
+-- `keepAmbiguous` filters and `env.ctorAmbiguous` and its peers store.  Key order is
 -- sorted (`omKeys`) rather than first-occurrence, which is byte-equivalent downstream
 -- because every consumer looks names up by key (`lookupAssoc`), never iterates in order.
 provToPairs : OrdMap (List String) -> List (String, List String)
@@ -3447,14 +3450,6 @@ provMidsOf : String -> OrdMap (List String) -> List String
 provMidsOf k prov = match omLookup k prov
   Some mids => mids
   None => []
-
--- Keep only names with ≥2 distinct provenances AND no same-module top-level
--- value shadow (a real local def wins).
-ambiguousSet : OrdMap ModuleExports -> List Decl -> List (String, List String)
-ambiguousSet known prog =
-  let prov = valueProvenance known (usePathsOf prog)
-  let sameMod = userValueNames prog
-  keepAmbiguous sameMod (provToPairs prov)
 
 keepAmbiguous : List String ->
   List (String, List String) ->
@@ -3466,7 +3461,8 @@ keepAmbiguous sameMod ((n, mids) :: rest)
   | otherwise = keepAmbiguous sameMod rest
 
 -- ── constructor-name provenance / ambiguity (#674) ─────────────────────────
--- The exact ctor peer of valueProvenance/ambiguousSet.  Each import contributes
+-- The ctor peer of the value ambiguity `frontend/name_scope.mdk` decides.  Each
+-- import contributes
 -- the CONSTRUCTOR names it actually binds (a bare `import m` binds NONE — impls
 -- only; a selective `import m.{T(..)}` binds T's exported ctors; `import m.*`
 -- binds all of m's ctors), keyed by the DECLARATION it denotes
@@ -3722,7 +3718,7 @@ abstractlyExportedTypes exp = exp.expAbstractData
 -- "declared in this module" means per namespace.
 
 -- The names one non-core import contributes to ONE export namespace (re-export
--- safe, like `importValueBindings`).  Every namespace whose elements are plain
+-- safe).  Every namespace whose elements are plain
 -- names reads
 -- this one body through its `ExpNs` descriptor's projection: constructors
 -- (the `#674` ctor peer), types, and interfaces.
@@ -4231,6 +4227,11 @@ buildEnvMM ps known prog internalGuard =
   -- prelude scope instead, which is the only place this path holds core's surface.
   let coreAliased = whenL seed (coreAliasImports ps.psCoreAliasValues prog)
   let importedM = omFromNames (adds.iaImported ++ coreAliased) omEmpty
+  let scope =
+    nameScopeOf
+      prog
+      (flatMap (importedSurfaces (surfaceOfModule ps known)) prog)
+      ps.psCoreExports
   let env = Env {
     values = valuesM,
     types = typesM,
@@ -4248,7 +4249,7 @@ buildEnvMM ps known prog internalGuard =
     effects = effectNames prog ++ impEffects,
     imported = importedM,
     importedModuleValues = impModValues,
-    ambiguous = ambiguousSet known prog,
+    bareScope = Some scope,
     ctorAmbiguous = ctorAmbiguousSet known prog,
     ctorAliasShadow = aliasShadowedCtors known prog,
     aliasAbstractCtor = aliasAbstractCtors known prog,
@@ -4260,7 +4261,27 @@ buildEnvMM ps known prog internalGuard =
     sugTypesMemo = Ref None,
     localValues = omFromNames (userValueNames prog) omEmpty,
   }
-  (env, adds.iaErrors)
+  (env, adds.iaErrors ++ importOwnNameErrors scope)
+
+-- The export surface of the module [mid] names; `core` is never in [known], so
+-- its surface is the prelude's.
+surfaceOfModule : PreludeScope ->
+  OrdMap ModuleExports ->
+  String ->
+  Option ModuleExports
+surfaceOfModule ps known mid
+  | mid == "core" = Some ps.psCoreExports
+  | otherwise = findExports mid known
+
+-- An explicit import of a name the module declares (`frontend/name_scope.mdk`,
+-- rung 3 against rung 2), at the import member.
+importOwnNameErrors : NameScope -> List ResError
+importOwnNameErrors scope =
+  flatMap
+    (c => match c.ncRungs
+      (RungOwn, RungExplicit) => [ImportOwnName c.ncName c.ncLoc]
+      _ => [])
+    (scopeCollisions scope)
 
 -- (modId, expValues) pairs for every non-`core` import in the program,
 -- regardless of import form (bare `UseName`, selective `UseGroup`, wildcard) —
@@ -4961,7 +4982,7 @@ stampClauseWith top (pats, body) =
 --   * own declarations beat imports, because a module that declares `data Foo`
 --     and also imports one means its own — the same rule a local binding follows
 --     against a top-level one.  Resolve's use-time ambiguity machinery
---     (`ambiguousSet`) only ever fires on ≥2 IMPORTED spellings for this reason:
+--     (`isAmbiguous`) only ever fires on ≥2 IMPORTED spellings for this reason:
 --     a local declaration is not a participant in the ambiguity, it settles it.
 --   * imports beat the prelude, because the prelude is implicit and an explicit
 --     `import m.{Result}` is a deliberate statement about which `Result` is meant.
@@ -5074,7 +5095,7 @@ builtinTyOrigins = map builtinTyOrigin (primitiveTypes ++ tupleCtorTyNames)
 builtinTyOrigin : String -> (String, TyConOrigin)
 builtinTyOrigin n = (n, OriginBuiltin)
 
--- The TYPE peer of `valueProvenance` / `ctorProvenance` (#674): which type names a
+-- The TYPE peer of `ctorProvenance` (#674): which type names a
 -- module exports, and which module DECLARED each.
 --
 -- ⚠️ This is the half `ModuleExports.expTypes` structurally CANNOT answer, and the

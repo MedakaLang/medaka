@@ -1780,8 +1780,8 @@ fi
 # standalone shadowing an interface method) once read `check=0 build=1` here.  That
 # particular axis has since closed — the diagnostics selection runs the same
 # method-alias rewrite the tree selection does, so both drivers see one program
-# (`test/run_check_agreement_fixtures/reject_1812_alias_import_order.mdk` asserts the
-# three verbs agree on it) — but the selections still differ on promotion, so the
+# (`test/run_check_agreement_fixtures/accept_1812_alias_import_order.mdk` asserts the
+# three verbs agree on it: all accept and print 99) — but the selections still differ on promotion, so the
 # class this pass covers is not empty.  So `compiler-soundness` — the job that exists because "ALL the gate
 # shards pass on an ill-typed compiler" — was vetting the compiler with an
 # instrument blind to a whole class of ill-typedness.  This pass closes that:

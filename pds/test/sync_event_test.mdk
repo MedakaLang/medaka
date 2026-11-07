@@ -259,17 +259,18 @@ mustEvent (Ok event) = event
 mustEvent (Err message) = panic "sync_event: event refused: \{message}"
 
 -- A repository at its first commit: created, never written to.
-genesisRepo : Repo
-genesisRepo =
+genesisRepo : Unit -> <Sign "commit"> Repo
+genesisRepo () =
   mustRepo
     (repoInitFromKeyBytes sampleDid (fromU8Array (arrayMake 32 1)) sampleRev)
 
 {- | The genesis event. `None` for the prior repository is what
    `pds/shell/server.mdk` hands `syncCommitEventFor` when it announces a new
    account, and the only case that passes it. -}
-genesisEvent : SyncCommitEvent
-genesisEvent =
-  mustEvent (syncCommitEventFor sampleSeq sampleTime sampleDid None genesisRepo)
+genesisEvent : Unit -> <Sign "commit"> SyncCommitEvent
+genesisEvent () =
+  mustEvent
+    (syncCommitEventFor sampleSeq sampleTime sampleDid None (genesisRepo ()))
 
 {- | A genesis `blocks` CAR has to carry the empty MST root node as well as the
    commit, because the commit's `data` field names that node and a reader
@@ -282,8 +283,8 @@ genesisEvent =
    traversal, and a CAR that carried the right two blocks in an order that
    varied run to run would still be a defect. -}
 test "a genesis commit's CAR carries the empty MST root beside the commit" =
-  let commit = cidToString (repoCommitCid (repoLatestCommit genesisRepo))
-  expectEqual (carCidsOf genesisEvent.blocksCar) (
+  let commit = cidToString (repoCommitCid (repoLatestCommit (genesisRepo ())))
+  expectEqual (carCidsOf (genesisEvent ()).blocksCar) (
     [commit],
     sort [commit, cidToString (mstRootCid mstEmpty)],
   )
@@ -332,7 +333,7 @@ test "a record rewritten to its own CID announces no op" =
         samplePath
         (sampleRecord "one")
         (mustTid (tidEncode 2 1))
-        genesisRepo)
+        (genesisRepo ()))
   let rewritten =
     mustState
       (repoUpdate
@@ -386,8 +387,8 @@ keyFF = fromU8Array [|97, 46, 98, 46, 99, 47, 255|]
 keyFE : Bytes
 keyFE = fromU8Array [|97, 46, 98, 46, 99, 47, 254|]
 
-oneAtFF : Repo
-oneAtFF = rebuiltRepo 1 [(keyFF, "one")]
+oneAtFF : Unit -> <Sign "commit"> Repo
+oneAtFF () = rebuiltRepo 1 [(keyFF, "one")]
 
 -- Every case below announces at least one op whose path is `keyFE` or `keyFF`,
 -- so each event's op list is exact and each event's frame is refused: the ops
@@ -413,14 +414,14 @@ test "a record renamed between two non-UTF-8 keys is a create and a delete" =
   ]
   expectEqual
     (expected, feRefusal)
-    (opsAndFrame oneAtFF (rebuiltRepo 3 [(keyFE, "one")]))
+    (opsAndFrame (oneAtFF ()) (rebuiltRepo 3 [(keyFE, "one")]))
 
 test "a second non-UTF-8 key beside the first is announced as a create" =
   let one = cidToString (recordCidOf "one")
   let after = rebuiltRepo 4 [(keyFF, "one"), (keyFE, "one")]
   expectEqual
     (["create 612e622e632ffe \{one}"], feRefusal)
-    (opsAndFrame oneAtFF after)
+    (opsAndFrame (oneAtFF ()) after)
 
 test "a different record under a different non-UTF-8 key is not an update" =
   let one = cidToString (recordCidOf "one")
@@ -431,7 +432,7 @@ test "a different record under a different non-UTF-8 key is not an update" =
   ]
   expectEqual
     (expected, feRefusal)
-    (opsAndFrame oneAtFF (rebuiltRepo 2 [(keyFE, "two")]))
+    (opsAndFrame (oneAtFF ()) (rebuiltRepo 2 [(keyFE, "two")]))
 
 -- The path `ops[0]` carries in an encoded `#commit` frame, re-encoded.
 framedOpPath : Result String Bytes -> Bytes
@@ -460,8 +461,8 @@ fillerRows =
       (postPath "k\{padLeft 3 '0' (intToString i)}", "filler \{intToString i}"))
     (range 0 120)
 
-batchBase : Repo
-batchBase =
+batchBase : Unit -> <Sign "commit"> Repo
+batchBase () =
   rebuiltRepo
     5
     ([
@@ -490,7 +491,7 @@ test "one applyWrites batch announces exactly the keys whose CIDs moved" =
     RepoWriteCreate (postPath "a") (sampleRecord "a2"),
   ]
   let after =
-    mustState (repoApplyWrites writes (mustTid (tidEncode 30 1)) batchBase)
+    mustState (repoApplyWrites writes (mustTid (tidEncode 30 1)) (batchBase ()))
   let cidOf = text => cidToString (recordCidOf text)
   let hexOf = rkey => encode (postPath rkey)
   expectEqual
@@ -500,7 +501,7 @@ test "one applyWrites batch announces exactly the keys whose CIDs moved" =
       "create \{hexOf "e"} \{cidOf "e1"}",
       "delete \{hexOf "c"} prev \{cidOf "c1"}",
     ]
-    (opsBetween batchBase after)
+    (opsBetween (batchBase ()) after)
 
 {- | The `blocks` CAR as the sync specification states it: the post-write MST
    nodes the prior tree does not hold, the covering proofs for every op's
@@ -567,7 +568,7 @@ test "a mixed batch's blocks CAR holds exactly the whole-tree block set" =
     RepoWriteDelete (postPath "a"),
     RepoWriteCreate (postPath "a") (sampleRecord "a2"),
   ]
-  let (actual, expected) = blocksAgainstWholeTrees batchBase writes
+  let (actual, expected) = blocksAgainstWholeTrees (batchBase ()) writes
   expectEqual expected actual
 
 {- | Deleting `k031` leaves a subtree next to it unchanged but no longer
@@ -577,5 +578,5 @@ test "a mixed batch's blocks CAR holds exactly the whole-tree block set" =
    unchanged subtree at all. -}
 test "a delete that moves an unchanged subtree adds no block for it" =
   let writes = [RepoWriteDelete (postPath "k031")]
-  let (actual, expected) = blocksAgainstWholeTrees batchBase writes
+  let (actual, expected) = blocksAgainstWholeTrees (batchBase ()) writes
   expectEqual expected actual

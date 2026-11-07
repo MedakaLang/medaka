@@ -845,6 +845,7 @@ toManifestString (SList [SAtom "some", value]) = Some (toStr value)
 toManifestString other =
   panic ("core_ir_sexp_parse: bad manifest string: " ++ sexprToStr other)
 # DESUGAR
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("types" "symbol_origins") ((mem "SymbolOrigin" true) (mem "CoreSymbolOrigins" true))))
 (DUse false (UseGroup ("types" "capability_manifest") ((mem "EntryKey" true) (mem "ManifestRequest" true) (mem "InvocationProtocol" true) (mem "CapabilityManifest" true) (mem "FrozenAtom" true) (mem "FrozenAuthority" true) (mem "FrozenVariable" true))))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true))))
@@ -1115,7 +1116,7 @@ toManifestString other =
 (DTypeSig false "joinSexps" (TyFun (TyApp (TyCon "List") (TyCon "SExp")) (TyCon "String")))
 (DFunDef false "joinSexps" ((PList)) (ELit (LString "")))
 (DFunDef false "joinSexps" ((PList (PVar "x"))) (EApp (EVar "sexprToStr") (EVar "x")))
-(DFunDef false "joinSexps" ((PCons (PVar "x") (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "sexprToStr") (EVar "x")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "joinSexps") (EVar "rest")))) (ELit (LString ""))))
+(DFunDef false "joinSexps" ((PCons (PVar "x") (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EApp (EVar "sexprToStr") (EVar "x")))) (ELit (LString " "))) (EApp (EVar "$core.display") (EApp (EVar "joinSexps") (EVar "rest")))) (ELit (LString ""))))
 (DTypeSig false "toExtern" (TyFun (TyCon "SExp") (TyCon "ExternDeclFact")))
 (DFunDef false "toExtern" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "extern"))) (PList (PVar "symbol") (PVar "origin") (PVar "name") (PVar "binding") (PCon "SList" (PVar "hosts")) (PVar "abi") (PVar "provenance"))))) (ERecordCreate "ExternDeclFact" ((fa "symbol" (EApp (EVar "toStr") (EVar "symbol"))) (fa "originModule" (EApp (EVar "toStr") (EVar "origin"))) (fa "declaredName" (EApp (EVar "toStr") (EVar "name"))) (fa "bindingKind" (EMatch (EVar "binding") (arm (PCon "SAtom" (PLit (LString "foreign"))) () (EVar "ForeignBinding")) (arm (PCon "SList" (PList (PCon "SAtom" (PLit (LString "runtime"))) (PVar "key"))) () (EApp (EVar "RuntimeBinding") (EApp (EVar "toStr") (EVar "key")))) (arm PWild () (EApp (EVar "panic") (ELit (LString "core_ir_sexp_parse: bad extern binding")))))) (fa "hostBindings" (EApp (EApp (EVar "map") (EVar "toExternHost")) (EVar "hosts"))) (fa "callableShape" (EApp (EVar "toShape") (EVar "abi"))) (fa "provenance" (EMatch (EVar "provenance") (arm (PCon "SAtom" (PLit (LString "checked"))) () (EVar "CheckedSource")) (arm (PCon "SAtom" (PLit (LString "raw"))) () (EVar "RawSource")) (arm (PCon "SAtom" (PLit (LString "no-source-signature"))) () (EVar "NoSourceSignature")) (arm PWild () (EApp (EVar "panic") (ELit (LString "core_ir_sexp_parse: bad extern provenance")))))))))
 (DFunDef false "toExtern" (PWild) (EApp (EVar "panic") (ELit (LString "core_ir_sexp_parse: bad extern declaration"))))
@@ -1151,6 +1152,7 @@ toManifestString other =
 (DFunDef false "toManifestString" ((PCon "SList" (PList (PCon "SAtom" (PLit (LString "some"))) (PVar "value")))) (EApp (EVar "Some") (EApp (EVar "toStr") (EVar "value"))))
 (DFunDef false "toManifestString" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad manifest string: ")) (EApp (EVar "sexprToStr") (EVar "other")))))
 # MARK
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("types" "symbol_origins") ((mem "SymbolOrigin" true) (mem "CoreSymbolOrigins" true))))
 (DUse false (UseGroup ("types" "capability_manifest") ((mem "EntryKey" true) (mem "ManifestRequest" true) (mem "InvocationProtocol" true) (mem "CapabilityManifest" true) (mem "FrozenAtom" true) (mem "FrozenAuthority" true) (mem "FrozenVariable" true))))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true))))
@@ -1421,7 +1423,7 @@ toManifestString other =
 (DTypeSig false "joinSexps" (TyFun (TyApp (TyCon "List") (TyCon "SExp")) (TyCon "String")))
 (DFunDef false "joinSexps" ((PList)) (ELit (LString "")))
 (DFunDef false "joinSexps" ((PList (PVar "x"))) (EApp (EVar "sexprToStr") (EVar "x")))
-(DFunDef false "joinSexps" ((PCons (PVar "x") (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "sexprToStr") (EVar "x")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "joinSexps") (EVar "rest")))) (ELit (LString ""))))
+(DFunDef false "joinSexps" ((PCons (PVar "x") (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EApp (EVar "sexprToStr") (EVar "x")))) (ELit (LString " "))) (EApp (EVar "$core.display") (EApp (EVar "joinSexps") (EVar "rest")))) (ELit (LString ""))))
 (DTypeSig false "toExtern" (TyFun (TyCon "SExp") (TyCon "ExternDeclFact")))
 (DFunDef false "toExtern" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "extern"))) (PList (PVar "symbol") (PVar "origin") (PVar "name") (PVar "binding") (PCon "SList" (PVar "hosts")) (PVar "abi") (PVar "provenance"))))) (ERecordCreate "ExternDeclFact" ((fa "symbol" (EApp (EVar "toStr") (EVar "symbol"))) (fa "originModule" (EApp (EVar "toStr") (EVar "origin"))) (fa "declaredName" (EApp (EVar "toStr") (EVar "name"))) (fa "bindingKind" (EMatch (EVar "binding") (arm (PCon "SAtom" (PLit (LString "foreign"))) () (EVar "ForeignBinding")) (arm (PCon "SList" (PList (PCon "SAtom" (PLit (LString "runtime"))) (PVar "key"))) () (EApp (EVar "RuntimeBinding") (EApp (EVar "toStr") (EVar "key")))) (arm PWild () (EApp (EVar "panic") (ELit (LString "core_ir_sexp_parse: bad extern binding")))))) (fa "hostBindings" (EApp (EApp (EMethodRef "map") (EVar "toExternHost")) (EVar "hosts"))) (fa "callableShape" (EApp (EVar "toShape") (EVar "abi"))) (fa "provenance" (EMatch (EVar "provenance") (arm (PCon "SAtom" (PLit (LString "checked"))) () (EVar "CheckedSource")) (arm (PCon "SAtom" (PLit (LString "raw"))) () (EVar "RawSource")) (arm (PCon "SAtom" (PLit (LString "no-source-signature"))) () (EVar "NoSourceSignature")) (arm PWild () (EApp (EVar "panic") (ELit (LString "core_ir_sexp_parse: bad extern provenance")))))))))
 (DFunDef false "toExtern" (PWild) (EApp (EVar "panic") (ELit (LString "core_ir_sexp_parse: bad extern declaration"))))

@@ -1,7 +1,9 @@
 frontend.ast
+frontend.ast_walk
 frontend.desugar
 frontend.exhaust
 frontend.marker
+frontend.name_scope
 frontend.resolve
 frontend.runtime_constructors
 frontend.visibility

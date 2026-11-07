@@ -315,7 +315,7 @@ Function definitions are implicitly self-recursive — `factorial n = n * factor
 fact n = if n == 0 then 1 else n * fact (n - 1)
 ```
 
-Plain value bindings are **not** recursive. `let x = ... x ...` is an error because Medaka evaluates strictly — without lazy thunks, a self-referencing value either loops forever or produces nonsense. Forgetting this gets a targeted diagnostic suggesting `let rec`.
+Plain value bindings are **not** recursive. `let x = ... x ...` is an error because Medaka evaluates strictly — without lazy thunks, a self-referencing value either loops forever or produces nonsense. Forgetting this gets a targeted diagnostic suggesting `let rec`. Top-level values follow the initialisation rules in [Module System](#top-level-initialisation-l1).
 
 For explicit value recursion and mutual recursion, use `let rec ... with ...`:
 
@@ -629,6 +629,55 @@ toList (Node l v r) = toList l ++ (v :: toList r)
 - **No circular dependencies** — enforced by compiler
 - **No first-class modules or functors** — OCaml-style complexity explicitly rejected
 
+### Top-level initialisation (L1)
+
+A module's top-level value bindings (nullary bindings: `x = ...`, `x : T`) are initialised once, at startup, strictly. A binding with parameters is a function and is not initialised. Clauses I1 to I6 state what a conforming implementation produces and what `check` rejects. The rejections belong to the static rules (`medaka check`); making every engine initialise strictly is a separate, later step, so a clause about order or failure describes the conforming result, not a claim about any engine today.
+
+- **(I1) Order.** Initialisation runs dependency-first: a value is initialised after every value its initialiser reaches. Ties are broken by source position. Modules run in import order; imports are acyclic.
+- **(I2) Purity.** The initialiser of a non-`main` top-level value has an empty forcing row. Looking up a top-level value is pure, so a function that mentions a value carries nothing for it. Effect labels are host capabilities only, so allocating or writing a `Ref`, `panic` and `exit` are pure for this rule; `putStrLn`, `readFile` and every other labelled primitive are not.
+- **(I3) Value cycles.** A value's initialiser may not read a member of its own recursive group. The rule is OCaml's `let rec` check (Dereference, Guard, Delay) lifted to the module, with Guard split in two: a value has no pre-allocated cell to backpatch, so a direct component is read at initialisation and only a lambda body is not.
+  - *The graph.* Its nodes are the module's top-level bindings plus one node per `impl` declared in the module; an impl node holds its method bodies and the default bodies it inherits from a local interface. An edge is any mention of a top-level name anywhere in a body, lambdas included. A site that dispatches on an interface `I` (a method, a call whose signature is constrained on `I`, an operator, a numeric literal) also has an edge to every local impl of every interface in `I`'s dispatch closure: `I` itself, its superinterfaces, the `requires` interfaces of every impl of `I`, and the constraint interfaces of `I`'s methods, closed transitively. A mention of an imported value has an edge to every local orphan impl. The strongly connected components of this graph are the recursive groups.
+  - *Positions.* Each mention is in one of four positions. **Deref**: evaluated when the initialiser runs: an application head or argument, a scrutinee, a `let` right-hand side, an operand, and everything inside a lambda or local function that sits in such a position, since it may be called. **Store**: stored, not evaluated, when the initialiser runs: a direct component of a constructor application, tuple, list or record, and an argument of an under-saturated call of a local function. **Guard**: read only when called: the whole right-hand side when it is a lambda, and everything inside a lambda in store position. **Delay**: inside a direct lambda argument of a `deferThen`, `deferMap`, `deferAp` or `deferFlatMap` call that is the whole right-hand side or in store position, so every continuation of a `defer` block.
+  - *The rule.* A value is rejected iff one of its deref mentions, or one of its store mentions of a value, is a member of its own group, itself included. A direct component is read at initialisation, so `xs = 1 :: xs` and `a = T 1 [b]` with `b = T 2 [a]` are rejected. A stored function or impl is not run, and guard and delay mentions are not read until called, so `p = Foo helper` with a function `helper` and `f = n => ... f ...` are admitted. A function, an impl and `main` are not initialised; they are group members a deref can enter.
+  - *Why it is sound.* Whatever a value reads while it initialises (a deref, or a stored value) outside its group lies in an earlier group, which is already initialised; a stored function is not run, and a guarded or delayed mention is not read until something calls it. A function or a consumer that later runs a stored lambda is itself a deref mention, so `total = runAsync p` with `p = defer { ... total ... }` is rejected. The delay exemption holds because the effect checker rejects a `Deferred*` impl that runs its callback at the call (`T-EFFECT-INDEX-EAGER`); the receiver can run, so it stays deref. Only the prelude's methods are exempt: a local, imported or shadowing `deferThen` is an ordinary function.
+  - *Repairs.* Make the value a function, `x () = ...`, so the reference happens at call time. A combinator value (a parser) keeps its type by wrapping its body in a lambda its constructor stores, `x = ParserE (ctx pos => runPWith ctx (defer { ... }) pos)`, which is read only when the parser runs; starting the `defer` block with a bind whose receiver is outside the group, `x = defer { _ <- deferPure (); ... }`, also delays the rest, at the cost of one extra bind on every run. A point-free alias of a function is eta-expanded, `f x = g x`.
+- **(I4) `main`.** A binding named `main` in any module is exempt from I2 and is never initialised; it is the program body. Another top-level binding may not use it in expression position. Local binders named `main` are unaffected.
+- **(I5) Failure.** A `panic` or `exit` in an initialiser aborts startup, before `main` runs, with the program's usual panic or exit behaviour.
+- **(I6) Constrained nullary bindings.** A nullary binding with a class constraint (`callMax = max`) is a function of its dictionaries and is not initialised. I1 to I3 do not apply to it.
+
+```
+-- rejected by I2
+banner : <Stdout> Unit
+banner = putStrLn "== banner =="
+
+-- accepted: a function, called from main
+banner () = putStrLn "== banner =="
+main = banner ()
+```
+
+#### Decision table
+
+Every row class the whole-tree census measured at the base (counts are rows, not files):
+
+| Class | Shape | Rows | Decided by | Verdict |
+|---|---|---|---|---|
+| C1 | non-`main` value with a non-empty forcing row (`check : <FileRead> Expectation`, `exeDir : <IO> String`) | 485 (466 outside fixture corpora, mostly test modules) | I2 | rejected with `T-TOPLEVEL-EFFECT`; rewrite as `name () = ...` |
+| C2 | value cycle that traps `E-CYCLIC-VALUE` at run or build today | 5, all test fixtures; one is visible only through an impl dictionary | I3 | rejected with `T-CYCLIC-VALUE` |
+| C2s | static value-cycle candidate under an over-approximate mention graph | 187 | I3 | decided by the deref rule; in tree code, 55 parser-combinator values are repaired (the compiler parser's wrap their body in the `ParserE` constructor, the `parsec` and `sqlite` parsers' take the `defer` prefix) and 1 point-free alias is eta-expanded; the rest are accepted |
+| C3 | rowless value whose body can panic or exit, referenced nowhere | 0 | I5 | startup failure if forced |
+| C3r | same body shape, referenced | 44 | I5 | startup failure under I1; whether a conditional reader moves is reviewed when engines change |
+| C4 | expression-position use of a top-level `main` | 2, both already rejected by `check` (`main` is the auto-printed entry point) | I4 | rejected; I4 codifies existing behaviour |
+| C4local, C4neg | local binder named `main`; `import m.{main}` | 48; 3 | I4 | admitted; an imported `main` is the entry |
+| C5 | constrained nullary binding | 24; 23 are function-typed | I6 | not initialised |
+| C6 | REPL binding of an effectful value | 0 | I2 | the REPL re-checks accumulated declarations, so such a binding is rejected; the hint says to bind `f () = ...` and call it |
+
+#### Diagnostics
+
+Both are `T-` codes minted per `compiler/DIAGNOSTIC-CODES-DESIGN.md`.
+
+- `T-TOPLEVEL-EFFECT`: ``top-level value `banner` performs <Stdout> when it is initialised; a top-level value is initialised once at startup and must have an empty effect row. Make it a function, `banner () = ...`, and call `banner ()` where it is read``. The message is located at the binding, names the binding and the row, and gives the fix.
+- `T-CYCLIC-VALUE`: "top-level value `total` evaluates itself while it is initialised, through `total -> impl Gives Box -> total`; a top-level value is initialised once, in dependency order, so it cannot depend on itself". The message is located at the binding and prints the shortest path back to the value whose first hop is a read at initialisation (a deref mention, or a store mention of a value), an impl hop spelled `impl I T`. It gives the fix: "make it a function, `total () = ...`, or move the recursive reference under a `defer` block or a lambda that initialisation does not call".
+
 ### Abstract Type Exports
 
 For data types, `export` exposes only the **type name** — constructors stay private to the defining module. To additionally expose constructors, use `public export`. This follows Idris's visibility model directly:
@@ -897,8 +946,8 @@ This is also why Medaka does not need associated types or `Collection c e`-style
 fetch : String -> <Async> Response
 parse : Response -> <Async> Json
 
-result : <Async> Json
-result = do
+result : Unit -> <Async> Json
+result () = do
   response <- fetch "https://api.example.com"
   json <- parse response
   pure json
@@ -932,7 +981,9 @@ import collections.HashMap as HM
 
 Wildcard imports are available but style guides should discourage them — makes it hard to know where names come from.
 
-When a wildcard import and an explicit import make two different declarations available under one name, using that name is an error at the use site: the name is ambiguous, as any two imports of one name are. A name that is never used is accepted, and so is one that reaches the module through two paths to the same declaration, such as a facade's re-export. To use the name, import it from one of the two modules under an alias, such as `import utils.{greet as hello}`. An explicit import of the name alone is not ambiguous.
+When two imports at one rung (two wildcards, or two explicit imports) make two different declarations available under one name, using that name is an error at the use site: the name is ambiguous. A name that is never used is accepted, and so is one that reaches the module through two paths to the same declaration, such as a facade's re-export. To use the name, import it explicitly from one of the two modules, optionally under an alias, such as `import utils.{greet as hello}`. A wildcard and an explicit import of one name are not ambiguous: the explicit import answers.
+
+Every bare name denotes one declaration, chosen by scope alone: local binders, then the module's own top-level declarations, then explicit imports, then wildcard imports, then the prelude (the clauses are in `docs/spec/SHADOW-SEMANTICS.md`). Neither the type of an argument nor the position of the name (applied, piped, passed as a value) changes the choice, and an `impl` in scope never turns a function into a method. A wildcard import loses silently to the module's own declaration of the name. An explicit import of a name the module also declares at top level is an error at the import member. An interface method and a top-level function of one name in one module is a duplicate-declaration error. A method hidden by a nearer rung is reached as `Alias.method` (`import core as C`) or by a member alias (`import core.{method as m2}`).
 
 ---
 
@@ -1155,7 +1206,7 @@ prop "sort preserves length" (xs : List Int) =
 -- None
 head : List a -> Option a
 ```
-`medaka test` runs these alongside regular tests. `medaka doc` renders them into the generated documentation. Examples stay correct because the build fails when they go stale.
+`medaka test` runs these alongside regular tests. `medaka doc` renders them into the generated documentation. Examples stay correct because the build fails when they go stale. Each example runs as a unit function called in example order, since a top-level value may not perform effects (I2). A smoke example that panics therefore errors at its own turn; it no longer fails the examples before it.
 
 ### Snapshot Tests
 For structured output (rendered HTML, generated code, formatted JSON), snapshot tests compare a fresh result against a stored reference, with `medaka test --update-snapshots` to refresh them deliberately.

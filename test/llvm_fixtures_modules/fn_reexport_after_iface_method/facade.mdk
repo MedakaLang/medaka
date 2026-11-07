@@ -1,2 +1,0 @@
-export import a.{Rend}
-export import b.{rendr}

@@ -17,7 +17,7 @@ second : (Display a, Display b) => Bool -> a -> b -> String
 second flag x y = if flag then first False y x else display x ++ display y
 
 interface Clash a where
-  probe : a -> String
+  clashProbe : a -> String
 
 probe : Display a => Bool -> a -> String
 probe again x = if again then probe False 1 else display x
