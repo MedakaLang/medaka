@@ -555,7 +555,7 @@ opDictVarOf mctx request False _ m _ encl useScope =
 --     method directly; UNOP has no interface-level default to reduce through (every
 --     `impl Num`, including Int/Float's own `negate a = 0 - a`, defines `negate`
 --     directly), so dictMethod is just `method`.
--- #156 S3c: the PURE op-site inst route (called from entailInst's EKOp arm).  A builtin
+-- The PURE op-site inst route (called from entailInst's EKOp arm).  A builtin
 -- head → RNone (the do-nothing case the old `if isBuiltin then ()` arm expressed; the
 -- adapter's RNone guard turns it back into a no-op that preserves the ref's RNone seed).
 -- Else a concrete non-builtin head → `RKey key reqs` with the element `requires` dicts
@@ -729,7 +729,7 @@ isCompareMethod m = contains m ["eq", "lt", "gt", "lte", "gte"]
 -- key (`rowRouteKey`), whichever other rows share its head, so one instance has one
 -- word in every module.  #609: [goals] is the interface's FULL param-mono vector `τ̄`
 -- at this site (recovered by `ifaceParamMonos`), or the singleton result mono when
--- the caller has none.  A general winner's word is its own key (#1128 F-3b), so the
+-- the caller has none.  A general winner's word is its own key, so the
 -- dictionary names the instance actually selected.  `None` when no row is selected:
 -- the arg-position caller then stamps no route word.  A definer-shadow site reaches
 -- that stamp and is restamped `RLocal` afterwards by `resolveRLocalSites`
@@ -915,7 +915,7 @@ reportOverlapForIface sx iface goals cands =
 -- test `undeterminedGoalExempt` uses, for the same reason.
 --
 -- A var recorded outside any generalized-group-close window is in NEITHER set (see
--- checkCallObligations' #838 I4 note), so it reads as non-closed: the caller of this
+-- checkCallObligations' note), so it reads as non-closed: the caller of this
 -- test reports such a goal rather than deferring it.
 --
 -- One deliberate imprecision, so nobody has to spot it twice: T3 says "quantified
@@ -1765,7 +1765,7 @@ routeOfD : SiteCtx ->
   List Mono ->
   ReqWalk ->
   Route
--- #156 S3b: a thin adapter over `entail` (EKNestedTop kind).  The nested/top ladder
+-- A thin adapter over `entail` (EKNestedTop kind).  The nested/top ladder
 -- packs its `requires` into the primary RKey, so `snd` is empty and only `fst` is read —
 -- byte-identical to the pre-S3b arm-by-arm body.  The requires recursion still lands back
 -- here via argImplRequiresRoutesForRow → argImplReqRoutes → argReqRoute → routeOfD, with the

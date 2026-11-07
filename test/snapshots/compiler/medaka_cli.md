@@ -332,7 +332,7 @@ medakaVersion : String
 medakaVersion = "0.1.0-preview"
 
 -- Full version string: version + commit + build date, from the ONE stamping
--- seam (issue #74 W8) — test/build_native_medaka.sh stamps commit/build-date
+-- seam — test/build_native_medaka.sh stamps commit/build-date
 -- alongside the fingerprint, surfaced via the `buildCommit`/`buildDate`
 -- externs (same empty-on-absent contract as `buildFingerprint`). Degrades to just the bare version when neither is
 -- baked (a dev/interpreted run, or a shipped binary with no provenance).

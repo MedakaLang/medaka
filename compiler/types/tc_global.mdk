@@ -2426,7 +2426,7 @@ checkMethodBodyAgainst env iface kind mname mty gscope inst contract loc pats bo
           declArrows
           actualArrows
           (wWindow env.teDyn.dcModule.mcCells.absorptions launderMark)
-      -- `.irName`: a DIAGNOSTIC wants the spelling, not the identity (#1446 P1's
+      -- `.irName`: a DIAGNOSTIC wants the spelling, not the identity (the
       -- rule — `irName` is kept alongside `irOrigin` for exactly this).
       match escaping
         [] => ()

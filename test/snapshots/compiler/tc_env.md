@@ -451,7 +451,7 @@ export
 rangedOver : GraphCtx -> EffLabel -> Bool -> Bool
 rangedOver gctx l pat = pat && domainHasPatterns (dtopFor gctx l)
 
--- ── #1111 A-2.3: the TYPE-namespace table key, and the MISS POLICY ────────
+-- ── the TYPE-namespace table key, and the MISS POLICY ────────
 -- The ONE place a key for `aliasTableRef` / `dataParamKindsRef` is minted, on
 -- both the write side and the read side.  `o` is always the `TyConOrigin` the
 -- `Ty.TyCon` being registered or elaborated carries — never ambient state (see
@@ -516,11 +516,11 @@ export
 tyTabKey : TyConOrigin -> String -> TabKey
 tyTabKey o n = tabKeyOf NsType o n
 
--- ── #1111 A-2.4: the INTERFACE-namespace table key ────────────────────────
+-- ── the INTERFACE-namespace table key ────────────────────────
 -- `tyTabKey`'s peer for the `NsIface` namespace, and the ONE place a key in that
--- namespace is minted — on both the write side and the read side.  #1557 A-3.5c:
+-- namespace is minted — on both the write side and the read side.
 -- `ifaceParamKindsRef` was one of the two tables named here and is RETIRED; the
--- other was `universeIfaceRequiredRef`, RETIRED in turn by #1557 A-3.5a.  The
+-- other was `universeIfaceRequiredRef`, RETIRED in turn.  The
 -- surviving consumer is stage K's `CE` alone — `ceRowKey`/`ceLookupAt`, and through
 -- it `ceRequiredAt` (impl completeness), `ceSlotKindsAt` (graded impl heads) and
 -- `ifaceDfsCycleOneSuper`'s superinterface edge.
@@ -700,7 +700,7 @@ ieCandidacyVisibleAt _ _ = True
 -- unreachable from the two drivers that exist today.
 --
 -- "FAIL-CLOSED" IS A claim about the reader, not about this function, and since
--- #1557 A-3.5c there are readers of the opposite polarity.  The argument above holds
+-- There are readers of the opposite polarity.  The argument above holds
 -- for a reader that CONSUMES declarations to build something — losing them shrinks a
 -- universe and the missing entry is reported.  It INVERTS for a reader that consumes
 -- declarations to CHECK them: at `cur = -1`, `ceRowsVisibleAt`/`ceRowsOwnedBy` return
@@ -856,7 +856,7 @@ declEnvDirectImports edges mid = optionOr [] (omLookup mid edges)
 -- MEASURED when A-3.2a and A-3.4 first met in one tree: 13/14, and neither PR
 -- could have seen it alone — no conflict marker, two adjacent comment blocks,
 -- each correct in isolation.
--- ═══ #1112 A-3.4: THE `IE` REGISTRY — IE-BLOCK-BEGIN ════════════════════════════
+-- ═══ THE `IE` REGISTRY — IE-BLOCK-BEGIN ════════════════════════════
 -- the two banner lines bounding this block are read by A GATE.  Check 4
 -- of `test/registry_keying_ratchet.sh` (which runs inside
 -- `test/typecheck_compiler_source.sh`, inside the required `soundness` job)
@@ -1238,7 +1238,7 @@ ieSnapAt cur ((o, u) :: rest) acc
   | ieCandidacyVisibleAt cur o = ieSnapAt cur rest u
   | otherwise = acc
 
--- #1557 A-3.5b: the ROW-SET read for the decl-time EXISTENCE check — built as the
+-- The ROW-SET read for the decl-time EXISTENCE check — built as the
 -- peer of `CE`'s `ceRowsVisibleAt` on the NAME/declaration axis.
 -- it is no longer on that axis.  Two retractions, in order, because the second
 -- only makes sense against the first: A-3.5b's original claim that this read is
@@ -1278,7 +1278,7 @@ ieRowsVisibleAt : Int -> ImplEnv -> List ImplRow
 ieRowsVisibleAt cur env =
   filterList (r => ieCandidacyVisibleAt cur (ieRowOrd r)) env.ieRows
 
--- #1559 A-3.7: the POPULATION reads coherence takes — the whole graph, and one
+-- The POPULATION reads coherence takes — the whole graph, and one
 -- module's OWN rows.  Peers of `CE`'s `ceRowsVisibleAt`/`ceRowsOwnedBy`, and they read
 -- `ieRows` for the same reason the snapshot fold does.
 --
@@ -1305,9 +1305,9 @@ export
 ieRowsOwnedBy : Int -> ImplEnv -> List ImplRow
 ieRowsOwnedBy cur env = filterList (r => ieRowOrd r == cur) env.ieRows
 
--- ═══ #1112 A-3.4: IE-BLOCK-END ═════════════════════════════════════════════════
+-- ═══ IE-BLOCK-END ═════════════════════════════════════════════════
 
--- ═══ #1519 A-3.3: THE `CE` REGISTRY — CE-BLOCK-BEGIN (its data declarations are in compiler/types/tc_types.mdk) ═══
+-- ═══ THE `CE` REGISTRY — CE-BLOCK-BEGIN (its data declarations are in compiler/types/tc_types.mdk) ═══
 
 ceRowKey : CeRow -> RegKey
 ceRowKey (CeRow k _ _ _ _ _ _ _ _) = k
@@ -1543,7 +1543,7 @@ ceLookupAt key cur env = do
 ceLookupGraph : RegKey -> ClassEnv -> Option CeRow
 ceLookupGraph key env = regLookupK key env.ceByKey
 
--- ── #1557 A-3.5c: the ROW-SET reads, and why there are exactly two ─────────
+-- ── the ROW-SET reads, and why there are exactly two ─────────
 -- `ceLookupAt` above answers "what does interface I mean here"; the two
 -- relocated SCANS (W1 acyclicity, phantom methods) instead need a POPULATION,
 -- and they need two DIFFERENT ones.  Both go through `declEnvVisibleAt` — the
@@ -1584,7 +1584,7 @@ ceSlotKindsAt key cur i env = do
   r <- ceLookupAt key cur env
   nthKindList i (ceRowParamKinds r)
 
--- #1557 A-3.5a: interface [key]'s REQUIRED-method names at the reading module's
+-- Interface [key]'s REQUIRED-method names at the reading module's
 -- ordinal — the relocation target of `universeIfaceRequiredRef`'s registry lookup
 -- and of the retired bare first-match scan.
 --
@@ -2586,7 +2586,7 @@ kindsEq _ _ = False
 -- KType, and disagreeing slot kinds across two methods of one interface would
 -- elaborate the same index to a row in one and a tyvar in the other.
 --
--- #1557 A-3.5c retired the table, not the inference.  `registerIfaceParamKinds`/
+-- The table is retired, not the inference.  `registerIfaceParamKinds`/
 -- `registerIfaceParamKindsGo` and the `ifaceParamKindsRef`/`universeIfaceParamKinds`
 -- pair they wrote into are GONE.  The inference above (`ifaceParamKindsOf`) has one
 -- consumer, the evidence `checkDeclaredKinds` gives the author of an interface
@@ -2599,7 +2599,7 @@ anyKRow [] = False
 anyKRow (KRow :: _) = True
 anyKRow (_ :: rest) = anyKRow rest
 
--- ── #1557 A-3.5c: `insertIfaceParamKinds`/`ifaceSlotKey` STOOD HERE ──────────
+-- ── `insertIfaceParamKinds`/`ifaceSlotKey` STOOD HERE ──────────
 -- The table they wrote is retired (see the note above `anyKRow`); the KEY SHAPE
 -- they minted survives in stage K's `CE` — `ceRowKey` is `regKeyOfTab (ifaceTabKey
 -- o name)` and the slot is supplied POSITIONALLY by `ceRowParamKinds`, which is
@@ -2608,7 +2608,7 @@ anyKRow (_ :: rest) = anyKRow rest
 -- its scope as an argument, and that is still live.
 --
 -- ONE key shape: the interface's IDENTITY plus the slot ORDINAL
--- (`regKeyTabAt (ifaceTabKey o iface) i`, #1111 A-2.4).  It was the bare string
+-- (`regKeyTabAt (ifaceTabKey o iface) i`).  It was the bare string
 -- `"\{iface}@\{i}"` until this unit, which is #1257: an ordinary interface and a
 -- graded one, same bare name, unrelated modules, one shared key.
 -- the slot is an ordinal and stays one.  It is deliberately NOT spliced into the
@@ -3004,7 +3004,7 @@ implRowHasReqs [] = False
 implRowHasReqs _ = True
 
 -- the names of an interface's REQUIRED methods (those whose merged IfaceMethod
--- carries NO default body).  Since #1557 A-3.5a this is called once per interface at
+-- carries NO default body).  This is called once per interface at
 -- `CeRow` construction (`classEnvRowsOf`) rather than once per impl-check, and it is
 -- the same pure computation the retired `insertIfaceRequired` writer stored.
 requiredMethodNames : List IfaceMethod -> List String
@@ -3345,7 +3345,7 @@ ieRowInheritsDefault gctx r name =
 
 -- The head-plus-headless union, on `IE`: the goal head's own bucket merged with the
 -- headless one, since a fully-general `impl C a` matches every goal but heads at
--- none (#1128 F-3b).  Its `KeyBuckets` predecessor was `candidateBucket`, deleted by
+-- none.  Its `KeyBuckets` predecessor was `candidateBucket`, deleted by
 -- B-2.1-d; the two properties below were derived against it and still hold here.
 --
 -- FILTER-THEN-MERGE, where `candidateBucket` merged-then-filtered, and the two
@@ -3569,7 +3569,7 @@ insertUnivImplAt ifk tys reqs (ImplUniverse conc hl) = match univReceiverTag tys
 -- now carries the rule.
 --
 -- the head half still does not move, and that is not symmetry-for-its-own-sake:
--- see `dispHeadTab` for the measured derivation (#1317 T1 / the closed S0 #1277).
+-- see `dispHeadTab` for the measured derivation (the closed S0 #1277).
 -- The `NsIface` tag is not decoration either: it is what stops a future table that
 -- mixes namespaces from colliding a bare interface name with a bare type name of the
 -- same spelling.
@@ -3898,7 +3898,7 @@ importTableMid path =
   let mid = useModId path
   if mid == "core" then "" else mid
 
--- ── #1111 A-2.5b: the method-IDENTITY rows a module carries (`meExports`) ──
+-- ── the method-IDENTITY rows a module carries (`meExports`) ──
 -- `mid → [(name the row carries this method under, the Ident of the interface
 -- declaration it means)]`, folded dependency-first by `methodEnvGo` so an
 -- `export import src.{…}` resolves against `src`'s already-folded row, at any depth.

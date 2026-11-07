@@ -1088,7 +1088,7 @@ unifyN dyn (ta@(TRigid a)) (tb@(TCon b _)) =
 -- TVar-headed spine (so `p a b` unifying with a tuple still flows through the generic arm).
 unifyN dyn t1 t2
   | tupleUnifyClash t1 t2 = typeMismatch dyn t1 t2
--- #1119 D-2 (#1098, #1121): the VARIANCE gate.  `a1` is the partial spine, so
+-- (#1098, #1121): the VARIANCE gate.  `a1` is the partial spine, so
 -- the number of `TApp` nodes already in `a1` is `b1`'s positional index.  When
 -- the head's recorded polarity at that index is not `PCo`, an effect row inside
 -- the argument must be EQUAL rather than merely compatible — see
@@ -1436,7 +1436,7 @@ solvedUpper mctx (Some (AVar cell)) = match !cell
   AUnbound _ _ _ _ _ => False
 solvedUpper _mctx _ = False
 
--- ── #1119 D-2: the per-parameter VARIANCE gate (#1098, #1121) ─────────────
+-- ── the per-parameter VARIANCE gate (#1098, #1121) ─────────────
 -- The arrow-row unifier's closed~closed arm demands equality, and a seam that
 -- knows its direction relaxes that to sub-effecting through `unifyInto`.  A
 -- type ARGUMENT at a non-covariant slot is where the relaxation must NOT
@@ -2468,7 +2468,7 @@ xmodVecObl s v
 
 -- map each (iface, scheme-var-id VECTOR) through the instantiation subst to this
 -- call's monos, pushing ONE joint obligation per predicate onto the call channel
--- (`Windowed UObligation`, #838 I1).  [originId] is the occurrence's own #837 binding
+-- (`Windowed UObligation`).  [originId] is the occurrence's own #837 binding
 -- id (threaded from instantiateVarTrackedId's [id] — the binding this re-instantiation
 -- was deferred by; 0 = anchorless), stored on the record so a later increment (I2) can
 -- read it without a second migration.  If ANY id is absent from the subst (shouldn't

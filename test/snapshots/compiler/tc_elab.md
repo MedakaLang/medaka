@@ -373,7 +373,7 @@ resolveArgStamps sx ((PendingEntry name tagRef am encl kind loc scope _) :: rest
     _ => ()
   resolveArgStamps sx rest
 
--- #156 S3c: a thin adapter over `entail` (EKArg kind).  `entail` returns
+-- A thin adapter over `entail` (EKArg kind).  `entail` returns
 -- `(primaryRoute, elementRoutes)`; stamp them into (tagRef, implRef).  Reproduces the
 -- pre-S3c arm-by-arm body: assum → `(RDict dname, [])`, inst → `(RKey key [],
 -- argImplDictRoutesForEncl …)`, fallback → `(RNone, [])`.
@@ -443,7 +443,7 @@ resolveSite : SiteCtx ->
   Option Loc ->
   ScopeId ->
   Unit
--- #156 S3b: a thin adapter over `entail` (EKReturn kind).  `entail` returns
+-- A thin adapter over `entail` (EKReturn kind).  `entail` returns
 -- `(primaryRoute, elementRoutes)`; stamp them into (tagRef, implRef).  Reproduces the
 -- pre-S3b arm-by-arm body: assum → `(RDictFwd/RDict, [])`, inst → `(RKey key [],
 -- selected-row prerequisite routes)`, fallback → `(RNone, [])`.
@@ -577,7 +577,7 @@ resolveArithSite dref m = match !dref
     None => ()
   _ => ()
 
--- #156 S3c: a thin adapter over `entail` (EKOp kind).  `entail`'s ladder IS this
+-- A thin adapter over `entail` (EKOp kind).  `entail`'s ladder IS this
 -- resolver's ladder: assum = opDictVarOf → RDict; inst = stampOpRouteVal (builtin head →
 -- RNone; else RKey with the element reqs PACKED in, so `snd` is empty and no separate
 -- implRef exists); fallback = RNone.  Op-site route cells are minted `RNone`-seeded
@@ -1779,7 +1779,7 @@ dictPassModulesIfEnabled : ModuleCtx ->
   List (String, List Decl) ->
   (List Decl, List (String, List Decl))
 dictPassModulesIfEnabled mctx dictNames corePassed core2 modules2 =
-  -- #2549 M2: index this sweep's solved evidence before anything reads a route
+  -- Index this sweep's solved evidence before anything reads a route
   -- out of it.  Here because `dictPass` is itself a reader (`collectDictSites`,
   -- `methodGrantUse`), and this is the Module arm's one funnel into it.
   let idx = evIndexOf (drivenEvidence mctx.mcGraph ())

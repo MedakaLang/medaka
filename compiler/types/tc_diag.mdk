@@ -341,7 +341,7 @@ boundaryOwnsOpen mctx rigidIds i =
 -- type is structurally un-implementable, so both stay hint-free (unchanged
 -- message) rather than print misleading advice.  A stdlib-owned type is
 -- hint-free too for the derivable interfaces (`headIsStdlibOwned`).
--- #1111 A-2.3: the ONE `dataParamKindsRef` consumer that stays a BARE-NAME
+-- The ONE `dataParamKindsRef` consumer that stays a BARE-NAME
 -- question, and it is a membership test rather than a lookup.  A-2.2 has since
 -- landed, so the identity IS reachable here (`headTyconMono` now answers a
 -- `HeadKey`); this site deliberately calls the bare-name residual

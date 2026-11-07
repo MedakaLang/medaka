@@ -1,4 +1,4 @@
--- The whole-graph per-method disposition table (#1112 A-3, #1403 X-E's future
+-- The whole-graph per-method disposition table (#1403's future
 -- input): for every accepted instance, whether each method of its interface is
 -- SUPPLIED by the impl or INHERITED from the interface's default body.  No
 -- method-less slot is ever represented here — an impl that omits a required

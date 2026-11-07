@@ -122,7 +122,7 @@ serviceDirectives = [
 ]
 
 {- | The shared floor for the three observability/custody units (#2967
-   E5/E6, #2962 D5/B16).
+   and #2962).
 
    All three reach the public internet by design, so none of them can carry
    pds.service's `IPAddressDeny=any`. What they can carry is the

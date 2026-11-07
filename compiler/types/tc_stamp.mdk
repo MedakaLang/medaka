@@ -228,7 +228,7 @@ resolveSites sx rpNames ((PendingEntry name tagRef resultMono encl kind loc scop
 -- would read `[]`.  Resolving inside the stamp is ordering-immune.  An unconstrained
 -- standalone has no monos ⇒ routesOfMonosTop returns [] immediately (it cannot even
 -- reach its AmbiguousImpl arm) ⇒ `RLocal sym []` ⇒ byte-identical to the pre-S1 stamp.
--- #156 S3d — resolveRLocalSites is DELIBERATELY NOT routed through `entail`, and DICT-
+-- resolveRLocalSites is DELIBERATELY NOT routed through `entail`, and DICT-
 -- SEMANTICS §3 conformance REQUIRES that, rather than merely permitting it.  This pass
 -- implements §4 `(var)`'s FIRST premise — binding selection: does this occurrence denote the
 -- module's own standalone `sym` or a shadowed interface method?  (Keyed on the solved receiver
@@ -292,7 +292,7 @@ resolveArithSites ((dref, m) :: rest) =
 -- reused binopRouteSplit, proving the shapes unify).  The two paths differ in exactly
 -- two flag-keyed places: the dict-var-of policy (opDictVarOf) and the RKey stamp
 -- (stampOpRouteVal — its builtin-head guard and Ord-style innerDefaultMethod reduction).
--- #156 S3c: resolveOpSite is now a thin adapter over `entail` (EKOp kind); the inst
+-- resolveOpSite is now a thin adapter over `entail` (EKOp kind); the inst
 -- route is stampOpRouteVal, a pure Route-returning extraction of the old stampOpRoute.
 resolveOpSites : SiteCtx -> Bool -> List PendingEntry -> Unit
 resolveOpSites _sx _ [] = ()
@@ -744,7 +744,7 @@ runStampCtx saved ctx =
     (d => verdictFinding ctx.scModule (isLiveSpan liveSpans (tcLoc d)) d)
     (captureTypeErrors stamp (_ => checkAdmittedOccObls stamp ()))
 
--- #2549 M2: publish this module's solved evidence, AFTER its stampers have run and
+-- Publish this module's solved evidence, AFTER its stampers have run and
 -- read back out of the cells they wrote.  Deriving the table any other way would make
 -- it a second answer that can disagree with the cells; derived this way it cannot.
 recordEvidence : GraphCtx -> List Obligation -> Unit

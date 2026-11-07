@@ -1,5 +1,5 @@
 # META
-source_lines=1174
+source_lines=1178
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_shared.mdk — helpers used by more than one lint module:
@@ -1164,6 +1164,10 @@ ruleNameCommentDeadPath : String
 ruleNameCommentDeadPath = "rule-comment-dead-path"
 
 export
+ruleNameCommentProvenanceId : String
+ruleNameCommentProvenanceId = "rule-comment-provenance-id"
+
+export
 ruleNameCommentShout : String
 ruleNameCommentShout = "rule-comment-shout"
 
@@ -1563,6 +1567,8 @@ isCodeText l = not (trim l == "" || startsWith "--" (trim l))
 (DFunDef false "ruleNameCommentDeictic" () (ELit (LString "rule-comment-deictic")))
 (DTypeSig true "ruleNameCommentDeadPath" (TyCon "String"))
 (DFunDef false "ruleNameCommentDeadPath" () (ELit (LString "rule-comment-dead-path")))
+(DTypeSig true "ruleNameCommentProvenanceId" (TyCon "String"))
+(DFunDef false "ruleNameCommentProvenanceId" () (ELit (LString "rule-comment-provenance-id")))
 (DTypeSig true "ruleNameCommentShout" (TyCon "String"))
 (DFunDef false "ruleNameCommentShout" () (ELit (LString "rule-comment-shout")))
 (DTypeSig true "indentWidth" (TyFun (TyCon "String") (TyCon "Int")))
@@ -1956,6 +1962,8 @@ isCodeText l = not (trim l == "" || startsWith "--" (trim l))
 (DFunDef false "ruleNameCommentDeictic" () (ELit (LString "rule-comment-deictic")))
 (DTypeSig true "ruleNameCommentDeadPath" (TyCon "String"))
 (DFunDef false "ruleNameCommentDeadPath" () (ELit (LString "rule-comment-dead-path")))
+(DTypeSig true "ruleNameCommentProvenanceId" (TyCon "String"))
+(DFunDef false "ruleNameCommentProvenanceId" () (ELit (LString "rule-comment-provenance-id")))
 (DTypeSig true "ruleNameCommentShout" (TyCon "String"))
 (DFunDef false "ruleNameCommentShout" () (ELit (LString "rule-comment-shout")))
 (DTypeSig true "indentWidth" (TyFun (TyCon "String") (TyCon "Int")))

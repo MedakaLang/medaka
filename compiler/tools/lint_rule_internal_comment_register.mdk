@@ -1,4 +1,4 @@
--- lint rules rule-comment-history, rule-comment-ruling, rule-comment-tombstone, rule-comment-emoji, rule-comment-draft, rule-comment-deictic, rule-comment-dead-path, rule-comment-shout: comment lines in a register that goes stale.
+-- lint rules rule-comment-history, rule-comment-ruling, rule-comment-tombstone, rule-comment-emoji, rule-comment-draft, rule-comment-deictic, rule-comment-dead-path, rule-comment-shout, rule-comment-provenance-id: comment lines in a register that goes stale.
 
 import frontend.ast.{Loc(..)}
 import driver.diagnostics.{Severity(..)}
@@ -26,6 +26,7 @@ import tools.lint_shared.{
   ruleNameCommentDraft,
   ruleNameCommentEmoji,
   ruleNameCommentHistory,
+  ruleNameCommentProvenanceId,
   ruleNameCommentRuling,
   ruleNameCommentShout,
   ruleNameCommentTombstone,
@@ -79,10 +80,19 @@ rules = [
     "comment line has three consecutive capitalised words"
     "Three consecutive words in capitals read as shouting; state the constraint in plain words.\n\nBefore:\n  -- (caps) do not edit this\nAfter:\n  -- byte-pinned by a gate"
     isShoutLine,
+  gatedClassRule
+    ruleNameCommentProvenanceId
+    "comment line carries a plan sub-id (\"#2400 F3\", \"#1111 A-2.3\")"
+    "A plan sub-id after an issue number (\"#2400 F3\", \"#838 I1\", \"#1111 A-2.3\") records which work item introduced the code; state the constraint the code carries now. A pointer to an issue the code waits on stays.\n\nBefore:\n  -- #2400 F3: unlocated diagnostics keep the placeholder\nAfter:\n  -- unlocated diagnostics keep the placeholder"
+    isProvenanceIdLine,
 ]
 
 classRule : String -> String -> String -> (String -> Bool) -> Rule
 classRule name summary doc hit = classRuleCoarse name summary doc hit hit
+
+gatedClassRule : String -> String -> String -> (String -> Bool) -> Rule
+gatedClassRule name summary doc hit =
+  classRuleWith Gated name summary doc hit hit
 
 -- `coarse` holds of any text with a hit line in it: a block comment is split
 -- into lines only when it does.
@@ -92,7 +102,16 @@ classRuleCoarse : String ->
   (String -> Bool) ->
   (String -> Bool) ->
   Rule
-classRuleCoarse name summary doc coarse hit =
+classRuleCoarse = classRuleWith Baselined
+
+classRuleWith : Ratchet ->
+  String ->
+  String ->
+  String ->
+  (String -> Bool) ->
+  (String -> Bool) ->
+  Rule
+classRuleWith ratchetKind name summary doc coarse hit =
   mkRule
     RuleMeta {
       name = name,
@@ -100,7 +119,7 @@ classRuleCoarse name summary doc coarse hit =
       doc = doc,
       category = Style,
       scope = Internal,
-      ratchet = Baselined,
+      ratchet = ratchetKind,
       defaultSeverity = SevWarning,
       fixability = NotFixable,
       needs = [],
@@ -180,6 +199,12 @@ isTombstoneLine = anyInfix [
 isEmojiLine : String -> Bool
 isEmojiLine l =
   stringByteLength l /= stringLength l && anyInfix ["🚨", "⚠️", "🔒"] l
+
+provenanceIdRe : Regex
+provenanceIdRe = mustCompile "#[0-9]+ [A-Z]-?[0-9]"
+
+isProvenanceIdLine : String -> Bool
+isProvenanceIdLine l = contains "#" l && isMatch provenanceIdRe l
 
 isDraftLine : String -> Bool
 isDraftLine = anyInfix ["earlier cut", "first cut", "earlier revision"]

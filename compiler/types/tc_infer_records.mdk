@@ -1031,7 +1031,7 @@ ctorSiblingWithholdingName mctx (Some hk) fname survivorKey = do
 -- dataOrigin> <tyname>`, so a module-stamped `data T` writes a `TkIdent` row.
 -- `headTabOf` goes through `dispHeadTab hk = TkBare NsType (headKeyName hk)`, which
 -- flattens EVERY head to `TkBare` because the dispatch head-buckets are SPELLING-keyed
--- (the #1317 T1 rule).  `tabKeyEq` never equates a `TkBare` lookup with a `TkIdent`
+-- (the spelling-key rule).  `tabKeyEq` never equates a `TkBare` lookup with a `TkIdent`
 -- row, so keying this table through `headTabOf` would miss on every module-stamped
 -- type, and both `None` arms of `ctorSiblingWithholdingName` fail OPEN (the narrowing is
 -- trusted and the singleton survivor accepted).  A single-file program hides the miss:

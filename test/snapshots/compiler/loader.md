@@ -757,7 +757,7 @@ loadedPairs ((_, path, _) :: rest) = match loadedSourceOf path
 -- (via the project root).  Result: one file loaded TWICE under two modIds.  That
 -- was already observable before anything read type identity — the two copies'
 -- `export impl`s double-count into `Conflicting 'impl C'. Defined in util and
--- src.util` — and #1111 A-2.10 made it far louder, because two `OriginModule`
+-- src.util` — and identity-keyed origins made it far louder, because two `OriginModule`
 -- ids for one declaration are two DIFFERENT types to every comparison in
 -- `types/typecheck.mdk`: a valid `src/`-layout project went `exit 0` → `exit 1`
 -- with `Type mismatch: Config vs Config`.  The comparison was right; the SUPPLY

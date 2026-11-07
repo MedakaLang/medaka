@@ -216,7 +216,7 @@ public export data AuthResidual = AuthResidual {
   arExact : Bool,
 }
 
--- #838 I1: the unified obligation record.  `pred.args` is the
+-- The unified obligation record.  `pred.args` is the
 -- ALREADY-PROJECTED dispatch/argument vector — exactly the call channel's existing
 -- shape (contrast the impl channel's un-projected method type, out of scope this
 -- increment).  `originId` is the #837 binding id of the binding this obligation was
@@ -238,7 +238,7 @@ public export data AuthResidual = AuthResidual {
 -- `DImpl.implOrigin`).  `irName` is kept ALONGSIDE it, not derived from it: every
 -- diagnostic in this channel prints the spelling, and `concreteReqMatchByIface`
 -- still asks the SPELLING-keyed `KeyBuckets` registry a route-word question that
--- must NOT become an identity question (#1317 T1 / the closed S0 #1277 — see
+-- must NOT become an identity question (the closed S0 #1277 — see
 -- `dispHeadTab`).  One value carrying both halves is what keeps those two questions
 -- from drifting apart.
 --
@@ -256,7 +256,7 @@ public export data IfaceRef = IfaceRef {
 }
 
 -- U1b (#1482): ONE vector obligation — one interface OCCURRENCE (identity-carrying,
--- #1446 P1) applied to one vector of scheme-quantified tyvar ids.  This is the payload
+-- identity-carrying) applied to one vector of scheme-quantified tyvar ids.  This is the payload
 -- of `schemeObligationsRef` and of its three cross-module mirrors.
 --
 -- The point of the record is not ergonomics.  Before it, this payload was

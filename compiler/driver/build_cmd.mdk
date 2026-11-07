@@ -170,7 +170,7 @@ askedEnvelope None _ = None
 -- The plain-CLI rendering of a report: byte-for-byte what `medaka build`
 -- printed when these three facts were string-concatenated onto the status
 -- line.  Deliberately NOT `ppDiagCliLines`: that renders an unlocated Diag as
--- "warning: <unknown location>: …" (#2400 F3), and a build note has never had
+-- "warning: <unknown location>: …", and a build note has never had
 -- — nor wanted — a location to point at.
 export
 ppBuildReport : BuildReport -> String
@@ -2060,7 +2060,7 @@ stampDate _ = match runCommand "date" ["-u", "+%Y-%m-%d"]
   Ok (0, out, _) => trimAscii out
   _ => ""
 
--- ---- the automatic C-runtime object cache (#133, epic #2036 G1) ------------
+-- ---- the automatic C-runtime object cache (#133, epic #2036) ------------
 -- MEASURED attribution of hello-world's ~1.5 s `medaka build` (this tree, this
 -- box; the `[perf]` sub-rows below report it live):
 --   typecheck            0.16 s

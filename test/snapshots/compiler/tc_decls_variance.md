@@ -47,7 +47,7 @@ import list.{indexed, sortOn}
 import types.invocation_basis.{paramPolaritiesIn}
 import support.scc.{tarjanSCCs}
 
--- ── #1119 D-2: the VARIANCE seed chain (#1098, #1121) ────────────────────
+-- ── the VARIANCE seed chain (#1098, #1121) ────────────────────
 -- `declEnvSeedChain`'s kind half, one table over: the same ordinal-ascending
 -- walk, the same `declEnvVisibleTo`-routed row projection, the same "row [m]'s
 -- seed is every row strictly earlier than [m]" stamping under [m]'s module id.
@@ -347,7 +347,7 @@ declEnvPolarityEntries tab ((DTypeAlias { tyAliasName = n, tyAliasParams = ps, t
   entry :: declEnvPolarityEntries (entry :: tab) rest
 declEnvPolarityEntries tab (_ :: rest) = declEnvPolarityEntries tab rest
 
--- ── #1119 D-2 (#1098 / #1121): the VARIANCE half of `recordParamKinds` ────
+-- ── the VARIANCE half of `recordParamKinds` (#1098 / #1121) ────
 -- Sibling of `recordParamKinds` immediately above, sharing its key (`tyTabKey
 -- o name`), its prepend, and therefore its first-match read ordering.  It is a
 -- SEPARATE table rather than a second column of the kind table because the two

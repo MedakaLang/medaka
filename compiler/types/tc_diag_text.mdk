@@ -486,7 +486,7 @@ constrainedApplicationText app plain ifaces =
   let names = joinWith " and " (map (i => "`\{i}`") ifaces)
   "`\{ppMono app}` is a value whose type implements \{names}, and `\{ppMono plain}` is not"
 
--- ── same-spelling mismatch hint (#1111 A-2.10) ─────────────────────────────
+-- ── same-spelling mismatch hint ─────────────────────────────
 -- Fires ONLY when the two sides RENDER identically and some head inside them
 -- carries two conflicting module identities — i.e. exactly the mismatch this
 -- unit newly reports.  Both conditions matter: the render test is what makes

@@ -676,7 +676,7 @@ argPerformableOccs mctx scope perf0 x0 = go perf0 x0
     go perf (TyFun a b) = go (not perf) a ++ go perf b
     go perf (TyTuple ts) = flatMap (argPerformableOccs mctx scope perf) ts
     go perf (TyApp a b) = match tyAppSpine (TyApp a b)
-      -- OCCURRENCE MINT (#1110/#1111 A-2.3): the head's acquired identity, read off
+      -- OCCURRENCE MINT: the head's acquired identity, read off
       -- the same record pattern as its name so the two cannot drift apart.
       (TyCon { tyConName = n, tyConOrigin = o }, args) =>
         krowSlotOccs mctx scope perf o n args

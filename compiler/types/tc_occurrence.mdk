@@ -395,7 +395,7 @@ argDispatchOfMethod typarams (IfaceMethod mname mty _ _) =
     Some i => [(mname, i)]
     None => []
 
--- #1351 L1 (EXPAND): the IDENTITY-CARRYING sibling of `argDispatchIndices` above.  Same
+-- The IDENTITY-CARRYING sibling of `argDispatchIndices` above.  Same
 -- walk, same arms, same `firstDispatchIdx` classification — the ONLY difference is the
 -- key: `(IfaceRef, method name)` instead of the bare method name.  `IfaceRef` is this
 -- file's existing module-qualified interface identity (`irName` spelling + `irOrigin` I4
@@ -597,7 +597,7 @@ notAnOpSite ev =
   panic
     "site cell \{evIdModule ev}#\{intToString (evOrdinal ev)} is not an operator site"
 
--- #2549 M2: the next evidence id for the module currently being inferred.  The
+-- The next evidence id for the module currently being inferred.  The
 -- module component comes from the module's record, which `checkBodyImpl` mints once per
 -- module before any body of it is inferred; the ordinal is this run's counter.
 -- `evCounter` is graph-global, and `graphLineageRun` carries it across every new
@@ -1981,7 +1981,7 @@ recordImplObligation mctx x mono omitted
       -- `test/dict_fixtures/i4-xmod-method-occurrence-{foreign-iface-rejected,
       -- own-iface-control}`.
       pushPendingObl mctx iface typarams mty mono omitted PMethodOcc mctx.mcLoc
-      -- #818 (#838 I3): also record each method-level `=>` constraint slot (e.g.
+      -- #818: also record each method-level `=>` constraint slot (e.g.
       -- `Ord b` on `peer : Ord b => a -> b -> b -> Bool`) as its OWN obligation, so an
       -- unsatisfiable slot (`Ord NoOrd`) is rejected by the unified checker at check
       -- time instead of silently becoming an RNone route (a wrong answer / segfault
@@ -2157,7 +2157,7 @@ recordNumLitImplObligation mctx anchor predicate occurrence origin scope =
   recordMethodLevelObls mctx anchor.msrTyparams anchor.msrType occurrence
   occurrence
 
--- #818 (#838 I3): record one PMethodLevel obligation per method-level `=>` constraint
+-- #818: record one PMethodLevel obligation per method-level `=>` constraint
 -- slot of a method occurrence.  [mty] is the method's DECLARED type (with its `=>`);
 -- [occMono] is THIS occurrence's instantiated (constraint-free) type.  Align the
 -- declared function spine (constraints/effects stripped) against [occMono] with
@@ -2385,7 +2385,7 @@ methodOmittedVars mctx name = match (
   (Some _, Some (_, typarams, mty, _)) => omittedParamVars mctx typarams mty
   _ => []
 
--- #818 (#838 I3): the method-level `=>` constraints, one per slot, in the declaration
+-- #818: the method-level `=>` constraints, one per slot, in the declaration
 -- order methodLevelConstraintVarNames enumerates.  recordMethodLevelObls poses each as
 -- its own obligation; the slot's interface identity is the `Constraint` occurrence's
 -- resolve stamp (`constraintOrigin`, #1110, P1 #1446).
@@ -2397,7 +2397,7 @@ methodLevelConstraintSlots typarams (TyEffect _ _ t) =
   methodLevelConstraintSlots typarams t
 methodLevelConstraintSlots _ _ = []
 
--- #818 (#838 I3): strip the leading `=>`/effect wrappers off a method's declared type,
+-- #818: strip the leading `=>`/effect wrappers off a method's declared type,
 -- leaving the bare function spine so matchTyMono can align it against a constraint-free
 -- occurrence mono (mirrors the TyConstrained/TyEffect peel in methodLevelConstraintVarNames).
 stripLeadingMethodConstraints : Ty -> Ty

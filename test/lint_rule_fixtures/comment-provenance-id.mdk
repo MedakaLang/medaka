@@ -1,0 +1,18 @@
+-- Fixture for rule-comment-provenance-id: hits are a full-line comment and a line of a block comment.
+-- expect-at-line 5 rule-comment-provenance-id
+-- expect-at-line 10 rule-comment-provenance-id
+
+-- #2400 F3: the placeholder stays in the position slot.
+a : Int
+a = 1
+
+{- a block
+   see #1111 A-2.3 for the mint. -}
+
+-- Non-hits follow: a live pointer, a bare issue, a string, a trailing comment.
+-- waits until #1115 lands.
+-- tracked by #4921 only.
+s : String
+s = "#2400 F3"
+u : Int
+u = 3 -- #2400 F3 trailing

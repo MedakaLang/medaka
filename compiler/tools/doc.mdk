@@ -1517,7 +1517,7 @@ renderModulePage (ModuleDoc name header entries _) =
 -- its impls beside its `data` declaration rather than scattering them to a
 -- module that merely operates on it.  The original instance was `Option`/
 -- `Result`, declared in `core.mdk` while one-entry `option.mdk`/`result.mdk`
--- also existed; #2306 I-2 deleted those two modules, so that pair no longer
+-- also existed; those two modules are gone, so that pair no longer
 -- exercises the ordering.  The rule is unchanged and still load-bearing for
 -- any core-declared type an operating module merely mentions.
 export

@@ -60,6 +60,7 @@ Every rule `medaka lint` knows. `universal` rules are meaningful in any Medaka p
 | [`rule-comment-deictic`](#rule-comment-deictic) | internal | style | baselined | not-fixable | file |
 | [`rule-comment-dead-path`](#rule-comment-dead-path) | internal | style | baselined | not-fixable | file |
 | [`rule-comment-shout`](#rule-comment-shout) | internal | style | baselined | not-fixable | file |
+| [`rule-comment-provenance-id`](#rule-comment-provenance-id) | internal | style | gated | not-fixable | file |
 
 ## rule-match-on-param
 
@@ -837,4 +838,17 @@ Before:
   -- (caps) do not edit this
 After:
   -- byte-pinned by a gate
+```
+
+## rule-comment-provenance-id
+
+comment line carries a plan sub-id ("#2400 F3", "#1111 A-2.3")
+
+A plan sub-id after an issue number ("#2400 F3", "#838 I1", "#1111 A-2.3") records which work item introduced the code; state the constraint the code carries now. A pointer to an issue the code waits on stays.
+
+```
+Before:
+  -- #2400 F3: unlocated diagnostics keep the placeholder
+After:
+  -- unlocated diagnostics keep the placeholder
 ```

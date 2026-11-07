@@ -1166,10 +1166,10 @@ bucketRecvMatch ((tys, _) :: rest) dm = match tys
 -- is an ERROR; a still-polymorphic head (`a`, the obligation propagated to a further-
 -- out caller — `id x = x; y = id 5`) is DEFERRED.  Exactly the accept/reject decision
 -- of checkOneImplObligation's tail: it checks fun_constraints instantiated at the call.
--- #838 I1: takes `List UObligation` (the ported call channel) instead of the old bare
+-- Takes `List UObligation` (the ported call channel) instead of the old bare
 -- tuple.  Deferral is BYTE-IDENTICAL to before the port — checkOneCallObligation still
 -- reads (iface, occs, loc) exactly as it did; only the storage/read shape changed.
--- #838 I4: [deferNonGround] selects the ONE rule that genuinely differs between the two
+-- [deferNonGround] selects the ONE rule that genuinely differs between the two
 -- obligation channels this single checker now serves (all GROUND rules — no-prelude-Num,
 -- unimplementable-head, function-reject, accept/nested-reqs, reportNumOrNoImpl reframe —
 -- are shared, which is the payoff).  False = the CALL channel: a non-ground obligation
@@ -1360,7 +1360,7 @@ checkOneCallObligation mctx deferNonGround univ iface occs loc scope =
     pushNoImplError mctx iface.irName loc args
   else if iface.irName == "Num"
     && not (builtinClassPresent mctx.mcGraph BNum) then
-    -- #838 I4 (was checkOneImplObligation step 4): no-prelude Num skip.  A grounded
+    -- No-prelude Num skip.  A grounded
     -- `Num Int` literal in a prelude-free program (bare-HM oracle, the prelude's `Num`
     -- absent) has no `impl Num Int`; without this guard the ground path below reports a
     -- spurious `No impl of Num for Int`, breaking `typecheck_main`/tc_probe oracle parity.
@@ -1371,7 +1371,7 @@ checkOneCallObligation mctx deferNonGround univ iface occs loc scope =
     -- presence half is what #1539 owns.
     ()
   else if not (allConcreteHeads args) then
-    -- #838 I4: the ONE per-channel branch (see checkCallObligations).  IMPL channel
+    -- The ONE per-channel branch (see checkCallObligations).  IMPL channel
     -- (deferNonGround) defers a non-ground obligation unconditionally; the signed-body
     -- coverage census below verifies that its complete predicate is declared.  CALL
     -- channel gives the goal the undetermined-goal verdict.
@@ -1489,7 +1489,7 @@ checkOneCallObligationNoImpl mctx iface args loc scope =
     -- A variable of the goal is one an earlier diagnostic explained.
     ()
   else
-    -- #838 I4 (was checkOneImplObligation step 9): reportNumOrNoImpl is a strict superset
+    -- reportNumOrNoImpl is a strict superset
     -- of pushNoImplError — it reframes a ground `Num`-obligation tracing to a numeric
     -- LITERAL (loc-keyed `numlitReframeLoc`, not prov-keyed) into `T-TYPE-MISMATCH`, and
     -- degrades to pushNoImplError verbatim for any non-literal (every call obligation) —

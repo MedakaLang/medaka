@@ -154,7 +154,7 @@ public export data RecordInfo =
 -- does, and elaborate an argument as a type, exactly as `KType` does.
 public export data Kind = KType | KRow | KAuth EffLabel Bool | KArrow Kind Kind
 
--- ── #1119 D-2 (#1098 / #1121): per-parameter VARIANCE ─────────────────────
+-- ── per-parameter VARIANCE (#1098 / #1121) ─────────────────────
 -- Variance of a data-type parameter, inferred from how it OCCURS in the
 -- declaration's constructor field types, exactly as `Kind` above is inferred
 -- from usage rather than written.  `PCo` = every occurrence is covariant
@@ -174,7 +174,7 @@ public export data Kind = KType | KRow | KAuth EffLabel Bool | KArrow Kind Kind
 -- publishes a parameter with no occurrence as `PCo`.
 public export data Polarity = PCo | PContra | PInv | PPhantom
 
--- #156 S3a: ONE record for every pending dispatch-site shape.  The four historical
+-- ONE record for every pending dispatch-site shape.  The four historical
 -- tuple/record shapes (return-position sites, arg-position stamps, operator sites,
 -- standalone-shadow RLocal sites) collapse into `PendingEntry`; `kind` (a
 -- payload-carrying `SiteKind`) records which recorder built it and carries the
@@ -205,7 +205,7 @@ public export data SiteKind =
   -- what lets resolveArgStamp recover the interface's WHOLE param vector
   -- (ifaceParamMonos) — the arg mono alone is only the receiver, and selecting on it
   -- made a multi-param dispatch order-dependent.  Mirrors SKReturn, which has
-  -- carried the method's full type for the same reason since #156 S3a.  The last
+  -- carried the method's full type for the same reason since it was introduced.  The last
   -- field is the occurrence's goal variable for each typaram its type never
   -- mentions (`methodOmittedVars`), which the full mono cannot recover.
   | SKArg (Ref (List Route)) Mono (List (String, Mono))
@@ -240,7 +240,7 @@ public export data PendingEntry =
   -- POST-HM, outside every construct, so only the snapshot can name this expression.
   -- Each resolver loop hands this span down as the walk's `sxSite` so the min⊑ selector's
   -- ambiguity reject can point at the goal it was actually posed by.
-  -- #2549 M2: the 7th field is this site's EVIDENCE ID — the value-level name of
+  -- The 7th field is this site's EVIDENCE ID — the value-level name of
   -- the association the 2nd field (the route cell) carries by pointer identity.
   -- Minted where the carrier is built, which is the one point at which the marked
   -- node and its cell are both in hand; the reader flip sources it from the node
@@ -297,7 +297,7 @@ public export data GoalPayload =
 public export data Obligation = Obligation {
   oKind : GoalKind,
   oDest : EvDest,
-  -- #2549 M2: the identity this goal's solution is PUBLISHED under, alongside the
+  -- The identity this goal's solution is PUBLISHED under, alongside the
   -- cell it is written through.  Carried in from the goal's carrier rather than
   -- minted here, so the id names the site and not the moment the goal was queued.
   oEv : EvId,
@@ -707,7 +707,7 @@ public export data ImplAcc = ImplAcc {
   iaSnaps : (List (Int, ImplUniverse), ImplUniverse),
 }
 
--- ═══ #1519 A-3.3: THE `CE` REGISTRY ═══════════════════════════
+-- ═══ THE `CE` REGISTRY ═══════════════════════════
 -- §2 K: *"CE (class environment): interfaces with declared parameter kinds …,
 -- method schemes, superclass predicates …"*  Built once, whole-graph, inside
 -- `buildDeclEnvs`; every read filters through `declEnvVisibleAt`.  This used to
@@ -759,7 +759,7 @@ public export data ImplAcc = ImplAcc {
 -- `TYPECHECK-TARGET-ARCHITECTURE.md` §9 independently routes it to `IE`/
 -- RLocal-site channels, not `CE`.
 --
--- ✅ `universeIfaceParamKinds` COORDINATION — DISCHARGED by #1557 A-3.5c, which is
+-- ✅ `universeIfaceParamKinds` COORDINATION — DISCHARGED, which is
 -- the PR this paragraph was addressed to.  A-3.3 wrote: *"its eventual retirement is
 -- this unit's (`CE`'s) to route, on whatever PR first gives `ceParamKinds` a live
 -- reader, not A-3.2b's to fold in by accident of which function happens to marshal it
@@ -829,7 +829,7 @@ public export data ImplAcc = ImplAcc {
 -- as `methodRowsInto` already does, not re-derived
 -- per method; its raw `Super` list, unelaborated; its per-typaram kind
 -- signature, POSITIONAL with `ceTyparams` — each parameter's resolved slot
--- kinds (`ifaceParamKindsDecl`); and, since #1557 A-3.5a, its REQUIRED-method
+-- kinds (`ifaceParamKindsDecl`); and, its REQUIRED-method
 -- names — `requiredMethodNames methods`, the SAME pure computation the retired
 -- `universeIfaceRequiredRef` writer (`insertIfaceRequired`) stored under the
 -- SAME `regKeyOfTab (ifaceTabKey ifaceOrigin name)` key, so relocating
@@ -1086,12 +1086,12 @@ manifestDriverFor _ (Some name) =
   Some EntryKey { moduleId = "async", binding = name }
 manifestDriverFor inputs None = inputs.diExecutedMainDriver
 
--- #841/#838 I1: `Windowed a` — a list+counter pair (formerly kept in step "by
+-- `Windowed a` — a list+counter pair (formerly kept in step "by
 -- convention" across module reset/push/error-rollback, per-channel) as ONE value whose
 -- ONLY mutators are its own five ops.  wPush/wRestore are the sole writers, so
 -- the invariant cannot drift; wMark/wWindow replace the `N0 = …N.value` snapshot +
--- prefix-take bracket over the first `…N.value - N0` items that every channel repeats.  #838 I1
--- ports `pendingCallObligations`/`pendingCallObligationsN` onto this — see
+-- prefix-take bracket over the first `…N.value - N0` items that every channel repeats.
+-- `pendingCallObligations`/`pendingCallObligationsN` are ported onto this — see
 -- `compiler/types/typecheck.mdk`'s `obls` field below.  #841 ported
 -- `pendingImplObligations` onto it too (the `implObls` field); the dictionary
 -- application channel lives on `GraphRun.goals` since #2547 unit 2.
@@ -1383,13 +1383,13 @@ public export data AbsorptionEvent = AbsorptionEvent {
 -- `implObls`' 5th element — `resolveDictApps` runs post-HM, outside every
 -- construct.  `resolveDictApps` hands it down as the walk's `sxSite`.
 public export data PendingDictApp = PendingDictApp {
-  -- #2549 M2: the goal's OWN cell, minted with the goal.  It used to be the
+  -- The goal's OWN cell, minted with the goal.  It used to be the
   -- `EDictAt` node's cell, which is how a reader reached the answer; the node now
   -- carries `pdaEv` instead and the reader looks that up in the published table, so
   -- this cell is private to the solver — the stampers' write target, read back once
   -- by `recordEvidence` and by nothing outside `compiler/types/typecheck.mdk`.
   pdaRoutesRef : Ref (List Route),
-  -- #2549 M2: this application's evidence id, the same field `PendingEntry` carries
+  -- This application's evidence id, the same field `PendingEntry` carries
   -- as its 7th and for the same reason.  Taken from the node (`inferDictAt`), not
   -- minted here, so the id names the occurrence rather than the moment the goal was
   -- queued — that is what makes the node's lookup find this goal's answer.
@@ -1419,7 +1419,7 @@ public export data PendingDictApp = PendingDictApp {
 -- lend it predicate slots or an arity.  Cross-run snapshots retain the same payload.
 public export data PendingMethodDict = PendingMethodDict {
   pmdRoutesRef : Ref (List Route),
-  -- #2549 M2: this application's evidence id — see `pdaEv`.
+  -- This application's evidence id — see `pdaEv`.
   pmdEv : EvId,
   pmdSlots : List PredicateSlot,
   pmdEncl : String,
@@ -1462,7 +1462,7 @@ public export data CrossRun = CrossRun {
   -- marshalling order.  Retired cell -> what answers it now:
   --   `universeRegisteredIfacesRef` (#1569) -- NOTHING.  Its only reader
   --      `ifaceRegistered` was deleted by #1539, leaving it and its `ModuleCtx` sibling
-  --      write-only.  It was deliberately bare-name while it lived (#1111 A-2.4; the
+  --      write-only.  It was deliberately bare-name while it lived (the
   --      reasoning is kept in `builtinClassPresent`'s header).  Do not re-add either
   --      half without a reader.
   --   `universeFieldOwners` (A-3.2b slice 3, #1512) -- `declEnvsRef.deOwnersBefore`,
@@ -1521,7 +1521,7 @@ public export data CrossRun = CrossRun {
 -- in scope in its body — rather than rebuilding one (which it cannot, the type is
 -- still the constraint variable).  Mirrors the reference's recursive_promoted_usages
 -- / realize_recursive_dict_apps (Phase 115/136).
--- #2549 M2: the 5th field is this application's evidence id — see `pdaEv`.
+-- The 5th field is this application's evidence id — see `pdaEv`.
 public export data RecDictApp =
   RecDictApp (Ref (List Route)) String String Mono ScopeId EvId
 
@@ -1822,7 +1822,7 @@ public export data GraphRun = GraphRun {
   -- the channel's length, maintained by `pushGoal` / `dropGoalsSince`, so a mark is
   -- O(1) — `goalsMark` is taken at every `let` and SCC bracket
   goalsN : Ref Int,
-  -- #2549 M2: the ordinal source for this run's evidence ids.  Graph-global and
+  -- The ordinal source for this run's evidence ids.  Graph-global and
   -- monotone, so `EvId <module> <ordinal>` is unique across the whole run without a
   -- per-module reset — see `freshEvId`.
   evCounter : Ref Int,
@@ -1838,7 +1838,7 @@ public export data GraphRun = GraphRun {
   -- The ordinal ranges [lo, hi) a recording module's own drain judged ahead of the
   -- watermark above; the drain that reaches them skips them (`unjudgedRanges`).
   evScopedJudged : Ref (List (Int, Int)),
-  -- #2549 M2: the solved evidence, one entry per goal, appended by the graph-end
+  -- The solved evidence, one entry per goal, appended by the graph-end
   -- drain as each module's stampers finish.  It is a SECOND RENDERING of the routes
   -- the stampers wrote into their cells, read back from those same cells, never an
   -- independently-derived answer.
@@ -1980,7 +1980,7 @@ public export data ModuleCtx = ModuleCtx {
 -- (fields stay `Ref …`), NOT a record of values: the hot accumulators (typeErrors,
 -- poisonedVars, localBindRefs, …) are pushed with `setRef x (v :: x.value)`, so the
 -- field must be a Ref for that to stay one Ref-write — a record of values would rebuild
--- the whole record on every push.  (`obls`, `implObls` — #838 I1 / #841 — are the
+-- the whole record on every push.  (`obls`, `implObls` — are the
 -- exceptions: each a small `Windowed a` VALUE whose own two fields are Refs — see
 -- `wPush` — so pushing through one is still one Ref-write, not a whole-record rebuild.)
 --
@@ -2749,7 +2749,7 @@ public export data MethodTemplateGivenResult =
 -- of fabricating a file-start caret; `None` for a synthesized impl with no source
 -- span (e.g. desugar's `deriving` lowering, which builds `tyConUnresolved tyName None`).
 --
--- #1559 A-3.7: the 1st field is an `IfaceRef` — the interface's SPELLING plus its
+-- The 1st field is an `IfaceRef` — the interface's SPELLING plus its
 -- I4 identity — not a bare `String`.  It was a bare `String` compared with
 -- `if1 == if2` until this unit, which is why two UNRELATED modules that each
 -- declared their own interface spelled `Same` and each impl'd it at a shared head
@@ -2759,7 +2759,7 @@ public export data MethodTemplateGivenResult =
 -- increase.
 public export data CohImpl = CohImpl IfaceRef (List Mono) String (Option Loc)
 
--- ── shared one-sided matcher core (#156 S1) ────────────────────────────────
+-- ── shared one-sided matcher core ────────────────────────────────
 -- cohSubsumes (Mono-space), tySubsumes (AST-space) and matchTyMono (AST head-
 -- pattern vs Mono) are the SAME one-sided, consistency-enforcing structural match
 -- in three node spaces: only the GENERAL side's vars bind, a var bound twice must
@@ -2844,7 +2844,7 @@ public export data MStep k g s = MVar k | MKids (List (g, s)) | MOk | MFail
 public export data CohScan =
   CohScan (Option (String, Option Loc)) (Option (String, Option Loc))
 
--- #1559 A-3.7: Which sweep is running, threaded as a value instead of inferred from
+-- Which sweep is running, threaded as a value instead of inferred from
 -- the shape of the module ids.  `cohSoftInScope` used to answer "am I the per-module
 -- sweep?" by testing `mid1 == "" && mid2 == ""`, which was only ever a PROXY: the
 -- per-module input was built by `cohImplsOf`, which stamped `""` because it had no
@@ -2908,7 +2908,7 @@ public export data KeyEntry =
 -- lint-disable-next-line rule-clone-type
 public export data Undetermined = KeepNone | CountImpls IfaceRef | CommitSuper
 
--- #156 S3b: the SiteKind-parametrized entailment core.  ONE `assum → inst → fallback`
+-- The SiteKind-parametrized entailment core.  ONE `assum → inst → fallback`
 -- ladder that both the genuine return-position method resolver (`resolveSite`, EKReturn)
 -- and the nested/top constrained-call router (`routeOfD`, EKNestedTop) route through.
 -- Returns `(primary route, element-dict route list)`.  Genuine sites carry their element
@@ -2923,7 +2923,7 @@ public export data Undetermined = KeepNone | CountImpls IfaceRef | CommitSuper
 --     canonical key of the min⊑ winner + `argImplRequiresRoutesForRow`-packed requires (under
 --     the shared W2 measure, `reqWalkEnter`).
 --   * fallback: EKReturn → RNone; EKNestedTop → the caller-supplied `Undetermined` policy.
--- #156 S3c wired arg-position + operator sites in (EKArg / EKOp below).
+-- Arg-position + operator sites are wired in (EKArg / EKOp below).
 public export data EntailKind =
   -- return-position method site: the method's full (un-stripped) mono (for
   -- ifaceParamMonos), and whether the method is return-position.
@@ -2941,7 +2941,7 @@ public export data EntailKind =
   -- pre-#1154 singleton exactly.  Same pattern as EKReturn/EKArg carrying the
   -- `fullMono` only THEY need.
   | EKNestedTop IfaceRef Undetermined ReqWalk (List Mono)
-  -- #156 S3c: arg-position stamp (resolveArgStamp).  assum =
+  -- Arg-position stamp (resolveArgStamp).  assum =
   -- activeDictVarOfEncl → RDict (never RDictFwd; arg-position); inst = same canonical
   -- RKey primary as EKReturn but element routes via argImplDictRoutesForEncl keyed on
   -- the (default-reduced) method; fallback = RNone (the load-bearing do-nothing arm).
@@ -2951,7 +2951,7 @@ public export data EntailKind =
   -- one an ordinary `ix 1 'x'` call takes.  The list is the site's `SKArg`
   -- omitted-typaram variables (`occurrenceParamMonos`).
   | EKArg Mono (List (String, Mono))
-  -- #156 S3c: operator site (resolveOpSite).  isBinop and the in-impl-body flag
+  -- Operator site (resolveOpSite).  isBinop and the in-impl-body flag
   -- (for opDictVarOf's dict-var policy).  assum = opDictVarOf → RDict;
   -- inst = stampOpRouteVal (builtin head → RNone, else RKey with reqs PACKED in — no
   -- separate implRef); fallback = RNone.  Both do-nothing arms preserved by the adapter's
@@ -2980,12 +2980,12 @@ public export data MethodGrantUse =
 -- call on a type WITH an impl is satisfied; a default-method call on a type with
 -- NO impl is rejected — both matching the oracle.
 -- #154 PR3: the KEYED impl universe consumed by the obligation checkers below.  Bundles
--- the two buckets `insertUnivImplAt` writes (#1112 A-3.4 PR2 deleted the three
+-- the two buckets `insertUnivImplAt` writes (the three
 -- `CrossRun` refs this line used to name): concrete-head impls keyed "iface|tag" and
 -- HEADLESS-receiver impls keyed by iface (matched against ANY receiver). Standalone
 -- builds one from its whole `prog` via `buildImplUniverse` (O(N) once — the same cost
 -- as the old `implDeclsWithReqs`+`implHeadsOf` it replaces); the Module path passes the
--- #1112 A-3.4 PR2: No longer a persistent accumulator.  This block's header used
+-- No longer a persistent accumulator.  This block's header used
 -- to read "PERSISTENT accumulator (grown one module at a time in
 -- appendUniverseAccums)"; those three `CrossRun` refs are deleted.  The Module path
 -- now PROJECTS this value out of stage K's `IE` at the reading module's ordinal
@@ -2996,7 +2996,7 @@ public export data MethodGrantUse =
 -- A-2.2b (#1111): both buckets are IDENTITY-KEYED registries.  What each
 -- key carries, and what it deliberately does NOT:
 --   * the INTERFACE half is an IDENTITY key on both the writer and every reader
---     (#1446 T2) — `tabKeyOf NsIface` over the occurrence's `TyConOrigin`, see
+--     `tabKeyOf NsIface` over the occurrence's `TyConOrigin`, see
 --     `oblIfaceKey`.  An impl that HAS an identity is additionally indexed under its
 --     bare spelling, for goals that cannot supply one: see `insertUnivImplKeys`.
 --   * the RECEIVER-HEAD half is the `TabKey` inside the `HeadKey` that
@@ -3301,7 +3301,7 @@ public export data GraphDrive = GraphDrive {
   gdModules : List (String, List Decl),
   gdResidual : List (String, TcDiag),
   gdEvTable : EvTable,
-  -- #1112 A-3: the whole-graph per-method disposition table, filled on both
+  -- The whole-graph per-method disposition table, filled on both
   -- arms exactly like `gdEvTable` — the whole-graph IE/CE it is built from
   -- (`declEnvsRef`) is complete by the graph preamble above, before either
   -- arm's own work begins.
@@ -3317,7 +3317,7 @@ public export data GraphDrive = GraphDrive {
 }
 
 -- ── TYPED multi-module elaboration (bootstrap eval front-end) ──────────────
--- The BINDER-TYPE table and selected entry outcome an elaboration produced (#1112 A-3).
+-- The BINDER-TYPE table and selected entry outcome an elaboration produced.
 public export data ElabFacts = ElabFacts {
   efManifests : List CapabilityManifest,
   efBinders : BinderTypeTable,
@@ -3516,7 +3516,7 @@ public export data DrainFinding = DrainFinding {
 -- the graph-wide standalone shadows) is what CORE is marked with; the split halves
 -- `msMarkSharedNames`/`msGraphShadowNames` let `moduleMarkCtx` scope the
 -- shadow component per user module (#1354).  `msArgNames` is the arg-dispatch NAME
--- set (#1351 L5: names only — the indices are answered by the identity-keyed
+-- set (names only — the indices are answered by the identity-keyed
 -- `argDispatchIdxByIdRef`, written here so a marked tree can be inferred by
 -- whichever driver marked it).  `msCoreShadowMap` is the definer-shadow map filtered
 -- to what is nameable in core (#2153).  `msBareDictNames` is the `=>`-constrained

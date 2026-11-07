@@ -852,7 +852,7 @@ deSeedNameSets mid =
         omEmpty)
   (accumulated, rebuilt)
 
--- ── #2158 F7: the name index as A PROGRAM-GLOBAL TABLE (T-GLOBAL-TABLE) ──────
+-- ── the name index as A PROGRAM-GLOBAL TABLE (T-GLOBAL-TABLE) ──────
 -- `deNameIndexBefore` is a new whole-graph table, so `compiler/AGENTS.md`'s
 -- T-GLOBAL-TABLE bar applies: the fixture that matters is not "the feature
 -- works", it is "the feature is present and code that never touches it is

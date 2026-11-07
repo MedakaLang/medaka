@@ -1038,7 +1038,7 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
     let ifaceSchemes = legacyMethodSchemes visibleMethodRows
     -- #259/#2157: seed both halves from the same already-minted row selection.
     seedNumLitFromIntAnchor mctx visibleMethodRows
-    -- #1351 L2 MIGRATE.  The importer-shadow layer now binds each shadowed method
+    -- MIGRATE.  The importer-shadow layer now binds each shadowed method
     -- name to the scheme of the declaration THIS module's import scope admits
     -- (`methodScopeAt`), not to `lookupAssoc`'s decl-walk first match.
     -- Falls back to the bare-name answer on a miss — see `pickSchemesByDecl`.
@@ -1173,7 +1173,7 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
   -- value that cannot have changed).
 
   let obUniv = moduleImplUniv
-  -- #838 I4: unified checker, same `obUniv`.  Impl channel = (deferNonGround=True);
+  -- Unified checker, same `obUniv`.  Impl channel = (deferNonGround=True);
   -- call channel = (deferNonGround=False).
   -- #2705: BOTH channels run on EVERY driver.  A driver that infers impl
   -- bodies without checking their obligations lets a program `check` rejects
@@ -1892,7 +1892,7 @@ processSCC outer sigs grouped0 members =
   -- shared ambiguous var.
   -- The CALL delta is passed RAW (it already carries each predicate's joint `List
   -- Mono`); registerSchemeObligations maps it with forwardedVecObls so a multi-param
-  -- predicate survives whole.  #838 I5: a constrained callee's DICT slot is forwarded
+  -- predicate survives whole.  A constrained callee's DICT slot is forwarded
   -- through THIS same call delta — inferDictAtFound records it as a 1-ary PCallSlot
   -- obligation (recordCallObligations, beside pushDictApp), so no separate re-derivation off
   -- the dict delta exists; addedObls carries only the real impl-obligation delta.
@@ -2225,7 +2225,7 @@ appendUniverseAccums gctx mid prog =
         (map fst (funDefs prog))
         gctx.crossRun.universeFunNamesRef.value
   -- #154 PR-B: grow the dispatch-index accumulator by THIS module's interface indices.
-  -- APPEND (universe first) so the accumulated list stays in core-first order.  #1351 L5
+  -- APPEND (universe first) so the accumulated list stays in core-first order.
   -- (CONTRACT): `dispatchIdxScoped` is identity-keyed only, so a prior-module entry this
   -- module never names cannot be queried by spelling at all.
   gctx.crossRun.universeMethodDispatchIdxByIdRef :=

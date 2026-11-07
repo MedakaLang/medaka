@@ -868,7 +868,7 @@ sliceHi e lo incl = defer
 -- re-entry point for EVERY recursive expression form — parenthesised/tuple
 -- exprs, list literals, if/let/match/do, and (through the operand ladder)
 -- nested application — so bounding depth here bounds all of them, whichever
--- bracket or keyword does the nesting. #77 F1: also shared by `parsePatAtom`
+-- bracket or keyword does the nesting. Also shared by `parsePatAtom`
 -- and `parseTyAtom`'s own wrappers below, closing the pattern- and
 -- type-grammar gaps the end-of-sprint review found; an expr-only input still
 -- only ever increments here, so `parseAtom`'s own boundary does not move.

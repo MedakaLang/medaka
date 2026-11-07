@@ -2476,7 +2476,7 @@ clausesForName name ((n, c) :: rest)
 --
 -- ⚠️ UNREACHABLE IS AN ARGUMENT, NOT A REMOVAL — the same standard this comment
 -- applies to `[0]` below, and it applies here too.  WHAT WOULD FALSIFY IT: any
--- change to identity SUPPLY.  #1115 E-1 gives the flat path module ids; any future
+-- change to identity SUPPLY.  The flat path module ids are one such supply; any future
 -- driver with PARTIAL supply does the same locally.  The moment a stamped query can
 -- meet a same-spelled row it does not own, this case goes from unreachable to live
 -- and dispatch changes — AND NO GATE COULD SEE IT, because the wrong row is a

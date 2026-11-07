@@ -417,7 +417,7 @@ ppDiagCliSrc src file diag = ppDiagCliLines (srcLinesArr src) file diag
 -- wrapper.  Output is byte-identical by construction — this IS the old body,
 -- with `nthLine src sl` replaced by an index into the pre-split array.
 --
--- 🚨 #2400 F2b: THIS is the one place a human-channel path becomes display text,
+-- THIS is the one place a human-channel path becomes display text,
 -- so `displayPath` is applied HERE and nowhere else.  Normalising at the four
 -- individual multi-module call sites (as F2b first did) fixed only the arms that
 -- happened to be listed: `medaka check main.mdk` agreed afterwards, but `medaka
@@ -433,7 +433,7 @@ ppDiagCliLines srcLines file (Diag sev _ msg (Some (Loc _ sl sc _ _)) _ _) =
     None => header
     Some lineText =>
       "\{header}\n  |\n\{intToString sl} | \{lineText}\n  | \{spaces sc}^"
--- #2400 F3: an unlocated diagnostic keeps `<unknown location>` in the POSITION
+-- An unlocated diagnostic keeps `<unknown location>` in the POSITION
 -- a `file:L:C:` would occupy, but takes the severity prefix like every other
 -- human diagnostic — so `grep -E '^(error|warning):'` over stderr finds ALL of
 -- them, not just the located ones.  This does NOT invent a location: a resolve
@@ -483,7 +483,7 @@ srcLinesCached file cache = match lookupAssoc file cache
     let ls = srcLinesArr (readFileSafe file)
     (ls, (file, ls) :: cache)
 
--- ── ONE FACE for the module-graph resolve channel (#2400 F2) ────────────────
+-- ── ONE FACE for the module-graph resolve channel ────────────────
 --
 -- `frontend.resolve` must not render its own multi-module human output by hand
 -- (`ppResErrorLocatedF`, deleted): `file:L:C: msg`, no `error: ` prefix, no
@@ -535,7 +535,7 @@ ppDiagBucketLines ((file, diags) :: rest) =
   let srcLines = srcLinesArr (readFileSafe file)
   map (ppDiagCliLines srcLines file) diags ++ ppDiagBucketLines rest
 
--- #2400 F2b: one file, two spellings, in one tool.  The loader mints a module's
+-- One file, two spellings, in one tool.  The loader mints a module's
 -- path by joining its search root with the module id (`loader.fileOfModuleId`),
 -- and the root for an entry named with no directory part is `"."` — so `medaka
 -- check main.mdk` attributed its OWN entry as `./main.mdk`, while the
@@ -2583,7 +2583,7 @@ joinedOrNone ls = Some (joinNl ls)
 -- per-file `Array String` split on EVERY file for output that does not exist.
 -- The `[]` arm is what keeps the split off the zero-diagnostic path; keep it.
 --
--- #2400 F2b: `path` here is the LOADER-NORMALISED form (`./main.mdk` for an
+-- `path` here is the LOADER-NORMALISED form (`./main.mdk` for an
 -- entry named with no directory part), where the single-file arm passes the
 -- CLI's `target` verbatim — the same tool printed `./main.mdk` for a
 -- multi-module TYPE error and `main.mdk` for a single-file one.  `displayPath`

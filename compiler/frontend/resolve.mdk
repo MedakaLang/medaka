@@ -953,7 +953,7 @@ recFieldSub cur env (Some p) = checkPat cur env p
 -- lookupValue), and a reference to a NON-local name — every top-level function
 -- call, for one — scans it to completion (never matching) before falling
 -- through to env.values.  As a bare `List String` (an O(scope) `contains`) that
--- made resolve O(references × scope-size): issue #78 P-1's residual quadratic,
+-- made resolve O(references × scope-size): the residual quadratic,
 -- the peer of the env.values→OrdMap fix above.  So `Scope` carries BOTH:
 --   * `names` — the binding-order list (duplicates and all), consumed ONLY by
 --     suggestName's did-you-mean, which tries local names first.  Preserved
@@ -4572,7 +4572,7 @@ resolveModulesToLines runtimeDecls preludeDecls mods =
 -- gone rather than deprecated: use `resolveModulesErrorsByFile` below, which
 -- takes the loader's modId → path map and attributes each module to its own file.
 
--- (REMOVED, #2400 F2) `resolveModulesToHumaneByPath` / `ppResErrorLocatedF` /
+-- (REMOVED) `resolveModulesToHumaneByPath` / `ppResErrorLocatedF` /
 -- `ppResErrorLocated` / `renderModuleErrorsByPath` / `resolveModulesErrorsByPathGo`
 -- were a SECOND human renderer: they hand-built `"\{file}:\{sl}:\{sc}: \{msg}"`
 -- with no `error: ` severity prefix and no caret block, so the SAME unbound name
@@ -4941,7 +4941,7 @@ stampClauseWith top (pats, body) =
 --
 -- 🚨 THE CONSUMER RULE IS NOT ONE RULE, AND THIS IS WHERE THAT WAS DISCOVERED.
 -- It read: "NO predicate may compare two `OriginUnresolved` heads equal, or treat
--- one as matching anything."  #1111 A-2.10's `tyConIdsConflict`
+-- one as matching anything."  The identity-aware `tyConIdsConflict`
 -- (`frontend/ast.mdk`) does BOTH — its `_ => False` arm makes two absent heads
 -- non-conflicting AND makes an absent head non-conflicting with any present one —
 -- and it is CORRECT, so the rule as written was falsified by the first consumer
@@ -5795,7 +5795,7 @@ unqualSection ctx (SecLeft e op) = SecLeft (unqualExpr ctx e) op
 -- (both `types/typecheck.mdk`), plus `lowerDeclImpl`'s default-method identity
 -- (`ir/core_ir_lower.mdk`).  The carrier's own comment in `frontend/ast.mdk`
 -- holds the derivation and the grep; do not restate the reader set here.
--- (Corrected during #1111 A-2.10's review, by grepping the tree for the OTHER
+-- (Corrected in review, by grepping the tree for the OTHER
 -- spellings of a claim being narrowed one file over — which is the procedure a
 -- "nothing reads this" negative always needs, because nothing else expires it.)
 --

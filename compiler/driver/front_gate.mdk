@@ -89,7 +89,7 @@ ppParseError src file e =
 -- that module had been checked directly: `ppParseError` against the module's OWN
 -- source and path, so the file, line/col, caret and `P-*`/`L-*` code all name the
 -- module that is actually broken rather than the entry that imported it.
--- #2400 F2b: `mpath` is LOADER-MINTED (`./bad.mdk` for a module beside an entry
+-- `mpath` is LOADER-MINTED (`./bad.mdk` for a module beside an entry
 -- named with no directory part), unlike every other `ppParseError` call site,
 -- which passes the CLI's own target string.  Same one-file-two-spellings defect
 -- the resolve and type-error channels had; `ppDiagCliLines` (which `ppParseError`

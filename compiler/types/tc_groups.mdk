@@ -1648,7 +1648,7 @@ registerSchemeObligations mctx defIds sigTvMaps callObls addedObls xs0 = go xs0
   where
     go [] = ()
     go ((m, sch) :: rest) =
-      -- #838 I2 / #827: record this binding's QUANTIFIED (generalized) var ids as
+      -- Record this binding's QUANTIFIED (generalized) var ids as
       -- caller-deferrable.  A var this binding ∀-quantifies is FORWARDED to its callers
       -- (each use re-instantiates it fresh), so an end-of-run call obligation carrying
       -- that exact id is this binding's own deferred predicate — undeterminedGoalExempt

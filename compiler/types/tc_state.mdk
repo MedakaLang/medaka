@@ -217,7 +217,7 @@ enterStampCtx saved ctx =
 -- resolveDictApps in elabModuleStamp: routing them through pendingDictApps would read
 -- `[]` and reproduce the S-1 bug with more code.  This way the fix is ordering-immune
 -- and the route has a single writer.  Empty for an unconstrained standalone.
--- #156 S3a: these fields now live in `PendingEntry`'s `SKRLocal` kind (mangledSym,
+-- These fields now live in `PendingEntry`'s `SKRLocal` kind (mangledSym,
 -- forceLocal, dictMonos, dictIfaces); the name/route/receiver-mono/enclosing-fn are
 -- the shared PendingEntry fields.
 
@@ -326,7 +326,7 @@ emptyClassEnv = ClassEnv { ceRows = [], ceByKey = regEmpty }
 -- banner is absorbed into the ungraded-kind doctest's expected value and it
 -- FAILS with `expected == actual` plus the banner spliced in.  MEASURED on
 -- this branch while writing this unit — not a borrowed warning.
--- ── #1519 A-3.3: CE-BLOCK-END ─────────────────────────────────────────────────
+-- ── CE-BLOCK-END ─────────────────────────────────────────────────
 
 export
 emptyMethodEnv : MethodEnv
@@ -612,8 +612,8 @@ emptyShadowDicts = ShadowDicts { sdMonos = [], sdIfaces = [], sdArgVecs = [] }
 -- for term — see routesOfMonosTopV.
 
 -- PERF: this channel's length in O(1) — same O(N²)-per-group length scan the call
--- channel had before #838 I1 ported it onto `Windowed` (see `wMark` above).  #841
--- ports `pendingDictApps` onto `Windowed` too (see `dictApps` below); mutated ONLY
+-- channel had before it was ported onto `Windowed` (see `wMark` above).
+-- `pendingDictApps` rides `Windowed` too (see `dictApps` below); mutated ONLY
 -- by `freshModuleCtx` and `pushDictApp`.
 
 -- Construct every field-Ref fresh (each reproduces its former top-level ref's initial);
@@ -750,7 +750,7 @@ export
 currentScopeStore : GraphCtx -> Unit -> ScopeStore
 currentScopeStore gctx _ = gctx.graphRun.scopeStore
 
--- #2549 M2: start a new graph lineage from [lineage], the interners' (the run
+-- Start a new graph lineage from [lineage], the interners' (the run
 -- most recently minted or restored).  The evidence ORDINAL continues from that run's counter, so an
 -- id minted from here does not repeat one the previous drive's tree holds, and a
 -- stray read of such an id fails loudly instead of answering for another node.

@@ -1286,7 +1286,7 @@ cohGoR subst (TVar c1) (TVar c2)
   | otherwise = cohBind subst (tyvarId c1) (TVar c2)
 cohGoR subst (TVar c1) t = cohBind subst (tyvarId c1) t
 cohGoR subst t (TVar c2) = cohBind subst (tyvarId c2) t
--- #1111 A-2.10: identity-aware, same rule as `unifyN` (`sameTyConHead`).  Two
+-- Identity-aware, same rule as `unifyN` (`sameTyConHead`).  Two
 -- impl heads that merely SPELL the same type no longer overlap, so a coherence
 -- conflict is no longer reported between `impl C a.T` and `impl C b.T` — which
 -- is the correct answer: they are different types.
@@ -1676,7 +1676,7 @@ preferConcrete a b = match headTyconMono a
 
 -- match an impl-head type PATTERN against a concrete mono, binding the impl's
 -- type-variable names to monos (single-level: the pattern's args are bare vars).
--- #156 S1 / Fork B: matchTyMono is a CONSISTENCY-ENFORCING frontend of the
+-- matchTyMono is a CONSISTENCY-ENFORCING frontend of the
 -- shared matchOneSided core (specific side = Mono, so the consistency equality is
 -- matchEqMono).  A var bound twice must agree: a non-linear impl head
 -- (`Get (Box a) a`) must not "match" `Get (Box Int) Bool` (binding a↦Int AND a↦Bool)
@@ -1734,7 +1734,7 @@ export
 matchStep : Ty -> Mono -> MStep String Ty Mono
 matchStep (TyVar n) _ = MVar n
 matchStep (TyCon { tyConName = n, tyConOrigin = o }) m = match peelQual m
-  -- #1111 A-2.10: the IMPL-HEAD-vs-GOAL match reads identity too, by the same
+  -- The IMPL-HEAD-vs-GOAL match reads identity too, by the same
   -- `sameTyConHead` rule `unifyN` uses.  This is the dispatch half: `impl C a.T`
   -- no longer matches a goal whose head is `b.T`.  It does NOT make dispatch
   -- identity-KEYED — `ImplBuckets`/`obUniv*` are still spelling-keyed (#1274,
@@ -2029,7 +2029,7 @@ monoSameGiven a b = match peelQual a
   TVar c1 => match peelQual b
     TVar c2 => tyvarId c1 == tyvarId c2
     _ => False
-  -- #1111 A-2.10 on the `TCon`/`TCon` pairing (`sameTyConHead`): an in-scope
+  -- On the `TCon`/`TCon` pairing (`sameTyConHead`): an in-scope
   -- dict given for `C a.T` no longer answers a goal `C b.T`.  Cross-population
   -- pairs left name-only and not separately probed — armed because the pre-split
   -- arm answered them (`__tupleN__`; see `Mono.TRigid`), and a rigid carries no

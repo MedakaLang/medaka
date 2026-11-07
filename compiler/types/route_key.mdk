@@ -62,7 +62,7 @@ import frontend.ast.{
 import support.util.{joinWith, escStr, reverseL}
 import array.{sort}
 
--- ── the evidence table (#2549 M2) ─────────────────────────────────────────
+-- ── the evidence table ─────────────────────────────────────────
 -- `EDictAt` carries an `EvId`, not a route cell, so a reader answers "what did
 -- the solver decide here" by looking the id up in the elaboration's `EvIndex`
 -- rather than by dereferencing a pointer the typechecker handed it.  The lookup

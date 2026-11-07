@@ -235,7 +235,7 @@ resolveMemberRows (origin, local) depRows = match lookupAssoc origin depRows
 -- `importFormSchemes`, which routes it to `aliasSchemes`).
 --
 -- A caller must not re-enumerate the forms.  Three consecutive repairs to the
--- dict-arity identity seam (#1425 F1 and its two relocations) each scoped their fix by
+-- dict-arity identity seam (and its two relocations) each scoped their fix by
 -- enumerating import forms by hand, and each enumeration missed a member the next
 -- review found — wildcard, then selective re-export, then wildcard re-export.  Routing
 -- through this function makes "did we cover every form" a property of ONE definition
@@ -1430,7 +1430,7 @@ recordCandImported : GraphCtx ->
 recordCandImported gctx prog n (ident, owner, _) =
   anyUsePathBindsCtor gctx prog n owner ident
 
--- ── #1351 L2 (MIGRATE Leg 2b): the IDENTITY-SCOPED picker for the shadow layer ──
+-- ── the IDENTITY-SCOPED picker for the shadow layer ──
 --
 -- `pickSchemes` above answers "which scheme does the bare name [n] have" with
 -- `lookupAssoc` — FIRST MATCH over the method-row decl-walk order.  When two

@@ -294,10 +294,10 @@ buildDeclEnvs gctx acc coreRow modRows =
     deOrdIndex = a.daOrdIndex,
     deDefiners = a.daDefiners,
     deAmbigValues = a.daAmbig,
-    -- #1112 A-3.1: `deAllDecls` IS `coreDecls ++ flatMap snd modules` (see
+    -- `deAllDecls` IS `coreDecls ++ flatMap snd modules` (see
     -- `declEnvDeclsOf`).
     deAllDecls = declEnvDeclsOf mods,
-    -- #1112 A-3.4 / #1519 A-3.3: `IE` and `CE` inherit this fold's ordering and
+    -- `IE` and `CE` inherit this fold's ordering and
     -- its must-run-after-`stampGraphTyOrigins` precondition, exactly as `deData`
     -- does.  All three are pure folds over the same rows, none mutates a ref, and
     -- none reads another's output -- so the order they are listed in is not
@@ -311,7 +311,7 @@ buildDeclEnvs gctx acc coreRow modRows =
     -- #2158: `deKindsBefore`'s BARE-NAME twin, out of the SAME fold and the same
     -- `kacc` rows -- see `declEnvSeedChain`.
     deNameIndexBefore = a.daSeeds.dsNames,
-    -- #1119 D-2: the VARIANCE seed.  A SEPARATE chain rather than a fourth
+    -- The VARIANCE seed.  A SEPARATE chain rather than a fourth
     -- accumulator inside `declEnvSeedChain` because it is the only one of the
     -- three that has to read its own accumulator while building it --
     -- `data Cell a = MkCell (Ref a)` composes with `Ref`'s row, and a
@@ -319,7 +319,7 @@ buildDeclEnvs gctx acc coreRow modRows =
     -- module contributed.  Same ordinal-ascending walk, same "[m]'s seed is
     -- everything strictly before [m]" stamping.
     dePolaritiesBefore = snd a.daPolarity,
-    -- #2110 S2-1: the ATOM-GUARANTEE seed, a third chain for a DIFFERENT reason
+    -- The ATOM-GUARANTEE seed, a third chain for a DIFFERENT reason
     -- than the variance one above: `inferParamRowAtoms` composes with NOTHING
     -- (see its note -- an occurrence reached through another type's spine drives
     -- the intersection empty), so this chain needs neither its own read edge nor
@@ -403,7 +403,7 @@ declEnvSeedChain gctx (m :: rest) s =
     dsNames = omInsert m.demId s.dsNAcc s.dsNames,
   }
 
--- ── #2110 S2-1: the ATOM-GUARANTEE seed chain ────────────────────────────
+-- ── the ATOM-GUARANTEE seed chain ────────────────────────────
 -- `declEnvPolarityChain`'s shape, one table over: the same ordinal-ascending
 -- walk, the same `declEnvVisibleTo`-routed row projection, the same "row [m]'s
 -- seed is every row strictly earlier than [m]" stamping under [m]'s module id.
@@ -608,13 +608,13 @@ declEnvSeedDataUniverse mctx mid envs =
   -- hint, so the reject still happens with its unhinted message.
   mctx.mcCells.dataParamNameIndexRef :=
     optionOr omEmpty (omLookup mid envs.deNameIndexBefore)
-  -- #1119 D-2: the VARIANCE half of the same seed, read under the same key.  A
+  -- The VARIANCE half of the same seed, read under the same key.  A
   -- MISS here is fail-SILENT in the same direction the kind half is (an absent
   -- row makes `unifyN`'s variance gate abstain, i.e. today's leniency) — it can
   -- lose a rejection, never manufacture one.
   mctx.mcCells.dataParamPolarityRef :=
     optionOr [] (omLookup mid envs.dePolaritiesBefore)
-  -- #2110 S2-1: the ATOM-GUARANTEE half of the same seed, read under the same
+  -- The ATOM-GUARANTEE half of the same seed, read under the same
   -- key.  A MISS here is fail-LOUD, not fail-silent like the two above: an
   -- absent row reads as "this declaration guarantees nothing", which is the
   -- pre-#2110 behaviour, so it can only over-reject.  That is why the table
@@ -869,7 +869,7 @@ takeUntilInclusiveS target (x :: xs) =
 -- Build the alias-dependency entry for one table entry: alias name → list of
 -- other alias keys mentioned in its RHS (the dependency edges).
 --
--- #1111 A-2.3 deliberately left this graph bare-NAME-KEYED, and it is the
+-- This graph is deliberately bare-NAME-KEYED, and it is the
 -- one consumer of `aliasTableRef` that is not re-keyed.  Three reasons, in the
 -- order that decided it:
 --   * it is a DELETION pass, and its over-approximation is conservative in the
@@ -1376,7 +1376,7 @@ registerData : TcEnv -> Decl -> TcEnv
 registerData env (DAttrib _ d) = registerData env d
 registerData env (DData { dataName = name, dataParams = params, dataParamKinds = anns, dataCtors = variants, dataCtorBinders = binders, dataOrigin = o }) =
   registerVariants o env name params anns variants binders
--- DECLARATION MINT (#1110/#1111 A-2.3): `tyAliasOrigin` is the alias's own
+-- DECLARATION MINT: `tyAliasOrigin` is the alias's own
 -- identity, stamped by `stampDeclOrigins` at the module that declared it — the
 -- same source `registerVariants` takes `dataOrigin`/`newtypeOrigin` from, and
 -- for the same reason (see its note: it must not come from ambient state).
@@ -1393,7 +1393,7 @@ registerData env (DTypeAlias { tyAliasName = name, tyAliasParams = params, tyAli
   env
 registerData env (DNewtype { newtypeName = name, newtypeParams = params, newtypeParamKinds = anns, newtypeCtor = con, newtypeCtorBinders = binders, newtypeFieldTy = fty, newtypeOrigin = o }) =
   registerVariants o env name params anns [Variant con (ConPos [fty])] [binders]
--- #1557 A-3.5c: THE `DInterface` arm is gone, and its absence is the point.
+-- THE `DInterface` arm is gone, and its absence is the point.
 -- #822 registered each interface type-parameter's slot kinds here, into
 -- `ifaceParamKindsRef`, *"because every consumer must see the table BEFORE the first
 -- signature is elaborated, which is exactly registerAllData's slot"*.  That timing
@@ -1481,7 +1481,7 @@ registerVariants : TyConOrigin ->
 registerVariants o env name params anns variants binders =
   -- the head's kinds were recorded ahead of every declaration (`recordDeclKinds`)
   let kinds = declParamKinds env.teDyn.dcModule.mcGraph params anns
-  -- #1119 D-2: the VARIANCE twin, registered in the same breath and from the
+  -- The VARIANCE twin, registered in the same breath and from the
   -- same decl-borne identity, so the two tables cannot come to disagree about
   -- which declaration a key names.  It runs AFTER `recordParamKinds` only
   -- because reading order is irrelevant here; it must run BEFORE
@@ -1550,7 +1550,7 @@ registerVariants o env name params anns variants binders =
 -- under `lookupAssoc`'s first-match — the module's own decls are registered as a FRONT
 -- overlay over the data universe and therefore win, which is the ordering every reader
 -- assumes (see the `dataEnv` binding in checkBodyImpl).
--- (`o` is the DECLARATION's identity — #1111 A-2.3; see `tyTabKey`.)
+-- (`o` is the DECLARATION's identity; see `tyTabKey`.)
 recordCtors : GraphCtx ->
   TyConOrigin ->
   String ->
@@ -1590,7 +1590,7 @@ recordParamKinds mctx o name kinds =
 -- back a pure-typed function that prints).
 --
 -- The key is identity-bearing (`tyTabKey` carries the DECLARATION's
--- `TyConOrigin` — #1111 A-2.3), so a row can only ever answer for the very
+-- `TyConOrigin`), so a row can only ever answer for the very
 -- declaration that wrote it.  An entry written while checking one module is not
 -- visible to an importer (`publicDataDecls` drops `VisAbstract` before an
 -- importer's `registerVariants` sees the decl), so the table is seeded per
@@ -2338,7 +2338,7 @@ loadDataUniverse mctx cur =
   mctx.mcCells.aliasTableRef :=
     aliasUniverseAt cur mctx.mcGraph.declEnvsRef.value.deData.deAliases
 
--- ── #1111 A-2.11 (#1319 unit 1): the CONSTRUCTOR peer of meExports ──
+-- ── the CONSTRUCTOR peer of meExports ──
 -- `DataEnv.deCtorExports`: (module id → [(ctor name, owning type name, declaring
 -- `Ident`)]), folded dependency-first by `dataEnvFromRowsGo` so a `export import` chain
 -- resolves transitively and BY IDENTITY.  Read through `ctorExportsIndex` by

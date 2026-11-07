@@ -737,7 +737,7 @@ ieUnivConcreteOf (ImplUniverse conc _) = conc
 --                       interfaces at the SAME head, which is the case `ieConcrete`
 --                       separates and `ieByHead` must not.
 --   `zmod` (ordinal 1): `impl Same Blob` (its own same-spelled head — `dispHeadTab`
---                       is spelling-keyed, #1317 T1, so it shares the bucket); a
+--                       is spelling-keyed, so it shares the bucket); a
 --                       fully-general `impl Gen a`, which has no head tycon and must
 --                       land in the HEADLESS bucket instead; and one impl whose
 --                       interface is `OriginUnresolved` (below).
@@ -749,7 +749,7 @@ ieUnivConcreteOf (ImplUniverse conc _) = conc
 -- Flat, so its impls file under ONE key there and TWO on Module.  `ieByHead` cannot
 -- inherit that, because its key has no interface component AT ALL: it is
 -- `headBucketKey (univReceiverTag tys)`, and `dispHeadTab hk = TkBare NsType
--- (headKeyName hk)` — bare spelling, origin-blind (#1317 T1).  This row asserts that
+-- (headKeyName hk)` — bare spelling, origin-blind.  This row asserts that
 -- rather than arguing it: it lands in the SAME head bucket as its origin-bearing
 -- siblings while minting half as many interface keys.
 ieOtherImplIn : String -> Decl

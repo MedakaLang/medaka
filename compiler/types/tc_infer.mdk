@@ -687,7 +687,7 @@ checkStmtNotDiscarded dyn stmtObls t e
 -- gzip/lib/{huffman,inflate}.mdk) never actually loses anything by discarding it.
 --
 -- NOT exempted by callee name alone: `setIndex` is not a reserved word and
--- method names are not globally unique (#1111 A-2.5) — a user's OWN unrelated
+-- method names are not globally unique — a user's OWN unrelated
 -- binding named `setIndex` (e.g. `setIndex : HashMap -> String -> Int -> Bool`,
 -- an existed-already probe) would silently dodge the discard check too, which
 -- is exactly the bug this check exists to catch. `isExemptInPlaceSetIndex`
@@ -2682,11 +2682,11 @@ sourceBindingArity _ = 0
 registerLocalScheme : ModuleCtx -> String -> Scheme -> Int -> Int -> Int -> Unit
 registerLocalScheme mctx x sch oblN0 callN0 _dictN0 =
   declareQuantified mctx sch
-  -- Obligations registered universally (#827/#838 I2); do not gate to IMPL/DEFAULT
+  -- Obligations registered universally; do not gate to IMPL/DEFAULT
   -- bodies only. See docs/spec/DICT-SEMANTICS.md § "4.1 `gen` at a local binder".
   let addedObls = wWindow mctx.mcCells.implObls oblN0
   let callOblsDelta = callOblsWindow mctx callN0
-  -- #838 I5: the dict-slot's forwarded obligation is ALREADY in callOblsDelta as the
+  -- The dict-slot's forwarded obligation is ALREADY in callOblsDelta as the
   -- mirroring PCallSlot obligation recorded at inferDictAtFound (recordCallObligations,
   -- beside pushDictApp), reaching schemeOblsForMember via forwardedVecObls; the old
   -- `allDictObls` re-derivation was a redundant second source (deduped away). Retired.
@@ -3355,11 +3355,11 @@ processLetGroup env binds =
   let callOblsDelta = callOblsWindow env.teDyn.dcModule callN0
   let schemes = groupSchemesOf genv binds
   each (p => declareQuantified env.teDyn.dcModule (snd p)) schemes
-  -- #827/#838 I2: register EVERYWHERE, not only inside a method body.  The
+  -- Register EVERYWHERE, not only inside a method body.  The
   -- uniform deferral (`undeterminedGoalExempt`'s OD2 test) makes a generalizable
   -- where/let var defer into the enclosing scheme rather than trip an ambiguity
   -- reject, closing the orphaned-local-constraint S0 (#827).  See registerLocalScheme.
-  -- #838 I5: dict-slot forwarding rides callOblsDelta's PCallSlot obligations (see
+  -- Dict-slot forwarding rides callOblsDelta's PCallSlot obligations (see
   -- registerLocalScheme); the redundant `allDictObls` re-derivation is retired.
   registerSchemeObligations
     env.teDyn.dcModule

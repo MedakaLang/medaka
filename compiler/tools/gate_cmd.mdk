@@ -1109,7 +1109,7 @@ runRunCmdBody argv = match parseRunArgs argv
 
 -- ── `gate verify` ───────────────────────────────────────────────────────────
 --
--- The drift gate (#2176 S-4, docs/ops/GATE-REGISTRY-DESIGN.md §3).  TEXT-ONLY,
+-- The drift gate (docs/ops/GATE-REGISTRY-DESIGN.md §3).  TEXT-ONLY,
 -- no build — runs everywhere, cheap.  Each check is its own violation class:
 --
 --   1. every gate CANDIDATE — test/preflight.sh's own `_gate_candidates`

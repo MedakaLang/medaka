@@ -475,7 +475,7 @@ mregAdd ident v mr = mregAddK (regKeyOf ident) v mr
 -- name which is which.
 --
 -- 🚨 ANCHOR: the two buckets are `ImplUniverse`'s, written by `insertUnivImplAt`
--- (`types/typecheck.mdk`). Until #1112 A-3.4 PR2 this paragraph named their
+-- (`types/typecheck.mdk`). This paragraph named their
 -- CARRIERS instead — the `obUnivConcreteRef`/`obUnivHeadlessRef` `CrossRun`
 -- accumulators — and those three fields are now DELETED: the Module path's
 -- universe is a projection of stage K's `IE` (`ieUniverseAt`, selecting from the

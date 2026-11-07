@@ -575,7 +575,7 @@ ffiInstAtom sub a = match a.eatParam
     _ => [a]
   _ => [a]
 
--- ── the CATALOG-ROW rule (#2163, epic #2070 R2) ─────────────────────────────
+-- ── the CATALOG-ROW rule (#2163, epic #2070) ─────────────────────────────
 --
 -- The fifth declaration rule, and it is about the effect row, not the shape.
 --

@@ -76,7 +76,7 @@ substringMatch needle haystack = isSome (stringIndexOf needle haystack)
 -- the evaluated program — so we re-implement the same LCG draws here over a
 -- PRIVATE ref (`propRngStateRef`), NOT `eval.mdk`'s `rngStateRef`.
 --
--- #2295/#2316 F-4: `rngStateRef` is the SAME ref the evaluated program's own
+-- `rngStateRef` is the SAME ref the evaluated program's own
 -- `randomInt`/`randomBool` externs draw from — sharing it here would mean
 -- `medaka test --seed <n>` perturbs the interpreter's supposedly-independent
 -- random draws for a program under test, which contradicts the settled "the

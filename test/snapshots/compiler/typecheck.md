@@ -1843,7 +1843,7 @@ graphPreamble inputs admitted sel preludeKey runtimeDecls coreDecls modules =
   -- first degrades every parameterized label to its ⊤ and over-rejects an honest
   -- relay into an abstractly-exported wrapper.
   --
-  -- #1112 A-3.1: the units here are what `deAllDecls` flattens (`declEnvDeclsOf`),
+  -- The units here are what `deAllDecls` flattens (`declEnvDeclsOf`),
   -- in the same order; `populateEffectDomainsGraph` walks them without building
   -- that concatenation a second time.
   populateEffectDomainsGraph gctx coreDecls modules
@@ -1865,7 +1865,7 @@ graphPreamble inputs admitted sel preludeKey runtimeDecls coreDecls modules =
   -- `graphCarriesMangledFunDefs` folds with `||`.
   gctx.mangledFunDefsPresentRef :=
     prelude.ppMangledFunDefs || graphCarriesMangledFunDefs modules
-  -- #1112 A-3.1: the whole-graph declaration envelope, under the same two-part
+  -- The whole-graph declaration envelope, under the same two-part
   -- property as the line above (nothing resets it within the drive, and the
   -- Module-mode driver entry writes it unconditionally).  See `buildDeclEnvs`.  It
   -- carries the method namespace (`deMethods`) and the constructor export index
@@ -2494,7 +2494,7 @@ serveOps = ServeOps {
 freezeFrom : Int -> List ModDiags -> List ModDiags
 freezeFrom n rows = take n rows ++ map freezeModDiags (drop n rows)
 
--- #1112 A-3: the disposition producer.  For every accepted instance
+-- The disposition producer.  For every accepted instance
 -- (`ieRowsAll` — every impl row in the whole-graph `IE`, prelude included) and
 -- every method of its interface's `CeRow`, exactly one row: `Supplied` when the
 -- impl names the method, `InheritedDefault` when it does not and the method is
@@ -2710,7 +2710,7 @@ driveGraphK sel (DriveArgs inputs valueMain executes preludeKey keyed runtimeDec
   -- #414: no span — see globalCoherenceConflict (the entry module it attaches to is
   -- not the module the span would name, and the renderer keys the file by group).
   -- F-3d: the ⊑-incomparable half rides the WARNING list of the same module.
-  -- #1559 A-3.7: the whole-graph `IE` the preamble built above; `cohRowsOf` is
+  -- The whole-graph `IE` the preamble built above; `cohRowsOf` is
   -- what excludes the prelude, replacing "walk the user `modules` list".
   -- It reads `deImpls` only, which nothing between here and the tree arm's return
   -- writes, so attaching once here serves both selections.
@@ -2751,7 +2751,7 @@ driveGraphK sel (DriveArgs inputs valueMain executes preludeKey keyed runtimeDec
       outcome
       (manifestDriverFor inputs executes)
       valueMain
-  -- #1112 A-3: the whole-graph IE/CE `buildDeclEnvs` filled in the preamble
+  -- The whole-graph IE/CE `buildDeclEnvs` filled in the preamble
   -- above is already complete at this point, on both arms alike.
   let dispositions =
     buildDispositions lastCtx.mcGraph lastCtx.mcGraph.declEnvsRef.value

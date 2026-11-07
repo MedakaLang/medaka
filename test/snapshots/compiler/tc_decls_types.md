@@ -1632,7 +1632,7 @@ foldAppFallback mctx etbl tvs acc0 xs0 = go acc0 xs0
 -- the head is a data type with a KRow param, refold the spine kind-directed (KRow
 -- arg → TEff row); else the opaque `appFallback`.
 -- (`o` is the head's acquired identity — see `appFallback`'s note.)
--- `key` is minted ONCE and shared by both lookups below (#1111 A-2.3 follow-up):
+-- `key` is minted ONCE and shared by both lookups below:
 -- `tyTabKey` → `mkIdent` → `identOriginOf` allocates on the way (an `Ident`, an
 -- `Option`, the `TkIdent`/`TkBare` wrapper), so minting it twice per call — once
 -- for `aliasTableRef`, again for `dataParamKindsRef` in the `_ =>` arm below —
@@ -2083,7 +2083,7 @@ rowArgNamesIn mctx scope x0 = go x0
   where
     go (TyApp a b) =
       let kinded = match tyAppSpine (TyApp a b)
-        -- OCCURRENCE MINT (#1110/#1111 A-2.3), same source as `fromAstTypeE`'s.
+        -- OCCURRENCE MINT, same source as `fromAstTypeE`'s.
         (TyCon { tyConName = n, tyConOrigin = o }, args) =>
           rowArgNamesApp mctx scope o n args
         -- #822: the abstract-head half — an interface typaram of graded kind, in scope.

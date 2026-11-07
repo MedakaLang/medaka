@@ -180,7 +180,7 @@ export
 defaultReceiverDict : String -> String
 defaultReceiverDict method = "$self_\{method}"
 
--- ── Cross-cutting identity substrate (#1111 A-2.0) ─────────────────────────
+-- ── Cross-cutting identity substrate ─────────────────────────
 -- `Ns` + `Ident` generalize `TyConOrigin` from "which module declared this
 -- TYPE head" to "which module declared this declaration, IN WHICH
 -- NAMESPACE" — the substrate the Stage A-2 table-conversion units (each its
@@ -381,7 +381,7 @@ export
 mkIdent : Ns -> TyConOrigin -> String -> Option Ident
 mkIdent ns origin name = map (io => Ident ns io name) (identOriginOf origin)
 
--- ── RE-HOMED FROM `types/registry.mdk` (#1111 A-2.3; oracle-identity family
+-- ── RE-HOMED FROM `types/registry.mdk` (oracle-identity family
 -- leaf L1).  MECHANICAL RE-HOME, bodies unchanged: `frontend/exhaust.mdk`'s
 -- constructor oracle now keys `typeCtors` by declaration identity, and
 -- `frontend` may not import `types` — so `TabKey` and its five combinators
@@ -422,7 +422,7 @@ mkIdent ns origin name = map (io => Ident ns io name) (identOriginOf origin)
 --     time a caller mints a key — and the two hottest readers
 --     (`fromAstTypeApp`, `headRemainingKinds`, `types/typecheck.mdk`) each
 --     minted it TWICE per node, once per table lookup, until hoisted to a
---     single shared binding (#1111 A-2.3 follow-up). The design chosen here
+--     single shared binding. The design chosen here
 --     is cheaper than `Registry`'s render-per-LOOKUP cost (paid every call,
 --     uncached), not free — price the alternative that was rejected AND the
 --     one that was picked, not only the former.
@@ -1526,7 +1526,7 @@ intMinLiteralHelp : String
 intMinLiteralHelp =
   "`Int` is 63-bit, spanning [-4611686018427387904, 4611686018427387903]; 4611686018427387904 fits only as the negative -4611686018427387904, so write it with its `-`"
 
--- ── evidence identity (#2549 M2) ──────────────────────────────────────────────
+-- ── evidence identity ──────────────────────────────────────────────
 -- A site and the goal that solves it are associated BY VALUE: the marked node
 -- carries an `EvId`, the typechecker keeps the cell the solver writes through under
 -- that id (`mintMethodCell`, `mintSite` in `types/typecheck.mdk`), and a reader looks
@@ -2185,7 +2185,7 @@ public export data Decl =
   --       compiler/types compiler/ir compiler/tools
   --
   -- ⚠️ FOUND BY GREPPING FOR THE OTHER SPELLINGS OF A CLAIM CORRECTED
-  -- ELSEWHERE (#1111 A-2.10's review), and that is the whole lesson: a "nothing
+  -- ELSEWHERE (found in review), and that is the whole lesson: a "nothing
   -- reads this" sentence is a NEGATIVE ABOUT THE WHOLE TREE, it expires the moment
   -- any unit adds a reader, and no gate notices.  `types/typecheck.mdk`'s `Mono`
   -- comment and `frontend/resolve.mdk`'s stamper comment carried the same sentence

@@ -108,6 +108,7 @@ fixtureNames = [
   "comment-draft",
   "comment-emoji",
   "comment-history",
+  "comment-provenance-id",
   "comment-ruling",
   "comment-shout",
   "comment-tombstone",
@@ -473,6 +474,8 @@ test "rule-comment-dead-path fixture" = fixtureHolds "comment-dead-path"
 test "rule-comment-deictic fixture" = fixtureHolds "comment-deictic"
 
 test "rule-comment-draft fixture" = fixtureHolds "comment-draft"
+
+test "rule-comment-provenance-id fixture" = fixtureHolds "comment-provenance-id"
 
 test "rule-comment-emoji fixture" = fixtureHolds "comment-emoji"
 

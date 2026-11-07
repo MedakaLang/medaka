@@ -1160,6 +1160,10 @@ ruleNameCommentDeadPath : String
 ruleNameCommentDeadPath = "rule-comment-dead-path"
 
 export
+ruleNameCommentProvenanceId : String
+ruleNameCommentProvenanceId = "rule-comment-provenance-id"
+
+export
 ruleNameCommentShout : String
 ruleNameCommentShout = "rule-comment-shout"
 
