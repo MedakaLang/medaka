@@ -90,11 +90,13 @@ lexJsonToDagCbor (JArray arr) =
 lexJsonToDagCbor (JObject pairs) = lexJsonObject pairs
 
 lexJsonArray : Array Json -> Int -> Int -> Result String (List DagCbor)
-lexJsonArray arr i n
-  | i >= n = Ok []
-  | otherwise = match lexJsonToDagCbor arr[i]
-    Err message => Err message
-    Ok value => map (value :: _) (lexJsonArray arr (i + 1) n)
+lexJsonArray arr i0 n = go i0
+  where
+    go i
+      | i >= n = Ok []
+      | otherwise = do
+        value <- lexJsonToDagCbor arr[i]
+        map (value :: _) (go (i + 1))
 
 lexJsonObject : Array (String, Json) -> Result String DagCbor
 lexJsonObject pairs =
@@ -127,43 +129,45 @@ lexJsonLink _ = Err "lexjson: '$link' value must be a string"
 -- base64 character that no canonical encoder ever sets — decodes to the
 -- same bytes but is rejected rather than silently normalized.
 lexJsonBytes : Json -> Result String DagCbor
-lexJsonBytes (JString text) = match padBase64 text
-  Err message => Err message
-  Ok padded => match decode padded
-    Err message => Err message
-    Ok bytes =>
-      let fullyPadded = encode bytes
-      if text == stripBase64Padding fullyPadded || text == fullyPadded then
-        Ok (DcBytes bytes)
-      else
-        Err "lexjson: '$bytes' value is not canonical base64"
+lexJsonBytes (JString text) = do
+  padded <- padBase64 text
+  do
+    bytes <- decode padded
+    let fullyPadded = encode bytes
+    if text == stripBase64Padding fullyPadded || text == fullyPadded then
+      Ok (DcBytes bytes)
+    else
+      Err "lexjson: '$bytes' value is not canonical base64"
 lexJsonBytes _ = Err "lexjson: '$bytes' value must be a string"
 
 lexJsonFields : Array (String, Json) ->
   Int ->
   Int ->
   Result String (List (String, DagCbor))
-lexJsonFields pairs i n
-  | i >= n = Ok []
-  | otherwise = match lexJsonToDagCbor (snd pairs[i])
-    Err message => Err message
-    Ok value => map ((fst pairs[i], value) :: _) (lexJsonFields pairs (i + 1) n)
+lexJsonFields pairs i0 n = go i0
+  where
+    go i
+      | i >= n = Ok []
+      | otherwise = do
+        value <- lexJsonToDagCbor (snd pairs[i])
+        map ((fst pairs[i], value) :: _) (go (i + 1))
 
 hasKey : String -> Array (String, Json) -> Int -> Int -> Bool
-hasKey key pairs i n
-  | i >= n = False
-  | fst pairs[i] == key = True
-  | otherwise = hasKey key pairs (i + 1) n
+hasKey key pairs i0 n = go i0
+  where
+    go i
+      | i >= n = False
+      | fst pairs[i] == key = True
+      | otherwise = go (i + 1)
 
 hasDuplicateKey : Array (String, Json) -> Int -> Int -> Bool
 hasDuplicateKey pairs i n = hasDuplicateKeyFrom pairs i n Tip
 
 hasDuplicateKeyFrom : Array (String, Json) -> Int -> Int -> Set String -> Bool
-hasDuplicateKeyFrom pairs i n seen
-  | i >= n = False
-  | otherwise =
-    let key = fst pairs[i]
-    if has key seen then
-      True
-    else
-      hasDuplicateKeyFrom pairs (i + 1) n (insert key seen)
+hasDuplicateKeyFrom pairs i0 n seen0 = go i0 seen0
+  where
+    go i seen
+      | i >= n = False
+      | otherwise =
+        let key = fst pairs[i]
+        if has key seen then True else go (i + 1) (insert key seen)

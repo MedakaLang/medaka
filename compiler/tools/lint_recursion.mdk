@@ -22,16 +22,18 @@
 
 import frontend.ast.{
   Arm(..),
+  DoStmt(..),
   Expr(..),
   FunClause(..),
   Guard(..),
+  GuardArm(..),
   LetBind(..),
   Loc,
   Pat(..),
   patBoundNames,
 }
 import frontend.ast_walk.{childExprs}
-import list.{findMap, get}
+import list.{findMap, get, last}
 import tools.lint_calls.{lastSegment}
 import tools.lint_scope.{Binder(..), BinderKind(..), FileScopes, binderOf}
 import tools.lint_shared.{mentionsVar, unwrapLoc, varSite}
@@ -98,6 +100,8 @@ paramBounds j (PAs x _ _ p) =
 paramBounds j p = map (n => Bound n j False) (patBoundNames p)
 
 walk : FileScopes -> Owner -> List Bound -> Option Loc -> Expr -> List SelfCall
+-- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 walk scopes owner env _ (ELoc l inner) = walk scopes owner env (Some l) inner
 walk scopes owner env loc e = match spineOf e []
   (hd, args) =>
@@ -131,11 +135,38 @@ walkNode scopes owner env loc (ELam ps b) =
 walkNode scopes owner env loc (ELet _ _ p e1 e2) =
   let env2 = without (patBoundNames p) env
   walk scopes owner env2 loc e1 ++ walk scopes owner env2 loc e2
+walkNode scopes owner env loc (EBlock stmts) =
+  walkStmts scopes owner env loc stmts
+walkNode scopes owner env loc (EDo _ stmts) =
+  walkStmts scopes owner env loc stmts
+walkNode scopes owner env loc (EGuards arms) =
+  flatMap ((GuardArm gs body) => walkGuarded scopes owner env loc gs body) arms
 walkNode scopes owner env loc (e@(ELetGroup binds _)) =
   let env2 = without (flatMap groupNames binds) env
   flatMap (walk scopes owner env2 loc) (childExprs e)
 walkNode scopes owner env loc e =
   flatMap (walk scopes owner env loc) (childExprs e)
+
+-- A statement's binders scope over the statements after it, so they shadow
+-- the parameters from there on.
+walkStmts : FileScopes ->
+  Owner ->
+  List Bound ->
+  Option Loc ->
+  List DoStmt ->
+  List SelfCall
+walkStmts scopes owner env0 loc stmts0 = go env0 stmts0
+  where
+    go _ [] = []
+    go env ((DoExpr e) :: rest) = walk scopes owner env loc e ++ go env rest
+    go env ((DoBind p e) :: rest) =
+      walk scopes owner env loc e ++ go (without (patBoundNames p) env) rest
+    go env ((DoLet _ isRec p e _) :: rest) =
+      let env2 = without (patBoundNames p) env
+      walk scopes owner (if isRec then env2 else env) loc e ++ go env2 rest
+    go env ((DoAssign _ e) :: rest) = walk scopes owner env loc e ++ go env rest
+    go env ((DoFieldAssign _ _ e) :: rest) =
+      walk scopes owner env loc e ++ go env rest
 
 groupNames : LetBind -> List String
 groupNames (LetBind n clauses _ _) =
@@ -162,8 +193,23 @@ walkArm : FileScopes ->
 walkArm scopes owner env loc scrut (Arm p gs body) =
   let bound = patBoundNames p
   let env2 = without bound env ++ armBounds env scrut bound
-  flatMap (walkGuard scopes owner env2 loc) gs
-    ++ walk scopes owner env2 loc body
+  walkGuarded scopes owner env2 loc gs body
+
+-- Guards run in order; a pattern guard's binders shadow the parameters in the
+-- later guards and in the body.
+walkGuarded : FileScopes ->
+  Owner ->
+  List Bound ->
+  Option Loc ->
+  List Guard ->
+  Expr ->
+  List SelfCall
+walkGuarded scopes owner env0 loc gs0 body = go env0 gs0
+  where
+    go env [] = walk scopes owner env loc body
+    go env ((GBool e) :: gs) = walk scopes owner env loc e ++ go env gs
+    go env ((GBind p e) :: gs) =
+      walk scopes owner env loc e ++ go (without (patBoundNames p) env) gs
 
 armBounds : List Bound -> Expr -> List String -> List Bound
 armBounds env scrut bound = match unwrapLoc scrut
@@ -174,15 +220,6 @@ armBounds env scrut bound = match unwrapLoc scrut
 
 boundIndex : String -> Bound -> Option Int
 boundIndex n (Bound m j _) = if n == m then Some j else None
-
-walkGuard : FileScopes ->
-  Owner ->
-  List Bound ->
-  Option Loc ->
-  Guard ->
-  List SelfCall
-walkGuard scopes owner env loc (GBool e) = walk scopes owner env loc e
-walkGuard scopes owner env loc (GBind _ e) = walk scopes owner env loc e
 
 isSelfCall : FileScopes -> Owner -> Expr -> List Expr -> Bool
 isSelfCall scopes (owner@(Owner name ps _)) hd args =
@@ -293,7 +330,11 @@ tailAppends acc e = match unwrapLoc e
   EMatch _ arms => any (armAppends acc) arms
   ELet _ _ _ _ body => tailAppends acc body
   ELetGroup _ body => tailAppends acc body
-  _ => False
+  EBlock stmts => match last stmts
+    Some (DoExpr l) => tailAppends acc l
+    _ => False
+  ELit _ | EVar _ | EApp _ _ | ELam _ _ | EUnOp _ _ _ | EInfix _ _ _ | EFieldAccess _ _ _ | ETuple _ | EListLit _ | EArrayLit _ | ERangeList _ _ _ | ERangeArray _ _ _ | ESlice _ _ _ _ | ESection _ | EIndex _ _ | EAnnot _ _ | EHeadAnnot _ _ | EDo _ _ | EStringInterp _ | EGuards _ | ERecordCreate _ _ | ERecordUpdate _ _ _ | EVariantUpdate _ _ _ | EMapLit _ _ | ESetLit _ _ | EAsPat _ _ | EOrPat _ | EMethodRef _ | EDictApp _ | EVarAt _ _ | EVarId _ _ | EMethodAt _ _ _ | EDictAt _ _ | ELoc _ _ | EDoOrigin _ _ | ENumLit _ _ _ | EWideLit _ _ _ _ | EBinOp _ _ _ _ =>
+    False
 
 leftIsAcc : String -> Expr -> Bool
 leftIsAcc acc a = match unwrapLoc a

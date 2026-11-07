@@ -14,10 +14,11 @@ public export data BindingSummary = BindingSummary {
 
 export
 bodyArrows : List Mono -> EffRow -> Mono -> Mono
-bodyArrows [] _ result = result
-bodyArrows [param] body result = TFun param body result
-bodyArrows (param :: rest) body result =
-  TFun param pureRow (bodyArrows rest body result)
+bodyArrows xs0 body result = go xs0
+  where
+    go [] = result
+    go [param] = TFun param body result
+    go (param :: rest) = TFun param pureRow (go rest)
 
 export
 newBindingSummary : Int -> (Unit -> Mono) -> (Unit -> EffRow) -> BindingSummary
@@ -36,6 +37,8 @@ newBindingSummary arity freshType freshSummary =
 -- recursive uses may constrain their assumption without claiming ownership of
 -- the envelope that will be published after all producers have been inferred.
 freshBodyValues : Int -> (Unit -> Mono) -> EffRow -> (Mono, Mono)
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
 freshBodyValues arity freshType body =
   if arity <= 0 then
     (freshType (), freshType ())

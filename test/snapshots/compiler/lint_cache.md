@@ -1,5 +1,5 @@
 # META
-source_lines=512
+source_lines=518
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_cache.mdk — the on-disk cache behind `medaka lint --cache` (#395).
@@ -62,7 +62,9 @@ import frontend.ast.{Loc(..)}
 import driver.diagnostics.{Severity(..)}
 import path.{dirname}
 import u64 as U64
-import tools.lint_core.{Finding(..), Directive(..), DirScope(..), Summary(..)}
+import tools.lint_core.{
+  Finding(..), Directive(..), DirScope(..), Summary(..), noFix
+}
 import tools.lint_index.{Answer(..), makeStagingDir, stageAndRename}
 import support.util.{joinWith, listLen, filterList}
 import support.char.{isAlnum}
@@ -193,6 +195,8 @@ sanitizePath p =
   stringFromChars (arrayFromList (sanitizeGo cs start n))
 
 sanitizeGo : Array Char -> Int -> Int -> List Char
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 sanitizeGo cs i n
   | i >= n = []
   | otherwise = sanitizeChar (arrayGetUnsafe i cs) :: sanitizeGo cs (i + 1) n
@@ -356,7 +360,7 @@ readRanked cur =
       message = message,
       severity = sev,
       loc = loc,
-      fix = None,
+      fix = noFix,
     },
   )
 
@@ -488,10 +492,12 @@ entryDirty : LintEntry -> Bool
 entryDirty e = e.dirty
 
 storeGo : String -> String -> String -> List LintEntry -> <IO> Unit
-storeGo _ _ _ [] = ()
-storeGo cacheDir tmp stamp (e :: rest) =
-  storeOne cacheDir tmp stamp e
-  storeGo cacheDir tmp stamp rest
+storeGo cacheDir tmp stamp xs0 = go xs0
+  where
+    go [] = ()
+    go (e :: rest) =
+      storeOne cacheDir tmp stamp e
+      go rest
 
 -- Stage under the temp dir, then rename ONTO the shard path (same filesystem —
 -- the temp dir is inside the cache dir).  A failed write leaves the staged file
@@ -520,7 +526,7 @@ ensureCacheDir cacheDir =
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("path") ((mem "dirname" false))))
 (DUse false (UseAlias ("u64") "U64"))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Finding" true) (mem "Directive" true) (mem "DirScope" true) (mem "Summary" true))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Finding" true) (mem "Directive" true) (mem "DirScope" true) (mem "Summary" true) (mem "noFix" false))))
 (DUse false (UseGroup ("tools" "lint_index") ((mem "Answer" true) (mem "makeStagingDir" false) (mem "stageAndRename" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "listLen" false) (mem "filterList" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isAlnum" false))))
@@ -583,7 +589,7 @@ ensureCacheDir cacheDir =
 (DTypeSig false "readAnswer" (TyFun (TyCon "SexpCursor") (TyCon "Answer")))
 (DFunDef false "readAnswer" ((PVar "cur")) (EBlock (DoExpr (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "question") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoLet false false (PVar "digest") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoExpr (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (ERecordCreate "Answer" ((fa "ansQuestion" (EVar "question")) (fa "ansDigest" (EVar "digest")))))))
 (DTypeSig false "readRanked" (TyFun (TyCon "SexpCursor") (TyTuple (TyCon "Int") (TyCon "Finding"))))
-(DFunDef false "readRanked" ((PVar "cur")) (EBlock (DoExpr (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "rank") (EApp (EVar "cursorInt") (EVar "cur"))) (DoLet false false (PVar "rule") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoLet false false (PVar "message") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoLet false false (PVar "sev") (EApp (EVar "readSeverity") (EVar "cur"))) (DoLet false false (PVar "loc") (EApp (EVar "readLoc") (EVar "cur"))) (DoExpr (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (ETuple (EVar "rank") (ERecordCreate "Finding" ((fa "rule" (EVar "rule")) (fa "message" (EVar "message")) (fa "severity" (EVar "sev")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None"))))))))
+(DFunDef false "readRanked" ((PVar "cur")) (EBlock (DoExpr (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "rank") (EApp (EVar "cursorInt") (EVar "cur"))) (DoLet false false (PVar "rule") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoLet false false (PVar "message") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoLet false false (PVar "sev") (EApp (EVar "readSeverity") (EVar "cur"))) (DoLet false false (PVar "loc") (EApp (EVar "readLoc") (EVar "cur"))) (DoExpr (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (ETuple (EVar "rank") (ERecordCreate "Finding" ((fa "rule" (EVar "rule")) (fa "message" (EVar "message")) (fa "severity" (EVar "sev")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "noFix"))))))))
 (DTypeSig false "readSeverity" (TyFun (TyCon "SexpCursor") (TyCon "Severity")))
 (DFunDef false "readSeverity" ((PVar "cur")) (EBlock (DoLet false false (PVar "c") (EApp (EVar "cursorChar") (EVar "cur"))) (DoExpr (EIf (EBinOp "==" (EVar "c") (ELit (LInt 101))) (EVar "SevError") (EIf (EBinOp "==" (EVar "c") (ELit (LInt 119))) (EVar "SevWarning") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "SevWarning")))))))
 (DTypeSig false "readLoc" (TyFun (TyCon "SexpCursor") (TyApp (TyCon "Option") (TyCon "Loc"))))
@@ -603,8 +609,7 @@ ensureCacheDir cacheDir =
 (DTypeSig false "entryDirty" (TyFun (TyCon "LintEntry") (TyCon "Bool")))
 (DFunDef false "entryDirty" ((PVar "e")) (EFieldAccess (EVar "e") "dirty"))
 (DTypeSig false "storeGo" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "LintEntry")) (TyEffect ("IO") None (TyCon "Unit")))))))
-(DFunDef false "storeGo" (PWild PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "storeGo" ((PVar "cacheDir") (PVar "tmp") (PVar "stamp") (PCons (PVar "e") (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EVar "storeOne") (EVar "cacheDir")) (EVar "tmp")) (EVar "stamp")) (EVar "e"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "storeGo") (EVar "cacheDir")) (EVar "tmp")) (EVar "stamp")) (EVar "rest")))))
+(DFunDef false "storeGo" ((PVar "cacheDir") (PVar "tmp") (PVar "stamp") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PVar "e") (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EVar "storeOne") (EVar "cacheDir")) (EVar "tmp")) (EVar "stamp")) (EVar "e"))) (DoExpr (EApp (EVar "go") (EVar "rest"))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "storeOne" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "LintEntry") (TyEffect ("IO") None (TyCon "Unit")))))))
 (DFunDef false "storeOne" ((PVar "cacheDir") (PVar "tmp") (PVar "stamp") (PVar "e")) (EApp (EApp (EApp (EVar "stageAndRename") (EVar "tmp")) (EApp (EApp (EVar "shardPathOf") (EVar "cacheDir")) (EFieldAccess (EVar "e") "path"))) (EApp (EApp (EVar "encodeEntry") (EVar "stamp")) (EVar "e"))))
 (DTypeSig false "ensureCacheDir" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
@@ -615,7 +620,7 @@ ensureCacheDir cacheDir =
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("path") ((mem "dirname" false))))
 (DUse false (UseAlias ("u64") "U64"))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Finding" true) (mem "Directive" true) (mem "DirScope" true) (mem "Summary" true))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Finding" true) (mem "Directive" true) (mem "DirScope" true) (mem "Summary" true) (mem "noFix" false))))
 (DUse false (UseGroup ("tools" "lint_index") ((mem "Answer" true) (mem "makeStagingDir" false) (mem "stageAndRename" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "listLen" false) (mem "filterList" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isAlnum" false))))
@@ -678,7 +683,7 @@ ensureCacheDir cacheDir =
 (DTypeSig false "readAnswer" (TyFun (TyCon "SexpCursor") (TyCon "Answer")))
 (DFunDef false "readAnswer" ((PVar "cur")) (EBlock (DoExpr (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "question") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoLet false false (PVar "digest") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoExpr (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (ERecordCreate "Answer" ((fa "ansQuestion" (EVar "question")) (fa "ansDigest" (EVar "digest")))))))
 (DTypeSig false "readRanked" (TyFun (TyCon "SexpCursor") (TyTuple (TyCon "Int") (TyCon "Finding"))))
-(DFunDef false "readRanked" ((PVar "cur")) (EBlock (DoExpr (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "rank") (EApp (EVar "cursorInt") (EVar "cur"))) (DoLet false false (PVar "rule") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoLet false false (PVar "message") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoLet false false (PVar "sev") (EApp (EVar "readSeverity") (EVar "cur"))) (DoLet false false (PVar "loc") (EApp (EVar "readLoc") (EVar "cur"))) (DoExpr (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (ETuple (EVar "rank") (ERecordCreate "Finding" ((fa "rule" (EVar "rule")) (fa "message" (EVar "message")) (fa "severity" (EVar "sev")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None"))))))))
+(DFunDef false "readRanked" ((PVar "cur")) (EBlock (DoExpr (EApp (EVar "cursorOpen") (EVar "cur"))) (DoLet false false (PVar "rank") (EApp (EVar "cursorInt") (EVar "cur"))) (DoLet false false (PVar "rule") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoLet false false (PVar "message") (EApp (EVar "cursorAtom") (EVar "cur"))) (DoLet false false (PVar "sev") (EApp (EVar "readSeverity") (EVar "cur"))) (DoLet false false (PVar "loc") (EApp (EVar "readLoc") (EVar "cur"))) (DoExpr (EApp (EVar "cursorClose") (EVar "cur"))) (DoExpr (ETuple (EVar "rank") (ERecordCreate "Finding" ((fa "rule" (EVar "rule")) (fa "message" (EVar "message")) (fa "severity" (EVar "sev")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "noFix"))))))))
 (DTypeSig false "readSeverity" (TyFun (TyCon "SexpCursor") (TyCon "Severity")))
 (DFunDef false "readSeverity" ((PVar "cur")) (EBlock (DoLet false false (PVar "c") (EApp (EVar "cursorChar") (EVar "cur"))) (DoExpr (EIf (EBinOp "==" (EVar "c") (ELit (LInt 101))) (EVar "SevError") (EIf (EBinOp "==" (EVar "c") (ELit (LInt 119))) (EVar "SevWarning") (EApp (EApp (EVar "cursorFail") (EVar "cur")) (EVar "SevWarning")))))))
 (DTypeSig false "readLoc" (TyFun (TyCon "SexpCursor") (TyApp (TyCon "Option") (TyCon "Loc"))))
@@ -698,8 +703,7 @@ ensureCacheDir cacheDir =
 (DTypeSig false "entryDirty" (TyFun (TyCon "LintEntry") (TyCon "Bool")))
 (DFunDef false "entryDirty" ((PVar "e")) (EFieldAccess (EVar "e") "dirty"))
 (DTypeSig false "storeGo" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "LintEntry")) (TyEffect ("IO") None (TyCon "Unit")))))))
-(DFunDef false "storeGo" (PWild PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "storeGo" ((PVar "cacheDir") (PVar "tmp") (PVar "stamp") (PCons (PVar "e") (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EVar "storeOne") (EVar "cacheDir")) (EVar "tmp")) (EVar "stamp")) (EVar "e"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "storeGo") (EVar "cacheDir")) (EVar "tmp")) (EVar "stamp")) (EVar "rest")))))
+(DFunDef false "storeGo" ((PVar "cacheDir") (PVar "tmp") (PVar "stamp") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PVar "e") (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EVar "storeOne") (EVar "cacheDir")) (EVar "tmp")) (EVar "stamp")) (EVar "e"))) (DoExpr (EApp (EVar "go") (EVar "rest"))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "storeOne" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "LintEntry") (TyEffect ("IO") None (TyCon "Unit")))))))
 (DFunDef false "storeOne" ((PVar "cacheDir") (PVar "tmp") (PVar "stamp") (PVar "e")) (EApp (EApp (EApp (EVar "stageAndRename") (EVar "tmp")) (EApp (EApp (EVar "shardPathOf") (EVar "cacheDir")) (EFieldAccess (EVar "e") "path"))) (EApp (EApp (EVar "encodeEntry") (EVar "stamp")) (EVar "e"))))
 (DTypeSig false "ensureCacheDir" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))

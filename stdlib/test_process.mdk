@@ -562,19 +562,17 @@ floorTitleMid = ".mdk executed >="
 -- prefix that roster's titles are spelled with, or `None` for any other
 -- line.
 titledFloorName : String -> String -> Option String
-titledFloorName titlePrefix line =
-  match stripPrefix (floorTitleOpen ++ titlePrefix) line
-    None => None
-    Some rest => map (i => stringSlice 0 i rest) (indexOf floorTitleMid rest)
+titledFloorName titlePrefix line = do
+  rest <- stripPrefix (floorTitleOpen ++ titlePrefix) line
+  map (i => stringSlice 0 i rest) (indexOf floorTitleMid rest)
 
 -- | The unit a grading call on `line` actually passes, given the call's
 -- opening text up to that argument's quote, or `None` for any other line.
 gradedFloorName : String -> String -> Option String
-gradedFloorName callOpen line = match indexOf callOpen line
-  None => None
-  Some i =>
-    let rest = stringSlice (i + stringLength callOpen) (stringLength line) line
-    map (j => stringSlice 0 j rest) (indexOf "\"" rest)
+gradedFloorName callOpen line = do
+  i <- indexOf callOpen line
+  let rest = stringSlice (i + stringLength callOpen) (stringLength line) line
+  map (j => stringSlice 0 j rest) (indexOf "\"" rest)
 
 -- | The unit graded by the body following a title line: the lines up to the
 -- next top-level `test` declaration, so a block that grades nothing cannot
@@ -595,6 +593,8 @@ floorBlockPairs : String ->
   String ->
   List String ->
   List (String, Option String)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 floorBlockPairs _ _ [] = []
 floorBlockPairs titlePrefix callOpen (line :: rest) =
   match titledFloorName titlePrefix line

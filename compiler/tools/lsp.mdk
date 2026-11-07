@@ -219,12 +219,9 @@ docsSetVersion uri version (Docs xs flagged kept versions generations next cache
 
 docsSnapshot : String -> Docs -> Option SourceSnapshot
 docsSnapshot uri docs = match docs
-  Docs _ _ _ _ generations _ _ => match docsLookup uri generations
-    Some generation =>
-      map
-        (makeSnapshot uri (docsVersion uri docs) generation)
-        (docsGet uri docs)
-    None => None
+  Docs _ _ _ _ generations _ _ => do
+    generation <- docsLookup uri generations
+    map (makeSnapshot uri (docsVersion uri docs) generation) (docsGet uri docs)
 
 docsRevision : String -> Docs -> Option SourceRevision
 docsRevision uri (docs@(Docs _ _ _ _ generations _ _)) = do
@@ -339,10 +336,12 @@ identStart arr i
   | otherwise = i
 
 identStop : Array Char -> Int -> Int -> Int
-identStop arr len i
-  | i + 1 >= len = i + 1
-  | isIdentChar (arrayGetUnsafe (i + 1) arr) = identStop arr len (i + 1)
-  | otherwise = i + 1
+identStop arr len i0 = go i0
+  where
+    go i
+      | i + 1 >= len = i + 1
+      | isIdentChar (arrayGetUnsafe (i + 1) arr) = go (i + 1)
+      | otherwise = i + 1
 
 -- The identifier under (line, col), or None if the cursor isn't on one.
 identifierAt : String -> Int -> Int -> Option String
@@ -352,15 +351,14 @@ identifierAt src line col =
 identifierAtIndexed : SourceIndex -> Array Char -> Int -> Int -> Option String
 identifierAtIndexed index arr line col =
   let len = arrayLength arr
-  match sourcePositionToOffset index (line + 1) col
-    None => None
-    Some pos =>
-      if pos >= len || not (isIdentChar (arrayGetUnsafe pos arr)) then
-        None
-      else
-        let s = identStart arr pos
-        let e = identStop arr len pos
-        Some (stringFromChars (sliceClamped s e arr))
+  do
+    pos <- sourcePositionToOffset index (line + 1) col
+    if pos >= len || not (isIdentChar (arrayGetUnsafe pos arr)) then
+      None
+    else
+      let s = identStart arr pos
+      let e = identStop arr len pos
+      Some (stringFromChars (sliceClamped s e arr))
 
 -- A whole-source word-boundary occurrence scan: every offset where `name`
 -- appears as a standalone identifier.  Returns the offsets in source order.
@@ -523,11 +521,12 @@ defZip : SourceIndex ->
   List DeclPos ->
   String ->
   Option Json
-defZip index len (d :: ds) (p :: ps) name =
-  match defZipDeclMatch index len d p name
-    Some j => Some j
-    None => defZip index len ds ps name
-defZip _ _ _ _ _ = None
+defZip index len xs0 xs1 name = go xs0 xs1
+  where
+    go (d :: ds) (p :: ps) = match defZipDeclMatch index len d p name
+      Some j => Some j
+      None => go ds ps
+    go _ _ = None
 
 defZipDeclMatch : SourceIndex -> Int -> Decl -> DeclPos -> String -> Option Json
 defZipDeclMatch index len d p name
@@ -875,9 +874,9 @@ localSchemeAt _ _ _ None _ = None
 localSchemeAt name line col (Some pos) locals =
   let decls = positionsDecls pos
   let cl = line + 1
-  match declIndexAt decls 0 cl
-    None => None
-    Some di => latestLocal None (localCandidates name cl col di decls locals)
+  do
+    di <- declIndexAt decls 0 cl
+    latestLocal None (localCandidates name cl col di decls locals)
 
 -- Index of the top-level decl whose start..end line range contains `l` (1-based).
 declIndexAt : List DeclPos -> Int -> Int -> Option Int
@@ -905,6 +904,8 @@ localCandidates : String ->
   List DeclPos ->
   List (String, PubScheme, Option Loc) ->
   List (Int, Int, PubScheme)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 localCandidates _ _ _ _ _ [] = []
 localCandidates name cl cc di decls ((n, sch, Some (Loc _ bl bc _ _)) :: rest)
   | n == name && locAtOrBefore bl bc cl cc && declIndexIs decls bl di =
@@ -976,10 +977,12 @@ prefixBefore src line col =
 
 -- Walk left from `stop` over identifier chars, not past the line start.
 prefixStart : Array Char -> Int -> Int -> Int
-prefixStart arr lineStart i
-  | i <= lineStart = lineStart
-  | isIdentChar (arrayGetUnsafe (i - 1) arr) = prefixStart arr lineStart (i - 1)
-  | otherwise = i
+prefixStart arr lineStart i0 = go i0
+  where
+    go i
+      | i <= lineStart = lineStart
+      | isIdentChar (arrayGetUnsafe (i - 1) arr) = go (i - 1)
+      | otherwise = i
 
 -- startsWith → support/util.mdk (imported above).
 
@@ -1102,6 +1105,8 @@ columnAfterName index arr line =
 
 -- Length of the leading identifier run starting at byte `i` (stops at EOL/EOF).
 identRunLen : Array Char -> Int -> Int -> Int -> Int
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
 identRunLen arr len i acc
   | i >= len = acc
   | arrayGetUnsafe i arr == '\n' = acc
@@ -1151,6 +1156,8 @@ inlayZip : SourceIndex ->
   List DeclPos ->
   List (String, PubScheme) ->
   List Json
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 inlayZip index arr allDecls (d :: ds) (p :: ps) env = match declBindingName d
   None => inlayZip index arr allDecls ds ps env
   Some name =>
@@ -1289,9 +1296,9 @@ contentLengthRe : Regex
 contentLengthRe = mustCompile "^Content-Length: *([0-9]+)"
 
 parseContentLength : String -> Option Int
-parseContentLength line = match find contentLengthRe line
-  None => None
-  Some m => match m.groups
+parseContentLength line = do
+  m <- find contentLengthRe line
+  match m.groups
     [Some g] => toInt g.text
     _ => None
 
@@ -1737,13 +1744,12 @@ publishProjectDiagnostics runtimeSrc coreSrc uri text docs =
   publishEach docs sources results
   -- A resolve-blocked entry is not the last module the drive checked, so its
   -- report holds another module's locals and seed: nothing is kept.
-  match keyed
-    Some ((report, _), graph) =>
-      if report.trPartial.paModule == graph.giEntry then
-        Some (KeptGraph text graph report.trPartial)
-      else
-        None
-    None => None
+  do
+    ((report, _), graph) <- keyed
+    if report.trPartial.paModule == graph.giEntry then
+      Some (KeptGraph text graph report.trPartial)
+    else
+      None
 -- Module root = nearest ancestor with medaka.toml (NOT the file's own dir), so
 -- a nested module's imports (rooted at the project dir) resolve.  Falls back to
 -- the file's dir when there's no medaka.toml.
@@ -1762,42 +1768,44 @@ hasParseDiagnosticFix (Diag _ code _ _ _ (Some _)) = diagIdIsSyntax code
 hasParseDiagnosticFix _ = False
 
 publishEach : Docs -> OrdMap String -> List (String, List Diag) -> <IO> Unit
-publishEach _ _ [] = ()
-publishEach docs sources ((file, ds) :: rest) =
-  let uri = uriOfPath file
-  -- Disk reads must only run when neither in-memory source is available.
-  -- lint-disable-next-line rule-orelse-staircase
-  let src = match docsGet uri docs
-    Some text => Some text
-    None => match omLookup file sources
-      Some text => Some text
-      None => sourceForPath docs file
-  let params = jObject [
-    ("uri", JString uri),
-    (
-      "diagnostics",
-      jArray (match src
-        Some text =>
-          if not (any hasParseDiagnosticFix ds) then
-            diagsToJson text ds
-          else match docsSnapshot uri docs
-            Some snapshot => match parseLocatedResult text
-              Err e =>
-                map
-                  (d =>
-                    parseDiagnosticJson
-                      snapshot
-                      (wholeDocRange text)
-                      d
-                      (parseErrorDiagnostic e))
-                  ds
-              Ok _ => diagsToJson text ds
-            None => diagsToJson text ds
-        None => map (diagnosticWithRange (jRange 0 0 0 0)) ds),
-    ),
-  ]
-  writeMessage (notificationMsg "textDocument/publishDiagnostics" params)
-  publishEach docs sources rest
+publishEach docs sources xs0 = go xs0
+  where
+    go [] = ()
+    go ((file, ds) :: rest) =
+      let uri = uriOfPath file
+      -- Disk reads must only run when neither in-memory source is available.
+      -- lint-disable-next-line rule-orelse-staircase
+      let src = match docsGet uri docs
+        Some text => Some text
+        None => match omLookup file sources
+          Some text => Some text
+          None => sourceForPath docs file
+      let params = jObject [
+        ("uri", JString uri),
+        (
+          "diagnostics",
+          jArray (match src
+            Some text =>
+              if not (any hasParseDiagnosticFix ds) then
+                diagsToJson text ds
+              else match docsSnapshot uri docs
+                Some snapshot => match parseLocatedResult text
+                  Err e =>
+                    map
+                      (d =>
+                        parseDiagnosticJson
+                          snapshot
+                          (wholeDocRange text)
+                          d
+                          (parseErrorDiagnostic e))
+                      ds
+                  Ok _ => diagsToJson text ds
+                None => diagsToJson text ds
+            None => map (diagnosticWithRange (jRange 0 0 0 0)) ds),
+        ),
+      ]
+      writeMessage (notificationMsg "textDocument/publishDiagnostics" params)
+      go rest
 
 -- Choose the single-document or project path for a freshly-edited buffer.
 publishFor : String -> String -> String -> String -> Docs -> <IO> Docs
@@ -1868,13 +1876,12 @@ publishForSelected runtimeSrc coreSrc uri text docs =
       else
         -- a one-module graph: the parse memo keeps this buffer's parse alone
         retainParsed projectParseCache [text]
-        match publishDiagnosticsFrom runtimeSrc coreSrc uri text decls
-          Some report =>
-            if report.trPartial.paModule == "__user__" then
-              Some (KeptOne text (reportEnv report))
-            else
-              None
-          None => None
+        do
+          report <- publishDiagnosticsFrom runtimeSrc coreSrc uri text decls
+          if report.trPartial.paModule == "__user__" then
+            Some (KeptOne text (reportEnv report))
+          else
+            None
 
 -- Extract a textDocument/{didOpen,didChange} uri + text and publish.
 -- didOpen:   params.textDocument.{uri,text}
@@ -2366,9 +2373,9 @@ fieldOr key j = optionOr JNull (get key j)
 
 export
 fieldStr : String -> Json -> Option String
-fieldStr key j = match get key j
-  Some v => asString v
-  None => None
+fieldStr key j = do
+  v <- get key j
+  asString v
 
 -- The request `id` (number or string), passed through verbatim into responses.
 -- We keep it as the raw Json so a string id round-trips unchanged.
@@ -2515,10 +2522,11 @@ serveOnce runtimeSrc coreSrc serverVersion docs = match readHeaders 0
 
 -- The session loop: serve messages until `exit` or EOF.
 serve : String -> String -> String -> Docs -> <IO> Unit
-serve runtimeSrc coreSrc serverVersion docs =
-  match serveOnce runtimeSrc coreSrc serverVersion docs
-    Step _ False => unit
-    Step docs2 True => serve runtimeSrc coreSrc serverVersion docs2
+serve runtimeSrc coreSrc serverVersion docs0 = go docs0
+  where
+    go docs = match serveOnce runtimeSrc coreSrc serverVersion docs
+      Step _ False => unit
+      Step docs2 True => go docs2
 
 -- Public entry point for the driver.  `serverVersion` is reported in the
 -- `initialize` response's serverInfo; see `initializeResultFor`.

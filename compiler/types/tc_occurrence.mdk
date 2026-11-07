@@ -632,12 +632,14 @@ ctorHeadShaped name =
   n > 0 && (isUpper (arrayGetUnsafe 0 cs) || mangledCtorShaped cs n 0)
 
 mangledCtorShaped : Array Char -> Int -> Int -> Bool
-mangledCtorShaped cs n i
-  | i + 2 >= n = False
-  | arrayGetUnsafe i cs == '_'
-    && arrayGetUnsafe (i + 1) cs == '_'
-    && isUpper (arrayGetUnsafe (i + 2) cs) = True
-  | otherwise = mangledCtorShaped cs n (i + 1)
+mangledCtorShaped cs n i0 = go i0
+  where
+    go i
+      | i + 2 >= n = False
+      | arrayGetUnsafe i cs == '_'
+        && arrayGetUnsafe (i + 1) cs == '_'
+        && isUpper (arrayGetUnsafe (i + 2) cs) = True
+      | otherwise = go (i + 1)
 
 export
 bindingDeclaredAt : TcEnv ->
@@ -987,6 +989,8 @@ instantiateMethodPredicateSlots : GraphCtx ->
   List MethodPredicateSlot ->
   List (Int, Mono) ->
   List PredicateSlot
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 instantiateMethodPredicateSlots _gctx [] _ = []
 instantiateMethodPredicateSlots gctx (slot :: rest) subst =
   match instantiateMethodPredicateSlot gctx slot subst
@@ -1235,15 +1239,14 @@ declaredConstraintIds mctx name = match qualConstraintIds mctx name
       predicateSlotIdsAt name mctx.mcCells.funPredicateSlotsIdxRef.value
 
 qualConstraintIds : ModuleCtx -> String -> Option (List Int)
-qualConstraintIds mctx name = match qualConstraintKey mctx name
-  None => None
-  Some (src, origin) =>
-    map
-      predicateSlotIds
-      (lookupQualPayload
-        src
-        origin
-        mctx.mcGraph.crossRun.crossModuleFunPredicateSlotsQualRef.value)
+qualConstraintIds mctx name = do
+  (src, origin) <- qualConstraintKey mctx name
+  map
+    predicateSlotIds
+    (lookupQualPayload
+      src
+      origin
+      mctx.mcGraph.crossRun.crossModuleFunPredicateSlotsQualRef.value)
 
 export
 inferDictAtFound : ModuleCtx ->
@@ -1604,18 +1607,18 @@ recordUnopSite mctx op dref m = match unopMethod op
 -- deliberate: any operand other than a (located) literal is ordinary arithmetic.
 export
 recordNegatedLitRange : ModuleCtx -> Mono -> Expr -> Unit
-recordNegatedLitRange mctx t (ELoc _ e) = recordNegatedLitRange mctx t e
-recordNegatedLitRange mctx t (ENumLit n _ _) =
-  match mctx.mcCells.numlitRanges.value
-    (_, m, loc) :: rest if m == n =>
-      mctx.mcCells.numlitRanges := (t, negateLiteral n, loc) :: rest
-    _ => recordNumlitRange mctx t (negateLiteral n)
-recordNegatedLitRange mctx t (EWideLit _ _ _ lx) =
-  match mctx.mcCells.wideLitRanges.value
-    (_, l, hi, lo, _, loc) :: rest if l == lx =>
-      mctx.mcCells.wideLitRanges := (t, lx, hi, lo, True, loc) :: rest
-    _ => ()
-recordNegatedLitRange _mctx _ _ = ()
+recordNegatedLitRange mctx t x0 = go x0
+  where
+    go (ELoc _ e) = go e
+    go (ENumLit n _ _) = match mctx.mcCells.numlitRanges.value
+      (_, m, loc) :: rest if m == n =>
+        mctx.mcCells.numlitRanges := (t, negateLiteral n, loc) :: rest
+      _ => recordNumlitRange mctx t (negateLiteral n)
+    go (EWideLit _ _ _ lx) = match mctx.mcCells.wideLitRanges.value
+      (_, l, hi, lo, _, loc) :: rest if l == lx =>
+        mctx.mcCells.wideLitRanges := (t, lx, hi, lo, True, loc) :: rest
+      _ => ()
+    go _ = ()
 
 -- #146: unified operator-obligation recorder.  The arithmetic (`+ - * / %`, unary
 -- `-`), comparison (`== /= < > <= >=`) and append (`++`) operators each carry an
@@ -1840,6 +1843,8 @@ anyRootMatch id ((v, _) :: rest) = sameRootId id v || anyRootMatch id rest
 -- Taint every worklist literal sharing the root [id] (record its loc as
 -- operator-tainted) and DROP it from the worklist; keep the others.
 taintAndDrop : ModuleCtx -> Int -> List (Mono, Loc) -> List (Mono, Loc)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 taintAndDrop _mctx _ [] = []
 taintAndDrop mctx id ((v, l) :: rest)
   | sameRootId id v =
@@ -2047,21 +2052,20 @@ recordMethodObligationGuarded env name s mono omitted =
     recordImplObligation env.teDyn.dcModule name mono omitted
 
 exactReturnRow : TcEnv -> String -> Scheme -> Option MethodSchemeRow
-exactReturnRow env name scheme = match lookupMethodRow env name
-  None => None
-  Some row =>
-    if lookupLocalFlag env name
-      || isMonoScheme scheme
-      || omHasKey name env.teDyn.dcModule.mcCells.definerShadowNamesRef.value
-      || omHasKey name env.teDyn.dcModule.mcCells.standaloneValuesRef.value
-      || isSome
-        (Scopes.enclosingDefaultBody
-          (currentScopeStore env.teDyn.dcModule.mcGraph ())
-          (captureScope env.teDyn.dcModule ()))
-      || listLen (methodAdmittedHere env.teDyn.dcModule name) >= 2 then
-      None
-    else
-      Some row
+exactReturnRow env name scheme = do
+  row <- lookupMethodRow env name
+  if lookupLocalFlag env name
+    || isMonoScheme scheme
+    || omHasKey name env.teDyn.dcModule.mcCells.definerShadowNamesRef.value
+    || omHasKey name env.teDyn.dcModule.mcCells.standaloneValuesRef.value
+    || isSome
+      (Scopes.enclosingDefaultBody
+        (currentScopeStore env.teDyn.dcModule.mcGraph ())
+        (captureScope env.teDyn.dcModule ()))
+    || listLen (methodAdmittedHere env.teDyn.dcModule name) >= 2 then
+    None
+  else
+    Some row
 
 export
 recordMethodObligationOwned : TcEnv ->
@@ -2109,19 +2113,21 @@ recordInstantiatedMethodLevelSlots : ModuleCtx ->
   Option Loc ->
   ScopeId ->
   Unit
-recordInstantiatedMethodLevelSlots _mctx [] _ _ = ()
-recordInstantiatedMethodLevelSlots mctx (slot :: rest) loc scope =
-  match slot.psArgs
-    PSArgsUnknown => ()
-    PSArgsKnown args =>
-      recordOblAt
-        mctx
-        Predicate { iface = slot.psIface, args = args }
-        0
-        PMethodLevel
-        loc
-        scope
-  recordInstantiatedMethodLevelSlots mctx rest loc scope
+recordInstantiatedMethodLevelSlots mctx xs0 loc scope = go xs0
+  where
+    go [] = ()
+    go (slot :: rest) =
+      match slot.psArgs
+        PSArgsUnknown => ()
+        PSArgsKnown args =>
+          recordOblAt
+            mctx
+            Predicate { iface = slot.psIface, args = args }
+            0
+            PMethodLevel
+            loc
+            scope
+      go rest
 
 -- A numeric literal's checking obligation and method-level slots come from its
 -- identity-selected method row; no bare-name table reconstructs the class and no
@@ -2177,22 +2183,24 @@ recordMethodLevelSlotObls : ModuleCtx ->
   List Constraint ->
   List (String, Mono) ->
   Unit
-recordMethodLevelSlotObls _mctx [] _ = ()
-recordMethodLevelSlotObls mctx (c :: rest) subst =
-  if allList (v => isSome (lookupAssoc v subst)) (constraintVarNames c) then
-    recordObl
-      mctx
-      Predicate {
-        iface = IfaceRef {
-          irName = constraintIface c,
-          irOrigin = c.constraintOrigin,
-        },
-        args = map (fromAstType mctx subst) c.constraintArgs,
-      }
-      0
-      PMethodLevel
-      mctx.mcLoc
-  recordMethodLevelSlotObls mctx rest subst
+recordMethodLevelSlotObls mctx xs0 subst = go xs0
+  where
+    go [] = ()
+    go (c :: rest) =
+      if allList (v => isSome (lookupAssoc v subst)) (constraintVarNames c) then
+        recordObl
+          mctx
+          Predicate {
+            iface = IfaceRef {
+              irName = constraintIface c,
+              irOrigin = c.constraintOrigin,
+            },
+            args = map (fromAstType mctx subst) c.constraintArgs,
+          }
+          0
+          PMethodLevel
+          mctx.mcLoc
+      go rest
 
 -- S-1 (importer half): re-record each of the importer shadow's route refs as an
 -- RLocalSite carrying the imported standalone's own constraint dicts, so
@@ -2206,27 +2214,29 @@ recordSelectedStandaloneRoutes : ModuleCtx ->
   List (Ref Route, Ref Inner) ->
   Mono ->
   Unit
-recordSelectedStandaloneRoutes _mctx _ _ [] _ = ()
-recordSelectedStandaloneRoutes mctx mname dicts ((r, inner) :: rest) tx =
-  pushSiteGoal
-    mctx.mcGraph
-    GKRLocalSite
-    inner
-    (PendingEntry
-      mname
-      r
-      tx
-      mctx.mcCells.currentFn.value
-      (SKRLocal
-        (routeLocalSym !r)
-        True
-        dicts.sdMonos
-        dicts.sdIfaces
-        dicts.sdArgVecs)
-      mctx.mcLoc
-      (captureScope mctx ())
-      (freshEvId mctx ()))
-  recordSelectedStandaloneRoutes mctx mname dicts rest tx
+recordSelectedStandaloneRoutes mctx mname dicts xs0 tx = go xs0
+  where
+    go [] = ()
+    go ((r, inner) :: rest) =
+      pushSiteGoal
+        mctx.mcGraph
+        GKRLocalSite
+        inner
+        (PendingEntry
+          mname
+          r
+          tx
+          mctx.mcCells.currentFn.value
+          (SKRLocal
+            (routeLocalSym !r)
+            True
+            dicts.sdMonos
+            dicts.sdIfaces
+            dicts.sdArgVecs)
+          mctx.mcLoc
+          (captureScope mctx ())
+          (freshEvId mctx ()))
+      go rest
 
 -- P0-19 d4b (S4): a definer-shadow occurrence in bare VALUE position (NOT the head of
 -- its own application — dcShadowHeadCtx is False) denotes the STANDALONE.  Returns the

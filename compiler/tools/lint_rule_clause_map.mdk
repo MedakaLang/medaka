@@ -21,13 +21,14 @@ import tools.lint_core.{
   Scope(..),
   StdlibIndex,
   mkRule,
+  noFix,
+  factDeclLocs,
 }
 import tools.lint_shared.{
   andThenEtaFn,
   appSpineOf,
   clausesOf,
   dedupeNamesLoc,
-  declLocList,
   isEVarNamed,
   mentionsVar,
   paramNameOf,
@@ -114,9 +115,9 @@ isNilBody e = match unwrapLoc e
 -- every pattern is a plain binder; the names, in order
 plainVarNames : List Pat -> Option (List String)
 plainVarNames [] = Some []
-plainVarNames (p :: ps) = match paramNameOf p
-  None => None
-  Some n => map (n :: _) (plainVarNames ps)
+plainVarNames (p :: ps) = do
+  n <- paramNameOf p
+  map (n :: _) (plainVarNames ps)
 
 -- Line the nil clause's parameters up against the cons clause's and find the ONE
 -- list position: nil side literally `[]`, cons side `(x :: xs)`.  Returns the
@@ -133,9 +134,9 @@ consSplit (np :: nps) (cp :: cps) = match consPatVars cp
       map (rest => (h, t, t :: rest)) (plainVarNames cps)
     else
       None
-  None => match paramNameOf cp
-    None => None
-    Some v => map ((h, t, rest) => (h, t, v :: rest)) (consSplit nps cps)
+  None => do
+    v <- paramNameOf cp
+    map ((h, t, rest) => (h, t, v :: rest)) (consSplit nps cps)
 consSplit _ _ = None
 
 -- the recursive call's arguments are exactly these variable references, in order
@@ -157,10 +158,9 @@ clauseMapTransform : String ->
   Expr ->
   Option Expr
 clauseMapTransform name headV tailV expected body = match unwrapLoc body
-  EBinOp op lhs rhs _ if op == "::"
-    && recursiveCallOn name expected rhs => match andThenEtaFn headV lhs
-    None => None
-    Some g => if mentionsVar name g || mentionsVar tailV g then None else Some g
+  EBinOp op lhs rhs _ if op == "::" && recursiveCallOn name expected rhs => do
+    g <- andThenEtaFn headV lhs
+    if mentionsVar name g || mentionsVar tailV g then None else Some g
   _ => None
 
 -- one ORDERED attempt: `nil` is the candidate base clause, `cons` the step.
@@ -168,10 +168,9 @@ clauseMapPair : String -> (List Pat, Expr) -> (List Pat, Expr) -> Option Expr
 clauseMapPair name (nilPs, nilBody) (consPs, consBody) =
   if not (isNilBody nilBody) || listLen nilPs /= listLen consPs then
     None
-  else match consSplit nilPs consPs
-    None => None
-    Some (headV, tailV, expected) =>
-      clauseMapTransform name headV tailV expected consBody
+  else do
+    (headV, tailV, expected) <- consSplit nilPs consPs
+    clauseMapTransform name headV tailV expected consBody
 
 -- the transform this definition maps with, if it is a clause-form map.
 -- Clause order is either way round.
@@ -189,13 +188,13 @@ ruleClauseMap : StdlibIndex ->
   Positions ->
   List Decl ->
   List Finding
-ruleClauseMap _ _ _ pos prog =
+ruleClauseMap _ _ facts _ prog =
   -- dedupe by name so a two-clause function is inspected once, not once per
   -- clause, keeping the FIRST clause's location (same shape as
   -- `rule-stdlib-reimpl`).
   flatMap
     (clauseMapHit prog)
-    (dedupeNamesLoc (flatMap topDefNameL (declLocList pos prog)))
+    (dedupeNamesLoc (flatMap topDefNameL (factDeclLocs facts)))
 
 clauseMapHit : List Decl -> (String, Option Loc) -> List Finding
 clauseMapHit prog (name, loc) = match clauseMapFnOf name prog
@@ -209,5 +208,5 @@ clauseMapFinding name g loc = Finding {
     "'\{name}' is a hand-written list map ('[]'/'(x :: xs)' clauses consing a per-element transform onto the recursive call). Rewrite as '\{exprToString (EApp (EVar "map") g)}' (suggest-only)",
   severity = SevWarning,
   loc = loc,
-  fix = None,
+  fix = noFix,
 }

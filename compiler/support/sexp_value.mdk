@@ -99,9 +99,11 @@ failAt off what = Err SexpError { seOffset = off, sePath = "", seWhat = what }
 -- costs one slice and no per-character value.
 
 skipWsAt : ByteBlock -> Int -> Int -> Int
-skipWsAt b n p
-  | p < n && isWsByte (byteBlockGetUnsafe p b) = skipWsAt b n (p + 1)
-  | otherwise = p
+skipWsAt b n p0 = go p0
+  where
+    go p
+      | p < n && isWsByte (byteBlockGetUnsafe p b) = go (p + 1)
+      | otherwise = p
 
 sliceText : ByteBlock -> Int -> Int -> String
 sliceText b i j =
@@ -110,6 +112,8 @@ sliceText b i j =
   byteBlockToString blk
 
 bareEnd : ByteBlock -> Int -> Int -> Int
+-- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 bareEnd b n p
   | p < n && not (isSpecialByte (byteBlockGetUnsafe p b)) = bareEnd b n (p + 1)
   | otherwise = p
@@ -122,21 +126,23 @@ isStrayByte b = isQuoteByte b || isSemiByte b || isBackslashByte b
 -- an escape occurred, or `(-1, _)` when the string never closes, or
 -- `(-2 - i, _)` when the escape at index `i` is not one the renderer writes.
 scanQuote : ByteBlock -> Int -> Int -> Bool -> (Int, Bool)
-scanQuote b n p esc
-  | p >= n = (-1, esc)
-  | otherwise =
-    let c = byteBlockGetUnsafe p b
-    if isQuoteByte c then
-      (p, esc)
-    else if isBackslashByte c then
-      if p + 1 >= n then
-        (-1, esc)
-      else if isNone (unescapeByte (byteBlockGetUnsafe (p + 1) b)) then
-        (-2 - p, esc)
-      else
-        scanQuote b n (p + 2) True
-    else
-      scanQuote b n (p + 1) esc
+scanQuote b n p0 esc0 = go p0 esc0
+  where
+    go p esc
+      | p >= n = (-1, esc)
+      | otherwise =
+        let c = byteBlockGetUnsafe p b
+        if isQuoteByte c then
+          (p, esc)
+        else if isBackslashByte c then
+          if p + 1 >= n then
+            (-1, esc)
+          else if isNone (unescapeByte (byteBlockGetUnsafe (p + 1) b)) then
+            (-2 - p, esc)
+          else
+            go (p + 2) True
+        else
+          go (p + 1) esc
 
 -- The byte an escape letter stands for, if the renderer writes one.
 unescapeByte : Int -> Option Int
@@ -145,17 +151,19 @@ unescapeByte b
   | otherwise = lookup b (map (p => (snd p, fst p)) letterEscapes)
 
 unescapeGo : ByteBlock -> Int -> Int -> ByteBlock -> Int -> Int
-unescapeGo b i j out k
-  | i >= j = k
-  | otherwise =
-    let c = byteBlockGetUnsafe i b
-    if isBackslashByte c then
-      let letter = byteBlockGetUnsafe (i + 1) b
-      byteBlockSetUnsafe k (optionOr letter (unescapeByte letter)) out
-      unescapeGo b (i + 2) j out (k + 1)
-    else
-      byteBlockSetUnsafe k c out
-      unescapeGo b (i + 1) j out (k + 1)
+unescapeGo b i0 j out k0 = go i0 k0
+  where
+    go i k
+      | i >= j = k
+      | otherwise =
+        let c = byteBlockGetUnsafe i b
+        if isBackslashByte c then
+          let letter = byteBlockGetUnsafe (i + 1) b
+          byteBlockSetUnsafe k (optionOr letter (unescapeByte letter)) out
+          go (i + 2) (k + 1)
+        else
+          byteBlockSetUnsafe k c out
+          go (i + 1) (k + 1)
 
 -- The text of the quoted atom whose body is the bytes `i` up to `j`.
 quotedText : ByteBlock -> Int -> Int -> Bool -> String
@@ -203,15 +211,17 @@ readItems : ByteBlock ->
   Int ->
   List SExp ->
   Result SexpError (SExp, Int)
-readItems b n open p0 acc =
-  let p = skipWsAt b n p0
-  if p >= n then
-    failAt open "unbalanced open paren"
-  else if isCloseByte (byteBlockGetUnsafe p b) then
-    Ok (SList (reverse acc), p + 1)
-  else match readNode b n p
-    Err e => Err e
-    Ok (item, q) => readItems b n open q (item :: acc)
+readItems b n open p1 acc0 = go p1 acc0
+  where
+    go p0 acc =
+      let p = skipWsAt b n p0
+      if p >= n then
+        failAt open "unbalanced open paren"
+      else if isCloseByte (byteBlockGetUnsafe p b) then
+        Ok (SList (reverse acc), p + 1)
+      else match readNode b n p
+        Err e => Err e
+        Ok (item, q) => go q (item :: acc)
 
 export
 parseSExp : String -> Result SexpError SExp
@@ -221,11 +231,10 @@ parseSExp text =
   let p = skipWsAt b n 0
   if p >= n then
     failAt p "empty input"
-  else match readNode b n p
-    Err e => Err e
-    Ok (node, q) =>
-      let r = skipWsAt b n q
-      if r >= n then Ok node else failAt r "trailing text after the first node"
+  else do
+    (node, q) <- readNode b n p
+    let r = skipWsAt b n q
+    if r >= n then Ok node else failAt r "trailing text after the first node"
 
 -- ── the cursor ──────────────────────────────────────────────────────────────
 -- A decoder reads values straight off the bytes, with no `SExp` in between.
@@ -409,6 +418,8 @@ cursorList f cur =
   cursorItems f cur []
 
 cursorItems : (SexpCursor -> a) -> SexpCursor -> List a -> List a
+-- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 cursorItems f cur acc =
   let c = cursorPeek cur
   if isCloseByte c then
@@ -430,9 +441,9 @@ expectAtom path _ = shapeError path "expected an atom"
 
 export
 atomInt : String -> SExp -> Result SexpError Int
-atomInt path node = match expectAtom path node
-  Err e => Err e
-  Ok s => match stringToInt s
+atomInt path node = do
+  s <- expectAtom path node
+  match stringToInt s
     Some n => Ok n
     None => shapeError path "expected an integer"
 
@@ -468,6 +479,8 @@ cursorSkipText cur =
     sliceText cur.scBytes p e
 
 skipNodeAt : ByteBlock -> Int -> Int -> Int -> Bool -> Int
+-- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 skipNodeAt b n p depth inQ
   | p >= n = n
   | inQ =

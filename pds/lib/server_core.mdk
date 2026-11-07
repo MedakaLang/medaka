@@ -551,9 +551,9 @@ isInternalField field = isAnnouncement field || isHandleUpdateCharge field
 -- The DID a response's internal field names. A value that is not UTF-8
 -- cannot have been written by `withHandleUpdateCharge`.
 chargeOf : List Header -> Option String
-chargeOf fields = match find isHandleUpdateCharge fields
-  None => None
-  Some field => B.decodeUtf8 (headerValue field)
+chargeOf fields = do
+  field <- find isHandleUpdateCharge fields
+  B.decodeUtf8 (headerValue field)
 
 takeInternalFields : Response -> (Response, Bool, Option String)
 takeInternalFields response =
@@ -968,9 +968,9 @@ admitProxyAudience account context table request nsid raw =
 -- A value that is not UTF-8 names no DID: it is the audience a credential
 -- would be minted for, so it is refused rather than repaired.
 namedService : Bytes -> Option (String, String)
-namedService raw = match B.decodeUtf8 raw
-  None => None
-  Some text => map (service => (text, service)) (proxyServiceDid text)
+namedService raw = do
+  text <- B.decodeUtf8 raw
+  map (service => (text, service)) (proxyServiceDid text)
 
 {- | The refusal this caller is owed for its credential, or `None` when it
    holds one.
@@ -1466,32 +1466,30 @@ createSessionNsid = "com.atproto.server.createSession"
    does, and a right password under it earns no second one. -}
 export
 classifyLogin : Server e -> Bytes -> Store -> Request -> Option LoginCheck
-classifyLogin (Server account registry _) salt store request =
-  match requestNsid request
-    None => None
-    Some named =>
-      if not (sameNsidIdentity named createSessionNsid) then
+classifyLogin (Server account registry _) salt store request = do
+  named <- requestNsid request
+  if not (sameNsidIdentity named createSessionNsid) then
+    None
+  else match routeRequest registry request
+    RouteCall _ (ProcedureJsonCall nsid _ body) =>
+      if nsid /= createSessionNsid then
         None
-      else match routeRequest registry request
-        RouteCall _ (ProcedureJsonCall nsid _ body) =>
-          if nsid /= createSessionNsid then
-            None
-          else match (
-            get "identifier" body,
-            get "password" body,
-            storeCredential store,
-          )
-            (Some (JString identifier), Some (JString presented), Some record) =>
-              let offered =
-                if identifiesAccount account identifier then salt else empty
-              Some
-                (loginCheckBegin
-                  (passwordFromText presented)
-                  offered
-                  defaultIterations
-                  record)
-            _ => None
+      else match (
+        get "identifier" body,
+        get "password" body,
+        storeCredential store,
+      )
+        (Some (JString identifier), Some (JString presented), Some record) =>
+          let offered =
+            if identifiesAccount account identifier then salt else empty
+          Some
+            (loginCheckBegin
+              (passwordFromText presented)
+              offered
+              defaultIterations
+              record)
         _ => None
+    _ => None
 
 -- ── framing raw bytes into a request ────────────────────────────────────────
 

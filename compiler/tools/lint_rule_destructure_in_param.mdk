@@ -20,11 +20,12 @@ import tools.lint_core.{
   StdlibIndex,
   factOracle,
   mkRule,
+  noFix,
+  factDeclLocs,
 }
 import tools.lint_shared.{
   armToClause,
   ctorIsSingle,
-  declLocList,
   matchBodyOnBareParam,
   ruleNameDestructureInParam,
   wholeWordIn,
@@ -71,9 +72,9 @@ ruleDestructureInParam : StdlibIndex ->
   Positions ->
   List Decl ->
   List Finding
-ruleDestructureInParam _ _ facts pos prog =
+ruleDestructureInParam _ _ facts _ _ =
   let orc = factOracle facts
-  flatMap (destructureDeclL orc) (declLocList pos prog)
+  flatMap (destructureDeclL orc) (factDeclLocs facts)
 
 destructureDeclL : Oracle -> (Decl, Option Loc) -> List Finding
 destructureDeclL orc (d, loc) = match d
@@ -105,7 +106,7 @@ destructureArmsFinding orc loc name p [arm] =
           "function '\{name}' destructures parameter '\{p}' via a single-arm irrefutable `match`. Destructure it directly in the parameter position",
         severity = SevWarning,
         loc = loc,
-        fix = None,
+        fix = noFix,
       },
     ]
   else
@@ -146,7 +147,8 @@ patIrrefutable orc (PCon c ps) =
 patIrrefutable orc (PRec c fs _) =
   ctorIsSingle orc c && allList (recPatFieldIrrefutable orc) fs
 patIrrefutable orc (PAs _ _ _ p) = patIrrefutable orc p
-patIrrefutable _ _ = False
+patIrrefutable _ (PLit _ | PCons _ _ | PList _ | POr _ | PRng _ _ _ | PAnn _ _) =
+  False
 
 recPatFieldIrrefutable : Oracle -> RecPatField -> Bool
 recPatFieldIrrefutable _ (RecPatField _ _ _ None) = True
@@ -158,10 +160,9 @@ recPatFieldIrrefutable orc (RecPatField _ _ _ (Some p)) = patIrrefutable orc p
 -- already proved the pattern irrefutable and the param unreferenced, so
 -- `armToClause`'s PWild re-bind special-case never triggers here.
 destructureInParamFix : Oracle -> Decl -> Option (List Decl)
-destructureInParamFix orc (DFunDef vis name pats body _ _) =
-  match matchBodyOnBareParam pats body
-    Some (p, k, arms) => destructureInParamFixArms orc vis name pats p k arms
-    None => None
+destructureInParamFix orc (DFunDef vis name pats body _ _) = do
+  (p, k, arms) <- matchBodyOnBareParam pats body
+  destructureInParamFixArms orc vis name pats p k arms
 destructureInParamFix _ _ = None
 
 destructureInParamFixArms : Oracle ->

@@ -205,13 +205,12 @@ rowsWithoutRoutes =
     (filter (row => isNone (lookup (fst row) derivedRoutes)) committedLines)
 
 disagreement : (String, String) -> Option String
-disagreement (nsid, actual) = match lookup nsid committedLines
-  None => None
-  Some expected =>
-    if expected == actual then
-      None
-    else
-      Some "\{nsid}: expected \{expected} but registry says \{actual}"
+disagreement (nsid, actual) = do
+  expected <- lookup nsid committedLines
+  if expected == actual then
+    None
+  else
+    Some "\{nsid}: expected \{expected} but registry says \{actual}"
 
 -- Routes whose committed line disagrees with the live one.
 mismatchedRoutes : List String

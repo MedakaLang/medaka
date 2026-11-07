@@ -208,17 +208,19 @@ processAll : Array Int ->
   Int ->
   Int ->
   <IO> Unit
-processAll _counts _totals _stride _path [] _lineNo _rowNo = ()
-processAll counts totals stride path (l :: rest) lineNo rowNo =
-  let t = trim l
-  if t == "" || isComment t then
-    processAll counts totals stride path rest (lineNo + 1) rowNo
-  else if rowNo % stride /= 0 then
-    let () = bump totals 2
-    processAll counts totals stride path rest (lineNo + 1) (rowNo + 1)
-  else
-    let () = processLine counts totals path lineNo l
-    processAll counts totals stride path rest (lineNo + 1) (rowNo + 1)
+processAll counts totals stride path xs0 lineNo0 rowNo0 = go xs0 lineNo0 rowNo0
+  where
+    go [] _lineNo _rowNo = ()
+    go (l :: rest) lineNo rowNo =
+      let t = trim l
+      if t == "" || isComment t then
+        go rest (lineNo + 1) rowNo
+      else if rowNo % stride /= 0 then
+        let () = bump totals 2
+        go rest (lineNo + 1) (rowNo + 1)
+      else
+        let () = processLine counts totals path lineNo l
+        go rest (lineNo + 1) (rowNo + 1)
 
 runFile : Array Int -> Array Int -> Int -> String -> <IO, FileRead> Unit
 runFile counts totals stride path = match readLines path
@@ -228,10 +230,12 @@ runFile counts totals stride path = match readLines path
   Ok ls => processAll counts totals stride path ls 1 0
 
 runAll : Array Int -> Array Int -> Int -> List String -> <IO, FileRead> Unit
-runAll _counts _totals _stride [] = ()
-runAll counts totals stride (f :: rest) =
-  let () = runFile counts totals stride f
-  runAll counts totals stride rest
+runAll counts totals stride xs0 = go xs0
+  where
+    go [] = ()
+    go (f :: rest) =
+      let () = runFile counts totals stride f
+      go rest
 
 -- ── Reporting ────────────────────────────────────────────────────────
 

@@ -69,10 +69,12 @@ indentOf line =
   indentOfGo cs (arrayLength cs) 0
 
 indentOfGo : Array Char -> Int -> Int -> Int
-indentOfGo cs n i
-  | i >= n = indentSentinel
-  | at cs i == ' ' = indentOfGo cs n (i + 1)
-  | otherwise = i
+indentOfGo cs n i0 = go i0
+  where
+    go i
+      | i >= n = indentSentinel
+      | at cs i == ' ' = go (i + 1)
+      | otherwise = i
 
 minIndentGo : List String -> Int -> Int
 minIndentGo [] acc = acc
@@ -202,6 +204,8 @@ firstFragNl : Bool -> List String -> Bool
 firstFragNl _leading [] = True
 firstFragNl leading _ = leading
 splitRange : Array Char -> Int -> Int -> Int -> List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 splitRange cs start p n
   | p >= n = [copyCharRange cs start n]
   | at cs p == '\n' =
@@ -209,10 +213,12 @@ splitRange cs start p n
   | otherwise = splitRange cs start (p + 1) n
 
 tripleRunEnd : Array Char -> Int -> Int -> Int
-tripleRunEnd src len p
-  | p >= len = len
-  | isQuote (at src p) || isBackslash (at src p) || isNL (at src p) = p
-  | otherwise = tripleRunEnd src len (p + 1)
+tripleRunEnd src len p0 = go p0
+  where
+    go p
+      | p >= len = len
+      | isQuote (at src p) || isBackslash (at src p) || isNL (at src p) = p
+      | otherwise = go (p + 1)
 
 uniEscWellFormed : Array Char -> Int -> Int -> Bool
 uniEscWellFormed src len p =
@@ -221,10 +227,12 @@ uniEscWellFormed src len p =
   he > s && he < len && at src he == '}'
 
 uniHexSigLen : Array Char -> Int -> Int -> Int
-uniHexSigLen src p endp
-  | p >= endp = 0
-  | at src p == '0' = uniHexSigLen src (p + 1) endp
-  | otherwise = endp - p
+uniHexSigLen src p0 endp = go p0
+  where
+    go p
+      | p >= endp = 0
+      | at src p == '0' = go (p + 1)
+      | otherwise = endp - p
 
 uniEscCode : Array Char -> Int -> Int -> Option Int
 uniEscCode src len p =
@@ -238,9 +246,9 @@ uniEscText src len p = copyCharRange src p (uHexEnd src len (p + 3) + 1)
 uniEscChar : Array Char -> Int -> Int -> Option Char
 uniEscChar src len p
   | not (uniEscWellFormed src len p) = None
-  | otherwise = match uniEscCode src len p
-    None => None
-    Some cp => charFromCode cp
+  | otherwise = do
+    cp <- uniEscCode src len p
+    charFromCode cp
 
 uniIsSurrogate : Int -> Bool
 uniIsSurrogate cp = cp >= 55296 && cp <= 57343
@@ -289,19 +297,23 @@ unicodeErrorEnd : Array Char -> Int -> Int -> Int
 unicodeErrorEnd src len p = unicodeErrorEndGo src len (p + 3)
 
 unicodeErrorEndGo : Array Char -> Int -> Int -> Int
-unicodeErrorEndGo src len p
-  | p >= len = len
-  | at src p == '}' = p + 1
-  | isQuote (at src p)
-    || isApos (at src p)
-    || isNL (at src p)
-    || isCR (at src p) = p
-  | otherwise = unicodeErrorEndGo src len (p + 1)
+unicodeErrorEndGo src len p0 = go p0
+  where
+    go p
+      | p >= len = len
+      | at src p == '}' = p + 1
+      | isQuote (at src p)
+        || isApos (at src p)
+        || isNL (at src p)
+        || isCR (at src p) = p
+      | otherwise = go (p + 1)
 
 uHexEnd : Array Char -> Int -> Int -> Int
-uHexEnd src len p
-  | p < len && isHexDigit (at src p) = uHexEnd src len (p + 1)
-  | otherwise = p
+uHexEnd src len p0 = go p0
+  where
+    go p
+      | p < len && isHexDigit (at src p) = go (p + 1)
+      | otherwise = p
 
 isBareUnicodeEsc : Array Char -> Int -> Int -> Char -> Bool
 isBareUnicodeEsc src len p e =
@@ -332,18 +344,20 @@ lexFailure : Int -> Int -> ParseDiagnosticKind -> Result LexError a
 lexFailure start end kind = Err (LexError kind start end)
 
 parseHex : Array Char -> Int -> Int -> Int -> Int
-parseHex src p end acc
-  | p >= end = acc
-  | otherwise =
-    let c = at src p
-    let d =
-      if c >= '0' && c <= '9' then
-        charCode c - charCode '0'
-      else if c >= 'a' && c <= 'f' then
-        charCode c - charCode 'a' + 10
-      else
-        charCode c - charCode 'A' + 10
-    parseHex src (p + 1) end (acc * 16 + d)
+parseHex src p0 end acc0 = go p0 acc0
+  where
+    go p acc
+      | p >= end = acc
+      | otherwise =
+        let c = at src p
+        let d =
+          if c >= '0' && c <= '9' then
+            charCode c - charCode '0'
+          else if c >= 'a' && c <= 'f' then
+            charCode c - charCode 'a' + 10
+          else
+            charCode c - charCode 'A' + 10
+        go (p + 1) (acc * 16 + d)
 
 export
 readLiteral : Array Char -> LiteralCursor -> Result LexError LiteralRead
@@ -359,6 +373,8 @@ literalGo : Array Char ->
   Bool ->
   List String ->
   Result LexError LiteralRead
+-- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 literalGo src len p flavor part leading inside acc
   | p >= len = lexFailure p p UnterminatedString
   | isPlain flavor && isQuote (at src p) =
@@ -436,10 +452,12 @@ isTripleAt src len p =
     && isQuote (at src (p + 2))
 
 plainRunEnd : Array Char -> Int -> Int -> Int
-plainRunEnd src len p
-  | p >= len = len
-  | isQuote (at src p) || isBackslash (at src p) = p
-  | otherwise = plainRunEnd src len (p + 1)
+plainRunEnd src len p0 = go p0
+  where
+    go p
+      | p >= len = len
+      | isQuote (at src p) || isBackslash (at src p) = p
+      | otherwise = go (p + 1)
 
 export
 readCharacter : Array Char -> Int -> Result LexError (String, Int)
@@ -484,10 +502,12 @@ charFinished src len p end s =
     lexFailure (p - 1) len UnterminatedChar
 
 charClose : Array Char -> Int -> Int -> Int
-charClose src len p
-  | p >= len = p
-  | isApos (at src p) = p
-  | otherwise = charClose src len (p + 1)
+charClose src len p0 = go p0
+  where
+    go p
+      | p >= len = p
+      | isApos (at src p) = p
+      | otherwise = go (p + 1)
 
 -- `pos` is the offset of the `b` of `b'x'`; returns the byte and the offset
 -- just past the closing apostrophe.  The escape set is the char literal's
@@ -585,14 +605,18 @@ readRawLiteral src pos =
     rawLineGo src len pos (pos + 2)
 
 rawLineGo : Array Char -> Int -> Int -> Int -> Result LexError (String, Int)
-rawLineGo src len open p
-  | p >= len || isNL (at src p) || isCR (at src p) =
-    lexFailure open p UnterminatedString
-  | isQuote (at src p) = Ok (copyCharRange src (open + 2) p, p + 1)
-  | otherwise = rawLineGo src len open (p + 1)
+rawLineGo src len open p0 = go p0
+  where
+    go p
+      | p >= len || isNL (at src p) || isCR (at src p) =
+        lexFailure open p UnterminatedString
+      | isQuote (at src p) = Ok (copyCharRange src (open + 2) p, p + 1)
+      | otherwise = go (p + 1)
 
 rawTripleGo : Array Char -> Int -> Int -> Int -> Result LexError (String, Int)
-rawTripleGo src len open p
-  | p >= len = lexFailure open len UnterminatedString
-  | isTripleAt src len p = Ok (copyCharRange src (open + 4) p, p + 3)
-  | otherwise = rawTripleGo src len open (p + 1)
+rawTripleGo src len open p0 = go p0
+  where
+    go p
+      | p >= len = lexFailure open len UnterminatedString
+      | isTripleAt src len p = Ok (copyCharRange src (open + 4) p, p + 3)
+      | otherwise = go (p + 1)

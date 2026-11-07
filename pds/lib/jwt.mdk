@@ -271,13 +271,12 @@ verifySegments (SessionKey secret) expectedSub expectedAud now headerSeg claimsS
   let expected = hs256Signature secret "\{headerSeg}.\{claimsSeg}"
   if not (ctEq (encodeUtf8 expected) (encodeUtf8 sigSeg)) then
     Err JwtBadSignature
-  else match checkAlg headerSeg
-    Err algError => Err algError
-    Ok () => do
-      payload <- payloadJson claimsSeg
-      claims <- readClaims payload
-      inWindow <- checkWindow now claims
-      checkAudience expectedSub expectedAud inWindow
+  else do
+    _ <- checkAlg headerSeg
+    payload <- payloadJson claimsSeg
+    claims <- readClaims payload
+    inWindow <- checkWindow now claims
+    checkAudience expectedSub expectedAud inWindow
 
 {- | The claims of `token`, or why it was refused.
 

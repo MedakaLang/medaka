@@ -26,6 +26,7 @@ import tools.lint_core.{
   StdlibIndex,
   Visitor(..),
   mkVisitorRule,
+  noFix,
 }
 import tools.lint_shared.{
   ctorVarPassthru,
@@ -220,7 +221,7 @@ orElseFinding isResult loc = Finding {
   message = orElseMessage isResult,
   severity = SevWarning,
   loc = loc,
-  fix = None,
+  fix = noFix,
 }
 
 orElseMessage : Bool -> String

@@ -1,5 +1,5 @@
 # META
-source_lines=213
+source_lines=212
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-clause-map: a two-clause `[]`/`(x :: xs)` recursion that is a hand-written `map` (suggest-only).
@@ -25,13 +25,14 @@ import tools.lint_core.{
   Scope(..),
   StdlibIndex,
   mkRule,
+  noFix,
+  factDeclLocs,
 }
 import tools.lint_shared.{
   andThenEtaFn,
   appSpineOf,
   clausesOf,
   dedupeNamesLoc,
-  declLocList,
   isEVarNamed,
   mentionsVar,
   paramNameOf,
@@ -118,9 +119,9 @@ isNilBody e = match unwrapLoc e
 -- every pattern is a plain binder; the names, in order
 plainVarNames : List Pat -> Option (List String)
 plainVarNames [] = Some []
-plainVarNames (p :: ps) = match paramNameOf p
-  None => None
-  Some n => map (n :: _) (plainVarNames ps)
+plainVarNames (p :: ps) = do
+  n <- paramNameOf p
+  map (n :: _) (plainVarNames ps)
 
 -- Line the nil clause's parameters up against the cons clause's and find the ONE
 -- list position: nil side literally `[]`, cons side `(x :: xs)`.  Returns the
@@ -137,9 +138,9 @@ consSplit (np :: nps) (cp :: cps) = match consPatVars cp
       map (rest => (h, t, t :: rest)) (plainVarNames cps)
     else
       None
-  None => match paramNameOf cp
-    None => None
-    Some v => map ((h, t, rest) => (h, t, v :: rest)) (consSplit nps cps)
+  None => do
+    v <- paramNameOf cp
+    map ((h, t, rest) => (h, t, v :: rest)) (consSplit nps cps)
 consSplit _ _ = None
 
 -- the recursive call's arguments are exactly these variable references, in order
@@ -161,10 +162,9 @@ clauseMapTransform : String ->
   Expr ->
   Option Expr
 clauseMapTransform name headV tailV expected body = match unwrapLoc body
-  EBinOp op lhs rhs _ if op == "::"
-    && recursiveCallOn name expected rhs => match andThenEtaFn headV lhs
-    None => None
-    Some g => if mentionsVar name g || mentionsVar tailV g then None else Some g
+  EBinOp op lhs rhs _ if op == "::" && recursiveCallOn name expected rhs => do
+    g <- andThenEtaFn headV lhs
+    if mentionsVar name g || mentionsVar tailV g then None else Some g
   _ => None
 
 -- one ORDERED attempt: `nil` is the candidate base clause, `cons` the step.
@@ -172,10 +172,9 @@ clauseMapPair : String -> (List Pat, Expr) -> (List Pat, Expr) -> Option Expr
 clauseMapPair name (nilPs, nilBody) (consPs, consBody) =
   if not (isNilBody nilBody) || listLen nilPs /= listLen consPs then
     None
-  else match consSplit nilPs consPs
-    None => None
-    Some (headV, tailV, expected) =>
-      clauseMapTransform name headV tailV expected consBody
+  else do
+    (headV, tailV, expected) <- consSplit nilPs consPs
+    clauseMapTransform name headV tailV expected consBody
 
 -- the transform this definition maps with, if it is a clause-form map.
 -- Clause order is either way round.
@@ -193,13 +192,13 @@ ruleClauseMap : StdlibIndex ->
   Positions ->
   List Decl ->
   List Finding
-ruleClauseMap _ _ _ pos prog =
+ruleClauseMap _ _ facts _ prog =
   -- dedupe by name so a two-clause function is inspected once, not once per
   -- clause, keeping the FIRST clause's location (same shape as
   -- `rule-stdlib-reimpl`).
   flatMap
     (clauseMapHit prog)
-    (dedupeNamesLoc (flatMap topDefNameL (declLocList pos prog)))
+    (dedupeNamesLoc (flatMap topDefNameL (factDeclLocs facts)))
 
 clauseMapHit : List Decl -> (String, Option Loc) -> List Finding
 clauseMapHit prog (name, loc) = match clauseMapFnOf name prog
@@ -213,7 +212,7 @@ clauseMapFinding name g loc = Finding {
     "'\{name}' is a hand-written list map ('[]'/'(x :: xs)' clauses consing a per-element transform onto the recursive call). Rewrite as '\{exprToString (EApp (EVar "map") g)}' (suggest-only)",
   severity = SevWarning,
   loc = loc,
-  fix = None,
+  fix = noFix,
 }
 # DESUGAR
 (DUse false (UseAlias ("core") "$core"))
@@ -222,8 +221,8 @@ clauseMapFinding name g loc = Finding {
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "exprToString" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "mkRule" false))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "andThenEtaFn" false) (mem "appSpineOf" false) (mem "clausesOf" false) (mem "dedupeNamesLoc" false) (mem "declLocList" false) (mem "isEVarNamed" false) (mem "mentionsVar" false) (mem "paramNameOf" false) (mem "ruleNameClauseMap" false) (mem "topDefNameL" false) (mem "unwrapLoc" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "mkRule" false) (mem "noFix" false) (mem "factDeclLocs" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "andThenEtaFn" false) (mem "appSpineOf" false) (mem "clausesOf" false) (mem "dedupeNamesLoc" false) (mem "isEVarNamed" false) (mem "mentionsVar" false) (mem "paramNameOf" false) (mem "ruleNameClauseMap" false) (mem "topDefNameL" false) (mem "unwrapLoc" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameClauseMap")) (fa "summary" (ELit (LString "two-clause `[]`/`(x :: xs)` recursion that conses a per-element transform onto the recursive call — a hand-written `map` (suggest-only)"))) (fa "doc" (ELit (LString "A two-clause `[]` / `(x :: xs)` recursion that conses a per-element transform onto the recursive call is a hand-written `map`. Suggest-only.\n\nBefore:\n  go [] = []\n  go (x :: xs) = f x :: go xs\nAfter:\n  map f"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Baselined")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "NotFixable")) (fa "needs" (EListLit))))) (EVar "ruleClauseMap")) (EVar "None")))
 (DTypeSig false "consPatVars" (TyFun (TyCon "Pat") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String")))))
@@ -236,10 +235,10 @@ clauseMapFinding name g loc = Finding {
 (DFunDef false "isNilBody" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EListLit" (PList)) () (EVar "True")) (arm PWild () (EVar "False"))))
 (DTypeSig false "plainVarNames" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "plainVarNames" ((PList)) (EApp (EVar "Some") (EListLit)))
-(DFunDef false "plainVarNames" ((PCons (PVar "p") (PVar "ps"))) (EMatch (EApp (EVar "paramNameOf") (EVar "p")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "n")) () (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "n") (EVar "_s")))) (EApp (EVar "plainVarNames") (EVar "ps"))))))
+(DFunDef false "plainVarNames" ((PCons (PVar "p") (PVar "ps"))) (EApp (EApp (EVar "$core.andThen") (EApp (EVar "paramNameOf") (EVar "p"))) (ELam ((PVar "n")) (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "n") (EVar "_s")))) (EApp (EVar "plainVarNames") (EVar "ps"))))))
 (DTypeSig false "consSplit" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "consSplit" ((PList) (PList)) (EVar "None"))
-(DFunDef false "consSplit" ((PCons (PVar "np") (PVar "nps")) (PCons (PVar "cp") (PVar "cps"))) (EMatch (EApp (EVar "consPatVars") (EVar "cp")) (arm (PCon "Some" (PTuple (PVar "h") (PVar "t"))) () (EIf (EApp (EVar "isNilPat") (EVar "np")) (EApp (EApp (EVar "map") (ELam ((PVar "rest")) (ETuple (EVar "h") (EVar "t") (EBinOp "::" (EVar "t") (EVar "rest"))))) (EApp (EVar "plainVarNames") (EVar "cps"))) (EVar "None"))) (arm (PCon "None") () (EMatch (EApp (EVar "paramNameOf") (EVar "cp")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "v")) () (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "h") (PVar "t") (PVar "rest"))) (ETuple (EVar "h") (EVar "t") (EBinOp "::" (EVar "v") (EVar "rest"))))) (EApp (EApp (EVar "consSplit") (EVar "nps")) (EVar "cps"))))))))
+(DFunDef false "consSplit" ((PCons (PVar "np") (PVar "nps")) (PCons (PVar "cp") (PVar "cps"))) (EMatch (EApp (EVar "consPatVars") (EVar "cp")) (arm (PCon "Some" (PTuple (PVar "h") (PVar "t"))) () (EIf (EApp (EVar "isNilPat") (EVar "np")) (EApp (EApp (EVar "map") (ELam ((PVar "rest")) (ETuple (EVar "h") (EVar "t") (EBinOp "::" (EVar "t") (EVar "rest"))))) (EApp (EVar "plainVarNames") (EVar "cps"))) (EVar "None"))) (arm (PCon "None") () (EApp (EApp (EVar "$core.andThen") (EApp (EVar "paramNameOf") (EVar "cp"))) (ELam ((PVar "v")) (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "h") (PVar "t") (PVar "rest"))) (ETuple (EVar "h") (EVar "t") (EBinOp "::" (EVar "v") (EVar "rest"))))) (EApp (EApp (EVar "consSplit") (EVar "nps")) (EVar "cps"))))))))
 (DFunDef false "consSplit" (PWild PWild) (EVar "None"))
 (DTypeSig false "argsAreVars" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyCon "Bool"))))
 (DFunDef false "argsAreVars" ((PList) (PList)) (EVar "True"))
@@ -248,18 +247,18 @@ clauseMapFinding name g loc = Finding {
 (DTypeSig false "recursiveCallOn" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Expr") (TyCon "Bool")))))
 (DFunDef false "recursiveCallOn" ((PVar "name") (PVar "expected") (PVar "e")) (EBlock (DoLet false false (PTuple (PVar "hd") (PVar "args")) (EApp (EVar "appSpineOf") (EVar "e"))) (DoExpr (EBinOp "&&" (EApp (EApp (EVar "isEVarNamed") (EVar "name")) (EVar "hd")) (EApp (EApp (EVar "argsAreVars") (EVar "expected")) (EVar "args"))))))
 (DTypeSig false "clauseMapTransform" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))))))
-(DFunDef false "clauseMapTransform" ((PVar "name") (PVar "headV") (PVar "tailV") (PVar "expected") (PVar "body")) (EMatch (EApp (EVar "unwrapLoc") (EVar "body")) (arm (PCon "EBinOp" (PVar "op") (PVar "lhs") (PVar "rhs") PWild) ((GBool (EBinOp "&&" (EBinOp "==" (EVar "op") (ELit (LString "::"))) (EApp (EApp (EApp (EVar "recursiveCallOn") (EVar "name")) (EVar "expected")) (EVar "rhs"))))) (EMatch (EApp (EApp (EVar "andThenEtaFn") (EVar "headV")) (EVar "lhs")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "g")) () (EIf (EBinOp "||" (EApp (EApp (EVar "mentionsVar") (EVar "name")) (EVar "g")) (EApp (EApp (EVar "mentionsVar") (EVar "tailV")) (EVar "g"))) (EVar "None") (EApp (EVar "Some") (EVar "g")))))) (arm PWild () (EVar "None"))))
+(DFunDef false "clauseMapTransform" ((PVar "name") (PVar "headV") (PVar "tailV") (PVar "expected") (PVar "body")) (EMatch (EApp (EVar "unwrapLoc") (EVar "body")) (arm (PCon "EBinOp" (PVar "op") (PVar "lhs") (PVar "rhs") PWild) ((GBool (EBinOp "&&" (EBinOp "==" (EVar "op") (ELit (LString "::"))) (EApp (EApp (EApp (EVar "recursiveCallOn") (EVar "name")) (EVar "expected")) (EVar "rhs"))))) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "andThenEtaFn") (EVar "headV")) (EVar "lhs"))) (ELam ((PVar "g")) (EIf (EBinOp "||" (EApp (EApp (EVar "mentionsVar") (EVar "name")) (EVar "g")) (EApp (EApp (EVar "mentionsVar") (EVar "tailV")) (EVar "g"))) (EVar "None") (EApp (EVar "Some") (EVar "g")))))) (arm PWild () (EVar "None"))))
 (DTypeSig false "clauseMapPair" (TyFun (TyCon "String") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")) (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")) (TyApp (TyCon "Option") (TyCon "Expr"))))))
-(DFunDef false "clauseMapPair" ((PVar "name") (PTuple (PVar "nilPs") (PVar "nilBody")) (PTuple (PVar "consPs") (PVar "consBody"))) (EIf (EBinOp "||" (EApp (EVar "not") (EApp (EVar "isNilBody") (EVar "nilBody"))) (EBinOp "/=" (EApp (EVar "listLen") (EVar "nilPs")) (EApp (EVar "listLen") (EVar "consPs")))) (EVar "None") (EMatch (EApp (EApp (EVar "consSplit") (EVar "nilPs")) (EVar "consPs")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PTuple (PVar "headV") (PVar "tailV") (PVar "expected"))) () (EApp (EApp (EApp (EApp (EApp (EVar "clauseMapTransform") (EVar "name")) (EVar "headV")) (EVar "tailV")) (EVar "expected")) (EVar "consBody"))))))
+(DFunDef false "clauseMapPair" ((PVar "name") (PTuple (PVar "nilPs") (PVar "nilBody")) (PTuple (PVar "consPs") (PVar "consBody"))) (EIf (EBinOp "||" (EApp (EVar "not") (EApp (EVar "isNilBody") (EVar "nilBody"))) (EBinOp "/=" (EApp (EVar "listLen") (EVar "nilPs")) (EApp (EVar "listLen") (EVar "consPs")))) (EVar "None") (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "consSplit") (EVar "nilPs")) (EVar "consPs"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "headV") (PVar "tailV") (PVar "expected")) () (EApp (EApp (EApp (EApp (EApp (EVar "clauseMapTransform") (EVar "name")) (EVar "headV")) (EVar "tailV")) (EVar "expected")) (EVar "consBody"))))))))
 (DTypeSig false "clauseMapFnOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "Expr")))))
 (DFunDef false "clauseMapFnOf" ((PLit (LString "map")) PWild) (EVar "None"))
 (DFunDef false "clauseMapFnOf" ((PVar "name") (PVar "prog")) (EMatch (EApp (EApp (EVar "clausesOf") (EVar "name")) (EVar "prog")) (arm (PList (PVar "a") (PVar "b")) () (EMatch (EApp (EApp (EApp (EVar "clauseMapPair") (EVar "name")) (EVar "a")) (EVar "b")) (arm (PCon "Some" (PVar "g")) () (EApp (EVar "Some") (EVar "g"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "clauseMapPair") (EVar "name")) (EVar "b")) (EVar "a"))))) (arm PWild () (EVar "None"))))
 (DTypeSig false "ruleClauseMap" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "ruleClauseMap" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EVar "flatMap") (EApp (EVar "clauseMapHit") (EVar "prog"))) (EApp (EVar "dedupeNamesLoc") (EApp (EApp (EVar "flatMap") (EVar "topDefNameL")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))))
+(DFunDef false "ruleClauseMap" (PWild PWild (PVar "facts") PWild (PVar "prog")) (EApp (EApp (EVar "flatMap") (EApp (EVar "clauseMapHit") (EVar "prog"))) (EApp (EVar "dedupeNamesLoc") (EApp (EApp (EVar "flatMap") (EVar "topDefNameL")) (EApp (EVar "factDeclLocs") (EVar "facts"))))))
 (DTypeSig false "clauseMapHit" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding")))))
 (DFunDef false "clauseMapHit" ((PVar "prog") (PTuple (PVar "name") (PVar "loc"))) (EMatch (EApp (EApp (EVar "clauseMapFnOf") (EVar "name")) (EVar "prog")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "g")) () (EListLit (EApp (EApp (EApp (EVar "clauseMapFinding") (EVar "name")) (EVar "g")) (EVar "loc"))))))
 (DTypeSig false "clauseMapFinding" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Finding")))))
-(DFunDef false "clauseMapFinding" ((PVar "name") (PVar "g") (PVar "loc")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameClauseMap")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EVar "$core.display") (EVar "name"))) (ELit (LString "' is a hand-written list map ('[]'/'(x :: xs)' clauses consing a per-element transform onto the recursive call). Rewrite as '"))) (EApp (EVar "$core.display") (EApp (EVar "exprToString") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "map")))) (EVar "g"))))) (ELit (LString "' (suggest-only)")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None")))))
+(DFunDef false "clauseMapFinding" ((PVar "name") (PVar "g") (PVar "loc")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameClauseMap")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EVar "$core.display") (EVar "name"))) (ELit (LString "' is a hand-written list map ('[]'/'(x :: xs)' clauses consing a per-element transform onto the recursive call). Rewrite as '"))) (EApp (EVar "$core.display") (EApp (EVar "exprToString") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "map")))) (EVar "g"))))) (ELit (LString "' (suggest-only)")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "noFix")))))
 # MARK
 (DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Pat" true) (mem "Expr" true) (mem "Decl" true))))
@@ -267,8 +266,8 @@ clauseMapFinding name g loc = Finding {
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "exprToString" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "mkRule" false))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "andThenEtaFn" false) (mem "appSpineOf" false) (mem "clausesOf" false) (mem "dedupeNamesLoc" false) (mem "declLocList" false) (mem "isEVarNamed" false) (mem "mentionsVar" false) (mem "paramNameOf" false) (mem "ruleNameClauseMap" false) (mem "topDefNameL" false) (mem "unwrapLoc" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "mkRule" false) (mem "noFix" false) (mem "factDeclLocs" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "andThenEtaFn" false) (mem "appSpineOf" false) (mem "clausesOf" false) (mem "dedupeNamesLoc" false) (mem "isEVarNamed" false) (mem "mentionsVar" false) (mem "paramNameOf" false) (mem "ruleNameClauseMap" false) (mem "topDefNameL" false) (mem "unwrapLoc" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameClauseMap")) (fa "summary" (ELit (LString "two-clause `[]`/`(x :: xs)` recursion that conses a per-element transform onto the recursive call — a hand-written `map` (suggest-only)"))) (fa "doc" (ELit (LString "A two-clause `[]` / `(x :: xs)` recursion that conses a per-element transform onto the recursive call is a hand-written `map`. Suggest-only.\n\nBefore:\n  go [] = []\n  go (x :: xs) = f x :: go xs\nAfter:\n  map f"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Baselined")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "NotFixable")) (fa "needs" (EListLit))))) (EVar "ruleClauseMap")) (EVar "None")))
 (DTypeSig false "consPatVars" (TyFun (TyCon "Pat") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String")))))
@@ -281,10 +280,10 @@ clauseMapFinding name g loc = Finding {
 (DFunDef false "isNilBody" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EListLit" (PList)) () (EVar "True")) (arm PWild () (EVar "False"))))
 (DTypeSig false "plainVarNames" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "plainVarNames" ((PList)) (EApp (EVar "Some") (EListLit)))
-(DFunDef false "plainVarNames" ((PCons (PVar "p") (PVar "ps"))) (EMatch (EApp (EVar "paramNameOf") (EVar "p")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "n")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "n") (EVar "_s")))) (EApp (EVar "plainVarNames") (EVar "ps"))))))
+(DFunDef false "plainVarNames" ((PCons (PVar "p") (PVar "ps"))) (EApp (EApp (EVar "$core.andThen") (EApp (EVar "paramNameOf") (EVar "p"))) (ELam ((PVar "n")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "n") (EVar "_s")))) (EApp (EVar "plainVarNames") (EVar "ps"))))))
 (DTypeSig false "consSplit" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "consSplit" ((PList) (PList)) (EVar "None"))
-(DFunDef false "consSplit" ((PCons (PVar "np") (PVar "nps")) (PCons (PVar "cp") (PVar "cps"))) (EMatch (EApp (EVar "consPatVars") (EVar "cp")) (arm (PCon "Some" (PTuple (PVar "h") (PVar "t"))) () (EIf (EApp (EVar "isNilPat") (EVar "np")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "rest")) (ETuple (EVar "h") (EVar "t") (EBinOp "::" (EVar "t") (EVar "rest"))))) (EApp (EVar "plainVarNames") (EVar "cps"))) (EVar "None"))) (arm (PCon "None") () (EMatch (EApp (EVar "paramNameOf") (EVar "cp")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "v")) () (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "h") (PVar "t") (PVar "rest"))) (ETuple (EVar "h") (EVar "t") (EBinOp "::" (EVar "v") (EVar "rest"))))) (EApp (EApp (EVar "consSplit") (EVar "nps")) (EVar "cps"))))))))
+(DFunDef false "consSplit" ((PCons (PVar "np") (PVar "nps")) (PCons (PVar "cp") (PVar "cps"))) (EMatch (EApp (EVar "consPatVars") (EVar "cp")) (arm (PCon "Some" (PTuple (PVar "h") (PVar "t"))) () (EIf (EApp (EVar "isNilPat") (EVar "np")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "rest")) (ETuple (EVar "h") (EVar "t") (EBinOp "::" (EVar "t") (EVar "rest"))))) (EApp (EVar "plainVarNames") (EVar "cps"))) (EVar "None"))) (arm (PCon "None") () (EApp (EApp (EVar "$core.andThen") (EApp (EVar "paramNameOf") (EVar "cp"))) (ELam ((PVar "v")) (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "h") (PVar "t") (PVar "rest"))) (ETuple (EVar "h") (EVar "t") (EBinOp "::" (EVar "v") (EVar "rest"))))) (EApp (EApp (EVar "consSplit") (EVar "nps")) (EVar "cps"))))))))
 (DFunDef false "consSplit" (PWild PWild) (EVar "None"))
 (DTypeSig false "argsAreVars" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyCon "Bool"))))
 (DFunDef false "argsAreVars" ((PList) (PList)) (EVar "True"))
@@ -293,15 +292,15 @@ clauseMapFinding name g loc = Finding {
 (DTypeSig false "recursiveCallOn" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Expr") (TyCon "Bool")))))
 (DFunDef false "recursiveCallOn" ((PVar "name") (PVar "expected") (PVar "e")) (EBlock (DoLet false false (PTuple (PVar "hd") (PVar "args")) (EApp (EVar "appSpineOf") (EVar "e"))) (DoExpr (EBinOp "&&" (EApp (EApp (EVar "isEVarNamed") (EVar "name")) (EVar "hd")) (EApp (EApp (EVar "argsAreVars") (EVar "expected")) (EVar "args"))))))
 (DTypeSig false "clauseMapTransform" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))))))
-(DFunDef false "clauseMapTransform" ((PVar "name") (PVar "headV") (PVar "tailV") (PVar "expected") (PVar "body")) (EMatch (EApp (EVar "unwrapLoc") (EVar "body")) (arm (PCon "EBinOp" (PVar "op") (PVar "lhs") (PVar "rhs") PWild) ((GBool (EBinOp "&&" (EBinOp "==" (EVar "op") (ELit (LString "::"))) (EApp (EApp (EApp (EVar "recursiveCallOn") (EVar "name")) (EVar "expected")) (EVar "rhs"))))) (EMatch (EApp (EApp (EVar "andThenEtaFn") (EVar "headV")) (EVar "lhs")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "g")) () (EIf (EBinOp "||" (EApp (EApp (EVar "mentionsVar") (EVar "name")) (EVar "g")) (EApp (EApp (EVar "mentionsVar") (EVar "tailV")) (EVar "g"))) (EVar "None") (EApp (EVar "Some") (EVar "g")))))) (arm PWild () (EVar "None"))))
+(DFunDef false "clauseMapTransform" ((PVar "name") (PVar "headV") (PVar "tailV") (PVar "expected") (PVar "body")) (EMatch (EApp (EVar "unwrapLoc") (EVar "body")) (arm (PCon "EBinOp" (PVar "op") (PVar "lhs") (PVar "rhs") PWild) ((GBool (EBinOp "&&" (EBinOp "==" (EVar "op") (ELit (LString "::"))) (EApp (EApp (EApp (EVar "recursiveCallOn") (EVar "name")) (EVar "expected")) (EVar "rhs"))))) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "andThenEtaFn") (EVar "headV")) (EVar "lhs"))) (ELam ((PVar "g")) (EIf (EBinOp "||" (EApp (EApp (EVar "mentionsVar") (EVar "name")) (EVar "g")) (EApp (EApp (EVar "mentionsVar") (EVar "tailV")) (EVar "g"))) (EVar "None") (EApp (EVar "Some") (EVar "g")))))) (arm PWild () (EVar "None"))))
 (DTypeSig false "clauseMapPair" (TyFun (TyCon "String") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")) (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")) (TyApp (TyCon "Option") (TyCon "Expr"))))))
-(DFunDef false "clauseMapPair" ((PVar "name") (PTuple (PVar "nilPs") (PVar "nilBody")) (PTuple (PVar "consPs") (PVar "consBody"))) (EIf (EBinOp "||" (EApp (EVar "not") (EApp (EVar "isNilBody") (EVar "nilBody"))) (EBinOp "/=" (EApp (EVar "listLen") (EVar "nilPs")) (EApp (EVar "listLen") (EVar "consPs")))) (EVar "None") (EMatch (EApp (EApp (EVar "consSplit") (EVar "nilPs")) (EVar "consPs")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PTuple (PVar "headV") (PVar "tailV") (PVar "expected"))) () (EApp (EApp (EApp (EApp (EApp (EVar "clauseMapTransform") (EVar "name")) (EVar "headV")) (EVar "tailV")) (EVar "expected")) (EVar "consBody"))))))
+(DFunDef false "clauseMapPair" ((PVar "name") (PTuple (PVar "nilPs") (PVar "nilBody")) (PTuple (PVar "consPs") (PVar "consBody"))) (EIf (EBinOp "||" (EApp (EVar "not") (EApp (EVar "isNilBody") (EVar "nilBody"))) (EBinOp "/=" (EApp (EVar "listLen") (EVar "nilPs")) (EApp (EVar "listLen") (EVar "consPs")))) (EVar "None") (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "consSplit") (EVar "nilPs")) (EVar "consPs"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "headV") (PVar "tailV") (PVar "expected")) () (EApp (EApp (EApp (EApp (EApp (EVar "clauseMapTransform") (EVar "name")) (EVar "headV")) (EVar "tailV")) (EVar "expected")) (EVar "consBody"))))))))
 (DTypeSig false "clauseMapFnOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "Expr")))))
 (DFunDef false "clauseMapFnOf" ((PLit (LString "map")) PWild) (EVar "None"))
 (DFunDef false "clauseMapFnOf" ((PVar "name") (PVar "prog")) (EMatch (EApp (EApp (EVar "clausesOf") (EVar "name")) (EVar "prog")) (arm (PList (PVar "a") (PVar "b")) () (EMatch (EApp (EApp (EApp (EVar "clauseMapPair") (EVar "name")) (EVar "a")) (EVar "b")) (arm (PCon "Some" (PVar "g")) () (EApp (EVar "Some") (EVar "g"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "clauseMapPair") (EVar "name")) (EVar "b")) (EVar "a"))))) (arm PWild () (EVar "None"))))
 (DTypeSig false "ruleClauseMap" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "ruleClauseMap" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "clauseMapHit") (EVar "prog"))) (EApp (EVar "dedupeNamesLoc") (EApp (EApp (EDictApp "flatMap") (EVar "topDefNameL")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))))
+(DFunDef false "ruleClauseMap" (PWild PWild (PVar "facts") PWild (PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "clauseMapHit") (EVar "prog"))) (EApp (EVar "dedupeNamesLoc") (EApp (EApp (EDictApp "flatMap") (EVar "topDefNameL")) (EApp (EVar "factDeclLocs") (EVar "facts"))))))
 (DTypeSig false "clauseMapHit" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding")))))
 (DFunDef false "clauseMapHit" ((PVar "prog") (PTuple (PVar "name") (PVar "loc"))) (EMatch (EApp (EApp (EVar "clauseMapFnOf") (EVar "name")) (EVar "prog")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "g")) () (EListLit (EApp (EApp (EApp (EVar "clauseMapFinding") (EVar "name")) (EVar "g")) (EVar "loc"))))))
 (DTypeSig false "clauseMapFinding" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Finding")))))
-(DFunDef false "clauseMapFinding" ((PVar "name") (PVar "g") (PVar "loc")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameClauseMap")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EVar "$core.display") (EVar "name"))) (ELit (LString "' is a hand-written list map ('[]'/'(x :: xs)' clauses consing a per-element transform onto the recursive call). Rewrite as '"))) (EApp (EVar "$core.display") (EApp (EVar "exprToString") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "map")))) (EVar "g"))))) (ELit (LString "' (suggest-only)")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None")))))
+(DFunDef false "clauseMapFinding" ((PVar "name") (PVar "g") (PVar "loc")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameClauseMap")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EVar "$core.display") (EVar "name"))) (ELit (LString "' is a hand-written list map ('[]'/'(x :: xs)' clauses consing a per-element transform onto the recursive call). Rewrite as '"))) (EApp (EVar "$core.display") (EApp (EVar "exprToString") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "map")))) (EVar "g"))))) (ELit (LString "' (suggest-only)")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "noFix")))))

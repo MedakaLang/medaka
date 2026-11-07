@@ -255,6 +255,8 @@ repoIdentityControl repo lowerPath record =
       0
 
 setField : String -> DagCbor -> List (String, DagCbor) -> List (String, DagCbor)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 setField _ _ [] = []
 setField name value ((key, old) :: rest) =
   if key == name then

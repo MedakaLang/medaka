@@ -25,6 +25,10 @@
 #      to be: `--baseline` promotes PER-FILE findings, and a cross-file rule's
 #      findings come from a whole-target-set tier the baseline never sees (#2861).
 #
+#   Both passes take test/lint_path_exempt.toml via `--exempt`, and assertion 0
+#   bounds that table: every row names in `pinned-by` the pds/test/constant_time_*.sh
+#   gate (or the lease replay) that pins its file, and carries a reason.
+#
 # The rule lists come from the binary (`medaka lint --list-rules --names`), never
 # from this file or the hook: a rule cannot exist without registry metadata, so
 # "every rule is enforced by something" holds by construction, and a new rule is
@@ -55,6 +59,9 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MEDAKA="$ROOT/medaka"
 BASELINE_REL="test/lint_baseline.toml"
 BASELINE="$ROOT/$BASELINE_REL"
+# The hand-written path exemption table; both assertions below pass it.
+EXEMPT_REL="test/lint_path_exempt.toml"
+EXEMPT="$ROOT/$EXEMPT_REL"
 # Narrower than the per-file roots on purpose: the other projects carry cross-file
 # findings that are not yet drained (#2881). Keep in step with the hook.
 CROSS_ROOTS="compiler stdlib sqlite"
@@ -121,10 +128,66 @@ if [ ! -f "$BASELINE" ]; then
   exit 1
 fi
 
+# ── assertion 0: the exemption table is not a general escape hatch ──────────
+# Every row must carry a non-empty reason and a `pinned-by` naming the
+# pds/test/constant_time_*.sh gate, or test/process_authority_fixtures/lease_replay.py,
+# that pins its file. That script must name the
+# file on a non-comment line (a manifest or anchor), or, for a file the script
+# pins only through the emitted IR closure it checks, the row's reason must say
+# so. `medaka lint` checks the reason too; this gate also says WHICH files may be
+# exempt at all.
+[ -f "$EXEMPT" ] || { echo "FAIL: missing $EXEMPT_REL"; exit 1; }
+exempt_rows="$(awk '
+  function flush() { if (n) print file "\t" reason "\t" pinned; file = ""; reason = ""; pinned = "" }
+  /^\[\[entry\]\]/ { flush(); n++; next }
+  /^file = "/ { v = $0; sub(/^file = "/, "", v); sub(/"$/, "", v); file = v }
+  /^reason = "/ { v = $0; sub(/^reason = "/, "", v); sub(/"$/, "", v); gsub(/^ +| +$/, "", v); reason = v }
+  /^pinned-by = "/ { v = $0; sub(/^pinned-by = "/, "", v); sub(/"$/, "", v); pinned = v }
+  END { flush() }' "$EXEMPT")"
+exempt_entries="$(grep -c '^\[\[entry\]\]' "$EXEMPT")"
+exempt_bad=0
+exempt_checked=0
+tab="$(printf '\t')"
+while IFS="$tab" read -r f why by; do
+  [ -n "$f" ] || continue
+  exempt_checked=$((exempt_checked + 1))
+  case "$by" in
+    pds/test/constant_time_*.sh | test/process_authority_fixtures/lease_replay.py) [ -f "$ROOT/$by" ] || by="" ;;
+    *) by="" ;;
+  esac
+  if [ -z "$why" ]; then
+    echo "FAIL: $EXEMPT_REL row for $f has no reason"
+    exempt_bad=1
+  elif [ -z "$by" ]; then
+    echo "FAIL: $EXEMPT_REL row for $f needs pinned-by = an existing pds/test/constant_time_*.sh or test/process_authority_fixtures/lease_replay.py"
+    exempt_bad=1
+  elif ! grep -v '^[[:space:]]*#' "$ROOT/$by" | grep -qF "$f"; then
+    case "$why" in
+      *"emitted closure pinned by $by"*) ;;
+      *)
+        echo "FAIL: $EXEMPT_REL exempts $f, but $by names it on no non-comment line"
+        echo "  and the row's reason does not say it is in the emitted closure $by pins."
+        exempt_bad=1
+        ;;
+    esac
+  fi
+done <<EOF_ROWS
+$exempt_rows
+EOF_ROWS
+if [ "$exempt_checked" -ne "$exempt_entries" ]; then
+  echo "FAIL: $EXEMPT_REL has $exempt_entries row(s) but $exempt_checked carry a file"
+  exempt_bad=1
+fi
+if [ "$exempt_bad" -ne 0 ]; then
+  echo "  The table is for bytes a constant-time gate pins. Fix the finding or"
+  echo "  silence it inline with '-- lint-disable-next-line <rule>' instead."
+  exit 1
+fi
+
 # ── assertion 1: count-baseline ratchet + the max-ratchet CI twin ───────────
 log="$(mktemp)"
 # shellcheck disable=SC2086
-"$MEDAKA" lint --internal --baseline="$BASELINE_REL" --only="$ONLY" $targets >"$log" 2>&1
+"$MEDAKA" lint --internal --exempt="$EXEMPT" --baseline="$BASELINE_REL" --only="$ONLY" $targets >"$log" 2>&1
 status=$?
 
 if [ "$status" -ne 0 ]; then
@@ -157,7 +220,7 @@ crosslog="$(mktemp)"
 crossstatus=0
 if [ -n "$CROSS" ] && [ -n "$crosstargets" ]; then
   # shellcheck disable=SC2086
-  "$MEDAKA" lint --internal --only="$CROSS" --deny="$CROSS" $crosstargets >"$crosslog" 2>&1
+  "$MEDAKA" lint --internal --exempt="$EXEMPT" --only="$CROSS" --deny="$CROSS" $crosstargets >"$crosslog" 2>&1
   crossstatus=$?
 fi
 
@@ -177,5 +240,5 @@ fi
 
 rows="$(grep -c '^\[\[entry\]\]' "$BASELINE")"
 rm -f "$log" "$crosslog"
-echo "-- lint enforcement floor: ok ($rows pinned baseline row(s), cross-file clean, roots: $targets)"
+echo "-- lint enforcement floor: ok ($rows pinned baseline row(s), $exempt_entries exempt file(s), cross-file clean, roots: $targets)"
 exit 0

@@ -27,6 +27,8 @@ is3 src len pos a b c =
     && at src (pos + 2) == c
 
 collectNoUs : Array Char -> Int -> Int -> List Char
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 collectNoUs src p endp
   | p >= endp = []
   | at src p == '_' = collectNoUs src (p + 1) endp
@@ -42,11 +44,12 @@ parseIntFrom src p endp acc = magnitudeInt (parseIntNeg src p endp acc)
 -- The digits' value NEGATED: a magnitude up to 2^62 (the range guard below
 -- admits no more) fits only on the negative side, and `Int` arithmetic traps.
 parseIntNeg : Array Char -> Int -> Int -> Int -> Int
-parseIntNeg src p endp acc
-  | p >= endp = acc
-  | at src p == '_' = parseIntNeg src (p + 1) endp acc
-  | otherwise =
-    parseIntNeg src (p + 1) endp (acc * 10 - (charCode (at src p) - 48))
+parseIntNeg src p0 endp acc0 = go p0 acc0
+  where
+    go p acc
+      | p >= endp = acc
+      | at src p == '_' = go (p + 1) acc
+      | otherwise = go (p + 1) (acc * 10 - (charCode (at src p) - 48))
 
 -- A negated magnitude back to the literal's `Int`: 2^62 has no positive `Int`,
 -- so it stays `intMinBound`, which is what the parser's `isIntMinLit` expects
@@ -230,10 +233,12 @@ scanAt ctx src len pos depth id c
   | otherwise = scanOp ctx src len pos depth id c
 
 skipLineComment : Array Char -> Int -> Int -> Int
-skipLineComment src len p
-  | p >= len = p
-  | isNL (at src p) || isCR (at src p) = p
-  | otherwise = skipLineComment src len (p + 1)
+skipLineComment src len p0 = go p0
+  where
+    go p
+      | p >= len = p
+      | isNL (at src p) || isCR (at src p) = p
+      | otherwise = go (p + 1)
 
 -- Emit a terminal lexer-error token instead of panicking.  The error carries the
 -- offending char offset `p` (as the RTok's start offset) so `parser.parseResult`
@@ -252,6 +257,8 @@ skipBlockComment : Array Char -> Int -> Int -> Int -> Int
 -- Returns the position just past the matching `-}`, or the sentinel `-1` when
 -- the comment is never closed (so the caller can emit a located lexer error
 -- rather than silently swallowing the rest of the file).
+-- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 skipBlockComment src len p d
   | d <= 0 = p
   | p >= len = 0 - 1
@@ -263,9 +270,11 @@ skipBlockComment src len p d
 
 -- identifiers / keywords / underscore
 identEnd : Array Char -> Int -> Int -> Int
-identEnd src len p
-  | p < len && isAlnum (at src p) = identEnd src len (p + 1)
-  | otherwise = p
+identEnd src len p0 = go p0
+  where
+    go p
+      | p < len && isAlnum (at src p) = go (p + 1)
+      | otherwise = p
 
 scanLower : ScanCursor -> Array Char -> Int -> Int -> Int -> LexFrame -> RawTok
 scanLower ctx src len pos depth id =
@@ -326,17 +335,20 @@ scanBacktick ctx src len pos depth id =
     id
 
 btClose : Array Char -> Int -> Int -> Int
-btClose src len p
-  | p >= len = p
-  | isBacktick (at src p) = p
-  | otherwise = btClose src len (p + 1)
+btClose src len p0 = go p0
+  where
+    go p
+      | p >= len = p
+      | isBacktick (at src p) = p
+      | otherwise = go (p + 1)
 
 -- numbers (int / float; underscores allowed)
 digitsEnd : Array Char -> Int -> Int -> Int
-digitsEnd src len p
-  | p < len && (isDigit (at src p) || at src p == '_') =
-    digitsEnd src len (p + 1)
-  | otherwise = p
+digitsEnd src len p0 = go p0
+  where
+    go p
+      | p < len && (isDigit (at src p) || at src p == '_') = go (p + 1)
+      | otherwise = p
 
 -- `0x…` / `0b…` / `0o…` radix literals (require ≥1 valid digit after the prefix).
 isRadixPrefix : Array Char -> Int -> Int -> Bool
@@ -366,10 +378,11 @@ digitVal c
   | otherwise = charCode c - 55
 
 radixEnd : Array Char -> Int -> Int -> Char -> Int
-radixEnd src len p k
-  | p < len && (isRadixDigit k (at src p) || at src p == '_') =
-    radixEnd src len (p + 1) k
-  | otherwise = p
+radixEnd src len p0 k = go p0
+  where
+    go p
+      | p < len && (isRadixDigit k (at src p) || at src p == '_') = go (p + 1)
+      | otherwise = p
 
 parseRadix : Array Char -> Int -> Int -> Int -> Int -> Int
 parseRadix src p endp base acc =
@@ -377,11 +390,12 @@ parseRadix src p endp base acc =
 
 -- `parseIntNeg` for a radix: the value negated, so 2^62 fits.
 parseRadixNeg : Array Char -> Int -> Int -> Int -> Int -> Int
-parseRadixNeg src p endp base acc
-  | p >= endp = acc
-  | at src p == '_' = parseRadixNeg src (p + 1) endp base acc
-  | otherwise =
-    parseRadixNeg src (p + 1) endp base (acc * base - digitVal (at src p))
+parseRadixNeg src p0 endp base acc0 = go p0 acc0
+  where
+    go p acc
+      | p >= endp = acc
+      | at src p == '_' = go (p + 1) acc
+      | otherwise = go (p + 1) (acc * base - digitVal (at src p))
 
 -- ── Radix-literal range guard (#556) ────────────────────────────────────
 -- `parseRadix` accumulates in the compiler's own 63-bit `Int`, whose arithmetic
@@ -421,10 +435,12 @@ radixMaxLead _ = 4
 -- Once a nonzero digit is seen the rest is taken verbatim (minus separators),
 -- so interior zeros are preserved and only the LEADING run is stripped.
 sigRadixDigits : Array Char -> Int -> Int -> List Char
-sigRadixDigits src p endp
-  | p >= endp = []
-  | at src p == '_' || at src p == '0' = sigRadixDigits src (p + 1) endp
-  | otherwise = collectNoUs src p endp
+sigRadixDigits src p0 endp = go p0
+  where
+    go p
+      | p >= endp = []
+      | at src p == '_' || at src p == '0' = go (p + 1)
+      | otherwise = collectNoUs src p endp
 
 radixMagOverflows : List Char -> Int -> Int -> Bool
 radixMagOverflows [] _ _ = False
@@ -507,9 +523,11 @@ malformedRadixTok ctx src len pos =
 -- (`0x_`, `0x___`) — that shape gets a fix-less diagnostic, since there is no
 -- safe spelling to suggest.
 stripLeadingUs : Array Char -> Int -> Int -> String
-stripLeadingUs src p e
-  | p < e && at src p == '_' = stripLeadingUs src (p + 1) e
-  | otherwise = copyCharRange src p e
+stripLeadingUs src p0 e = go p0
+  where
+    go p
+      | p < e && at src p == '_' = go (p + 1)
+      | otherwise = copyCharRange src p e
 
 malformedRadixErr : ScanCursor -> Int -> String -> String -> String -> RawTok
 malformedRadixErr ctx pos bad prefix digits =
@@ -743,11 +761,13 @@ singleCharBody src len p =
   p + 1 < len && not (isApos (at src p)) && closesAfterMarks src len (p + 1)
 
 closesAfterMarks : Array Char -> Int -> Int -> Bool
-closesAfterMarks src len p
-  | p >= len = False
-  | isApos (at src p) = True
-  | isCombiningMark (at src p) = closesAfterMarks src len (p + 1)
-  | otherwise = False
+closesAfterMarks src len p0 = go p0
+  where
+    go p
+      | p >= len = False
+      | isApos (at src p) = True
+      | isCombiningMark (at src p) = go (p + 1)
+      | otherwise = False
 
 isCombiningMark : Char -> Bool
 isCombiningMark c = charCode c >= 768 && charCode c <= 879
@@ -1048,6 +1068,8 @@ handleNewline ctx src len pos depth id =
   afterNl ctx src len np depth id indent pos
 
 consumeNl : Array Char -> Int -> Int -> Int -> (Int, Int)
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
 consumeNl src len p indent
   | p >= len = (indent, p)
   | isCR (at src p) && p + 1 < len && isNL (at src (p + 1)) =
@@ -1125,6 +1147,8 @@ data ScanCursor = ScanCursor {
 }
 
 scan : Array Char -> Int -> ScanCursor -> List RawTok
+-- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 scan src len cursor =
   match (scanOne
     cursor

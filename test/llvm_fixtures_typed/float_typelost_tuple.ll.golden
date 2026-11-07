@@ -249,11 +249,10 @@ entry:
   store i64 %t5, ptr %t8
   %t9 = ptrtoint ptr %t6 to i64
   %t10 = call i64 @mdk.user.6d356635663735373336353732356635665f5f61646450616972(i64 %t9)
-  %t11 = call i64 @mdk.user.6d356635663735373336353732356635665f5f666964(i64 %t10)
-  %t12 = inttoptr i64 %t11 to ptr
-  %t13 = getelementptr i8, ptr %t12, i64 8
-  %t14 = load double, ptr %t13
-  call void @mdk_print_float(double %t14)
+  %t11 = inttoptr i64 %t10 to ptr
+  %t12 = getelementptr i8, ptr %t11, i64 8
+  %t13 = load double, ptr %t12
+  call void @mdk_print_float(double %t13)
   ret i32 0
 }
 ; mdk-module module.5f5f757365725f5f

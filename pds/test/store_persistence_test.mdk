@@ -1031,9 +1031,9 @@ traceEvent raw =
         _ => None
       None => match R.find mkdirCall stripped
         Some m => map (p => "M \{p}") (groupText m 0)
-        None => match R.find mkdiratCall stripped
-          Some m => map (p => "M \{p}") (groupText m 0)
-          None => None
+        None => do
+          m <- R.find mkdiratCall stripped
+          map (p => "M \{p}") (groupText m 0)
 
 -- `strace -f -o` heads every line with the pid that made the call.
 pidPrefix : R.Regex

@@ -75,9 +75,10 @@ findServingIndex db table column =
   flatMap (servingGo table column) (readSchema db)
 
 servingGo : String -> String -> List SchemaEntry -> Result String SchemaEntry
-servingGo table column [] = Err "no index on \{table}.\{column}"
-servingGo table column (e :: rest) =
-  if servesColumn table column e then Ok e else servingGo table column rest
+servingGo table column xs0 = go xs0
+  where
+    go [] = Err "no index on \{table}.\{column}"
+    go (e :: rest) = if servesColumn table column e then Ok e else go rest
 
 -- A schema entry serves the column if it is an index whose stored CREATE INDEX
 -- text names that table and that column.  An index whose `sql` this library
@@ -122,11 +123,13 @@ keyMatches key target = match compareCellsSqlite key target
 -- Fetch one table row per matched rowid.  A rowid the index names but the
 -- table has no row for is corruption, not an empty result — say so.
 fetchRows : Db -> String -> List Int -> List Row -> Result String (List Row)
-fetchRows _ _ [] acc = Ok (reverse acc)
-fetchRows db table (rid :: rest) acc = do
-  found <- seekTableRow db table rid
-  match found
-    Some row => fetchRows db table rest (row :: acc)
-    None =>
-      Err
-        "index points at rowid \{intToString rid}, which table '\{table}' has no row for"
+fetchRows db table xs0 acc0 = go xs0 acc0
+  where
+    go [] acc = Ok (reverse acc)
+    go (rid :: rest) acc = do
+      found <- seekTableRow db table rid
+      match found
+        Some row => go rest (row :: acc)
+        None =>
+          Err
+            "index points at rowid \{intToString rid}, which table '\{table}' has no row for"

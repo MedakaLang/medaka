@@ -162,91 +162,68 @@ scan : String ->
   List Token ->
   List String ->
   Result SymbolDefect (List Token, String)
-scan text bytes entries markers registry i copied tokens chunks =
-  let c = byte bytes i
-  if c == -1 then
-    Ok (
-      reverseL tokens,
-      joinWith "" (reverseL (stringSliceBytes copied i text :: chunks)),
-    )
-  else if c == 30 then
-    if not markers
-      || byte bytes (i + 1) /= 87
-      || not (boundary (byte bytes (i - 1))) then
-      Err (UncheckedText "malformed or nested receipt" moduleOrigin)
-    else
-      let endKey = keyEnd bytes (i + 2)
-      let key = stringSliceBytes (i + 2) endKey text
-      if key == "" || byte bytes endKey /= 58 then
-        Err (UncheckedText "malformed receipt key" moduleOrigin)
-      else match omLookup key entries
-        None => Err (UncheckedText "unknown receipt" moduleOrigin)
-        Some receipt =>
-          let start = endKey + 1
-          let end = start + stringByteLength receipt.text
-          if end >= arrayLength bytes
-            || byte bytes end /= 31
-            || not (boundary (byte bytes (end + 1))) then
-            Err (UncheckedText "changed or unterminated receipt" receipt.origin)
-          else if stringSliceBytes start end text /= receipt.text then
-            Err (UncheckedText "changed receipt text" receipt.origin)
-          else match recheck registry receipt
-            Err d => Err d
-            Ok _ =>
-              scan
-                text
-                bytes
-                entries
-                markers
-                registry
-                (end + 1)
-                (end + 1)
-                (prependChecked receipt.tokens receipt.origin tokens)
-                (receipt.text :: stringSliceBytes copied i text :: chunks)
-  else if c == 31 then
-    Err (UncheckedText "unmatched receipt end" moduleOrigin)
-  else if space c then
-    scan text bytes entries markers registry (i + 1) copied tokens chunks
-  else if c == 59 && byte bytes (i + 1) == 59 then
-    scan
-      text
-      bytes
-      entries
-      markers
-      registry
-      (lineEnd bytes i)
-      copied
-      tokens
-      chunks
-  else if c == 40 && byte bytes (i + 1) == 59 then do
-    end <- commentEnd bytes (i + 2) 1
-    scan text bytes entries markers registry end copied tokens chunks
-  else if c == 34 then do
-    end <- quotedEnd bytes (i + 1)
-    scan
-      text
-      bytes
-      entries
-      markers
-      registry
-      end
-      copied
-      (Token "\"\"" False moduleOrigin :: tokens)
-      chunks
-  else if c == 59 then
-    Err (UncheckedText "invalid comment delimiter" moduleOrigin)
-  else
-    let end = if c == 40 || c == 41 then i + 1 else wordEnd bytes i
-    scan
-      text
-      bytes
-      entries
-      markers
-      registry
-      end
-      copied
-      (Token (stringSliceBytes i end text) False moduleOrigin :: tokens)
-      chunks
+scan text bytes entries markers registry i0 cp0 tk0 ch0 = go i0 cp0 tk0 ch0
+  where
+    go i copied tokens chunks =
+      let c = byte bytes i
+      if c == -1 then
+        Ok (
+          reverseL tokens,
+          joinWith "" (reverseL (stringSliceBytes copied i text :: chunks)),
+        )
+      else if c == 30 then
+        if not markers
+          || byte bytes (i + 1) /= 87
+          || not (boundary (byte bytes (i - 1))) then
+          Err (UncheckedText "malformed or nested receipt" moduleOrigin)
+        else
+          let endKey = keyEnd bytes (i + 2)
+          let key = stringSliceBytes (i + 2) endKey text
+          if key == "" || byte bytes endKey /= 58 then
+            Err (UncheckedText "malformed receipt key" moduleOrigin)
+          else match omLookup key entries
+            None => Err (UncheckedText "unknown receipt" moduleOrigin)
+            Some receipt =>
+              let start = endKey + 1
+              let end = start + stringByteLength receipt.text
+              if end >= arrayLength bytes
+                || byte bytes end /= 31
+                || not (boundary (byte bytes (end + 1))) then
+                Err
+                  (UncheckedText
+                    "changed or unterminated receipt"
+                    receipt.origin)
+              else if stringSliceBytes start end text /= receipt.text then
+                Err (UncheckedText "changed receipt text" receipt.origin)
+              else match recheck registry receipt
+                Err d => Err d
+                Ok _ =>
+                  go
+                    (end + 1)
+                    (end + 1)
+                    (prependChecked receipt.tokens receipt.origin tokens)
+                    (receipt.text :: stringSliceBytes copied i text :: chunks)
+      else if c == 31 then
+        Err (UncheckedText "unmatched receipt end" moduleOrigin)
+      else if space c then
+        go (i + 1) copied tokens chunks
+      else if c == 59 && byte bytes (i + 1) == 59 then
+        go (lineEnd bytes i) copied tokens chunks
+      else if c == 40 && byte bytes (i + 1) == 59 then do
+        end <- commentEnd bytes (i + 2) 1
+        go end copied tokens chunks
+      else if c == 34 then do
+        end <- quotedEnd bytes (i + 1)
+        go end copied (Token "\"\"" False moduleOrigin :: tokens) chunks
+      else if c == 59 then
+        Err (UncheckedText "invalid comment delimiter" moduleOrigin)
+      else
+        let end = if c == 40 || c == 41 then i + 1 else wordEnd bytes i
+        go
+          end
+          copied
+          (Token (stringSliceBytes i end text) False moduleOrigin :: tokens)
+          chunks
 
 recheck : Option SymbolRegistry -> Receipt -> Result SymbolDefect Unit
 recheck None _ = Ok ()
@@ -287,9 +264,9 @@ symbolFrom "d" n = WasmData n
 symbolFrom _ n = WasmElem n
 
 symbolLookup : WasmSymbol -> SymbolIndex a -> Option a
-symbolLookup sym index = match omLookup (symbolNamespace sym) index
-  None => None
-  Some names => omLookup (symbolName sym) names
+symbolLookup sym index = do
+  names <- omLookup (symbolNamespace sym) index
+  omLookup (symbolName sym) names
 
 symbolHas : WasmSymbol -> SymbolIndex a -> Bool
 symbolHas sym index = isSome (symbolLookup sym index)
@@ -635,32 +612,34 @@ usesGo : List Token ->
   SymbolIndex Unit ->
   List SymbolDefect ->
   List SymbolDefect
-usesGo [] _ _ acc = acc
-usesGo ((Token op covered origin) :: rest) seen gaps acc = match rest
-  [] =>
-    if (op == "call" || op == "return_call") && not covered then
-      UncheckedText "uncovered direct call" origin :: acc
-    else
-      acc
-  (Token name _ _) :: after =>
-    let uncovered =
-      if (op == "call" || op == "return_call") && not covered then
-        [UncheckedText "uncovered direct call" origin]
-      else
-        []
-    let absent =
-      if named name then
-        flatMap (missingUse seen gaps origin) (useOf op (bare name))
-      else
-        []
-    let extra = match after
-      (Token second _ _) :: _ if named second
-        && (op == "array.new_data" || op == "array.init_data") =>
-        missingUse seen gaps origin (WasmData (bare second))
-      (Token second _ _) :: _ if named second && op == "array.copy" =>
-        missingUse seen gaps origin (WasmType (bare second))
-      _ => []
-    usesGo rest seen gaps (reverseL (uncovered ++ absent ++ extra) ++ acc)
+usesGo xs0 seen gaps acc0 = go xs0 acc0
+  where
+    go [] acc = acc
+    go ((Token op covered origin) :: rest) acc = match rest
+      [] =>
+        if (op == "call" || op == "return_call") && not covered then
+          UncheckedText "uncovered direct call" origin :: acc
+        else
+          acc
+      (Token name _ _) :: after =>
+        let uncovered =
+          if (op == "call" || op == "return_call") && not covered then
+            [UncheckedText "uncovered direct call" origin]
+          else
+            []
+        let absent =
+          if named name then
+            flatMap (missingUse seen gaps origin) (useOf op (bare name))
+          else
+            []
+        let extra = match after
+          (Token second _ _) :: _ if named second
+            && (op == "array.new_data" || op == "array.init_data") =>
+            missingUse seen gaps origin (WasmData (bare second))
+          (Token second _ _) :: _ if named second && op == "array.copy" =>
+            missingUse seen gaps origin (WasmType (bare second))
+          _ => []
+        go rest (reverseL (uncovered ++ absent ++ extra) ++ acc)
 
 -- Count code dependencies for manifest drift checks; comments and literals are
 -- inert, and namespaces keep a global and a type with the same name distinct.

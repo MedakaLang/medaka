@@ -104,7 +104,7 @@ levelsOf m = match normalize m
   TApp a b => levelsOf a ++ levelsOf b
   TFun a _ b => levelsOf a ++ levelsOf b
   TQual a _ => levelsOf a
-  _ => []
+  TCon _ _ | TRigid _ | TEff _ | TAuth _ => []
 
 -- Unify the types of [a] and [b] (variables of the two are distinct cells) and answer
 -- whether it was accepted, with the joint reading of both operands afterwards.  [swap]

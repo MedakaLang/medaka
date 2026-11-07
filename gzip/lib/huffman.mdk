@@ -88,16 +88,18 @@ maxCodeLen = 15
 
 -- Every code length in `lengths` must be 0 (unused) or 1..maxCodeLen.
 validateLengths : Array Int -> Int -> Int -> Result String Unit
-validateLengths lengths i n
-  | i >= n = Ok ()
-  | otherwise = match get i lengths
-    Some len =>
-      if len < 0 || len > maxCodeLen then
-        Err
-          "buildHuffman: symbol \{i} has invalid code length \{len} (must be 0..\{maxCodeLen})"
-      else
-        validateLengths lengths (i + 1) n
-    None => Ok ()
+validateLengths lengths i0 n = go i0
+  where
+    go i
+      | i >= n = Ok ()
+      | otherwise = match get i lengths
+        Some len =>
+          if len < 0 || len > maxCodeLen then
+            Err
+              "buildHuffman: symbol \{i} has invalid code length \{len} (must be 0..\{maxCodeLen})"
+          else
+            go (i + 1)
+        None => Ok ()
 
 -- `counts[len]` = how many symbols in `lengths` have code length `len`.
 countLengths : Array Int -> Int -> Array Int
@@ -107,20 +109,22 @@ countLengths lengths n =
   counts
 
 countLengthsGo : Array Int -> Int -> Int -> Array Int -> Unit
-countLengthsGo lengths i n counts
-  | i >= n = ()
-  | otherwise = match get i lengths
-    Some len =>
-      if len == 0 then
-        countLengthsGo lengths (i + 1) n counts
-      else match get len counts
-        Some c =>
-          counts[len] := c + 1
-          countLengthsGo lengths (i + 1) n counts
-        None =>
-          panic
-            "countLengths: length \{len} out of table range (unreachable after validateLengths)"
-    None => ()
+countLengthsGo lengths i0 n counts = go i0
+  where
+    go i
+      | i >= n = ()
+      | otherwise = match get i lengths
+        Some len =>
+          if len == 0 then
+            go (i + 1)
+          else match get len counts
+            Some c =>
+              counts[len] := c + 1
+              go (i + 1)
+            None =>
+              panic
+                "countLengths: length \{len} out of table range (unreachable after validateLengths)"
+        None => ()
 
 -- Total number of symbols with a nonzero code length.
 sumUsed : Array Int -> Int
@@ -155,22 +159,26 @@ singleCodeIsLengthOne counts = match get 1 counts
 -- `allowSingle = False` via `buildHuffmanStrict`, so it only ever gets the
 -- `numUsed == 0` forgiveness.
 kraftCheck : Array Int -> Int -> Int -> Int -> Bool -> Result String Unit
-kraftCheck counts len left numUsed allowSingle
-  | len > maxCodeLen =
-    if left == 0
-      || numUsed == 0
-      || allowSingle && numUsed == 1 && singleCodeIsLengthOne counts then
-      Ok ()
-    else
-      Err "buildHuffman: incomplete Huffman code (unused code space remains)"
-  | otherwise = match get len counts
-    Some c =>
-      let left2 = left * 2 - c
-      if left2 < 0 then
-        Err "buildHuffman: over-subscribed Huffman code (length \{len})"
-      else
-        kraftCheck counts (len + 1) left2 numUsed allowSingle
-    None => panic "kraftCheck: length \{len} out of table range (unreachable)"
+kraftCheck counts len0 left0 numUsed allowSingle = go len0 left0
+  where
+    go len left
+      | len > maxCodeLen =
+        if left == 0
+          || numUsed == 0
+          || allowSingle && numUsed == 1 && singleCodeIsLengthOne counts then
+          Ok ()
+        else
+          Err
+            "buildHuffman: incomplete Huffman code (unused code space remains)"
+      | otherwise = match get len counts
+        Some c =>
+          let left2 = left * 2 - c
+          if left2 < 0 then
+            Err "buildHuffman: over-subscribed Huffman code (length \{len})"
+          else
+            go (len + 1) left2
+        None =>
+          panic "kraftCheck: length \{len} out of table range (unreachable)"
 
 -- `offs[len]` = index into `symbols` where the first code of length `len`
 -- lands: `offs[1] = 0`, `offs[len+1] = offs[len] + counts[len]`.
@@ -181,14 +189,16 @@ buildOffsets counts =
   offs
 
 buildOffsetsGo : Array Int -> Int -> Int -> Array Int -> Unit
-buildOffsetsGo counts len acc offs
-  | len > maxCodeLen = ()
-  | otherwise =
-    offs[len] := acc
-    match get len counts
-      Some c => buildOffsetsGo counts (len + 1) (acc + c) offs
-      None =>
-        panic "buildOffsets: length \{len} out of table range (unreachable)"
+buildOffsetsGo counts len0 acc0 offs = go len0 acc0
+  where
+    go len acc
+      | len > maxCodeLen = ()
+      | otherwise =
+        offs[len] := acc
+        match get len counts
+          Some c => go (len + 1) (acc + c)
+          None =>
+            panic "buildOffsets: length \{len} out of table range (unreachable)"
 
 -- Scatter every used symbol (in ascending symbol order) into `symbols` at
 -- its length's next free `offs` slot, advancing that slot as we go — this
@@ -200,20 +210,23 @@ placeSymbols lengths n offs total =
   symbols
 
 placeSymbolsGo : Array Int -> Int -> Int -> Array Int -> Array Int -> Unit
-placeSymbolsGo lengths i n offs symbols
-  | i >= n = ()
-  | otherwise = match get i lengths
-    Some len =>
-      if len == 0 then
-        placeSymbolsGo lengths (i + 1) n offs symbols
-      else match get len offs
-        Some pos =>
-          symbols[pos] := i
-          offs[len] := pos + 1
-          placeSymbolsGo lengths (i + 1) n offs symbols
-        None =>
-          panic "placeSymbols: length \{len} out of table range (unreachable)"
-    None => ()
+placeSymbolsGo lengths i0 n offs symbols = go i0
+  where
+    go i
+      | i >= n = ()
+      | otherwise = match get i lengths
+        Some len =>
+          if len == 0 then
+            go (i + 1)
+          else match get len offs
+            Some pos =>
+              symbols[pos] := i
+              offs[len] := pos + 1
+              go (i + 1)
+            None =>
+              panic
+                "placeSymbols: length \{len} out of table range (unreachable)"
+        None => ()
 
 -- Shared construction for `buildHuffman`/`buildHuffmanStrict` — the only
 -- difference between the two public entry points is whether `kraftCheck`
@@ -279,29 +292,31 @@ decodeSymGo : Huffman ->
   Int ->
   Int ->
   Result String Int
-decodeSymGo h r len code first index
-  | len > maxCodeLen =
-    Err "decodeSym: invalid Huffman code (no match within \{maxCodeLen} bits)"
-  | otherwise = do
-    bit <- getBits 1 r
-    let code2 = bitOr code bit
-    match get len h.counts
-      Some count =>
-        if code2 - first
-          < count then match get (index + code2 - first) h.symbols
-          Some sym => Ok sym
+decodeSymGo h r len0 code0 first0 index0 = go len0 code0 first0 index0
+  where
+    go len code first index
+      | len > maxCodeLen =
+        Err
+          "decodeSym: invalid Huffman code (no match within \{maxCodeLen} bits)"
+      | otherwise = do
+        bit <- getBits 1 r
+        let code2 = bitOr code bit
+        match get len h.counts
+          Some count =>
+            if code2 - first
+              < count then match get (index + code2 - first) h.symbols
+              Some sym => Ok sym
+              None =>
+                panic
+                  "decodeSym: symbol index out of range (unreachable for a table built by buildHuffman)"
+            else
+              go
+                (len + 1)
+                (shiftLeft code2 1)
+                (shiftLeft (first + count) 1)
+                (index + count)
           None =>
-            panic
-              "decodeSym: symbol index out of range (unreachable for a table built by buildHuffman)"
-        else
-          decodeSymGo
-            h
-            r
-            (len + 1)
-            (shiftLeft code2 1)
-            (shiftLeft (first + count) 1)
-            (index + count)
-      None => panic "decodeSym: length \{len} out of table range (unreachable)"
+            panic "decodeSym: length \{len} out of table range (unreachable)"
 
 -- ---------------------------------------------------------------------------
 -- Fixed Huffman (RFC 1951 §3.2.6)
@@ -591,13 +606,15 @@ tableAt arr i = match get i arr
 -- `base[j+1] = base[j] + 2^extra[j]` for every `j` in `[start, limit]`
 -- (predicting entries up to `limit + 1`).
 chainHolds : Array Int -> Array Int -> Int -> Int -> Bool
-chainHolds base extra j limit
-  | j > limit = True
-  | otherwise =
-    let b = tableAt base j
-    let e = tableAt extra j
-    let bNext = tableAt base (j + 1)
-    bNext == b + shiftLeft 1 e && chainHolds base extra (j + 1) limit
+chainHolds base extra j0 limit = go j0
+  where
+    go j
+      | j > limit = True
+      | otherwise =
+        let b = tableAt base j
+        let e = tableAt extra j
+        let bNext = tableAt base (j + 1)
+        bNext == b + shiftLeft 1 e && go (j + 1)
 
 test "lengthBase/lengthExtra array sizes cover symbols 257..285 (29 entries each)" =
   expectEqual (29, 29) (arrayLength lengthBase, arrayLength lengthExtra)
@@ -654,18 +671,20 @@ testCountLengths lengths n =
   counts
 
 testCountLengthsGo : Array Int -> Int -> Int -> Array Int -> Unit
-testCountLengthsGo lengths i n counts
-  | i >= n = ()
-  | otherwise = match get i lengths
-    Some len =>
-      if len == 0 then
-        testCountLengthsGo lengths (i + 1) n counts
-      else match get len counts
-        Some c =>
-          counts[len] := c + 1
-          testCountLengthsGo lengths (i + 1) n counts
-        None => testCountLengthsGo lengths (i + 1) n counts
-    None => ()
+testCountLengthsGo lengths i0 n counts = go i0
+  where
+    go i
+      | i >= n = ()
+      | otherwise = match get i lengths
+        Some len =>
+          if len == 0 then
+            go (i + 1)
+          else match get len counts
+            Some c =>
+              counts[len] := c + 1
+              go (i + 1)
+            None => go (i + 1)
+        None => ()
 
 nextCodeTable : Array Int -> Array Int
 nextCodeTable counts =
@@ -674,14 +693,16 @@ nextCodeTable counts =
   next
 
 nextCodeTableGo : Array Int -> Int -> Int -> Array Int -> Unit
-nextCodeTableGo counts len code next
-  | len > maxCodeLen = ()
-  | otherwise = match get (len - 1) counts
-    Some prevCount =>
-      let code2 = shiftLeft (code + prevCount) 1
-      next[len] := code2
-      nextCodeTableGo counts (len + 1) code2 next
-    None => ()
+nextCodeTableGo counts len0 code0 next = go len0 code0
+  where
+    go len code
+      | len > maxCodeLen = ()
+      | otherwise = match get (len - 1) counts
+        Some prevCount =>
+          let code2 = shiftLeft (code + prevCount) 1
+          next[len] := code2
+          go (len + 1) code2
+        None => ()
 
 symbolCodesFor : Array Int -> Int -> Array Int
 symbolCodesFor lengths n =
@@ -692,21 +713,25 @@ symbolCodesFor lengths n =
   codes
 
 symbolCodesGo : Array Int -> Int -> Int -> Array Int -> Array Int -> Unit
-symbolCodesGo lengths i n next codes
-  | i >= n = ()
-  | otherwise = match get i lengths
-    Some len =>
-      if len == 0 then
-        symbolCodesGo lengths (i + 1) n next codes
-      else match get len next
-        Some c =>
-          codes[i] := c
-          next[len] := c + 1
-          symbolCodesGo lengths (i + 1) n next codes
-        None => symbolCodesGo lengths (i + 1) n next codes
-    None => ()
+symbolCodesGo lengths i0 n next codes = go i0
+  where
+    go i
+      | i >= n = ()
+      | otherwise = match get i lengths
+        Some len =>
+          if len == 0 then
+            go (i + 1)
+          else match get len next
+            Some c =>
+              codes[i] := c
+              next[len] := c + 1
+              go (i + 1)
+            None => go (i + 1)
+        None => ()
 
 usedSymbols : Array Int -> Int -> Int -> List Int
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 usedSymbols lengths i n
   | i >= n = []
   | otherwise = match get i lengths
@@ -718,24 +743,28 @@ usedSymbols lengths i n
     None => []
 
 emitUsed : Array Int -> Array Int -> Int -> Int -> BitWriter -> Unit
-emitUsed lengths codes i n w
-  | i >= n = ()
-  | otherwise = match get i lengths
-    Some len =>
-      if len == 0 then
-        emitUsed lengths codes (i + 1) n w
-      else match get i codes
-        Some c =>
-          putCodeMSB c len w
-          emitUsed lengths codes (i + 1) n w
-        None => emitUsed lengths codes (i + 1) n w
-    None => ()
+emitUsed lengths codes i0 n w = go i0
+  where
+    go i
+      | i >= n = ()
+      | otherwise = match get i lengths
+        Some len =>
+          if len == 0 then
+            go (i + 1)
+          else match get i codes
+            Some c =>
+              putCodeMSB c len w
+              go (i + 1)
+            None => go (i + 1)
+        None => ()
 
 decodeExpected : Huffman -> BitReader -> List Int -> Bool
-decodeExpected _h _r [] = True
-decodeExpected h r (sym :: rest) = match decodeSym h r
-  Ok got => got == sym && decodeExpected h r rest
-  Err _ => False
+decodeExpected h r xs0 = go xs0
+  where
+    go [] = True
+    go (sym :: rest) = match decodeSym h r
+      Ok got => got == sym && go rest
+      Err _ => False
 
 -- Given a Kraft-complete length vector, every used symbol's canonical code
 -- (computed by `nextCodeTable`/`symbolCodesFor`, NOT by `buildHuffman`)

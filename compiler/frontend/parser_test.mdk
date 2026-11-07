@@ -153,6 +153,8 @@ shape (ESection (SecRight op e)) = "(right \{op} \{shape e})"
 shape (ESection (SecLeft e op)) = "(left \{shape e} \{op})"
 shape (EVar v) = v
 shape (ENumLit _ _ lx) = lx
+-- Bound: a test renderer for the operator skeleton only; every other expression prints `?`, so a wrong parse shows in the expected string, and naming the other expression constructors would add nothing the expectations read.
+-- lint-disable-next-line rule-walker-wildcard
 shape _ = "?"
 
 bodyShape : String -> String
@@ -788,6 +790,8 @@ patShape (PTuple ps) = "(tuple \{joinWith " " (map patShape ps)})"
 patShape (PAs x _ _ p) = "\{x}@\{patShape p}"
 patShape (PCons h t) = "(\{patShape h} :: \{patShape t})"
 patShape (PAnn p _) = "(ann \{patShape p})"
+-- Bound: a test renderer for the or-pattern tests; patterns they do not exercise print `?`, so a wrong parse shows in the expected string.
+-- lint-disable-next-line rule-walker-wildcard
 patShape _ = "?"
 
 armShape : Arm -> String

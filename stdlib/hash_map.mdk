@@ -133,6 +133,8 @@ bucketHas key ((k, _) :: rest)
   | otherwise = bucketHas key rest
 
 bucketReplace : Eq k => k -> v -> List (k, v) -> List (k, v)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 bucketReplace _ _ [] = []
 bucketReplace key val ((k, v) :: rest)
   | key == k = (key, val) :: rest
@@ -193,6 +195,8 @@ reinsertAll : (Eq k, Hashable k) =>
   Ref (Array (List (k, v))) ->
   Ref Int ->
   Unit
+-- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 reinsertAll oldArr i n buckets count
   | i >= n = ()
   | otherwise =
@@ -204,10 +208,12 @@ reinsertBucket : (Eq k, Hashable k) =>
   Ref (Array (List (k, v))) ->
   Ref Int ->
   Unit
-reinsertBucket [] _ _ = ()
-reinsertBucket ((k, v) :: rest) buckets count =
-  putRaw k v buckets count
-  reinsertBucket rest buckets count
+reinsertBucket xs0 buckets count = go xs0
+  where
+    go [] = ()
+    go ((k, v) :: rest) =
+      putRaw k v buckets count
+      go rest
 
 -- Insert into a freshly-resized table (key known absent, so just prepend).
 putRaw : Hashable k => k -> v -> Ref (Array (List (k, v))) -> Ref Int -> Unit
@@ -243,9 +249,11 @@ deleteAt key arr idx count =
 -- # Iteration
 
 collectBuckets : Array (List (k, v)) -> Int -> Int -> List (k, v) -> List (k, v)
-collectBuckets arr i n acc
-  | i >= n = acc
-  | otherwise = collectBuckets arr (i + 1) n (arrayGetUnsafe i arr ++ acc)
+collectBuckets arr i0 n acc0 = go i0 acc0
+  where
+    go i acc
+      | i >= n = acc
+      | otherwise = go (i + 1) (arrayGetUnsafe i arr ++ acc)
 
 {- | The entries as pairs, in unspecified order.
 

@@ -643,7 +643,7 @@ ordinalsIn : List String -> SExp -> List Int
 ordinalsIn mids (SList [SAtom m, SAtom n])
   | contains m mids = intsOf (stringToInt n)
 ordinalsIn mids (SList items) = flatMap (ordinalsIn mids) items
-ordinalsIn _ _ = []
+ordinalsIn _ (SAtom _) = []
 
 grantNumbersIn : SExp -> List Int
 grantNumbersIn (SAtom a) = match S.stripPrefix "$grant_arg_" a

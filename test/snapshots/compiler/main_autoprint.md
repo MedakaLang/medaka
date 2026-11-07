@@ -1,5 +1,5 @@
 # META
-source_lines=439
+source_lines=442
 stages=DESUGAR,MARK
 # SOURCE
 import string.{split}
@@ -210,6 +210,8 @@ pinnedPrintlnDecls decls = pinnedCopies "println" autoPrintPinName decls
 -- Copies of every signature and clause of `origin` re-bound under `pin`, marked
 -- exported so a synthesized import can reach them.
 pinnedCopies : String -> String -> List Decl -> List Decl
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 pinnedCopies _ _ [] = []
 pinnedCopies origin pin ((DAttrib _ d) :: rest) =
   pinnedCopies origin pin (d :: rest)
@@ -334,7 +336,8 @@ wrapMainDecl : Expr -> Decl -> Decl
 wrapMainDecl callee (DFunDef vis "main" [] body site bid) =
   DFunDef vis "main" [] (wrapCall callee site body) site bid
 wrapMainDecl callee (DAttrib a d) = DAttrib a (wrapMainDecl callee d)
-wrapMainDecl _ d = d
+wrapMainDecl _ (d@(DTypeSig _ _ _ _ | DExtern _ | DFunDef _ _ _ _ _ _ | DData {  } | DUse _ _ _ | DEffect _ _ _ _ _ _ | DProp _ _ _ _ | DTest _ _ _ | DInterface {  } | DImpl {  } | DTypeAlias {  } | DNewtype {  } | DLetGroup _ _)) =
+  d
 
 -- `<e>` → `callee <e>`, keeping the body's outer `ELoc` around the application.
 -- A body with none (an application such as `Err "x"`) is located at the `main`
@@ -391,9 +394,9 @@ asyncMainShapeError : EntryOutcome -> List (String, List Decl) -> Option String
 asyncMainShapeError outcome modules =
   if not outcome.eoMainIsAsync || outcome.eoMainAsyncPayloadIsUnit then
     None
-  else match entryPair modules
-    None => None
-    Some (_, decls) => match findMainParams decls
+  else do
+    (_, decls) <- entryPair modules
+    match findMainParams decls
       Some [] =>
         Some
           "main : Async e a must have a Unit payload (`main : Async e Unit`) — the driver runs the program for its effects and has nowhere to put a value; print it inside the program instead"
@@ -442,6 +445,7 @@ asyncPinImport driver =
     ])
     synthLoc
 # DESUGAR
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("string") ((mem "split" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Pat" false) (mem "Loc" true) (mem "UsePath" true) (mem "UseMember" true))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "mangledName" false))))
@@ -520,7 +524,7 @@ asyncPinImport driver =
 (DTypeSig false "wrapMainDecl" (TyFun (TyCon "Expr") (TyFun (TyCon "Decl") (TyCon "Decl"))))
 (DFunDef false "wrapMainDecl" ((PVar "callee") (PCon "DFunDef" (PVar "vis") (PLit (LString "main")) (PList) (PVar "body") (PVar "site") (PVar "bid"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "vis")) (ELit (LString "main"))) (EListLit)) (EApp (EApp (EApp (EVar "wrapCall") (EVar "callee")) (EVar "site")) (EVar "body"))) (EVar "site")) (EVar "bid")))
 (DFunDef false "wrapMainDecl" ((PVar "callee") (PCon "DAttrib" (PVar "a") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "a")) (EApp (EApp (EVar "wrapMainDecl") (EVar "callee")) (EVar "d"))))
-(DFunDef false "wrapMainDecl" (PWild (PVar "d")) (EVar "d"))
+(DFunDef false "wrapMainDecl" (PWild (PAs "d" (POr (PCon "DTypeSig" PWild PWild PWild PWild) (PCon "DExtern" PWild) (PCon "DFunDef" PWild PWild PWild PWild PWild PWild) (PRec "DData" () false) (PCon "DUse" PWild PWild PWild) (PCon "DEffect" PWild PWild PWild PWild PWild PWild) (PCon "DProp" PWild PWild PWild PWild) (PCon "DTest" PWild PWild PWild) (PRec "DInterface" () false) (PRec "DImpl" () false) (PRec "DTypeAlias" () false) (PRec "DNewtype" () false) (PCon "DLetGroup" PWild PWild)))) (EVar "d"))
 (DTypeSig false "wrapCall" (TyFun (TyCon "Expr") (TyFun (TyCon "Loc") (TyFun (TyCon "Expr") (TyCon "Expr")))))
 (DFunDef false "wrapCall" ((PVar "callee") PWild (PCon "ELoc" (PVar "l") (PVar "inner"))) (EApp (EApp (EVar "ELoc") (EVar "l")) (EApp (EApp (EVar "EApp") (EVar "callee")) (EApp (EApp (EVar "ELoc") (EVar "l")) (EVar "inner")))))
 (DFunDef false "wrapCall" ((PVar "callee") (PVar "site") (PVar "body")) (EApp (EApp (EVar "ELoc") (EVar "site")) (EApp (EApp (EVar "EApp") (EVar "callee")) (EVar "body"))))
@@ -531,7 +535,7 @@ asyncPinImport driver =
 (DTypeSig true "shouldAsyncWrapMain" (TyFun (TyCon "EntryOutcome") (TyFun (TyCon "EntryKey") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "Bool")))))
 (DFunDef false "shouldAsyncWrapMain" ((PVar "outcome") (PVar "driver") (PVar "modules")) (EIf (EApp (EVar "not") (EBinOp "&&" (EFieldAccess (EVar "outcome") "eoMainIsAsync") (EFieldAccess (EVar "outcome") "eoMainAsyncPayloadIsUnit"))) (EVar "False") (EMatch (EApp (EVar "entryPair") (EVar "modules")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PTuple PWild (PVar "decls"))) () (EMatch (EApp (EVar "findMainParams") (EVar "decls")) (arm (PCon "Some" (PList)) () (EApp (EApp (EVar "any") (ELam ((PVar "p")) (EBinOp "&&" (EBinOp "==" (EApp (EVar "fst") (EVar "p")) (EFieldAccess (EVar "driver") "moduleId")) (EApp (EApp (EVar "definesFun") (EFieldAccess (EVar "driver") "binding")) (EApp (EVar "snd") (EVar "p")))))) (EVar "modules"))) (arm PWild () (EVar "False")))))))
 (DTypeSig true "asyncMainShapeError" (TyFun (TyCon "EntryOutcome") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "asyncMainShapeError" ((PVar "outcome") (PVar "modules")) (EIf (EBinOp "||" (EApp (EVar "not") (EFieldAccess (EVar "outcome") "eoMainIsAsync")) (EFieldAccess (EVar "outcome") "eoMainAsyncPayloadIsUnit")) (EVar "None") (EMatch (EApp (EVar "entryPair") (EVar "modules")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PTuple PWild (PVar "decls"))) () (EMatch (EApp (EVar "findMainParams") (EVar "decls")) (arm (PCon "Some" (PList)) () (EApp (EVar "Some") (ELit (LString "main : Async e a must have a Unit payload (`main : Async e Unit`) — the driver runs the program for its effects and has nowhere to put a value; print it inside the program instead")))) (arm PWild () (EVar "None")))))))
+(DFunDef false "asyncMainShapeError" ((PVar "outcome") (PVar "modules")) (EIf (EBinOp "||" (EApp (EVar "not") (EFieldAccess (EVar "outcome") "eoMainIsAsync")) (EFieldAccess (EVar "outcome") "eoMainAsyncPayloadIsUnit")) (EVar "None") (EApp (EApp (EVar "$core.andThen") (EApp (EVar "entryPair") (EVar "modules"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple PWild (PVar "decls")) () (EMatch (EApp (EVar "findMainParams") (EVar "decls")) (arm (PCon "Some" (PList)) () (EApp (EVar "Some") (ELit (LString "main : Async e a must have a Unit payload (`main : Async e Unit`) — the driver runs the program for its effects and has nowhere to put a value; print it inside the program instead")))) (arm PWild () (EVar "None")))))))))
 (DTypeSig false "definesFun" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool"))))
 (DFunDef false "definesFun" (PWild (PList)) (EVar "False"))
 (DFunDef false "definesFun" ((PVar "n") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EApp (EVar "definesFun") (EVar "n")) (EBinOp "::" (EVar "d") (EVar "rest"))))
@@ -548,6 +552,7 @@ asyncPinImport driver =
 (DTypeSig false "asyncPinImport" (TyFun (TyCon "EntryKey") (TyCon "Decl")))
 (DFunDef false "asyncPinImport" ((PVar "driver")) (EApp (EApp (EApp (EVar "DUse") (EVar "False")) (EApp (EApp (EVar "UseGroup") (EApp (EApp (EVar "split") (ELit (LString "."))) (EFieldAccess (EVar "driver") "moduleId"))) (EListLit (EApp (EApp (EApp (EApp (EVar "UseMember") (EVar "asyncMainPinName")) (EVar "False")) (EVar "synthLoc")) (EVar "None"))))) (EVar "synthLoc")))
 # MARK
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("string") ((mem "split" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Pat" false) (mem "Loc" true) (mem "UsePath" true) (mem "UseMember" true))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "mangledName" false))))
@@ -626,7 +631,7 @@ asyncPinImport driver =
 (DTypeSig false "wrapMainDecl" (TyFun (TyCon "Expr") (TyFun (TyCon "Decl") (TyCon "Decl"))))
 (DFunDef false "wrapMainDecl" ((PVar "callee") (PCon "DFunDef" (PVar "vis") (PLit (LString "main")) (PList) (PVar "body") (PVar "site") (PVar "bid"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "vis")) (ELit (LString "main"))) (EListLit)) (EApp (EApp (EApp (EVar "wrapCall") (EVar "callee")) (EVar "site")) (EVar "body"))) (EVar "site")) (EVar "bid")))
 (DFunDef false "wrapMainDecl" ((PVar "callee") (PCon "DAttrib" (PVar "a") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "a")) (EApp (EApp (EVar "wrapMainDecl") (EVar "callee")) (EVar "d"))))
-(DFunDef false "wrapMainDecl" (PWild (PVar "d")) (EVar "d"))
+(DFunDef false "wrapMainDecl" (PWild (PAs "d" (POr (PCon "DTypeSig" PWild PWild PWild PWild) (PCon "DExtern" PWild) (PCon "DFunDef" PWild PWild PWild PWild PWild PWild) (PRec "DData" () false) (PCon "DUse" PWild PWild PWild) (PCon "DEffect" PWild PWild PWild PWild PWild PWild) (PCon "DProp" PWild PWild PWild PWild) (PCon "DTest" PWild PWild PWild) (PRec "DInterface" () false) (PRec "DImpl" () false) (PRec "DTypeAlias" () false) (PRec "DNewtype" () false) (PCon "DLetGroup" PWild PWild)))) (EVar "d"))
 (DTypeSig false "wrapCall" (TyFun (TyCon "Expr") (TyFun (TyCon "Loc") (TyFun (TyCon "Expr") (TyCon "Expr")))))
 (DFunDef false "wrapCall" ((PVar "callee") PWild (PCon "ELoc" (PVar "l") (PVar "inner"))) (EApp (EApp (EVar "ELoc") (EVar "l")) (EApp (EApp (EVar "EApp") (EVar "callee")) (EApp (EApp (EVar "ELoc") (EVar "l")) (EVar "inner")))))
 (DFunDef false "wrapCall" ((PVar "callee") (PVar "site") (PVar "body")) (EApp (EApp (EVar "ELoc") (EVar "site")) (EApp (EApp (EVar "EApp") (EVar "callee")) (EVar "body"))))
@@ -637,7 +642,7 @@ asyncPinImport driver =
 (DTypeSig true "shouldAsyncWrapMain" (TyFun (TyCon "EntryOutcome") (TyFun (TyCon "EntryKey") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "Bool")))))
 (DFunDef false "shouldAsyncWrapMain" ((PVar "outcome") (PVar "driver") (PVar "modules")) (EIf (EApp (EVar "not") (EBinOp "&&" (EFieldAccess (EVar "outcome") "eoMainIsAsync") (EFieldAccess (EVar "outcome") "eoMainAsyncPayloadIsUnit"))) (EVar "False") (EMatch (EApp (EVar "entryPair") (EVar "modules")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PTuple PWild (PVar "decls"))) () (EMatch (EApp (EVar "findMainParams") (EVar "decls")) (arm (PCon "Some" (PList)) () (EApp (EApp (EDictApp "any") (ELam ((PVar "p")) (EBinOp "&&" (EBinOp "==" (EApp (EVar "fst") (EVar "p")) (EFieldAccess (EVar "driver") "moduleId")) (EApp (EApp (EVar "definesFun") (EFieldAccess (EVar "driver") "binding")) (EApp (EVar "snd") (EVar "p")))))) (EVar "modules"))) (arm PWild () (EVar "False")))))))
 (DTypeSig true "asyncMainShapeError" (TyFun (TyCon "EntryOutcome") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "asyncMainShapeError" ((PVar "outcome") (PVar "modules")) (EIf (EBinOp "||" (EApp (EVar "not") (EFieldAccess (EVar "outcome") "eoMainIsAsync")) (EFieldAccess (EVar "outcome") "eoMainAsyncPayloadIsUnit")) (EVar "None") (EMatch (EApp (EVar "entryPair") (EVar "modules")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PTuple PWild (PVar "decls"))) () (EMatch (EApp (EVar "findMainParams") (EVar "decls")) (arm (PCon "Some" (PList)) () (EApp (EVar "Some") (ELit (LString "main : Async e a must have a Unit payload (`main : Async e Unit`) — the driver runs the program for its effects and has nowhere to put a value; print it inside the program instead")))) (arm PWild () (EVar "None")))))))
+(DFunDef false "asyncMainShapeError" ((PVar "outcome") (PVar "modules")) (EIf (EBinOp "||" (EApp (EVar "not") (EFieldAccess (EVar "outcome") "eoMainIsAsync")) (EFieldAccess (EVar "outcome") "eoMainAsyncPayloadIsUnit")) (EVar "None") (EApp (EApp (EVar "$core.andThen") (EApp (EVar "entryPair") (EVar "modules"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple PWild (PVar "decls")) () (EMatch (EApp (EVar "findMainParams") (EVar "decls")) (arm (PCon "Some" (PList)) () (EApp (EVar "Some") (ELit (LString "main : Async e a must have a Unit payload (`main : Async e Unit`) — the driver runs the program for its effects and has nowhere to put a value; print it inside the program instead")))) (arm PWild () (EVar "None")))))))))
 (DTypeSig false "definesFun" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool"))))
 (DFunDef false "definesFun" (PWild (PList)) (EVar "False"))
 (DFunDef false "definesFun" ((PVar "n") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EApp (EVar "definesFun") (EVar "n")) (EBinOp "::" (EVar "d") (EVar "rest"))))

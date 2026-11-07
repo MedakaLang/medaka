@@ -1,5 +1,5 @@
 # META
-source_lines=540
+source_lines=542
 stages=DESUGAR,MARK
 # SOURCE
 -- async.mdk — Medaka's cooperative-concurrency layer: the `Async` type, its
@@ -320,19 +320,21 @@ schedule : Ref (List (Async e Unit)) ->
   Ref (List (List (Wait e), Unit -> <e> Async e Unit)) ->
   Int ->
   <e> Unit
-schedule front back parked budget =
-  if budget <= 0 then
-    wakeParked back parked False
-    schedule front back parked (max 1 (queueLength front back))
-  else match popTask front back
-    Some t =>
-      dispatch back parked (stepTask t)
-      schedule front back parked (budget - 1)
-    None => match !parked
-      [] => ()
-      _ =>
-        wakeParked back parked True
-        schedule front back parked (max 1 (queueLength front back))
+schedule front back parked budget0 = go budget0
+  where
+    go budget =
+      if budget <= 0 then
+        wakeParked back parked False
+        go (max 1 (queueLength front back))
+      else match popTask front back
+        Some t =>
+          dispatch back parked (stepTask t)
+          go (budget - 1)
+        None => match !parked
+          [] => ()
+          _ =>
+            wakeParked back parked True
+            go (max 1 (queueLength front back))
 
 stepTask : Async e Unit -> <e> Async e Unit
 stepTask (Suspend k) = k ()
@@ -616,7 +618,7 @@ isWriteOf _ _ = False
 (DTypeSig false "queueLength" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))) (TyCon "Int"))))
 (DFunDef false "queueLength" ((PVar "front") (PVar "back")) (EBinOp "+" (EApp (EVar "length") (EUnOp "!" (EVar "front"))) (EApp (EVar "length") (EUnOp "!" (EVar "back")))))
 (DTypeSig false "schedule" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyApp (TyCon "Wait") (TyVar "e"))) (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit"))))))) (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyCon "Unit")))))))
-(DFunDef false "schedule" ((PVar "front") (PVar "back") (PVar "parked") (PVar "budget")) (EIf (EBinOp "<=" (EVar "budget") (ELit (LInt 0))) (EBlock (DoExpr (EApp (EApp (EApp (EVar "wakeParked") (EVar "back")) (EVar "parked")) (EVar "False"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "schedule") (EVar "front")) (EVar "back")) (EVar "parked")) (EApp (EApp (EVar "max") (ELit (LInt 1))) (EApp (EApp (EVar "queueLength") (EVar "front")) (EVar "back")))))) (EMatch (EApp (EApp (EVar "popTask") (EVar "front")) (EVar "back")) (arm (PCon "Some" (PVar "t")) () (EBlock (DoExpr (EApp (EApp (EApp (EVar "dispatch") (EVar "back")) (EVar "parked")) (EApp (EVar "stepTask") (EVar "t")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "schedule") (EVar "front")) (EVar "back")) (EVar "parked")) (EBinOp "-" (EVar "budget") (ELit (LInt 1))))))) (arm (PCon "None") () (EMatch (EUnOp "!" (EVar "parked")) (arm (PList) () (ELit LUnit)) (arm PWild () (EBlock (DoExpr (EApp (EApp (EApp (EVar "wakeParked") (EVar "back")) (EVar "parked")) (EVar "True"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "schedule") (EVar "front")) (EVar "back")) (EVar "parked")) (EApp (EApp (EVar "max") (ELit (LInt 1))) (EApp (EApp (EVar "queueLength") (EVar "front")) (EVar "back"))))))))))))
+(DFunDef false "schedule" ((PVar "front") (PVar "back") (PVar "parked") (PVar "budget0")) (ELetGroup ((lgb "go" (clause ((PVar "budget")) (EIf (EBinOp "<=" (EVar "budget") (ELit (LInt 0))) (EBlock (DoExpr (EApp (EApp (EApp (EVar "wakeParked") (EVar "back")) (EVar "parked")) (EVar "False"))) (DoExpr (EApp (EVar "go") (EApp (EApp (EVar "max") (ELit (LInt 1))) (EApp (EApp (EVar "queueLength") (EVar "front")) (EVar "back")))))) (EMatch (EApp (EApp (EVar "popTask") (EVar "front")) (EVar "back")) (arm (PCon "Some" (PVar "t")) () (EBlock (DoExpr (EApp (EApp (EApp (EVar "dispatch") (EVar "back")) (EVar "parked")) (EApp (EVar "stepTask") (EVar "t")))) (DoExpr (EApp (EVar "go") (EBinOp "-" (EVar "budget") (ELit (LInt 1))))))) (arm (PCon "None") () (EMatch (EUnOp "!" (EVar "parked")) (arm (PList) () (ELit LUnit)) (arm PWild () (EBlock (DoExpr (EApp (EApp (EApp (EVar "wakeParked") (EVar "back")) (EVar "parked")) (EVar "True"))) (DoExpr (EApp (EVar "go") (EApp (EApp (EVar "max") (ELit (LInt 1))) (EApp (EApp (EVar "queueLength") (EVar "front")) (EVar "back")))))))))))))) (EApp (EVar "go") (EVar "budget0"))))
 (DTypeSig false "stepTask" (TyFun (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")) (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))))
 (DFunDef false "stepTask" ((PCon "Suspend" (PVar "k"))) (EApp (EVar "k") (ELit LUnit)))
 (DFunDef false "stepTask" ((PVar "other")) (EVar "other"))
@@ -770,7 +772,7 @@ isWriteOf _ _ = False
 (DTypeSig false "queueLength" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))) (TyCon "Int"))))
 (DFunDef false "queueLength" ((PVar "front") (PVar "back")) (EBinOp "+" (EApp (EMethodRef "length") (EUnOp "!" (EVar "front"))) (EApp (EMethodRef "length") (EUnOp "!" (EVar "back")))))
 (DTypeSig false "schedule" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyApp (TyCon "Wait") (TyVar "e"))) (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit"))))))) (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyCon "Unit")))))))
-(DFunDef false "schedule" ((PVar "front") (PVar "back") (PVar "parked") (PVar "budget")) (EIf (EBinOp "<=" (EVar "budget") (ELit (LInt 0))) (EBlock (DoExpr (EApp (EApp (EApp (EVar "wakeParked") (EVar "back")) (EVar "parked")) (EVar "False"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "schedule") (EVar "front")) (EVar "back")) (EVar "parked")) (EApp (EApp (EMethodRef "max") (ELit (LInt 1))) (EApp (EApp (EVar "queueLength") (EVar "front")) (EVar "back")))))) (EMatch (EApp (EApp (EVar "popTask") (EVar "front")) (EVar "back")) (arm (PCon "Some" (PVar "t")) () (EBlock (DoExpr (EApp (EApp (EApp (EVar "dispatch") (EVar "back")) (EVar "parked")) (EApp (EVar "stepTask") (EVar "t")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "schedule") (EVar "front")) (EVar "back")) (EVar "parked")) (EBinOp "-" (EVar "budget") (ELit (LInt 1))))))) (arm (PCon "None") () (EMatch (EUnOp "!" (EVar "parked")) (arm (PList) () (ELit LUnit)) (arm PWild () (EBlock (DoExpr (EApp (EApp (EApp (EVar "wakeParked") (EVar "back")) (EVar "parked")) (EVar "True"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "schedule") (EVar "front")) (EVar "back")) (EVar "parked")) (EApp (EApp (EMethodRef "max") (ELit (LInt 1))) (EApp (EApp (EVar "queueLength") (EVar "front")) (EVar "back"))))))))))))
+(DFunDef false "schedule" ((PVar "front") (PVar "back") (PVar "parked") (PVar "budget0")) (ELetGroup ((lgb "go" (clause ((PVar "budget")) (EIf (EBinOp "<=" (EVar "budget") (ELit (LInt 0))) (EBlock (DoExpr (EApp (EApp (EApp (EVar "wakeParked") (EVar "back")) (EVar "parked")) (EVar "False"))) (DoExpr (EApp (EVar "go") (EApp (EApp (EMethodRef "max") (ELit (LInt 1))) (EApp (EApp (EVar "queueLength") (EVar "front")) (EVar "back")))))) (EMatch (EApp (EApp (EVar "popTask") (EVar "front")) (EVar "back")) (arm (PCon "Some" (PVar "t")) () (EBlock (DoExpr (EApp (EApp (EApp (EVar "dispatch") (EVar "back")) (EVar "parked")) (EApp (EVar "stepTask") (EVar "t")))) (DoExpr (EApp (EVar "go") (EBinOp "-" (EVar "budget") (ELit (LInt 1))))))) (arm (PCon "None") () (EMatch (EUnOp "!" (EVar "parked")) (arm (PList) () (ELit LUnit)) (arm PWild () (EBlock (DoExpr (EApp (EApp (EApp (EVar "wakeParked") (EVar "back")) (EVar "parked")) (EVar "True"))) (DoExpr (EApp (EVar "go") (EApp (EApp (EMethodRef "max") (ELit (LInt 1))) (EApp (EApp (EVar "queueLength") (EVar "front")) (EVar "back")))))))))))))) (EApp (EVar "go") (EVar "budget0"))))
 (DTypeSig false "stepTask" (TyFun (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")) (TyEffect () (Some "e") (TyApp (TyApp (TyCon "Async") (TyVar "e")) (TyCon "Unit")))))
 (DFunDef false "stepTask" ((PCon "Suspend" (PVar "k"))) (EApp (EVar "k") (ELit LUnit)))
 (DFunDef false "stepTask" ((PVar "other")) (EVar "other"))

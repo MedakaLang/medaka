@@ -1,5 +1,5 @@
 # META
-source_lines=185
+source_lines=191
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_registry.mdk — THE REGISTRY: `allRules`, the project-rule
@@ -53,6 +53,9 @@ import tools.lint_rule_discarded_result as DiscardedResult
 import tools.lint_rule_accumulator_append as AccumulatorAppend
 import tools.lint_rule_reslice_in_loop as ResliceInLoop
 import tools.lint_rule_list_as_set as ListAsSet
+import tools.lint_rule_internal_walker_wildcard as WalkerWildcard
+import tools.lint_rule_internal_threaded_invariant as ThreadedInvariant
+import tools.lint_rule_internal_passthrough_arm as PassthroughArm
 
 -- ── the registry ─────────────────────────────────────────────────────────────
 -- The list position is the output order of findings.  Each entry is the `rule`
@@ -103,6 +106,9 @@ allRules = [
   AccumulatorAppend.rule,
   ResliceInLoop.rule,
   ListAsSet.rule,
+  WalkerWildcard.rule,
+  ThreadedInvariant.rule,
+  PassthroughArm.rule,
 ]
 
 -- ── the project registry ──────────────────────────────────────────────────────
@@ -235,8 +241,11 @@ projectRuleActive only disable r =
 (DUse false (UseAlias ("tools" "lint_rule_accumulator_append") "AccumulatorAppend"))
 (DUse false (UseAlias ("tools" "lint_rule_reslice_in_loop") "ResliceInLoop"))
 (DUse false (UseAlias ("tools" "lint_rule_list_as_set") "ListAsSet"))
+(DUse false (UseAlias ("tools" "lint_rule_internal_walker_wildcard") "WalkerWildcard"))
+(DUse false (UseAlias ("tools" "lint_rule_internal_threaded_invariant") "ThreadedInvariant"))
+(DUse false (UseAlias ("tools" "lint_rule_internal_passthrough_arm") "PassthroughArm"))
 (DTypeSig true "allRules" (TyApp (TyCon "List") (TyCon "Rule")))
-(DFunDef false "allRules" () (EListLit (EVar "MatchOnParam.rule") (EVar "HandRolledDerivable.rule") (EVar "StdlibReimpl.rule") (EVar "BindThenDestructure.rule") (EVar "LambdaSection.rule") (EVar "IfMaxMin.rule") (EVar "AndThenPureMap.rule") (EVar "DestructureInParam.rule") (EVar "MissingSignature.rule") (EVar "NotEq.rule") (EVar "BoolSimplify.rule") (EVar "RemParity.rule") (EVar "DoubleReverse.rule") (EVar "FuseListPipeline.rule") (EVar "WhenUnless.rule") (EVar "ComplementPredicate.rule") (EVar "MatchToMap.rule") (EVar "OptionEliminators.rule") (EVar "EagerDefault.rule") (EVar "BindChainToDo.rule") (EVar "DeadCode.rule") (EVar "UnusedImport.rule") (EVar "UnusedParam.rule") (EVar "UnusedLocal.rule") (EVar "ConcatToInterp.rule") (EVar "SelfShadowExtern.rule") (EVar "PreferAssignOp.rule") (EVar "LetUnderscoreUnit.rule") (EVar "DiscardedResult.rule") (EVar "PromissoryReader.rule") (EVar "OrElseStaircase.rule") (EVar "CloneType.rule") (EVar "ClauseMap.rule") (EVar "DuplicateBodySameFile.rule") (EVar "DirectiveReason.rule") (EVar "RegexLiteral.rule") (EVar "TestBoolLiteralEqual.rule") (EVar "TestBoolHelper.rule") (EVar "TestEqualInTrue.rule") (EVar "PreludeShadow.rule") (EVar "AccumulatorAppend.rule") (EVar "ResliceInLoop.rule") (EVar "ListAsSet.rule")))
+(DFunDef false "allRules" () (EListLit (EVar "MatchOnParam.rule") (EVar "HandRolledDerivable.rule") (EVar "StdlibReimpl.rule") (EVar "BindThenDestructure.rule") (EVar "LambdaSection.rule") (EVar "IfMaxMin.rule") (EVar "AndThenPureMap.rule") (EVar "DestructureInParam.rule") (EVar "MissingSignature.rule") (EVar "NotEq.rule") (EVar "BoolSimplify.rule") (EVar "RemParity.rule") (EVar "DoubleReverse.rule") (EVar "FuseListPipeline.rule") (EVar "WhenUnless.rule") (EVar "ComplementPredicate.rule") (EVar "MatchToMap.rule") (EVar "OptionEliminators.rule") (EVar "EagerDefault.rule") (EVar "BindChainToDo.rule") (EVar "DeadCode.rule") (EVar "UnusedImport.rule") (EVar "UnusedParam.rule") (EVar "UnusedLocal.rule") (EVar "ConcatToInterp.rule") (EVar "SelfShadowExtern.rule") (EVar "PreferAssignOp.rule") (EVar "LetUnderscoreUnit.rule") (EVar "DiscardedResult.rule") (EVar "PromissoryReader.rule") (EVar "OrElseStaircase.rule") (EVar "CloneType.rule") (EVar "ClauseMap.rule") (EVar "DuplicateBodySameFile.rule") (EVar "DirectiveReason.rule") (EVar "RegexLiteral.rule") (EVar "TestBoolLiteralEqual.rule") (EVar "TestBoolHelper.rule") (EVar "TestEqualInTrue.rule") (EVar "PreludeShadow.rule") (EVar "AccumulatorAppend.rule") (EVar "ResliceInLoop.rule") (EVar "ListAsSet.rule") (EVar "WalkerWildcard.rule") (EVar "ThreadedInvariant.rule") (EVar "PassthroughArm.rule")))
 (DTypeSig true "allProjectRules" (TyApp (TyCon "List") (TyCon "ProjectRule")))
 (DFunDef false "allProjectRules" () (EListLit (EVar "DuplicateBody.rule")))
 (DTypeSig true "projectRuleMetaProblems" (TyFun (TyApp (TyCon "List") (TyCon "ProjectRule")) (TyApp (TyCon "List") (TyCon "String"))))
@@ -305,8 +314,11 @@ projectRuleActive only disable r =
 (DUse false (UseAlias ("tools" "lint_rule_accumulator_append") "AccumulatorAppend"))
 (DUse false (UseAlias ("tools" "lint_rule_reslice_in_loop") "ResliceInLoop"))
 (DUse false (UseAlias ("tools" "lint_rule_list_as_set") "ListAsSet"))
+(DUse false (UseAlias ("tools" "lint_rule_internal_walker_wildcard") "WalkerWildcard"))
+(DUse false (UseAlias ("tools" "lint_rule_internal_threaded_invariant") "ThreadedInvariant"))
+(DUse false (UseAlias ("tools" "lint_rule_internal_passthrough_arm") "PassthroughArm"))
 (DTypeSig true "allRules" (TyApp (TyCon "List") (TyCon "Rule")))
-(DFunDef false "allRules" () (EListLit (EVar "MatchOnParam.rule") (EVar "HandRolledDerivable.rule") (EVar "StdlibReimpl.rule") (EVar "BindThenDestructure.rule") (EVar "LambdaSection.rule") (EVar "IfMaxMin.rule") (EVar "AndThenPureMap.rule") (EVar "DestructureInParam.rule") (EVar "MissingSignature.rule") (EVar "NotEq.rule") (EVar "BoolSimplify.rule") (EVar "RemParity.rule") (EVar "DoubleReverse.rule") (EVar "FuseListPipeline.rule") (EVar "WhenUnless.rule") (EVar "ComplementPredicate.rule") (EVar "MatchToMap.rule") (EVar "OptionEliminators.rule") (EVar "EagerDefault.rule") (EVar "BindChainToDo.rule") (EVar "DeadCode.rule") (EVar "UnusedImport.rule") (EVar "UnusedParam.rule") (EVar "UnusedLocal.rule") (EVar "ConcatToInterp.rule") (EVar "SelfShadowExtern.rule") (EVar "PreferAssignOp.rule") (EVar "LetUnderscoreUnit.rule") (EVar "DiscardedResult.rule") (EVar "PromissoryReader.rule") (EVar "OrElseStaircase.rule") (EVar "CloneType.rule") (EVar "ClauseMap.rule") (EVar "DuplicateBodySameFile.rule") (EVar "DirectiveReason.rule") (EVar "RegexLiteral.rule") (EVar "TestBoolLiteralEqual.rule") (EVar "TestBoolHelper.rule") (EVar "TestEqualInTrue.rule") (EVar "PreludeShadow.rule") (EVar "AccumulatorAppend.rule") (EVar "ResliceInLoop.rule") (EVar "ListAsSet.rule")))
+(DFunDef false "allRules" () (EListLit (EVar "MatchOnParam.rule") (EVar "HandRolledDerivable.rule") (EVar "StdlibReimpl.rule") (EVar "BindThenDestructure.rule") (EVar "LambdaSection.rule") (EVar "IfMaxMin.rule") (EVar "AndThenPureMap.rule") (EVar "DestructureInParam.rule") (EVar "MissingSignature.rule") (EVar "NotEq.rule") (EVar "BoolSimplify.rule") (EVar "RemParity.rule") (EVar "DoubleReverse.rule") (EVar "FuseListPipeline.rule") (EVar "WhenUnless.rule") (EVar "ComplementPredicate.rule") (EVar "MatchToMap.rule") (EVar "OptionEliminators.rule") (EVar "EagerDefault.rule") (EVar "BindChainToDo.rule") (EVar "DeadCode.rule") (EVar "UnusedImport.rule") (EVar "UnusedParam.rule") (EVar "UnusedLocal.rule") (EVar "ConcatToInterp.rule") (EVar "SelfShadowExtern.rule") (EVar "PreferAssignOp.rule") (EVar "LetUnderscoreUnit.rule") (EVar "DiscardedResult.rule") (EVar "PromissoryReader.rule") (EVar "OrElseStaircase.rule") (EVar "CloneType.rule") (EVar "ClauseMap.rule") (EVar "DuplicateBodySameFile.rule") (EVar "DirectiveReason.rule") (EVar "RegexLiteral.rule") (EVar "TestBoolLiteralEqual.rule") (EVar "TestBoolHelper.rule") (EVar "TestEqualInTrue.rule") (EVar "PreludeShadow.rule") (EVar "AccumulatorAppend.rule") (EVar "ResliceInLoop.rule") (EVar "ListAsSet.rule") (EVar "WalkerWildcard.rule") (EVar "ThreadedInvariant.rule") (EVar "PassthroughArm.rule")))
 (DTypeSig true "allProjectRules" (TyApp (TyCon "List") (TyCon "ProjectRule")))
 (DFunDef false "allProjectRules" () (EListLit (EVar "DuplicateBody.rule")))
 (DTypeSig true "projectRuleMetaProblems" (TyFun (TyApp (TyCon "List") (TyCon "ProjectRule")) (TyApp (TyCon "List") (TyCon "String"))))

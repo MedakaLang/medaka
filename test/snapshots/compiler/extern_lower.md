@@ -1,10 +1,10 @@
 # META
-source_lines=284
+source_lines=281
 stages=DESUGAR,MARK
 # SOURCE
 import support.symbol_encoding.{encodePair}
 import frontend.ast.{Addr(..), Pat}
-import ir.core_walk.{patBinders}
+import ir.core_walk.{bindPats, patBinders}
 import ir.core_ir.{
   CProgram(..), CBind(..), CClause(..), CExpr(..), CImplEntry(..),
   CImplBody(..), CArm(..), CGuard(..), CStmt(..), CField(..),
@@ -113,9 +113,6 @@ walkExternVars f (CProgram groups ca ct impls mc facts) =
 bindPatScope : Pat -> OrdMap Unit -> OrdMap Unit
 bindPatScope pat scope = omFromNames (patBinders pat) scope
 
-bindPatsScope : List Pat -> OrdMap Unit -> OrdMap Unit
-bindPatsScope pats scope = omFromNames (flatMap patBinders pats) scope
-
 bindLetScope : Pat -> CExpr -> OrdMap Unit -> OrdMap Unit
 bindLetScope pat _ scope = bindPatScope pat scope
 
@@ -141,11 +138,11 @@ externHeadRows (CProgram _ _ _ _ _ facts) =
 
 export
 externRuntimeKey : OrdMap ExternDeclFact -> String -> Option String
-externRuntimeKey inventory symbol = match omLookup symbol inventory
-  Some fact => match fact.bindingKind
+externRuntimeKey inventory symbol = do
+  fact <- omLookup symbol inventory
+  match fact.bindingKind
     RuntimeBinding key => Some key
     ForeignBinding => None
-  None => None
 
 walkBind : ExternVisitor -> OrdMap Unit -> CBind -> CBind
 walkBind env scope (CBind name clauses site bid) =
@@ -153,7 +150,7 @@ walkBind env scope (CBind name clauses site bid) =
 
 walkClause : ExternVisitor -> OrdMap Unit -> CClause -> CClause
 walkClause env scope (CClause pats body) =
-  CClause pats (walkExpr env (bindPatsScope pats scope) body)
+  CClause pats (walkExpr env (bindPats pats scope) body)
 
 walkEntry : ExternVisitor -> CImplEntry -> CImplEntry
 walkEntry env (CImplEntry m s d (CImplTagged tag key iface sym pos pats body)) =
@@ -168,7 +165,7 @@ walkEntry env (CImplEntry m s d (CImplTagged tag key iface sym pos pats body)) =
       sym
       pos
       pats
-      (walkExpr env (bindPatsScope pats omEmpty) body))
+      (walkExpr env (bindPats pats omEmpty) body))
 walkEntry env (CImplEntry m s d (CImplDefault w tag key sym pos pats body)) =
   CImplEntry
     m
@@ -181,7 +178,7 @@ walkEntry env (CImplEntry m s d (CImplDefault w tag key sym pos pats body)) =
       sym
       pos
       pats
-      (walkExpr env (bindPatsScope pats omEmpty) body))
+      (walkExpr env (bindPats pats omEmpty) body))
 
 -- Every constructor is listed, with no catch-all arm, so a new expression form
 -- must decide where its binders scope.
@@ -193,7 +190,7 @@ walkExpr env scope (CApp f args site) =
 walkExpr _ _ (CLit l) = CLit l
 walkExpr env scope (CVar x addr) = env scope (0 - 1) x addr
 walkExpr env scope (CLam pats body) =
-  CLam pats (walkExpr env (bindPatsScope pats scope) body)
+  CLam pats (walkExpr env (bindPats pats scope) body)
 walkExpr env scope (CLet recF pat rhs body) =
   let inner = bindLetScope pat rhs scope
   CLet
@@ -287,9 +284,10 @@ externFactIndex =
         omInsert fact.symbol fact index)
     omEmpty
 # DESUGAR
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("support" "symbol_encoding") ((mem "encodePair" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Addr" true) (mem "Pat" false))))
-(DUse false (UseGroup ("ir" "core_walk") ((mem "patBinders" false))))
+(DUse false (UseGroup ("ir" "core_walk") ((mem "bindPats" false) (mem "patBinders" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "MethodEvidence" true) (mem "DeclFacts" true))))
 (DUse false (UseGroup ("ir" "extern_types") ((mem "ExternDeclFact" true))))
 (DUse false (UseGroup ("types" "extern_source") ((mem "ExternSource" true) (mem "ExternProvenance" true) (mem "ExternBindingKind" true) (mem "runtimeExternSymbol" false) (mem "sourceExterns" false) (mem "ExternHeadRows" false))))
@@ -313,8 +311,6 @@ externFactIndex =
 (DFunDef false "walkExternVars" ((PVar "f") (PCon "CProgram" (PVar "groups") (PVar "ca") (PVar "ct") (PVar "impls") (PVar "mc") (PVar "facts"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EApp (EApp (EVar "map") (EApp (EApp (EVar "walkBind") (EVar "f")) (EVar "omEmpty"))) (EVar "groups"))) (EVar "ca")) (EVar "ct")) (EApp (EApp (EVar "map") (EApp (EVar "walkEntry") (EVar "f"))) (EVar "impls"))) (EVar "mc")) (EVar "facts")))
 (DTypeSig false "bindPatScope" (TyFun (TyCon "Pat") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
 (DFunDef false "bindPatScope" ((PVar "pat") (PVar "scope")) (EApp (EApp (EVar "omFromNames") (EApp (EVar "patBinders") (EVar "pat"))) (EVar "scope")))
-(DTypeSig false "bindPatsScope" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
-(DFunDef false "bindPatsScope" ((PVar "pats") (PVar "scope")) (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "flatMap") (EVar "patBinders")) (EVar "pats"))) (EVar "scope")))
 (DTypeSig false "bindLetScope" (TyFun (TyCon "Pat") (TyFun (TyCon "CExpr") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))
 (DFunDef false "bindLetScope" ((PVar "pat") PWild (PVar "scope")) (EApp (EApp (EVar "bindPatScope") (EVar "pat")) (EVar "scope")))
 (DTypeSig false "bindGroupScope" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
@@ -322,20 +318,20 @@ externFactIndex =
 (DTypeSig true "externHeadRows" (TyFun (TyCon "CProgram") (TyCon "ExternHeadRows")))
 (DFunDef false "externHeadRows" ((PCon "CProgram" PWild PWild PWild PWild PWild (PVar "facts"))) (EApp (EApp (EVar "flatMap") (ELam ((PVar "key")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "key")) (EFieldAccess (EVar "facts") "factExterns")) (arm (PCon "Some" (PVar "fact")) () (EMatch (ETuple (EFieldAccess (EVar "fact") "bindingKind") (EFieldAccess (EVar "fact") "callableShape")) (arm (PTuple (PCon "ForeignBinding") (PCon "Some" (PVar "shape"))) () (EListLit (ETuple (EFieldAccess (EVar "fact") "symbol") (ETuple (EFieldAccess (EVar "fact") "hostBindings") (ETuple (EFieldAccess (EVar "shape") "parameterHeads") (EFieldAccess (EVar "shape") "resultHead")))))) (arm PWild () (EListLit)))) (arm (PCon "None") () (EListLit))))) (EApp (EVar "omKeys") (EFieldAccess (EVar "facts") "factExterns"))))
 (DTypeSig true "externRuntimeKey" (TyFun (TyApp (TyCon "OrdMap") (TyCon "ExternDeclFact")) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "externRuntimeKey" ((PVar "inventory") (PVar "symbol")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "symbol")) (EVar "inventory")) (arm (PCon "Some" (PVar "fact")) () (EMatch (EFieldAccess (EVar "fact") "bindingKind") (arm (PCon "RuntimeBinding" (PVar "key")) () (EApp (EVar "Some") (EVar "key"))) (arm (PCon "ForeignBinding") () (EVar "None")))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "externRuntimeKey" ((PVar "inventory") (PVar "symbol")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "omLookup") (EVar "symbol")) (EVar "inventory"))) (ELam ((PVar "fact")) (EMatch (EFieldAccess (EVar "fact") "bindingKind") (arm (PCon "RuntimeBinding" (PVar "key")) () (EApp (EVar "Some") (EVar "key"))) (arm (PCon "ForeignBinding") () (EVar "None"))))))
 (DTypeSig false "walkBind" (TyFun (TyCon "ExternVisitor") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CBind") (TyCon "CBind")))))
 (DFunDef false "walkBind" ((PVar "env") (PVar "scope") (PCon "CBind" (PVar "name") (PVar "clauses") (PVar "site") (PVar "bid"))) (EApp (EApp (EApp (EApp (EVar "CBind") (EVar "name")) (EApp (EApp (EVar "map") (EApp (EApp (EVar "walkClause") (EVar "env")) (EVar "scope"))) (EVar "clauses"))) (EVar "site")) (EVar "bid")))
 (DTypeSig false "walkClause" (TyFun (TyCon "ExternVisitor") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CClause") (TyCon "CClause")))))
-(DFunDef false "walkClause" ((PVar "env") (PVar "scope") (PCon "CClause" (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "CClause") (EVar "pats")) (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EApp (EApp (EVar "bindPatsScope") (EVar "pats")) (EVar "scope"))) (EVar "body"))))
+(DFunDef false "walkClause" ((PVar "env") (PVar "scope") (PCon "CClause" (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "CClause") (EVar "pats")) (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EApp (EApp (EVar "bindPats") (EVar "pats")) (EVar "scope"))) (EVar "body"))))
 (DTypeSig false "walkEntry" (TyFun (TyCon "ExternVisitor") (TyFun (TyCon "CImplEntry") (TyCon "CImplEntry"))))
-(DFunDef false "walkEntry" ((PVar "env") (PCon "CImplEntry" (PVar "m") (PVar "s") (PVar "d") (PCon "CImplTagged" (PVar "tag") (PVar "key") (PVar "iface") (PVar "sym") (PVar "pos") (PVar "pats") (PVar "body")))) (EApp (EApp (EApp (EApp (EVar "CImplEntry") (EVar "m")) (EVar "s")) (EVar "d")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplTagged") (EVar "tag")) (EVar "key")) (EVar "iface")) (EVar "sym")) (EVar "pos")) (EVar "pats")) (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EApp (EApp (EVar "bindPatsScope") (EVar "pats")) (EVar "omEmpty"))) (EVar "body")))))
-(DFunDef false "walkEntry" ((PVar "env") (PCon "CImplEntry" (PVar "m") (PVar "s") (PVar "d") (PCon "CImplDefault" (PVar "w") (PVar "tag") (PVar "key") (PVar "sym") (PVar "pos") (PVar "pats") (PVar "body")))) (EApp (EApp (EApp (EApp (EVar "CImplEntry") (EVar "m")) (EVar "s")) (EVar "d")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplDefault") (EVar "w")) (EVar "tag")) (EVar "key")) (EVar "sym")) (EVar "pos")) (EVar "pats")) (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EApp (EApp (EVar "bindPatsScope") (EVar "pats")) (EVar "omEmpty"))) (EVar "body")))))
+(DFunDef false "walkEntry" ((PVar "env") (PCon "CImplEntry" (PVar "m") (PVar "s") (PVar "d") (PCon "CImplTagged" (PVar "tag") (PVar "key") (PVar "iface") (PVar "sym") (PVar "pos") (PVar "pats") (PVar "body")))) (EApp (EApp (EApp (EApp (EVar "CImplEntry") (EVar "m")) (EVar "s")) (EVar "d")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplTagged") (EVar "tag")) (EVar "key")) (EVar "iface")) (EVar "sym")) (EVar "pos")) (EVar "pats")) (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EApp (EApp (EVar "bindPats") (EVar "pats")) (EVar "omEmpty"))) (EVar "body")))))
+(DFunDef false "walkEntry" ((PVar "env") (PCon "CImplEntry" (PVar "m") (PVar "s") (PVar "d") (PCon "CImplDefault" (PVar "w") (PVar "tag") (PVar "key") (PVar "sym") (PVar "pos") (PVar "pats") (PVar "body")))) (EApp (EApp (EApp (EApp (EVar "CImplEntry") (EVar "m")) (EVar "s")) (EVar "d")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplDefault") (EVar "w")) (EVar "tag")) (EVar "key")) (EVar "sym")) (EVar "pos")) (EVar "pats")) (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EApp (EApp (EVar "bindPats") (EVar "pats")) (EVar "omEmpty"))) (EVar "body")))))
 (DTypeSig false "walkExpr" (TyFun (TyCon "ExternVisitor") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CExpr") (TyCon "CExpr")))))
 (DFunDef false "walkExpr" ((PVar "env") (PVar "scope") (PCon "CApp" (PCon "CVar" (PVar "name") (PVar "addr")) (PVar "args") (PVar "site"))) (EApp (EApp (EApp (EVar "CApp") (EApp (EApp (EApp (EApp (EVar "env") (EVar "scope")) (EApp (EVar "listLen") (EVar "args"))) (EVar "name")) (EVar "addr"))) (EApp (EApp (EVar "map") (EApp (EApp (EVar "walkExpr") (EVar "env")) (EVar "scope"))) (EVar "args"))) (EVar "site")))
 (DFunDef false "walkExpr" ((PVar "env") (PVar "scope") (PCon "CApp" (PVar "f") (PVar "args") (PVar "site"))) (EApp (EApp (EApp (EVar "CApp") (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EVar "scope")) (EVar "f"))) (EApp (EApp (EVar "map") (EApp (EApp (EVar "walkExpr") (EVar "env")) (EVar "scope"))) (EVar "args"))) (EVar "site")))
 (DFunDef false "walkExpr" (PWild PWild (PCon "CLit" (PVar "l"))) (EApp (EVar "CLit") (EVar "l")))
 (DFunDef false "walkExpr" ((PVar "env") (PVar "scope") (PCon "CVar" (PVar "x") (PVar "addr"))) (EApp (EApp (EApp (EApp (EVar "env") (EVar "scope")) (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1)))) (EVar "x")) (EVar "addr")))
-(DFunDef false "walkExpr" ((PVar "env") (PVar "scope") (PCon "CLam" (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "CLam") (EVar "pats")) (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EApp (EApp (EVar "bindPatsScope") (EVar "pats")) (EVar "scope"))) (EVar "body"))))
+(DFunDef false "walkExpr" ((PVar "env") (PVar "scope") (PCon "CLam" (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "CLam") (EVar "pats")) (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EApp (EApp (EVar "bindPats") (EVar "pats")) (EVar "scope"))) (EVar "body"))))
 (DFunDef false "walkExpr" ((PVar "env") (PVar "scope") (PCon "CLet" (PVar "recF") (PVar "pat") (PVar "rhs") (PVar "body"))) (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EApp (EVar "bindLetScope") (EVar "pat")) (EVar "rhs")) (EVar "scope"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "CLet") (EVar "recF")) (EVar "pat")) (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EIf (EVar "recF") (EVar "inner") (EVar "scope"))) (EVar "rhs"))) (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EVar "inner")) (EVar "body"))))))
 (DFunDef false "walkExpr" ((PVar "env") (PVar "scope") (PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EVar "bindGroupScope") (EVar "binds")) (EVar "scope"))) (DoExpr (EApp (EApp (EVar "CLetGroup") (EApp (EApp (EVar "map") (EApp (EApp (EVar "walkBind") (EVar "env")) (EVar "inner"))) (EVar "binds"))) (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EVar "inner")) (EVar "body"))))))
 (DFunDef false "walkExpr" ((PVar "env") (PVar "scope") (PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EApp (EApp (EVar "CMatch") (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EVar "scope")) (EVar "scrut"))) (EApp (EApp (EVar "map") (EApp (EApp (EVar "walkArm") (EVar "env")) (EVar "scope"))) (EVar "arms"))))
@@ -372,9 +368,10 @@ externFactIndex =
 (DTypeSig true "externFactIndex" (TyFun (TyApp (TyCon "List") (TyCon "ExternDeclFact")) (TyApp (TyCon "OrdMap") (TyCon "ExternDeclFact"))))
 (DFunDef false "externFactIndex" () (EApp (EApp (EVar "fold") (ELam ((PVar "index") (PVar "fact")) (EIf (EApp (EApp (EVar "omHasKey") (EFieldAccess (EVar "fact") "symbol")) (EVar "index")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "duplicate-extern-declaration: ")) (EFieldAccess (EVar "fact") "symbol"))) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "fact") "symbol")) (EVar "fact")) (EVar "index"))))) (EVar "omEmpty")))
 # MARK
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("support" "symbol_encoding") ((mem "encodePair" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Addr" true) (mem "Pat" false))))
-(DUse false (UseGroup ("ir" "core_walk") ((mem "patBinders" false))))
+(DUse false (UseGroup ("ir" "core_walk") ((mem "bindPats" false) (mem "patBinders" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "MethodEvidence" true) (mem "DeclFacts" true))))
 (DUse false (UseGroup ("ir" "extern_types") ((mem "ExternDeclFact" true))))
 (DUse false (UseGroup ("types" "extern_source") ((mem "ExternSource" true) (mem "ExternProvenance" true) (mem "ExternBindingKind" true) (mem "runtimeExternSymbol" false) (mem "sourceExterns" false) (mem "ExternHeadRows" false))))
@@ -398,8 +395,6 @@ externFactIndex =
 (DFunDef false "walkExternVars" ((PVar "f") (PCon "CProgram" (PVar "groups") (PVar "ca") (PVar "ct") (PVar "impls") (PVar "mc") (PVar "facts"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "walkBind") (EVar "f")) (EVar "omEmpty"))) (EVar "groups"))) (EVar "ca")) (EVar "ct")) (EApp (EApp (EMethodRef "map") (EApp (EVar "walkEntry") (EVar "f"))) (EVar "impls"))) (EVar "mc")) (EVar "facts")))
 (DTypeSig false "bindPatScope" (TyFun (TyCon "Pat") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
 (DFunDef false "bindPatScope" ((PVar "pat") (PVar "scope")) (EApp (EApp (EVar "omFromNames") (EApp (EVar "patBinders") (EVar "pat"))) (EVar "scope")))
-(DTypeSig false "bindPatsScope" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
-(DFunDef false "bindPatsScope" ((PVar "pats") (PVar "scope")) (EApp (EApp (EVar "omFromNames") (EApp (EApp (EDictApp "flatMap") (EVar "patBinders")) (EVar "pats"))) (EVar "scope")))
 (DTypeSig false "bindLetScope" (TyFun (TyCon "Pat") (TyFun (TyCon "CExpr") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))
 (DFunDef false "bindLetScope" ((PVar "pat") PWild (PVar "scope")) (EApp (EApp (EVar "bindPatScope") (EVar "pat")) (EVar "scope")))
 (DTypeSig false "bindGroupScope" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
@@ -407,20 +402,20 @@ externFactIndex =
 (DTypeSig true "externHeadRows" (TyFun (TyCon "CProgram") (TyCon "ExternHeadRows")))
 (DFunDef false "externHeadRows" ((PCon "CProgram" PWild PWild PWild PWild PWild (PVar "facts"))) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "key")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "key")) (EFieldAccess (EVar "facts") "factExterns")) (arm (PCon "Some" (PVar "fact")) () (EMatch (ETuple (EFieldAccess (EVar "fact") "bindingKind") (EFieldAccess (EVar "fact") "callableShape")) (arm (PTuple (PCon "ForeignBinding") (PCon "Some" (PVar "shape"))) () (EListLit (ETuple (EFieldAccess (EVar "fact") "symbol") (ETuple (EFieldAccess (EVar "fact") "hostBindings") (ETuple (EFieldAccess (EVar "shape") "parameterHeads") (EFieldAccess (EVar "shape") "resultHead")))))) (arm PWild () (EListLit)))) (arm (PCon "None") () (EListLit))))) (EApp (EVar "omKeys") (EFieldAccess (EVar "facts") "factExterns"))))
 (DTypeSig true "externRuntimeKey" (TyFun (TyApp (TyCon "OrdMap") (TyCon "ExternDeclFact")) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "externRuntimeKey" ((PVar "inventory") (PVar "symbol")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "symbol")) (EVar "inventory")) (arm (PCon "Some" (PVar "fact")) () (EMatch (EFieldAccess (EVar "fact") "bindingKind") (arm (PCon "RuntimeBinding" (PVar "key")) () (EApp (EVar "Some") (EVar "key"))) (arm (PCon "ForeignBinding") () (EVar "None")))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "externRuntimeKey" ((PVar "inventory") (PVar "symbol")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "omLookup") (EVar "symbol")) (EVar "inventory"))) (ELam ((PVar "fact")) (EMatch (EFieldAccess (EVar "fact") "bindingKind") (arm (PCon "RuntimeBinding" (PVar "key")) () (EApp (EVar "Some") (EVar "key"))) (arm (PCon "ForeignBinding") () (EVar "None"))))))
 (DTypeSig false "walkBind" (TyFun (TyCon "ExternVisitor") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CBind") (TyCon "CBind")))))
 (DFunDef false "walkBind" ((PVar "env") (PVar "scope") (PCon "CBind" (PVar "name") (PVar "clauses") (PVar "site") (PVar "bid"))) (EApp (EApp (EApp (EApp (EVar "CBind") (EVar "name")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "walkClause") (EVar "env")) (EVar "scope"))) (EVar "clauses"))) (EVar "site")) (EVar "bid")))
 (DTypeSig false "walkClause" (TyFun (TyCon "ExternVisitor") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CClause") (TyCon "CClause")))))
-(DFunDef false "walkClause" ((PVar "env") (PVar "scope") (PCon "CClause" (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "CClause") (EVar "pats")) (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EApp (EApp (EVar "bindPatsScope") (EVar "pats")) (EVar "scope"))) (EVar "body"))))
+(DFunDef false "walkClause" ((PVar "env") (PVar "scope") (PCon "CClause" (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "CClause") (EVar "pats")) (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EApp (EApp (EVar "bindPats") (EVar "pats")) (EVar "scope"))) (EVar "body"))))
 (DTypeSig false "walkEntry" (TyFun (TyCon "ExternVisitor") (TyFun (TyCon "CImplEntry") (TyCon "CImplEntry"))))
-(DFunDef false "walkEntry" ((PVar "env") (PCon "CImplEntry" (PVar "m") (PVar "s") (PVar "d") (PCon "CImplTagged" (PVar "tag") (PVar "key") (PVar "iface") (PVar "sym") (PVar "pos") (PVar "pats") (PVar "body")))) (EApp (EApp (EApp (EApp (EVar "CImplEntry") (EVar "m")) (EVar "s")) (EVar "d")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplTagged") (EVar "tag")) (EVar "key")) (EVar "iface")) (EVar "sym")) (EVar "pos")) (EVar "pats")) (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EApp (EApp (EVar "bindPatsScope") (EVar "pats")) (EVar "omEmpty"))) (EVar "body")))))
-(DFunDef false "walkEntry" ((PVar "env") (PCon "CImplEntry" (PVar "m") (PVar "s") (PVar "d") (PCon "CImplDefault" (PVar "w") (PVar "tag") (PVar "key") (PVar "sym") (PVar "pos") (PVar "pats") (PVar "body")))) (EApp (EApp (EApp (EApp (EVar "CImplEntry") (EVar "m")) (EVar "s")) (EVar "d")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplDefault") (EVar "w")) (EVar "tag")) (EVar "key")) (EVar "sym")) (EVar "pos")) (EVar "pats")) (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EApp (EApp (EVar "bindPatsScope") (EVar "pats")) (EVar "omEmpty"))) (EVar "body")))))
+(DFunDef false "walkEntry" ((PVar "env") (PCon "CImplEntry" (PVar "m") (PVar "s") (PVar "d") (PCon "CImplTagged" (PVar "tag") (PVar "key") (PVar "iface") (PVar "sym") (PVar "pos") (PVar "pats") (PVar "body")))) (EApp (EApp (EApp (EApp (EVar "CImplEntry") (EVar "m")) (EVar "s")) (EVar "d")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplTagged") (EVar "tag")) (EVar "key")) (EVar "iface")) (EVar "sym")) (EVar "pos")) (EVar "pats")) (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EApp (EApp (EVar "bindPats") (EVar "pats")) (EVar "omEmpty"))) (EVar "body")))))
+(DFunDef false "walkEntry" ((PVar "env") (PCon "CImplEntry" (PVar "m") (PVar "s") (PVar "d") (PCon "CImplDefault" (PVar "w") (PVar "tag") (PVar "key") (PVar "sym") (PVar "pos") (PVar "pats") (PVar "body")))) (EApp (EApp (EApp (EApp (EVar "CImplEntry") (EVar "m")) (EVar "s")) (EVar "d")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplDefault") (EVar "w")) (EVar "tag")) (EVar "key")) (EVar "sym")) (EVar "pos")) (EVar "pats")) (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EApp (EApp (EVar "bindPats") (EVar "pats")) (EVar "omEmpty"))) (EVar "body")))))
 (DTypeSig false "walkExpr" (TyFun (TyCon "ExternVisitor") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CExpr") (TyCon "CExpr")))))
 (DFunDef false "walkExpr" ((PVar "env") (PVar "scope") (PCon "CApp" (PCon "CVar" (PVar "name") (PVar "addr")) (PVar "args") (PVar "site"))) (EApp (EApp (EApp (EVar "CApp") (EApp (EApp (EApp (EApp (EVar "env") (EVar "scope")) (EApp (EVar "listLen") (EVar "args"))) (EVar "name")) (EVar "addr"))) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "walkExpr") (EVar "env")) (EVar "scope"))) (EVar "args"))) (EVar "site")))
 (DFunDef false "walkExpr" ((PVar "env") (PVar "scope") (PCon "CApp" (PVar "f") (PVar "args") (PVar "site"))) (EApp (EApp (EApp (EVar "CApp") (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EVar "scope")) (EVar "f"))) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "walkExpr") (EVar "env")) (EVar "scope"))) (EVar "args"))) (EVar "site")))
 (DFunDef false "walkExpr" (PWild PWild (PCon "CLit" (PVar "l"))) (EApp (EVar "CLit") (EVar "l")))
 (DFunDef false "walkExpr" ((PVar "env") (PVar "scope") (PCon "CVar" (PVar "x") (PVar "addr"))) (EApp (EApp (EApp (EApp (EVar "env") (EVar "scope")) (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1)))) (EVar "x")) (EVar "addr")))
-(DFunDef false "walkExpr" ((PVar "env") (PVar "scope") (PCon "CLam" (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "CLam") (EVar "pats")) (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EApp (EApp (EVar "bindPatsScope") (EVar "pats")) (EVar "scope"))) (EVar "body"))))
+(DFunDef false "walkExpr" ((PVar "env") (PVar "scope") (PCon "CLam" (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "CLam") (EVar "pats")) (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EApp (EApp (EVar "bindPats") (EVar "pats")) (EVar "scope"))) (EVar "body"))))
 (DFunDef false "walkExpr" ((PVar "env") (PVar "scope") (PCon "CLet" (PVar "recF") (PVar "pat") (PVar "rhs") (PVar "body"))) (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EApp (EVar "bindLetScope") (EVar "pat")) (EVar "rhs")) (EVar "scope"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "CLet") (EVar "recF")) (EVar "pat")) (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EIf (EVar "recF") (EVar "inner") (EVar "scope"))) (EVar "rhs"))) (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EVar "inner")) (EVar "body"))))))
 (DFunDef false "walkExpr" ((PVar "env") (PVar "scope") (PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EVar "bindGroupScope") (EVar "binds")) (EVar "scope"))) (DoExpr (EApp (EApp (EVar "CLetGroup") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "walkBind") (EVar "env")) (EVar "inner"))) (EVar "binds"))) (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EVar "inner")) (EVar "body"))))))
 (DFunDef false "walkExpr" ((PVar "env") (PVar "scope") (PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EApp (EApp (EVar "CMatch") (EApp (EApp (EApp (EVar "walkExpr") (EVar "env")) (EVar "scope")) (EVar "scrut"))) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "walkArm") (EVar "env")) (EVar "scope"))) (EVar "arms"))))

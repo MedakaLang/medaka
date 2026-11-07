@@ -957,6 +957,8 @@ importedBindingWinners : ModuleCtx ->
   OrdMap Unit ->
   OrdMap Unit ->
   List (String, ExportBinding)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 importedBindingWinners _mctx [] _ _ = []
 importedBindingWinners mctx ((name, (_, binding)) :: rest) seen ambiguous =
   if omHasKey name seen then
@@ -1353,7 +1355,8 @@ deAliasMethodMembers rows (DAttrib attrs d) =
   DAttrib attrs (deAliasMethodMembers rows d)
 deAliasMethodMembers rows (DUse pub (UseGroup quals ms) loc) =
   DUse pub (UseGroup quals (map (deAliasMethodMember rows) ms)) loc
-deAliasMethodMembers _ d = d
+deAliasMethodMembers _ (d@(DUse _ _ _ | DTypeSig _ _ _ _ | DExtern _ | DFunDef _ _ _ _ _ _ | DData {  } | DEffect _ _ _ _ _ _ | DProp _ _ _ _ | DTest _ _ _ | DInterface {  } | DImpl {  } | DTypeAlias {  } | DNewtype {  } | DLetGroup _ _)) =
+  d
 
 deAliasMethodMember : List (String, String) -> UseMember -> UseMember
 deAliasMethodMember rows (m@(UseMember n allCtors loc (Some local)))
@@ -1398,43 +1401,42 @@ importSeed : GraphCtx ->
   List Decl ->
   List (String, List (String, a)) ->
   List (String, (Option String, a))
-importSeed _gctx _ _ _ [] _ = []
-importSeed gctx mid coreV admitted ((DAttrib _ d) :: rest) depEnv =
-  importSeed gctx mid coreV admitted (d :: rest) depEnv
-importSeed gctx mid coreV admitted ((DUse _ path _) :: rest) depEnv =
-  let depId = useModId path
-  if depId == "core" then
-    map (suppliedBy None) (coreAliasSchemes path coreV)
-      ++ importSeed gctx mid coreV admitted rest depEnv
-  else match lookupAssoc depId depEnv
-    None => importSeed gctx mid coreV admitted rest depEnv
-    Some depSchemes =>
-      let bound = boundNames path
-      let decls =
-        omFromPairs
-          (reverseL (importFormRows path (importerDefiners gctx mid depId)))
-          omEmpty
-      let methods =
-        identKeysByName
-          omEmpty
-          (importFormRows
-            path
-            (match omLookup depId (methodExportsIndex gctx ())
-              Some rows => rows
-              None => []))
-      map
-          (row =>
-            suppliedBy
-              (if bindsName bound (fst row)
-                && not (containsPair (depId, fst row) admitted) then
-                Some (importSupplierKey depId decls methods (fst row))
-              else
-                None)
-              row)
-          (importFormSchemes depEnv path depSchemes)
-        ++ importSeed gctx mid coreV admitted rest depEnv
-importSeed gctx mid coreV admitted (_ :: rest) depEnv =
-  importSeed gctx mid coreV admitted rest depEnv
+importSeed gctx mid coreV admitted xs0 depEnv = go xs0
+  where
+    go [] = []
+    go ((DAttrib _ d) :: rest) = go (d :: rest)
+    go ((DUse _ path _) :: rest) =
+      let depId = useModId path
+      if depId == "core" then
+        map (suppliedBy None) (coreAliasSchemes path coreV) ++ go rest
+      else match lookupAssoc depId depEnv
+        None => go rest
+        Some depSchemes =>
+          let bound = boundNames path
+          let decls =
+            omFromPairs
+              (reverseL (importFormRows path (importerDefiners gctx mid depId)))
+              omEmpty
+          let methods =
+            identKeysByName
+              omEmpty
+              (importFormRows
+                path
+                (match omLookup depId (methodExportsIndex gctx ())
+                  Some rows => rows
+                  None => []))
+          map
+              (row =>
+                suppliedBy
+                  (if bindsName bound (fst row)
+                    && not (containsPair (depId, fst row) admitted) then
+                    Some (importSupplierKey depId decls methods (fst row))
+                  else
+                    None)
+                  row)
+              (importFormSchemes depEnv path depSchemes)
+            ++ go rest
+    go (_ :: rest) = go rest
 
 -- The identity one import's binding of `name` is compared by: the declaration
 -- it denotes.  A standalone value is `(defining module, name there)` from
@@ -1660,9 +1662,9 @@ checkCoreMemoized : ModuleCtx ->
 checkCoreMemoized prev key runtimeDecls coreDecls runtimeSeed =
   let gctx = prev.mcGraph
   let join = gctx.config.value.tcIoJoin
-  let cached = match key
-    Some k => preludeCacheHit k join
-    None => None
+  let cached = do
+    k <- key
+    preludeCacheHit k join
   match cached
     Some pi => continueFromInterface gctx gctx.graphRun pi
     None =>
@@ -1952,9 +1954,9 @@ graphPreamble inputs admitted sel preludeKey runtimeDecls coreDecls modules =
 -- onto the binders of [coreDecls], the drive's own desugar of core: held for the
 -- drive's prelude key.
 treeArmElab : DriveInputs -> List Decl -> Option PreludeElab
-treeArmElab inputs coreDecls = match inputs.diPreludeKey
-  Some k => preludeElabFor k coreDecls
-  None => None
+treeArmElab inputs coreDecls = do
+  k <- inputs.diPreludeKey
+  preludeElabFor k coreDecls
 
 -- Those trees with the interface of the same key cached for the drive's IO join:
 -- a drive takes both or neither.
@@ -2532,9 +2534,10 @@ dispositionRowsOfImpls : ImplEnv ->
   List ImplRow ->
   ClassEnv ->
   List (InstanceShape, String, MethodDisposition)
-dispositionRowsOfImpls _ [] _ = []
-dispositionRowsOfImpls ie (r :: rest) ce =
-  dispositionRowsOfImpl ie r ce ++ dispositionRowsOfImpls ie rest ce
+dispositionRowsOfImpls ie xs0 ce = go xs0
+  where
+    go [] = []
+    go (r :: rest) = dispositionRowsOfImpl ie r ce ++ go rest
 
 -- Each row carries its instance's shape and its interface's word.  The shape's
 -- route word is minted by the same call the lowering and eval install passes make
@@ -2587,6 +2590,8 @@ dispositionRowsOfMethods : InstId ->
   List String ->
   List String ->
   List MethodDisposition
+-- Bound: test/arch_ratchet.sh pins typecheck.mdk's code-line count; the where-go form adds three code lines here.
+-- lint-disable-next-line rule-threaded-invariant
 dispositionRowsOfMethods _ _ _ _ [] = []
 dispositionRowsOfMethods inst iface supplied required (m :: rest) =
   let restRows = dispositionRowsOfMethods inst iface supplied required rest
@@ -2793,9 +2798,9 @@ driveGraphK sel (DriveArgs inputs valueMain executes preludeKey keyed runtimeDec
           modules
       -- On a hit (`treeArmHit`: the core pass closed core) core's trees arrive
       -- dict-passed, and core's evidence and binder rows join the drive's.
-      let shipped = match coreClosed
-        Some _ => treeArmElab inputs coreDecls
-        None => None
+      let shipped = do
+        _ <- coreClosed
+        treeArmElab inputs coreDecls
       let (coreD, modules3) =
         dictPassModulesIfEnabled
           lastCtx

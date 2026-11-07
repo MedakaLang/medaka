@@ -1,5 +1,5 @@
 # META
-source_lines=647
+source_lines=646
 stages=DESUGAR,MARK
 # SOURCE
 {- | A command-line argument parser.
@@ -491,9 +491,9 @@ scanKnown sp t f rest = match f.arity
   Switch => consGiven (canonical f, None) (scanArgs sp rest)
   _ => match rest
     [] => Err (missingValueMessage sp t)
-    v :: rest2 => match checkValue sp t f.arity v
-      Err m => Err m
-      Ok _ => consGiven (canonical f, Some v) (scanArgs sp rest2)
+    v :: rest2 => do
+      _ <- checkValue sp t f.arity v
+      consGiven (canonical f, Some v) (scanArgs sp rest2)
 
 -- The `=` spelling: `--flag=v`.  A switch given `--flag=v` was not spelled by
 -- any name in the spec, so it is an unclaimed token, not a silently dropped
@@ -503,9 +503,9 @@ scanEqForm sp t nm v rest = match findFlag nm sp.flags
   None => scanUnclaimed sp t rest
   Some f => match f.arity
     Switch => scanUnclaimed sp t rest
-    _ => match checkValue sp nm f.arity v
-      Err m => Err m
-      Ok _ => consGiven (canonical f, Some v) (scanArgs sp rest)
+    _ => do
+      _ <- checkValue sp nm f.arity v
+      consGiven (canonical f, Some v) (scanArgs sp rest)
 
 -- No `FlagSpec` claims this token.
 scanUnclaimed : ArgSpec -> String -> List String -> Scan
@@ -537,13 +537,12 @@ hasName nm (n :: rest) = n == nm || hasName nm rest
 
 -- `--flag=v` → `("--flag", "v")`.  An `=` at position 0 is not a split.
 splitEq : String -> Option (String, String)
-splitEq t = match indexOf "=" t
-  None => None
-  Some i =>
-    if i <= 0 then
-      None
-    else
-      Some (stringSlice 0 i t, stringSlice (i + 1) (stringLength t) t)
+splitEq t = do
+  i <- indexOf "=" t
+  if i <= 0 then
+    None
+  else
+    Some (stringSlice 0 i t, stringSlice (i + 1) (stringLength t) t)
 
 -- # Querying a parse
 
@@ -753,9 +752,9 @@ prop "Debug ArgSpec agrees with Eq" (n : String) =
 (DTypeSig false "scanFlag" (TyFun (TyCon "ArgSpec") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Scan")))))
 (DFunDef false "scanFlag" ((PVar "sp") (PVar "t") (PVar "rest")) (EMatch (EApp (EApp (EVar "findFlag") (EVar "t")) (EFieldAccess (EVar "sp") "flags")) (arm (PCon "Some" (PVar "f")) () (EApp (EApp (EApp (EApp (EVar "scanKnown") (EVar "sp")) (EVar "t")) (EVar "f")) (EVar "rest"))) (arm (PCon "None") () (EMatch (EApp (EVar "splitEq") (EVar "t")) (arm (PCon "Some" (PTuple (PVar "nm") (PVar "v"))) () (EApp (EApp (EApp (EApp (EApp (EVar "scanEqForm") (EVar "sp")) (EVar "t")) (EVar "nm")) (EVar "v")) (EVar "rest"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "scanUnclaimed") (EVar "sp")) (EVar "t")) (EVar "rest")))))))
 (DTypeSig false "scanKnown" (TyFun (TyCon "ArgSpec") (TyFun (TyCon "String") (TyFun (TyCon "FlagSpec") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Scan"))))))
-(DFunDef false "scanKnown" ((PVar "sp") (PVar "t") (PVar "f") (PVar "rest")) (EMatch (EFieldAccess (EVar "f") "arity") (arm (PCon "Switch") () (EApp (EApp (EVar "consGiven") (ETuple (EApp (EVar "canonical") (EVar "f")) (EVar "None"))) (EApp (EApp (EVar "scanArgs") (EVar "sp")) (EVar "rest")))) (arm PWild () (EMatch (EVar "rest") (arm (PList) () (EApp (EVar "Err") (EApp (EApp (EVar "missingValueMessage") (EVar "sp")) (EVar "t")))) (arm (PCons (PVar "v") (PVar "rest2")) () (EMatch (EApp (EApp (EApp (EApp (EVar "checkValue") (EVar "sp")) (EVar "t")) (EFieldAccess (EVar "f") "arity")) (EVar "v")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EVar "m"))) (arm (PCon "Ok" PWild) () (EApp (EApp (EVar "consGiven") (ETuple (EApp (EVar "canonical") (EVar "f")) (EApp (EVar "Some") (EVar "v")))) (EApp (EApp (EVar "scanArgs") (EVar "sp")) (EVar "rest2"))))))))))
+(DFunDef false "scanKnown" ((PVar "sp") (PVar "t") (PVar "f") (PVar "rest")) (EMatch (EFieldAccess (EVar "f") "arity") (arm (PCon "Switch") () (EApp (EApp (EVar "consGiven") (ETuple (EApp (EVar "canonical") (EVar "f")) (EVar "None"))) (EApp (EApp (EVar "scanArgs") (EVar "sp")) (EVar "rest")))) (arm PWild () (EMatch (EVar "rest") (arm (PList) () (EApp (EVar "Err") (EApp (EApp (EVar "missingValueMessage") (EVar "sp")) (EVar "t")))) (arm (PCons (PVar "v") (PVar "rest2")) () (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EApp (EVar "checkValue") (EVar "sp")) (EVar "t")) (EFieldAccess (EVar "f") "arity")) (EVar "v"))) (ELam (PWild) (EApp (EApp (EVar "consGiven") (ETuple (EApp (EVar "canonical") (EVar "f")) (EApp (EVar "Some") (EVar "v")))) (EApp (EApp (EVar "scanArgs") (EVar "sp")) (EVar "rest2"))))))))))
 (DTypeSig false "scanEqForm" (TyFun (TyCon "ArgSpec") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Scan")))))))
-(DFunDef false "scanEqForm" ((PVar "sp") (PVar "t") (PVar "nm") (PVar "v") (PVar "rest")) (EMatch (EApp (EApp (EVar "findFlag") (EVar "nm")) (EFieldAccess (EVar "sp") "flags")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "scanUnclaimed") (EVar "sp")) (EVar "t")) (EVar "rest"))) (arm (PCon "Some" (PVar "f")) () (EMatch (EFieldAccess (EVar "f") "arity") (arm (PCon "Switch") () (EApp (EApp (EApp (EVar "scanUnclaimed") (EVar "sp")) (EVar "t")) (EVar "rest"))) (arm PWild () (EMatch (EApp (EApp (EApp (EApp (EVar "checkValue") (EVar "sp")) (EVar "nm")) (EFieldAccess (EVar "f") "arity")) (EVar "v")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EVar "m"))) (arm (PCon "Ok" PWild) () (EApp (EApp (EVar "consGiven") (ETuple (EApp (EVar "canonical") (EVar "f")) (EApp (EVar "Some") (EVar "v")))) (EApp (EApp (EVar "scanArgs") (EVar "sp")) (EVar "rest"))))))))))
+(DFunDef false "scanEqForm" ((PVar "sp") (PVar "t") (PVar "nm") (PVar "v") (PVar "rest")) (EMatch (EApp (EApp (EVar "findFlag") (EVar "nm")) (EFieldAccess (EVar "sp") "flags")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "scanUnclaimed") (EVar "sp")) (EVar "t")) (EVar "rest"))) (arm (PCon "Some" (PVar "f")) () (EMatch (EFieldAccess (EVar "f") "arity") (arm (PCon "Switch") () (EApp (EApp (EApp (EVar "scanUnclaimed") (EVar "sp")) (EVar "t")) (EVar "rest"))) (arm PWild () (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EApp (EVar "checkValue") (EVar "sp")) (EVar "nm")) (EFieldAccess (EVar "f") "arity")) (EVar "v"))) (ELam (PWild) (EApp (EApp (EVar "consGiven") (ETuple (EApp (EVar "canonical") (EVar "f")) (EApp (EVar "Some") (EVar "v")))) (EApp (EApp (EVar "scanArgs") (EVar "sp")) (EVar "rest"))))))))))
 (DTypeSig false "scanUnclaimed" (TyFun (TyCon "ArgSpec") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Scan")))))
 (DFunDef false "scanUnclaimed" ((PVar "sp") (PVar "t") (PVar "rest")) (EMatch (EFieldAccess (EVar "sp") "unknown") (arm (PCon "RejectUnknown") () (EApp (EVar "Err") (EApp (EApp (EVar "unknownFlagMessage") (EVar "sp")) (EVar "t")))) (arm (PCon "CollectUnknown") () (EMatch (EApp (EVar "splitEq") (EVar "t")) (arm (PCon "Some" (PTuple (PVar "nm") (PVar "v"))) () (EApp (EApp (EVar "consGiven") (ETuple (EVar "nm") (EApp (EVar "Some") (EVar "v")))) (EApp (EApp (EVar "scanArgs") (EVar "sp")) (EVar "rest")))) (arm (PCon "None") () (EMatch (EVar "rest") (arm (PList) () (EApp (EApp (EVar "consGiven") (ETuple (EVar "t") (EVar "None"))) (EApp (EApp (EVar "scanArgs") (EVar "sp")) (EListLit)))) (arm (PCons (PVar "v") (PVar "rest2")) () (EApp (EApp (EVar "consGiven") (ETuple (EVar "t") (EApp (EVar "Some") (EVar "v")))) (EApp (EApp (EVar "scanArgs") (EVar "sp")) (EVar "rest2"))))))))))
 (DTypeSig false "checkValue" (TyFun (TyCon "ArgSpec") (TyFun (TyCon "String") (TyFun (TyCon "Arity") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))))
@@ -769,7 +768,7 @@ prop "Debug ArgSpec agrees with Eq" (n : String) =
 (DFunDef false "hasName" (PWild (PList)) (EVar "False"))
 (DFunDef false "hasName" ((PVar "nm") (PCons (PVar "n") (PVar "rest"))) (EBinOp "||" (EBinOp "==" (EVar "n") (EVar "nm")) (EApp (EApp (EVar "hasName") (EVar "nm")) (EVar "rest"))))
 (DTypeSig false "splitEq" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String")))))
-(DFunDef false "splitEq" ((PVar "t")) (EMatch (EApp (EApp (EVar "indexOf") (ELit (LString "="))) (EVar "t")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "i")) () (EIf (EBinOp "<=" (EVar "i") (ELit (LInt 0))) (EVar "None") (EApp (EVar "Some") (ETuple (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "t")) (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "t"))) (EVar "t"))))))))
+(DFunDef false "splitEq" ((PVar "t")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "indexOf") (ELit (LString "="))) (EVar "t"))) (ELam ((PVar "i")) (EIf (EBinOp "<=" (EVar "i") (ELit (LInt 0))) (EVar "None") (EApp (EVar "Some") (ETuple (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "t")) (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "t"))) (EVar "t"))))))))
 (DTypeSig true "flag" (TyFun (TyCon "String") (TyFun (TyCon "Args") (TyCon "Bool"))))
 (DFunDef false "flag" ((PVar "nm") (PVar "a")) (EApp (EApp (EVar "hasKey") (EVar "nm")) (EFieldAccess (EVar "a") "given")))
 (DTypeSig false "hasKey" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyCon "Bool"))))
@@ -897,9 +896,9 @@ prop "Debug ArgSpec agrees with Eq" (n : String) =
 (DTypeSig false "scanFlag" (TyFun (TyCon "ArgSpec") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Scan")))))
 (DFunDef false "scanFlag" ((PVar "sp") (PVar "t") (PVar "rest")) (EMatch (EApp (EApp (EVar "findFlag") (EVar "t")) (EFieldAccess (EVar "sp") "flags")) (arm (PCon "Some" (PVar "f")) () (EApp (EApp (EApp (EApp (EVar "scanKnown") (EVar "sp")) (EVar "t")) (EVar "f")) (EVar "rest"))) (arm (PCon "None") () (EMatch (EApp (EVar "splitEq") (EVar "t")) (arm (PCon "Some" (PTuple (PVar "nm") (PVar "v"))) () (EApp (EApp (EApp (EApp (EApp (EVar "scanEqForm") (EVar "sp")) (EVar "t")) (EVar "nm")) (EVar "v")) (EVar "rest"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "scanUnclaimed") (EVar "sp")) (EVar "t")) (EVar "rest")))))))
 (DTypeSig false "scanKnown" (TyFun (TyCon "ArgSpec") (TyFun (TyCon "String") (TyFun (TyCon "FlagSpec") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Scan"))))))
-(DFunDef false "scanKnown" ((PVar "sp") (PVar "t") (PVar "f") (PVar "rest")) (EMatch (EFieldAccess (EVar "f") "arity") (arm (PCon "Switch") () (EApp (EApp (EVar "consGiven") (ETuple (EApp (EVar "canonical") (EVar "f")) (EVar "None"))) (EApp (EApp (EVar "scanArgs") (EVar "sp")) (EVar "rest")))) (arm PWild () (EMatch (EVar "rest") (arm (PList) () (EApp (EVar "Err") (EApp (EApp (EVar "missingValueMessage") (EVar "sp")) (EVar "t")))) (arm (PCons (PVar "v") (PVar "rest2")) () (EMatch (EApp (EApp (EApp (EApp (EVar "checkValue") (EVar "sp")) (EVar "t")) (EFieldAccess (EVar "f") "arity")) (EVar "v")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EVar "m"))) (arm (PCon "Ok" PWild) () (EApp (EApp (EVar "consGiven") (ETuple (EApp (EVar "canonical") (EVar "f")) (EApp (EVar "Some") (EVar "v")))) (EApp (EApp (EVar "scanArgs") (EVar "sp")) (EVar "rest2"))))))))))
+(DFunDef false "scanKnown" ((PVar "sp") (PVar "t") (PVar "f") (PVar "rest")) (EMatch (EFieldAccess (EVar "f") "arity") (arm (PCon "Switch") () (EApp (EApp (EVar "consGiven") (ETuple (EApp (EVar "canonical") (EVar "f")) (EVar "None"))) (EApp (EApp (EVar "scanArgs") (EVar "sp")) (EVar "rest")))) (arm PWild () (EMatch (EVar "rest") (arm (PList) () (EApp (EVar "Err") (EApp (EApp (EVar "missingValueMessage") (EVar "sp")) (EVar "t")))) (arm (PCons (PVar "v") (PVar "rest2")) () (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EApp (EVar "checkValue") (EVar "sp")) (EVar "t")) (EFieldAccess (EVar "f") "arity")) (EVar "v"))) (ELam (PWild) (EApp (EApp (EVar "consGiven") (ETuple (EApp (EVar "canonical") (EVar "f")) (EApp (EVar "Some") (EVar "v")))) (EApp (EApp (EVar "scanArgs") (EVar "sp")) (EVar "rest2"))))))))))
 (DTypeSig false "scanEqForm" (TyFun (TyCon "ArgSpec") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Scan")))))))
-(DFunDef false "scanEqForm" ((PVar "sp") (PVar "t") (PVar "nm") (PVar "v") (PVar "rest")) (EMatch (EApp (EApp (EVar "findFlag") (EVar "nm")) (EFieldAccess (EVar "sp") "flags")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "scanUnclaimed") (EVar "sp")) (EVar "t")) (EVar "rest"))) (arm (PCon "Some" (PVar "f")) () (EMatch (EFieldAccess (EVar "f") "arity") (arm (PCon "Switch") () (EApp (EApp (EApp (EVar "scanUnclaimed") (EVar "sp")) (EVar "t")) (EVar "rest"))) (arm PWild () (EMatch (EApp (EApp (EApp (EApp (EVar "checkValue") (EVar "sp")) (EVar "nm")) (EFieldAccess (EVar "f") "arity")) (EVar "v")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EVar "m"))) (arm (PCon "Ok" PWild) () (EApp (EApp (EVar "consGiven") (ETuple (EApp (EVar "canonical") (EVar "f")) (EApp (EVar "Some") (EVar "v")))) (EApp (EApp (EVar "scanArgs") (EVar "sp")) (EVar "rest"))))))))))
+(DFunDef false "scanEqForm" ((PVar "sp") (PVar "t") (PVar "nm") (PVar "v") (PVar "rest")) (EMatch (EApp (EApp (EVar "findFlag") (EVar "nm")) (EFieldAccess (EVar "sp") "flags")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "scanUnclaimed") (EVar "sp")) (EVar "t")) (EVar "rest"))) (arm (PCon "Some" (PVar "f")) () (EMatch (EFieldAccess (EVar "f") "arity") (arm (PCon "Switch") () (EApp (EApp (EApp (EVar "scanUnclaimed") (EVar "sp")) (EVar "t")) (EVar "rest"))) (arm PWild () (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EApp (EVar "checkValue") (EVar "sp")) (EVar "nm")) (EFieldAccess (EVar "f") "arity")) (EVar "v"))) (ELam (PWild) (EApp (EApp (EVar "consGiven") (ETuple (EApp (EVar "canonical") (EVar "f")) (EApp (EVar "Some") (EVar "v")))) (EApp (EApp (EVar "scanArgs") (EVar "sp")) (EVar "rest"))))))))))
 (DTypeSig false "scanUnclaimed" (TyFun (TyCon "ArgSpec") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Scan")))))
 (DFunDef false "scanUnclaimed" ((PVar "sp") (PVar "t") (PVar "rest")) (EMatch (EFieldAccess (EVar "sp") "unknown") (arm (PCon "RejectUnknown") () (EApp (EVar "Err") (EApp (EApp (EVar "unknownFlagMessage") (EVar "sp")) (EVar "t")))) (arm (PCon "CollectUnknown") () (EMatch (EApp (EVar "splitEq") (EVar "t")) (arm (PCon "Some" (PTuple (PVar "nm") (PVar "v"))) () (EApp (EApp (EVar "consGiven") (ETuple (EVar "nm") (EApp (EVar "Some") (EVar "v")))) (EApp (EApp (EVar "scanArgs") (EVar "sp")) (EVar "rest")))) (arm (PCon "None") () (EMatch (EVar "rest") (arm (PList) () (EApp (EApp (EVar "consGiven") (ETuple (EVar "t") (EVar "None"))) (EApp (EApp (EVar "scanArgs") (EVar "sp")) (EListLit)))) (arm (PCons (PVar "v") (PVar "rest2")) () (EApp (EApp (EVar "consGiven") (ETuple (EVar "t") (EApp (EVar "Some") (EVar "v")))) (EApp (EApp (EVar "scanArgs") (EVar "sp")) (EVar "rest2"))))))))))
 (DTypeSig false "checkValue" (TyFun (TyCon "ArgSpec") (TyFun (TyCon "String") (TyFun (TyCon "Arity") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))))
@@ -913,7 +912,7 @@ prop "Debug ArgSpec agrees with Eq" (n : String) =
 (DFunDef false "hasName" (PWild (PList)) (EVar "False"))
 (DFunDef false "hasName" ((PVar "nm") (PCons (PVar "n") (PVar "rest"))) (EBinOp "||" (EBinOp "==" (EVar "n") (EVar "nm")) (EApp (EApp (EVar "hasName") (EVar "nm")) (EVar "rest"))))
 (DTypeSig false "splitEq" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String")))))
-(DFunDef false "splitEq" ((PVar "t")) (EMatch (EApp (EApp (EVar "indexOf") (ELit (LString "="))) (EVar "t")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "i")) () (EIf (EBinOp "<=" (EVar "i") (ELit (LInt 0))) (EVar "None") (EApp (EVar "Some") (ETuple (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "t")) (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "t"))) (EVar "t"))))))))
+(DFunDef false "splitEq" ((PVar "t")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "indexOf") (ELit (LString "="))) (EVar "t"))) (ELam ((PVar "i")) (EIf (EBinOp "<=" (EVar "i") (ELit (LInt 0))) (EVar "None") (EApp (EVar "Some") (ETuple (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "t")) (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "t"))) (EVar "t"))))))))
 (DTypeSig true "flag" (TyFun (TyCon "String") (TyFun (TyCon "Args") (TyCon "Bool"))))
 (DFunDef false "flag" ((PVar "nm") (PVar "a")) (EApp (EApp (EVar "hasKey") (EVar "nm")) (EFieldAccess (EVar "a") "given")))
 (DTypeSig false "hasKey" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))) (TyCon "Bool"))))

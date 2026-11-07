@@ -761,9 +761,9 @@ persistRepoHalf dir did nowSeconds before after = match storeRepo after
   Some next =>
     if not (repoAdvanced before after) then
       Ok ()
-    else match stageCommitEvent dir did nowSeconds (storeRepo before) next
-      Err message => Err message
-      Ok () => match persistRepo dir (storeRepo before) next
+    else do
+      _ <- stageCommitEvent dir did nowSeconds (storeRepo before) next
+      match persistRepo dir (storeRepo before) next
         Err message => match eventLogDiscardStaged dir
           Err _ => Err message
           Ok () => Err message
@@ -915,21 +915,22 @@ genesisFrom : Int ->
   Int ->
   Repo ->
   <FileRead d, FileWrite d> Result String Unit
-genesisFrom 1 dir did handle nowSeconds repo = do
-  let identityFrame = seq time => syncIdentityFrame seq time did handle
-  () <- emitUnanchored dir nowSeconds identityFrame
-  genesisFrom 2 dir did handle nowSeconds repo
-genesisFrom 2 dir did handle nowSeconds repo = do
-  let accountFrame = seq time => syncAccountFrame seq time did
-  () <- emitUnanchored dir nowSeconds accountFrame
-  genesisFrom 3 dir did handle nowSeconds repo
-genesisFrom 3 dir did handle nowSeconds repo = do
-  () <- stageCommitEvent dir did nowSeconds None repo
-  () <- eventLogPromote dir eventLogRetentionSeconds nowSeconds
-  genesisFrom 4 dir did handle nowSeconds repo
-genesisFrom 4 dir did _ nowSeconds repo =
-  emitUnanchored dir nowSeconds (headSyncFrame did repo)
-genesisFrom _ _ _ _ _ _ = Ok ()
+genesisFrom x0 dir did handle nowSeconds repo = go x0
+  where
+    go 1 = do
+      let identityFrame = seq time => syncIdentityFrame seq time did handle
+      () <- emitUnanchored dir nowSeconds identityFrame
+      go 2
+    go 2 = do
+      let accountFrame = seq time => syncAccountFrame seq time did
+      () <- emitUnanchored dir nowSeconds accountFrame
+      go 3
+    go 3 = do
+      () <- stageCommitEvent dir did nowSeconds None repo
+      () <- eventLogPromote dir eventLogRetentionSeconds nowSeconds
+      go 4
+    go 4 = emitUnanchored dir nowSeconds (headSyncFrame did repo)
+    go _ = Ok ()
 
 -- The `#sync` frame for a repository's current head: the one event that
 -- states where the repository stands without describing how it got there.
@@ -1017,17 +1018,19 @@ blobRowsOwed : Store ->
   Store ->
   List Cid ->
   Result String (List (Cid, String, Bytes))
-blobRowsOwed _ _ [] = Ok []
-blobRowsOwed before after (cid :: rest) =
-  if blobWriteOwed before after cid then match storeGet cid after
-    None =>
-      Err
-        "blob \{cidToString cid} is listed by the blob half but holds no bytes"
-    Some bytes => do
-      tail <- blobRowsOwed before after rest
-      Ok ((cid, declaredMimeType after cid, bytes) :: tail)
-  else
-    blobRowsOwed before after rest
+blobRowsOwed before after xs0 = go xs0
+  where
+    go [] = Ok []
+    go (cid :: rest) =
+      if blobWriteOwed before after cid then match storeGet cid after
+        None =>
+          Err
+            "blob \{cidToString cid} is listed by the blob half but holds no bytes"
+        Some bytes => do
+          tail <- go rest
+          Ok ((cid, declaredMimeType after cid, bytes) :: tail)
+      else
+        go rest
 
 -- Only the blobs the transition owes are rewritten, not the whole area: a
 -- blob file's name is its content, so promoting one already on disk writes
@@ -1155,12 +1158,13 @@ admitClasses : RateLimitState ->
   Int ->
   List RateLimitClass ->
   RateLimitAdmission
-admitClasses state _ _ [] = RequestAdmitted state
-admitClasses state identity nowSeconds (cls :: rest) =
-  match step state identity cls nowSeconds
-    (next, Refused) => RequestRefused next cls
-    (next, RefusedCapacity) => RequestRefusedCapacity next
-    (next, Admitted) => admitClasses next identity nowSeconds rest
+admitClasses state0 identity nowSeconds xs0 = go state0 xs0
+  where
+    go state [] = RequestAdmitted state
+    go state (cls :: rest) = match step state identity cls nowSeconds
+      (next, Refused) => RequestRefused next cls
+      (next, RefusedCapacity) => RequestRefusedCapacity next
+      (next, Admitted) => go next rest
 
 -- | `None` admits; `Some` is the 429 to send instead of doing any real work.
 -- Every buffer that reached the framer is charged, a parse failure included:
@@ -1495,18 +1499,19 @@ grantHeadroomWithin : Int ->
   Ref Int ->
   Ref (List BufferWaiter) ->
   Unit
-grantHeadroomWithin ceiling held waiting queue =
-  match firstLiveBufferWaiter !queue
-    None => queue := []
-    Some (waiter, rest) =>
-      if !held + bufferWaiterBytes waiter > ceiling then
-        queue := waiter :: rest
-      else
-        let () = queue := rest
-        let () = waiting := !waiting - 1
-        let () = held := !held + bufferWaiterBytes waiter
-        let () = bufferWaiterGranted waiter := True
-        grantHeadroomWithin ceiling held waiting queue
+grantHeadroomWithin ceiling held waiting queue = go ()
+  where
+    go () = match firstLiveBufferWaiter !queue
+      None => queue := []
+      Some (waiter, rest) =>
+        if !held + bufferWaiterBytes waiter > ceiling then
+          queue := waiter :: rest
+        else
+          let () = queue := rest
+          let () = waiting := !waiting - 1
+          let () = held := !held + bufferWaiterBytes waiter
+          let () = bufferWaiterGranted waiter := True
+          go ()
 
 {- | Give `bytes` back to the budget and pass them on to whoever is waiting.
 
@@ -2017,6 +2022,8 @@ statsLoop : DataDir d ->
   Duration ->
   Ref Bool ->
   Async <Clock, FileRead d, Stdout | e> Unit
+-- Bound: the signature's effect row variable does not unify with the row of a where-local go: `check` rejects the go form with "effect rows ... cannot be made equal"; convert when a local function can inherit its parent's row.
+-- lint-disable-next-line rule-threaded-invariant
 statsLoop dir storeRef active unframed subs interval stopping = defer
   if !stopping then
     deferPure ()
@@ -2108,14 +2115,16 @@ drainPending active until = defer
 acceptOrSignal : Listener h ->
   Int ->
   Wire h <Signal | e> (Result String (Option (Connection h)))
+-- Bound: the signature's effect row variable does not unify with the row of a where-local go: `check` rejects the go form with "effect rows ... cannot be made equal"; convert when a local function can inherit its parent's row.
+-- lint-disable-next-line rule-threaded-invariant
 acceptOrSignal lis signalFd = defer
   requested <- liftIO (u => pdsSignalRequested ())
   if requested then
     deferPure (Ok None)
   else defer
-    attempt <- liftIO (u => match netSetNonblockListener lis True
-      Err message => Err message
-      Ok () => netTryAccept lis)
+    attempt <- liftIO (u => do
+      _ <- netSetNonblockListener lis True
+      netTryAccept lis)
     match attempt
       Err message => deferPure (Err message)
       Ok (Some conn) => defer

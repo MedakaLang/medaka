@@ -1,5 +1,5 @@
 # META
-source_lines=598
+source_lines=622
 stages=DESUGAR,MARK
 # SOURCE
 import frontend.parse_diagnostic.{ParseDiagnosticKind(..), UnicodeProblem(..)}
@@ -73,10 +73,12 @@ indentOf line =
   indentOfGo cs (arrayLength cs) 0
 
 indentOfGo : Array Char -> Int -> Int -> Int
-indentOfGo cs n i
-  | i >= n = indentSentinel
-  | at cs i == ' ' = indentOfGo cs n (i + 1)
-  | otherwise = i
+indentOfGo cs n i0 = go i0
+  where
+    go i
+      | i >= n = indentSentinel
+      | at cs i == ' ' = go (i + 1)
+      | otherwise = i
 
 minIndentGo : List String -> Int -> Int
 minIndentGo [] acc = acc
@@ -206,6 +208,8 @@ firstFragNl : Bool -> List String -> Bool
 firstFragNl _leading [] = True
 firstFragNl leading _ = leading
 splitRange : Array Char -> Int -> Int -> Int -> List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 splitRange cs start p n
   | p >= n = [copyCharRange cs start n]
   | at cs p == '\n' =
@@ -213,10 +217,12 @@ splitRange cs start p n
   | otherwise = splitRange cs start (p + 1) n
 
 tripleRunEnd : Array Char -> Int -> Int -> Int
-tripleRunEnd src len p
-  | p >= len = len
-  | isQuote (at src p) || isBackslash (at src p) || isNL (at src p) = p
-  | otherwise = tripleRunEnd src len (p + 1)
+tripleRunEnd src len p0 = go p0
+  where
+    go p
+      | p >= len = len
+      | isQuote (at src p) || isBackslash (at src p) || isNL (at src p) = p
+      | otherwise = go (p + 1)
 
 uniEscWellFormed : Array Char -> Int -> Int -> Bool
 uniEscWellFormed src len p =
@@ -225,10 +231,12 @@ uniEscWellFormed src len p =
   he > s && he < len && at src he == '}'
 
 uniHexSigLen : Array Char -> Int -> Int -> Int
-uniHexSigLen src p endp
-  | p >= endp = 0
-  | at src p == '0' = uniHexSigLen src (p + 1) endp
-  | otherwise = endp - p
+uniHexSigLen src p0 endp = go p0
+  where
+    go p
+      | p >= endp = 0
+      | at src p == '0' = go (p + 1)
+      | otherwise = endp - p
 
 uniEscCode : Array Char -> Int -> Int -> Option Int
 uniEscCode src len p =
@@ -242,9 +250,9 @@ uniEscText src len p = copyCharRange src p (uHexEnd src len (p + 3) + 1)
 uniEscChar : Array Char -> Int -> Int -> Option Char
 uniEscChar src len p
   | not (uniEscWellFormed src len p) = None
-  | otherwise = match uniEscCode src len p
-    None => None
-    Some cp => charFromCode cp
+  | otherwise = do
+    cp <- uniEscCode src len p
+    charFromCode cp
 
 uniIsSurrogate : Int -> Bool
 uniIsSurrogate cp = cp >= 55296 && cp <= 57343
@@ -293,19 +301,23 @@ unicodeErrorEnd : Array Char -> Int -> Int -> Int
 unicodeErrorEnd src len p = unicodeErrorEndGo src len (p + 3)
 
 unicodeErrorEndGo : Array Char -> Int -> Int -> Int
-unicodeErrorEndGo src len p
-  | p >= len = len
-  | at src p == '}' = p + 1
-  | isQuote (at src p)
-    || isApos (at src p)
-    || isNL (at src p)
-    || isCR (at src p) = p
-  | otherwise = unicodeErrorEndGo src len (p + 1)
+unicodeErrorEndGo src len p0 = go p0
+  where
+    go p
+      | p >= len = len
+      | at src p == '}' = p + 1
+      | isQuote (at src p)
+        || isApos (at src p)
+        || isNL (at src p)
+        || isCR (at src p) = p
+      | otherwise = go (p + 1)
 
 uHexEnd : Array Char -> Int -> Int -> Int
-uHexEnd src len p
-  | p < len && isHexDigit (at src p) = uHexEnd src len (p + 1)
-  | otherwise = p
+uHexEnd src len p0 = go p0
+  where
+    go p
+      | p < len && isHexDigit (at src p) = go (p + 1)
+      | otherwise = p
 
 isBareUnicodeEsc : Array Char -> Int -> Int -> Char -> Bool
 isBareUnicodeEsc src len p e =
@@ -336,18 +348,20 @@ lexFailure : Int -> Int -> ParseDiagnosticKind -> Result LexError a
 lexFailure start end kind = Err (LexError kind start end)
 
 parseHex : Array Char -> Int -> Int -> Int -> Int
-parseHex src p end acc
-  | p >= end = acc
-  | otherwise =
-    let c = at src p
-    let d =
-      if c >= '0' && c <= '9' then
-        charCode c - charCode '0'
-      else if c >= 'a' && c <= 'f' then
-        charCode c - charCode 'a' + 10
-      else
-        charCode c - charCode 'A' + 10
-    parseHex src (p + 1) end (acc * 16 + d)
+parseHex src p0 end acc0 = go p0 acc0
+  where
+    go p acc
+      | p >= end = acc
+      | otherwise =
+        let c = at src p
+        let d =
+          if c >= '0' && c <= '9' then
+            charCode c - charCode '0'
+          else if c >= 'a' && c <= 'f' then
+            charCode c - charCode 'a' + 10
+          else
+            charCode c - charCode 'A' + 10
+        go (p + 1) (acc * 16 + d)
 
 export
 readLiteral : Array Char -> LiteralCursor -> Result LexError LiteralRead
@@ -363,6 +377,8 @@ literalGo : Array Char ->
   Bool ->
   List String ->
   Result LexError LiteralRead
+-- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 literalGo src len p flavor part leading inside acc
   | p >= len = lexFailure p p UnterminatedString
   | isPlain flavor && isQuote (at src p) =
@@ -440,10 +456,12 @@ isTripleAt src len p =
     && isQuote (at src (p + 2))
 
 plainRunEnd : Array Char -> Int -> Int -> Int
-plainRunEnd src len p
-  | p >= len = len
-  | isQuote (at src p) || isBackslash (at src p) = p
-  | otherwise = plainRunEnd src len (p + 1)
+plainRunEnd src len p0 = go p0
+  where
+    go p
+      | p >= len = len
+      | isQuote (at src p) || isBackslash (at src p) = p
+      | otherwise = go (p + 1)
 
 export
 readCharacter : Array Char -> Int -> Result LexError (String, Int)
@@ -488,10 +506,12 @@ charFinished src len p end s =
     lexFailure (p - 1) len UnterminatedChar
 
 charClose : Array Char -> Int -> Int -> Int
-charClose src len p
-  | p >= len = p
-  | isApos (at src p) = p
-  | otherwise = charClose src len (p + 1)
+charClose src len p0 = go p0
+  where
+    go p
+      | p >= len = p
+      | isApos (at src p) = p
+      | otherwise = go (p + 1)
 
 -- `pos` is the offset of the `b` of `b'x'`; returns the byte and the offset
 -- just past the closing apostrophe.  The escape set is the char literal's
@@ -589,17 +609,21 @@ readRawLiteral src pos =
     rawLineGo src len pos (pos + 2)
 
 rawLineGo : Array Char -> Int -> Int -> Int -> Result LexError (String, Int)
-rawLineGo src len open p
-  | p >= len || isNL (at src p) || isCR (at src p) =
-    lexFailure open p UnterminatedString
-  | isQuote (at src p) = Ok (copyCharRange src (open + 2) p, p + 1)
-  | otherwise = rawLineGo src len open (p + 1)
+rawLineGo src len open p0 = go p0
+  where
+    go p
+      | p >= len || isNL (at src p) || isCR (at src p) =
+        lexFailure open p UnterminatedString
+      | isQuote (at src p) = Ok (copyCharRange src (open + 2) p, p + 1)
+      | otherwise = go (p + 1)
 
 rawTripleGo : Array Char -> Int -> Int -> Int -> Result LexError (String, Int)
-rawTripleGo src len open p
-  | p >= len = lexFailure open len UnterminatedString
-  | isTripleAt src len p = Ok (copyCharRange src (open + 4) p, p + 3)
-  | otherwise = rawTripleGo src len open (p + 1)
+rawTripleGo src len open p0 = go p0
+  where
+    go p
+      | p >= len = lexFailure open len UnterminatedString
+      | isTripleAt src len p = Ok (copyCharRange src (open + 4) p, p + 3)
+      | otherwise = go (p + 1)
 # DESUGAR
 (DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("frontend" "parse_diagnostic") ((mem "ParseDiagnosticKind" true) (mem "UnicodeProblem" true))))
@@ -633,7 +657,7 @@ rawTripleGo src len open p
 (DTypeSig false "indentOf" (TyFun (TyCon "String") (TyCon "Int")))
 (DFunDef false "indentOf" ((PVar "line")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "line"))) (DoExpr (EApp (EApp (EApp (EVar "indentOfGo") (EVar "cs")) (EApp (EVar "arrayLength") (EVar "cs"))) (ELit (LInt 0))))))
 (DTypeSig false "indentOfGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "indentOfGo" ((PVar "cs") (PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "indentSentinel") (EIf (EBinOp "==" (EApp (EApp (EVar "at") (EVar "cs")) (EVar "i")) (ELit (LChar " "))) (EApp (EApp (EApp (EVar "indentOfGo") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "indentOfGo" ((PVar "cs") (PVar "n") (PVar "i0")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "indentSentinel") (EIf (EBinOp "==" (EApp (EApp (EVar "at") (EVar "cs")) (EVar "i")) (ELit (LChar " "))) (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit)))))))) (EApp (EVar "go") (EVar "i0"))))
 (DTypeSig false "minIndentGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "minIndentGo" ((PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "minIndentGo" ((PCons (PVar "l") (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "minIndentGo") (EVar "rest")) (EApp (EApp (EVar "min") (EVar "acc")) (EApp (EVar "indentOf") (EVar "l")))))
@@ -696,17 +720,17 @@ rawTripleGo src len open p
 (DTypeSig false "splitRange" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "splitRange" ((PVar "cs") (PVar "start") (PVar "p") (PVar "n")) (EIf (EBinOp ">=" (EVar "p") (EVar "n")) (EListLit (EApp (EApp (EApp (EVar "copyCharRange") (EVar "cs")) (EVar "start")) (EVar "n"))) (EIf (EBinOp "==" (EApp (EApp (EVar "at") (EVar "cs")) (EVar "p")) (ELit (LChar "\n"))) (EBinOp "::" (EApp (EApp (EApp (EVar "copyCharRange") (EVar "cs")) (EVar "start")) (EVar "p")) (EApp (EApp (EApp (EApp (EVar "splitRange") (EVar "cs")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "n"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "splitRange") (EVar "cs")) (EVar "start")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "tripleRunEnd" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "tripleRunEnd" ((PVar "src") (PVar "len") (PVar "p")) (EIf (EBinOp ">=" (EVar "p") (EVar "len")) (EVar "len") (EIf (EBinOp "||" (EBinOp "||" (EApp (EVar "isQuote") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (EApp (EVar "isBackslash") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")))) (EApp (EVar "isNL") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")))) (EVar "p") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "tripleRunEnd") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "tripleRunEnd" ((PVar "src") (PVar "len") (PVar "p0")) (ELetGroup ((lgb "go" (clause ((PVar "p")) (EIf (EBinOp ">=" (EVar "p") (EVar "len")) (EVar "len") (EIf (EBinOp "||" (EBinOp "||" (EApp (EVar "isQuote") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (EApp (EVar "isBackslash") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")))) (EApp (EVar "isNL") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")))) (EVar "p") (EIf (EVar "otherwise") (EApp (EVar "go") (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))) (EApp (EVar "go") (EVar "p0"))))
 (DTypeSig false "uniEscWellFormed" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
 (DFunDef false "uniEscWellFormed" ((PVar "src") (PVar "len") (PVar "p")) (EBlock (DoLet false false (PVar "s") (EBinOp "+" (EVar "p") (ELit (LInt 3)))) (DoLet false false (PVar "he") (EApp (EApp (EApp (EVar "uHexEnd") (EVar "src")) (EVar "len")) (EVar "s"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp ">" (EVar "he") (EVar "s")) (EBinOp "<" (EVar "he") (EVar "len"))) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EVar "he")) (ELit (LChar "}")))))))
 (DTypeSig false "uniHexSigLen" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "uniHexSigLen" ((PVar "src") (PVar "p") (PVar "endp")) (EIf (EBinOp ">=" (EVar "p") (EVar "endp")) (ELit (LInt 0)) (EIf (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")) (ELit (LChar "0"))) (EApp (EApp (EApp (EVar "uniHexSigLen") (EVar "src")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "endp")) (EIf (EVar "otherwise") (EBinOp "-" (EVar "endp") (EVar "p")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "uniHexSigLen" ((PVar "src") (PVar "p0") (PVar "endp")) (ELetGroup ((lgb "go" (clause ((PVar "p")) (EIf (EBinOp ">=" (EVar "p") (EVar "endp")) (ELit (LInt 0)) (EIf (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")) (ELit (LChar "0"))) (EApp (EVar "go") (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EBinOp "-" (EVar "endp") (EVar "p")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))) (EApp (EVar "go") (EVar "p0"))))
 (DTypeSig false "uniEscCode" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))))
 (DFunDef false "uniEscCode" ((PVar "src") (PVar "len") (PVar "p")) (EBlock (DoLet false false (PVar "s") (EBinOp "+" (EVar "p") (ELit (LInt 3)))) (DoLet false false (PVar "he") (EApp (EApp (EApp (EVar "uHexEnd") (EVar "src")) (EVar "len")) (EVar "s"))) (DoExpr (EIf (EBinOp ">" (EApp (EApp (EApp (EVar "uniHexSigLen") (EVar "src")) (EVar "s")) (EVar "he")) (ELit (LInt 6))) (EVar "None") (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "parseHex") (EVar "src")) (EVar "s")) (EVar "he")) (ELit (LInt 0))))))))
 (DTypeSig false "uniEscText" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
 (DFunDef false "uniEscText" ((PVar "src") (PVar "len") (PVar "p")) (EApp (EApp (EApp (EVar "copyCharRange") (EVar "src")) (EVar "p")) (EBinOp "+" (EApp (EApp (EApp (EVar "uHexEnd") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 3)))) (ELit (LInt 1)))))
 (DTypeSig false "uniEscChar" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Char"))))))
-(DFunDef false "uniEscChar" ((PVar "src") (PVar "len") (PVar "p")) (EIf (EApp (EVar "not") (EApp (EApp (EApp (EVar "uniEscWellFormed") (EVar "src")) (EVar "len")) (EVar "p"))) (EVar "None") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EApp (EVar "uniEscCode") (EVar "src")) (EVar "len")) (EVar "p")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "cp")) () (EApp (EVar "charFromCode") (EVar "cp")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "uniEscChar" ((PVar "src") (PVar "len") (PVar "p")) (EIf (EApp (EVar "not") (EApp (EApp (EApp (EVar "uniEscWellFormed") (EVar "src")) (EVar "len")) (EVar "p"))) (EVar "None") (EIf (EVar "otherwise") (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EVar "uniEscCode") (EVar "src")) (EVar "len")) (EVar "p"))) (ELam ((PVar "cp")) (EApp (EVar "charFromCode") (EVar "cp")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "uniIsSurrogate" (TyFun (TyCon "Int") (TyCon "Bool")))
 (DFunDef false "uniIsSurrogate" ((PVar "cp")) (EBinOp "&&" (EBinOp ">=" (EVar "cp") (ELit (LInt 55296))) (EBinOp "<=" (EVar "cp") (ELit (LInt 57343)))))
 (DTypeSig false "uniEscTermErr" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "LexError")) (TyVar "a")))))))))
@@ -716,9 +740,9 @@ rawTripleGo src len open p
 (DTypeSig false "unicodeErrorEnd" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
 (DFunDef false "unicodeErrorEnd" ((PVar "src") (PVar "len") (PVar "p")) (EApp (EApp (EApp (EVar "unicodeErrorEndGo") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 3)))))
 (DTypeSig false "unicodeErrorEndGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "unicodeErrorEndGo" ((PVar "src") (PVar "len") (PVar "p")) (EIf (EBinOp ">=" (EVar "p") (EVar "len")) (EVar "len") (EIf (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")) (ELit (LChar "}"))) (EBinOp "+" (EVar "p") (ELit (LInt 1))) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EApp (EVar "isQuote") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (EApp (EVar "isApos") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")))) (EApp (EVar "isNL") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")))) (EApp (EVar "isCR") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")))) (EVar "p") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "unicodeErrorEndGo") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DFunDef false "unicodeErrorEndGo" ((PVar "src") (PVar "len") (PVar "p0")) (ELetGroup ((lgb "go" (clause ((PVar "p")) (EIf (EBinOp ">=" (EVar "p") (EVar "len")) (EVar "len") (EIf (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")) (ELit (LChar "}"))) (EBinOp "+" (EVar "p") (ELit (LInt 1))) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EApp (EVar "isQuote") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (EApp (EVar "isApos") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")))) (EApp (EVar "isNL") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")))) (EApp (EVar "isCR") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")))) (EVar "p") (EIf (EVar "otherwise") (EApp (EVar "go") (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))) (EApp (EVar "go") (EVar "p0"))))
 (DTypeSig false "uHexEnd" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "uHexEnd" ((PVar "src") (PVar "len") (PVar "p")) (EIf (EBinOp "&&" (EBinOp "<" (EVar "p") (EVar "len")) (EApp (EVar "isHexDigit") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")))) (EApp (EApp (EApp (EVar "uHexEnd") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "p") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "uHexEnd" ((PVar "src") (PVar "len") (PVar "p0")) (ELetGroup ((lgb "go" (clause ((PVar "p")) (EIf (EBinOp "&&" (EBinOp "<" (EVar "p") (EVar "len")) (EApp (EVar "isHexDigit") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")))) (EApp (EVar "go") (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "p") (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EVar "go") (EVar "p0"))))
 (DTypeSig false "isBareUnicodeEsc" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Char") (TyCon "Bool"))))))
 (DFunDef false "isBareUnicodeEsc" ((PVar "src") (PVar "len") (PVar "p") (PVar "e")) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "e") (ELit (LChar "u"))) (EBinOp "<" (EBinOp "+" (EVar "p") (ELit (LInt 2))) (EVar "len"))) (EApp (EVar "isHexDigit") (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "p") (ELit (LInt 2)))))) (EBinOp "==" (EBinOp "-" (EApp (EApp (EApp (EVar "uHexEnd") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 2)))) (EBinOp "+" (EVar "p") (ELit (LInt 2)))) (ELit (LInt 4)))))
 (DTypeSig false "bareUnicodeEscWritten" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
@@ -734,7 +758,7 @@ rawTripleGo src len open p
 (DTypeSig false "lexFailure" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "ParseDiagnosticKind") (TyApp (TyApp (TyCon "Result") (TyCon "LexError")) (TyVar "a"))))))
 (DFunDef false "lexFailure" ((PVar "start") (PVar "end") (PVar "kind")) (EApp (EVar "Err") (EApp (EApp (EApp (EVar "LexError") (EVar "kind")) (EVar "start")) (EVar "end"))))
 (DTypeSig false "parseHex" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
-(DFunDef false "parseHex" ((PVar "src") (PVar "p") (PVar "end") (PVar "acc")) (EIf (EBinOp ">=" (EVar "p") (EVar "end")) (EVar "acc") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (DoLet false false (PVar "d") (EIf (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LChar "0"))) (EBinOp "<=" (EVar "c") (ELit (LChar "9")))) (EBinOp "-" (EApp (EVar "charCode") (EVar "c")) (EApp (EVar "charCode") (ELit (LChar "0")))) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LChar "a"))) (EBinOp "<=" (EVar "c") (ELit (LChar "f")))) (EBinOp "+" (EBinOp "-" (EApp (EVar "charCode") (EVar "c")) (EApp (EVar "charCode") (ELit (LChar "a")))) (ELit (LInt 10))) (EBinOp "+" (EBinOp "-" (EApp (EVar "charCode") (EVar "c")) (EApp (EVar "charCode") (ELit (LChar "A")))) (ELit (LInt 10)))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "parseHex") (EVar "src")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "end")) (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 16))) (EVar "d"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "parseHex" ((PVar "src") (PVar "p0") (PVar "end") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PVar "p") (PVar "acc")) (EIf (EBinOp ">=" (EVar "p") (EVar "end")) (EVar "acc") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (DoLet false false (PVar "d") (EIf (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LChar "0"))) (EBinOp "<=" (EVar "c") (ELit (LChar "9")))) (EBinOp "-" (EApp (EVar "charCode") (EVar "c")) (EApp (EVar "charCode") (ELit (LChar "0")))) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LChar "a"))) (EBinOp "<=" (EVar "c") (ELit (LChar "f")))) (EBinOp "+" (EBinOp "-" (EApp (EVar "charCode") (EVar "c")) (EApp (EVar "charCode") (ELit (LChar "a")))) (ELit (LInt 10))) (EBinOp "+" (EBinOp "-" (EApp (EVar "charCode") (EVar "c")) (EApp (EVar "charCode") (ELit (LChar "A")))) (ELit (LInt 10)))))) (DoExpr (EApp (EApp (EVar "go") (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 16))) (EVar "d"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EApp (EVar "go") (EVar "p0")) (EVar "acc0"))))
 (DTypeSig true "readLiteral" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "LiteralCursor") (TyApp (TyApp (TyCon "Result") (TyCon "LexError")) (TyCon "LiteralRead")))))
 (DFunDef false "readLiteral" ((PVar "src") (PCon "LiteralCursor" (PVar "p") (PVar "_quote") (PVar "flavor") (PVar "part") (PVar "leading") (PVar "inside"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "literalGo") (EVar "src")) (EApp (EVar "arrayLength") (EVar "src"))) (EVar "p")) (EVar "flavor")) (EVar "part")) (EVar "leading")) (EVar "inside")) (EListLit)))
 (DTypeSig false "literalGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "LiteralFlavor") (TyFun (TyCon "LiteralPart") (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "LexError")) (TyCon "LiteralRead")))))))))))
@@ -744,7 +768,7 @@ rawTripleGo src len open p
 (DTypeSig false "isTripleAt" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
 (DFunDef false "isTripleAt" ((PVar "src") (PVar "len") (PVar "p")) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "<" (EBinOp "+" (EVar "p") (ELit (LInt 2))) (EVar "len")) (EApp (EVar "isQuote") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")))) (EApp (EVar "isQuote") (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))))) (EApp (EVar "isQuote") (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "p") (ELit (LInt 2)))))))
 (DTypeSig false "plainRunEnd" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "plainRunEnd" ((PVar "src") (PVar "len") (PVar "p")) (EIf (EBinOp ">=" (EVar "p") (EVar "len")) (EVar "len") (EIf (EBinOp "||" (EApp (EVar "isQuote") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (EApp (EVar "isBackslash") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")))) (EVar "p") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "plainRunEnd") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "plainRunEnd" ((PVar "src") (PVar "len") (PVar "p0")) (ELetGroup ((lgb "go" (clause ((PVar "p")) (EIf (EBinOp ">=" (EVar "p") (EVar "len")) (EVar "len") (EIf (EBinOp "||" (EApp (EVar "isQuote") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (EApp (EVar "isBackslash") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")))) (EVar "p") (EIf (EVar "otherwise") (EApp (EVar "go") (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))) (EApp (EVar "go") (EVar "p0"))))
 (DTypeSig true "readCharacter" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "LexError")) (TyTuple (TyCon "String") (TyCon "Int"))))))
 (DFunDef false "readCharacter" ((PVar "src") (PVar "pos")) (EApp (EApp (EApp (EVar "charRead") (EVar "src")) (EApp (EVar "arrayLength") (EVar "src"))) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))))
 (DTypeSig false "charRead" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "LexError")) (TyTuple (TyCon "String") (TyCon "Int")))))))
@@ -754,7 +778,7 @@ rawTripleGo src len open p
 (DTypeSig false "charFinished" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "LexError")) (TyTuple (TyCon "String") (TyCon "Int")))))))))
 (DFunDef false "charFinished" ((PVar "src") (PVar "len") (PVar "p") (PVar "end") (PVar "s")) (EIf (EBinOp "&&" (EBinOp "<" (EVar "end") (EVar "len")) (EApp (EVar "isApos") (EApp (EApp (EVar "at") (EVar "src")) (EVar "end")))) (EApp (EVar "Ok") (ETuple (EVar "s") (EBinOp "+" (EVar "end") (ELit (LInt 1))))) (EApp (EApp (EApp (EVar "lexFailure") (EBinOp "-" (EVar "p") (ELit (LInt 1)))) (EVar "len")) (EVar "UnterminatedChar"))))
 (DTypeSig false "charClose" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "charClose" ((PVar "src") (PVar "len") (PVar "p")) (EIf (EBinOp ">=" (EVar "p") (EVar "len")) (EVar "p") (EIf (EApp (EVar "isApos") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (EVar "p") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "charClose") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "charClose" ((PVar "src") (PVar "len") (PVar "p0")) (ELetGroup ((lgb "go" (clause ((PVar "p")) (EIf (EBinOp ">=" (EVar "p") (EVar "len")) (EVar "p") (EIf (EApp (EVar "isApos") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (EVar "p") (EIf (EVar "otherwise") (EApp (EVar "go") (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))) (EApp (EVar "go") (EVar "p0"))))
 (DTypeSig true "readByteLiteral" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "LexError")) (TyTuple (TyCon "Int") (TyCon "Int"))))))
 (DFunDef false "readByteLiteral" ((PVar "src") (PVar "pos")) (EBlock (DoLet false false (PVar "len") (EApp (EVar "arrayLength") (EVar "src"))) (DoLet false false (PVar "p") (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "<" (EBinOp "+" (EVar "p") (ELit (LInt 1))) (EVar "len")) (EApp (EVar "isBackslash") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")))) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (ELit (LChar "x")))) (EApp (EApp (EApp (EApp (EVar "hexByteEscape") (EVar "src")) (EVar "len")) (EVar "pos")) (EBinOp "+" (EVar "p") (ELit (LInt 2)))) (EMatch (EApp (EApp (EApp (EVar "charRead") (EVar "src")) (EVar "len")) (EVar "p")) (arm (PCon "Err" (PCon "LexError" (PVar "kind") PWild (PVar "e"))) () (EApp (EApp (EApp (EVar "lexFailure") (EVar "pos")) (EVar "e")) (EApp (EVar "byteKind") (EVar "kind")))) (arm (PCon "Ok" (PTuple (PVar "s") (PVar "next"))) () (EApp (EApp (EApp (EApp (EVar "asciiByte") (EVar "src")) (EVar "pos")) (EVar "next")) (EVar "s"))))))))
 (DTypeSig false "byteKind" (TyFun (TyCon "ParseDiagnosticKind") (TyCon "ParseDiagnosticKind")))
@@ -786,9 +810,9 @@ rawTripleGo src len open p
 (DTypeSig true "readRawLiteral" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "LexError")) (TyTuple (TyCon "String") (TyCon "Int"))))))
 (DFunDef false "readRawLiteral" ((PVar "src") (PVar "pos")) (EBlock (DoLet false false (PVar "len") (EApp (EVar "arrayLength") (EVar "src"))) (DoExpr (EIf (EApp (EApp (EApp (EVar "isTripleAt") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EApp (EApp (EApp (EApp (EVar "rawTripleGo") (EVar "src")) (EVar "len")) (EVar "pos")) (EBinOp "+" (EVar "pos") (ELit (LInt 4)))) (EApp (EApp (EApp (EApp (EVar "rawLineGo") (EVar "src")) (EVar "len")) (EVar "pos")) (EBinOp "+" (EVar "pos") (ELit (LInt 2))))))))
 (DTypeSig false "rawLineGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "LexError")) (TyTuple (TyCon "String") (TyCon "Int"))))))))
-(DFunDef false "rawLineGo" ((PVar "src") (PVar "len") (PVar "open") (PVar "p")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp ">=" (EVar "p") (EVar "len")) (EApp (EVar "isNL") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")))) (EApp (EVar "isCR") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")))) (EApp (EApp (EApp (EVar "lexFailure") (EVar "open")) (EVar "p")) (EVar "UnterminatedString")) (EIf (EApp (EVar "isQuote") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (EApp (EVar "Ok") (ETuple (EApp (EApp (EApp (EVar "copyCharRange") (EVar "src")) (EBinOp "+" (EVar "open") (ELit (LInt 2)))) (EVar "p")) (EBinOp "+" (EVar "p") (ELit (LInt 1))))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "rawLineGo") (EVar "src")) (EVar "len")) (EVar "open")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "rawLineGo" ((PVar "src") (PVar "len") (PVar "open") (PVar "p0")) (ELetGroup ((lgb "go" (clause ((PVar "p")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp ">=" (EVar "p") (EVar "len")) (EApp (EVar "isNL") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")))) (EApp (EVar "isCR") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")))) (EApp (EApp (EApp (EVar "lexFailure") (EVar "open")) (EVar "p")) (EVar "UnterminatedString")) (EIf (EApp (EVar "isQuote") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (EApp (EVar "Ok") (ETuple (EApp (EApp (EApp (EVar "copyCharRange") (EVar "src")) (EBinOp "+" (EVar "open") (ELit (LInt 2)))) (EVar "p")) (EBinOp "+" (EVar "p") (ELit (LInt 1))))) (EIf (EVar "otherwise") (EApp (EVar "go") (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))) (EApp (EVar "go") (EVar "p0"))))
 (DTypeSig false "rawTripleGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "LexError")) (TyTuple (TyCon "String") (TyCon "Int"))))))))
-(DFunDef false "rawTripleGo" ((PVar "src") (PVar "len") (PVar "open") (PVar "p")) (EIf (EBinOp ">=" (EVar "p") (EVar "len")) (EApp (EApp (EApp (EVar "lexFailure") (EVar "open")) (EVar "len")) (EVar "UnterminatedString")) (EIf (EApp (EApp (EApp (EVar "isTripleAt") (EVar "src")) (EVar "len")) (EVar "p")) (EApp (EVar "Ok") (ETuple (EApp (EApp (EApp (EVar "copyCharRange") (EVar "src")) (EBinOp "+" (EVar "open") (ELit (LInt 4)))) (EVar "p")) (EBinOp "+" (EVar "p") (ELit (LInt 3))))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "rawTripleGo") (EVar "src")) (EVar "len")) (EVar "open")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "rawTripleGo" ((PVar "src") (PVar "len") (PVar "open") (PVar "p0")) (ELetGroup ((lgb "go" (clause ((PVar "p")) (EIf (EBinOp ">=" (EVar "p") (EVar "len")) (EApp (EApp (EApp (EVar "lexFailure") (EVar "open")) (EVar "len")) (EVar "UnterminatedString")) (EIf (EApp (EApp (EApp (EVar "isTripleAt") (EVar "src")) (EVar "len")) (EVar "p")) (EApp (EVar "Ok") (ETuple (EApp (EApp (EApp (EVar "copyCharRange") (EVar "src")) (EBinOp "+" (EVar "open") (ELit (LInt 4)))) (EVar "p")) (EBinOp "+" (EVar "p") (ELit (LInt 3))))) (EIf (EVar "otherwise") (EApp (EVar "go") (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))) (EApp (EVar "go") (EVar "p0"))))
 # MARK
 (DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("frontend" "parse_diagnostic") ((mem "ParseDiagnosticKind" true) (mem "UnicodeProblem" true))))
@@ -822,7 +846,7 @@ rawTripleGo src len open p
 (DTypeSig false "indentOf" (TyFun (TyCon "String") (TyCon "Int")))
 (DFunDef false "indentOf" ((PVar "line")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "line"))) (DoExpr (EApp (EApp (EApp (EVar "indentOfGo") (EVar "cs")) (EApp (EVar "arrayLength") (EVar "cs"))) (ELit (LInt 0))))))
 (DTypeSig false "indentOfGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "indentOfGo" ((PVar "cs") (PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "indentSentinel") (EIf (EBinOp "==" (EApp (EApp (EVar "at") (EVar "cs")) (EVar "i")) (ELit (LChar " "))) (EApp (EApp (EApp (EVar "indentOfGo") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "indentOfGo" ((PVar "cs") (PVar "n") (PVar "i0")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "indentSentinel") (EIf (EBinOp "==" (EApp (EApp (EVar "at") (EVar "cs")) (EVar "i")) (ELit (LChar " "))) (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit)))))))) (EApp (EVar "go") (EVar "i0"))))
 (DTypeSig false "minIndentGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "minIndentGo" ((PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "minIndentGo" ((PCons (PVar "l") (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "minIndentGo") (EVar "rest")) (EApp (EApp (EMethodRef "min") (EVar "acc")) (EApp (EVar "indentOf") (EVar "l")))))
@@ -885,17 +909,17 @@ rawTripleGo src len open p
 (DTypeSig false "splitRange" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "splitRange" ((PVar "cs") (PVar "start") (PVar "p") (PVar "n")) (EIf (EBinOp ">=" (EVar "p") (EVar "n")) (EListLit (EApp (EApp (EApp (EVar "copyCharRange") (EVar "cs")) (EVar "start")) (EVar "n"))) (EIf (EBinOp "==" (EApp (EApp (EVar "at") (EVar "cs")) (EVar "p")) (ELit (LChar "\n"))) (EBinOp "::" (EApp (EApp (EApp (EVar "copyCharRange") (EVar "cs")) (EVar "start")) (EVar "p")) (EApp (EApp (EApp (EApp (EVar "splitRange") (EVar "cs")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "n"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "splitRange") (EVar "cs")) (EVar "start")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "tripleRunEnd" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "tripleRunEnd" ((PVar "src") (PVar "len") (PVar "p")) (EIf (EBinOp ">=" (EVar "p") (EVar "len")) (EVar "len") (EIf (EBinOp "||" (EBinOp "||" (EApp (EVar "isQuote") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (EApp (EVar "isBackslash") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")))) (EApp (EVar "isNL") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")))) (EVar "p") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "tripleRunEnd") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "tripleRunEnd" ((PVar "src") (PVar "len") (PVar "p0")) (ELetGroup ((lgb "go" (clause ((PVar "p")) (EIf (EBinOp ">=" (EVar "p") (EVar "len")) (EVar "len") (EIf (EBinOp "||" (EBinOp "||" (EApp (EVar "isQuote") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (EApp (EVar "isBackslash") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")))) (EApp (EVar "isNL") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")))) (EVar "p") (EIf (EVar "otherwise") (EApp (EVar "go") (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))) (EApp (EVar "go") (EVar "p0"))))
 (DTypeSig false "uniEscWellFormed" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
 (DFunDef false "uniEscWellFormed" ((PVar "src") (PVar "len") (PVar "p")) (EBlock (DoLet false false (PVar "s") (EBinOp "+" (EVar "p") (ELit (LInt 3)))) (DoLet false false (PVar "he") (EApp (EApp (EApp (EVar "uHexEnd") (EVar "src")) (EVar "len")) (EVar "s"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp ">" (EVar "he") (EVar "s")) (EBinOp "<" (EVar "he") (EVar "len"))) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EVar "he")) (ELit (LChar "}")))))))
 (DTypeSig false "uniHexSigLen" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "uniHexSigLen" ((PVar "src") (PVar "p") (PVar "endp")) (EIf (EBinOp ">=" (EVar "p") (EVar "endp")) (ELit (LInt 0)) (EIf (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")) (ELit (LChar "0"))) (EApp (EApp (EApp (EVar "uniHexSigLen") (EVar "src")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "endp")) (EIf (EVar "otherwise") (EBinOp "-" (EVar "endp") (EVar "p")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "uniHexSigLen" ((PVar "src") (PVar "p0") (PVar "endp")) (ELetGroup ((lgb "go" (clause ((PVar "p")) (EIf (EBinOp ">=" (EVar "p") (EVar "endp")) (ELit (LInt 0)) (EIf (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")) (ELit (LChar "0"))) (EApp (EVar "go") (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EBinOp "-" (EVar "endp") (EVar "p")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))) (EApp (EVar "go") (EVar "p0"))))
 (DTypeSig false "uniEscCode" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))))
 (DFunDef false "uniEscCode" ((PVar "src") (PVar "len") (PVar "p")) (EBlock (DoLet false false (PVar "s") (EBinOp "+" (EVar "p") (ELit (LInt 3)))) (DoLet false false (PVar "he") (EApp (EApp (EApp (EVar "uHexEnd") (EVar "src")) (EVar "len")) (EVar "s"))) (DoExpr (EIf (EBinOp ">" (EApp (EApp (EApp (EVar "uniHexSigLen") (EVar "src")) (EVar "s")) (EVar "he")) (ELit (LInt 6))) (EVar "None") (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EVar "parseHex") (EVar "src")) (EVar "s")) (EVar "he")) (ELit (LInt 0))))))))
 (DTypeSig false "uniEscText" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
 (DFunDef false "uniEscText" ((PVar "src") (PVar "len") (PVar "p")) (EApp (EApp (EApp (EVar "copyCharRange") (EVar "src")) (EVar "p")) (EBinOp "+" (EApp (EApp (EApp (EVar "uHexEnd") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 3)))) (ELit (LInt 1)))))
 (DTypeSig false "uniEscChar" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Char"))))))
-(DFunDef false "uniEscChar" ((PVar "src") (PVar "len") (PVar "p")) (EIf (EApp (EVar "not") (EApp (EApp (EApp (EVar "uniEscWellFormed") (EVar "src")) (EVar "len")) (EVar "p"))) (EVar "None") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EApp (EVar "uniEscCode") (EVar "src")) (EVar "len")) (EVar "p")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "cp")) () (EApp (EVar "charFromCode") (EVar "cp")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "uniEscChar" ((PVar "src") (PVar "len") (PVar "p")) (EIf (EApp (EVar "not") (EApp (EApp (EApp (EVar "uniEscWellFormed") (EVar "src")) (EVar "len")) (EVar "p"))) (EVar "None") (EIf (EVar "otherwise") (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EVar "uniEscCode") (EVar "src")) (EVar "len")) (EVar "p"))) (ELam ((PVar "cp")) (EApp (EVar "charFromCode") (EVar "cp")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "uniIsSurrogate" (TyFun (TyCon "Int") (TyCon "Bool")))
 (DFunDef false "uniIsSurrogate" ((PVar "cp")) (EBinOp "&&" (EBinOp ">=" (EVar "cp") (ELit (LInt 55296))) (EBinOp "<=" (EVar "cp") (ELit (LInt 57343)))))
 (DTypeSig false "uniEscTermErr" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "LexError")) (TyVar "a")))))))))
@@ -905,9 +929,9 @@ rawTripleGo src len open p
 (DTypeSig false "unicodeErrorEnd" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
 (DFunDef false "unicodeErrorEnd" ((PVar "src") (PVar "len") (PVar "p")) (EApp (EApp (EApp (EVar "unicodeErrorEndGo") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 3)))))
 (DTypeSig false "unicodeErrorEndGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "unicodeErrorEndGo" ((PVar "src") (PVar "len") (PVar "p")) (EIf (EBinOp ">=" (EVar "p") (EVar "len")) (EVar "len") (EIf (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")) (ELit (LChar "}"))) (EBinOp "+" (EVar "p") (ELit (LInt 1))) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EApp (EVar "isQuote") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (EApp (EVar "isApos") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")))) (EApp (EVar "isNL") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")))) (EApp (EVar "isCR") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")))) (EVar "p") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "unicodeErrorEndGo") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DFunDef false "unicodeErrorEndGo" ((PVar "src") (PVar "len") (PVar "p0")) (ELetGroup ((lgb "go" (clause ((PVar "p")) (EIf (EBinOp ">=" (EVar "p") (EVar "len")) (EVar "len") (EIf (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")) (ELit (LChar "}"))) (EBinOp "+" (EVar "p") (ELit (LInt 1))) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EApp (EVar "isQuote") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (EApp (EVar "isApos") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")))) (EApp (EVar "isNL") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")))) (EApp (EVar "isCR") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")))) (EVar "p") (EIf (EVar "otherwise") (EApp (EVar "go") (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))) (EApp (EVar "go") (EVar "p0"))))
 (DTypeSig false "uHexEnd" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "uHexEnd" ((PVar "src") (PVar "len") (PVar "p")) (EIf (EBinOp "&&" (EBinOp "<" (EVar "p") (EVar "len")) (EApp (EVar "isHexDigit") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")))) (EApp (EApp (EApp (EVar "uHexEnd") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "p") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "uHexEnd" ((PVar "src") (PVar "len") (PVar "p0")) (ELetGroup ((lgb "go" (clause ((PVar "p")) (EIf (EBinOp "&&" (EBinOp "<" (EVar "p") (EVar "len")) (EApp (EVar "isHexDigit") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")))) (EApp (EVar "go") (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "p") (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EVar "go") (EVar "p0"))))
 (DTypeSig false "isBareUnicodeEsc" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Char") (TyCon "Bool"))))))
 (DFunDef false "isBareUnicodeEsc" ((PVar "src") (PVar "len") (PVar "p") (PVar "e")) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "e") (ELit (LChar "u"))) (EBinOp "<" (EBinOp "+" (EVar "p") (ELit (LInt 2))) (EVar "len"))) (EApp (EVar "isHexDigit") (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "p") (ELit (LInt 2)))))) (EBinOp "==" (EBinOp "-" (EApp (EApp (EApp (EVar "uHexEnd") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 2)))) (EBinOp "+" (EVar "p") (ELit (LInt 2)))) (ELit (LInt 4)))))
 (DTypeSig false "bareUnicodeEscWritten" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
@@ -923,7 +947,7 @@ rawTripleGo src len open p
 (DTypeSig false "lexFailure" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "ParseDiagnosticKind") (TyApp (TyApp (TyCon "Result") (TyCon "LexError")) (TyVar "a"))))))
 (DFunDef false "lexFailure" ((PVar "start") (PVar "end") (PVar "kind")) (EApp (EVar "Err") (EApp (EApp (EApp (EVar "LexError") (EVar "kind")) (EVar "start")) (EVar "end"))))
 (DTypeSig false "parseHex" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
-(DFunDef false "parseHex" ((PVar "src") (PVar "p") (PVar "end") (PVar "acc")) (EIf (EBinOp ">=" (EVar "p") (EVar "end")) (EVar "acc") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (DoLet false false (PVar "d") (EIf (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LChar "0"))) (EBinOp "<=" (EVar "c") (ELit (LChar "9")))) (EBinOp "-" (EApp (EVar "charCode") (EVar "c")) (EApp (EVar "charCode") (ELit (LChar "0")))) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LChar "a"))) (EBinOp "<=" (EVar "c") (ELit (LChar "f")))) (EBinOp "+" (EBinOp "-" (EApp (EVar "charCode") (EVar "c")) (EApp (EVar "charCode") (ELit (LChar "a")))) (ELit (LInt 10))) (EBinOp "+" (EBinOp "-" (EApp (EVar "charCode") (EVar "c")) (EApp (EVar "charCode") (ELit (LChar "A")))) (ELit (LInt 10)))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "parseHex") (EVar "src")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "end")) (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 16))) (EVar "d"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "parseHex" ((PVar "src") (PVar "p0") (PVar "end") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PVar "p") (PVar "acc")) (EIf (EBinOp ">=" (EVar "p") (EVar "end")) (EVar "acc") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (DoLet false false (PVar "d") (EIf (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LChar "0"))) (EBinOp "<=" (EVar "c") (ELit (LChar "9")))) (EBinOp "-" (EApp (EVar "charCode") (EVar "c")) (EApp (EVar "charCode") (ELit (LChar "0")))) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LChar "a"))) (EBinOp "<=" (EVar "c") (ELit (LChar "f")))) (EBinOp "+" (EBinOp "-" (EApp (EVar "charCode") (EVar "c")) (EApp (EVar "charCode") (ELit (LChar "a")))) (ELit (LInt 10))) (EBinOp "+" (EBinOp "-" (EApp (EVar "charCode") (EVar "c")) (EApp (EVar "charCode") (ELit (LChar "A")))) (ELit (LInt 10)))))) (DoExpr (EApp (EApp (EVar "go") (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 16))) (EVar "d"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EApp (EVar "go") (EVar "p0")) (EVar "acc0"))))
 (DTypeSig true "readLiteral" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "LiteralCursor") (TyApp (TyApp (TyCon "Result") (TyCon "LexError")) (TyCon "LiteralRead")))))
 (DFunDef false "readLiteral" ((PVar "src") (PCon "LiteralCursor" (PVar "p") (PVar "_quote") (PVar "flavor") (PVar "part") (PVar "leading") (PVar "inside"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "literalGo") (EVar "src")) (EApp (EVar "arrayLength") (EVar "src"))) (EVar "p")) (EVar "flavor")) (EVar "part")) (EVar "leading")) (EVar "inside")) (EListLit)))
 (DTypeSig false "literalGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "LiteralFlavor") (TyFun (TyCon "LiteralPart") (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "LexError")) (TyCon "LiteralRead")))))))))))
@@ -933,7 +957,7 @@ rawTripleGo src len open p
 (DTypeSig false "isTripleAt" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
 (DFunDef false "isTripleAt" ((PVar "src") (PVar "len") (PVar "p")) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "<" (EBinOp "+" (EVar "p") (ELit (LInt 2))) (EVar "len")) (EApp (EVar "isQuote") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")))) (EApp (EVar "isQuote") (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))))) (EApp (EVar "isQuote") (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "p") (ELit (LInt 2)))))))
 (DTypeSig false "plainRunEnd" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "plainRunEnd" ((PVar "src") (PVar "len") (PVar "p")) (EIf (EBinOp ">=" (EVar "p") (EVar "len")) (EVar "len") (EIf (EBinOp "||" (EApp (EVar "isQuote") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (EApp (EVar "isBackslash") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")))) (EVar "p") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "plainRunEnd") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "plainRunEnd" ((PVar "src") (PVar "len") (PVar "p0")) (ELetGroup ((lgb "go" (clause ((PVar "p")) (EIf (EBinOp ">=" (EVar "p") (EVar "len")) (EVar "len") (EIf (EBinOp "||" (EApp (EVar "isQuote") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (EApp (EVar "isBackslash") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")))) (EVar "p") (EIf (EVar "otherwise") (EApp (EVar "go") (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))) (EApp (EVar "go") (EVar "p0"))))
 (DTypeSig true "readCharacter" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "LexError")) (TyTuple (TyCon "String") (TyCon "Int"))))))
 (DFunDef false "readCharacter" ((PVar "src") (PVar "pos")) (EApp (EApp (EApp (EVar "charRead") (EVar "src")) (EApp (EVar "arrayLength") (EVar "src"))) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))))
 (DTypeSig false "charRead" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "LexError")) (TyTuple (TyCon "String") (TyCon "Int")))))))
@@ -943,7 +967,7 @@ rawTripleGo src len open p
 (DTypeSig false "charFinished" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "LexError")) (TyTuple (TyCon "String") (TyCon "Int")))))))))
 (DFunDef false "charFinished" ((PVar "src") (PVar "len") (PVar "p") (PVar "end") (PVar "s")) (EIf (EBinOp "&&" (EBinOp "<" (EVar "end") (EVar "len")) (EApp (EVar "isApos") (EApp (EApp (EVar "at") (EVar "src")) (EVar "end")))) (EApp (EVar "Ok") (ETuple (EVar "s") (EBinOp "+" (EVar "end") (ELit (LInt 1))))) (EApp (EApp (EApp (EVar "lexFailure") (EBinOp "-" (EVar "p") (ELit (LInt 1)))) (EVar "len")) (EVar "UnterminatedChar"))))
 (DTypeSig false "charClose" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "charClose" ((PVar "src") (PVar "len") (PVar "p")) (EIf (EBinOp ">=" (EVar "p") (EVar "len")) (EVar "p") (EIf (EApp (EVar "isApos") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (EVar "p") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "charClose") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "charClose" ((PVar "src") (PVar "len") (PVar "p0")) (ELetGroup ((lgb "go" (clause ((PVar "p")) (EIf (EBinOp ">=" (EVar "p") (EVar "len")) (EVar "p") (EIf (EApp (EVar "isApos") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (EVar "p") (EIf (EVar "otherwise") (EApp (EVar "go") (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))) (EApp (EVar "go") (EVar "p0"))))
 (DTypeSig true "readByteLiteral" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "LexError")) (TyTuple (TyCon "Int") (TyCon "Int"))))))
 (DFunDef false "readByteLiteral" ((PVar "src") (PVar "pos")) (EBlock (DoLet false false (PVar "len") (EApp (EVar "arrayLength") (EVar "src"))) (DoLet false false (PVar "p") (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "<" (EBinOp "+" (EVar "p") (ELit (LInt 1))) (EVar "len")) (EApp (EVar "isBackslash") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")))) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (ELit (LChar "x")))) (EApp (EApp (EApp (EApp (EVar "hexByteEscape") (EVar "src")) (EVar "len")) (EVar "pos")) (EBinOp "+" (EVar "p") (ELit (LInt 2)))) (EMatch (EApp (EApp (EApp (EVar "charRead") (EVar "src")) (EVar "len")) (EVar "p")) (arm (PCon "Err" (PCon "LexError" (PVar "kind") PWild (PVar "e"))) () (EApp (EApp (EApp (EVar "lexFailure") (EVar "pos")) (EVar "e")) (EApp (EVar "byteKind") (EVar "kind")))) (arm (PCon "Ok" (PTuple (PVar "s") (PVar "next"))) () (EApp (EApp (EApp (EApp (EVar "asciiByte") (EVar "src")) (EVar "pos")) (EVar "next")) (EVar "s"))))))))
 (DTypeSig false "byteKind" (TyFun (TyCon "ParseDiagnosticKind") (TyCon "ParseDiagnosticKind")))
@@ -975,6 +999,6 @@ rawTripleGo src len open p
 (DTypeSig true "readRawLiteral" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "LexError")) (TyTuple (TyCon "String") (TyCon "Int"))))))
 (DFunDef false "readRawLiteral" ((PVar "src") (PVar "pos")) (EBlock (DoLet false false (PVar "len") (EApp (EVar "arrayLength") (EVar "src"))) (DoExpr (EIf (EApp (EApp (EApp (EVar "isTripleAt") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EApp (EApp (EApp (EApp (EVar "rawTripleGo") (EVar "src")) (EVar "len")) (EVar "pos")) (EBinOp "+" (EVar "pos") (ELit (LInt 4)))) (EApp (EApp (EApp (EApp (EVar "rawLineGo") (EVar "src")) (EVar "len")) (EVar "pos")) (EBinOp "+" (EVar "pos") (ELit (LInt 2))))))))
 (DTypeSig false "rawLineGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "LexError")) (TyTuple (TyCon "String") (TyCon "Int"))))))))
-(DFunDef false "rawLineGo" ((PVar "src") (PVar "len") (PVar "open") (PVar "p")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp ">=" (EVar "p") (EVar "len")) (EApp (EVar "isNL") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")))) (EApp (EVar "isCR") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")))) (EApp (EApp (EApp (EVar "lexFailure") (EVar "open")) (EVar "p")) (EVar "UnterminatedString")) (EIf (EApp (EVar "isQuote") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (EApp (EVar "Ok") (ETuple (EApp (EApp (EApp (EVar "copyCharRange") (EVar "src")) (EBinOp "+" (EVar "open") (ELit (LInt 2)))) (EVar "p")) (EBinOp "+" (EVar "p") (ELit (LInt 1))))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "rawLineGo") (EVar "src")) (EVar "len")) (EVar "open")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "rawLineGo" ((PVar "src") (PVar "len") (PVar "open") (PVar "p0")) (ELetGroup ((lgb "go" (clause ((PVar "p")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp ">=" (EVar "p") (EVar "len")) (EApp (EVar "isNL") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")))) (EApp (EVar "isCR") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")))) (EApp (EApp (EApp (EVar "lexFailure") (EVar "open")) (EVar "p")) (EVar "UnterminatedString")) (EIf (EApp (EVar "isQuote") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (EApp (EVar "Ok") (ETuple (EApp (EApp (EApp (EVar "copyCharRange") (EVar "src")) (EBinOp "+" (EVar "open") (ELit (LInt 2)))) (EVar "p")) (EBinOp "+" (EVar "p") (ELit (LInt 1))))) (EIf (EVar "otherwise") (EApp (EVar "go") (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))) (EApp (EVar "go") (EVar "p0"))))
 (DTypeSig false "rawTripleGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "LexError")) (TyTuple (TyCon "String") (TyCon "Int"))))))))
-(DFunDef false "rawTripleGo" ((PVar "src") (PVar "len") (PVar "open") (PVar "p")) (EIf (EBinOp ">=" (EVar "p") (EVar "len")) (EApp (EApp (EApp (EVar "lexFailure") (EVar "open")) (EVar "len")) (EVar "UnterminatedString")) (EIf (EApp (EApp (EApp (EVar "isTripleAt") (EVar "src")) (EVar "len")) (EVar "p")) (EApp (EVar "Ok") (ETuple (EApp (EApp (EApp (EVar "copyCharRange") (EVar "src")) (EBinOp "+" (EVar "open") (ELit (LInt 4)))) (EVar "p")) (EBinOp "+" (EVar "p") (ELit (LInt 3))))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "rawTripleGo") (EVar "src")) (EVar "len")) (EVar "open")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "rawTripleGo" ((PVar "src") (PVar "len") (PVar "open") (PVar "p0")) (ELetGroup ((lgb "go" (clause ((PVar "p")) (EIf (EBinOp ">=" (EVar "p") (EVar "len")) (EApp (EApp (EApp (EVar "lexFailure") (EVar "open")) (EVar "len")) (EVar "UnterminatedString")) (EIf (EApp (EApp (EApp (EVar "isTripleAt") (EVar "src")) (EVar "len")) (EVar "p")) (EApp (EVar "Ok") (ETuple (EApp (EApp (EApp (EVar "copyCharRange") (EVar "src")) (EBinOp "+" (EVar "open") (ELit (LInt 4)))) (EVar "p")) (EBinOp "+" (EVar "p") (ELit (LInt 3))))) (EIf (EVar "otherwise") (EApp (EVar "go") (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))) (EApp (EVar "go") (EVar "p0"))))

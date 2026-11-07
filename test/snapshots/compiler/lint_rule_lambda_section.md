@@ -1,5 +1,5 @@
 # META
-source_lines=216
+source_lines=214
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-lambda-section: a lambda whose body is one binary op on its parameter(s). Prefer an operator section.
@@ -22,12 +22,14 @@ import tools.lint_core.{
   Finding(..),
   Fix,
   Fixability(..),
+  Memo,
   Ratchet(..),
   Rule,
   RuleMeta(..),
   Scope(..),
   StdlibIndex,
   Visitor(..),
+  fixLater,
   mkVisitorRule,
 }
 import tools.lint_shared.{
@@ -153,12 +155,12 @@ lambdaSectionAt facts ctx (ELam pats body) = match lamSection pats body
     lambdaSectionFinding
       ctx.ctxDeclLoc
       sec
-      (lambdaSectionFix facts ctx pats sec),
+      (fixLater (_ => lambdaSectionFix facts ctx pats sec)),
   ]
   None => []
 lambdaSectionAt _ _ _ = []
 
-lambdaSectionFinding : Option Loc -> Section -> Option Fix -> Finding
+lambdaSectionFinding : Option Loc -> Section -> Memo (Option Fix) -> Finding
 lambdaSectionFinding loc s fix = Finding {
   rule = ruleNameLambdaSection,
   message =
@@ -190,19 +192,15 @@ lambdaSectionFix facts ctx pats sec =
 -- its first parameter, found by reading the parameter names back from the
 -- arrow; any other spacing leaves the finding without a fix.
 lambdaSpan : FileFacts -> Ctx -> List Pat -> Option Loc
-lambdaSpan facts ctx pats = match ctx.ctxOwn
-  Some (own@(Loc f sl sc el ec)) =>
-    if parenAt facts sl sc then
-      Some own
-    else match sourceLine facts sl
-      Some line =>
-        map
-          (start => Loc f sl start el ec)
-          (paramsStart
-            (stringSlice 0 sc line)
-            (unwords (flatMap patVarName pats)))
-      None => None
-  None => None
+lambdaSpan facts ctx pats = do
+  own@(Loc f sl sc el ec) <- ctx.ctxOwn
+  if parenAt facts sl sc then
+    Some own
+  else do
+    line <- sourceLine facts sl
+    map
+      (start => Loc f sl start el ec)
+      (paramsStart (stringSlice 0 sc line) (unwords (flatMap patVarName pats)))
 
 patVarName : Pat -> List String
 patVarName (PVar x _ _) = [x]
@@ -210,15 +208,16 @@ patVarName _ = []
 
 -- The column where `params` begins, given the text before the arrow.
 paramsStart : String -> String -> Option Int
-paramsStart before params = match stripSuffix params (trimRight before)
-  Some rest => if endsInIdent rest then None else Some (stringLength rest)
-  None => None
+paramsStart before params = do
+  rest <- stripSuffix params (trimRight before)
+  if endsInIdent rest then None else Some (stringLength rest)
 
 endsInIdent : String -> Bool
 endsInIdent text = match last (toList (stringToChars text))
   Some c => isIdentChar c
   None => False
 # DESUGAR
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Pat" true) (mem "Section" true) (mem "Expr" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "ast_walk") ((mem "ExprKind" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
@@ -229,7 +228,7 @@ endsInIdent text = match last (toList (stringToChars text))
 (DUse false (UseGroup ("string") ((mem "stripSuffix" false) (mem "trimRight" false) (mem "unwords" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "exprToString" false))))
 (DUse false (UseGroup ("tools" "lint_fix") ((mem "Binding" true))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" false) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "mkVisitorRule" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" false) (mem "Fixability" true) (mem "Memo" false) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "fixLater" false) (mem "mkVisitorRule" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "isEVarNamed" false) (mem "mentionsVar" false) (mem "replaceFix" false) (mem "parenAt" false) (mem "sourceLine" false) (mem "ruleNameLambdaSection" false) (mem "unwrapLoc" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameLambdaSection")) (fa "summary" (ELit (LString "lambda whose body is a single binary op on its parameter(s). Prefer an operator section (STYLE \"Dogfooding\")"))) (fa "doc" (ELit (LString "A lambda whose body is a single binary operator applied to its parameter is an operator section. The section is shorter and names no throwaway variable.\n\nBefore:\n  map (x => x + 1) xs\nAfter:\n  map (+ 1) xs"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "Fixable")) (fa "needs" (EListLit))))) (EVar "ruleLambdaSection")) (EVar "None")))
@@ -254,22 +253,23 @@ endsInIdent text = match last (toList (stringToChars text))
 (DTypeSig false "ruleLambdaSection" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor"))))))))
 (DFunDef false "ruleLambdaSection" (PWild PWild (PVar "facts") PWild PWild) (EListLit (EApp (EApp (EVar "OnExpr") (EListLit (EVar "KLam"))) (EApp (EVar "lambdaSectionAt") (EVar "facts")))))
 (DTypeSig false "lambdaSectionAt" (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding"))))))
-(DFunDef false "lambdaSectionAt" ((PVar "facts") (PVar "ctx") (PCon "ELam" (PVar "pats") (PVar "body"))) (EMatch (EApp (EApp (EVar "lamSection") (EVar "pats")) (EVar "body")) (arm (PCon "Some" (PVar "sec")) () (EListLit (EApp (EApp (EApp (EVar "lambdaSectionFinding") (EFieldAccess (EVar "ctx") "ctxDeclLoc")) (EVar "sec")) (EApp (EApp (EApp (EApp (EVar "lambdaSectionFix") (EVar "facts")) (EVar "ctx")) (EVar "pats")) (EVar "sec"))))) (arm (PCon "None") () (EListLit))))
+(DFunDef false "lambdaSectionAt" ((PVar "facts") (PVar "ctx") (PCon "ELam" (PVar "pats") (PVar "body"))) (EMatch (EApp (EApp (EVar "lamSection") (EVar "pats")) (EVar "body")) (arm (PCon "Some" (PVar "sec")) () (EListLit (EApp (EApp (EApp (EVar "lambdaSectionFinding") (EFieldAccess (EVar "ctx") "ctxDeclLoc")) (EVar "sec")) (EApp (EVar "fixLater") (ELam (PWild) (EApp (EApp (EApp (EApp (EVar "lambdaSectionFix") (EVar "facts")) (EVar "ctx")) (EVar "pats")) (EVar "sec"))))))) (arm (PCon "None") () (EListLit))))
 (DFunDef false "lambdaSectionAt" (PWild PWild PWild) (EListLit))
-(DTypeSig false "lambdaSectionFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Section") (TyFun (TyApp (TyCon "Option") (TyCon "Fix")) (TyCon "Finding")))))
+(DTypeSig false "lambdaSectionFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Section") (TyFun (TyApp (TyCon "Memo") (TyApp (TyCon "Option") (TyCon "Fix"))) (TyCon "Finding")))))
 (DFunDef false "lambdaSectionFinding" ((PVar "loc") (PVar "s") (PVar "fix")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameLambdaSection")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "lambda is a single binary operation on its parameter(s). Rewrite as the operator section '")) (EApp (EVar "exprToString") (EApp (EVar "ESection") (EVar "s")))) (ELit (LString "'")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "fix")))))
 (DTypeSig false "lambdaSectionFix" (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Section") (TyApp (TyCon "Option") (TyCon "Fix")))))))
 (DFunDef false "lambdaSectionFix" ((PVar "facts") (PVar "ctx") (PVar "pats") (PVar "sec")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "replaceFix") (EVar "Safe")) (ELit (LString "use the operator section"))) (EApp (EApp (EApp (EVar "lambdaSpan") (EVar "facts")) (EVar "ctx")) (EVar "pats"))) (EVar "Closed")) (EVar "ctx")) (EApp (EVar "exprToString") (EApp (EVar "ESection") (EVar "sec")))))
 (DTypeSig false "lambdaSpan" (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "Option") (TyCon "Loc"))))))
-(DFunDef false "lambdaSpan" ((PVar "facts") (PVar "ctx") (PVar "pats")) (EMatch (EFieldAccess (EVar "ctx") "ctxOwn") (arm (PCon "Some" (PAs "own" (PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec")))) () (EIf (EApp (EApp (EApp (EVar "parenAt") (EVar "facts")) (EVar "sl")) (EVar "sc")) (EApp (EVar "Some") (EVar "own")) (EMatch (EApp (EApp (EVar "sourceLine") (EVar "facts")) (EVar "sl")) (arm (PCon "Some" (PVar "line")) () (EApp (EApp (EVar "map") (ELam ((PVar "start")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "start")) (EVar "el")) (EVar "ec")))) (EApp (EApp (EVar "paramsStart") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "sc")) (EVar "line"))) (EApp (EVar "unwords") (EApp (EApp (EVar "flatMap") (EVar "patVarName")) (EVar "pats")))))) (arm (PCon "None") () (EVar "None"))))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "lambdaSpan" ((PVar "facts") (PVar "ctx") (PVar "pats")) (EApp (EApp (EVar "$core.andThen") (EFieldAccess (EVar "ctx") "ctxOwn")) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PAs "own" (PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec"))) () (EIf (EApp (EApp (EApp (EVar "parenAt") (EVar "facts")) (EVar "sl")) (EVar "sc")) (EApp (EVar "Some") (EVar "own")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "sourceLine") (EVar "facts")) (EVar "sl"))) (ELam ((PVar "line")) (EApp (EApp (EVar "map") (ELam ((PVar "start")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "start")) (EVar "el")) (EVar "ec")))) (EApp (EApp (EVar "paramsStart") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "sc")) (EVar "line"))) (EApp (EVar "unwords") (EApp (EApp (EVar "flatMap") (EVar "patVarName")) (EVar "pats")))))))))))))
 (DTypeSig false "patVarName" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "patVarName" ((PCon "PVar" (PVar "x") PWild PWild)) (EListLit (EVar "x")))
 (DFunDef false "patVarName" (PWild) (EListLit))
 (DTypeSig false "paramsStart" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int")))))
-(DFunDef false "paramsStart" ((PVar "before") (PVar "params")) (EMatch (EApp (EApp (EVar "stripSuffix") (EVar "params")) (EApp (EVar "trimRight") (EVar "before"))) (arm (PCon "Some" (PVar "rest")) () (EIf (EApp (EVar "endsInIdent") (EVar "rest")) (EVar "None") (EApp (EVar "Some") (EApp (EVar "stringLength") (EVar "rest"))))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "paramsStart" ((PVar "before") (PVar "params")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "stripSuffix") (EVar "params")) (EApp (EVar "trimRight") (EVar "before")))) (ELam ((PVar "rest")) (EIf (EApp (EVar "endsInIdent") (EVar "rest")) (EVar "None") (EApp (EVar "Some") (EApp (EVar "stringLength") (EVar "rest")))))))
 (DTypeSig false "endsInIdent" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "endsInIdent" ((PVar "text")) (EMatch (EApp (EVar "last") (EApp (EVar "toList") (EApp (EVar "stringToChars") (EVar "text")))) (arm (PCon "Some" (PVar "c")) () (EApp (EVar "isIdentChar") (EVar "c"))) (arm (PCon "None") () (EVar "False"))))
 # MARK
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Pat" true) (mem "Section" true) (mem "Expr" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "ast_walk") ((mem "ExprKind" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
@@ -280,7 +280,7 @@ endsInIdent text = match last (toList (stringToChars text))
 (DUse false (UseGroup ("string") ((mem "stripSuffix" false) (mem "trimRight" false) (mem "unwords" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "exprToString" false))))
 (DUse false (UseGroup ("tools" "lint_fix") ((mem "Binding" true))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" false) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "mkVisitorRule" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" false) (mem "Fixability" true) (mem "Memo" false) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "fixLater" false) (mem "mkVisitorRule" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "isEVarNamed" false) (mem "mentionsVar" false) (mem "replaceFix" false) (mem "parenAt" false) (mem "sourceLine" false) (mem "ruleNameLambdaSection" false) (mem "unwrapLoc" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameLambdaSection")) (fa "summary" (ELit (LString "lambda whose body is a single binary op on its parameter(s). Prefer an operator section (STYLE \"Dogfooding\")"))) (fa "doc" (ELit (LString "A lambda whose body is a single binary operator applied to its parameter is an operator section. The section is shorter and names no throwaway variable.\n\nBefore:\n  map (x => x + 1) xs\nAfter:\n  map (+ 1) xs"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "Fixable")) (fa "needs" (EListLit))))) (EVar "ruleLambdaSection")) (EVar "None")))
@@ -305,18 +305,18 @@ endsInIdent text = match last (toList (stringToChars text))
 (DTypeSig false "ruleLambdaSection" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor"))))))))
 (DFunDef false "ruleLambdaSection" (PWild PWild (PVar "facts") PWild PWild) (EListLit (EApp (EApp (EVar "OnExpr") (EListLit (EVar "KLam"))) (EApp (EVar "lambdaSectionAt") (EVar "facts")))))
 (DTypeSig false "lambdaSectionAt" (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding"))))))
-(DFunDef false "lambdaSectionAt" ((PVar "facts") (PVar "ctx") (PCon "ELam" (PVar "pats") (PVar "body"))) (EMatch (EApp (EApp (EVar "lamSection") (EVar "pats")) (EVar "body")) (arm (PCon "Some" (PVar "sec")) () (EListLit (EApp (EApp (EApp (EVar "lambdaSectionFinding") (EFieldAccess (EVar "ctx") "ctxDeclLoc")) (EVar "sec")) (EApp (EApp (EApp (EApp (EVar "lambdaSectionFix") (EVar "facts")) (EVar "ctx")) (EVar "pats")) (EVar "sec"))))) (arm (PCon "None") () (EListLit))))
+(DFunDef false "lambdaSectionAt" ((PVar "facts") (PVar "ctx") (PCon "ELam" (PVar "pats") (PVar "body"))) (EMatch (EApp (EApp (EVar "lamSection") (EVar "pats")) (EVar "body")) (arm (PCon "Some" (PVar "sec")) () (EListLit (EApp (EApp (EApp (EVar "lambdaSectionFinding") (EFieldAccess (EVar "ctx") "ctxDeclLoc")) (EVar "sec")) (EApp (EVar "fixLater") (ELam (PWild) (EApp (EApp (EApp (EApp (EVar "lambdaSectionFix") (EVar "facts")) (EVar "ctx")) (EVar "pats")) (EVar "sec"))))))) (arm (PCon "None") () (EListLit))))
 (DFunDef false "lambdaSectionAt" (PWild PWild PWild) (EListLit))
-(DTypeSig false "lambdaSectionFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Section") (TyFun (TyApp (TyCon "Option") (TyCon "Fix")) (TyCon "Finding")))))
+(DTypeSig false "lambdaSectionFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Section") (TyFun (TyApp (TyCon "Memo") (TyApp (TyCon "Option") (TyCon "Fix"))) (TyCon "Finding")))))
 (DFunDef false "lambdaSectionFinding" ((PVar "loc") (PVar "s") (PVar "fix")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameLambdaSection")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "lambda is a single binary operation on its parameter(s). Rewrite as the operator section '")) (EApp (EVar "exprToString") (EApp (EVar "ESection") (EVar "s")))) (ELit (LString "'")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "fix")))))
 (DTypeSig false "lambdaSectionFix" (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Section") (TyApp (TyCon "Option") (TyCon "Fix")))))))
 (DFunDef false "lambdaSectionFix" ((PVar "facts") (PVar "ctx") (PVar "pats") (PVar "sec")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "replaceFix") (EVar "Safe")) (ELit (LString "use the operator section"))) (EApp (EApp (EApp (EVar "lambdaSpan") (EVar "facts")) (EVar "ctx")) (EVar "pats"))) (EVar "Closed")) (EVar "ctx")) (EApp (EVar "exprToString") (EApp (EVar "ESection") (EVar "sec")))))
 (DTypeSig false "lambdaSpan" (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "Option") (TyCon "Loc"))))))
-(DFunDef false "lambdaSpan" ((PVar "facts") (PVar "ctx") (PVar "pats")) (EMatch (EFieldAccess (EVar "ctx") "ctxOwn") (arm (PCon "Some" (PAs "own" (PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec")))) () (EIf (EApp (EApp (EApp (EVar "parenAt") (EVar "facts")) (EVar "sl")) (EVar "sc")) (EApp (EVar "Some") (EVar "own")) (EMatch (EApp (EApp (EVar "sourceLine") (EVar "facts")) (EVar "sl")) (arm (PCon "Some" (PVar "line")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "start")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "start")) (EVar "el")) (EVar "ec")))) (EApp (EApp (EVar "paramsStart") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "sc")) (EVar "line"))) (EApp (EVar "unwords") (EApp (EApp (EDictApp "flatMap") (EVar "patVarName")) (EVar "pats")))))) (arm (PCon "None") () (EVar "None"))))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "lambdaSpan" ((PVar "facts") (PVar "ctx") (PVar "pats")) (EApp (EApp (EVar "$core.andThen") (EFieldAccess (EVar "ctx") "ctxOwn")) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PAs "own" (PCon "Loc" (PVar "f") (PVar "sl") (PVar "sc") (PVar "el") (PVar "ec"))) () (EIf (EApp (EApp (EApp (EVar "parenAt") (EVar "facts")) (EVar "sl")) (EVar "sc")) (EApp (EVar "Some") (EVar "own")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "sourceLine") (EVar "facts")) (EVar "sl"))) (ELam ((PVar "line")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "start")) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "sl")) (EVar "start")) (EVar "el")) (EVar "ec")))) (EApp (EApp (EVar "paramsStart") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "sc")) (EVar "line"))) (EApp (EVar "unwords") (EApp (EApp (EDictApp "flatMap") (EVar "patVarName")) (EVar "pats")))))))))))))
 (DTypeSig false "patVarName" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "patVarName" ((PCon "PVar" (PVar "x") PWild PWild)) (EListLit (EVar "x")))
 (DFunDef false "patVarName" (PWild) (EListLit))
 (DTypeSig false "paramsStart" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int")))))
-(DFunDef false "paramsStart" ((PVar "before") (PVar "params")) (EMatch (EApp (EApp (EVar "stripSuffix") (EVar "params")) (EApp (EVar "trimRight") (EVar "before"))) (arm (PCon "Some" (PVar "rest")) () (EIf (EApp (EVar "endsInIdent") (EVar "rest")) (EVar "None") (EApp (EVar "Some") (EApp (EVar "stringLength") (EVar "rest"))))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "paramsStart" ((PVar "before") (PVar "params")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "stripSuffix") (EVar "params")) (EApp (EVar "trimRight") (EVar "before")))) (ELam ((PVar "rest")) (EIf (EApp (EVar "endsInIdent") (EVar "rest")) (EVar "None") (EApp (EVar "Some") (EApp (EVar "stringLength") (EVar "rest")))))))
 (DTypeSig false "endsInIdent" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "endsInIdent" ((PVar "text")) (EMatch (EApp (EVar "last") (EApp (EMethodRef "toList") (EApp (EVar "stringToChars") (EVar "text")))) (arm (PCon "Some" (PVar "c")) () (EApp (EVar "isIdentChar") (EVar "c"))) (arm (PCon "None") () (EVar "False"))))

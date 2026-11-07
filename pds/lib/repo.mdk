@@ -179,13 +179,15 @@ findPathSlash path i slash =
     findPathSlash path (i + 1) slash
 
 lastDotBefore : Bytes -> Int -> Int -> Int -> Int
-lastDotBefore bytes i end last =
-  if i >= end then
-    last
-  else if byteAt bytes i == 46 then
-    lastDotBefore bytes (i + 1) end i
-  else
-    lastDotBefore bytes (i + 1) end last
+lastDotBefore bytes i0 end last0 = go i0 last0
+  where
+    go i last =
+      if i >= end then
+        last
+      else if byteAt bytes i == 46 then
+        go (i + 1) i
+      else
+        go (i + 1) last
 
 normalizedAuthority : Bytes -> Int -> Bool
 normalizedAuthority path end =
@@ -743,13 +745,12 @@ nodeLinks bytes = match dagCborDecode bytes
       DcNull => Ok cidSeqEmpty
       DcLink cid => Ok (cidSeqAdd cid cidSeqEmpty)
       _ => Err "repo: tampered graph left link"
-    match initial
-      Err message => Err message
-      Ok trees =>
-        map
-          ((foundTrees, foundLeaves) =>
-            (cidSeqList foundTrees, cidSeqList foundLeaves))
-          (entryLinks entries trees cidSeqEmpty)
+    do
+      trees <- initial
+      map
+        ((foundTrees, foundLeaves) =>
+          (cidSeqList foundTrees, cidSeqList foundLeaves))
+        (entryLinks entries trees cidSeqEmpty)
   Ok _ => Err "repo: tampered graph node form"
 
 walkNodes : List Cid ->
@@ -813,17 +814,16 @@ repoExportGraph commitCid commitBytes dataRoot store =
         Ok (_, commitData, _, _) =>
           if not (cidEqual commitData dataRoot) then
             Err "repo: commit data mismatch"
-          else match walkNodes [dataRoot] store [] cidSeqEmpty 0
-            Err message => Err message
-            Ok (nodes, leaves) => match mstValidateBlocks dataRoot nodes
+          else do
+            (nodes, leaves) <- walkNodes [dataRoot] store [] cidSeqEmpty 0
+            match mstValidateBlocks dataRoot nodes
               Err message => Err "repo: invalid graph MST: \{message}"
-              Ok () => match recordBlocks leaves store []
-                Err message => Err message
-                Ok records =>
-                  let blocks = (commitCid, commitBytes) :: nodes ++ records
-                  match carEncode [commitCid] blocks
-                    Err message => Err "repo: CAR export failed: \{message}"
-                    Ok bytes => Ok (blocks, bytes)
+              Ok () => do
+                records <- recordBlocks leaves store []
+                let blocks = (commitCid, commitBytes) :: nodes ++ records
+                match carEncode [commitCid] blocks
+                  Err message => Err "repo: CAR export failed: \{message}"
+                  Ok bytes => Ok (blocks, bytes)
 
 -- | Deterministic full repository CAR bytes.
 export

@@ -1,0 +1,458 @@
+import test.{Expectation, expectAll, expectEqual, labelFail}
+import frontend.parser.{parse}
+import frontend.desugar.{desugar}
+import types.typecheck.{defaultDriveInputs, elaborateOneFacts}
+import types.tc_elab.{grantWholeDomain}
+import ir.core_ir.{CBind(..), CClause(..), CProgram(..)}
+import ir.core_ir_lower.{lowerTypedProgramWith, noInlineFnNames}
+import ir.core_ir_eval.{cevalMainOf}
+import ir.core_ir_sexp.{cexprSexp, defaultSexpMode}
+import ir.core_opt_unfold.{inlineTrivialCalls, propagateLiteralGlobals}
+import ir.core_walk.{bindName}
+-- Sibling test module for `compiler/ir/core_opt_unfold.mdk` ([P-TEST-SIBLING]).
+--
+-- `passCase` is the pass test vehicle: it typechecks a source program, lowers it
+-- with the interpreter-safe lowering, applies ONE pass and returns the before and
+-- after sexp with the interpreter's answer on each.  It takes the pass as a plain
+-- function, so any `CProgram -> CProgram` pass reuses it.
+
+prelude : String
+prelude =
+  "interface Num a where\n  fromInt : Int -> a\nimpl Num Int where\n  fromInt n = n\nimpl Num Float where\n  fromInt n = 1.5\ndata Money = Money Int\nimpl Num Money where\n  fromInt n = Money n\nunMoney : Money -> Int\nunMoney (Money n) = n"
+
+-- (binding body before, binding body after, interpreter answer before, interpreter
+-- answer after) for the binding named [target]; the interpreter runs `main`.
+passCase : (CProgram -> CProgram) ->
+  String ->
+  String ->
+  (String, String, String, String)
+passCase pass target src =
+  let (decls, facts) = elaborateOneFacts defaultDriveInputs [] (desugar
+    (parse prelude)) (
+    "passcase",
+    grantWholeDomain (desugar (parse src)),
+  )
+  let before = lowerTypedProgramWith facts decls
+  let after = pass before
+  (
+    bodyOf target before,
+    bodyOf target after,
+    cevalMainOf facts decls before,
+    cevalMainOf facts decls after,
+  )
+
+bodyOf : String -> CProgram -> String
+bodyOf target (CProgram binds _ _ _ _ _) =
+  match find (b => bindName b == target) binds
+    Some (CBind _ ((CClause _ body) :: _) _ _) => cexprSexp defaultSexpMode body
+    _ => "no binding \{target}"
+
+-- The pass with no `@noinline` names.
+inlineAll : CProgram -> CProgram
+inlineAll = inlineTrivialCalls []
+
+-- The four results of `passCase` held to their expected values; the interpreter
+-- gives [out] on both sides.
+expectCase : String ->
+  String ->
+  String ->
+  (String, String, String, String) ->
+  Expectation
+expectCase before after out (gotBefore, gotAfter, outBefore, outAfter) = expectAll
+  [
+    labelFail "before" (expectEqual before gotBefore),
+    labelFail "after" (expectEqual after gotAfter),
+    labelFail "interpreter before" (expectEqual out outBefore),
+    labelFail "interpreter after" (expectEqual out outAfter),
+  ]
+
+-- `fromInt` at a given instance, as the dump prints the occurrence.
+fromIntAt : String -> String
+fromIntAt inst =
+  "(CMethod \"fromInt\" \"core::Num\" 1 (RKey \"core::Num|\{inst}|\") () ())"
+
+-- A saturated call of `fromInt` at [inst] on the printed argument [arg].
+callAt : String -> String -> String -> String
+callAt inst arg mode = "(CApp \{fromIntAt inst} (\{arg}) CallExact \{mode})"
+
+-- An integer literal as the lowering prints it before the pass: `fromInt` at Int.
+intLit : Int -> String
+intLit n = callAt "Int" "(CLit (LInt \{n}))" "false"
+
+-- A call of the variable [f] on the printed arguments [args].
+callOf : String -> String -> String -> String
+callOf f args mode =
+  "(CApp (CVar \"\{f}\" AGlobal) (\{args}) CallExact \{mode})"
+
+-- `unMoney` applied to the printed [arg], as `main`'s body.
+unMoneyOf : String -> String
+unMoneyOf arg = callOf "unMoney" arg "false"
+
+-- Every `3` is itself `fromInt 3` at its type, so the literal case unfolds the
+-- written call and the literal's own.
+test "fromInt at Int on a literal unfolds to the literal" =
+  expectCase
+    (callAt "Int" (intLit 3) "false")
+    "(CLit (LInt 3))"
+    "3"
+    (passCase inlineAll "main" "main = (fromInt 3 : Int)")
+
+test "fromInt at Int on a variable unfolds to the variable" =
+  expectCase
+    (callAt "Int" "(CVar \"n\" AGlobal)" "true")
+    "(CVar \"n\" AGlobal)"
+    "4"
+    (passCase inlineAll "f" """
+f n = (fromInt n : Int)
+main = f 4
+""")
+
+-- The vehicle's `Num Float` ignores its parameter, so it is not trivial.
+test "fromInt at a Float that drops its parameter keeps its call" =
+  expectCase
+    (callAt "Float" (intLit 2) "false")
+    (callAt "Float" "(CLit (LInt 2))" "false")
+    "1.5"
+    (passCase inlineAll "main" "main = (fromInt 2 : Float)")
+
+test "fromInt at a user Num reached by its route word unfolds to the constructor" =
+  expectCase
+    (unMoneyOf (callAt "Money" (intLit 5) "false"))
+    (unMoneyOf (callOf "Money" "(CLit (LInt 5))" "false"))
+    "5"
+    (passCase inlineAll "main" "main = unMoney (fromInt 5)")
+
+test "an unsaturated fromInt value is left alone" =
+  expectCase
+    (callOf "apply" "\{fromIntAt "Int"} \{intLit 6}" "false")
+    (callOf "apply" "\{fromIntAt "Int"} (CLit (LInt 6))" "false")
+    "6"
+    (passCase
+      inlineAll
+      "main"
+      """
+apply g x = g x
+main = apply (fromInt : Int -> Int) 6
+""")
+
+test "a wrapper forwarding to an extern unfolds to the extern call" =
+  expectCase
+    (callOf "toF" (intLit 2) "false")
+    (callOf "intToFloat" "(CLit (LInt 2))" "false")
+    "2.0"
+    (passCase
+      inlineAll
+      "main"
+      """
+extern intToFloat : Int -> Float
+toF : Int -> Float
+toF n = intToFloat n
+main = toF 2
+""")
+
+test "a wrapper forwarding to a constructor unfolds to the constructor" =
+  expectCase
+    (unMoneyOf (callOf "wrap" (intLit 7) "false"))
+    (unMoneyOf (callOf "Money" "(CLit (LInt 7))" "false"))
+    "7"
+    (passCase
+      inlineAll
+      "main"
+      """
+wrap : Int -> Money
+wrap n = Money n
+main = unMoney (wrap 7)
+""")
+
+-- `toMoney` forwards to `fromInt` at Money, which forwards to `Money`.
+test "a chain of wrappers unfolds to the last head" =
+  expectCase
+    (unMoneyOf (callOf "toMoney" (intLit 8) "false"))
+    (unMoneyOf (callOf "Money" "(CLit (LInt 8))" "false"))
+    "8"
+    (passCase
+      inlineAll
+      "main"
+      """
+toMoney : Int -> Money
+toMoney n = fromInt n
+main = unMoney (toMoney 8)
+""")
+
+test "a @noinline wrapper keeps its call" =
+  let src =
+    """
+@noinline
+wrap : Int -> Money
+wrap n = Money n
+main = unMoney (wrap 7)
+"""
+  expectCase
+    (unMoneyOf (callOf "wrap" (intLit 7) "false"))
+    (unMoneyOf (callOf "wrap" "(CLit (LInt 7))" "false"))
+    "7"
+    (passCase
+      (inlineTrivialCalls (noInlineFnNames (desugar (parse src))))
+      "main"
+      src)
+
+-- `g`'s parameter rebinds `intToFloat`, the name `toF`'s body calls.
+test "a call whose unfolding head a local binder rebinds keeps its call" =
+  expectCase
+    (callOf "toF" (intLit 1) "true")
+    (callOf "toF" "(CLit (LInt 1))" "true")
+    "1.0"
+    (passCase
+      inlineAll
+      "g"
+      """
+extern intToFloat : Int -> Float
+toF : Int -> Float
+toF n = intToFloat n
+g : (Int -> Float) -> Float
+g intToFloat = toF 1
+main = g (_ => 0.5)
+""")
+
+test "a wrapper using its parameter twice keeps its call" =
+  expectCase
+    (callOf "left" (callOf "dup" (intLit 3) "false") "false")
+    (callOf "left" (callOf "dup" "(CLit (LInt 3))" "false") "false")
+    "3"
+    (passCase
+      inlineAll
+      "main"
+      """
+data P = P Int Int
+left : P -> Int
+left (P a _) = a
+dup : Int -> P
+dup n = P n n
+main = left (dup 3)
+""")
+
+test "a wrapper dropping a parameter keeps its call" =
+  expectCase
+    (unMoneyOf (callOf "pick" "\{intLit 4} \{intLit 5}" "false"))
+    (unMoneyOf (callOf "pick" "(CLit (LInt 4)) (CLit (LInt 5))" "false"))
+    "4"
+    (passCase
+      inlineAll
+      "main"
+      """
+pick : Int -> Int -> Money
+pick a b = Money a
+main = unMoney (pick 4 5)
+""")
+
+test "a wrapper passing its parameters out of order keeps its call" =
+  expectCase
+    (callOf "left" (callOf "swap" "\{intLit 1} \{intLit 2}" "false") "false")
+    (callOf
+      "left"
+      (callOf "swap" "(CLit (LInt 1)) (CLit (LInt 2))" "false")
+      "false")
+    "2"
+    (passCase
+      inlineAll
+      "main"
+      """
+data P = P Int Int
+left : P -> Int
+left (P a _) = a
+swap : Int -> Int -> P
+swap a b = P b a
+main = left (swap 1 2)
+""")
+
+test "an unsaturated wrapper value is left alone" =
+  expectCase
+    (unMoneyOf (callOf "apply" "(CVar \"wrap\" AGlobal) \{intLit 9}" "false"))
+    (unMoneyOf
+      (callOf "apply" "(CVar \"wrap\" AGlobal) (CLit (LInt 9))" "false"))
+    "9"
+    (passCase
+      inlineAll
+      "main"
+      """
+wrap : Int -> Money
+wrap n = Money n
+apply : (Int -> Money) -> Int -> Money
+apply g x = g x
+main = unMoney (apply wrap 9)
+""")
+
+test "a self-recursive wrapper keeps its call" =
+  expectCase
+    (callOf "spin" "(CVar \"n\" AGlobal)" "true")
+    (callOf "spin" "(CVar \"n\" AGlobal)" "true")
+    "1"
+    (passCase inlineAll "spin" """
+spin : Int -> Int
+spin n = spin n
+main = 1
+""")
+
+-- `Mk (Box a)` requires `Num a`, so its entry takes that dictionary first.
+test "an impl entry that takes requires dictionaries keeps its call" =
+  let (before, after, outBefore, outAfter) =
+    passCase
+      inlineAll
+      "useMk"
+      """
+interface Mk a where
+  mk : Int -> a
+data Box a = Box Int
+impl Mk (Box a) requires Num a where
+  mk n = Box n
+unBox : Box Int -> Int
+unBox (Box n) = n
+useMk : Int -> Box Int
+useMk n = mk n
+main = unBox (useMk 3)
+"""
+  expectAll [
+    labelFail "unchanged" (expectEqual before after),
+    labelFail "interpreter before" (expectEqual "3" outBefore),
+    labelFail "interpreter after" (expectEqual "3" outAfter),
+  ]
+
+-- ── propagateLiteralGlobals ────────────────────────────────────────────────
+
+-- Both passes in the slot's order: the first turns `fromInt@Int 3` into `3`.
+propagateAll : CProgram -> CProgram
+propagateAll p = propagateLiteralGlobals [] (inlineAll p)
+
+test "a read of an Int literal global becomes the literal" =
+  expectCase
+    "(CVar \"k\" AGlobal)"
+    "(CLit (LInt 3))"
+    "3"
+    (passCase propagateAll "f" """
+k : Int
+k = 3
+f : Int
+f = k
+main = f
+""")
+
+test "a read of a U64 literal global in U64 arithmetic becomes the literal" =
+  expectCase
+    "(CBinPrim \"+\" (CVar \"m\" AGlobal) (CVar \"x\" AGlobal) \"U64\")"
+    "(CBinPrim \"+\" (CLit (LInt 7)) (CVar \"x\" AGlobal) \"U64\")"
+    "9"
+    (passCase
+      propagateAll
+      "f"
+      """
+m : U64
+m = 7
+f : U64 -> U64
+f x = m + x
+main = f 2
+""")
+
+test "a read of a Float literal global stays a read" =
+  expectCase
+    "(CVar \"k\" AGlobal)"
+    "(CVar \"k\" AGlobal)"
+    "2.5"
+    (passCase
+      propagateAll
+      "f"
+      """
+k : Float
+k = 2.5
+f : Float
+f = k
+main = f
+""")
+
+test "a read whose name a local binder rebinds is left alone" =
+  expectCase
+    "(CVar \"k\" AGlobal)"
+    "(CVar \"k\" AGlobal)"
+    "5"
+    (passCase
+      propagateAll
+      "f"
+      """
+k : Int
+k = 3
+f : Int -> Int
+f k = k
+main = f 5
+""")
+
+test "a read at the top level of another global becomes the literal" =
+  expectCase
+    "(CVar \"k\" AGlobal)"
+    "(CLit (LInt 3))"
+    "3"
+    (passCase propagateAll "j" """
+k : Int
+k = 3
+j : Int
+j = k
+main = j
+""")
+
+test "a literal global that is fromInt at Int is read as its literal" =
+  expectCase
+    "(CVar \"k\" AGlobal)"
+    "(CLit (LInt 3))"
+    "3"
+    (passCase
+      propagateAll
+      "g"
+      """
+k : Int
+k = fromInt 3
+g : Int
+g = k
+main = g
+""")
+
+-- Inlining `wrap` would force the value `g` before the argument runs, moving
+-- which panic fires.  `main` does not run `h`, since the interpreter aborts on the
+-- panic; the probe `wrap (boom "arg")` as `main` is held to `arg` by the native
+-- and `run` engines.
+test "a wrapper whose head is a top-level value keeps its call" =
+  expectCase
+    (wrapArg "boom")
+    (wrapArg "panic")
+    "0"
+    (passCase
+      inlineAll
+      "h"
+      """
+boom : String -> Int
+boom msg = panic msg
+g : Int -> Int
+g = if boom "init" > 0 then (x => x) else (x => x + 1)
+wrap : Int -> Int
+wrap x = g x
+h : Int
+h = wrap (boom "arg")
+main = 0
+""")
+
+test "a wrapper whose head is an ordinary function is still inlined" =
+  expectCase
+    (callOf "wrap" (intLit 4) "false")
+    (callOf "g" "(CLit (LInt 4))" "false")
+    "5"
+    (passCase
+      inlineAll
+      "main"
+      """
+g : Int -> Int
+g y = y + 1
+wrap : Int -> Int
+wrap x = g x
+main = wrap 4
+""")
+
+-- `wrap (f "arg")`, kept as a call of `wrap`; `boom` itself unfolds to `panic`.
+wrapArg : String -> String
+wrapArg f = callOf "wrap" (callOf f "(CLit (LString \"arg\"))" "false") "false"

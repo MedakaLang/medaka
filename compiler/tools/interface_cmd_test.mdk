@@ -56,9 +56,9 @@ test "show lists every published row of every section" =
       ]
 
 copyInto : String -> String -> <IO> Result String Unit
-copyInto dir name = match readFile (underRoot "stdlib/\{name}")
-  Err e => Err e
-  Ok text => writeFile "\{dir}/\{name}" text
+copyInto dir name = do
+  text <- readFile (underRoot "stdlib/\{name}")
+  writeFile "\{dir}/\{name}" text
 
 -- [body] run on a scratch directory holding the real runtime.mdk and core.mdk.
 withStagedStdlib : (String -> <Exec, IO, FileRead, FileWrite> Expectation) ->
@@ -539,10 +539,9 @@ verdictOfCounter : String ->
   String ->
   Bool ->
   <Exec, IO, FileWrite, Env "MEDAKA_ROOT", Env "MEDAKA"> Result String String
-verdictOfCounter dir fresh redigest =
-  match counterEdited fresh (k => k - 1) redigest
-    Ok edited => verdictOfText dir edited
-    Err e => Err e
+verdictOfCounter dir fresh redigest = do
+  edited <- counterEdited fresh (k => k - 1) redigest
+  verdictOfText dir edited
 
 test "verify names the component of a header edit, a truncation and an empty elaborated file" = withStagedStdlib
   (dir => match runCommandBatch "env" 1 [writeArgv dir]

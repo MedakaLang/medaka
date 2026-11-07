@@ -245,7 +245,7 @@ setMembers _ = []
 largestSet : Param -> Int
 largestSet (PSet (Some xs)) = listLen xs
 largestSet (PProduct ax) = fold (acc a => max acc (largestSet (snd a))) 0 ax
-largestSet _ = 0
+largestSet (PUnit | PPrefix _ | PPath _ | PSet _) = 0
 
 headParam : List Param -> Param
 headParam (p :: _) = p
@@ -363,17 +363,19 @@ data PGroup =
   PGroup String (List (String, Param)) (Option (List String)) (List (String, Param))
 
 addGroup : String -> Param -> List PGroup -> List PGroup
-addGroup axis p gs =
-  let others = otherAxes axis p
-  let key = axesKey others
-  let members = axisMembers axis p
-  match gs
-    [] => [PGroup key others members (productAxes p)]
-    (PGroup k o ms t) :: rest =>
-      if k == key then
-        PGroup k o (unionMembers ms members) t :: rest
-      else
-        PGroup k o ms t :: addGroup axis p rest
+addGroup axis p gs0 = go gs0
+  where
+    go gs =
+      let others = otherAxes axis p
+      let key = axesKey others
+      let members = axisMembers axis p
+      match gs
+        [] => [PGroup key others members (productAxes p)]
+        (PGroup k o ms t) :: rest =>
+          if k == key then
+            PGroup k o (unionMembers ms members) t :: rest
+          else
+            PGroup k o ms t :: go rest
 
 productAxes : Param -> List (String, Param)
 productAxes (PProduct ax) = ax
@@ -517,13 +519,15 @@ commonPrefixLen : String -> String -> Int -> Int
 commonPrefixLen a b i = commonPrefixChars (stringToChars a) (stringToChars b) i
 
 commonPrefixChars : Array Char -> Array Char -> Int -> Int
-commonPrefixChars xs ys i =
-  if i >= arrayLength xs || i >= arrayLength ys then
-    i
-  else if arrayGetUnsafe i xs == arrayGetUnsafe i ys then
-    commonPrefixChars xs ys (i + 1)
-  else
-    i
+commonPrefixChars xs ys i0 = go i0
+  where
+    go i =
+      if i >= arrayLength xs || i >= arrayLength ys then
+        i
+      else if arrayGetUnsafe i xs == arrayGetUnsafe i ys then
+        go (i + 1)
+      else
+        i
 
 export
 drender : Param -> String

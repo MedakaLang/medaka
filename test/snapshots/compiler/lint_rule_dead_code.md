@@ -1,5 +1,5 @@
 # META
-source_lines=313
+source_lines=320
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-dead-code: a private top-level binding that nothing reachable from the file's exports, `main` or doctests uses.
@@ -25,10 +25,11 @@ import tools.lint_core.{
   StdlibIndex,
   factComments,
   mkRule,
+  noFix,
+  factDeclLocs,
 }
 import tools.lint_shared.{
   dedupeNamesLoc,
-  declLocList,
   nameSetOf,
   ruleNameDeadCode,
   sortUniqS,
@@ -88,9 +89,9 @@ ruleDeadCode : StdlibIndex ->
   Positions ->
   List Decl ->
   List Finding
-ruleDeadCode _ _ facts pos prog =
+ruleDeadCode _ _ facts _ prog =
   let reach = reachableNames facts prog
-  map deadFinding (filterList (deadPair reach) (privateDefLocs pos prog))
+  map deadFinding (filterList (deadPair reach) (privateDefLocs facts prog))
 
 deadPair : HashMap String Unit -> (String, Option Loc) -> Bool
 deadPair reach (n, _) = not (has n reach)
@@ -104,7 +105,7 @@ deadFinding (name, loc) = Finding {
       ++ "' is unreachable from exports/main/doctests — remove it (dead code)",
   severity = SevWarning,
   loc = loc,
-  fix = None,
+  fix = noFix,
 }
 
 -- private (unexported) top-level fn/value bindings, deduped by name (first loc),
@@ -115,8 +116,8 @@ deadFinding (name, loc) = Finding {
 -- (`DTypeSig True`), NOT the `DFunDef` — so exportedness is decided by
 -- `exportedNames` (which unions DFunDef-pub and DTypeSig-pub), not the DFunDef
 -- flag alone.
-privateDefLocs : Positions -> List Decl -> List (String, Option Loc)
-privateDefLocs pos prog =
+privateDefLocs : FileFacts -> List Decl -> List (String, Option Loc)
+privateDefLocs facts prog =
   -- HashMap-as-set: `contains` over the exported LIST was O(exports) per decl,
   -- i.e. O(decls x exports) over the filterList — one of this rule's four
   -- List-as-a-set quadratics (see reachableNames).  Membership only; order
@@ -125,7 +126,7 @@ privateDefLocs pos prog =
   dedupeNamesLoc
     (filterList
       (candidatePair exported)
-      (flatMap allDefNameL (declLocList pos prog)))
+      (flatMap allDefNameL (factDeclLocs facts)))
 
 allDefNameL : (Decl, Option Loc) -> List (String, Option Loc)
 allDefNameL (DFunDef _ name _ _ _ _, loc) = [(name, loc)]
@@ -223,12 +224,14 @@ bfsReach : HashMap String (List String) ->
   HashMap String Unit ->
   List String ->
   Unit
-bfsReach _ _ [] = ()
-bfsReach refMap visited (x :: rest)
-  | has x visited = bfsReach refMap visited rest
-  | otherwise =
-    setInPlace x () visited
-    bfsReach refMap visited (refsOf refMap x ++ rest)
+bfsReach refMap visited xs0 = go xs0
+  where
+    go [] = ()
+    go (x :: rest)
+      | has x visited = go rest
+      | otherwise =
+        setInPlace x () visited
+        go (refsOf refMap x ++ rest)
 
 refsOf : HashMap String (List String) -> String -> List String
 refsOf refMap n = findWithDefault [] n refMap
@@ -261,6 +264,8 @@ identTokens s =
   identTokGo cs (arrayLength cs) 0
 
 identTokGo : Array Char -> Int -> Int -> List String
+-- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 identTokGo cs n i
   | i >= n = []
   | isIdentStart (arrayGetUnsafe i cs) =
@@ -282,10 +287,12 @@ isIdentStart : Char -> Bool
 isIdentStart c = isLower c || isUpper c || c == '_'
 
 identEnd : Array Char -> Int -> Int -> Int
-identEnd cs n i
-  | i >= n = i
-  | isAlnum (arrayGetUnsafe i cs) = identEnd cs n (i + 1)
-  | otherwise = i
+identEnd cs n i0 = go i0
+  where
+    go i
+      | i >= n = i
+      | isAlnum (arrayGetUnsafe i cs) = go (i + 1)
+      | otherwise = i
 
 -- ── doctest identifiers (string-aware comment channel) ────────────────────────
 -- Identifiers on `>` input lines of doctests (both `-- > expr` line-comment and
@@ -325,18 +332,18 @@ blockDocLineIdents line =
 (DUse false (UseGroup ("tools" "printer") ((mem "declToString" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isAlnum" false) (mem "isLower" false) (mem "isUpper" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "commentText" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" false) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "factComments" false) (mem "mkRule" false))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "dedupeNamesLoc" false) (mem "declLocList" false) (mem "nameSetOf" false) (mem "ruleNameDeadCode" false) (mem "sortUniqS" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" false) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "factComments" false) (mem "mkRule" false) (mem "noFix" false) (mem "factDeclLocs" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "dedupeNamesLoc" false) (mem "nameSetOf" false) (mem "ruleNameDeadCode" false) (mem "sortUniqS" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameDeadCode")) (fa "summary" (ELit (LString "private (unexported) top-level binding is unreachable from the file's exports/main/doctests. Dead code (Haskell -Wunused-top-binds)"))) (fa "doc" (ELit (LString "A private top-level binding that nothing reachable from the file's exports, `main` or doctests uses is dead code (Haskell -Wunused-top-binds). Delete it or export it.\n\nBefore:\n  helper x = x + 1   -- never called\nAfter:\n  (binding removed)"))) (fa "category" (EVar "Suspicious")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "NotFixable")) (fa "needs" (EListLit))))) (EVar "ruleDeadCode")) (EVar "None")))
 (DTypeSig false "ruleDeadCode" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "ruleDeadCode" (PWild PWild (PVar "facts") (PVar "pos") (PVar "prog")) (EBlock (DoLet false false (PVar "reach") (EApp (EApp (EVar "reachableNames") (EVar "facts")) (EVar "prog"))) (DoExpr (EApp (EApp (EVar "map") (EVar "deadFinding")) (EApp (EApp (EVar "filterList") (EApp (EVar "deadPair") (EVar "reach"))) (EApp (EApp (EVar "privateDefLocs") (EVar "pos")) (EVar "prog")))))))
+(DFunDef false "ruleDeadCode" (PWild PWild (PVar "facts") PWild (PVar "prog")) (EBlock (DoLet false false (PVar "reach") (EApp (EApp (EVar "reachableNames") (EVar "facts")) (EVar "prog"))) (DoExpr (EApp (EApp (EVar "map") (EVar "deadFinding")) (EApp (EApp (EVar "filterList") (EApp (EVar "deadPair") (EVar "reach"))) (EApp (EApp (EVar "privateDefLocs") (EVar "facts")) (EVar "prog")))))))
 (DTypeSig false "deadPair" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyCon "Bool"))))
 (DFunDef false "deadPair" ((PVar "reach") (PTuple (PVar "n") PWild)) (EApp (EVar "not") (EApp (EApp (EVar "has") (EVar "n")) (EVar "reach"))))
 (DTypeSig false "deadFinding" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyCon "Finding")))
-(DFunDef false "deadFinding" ((PTuple (PVar "name") (PVar "loc"))) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDeadCode")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "private top-level '")) (EVar "name")) (ELit (LString "' is unreachable from exports/main/doctests — remove it (dead code)")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None")))))
-(DTypeSig false "privateDefLocs" (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
-(DFunDef false "privateDefLocs" ((PVar "pos") (PVar "prog")) (EBlock (DoLet false false (PVar "exported") (EApp (EVar "nameSetOf") (EApp (EVar "exportedNames") (EVar "prog")))) (DoExpr (EApp (EVar "dedupeNamesLoc") (EApp (EApp (EVar "filterList") (EApp (EVar "candidatePair") (EVar "exported"))) (EApp (EApp (EVar "flatMap") (EVar "allDefNameL")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))))))
+(DFunDef false "deadFinding" ((PTuple (PVar "name") (PVar "loc"))) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDeadCode")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "private top-level '")) (EVar "name")) (ELit (LString "' is unreachable from exports/main/doctests — remove it (dead code)")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "noFix")))))
+(DTypeSig false "privateDefLocs" (TyFun (TyCon "FileFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
+(DFunDef false "privateDefLocs" ((PVar "facts") (PVar "prog")) (EBlock (DoLet false false (PVar "exported") (EApp (EVar "nameSetOf") (EApp (EVar "exportedNames") (EVar "prog")))) (DoExpr (EApp (EVar "dedupeNamesLoc") (EApp (EApp (EVar "filterList") (EApp (EVar "candidatePair") (EVar "exported"))) (EApp (EApp (EVar "flatMap") (EVar "allDefNameL")) (EApp (EVar "factDeclLocs") (EVar "facts"))))))))
 (DTypeSig false "allDefNameL" (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))))
 (DFunDef false "allDefNameL" ((PTuple (PCon "DFunDef" PWild (PVar "name") PWild PWild PWild PWild) (PVar "loc"))) (EListLit (ETuple (EVar "name") (EVar "loc"))))
 (DFunDef false "allDefNameL" ((PTuple (PCon "DAttrib" PWild (PVar "d")) (PVar "loc"))) (EApp (EVar "allDefNameL") (ETuple (EVar "d") (EVar "loc"))))
@@ -377,8 +384,7 @@ blockDocLineIdents line =
 (DTypeSig false "bodyIdents" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "bodyIdents" ((PVar "d")) (EApp (EVar "sortUniqS") (EApp (EVar "identTokens") (EApp (EVar "declToString") (EVar "d")))))
 (DTypeSig false "bfsReach" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit")))))
-(DFunDef false "bfsReach" (PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "bfsReach" ((PVar "refMap") (PVar "visited") (PCons (PVar "x") (PVar "rest"))) (EIf (EApp (EApp (EVar "has") (EVar "x")) (EVar "visited")) (EApp (EApp (EApp (EVar "bfsReach") (EVar "refMap")) (EVar "visited")) (EVar "rest")) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EVar "x")) (ELit LUnit)) (EVar "visited"))) (DoExpr (EApp (EApp (EApp (EVar "bfsReach") (EVar "refMap")) (EVar "visited")) (EBinOp "++" (EApp (EApp (EVar "refsOf") (EVar "refMap")) (EVar "x")) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "bfsReach" ((PVar "refMap") (PVar "visited") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PVar "x") (PVar "rest"))) (EIf (EApp (EApp (EVar "has") (EVar "x")) (EVar "visited")) (EApp (EVar "go") (EVar "rest")) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EVar "x")) (ELit LUnit)) (EVar "visited"))) (DoExpr (EApp (EVar "go") (EBinOp "++" (EApp (EApp (EVar "refsOf") (EVar "refMap")) (EVar "x")) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "refsOf" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "refsOf" ((PVar "refMap") (PVar "n")) (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "n")) (EVar "refMap")))
 (DTypeSig false "mergeRefs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
@@ -395,7 +401,7 @@ blockDocLineIdents line =
 (DTypeSig false "isIdentStart" (TyFun (TyCon "Char") (TyCon "Bool")))
 (DFunDef false "isIdentStart" ((PVar "c")) (EBinOp "||" (EBinOp "||" (EApp (EVar "isLower") (EVar "c")) (EApp (EVar "isUpper") (EVar "c"))) (EBinOp "==" (EVar "c") (ELit (LChar "_")))))
 (DTypeSig false "identEnd" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "identEnd" ((PVar "cs") (PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "i") (EIf (EApp (EVar "isAlnum") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))) (EApp (EApp (EApp (EVar "identEnd") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "identEnd" ((PVar "cs") (PVar "n") (PVar "i0")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "i") (EIf (EApp (EVar "isAlnum") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))) (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit)))))))) (EApp (EVar "go") (EVar "i0"))))
 (DTypeSig false "doctestIdents" (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "doctestIdents" ((PVar "cmts")) (EApp (EApp (EVar "flatMap") (EVar "commentDocIdents")) (EVar "cmts")))
 (DTypeSig false "commentDocIdents" (TyFun (TyCon "Comment") (TyApp (TyCon "List") (TyCon "String"))))
@@ -414,18 +420,18 @@ blockDocLineIdents line =
 (DUse false (UseGroup ("tools" "printer") ((mem "declToString" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isAlnum" false) (mem "isLower" false) (mem "isUpper" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "commentText" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" false) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "factComments" false) (mem "mkRule" false))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "dedupeNamesLoc" false) (mem "declLocList" false) (mem "nameSetOf" false) (mem "ruleNameDeadCode" false) (mem "sortUniqS" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" false) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "factComments" false) (mem "mkRule" false) (mem "noFix" false) (mem "factDeclLocs" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "dedupeNamesLoc" false) (mem "nameSetOf" false) (mem "ruleNameDeadCode" false) (mem "sortUniqS" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameDeadCode")) (fa "summary" (ELit (LString "private (unexported) top-level binding is unreachable from the file's exports/main/doctests. Dead code (Haskell -Wunused-top-binds)"))) (fa "doc" (ELit (LString "A private top-level binding that nothing reachable from the file's exports, `main` or doctests uses is dead code (Haskell -Wunused-top-binds). Delete it or export it.\n\nBefore:\n  helper x = x + 1   -- never called\nAfter:\n  (binding removed)"))) (fa "category" (EVar "Suspicious")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "NotFixable")) (fa "needs" (EListLit))))) (EVar "ruleDeadCode")) (EVar "None")))
 (DTypeSig false "ruleDeadCode" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "ruleDeadCode" (PWild PWild (PVar "facts") (PVar "pos") (PVar "prog")) (EBlock (DoLet false false (PVar "reach") (EApp (EApp (EVar "reachableNames") (EVar "facts")) (EVar "prog"))) (DoExpr (EApp (EApp (EMethodRef "map") (EVar "deadFinding")) (EApp (EApp (EVar "filterList") (EApp (EVar "deadPair") (EVar "reach"))) (EApp (EApp (EVar "privateDefLocs") (EVar "pos")) (EVar "prog")))))))
+(DFunDef false "ruleDeadCode" (PWild PWild (PVar "facts") PWild (PVar "prog")) (EBlock (DoLet false false (PVar "reach") (EApp (EApp (EVar "reachableNames") (EVar "facts")) (EVar "prog"))) (DoExpr (EApp (EApp (EMethodRef "map") (EVar "deadFinding")) (EApp (EApp (EVar "filterList") (EApp (EVar "deadPair") (EVar "reach"))) (EApp (EApp (EVar "privateDefLocs") (EVar "facts")) (EVar "prog")))))))
 (DTypeSig false "deadPair" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyCon "Bool"))))
 (DFunDef false "deadPair" ((PVar "reach") (PTuple (PVar "n") PWild)) (EApp (EVar "not") (EApp (EApp (EVar "has") (EVar "n")) (EVar "reach"))))
 (DTypeSig false "deadFinding" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyCon "Finding")))
-(DFunDef false "deadFinding" ((PTuple (PVar "name") (PVar "loc"))) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDeadCode")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "private top-level '")) (EVar "name")) (ELit (LString "' is unreachable from exports/main/doctests — remove it (dead code)")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None")))))
-(DTypeSig false "privateDefLocs" (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
-(DFunDef false "privateDefLocs" ((PVar "pos") (PVar "prog")) (EBlock (DoLet false false (PVar "exported") (EApp (EVar "nameSetOf") (EApp (EVar "exportedNames") (EVar "prog")))) (DoExpr (EApp (EVar "dedupeNamesLoc") (EApp (EApp (EVar "filterList") (EApp (EVar "candidatePair") (EVar "exported"))) (EApp (EApp (EDictApp "flatMap") (EVar "allDefNameL")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))))))
+(DFunDef false "deadFinding" ((PTuple (PVar "name") (PVar "loc"))) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDeadCode")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "private top-level '")) (EVar "name")) (ELit (LString "' is unreachable from exports/main/doctests — remove it (dead code)")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "noFix")))))
+(DTypeSig false "privateDefLocs" (TyFun (TyCon "FileFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))))))
+(DFunDef false "privateDefLocs" ((PVar "facts") (PVar "prog")) (EBlock (DoLet false false (PVar "exported") (EApp (EVar "nameSetOf") (EApp (EVar "exportedNames") (EVar "prog")))) (DoExpr (EApp (EVar "dedupeNamesLoc") (EApp (EApp (EVar "filterList") (EApp (EVar "candidatePair") (EVar "exported"))) (EApp (EApp (EDictApp "flatMap") (EVar "allDefNameL")) (EApp (EVar "factDeclLocs") (EVar "facts"))))))))
 (DTypeSig false "allDefNameL" (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))))
 (DFunDef false "allDefNameL" ((PTuple (PCon "DFunDef" PWild (PVar "name") PWild PWild PWild PWild) (PVar "loc"))) (EListLit (ETuple (EVar "name") (EVar "loc"))))
 (DFunDef false "allDefNameL" ((PTuple (PCon "DAttrib" PWild (PVar "d")) (PVar "loc"))) (EApp (EVar "allDefNameL") (ETuple (EVar "d") (EVar "loc"))))
@@ -466,8 +472,7 @@ blockDocLineIdents line =
 (DTypeSig false "bodyIdents" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "bodyIdents" ((PVar "d")) (EApp (EVar "sortUniqS") (EApp (EVar "identTokens") (EApp (EVar "declToString") (EVar "d")))))
 (DTypeSig false "bfsReach" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit")))))
-(DFunDef false "bfsReach" (PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "bfsReach" ((PVar "refMap") (PVar "visited") (PCons (PVar "x") (PVar "rest"))) (EIf (EApp (EApp (EVar "has") (EVar "x")) (EVar "visited")) (EApp (EApp (EApp (EVar "bfsReach") (EVar "refMap")) (EVar "visited")) (EVar "rest")) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EVar "x")) (ELit LUnit)) (EVar "visited"))) (DoExpr (EApp (EApp (EApp (EVar "bfsReach") (EVar "refMap")) (EVar "visited")) (EBinOp "++" (EApp (EApp (EVar "refsOf") (EVar "refMap")) (EVar "x")) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "bfsReach" ((PVar "refMap") (PVar "visited") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PVar "x") (PVar "rest"))) (EIf (EApp (EApp (EVar "has") (EVar "x")) (EVar "visited")) (EApp (EVar "go") (EVar "rest")) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EVar "x")) (ELit LUnit)) (EVar "visited"))) (DoExpr (EApp (EVar "go") (EBinOp "++" (EApp (EApp (EVar "refsOf") (EVar "refMap")) (EVar "x")) (EVar "rest"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "refsOf" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "refsOf" ((PVar "refMap") (PVar "n")) (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "n")) (EVar "refMap")))
 (DTypeSig false "mergeRefs" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
@@ -484,7 +489,7 @@ blockDocLineIdents line =
 (DTypeSig false "isIdentStart" (TyFun (TyCon "Char") (TyCon "Bool")))
 (DFunDef false "isIdentStart" ((PVar "c")) (EBinOp "||" (EBinOp "||" (EApp (EVar "isLower") (EVar "c")) (EApp (EVar "isUpper") (EVar "c"))) (EBinOp "==" (EVar "c") (ELit (LChar "_")))))
 (DTypeSig false "identEnd" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "identEnd" ((PVar "cs") (PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "i") (EIf (EApp (EVar "isAlnum") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))) (EApp (EApp (EApp (EVar "identEnd") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "identEnd" ((PVar "cs") (PVar "n") (PVar "i0")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "i") (EIf (EApp (EVar "isAlnum") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))) (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit)))))))) (EApp (EVar "go") (EVar "i0"))))
 (DTypeSig false "doctestIdents" (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "doctestIdents" ((PVar "cmts")) (EApp (EApp (EDictApp "flatMap") (EVar "commentDocIdents")) (EVar "cmts")))
 (DTypeSig false "commentDocIdents" (TyFun (TyCon "Comment") (TyApp (TyCon "List") (TyCon "String"))))

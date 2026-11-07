@@ -24,6 +24,7 @@ ir.extern_lower
 ir.extern_types
 ir.extern_uses
 support.diag_codes
+support.graph
 support.opcount
 support.ordmap
 support.path

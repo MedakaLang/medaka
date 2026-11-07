@@ -251,17 +251,16 @@ joinKey atoms = joinWith "," (map (a => "\{atomKey a} \{renderAtom a}") atoms)
 
 export
 preludeCacheHit : (Int, Int) -> List Atom -> Option PreludeInterface
-preludeCacheHit generation join = match !preludeCacheRef
-  None => None
-  Some entry =>
-    if entry.pceGeneration == generation then
-      map
-        snd
-        (find
-          (section => any (j => joinKey j == joinKey join) (fst section))
-          entry.pceSections)
-    else
-      None
+preludeCacheHit generation join = do
+  entry <- !preludeCacheRef
+  if entry.pceGeneration == generation then
+    map
+      snd
+      (find
+        (section => any (j => joinKey j == joinKey join) (fst section))
+        entry.pceSections)
+  else
+    None
 
 export
 currentPreludeInterface : Unit -> List (List (List Atom), PreludeInterface)

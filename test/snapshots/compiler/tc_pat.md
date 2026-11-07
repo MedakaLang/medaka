@@ -1,5 +1,5 @@
 # META
-source_lines=617
+source_lines=626
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_pat: pattern inference: literal, constructor, tuple, list, record and existential-opening
@@ -206,12 +206,14 @@ inferOrPat env (first :: rest) =
   fr
 
 inferOrAlts : TcEnv -> (Mono, List (String, Scheme)) -> Int -> List Pat -> Unit
-inferOrAlts _ _ _ [] = ()
-inferOrAlts env fr k (alt :: rest) =
-  let ar = inferPatNode env alt
-  unifyIn env.teDyn (fst fr) (fst ar)
-  each (unifyOrBinder env k (snd ar)) (snd fr)
-  inferOrAlts env fr (k + 1) rest
+inferOrAlts env fr k0 xs0 = go k0 xs0
+  where
+    go _ [] = ()
+    go k (alt :: rest) =
+      let ar = inferPatNode env alt
+      unifyIn env.teDyn (fst fr) (fst ar)
+      each (unifyOrBinder env k (snd ar)) (snd fr)
+      go (k + 1) rest
 
 -- The mismatch is also reported by unification itself; this adds the diagnostic that
 -- names the two alternatives, which unification cannot.
@@ -284,10 +286,11 @@ inferRecPatFields : TcEnv ->
   List (String, Mono) ->
   List RecPatField ->
   List (String, Scheme)
-inferRecPatFields _env _ _ [] = []
-inferRecPatFields env rname fieldTypes ((RecPatField fname _ bid mp) :: rest) =
-  inferRecPatField env rname fieldTypes fname bid mp
-    ++ inferRecPatFields env rname fieldTypes rest
+inferRecPatFields env rname fieldTypes xs0 = go xs0
+  where
+    go [] = []
+    go ((RecPatField fname _ bid mp) :: rest) =
+      inferRecPatField env rname fieldTypes fname bid mp ++ go rest
 
 inferRecPatField : TcEnv ->
   String ->
@@ -406,19 +409,24 @@ settlePatLitsOnly dyn saved =
 
 -- [final]: the module is done, so an unknown var defaults instead of deferring.
 settlePatLitsGo : DynCtx -> Bool -> List (Mono, Int, Option Loc) -> Unit
-settlePatLitsGo _dyn _ [] = ()
-settlePatLitsGo dyn final ((a, n, loc) :: rest) =
-  match normalize a
-    TCon tag _ if isTaggedFixedHead tag =>
-      dyn.dcModule.mcCells.numlitRanges :=
-        (a, n, loc) :: dyn.dcModule.mcCells.numlitRanges.value
-    TCon tag _ if isBoxed64Head tag =>
-      refuseBoxedLitPat dyn.dcModule tag (intToString n) loc
-    TVar _ if not final =>
-      dyn.dcModule.mcCells.patLitDeferred :=
-        (a, n, loc) :: dyn.dcModule.mcCells.patLitDeferred.value
-    _ => unifyIn (dynAtIfSome loc dyn) (tconBuiltin "Int") a
-  settlePatLitsGo dyn final rest
+settlePatLitsGo dyn final xs0 = go xs0
+  where
+    go [] = ()
+    go ((a, n, loc) :: rest) =
+      match normalize a
+        TCon tag _ if isTaggedFixedHead tag =>
+          dyn.dcModule.mcCells.numlitRanges :=
+            (a, n, loc) :: dyn.dcModule.mcCells.numlitRanges.value
+        TCon tag _ if isBoxed64Head tag =>
+          refuseBoxedLitPat dyn.dcModule tag (intToString n) loc
+        TVar _ =>
+          if final then
+            unifyIn (dynAtIfSome loc dyn) (tconBuiltin "Int") a
+          else
+            dyn.dcModule.mcCells.patLitDeferred :=
+              (a, n, loc) :: dyn.dcModule.mcCells.patLitDeferred.value
+        _ => unifyIn (dynAtIfSome loc dyn) (tconBuiltin "Int") a
+      go rest
 
 -- The module's inference is complete: every deferred literal pattern takes the
 -- type its scrutinee finally got, or `Int`.
@@ -525,7 +533,8 @@ patOpensExistentials env (PCons h t) =
   patOpensExistentials env h || patOpensExistentials env t
 patOpensExistentials env (PAs _ _ _ p) = patOpensExistentials env p
 patOpensExistentials env (POr alts) = anyList (patOpensExistentials env) alts
-patOpensExistentials _env _ = False
+patOpensExistentials env (PAnn p _) = patOpensExistentials env p
+patOpensExistentials _env (PVar _ _ _ | PWild | PLit _ | PRng _ _ _) = False
 
 recPatFieldOpens : TcEnv -> RecPatField -> Bool
 recPatFieldOpens env (RecPatField _ _ _ (Some p)) = patOpensExistentials env p
@@ -676,8 +685,7 @@ recordLetBindType gctx (LetBind name _ _ bid, (_, summary)) =
 (DFunDef false "inferOrPat" ((PVar "env") (PList)) (ETuple (EApp (EApp (EVar "freshVar") (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule")) (ELit LUnit)) (EListLit)))
 (DFunDef false "inferOrPat" ((PVar "env") (PCons (PVar "first") (PVar "rest"))) (EBlock (DoLet false false (PVar "fr") (EApp (EApp (EVar "inferPatNode") (EVar "env")) (EVar "first"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "inferOrAlts") (EVar "env")) (EVar "fr")) (ELit (LInt 2))) (EVar "rest"))) (DoExpr (EVar "fr"))))
 (DTypeSig false "inferOrAlts" (TyFun (TyCon "TcEnv") (TyFun (TyTuple (TyCon "Mono") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Unit"))))))
-(DFunDef false "inferOrAlts" (PWild PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "inferOrAlts" ((PVar "env") (PVar "fr") (PVar "k") (PCons (PVar "alt") (PVar "rest"))) (EBlock (DoLet false false (PVar "ar") (EApp (EApp (EVar "inferPatNode") (EVar "env")) (EVar "alt"))) (DoExpr (EApp (EApp (EApp (EVar "unifyIn") (EFieldAccess (EVar "env") "teDyn")) (EApp (EVar "fst") (EVar "fr"))) (EApp (EVar "fst") (EVar "ar")))) (DoExpr (EApp (EApp (EVar "each") (EApp (EApp (EApp (EVar "unifyOrBinder") (EVar "env")) (EVar "k")) (EApp (EVar "snd") (EVar "ar")))) (EApp (EVar "snd") (EVar "fr")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "inferOrAlts") (EVar "env")) (EVar "fr")) (EBinOp "+" (EVar "k") (ELit (LInt 1)))) (EVar "rest")))))
+(DFunDef false "inferOrAlts" ((PVar "env") (PVar "fr") (PVar "k0") (PVar "xs0")) (ELetGroup ((lgb "go" (clause (PWild (PList)) (ELit LUnit)) (clause ((PVar "k") (PCons (PVar "alt") (PVar "rest"))) (EBlock (DoLet false false (PVar "ar") (EApp (EApp (EVar "inferPatNode") (EVar "env")) (EVar "alt"))) (DoExpr (EApp (EApp (EApp (EVar "unifyIn") (EFieldAccess (EVar "env") "teDyn")) (EApp (EVar "fst") (EVar "fr"))) (EApp (EVar "fst") (EVar "ar")))) (DoExpr (EApp (EApp (EVar "each") (EApp (EApp (EApp (EVar "unifyOrBinder") (EVar "env")) (EVar "k")) (EApp (EVar "snd") (EVar "ar")))) (EApp (EVar "snd") (EVar "fr")))) (DoExpr (EApp (EApp (EVar "go") (EBinOp "+" (EVar "k") (ELit (LInt 1)))) (EVar "rest"))))))) (EApp (EApp (EVar "go") (EVar "k0")) (EVar "xs0"))))
 (DTypeSig false "unifyOrBinder" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyTuple (TyCon "String") (TyCon "Scheme")) (TyCon "Unit"))))))
 (DFunDef false "unifyOrBinder" ((PVar "env") (PVar "k") (PVar "binds") (PTuple (PVar "name") (PCon "Forall" PWild PWild PWild PWild PWild (PVar "t1")))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EVar "binds")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PCon "Forall" PWild PWild PWild PWild PWild (PVar "t2"))) () (EBlock (DoLet false false (PTuple (PVar "erred") PWild) (EApp (EApp (EVar "erredDuring") (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule")) (ELam (PWild) (EApp (EApp (EApp (EVar "unifyIn") (EFieldAccess (EVar "env") "teDyn")) (EVar "t1")) (EVar "t2"))))) (DoExpr (EIf (EVar "erred") (EApp (EApp (EApp (EVar "pushTypeError") (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule")) (EVar "TOrPatternBinderTypes")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "the alternatives of an or-pattern must bind `")) (EApp (EVar "$core.display") (EVar "name"))) (ELit (LString "` at one type, but alternative 1 binds it as "))) (EApp (EVar "$core.display") (EApp (EVar "ppMono") (EApp (EVar "normalize") (EVar "t1"))))) (ELit (LString " and alternative "))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EVar "k")))) (ELit (LString " as "))) (EApp (EVar "$core.display") (EApp (EVar "ppMono") (EApp (EVar "normalize") (EVar "t2"))))) (ELit (LString "")))) (ELit LUnit)))))))
 (DTypeSig false "inferPatRng" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Lit") (TyFun (TyCon "Lit") (TyTuple (TyCon "Mono") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))))
@@ -693,8 +701,7 @@ recordLetBindType gctx (LetBind name _ _ bid, (_, summary)) =
 (DTypeSig false "inferPatRecWith" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "RecordInfo") (TyFun (TyApp (TyCon "List") (TyCon "RecPatField")) (TyTuple (TyCon "Mono") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))))
 (DFunDef false "inferPatRecWith" ((PVar "env") (PVar "rname") (PVar "ri") (PVar "fields")) (EBlock (DoLet false false (PTuple (PVar "ir") (PVar "opened")) (EApp (EApp (EVar "instantiateRecordOpening") (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule")) (EVar "ri"))) (DoExpr (EApp (EApp (EVar "openExistentials") (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule")) (EVar "opened"))) (DoExpr (ETuple (EApp (EVar "fst") (EVar "ir")) (EApp (EApp (EApp (EApp (EVar "inferRecPatFields") (EVar "env")) (EVar "rname")) (EApp (EVar "snd") (EVar "ir"))) (EVar "fields"))))))
 (DTypeSig false "inferRecPatFields" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyCon "RecPatField")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))))
-(DFunDef false "inferRecPatFields" ((PVar "_env") PWild PWild (PList)) (EListLit))
-(DFunDef false "inferRecPatFields" ((PVar "env") (PVar "rname") (PVar "fieldTypes") (PCons (PCon "RecPatField" (PVar "fname") PWild (PVar "bid") (PVar "mp")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "inferRecPatField") (EVar "env")) (EVar "rname")) (EVar "fieldTypes")) (EVar "fname")) (EVar "bid")) (EVar "mp")) (EApp (EApp (EApp (EApp (EVar "inferRecPatFields") (EVar "env")) (EVar "rname")) (EVar "fieldTypes")) (EVar "rest"))))
+(DFunDef false "inferRecPatFields" ((PVar "env") (PVar "rname") (PVar "fieldTypes") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EListLit)) (clause ((PCons (PCon "RecPatField" (PVar "fname") PWild (PVar "bid") (PVar "mp")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "inferRecPatField") (EVar "env")) (EVar "rname")) (EVar "fieldTypes")) (EVar "fname")) (EVar "bid")) (EVar "mp")) (EApp (EVar "go") (EVar "rest")))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "inferRecPatField" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyCon "String") (TyFun (TyCon "BinderId") (TyFun (TyApp (TyCon "Option") (TyCon "Pat")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))))))
 (DFunDef false "inferRecPatField" ((PVar "env") (PVar "rname") (PVar "fieldTypes") (PVar "fname") (PVar "bid") (PVar "mp")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "fname")) (EVar "fieldTypes")) (arm (PCon "None") () (EBlock (DoExpr (EApp (EApp (EApp (EVar "pushTypeError") (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule")) (EVar "TUnknownField")) (EApp (EApp (EVar "unknownFieldMsg") (EVar "fname")) (EVar "rname")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "inferRecPatFieldWith") (EVar "env")) (EApp (EApp (EVar "freshVar") (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule")) (ELit LUnit))) (EVar "fname")) (EVar "bid")) (EVar "mp"))))) (arm (PCon "Some" (PVar "ft")) () (EApp (EApp (EApp (EApp (EApp (EVar "inferRecPatFieldWith") (EVar "env")) (EVar "ft")) (EVar "fname")) (EVar "bid")) (EVar "mp")))))
 (DTypeSig false "inferRecPatFieldWith" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyCon "BinderId") (TyFun (TyApp (TyCon "Option") (TyCon "Pat")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))))
@@ -717,8 +724,7 @@ recordLetBindType gctx (LetBind name _ _ bid, (_, summary)) =
 (DTypeSig false "settlePatLitsOnly" (TyFun (TyCon "DynCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Loc")))) (TyCon "Unit"))))
 (DFunDef false "settlePatLitsOnly" ((PVar "dyn") (PVar "saved")) (EBlock (DoExpr (EApp (EApp (EApp (EVar "settlePatLitsGo") (EVar "dyn")) (EVar "False")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "dyn") "dcModule") "mcCells") "patLitPending") "value"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "dyn") "dcModule") "mcCells") "patLitPending")) (EVar "saved")))))
 (DTypeSig false "settlePatLitsGo" (TyFun (TyCon "DynCtx") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Loc")))) (TyCon "Unit")))))
-(DFunDef false "settlePatLitsGo" ((PVar "_dyn") PWild (PList)) (ELit LUnit))
-(DFunDef false "settlePatLitsGo" ((PVar "dyn") (PVar "final") (PCons (PTuple (PVar "a") (PVar "n") (PVar "loc")) (PVar "rest"))) (EBlock (DoExpr (EMatch (EApp (EVar "normalize") (EVar "a")) (arm (PCon "TCon" (PVar "tag") PWild) ((GBool (EApp (EVar "isTaggedFixedHead") (EVar "tag")))) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "dyn") "dcModule") "mcCells") "numlitRanges")) (EBinOp "::" (ETuple (EVar "a") (EVar "n") (EVar "loc")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "dyn") "dcModule") "mcCells") "numlitRanges") "value")))) (arm (PCon "TCon" (PVar "tag") PWild) ((GBool (EApp (EVar "isBoxed64Head") (EVar "tag")))) (EApp (EApp (EApp (EApp (EVar "refuseBoxedLitPat") (EFieldAccess (EVar "dyn") "dcModule")) (EVar "tag")) (EApp (EVar "intToString") (EVar "n"))) (EVar "loc"))) (arm (PCon "TVar" PWild) ((GBool (EApp (EVar "not") (EVar "final")))) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "dyn") "dcModule") "mcCells") "patLitDeferred")) (EBinOp "::" (ETuple (EVar "a") (EVar "n") (EVar "loc")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "dyn") "dcModule") "mcCells") "patLitDeferred") "value")))) (arm PWild () (EApp (EApp (EApp (EVar "unifyIn") (EApp (EApp (EVar "dynAtIfSome") (EVar "loc")) (EVar "dyn"))) (EApp (EVar "tconBuiltin") (ELit (LString "Int")))) (EVar "a"))))) (DoExpr (EApp (EApp (EApp (EVar "settlePatLitsGo") (EVar "dyn")) (EVar "final")) (EVar "rest")))))
+(DFunDef false "settlePatLitsGo" ((PVar "dyn") (PVar "final") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PTuple (PVar "a") (PVar "n") (PVar "loc")) (PVar "rest"))) (EBlock (DoExpr (EMatch (EApp (EVar "normalize") (EVar "a")) (arm (PCon "TCon" (PVar "tag") PWild) ((GBool (EApp (EVar "isTaggedFixedHead") (EVar "tag")))) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "dyn") "dcModule") "mcCells") "numlitRanges")) (EBinOp "::" (ETuple (EVar "a") (EVar "n") (EVar "loc")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "dyn") "dcModule") "mcCells") "numlitRanges") "value")))) (arm (PCon "TCon" (PVar "tag") PWild) ((GBool (EApp (EVar "isBoxed64Head") (EVar "tag")))) (EApp (EApp (EApp (EApp (EVar "refuseBoxedLitPat") (EFieldAccess (EVar "dyn") "dcModule")) (EVar "tag")) (EApp (EVar "intToString") (EVar "n"))) (EVar "loc"))) (arm (PCon "TVar" PWild) () (EIf (EVar "final") (EApp (EApp (EApp (EVar "unifyIn") (EApp (EApp (EVar "dynAtIfSome") (EVar "loc")) (EVar "dyn"))) (EApp (EVar "tconBuiltin") (ELit (LString "Int")))) (EVar "a")) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "dyn") "dcModule") "mcCells") "patLitDeferred")) (EBinOp "::" (ETuple (EVar "a") (EVar "n") (EVar "loc")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "dyn") "dcModule") "mcCells") "patLitDeferred") "value"))))) (arm PWild () (EApp (EApp (EApp (EVar "unifyIn") (EApp (EApp (EVar "dynAtIfSome") (EVar "loc")) (EVar "dyn"))) (EApp (EVar "tconBuiltin") (ELit (LString "Int")))) (EVar "a"))))) (DoExpr (EApp (EVar "go") (EVar "rest"))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig true "settleDeferredPatLits" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Unit") (TyCon "Unit"))))
 (DFunDef false "settleDeferredPatLits" ((PVar "mctx") PWild) (EBlock (DoLet false false (PVar "deferred") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "patLitDeferred") "value")) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "patLitDeferred")) (EListLit))) (DoExpr (EApp (EApp (EApp (EVar "settlePatLitsGo") (EApp (EVar "dynFor") (EVar "mctx"))) (EVar "True")) (EVar "deferred")))))
 (DTypeSig false "refuseBoxedLitPat" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Unit"))))))
@@ -748,7 +754,8 @@ recordLetBindType gctx (LetBind name _ _ bid, (_, summary)) =
 (DFunDef false "patOpensExistentials" ((PVar "env") (PCon "PCons" (PVar "h") (PVar "t"))) (EBinOp "||" (EApp (EApp (EVar "patOpensExistentials") (EVar "env")) (EVar "h")) (EApp (EApp (EVar "patOpensExistentials") (EVar "env")) (EVar "t"))))
 (DFunDef false "patOpensExistentials" ((PVar "env") (PCon "PAs" PWild PWild PWild (PVar "p"))) (EApp (EApp (EVar "patOpensExistentials") (EVar "env")) (EVar "p")))
 (DFunDef false "patOpensExistentials" ((PVar "env") (PCon "POr" (PVar "alts"))) (EApp (EApp (EVar "anyList") (EApp (EVar "patOpensExistentials") (EVar "env"))) (EVar "alts")))
-(DFunDef false "patOpensExistentials" ((PVar "_env") PWild) (EVar "False"))
+(DFunDef false "patOpensExistentials" ((PVar "env") (PCon "PAnn" (PVar "p") PWild)) (EApp (EApp (EVar "patOpensExistentials") (EVar "env")) (EVar "p")))
+(DFunDef false "patOpensExistentials" ((PVar "_env") (POr (PCon "PVar" PWild PWild PWild) (PCon "PWild") (PCon "PLit" PWild) (PCon "PRng" PWild PWild PWild))) (EVar "False"))
 (DTypeSig false "recPatFieldOpens" (TyFun (TyCon "TcEnv") (TyFun (TyCon "RecPatField") (TyCon "Bool"))))
 (DFunDef false "recPatFieldOpens" ((PVar "env") (PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EApp (EVar "patOpensExistentials") (EVar "env")) (EVar "p")))
 (DFunDef false "recPatFieldOpens" ((PVar "_env") PWild) (EVar "False"))
@@ -829,8 +836,7 @@ recordLetBindType gctx (LetBind name _ _ bid, (_, summary)) =
 (DFunDef false "inferOrPat" ((PVar "env") (PList)) (ETuple (EApp (EApp (EVar "freshVar") (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule")) (ELit LUnit)) (EListLit)))
 (DFunDef false "inferOrPat" ((PVar "env") (PCons (PVar "first") (PVar "rest"))) (EBlock (DoLet false false (PVar "fr") (EApp (EApp (EVar "inferPatNode") (EVar "env")) (EVar "first"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "inferOrAlts") (EVar "env")) (EVar "fr")) (ELit (LInt 2))) (EVar "rest"))) (DoExpr (EVar "fr"))))
 (DTypeSig false "inferOrAlts" (TyFun (TyCon "TcEnv") (TyFun (TyTuple (TyCon "Mono") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Unit"))))))
-(DFunDef false "inferOrAlts" (PWild PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "inferOrAlts" ((PVar "env") (PVar "fr") (PVar "k") (PCons (PVar "alt") (PVar "rest"))) (EBlock (DoLet false false (PVar "ar") (EApp (EApp (EVar "inferPatNode") (EVar "env")) (EVar "alt"))) (DoExpr (EApp (EApp (EApp (EVar "unifyIn") (EFieldAccess (EVar "env") "teDyn")) (EApp (EVar "fst") (EVar "fr"))) (EApp (EVar "fst") (EVar "ar")))) (DoExpr (EApp (EApp (EVar "each") (EApp (EApp (EApp (EVar "unifyOrBinder") (EVar "env")) (EVar "k")) (EApp (EVar "snd") (EVar "ar")))) (EApp (EVar "snd") (EVar "fr")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "inferOrAlts") (EVar "env")) (EVar "fr")) (EBinOp "+" (EVar "k") (ELit (LInt 1)))) (EVar "rest")))))
+(DFunDef false "inferOrAlts" ((PVar "env") (PVar "fr") (PVar "k0") (PVar "xs0")) (ELetGroup ((lgb "go" (clause (PWild (PList)) (ELit LUnit)) (clause ((PVar "k") (PCons (PVar "alt") (PVar "rest"))) (EBlock (DoLet false false (PVar "ar") (EApp (EApp (EVar "inferPatNode") (EVar "env")) (EVar "alt"))) (DoExpr (EApp (EApp (EApp (EVar "unifyIn") (EFieldAccess (EVar "env") "teDyn")) (EApp (EVar "fst") (EVar "fr"))) (EApp (EVar "fst") (EVar "ar")))) (DoExpr (EApp (EApp (EVar "each") (EApp (EApp (EApp (EVar "unifyOrBinder") (EVar "env")) (EVar "k")) (EApp (EVar "snd") (EVar "ar")))) (EApp (EVar "snd") (EVar "fr")))) (DoExpr (EApp (EApp (EVar "go") (EBinOp "+" (EVar "k") (ELit (LInt 1)))) (EVar "rest"))))))) (EApp (EApp (EVar "go") (EVar "k0")) (EVar "xs0"))))
 (DTypeSig false "unifyOrBinder" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyTuple (TyCon "String") (TyCon "Scheme")) (TyCon "Unit"))))))
 (DFunDef false "unifyOrBinder" ((PVar "env") (PVar "k") (PVar "binds") (PTuple (PVar "name") (PCon "Forall" PWild PWild PWild PWild PWild (PVar "t1")))) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EVar "binds")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PCon "Forall" PWild PWild PWild PWild PWild (PVar "t2"))) () (EBlock (DoLet false false (PTuple (PVar "erred") PWild) (EApp (EApp (EVar "erredDuring") (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule")) (ELam (PWild) (EApp (EApp (EApp (EVar "unifyIn") (EFieldAccess (EVar "env") "teDyn")) (EVar "t1")) (EVar "t2"))))) (DoExpr (EIf (EVar "erred") (EApp (EApp (EApp (EVar "pushTypeError") (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule")) (EVar "TOrPatternBinderTypes")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "the alternatives of an or-pattern must bind `")) (EApp (EVar "$core.display") (EVar "name"))) (ELit (LString "` at one type, but alternative 1 binds it as "))) (EApp (EVar "$core.display") (EApp (EVar "ppMono") (EApp (EVar "normalize") (EVar "t1"))))) (ELit (LString " and alternative "))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EVar "k")))) (ELit (LString " as "))) (EApp (EVar "$core.display") (EApp (EVar "ppMono") (EApp (EVar "normalize") (EVar "t2"))))) (ELit (LString "")))) (ELit LUnit)))))))
 (DTypeSig false "inferPatRng" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Lit") (TyFun (TyCon "Lit") (TyTuple (TyCon "Mono") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))))
@@ -846,8 +852,7 @@ recordLetBindType gctx (LetBind name _ _ bid, (_, summary)) =
 (DTypeSig false "inferPatRecWith" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "RecordInfo") (TyFun (TyApp (TyCon "List") (TyCon "RecPatField")) (TyTuple (TyCon "Mono") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))))
 (DFunDef false "inferPatRecWith" ((PVar "env") (PVar "rname") (PVar "ri") (PVar "fields")) (EBlock (DoLet false false (PTuple (PVar "ir") (PVar "opened")) (EApp (EApp (EVar "instantiateRecordOpening") (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule")) (EVar "ri"))) (DoExpr (EApp (EApp (EVar "openExistentials") (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule")) (EVar "opened"))) (DoExpr (ETuple (EApp (EVar "fst") (EVar "ir")) (EApp (EApp (EApp (EApp (EVar "inferRecPatFields") (EVar "env")) (EVar "rname")) (EApp (EVar "snd") (EVar "ir"))) (EVar "fields"))))))
 (DTypeSig false "inferRecPatFields" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyCon "RecPatField")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))))
-(DFunDef false "inferRecPatFields" ((PVar "_env") PWild PWild (PList)) (EListLit))
-(DFunDef false "inferRecPatFields" ((PVar "env") (PVar "rname") (PVar "fieldTypes") (PCons (PCon "RecPatField" (PVar "fname") PWild (PVar "bid") (PVar "mp")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "inferRecPatField") (EVar "env")) (EVar "rname")) (EVar "fieldTypes")) (EVar "fname")) (EVar "bid")) (EVar "mp")) (EApp (EApp (EApp (EApp (EVar "inferRecPatFields") (EVar "env")) (EVar "rname")) (EVar "fieldTypes")) (EVar "rest"))))
+(DFunDef false "inferRecPatFields" ((PVar "env") (PVar "rname") (PVar "fieldTypes") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EListLit)) (clause ((PCons (PCon "RecPatField" (PVar "fname") PWild (PVar "bid") (PVar "mp")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "inferRecPatField") (EVar "env")) (EVar "rname")) (EVar "fieldTypes")) (EVar "fname")) (EVar "bid")) (EVar "mp")) (EApp (EVar "go") (EVar "rest")))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "inferRecPatField" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyCon "String") (TyFun (TyCon "BinderId") (TyFun (TyApp (TyCon "Option") (TyCon "Pat")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))))))
 (DFunDef false "inferRecPatField" ((PVar "env") (PVar "rname") (PVar "fieldTypes") (PVar "fname") (PVar "bid") (PVar "mp")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "fname")) (EVar "fieldTypes")) (arm (PCon "None") () (EBlock (DoExpr (EApp (EApp (EApp (EVar "pushTypeError") (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule")) (EVar "TUnknownField")) (EApp (EApp (EVar "unknownFieldMsg") (EVar "fname")) (EVar "rname")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "inferRecPatFieldWith") (EVar "env")) (EApp (EApp (EVar "freshVar") (EFieldAccess (EFieldAccess (EVar "env") "teDyn") "dcModule")) (ELit LUnit))) (EVar "fname")) (EVar "bid")) (EVar "mp"))))) (arm (PCon "Some" (PVar "ft")) () (EApp (EApp (EApp (EApp (EApp (EVar "inferRecPatFieldWith") (EVar "env")) (EVar "ft")) (EVar "fname")) (EVar "bid")) (EVar "mp")))))
 (DTypeSig false "inferRecPatFieldWith" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyCon "BinderId") (TyFun (TyApp (TyCon "Option") (TyCon "Pat")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))))
@@ -870,8 +875,7 @@ recordLetBindType gctx (LetBind name _ _ bid, (_, summary)) =
 (DTypeSig false "settlePatLitsOnly" (TyFun (TyCon "DynCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Loc")))) (TyCon "Unit"))))
 (DFunDef false "settlePatLitsOnly" ((PVar "dyn") (PVar "saved")) (EBlock (DoExpr (EApp (EApp (EApp (EVar "settlePatLitsGo") (EVar "dyn")) (EVar "False")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "dyn") "dcModule") "mcCells") "patLitPending") "value"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "dyn") "dcModule") "mcCells") "patLitPending")) (EVar "saved")))))
 (DTypeSig false "settlePatLitsGo" (TyFun (TyCon "DynCtx") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Loc")))) (TyCon "Unit")))))
-(DFunDef false "settlePatLitsGo" ((PVar "_dyn") PWild (PList)) (ELit LUnit))
-(DFunDef false "settlePatLitsGo" ((PVar "dyn") (PVar "final") (PCons (PTuple (PVar "a") (PVar "n") (PVar "loc")) (PVar "rest"))) (EBlock (DoExpr (EMatch (EApp (EVar "normalize") (EVar "a")) (arm (PCon "TCon" (PVar "tag") PWild) ((GBool (EApp (EVar "isTaggedFixedHead") (EVar "tag")))) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "dyn") "dcModule") "mcCells") "numlitRanges")) (EBinOp "::" (ETuple (EVar "a") (EVar "n") (EVar "loc")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "dyn") "dcModule") "mcCells") "numlitRanges") "value")))) (arm (PCon "TCon" (PVar "tag") PWild) ((GBool (EApp (EVar "isBoxed64Head") (EVar "tag")))) (EApp (EApp (EApp (EApp (EVar "refuseBoxedLitPat") (EFieldAccess (EVar "dyn") "dcModule")) (EVar "tag")) (EApp (EVar "intToString") (EVar "n"))) (EVar "loc"))) (arm (PCon "TVar" PWild) ((GBool (EApp (EVar "not") (EVar "final")))) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "dyn") "dcModule") "mcCells") "patLitDeferred")) (EBinOp "::" (ETuple (EVar "a") (EVar "n") (EVar "loc")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "dyn") "dcModule") "mcCells") "patLitDeferred") "value")))) (arm PWild () (EApp (EApp (EApp (EVar "unifyIn") (EApp (EApp (EVar "dynAtIfSome") (EVar "loc")) (EVar "dyn"))) (EApp (EVar "tconBuiltin") (ELit (LString "Int")))) (EVar "a"))))) (DoExpr (EApp (EApp (EApp (EVar "settlePatLitsGo") (EVar "dyn")) (EVar "final")) (EVar "rest")))))
+(DFunDef false "settlePatLitsGo" ((PVar "dyn") (PVar "final") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PTuple (PVar "a") (PVar "n") (PVar "loc")) (PVar "rest"))) (EBlock (DoExpr (EMatch (EApp (EVar "normalize") (EVar "a")) (arm (PCon "TCon" (PVar "tag") PWild) ((GBool (EApp (EVar "isTaggedFixedHead") (EVar "tag")))) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "dyn") "dcModule") "mcCells") "numlitRanges")) (EBinOp "::" (ETuple (EVar "a") (EVar "n") (EVar "loc")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "dyn") "dcModule") "mcCells") "numlitRanges") "value")))) (arm (PCon "TCon" (PVar "tag") PWild) ((GBool (EApp (EVar "isBoxed64Head") (EVar "tag")))) (EApp (EApp (EApp (EApp (EVar "refuseBoxedLitPat") (EFieldAccess (EVar "dyn") "dcModule")) (EVar "tag")) (EApp (EVar "intToString") (EVar "n"))) (EVar "loc"))) (arm (PCon "TVar" PWild) () (EIf (EVar "final") (EApp (EApp (EApp (EVar "unifyIn") (EApp (EApp (EVar "dynAtIfSome") (EVar "loc")) (EVar "dyn"))) (EApp (EVar "tconBuiltin") (ELit (LString "Int")))) (EVar "a")) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "dyn") "dcModule") "mcCells") "patLitDeferred")) (EBinOp "::" (ETuple (EVar "a") (EVar "n") (EVar "loc")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "dyn") "dcModule") "mcCells") "patLitDeferred") "value"))))) (arm PWild () (EApp (EApp (EApp (EVar "unifyIn") (EApp (EApp (EVar "dynAtIfSome") (EVar "loc")) (EVar "dyn"))) (EApp (EVar "tconBuiltin") (ELit (LString "Int")))) (EVar "a"))))) (DoExpr (EApp (EVar "go") (EVar "rest"))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig true "settleDeferredPatLits" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Unit") (TyCon "Unit"))))
 (DFunDef false "settleDeferredPatLits" ((PVar "mctx") PWild) (EBlock (DoLet false false (PVar "deferred") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "patLitDeferred") "value")) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "patLitDeferred")) (EListLit))) (DoExpr (EApp (EApp (EApp (EVar "settlePatLitsGo") (EApp (EVar "dynFor") (EVar "mctx"))) (EVar "True")) (EVar "deferred")))))
 (DTypeSig false "refuseBoxedLitPat" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Unit"))))))
@@ -901,7 +905,8 @@ recordLetBindType gctx (LetBind name _ _ bid, (_, summary)) =
 (DFunDef false "patOpensExistentials" ((PVar "env") (PCon "PCons" (PVar "h") (PVar "t"))) (EBinOp "||" (EApp (EApp (EVar "patOpensExistentials") (EVar "env")) (EVar "h")) (EApp (EApp (EVar "patOpensExistentials") (EVar "env")) (EVar "t"))))
 (DFunDef false "patOpensExistentials" ((PVar "env") (PCon "PAs" PWild PWild PWild (PVar "p"))) (EApp (EApp (EVar "patOpensExistentials") (EVar "env")) (EVar "p")))
 (DFunDef false "patOpensExistentials" ((PVar "env") (PCon "POr" (PVar "alts"))) (EApp (EApp (EVar "anyList") (EApp (EVar "patOpensExistentials") (EVar "env"))) (EVar "alts")))
-(DFunDef false "patOpensExistentials" ((PVar "_env") PWild) (EVar "False"))
+(DFunDef false "patOpensExistentials" ((PVar "env") (PCon "PAnn" (PVar "p") PWild)) (EApp (EApp (EVar "patOpensExistentials") (EVar "env")) (EVar "p")))
+(DFunDef false "patOpensExistentials" ((PVar "_env") (POr (PCon "PVar" PWild PWild PWild) (PCon "PWild") (PCon "PLit" PWild) (PCon "PRng" PWild PWild PWild))) (EVar "False"))
 (DTypeSig false "recPatFieldOpens" (TyFun (TyCon "TcEnv") (TyFun (TyCon "RecPatField") (TyCon "Bool"))))
 (DFunDef false "recPatFieldOpens" ((PVar "env") (PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EApp (EVar "patOpensExistentials") (EVar "env")) (EVar "p")))
 (DFunDef false "recPatFieldOpens" ((PVar "_env") PWild) (EVar "False"))

@@ -1,0 +1,432 @@
+-- lint rule rule-passthrough-arm: a two-arm `match` over an Option/Result with a verbatim `None => None` / `Err e => Err e` arm. Bind in a `do` block instead.
+
+import driver.diagnostics.{Severity(..)}
+import frontend.ast.{
+  Arm(..), Decl, DoStmt(..), Expr(..), FunClause(..), LetBind(..), Loc, Pat(..)
+}
+import frontend.ast_walk.{
+  BodyOwner(..), DeclBody(..), ExprKind(..), childExprs, declBodies
+}
+import frontend.parser.{Positions(..)}
+import list.{last, sort}
+import string.{endsWith, indexOf, repeat, startsWith, trim, trimLeft, trimRight}
+import support.char.{isAlnum}
+import support.util.{allList, anyList, initList, isEmptyL}
+import tools.lint_core.{
+  Applicability(..),
+  Category(..),
+  Ctx(..),
+  FileFacts,
+  Finding(..),
+  Fix(..),
+  FixEdit(..),
+  Fixability(..),
+  Memo,
+  Ratchet(..),
+  Rule,
+  RuleMeta(..),
+  Scope(..),
+  StdlibIndex,
+  Visitor(..),
+  fixLater,
+  memoGet,
+  memoNew,
+  mkVisitorRule,
+}
+import tools.lint_shared.{
+  ctorVarPassthru,
+  indentWidth,
+  isCodeText,
+  isEVarNamed,
+  isNilPCon,
+  matchScrutOf,
+  matchToMapTransform,
+  ruleNamePassthroughArm,
+  sourceLine,
+  tightSpan,
+  unwrapLoc,
+}
+
+-- Flagged at any depth, one level included: a `match` with exactly two arms, no
+-- guards, one a verbatim failure passthrough (`None => None`, or `Err e => Err e`
+-- returning the bound variable unchanged) and the other the success bind
+-- (`Some p => body`, `Ok p => body`). Not flagged: a rebuilt failure value
+-- (`Err e => Err (wrap e)`), a constructor swap, a third arm, a guarded arm, a
+-- success arm that re-wraps in the same constructor (a `map`, owned by
+-- `rule-match-to-map`), and a match whose success arm ends in a call of the
+-- enclosing function (a self-recursive tail), where the `do` form costs a
+-- closure per iteration.
+export
+rule : Rule
+rule =
+  mkVisitorRule
+    RuleMeta {
+      name = ruleNamePassthroughArm,
+      summary =
+        "a two-arm `match` over an Option/Result with a verbatim `None => None` / `Err e => Err e` arm: bind in a `do` block instead",
+      doc =
+        "A `match` that passes a failure straight through (`None => None`, or `Err e => Err e` with the same variable) and continues in the other arm is a monadic bind written by hand. Write it as a `do` block, at any depth: one level is enough, unlike `rule-bind-chain-to-do`, which needs a pyramid of three. `--fix --unsafe-fixes` rewrites the statement-position cases; the rest are reported only.\n\nNot reported: a failure arm that rebuilds its value (`Err e => Err (wrap e)`), a match with a third arm or a guard, a success arm that re-wraps in the same constructor (`rule-match-to-map` owns it). A match whose success arm ends, through `if`, `let`, `match` arms and block tails, in a call of the enclosing function (a self-recursive tail, including a where-local `go`) is not reported: the `do` form lowers to `andThen`, which allocates a closure per iteration and measurably slows the loop.\n\nBefore:\n  match catalogRow n\n    Some r => g r\n    None => None\nAfter:\n  do\n    r <- catalogRow n\n    g r",
+      category = Style,
+      scope = Internal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = FixableUnsafe,
+      needs = [],
+    }
+    rulePassthroughArm
+    None
+
+rulePassthroughArm : StdlibIndex ->
+  String ->
+  FileFacts ->
+  Positions ->
+  List Decl ->
+  List Visitor
+rulePassthroughArm _ _ facts _ prog =
+  let exempt = memoNew (_ => flatMap declExempt prog)
+  [OnExpr [KMatch] (passthroughAt facts exempt)]
+
+-- ── the match ────────────────────────────────────────────────────────────────
+
+-- `exempt` holds the span of each match whose success arm is a self-recursive
+-- tail.  Finding them walks every body of the file, so the walk waits for the
+-- file's first passthrough match: most files have none.
+passthroughAt : FileFacts ->
+  Memo (List (Option Loc)) ->
+  Ctx ->
+  Expr ->
+  List Finding
+passthroughAt facts exempt ctx e = match passthroughOf e
+  Some (kind, _) =>
+    if anyList (== ctx.ctxSpan) (memoGet exempt) then
+      []
+    else
+      [report ctx.ctxSpan kind (fixLater (_ => passthroughFix facts ctx e))]
+  None => []
+
+-- `(kind, success body)` of a two-arm passthrough `match`.
+passthroughOf : Expr -> Option (String, Expr)
+passthroughOf (EMatch _ [a1, a2]) = match bindArm a1 a2
+  Some r => Some r
+  None => bindArm a2 a1
+passthroughOf _ = None
+
+-- ── self-recursive tails ─────────────────────────────────────────────────────
+
+-- The spans of the passthrough matches in a declaration's bodies whose success
+-- arm ends in a call of the nearest enclosing function: the clause itself, or
+-- the `where`/`let` binding the match sits in.
+declExempt : Decl -> List (Option Loc)
+declExempt d = flatMap bodyExempt (declBodies d)
+
+bodyExempt : DeclBody -> List (Option Loc)
+bodyExempt (DeclBody owner body) = exemptIn (ownerName owner) None body
+
+ownerName : BodyOwner -> String
+ownerName (OwnerClause n _) = n
+ownerName (OwnerImplMethod _ m _) = m
+ownerName (OwnerIfaceDefault _ m _) = m
+ownerName (OwnerTest _) = ""
+ownerName (OwnerProp _ _) = ""
+ownerName (OwnerLetGroup n _) = n
+
+exemptIn : String -> Option Loc -> Expr -> List (Option Loc)
+exemptIn owner _ (ELoc l inner) = exemptIn owner (Some l) inner
+exemptIn owner loc e =
+  thisExempt owner loc e
+    ++ (match e
+      ELetGroup binds body =>
+        flatMap (localExempt loc) binds ++ exemptIn owner loc body
+      _ => flatMap (exemptIn owner loc) (childExprs e))
+
+localExempt : Option Loc -> LetBind -> List (Option Loc)
+localExempt loc (LetBind n clauses _ _) =
+  flatMap ((FunClause _ body) => exemptIn n loc body) clauses
+
+thisExempt : String -> Option Loc -> Expr -> List (Option Loc)
+thisExempt owner loc e = match passthroughOf e
+  Some (_, body) => if selfTail owner body then [loc] else []
+  None => []
+
+-- `(kind, success body)` when the first arm is the passthrough and the second
+-- the bind.
+bindArm : Arm -> Arm -> Option (String, Expr)
+bindArm (Arm fp fgs fbody) (Arm sp sgs sbody)
+  | not (isEmptyL fgs && isEmptyL sgs) = None
+  | isNilPCon "None" fp && isEVarNamed "None" fbody =
+    success "Some" "Option" sp sbody
+  | ctorVarPassthru "Err" fp fbody = success "Ok" "Result" sp sbody
+  | otherwise = None
+
+success : String -> String -> Pat -> Expr -> Option (String, Expr)
+success ctor kind (p@(PCon c [_])) body =
+  if c == ctor && isNone (matchToMapTransform ctor p body) then
+    Some (kind, body)
+  else
+    None
+success _ _ _ _ = None
+
+-- Some tail position of `e` is a call of `name`, the function the match sits in.
+selfTail : String -> Expr -> Bool
+selfTail name e = match unwrapLoc e
+  EApp f _ => calls name f
+  EIf _ t el => selfTail name t || selfTail name el
+  ELet _ _ _ _ body => selfTail name body
+  ELetGroup _ body => selfTail name body
+  EMatch _ arms => anyList (armTail name) arms
+  EBlock stmts => match last stmts
+    Some (DoExpr l) => selfTail name l
+    _ => False
+  ELit _ | EVar _ | ELam _ _ | EBinOp _ _ _ _ | EUnOp _ _ _ | EInfix _ _ _ | EFieldAccess _ _ _ | ETuple _ | EListLit _ | EArrayLit _ | ERangeList _ _ _ | ERangeArray _ _ _ | ESlice _ _ _ _ | ESection _ | EIndex _ _ | EAnnot _ _ | EHeadAnnot _ _ | EDo _ _ | EStringInterp _ | EGuards _ | ERecordCreate _ _ | ERecordUpdate _ _ _ | EVariantUpdate _ _ _ | EMapLit _ _ | ESetLit _ _ | EAsPat _ _ | EOrPat _ | EMethodRef _ | EDictApp _ | EVarAt _ _ | EVarId _ _ | EMethodAt _ _ _ | EDictAt _ _ | ELoc _ _ | EDoOrigin _ _ | ENumLit _ _ _ | EWideLit _ _ _ _ =>
+    False
+
+armTail : String -> Arm -> Bool
+armTail name (Arm _ _ body) = selfTail name body
+
+calls : String -> Expr -> Bool
+calls name f = match unwrapLoc f
+  EVar n => n == name
+  EApp g _ => calls name g
+  _ => False
+
+report : Option Loc -> String -> Memo (Option Fix) -> Finding
+report loc kind fix = Finding {
+  rule = ruleNamePassthroughArm,
+  message =
+    "`match` over \{kind} passes the failure straight through: bind it in a `do` block (`pat <- scrutinee`, then the success arm)",
+  severity = SevWarning,
+  loc = loc,
+  fix = fix,
+}
+
+-- ── the fix ──────────────────────────────────────────────────────────────────
+
+-- Unsafe: `--fix --unsafe-fixes` rewrites
+--
+--   match e                  do
+--     Some p => body    ==>    p <- e
+--     None => None             body
+--
+-- as text edits, so the success arm's body keeps its lines and comments. The
+-- fix is withheld, the finding still reported, unless the whole shape is known:
+--   * the match is a clause body, a `let` value or an arm body (never a bare
+--     operand, argument, `if` branch or parenthesised), and starts a line or
+--     follows an `=` / `=>` that ends the previous significant line;
+--   * the scrutinee ends on the `match` line, the arms sit at one column below
+--     it, and the passthrough arm is exactly one line `None => None` /
+--     `Err x => Err x`;
+--   * the success pattern is a variable, `_`, or a tuple of them, which a `do`
+--     bind accepts without a failure path;
+--   * the success body has no bare expression statement before its last one,
+--     which would be a statement in the scrutinee's monad inside the `do`;
+--   * no comment touches an edited line (the driver demotes such a fix).
+-- The passthrough arm is listed first or second. A success body that starts on
+-- the arrow's line moves to the arm's column, and the bind is placed there; a
+-- body that starts on the next line stays where it is and the bind is placed at
+-- its column. Both match and `do` blocks are layout blocks, so no line is
+-- re-indented.
+passthroughFix : FileFacts -> Ctx -> Expr -> Option Fix
+passthroughFix facts ctx e = do
+  (Loc path sl sc el ec) <- ctx.ctxSpan
+  (first, pass, succArm) <- passthroughArms e
+  guard (ctx.ctxOwn == ctx.ctxSpan && statementParent ctx.ctxParent)
+  scrutEnd <- tightSpan (matchScrutOf e)
+  guard (spanEndLine scrutEnd == sl && matchTokenAt facts sl sc)
+  guard (positionOk facts ctx sl sc (if ec == 0 then el - 1 else el))
+  firstArm <- nextCode facts sl
+  let ac = indentWidth (lineAt facts firstArm)
+  guard (ac > indentWidth (lineAt facts sl))
+  passLine <- passthroughLine first pass firstArm
+  succLine <- if first then nextCode facts passLine else Some firstArm
+  guard (first || succLine < passLine)
+  guard (indentWidth (lineAt facts passLine) == ac)
+  guard (isPassthroughText (lineAt facts passLine))
+  guard (indentWidth (lineAt facts succLine) == ac)
+  (ctorName, inner) <- successParts succArm
+  guard (not (hasBareStatement succArm))
+  let sline = lineAt facts succLine
+  arrow <- indexOf "=>" sline
+  guard
+    (stringSlice ac (ac + stringLength ctorName + 1) sline == ctorName ++ " ")
+  let patText = trim (stringSlice (ac + stringLength ctorName) arrow sline)
+  guard (patTextOk inner patText)
+  (blockCol, deleted, extra) <- bodyPlan facts path ac succLine passLine arrow
+  let header =
+    FixEdit
+      (Loc path sl sc sl (sc + 5))
+      "do\n\{repeat blockCol " "}\{patText} <-"
+  Some Fix {
+    fixApplicability = Unsafe,
+    fixEdits =
+      header :: extra ++ map (deleteLines facts path) (runs (sort deleted)),
+    fixMessage = "bind the scrutinee in a `do` block",
+  }
+
+-- Where the bind goes, the lines to delete, and the edit that lifts a body
+-- starting on the arrow's line to the arm's column.
+bodyPlan : FileFacts ->
+  String ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  Option (Int, List Int, List FixEdit)
+bodyPlan facts path ac succLine passLine arrow = do
+  let sline = lineAt facts succLine
+  let rest = stringSlice (arrow + 2) (stringLength sline) sline
+  if trim rest == "" then do
+    bodyLine <- nextCode facts succLine
+    let bi = indentWidth (lineAt facts bodyLine)
+    guard (bi > ac)
+    Some (bi, [passLine, succLine], [])
+  else do
+    guard (not (startsWith "--" (trim rest)))
+    let bodyCol = arrow + 2 + stringLength rest - stringLength (trimLeft rest)
+    Some (ac, [passLine], [FixEdit (Loc path succLine ac succLine bodyCol) ""])
+
+-- `(passthrough listed first, passthrough arm, success arm)`.
+passthroughArms : Expr -> Option (Bool, Arm, Arm)
+passthroughArms (EMatch _ [a1, a2]) =
+  if isSome (bindArm a1 a2) then
+    Some (True, a1, a2)
+  else if isSome (bindArm a2 a1) then
+    Some (False, a2, a1)
+  else
+    None
+passthroughArms _ = None
+
+-- The success body is a block with a bare expression statement before its last
+-- statement, as in `log x` then the result.
+hasBareStatement : Arm -> Bool
+hasBareStatement (Arm _ _ body) = match unwrapLoc body
+  EBlock stmts => anyList isBare (initList stmts)
+  _ => False
+
+isBare : DoStmt -> Bool
+isBare (DoExpr _) = True
+isBare _ = False
+
+-- The success arm's constructor and the pattern it wraps.
+successParts : Arm -> Option (String, Pat)
+successParts (Arm (PCon c [p]) _ _) = Some (c, p)
+successParts _ = None
+
+-- The line of the passthrough arm: the first arm, else the line its body is on.
+passthroughLine : Bool -> Arm -> Int -> Option Int
+passthroughLine True _ firstArm = Some firstArm
+passthroughLine False (Arm _ _ body) _ = map spanStartLine (tightSpan body)
+
+spanStartLine : Loc -> Int
+spanStartLine (Loc _ l _ _ _) = l
+
+spanEndLine : Loc -> Int
+spanEndLine (Loc _ _ _ l _) = l
+
+-- Where a multi-line `do` can replace the match without regrouping its parent.
+statementParent : Option ExprKind -> Bool
+statementParent None = True
+statementParent (Some KMatch) = True
+statementParent (Some KLet) = True
+statementParent (Some KLetGroup) = True
+statementParent (Some KGuards) = True
+statementParent (Some KDo) = True
+statementParent (Some KBlock) = True
+statementParent (Some _) = False
+
+matchTokenAt : FileFacts -> Int -> Int -> Bool
+matchTokenAt facts l c = stringSlice c (c + 5) (lineAt facts l) == "match"
+
+-- The match follows an `=` or `=>`, or is the last statement of a block, which
+-- a `do` takes the place of.
+positionOk : FileFacts -> Ctx -> Int -> Int -> Int -> Bool
+positionOk facts ctx l c endLine =
+  assignmentBefore facts l c || lastStatement facts ctx l c endLine
+
+lastStatement : FileFacts -> Ctx -> Int -> Int -> Int -> Bool
+lastStatement facts ctx l c endLine =
+  (ctx.ctxParent == Some KDo || ctx.ctxParent == Some KBlock)
+    && trim (stringSlice 0 c (lineAt facts l)) == ""
+    && (match prevCode facts l
+      Some p => indentWidth (lineAt facts p) == indentWidth (lineAt facts l)
+      None => False)
+    && (match nextCode facts endLine
+      Some n => indentWidth (lineAt facts n) < indentWidth (lineAt facts l)
+      None => True)
+
+-- The match follows an `=` or `=>` on its line, or starts its line right after
+-- a significant line that ends with one.
+assignmentBefore : FileFacts -> Int -> Int -> Bool
+assignmentBefore facts l c =
+  let before = stringSlice 0 c (lineAt facts l)
+  if trim before == "" then match prevCode facts l
+    Some p => endsAssign (lineAt facts p)
+    None => False
+  else
+    endsAssign before
+
+endsAssign : String -> Bool
+endsAssign s =
+  let t = trimRight s
+  endsWith "=>" t
+    || endsWith "=" t
+      && not (anyList (c => endsWith (c ++ "=") t) ["=", "<", ">", "!", "/"])
+
+lineAt : FileFacts -> Int -> String
+lineAt facts n = optionOr "" (sourceLine facts n)
+
+nextCode : FileFacts -> Int -> Option Int
+nextCode facts n = match sourceLine facts (n + 1)
+  Some l => if isCodeText l then Some (n + 1) else nextCode facts (n + 1)
+  None => None
+
+prevCode : FileFacts -> Int -> Option Int
+prevCode facts n
+  | n <= 1 = None
+  | isCodeText (lineAt facts (n - 1)) = Some (n - 1)
+  | otherwise = prevCode facts (n - 1)
+
+-- `None => None`, `Err e => Err e` on one line.
+isPassthroughText : String -> Bool
+isPassthroughText l = match indexOf "=>" l
+  Some i =>
+    let lhs = trim (stringSlice 0 i l)
+    let rhs = trim (stringSlice (i + 2) (stringLength l) l)
+    lhs == rhs && (lhs == "None" || startsWith "Err " lhs)
+  None => False
+
+-- A variable, `_` or a tuple of them, written with nothing else.
+patTextOk : Pat -> String -> Bool
+patTextOk p t =
+  patShapeOk p
+    && allList
+      (c => isAlnum c || elem c [',', ' ', '(', ')'])
+      (toList (stringToChars t))
+
+patShapeOk : Pat -> Bool
+patShapeOk (PVar _ _ _) = True
+patShapeOk PWild = True
+patShapeOk (PTuple ps) = allList patShapeOk ps
+patShapeOk (PLit _ | PCon _ _ | PCons _ _ | PList _ | PAs _ _ _ _ | POr _ | PRng _ _ _ | PRec _ _ _ | PAnn _ _) =
+  False
+
+-- Consecutive line numbers as `(first, last)` runs.
+runs : List Int -> List (Int, Int)
+runs [] = []
+runs (x :: xs) = runFrom x x xs
+
+runFrom : Int -> Int -> List Int -> List (Int, Int)
+runFrom lo hi (y :: ys)
+  | y == hi + 1 = runFrom lo y ys
+runFrom lo hi rest = (lo, hi) :: runs rest
+
+-- Deletes lines `lo..hi` with the newline that precedes them.
+deleteLines : FileFacts -> String -> (Int, Int) -> FixEdit
+deleteLines facts path (lo, hi) =
+  FixEdit
+    (Loc
+      path
+      (lo - 1)
+      (stringLength (lineAt facts (lo - 1)))
+      hi
+      (stringLength (lineAt facts hi)))
+    ""

@@ -15,8 +15,10 @@ import tools.lint_core.{
   Scope(..),
   StdlibIndex,
   mkRule,
+  noFix,
+  factDeclLocs,
 }
-import tools.lint_shared.{declLocList, ruleNameSelfShadowExtern, unwrapLoc}
+import tools.lint_shared.{ruleNameSelfShadowExtern, unwrapLoc}
 
 export
 rule : Rule
@@ -70,8 +72,8 @@ ruleSelfShadowExtern : StdlibIndex ->
   Positions ->
   List Decl ->
   List Finding
-ruleSelfShadowExtern _ _ _ pos prog =
-  selfShadowFindings (flatMap selfShadowClauseL (declLocList pos prog))
+ruleSelfShadowExtern _ _ facts _ _ =
+  selfShadowFindings (flatMap selfShadowClauseL (factDeclLocs facts))
 
 selfShadowFindings : List (String, List Pat, Expr, Option Loc) -> List Finding
 selfShadowFindings clauses =
@@ -134,5 +136,5 @@ selfShadowFinding (name, loc) = Finding {
     "top-level '\{name}' unconditionally calls itself with no base case — an infinite self-recursion, not a forward to a same-named extern/definition. Rename the binding (give it a distinct name) or add a terminating `match`/`if`/guard",
   severity = SevWarning,
   loc = loc,
-  fix = None,
+  fix = noFix,
 }

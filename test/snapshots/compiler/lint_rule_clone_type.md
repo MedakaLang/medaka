@@ -1,5 +1,5 @@
 # META
-source_lines=140
+source_lines=143
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-clone-type: a two-constructor `data` with Option's or Result's arities and no `impl`. Prefer the stdlib type.
@@ -43,9 +43,10 @@ import tools.lint_core.{
   Scope(..),
   StdlibIndex,
   mkRule,
+  noFix,
+  factDeclLocs,
 }
 import tools.lint_shared.{
-  declLocList,
   ruleNameCloneType,
   tyHeadName,
 }
@@ -109,18 +110,20 @@ ruleCloneType : StdlibIndex ->
   Positions ->
   List Decl ->
   List Finding
-ruleCloneType _ _ _ pos prog =
+ruleCloneType _ _ facts _ prog =
   let impls = cloneImplTargets prog
-  flatMap (cloneTypeDeclL impls) (declLocList pos prog)
+  flatMap (cloneTypeDeclL impls) (factDeclLocs facts)
 
 cloneTypeDeclL : List String -> (Decl, Option Loc) -> List Finding
 cloneTypeDeclL impls (d, loc) = cloneTypeDecl impls loc d
 
 cloneTypeDecl : List String -> Option Loc -> Decl -> List Finding
-cloneTypeDecl impls loc (DData { dataName, dataCtors, ... }) =
-  cloneTypeHit impls loc dataName dataCtors
-cloneTypeDecl impls loc (DAttrib _ d) = cloneTypeDecl impls loc d
-cloneTypeDecl _ _ _ = []
+cloneTypeDecl impls loc x0 = go x0
+  where
+    go (DData { dataName, dataCtors, ... }) =
+      cloneTypeHit impls loc dataName dataCtors
+    go (DAttrib _ d) = go d
+    go _ = []
 
 cloneTypeHit : List String ->
   Option Loc ->
@@ -140,7 +143,7 @@ cloneTypeFinding loc n shape = Finding {
     "'\{n}' re-declares `\{shape}`'s constructor shape and its file writes no `impl` for it -- prefer the stdlib `\{shape}`, whose combinators come with it",
   severity = SevWarning,
   loc = loc,
-  fix = None,
+  fix = noFix,
 }
 # DESUGAR
 (DUse false (UseAlias ("core") "$core"))
@@ -148,8 +151,8 @@ cloneTypeFinding loc n shape = Finding {
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "mkRule" false))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "declLocList" false) (mem "ruleNameCloneType" false) (mem "tyHeadName" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "mkRule" false) (mem "noFix" false) (mem "factDeclLocs" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "ruleNameCloneType" false) (mem "tyHeadName" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameCloneType")) (fa "summary" (ELit (LString "two-constructor `data` with `Option`'s or `Result`'s constructor arities and no `impl` in the declaring file. Prefer the stdlib type (suggest-only)"))) (fa "doc" (ELit (LString "A two-constructor `data` with the arities of `Option` or `Result` and no `impl` in its file duplicates the stdlib type and loses its instances. Suggest-only.\n\nBefore:\n  data Maybe2 a = Nope | Yep a\nAfter:\n  use `Option a`"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Baselined")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "NotFixable")) (fa "needs" (EListLit))))) (EVar "ruleCloneType")) (EVar "None")))
 (DTypeSig false "cloneCtorArity" (TyFun (TyCon "Variant") (TyCon "Int")))
@@ -169,25 +172,23 @@ cloneTypeFinding loc n shape = Finding {
 (DTypeSig false "cloneTyHeadList" (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "cloneTyHeadList" ((PVar "t")) (EMatch (EApp (EVar "tyHeadName") (EVar "t")) (arm (PCon "Some" (PVar "n")) () (EListLit (EVar "n"))) (arm (PCon "None") () (EListLit))))
 (DTypeSig false "ruleCloneType" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "ruleCloneType" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EBlock (DoLet false false (PVar "impls") (EApp (EVar "cloneImplTargets") (EVar "prog"))) (DoExpr (EApp (EApp (EVar "flatMap") (EApp (EVar "cloneTypeDeclL") (EVar "impls"))) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))))
+(DFunDef false "ruleCloneType" (PWild PWild (PVar "facts") PWild (PVar "prog")) (EBlock (DoLet false false (PVar "impls") (EApp (EVar "cloneImplTargets") (EVar "prog"))) (DoExpr (EApp (EApp (EVar "flatMap") (EApp (EVar "cloneTypeDeclL") (EVar "impls"))) (EApp (EVar "factDeclLocs") (EVar "facts"))))))
 (DTypeSig false "cloneTypeDeclL" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding")))))
 (DFunDef false "cloneTypeDeclL" ((PVar "impls") (PTuple (PVar "d") (PVar "loc"))) (EApp (EApp (EApp (EVar "cloneTypeDecl") (EVar "impls")) (EVar "loc")) (EVar "d")))
 (DTypeSig false "cloneTypeDecl" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Finding"))))))
-(DFunDef false "cloneTypeDecl" ((PVar "impls") (PVar "loc") (PRec "DData" ((rf "dataName" None) (rf "dataCtors" None)) true)) (EApp (EApp (EApp (EApp (EVar "cloneTypeHit") (EVar "impls")) (EVar "loc")) (EVar "dataName")) (EVar "dataCtors")))
-(DFunDef false "cloneTypeDecl" ((PVar "impls") (PVar "loc") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EApp (EVar "cloneTypeDecl") (EVar "impls")) (EVar "loc")) (EVar "d")))
-(DFunDef false "cloneTypeDecl" (PWild PWild PWild) (EListLit))
+(DFunDef false "cloneTypeDecl" ((PVar "impls") (PVar "loc") (PVar "x0")) (ELetGroup ((lgb "go" (clause ((PRec "DData" ((rf "dataName" None) (rf "dataCtors" None)) true)) (EApp (EApp (EApp (EApp (EVar "cloneTypeHit") (EVar "impls")) (EVar "loc")) (EVar "dataName")) (EVar "dataCtors"))) (clause ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "go") (EVar "d"))) (clause (PWild) (EListLit)))) (EApp (EVar "go") (EVar "x0"))))
 (DTypeSig false "cloneTypeHit" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyApp (TyCon "List") (TyCon "Finding")))))))
 (DFunDef false "cloneTypeHit" ((PVar "impls") (PVar "loc") (PVar "n") (PVar "ctors")) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "impls")) (EListLit) (EIf (EVar "otherwise") (EMatch (EApp (EVar "cloneShapeName") (EVar "ctors")) (arm (PCon "Some" (PVar "shape")) () (EListLit (EApp (EApp (EApp (EVar "cloneTypeFinding") (EVar "loc")) (EVar "n")) (EVar "shape")))) (arm (PCon "None") () (EListLit))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "cloneTypeFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Finding")))))
-(DFunDef false "cloneTypeFinding" ((PVar "loc") (PVar "n") (PVar "shape")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameCloneType")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EVar "$core.display") (EVar "n"))) (ELit (LString "' re-declares `"))) (EApp (EVar "$core.display") (EVar "shape"))) (ELit (LString "`'s constructor shape and its file writes no `impl` for it -- prefer the stdlib `"))) (EApp (EVar "$core.display") (EVar "shape"))) (ELit (LString "`, whose combinators come with it")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None")))))
+(DFunDef false "cloneTypeFinding" ((PVar "loc") (PVar "n") (PVar "shape")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameCloneType")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EVar "$core.display") (EVar "n"))) (ELit (LString "' re-declares `"))) (EApp (EVar "$core.display") (EVar "shape"))) (ELit (LString "`'s constructor shape and its file writes no `impl` for it -- prefer the stdlib `"))) (EApp (EVar "$core.display") (EVar "shape"))) (ELit (LString "`, whose combinators come with it")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "noFix")))))
 # MARK
 (DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Ty" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "mkRule" false))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "declLocList" false) (mem "ruleNameCloneType" false) (mem "tyHeadName" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "mkRule" false) (mem "noFix" false) (mem "factDeclLocs" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "ruleNameCloneType" false) (mem "tyHeadName" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameCloneType")) (fa "summary" (ELit (LString "two-constructor `data` with `Option`'s or `Result`'s constructor arities and no `impl` in the declaring file. Prefer the stdlib type (suggest-only)"))) (fa "doc" (ELit (LString "A two-constructor `data` with the arities of `Option` or `Result` and no `impl` in its file duplicates the stdlib type and loses its instances. Suggest-only.\n\nBefore:\n  data Maybe2 a = Nope | Yep a\nAfter:\n  use `Option a`"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Baselined")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "NotFixable")) (fa "needs" (EListLit))))) (EVar "ruleCloneType")) (EVar "None")))
 (DTypeSig false "cloneCtorArity" (TyFun (TyCon "Variant") (TyCon "Int")))
@@ -207,14 +208,12 @@ cloneTypeFinding loc n shape = Finding {
 (DTypeSig false "cloneTyHeadList" (TyFun (TyCon "Ty") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "cloneTyHeadList" ((PVar "t")) (EMatch (EApp (EVar "tyHeadName") (EVar "t")) (arm (PCon "Some" (PVar "n")) () (EListLit (EVar "n"))) (arm (PCon "None") () (EListLit))))
 (DTypeSig false "ruleCloneType" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "ruleCloneType" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EBlock (DoLet false false (PVar "impls") (EApp (EVar "cloneImplTargets") (EVar "prog"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (EApp (EVar "cloneTypeDeclL") (EVar "impls"))) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))))
+(DFunDef false "ruleCloneType" (PWild PWild (PVar "facts") PWild (PVar "prog")) (EBlock (DoLet false false (PVar "impls") (EApp (EVar "cloneImplTargets") (EVar "prog"))) (DoExpr (EApp (EApp (EDictApp "flatMap") (EApp (EVar "cloneTypeDeclL") (EVar "impls"))) (EApp (EVar "factDeclLocs") (EVar "facts"))))))
 (DTypeSig false "cloneTypeDeclL" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding")))))
 (DFunDef false "cloneTypeDeclL" ((PVar "impls") (PTuple (PVar "d") (PVar "loc"))) (EApp (EApp (EApp (EVar "cloneTypeDecl") (EVar "impls")) (EVar "loc")) (EVar "d")))
 (DTypeSig false "cloneTypeDecl" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Finding"))))))
-(DFunDef false "cloneTypeDecl" ((PVar "impls") (PVar "loc") (PRec "DData" ((rf "dataName" None) (rf "dataCtors" None)) true)) (EApp (EApp (EApp (EApp (EVar "cloneTypeHit") (EVar "impls")) (EVar "loc")) (EVar "dataName")) (EVar "dataCtors")))
-(DFunDef false "cloneTypeDecl" ((PVar "impls") (PVar "loc") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EApp (EVar "cloneTypeDecl") (EVar "impls")) (EVar "loc")) (EVar "d")))
-(DFunDef false "cloneTypeDecl" (PWild PWild PWild) (EListLit))
+(DFunDef false "cloneTypeDecl" ((PVar "impls") (PVar "loc") (PVar "x0")) (ELetGroup ((lgb "go" (clause ((PRec "DData" ((rf "dataName" None) (rf "dataCtors" None)) true)) (EApp (EApp (EApp (EApp (EVar "cloneTypeHit") (EVar "impls")) (EVar "loc")) (EVar "dataName")) (EVar "dataCtors"))) (clause ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "go") (EVar "d"))) (clause (PWild) (EListLit)))) (EApp (EVar "go") (EVar "x0"))))
 (DTypeSig false "cloneTypeHit" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Variant")) (TyApp (TyCon "List") (TyCon "Finding")))))))
 (DFunDef false "cloneTypeHit" ((PVar "impls") (PVar "loc") (PVar "n") (PVar "ctors")) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "impls")) (EListLit) (EIf (EVar "otherwise") (EMatch (EApp (EVar "cloneShapeName") (EVar "ctors")) (arm (PCon "Some" (PVar "shape")) () (EListLit (EApp (EApp (EApp (EVar "cloneTypeFinding") (EVar "loc")) (EVar "n")) (EVar "shape")))) (arm (PCon "None") () (EListLit))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "cloneTypeFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Finding")))))
-(DFunDef false "cloneTypeFinding" ((PVar "loc") (PVar "n") (PVar "shape")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameCloneType")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EVar "$core.display") (EVar "n"))) (ELit (LString "' re-declares `"))) (EApp (EVar "$core.display") (EVar "shape"))) (ELit (LString "`'s constructor shape and its file writes no `impl` for it -- prefer the stdlib `"))) (EApp (EVar "$core.display") (EVar "shape"))) (ELit (LString "`, whose combinators come with it")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None")))))
+(DFunDef false "cloneTypeFinding" ((PVar "loc") (PVar "n") (PVar "shape")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameCloneType")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EVar "$core.display") (EVar "n"))) (ELit (LString "' re-declares `"))) (EApp (EVar "$core.display") (EVar "shape"))) (ELit (LString "`'s constructor shape and its file writes no `impl` for it -- prefer the stdlib `"))) (EApp (EVar "$core.display") (EVar "shape"))) (ELit (LString "`, whose combinators come with it")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "noFix")))))

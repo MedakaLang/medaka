@@ -76,32 +76,28 @@ decodeAt label bytes offset =
 {- | Parse and validate one complete binary atproto CID. -}
 export
 cidFromBytes : Bytes -> Result String Cid
-cidFromBytes bytes = match decodeAt "version" bytes 0
-  Err message => Err message
-  Ok (version, p1) =>
-    if version /= 1 then
-      Err "cid: version must be 1"
-    else match decodeAt "codec" bytes p1
-      Err message => Err message
-      Ok (codec, p2) =>
-        if not (validCodec codec) then
-          Err "cid: codec must be raw (0x55) or dag-cbor/DRISL (0x71)"
-        else match decodeAt "hash code" bytes p2
-          Err message => Err message
-          Ok (hashCode, p3) =>
-            if hashCode /= multicodecSha2_256 then
-              Err "cid: hash code must be sha2-256 (0x12)"
-            else match decodeAt "hash length" bytes p3
-              Err message => Err message
-              Ok (hashLength, p4) =>
-                if hashLength /= 32 then
-                  Err "cid: SHA-256 digest length must be 32 bytes"
-                else if B.length bytes - p4 < 32 then
-                  Err "cid: truncated SHA-256 digest"
-                else if B.length bytes - p4 > 32 then
-                  Err "cid: trailing bytes after SHA-256 digest"
-                else
-                  cidFromDigest codec (B.take 32 (B.drop p4 bytes))
+cidFromBytes bytes = do
+  (version, p1) <- decodeAt "version" bytes 0
+  if version /= 1 then
+    Err "cid: version must be 1"
+  else do
+    (codec, p2) <- decodeAt "codec" bytes p1
+    if not (validCodec codec) then
+      Err "cid: codec must be raw (0x55) or dag-cbor/DRISL (0x71)"
+    else do
+      (hashCode, p3) <- decodeAt "hash code" bytes p2
+      if hashCode /= multicodecSha2_256 then
+        Err "cid: hash code must be sha2-256 (0x12)"
+      else do
+        (hashLength, p4) <- decodeAt "hash length" bytes p3
+        if hashLength /= 32 then
+          Err "cid: SHA-256 digest length must be 32 bytes"
+        else if B.length bytes - p4 < 32 then
+          Err "cid: truncated SHA-256 digest"
+        else if B.length bytes - p4 > 32 then
+          Err "cid: trailing bytes after SHA-256 digest"
+        else
+          cidFromDigest codec (B.take 32 (B.drop p4 bytes))
 
 -- | Canonical lowercase unpadded base32 CID string.
 export

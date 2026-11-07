@@ -82,14 +82,19 @@ halveBytes bs =
   MB.freeze out
 
 halveGo : Bytes -> MutBytes -> Int -> Int -> Unit
-halveGo bs out i carry =
-  if i >= 32 then
-    ()
-  else
-    let cur = U8.toInt bs[i]
-    let () =
-      MB.setInPlace i (U8.truncate (shiftRight cur 1 + shiftLeft carry 7)) out
-    halveGo bs out (i + 1) (bitAnd cur 1)
+halveGo bs out i0 carry0 = go i0 carry0
+  where
+    go i carry =
+      if i >= 32 then
+        ()
+      else
+        let cur = U8.toInt bs[i]
+        let () =
+          MB.setInPlace
+            i
+            (U8.truncate (shiftRight cur 1 + shiftLeft carry 7))
+            out
+        go (i + 1) (bitAnd cur 1)
 
 -- 32 big-endian bytes, a - b (a >= b, which every input here satisfies).
 subBytes : Bytes -> Bytes -> Bytes
@@ -99,17 +104,19 @@ subBytes a b =
   MB.freeze out
 
 subGo : Bytes -> Bytes -> MutBytes -> Int -> Int -> Unit
-subGo a b out i borrow =
-  if i < 0 then
-    ()
-  else
-    let v = U8.toInt a[i] - U8.toInt b[i] - borrow
-    if v < 0 then
-      let () = MB.setInPlace i (U8.truncate (v + 256)) out
-      subGo a b out (i - 1) 1
-    else
-      let () = MB.setInPlace i (U8.truncate v) out
-      subGo a b out (i - 1) 0
+subGo a b out i0 borrow0 = go i0 borrow0
+  where
+    go i borrow =
+      if i < 0 then
+        ()
+      else
+        let v = U8.toInt a[i] - U8.toInt b[i] - borrow
+        if v < 0 then
+          let () = MB.setInPlace i (U8.truncate (v + 256)) out
+          go (i - 1) 1
+        else
+          let () = MB.setInPlace i (U8.truncate v) out
+          go (i - 1) 0
 
 -- 32 big-endian bytes, a + b (the sum below 2^256, which every input here
 -- satisfies).
@@ -120,13 +127,15 @@ addBytes a b =
   MB.freeze out
 
 addGo : Bytes -> Bytes -> MutBytes -> Int -> Int -> Unit
-addGo a b out i carry =
-  if i < 0 then
-    ()
-  else
-    let v = U8.toInt a[i] + U8.toInt b[i] + carry
-    let () = MB.setInPlace i (U8.truncate (bitAnd v 255)) out
-    addGo a b out (i - 1) (shiftRight v 8)
+addGo a b out i0 carry0 = go i0 carry0
+  where
+    go i carry =
+      if i < 0 then
+        ()
+      else
+        let v = U8.toInt a[i] + U8.toInt b[i] + carry
+        let () = MB.setInPlace i (U8.truncate (bitAnd v 255)) out
+        go (i - 1) (shiftRight v 8)
 
 allOnes : Bytes
 allOnes = fromU8Array (arrayMake 32 255)

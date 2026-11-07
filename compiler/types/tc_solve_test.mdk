@@ -287,6 +287,10 @@ test "walkDispatch binds the interface parameter wherever the declared type has 
     expectEqual [[]] (walked ["a"] "x : a -> Int" intM),
   ]
 
+test "walkDispatch binds the interface parameter through a named binder" =
+  let occurrence = TFun boolM pureRow (TApp intM boolM)
+  expectEqual [[("a", "Bool")]] (walked ["a"] "x : (n : a) -> Box b" occurrence)
+
 test "an occurrence's dispatch monos keep every interface position, an omitted one read from the occurrence" =
   let occurrence = TFun boolM pureRow intM
   expectEqual
@@ -592,9 +596,9 @@ publishMethodReturnTrace : EvTable ->
   MethodReturnTraceEntry ->
   MethodReturnTraceEntry
 publishMethodReturnTrace evidence entry =
-  let published = match entry.mrtGoal
-    Some goal => lookupTraceEvidence goal evidence
-    None => None
+  let published = do
+    goal <- entry.mrtGoal
+    lookupTraceEvidence goal evidence
   MethodReturnTraceEntry {
     mrtStage = entry.mrtStage,
     mrtInterface = entry.mrtInterface,
@@ -634,14 +638,15 @@ sealMethodReturnGoalsFrom : GraphCtx ->
   List Obligation ->
   (List Obligation, List MethodReturnMemoView) ->
   (List Obligation, List MethodReturnMemoView)
-sealMethodReturnGoalsFrom _gctx _ [] acc = acc
-sealMethodReturnGoalsFrom gctx evidence (goal :: rest) (goals, views) =
-  match exactReturnRequestOfGoal goal
-    Some request => sealMethodReturnGoalsFrom gctx evidence rest (
-      goals,
-      methodReturnMemoView gctx evidence goal request :: views,
-    )
-    None => sealMethodReturnGoalsFrom gctx evidence rest (goal :: goals, views)
+sealMethodReturnGoalsFrom gctx evidence xs0 acc0 = go xs0 acc0
+  where
+    go [] acc = acc
+    go (goal :: rest) (goals, views) = match exactReturnRequestOfGoal goal
+      Some request => go rest (
+        goals,
+        methodReturnMemoView gctx evidence goal request :: views,
+      )
+      None => go rest (goal :: goals, views)
 
 methodReturnMemoView : GraphCtx ->
   EvTable ->

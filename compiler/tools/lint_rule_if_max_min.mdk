@@ -14,6 +14,7 @@ import tools.lint_core.{
   Finding(..),
   Fix,
   Fixability(..),
+  Memo,
   Need(..),
   Ratchet(..),
   Rule,
@@ -21,11 +22,12 @@ import tools.lint_core.{
   Scope(..),
   StdlibIndex,
   Visitor(..),
+  fixLater,
   mkVisitorRule,
+  factDeclLocs,
 }
 import tools.lint_shared.{
   rebinds,
-  declLocList,
   replaceNodeFix,
   ruleNameIfMaxMin,
   unwrapLoc,
@@ -129,8 +131,8 @@ ruleIfMaxMin : StdlibIndex ->
   Positions ->
   List Decl ->
   List Visitor
-ruleIfMaxMin idx _ facts pos decls =
-  [OnExpr [KIf] (ifMaxMinAt idx (ordImplLocs pos decls) facts)]
+ruleIfMaxMin idx _ facts _ _ =
+  [OnExpr [KIf] (ifMaxMinAt idx (ordImplLocs facts) facts)]
 
 ifMaxMinAt : StdlibIndex -> List Loc -> FileFacts -> Ctx -> Expr -> List Finding
 ifMaxMinAt idx ordLocs facts ctx (e@(EIf cond t el)) =
@@ -139,12 +141,15 @@ ifMaxMinAt idx ordLocs facts ctx (e@(EIf cond t el)) =
       ifMaxMinFinding
         ctx.ctxDeclLoc
         hit
-        (ifMaxMinFix idx ordLocs facts ctx e hit),
+        (fixLater (_ => ifMaxMinFix idx ordLocs facts ctx e hit)),
     ]
     None => []
 ifMaxMinAt _ _ _ _ _ = []
 
-ifMaxMinFinding : Option Loc -> (String, Expr, Expr) -> Option Fix -> Finding
+ifMaxMinFinding : Option Loc ->
+  (String, Expr, Expr) ->
+  Memo (Option Fix) ->
+  Finding
 ifMaxMinFinding loc (fn, a, b) fix = Finding {
   rule = ruleNameIfMaxMin,
   message =
@@ -177,8 +182,8 @@ ifMaxMinFix idx ordLocs facts ctx e (fn, a, b) =
 
 -- The declaration locations of the `impl Ord` blocks.  The walk gives every body
 -- of an impl the impl's own location as its `ctxDeclLoc`.
-ordImplLocs : Positions -> List Decl -> List Loc
-ordImplLocs pos decls = flatMap ordImplLoc (declLocList pos decls)
+ordImplLocs : FileFacts -> List Loc
+ordImplLocs facts = flatMap ordImplLoc (factDeclLocs facts)
 
 ordImplLoc : (Decl, Option Loc) -> List Loc
 ordImplLoc (d, loc) = match (isOrdImpl d, loc)

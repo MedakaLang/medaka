@@ -14,6 +14,8 @@ import frontend.ast.{
   Decl(..),
   Expr(..),
   ExternDecl(..),
+  FunClause(..),
+  LetBind(..),
   Pat,
 }
 import frontend.ast_walk.{
@@ -111,11 +113,15 @@ import tools.lint_core.{
   StdlibIndexError(..),
   Visitor(..),
   factComments,
+  factDeclLocs,
   fixToDiagFix,
+  findingFixOf,
   factScopes,
   clampApplicability,
   emptyStdlibIndex,
   maxApplicability,
+  memoGet,
+  memoMap,
   memoNew,
   mkStdlibIndex,
   projectIndexOf,
@@ -153,16 +159,19 @@ import tools.lint_registry.{
 
 export
 mkFileFacts : String -> List Decl -> Positions -> FileFacts
-mkFileFacts src prog pos = FileFacts {
-  ffSrc = src,
-  ffComments = memoNew (_ => collectComments src),
-  ffOracle = memoNew (_ => buildOracle prog),
-  ffDupClauses = memoNew (_ => flatMap dupClauseOfDecl (declLocList pos prog)),
-  ffScopes = memoNew (_ => buildScopes prog),
-  ffLines = memoNew (_ => fromList (lines src)),
-  ffLocalMods = [],
-  ffCanonPath = "",
-}
+mkFileFacts src prog pos =
+  let declLocs = memoNew (_ => declLocList pos prog)
+  FileFacts {
+    ffSrc = src,
+    ffComments = memoNew (_ => collectComments src),
+    ffOracle = memoNew (_ => buildOracle prog),
+    ffDeclLocs = declLocs,
+    ffDupClauses = memoNew (_ => flatMap dupClauseOfDecl (memoGet declLocs)),
+    ffScopes = memoNew (_ => buildScopes prog),
+    ffLines = memoNew (_ => fromList (lines src)),
+    ffLocalMods = [],
+    ffCanonPath = "",
+  }
 
 -- The dotted names of the program's `import m.*` modules that resolve to a file
 -- of the project: `<root>/<m as a path>.mdk` under the file's own directory or
@@ -309,7 +318,7 @@ lintProgramRanked idx rules path facts pos prog =
     if isEmptyL visitorSets then
       []
     else
-      runVisitors visitorSets (declLocList pos prog)
+      runVisitors visitorSets (factDeclLocs facts)
   ruleFindings idx path facts pos prog enabled walked
 
 rankedEnabled : (Int, Rule) -> Bool
@@ -343,18 +352,18 @@ ruleFindings : StdlibIndex ->
   List (Int, Rule) ->
   List (List Finding) ->
   List (Int, Finding)
-ruleFindings _ _ _ _ _ [] _ = []
-ruleFindings idx path facts pos prog ((rank, r) :: rs) walked = match r.check
-  WholeFile check =>
-    map
-        (f => (rank, restampFinding r f))
-        (check (indexFor r idx) path facts pos prog)
-      ++ ruleFindings idx path facts pos prog rs walked
-  Visits _ => match walked
-    hits :: rest =>
-      map (f => (rank, restampFinding r f)) hits
-        ++ ruleFindings idx path facts pos prog rs rest
-    [] => ruleFindings idx path facts pos prog rs []
+ruleFindings idx path facts pos prog rs0 walked0 = go rs0 walked0
+  where
+    go [] _ = []
+    go ((rank, r) :: rs) walked = match r.check
+      WholeFile check =>
+        map
+            (f => (rank, restampFinding r f))
+            (check (indexFor r idx) path facts pos prog)
+          ++ go rs walked
+      Visits _ => match walked
+        hits :: rest => map (f => (rank, restampFinding r f)) hits ++ go rs rest
+        [] => go rs []
 
 -- ── the visitor walk ──────────────────────────────────────────────────────────
 -- One pass over a file's declarations (each paired with its start location)
@@ -379,9 +388,11 @@ data ExprHook =
 
 data DeclHook = DeclHook Int (Ctx -> Decl -> List Finding)
 
--- What every node of one body shares: its owner's name and parameters, and
--- whether it is a test or prop body.
-data BodyScope = BodyScope String (List Pat) BodyKind (Option Loc)
+-- What every node of one body shares: its owner's name and parameters,
+-- whether it is a test or prop body, the declaration's start, and the nearest
+-- `let` or `where` binding the node is in.
+data BodyScope =
+  BodyScope String (List Pat) BodyKind (Option Loc) (Option (String, Loc))
 
 data BodyKind = PlainBody | TestBody
 
@@ -410,6 +421,8 @@ walkDecls : List ExprHook ->
   List (Int, Finding) ->
   List (Decl, Option Loc) ->
   List (Int, Finding)
+-- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 walkDecls _ _ acc [] = acc
 walkDecls exprHooks declHooks acc ((d, loc) :: rest) =
   let bodies = declBodies d
@@ -429,22 +442,26 @@ walkDecls exprHooks declHooks acc ((d, loc) :: rest) =
 -- A declaration's own `Ctx` reads its first body's owner, so a function clause
 -- carries its name and parameters and a test or prop is in a test.
 declScope : List DeclBody -> Option Loc -> BodyScope
-declScope [] loc = BodyScope "" [] PlainBody loc
+declScope [] loc = BodyScope "" [] PlainBody loc None
 declScope ((DeclBody owner _) :: _) loc = ownerScope owner loc
 
 ownerScope : BodyOwner -> Option Loc -> BodyScope
-ownerScope (OwnerClause name ps) loc = BodyScope name ps PlainBody loc
-ownerScope (OwnerImplMethod _ m ps) loc = BodyScope m ps PlainBody loc
-ownerScope (OwnerIfaceDefault _ m ps) loc = BodyScope m ps PlainBody loc
-ownerScope (OwnerTest name) loc = BodyScope name [] TestBody loc
-ownerScope (OwnerProp name _) loc = BodyScope name [] TestBody loc
-ownerScope (OwnerLetGroup name ps) loc = BodyScope name ps PlainBody loc
+ownerScope (OwnerClause name ps) loc = BodyScope name ps PlainBody loc None
+ownerScope (OwnerImplMethod _ m ps) loc = BodyScope m ps PlainBody loc None
+ownerScope (OwnerIfaceDefault _ m ps) loc = BodyScope m ps PlainBody loc None
+ownerScope (OwnerTest name) loc = BodyScope name [] TestBody loc None
+ownerScope (OwnerProp name _) loc = BodyScope name [] TestBody loc None
+ownerScope (OwnerLetGroup name ps) loc = BodyScope name ps PlainBody loc None
+
+inBinding : String -> Loc -> BodyScope -> BodyScope
+inBinding name site (BodyScope n ps kind declLoc _) =
+  BodyScope n ps kind declLoc (Some (name, site))
 
 -- The walk carries the parent kind unwrapped, with `KLoc` standing for "no
 -- parent": an `ELoc` is never a parent, and the `Option` is built only when a
 -- callback fires.
 scopeCtx : BodyScope -> ExprKind -> Option Loc -> Option Loc -> Ctx
-scopeCtx (BodyScope name ps kind declLoc) parent span own = Ctx {
+scopeCtx (BodyScope name ps kind declLoc binding) parent span own = Ctx {
   ctxDeclName = name,
   ctxParams = ps,
   ctxInTest = isTestBody kind,
@@ -452,6 +469,7 @@ scopeCtx (BodyScope name ps kind declLoc) parent span own = Ctx {
   ctxSpan = span,
   ctxOwn = own,
   ctxDeclLoc = declLoc,
+  ctxBinding = binding,
 }
 
 isTestBody : BodyKind -> Bool
@@ -463,9 +481,10 @@ runDeclHooks : Ctx ->
   List (Int, Finding) ->
   List DeclHook ->
   List (Int, Finding)
-runDeclHooks _ _ acc [] = acc
-runDeclHooks ctx d acc ((DeclHook i cb) :: rest) =
-  runDeclHooks ctx d (pushTagged i (cb ctx d) acc) rest
+runDeclHooks ctx d acc0 xs0 = go acc0 xs0
+  where
+    go acc [] = acc
+    go acc ((DeclHook i cb) :: rest) = go (pushTagged i (cb ctx d) acc) rest
 
 pushTagged : Int -> List Finding -> List (Int, Finding) -> List (Int, Finding)
 pushTagged _ [] acc = acc
@@ -476,13 +495,11 @@ walkBodies : List ExprHook ->
   List (Int, Finding) ->
   List DeclBody ->
   List (Int, Finding)
-walkBodies _ _ acc [] = acc
-walkBodies hooks loc acc ((DeclBody owner body) :: rest) =
-  walkBodies
-    hooks
-    loc
-    (walkExpr hooks (ownerScope owner loc) KLoc loc acc body)
-    rest
+walkBodies hooks loc acc0 xs0 = go acc0 xs0
+  where
+    go acc [] = acc
+    go acc ((DeclBody owner body) :: rest) =
+      go (walkExpr hooks (ownerScope owner loc) KLoc loc acc body) rest
 
 -- An `ELoc` is transparent: its span becomes the span beneath it and its
 -- parent is the parent of what it wraps.  The outermost `ELoc` of a run of
@@ -507,10 +524,11 @@ walkWrapped : List ExprHook ->
   List (Int, Finding) ->
   Expr ->
   List (Int, Finding)
-walkWrapped hooks scope parent outer _ acc (ELoc l inner) =
-  walkWrapped hooks scope parent outer l acc inner
-walkWrapped hooks scope parent outer innermost acc e =
-  walkNode hooks scope parent (Some innermost) (Some outer) acc e
+walkWrapped hooks scope parent outer innermost0 acc e0 = go innermost0 e0
+  where
+    go _ (ELoc l inner) = go l inner
+    go innermost e =
+      walkNode hooks scope parent (Some innermost) (Some outer) acc e
 
 walkNode : List ExprHook ->
   BodyScope ->
@@ -523,7 +541,35 @@ walkNode : List ExprHook ->
 walkNode hooks scope parent span own acc e =
   let k = exprKind e
   let acc2 = visitHooks (scopeCtx scope parent span own) k e acc hooks
-  walkKids hooks scope k span acc2 (childExprs e)
+  match e
+    ELetGroup binds body =>
+      walkKids hooks scope k span (walkBinds hooks scope span acc2 binds) [body]
+    _ => walkKids hooks scope k span acc2 (childExprs e)
+
+-- The clause bodies of a `let` group's bindings, in `childExprs` order, each
+-- under its binding.
+walkBinds : List ExprHook ->
+  BodyScope ->
+  Option Loc ->
+  List (Int, Finding) ->
+  List LetBind ->
+  List (Int, Finding)
+walkBinds hooks scope span acc0 xs0 = go acc0 xs0
+  where
+    go acc [] = acc
+    go acc ((LetBind name clauses site _) :: rest) =
+      go
+        (walkKids
+          hooks
+          (inBinding name site scope)
+          KLetGroup
+          span
+          acc
+          (map clauseBody clauses))
+        rest
+
+clauseBody : FunClause -> Expr
+clauseBody (FunClause _ body) = body
 
 walkKids : List ExprHook ->
   BodyScope ->
@@ -532,9 +578,10 @@ walkKids : List ExprHook ->
   List (Int, Finding) ->
   List Expr ->
   List (Int, Finding)
-walkKids _ _ _ _ acc [] = acc
-walkKids hooks scope parent span acc (c :: cs) =
-  walkKids hooks scope parent span (walkExpr hooks scope parent span acc c) cs
+walkKids hooks scope parent span acc0 xs0 = go acc0 xs0
+  where
+    go acc [] = acc
+    go acc (c :: cs) = go (walkExpr hooks scope parent span acc c) cs
 
 visitHooks : Ctx ->
   ExprKind ->
@@ -542,6 +589,8 @@ visitHooks : Ctx ->
   List (Int, Finding) ->
   List ExprHook ->
   List (Int, Finding)
+-- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 visitHooks _ _ _ acc [] = acc
 visitHooks ctx k e acc ((ExprHook i kinds cb) :: rest)
   | hookWants k kinds = visitHooks ctx k e (pushTagged i (cb ctx e) acc) rest
@@ -565,7 +614,7 @@ restampFinding r f = Finding {
   message = f.message,
   severity = r.severity,
   loc = f.loc,
-  fix = map (clampFix r.meta.fixability) f.fix,
+  fix = memoMap (map (clampFix r.meta.fixability)) f.fix,
 }
 
 clampFix : Fixability -> Fix -> Fix
@@ -856,20 +905,20 @@ stdlibRowsGo : String ->
   String ->
   List String ->
   <IO> Result StdlibIndexError (List String, List IndexRow)
-stdlibRowsGo _ _ _ [] = Ok ([], [])
-stdlibRowsGo dir stamp sdir (rel :: rest) =
-  let path = "\{sdir}/\{rel}"
-  let modId = joinWith "." (splitOnChar '/' (stripMdk rel))
-  match fileRows True lintParseSource dir stamp modId path
-    Err (src, e) => Err StdlibIndexError {
-      path = path,
-      source = src,
-      diagnostic = parseErrDiag path e,
-    }
-    Ok (digest, rows) =>
-      map
-        ((ds, rs) => (digest :: ds, rows ++ rs))
-        (stdlibRowsGo dir stamp sdir rest)
+stdlibRowsGo dir stamp sdir xs0 = go xs0
+  where
+    go [] = Ok ([], [])
+    go (rel :: rest) =
+      let path = "\{sdir}/\{rel}"
+      let modId = joinWith "." (splitOnChar '/' (stripMdk rel))
+      match fileRows True lintParseSource dir stamp modId path
+        Err (src, e) => Err StdlibIndexError {
+          path = path,
+          source = src,
+          diagnostic = parseErrDiag path e,
+        }
+        Ok (digest, rows) =>
+          map ((ds, rs) => (digest :: ds, rows ++ rs)) (go rest)
 
 -- A project file that does not parse has no rows: the lint pass over that file
 -- reports the parse error, and the index abstains on what it cannot read.
@@ -1278,6 +1327,8 @@ collectSplices : Option FileFacts ->
   List Rule ->
   List (Decl, DeclPos) ->
   List ((Int, Int, String), List String)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 collectSplices _ _ _ _ _ [] = []
 collectSplices facts live cmtLines orc rules ((d, dp) :: rest) =
   let liveRules =
@@ -1307,15 +1358,17 @@ spanHasComment cmtLines startLine endLine =
   anyList (l => startLine <= l && l <= endLine) cmtLines
 
 firstFix : Oracle -> List Rule -> Decl -> Option (List Decl)
-firstFix _ [] _ = None
-firstFix orc (r :: rs) d = match applyRuleFix orc r d
-  Some newDecls => Some newDecls
-  None => firstFix orc rs d
+firstFix orc xs0 d = go xs0
+  where
+    go [] = None
+    go (r :: rs) = match applyRuleFix orc r d
+      Some newDecls => Some newDecls
+      None => go rs
 
 applyRuleFix : Oracle -> Rule -> Decl -> Option (List Decl)
-applyRuleFix orc r d = match r.fix
-  Some f => f orc d
-  None => None
+applyRuleFix orc r d = do
+  f <- r.fix
+  f orc d
 
 -- render replacement decls, one per line (printer emits a single decl, no NL).
 renderDecls : List Decl -> String
@@ -1436,7 +1489,7 @@ findingToDiag f =
     "[\{f.rule}] \{f.message}"
     f.loc
     None
-    (map fixToDiagFix f.fix)
+    (map fixToDiagFix (findingFixOf f))
 
 -- Run the full lint pipeline (all rules, inline `-- lint-disable-*` suppression,
 -- then the `--disable`/`--only`/`--deny` CLI-flag-style filters) over ONE file

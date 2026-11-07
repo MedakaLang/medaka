@@ -27,6 +27,7 @@ import tools.lint_core.{
   Visitor(..),
   factScopes,
   mkVisitorRule,
+  noFix,
 }
 import tools.lint_recursion.{
   ArgRole(..),
@@ -196,7 +197,7 @@ report loc message = Finding {
   message = message,
   severity = SevWarning,
   loc = loc,
-  fix = None,
+  fix = noFix,
 }
 
 fixes : Operand -> String

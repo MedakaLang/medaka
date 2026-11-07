@@ -45,14 +45,13 @@ callRoles (SelfCall _ _ roles) = roles
 localRolesOf : String -> String -> Option (List (List ArgRole))
 localRolesOf name src = match lintParseSource src
   Err _ => None
-  Ok (decls, _) => match findMap (clauseOf name) decls
-    None => None
-    Some (_, body) =>
-      let scopes = buildScopes decls
-      Some
-        (flatMap
-          (o => map callRoles (selfCalls scopes (fst o) (snd o)))
-          (groupOwners body))
+  Ok (decls, _) => do
+    (_, body) <- findMap (clauseOf name) decls
+    let scopes = buildScopes decls
+    Some
+      (flatMap
+        (o => map callRoles (selfCalls scopes (fst o) (snd o)))
+        (groupOwners body))
 
 groupOwners : Expr -> List (Owner, Expr)
 groupOwners e = match letOwners e
@@ -86,6 +85,26 @@ test "a lambda parameter that shadows the name is not matched" =
 
 test "a let binding that shadows the name is not matched" =
   expectEqual (Some []) (rolesOf "f" "f a =\n  let f = x => x\n  f a\n")
+
+test "a block let that rebinds a parameter name is not that parameter" =
+  expectEqual
+    (Some [[Fresh, Unchanged 1]])
+    (rolesOf "f" "f a b =\n  let a = a + 1\n  f a b\n")
+
+test "a do bind that rebinds a parameter name is not that parameter" =
+  expectEqual
+    (Some [[Fresh, Unchanged 1]])
+    (rolesOf "f" "f a b = do\n  a <- Some (a + 1)\n  f a b\n")
+
+test "a let pattern that rebinds a parameter name is not that parameter" =
+  expectEqual
+    (Some [[Fresh, Unchanged 1]])
+    (rolesOf "f" "f a b =\n  let (a, c) = (a + 1, 0)\n  f a b\n")
+
+test "a pattern guard that rebinds a parameter name is not that parameter" =
+  expectEqual
+    (Some [[Fresh, Unchanged 1, Fresh]])
+    (rolesOf "f" "f a b xs\n  | (a :: rest) <- xs = f a b rest\n")
 
 test "a where-local loop is an owner of its own self-calls" =
   expectEqual
@@ -150,3 +169,13 @@ test "foldRight's accumulator is its second parameter" =
 
 test "a call that is not a fold is NotAFold" =
   expectEqual NotAFold (foldOf "g xs = map (x => x ++ [x]) xs\n")
+
+test "an append at the end of a fold lambda's let block counts" =
+  expectEqual
+    FoldAppends
+    (foldOf "g xs = fold (acc x =>\n    let y = x\n    acc ++ [y]) [] xs\n")
+
+test "a statement block that ends in a cons is not an append" =
+  expectEqual
+    FoldPlain
+    (foldOf "g xs = fold (acc x =>\n    let y = x\n    y :: acc) [] xs\n")

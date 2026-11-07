@@ -566,19 +566,17 @@ floorTitleMid = ".mdk executed >="
 -- prefix that roster's titles are spelled with, or `None` for any other
 -- line.
 titledFloorName : String -> String -> Option String
-titledFloorName titlePrefix line =
-  match stripPrefix (floorTitleOpen ++ titlePrefix) line
-    None => None
-    Some rest => map (i => stringSlice 0 i rest) (indexOf floorTitleMid rest)
+titledFloorName titlePrefix line = do
+  rest <- stripPrefix (floorTitleOpen ++ titlePrefix) line
+  map (i => stringSlice 0 i rest) (indexOf floorTitleMid rest)
 
 -- | The unit a grading call on `line` actually passes, given the call's
 -- opening text up to that argument's quote, or `None` for any other line.
 gradedFloorName : String -> String -> Option String
-gradedFloorName callOpen line = match indexOf callOpen line
-  None => None
-  Some i =>
-    let rest = stringSlice (i + stringLength callOpen) (stringLength line) line
-    map (j => stringSlice 0 j rest) (indexOf "\"" rest)
+gradedFloorName callOpen line = do
+  i <- indexOf callOpen line
+  let rest = stringSlice (i + stringLength callOpen) (stringLength line) line
+  map (j => stringSlice 0 j rest) (indexOf "\"" rest)
 
 -- | The unit graded by the body following a title line: the lines up to the
 -- next top-level `test` declaration, so a block that grades nothing cannot
@@ -599,6 +597,8 @@ floorBlockPairs : String ->
   String ->
   List String ->
   List (String, Option String)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 floorBlockPairs _ _ [] = []
 floorBlockPairs titlePrefix callOpen (line :: rest) =
   match titledFloorName titlePrefix line
@@ -732,9 +732,9 @@ disagreeingFloorBlocks titlePrefix callOpen sourceLines =
 (DTypeSig false "floorTitleMid" (TyCon "String"))
 (DFunDef false "floorTitleMid" () (ELit (LString ".mdk executed >=")))
 (DTypeSig false "titledFloorName" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "titledFloorName" ((PVar "titlePrefix") (PVar "line")) (EMatch (EApp (EApp (EVar "stripPrefix") (EBinOp "++" (EVar "floorTitleOpen") (EVar "titlePrefix"))) (EVar "line")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "rest")) () (EApp (EApp (EVar "map") (ELam ((PVar "i")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "rest")))) (EApp (EApp (EVar "indexOf") (EVar "floorTitleMid")) (EVar "rest"))))))
+(DFunDef false "titledFloorName" ((PVar "titlePrefix") (PVar "line")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "stripPrefix") (EBinOp "++" (EVar "floorTitleOpen") (EVar "titlePrefix"))) (EVar "line"))) (ELam ((PVar "rest")) (EApp (EApp (EVar "map") (ELam ((PVar "i")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "rest")))) (EApp (EApp (EVar "indexOf") (EVar "floorTitleMid")) (EVar "rest"))))))
 (DTypeSig false "gradedFloorName" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "gradedFloorName" ((PVar "callOpen") (PVar "line")) (EMatch (EApp (EApp (EVar "indexOf") (EVar "callOpen")) (EVar "line")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "i")) () (EBlock (DoLet false false (PVar "rest") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (EApp (EVar "stringLength") (EVar "callOpen")))) (EApp (EVar "stringLength") (EVar "line"))) (EVar "line"))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "j")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "j")) (EVar "rest")))) (EApp (EApp (EVar "indexOf") (ELit (LString "\""))) (EVar "rest"))))))))
+(DFunDef false "gradedFloorName" ((PVar "callOpen") (PVar "line")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "indexOf") (EVar "callOpen")) (EVar "line"))) (ELam ((PVar "i")) (ELet false (PVar "rest") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (EApp (EVar "stringLength") (EVar "callOpen")))) (EApp (EVar "stringLength") (EVar "line"))) (EVar "line")) (EApp (EApp (EVar "map") (ELam ((PVar "j")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "j")) (EVar "rest")))) (EApp (EApp (EVar "indexOf") (ELit (LString "\""))) (EVar "rest")))))))
 (DTypeSig false "gradedFloorAfter" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "gradedFloorAfter" (PWild (PList)) (EVar "None"))
 (DFunDef false "gradedFloorAfter" ((PVar "callOpen") (PCons (PVar "line") (PVar "rest"))) (EMatch (EApp (EApp (EVar "stripPrefix") (EVar "floorTitleOpen")) (EVar "line")) (arm (PCon "Some" PWild) () (EVar "None")) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "gradedFloorName") (EVar "callOpen")) (EVar "line")) (arm (PCon "Some" (PVar "graded")) () (EApp (EVar "Some") (EVar "graded"))) (arm (PCon "None") () (EApp (EApp (EVar "gradedFloorAfter") (EVar "callOpen")) (EVar "rest")))))))
@@ -823,9 +823,9 @@ disagreeingFloorBlocks titlePrefix callOpen sourceLines =
 (DTypeSig false "floorTitleMid" (TyCon "String"))
 (DFunDef false "floorTitleMid" () (ELit (LString ".mdk executed >=")))
 (DTypeSig false "titledFloorName" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "titledFloorName" ((PVar "titlePrefix") (PVar "line")) (EMatch (EApp (EApp (EVar "stripPrefix") (EBinOp "++" (EVar "floorTitleOpen") (EVar "titlePrefix"))) (EVar "line")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "rest")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "i")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "rest")))) (EApp (EApp (EVar "indexOf") (EVar "floorTitleMid")) (EVar "rest"))))))
+(DFunDef false "titledFloorName" ((PVar "titlePrefix") (PVar "line")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "stripPrefix") (EBinOp "++" (EVar "floorTitleOpen") (EVar "titlePrefix"))) (EVar "line"))) (ELam ((PVar "rest")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "i")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "rest")))) (EApp (EApp (EVar "indexOf") (EVar "floorTitleMid")) (EVar "rest"))))))
 (DTypeSig false "gradedFloorName" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "gradedFloorName" ((PVar "callOpen") (PVar "line")) (EMatch (EApp (EApp (EVar "indexOf") (EVar "callOpen")) (EVar "line")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "i")) () (EBlock (DoLet false false (PVar "rest") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (EApp (EVar "stringLength") (EVar "callOpen")))) (EApp (EVar "stringLength") (EVar "line"))) (EVar "line"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "j")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "j")) (EVar "rest")))) (EApp (EApp (EVar "indexOf") (ELit (LString "\""))) (EVar "rest"))))))))
+(DFunDef false "gradedFloorName" ((PVar "callOpen") (PVar "line")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "indexOf") (EVar "callOpen")) (EVar "line"))) (ELam ((PVar "i")) (ELet false (PVar "rest") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (EApp (EVar "stringLength") (EVar "callOpen")))) (EApp (EVar "stringLength") (EVar "line"))) (EVar "line")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "j")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "j")) (EVar "rest")))) (EApp (EApp (EVar "indexOf") (ELit (LString "\""))) (EVar "rest")))))))
 (DTypeSig false "gradedFloorAfter" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "gradedFloorAfter" (PWild (PList)) (EVar "None"))
 (DFunDef false "gradedFloorAfter" ((PVar "callOpen") (PCons (PVar "line") (PVar "rest"))) (EMatch (EApp (EApp (EVar "stripPrefix") (EVar "floorTitleOpen")) (EVar "line")) (arm (PCon "Some" PWild) () (EVar "None")) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "gradedFloorName") (EVar "callOpen")) (EVar "line")) (arm (PCon "Some" (PVar "graded")) () (EApp (EVar "Some") (EVar "graded"))) (arm (PCon "None") () (EApp (EApp (EVar "gradedFloorAfter") (EVar "callOpen")) (EVar "rest")))))))

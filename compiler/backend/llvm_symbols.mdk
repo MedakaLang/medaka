@@ -198,13 +198,14 @@ judgeWaiting : String ->
   List Waiting ->
   SymbolRegistry ->
   Result SymbolDefect SymbolRegistry
-judgeWaiting _ _ [] reg = Ok reg
-judgeWaiting name entry ((Waiting (Some shape) at) :: rest) reg =
-  match callDefect name shape at entry
-    Some d => Err d
-    None => judgeWaiting name entry rest reg
-judgeWaiting name entry ((Waiting None _) :: rest) reg =
-  judgeWaiting name entry rest reg
+judgeWaiting name entry xs0 reg = go xs0
+  where
+    go [] = Ok reg
+    go ((Waiting (Some shape) at) :: rest) =
+      match callDefect name shape at entry
+        Some d => Err d
+        None => go rest
+    go ((Waiting None _) :: rest) = go rest
 
 callDefect : String -> CallShape -> SymbolOrigin -> Entry -> Option SymbolDefect
 callDefect name (shape@(CallShape ret operands)) at (Entry _ _ proto declared) =

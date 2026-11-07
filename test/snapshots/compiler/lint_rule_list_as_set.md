@@ -1,5 +1,5 @@
 # META
-source_lines=642
+source_lines=648
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-list-as-set: a `List` a loop grows and membership-tests on every step (`contains`, `elem`, `notElem`, `lookupAssoc`, `lookup`). Keep a `Set` or `Map` beside it, or build the set once.
@@ -50,7 +50,7 @@ import frontend.ast.{
 }
 import frontend.ast_walk.{ExprKind(..), childExprs, stmtExprs}
 import frontend.parser.{Positions(..)}
-import list.{findMap, get, indexed, nub}
+import list.{findMap, get, indexed, last, nub}
 import map as M
 import string.{contains, endsWith}
 import tools.lint_calls.{lastSegment}
@@ -69,6 +69,7 @@ import tools.lint_core.{
   Visitor(..),
   factScopes,
   mkVisitorRule,
+  noFix,
 }
 import tools.lint_recursion.{
   ArgRole(..),
@@ -180,9 +181,9 @@ helperEntry : Reader ->
   (String, List Def) ->
   List (String, Helper)
 helperEntry (rd@(Reader scopes _)) searches (name, ds) =
-  let search = match M.get name searches
-    Some (Helper _ k _ _) => k
-    None => None
+  let search = do
+    (Helper _ k _ _) <- M.get name searches
+    k
   let tested =
     nub
       (flatMap
@@ -410,9 +411,9 @@ probeParam scopes ps (probe@(Probe _ _ _ c)) =
     None => []
 
 atParam : FileScopes -> Expr -> (Int, Pat) -> Option Int
-atParam scopes c (j, p) = match wholeParam p
-  Some param => if isParam scopes param c then Some j else None
-  None => None
+atParam scopes c (j, p) = do
+  param <- wholeParam p
+  if isParam scopes param c then Some j else None
 
 -- ── growth ───────────────────────────────────────────────────────────────────
 
@@ -427,16 +428,16 @@ grows (rd@(Reader scopes _)) lets param e = match unwrapLoc e
   _ => grownDirect rd param e
 
 grownDirect : Reader -> Param -> Expr -> Bool
-grownDirect (rd@(Reader scopes _)) param e = match unwrapLoc e
-  EBinOp "::" _ t _ => isParam scopes param t || grownDirect rd param t
-  EBinOp "++" a b _ =>
-    isParam scopes param a
-      || isParam scopes param b
-      || grownDirect rd param a
-      || grownDirect rd param b
-  EIf _ t f => grownDirect rd param t || grownDirect rd param f
-  EApp _ _ => helperGrows rd param e
-  _ => False
+grownDirect (rd@(Reader scopes _)) param expr0 = go expr0
+  where
+    go e = match unwrapLoc e
+      EBinOp "::" _ t _ => isParam scopes param t || go t
+      EBinOp "++" a b _ =>
+        isParam scopes param a || isParam scopes param b || go a || go b
+      EIf _ t f => go t || go f
+      EApp _ _ => helperGrows rd param e
+      ELit _ | EVar _ | ELam _ _ | ELet _ _ _ _ _ | EMatch _ _ | EUnOp _ _ _ | EInfix _ _ _ | EFieldAccess _ _ _ | ETuple _ | EListLit _ | EArrayLit _ | ERangeList _ _ _ | ERangeArray _ _ _ | ESlice _ _ _ _ | ELetGroup _ _ | ESection _ | EIndex _ _ | EAnnot _ _ | EHeadAnnot _ _ | EBlock _ | EDo _ _ | EStringInterp _ | EGuards _ | ERecordCreate _ _ | ERecordUpdate _ _ _ | EVariantUpdate _ _ _ | EMapLit _ _ | ESetLit _ _ | EAsPat _ _ | EOrPat _ | EMethodRef _ | EDictApp _ | EVarAt _ _ | EVarId _ _ | EMethodAt _ _ _ | EDictAt _ _ | ELoc _ _ | EDoOrigin _ _ | ENumLit _ _ _ | EWideLit _ _ _ _ | EBinOp _ _ _ _ =>
+        False
 
 -- Whether `e` is a full-arity call of a helper that returns, grown, the
 -- argument it is passed the parameter at.
@@ -452,12 +453,11 @@ helperGrows (rd@(Reader scopes _)) param e = match spineOf e []
     None => False
 
 aliasOf : FileScopes -> List (Loc, Expr) -> Expr -> Option Expr
-aliasOf scopes lets e = match varSite e
-  None => None
-  Some site => match binderOf scopes site
-    Some b =>
-      findMap ((l, rhs) => if l == b.binderSpan then Some rhs else None) lets
-    None => None
+aliasOf scopes lets e = do
+  site <- varSite e
+  do
+    b <- binderOf scopes site
+    findMap ((l, rhs) => if l == b.binderSpan then Some rhs else None) lets
 
 -- The `let x = rhs` bindings of a body, by the span of `x`.
 letsIn : Expr -> List (Loc, Expr)
@@ -589,11 +589,11 @@ foldFindings rd ctx e
 foldAccOf : Expr -> List Pat -> Option Param
 foldAccOf e ps = match spineOf e []
   (hd, _) => match unwrapLoc hd
-    EVar n => match foldAccIndex (lastSegment n)
-      Some k => match get k ps
-        Some p => wholeParam p
-        None => None
-      None => None
+    EVar n => do
+      k <- foldAccIndex (lastSegment n)
+      do
+        p <- get k ps
+        wholeParam p
     _ => None
 
 accProbes : Reader -> Param -> Expr -> List Probe
@@ -602,16 +602,22 @@ accProbes (rd@(Reader scopes _)) acc body =
 
 -- Whether some tail position of `e` returns the accumulator grown.
 tailGrows : Reader -> Param -> Expr -> Bool
-tailGrows rd acc e = match unwrapLoc e
-  EBinOp "::" _ _ _ => grownDirect rd acc e
-  EBinOp "++" _ _ _ => grownDirect rd acc e
-  EApp _ _ => grownDirect rd acc e
-  EIf _ t f => tailGrows rd acc t || tailGrows rd acc f
-  EMatch _ arms => any ((Arm _ _ b) => tailGrows rd acc b) arms
-  EGuards arms => any ((GuardArm _ b) => tailGrows rd acc b) arms
-  ELet _ _ _ _ body => tailGrows rd acc body
-  ELetGroup _ body => tailGrows rd acc body
-  _ => False
+tailGrows rd acc expr0 = go expr0
+  where
+    go e = match unwrapLoc e
+      EBinOp "::" _ _ _ => grownDirect rd acc e
+      EBinOp "++" _ _ _ => grownDirect rd acc e
+      EApp _ _ => grownDirect rd acc e
+      EIf _ t f => go t || go f
+      EMatch _ arms => any ((Arm _ _ b) => go b) arms
+      EGuards arms => any ((GuardArm _ b) => go b) arms
+      ELet _ _ _ _ body => go body
+      ELetGroup _ body => go body
+      EBlock stmts => match last stmts
+        Some (DoExpr l) => go l
+        _ => False
+      ELit _ | EVar _ | ELam _ _ | EUnOp _ _ _ | EInfix _ _ _ | EFieldAccess _ _ _ | ETuple _ | EListLit _ | EArrayLit _ | ERangeList _ _ _ | ERangeArray _ _ _ | ESlice _ _ _ _ | ESection _ | EIndex _ _ | EAnnot _ _ | EHeadAnnot _ _ | EDo _ _ | EStringInterp _ | ERecordCreate _ _ | ERecordUpdate _ _ _ | EVariantUpdate _ _ _ | EMapLit _ _ | ESetLit _ _ | EAsPat _ _ | EOrPat _ | EMethodRef _ | EDictApp _ | EVarAt _ _ | EVarId _ _ | EMethodAt _ _ _ | EDictAt _ _ | ELoc _ _ | EDoOrigin _ _ | ENumLit _ _ _ | EWideLit _ _ _ _ | EBinOp _ _ _ _ =>
+        False
 
 -- ── findings ─────────────────────────────────────────────────────────────────
 
@@ -621,7 +627,7 @@ probeFinding fallback (Probe loc callee via c) = Finding {
   message = message callee via (containerName c),
   severity = SevWarning,
   loc = orElseLoc loc fallback,
-  fix = None,
+  fix = noFix,
 }
 
 containerName : Expr -> String
@@ -650,11 +656,11 @@ lookupFix =
 (DUse false (UseGroup ("frontend" "ast") ((mem "Arm" true) (mem "Decl" true) (mem "DoStmt" true) (mem "Expr" true) (mem "GuardArm" true) (mem "Loc" false) (mem "Pat" true) (mem "Ty" true) (mem "orElseLoc" false))))
 (DUse false (UseGroup ("frontend" "ast_walk") ((mem "ExprKind" true) (mem "childExprs" false) (mem "stmtExprs" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
-(DUse false (UseGroup ("list") ((mem "findMap" false) (mem "get" false) (mem "indexed" false) (mem "nub" false))))
+(DUse false (UseGroup ("list") ((mem "findMap" false) (mem "get" false) (mem "indexed" false) (mem "last" false) (mem "nub" false))))
 (DUse false (UseAlias ("map") "M"))
 (DUse false (UseGroup ("string") ((mem "contains" false) (mem "endsWith" false))))
 (DUse false (UseGroup ("tools" "lint_calls") ((mem "lastSegment" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "Ctx" true) (mem "FileFacts" false) (mem "Finding" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "factScopes" false) (mem "mkVisitorRule" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "Ctx" true) (mem "FileFacts" false) (mem "Finding" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "factScopes" false) (mem "mkVisitorRule" false) (mem "noFix" false))))
 (DUse false (UseGroup ("tools" "lint_recursion") ((mem "ArgRole" true) (mem "Owner" true) (mem "SelfCall" true) (mem "foldAccIndex" false) (mem "letOwners" false) (mem "selfCalls" false) (mem "spineOf" false))))
 (DUse false (UseGroup ("tools" "lint_scope") ((mem "BinderKind" true) (mem "FileScopes" false) (mem "binderOf" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "appArgsOf" false) (mem "firstLoc" false) (mem "ruleNameListAsSet" false) (mem "tyHeadName" false) (mem "unwrapLoc" false) (mem "varSite" false))))
@@ -680,7 +686,7 @@ lookupFix =
 (DFunDef false "sigOf" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "sigOf") (EVar "d")))
 (DFunDef false "sigOf" (PWild) (EListLit))
 (DTypeSig false "helperEntry" (TyFun (TyCon "Reader") (TyFun (TyApp (TyApp (TyCon "M.Map") (TyCon "String")) (TyCon "Helper")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Def"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Helper")))))))
-(DFunDef false "helperEntry" ((PAs "rd" (PCon "Reader" (PVar "scopes") PWild)) (PVar "searches") (PTuple (PVar "name") (PVar "ds"))) (EBlock (DoLet false false (PVar "search") (EMatch (EApp (EApp (EVar "M.get") (EVar "name")) (EVar "searches")) (arm (PCon "Some" (PCon "Helper" PWild (PVar "k") PWild PWild)) () (EVar "k")) (arm (PCon "None") () (EVar "None")))) (DoLet false false (PVar "tested") (EApp (EVar "nub") (EApp (EApp (EVar "flatMap") (ELam ((PCon "Def" PWild (PVar "ps") PWild (PVar "calls"))) (EApp (EApp (EVar "map") (ELam ((PTuple (PCon "Probe" PWild (PVar "callee") PWild PWild) (PVar "j"))) (ETuple (EVar "j") (EVar "callee")))) (EApp (EApp (EApp (EApp (EVar "paramProbes") (EVar "rd")) (EApp (EVar "Some") (EVar "name"))) (EVar "ps")) (EVar "calls"))))) (EVar "ds")))) (DoLet false false (PVar "grown") (EApp (EVar "nub") (EApp (EApp (EVar "flatMap") (EApp (EVar "clauseReturnsGrown") (EVar "scopes"))) (EVar "ds")))) (DoExpr (EMatch (ETuple (EVar "search") (EVar "tested") (EVar "grown")) (arm (PTuple (PCon "None") (PList) (PList)) () (EListLit)) (arm PWild () (EListLit (ETuple (EVar "name") (EApp (EApp (EApp (EApp (EVar "Helper") (EApp (EVar "arityOf") (EVar "ds"))) (EVar "search")) (EVar "tested")) (EVar "grown")))))))))
+(DFunDef false "helperEntry" ((PAs "rd" (PCon "Reader" (PVar "scopes") PWild)) (PVar "searches") (PTuple (PVar "name") (PVar "ds"))) (EBlock (DoLet false false (PVar "search") (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "M.get") (EVar "name")) (EVar "searches"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PCon "Helper" PWild (PVar "k") PWild PWild) () (EVar "k")))))) (DoLet false false (PVar "tested") (EApp (EVar "nub") (EApp (EApp (EVar "flatMap") (ELam ((PCon "Def" PWild (PVar "ps") PWild (PVar "calls"))) (EApp (EApp (EVar "map") (ELam ((PTuple (PCon "Probe" PWild (PVar "callee") PWild PWild) (PVar "j"))) (ETuple (EVar "j") (EVar "callee")))) (EApp (EApp (EApp (EApp (EVar "paramProbes") (EVar "rd")) (EApp (EVar "Some") (EVar "name"))) (EVar "ps")) (EVar "calls"))))) (EVar "ds")))) (DoLet false false (PVar "grown") (EApp (EVar "nub") (EApp (EApp (EVar "flatMap") (EApp (EVar "clauseReturnsGrown") (EVar "scopes"))) (EVar "ds")))) (DoExpr (EMatch (ETuple (EVar "search") (EVar "tested") (EVar "grown")) (arm (PTuple (PCon "None") (PList) (PList)) () (EListLit)) (arm PWild () (EListLit (ETuple (EVar "name") (EApp (EApp (EApp (EApp (EVar "Helper") (EApp (EVar "arityOf") (EVar "ds"))) (EVar "search")) (EVar "tested")) (EVar "grown")))))))))
 (DTypeSig false "arityOf" (TyFun (TyApp (TyCon "List") (TyCon "Def")) (TyCon "Int")))
 (DFunDef false "arityOf" ((PCons (PCon "Def" PWild (PVar "ps") PWild PWild) PWild)) (EApp (EVar "length") (EVar "ps")))
 (DFunDef false "arityOf" ((PList)) (ELit (LInt 0)))
@@ -740,15 +746,15 @@ lookupFix =
 (DTypeSig false "probeParam" (TyFun (TyCon "FileScopes") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Probe") (TyApp (TyCon "List") (TyTuple (TyCon "Probe") (TyCon "Int")))))))
 (DFunDef false "probeParam" ((PVar "scopes") (PVar "ps") (PAs "probe" (PCon "Probe" PWild PWild PWild (PVar "c")))) (EMatch (EApp (EApp (EVar "findMap") (EApp (EApp (EVar "atParam") (EVar "scopes")) (EVar "c"))) (EApp (EVar "indexed") (EVar "ps"))) (arm (PCon "Some" (PVar "j")) () (EListLit (ETuple (EVar "probe") (EVar "j")))) (arm (PCon "None") () (EListLit))))
 (DTypeSig false "atParam" (TyFun (TyCon "FileScopes") (TyFun (TyCon "Expr") (TyFun (TyTuple (TyCon "Int") (TyCon "Pat")) (TyApp (TyCon "Option") (TyCon "Int"))))))
-(DFunDef false "atParam" ((PVar "scopes") (PVar "c") (PTuple (PVar "j") (PVar "p"))) (EMatch (EApp (EVar "wholeParam") (EVar "p")) (arm (PCon "Some" (PVar "param")) () (EIf (EApp (EApp (EApp (EVar "isParam") (EVar "scopes")) (EVar "param")) (EVar "c")) (EApp (EVar "Some") (EVar "j")) (EVar "None"))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "atParam" ((PVar "scopes") (PVar "c") (PTuple (PVar "j") (PVar "p"))) (EApp (EApp (EVar "$core.andThen") (EApp (EVar "wholeParam") (EVar "p"))) (ELam ((PVar "param")) (EIf (EApp (EApp (EApp (EVar "isParam") (EVar "scopes")) (EVar "param")) (EVar "c")) (EApp (EVar "Some") (EVar "j")) (EVar "None")))))
 (DTypeSig false "grows" (TyFun (TyCon "Reader") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Loc") (TyCon "Expr"))) (TyFun (TyCon "Param") (TyFun (TyCon "Expr") (TyCon "Bool"))))))
 (DFunDef false "grows" ((PAs "rd" (PCon "Reader" (PVar "scopes") PWild)) (PVar "lets") (PVar "param") (PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EVar" PWild) () (EMatch (EApp (EApp (EApp (EVar "aliasOf") (EVar "scopes")) (EVar "lets")) (EVar "e")) (arm (PCon "Some" (PVar "rhs")) () (EApp (EApp (EApp (EVar "grownDirect") (EVar "rd")) (EVar "param")) (EVar "rhs"))) (arm (PCon "None") () (EVar "False")))) (arm PWild () (EApp (EApp (EApp (EVar "grownDirect") (EVar "rd")) (EVar "param")) (EVar "e")))))
 (DTypeSig false "grownDirect" (TyFun (TyCon "Reader") (TyFun (TyCon "Param") (TyFun (TyCon "Expr") (TyCon "Bool")))))
-(DFunDef false "grownDirect" ((PAs "rd" (PCon "Reader" (PVar "scopes") PWild)) (PVar "param") (PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EBinOp" (PLit (LString "::")) PWild (PVar "t") PWild) () (EBinOp "||" (EApp (EApp (EApp (EVar "isParam") (EVar "scopes")) (EVar "param")) (EVar "t")) (EApp (EApp (EApp (EVar "grownDirect") (EVar "rd")) (EVar "param")) (EVar "t")))) (arm (PCon "EBinOp" (PLit (LString "++")) (PVar "a") (PVar "b") PWild) () (EBinOp "||" (EBinOp "||" (EBinOp "||" (EApp (EApp (EApp (EVar "isParam") (EVar "scopes")) (EVar "param")) (EVar "a")) (EApp (EApp (EApp (EVar "isParam") (EVar "scopes")) (EVar "param")) (EVar "b"))) (EApp (EApp (EApp (EVar "grownDirect") (EVar "rd")) (EVar "param")) (EVar "a"))) (EApp (EApp (EApp (EVar "grownDirect") (EVar "rd")) (EVar "param")) (EVar "b")))) (arm (PCon "EIf" PWild (PVar "t") (PVar "f")) () (EBinOp "||" (EApp (EApp (EApp (EVar "grownDirect") (EVar "rd")) (EVar "param")) (EVar "t")) (EApp (EApp (EApp (EVar "grownDirect") (EVar "rd")) (EVar "param")) (EVar "f")))) (arm (PCon "EApp" PWild PWild) () (EApp (EApp (EApp (EVar "helperGrows") (EVar "rd")) (EVar "param")) (EVar "e"))) (arm PWild () (EVar "False"))))
+(DFunDef false "grownDirect" ((PAs "rd" (PCon "Reader" (PVar "scopes") PWild)) (PVar "param") (PVar "expr0")) (ELetGroup ((lgb "go" (clause ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EBinOp" (PLit (LString "::")) PWild (PVar "t") PWild) () (EBinOp "||" (EApp (EApp (EApp (EVar "isParam") (EVar "scopes")) (EVar "param")) (EVar "t")) (EApp (EVar "go") (EVar "t")))) (arm (PCon "EBinOp" (PLit (LString "++")) (PVar "a") (PVar "b") PWild) () (EBinOp "||" (EBinOp "||" (EBinOp "||" (EApp (EApp (EApp (EVar "isParam") (EVar "scopes")) (EVar "param")) (EVar "a")) (EApp (EApp (EApp (EVar "isParam") (EVar "scopes")) (EVar "param")) (EVar "b"))) (EApp (EVar "go") (EVar "a"))) (EApp (EVar "go") (EVar "b")))) (arm (PCon "EIf" PWild (PVar "t") (PVar "f")) () (EBinOp "||" (EApp (EVar "go") (EVar "t")) (EApp (EVar "go") (EVar "f")))) (arm (PCon "EApp" PWild PWild) () (EApp (EApp (EApp (EVar "helperGrows") (EVar "rd")) (EVar "param")) (EVar "e"))) (arm (POr (PCon "ELit" PWild) (PCon "EVar" PWild) (PCon "ELam" PWild PWild) (PCon "ELet" PWild PWild PWild PWild PWild) (PCon "EMatch" PWild PWild) (PCon "EUnOp" PWild PWild PWild) (PCon "EInfix" PWild PWild PWild) (PCon "EFieldAccess" PWild PWild PWild) (PCon "ETuple" PWild) (PCon "EListLit" PWild) (PCon "EArrayLit" PWild) (PCon "ERangeList" PWild PWild PWild) (PCon "ERangeArray" PWild PWild PWild) (PCon "ESlice" PWild PWild PWild PWild) (PCon "ELetGroup" PWild PWild) (PCon "ESection" PWild) (PCon "EIndex" PWild PWild) (PCon "EAnnot" PWild PWild) (PCon "EHeadAnnot" PWild PWild) (PCon "EBlock" PWild) (PCon "EDo" PWild PWild) (PCon "EStringInterp" PWild) (PCon "EGuards" PWild) (PCon "ERecordCreate" PWild PWild) (PCon "ERecordUpdate" PWild PWild PWild) (PCon "EVariantUpdate" PWild PWild PWild) (PCon "EMapLit" PWild PWild) (PCon "ESetLit" PWild PWild) (PCon "EAsPat" PWild PWild) (PCon "EOrPat" PWild) (PCon "EMethodRef" PWild) (PCon "EDictApp" PWild) (PCon "EVarAt" PWild PWild) (PCon "EVarId" PWild PWild) (PCon "EMethodAt" PWild PWild PWild) (PCon "EDictAt" PWild PWild) (PCon "ELoc" PWild PWild) (PCon "EDoOrigin" PWild PWild) (PCon "ENumLit" PWild PWild PWild) (PCon "EWideLit" PWild PWild PWild PWild) (PCon "EBinOp" PWild PWild PWild PWild)) () (EVar "False")))))) (EApp (EVar "go") (EVar "expr0"))))
 (DTypeSig false "helperGrows" (TyFun (TyCon "Reader") (TyFun (TyCon "Param") (TyFun (TyCon "Expr") (TyCon "Bool")))))
 (DFunDef false "helperGrows" ((PAs "rd" (PCon "Reader" (PVar "scopes") PWild)) (PVar "param") (PVar "e")) (EMatch (EApp (EApp (EVar "spineOf") (EVar "e")) (EListLit)) (arm (PTuple (PVar "hd") (PVar "args")) () (EMatch (EApp (EApp (EApp (EApp (EVar "topHelper") (EVar "rd")) (EVar "None")) (EVar "hd")) (EApp (EVar "length") (EVar "args"))) (arm (PCon "Some" (PCon "Helper" PWild PWild PWild (PVar "grown"))) () (EApp (EApp (EVar "any") (ELam ((PVar "j")) (EMatch (EApp (EApp (EVar "get") (EVar "j")) (EVar "args")) (arm (PCon "Some" (PVar "a")) () (EApp (EApp (EApp (EVar "isParam") (EVar "scopes")) (EVar "param")) (EVar "a"))) (arm (PCon "None") () (EVar "False"))))) (EVar "grown"))) (arm (PCon "None") () (EVar "False"))))))
 (DTypeSig false "aliasOf" (TyFun (TyCon "FileScopes") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Loc") (TyCon "Expr"))) (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))))
-(DFunDef false "aliasOf" ((PVar "scopes") (PVar "lets") (PVar "e")) (EMatch (EApp (EVar "varSite") (EVar "e")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "site")) () (EMatch (EApp (EApp (EVar "binderOf") (EVar "scopes")) (EVar "site")) (arm (PCon "Some" (PVar "b")) () (EApp (EApp (EVar "findMap") (ELam ((PTuple (PVar "l") (PVar "rhs"))) (EIf (EBinOp "==" (EVar "l") (EFieldAccess (EVar "b") "binderSpan")) (EApp (EVar "Some") (EVar "rhs")) (EVar "None")))) (EVar "lets"))) (arm (PCon "None") () (EVar "None"))))))
+(DFunDef false "aliasOf" ((PVar "scopes") (PVar "lets") (PVar "e")) (EApp (EApp (EVar "$core.andThen") (EApp (EVar "varSite") (EVar "e"))) (ELam ((PVar "site")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "binderOf") (EVar "scopes")) (EVar "site"))) (ELam ((PVar "b")) (EApp (EApp (EVar "findMap") (ELam ((PTuple (PVar "l") (PVar "rhs"))) (EIf (EBinOp "==" (EVar "l") (EFieldAccess (EVar "b") "binderSpan")) (EApp (EVar "Some") (EVar "rhs")) (EVar "None")))) (EVar "lets")))))))
 (DTypeSig false "letsIn" (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyTuple (TyCon "Loc") (TyCon "Expr")))))
 (DFunDef false "letsIn" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "ELet" PWild PWild (PCon "PVar" PWild (PVar "l") PWild) (PVar "rhs") (PVar "body")) () (EBinOp "::" (ETuple (EVar "l") (EVar "rhs")) (EBinOp "++" (EApp (EVar "letsIn") (EVar "rhs")) (EApp (EVar "letsIn") (EVar "body"))))) (arm (PCon "EBlock" (PVar "stmts")) () (EApp (EApp (EVar "flatMap") (EVar "stmtLets")) (EVar "stmts"))) (arm (PVar "e2") () (EApp (EApp (EVar "flatMap") (EVar "letsIn")) (EApp (EVar "childExprs") (EVar "e2"))))))
 (DTypeSig false "stmtLets" (TyFun (TyCon "DoStmt") (TyApp (TyCon "List") (TyTuple (TyCon "Loc") (TyCon "Expr")))))
@@ -782,13 +788,13 @@ lookupFix =
 (DTypeSig false "foldFindings" (TyFun (TyCon "Reader") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding"))))))
 (DFunDef false "foldFindings" ((PVar "rd") (PVar "ctx") (PVar "e")) (EIf (EFieldAccess (EVar "ctx") "ctxInTest") (EListLit) (EIf (EVar "otherwise") (EMatch (EVar "e") (arm (PCon "EApp" PWild (PVar "a")) () (EMatch (EApp (EVar "unwrapLoc") (EVar "a")) (arm (PCon "ELam" (PVar "ps") (PVar "body")) () (EMatch (EApp (EApp (EVar "foldAccOf") (EVar "e")) (EVar "ps")) (arm (PCon "Some" (PVar "acc")) () (EIf (EApp (EApp (EApp (EVar "tailGrows") (EVar "rd")) (EVar "acc")) (EVar "body")) (EApp (EApp (EVar "map") (EApp (EVar "probeFinding") (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstLoc") (EVar "e"))) (EFieldAccess (EVar "ctx") "ctxSpan")))) (EApp (EApp (EApp (EVar "accProbes") (EVar "rd")) (EVar "acc")) (EVar "body"))) (EListLit))) (arm (PCon "None") () (EListLit)))) (arm PWild () (EListLit)))) (arm PWild () (EListLit))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "foldAccOf" (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "Option") (TyCon "Param")))))
-(DFunDef false "foldAccOf" ((PVar "e") (PVar "ps")) (EMatch (EApp (EApp (EVar "spineOf") (EVar "e")) (EListLit)) (arm (PTuple (PVar "hd") PWild) () (EMatch (EApp (EVar "unwrapLoc") (EVar "hd")) (arm (PCon "EVar" (PVar "n")) () (EMatch (EApp (EVar "foldAccIndex") (EApp (EVar "lastSegment") (EVar "n"))) (arm (PCon "Some" (PVar "k")) () (EMatch (EApp (EApp (EVar "get") (EVar "k")) (EVar "ps")) (arm (PCon "Some" (PVar "p")) () (EApp (EVar "wholeParam") (EVar "p"))) (arm (PCon "None") () (EVar "None")))) (arm (PCon "None") () (EVar "None")))) (arm PWild () (EVar "None"))))))
+(DFunDef false "foldAccOf" ((PVar "e") (PVar "ps")) (EMatch (EApp (EApp (EVar "spineOf") (EVar "e")) (EListLit)) (arm (PTuple (PVar "hd") PWild) () (EMatch (EApp (EVar "unwrapLoc") (EVar "hd")) (arm (PCon "EVar" (PVar "n")) () (EApp (EApp (EVar "$core.andThen") (EApp (EVar "foldAccIndex") (EApp (EVar "lastSegment") (EVar "n")))) (ELam ((PVar "k")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "get") (EVar "k")) (EVar "ps"))) (ELam ((PVar "p")) (EApp (EVar "wholeParam") (EVar "p"))))))) (arm PWild () (EVar "None"))))))
 (DTypeSig false "accProbes" (TyFun (TyCon "Reader") (TyFun (TyCon "Param") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Probe"))))))
 (DFunDef false "accProbes" ((PAs "rd" (PCon "Reader" (PVar "scopes") PWild)) (PVar "acc") (PVar "body")) (EApp (EApp (EVar "filter") (ELam ((PCon "Probe" PWild PWild PWild (PVar "c"))) (EApp (EApp (EApp (EVar "isParam") (EVar "scopes")) (EVar "acc")) (EVar "c")))) (EApp (EApp (EVar "probesIn") (EVar "rd")) (EVar "body"))))
 (DTypeSig false "tailGrows" (TyFun (TyCon "Reader") (TyFun (TyCon "Param") (TyFun (TyCon "Expr") (TyCon "Bool")))))
-(DFunDef false "tailGrows" ((PVar "rd") (PVar "acc") (PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EBinOp" (PLit (LString "::")) PWild PWild PWild) () (EApp (EApp (EApp (EVar "grownDirect") (EVar "rd")) (EVar "acc")) (EVar "e"))) (arm (PCon "EBinOp" (PLit (LString "++")) PWild PWild PWild) () (EApp (EApp (EApp (EVar "grownDirect") (EVar "rd")) (EVar "acc")) (EVar "e"))) (arm (PCon "EApp" PWild PWild) () (EApp (EApp (EApp (EVar "grownDirect") (EVar "rd")) (EVar "acc")) (EVar "e"))) (arm (PCon "EIf" PWild (PVar "t") (PVar "f")) () (EBinOp "||" (EApp (EApp (EApp (EVar "tailGrows") (EVar "rd")) (EVar "acc")) (EVar "t")) (EApp (EApp (EApp (EVar "tailGrows") (EVar "rd")) (EVar "acc")) (EVar "f")))) (arm (PCon "EMatch" PWild (PVar "arms")) () (EApp (EApp (EVar "any") (ELam ((PCon "Arm" PWild PWild (PVar "b"))) (EApp (EApp (EApp (EVar "tailGrows") (EVar "rd")) (EVar "acc")) (EVar "b")))) (EVar "arms"))) (arm (PCon "EGuards" (PVar "arms")) () (EApp (EApp (EVar "any") (ELam ((PCon "GuardArm" PWild (PVar "b"))) (EApp (EApp (EApp (EVar "tailGrows") (EVar "rd")) (EVar "acc")) (EVar "b")))) (EVar "arms"))) (arm (PCon "ELet" PWild PWild PWild PWild (PVar "body")) () (EApp (EApp (EApp (EVar "tailGrows") (EVar "rd")) (EVar "acc")) (EVar "body"))) (arm (PCon "ELetGroup" PWild (PVar "body")) () (EApp (EApp (EApp (EVar "tailGrows") (EVar "rd")) (EVar "acc")) (EVar "body"))) (arm PWild () (EVar "False"))))
+(DFunDef false "tailGrows" ((PVar "rd") (PVar "acc") (PVar "expr0")) (ELetGroup ((lgb "go" (clause ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EBinOp" (PLit (LString "::")) PWild PWild PWild) () (EApp (EApp (EApp (EVar "grownDirect") (EVar "rd")) (EVar "acc")) (EVar "e"))) (arm (PCon "EBinOp" (PLit (LString "++")) PWild PWild PWild) () (EApp (EApp (EApp (EVar "grownDirect") (EVar "rd")) (EVar "acc")) (EVar "e"))) (arm (PCon "EApp" PWild PWild) () (EApp (EApp (EApp (EVar "grownDirect") (EVar "rd")) (EVar "acc")) (EVar "e"))) (arm (PCon "EIf" PWild (PVar "t") (PVar "f")) () (EBinOp "||" (EApp (EVar "go") (EVar "t")) (EApp (EVar "go") (EVar "f")))) (arm (PCon "EMatch" PWild (PVar "arms")) () (EApp (EApp (EVar "any") (ELam ((PCon "Arm" PWild PWild (PVar "b"))) (EApp (EVar "go") (EVar "b")))) (EVar "arms"))) (arm (PCon "EGuards" (PVar "arms")) () (EApp (EApp (EVar "any") (ELam ((PCon "GuardArm" PWild (PVar "b"))) (EApp (EVar "go") (EVar "b")))) (EVar "arms"))) (arm (PCon "ELet" PWild PWild PWild PWild (PVar "body")) () (EApp (EVar "go") (EVar "body"))) (arm (PCon "ELetGroup" PWild (PVar "body")) () (EApp (EVar "go") (EVar "body"))) (arm (PCon "EBlock" (PVar "stmts")) () (EMatch (EApp (EVar "last") (EVar "stmts")) (arm (PCon "Some" (PCon "DoExpr" (PVar "l"))) () (EApp (EVar "go") (EVar "l"))) (arm PWild () (EVar "False")))) (arm (POr (PCon "ELit" PWild) (PCon "EVar" PWild) (PCon "ELam" PWild PWild) (PCon "EUnOp" PWild PWild PWild) (PCon "EInfix" PWild PWild PWild) (PCon "EFieldAccess" PWild PWild PWild) (PCon "ETuple" PWild) (PCon "EListLit" PWild) (PCon "EArrayLit" PWild) (PCon "ERangeList" PWild PWild PWild) (PCon "ERangeArray" PWild PWild PWild) (PCon "ESlice" PWild PWild PWild PWild) (PCon "ESection" PWild) (PCon "EIndex" PWild PWild) (PCon "EAnnot" PWild PWild) (PCon "EHeadAnnot" PWild PWild) (PCon "EDo" PWild PWild) (PCon "EStringInterp" PWild) (PCon "ERecordCreate" PWild PWild) (PCon "ERecordUpdate" PWild PWild PWild) (PCon "EVariantUpdate" PWild PWild PWild) (PCon "EMapLit" PWild PWild) (PCon "ESetLit" PWild PWild) (PCon "EAsPat" PWild PWild) (PCon "EOrPat" PWild) (PCon "EMethodRef" PWild) (PCon "EDictApp" PWild) (PCon "EVarAt" PWild PWild) (PCon "EVarId" PWild PWild) (PCon "EMethodAt" PWild PWild PWild) (PCon "EDictAt" PWild PWild) (PCon "ELoc" PWild PWild) (PCon "EDoOrigin" PWild PWild) (PCon "ENumLit" PWild PWild PWild) (PCon "EWideLit" PWild PWild PWild PWild) (PCon "EBinOp" PWild PWild PWild PWild)) () (EVar "False")))))) (EApp (EVar "go") (EVar "expr0"))))
 (DTypeSig false "probeFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Probe") (TyCon "Finding"))))
-(DFunDef false "probeFinding" ((PVar "fallback") (PCon "Probe" (PVar "loc") (PVar "callee") (PVar "via") (PVar "c"))) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameListAsSet")) (fa "message" (EApp (EApp (EApp (EVar "message") (EVar "callee")) (EVar "via")) (EApp (EVar "containerName") (EVar "c")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EVar "fallback"))) (fa "fix" (EVar "None")))))
+(DFunDef false "probeFinding" ((PVar "fallback") (PCon "Probe" (PVar "loc") (PVar "callee") (PVar "via") (PVar "c"))) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameListAsSet")) (fa "message" (EApp (EApp (EApp (EVar "message") (EVar "callee")) (EVar "via")) (EApp (EVar "containerName") (EVar "c")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EVar "fallback"))) (fa "fix" (EVar "noFix")))))
 (DTypeSig false "containerName" (TyFun (TyCon "Expr") (TyCon "String")))
 (DFunDef false "containerName" ((PVar "c")) (EMatch (EApp (EVar "unwrapLoc") (EVar "c")) (arm (PCon "EVar" (PVar "n")) () (EVar "n")) (arm PWild () (ELit (LString "the list")))))
 (DTypeSig false "message" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyCon "String")))))
@@ -806,11 +812,11 @@ lookupFix =
 (DUse false (UseGroup ("frontend" "ast") ((mem "Arm" true) (mem "Decl" true) (mem "DoStmt" true) (mem "Expr" true) (mem "GuardArm" true) (mem "Loc" false) (mem "Pat" true) (mem "Ty" true) (mem "orElseLoc" false))))
 (DUse false (UseGroup ("frontend" "ast_walk") ((mem "ExprKind" true) (mem "childExprs" false) (mem "stmtExprs" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
-(DUse false (UseGroup ("list") ((mem "findMap" false) (mem "get" false) (mem "indexed" false) (mem "nub" false))))
+(DUse false (UseGroup ("list") ((mem "findMap" false) (mem "get" false) (mem "indexed" false) (mem "last" false) (mem "nub" false))))
 (DUse false (UseAlias ("map") "M"))
 (DUse false (UseGroup ("string") ((mem "contains" false) (mem "endsWith" false))))
 (DUse false (UseGroup ("tools" "lint_calls") ((mem "lastSegment" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "Ctx" true) (mem "FileFacts" false) (mem "Finding" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "factScopes" false) (mem "mkVisitorRule" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "Ctx" true) (mem "FileFacts" false) (mem "Finding" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "factScopes" false) (mem "mkVisitorRule" false) (mem "noFix" false))))
 (DUse false (UseGroup ("tools" "lint_recursion") ((mem "ArgRole" true) (mem "Owner" true) (mem "SelfCall" true) (mem "foldAccIndex" false) (mem "letOwners" false) (mem "selfCalls" false) (mem "spineOf" false))))
 (DUse false (UseGroup ("tools" "lint_scope") ((mem "BinderKind" true) (mem "FileScopes" false) (mem "binderOf" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "appArgsOf" false) (mem "firstLoc" false) (mem "ruleNameListAsSet" false) (mem "tyHeadName" false) (mem "unwrapLoc" false) (mem "varSite" false))))
@@ -836,7 +842,7 @@ lookupFix =
 (DFunDef false "sigOf" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "sigOf") (EVar "d")))
 (DFunDef false "sigOf" (PWild) (EListLit))
 (DTypeSig false "helperEntry" (TyFun (TyCon "Reader") (TyFun (TyApp (TyApp (TyCon "M.Map") (TyCon "String")) (TyCon "Helper")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Def"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Helper")))))))
-(DFunDef false "helperEntry" ((PAs "rd" (PCon "Reader" (PVar "scopes") PWild)) (PVar "searches") (PTuple (PVar "name") (PVar "ds"))) (EBlock (DoLet false false (PVar "search") (EMatch (EApp (EApp (EVar "M.get") (EVar "name")) (EVar "searches")) (arm (PCon "Some" (PCon "Helper" PWild (PVar "k") PWild PWild)) () (EVar "k")) (arm (PCon "None") () (EVar "None")))) (DoLet false false (PVar "tested") (EApp (EVar "nub") (EApp (EApp (EDictApp "flatMap") (ELam ((PCon "Def" PWild (PVar "ps") PWild (PVar "calls"))) (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PCon "Probe" PWild (PVar "callee") PWild PWild) (PVar "j"))) (ETuple (EVar "j") (EVar "callee")))) (EApp (EApp (EApp (EApp (EVar "paramProbes") (EVar "rd")) (EApp (EVar "Some") (EVar "name"))) (EVar "ps")) (EVar "calls"))))) (EVar "ds")))) (DoLet false false (PVar "grown") (EApp (EVar "nub") (EApp (EApp (EDictApp "flatMap") (EApp (EVar "clauseReturnsGrown") (EVar "scopes"))) (EVar "ds")))) (DoExpr (EMatch (ETuple (EVar "search") (EVar "tested") (EVar "grown")) (arm (PTuple (PCon "None") (PList) (PList)) () (EListLit)) (arm PWild () (EListLit (ETuple (EVar "name") (EApp (EApp (EApp (EApp (EVar "Helper") (EApp (EVar "arityOf") (EVar "ds"))) (EVar "search")) (EVar "tested")) (EVar "grown")))))))))
+(DFunDef false "helperEntry" ((PAs "rd" (PCon "Reader" (PVar "scopes") PWild)) (PVar "searches") (PTuple (PVar "name") (PVar "ds"))) (EBlock (DoLet false false (PVar "search") (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "M.get") (EVar "name")) (EVar "searches"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PCon "Helper" PWild (PVar "k") PWild PWild) () (EVar "k")))))) (DoLet false false (PVar "tested") (EApp (EVar "nub") (EApp (EApp (EDictApp "flatMap") (ELam ((PCon "Def" PWild (PVar "ps") PWild (PVar "calls"))) (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PCon "Probe" PWild (PVar "callee") PWild PWild) (PVar "j"))) (ETuple (EVar "j") (EVar "callee")))) (EApp (EApp (EApp (EApp (EVar "paramProbes") (EVar "rd")) (EApp (EVar "Some") (EVar "name"))) (EVar "ps")) (EVar "calls"))))) (EVar "ds")))) (DoLet false false (PVar "grown") (EApp (EVar "nub") (EApp (EApp (EDictApp "flatMap") (EApp (EVar "clauseReturnsGrown") (EVar "scopes"))) (EVar "ds")))) (DoExpr (EMatch (ETuple (EVar "search") (EVar "tested") (EVar "grown")) (arm (PTuple (PCon "None") (PList) (PList)) () (EListLit)) (arm PWild () (EListLit (ETuple (EVar "name") (EApp (EApp (EApp (EApp (EVar "Helper") (EApp (EVar "arityOf") (EVar "ds"))) (EVar "search")) (EVar "tested")) (EVar "grown")))))))))
 (DTypeSig false "arityOf" (TyFun (TyApp (TyCon "List") (TyCon "Def")) (TyCon "Int")))
 (DFunDef false "arityOf" ((PCons (PCon "Def" PWild (PVar "ps") PWild PWild) PWild)) (EApp (EMethodRef "length") (EVar "ps")))
 (DFunDef false "arityOf" ((PList)) (ELit (LInt 0)))
@@ -896,15 +902,15 @@ lookupFix =
 (DTypeSig false "probeParam" (TyFun (TyCon "FileScopes") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Probe") (TyApp (TyCon "List") (TyTuple (TyCon "Probe") (TyCon "Int")))))))
 (DFunDef false "probeParam" ((PVar "scopes") (PVar "ps") (PAs "probe" (PCon "Probe" PWild PWild PWild (PVar "c")))) (EMatch (EApp (EApp (EVar "findMap") (EApp (EApp (EVar "atParam") (EVar "scopes")) (EVar "c"))) (EApp (EVar "indexed") (EVar "ps"))) (arm (PCon "Some" (PVar "j")) () (EListLit (ETuple (EVar "probe") (EVar "j")))) (arm (PCon "None") () (EListLit))))
 (DTypeSig false "atParam" (TyFun (TyCon "FileScopes") (TyFun (TyCon "Expr") (TyFun (TyTuple (TyCon "Int") (TyCon "Pat")) (TyApp (TyCon "Option") (TyCon "Int"))))))
-(DFunDef false "atParam" ((PVar "scopes") (PVar "c") (PTuple (PVar "j") (PVar "p"))) (EMatch (EApp (EVar "wholeParam") (EVar "p")) (arm (PCon "Some" (PVar "param")) () (EIf (EApp (EApp (EApp (EVar "isParam") (EVar "scopes")) (EVar "param")) (EVar "c")) (EApp (EVar "Some") (EVar "j")) (EVar "None"))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "atParam" ((PVar "scopes") (PVar "c") (PTuple (PVar "j") (PVar "p"))) (EApp (EApp (EVar "$core.andThen") (EApp (EVar "wholeParam") (EVar "p"))) (ELam ((PVar "param")) (EIf (EApp (EApp (EApp (EVar "isParam") (EVar "scopes")) (EVar "param")) (EVar "c")) (EApp (EVar "Some") (EVar "j")) (EVar "None")))))
 (DTypeSig false "grows" (TyFun (TyCon "Reader") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Loc") (TyCon "Expr"))) (TyFun (TyCon "Param") (TyFun (TyCon "Expr") (TyCon "Bool"))))))
 (DFunDef false "grows" ((PAs "rd" (PCon "Reader" (PVar "scopes") PWild)) (PVar "lets") (PVar "param") (PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EVar" PWild) () (EMatch (EApp (EApp (EApp (EVar "aliasOf") (EVar "scopes")) (EVar "lets")) (EVar "e")) (arm (PCon "Some" (PVar "rhs")) () (EApp (EApp (EApp (EVar "grownDirect") (EVar "rd")) (EVar "param")) (EVar "rhs"))) (arm (PCon "None") () (EVar "False")))) (arm PWild () (EApp (EApp (EApp (EVar "grownDirect") (EVar "rd")) (EVar "param")) (EVar "e")))))
 (DTypeSig false "grownDirect" (TyFun (TyCon "Reader") (TyFun (TyCon "Param") (TyFun (TyCon "Expr") (TyCon "Bool")))))
-(DFunDef false "grownDirect" ((PAs "rd" (PCon "Reader" (PVar "scopes") PWild)) (PVar "param") (PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EBinOp" (PLit (LString "::")) PWild (PVar "t") PWild) () (EBinOp "||" (EApp (EApp (EApp (EVar "isParam") (EVar "scopes")) (EVar "param")) (EVar "t")) (EApp (EApp (EApp (EVar "grownDirect") (EVar "rd")) (EVar "param")) (EVar "t")))) (arm (PCon "EBinOp" (PLit (LString "++")) (PVar "a") (PVar "b") PWild) () (EBinOp "||" (EBinOp "||" (EBinOp "||" (EApp (EApp (EApp (EVar "isParam") (EVar "scopes")) (EVar "param")) (EVar "a")) (EApp (EApp (EApp (EVar "isParam") (EVar "scopes")) (EVar "param")) (EVar "b"))) (EApp (EApp (EApp (EVar "grownDirect") (EVar "rd")) (EVar "param")) (EVar "a"))) (EApp (EApp (EApp (EVar "grownDirect") (EVar "rd")) (EVar "param")) (EVar "b")))) (arm (PCon "EIf" PWild (PVar "t") (PVar "f")) () (EBinOp "||" (EApp (EApp (EApp (EVar "grownDirect") (EVar "rd")) (EVar "param")) (EVar "t")) (EApp (EApp (EApp (EVar "grownDirect") (EVar "rd")) (EVar "param")) (EVar "f")))) (arm (PCon "EApp" PWild PWild) () (EApp (EApp (EApp (EVar "helperGrows") (EVar "rd")) (EVar "param")) (EVar "e"))) (arm PWild () (EVar "False"))))
+(DFunDef false "grownDirect" ((PAs "rd" (PCon "Reader" (PVar "scopes") PWild)) (PVar "param") (PVar "expr0")) (ELetGroup ((lgb "go" (clause ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EBinOp" (PLit (LString "::")) PWild (PVar "t") PWild) () (EBinOp "||" (EApp (EApp (EApp (EVar "isParam") (EVar "scopes")) (EVar "param")) (EVar "t")) (EApp (EVar "go") (EVar "t")))) (arm (PCon "EBinOp" (PLit (LString "++")) (PVar "a") (PVar "b") PWild) () (EBinOp "||" (EBinOp "||" (EBinOp "||" (EApp (EApp (EApp (EVar "isParam") (EVar "scopes")) (EVar "param")) (EVar "a")) (EApp (EApp (EApp (EVar "isParam") (EVar "scopes")) (EVar "param")) (EVar "b"))) (EApp (EVar "go") (EVar "a"))) (EApp (EVar "go") (EVar "b")))) (arm (PCon "EIf" PWild (PVar "t") (PVar "f")) () (EBinOp "||" (EApp (EVar "go") (EVar "t")) (EApp (EVar "go") (EVar "f")))) (arm (PCon "EApp" PWild PWild) () (EApp (EApp (EApp (EVar "helperGrows") (EVar "rd")) (EVar "param")) (EVar "e"))) (arm (POr (PCon "ELit" PWild) (PCon "EVar" PWild) (PCon "ELam" PWild PWild) (PCon "ELet" PWild PWild PWild PWild PWild) (PCon "EMatch" PWild PWild) (PCon "EUnOp" PWild PWild PWild) (PCon "EInfix" PWild PWild PWild) (PCon "EFieldAccess" PWild PWild PWild) (PCon "ETuple" PWild) (PCon "EListLit" PWild) (PCon "EArrayLit" PWild) (PCon "ERangeList" PWild PWild PWild) (PCon "ERangeArray" PWild PWild PWild) (PCon "ESlice" PWild PWild PWild PWild) (PCon "ELetGroup" PWild PWild) (PCon "ESection" PWild) (PCon "EIndex" PWild PWild) (PCon "EAnnot" PWild PWild) (PCon "EHeadAnnot" PWild PWild) (PCon "EBlock" PWild) (PCon "EDo" PWild PWild) (PCon "EStringInterp" PWild) (PCon "EGuards" PWild) (PCon "ERecordCreate" PWild PWild) (PCon "ERecordUpdate" PWild PWild PWild) (PCon "EVariantUpdate" PWild PWild PWild) (PCon "EMapLit" PWild PWild) (PCon "ESetLit" PWild PWild) (PCon "EAsPat" PWild PWild) (PCon "EOrPat" PWild) (PCon "EMethodRef" PWild) (PCon "EDictApp" PWild) (PCon "EVarAt" PWild PWild) (PCon "EVarId" PWild PWild) (PCon "EMethodAt" PWild PWild PWild) (PCon "EDictAt" PWild PWild) (PCon "ELoc" PWild PWild) (PCon "EDoOrigin" PWild PWild) (PCon "ENumLit" PWild PWild PWild) (PCon "EWideLit" PWild PWild PWild PWild) (PCon "EBinOp" PWild PWild PWild PWild)) () (EVar "False")))))) (EApp (EVar "go") (EVar "expr0"))))
 (DTypeSig false "helperGrows" (TyFun (TyCon "Reader") (TyFun (TyCon "Param") (TyFun (TyCon "Expr") (TyCon "Bool")))))
 (DFunDef false "helperGrows" ((PAs "rd" (PCon "Reader" (PVar "scopes") PWild)) (PVar "param") (PVar "e")) (EMatch (EApp (EApp (EVar "spineOf") (EVar "e")) (EListLit)) (arm (PTuple (PVar "hd") (PVar "args")) () (EMatch (EApp (EApp (EApp (EApp (EVar "topHelper") (EVar "rd")) (EVar "None")) (EVar "hd")) (EApp (EMethodRef "length") (EVar "args"))) (arm (PCon "Some" (PCon "Helper" PWild PWild PWild (PVar "grown"))) () (EApp (EApp (EDictApp "any") (ELam ((PVar "j")) (EMatch (EApp (EApp (EVar "get") (EVar "j")) (EVar "args")) (arm (PCon "Some" (PVar "a")) () (EApp (EApp (EApp (EVar "isParam") (EVar "scopes")) (EVar "param")) (EVar "a"))) (arm (PCon "None") () (EVar "False"))))) (EVar "grown"))) (arm (PCon "None") () (EVar "False"))))))
 (DTypeSig false "aliasOf" (TyFun (TyCon "FileScopes") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Loc") (TyCon "Expr"))) (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))))
-(DFunDef false "aliasOf" ((PVar "scopes") (PVar "lets") (PVar "e")) (EMatch (EApp (EVar "varSite") (EVar "e")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "site")) () (EMatch (EApp (EApp (EVar "binderOf") (EVar "scopes")) (EVar "site")) (arm (PCon "Some" (PVar "b")) () (EApp (EApp (EVar "findMap") (ELam ((PTuple (PVar "l") (PVar "rhs"))) (EIf (EBinOp "==" (EVar "l") (EFieldAccess (EVar "b") "binderSpan")) (EApp (EVar "Some") (EVar "rhs")) (EVar "None")))) (EVar "lets"))) (arm (PCon "None") () (EVar "None"))))))
+(DFunDef false "aliasOf" ((PVar "scopes") (PVar "lets") (PVar "e")) (EApp (EApp (EVar "$core.andThen") (EApp (EVar "varSite") (EVar "e"))) (ELam ((PVar "site")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "binderOf") (EVar "scopes")) (EVar "site"))) (ELam ((PVar "b")) (EApp (EApp (EVar "findMap") (ELam ((PTuple (PVar "l") (PVar "rhs"))) (EIf (EBinOp "==" (EVar "l") (EFieldAccess (EVar "b") "binderSpan")) (EApp (EVar "Some") (EVar "rhs")) (EVar "None")))) (EVar "lets")))))))
 (DTypeSig false "letsIn" (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyTuple (TyCon "Loc") (TyCon "Expr")))))
 (DFunDef false "letsIn" ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "ELet" PWild PWild (PCon "PVar" PWild (PVar "l") PWild) (PVar "rhs") (PVar "body")) () (EBinOp "::" (ETuple (EVar "l") (EVar "rhs")) (EBinOp "++" (EApp (EVar "letsIn") (EVar "rhs")) (EApp (EVar "letsIn") (EVar "body"))))) (arm (PCon "EBlock" (PVar "stmts")) () (EApp (EApp (EDictApp "flatMap") (EVar "stmtLets")) (EVar "stmts"))) (arm (PVar "e2") () (EApp (EApp (EDictApp "flatMap") (EVar "letsIn")) (EApp (EVar "childExprs") (EVar "e2"))))))
 (DTypeSig false "stmtLets" (TyFun (TyCon "DoStmt") (TyApp (TyCon "List") (TyTuple (TyCon "Loc") (TyCon "Expr")))))
@@ -938,13 +944,13 @@ lookupFix =
 (DTypeSig false "foldFindings" (TyFun (TyCon "Reader") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding"))))))
 (DFunDef false "foldFindings" ((PVar "rd") (PVar "ctx") (PVar "e")) (EIf (EFieldAccess (EVar "ctx") "ctxInTest") (EListLit) (EIf (EVar "otherwise") (EMatch (EVar "e") (arm (PCon "EApp" PWild (PVar "a")) () (EMatch (EApp (EVar "unwrapLoc") (EVar "a")) (arm (PCon "ELam" (PVar "ps") (PVar "body")) () (EMatch (EApp (EApp (EVar "foldAccOf") (EVar "e")) (EVar "ps")) (arm (PCon "Some" (PVar "acc")) () (EIf (EApp (EApp (EApp (EVar "tailGrows") (EVar "rd")) (EVar "acc")) (EVar "body")) (EApp (EApp (EMethodRef "map") (EApp (EVar "probeFinding") (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstLoc") (EVar "e"))) (EFieldAccess (EVar "ctx") "ctxSpan")))) (EApp (EApp (EApp (EVar "accProbes") (EVar "rd")) (EVar "acc")) (EVar "body"))) (EListLit))) (arm (PCon "None") () (EListLit)))) (arm PWild () (EListLit)))) (arm PWild () (EListLit))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "foldAccOf" (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "Option") (TyCon "Param")))))
-(DFunDef false "foldAccOf" ((PVar "e") (PVar "ps")) (EMatch (EApp (EApp (EVar "spineOf") (EVar "e")) (EListLit)) (arm (PTuple (PVar "hd") PWild) () (EMatch (EApp (EVar "unwrapLoc") (EVar "hd")) (arm (PCon "EVar" (PVar "n")) () (EMatch (EApp (EVar "foldAccIndex") (EApp (EVar "lastSegment") (EVar "n"))) (arm (PCon "Some" (PVar "k")) () (EMatch (EApp (EApp (EVar "get") (EVar "k")) (EVar "ps")) (arm (PCon "Some" (PVar "p")) () (EApp (EVar "wholeParam") (EVar "p"))) (arm (PCon "None") () (EVar "None")))) (arm (PCon "None") () (EVar "None")))) (arm PWild () (EVar "None"))))))
+(DFunDef false "foldAccOf" ((PVar "e") (PVar "ps")) (EMatch (EApp (EApp (EVar "spineOf") (EVar "e")) (EListLit)) (arm (PTuple (PVar "hd") PWild) () (EMatch (EApp (EVar "unwrapLoc") (EVar "hd")) (arm (PCon "EVar" (PVar "n")) () (EApp (EApp (EVar "$core.andThen") (EApp (EVar "foldAccIndex") (EApp (EVar "lastSegment") (EVar "n")))) (ELam ((PVar "k")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "get") (EVar "k")) (EVar "ps"))) (ELam ((PVar "p")) (EApp (EVar "wholeParam") (EVar "p"))))))) (arm PWild () (EVar "None"))))))
 (DTypeSig false "accProbes" (TyFun (TyCon "Reader") (TyFun (TyCon "Param") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Probe"))))))
 (DFunDef false "accProbes" ((PAs "rd" (PCon "Reader" (PVar "scopes") PWild)) (PVar "acc") (PVar "body")) (EApp (EApp (EMethodRef "filter") (ELam ((PCon "Probe" PWild PWild PWild (PVar "c"))) (EApp (EApp (EApp (EVar "isParam") (EVar "scopes")) (EVar "acc")) (EVar "c")))) (EApp (EApp (EVar "probesIn") (EVar "rd")) (EVar "body"))))
 (DTypeSig false "tailGrows" (TyFun (TyCon "Reader") (TyFun (TyCon "Param") (TyFun (TyCon "Expr") (TyCon "Bool")))))
-(DFunDef false "tailGrows" ((PVar "rd") (PVar "acc") (PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EBinOp" (PLit (LString "::")) PWild PWild PWild) () (EApp (EApp (EApp (EVar "grownDirect") (EVar "rd")) (EVar "acc")) (EVar "e"))) (arm (PCon "EBinOp" (PLit (LString "++")) PWild PWild PWild) () (EApp (EApp (EApp (EVar "grownDirect") (EVar "rd")) (EVar "acc")) (EVar "e"))) (arm (PCon "EApp" PWild PWild) () (EApp (EApp (EApp (EVar "grownDirect") (EVar "rd")) (EVar "acc")) (EVar "e"))) (arm (PCon "EIf" PWild (PVar "t") (PVar "f")) () (EBinOp "||" (EApp (EApp (EApp (EVar "tailGrows") (EVar "rd")) (EVar "acc")) (EVar "t")) (EApp (EApp (EApp (EVar "tailGrows") (EVar "rd")) (EVar "acc")) (EVar "f")))) (arm (PCon "EMatch" PWild (PVar "arms")) () (EApp (EApp (EDictApp "any") (ELam ((PCon "Arm" PWild PWild (PVar "b"))) (EApp (EApp (EApp (EVar "tailGrows") (EVar "rd")) (EVar "acc")) (EVar "b")))) (EVar "arms"))) (arm (PCon "EGuards" (PVar "arms")) () (EApp (EApp (EDictApp "any") (ELam ((PCon "GuardArm" PWild (PVar "b"))) (EApp (EApp (EApp (EVar "tailGrows") (EVar "rd")) (EVar "acc")) (EVar "b")))) (EVar "arms"))) (arm (PCon "ELet" PWild PWild PWild PWild (PVar "body")) () (EApp (EApp (EApp (EVar "tailGrows") (EVar "rd")) (EVar "acc")) (EVar "body"))) (arm (PCon "ELetGroup" PWild (PVar "body")) () (EApp (EApp (EApp (EVar "tailGrows") (EVar "rd")) (EVar "acc")) (EVar "body"))) (arm PWild () (EVar "False"))))
+(DFunDef false "tailGrows" ((PVar "rd") (PVar "acc") (PVar "expr0")) (ELetGroup ((lgb "go" (clause ((PVar "e")) (EMatch (EApp (EVar "unwrapLoc") (EVar "e")) (arm (PCon "EBinOp" (PLit (LString "::")) PWild PWild PWild) () (EApp (EApp (EApp (EVar "grownDirect") (EVar "rd")) (EVar "acc")) (EVar "e"))) (arm (PCon "EBinOp" (PLit (LString "++")) PWild PWild PWild) () (EApp (EApp (EApp (EVar "grownDirect") (EVar "rd")) (EVar "acc")) (EVar "e"))) (arm (PCon "EApp" PWild PWild) () (EApp (EApp (EApp (EVar "grownDirect") (EVar "rd")) (EVar "acc")) (EVar "e"))) (arm (PCon "EIf" PWild (PVar "t") (PVar "f")) () (EBinOp "||" (EApp (EVar "go") (EVar "t")) (EApp (EVar "go") (EVar "f")))) (arm (PCon "EMatch" PWild (PVar "arms")) () (EApp (EApp (EDictApp "any") (ELam ((PCon "Arm" PWild PWild (PVar "b"))) (EApp (EVar "go") (EVar "b")))) (EVar "arms"))) (arm (PCon "EGuards" (PVar "arms")) () (EApp (EApp (EDictApp "any") (ELam ((PCon "GuardArm" PWild (PVar "b"))) (EApp (EVar "go") (EVar "b")))) (EVar "arms"))) (arm (PCon "ELet" PWild PWild PWild PWild (PVar "body")) () (EApp (EVar "go") (EVar "body"))) (arm (PCon "ELetGroup" PWild (PVar "body")) () (EApp (EVar "go") (EVar "body"))) (arm (PCon "EBlock" (PVar "stmts")) () (EMatch (EApp (EVar "last") (EVar "stmts")) (arm (PCon "Some" (PCon "DoExpr" (PVar "l"))) () (EApp (EVar "go") (EVar "l"))) (arm PWild () (EVar "False")))) (arm (POr (PCon "ELit" PWild) (PCon "EVar" PWild) (PCon "ELam" PWild PWild) (PCon "EUnOp" PWild PWild PWild) (PCon "EInfix" PWild PWild PWild) (PCon "EFieldAccess" PWild PWild PWild) (PCon "ETuple" PWild) (PCon "EListLit" PWild) (PCon "EArrayLit" PWild) (PCon "ERangeList" PWild PWild PWild) (PCon "ERangeArray" PWild PWild PWild) (PCon "ESlice" PWild PWild PWild PWild) (PCon "ESection" PWild) (PCon "EIndex" PWild PWild) (PCon "EAnnot" PWild PWild) (PCon "EHeadAnnot" PWild PWild) (PCon "EDo" PWild PWild) (PCon "EStringInterp" PWild) (PCon "ERecordCreate" PWild PWild) (PCon "ERecordUpdate" PWild PWild PWild) (PCon "EVariantUpdate" PWild PWild PWild) (PCon "EMapLit" PWild PWild) (PCon "ESetLit" PWild PWild) (PCon "EAsPat" PWild PWild) (PCon "EOrPat" PWild) (PCon "EMethodRef" PWild) (PCon "EDictApp" PWild) (PCon "EVarAt" PWild PWild) (PCon "EVarId" PWild PWild) (PCon "EMethodAt" PWild PWild PWild) (PCon "EDictAt" PWild PWild) (PCon "ELoc" PWild PWild) (PCon "EDoOrigin" PWild PWild) (PCon "ENumLit" PWild PWild PWild) (PCon "EWideLit" PWild PWild PWild PWild) (PCon "EBinOp" PWild PWild PWild PWild)) () (EVar "False")))))) (EApp (EVar "go") (EVar "expr0"))))
 (DTypeSig false "probeFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Probe") (TyCon "Finding"))))
-(DFunDef false "probeFinding" ((PVar "fallback") (PCon "Probe" (PVar "loc") (PVar "callee") (PVar "via") (PVar "c"))) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameListAsSet")) (fa "message" (EApp (EApp (EApp (EVar "message") (EVar "callee")) (EVar "via")) (EApp (EVar "containerName") (EVar "c")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EVar "fallback"))) (fa "fix" (EVar "None")))))
+(DFunDef false "probeFinding" ((PVar "fallback") (PCon "Probe" (PVar "loc") (PVar "callee") (PVar "via") (PVar "c"))) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameListAsSet")) (fa "message" (EApp (EApp (EApp (EVar "message") (EVar "callee")) (EVar "via")) (EApp (EVar "containerName") (EVar "c")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EVar "fallback"))) (fa "fix" (EVar "noFix")))))
 (DTypeSig false "containerName" (TyFun (TyCon "Expr") (TyCon "String")))
 (DFunDef false "containerName" ((PVar "c")) (EMatch (EApp (EVar "unwrapLoc") (EVar "c")) (arm (PCon "EVar" (PVar "n")) () (EVar "n")) (arm PWild () (ELit (LString "the list")))))
 (DTypeSig false "message" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyCon "String")))))

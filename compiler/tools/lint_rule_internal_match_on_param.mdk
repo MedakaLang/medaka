@@ -19,10 +19,11 @@ import tools.lint_core.{
   Scope(..),
   StdlibIndex,
   mkRule,
+  noFix,
+  factDeclLocs,
 }
 import tools.lint_shared.{
   armToClause,
-  declLocList,
   isBareParam,
   matchBodyOnBareParam,
   patIsWild,
@@ -61,7 +62,7 @@ ruleMatchOnParam : StdlibIndex ->
   Positions ->
   List Decl ->
   List Finding
-ruleMatchOnParam _ _ _ pos prog = flatMap matchParamDeclL (declLocList pos prog)
+ruleMatchOnParam _ _ facts _ _ = flatMap matchParamDeclL (factDeclLocs facts)
 
 matchParamDeclL : (Decl, Option Loc) -> List Finding
 matchParamDeclL (d, loc) = matchParamDecl loc d
@@ -104,7 +105,7 @@ matchParamHit loc name pats p
         "function '\{name}' matches on parameter '\{p}' — use a multi-clause function definition",
       severity = SevWarning,
       loc = loc,
-      fix = None,
+      fix = noFix,
     },
   ]
   | otherwise = []
@@ -127,10 +128,9 @@ matchParamHit loc name pats p
 --     as the token `p`, so a real reference is never missed (the scan can only
 --     over-bail, which is safe).
 matchParamFix : Oracle -> Decl -> Option (List Decl)
-matchParamFix _ (DFunDef vis name pats body _ _) =
-  match matchBodyOnBareParam pats body
-    Some (p, k, arms) => matchParamFixArms vis name pats p k arms
-    None => None
+matchParamFix _ (DFunDef vis name pats body _ _) = do
+  (p, k, arms) <- matchBodyOnBareParam pats body
+  matchParamFixArms vis name pats p k arms
 matchParamFix _ _ = None
 
 matchParamFixArms : Bool ->

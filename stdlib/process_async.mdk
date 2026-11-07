@@ -170,17 +170,18 @@ startUntil : (program : String) ->
   Deadline <Clock, Exec program | e> ->
   CancelToken ->
   Async <Clock, Exec program | e> (Result (StartError (LaunchTicket program)) (StartResult (Process program) (LaunchTicket program)))
-startUntil program opts deadline token =
-  deferThen
-    (liftIO (_ => match stop deadline token
-      Some True => deferPure (Ok (StartCancelled LaunchStopped))
-      Some False => deferPure (Ok (StartTimedOut LaunchStopped))
-      None => match submit program opts
-        Ok ticket => startPoll ticket deadline token
-        Err ProcessBusy => deferThen (park deadline token []) (_ =>
-          startUntil program opts deadline token)
-        Err err => deferPure (Err (StartRejected err))))
-    identity
+startUntil program opts deadline token = go ()
+  where
+    go _ =
+      deferThen
+        (liftIO (_ => match stop deadline token
+          Some True => deferPure (Ok (StartCancelled LaunchStopped))
+          Some False => deferPure (Ok (StartTimedOut LaunchStopped))
+          None => match submit program opts
+            Ok ticket => startPoll ticket deadline token
+            Err ProcessBusy => deferThen (park deadline token []) (_ => go ())
+            Err err => deferPure (Err (StartRejected err))))
+        identity
 
 startPoll : LaunchTicket p ->
   Deadline <Clock, Exec p | e> ->

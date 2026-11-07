@@ -1,0 +1,11 @@
+-- A data field whose arrow domain is a named binder over the parameter still
+-- counts that occurrence, so the declaration does not guarantee <Stdout> at
+-- every instantiation and the relay is refused, as with the unnamed spelling.
+data Box0 (e : Effect) = Box0 (Unit -> <e> Unit)
+
+data W (e : Effect) = W ((b : Box0 e) -> <Stdout | e> Unit)
+
+stashW : ((b : Box0 e) -> <Stdout | e> Unit) -> W e
+stashW f = W f
+
+main = println 1

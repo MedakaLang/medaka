@@ -29,17 +29,15 @@ withFixture source inspect = match makeTempDir ()
     result
 
 runReport : String -> <Exec, IO> Result String (Int, Json)
-runReport target =
-  match (boundedVerbSeconds 120 (medakaBin ()) [
+runReport target = do
+  (code, out, err) <- boundedVerbSeconds 120 (medakaBin ()) [
     "test", "--json", "--engines", "eval,native", "--seed", "1", "--cases",
     "20", target
-  ])
-    Err message => Err message
-    Ok (code, out, err) =>
-      if err /= "" then
-        Err "unexpected runner stderr: \{err}"
-      else
-        map (report => (code, report)) (parse out)
+  ]
+  if err /= "" then
+    Err "unexpected runner stderr: \{err}"
+  else
+    map (report => (code, report)) (parse out)
 
 propertyRows : Json -> List Json
 propertyRows report = propertyRowsValue (get "properties" report)
@@ -57,12 +55,14 @@ intField : String -> Json -> Option Int
 intField name row = flatMap asInt (get name row)
 
 propertyRow : String -> String -> List Json -> Option Json
-propertyRow _ _ [] = None
-propertyRow engine name (row :: rows) =
-  if field "engine" row == Some engine && field "name" row == Some name then
-    Some row
-  else
-    propertyRow engine name rows
+propertyRow engine name rows0 = go rows0
+  where
+    go [] = None
+    go (row :: rows) =
+      if field "engine" row == Some engine && field "name" row == Some name then
+        Some row
+      else
+        go rows
 
 warningText : String
 warningText =

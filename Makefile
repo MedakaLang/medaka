@@ -249,10 +249,10 @@ inlang-ir-core-ir-lower-test:
 inlang-ir-core-pass-test:
 	./medaka test compiler/ir/core_pass_test.mdk
 
-## The numeric Core IR pass folds `fromInt` at `Num Int` to its argument and leaves
-## every other `fromInt` alone; no entry imports this sibling.
-inlang-ir-core-opt-num-test:
-	./medaka test compiler/ir/core_opt_num_test.mdk
+## The unfolding pass replaces a saturated call of a trivial definition by its body
+## and leaves every other call alone; no entry imports this sibling.
+inlang-ir-core-opt-unfold-test:
+	./medaka test compiler/ir/core_opt_unfold_test.mdk
 
 ## The Core IR lint fires each rule on a bad program and stays silent on its good
 ## twin; no entry imports this sibling.

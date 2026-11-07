@@ -151,12 +151,12 @@ accept lis =
   deferThen (liftIO (u => tryAccept lis)) (step => acceptStep lis step)
 
 tryAccept : Listener a -> <Net a> Result String (Option (Connection a))
-tryAccept lis = match netSetNonblockListener lis True
-  Ok _ => match netTryAccept lis
+tryAccept lis = do
+  _ <- netSetNonblockListener lis True
+  match netTryAccept lis
     Ok (Some c) => map (_ => Some c) (netSetNonblock c True)
     Ok None => Ok None
     Err e => Err e
-  Err e => Err e
 
 acceptStep : Listener a ->
   Result String (Option (Connection a)) ->
@@ -182,16 +182,16 @@ pendingRecv : Connection h ->
 pendingRecv conn n = liftIO (u => tryRecv conn n)
 
 tryRecv : Connection h -> Int -> <Net h> Result String (Option Bytes)
-tryRecv conn n = match netSetNonblock conn True
+tryRecv conn n = do
+  _ <- netSetNonblock conn True
   -- The block was allocated by this very call and the runtime kept no
   -- reference to it, so it has one owner and nothing can write it behind the
   -- byte string's back: adopting it is safe where the general contract on
   -- `adoptByteBlockUnsafe` would demand a copy.
-  Ok _ => match netTryRecvBytes conn n
+  match netTryRecvBytes conn n
     Ok (Some bb) => Ok (Some (adoptByteBlockUnsafe bb))
     Ok None => Ok None
     Err e => Err e
-  Err e => Err e
 
 recvStep : Connection h ->
   Int ->
@@ -264,9 +264,9 @@ trySend : Connection h ->
   Int ->
   Int ->
   <Net h> Result String (Option Int)
-trySend conn bb off end = match netSetNonblock conn True
-  Ok _ => netTrySendBytesFrom conn bb off end
-  Err e => Err e
+trySend conn bb off end = do
+  _ <- netSetNonblock conn True
+  netTrySendBytesFrom conn bb off end
 
 sendStep : Connection h ->
   ByteBlock ->

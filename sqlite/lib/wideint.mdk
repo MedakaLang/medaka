@@ -168,17 +168,19 @@ parse s =
     if start >= n then None else parseDigits cs start n negative 0
 
 parseDigits : Array Char -> Int -> Int -> Bool -> I64 -> Option I64
-parseDigits cs i n negative acc
-  | i >= n = if negative then Some acc else checkedSub 0 acc
-  | otherwise =
-    let k = charCode cs[i] - 48
-    if k < 0 || k > 9 then
-      None
-    else match checkedMul acc 10
-      None => None
-      Some t => match checkedSub t (widen k)
-        None => None
-        Some acc2 => parseDigits cs (i + 1) n negative acc2
+parseDigits cs i0 n negative acc0 = go i0 acc0
+  where
+    go i acc
+      | i >= n = if negative then Some acc else checkedSub 0 acc
+      | otherwise =
+        let k = charCode cs[i] - 48
+        if k < 0 || k > 9 then
+          None
+        else match checkedMul acc 10
+          None => None
+          Some t => match checkedSub t (widen k)
+            None => None
+            Some acc2 => go (i + 1) acc2
 
 -- | The value's 8 bytes, most significant first, as an 8-byte INTEGER body.
 --

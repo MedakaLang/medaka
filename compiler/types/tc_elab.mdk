@@ -69,7 +69,6 @@ import types.tc_solve.{
   noteMethodReturnTrace,
   numericReturnRoute,
   recRoutes,
-  returnPosMethodNames,
   routesOfMonosTopV,
   solveExactReturnOnce,
 }
@@ -325,7 +324,8 @@ mapDeclBodies f (DProp pub name params body) = DProp pub name params (f body)
 mapDeclBodies f (DTest pub name body) = DTest pub name (f body)
 mapDeclBodies f (DAttrib attrs d) = DAttrib attrs (mapDeclBodies f d)
 -- a declaration with no expression body (data, signatures, imports, externs)
-mapDeclBodies _ d = d
+mapDeclBodies _ (d@(DTypeSig _ _ _ _ | DExtern _ | DData {  } | DUse _ _ _ | DEffect _ _ _ _ _ _ | DTypeAlias {  } | DNewtype {  })) =
+  d
 
 isSourceless : GraphCtx -> Int -> Bool
 isSourceless gctx i = IdMap.has i gctx.graphRun.grants.gsSourceless.value
@@ -686,11 +686,7 @@ dictPass mctx0 idx mid names prog =
   let mctx = ownedBy mid mctx0
   let pe = PassEvidence idx (Ref omEmpty)
   map
-    (dictPassDecl
-      mctx
-      pe
-      (omFromNames names omEmpty)
-      (returnPosMethodNames prog))
+    (dictPassDecl mctx pe (omFromNames names omEmpty))
     (mapProg
       (e => rewriteLocalDictExpr mctx.mcGraph (rewriteBinopExpr mctx pe e))
       (grantPass mctx.mcGraph pe mid prog))
@@ -735,41 +731,43 @@ grantPass gctx pe mid prog =
   result
 
 grantDecl : GraphCtx -> PassEvidence -> String -> Decl -> Decl
-grantDecl gctx pe mid (DFunDef pub n pats body site bid) =
-  DFunDef
-    pub
-    n
-    (grantParamPats (topGrantIds gctx mid n) n ++ pats)
-    (grantBody gctx pe body)
-    site
-    bid
-grantDecl gctx pe mid (DLetGroup pub binds) =
-  DLetGroup
-    pub
-    (map
-      (b => match b
-        LetBind n clauses site bid =>
-          grantLetBind
-            gctx
-            pe
-            (grantParamPats (topGrantIds gctx mid n) n)
-            (LetBind n clauses site bid))
-      binds)
-grantDecl gctx pe _ (d@(DInterface { name, ifaceOrigin, methods, ... })) = DInterface { d |
-  methods =
-    map (grantIfaceMethod gctx pe (ifaceWordOf ifaceOrigin name)) methods,
-}
-grantDecl gctx pe _ (d@(DImpl { iface, implOrigin, methods, ... })) = DImpl { d |
-  methods = map (grantImplMethod gctx pe (ifaceWordOf implOrigin iface)) methods,
-}
-grantDecl gctx pe _ (DProp pub name params body) =
-  DProp pub name params (grantExpr gctx pe body)
-grantDecl gctx pe _ (DTest pub name body) =
-  DTest pub name (grantExpr gctx pe body)
-grantDecl gctx pe mid (DAttrib attrs d) =
-  DAttrib attrs (grantDecl gctx pe mid d)
--- a declaration with no expression body (data, signatures, imports, externs)
-grantDecl _gctx _ _ d = d
+grantDecl gctx pe mid decl0 = go decl0
+  where
+    go (DFunDef pub n pats body site bid) =
+      DFunDef
+        pub
+        n
+        (grantParamPats (topGrantIds gctx mid n) n ++ pats)
+        (grantBody gctx pe body)
+        site
+        bid
+    go (DLetGroup pub binds) =
+      DLetGroup
+        pub
+        (map
+          (b => match b
+            LetBind n clauses site bid =>
+              grantLetBind
+                gctx
+                pe
+                (grantParamPats (topGrantIds gctx mid n) n)
+                (LetBind n clauses site bid))
+          binds)
+    go (d@(DInterface { name, ifaceOrigin, methods, ... })) = DInterface { d |
+      methods =
+        map (grantIfaceMethod gctx pe (ifaceWordOf ifaceOrigin name)) methods,
+    }
+    go (d@(DImpl { iface, implOrigin, methods, ... })) = DImpl { d |
+      methods =
+        map (grantImplMethod gctx pe (ifaceWordOf implOrigin iface)) methods,
+    }
+    go (DProp pub name params body) =
+      DProp pub name params (grantExpr gctx pe body)
+    go (DTest pub name body) = DTest pub name (grantExpr gctx pe body)
+    go (DAttrib attrs d) = DAttrib attrs (go d)
+    -- a declaration with no expression body (data, signatures, imports, externs)
+    go (d@(DTypeSig _ _ _ _ | DExtern _ | DData {  } | DUse _ _ _ | DEffect _ _ _ _ _ _ | DTypeAlias {  } | DNewtype {  })) =
+      d
 
 -- A method that takes grants declares them after its value arguments, so the
 -- arity every backend reads off the declaration counts them.
@@ -1108,27 +1106,29 @@ freshGrantName st _ =
 -- Evaluate a function-valued expression once. Its bound becomes active on
 -- application, and the returned function (if any) retains its own arrow rows.
 fileBoundValue : GraphCtx -> List GrantBinder -> Mono -> Expr -> Expr
-fileBoundValue gctx chain ty e =
-  if hasFileBoundValue ty then match normalize ty
-    TFun _ row result =>
-      let fn = freshGrantName gctx.graphRun.grants ()
-      let arg = freshGrantName gctx.graphRun.grants ()
-      ELet
-        noDeclLoc
-        False
-        (PVar fn (Loc "" 0 0 0 0) noBinderId)
+fileBoundValue gctx chain ty0 expr0 = go ty0 expr0
+  where
+    go ty e =
+      if hasFileBoundValue ty then match normalize ty
+        TFun _ row result =>
+          let fn = freshGrantName gctx.graphRun.grants ()
+          let arg = freshGrantName gctx.graphRun.grants ()
+          ELet
+            noDeclLoc
+            False
+            (PVar fn (Loc "" 0 0 0 0) noBinderId)
+            e
+            (ELam
+              [PVar arg (Loc "" 0 0 0 0) noBinderId]
+              (fileBoundExpr
+                gctx
+                chain
+                row
+                (go result (EApp (EVar fn) (EVar arg)))))
+        TQual inner _ => go inner e
+        _ => e
+      else
         e
-        (ELam
-          [PVar arg (Loc "" 0 0 0 0) noBinderId]
-          (fileBoundExpr
-            gctx
-            chain
-            row
-            (fileBoundValue gctx chain result (EApp (EVar fn) (EVar arg)))))
-    TQual inner _ => fileBoundValue gctx chain inner e
-    _ => e
-  else
-    e
 
 grantBody : GraphCtx -> PassEvidence -> Expr -> Expr
 grantBody gctx pe body =
@@ -1218,15 +1218,12 @@ grantVarParams : GraphCtx ->
   List (Ref Authvar) ->
   List String ->
   Option (List String)
-grantVarParams _gctx _ [] acc = Some (reverse acc)
-grantVarParams gctx chain (v :: rest) acc =
-  match grantParamFor gctx chain (authvarId v)
-    Some p => grantVarParams gctx chain rest (p :: acc)
-    None =>
-      if isSourceless gctx (authvarId v) then
-        None
-      else
-        grantVarParams gctx chain rest acc
+grantVarParams gctx chain xs0 acc0 = go xs0 acc0
+  where
+    go [] acc = Some (reverse acc)
+    go (v :: rest) acc = match grantParamFor gctx chain (authvarId v)
+      Some p => go rest (p :: acc)
+      None => if isSourceless gctx (authvarId v) then None else go rest acc
 
 -- A parameter holding the whole domain makes a join it is part of the whole
 -- domain; concatenation alone would narrow it to the other parts.
@@ -1243,15 +1240,17 @@ grantIdTerm gctx chain i = match grantParamFor gctx chain i
 
 -- The parameter of the innermost enclosing binder that quantifies authority [i].
 grantParamFor : GraphCtx -> List GrantBinder -> Int -> Option String
-grantParamFor _gctx [] _ = None
-grantParamFor gctx (b :: rest) i =
-  let (name, ids) = match b
-    TopGrantBinder mid n => (n, topGrantIds gctx mid n)
-    LocalGrantBinder n => (n, localGrantIds gctx n)
-    BodyGrantBinder n bound => (n, bound)
-  match elemIndex i ids
-    Some k => Some (grantParamName name k)
-    None => grantParamFor gctx rest i
+grantParamFor gctx xs0 i = go xs0
+  where
+    go [] = None
+    go (b :: rest) =
+      let (name, ids) = match b
+        TopGrantBinder mid n => (n, topGrantIds gctx mid n)
+        LocalGrantBinder n => (n, localGrantIds gctx n)
+        BodyGrantBinder n bound => (n, bound)
+      match elemIndex i ids
+        Some k => Some (grantParamName name k)
+        None => go rest
 
 -- Routed operators become method applications, including generic arithmetic.
 -- Packed instance prerequisites move into EMethodAt's implementation-dictionary
@@ -1443,49 +1442,46 @@ unopMethodApp mctx pe op e route =
         (snd split)))
     e
 
-dictPassDecl : ModuleCtx ->
-  PassEvidence ->
-  OrdMap Unit ->
-  List String ->
-  Decl ->
-  Decl
-dictPassDecl mctx _ names _ (DFunDef pub n pats body site bid)
-  | omHasKey n names =
-    DFunDef pub n (dictParams n (dictArityOf mctx n) ++ pats) body site bid
-  | otherwise = DFunDef pub n pats body site bid
--- Top-level `let rec … with …` (DLetGroup): each binding is dict-passed exactly
--- like a DFunDef — a constrained member gets `dictParams n (dictArityOf n)`
--- prepended to every clause's params, so the dict-passed call sites (which DO get
--- rewritten) line up with the definition.  (Without this, a `Num a => a -> a` group member's call site
--- supplies a leading dict the body never binds → the dict lands in the first user
--- param → arithmetic over a dict value panics `unknown op`.)
-dictPassDecl mctx _ names _ (DLetGroup pub binds) =
-  DLetGroup pub (map (dictPassLetBind mctx names) binds)
--- Phase 83/84 single-level + D3b-1: a parametric impl with `requires` gets one
--- leading `$dict_<method>_<slot>` param on each method (return- OR argument-
--- position) whose body actually reads an impl dict (so a terminal body like
--- `eq Nil Nil = True` would take none — but see implDictPassMethods: the param is
--- added UNIFORMLY across all clauses of a method when ANY clause uses the dict, so
--- a multi-clause method keeps one arity).  The routes resolveSite/resolveArgStamp
--- filled on the call-site EMethodAt's impl-dicts ref line up with these params.
-dictPassDecl mctx pe _ _ (d@(DImpl { iface, implOrigin, reqs, methods, ... })) = DImpl { d |
-  methods =
-    implDictPassMethods
-      mctx
-      pe
-      IfaceRef { irName = iface, irOrigin = implOrigin }
-      (listLen reqs)
-      methods,
-}
--- Phase 69.x-e: a method with method-level constraints (foldMap's `Monoid m`) gets
--- one leading `$dict_<method>_<slot>` param per constraint on its DEFAULT body, so a
--- caller can supply the dictionary the body's `empty`/… reads (routed RDict by
--- inferDefaultMethod).
-dictPassDecl _mctx _ _ _ (d@(DInterface { typarams, methods, ... })) =
-  DInterface { d | methods = map (ifaceDictPassMethod typarams) methods }
-dictPassDecl mctx pe names ret (DAttrib attrs d) =
-  DAttrib attrs (dictPassDecl mctx pe names ret d)
-dictPassDecl _mctx _ _ _ d = d
+dictPassDecl : ModuleCtx -> PassEvidence -> OrdMap Unit -> Decl -> Decl
+dictPassDecl mctx pe names decl0 = go decl0
+  where
+    go (DFunDef pub n pats body site bid)
+      | omHasKey n names =
+        DFunDef pub n (dictParams n (dictArityOf mctx n) ++ pats) body site bid
+      | otherwise = DFunDef pub n pats body site bid
+    -- Top-level `let rec … with …` (DLetGroup): each binding is dict-passed exactly
+    -- like a DFunDef — a constrained member gets `dictParams n (dictArityOf n)`
+    -- prepended to every clause's params, so the dict-passed call sites (which DO get
+    -- rewritten) line up with the definition.  (Without this, a `Num a => a -> a` group member's call site
+    -- supplies a leading dict the body never binds → the dict lands in the first user
+    -- param → arithmetic over a dict value panics `unknown op`.)
+    go (DLetGroup pub binds) =
+      DLetGroup pub (map (dictPassLetBind mctx names) binds)
+    -- Phase 83/84 single-level + D3b-1: a parametric impl with `requires` gets one
+    -- leading `$dict_<method>_<slot>` param on each method (return- OR argument-
+    -- position) whose body actually reads an impl dict (so a terminal body like
+    -- `eq Nil Nil = True` would take none — but see implDictPassMethods: the param is
+    -- added UNIFORMLY across all clauses of a method when ANY clause uses the dict, so
+    -- a multi-clause method keeps one arity).  The routes resolveSite/resolveArgStamp
+    -- filled on the call-site EMethodAt's impl-dicts ref line up with these params.
+    go (d@(DImpl { iface, implOrigin, reqs, methods, ... })) = DImpl { d |
+      methods =
+        implDictPassMethods
+          mctx
+          pe
+          IfaceRef { irName = iface, irOrigin = implOrigin }
+          (listLen reqs)
+          methods,
+    }
+    -- Phase 69.x-e: a method with method-level constraints (foldMap's `Monoid m`) gets
+    -- one leading `$dict_<method>_<slot>` param per constraint on its DEFAULT body, so a
+    -- caller can supply the dictionary the body's `empty`/… reads (routed RDict by
+    -- inferDefaultMethod).
+    go (d@(DInterface { typarams, methods, ... })) =
+      DInterface { d | methods = map (ifaceDictPassMethod typarams) methods }
+    go (DAttrib attrs d) = DAttrib attrs (go d)
+    go (d@(DTypeSig _ _ _ _ | DExtern _ | DData {  } | DUse _ _ _ | DEffect _ _ _ _ _ _ | DProp _ _ _ _ | DTest _ _ _ | DTypeAlias {  } | DNewtype {  })) =
+      d
 
 -- DLetGroup binding dict-pass: prepend the member's dict params to every clause.
 -- `dictArityOf n` is 0 for an unconstrained member (no change), matching the
@@ -1613,6 +1609,7 @@ siteRDictName : Route -> List String
 siteRDictName (RDict d) = [d]
 siteRDictName (RDictFwd d) = [d]
 siteRDictName (RProj inner _) = routeRDictName inner
+siteRDictName (RLocal _ dicts) = siteRDictNamesL dicts
 siteRDictName _ = []
 
 siteRDictNamesL : List Route -> List String
@@ -1630,7 +1627,8 @@ routeRDictName (RDictFwd d) = [d]
 routeRDictName (RKey _ reqs sups) =
   flatMap routeRDictName reqs ++ flatMap routeRDictName sups
 routeRDictName (RProj r _) = routeRDictName r
-routeRDictName _ = []
+routeRDictName (RLocal _ dicts) = flatMap routeRDictName dicts
+routeRDictName (RNone | RScalar _) = []
 
 -- The dict-param names the method occurrences and dictionary applications in [e]
 -- route to: an `EMethodAt`'s dispatch route (RDict/RDictFwd, post-resolveSites)
@@ -1652,6 +1650,7 @@ collectDictSites pe (EMethodAt _ _ ev) =
   siteRDictName tag ++ siteRDictNamesL dicts
 collectDictSites pe (ELoc _ e) = collectDictSites pe e
 collectDictSites pe (EDoOrigin _ e) = collectDictSites pe e
+collectDictSites pe (EHeadAnnot e _) = collectDictSites pe e
 collectDictSites pe (EApp f x) = collectDictSites pe f ++ collectDictSites pe x
 collectDictSites pe (ELam _ b) = collectDictSites pe b
 collectDictSites pe (ELet _ _ _ e1 e2) =
@@ -1686,7 +1685,8 @@ collectDictSites pe (ERecordUpdate e fs _) =
   collectDictSites pe e ++ flatMap (fieldAssignDictSites pe) fs
 collectDictSites pe (EVariantUpdate _ e fs) =
   collectDictSites pe e ++ flatMap (fieldAssignDictSites pe) fs
-collectDictSites _ _ = []
+collectDictSites _ (ELit _ | EVar _ | ESection _ | EDo _ _ | EStringInterp _ | EGuards _ | EMapLit _ _ | ESetLit _ _ | EAsPat _ _ | EOrPat _ | EMethodRef _ | EDictApp _ | EVarAt _ _ | EVarId _ _ | ENumLit _ _ _ | EWideLit _ _ _ _) =
+  []
 
 letBindDictSites : PassEvidence -> LetBind -> List String
 letBindDictSites pe (LetBind _ clauses _ _) =
@@ -1724,11 +1724,12 @@ dictParams : String -> Int -> List Pat
 dictParams n k = dictParamsGo n 0 k
 
 dictParamsGo : String -> Int -> Int -> List Pat
-dictParamsGo n slot k
-  | slot >= k = []
-  | otherwise =
-    PVar (dictParamName n slot) (Loc "" 0 0 0 0) noBinderId
-      :: dictParamsGo n (slot + 1) k
+dictParamsGo n slot0 k = go slot0
+  where
+    go slot
+      | slot >= k = []
+      | otherwise =
+        PVar (dictParamName n slot) (Loc "" 0 0 0 0) noBinderId :: go (slot + 1)
 
 -- [count] dict params for [n] starting at slot [start]: $dict_n_start ..
 -- $dict_n_(start+count-1).  Used for impl-`requires` element-dict params, which
@@ -1821,7 +1822,7 @@ dictPassModulesIfEnabled mctx dictNames corePassed core2 modules2 =
 -- per-module: set funConstraintsRef to the module's importer-scoped arities, then
 -- dict-pass that module.  [allModules] is the full set (for the transitive-importer
 -- walk); [modules2] is the remaining suffix to process.  core2 is always in scope.
--- [importerReach] is the run's one reachability index; it answers the importer
+-- [reach] is the run's one reachability index; it answers the importer
 -- question for every module, so nothing here re-walks the import graph.
 dictPassModulesScoped : ModuleCtx ->
   EvIndex ->
@@ -1832,49 +1833,42 @@ dictPassModulesScoped : ModuleCtx ->
   List (String, List Decl) ->
   List (String, List Decl) ->
   List (String, List Decl)
-dictPassModulesScoped _mctx _ _ _ _ _ _ [] = []
-dictPassModulesScoped mctx idx dictNames promotedQ importerReach core2 allModules ((mid, prog) :: rest) =
-  let importers = transitiveImporters importerReach mid allModules
-  let importerDecls = flatMap snd importers
-  let scope = core2 ++ prog ++ importerDecls
-  let scopeMods = namesToSet (mid :: map fst importers) omEmpty
-  -- IMPORT ALIASING: scopePredicateSlots keys arity by the DEFINITION's name, but an aliased
-  -- call site in THIS module writes the LOCAL name.  Re-key this module's own aliases
-  -- (from its DUse decls) onto the origin's arity, else the aliased call under-applies
-  -- its dicts.  This is the RUN/eval path's counterpart to the same fix in
-  -- checkModuleFullImpl — the EMIT path never needs it, because private_mangle has
-  -- already rewritten `A.name` to the origin's real symbol before this point.
-  -- #1425 site 3: re-key the names THIS module declares onto its own qual rows before the
-  -- table is handed to `dictPass`.  `scopePredicateSlots` reduces `(mid, name)` to a bare name and
-  -- throws the module id away, which is where a foreign module's constrained row becomes
-  -- this module's phantom dict param; `selfDeclArities` is what puts the identity back for
-  -- the one set of names this module can answer authoritatively — its own.
-  setFunPredicateSlots
-    mctx
-    (selfDeclArities
-      mid
-      prog
-      promotedQ
-      (aliasConstraintEntries (importerDefiners mctx.mcGraph mid) prog promotedQ
-        ++ scopePredicateSlots promotedQ scopeMods scope))
-  -- Cleared for the same reason as in `dictPassModulesIfEnabled`: a stale
-  -- prefix table is worse than an empty one, because only the empty one answers
-  -- `CDPUnknown`.
-  mctx.mcCells.funConstraintDeclaredRef := []
-  mctx.mcCells.methodPredicateSlotsRef :=
-    scopeMethodPredicateSlots
-      mctx.mcGraph.crossRun.crossModuleMethodPredicateSlotsQualRef.value
-      scopeMods
-  (mid, dictPass mctx idx mid dictNames prog)
-    :: dictPassModulesScoped
-      mctx
-      idx
-      dictNames
-      promotedQ
-      importerReach
-      core2
-      allModules
-      rest
+dictPassModulesScoped mctx idx dn pq reach core2 allModules xs0 = go xs0
+  where
+    go [] = []
+    go ((mid, prog) :: rest) =
+      let importers = transitiveImporters reach mid allModules
+      let importerDecls = flatMap snd importers
+      let scope = core2 ++ prog ++ importerDecls
+      let scopeMods = namesToSet (mid :: map fst importers) omEmpty
+      -- IMPORT ALIASING: scopePredicateSlots keys arity by the DEFINITION's name, but an aliased
+      -- call site in THIS module writes the LOCAL name.  Re-key this module's own aliases
+      -- (from its DUse decls) onto the origin's arity, else the aliased call under-applies
+      -- its dicts.  This is the RUN/eval path's counterpart to the same fix in
+      -- checkModuleFullImpl — the EMIT path never needs it, because private_mangle has
+      -- already rewritten `A.name` to the origin's real symbol before this point.
+      -- #1425 site 3: re-key the names THIS module declares onto its own qual rows before the
+      -- table is handed to `dictPass`.  `scopePredicateSlots` reduces `(mid, name)` to a bare name and
+      -- throws the module id away, which is where a foreign module's constrained row becomes
+      -- this module's phantom dict param; `selfDeclArities` is what puts the identity back for
+      -- the one set of names this module can answer authoritatively — its own.
+      setFunPredicateSlots
+        mctx
+        (selfDeclArities
+          mid
+          prog
+          pq
+          (aliasConstraintEntries (importerDefiners mctx.mcGraph mid) prog pq
+            ++ scopePredicateSlots pq scopeMods scope))
+      -- Cleared for the same reason as in `dictPassModulesIfEnabled`: a stale
+      -- prefix table is worse than an empty one, because only the empty one answers
+      -- `CDPUnknown`.
+      mctx.mcCells.funConstraintDeclaredRef := []
+      mctx.mcCells.methodPredicateSlotsRef :=
+        scopeMethodPredicateSlots
+          mctx.mcGraph.crossRun.crossModuleMethodPredicateSlotsQualRef.value
+          scopeMods
+      (mid, dictPass mctx idx mid dn prog) :: go rest
 
 -- the arity table for a scope: every `=>`-constrained signature in [scope]
 -- (constrainedSigPredicateSlots) PLUS the joint-discovered promoted-fn slots whose fn is

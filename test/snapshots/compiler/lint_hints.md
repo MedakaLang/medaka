@@ -1,5 +1,5 @@
 # META
-source_lines=413
+source_lines=419
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_hints.mdk — the rewrite-hint engine: a rule that rewrites
@@ -45,6 +45,7 @@ import tools.lint_core.{
   Fix,
   StdlibIndex,
   Visitor(..),
+  fixLater,
 }
 import tools.lint_shared.{
   oneLine,
@@ -120,7 +121,7 @@ templateOf (EBinOp op a b r) = match (templateOf a, templateOf b)
   (Ok a2, Ok b2) => Ok (EBinOp op a2 b2 r)
   (Err m, _) => Err m
   (_, Err m) => Err m
-templateOf _ =
+templateOf (ELam _ _ | ELet _ _ _ _ _ | EMatch _ _ | EIf _ _ _ | EUnOp _ _ _ | EInfix _ _ _ | EFieldAccess _ _ _ | ETuple _ | EArrayLit _ | ERangeList _ _ _ | ERangeArray _ _ _ | ESlice _ _ _ _ | ELetGroup _ _ | ESection _ | EIndex _ _ | EAnnot _ _ | EHeadAnnot _ _ | EBlock _ | EDo _ _ | EStringInterp _ | EGuards _ | ERecordCreate _ _ | ERecordUpdate _ _ _ | EVariantUpdate _ _ _ | EMapLit _ _ | ESetLit _ _ | EAsPat _ _ | EOrPat _ | EMethodRef _ | EDictApp _ | EVarAt _ _ | EVarId _ _ | EMethodAt _ _ _ | EDictAt _ _ | EDoOrigin _ _ | EWideLit _ _ _ _ | EListLit _) =
   Err "a template holds only names, literals, `[]`, applications and operators"
 
 -- The lowercase literal names a right side writes: the names the rewrite
@@ -129,13 +130,15 @@ introducedOf : Expr -> List String
 introducedOf (EVar n) = if isMeta n || not (isHeadName n) then [] else [n]
 introducedOf (EApp f x) = nub (introducedOf f ++ introducedOf x)
 introducedOf (EBinOp _ a b _) = nub (introducedOf a ++ introducedOf b)
-introducedOf _ = []
+introducedOf (ELit _ | ELam _ _ | ELet _ _ _ _ _ | EMatch _ _ | EIf _ _ _ | EUnOp _ _ _ | EInfix _ _ _ | EFieldAccess _ _ _ | ETuple _ | EListLit _ | EArrayLit _ | ERangeList _ _ _ | ERangeArray _ _ _ | ESlice _ _ _ _ | ELetGroup _ _ | ESection _ | EIndex _ _ | EAnnot _ _ | EHeadAnnot _ _ | EBlock _ | EDo _ _ | EStringInterp _ | EGuards _ | ERecordCreate _ _ | ERecordUpdate _ _ _ | EVariantUpdate _ _ _ | EMapLit _ _ | ESetLit _ _ | EAsPat _ _ | EOrPat _ | EMethodRef _ | EDictApp _ | EVarAt _ _ | EVarId _ _ | EMethodAt _ _ _ | EDictAt _ _ | ELoc _ _ | EDoOrigin _ _ | ENumLit _ _ _ | EWideLit _ _ _ _) =
+  []
 
 metasOf : Expr -> List String
 metasOf (EVar n) = if isMeta n then [n] else []
 metasOf (EApp f x) = metasOf f ++ metasOf x
 metasOf (EBinOp _ a b _) = metasOf a ++ metasOf b
-metasOf _ = []
+metasOf (ELit _ | ELam _ _ | ELet _ _ _ _ _ | EMatch _ _ | EIf _ _ _ | EUnOp _ _ _ | EInfix _ _ _ | EFieldAccess _ _ _ | ETuple _ | EListLit _ | EArrayLit _ | ERangeList _ _ _ | ERangeArray _ _ _ | ESlice _ _ _ _ | ELetGroup _ _ | ESection _ | EIndex _ _ | EAnnot _ _ | EHeadAnnot _ _ | EBlock _ | EDo _ _ | EStringInterp _ | EGuards _ | ERecordCreate _ _ | ERecordUpdate _ _ _ | EVariantUpdate _ _ _ | EMapLit _ _ | ESetLit _ _ | EAsPat _ _ | EOrPat _ | EMethodRef _ | EDictApp _ | EVarAt _ _ | EVarId _ _ | EMethodAt _ _ _ | EDictAt _ _ | ELoc _ _ | EDoOrigin _ _ | ENumLit _ _ _ | EWideLit _ _ _ _) =
+  []
 
 tmplOf : Expr -> Tmpl
 tmplOf (EVar n) = if isMeta n then TMeta n else TName n (isHeadName n)
@@ -247,9 +250,9 @@ public export data Found = Found {
 
 -- The subject against the template; a bound subexpression keeps its wrappers.
 matchHint : Hint -> Expr -> Option Found
-matchHint h subject = match matchT h.hintLhs subject (Found [] [])
-  Some found => if condsHold h.hintRow.rowConds found then Some found else None
-  None => None
+matchHint h subject = do
+  found <- matchT h.hintLhs subject (Found [] [])
+  if condsHold h.hintRow.rowConds found then Some found else None
 
 condsHold : List HintCond -> Found -> Bool
 condsHold conds found = all (condHolds found) conds
@@ -289,9 +292,9 @@ matchT (TLeaf sexp) subject found =
   if sexp == exprSexp (unwrapLoc subject) then Some found else None
 
 matchBoth : Tmpl -> Expr -> Tmpl -> Expr -> Found -> Option Found
-matchBoth p1 s1 p2 s2 found = match matchT p1 s1 found
-  Some found2 => matchT p2 s2 found2
-  None => None
+matchBoth p1 s1 p2 s2 found = do
+  found2 <- matchT p1 s1 found
+  matchT p2 s2 found2
 
 bindMeta : String -> Expr -> Found -> Option Found
 bindMeta n subject found = match lookupAssoc n found.foundBinds
@@ -311,7 +314,8 @@ fill : List (String, Expr) -> Expr -> Expr
 fill binds (EVar n) = optionOr (EVar n) (lookupAssoc n binds)
 fill binds (EApp f x) = EApp (fill binds f) (fill binds x)
 fill binds (EBinOp op a b r) = EBinOp op (fill binds a) (fill binds b) r
-fill _ e = e
+fill _ (e@(ELit _ | ELam _ _ | ELet _ _ _ _ _ | EMatch _ _ | EIf _ _ _ | EUnOp _ _ _ | EInfix _ _ _ | EFieldAccess _ _ _ | ETuple _ | EListLit _ | EArrayLit _ | ERangeList _ _ _ | ERangeArray _ _ _ | ESlice _ _ _ _ | ELetGroup _ _ | ESection _ | EIndex _ _ | EAnnot _ _ | EHeadAnnot _ _ | EBlock _ | EDo _ _ | EStringInterp _ | EGuards _ | ERecordCreate _ _ | ERecordUpdate _ _ _ | EVariantUpdate _ _ _ | EMapLit _ _ | ESetLit _ _ | EAsPat _ _ | EOrPat _ | EMethodRef _ | EDictApp _ | EVarAt _ _ | EVarId _ _ | EMethodAt _ _ _ | EDictAt _ _ | ELoc _ _ | EDoOrigin _ _ | ENumLit _ _ _ | EWideLit _ _ _ _)) =
+  e
 
 -- ── the rule ─────────────────────────────────────────────────────────────────
 
@@ -358,13 +362,15 @@ hintsKeyed : String ->
   Ctx ->
   Expr ->
   List Finding
-hintsKeyed _ _ _ [] _ _ _ _ = []
-hintsKeyed key name severity (h :: rest) idx facts ctx e =
-  if h.hintKey == "" || h.hintKey == key then match matchHint h e
-    Some found => [hintFinding name severity h found idx facts ctx e]
-    None => hintsKeyed key name severity rest idx facts ctx e
-  else
-    hintsKeyed key name severity rest idx facts ctx e
+hintsKeyed key name severity hints0 idx facts ctx e = go hints0
+  where
+    go [] = []
+    go (h :: rest) =
+      if h.hintKey == "" || h.hintKey == key then match matchHint h e
+        Some found => [hintFinding name severity h found idx facts ctx e]
+        None => go rest
+      else
+        go rest
 
 hintFinding : String ->
   Severity ->
@@ -383,7 +389,7 @@ hintFinding name severity h found idx facts ctx e =
       "\{h.hintRow.rowMessage}. Rewrite as '\{oneLine (exprToString rewritten)}'",
     severity = severity,
     loc = ctx.ctxSpan,
-    fix = hintFix h found idx facts ctx e rewritten,
+    fix = fixLater (_ => hintFix h found idx facts ctx e rewritten),
   }
 
 hintFix : Hint ->
@@ -425,7 +431,7 @@ ownsName _ _ = False
 (DUse false (UseGroup ("support" "util") ((mem "lookupAssoc" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "exprToString" false))))
 (DUse false (UseGroup ("ir" "sexp") ((mem "exprSexp" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" false) (mem "StdlibIndex" false) (mem "Visitor" true))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" false) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "fixLater" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "oneLine" false) (mem "rebinds" false) (mem "replaceNodeFix" false) (mem "unwrapLoc" false) (mem "usesPreludeName" false))))
 (DUse false (UseGroup ("list") ((mem "nub" false))))
 (DData Public "HintCond" () ((variant "Atomic" (ConPos (TyCon "String"))) (variant "NotInDefOf" (ConPos (TyApp (TyCon "List") (TyCon "String"))))) ())
@@ -446,17 +452,17 @@ ownsName _ _ = False
 (DFunDef false "templateOf" ((PAs "e" (PCon "EListLit" (PList)))) (EApp (EVar "Ok") (EVar "e")))
 (DFunDef false "templateOf" ((PCon "EApp" (PVar "f") (PVar "x"))) (EMatch (ETuple (EApp (EVar "templateOf") (EVar "f")) (EApp (EVar "templateOf") (EVar "x"))) (arm (PTuple (PCon "Ok" (PVar "f2")) (PCon "Ok" (PVar "x2"))) () (EApp (EVar "Ok") (EApp (EApp (EVar "EApp") (EVar "f2")) (EVar "x2")))) (arm (PTuple (PCon "Err" (PVar "m")) PWild) () (EApp (EVar "Err") (EVar "m"))) (arm (PTuple PWild (PCon "Err" (PVar "m"))) () (EApp (EVar "Err") (EVar "m")))))
 (DFunDef false "templateOf" ((PCon "EBinOp" (PVar "op") (PVar "a") (PVar "b") (PVar "r"))) (EMatch (ETuple (EApp (EVar "templateOf") (EVar "a")) (EApp (EVar "templateOf") (EVar "b"))) (arm (PTuple (PCon "Ok" (PVar "a2")) (PCon "Ok" (PVar "b2"))) () (EApp (EVar "Ok") (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "op")) (EVar "a2")) (EVar "b2")) (EVar "r")))) (arm (PTuple (PCon "Err" (PVar "m")) PWild) () (EApp (EVar "Err") (EVar "m"))) (arm (PTuple PWild (PCon "Err" (PVar "m"))) () (EApp (EVar "Err") (EVar "m")))))
-(DFunDef false "templateOf" (PWild) (EApp (EVar "Err") (ELit (LString "a template holds only names, literals, `[]`, applications and operators"))))
+(DFunDef false "templateOf" ((POr (PCon "ELam" PWild PWild) (PCon "ELet" PWild PWild PWild PWild PWild) (PCon "EMatch" PWild PWild) (PCon "EIf" PWild PWild PWild) (PCon "EUnOp" PWild PWild PWild) (PCon "EInfix" PWild PWild PWild) (PCon "EFieldAccess" PWild PWild PWild) (PCon "ETuple" PWild) (PCon "EArrayLit" PWild) (PCon "ERangeList" PWild PWild PWild) (PCon "ERangeArray" PWild PWild PWild) (PCon "ESlice" PWild PWild PWild PWild) (PCon "ELetGroup" PWild PWild) (PCon "ESection" PWild) (PCon "EIndex" PWild PWild) (PCon "EAnnot" PWild PWild) (PCon "EHeadAnnot" PWild PWild) (PCon "EBlock" PWild) (PCon "EDo" PWild PWild) (PCon "EStringInterp" PWild) (PCon "EGuards" PWild) (PCon "ERecordCreate" PWild PWild) (PCon "ERecordUpdate" PWild PWild PWild) (PCon "EVariantUpdate" PWild PWild PWild) (PCon "EMapLit" PWild PWild) (PCon "ESetLit" PWild PWild) (PCon "EAsPat" PWild PWild) (PCon "EOrPat" PWild) (PCon "EMethodRef" PWild) (PCon "EDictApp" PWild) (PCon "EVarAt" PWild PWild) (PCon "EVarId" PWild PWild) (PCon "EMethodAt" PWild PWild PWild) (PCon "EDictAt" PWild PWild) (PCon "EDoOrigin" PWild PWild) (PCon "EWideLit" PWild PWild PWild PWild) (PCon "EListLit" PWild))) (EApp (EVar "Err") (ELit (LString "a template holds only names, literals, `[]`, applications and operators"))))
 (DTypeSig false "introducedOf" (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "introducedOf" ((PCon "EVar" (PVar "n"))) (EIf (EBinOp "||" (EApp (EVar "isMeta") (EVar "n")) (EApp (EVar "not") (EApp (EVar "isHeadName") (EVar "n")))) (EListLit) (EListLit (EVar "n"))))
 (DFunDef false "introducedOf" ((PCon "EApp" (PVar "f") (PVar "x"))) (EApp (EVar "nub") (EBinOp "++" (EApp (EVar "introducedOf") (EVar "f")) (EApp (EVar "introducedOf") (EVar "x")))))
 (DFunDef false "introducedOf" ((PCon "EBinOp" PWild (PVar "a") (PVar "b") PWild)) (EApp (EVar "nub") (EBinOp "++" (EApp (EVar "introducedOf") (EVar "a")) (EApp (EVar "introducedOf") (EVar "b")))))
-(DFunDef false "introducedOf" (PWild) (EListLit))
+(DFunDef false "introducedOf" ((POr (PCon "ELit" PWild) (PCon "ELam" PWild PWild) (PCon "ELet" PWild PWild PWild PWild PWild) (PCon "EMatch" PWild PWild) (PCon "EIf" PWild PWild PWild) (PCon "EUnOp" PWild PWild PWild) (PCon "EInfix" PWild PWild PWild) (PCon "EFieldAccess" PWild PWild PWild) (PCon "ETuple" PWild) (PCon "EListLit" PWild) (PCon "EArrayLit" PWild) (PCon "ERangeList" PWild PWild PWild) (PCon "ERangeArray" PWild PWild PWild) (PCon "ESlice" PWild PWild PWild PWild) (PCon "ELetGroup" PWild PWild) (PCon "ESection" PWild) (PCon "EIndex" PWild PWild) (PCon "EAnnot" PWild PWild) (PCon "EHeadAnnot" PWild PWild) (PCon "EBlock" PWild) (PCon "EDo" PWild PWild) (PCon "EStringInterp" PWild) (PCon "EGuards" PWild) (PCon "ERecordCreate" PWild PWild) (PCon "ERecordUpdate" PWild PWild PWild) (PCon "EVariantUpdate" PWild PWild PWild) (PCon "EMapLit" PWild PWild) (PCon "ESetLit" PWild PWild) (PCon "EAsPat" PWild PWild) (PCon "EOrPat" PWild) (PCon "EMethodRef" PWild) (PCon "EDictApp" PWild) (PCon "EVarAt" PWild PWild) (PCon "EVarId" PWild PWild) (PCon "EMethodAt" PWild PWild PWild) (PCon "EDictAt" PWild PWild) (PCon "ELoc" PWild PWild) (PCon "EDoOrigin" PWild PWild) (PCon "ENumLit" PWild PWild PWild) (PCon "EWideLit" PWild PWild PWild PWild))) (EListLit))
 (DTypeSig false "metasOf" (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "metasOf" ((PCon "EVar" (PVar "n"))) (EIf (EApp (EVar "isMeta") (EVar "n")) (EListLit (EVar "n")) (EListLit)))
 (DFunDef false "metasOf" ((PCon "EApp" (PVar "f") (PVar "x"))) (EBinOp "++" (EApp (EVar "metasOf") (EVar "f")) (EApp (EVar "metasOf") (EVar "x"))))
 (DFunDef false "metasOf" ((PCon "EBinOp" PWild (PVar "a") (PVar "b") PWild)) (EBinOp "++" (EApp (EVar "metasOf") (EVar "a")) (EApp (EVar "metasOf") (EVar "b"))))
-(DFunDef false "metasOf" (PWild) (EListLit))
+(DFunDef false "metasOf" ((POr (PCon "ELit" PWild) (PCon "ELam" PWild PWild) (PCon "ELet" PWild PWild PWild PWild PWild) (PCon "EMatch" PWild PWild) (PCon "EIf" PWild PWild PWild) (PCon "EUnOp" PWild PWild PWild) (PCon "EInfix" PWild PWild PWild) (PCon "EFieldAccess" PWild PWild PWild) (PCon "ETuple" PWild) (PCon "EListLit" PWild) (PCon "EArrayLit" PWild) (PCon "ERangeList" PWild PWild PWild) (PCon "ERangeArray" PWild PWild PWild) (PCon "ESlice" PWild PWild PWild PWild) (PCon "ELetGroup" PWild PWild) (PCon "ESection" PWild) (PCon "EIndex" PWild PWild) (PCon "EAnnot" PWild PWild) (PCon "EHeadAnnot" PWild PWild) (PCon "EBlock" PWild) (PCon "EDo" PWild PWild) (PCon "EStringInterp" PWild) (PCon "EGuards" PWild) (PCon "ERecordCreate" PWild PWild) (PCon "ERecordUpdate" PWild PWild PWild) (PCon "EVariantUpdate" PWild PWild PWild) (PCon "EMapLit" PWild PWild) (PCon "ESetLit" PWild PWild) (PCon "EAsPat" PWild PWild) (PCon "EOrPat" PWild) (PCon "EMethodRef" PWild) (PCon "EDictApp" PWild) (PCon "EVarAt" PWild PWild) (PCon "EVarId" PWild PWild) (PCon "EMethodAt" PWild PWild PWild) (PCon "EDictAt" PWild PWild) (PCon "ELoc" PWild PWild) (PCon "EDoOrigin" PWild PWild) (PCon "ENumLit" PWild PWild PWild) (PCon "EWideLit" PWild PWild PWild PWild))) (EListLit))
 (DTypeSig false "tmplOf" (TyFun (TyCon "Expr") (TyCon "Tmpl")))
 (DFunDef false "tmplOf" ((PCon "EVar" (PVar "n"))) (EIf (EApp (EVar "isMeta") (EVar "n")) (EApp (EVar "TMeta") (EVar "n")) (EApp (EApp (EVar "TName") (EVar "n")) (EApp (EVar "isHeadName") (EVar "n")))))
 (DFunDef false "tmplOf" ((PCon "EApp" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "TApp") (EApp (EVar "tmplOf") (EVar "f"))) (EApp (EVar "tmplOf") (EVar "x"))))
@@ -491,7 +497,7 @@ ownsName _ _ = False
 (DFunDef false "compileOrPanic" ((PVar "row")) (EMatch (EApp (EVar "compileHint") (EVar "row")) (arm (PCon "Ok" (PVar "h")) () (EVar "h")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "panic") (EVar "m")))))
 (DData Public "Found" () ((variant "Found" (ConNamed (field "foundBinds" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Expr")))) (field "foundHeads" (TyApp (TyCon "List") (TyCon "Expr")))))) ())
 (DTypeSig false "matchHint" (TyFun (TyCon "Hint") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Found")))))
-(DFunDef false "matchHint" ((PVar "h") (PVar "subject")) (EMatch (EApp (EApp (EApp (EVar "matchT") (EFieldAccess (EVar "h") "hintLhs")) (EVar "subject")) (EApp (EApp (EVar "Found") (EListLit)) (EListLit))) (arm (PCon "Some" (PVar "found")) () (EIf (EApp (EApp (EVar "condsHold") (EFieldAccess (EFieldAccess (EVar "h") "hintRow") "rowConds")) (EVar "found")) (EApp (EVar "Some") (EVar "found")) (EVar "None"))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "matchHint" ((PVar "h") (PVar "subject")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EVar "matchT") (EFieldAccess (EVar "h") "hintLhs")) (EVar "subject")) (EApp (EApp (EVar "Found") (EListLit)) (EListLit)))) (ELam ((PVar "found")) (EIf (EApp (EApp (EVar "condsHold") (EFieldAccess (EFieldAccess (EVar "h") "hintRow") "rowConds")) (EVar "found")) (EApp (EVar "Some") (EVar "found")) (EVar "None")))))
 (DTypeSig false "condsHold" (TyFun (TyApp (TyCon "List") (TyCon "HintCond")) (TyFun (TyCon "Found") (TyCon "Bool"))))
 (DFunDef false "condsHold" ((PVar "conds") (PVar "found")) (EApp (EApp (EVar "all") (EApp (EVar "condHolds") (EVar "found"))) (EVar "conds")))
 (DTypeSig false "condHolds" (TyFun (TyCon "Found") (TyFun (TyCon "HintCond") (TyCon "Bool"))))
@@ -506,7 +512,7 @@ ownsName _ _ = False
 (DFunDef false "matchT" ((PCon "TBin" (PVar "op") (PVar "pa") (PVar "pb")) (PVar "subject") (PVar "found")) (EMatch (EApp (EVar "unwrapLoc") (EVar "subject")) (arm (PCon "EBinOp" (PVar "op2") (PVar "sa") (PVar "sb") PWild) () (EIf (EBinOp "==" (EVar "op") (EVar "op2")) (EApp (EApp (EApp (EApp (EApp (EVar "matchBoth") (EVar "pa")) (EVar "sa")) (EVar "pb")) (EVar "sb")) (EVar "found")) (EVar "None"))) (arm PWild () (EVar "None"))))
 (DFunDef false "matchT" ((PCon "TLeaf" (PVar "sexp")) (PVar "subject") (PVar "found")) (EIf (EBinOp "==" (EVar "sexp") (EApp (EVar "exprSexp") (EApp (EVar "unwrapLoc") (EVar "subject")))) (EApp (EVar "Some") (EVar "found")) (EVar "None")))
 (DTypeSig false "matchBoth" (TyFun (TyCon "Tmpl") (TyFun (TyCon "Expr") (TyFun (TyCon "Tmpl") (TyFun (TyCon "Expr") (TyFun (TyCon "Found") (TyApp (TyCon "Option") (TyCon "Found"))))))))
-(DFunDef false "matchBoth" ((PVar "p1") (PVar "s1") (PVar "p2") (PVar "s2") (PVar "found")) (EMatch (EApp (EApp (EApp (EVar "matchT") (EVar "p1")) (EVar "s1")) (EVar "found")) (arm (PCon "Some" (PVar "found2")) () (EApp (EApp (EApp (EVar "matchT") (EVar "p2")) (EVar "s2")) (EVar "found2"))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "matchBoth" ((PVar "p1") (PVar "s1") (PVar "p2") (PVar "s2") (PVar "found")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EVar "matchT") (EVar "p1")) (EVar "s1")) (EVar "found"))) (ELam ((PVar "found2")) (EApp (EApp (EApp (EVar "matchT") (EVar "p2")) (EVar "s2")) (EVar "found2")))))
 (DTypeSig false "bindMeta" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyCon "Found") (TyApp (TyCon "Option") (TyCon "Found"))))))
 (DFunDef false "bindMeta" ((PVar "n") (PVar "subject") (PVar "found")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EFieldAccess (EVar "found") "foundBinds")) (arm (PCon "Some" (PVar "prev")) () (EIf (EBinOp "==" (EApp (EVar "exprSexp") (EApp (EVar "unwrapLoc") (EVar "prev"))) (EApp (EVar "exprSexp") (EApp (EVar "unwrapLoc") (EVar "subject")))) (EApp (EVar "Some") (EVar "found")) (EVar "None"))) (arm (PCon "None") () (EApp (EVar "Some") (EApp (EApp (EVar "Found") (EBinOp "::" (ETuple (EVar "n") (EVar "subject")) (EFieldAccess (EVar "found") "foundBinds"))) (EFieldAccess (EVar "found") "foundHeads"))))))
 (DTypeSig true "instantiate" (TyFun (TyCon "Hint") (TyFun (TyCon "Found") (TyCon "Expr"))))
@@ -515,7 +521,7 @@ ownsName _ _ = False
 (DFunDef false "fill" ((PVar "binds") (PCon "EVar" (PVar "n"))) (EApp (EApp (EVar "optionOr") (EApp (EVar "EVar") (EVar "n"))) (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "binds"))))
 (DFunDef false "fill" ((PVar "binds") (PCon "EApp" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "fill") (EVar "binds")) (EVar "f"))) (EApp (EApp (EVar "fill") (EVar "binds")) (EVar "x"))))
 (DFunDef false "fill" ((PVar "binds") (PCon "EBinOp" (PVar "op") (PVar "a") (PVar "b") (PVar "r"))) (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "op")) (EApp (EApp (EVar "fill") (EVar "binds")) (EVar "a"))) (EApp (EApp (EVar "fill") (EVar "binds")) (EVar "b"))) (EVar "r")))
-(DFunDef false "fill" (PWild (PVar "e")) (EVar "e"))
+(DFunDef false "fill" (PWild (PAs "e" (POr (PCon "ELit" PWild) (PCon "ELam" PWild PWild) (PCon "ELet" PWild PWild PWild PWild PWild) (PCon "EMatch" PWild PWild) (PCon "EIf" PWild PWild PWild) (PCon "EUnOp" PWild PWild PWild) (PCon "EInfix" PWild PWild PWild) (PCon "EFieldAccess" PWild PWild PWild) (PCon "ETuple" PWild) (PCon "EListLit" PWild) (PCon "EArrayLit" PWild) (PCon "ERangeList" PWild PWild PWild) (PCon "ERangeArray" PWild PWild PWild) (PCon "ESlice" PWild PWild PWild PWild) (PCon "ELetGroup" PWild PWild) (PCon "ESection" PWild) (PCon "EIndex" PWild PWild) (PCon "EAnnot" PWild PWild) (PCon "EHeadAnnot" PWild PWild) (PCon "EBlock" PWild) (PCon "EDo" PWild PWild) (PCon "EStringInterp" PWild) (PCon "EGuards" PWild) (PCon "ERecordCreate" PWild PWild) (PCon "ERecordUpdate" PWild PWild PWild) (PCon "EVariantUpdate" PWild PWild PWild) (PCon "EMapLit" PWild PWild) (PCon "ESetLit" PWild PWild) (PCon "EAsPat" PWild PWild) (PCon "EOrPat" PWild) (PCon "EMethodRef" PWild) (PCon "EDictApp" PWild) (PCon "EVarAt" PWild PWild) (PCon "EVarId" PWild PWild) (PCon "EMethodAt" PWild PWild PWild) (PCon "EDictAt" PWild PWild) (PCon "ELoc" PWild PWild) (PCon "EDoOrigin" PWild PWild) (PCon "ENumLit" PWild PWild PWild) (PCon "EWideLit" PWild PWild PWild PWild)))) (EVar "e"))
 (DTypeSig false "hintKinds" (TyFun (TyApp (TyCon "List") (TyCon "Hint")) (TyApp (TyCon "List") (TyCon "ExprKind"))))
 (DFunDef false "hintKinds" ((PVar "hints")) (EApp (EApp (EApp (EVar "fold") (EVar "addKind")) (EListLit)) (EApp (EApp (EVar "map") (ELam ((PVar "h")) (EFieldAccess (EVar "h") "hintKind"))) (EVar "hints"))))
 (DTypeSig false "addKind" (TyFun (TyApp (TyCon "List") (TyCon "ExprKind")) (TyFun (TyCon "ExprKind") (TyApp (TyCon "List") (TyCon "ExprKind")))))
@@ -526,10 +532,9 @@ ownsName _ _ = False
 (DFunDef false "hintsAt" (PWild PWild (PList) PWild PWild PWild PWild) (EListLit))
 (DFunDef false "hintsAt" ((PVar "name") (PVar "severity") (PCons (PVar "h") (PVar "rest")) (PVar "idx") (PVar "facts") (PVar "ctx") (PVar "e")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hintsKeyed") (EApp (EVar "nodeKey") (EVar "e"))) (EVar "name")) (EVar "severity")) (EBinOp "::" (EVar "h") (EVar "rest"))) (EVar "idx")) (EVar "facts")) (EVar "ctx")) (EVar "e")))
 (DTypeSig false "hintsKeyed" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Severity") (TyFun (TyApp (TyCon "List") (TyCon "Hint")) (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding")))))))))))
-(DFunDef false "hintsKeyed" (PWild PWild PWild (PList) PWild PWild PWild PWild) (EListLit))
-(DFunDef false "hintsKeyed" ((PVar "key") (PVar "name") (PVar "severity") (PCons (PVar "h") (PVar "rest")) (PVar "idx") (PVar "facts") (PVar "ctx") (PVar "e")) (EIf (EBinOp "||" (EBinOp "==" (EFieldAccess (EVar "h") "hintKey") (ELit (LString ""))) (EBinOp "==" (EFieldAccess (EVar "h") "hintKey") (EVar "key"))) (EMatch (EApp (EApp (EVar "matchHint") (EVar "h")) (EVar "e")) (arm (PCon "Some" (PVar "found")) () (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hintFinding") (EVar "name")) (EVar "severity")) (EVar "h")) (EVar "found")) (EVar "idx")) (EVar "facts")) (EVar "ctx")) (EVar "e")))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hintsKeyed") (EVar "key")) (EVar "name")) (EVar "severity")) (EVar "rest")) (EVar "idx")) (EVar "facts")) (EVar "ctx")) (EVar "e")))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hintsKeyed") (EVar "key")) (EVar "name")) (EVar "severity")) (EVar "rest")) (EVar "idx")) (EVar "facts")) (EVar "ctx")) (EVar "e"))))
+(DFunDef false "hintsKeyed" ((PVar "key") (PVar "name") (PVar "severity") (PVar "hints0") (PVar "idx") (PVar "facts") (PVar "ctx") (PVar "e")) (ELetGroup ((lgb "go" (clause ((PList)) (EListLit)) (clause ((PCons (PVar "h") (PVar "rest"))) (EIf (EBinOp "||" (EBinOp "==" (EFieldAccess (EVar "h") "hintKey") (ELit (LString ""))) (EBinOp "==" (EFieldAccess (EVar "h") "hintKey") (EVar "key"))) (EMatch (EApp (EApp (EVar "matchHint") (EVar "h")) (EVar "e")) (arm (PCon "Some" (PVar "found")) () (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hintFinding") (EVar "name")) (EVar "severity")) (EVar "h")) (EVar "found")) (EVar "idx")) (EVar "facts")) (EVar "ctx")) (EVar "e")))) (arm (PCon "None") () (EApp (EVar "go") (EVar "rest")))) (EApp (EVar "go") (EVar "rest")))))) (EApp (EVar "go") (EVar "hints0"))))
 (DTypeSig false "hintFinding" (TyFun (TyCon "String") (TyFun (TyCon "Severity") (TyFun (TyCon "Hint") (TyFun (TyCon "Found") (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyCon "Finding"))))))))))
-(DFunDef false "hintFinding" ((PVar "name") (PVar "severity") (PVar "h") (PVar "found") (PVar "idx") (PVar "facts") (PVar "ctx") (PVar "e")) (EBlock (DoLet false false (PVar "rewritten") (EApp (EApp (EVar "instantiate") (EVar "h")) (EVar "found"))) (DoExpr (ERecordCreate "Finding" ((fa "rule" (EVar "name")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EFieldAccess (EFieldAccess (EVar "h") "hintRow") "rowMessage"))) (ELit (LString ". Rewrite as '"))) (EApp (EVar "$core.display") (EApp (EVar "oneLine") (EApp (EVar "exprToString") (EVar "rewritten"))))) (ELit (LString "'")))) (fa "severity" (EVar "severity")) (fa "loc" (EFieldAccess (EVar "ctx") "ctxSpan")) (fa "fix" (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hintFix") (EVar "h")) (EVar "found")) (EVar "idx")) (EVar "facts")) (EVar "ctx")) (EVar "e")) (EVar "rewritten"))))))))
+(DFunDef false "hintFinding" ((PVar "name") (PVar "severity") (PVar "h") (PVar "found") (PVar "idx") (PVar "facts") (PVar "ctx") (PVar "e")) (EBlock (DoLet false false (PVar "rewritten") (EApp (EApp (EVar "instantiate") (EVar "h")) (EVar "found"))) (DoExpr (ERecordCreate "Finding" ((fa "rule" (EVar "name")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EFieldAccess (EFieldAccess (EVar "h") "hintRow") "rowMessage"))) (ELit (LString ". Rewrite as '"))) (EApp (EVar "$core.display") (EApp (EVar "oneLine") (EApp (EVar "exprToString") (EVar "rewritten"))))) (ELit (LString "'")))) (fa "severity" (EVar "severity")) (fa "loc" (EFieldAccess (EVar "ctx") "ctxSpan")) (fa "fix" (EApp (EVar "fixLater") (ELam (PWild) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hintFix") (EVar "h")) (EVar "found")) (EVar "idx")) (EVar "facts")) (EVar "ctx")) (EVar "e")) (EVar "rewritten"))))))))))
 (DTypeSig false "hintFix" (TyFun (TyCon "Hint") (TyFun (TyCon "Found") (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Fix"))))))))))
 (DFunDef false "hintFix" ((PVar "h") (PVar "found") (PVar "idx") (PVar "facts") (PVar "ctx") (PVar "e") (PVar "rewritten")) (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EApp (EVar "allHeadsPrelude") (EVar "idx")) (EVar "facts")) (EVar "found")) (EApp (EVar "not") (EApp (EApp (EVar "any") (EApp (EApp (EApp (EVar "rebinds") (EVar "idx")) (EVar "facts")) (EVar "ctx"))) (EFieldAccess (EVar "h") "hintIntro")))) (EApp (EVar "not") (EApp (EApp (EVar "inOwnDefinition") (EVar "h")) (EVar "ctx")))) (EApp (EApp (EApp (EApp (EApp (EVar "replaceNodeFix") (EFieldAccess (EFieldAccess (EVar "h") "hintRow") "rowApplicability")) (EFieldAccess (EFieldAccess (EVar "h") "hintRow") "rowFix")) (EVar "ctx")) (EVar "e")) (EVar "rewritten")) (EVar "None")))
 (DTypeSig false "allHeadsPrelude" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Found") (TyCon "Bool")))))
@@ -549,7 +554,7 @@ ownsName _ _ = False
 (DUse false (UseGroup ("support" "util") ((mem "lookupAssoc" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "exprToString" false))))
 (DUse false (UseGroup ("ir" "sexp") ((mem "exprSexp" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" false) (mem "StdlibIndex" false) (mem "Visitor" true))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" false) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "fixLater" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "oneLine" false) (mem "rebinds" false) (mem "replaceNodeFix" false) (mem "unwrapLoc" false) (mem "usesPreludeName" false))))
 (DUse false (UseGroup ("list") ((mem "nub" false))))
 (DData Public "HintCond" () ((variant "Atomic" (ConPos (TyCon "String"))) (variant "NotInDefOf" (ConPos (TyApp (TyCon "List") (TyCon "String"))))) ())
@@ -570,17 +575,17 @@ ownsName _ _ = False
 (DFunDef false "templateOf" ((PAs "e" (PCon "EListLit" (PList)))) (EApp (EVar "Ok") (EVar "e")))
 (DFunDef false "templateOf" ((PCon "EApp" (PVar "f") (PVar "x"))) (EMatch (ETuple (EApp (EVar "templateOf") (EVar "f")) (EApp (EVar "templateOf") (EVar "x"))) (arm (PTuple (PCon "Ok" (PVar "f2")) (PCon "Ok" (PVar "x2"))) () (EApp (EVar "Ok") (EApp (EApp (EVar "EApp") (EVar "f2")) (EVar "x2")))) (arm (PTuple (PCon "Err" (PVar "m")) PWild) () (EApp (EVar "Err") (EVar "m"))) (arm (PTuple PWild (PCon "Err" (PVar "m"))) () (EApp (EVar "Err") (EVar "m")))))
 (DFunDef false "templateOf" ((PCon "EBinOp" (PVar "op") (PVar "a") (PVar "b") (PVar "r"))) (EMatch (ETuple (EApp (EVar "templateOf") (EVar "a")) (EApp (EVar "templateOf") (EVar "b"))) (arm (PTuple (PCon "Ok" (PVar "a2")) (PCon "Ok" (PVar "b2"))) () (EApp (EVar "Ok") (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "op")) (EVar "a2")) (EVar "b2")) (EVar "r")))) (arm (PTuple (PCon "Err" (PVar "m")) PWild) () (EApp (EVar "Err") (EVar "m"))) (arm (PTuple PWild (PCon "Err" (PVar "m"))) () (EApp (EVar "Err") (EVar "m")))))
-(DFunDef false "templateOf" (PWild) (EApp (EVar "Err") (ELit (LString "a template holds only names, literals, `[]`, applications and operators"))))
+(DFunDef false "templateOf" ((POr (PCon "ELam" PWild PWild) (PCon "ELet" PWild PWild PWild PWild PWild) (PCon "EMatch" PWild PWild) (PCon "EIf" PWild PWild PWild) (PCon "EUnOp" PWild PWild PWild) (PCon "EInfix" PWild PWild PWild) (PCon "EFieldAccess" PWild PWild PWild) (PCon "ETuple" PWild) (PCon "EArrayLit" PWild) (PCon "ERangeList" PWild PWild PWild) (PCon "ERangeArray" PWild PWild PWild) (PCon "ESlice" PWild PWild PWild PWild) (PCon "ELetGroup" PWild PWild) (PCon "ESection" PWild) (PCon "EIndex" PWild PWild) (PCon "EAnnot" PWild PWild) (PCon "EHeadAnnot" PWild PWild) (PCon "EBlock" PWild) (PCon "EDo" PWild PWild) (PCon "EStringInterp" PWild) (PCon "EGuards" PWild) (PCon "ERecordCreate" PWild PWild) (PCon "ERecordUpdate" PWild PWild PWild) (PCon "EVariantUpdate" PWild PWild PWild) (PCon "EMapLit" PWild PWild) (PCon "ESetLit" PWild PWild) (PCon "EAsPat" PWild PWild) (PCon "EOrPat" PWild) (PCon "EMethodRef" PWild) (PCon "EDictApp" PWild) (PCon "EVarAt" PWild PWild) (PCon "EVarId" PWild PWild) (PCon "EMethodAt" PWild PWild PWild) (PCon "EDictAt" PWild PWild) (PCon "EDoOrigin" PWild PWild) (PCon "EWideLit" PWild PWild PWild PWild) (PCon "EListLit" PWild))) (EApp (EVar "Err") (ELit (LString "a template holds only names, literals, `[]`, applications and operators"))))
 (DTypeSig false "introducedOf" (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "introducedOf" ((PCon "EVar" (PVar "n"))) (EIf (EBinOp "||" (EApp (EVar "isMeta") (EVar "n")) (EApp (EVar "not") (EApp (EVar "isHeadName") (EVar "n")))) (EListLit) (EListLit (EVar "n"))))
 (DFunDef false "introducedOf" ((PCon "EApp" (PVar "f") (PVar "x"))) (EApp (EVar "nub") (EBinOp "++" (EApp (EVar "introducedOf") (EVar "f")) (EApp (EVar "introducedOf") (EVar "x")))))
 (DFunDef false "introducedOf" ((PCon "EBinOp" PWild (PVar "a") (PVar "b") PWild)) (EApp (EVar "nub") (EBinOp "++" (EApp (EVar "introducedOf") (EVar "a")) (EApp (EVar "introducedOf") (EVar "b")))))
-(DFunDef false "introducedOf" (PWild) (EListLit))
+(DFunDef false "introducedOf" ((POr (PCon "ELit" PWild) (PCon "ELam" PWild PWild) (PCon "ELet" PWild PWild PWild PWild PWild) (PCon "EMatch" PWild PWild) (PCon "EIf" PWild PWild PWild) (PCon "EUnOp" PWild PWild PWild) (PCon "EInfix" PWild PWild PWild) (PCon "EFieldAccess" PWild PWild PWild) (PCon "ETuple" PWild) (PCon "EListLit" PWild) (PCon "EArrayLit" PWild) (PCon "ERangeList" PWild PWild PWild) (PCon "ERangeArray" PWild PWild PWild) (PCon "ESlice" PWild PWild PWild PWild) (PCon "ELetGroup" PWild PWild) (PCon "ESection" PWild) (PCon "EIndex" PWild PWild) (PCon "EAnnot" PWild PWild) (PCon "EHeadAnnot" PWild PWild) (PCon "EBlock" PWild) (PCon "EDo" PWild PWild) (PCon "EStringInterp" PWild) (PCon "EGuards" PWild) (PCon "ERecordCreate" PWild PWild) (PCon "ERecordUpdate" PWild PWild PWild) (PCon "EVariantUpdate" PWild PWild PWild) (PCon "EMapLit" PWild PWild) (PCon "ESetLit" PWild PWild) (PCon "EAsPat" PWild PWild) (PCon "EOrPat" PWild) (PCon "EMethodRef" PWild) (PCon "EDictApp" PWild) (PCon "EVarAt" PWild PWild) (PCon "EVarId" PWild PWild) (PCon "EMethodAt" PWild PWild PWild) (PCon "EDictAt" PWild PWild) (PCon "ELoc" PWild PWild) (PCon "EDoOrigin" PWild PWild) (PCon "ENumLit" PWild PWild PWild) (PCon "EWideLit" PWild PWild PWild PWild))) (EListLit))
 (DTypeSig false "metasOf" (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "metasOf" ((PCon "EVar" (PVar "n"))) (EIf (EApp (EVar "isMeta") (EVar "n")) (EListLit (EVar "n")) (EListLit)))
 (DFunDef false "metasOf" ((PCon "EApp" (PVar "f") (PVar "x"))) (EBinOp "++" (EApp (EVar "metasOf") (EVar "f")) (EApp (EVar "metasOf") (EVar "x"))))
 (DFunDef false "metasOf" ((PCon "EBinOp" PWild (PVar "a") (PVar "b") PWild)) (EBinOp "++" (EApp (EVar "metasOf") (EVar "a")) (EApp (EVar "metasOf") (EVar "b"))))
-(DFunDef false "metasOf" (PWild) (EListLit))
+(DFunDef false "metasOf" ((POr (PCon "ELit" PWild) (PCon "ELam" PWild PWild) (PCon "ELet" PWild PWild PWild PWild PWild) (PCon "EMatch" PWild PWild) (PCon "EIf" PWild PWild PWild) (PCon "EUnOp" PWild PWild PWild) (PCon "EInfix" PWild PWild PWild) (PCon "EFieldAccess" PWild PWild PWild) (PCon "ETuple" PWild) (PCon "EListLit" PWild) (PCon "EArrayLit" PWild) (PCon "ERangeList" PWild PWild PWild) (PCon "ERangeArray" PWild PWild PWild) (PCon "ESlice" PWild PWild PWild PWild) (PCon "ELetGroup" PWild PWild) (PCon "ESection" PWild) (PCon "EIndex" PWild PWild) (PCon "EAnnot" PWild PWild) (PCon "EHeadAnnot" PWild PWild) (PCon "EBlock" PWild) (PCon "EDo" PWild PWild) (PCon "EStringInterp" PWild) (PCon "EGuards" PWild) (PCon "ERecordCreate" PWild PWild) (PCon "ERecordUpdate" PWild PWild PWild) (PCon "EVariantUpdate" PWild PWild PWild) (PCon "EMapLit" PWild PWild) (PCon "ESetLit" PWild PWild) (PCon "EAsPat" PWild PWild) (PCon "EOrPat" PWild) (PCon "EMethodRef" PWild) (PCon "EDictApp" PWild) (PCon "EVarAt" PWild PWild) (PCon "EVarId" PWild PWild) (PCon "EMethodAt" PWild PWild PWild) (PCon "EDictAt" PWild PWild) (PCon "ELoc" PWild PWild) (PCon "EDoOrigin" PWild PWild) (PCon "ENumLit" PWild PWild PWild) (PCon "EWideLit" PWild PWild PWild PWild))) (EListLit))
 (DTypeSig false "tmplOf" (TyFun (TyCon "Expr") (TyCon "Tmpl")))
 (DFunDef false "tmplOf" ((PCon "EVar" (PVar "n"))) (EIf (EApp (EVar "isMeta") (EVar "n")) (EApp (EVar "TMeta") (EVar "n")) (EApp (EApp (EVar "TName") (EVar "n")) (EApp (EVar "isHeadName") (EVar "n")))))
 (DFunDef false "tmplOf" ((PCon "EApp" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "TApp") (EApp (EVar "tmplOf") (EVar "f"))) (EApp (EVar "tmplOf") (EVar "x"))))
@@ -615,7 +620,7 @@ ownsName _ _ = False
 (DFunDef false "compileOrPanic" ((PVar "row")) (EMatch (EApp (EVar "compileHint") (EVar "row")) (arm (PCon "Ok" (PVar "h")) () (EVar "h")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "panic") (EVar "m")))))
 (DData Public "Found" () ((variant "Found" (ConNamed (field "foundBinds" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Expr")))) (field "foundHeads" (TyApp (TyCon "List") (TyCon "Expr")))))) ())
 (DTypeSig false "matchHint" (TyFun (TyCon "Hint") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Found")))))
-(DFunDef false "matchHint" ((PVar "h") (PVar "subject")) (EMatch (EApp (EApp (EApp (EVar "matchT") (EFieldAccess (EVar "h") "hintLhs")) (EVar "subject")) (EApp (EApp (EVar "Found") (EListLit)) (EListLit))) (arm (PCon "Some" (PVar "found")) () (EIf (EApp (EApp (EVar "condsHold") (EFieldAccess (EFieldAccess (EVar "h") "hintRow") "rowConds")) (EVar "found")) (EApp (EVar "Some") (EVar "found")) (EVar "None"))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "matchHint" ((PVar "h") (PVar "subject")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EVar "matchT") (EFieldAccess (EVar "h") "hintLhs")) (EVar "subject")) (EApp (EApp (EVar "Found") (EListLit)) (EListLit)))) (ELam ((PVar "found")) (EIf (EApp (EApp (EVar "condsHold") (EFieldAccess (EFieldAccess (EVar "h") "hintRow") "rowConds")) (EVar "found")) (EApp (EVar "Some") (EVar "found")) (EVar "None")))))
 (DTypeSig false "condsHold" (TyFun (TyApp (TyCon "List") (TyCon "HintCond")) (TyFun (TyCon "Found") (TyCon "Bool"))))
 (DFunDef false "condsHold" ((PVar "conds") (PVar "found")) (EApp (EApp (EDictApp "all") (EApp (EVar "condHolds") (EVar "found"))) (EVar "conds")))
 (DTypeSig false "condHolds" (TyFun (TyCon "Found") (TyFun (TyCon "HintCond") (TyCon "Bool"))))
@@ -630,7 +635,7 @@ ownsName _ _ = False
 (DFunDef false "matchT" ((PCon "TBin" (PVar "op") (PVar "pa") (PVar "pb")) (PVar "subject") (PVar "found")) (EMatch (EApp (EVar "unwrapLoc") (EVar "subject")) (arm (PCon "EBinOp" (PVar "op2") (PVar "sa") (PVar "sb") PWild) () (EIf (EBinOp "==" (EVar "op") (EVar "op2")) (EApp (EApp (EApp (EApp (EApp (EVar "matchBoth") (EVar "pa")) (EVar "sa")) (EVar "pb")) (EVar "sb")) (EVar "found")) (EVar "None"))) (arm PWild () (EVar "None"))))
 (DFunDef false "matchT" ((PCon "TLeaf" (PVar "sexp")) (PVar "subject") (PVar "found")) (EIf (EBinOp "==" (EVar "sexp") (EApp (EVar "exprSexp") (EApp (EVar "unwrapLoc") (EVar "subject")))) (EApp (EVar "Some") (EVar "found")) (EVar "None")))
 (DTypeSig false "matchBoth" (TyFun (TyCon "Tmpl") (TyFun (TyCon "Expr") (TyFun (TyCon "Tmpl") (TyFun (TyCon "Expr") (TyFun (TyCon "Found") (TyApp (TyCon "Option") (TyCon "Found"))))))))
-(DFunDef false "matchBoth" ((PVar "p1") (PVar "s1") (PVar "p2") (PVar "s2") (PVar "found")) (EMatch (EApp (EApp (EApp (EVar "matchT") (EVar "p1")) (EVar "s1")) (EVar "found")) (arm (PCon "Some" (PVar "found2")) () (EApp (EApp (EApp (EVar "matchT") (EVar "p2")) (EVar "s2")) (EVar "found2"))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "matchBoth" ((PVar "p1") (PVar "s1") (PVar "p2") (PVar "s2") (PVar "found")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EVar "matchT") (EVar "p1")) (EVar "s1")) (EVar "found"))) (ELam ((PVar "found2")) (EApp (EApp (EApp (EVar "matchT") (EVar "p2")) (EVar "s2")) (EVar "found2")))))
 (DTypeSig false "bindMeta" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyCon "Found") (TyApp (TyCon "Option") (TyCon "Found"))))))
 (DFunDef false "bindMeta" ((PVar "n") (PVar "subject") (PVar "found")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EFieldAccess (EVar "found") "foundBinds")) (arm (PCon "Some" (PVar "prev")) () (EIf (EBinOp "==" (EApp (EVar "exprSexp") (EApp (EVar "unwrapLoc") (EVar "prev"))) (EApp (EVar "exprSexp") (EApp (EVar "unwrapLoc") (EVar "subject")))) (EApp (EVar "Some") (EVar "found")) (EVar "None"))) (arm (PCon "None") () (EApp (EVar "Some") (EApp (EApp (EVar "Found") (EBinOp "::" (ETuple (EVar "n") (EVar "subject")) (EFieldAccess (EVar "found") "foundBinds"))) (EFieldAccess (EVar "found") "foundHeads"))))))
 (DTypeSig true "instantiate" (TyFun (TyCon "Hint") (TyFun (TyCon "Found") (TyCon "Expr"))))
@@ -639,7 +644,7 @@ ownsName _ _ = False
 (DFunDef false "fill" ((PVar "binds") (PCon "EVar" (PVar "n"))) (EApp (EApp (EVar "optionOr") (EApp (EVar "EVar") (EVar "n"))) (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "binds"))))
 (DFunDef false "fill" ((PVar "binds") (PCon "EApp" (PVar "f") (PVar "x"))) (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "fill") (EVar "binds")) (EVar "f"))) (EApp (EApp (EVar "fill") (EVar "binds")) (EVar "x"))))
 (DFunDef false "fill" ((PVar "binds") (PCon "EBinOp" (PVar "op") (PVar "a") (PVar "b") (PVar "r"))) (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "op")) (EApp (EApp (EVar "fill") (EVar "binds")) (EVar "a"))) (EApp (EApp (EVar "fill") (EVar "binds")) (EVar "b"))) (EVar "r")))
-(DFunDef false "fill" (PWild (PVar "e")) (EVar "e"))
+(DFunDef false "fill" (PWild (PAs "e" (POr (PCon "ELit" PWild) (PCon "ELam" PWild PWild) (PCon "ELet" PWild PWild PWild PWild PWild) (PCon "EMatch" PWild PWild) (PCon "EIf" PWild PWild PWild) (PCon "EUnOp" PWild PWild PWild) (PCon "EInfix" PWild PWild PWild) (PCon "EFieldAccess" PWild PWild PWild) (PCon "ETuple" PWild) (PCon "EListLit" PWild) (PCon "EArrayLit" PWild) (PCon "ERangeList" PWild PWild PWild) (PCon "ERangeArray" PWild PWild PWild) (PCon "ESlice" PWild PWild PWild PWild) (PCon "ELetGroup" PWild PWild) (PCon "ESection" PWild) (PCon "EIndex" PWild PWild) (PCon "EAnnot" PWild PWild) (PCon "EHeadAnnot" PWild PWild) (PCon "EBlock" PWild) (PCon "EDo" PWild PWild) (PCon "EStringInterp" PWild) (PCon "EGuards" PWild) (PCon "ERecordCreate" PWild PWild) (PCon "ERecordUpdate" PWild PWild PWild) (PCon "EVariantUpdate" PWild PWild PWild) (PCon "EMapLit" PWild PWild) (PCon "ESetLit" PWild PWild) (PCon "EAsPat" PWild PWild) (PCon "EOrPat" PWild) (PCon "EMethodRef" PWild) (PCon "EDictApp" PWild) (PCon "EVarAt" PWild PWild) (PCon "EVarId" PWild PWild) (PCon "EMethodAt" PWild PWild PWild) (PCon "EDictAt" PWild PWild) (PCon "ELoc" PWild PWild) (PCon "EDoOrigin" PWild PWild) (PCon "ENumLit" PWild PWild PWild) (PCon "EWideLit" PWild PWild PWild PWild)))) (EVar "e"))
 (DTypeSig false "hintKinds" (TyFun (TyApp (TyCon "List") (TyCon "Hint")) (TyApp (TyCon "List") (TyCon "ExprKind"))))
 (DFunDef false "hintKinds" ((PVar "hints")) (EApp (EApp (EApp (EMethodRef "fold") (EVar "addKind")) (EListLit)) (EApp (EApp (EMethodRef "map") (ELam ((PVar "h")) (EFieldAccess (EVar "h") "hintKind"))) (EVar "hints"))))
 (DTypeSig false "addKind" (TyFun (TyApp (TyCon "List") (TyCon "ExprKind")) (TyFun (TyCon "ExprKind") (TyApp (TyCon "List") (TyCon "ExprKind")))))
@@ -650,10 +655,9 @@ ownsName _ _ = False
 (DFunDef false "hintsAt" (PWild PWild (PList) PWild PWild PWild PWild) (EListLit))
 (DFunDef false "hintsAt" ((PVar "name") (PVar "severity") (PCons (PVar "h") (PVar "rest")) (PVar "idx") (PVar "facts") (PVar "ctx") (PVar "e")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hintsKeyed") (EApp (EVar "nodeKey") (EVar "e"))) (EVar "name")) (EVar "severity")) (EBinOp "::" (EVar "h") (EVar "rest"))) (EVar "idx")) (EVar "facts")) (EVar "ctx")) (EVar "e")))
 (DTypeSig false "hintsKeyed" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Severity") (TyFun (TyApp (TyCon "List") (TyCon "Hint")) (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding")))))))))))
-(DFunDef false "hintsKeyed" (PWild PWild PWild (PList) PWild PWild PWild PWild) (EListLit))
-(DFunDef false "hintsKeyed" ((PVar "key") (PVar "name") (PVar "severity") (PCons (PVar "h") (PVar "rest")) (PVar "idx") (PVar "facts") (PVar "ctx") (PVar "e")) (EIf (EBinOp "||" (EBinOp "==" (EFieldAccess (EVar "h") "hintKey") (ELit (LString ""))) (EBinOp "==" (EFieldAccess (EVar "h") "hintKey") (EVar "key"))) (EMatch (EApp (EApp (EVar "matchHint") (EVar "h")) (EVar "e")) (arm (PCon "Some" (PVar "found")) () (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hintFinding") (EVar "name")) (EVar "severity")) (EVar "h")) (EVar "found")) (EVar "idx")) (EVar "facts")) (EVar "ctx")) (EVar "e")))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hintsKeyed") (EVar "key")) (EVar "name")) (EVar "severity")) (EVar "rest")) (EVar "idx")) (EVar "facts")) (EVar "ctx")) (EVar "e")))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hintsKeyed") (EVar "key")) (EVar "name")) (EVar "severity")) (EVar "rest")) (EVar "idx")) (EVar "facts")) (EVar "ctx")) (EVar "e"))))
+(DFunDef false "hintsKeyed" ((PVar "key") (PVar "name") (PVar "severity") (PVar "hints0") (PVar "idx") (PVar "facts") (PVar "ctx") (PVar "e")) (ELetGroup ((lgb "go" (clause ((PList)) (EListLit)) (clause ((PCons (PVar "h") (PVar "rest"))) (EIf (EBinOp "||" (EBinOp "==" (EFieldAccess (EVar "h") "hintKey") (ELit (LString ""))) (EBinOp "==" (EFieldAccess (EVar "h") "hintKey") (EVar "key"))) (EMatch (EApp (EApp (EVar "matchHint") (EVar "h")) (EVar "e")) (arm (PCon "Some" (PVar "found")) () (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hintFinding") (EVar "name")) (EVar "severity")) (EVar "h")) (EVar "found")) (EVar "idx")) (EVar "facts")) (EVar "ctx")) (EVar "e")))) (arm (PCon "None") () (EApp (EVar "go") (EVar "rest")))) (EApp (EVar "go") (EVar "rest")))))) (EApp (EVar "go") (EVar "hints0"))))
 (DTypeSig false "hintFinding" (TyFun (TyCon "String") (TyFun (TyCon "Severity") (TyFun (TyCon "Hint") (TyFun (TyCon "Found") (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyCon "Finding"))))))))))
-(DFunDef false "hintFinding" ((PVar "name") (PVar "severity") (PVar "h") (PVar "found") (PVar "idx") (PVar "facts") (PVar "ctx") (PVar "e")) (EBlock (DoLet false false (PVar "rewritten") (EApp (EApp (EVar "instantiate") (EVar "h")) (EVar "found"))) (DoExpr (ERecordCreate "Finding" ((fa "rule" (EVar "name")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EFieldAccess (EFieldAccess (EVar "h") "hintRow") "rowMessage"))) (ELit (LString ". Rewrite as '"))) (EApp (EVar "$core.display") (EApp (EVar "oneLine") (EApp (EVar "exprToString") (EVar "rewritten"))))) (ELit (LString "'")))) (fa "severity" (EVar "severity")) (fa "loc" (EFieldAccess (EVar "ctx") "ctxSpan")) (fa "fix" (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hintFix") (EVar "h")) (EVar "found")) (EVar "idx")) (EVar "facts")) (EVar "ctx")) (EVar "e")) (EVar "rewritten"))))))))
+(DFunDef false "hintFinding" ((PVar "name") (PVar "severity") (PVar "h") (PVar "found") (PVar "idx") (PVar "facts") (PVar "ctx") (PVar "e")) (EBlock (DoLet false false (PVar "rewritten") (EApp (EApp (EVar "instantiate") (EVar "h")) (EVar "found"))) (DoExpr (ERecordCreate "Finding" ((fa "rule" (EVar "name")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EFieldAccess (EFieldAccess (EVar "h") "hintRow") "rowMessage"))) (ELit (LString ". Rewrite as '"))) (EApp (EVar "$core.display") (EApp (EVar "oneLine") (EApp (EVar "exprToString") (EVar "rewritten"))))) (ELit (LString "'")))) (fa "severity" (EVar "severity")) (fa "loc" (EFieldAccess (EVar "ctx") "ctxSpan")) (fa "fix" (EApp (EVar "fixLater") (ELam (PWild) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "hintFix") (EVar "h")) (EVar "found")) (EVar "idx")) (EVar "facts")) (EVar "ctx")) (EVar "e")) (EVar "rewritten"))))))))))
 (DTypeSig false "hintFix" (TyFun (TyCon "Hint") (TyFun (TyCon "Found") (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Fix"))))))))))
 (DFunDef false "hintFix" ((PVar "h") (PVar "found") (PVar "idx") (PVar "facts") (PVar "ctx") (PVar "e") (PVar "rewritten")) (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EApp (EVar "allHeadsPrelude") (EVar "idx")) (EVar "facts")) (EVar "found")) (EApp (EVar "not") (EApp (EApp (EDictApp "any") (EApp (EApp (EApp (EVar "rebinds") (EVar "idx")) (EVar "facts")) (EVar "ctx"))) (EFieldAccess (EVar "h") "hintIntro")))) (EApp (EVar "not") (EApp (EApp (EVar "inOwnDefinition") (EVar "h")) (EVar "ctx")))) (EApp (EApp (EApp (EApp (EApp (EVar "replaceNodeFix") (EFieldAccess (EFieldAccess (EVar "h") "hintRow") "rowApplicability")) (EFieldAccess (EFieldAccess (EVar "h") "hintRow") "rowFix")) (EVar "ctx")) (EVar "e")) (EVar "rewritten")) (EVar "None")))
 (DTypeSig false "allHeadsPrelude" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Found") (TyCon "Bool")))))

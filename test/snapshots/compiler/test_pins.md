@@ -1,5 +1,5 @@
 # META
-source_lines=512
+source_lines=516
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/test_pins.mdk -- the typed known-red ledger shared by test
@@ -254,20 +254,18 @@ readPin entry i = do
   kind <- requiredString i "kind" entry
   if not (validKind kind) then
     Err "\{rowPrefix i}: kind must be 'prop' or 'test'"
-  else match validateFields i kind entry
-    Err err => Err err
-    Ok _ => do
-      file <- requiredString i "file" entry
-      name <- requiredString i "name" entry
-      engine <- requiredString i "engine" entry
-      issue <- requiredInt i "issue" entry
-      match validateBase i file name engine issue
-        Err err => Err err
-        Ok _ =>
-          if kind == "prop" then
-            readPropPin i file name engine issue entry
-          else
-            readTestPin i file name engine issue entry
+  else do
+    _ <- validateFields i kind entry
+    file <- requiredString i "file" entry
+    name <- requiredString i "name" entry
+    engine <- requiredString i "engine" entry
+    issue <- requiredInt i "issue" entry
+    do
+      _ <- validateBase i file name engine issue
+      if kind == "prop" then
+        readPropPin i file name engine issue entry
+      else
+        readTestPin i file name engine issue entry
 
 -- TOML stores array tables as flat qualified keys. Build this index once so
 -- reading N pin rows does not scan the whole document N times.
@@ -292,29 +290,30 @@ pinFieldKey key =
     None
   else
     let tail = drop 4 key
-    match indexOf "." tail
-      None => None
-      Some dot =>
-        let row = stringSlice 0 dot tail
-        let field = drop (dot + 1) tail
-        match toInt row
-          Some _ => if field == "" then None else Some (row, field)
-          None => None
+    do
+      dot <- indexOf "." tail
+      let row = stringSlice 0 dot tail
+      let field = drop (dot + 1) tail
+      do
+        _ <- toInt row
+        if field == "" then None else Some (row, field)
 
 readPinsGo : OrdMap (List (String, TomlValue)) ->
   Int ->
   Int ->
   List TestPin ->
   Result String (List TestPin)
-readPinsGo rows i n acc
-  | i >= n = Ok (reverse acc)
-  | otherwise =
-    let row = intToString i
-    match omLookup row rows
-      None => Err "\{rowPrefix i}: no such row"
-      Some fields => do
-        pin <- readPin (Toml fields) i
-        readPinsGo rows (i + 1) n (pin :: acc)
+readPinsGo rows i0 n acc0 = go i0 acc0
+  where
+    go i acc
+      | i >= n = Ok (reverse acc)
+      | otherwise =
+        let row = intToString i
+        match omLookup row rows
+          None => Err "\{rowPrefix i}: no such row"
+          Some fields => do
+            pin <- readPin (Toml fields) i
+            go (i + 1) (pin :: acc)
 
 {- | Parse the repository's known-red ledger. A ledger with no `[[pin]]` rows
    is valid only when it says `version = 1`; it is the explicit empty state,
@@ -339,9 +338,9 @@ parsePinsDoc src (Toml fields) =
   else match getInt "version" doc
     Some 1 =>
       let n = pinHeaderCount (lines src)
-      match readPinsGo (pinRows fields) 0 n []
-        Err err => Err err
-        Ok pins => map (_ => pins) (buildPinIndex pins)
+      do
+        pins <- readPinsGo (pinRows fields) 0 n []
+        map (_ => pins) (buildPinIndex pins)
     Some _ => Err "\{pinOrigin}: version must be 1"
     None => Err "\{pinOrigin}: exactly one integer version field is required"
 
@@ -393,13 +392,15 @@ validatePinNamesGo : List TestPin ->
   OrdMap Unit ->
   OrdMap Unit ->
   Result String Unit
-validatePinNamesGo [] _ _ _ = Ok ()
-validatePinNamesGo (pin :: rest) file propNames testNames =
-  if pin.pinFile /= file || pinNamePresent pin propNames testNames then
-    validatePinNamesGo rest file propNames testNames
-  else
-    Err
-      "\{pinOrigin}: issue #\{intToString pin.pinIssue} pins missing \{pinKindName pin.pinKind} '\{pin.pinName}' in \{file}"
+validatePinNamesGo pins0 file propNames testNames = go pins0
+  where
+    go [] = Ok ()
+    go (pin :: rest) =
+      if pin.pinFile /= file || pinNamePresent pin propNames testNames then
+        go rest
+      else
+        Err
+          "\{pinOrigin}: issue #\{intToString pin.pinIssue} pins missing \{pinKindName pin.pinKind} '\{pin.pinName}' in \{file}"
 
 pinKindName : PinKind -> String
 pinKindName PropPin = "property"
@@ -432,9 +433,10 @@ declarationIndex pins file kind label names =
     Ok (omFromNames names omEmpty)
 
 hasSelectedPin : List TestPin -> String -> PinKind -> Bool
-hasSelectedPin [] _ _ = False
-hasSelectedPin (pin :: rest) file kind =
-  pin.pinFile == file && pin.pinKind == kind || hasSelectedPin rest file kind
+hasSelectedPin pins0 file kind = go pins0
+  where
+    go [] = False
+    go (pin :: rest) = pin.pinFile == file && pin.pinKind == kind || go rest
 
 -- A ledger selector identifies one result by kind/name/engine. Duplicate
 -- declarations of one kind would make that identity ambiguous, so reject
@@ -445,13 +447,15 @@ uniqueDeclaredNames : String ->
   List String ->
   OrdMap Unit ->
   Result String (OrdMap Unit)
-uniqueDeclaredNames _ _ [] seen = Ok seen
-uniqueDeclaredNames file kind (name :: rest) seen =
-  if omHasKey name seen then
-    Err
-      "\{pinOrigin}: ambiguous duplicate \{kind} declaration '\{name}' in \{file}"
-  else
-    uniqueDeclaredNames file kind rest (omInsert name () seen)
+uniqueDeclaredNames file kind xs0 seen0 = go xs0 seen0
+  where
+    go [] seen = Ok seen
+    go (name :: rest) seen =
+      if omHasKey name seen then
+        Err
+          "\{pinOrigin}: ambiguous duplicate \{kind} declaration '\{name}' in \{file}"
+      else
+        go rest (omInsert name () seen)
 
 -- ── Observations and reporting ─────────────────────────────────────────────
 
@@ -602,23 +606,23 @@ pinVerdictDetail (PinChanged issue detail) =
 (DTypeSig false "testExpectedFailure" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "TestExpectedFailure")))))))
 (DFunDef false "testExpectedFailure" ((PVar "i") (PVar "engine") (PVar "failure") (PVar "detail")) (EIf (EBinOp "==" (EVar "failure") (ELit (LString "assertion"))) (EApp (EVar "Ok") (EApp (EVar "ExpectAssertion") (EVar "detail"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "failure") (ELit (LString "error"))) (EBinOp "==" (EVar "engine") (ELit (LString "native")))) (EApp (EVar "Ok") (EApp (EVar "ExpectError") (EVar "detail"))) (EIf (EBinOp "==" (EVar "failure") (ELit (LString "error"))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EApp (EVar "rowPrefix") (EVar "i")))) (ELit (LString ": failure \"error\" is only valid for native test pins")))) (EIf (EVar "otherwise") (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EApp (EVar "rowPrefix") (EVar "i")))) (ELit (LString ": test failure must be \"assertion\" or \"error\"")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DTypeSig false "readPin" (TyFun (TyCon "Toml") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "TestPin")))))
-(DFunDef false "readPin" ((PVar "entry") (PVar "i")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EVar "requiredString") (EVar "i")) (ELit (LString "kind"))) (EVar "entry"))) (ELam ((PVar "kind")) (EIf (EApp (EVar "not") (EApp (EVar "validKind") (EVar "kind"))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EApp (EVar "rowPrefix") (EVar "i")))) (ELit (LString ": kind must be 'prop' or 'test'")))) (EMatch (EApp (EApp (EApp (EVar "validateFields") (EVar "i")) (EVar "kind")) (EVar "entry")) (arm (PCon "Err" (PVar "err")) () (EApp (EVar "Err") (EVar "err"))) (arm (PCon "Ok" PWild) () (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EVar "requiredString") (EVar "i")) (ELit (LString "file"))) (EVar "entry"))) (ELam ((PVar "file")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EVar "requiredString") (EVar "i")) (ELit (LString "name"))) (EVar "entry"))) (ELam ((PVar "name")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EVar "requiredString") (EVar "i")) (ELit (LString "engine"))) (EVar "entry"))) (ELam ((PVar "engine")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EVar "requiredInt") (EVar "i")) (ELit (LString "issue"))) (EVar "entry"))) (ELam ((PVar "issue")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "validateBase") (EVar "i")) (EVar "file")) (EVar "name")) (EVar "engine")) (EVar "issue")) (arm (PCon "Err" (PVar "err")) () (EApp (EVar "Err") (EVar "err"))) (arm (PCon "Ok" PWild) () (EIf (EBinOp "==" (EVar "kind") (ELit (LString "prop"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "readPropPin") (EVar "i")) (EVar "file")) (EVar "name")) (EVar "engine")) (EVar "issue")) (EVar "entry")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "readTestPin") (EVar "i")) (EVar "file")) (EVar "name")) (EVar "engine")) (EVar "issue")) (EVar "entry")))))))))))))))))))
+(DFunDef false "readPin" ((PVar "entry") (PVar "i")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EVar "requiredString") (EVar "i")) (ELit (LString "kind"))) (EVar "entry"))) (ELam ((PVar "kind")) (EIf (EApp (EVar "not") (EApp (EVar "validKind") (EVar "kind"))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EApp (EVar "rowPrefix") (EVar "i")))) (ELit (LString ": kind must be 'prop' or 'test'")))) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EVar "validateFields") (EVar "i")) (EVar "kind")) (EVar "entry"))) (ELam (PWild) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EVar "requiredString") (EVar "i")) (ELit (LString "file"))) (EVar "entry"))) (ELam ((PVar "file")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EVar "requiredString") (EVar "i")) (ELit (LString "name"))) (EVar "entry"))) (ELam ((PVar "name")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EVar "requiredString") (EVar "i")) (ELit (LString "engine"))) (EVar "entry"))) (ELam ((PVar "engine")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EVar "requiredInt") (EVar "i")) (ELit (LString "issue"))) (EVar "entry"))) (ELam ((PVar "issue")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EApp (EApp (EVar "validateBase") (EVar "i")) (EVar "file")) (EVar "name")) (EVar "engine")) (EVar "issue"))) (ELam (PWild) (EIf (EBinOp "==" (EVar "kind") (ELit (LString "prop"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "readPropPin") (EVar "i")) (EVar "file")) (EVar "name")) (EVar "engine")) (EVar "issue")) (EVar "entry")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "readTestPin") (EVar "i")) (EVar "file")) (EVar "name")) (EVar "engine")) (EVar "issue")) (EVar "entry")))))))))))))))))))
 (DTypeSig false "pinRows" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))))))
 (DFunDef false "pinRows" ((PVar "fields")) (EApp (EApp (EVar "pinRowsGo") (EVar "fields")) (EVar "omEmpty")))
 (DTypeSig false "pinRowsGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a")))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a")))))))
 (DFunDef false "pinRowsGo" ((PList) (PVar "rows")) (EVar "rows"))
 (DFunDef false "pinRowsGo" ((PCons (PTuple (PVar "key") (PVar "value")) (PVar "rest")) (PVar "rows")) (EMatch (EApp (EVar "pinFieldKey") (EVar "key")) (arm (PCon "None") () (EApp (EApp (EVar "pinRowsGo") (EVar "rest")) (EVar "rows"))) (arm (PCon "Some" (PTuple (PVar "row") (PVar "field"))) () (EBlock (DoLet false false (PVar "prior") (EMatch (EApp (EApp (EVar "omLookup") (EVar "row")) (EVar "rows")) (arm (PCon "Some" (PVar "found")) () (EVar "found")) (arm (PCon "None") () (EListLit)))) (DoExpr (EApp (EApp (EVar "pinRowsGo") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "row")) (EBinOp "::" (ETuple (EVar "field") (EVar "value")) (EVar "prior"))) (EVar "rows"))))))))
 (DTypeSig false "pinFieldKey" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String")))))
-(DFunDef false "pinFieldKey" ((PVar "key")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "startsWith") (ELit (LString "pin."))) (EVar "key"))) (EVar "None") (EBlock (DoLet false false (PVar "tail") (EApp (EApp (EVar "drop") (ELit (LInt 4))) (EVar "key"))) (DoExpr (EMatch (EApp (EApp (EVar "indexOf") (ELit (LString "."))) (EVar "tail")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "dot")) () (EBlock (DoLet false false (PVar "row") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "dot")) (EVar "tail"))) (DoLet false false (PVar "field") (EApp (EApp (EVar "drop") (EBinOp "+" (EVar "dot") (ELit (LInt 1)))) (EVar "tail"))) (DoExpr (EMatch (EApp (EVar "toInt") (EVar "row")) (arm (PCon "Some" PWild) () (EIf (EBinOp "==" (EVar "field") (ELit (LString ""))) (EVar "None") (EApp (EVar "Some") (ETuple (EVar "row") (EVar "field"))))) (arm (PCon "None") () (EVar "None")))))))))))
+(DFunDef false "pinFieldKey" ((PVar "key")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "startsWith") (ELit (LString "pin."))) (EVar "key"))) (EVar "None") (EBlock (DoLet false false (PVar "tail") (EApp (EApp (EVar "drop") (ELit (LInt 4))) (EVar "key"))) (DoExpr (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "indexOf") (ELit (LString "."))) (EVar "tail"))) (ELam ((PVar "dot")) (ELet false (PVar "row") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "dot")) (EVar "tail")) (ELet false (PVar "field") (EApp (EApp (EVar "drop") (EBinOp "+" (EVar "dot") (ELit (LInt 1)))) (EVar "tail")) (EApp (EApp (EVar "$core.andThen") (EApp (EVar "toInt") (EVar "row"))) (ELam (PWild) (EIf (EBinOp "==" (EVar "field") (ELit (LString ""))) (EVar "None") (EApp (EVar "Some") (ETuple (EVar "row") (EVar "field"))))))))))))))
 (DTypeSig false "readPinsGo" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TomlValue")))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "TestPin")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "TestPin"))))))))
-(DFunDef false "readPinsGo" ((PVar "rows") (PVar "i") (PVar "n") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EApp (EVar "Ok") (EApp (EVar "reverse") (EVar "acc"))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "row") (EApp (EVar "intToString") (EVar "i"))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "row")) (EVar "rows")) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EApp (EVar "rowPrefix") (EVar "i")))) (ELit (LString ": no such row"))))) (arm (PCon "Some" (PVar "fields")) () (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "readPin") (EApp (EVar "Toml") (EVar "fields"))) (EVar "i"))) (ELam ((PVar "pin")) (EApp (EApp (EApp (EApp (EVar "readPinsGo") (EVar "rows")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EBinOp "::" (EVar "pin") (EVar "acc"))))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "readPinsGo" ((PVar "rows") (PVar "i0") (PVar "n") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EApp (EVar "Ok") (EApp (EVar "reverse") (EVar "acc"))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "row") (EApp (EVar "intToString") (EVar "i"))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "row")) (EVar "rows")) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EApp (EVar "rowPrefix") (EVar "i")))) (ELit (LString ": no such row"))))) (arm (PCon "Some" (PVar "fields")) () (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "readPin") (EApp (EVar "Toml") (EVar "fields"))) (EVar "i"))) (ELam ((PVar "pin")) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "::" (EVar "pin") (EVar "acc"))))))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EApp (EVar "go") (EVar "i0")) (EVar "acc0"))))
 (DTypeSig true "parsePins" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "TestPin")))))
 (DFunDef false "parsePins" ((PVar "src")) (EApp (EApp (EVar "parsePinsHeaders") (EApp (EVar "sourceHeadersBad") (EVar "src"))) (EVar "src")))
 (DTypeSig false "parsePinsHeaders" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "TestPin"))))))
 (DFunDef false "parsePinsHeaders" ((PCon "True") PWild) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "pinOrigin"))) (ELit (LString ": only [[pin]] tables are allowed")))))
 (DFunDef false "parsePinsHeaders" ((PCon "False") (PVar "src")) (EMatch (EApp (EVar "parse") (EVar "src")) (arm (PCon "Err" (PVar "err")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "pinOrigin"))) (ELit (LString ": not valid TOML: "))) (EApp (EVar "$core.display") (EVar "err"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "doc")) () (EApp (EApp (EVar "parsePinsDoc") (EVar "src")) (EVar "doc")))))
 (DTypeSig false "parsePinsDoc" (TyFun (TyCon "String") (TyFun (TyCon "Toml") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "TestPin"))))))
-(DFunDef false "parsePinsDoc" ((PVar "src") (PCon "Toml" (PVar "fields"))) (EBlock (DoLet false false (PVar "doc") (EApp (EVar "Toml") (EVar "fields"))) (DoExpr (EIf (EApp (EVar "not") (EApp (EVar "rootKeysOk") (EVar "fields"))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "pinOrigin"))) (ELit (LString ": unknown top-level key or table")))) (EIf (EBinOp "/=" (EApp (EVar "rootVersionCount") (EVar "fields")) (ELit (LInt 1))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "pinOrigin"))) (ELit (LString ": exactly one integer version field is required")))) (EMatch (EApp (EApp (EVar "getInt") (ELit (LString "version"))) (EVar "doc")) (arm (PCon "Some" (PLit (LInt 1))) () (EBlock (DoLet false false (PVar "n") (EApp (EVar "pinHeaderCount") (EApp (EVar "lines") (EVar "src")))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "readPinsGo") (EApp (EVar "pinRows") (EVar "fields"))) (ELit (LInt 0))) (EVar "n")) (EListLit)) (arm (PCon "Err" (PVar "err")) () (EApp (EVar "Err") (EVar "err"))) (arm (PCon "Ok" (PVar "pins")) () (EApp (EApp (EVar "map") (ELam (PWild) (EVar "pins"))) (EApp (EVar "buildPinIndex") (EVar "pins")))))))) (arm (PCon "Some" PWild) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "pinOrigin"))) (ELit (LString ": version must be 1"))))) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "pinOrigin"))) (ELit (LString ": exactly one integer version field is required")))))))))))
+(DFunDef false "parsePinsDoc" ((PVar "src") (PCon "Toml" (PVar "fields"))) (EBlock (DoLet false false (PVar "doc") (EApp (EVar "Toml") (EVar "fields"))) (DoExpr (EIf (EApp (EVar "not") (EApp (EVar "rootKeysOk") (EVar "fields"))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "pinOrigin"))) (ELit (LString ": unknown top-level key or table")))) (EIf (EBinOp "/=" (EApp (EVar "rootVersionCount") (EVar "fields")) (ELit (LInt 1))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "pinOrigin"))) (ELit (LString ": exactly one integer version field is required")))) (EMatch (EApp (EApp (EVar "getInt") (ELit (LString "version"))) (EVar "doc")) (arm (PCon "Some" (PLit (LInt 1))) () (EBlock (DoLet false false (PVar "n") (EApp (EVar "pinHeaderCount") (EApp (EVar "lines") (EVar "src")))) (DoExpr (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EApp (EVar "readPinsGo") (EApp (EVar "pinRows") (EVar "fields"))) (ELit (LInt 0))) (EVar "n")) (EListLit))) (ELam ((PVar "pins")) (EApp (EApp (EVar "map") (ELam (PWild) (EVar "pins"))) (EApp (EVar "buildPinIndex") (EVar "pins")))))))) (arm (PCon "Some" PWild) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "pinOrigin"))) (ELit (LString ": version must be 1"))))) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "pinOrigin"))) (ELit (LString ": exactly one integer version field is required")))))))))))
 (DTypeSig false "selectorKey" (TyFun (TyCon "String") (TyFun (TyCon "PinKind") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))))
 (DFunDef false "selectorKey" ((PVar "file") (PVar "kind") (PVar "name") (PVar "engine")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EVar "lenKey") (EVar "file")) (EApp (EVar "lenKey") (EApp (EVar "pinKindKey") (EVar "kind")))) (EApp (EVar "lenKey") (EVar "name"))) (EApp (EVar "lenKey") (EVar "engine"))))
 (DTypeSig false "pinKindKey" (TyFun (TyCon "PinKind") (TyCon "String")))
@@ -636,8 +640,7 @@ pinVerdictDetail (PinChanged issue detail) =
 (DTypeSig false "pinNamePresent" (TyFun (TyCon "TestPin") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyCon "Bool")))))
 (DFunDef false "pinNamePresent" ((PVar "pin") (PVar "propNames") (PVar "testNames")) (EMatch (EFieldAccess (EVar "pin") "pinKind") (arm (PCon "PropPin") () (EApp (EVar "isSome") (EApp (EApp (EVar "omLookup") (EFieldAccess (EVar "pin") "pinName")) (EVar "propNames")))) (arm (PCon "TestPin") () (EApp (EVar "isSome") (EApp (EApp (EVar "omLookup") (EFieldAccess (EVar "pin") "pinName")) (EVar "testNames"))))))
 (DTypeSig false "validatePinNamesGo" (TyFun (TyApp (TyCon "List") (TyCon "TestPin")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))))
-(DFunDef false "validatePinNamesGo" ((PList) PWild PWild PWild) (EApp (EVar "Ok") (ELit LUnit)))
-(DFunDef false "validatePinNamesGo" ((PCons (PVar "pin") (PVar "rest")) (PVar "file") (PVar "propNames") (PVar "testNames")) (EIf (EBinOp "||" (EBinOp "/=" (EFieldAccess (EVar "pin") "pinFile") (EVar "file")) (EApp (EApp (EApp (EVar "pinNamePresent") (EVar "pin")) (EVar "propNames")) (EVar "testNames"))) (EApp (EApp (EApp (EApp (EVar "validatePinNamesGo") (EVar "rest")) (EVar "file")) (EVar "propNames")) (EVar "testNames")) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "pinOrigin"))) (ELit (LString ": issue #"))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EFieldAccess (EVar "pin") "pinIssue")))) (ELit (LString " pins missing "))) (EApp (EVar "$core.display") (EApp (EVar "pinKindName") (EFieldAccess (EVar "pin") "pinKind")))) (ELit (LString " '"))) (EApp (EVar "$core.display") (EFieldAccess (EVar "pin") "pinName"))) (ELit (LString "' in "))) (EApp (EVar "$core.display") (EVar "file"))) (ELit (LString ""))))))
+(DFunDef false "validatePinNamesGo" ((PVar "pins0") (PVar "file") (PVar "propNames") (PVar "testNames")) (ELetGroup ((lgb "go" (clause ((PList)) (EApp (EVar "Ok") (ELit LUnit))) (clause ((PCons (PVar "pin") (PVar "rest"))) (EIf (EBinOp "||" (EBinOp "/=" (EFieldAccess (EVar "pin") "pinFile") (EVar "file")) (EApp (EApp (EApp (EVar "pinNamePresent") (EVar "pin")) (EVar "propNames")) (EVar "testNames"))) (EApp (EVar "go") (EVar "rest")) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "pinOrigin"))) (ELit (LString ": issue #"))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EFieldAccess (EVar "pin") "pinIssue")))) (ELit (LString " pins missing "))) (EApp (EVar "$core.display") (EApp (EVar "pinKindName") (EFieldAccess (EVar "pin") "pinKind")))) (ELit (LString " '"))) (EApp (EVar "$core.display") (EFieldAccess (EVar "pin") "pinName"))) (ELit (LString "' in "))) (EApp (EVar "$core.display") (EVar "file"))) (ELit (LString "")))))))) (EApp (EVar "go") (EVar "pins0"))))
 (DTypeSig false "pinKindName" (TyFun (TyCon "PinKind") (TyCon "String")))
 (DFunDef false "pinKindName" ((PCon "PropPin")) (ELit (LString "property")))
 (DFunDef false "pinKindName" ((PCon "TestPin")) (ELit (LString "test")))
@@ -646,11 +649,9 @@ pinVerdictDetail (PinChanged issue detail) =
 (DTypeSig false "declarationIndex" (TyFun (TyApp (TyCon "List") (TyCon "TestPin")) (TyFun (TyCon "String") (TyFun (TyCon "PinKind") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))))))
 (DFunDef false "declarationIndex" ((PVar "pins") (PVar "file") (PVar "kind") (PVar "label") (PVar "names")) (EIf (EApp (EApp (EApp (EVar "hasSelectedPin") (EVar "pins")) (EVar "file")) (EVar "kind")) (EApp (EApp (EApp (EApp (EVar "uniqueDeclaredNames") (EVar "file")) (EVar "label")) (EVar "names")) (EVar "omEmpty")) (EApp (EVar "Ok") (EApp (EApp (EVar "omFromNames") (EVar "names")) (EVar "omEmpty")))))
 (DTypeSig false "hasSelectedPin" (TyFun (TyApp (TyCon "List") (TyCon "TestPin")) (TyFun (TyCon "String") (TyFun (TyCon "PinKind") (TyCon "Bool")))))
-(DFunDef false "hasSelectedPin" ((PList) PWild PWild) (EVar "False"))
-(DFunDef false "hasSelectedPin" ((PCons (PVar "pin") (PVar "rest")) (PVar "file") (PVar "kind")) (EBinOp "||" (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "pin") "pinFile") (EVar "file")) (EBinOp "==" (EFieldAccess (EVar "pin") "pinKind") (EVar "kind"))) (EApp (EApp (EApp (EVar "hasSelectedPin") (EVar "rest")) (EVar "file")) (EVar "kind"))))
+(DFunDef false "hasSelectedPin" ((PVar "pins0") (PVar "file") (PVar "kind")) (ELetGroup ((lgb "go" (clause ((PList)) (EVar "False")) (clause ((PCons (PVar "pin") (PVar "rest"))) (EBinOp "||" (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "pin") "pinFile") (EVar "file")) (EBinOp "==" (EFieldAccess (EVar "pin") "pinKind") (EVar "kind"))) (EApp (EVar "go") (EVar "rest")))))) (EApp (EVar "go") (EVar "pins0"))))
 (DTypeSig false "uniqueDeclaredNames" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))))
-(DFunDef false "uniqueDeclaredNames" (PWild PWild (PList) (PVar "seen")) (EApp (EVar "Ok") (EVar "seen")))
-(DFunDef false "uniqueDeclaredNames" ((PVar "file") (PVar "kind") (PCons (PVar "name") (PVar "rest")) (PVar "seen")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "seen")) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "pinOrigin"))) (ELit (LString ": ambiguous duplicate "))) (EApp (EVar "$core.display") (EVar "kind"))) (ELit (LString " declaration '"))) (EApp (EVar "$core.display") (EVar "name"))) (ELit (LString "' in "))) (EApp (EVar "$core.display") (EVar "file"))) (ELit (LString "")))) (EApp (EApp (EApp (EApp (EVar "uniqueDeclaredNames") (EVar "file")) (EVar "kind")) (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "name")) (ELit LUnit)) (EVar "seen")))))
+(DFunDef false "uniqueDeclaredNames" ((PVar "file") (PVar "kind") (PVar "xs0") (PVar "seen0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "seen")) (EApp (EVar "Ok") (EVar "seen"))) (clause ((PCons (PVar "name") (PVar "rest")) (PVar "seen")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "seen")) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "pinOrigin"))) (ELit (LString ": ambiguous duplicate "))) (EApp (EVar "$core.display") (EVar "kind"))) (ELit (LString " declaration '"))) (EApp (EVar "$core.display") (EVar "name"))) (ELit (LString "' in "))) (EApp (EVar "$core.display") (EVar "file"))) (ELit (LString "")))) (EApp (EApp (EVar "go") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "name")) (ELit LUnit)) (EVar "seen"))))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "seen0"))))
 (DTypeSig true "classifyPin" (TyFun (TyCon "TestPin") (TyFun (TyCon "PinObservation") (TyCon "PinVerdict"))))
 (DFunDef false "classifyPin" ((PVar "pin") (PCon "PinPassed")) (EApp (EVar "PinDrained") (EFieldAccess (EVar "pin") "pinIssue")))
 (DFunDef false "classifyPin" ((PVar "pin") (PCon "PinLawFailure")) (EApp (EVar "classifyLawPin") (EVar "pin")))
@@ -757,23 +758,23 @@ pinVerdictDetail (PinChanged issue detail) =
 (DTypeSig false "testExpectedFailure" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "TestExpectedFailure")))))))
 (DFunDef false "testExpectedFailure" ((PVar "i") (PVar "engine") (PVar "failure") (PVar "detail")) (EIf (EBinOp "==" (EVar "failure") (ELit (LString "assertion"))) (EApp (EVar "Ok") (EApp (EVar "ExpectAssertion") (EVar "detail"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "failure") (ELit (LString "error"))) (EBinOp "==" (EVar "engine") (ELit (LString "native")))) (EApp (EVar "Ok") (EApp (EVar "ExpectError") (EVar "detail"))) (EIf (EBinOp "==" (EVar "failure") (ELit (LString "error"))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EApp (EVar "rowPrefix") (EVar "i")))) (ELit (LString ": failure \"error\" is only valid for native test pins")))) (EIf (EVar "otherwise") (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EApp (EVar "rowPrefix") (EVar "i")))) (ELit (LString ": test failure must be \"assertion\" or \"error\"")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DTypeSig false "readPin" (TyFun (TyCon "Toml") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "TestPin")))))
-(DFunDef false "readPin" ((PVar "entry") (PVar "i")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EVar "requiredString") (EVar "i")) (ELit (LString "kind"))) (EVar "entry"))) (ELam ((PVar "kind")) (EIf (EApp (EVar "not") (EApp (EVar "validKind") (EVar "kind"))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EApp (EVar "rowPrefix") (EVar "i")))) (ELit (LString ": kind must be 'prop' or 'test'")))) (EMatch (EApp (EApp (EApp (EVar "validateFields") (EVar "i")) (EVar "kind")) (EVar "entry")) (arm (PCon "Err" (PVar "err")) () (EApp (EVar "Err") (EVar "err"))) (arm (PCon "Ok" PWild) () (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EVar "requiredString") (EVar "i")) (ELit (LString "file"))) (EVar "entry"))) (ELam ((PVar "file")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EVar "requiredString") (EVar "i")) (ELit (LString "name"))) (EVar "entry"))) (ELam ((PVar "name")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EVar "requiredString") (EVar "i")) (ELit (LString "engine"))) (EVar "entry"))) (ELam ((PVar "engine")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EVar "requiredInt") (EVar "i")) (ELit (LString "issue"))) (EVar "entry"))) (ELam ((PVar "issue")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "validateBase") (EVar "i")) (EVar "file")) (EVar "name")) (EVar "engine")) (EVar "issue")) (arm (PCon "Err" (PVar "err")) () (EApp (EVar "Err") (EVar "err"))) (arm (PCon "Ok" PWild) () (EIf (EBinOp "==" (EVar "kind") (ELit (LString "prop"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "readPropPin") (EVar "i")) (EVar "file")) (EVar "name")) (EVar "engine")) (EVar "issue")) (EVar "entry")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "readTestPin") (EVar "i")) (EVar "file")) (EVar "name")) (EVar "engine")) (EVar "issue")) (EVar "entry")))))))))))))))))))
+(DFunDef false "readPin" ((PVar "entry") (PVar "i")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EVar "requiredString") (EVar "i")) (ELit (LString "kind"))) (EVar "entry"))) (ELam ((PVar "kind")) (EIf (EApp (EVar "not") (EApp (EVar "validKind") (EVar "kind"))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EApp (EVar "rowPrefix") (EVar "i")))) (ELit (LString ": kind must be 'prop' or 'test'")))) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EVar "validateFields") (EVar "i")) (EVar "kind")) (EVar "entry"))) (ELam (PWild) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EVar "requiredString") (EVar "i")) (ELit (LString "file"))) (EVar "entry"))) (ELam ((PVar "file")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EVar "requiredString") (EVar "i")) (ELit (LString "name"))) (EVar "entry"))) (ELam ((PVar "name")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EVar "requiredString") (EVar "i")) (ELit (LString "engine"))) (EVar "entry"))) (ELam ((PVar "engine")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EVar "requiredInt") (EVar "i")) (ELit (LString "issue"))) (EVar "entry"))) (ELam ((PVar "issue")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EApp (EApp (EVar "validateBase") (EVar "i")) (EVar "file")) (EVar "name")) (EVar "engine")) (EVar "issue"))) (ELam (PWild) (EIf (EBinOp "==" (EVar "kind") (ELit (LString "prop"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "readPropPin") (EVar "i")) (EVar "file")) (EVar "name")) (EVar "engine")) (EVar "issue")) (EVar "entry")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "readTestPin") (EVar "i")) (EVar "file")) (EVar "name")) (EVar "engine")) (EVar "issue")) (EVar "entry")))))))))))))))))))
 (DTypeSig false "pinRows" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))))))
 (DFunDef false "pinRows" ((PVar "fields")) (EApp (EApp (EVar "pinRowsGo") (EVar "fields")) (EVar "omEmpty")))
 (DTypeSig false "pinRowsGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a")))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a")))))))
 (DFunDef false "pinRowsGo" ((PList) (PVar "rows")) (EVar "rows"))
 (DFunDef false "pinRowsGo" ((PCons (PTuple (PVar "key") (PVar "value")) (PVar "rest")) (PVar "rows")) (EMatch (EApp (EVar "pinFieldKey") (EVar "key")) (arm (PCon "None") () (EApp (EApp (EVar "pinRowsGo") (EVar "rest")) (EVar "rows"))) (arm (PCon "Some" (PTuple (PVar "row") (PVar "field"))) () (EBlock (DoLet false false (PVar "prior") (EMatch (EApp (EApp (EVar "omLookup") (EVar "row")) (EVar "rows")) (arm (PCon "Some" (PVar "found")) () (EVar "found")) (arm (PCon "None") () (EListLit)))) (DoExpr (EApp (EApp (EVar "pinRowsGo") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "row")) (EBinOp "::" (ETuple (EVar "field") (EVar "value")) (EVar "prior"))) (EVar "rows"))))))))
 (DTypeSig false "pinFieldKey" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String")))))
-(DFunDef false "pinFieldKey" ((PVar "key")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "startsWith") (ELit (LString "pin."))) (EVar "key"))) (EVar "None") (EBlock (DoLet false false (PVar "tail") (EApp (EApp (EVar "drop") (ELit (LInt 4))) (EVar "key"))) (DoExpr (EMatch (EApp (EApp (EVar "indexOf") (ELit (LString "."))) (EVar "tail")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "dot")) () (EBlock (DoLet false false (PVar "row") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "dot")) (EVar "tail"))) (DoLet false false (PVar "field") (EApp (EApp (EVar "drop") (EBinOp "+" (EVar "dot") (ELit (LInt 1)))) (EVar "tail"))) (DoExpr (EMatch (EApp (EVar "toInt") (EVar "row")) (arm (PCon "Some" PWild) () (EIf (EBinOp "==" (EVar "field") (ELit (LString ""))) (EVar "None") (EApp (EVar "Some") (ETuple (EVar "row") (EVar "field"))))) (arm (PCon "None") () (EVar "None")))))))))))
+(DFunDef false "pinFieldKey" ((PVar "key")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "startsWith") (ELit (LString "pin."))) (EVar "key"))) (EVar "None") (EBlock (DoLet false false (PVar "tail") (EApp (EApp (EVar "drop") (ELit (LInt 4))) (EVar "key"))) (DoExpr (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "indexOf") (ELit (LString "."))) (EVar "tail"))) (ELam ((PVar "dot")) (ELet false (PVar "row") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "dot")) (EVar "tail")) (ELet false (PVar "field") (EApp (EApp (EVar "drop") (EBinOp "+" (EVar "dot") (ELit (LInt 1)))) (EVar "tail")) (EApp (EApp (EVar "$core.andThen") (EApp (EVar "toInt") (EVar "row"))) (ELam (PWild) (EIf (EBinOp "==" (EVar "field") (ELit (LString ""))) (EVar "None") (EApp (EVar "Some") (ETuple (EVar "row") (EVar "field"))))))))))))))
 (DTypeSig false "readPinsGo" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TomlValue")))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "TestPin")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "TestPin"))))))))
-(DFunDef false "readPinsGo" ((PVar "rows") (PVar "i") (PVar "n") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EApp (EVar "Ok") (EApp (EVar "reverse") (EVar "acc"))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "row") (EApp (EVar "intToString") (EVar "i"))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "row")) (EVar "rows")) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EApp (EVar "rowPrefix") (EVar "i")))) (ELit (LString ": no such row"))))) (arm (PCon "Some" (PVar "fields")) () (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "readPin") (EApp (EVar "Toml") (EVar "fields"))) (EVar "i"))) (ELam ((PVar "pin")) (EApp (EApp (EApp (EApp (EVar "readPinsGo") (EVar "rows")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EBinOp "::" (EVar "pin") (EVar "acc"))))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "readPinsGo" ((PVar "rows") (PVar "i0") (PVar "n") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EApp (EVar "Ok") (EApp (EVar "reverse") (EVar "acc"))) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "row") (EApp (EVar "intToString") (EVar "i"))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "row")) (EVar "rows")) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EApp (EVar "rowPrefix") (EVar "i")))) (ELit (LString ": no such row"))))) (arm (PCon "Some" (PVar "fields")) () (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "readPin") (EApp (EVar "Toml") (EVar "fields"))) (EVar "i"))) (ELam ((PVar "pin")) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "::" (EVar "pin") (EVar "acc"))))))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EApp (EVar "go") (EVar "i0")) (EVar "acc0"))))
 (DTypeSig true "parsePins" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "TestPin")))))
 (DFunDef false "parsePins" ((PVar "src")) (EApp (EApp (EVar "parsePinsHeaders") (EApp (EVar "sourceHeadersBad") (EVar "src"))) (EVar "src")))
 (DTypeSig false "parsePinsHeaders" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "TestPin"))))))
 (DFunDef false "parsePinsHeaders" ((PCon "True") PWild) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "pinOrigin"))) (ELit (LString ": only [[pin]] tables are allowed")))))
 (DFunDef false "parsePinsHeaders" ((PCon "False") (PVar "src")) (EMatch (EApp (EVar "parse") (EVar "src")) (arm (PCon "Err" (PVar "err")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "pinOrigin"))) (ELit (LString ": not valid TOML: "))) (EApp (EVar "$core.display") (EVar "err"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "doc")) () (EApp (EApp (EVar "parsePinsDoc") (EVar "src")) (EVar "doc")))))
 (DTypeSig false "parsePinsDoc" (TyFun (TyCon "String") (TyFun (TyCon "Toml") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "TestPin"))))))
-(DFunDef false "parsePinsDoc" ((PVar "src") (PCon "Toml" (PVar "fields"))) (EBlock (DoLet false false (PVar "doc") (EApp (EVar "Toml") (EVar "fields"))) (DoExpr (EIf (EApp (EVar "not") (EApp (EVar "rootKeysOk") (EVar "fields"))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "pinOrigin"))) (ELit (LString ": unknown top-level key or table")))) (EIf (EBinOp "/=" (EApp (EVar "rootVersionCount") (EVar "fields")) (ELit (LInt 1))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "pinOrigin"))) (ELit (LString ": exactly one integer version field is required")))) (EMatch (EApp (EApp (EVar "getInt") (ELit (LString "version"))) (EVar "doc")) (arm (PCon "Some" (PLit (LInt 1))) () (EBlock (DoLet false false (PVar "n") (EApp (EVar "pinHeaderCount") (EApp (EVar "lines") (EVar "src")))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "readPinsGo") (EApp (EVar "pinRows") (EVar "fields"))) (ELit (LInt 0))) (EVar "n")) (EListLit)) (arm (PCon "Err" (PVar "err")) () (EApp (EVar "Err") (EVar "err"))) (arm (PCon "Ok" (PVar "pins")) () (EApp (EApp (EMethodRef "map") (ELam (PWild) (EVar "pins"))) (EApp (EVar "buildPinIndex") (EVar "pins")))))))) (arm (PCon "Some" PWild) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "pinOrigin"))) (ELit (LString ": version must be 1"))))) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "pinOrigin"))) (ELit (LString ": exactly one integer version field is required")))))))))))
+(DFunDef false "parsePinsDoc" ((PVar "src") (PCon "Toml" (PVar "fields"))) (EBlock (DoLet false false (PVar "doc") (EApp (EVar "Toml") (EVar "fields"))) (DoExpr (EIf (EApp (EVar "not") (EApp (EVar "rootKeysOk") (EVar "fields"))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "pinOrigin"))) (ELit (LString ": unknown top-level key or table")))) (EIf (EBinOp "/=" (EApp (EVar "rootVersionCount") (EVar "fields")) (ELit (LInt 1))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "pinOrigin"))) (ELit (LString ": exactly one integer version field is required")))) (EMatch (EApp (EApp (EVar "getInt") (ELit (LString "version"))) (EVar "doc")) (arm (PCon "Some" (PLit (LInt 1))) () (EBlock (DoLet false false (PVar "n") (EApp (EVar "pinHeaderCount") (EApp (EVar "lines") (EVar "src")))) (DoExpr (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EApp (EVar "readPinsGo") (EApp (EVar "pinRows") (EVar "fields"))) (ELit (LInt 0))) (EVar "n")) (EListLit))) (ELam ((PVar "pins")) (EApp (EApp (EMethodRef "map") (ELam (PWild) (EVar "pins"))) (EApp (EVar "buildPinIndex") (EVar "pins")))))))) (arm (PCon "Some" PWild) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "pinOrigin"))) (ELit (LString ": version must be 1"))))) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "pinOrigin"))) (ELit (LString ": exactly one integer version field is required")))))))))))
 (DTypeSig false "selectorKey" (TyFun (TyCon "String") (TyFun (TyCon "PinKind") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))))
 (DFunDef false "selectorKey" ((PVar "file") (PVar "kind") (PVar "name") (PVar "engine")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EVar "lenKey") (EVar "file")) (EApp (EVar "lenKey") (EApp (EVar "pinKindKey") (EVar "kind")))) (EApp (EVar "lenKey") (EVar "name"))) (EApp (EVar "lenKey") (EVar "engine"))))
 (DTypeSig false "pinKindKey" (TyFun (TyCon "PinKind") (TyCon "String")))
@@ -791,8 +792,7 @@ pinVerdictDetail (PinChanged issue detail) =
 (DTypeSig false "pinNamePresent" (TyFun (TyCon "TestPin") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyCon "Bool")))))
 (DFunDef false "pinNamePresent" ((PVar "pin") (PVar "propNames") (PVar "testNames")) (EMatch (EFieldAccess (EVar "pin") "pinKind") (arm (PCon "PropPin") () (EApp (EVar "isSome") (EApp (EApp (EVar "omLookup") (EFieldAccess (EVar "pin") "pinName")) (EVar "propNames")))) (arm (PCon "TestPin") () (EApp (EVar "isSome") (EApp (EApp (EVar "omLookup") (EFieldAccess (EVar "pin") "pinName")) (EVar "testNames"))))))
 (DTypeSig false "validatePinNamesGo" (TyFun (TyApp (TyCon "List") (TyCon "TestPin")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))))
-(DFunDef false "validatePinNamesGo" ((PList) PWild PWild PWild) (EApp (EVar "Ok") (ELit LUnit)))
-(DFunDef false "validatePinNamesGo" ((PCons (PVar "pin") (PVar "rest")) (PVar "file") (PVar "propNames") (PVar "testNames")) (EIf (EBinOp "||" (EBinOp "/=" (EFieldAccess (EVar "pin") "pinFile") (EVar "file")) (EApp (EApp (EApp (EVar "pinNamePresent") (EVar "pin")) (EVar "propNames")) (EVar "testNames"))) (EApp (EApp (EApp (EApp (EVar "validatePinNamesGo") (EVar "rest")) (EVar "file")) (EVar "propNames")) (EVar "testNames")) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "pinOrigin"))) (ELit (LString ": issue #"))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EFieldAccess (EVar "pin") "pinIssue")))) (ELit (LString " pins missing "))) (EApp (EVar "$core.display") (EApp (EVar "pinKindName") (EFieldAccess (EVar "pin") "pinKind")))) (ELit (LString " '"))) (EApp (EVar "$core.display") (EFieldAccess (EVar "pin") "pinName"))) (ELit (LString "' in "))) (EApp (EVar "$core.display") (EVar "file"))) (ELit (LString ""))))))
+(DFunDef false "validatePinNamesGo" ((PVar "pins0") (PVar "file") (PVar "propNames") (PVar "testNames")) (ELetGroup ((lgb "go" (clause ((PList)) (EApp (EVar "Ok") (ELit LUnit))) (clause ((PCons (PVar "pin") (PVar "rest"))) (EIf (EBinOp "||" (EBinOp "/=" (EFieldAccess (EVar "pin") "pinFile") (EVar "file")) (EApp (EApp (EApp (EVar "pinNamePresent") (EVar "pin")) (EVar "propNames")) (EVar "testNames"))) (EApp (EVar "go") (EVar "rest")) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "pinOrigin"))) (ELit (LString ": issue #"))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EFieldAccess (EVar "pin") "pinIssue")))) (ELit (LString " pins missing "))) (EApp (EVar "$core.display") (EApp (EVar "pinKindName") (EFieldAccess (EVar "pin") "pinKind")))) (ELit (LString " '"))) (EApp (EVar "$core.display") (EFieldAccess (EVar "pin") "pinName"))) (ELit (LString "' in "))) (EApp (EVar "$core.display") (EVar "file"))) (ELit (LString "")))))))) (EApp (EVar "go") (EVar "pins0"))))
 (DTypeSig false "pinKindName" (TyFun (TyCon "PinKind") (TyCon "String")))
 (DFunDef false "pinKindName" ((PCon "PropPin")) (ELit (LString "property")))
 (DFunDef false "pinKindName" ((PCon "TestPin")) (ELit (LString "test")))
@@ -801,11 +801,9 @@ pinVerdictDetail (PinChanged issue detail) =
 (DTypeSig false "declarationIndex" (TyFun (TyApp (TyCon "List") (TyCon "TestPin")) (TyFun (TyCon "String") (TyFun (TyCon "PinKind") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))))))
 (DFunDef false "declarationIndex" ((PVar "pins") (PVar "file") (PVar "kind") (PVar "label") (PVar "names")) (EIf (EApp (EApp (EApp (EVar "hasSelectedPin") (EVar "pins")) (EVar "file")) (EVar "kind")) (EApp (EApp (EApp (EApp (EVar "uniqueDeclaredNames") (EVar "file")) (EVar "label")) (EVar "names")) (EVar "omEmpty")) (EApp (EVar "Ok") (EApp (EApp (EVar "omFromNames") (EVar "names")) (EVar "omEmpty")))))
 (DTypeSig false "hasSelectedPin" (TyFun (TyApp (TyCon "List") (TyCon "TestPin")) (TyFun (TyCon "String") (TyFun (TyCon "PinKind") (TyCon "Bool")))))
-(DFunDef false "hasSelectedPin" ((PList) PWild PWild) (EVar "False"))
-(DFunDef false "hasSelectedPin" ((PCons (PVar "pin") (PVar "rest")) (PVar "file") (PVar "kind")) (EBinOp "||" (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "pin") "pinFile") (EVar "file")) (EBinOp "==" (EFieldAccess (EVar "pin") "pinKind") (EVar "kind"))) (EApp (EApp (EApp (EVar "hasSelectedPin") (EVar "rest")) (EVar "file")) (EVar "kind"))))
+(DFunDef false "hasSelectedPin" ((PVar "pins0") (PVar "file") (PVar "kind")) (ELetGroup ((lgb "go" (clause ((PList)) (EVar "False")) (clause ((PCons (PVar "pin") (PVar "rest"))) (EBinOp "||" (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "pin") "pinFile") (EVar "file")) (EBinOp "==" (EFieldAccess (EVar "pin") "pinKind") (EVar "kind"))) (EApp (EVar "go") (EVar "rest")))))) (EApp (EVar "go") (EVar "pins0"))))
 (DTypeSig false "uniqueDeclaredNames" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))))
-(DFunDef false "uniqueDeclaredNames" (PWild PWild (PList) (PVar "seen")) (EApp (EVar "Ok") (EVar "seen")))
-(DFunDef false "uniqueDeclaredNames" ((PVar "file") (PVar "kind") (PCons (PVar "name") (PVar "rest")) (PVar "seen")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "seen")) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "pinOrigin"))) (ELit (LString ": ambiguous duplicate "))) (EApp (EVar "$core.display") (EVar "kind"))) (ELit (LString " declaration '"))) (EApp (EVar "$core.display") (EVar "name"))) (ELit (LString "' in "))) (EApp (EVar "$core.display") (EVar "file"))) (ELit (LString "")))) (EApp (EApp (EApp (EApp (EVar "uniqueDeclaredNames") (EVar "file")) (EVar "kind")) (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "name")) (ELit LUnit)) (EVar "seen")))))
+(DFunDef false "uniqueDeclaredNames" ((PVar "file") (PVar "kind") (PVar "xs0") (PVar "seen0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "seen")) (EApp (EVar "Ok") (EVar "seen"))) (clause ((PCons (PVar "name") (PVar "rest")) (PVar "seen")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "seen")) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "pinOrigin"))) (ELit (LString ": ambiguous duplicate "))) (EApp (EVar "$core.display") (EVar "kind"))) (ELit (LString " declaration '"))) (EApp (EVar "$core.display") (EVar "name"))) (ELit (LString "' in "))) (EApp (EVar "$core.display") (EVar "file"))) (ELit (LString "")))) (EApp (EApp (EVar "go") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "name")) (ELit LUnit)) (EVar "seen"))))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "seen0"))))
 (DTypeSig true "classifyPin" (TyFun (TyCon "TestPin") (TyFun (TyCon "PinObservation") (TyCon "PinVerdict"))))
 (DFunDef false "classifyPin" ((PVar "pin") (PCon "PinPassed")) (EApp (EVar "PinDrained") (EFieldAccess (EVar "pin") "pinIssue")))
 (DFunDef false "classifyPin" ((PVar "pin") (PCon "PinLawFailure")) (EApp (EVar "classifyLawPin") (EVar "pin")))

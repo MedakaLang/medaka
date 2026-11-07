@@ -25,20 +25,19 @@ targetRef : Ref (Option (String, List Decl, Option (List Decl)))
 targetRef = Ref None
 
 cachedFor : String -> Option (List Decl, Option (List Decl))
-cachedFor src = match !targetRef
-  Some (key, decls, ds) => if key == src then Some (decls, ds) else None
-  None => None
+cachedFor src = do
+  (key, decls, ds) <- !targetRef
+  if key == src then Some (decls, ds) else None
 
 -- The located parse of `src`, non-panicking; a success is memoized.
 export
 parseTargetResult : String -> Result ParseError (List Decl)
 parseTargetResult src = match cachedFor src
   Some (decls, _) => Ok decls
-  None => match parseLocatedResult src
-    Err e => Err e
-    Ok decls =>
-      targetRef := Some (src, decls, None)
-      Ok decls
+  None => do
+    decls <- parseLocatedResult src
+    let _ = targetRef := Some (src, decls, None)
+    Ok decls
 
 -- The located decls, panicking on a parse error exactly as `parse` does.
 export

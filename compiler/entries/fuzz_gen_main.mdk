@@ -72,6 +72,8 @@ nthL n (x :: xs) = if n <= 0 then x else nthL (n - 1) xs
 
 -- build [f 0, f 1, …, f (n-1)]  (effectful f: each call may draw from the RNG)
 listInitGo : Int -> Int -> (Int -> <e> a) -> <e> List a
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 listInitGo i n f = if i >= n then [] else f i :: listInitGo (i + 1) n f
 
 listInit : Int -> (Int -> <e> a) -> <e> List a
@@ -79,12 +81,14 @@ listInit n f = listInitGo 0 n f
 
 -- repeat an effectful action n times, discarding results (for-style loop)
 timesGo : Int -> Int -> (Int -> <e> Unit) -> <e> Unit
-timesGo i n f =
-  if i >= n then
-    ()
-  else
-    let _ = f i
-    timesGo (i + 1) n f
+timesGo i0 n f = go i0
+  where
+    go i =
+      if i >= n then
+        ()
+      else
+        let _ = f i
+        go (i + 1)
 
 times : Int -> (Int -> <e> Unit) -> <e> Unit
 times n f = timesGo 0 n f
@@ -174,6 +178,8 @@ randGty ctx depth =
 
 -- k random element types (named recursion, not an inline ctx-closure)
 randGtyList : Ctx -> Int -> Int -> <Rand> List Gty
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 randGtyList ctx depth k =
   if k <= 0 then [] else randGty ctx depth :: randGtyList ctx depth (k - 1)
 
@@ -242,6 +248,8 @@ findAdt ctx name = findAdtGo name (ctxAdts ctx)
 -- native codegen gap mis-lowers at nested-tuple depth — interpreter is fine, but
 -- the LLVM backend faults on the captured-ctx map closure inside ETuple).
 genTupElems : Ctx -> List Gty -> Int -> <Rand> List Expr
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 genTupElems _ [] _ = []
 genTupElems ctx (ti :: rest) depth =
   genExpr ctx ti (depth - 1) :: genTupElems ctx rest depth
@@ -389,9 +397,11 @@ genLet ctx t depth =
 
 -- construct an ADT value: pick a variant, fill positional fields.
 applyFields : Ctx -> Int -> Expr -> List Gty -> <Rand> Expr
-applyFields _ctx _depth acc [] = acc
-applyFields ctx depth acc (fty :: rest) =
-  applyFields ctx depth (EApp acc (genExpr ctx fty (maxI 0 (depth - 1)))) rest
+applyFields ctx depth acc0 xs0 = go acc0 xs0
+  where
+    go acc [] = acc
+    go acc (fty :: rest) =
+      go (EApp acc (genExpr ctx fty (maxI 0 (depth - 1)))) rest
 
 genData : Ctx -> String -> Int -> <Rand> Expr
 genData ctx name depth =

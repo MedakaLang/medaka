@@ -7,9 +7,10 @@ import string.{
   StrCursor, isSpace, toChars, byteLength, center, countOccurrences, cutBetween,
   dedent, drop, endsWith, fromChars, groupThousands, indent, repeat,
   replaceOnce, indexOf, join, lastIndexOf, lines, padLeft, padRight, replace,
-  replaceAll, reverse, nextChar, sliceBetween, startCursor, splitAt, startsWith,
-  stripPrefix, stripSuffix, take, toInt, toLower, toUpper, toFixed, trim,
-  trimAscii, trimLeft, trimRight, unlines, unwords, utf8ByteLength, words
+  replaceAll, reverse, nextChar, sliceBetween, startCursor, split, splitAt,
+  startsWith, stripCR, stripPrefix, stripSuffix, take, toInt, toLower, toUpper,
+  toFixed, trim, trimAscii, trimLeft, trimRight, unlines, unwords,
+  utf8ByteLength, words
 }
 import test.{
   expectAll, expectEach, expectEqual, expectFalse, expectNotEqual, expectTrue
@@ -254,6 +255,19 @@ test "lines does not split on a bare carriage return" =
 test "lines of multibyte text with carriage returns" =
   expectEqual ["é", "日"] (lines "é\r\n日\r")
 
+-- The two line-ending characters, with one- and multi-byte text around them.
+linePool : Array Char
+linePool = toChars "a\n\ré日"
+
+lineSample : List Int -> String
+lineSample ks =
+  fromChars
+    (map (k => arrayGetUnsafe (abs k % arrayLength linePool) linePool) ks)
+
+prop "lines is the newline split, one trailing carriage return off each piece" (ks : List Int) =
+  let s = lineSample ks
+  lines s == map stripCR (split "\n" s)
+
 test "unlines of no lines is empty" = expectEqual "" (unlines [])
 
 test "unlines ends every line, including empty ones" =
@@ -473,13 +487,15 @@ refCountOccurrences needle hay
   | otherwise = refCountGo needle hay 0 0
 
 refCountGo : String -> String -> Int -> Int -> Int
-refCountGo needle hay i acc
-  | i + stringLength needle > stringLength hay = acc
-  -- Bound: reference oracle over short test strings, kept as the codepoint definition.
-  -- lint-disable-next-line rule-reslice-in-loop
-  | stringSlice i (i + stringLength needle) hay == needle =
-    refCountGo needle hay (i + stringLength needle) (acc + 1)
-  | otherwise = refCountGo needle hay (i + 1) acc
+refCountGo needle hay i0 acc0 = go i0 acc0
+  where
+    go i acc
+      | i + stringLength needle > stringLength hay = acc
+      -- Bound: reference oracle over short test strings, kept as the codepoint definition.
+      -- lint-disable-next-line rule-reslice-in-loop
+      | stringSlice i (i + stringLength needle) hay == needle =
+        go (i + stringLength needle) (acc + 1)
+      | otherwise = go (i + 1) acc
 
 refLastIndexOf : String -> String -> Option Int
 -- Oracle: the codepoint definition the native extern replaced, kept on purpose.
@@ -489,13 +505,15 @@ refLastIndexOf needle hay
   | otherwise = refLastGo needle hay 0 None
 
 refLastGo : String -> String -> Int -> Option Int -> Option Int
-refLastGo needle hay i acc
-  | i + stringLength needle > stringLength hay = acc
-  -- Bound: reference oracle over short test strings, kept as the codepoint definition.
-  -- lint-disable-next-line rule-reslice-in-loop
-  | stringSlice i (i + stringLength needle) hay == needle =
-    refLastGo needle hay (i + 1) (Some i)
-  | otherwise = refLastGo needle hay (i + 1) acc
+refLastGo needle hay i0 acc0 = go i0 acc0
+  where
+    go i acc
+      | i + stringLength needle > stringLength hay = acc
+      -- Bound: reference oracle over short test strings, kept as the codepoint definition.
+      -- lint-disable-next-line rule-reslice-in-loop
+      | stringSlice i (i + stringLength needle) hay == needle =
+        go (i + 1) (Some i)
+      | otherwise = go (i + 1) acc
 
 edgePairs : List (String, String)
 edgePairs = [

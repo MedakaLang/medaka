@@ -1,5 +1,5 @@
 # META
-source_lines=340
+source_lines=347
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-promissory-reader: a comment says a symbol has no reader yet, but the file reads it (#2550).
@@ -26,6 +26,7 @@ import tools.lint_core.{
   StdlibIndex,
   factComments,
   mkRule,
+  noFix,
 }
 import tools.lint_shared.{
   CommentBlock(..),
@@ -187,12 +188,11 @@ claimSubject codeLines (line, text, CommentBlock _ last trailing _) =
 backtickedAfterReads : String -> Option String
 backtickedAfterReads t =
   let lower = stringToLower t
-  match stringIndexOf "reads `" lower
-    None => None
-    Some i =>
-      let start = i + stringLength "reads `"
-      let rest = stringSlice start (stringLength t) t
-      map (j => stringSlice 0 j rest) (stringIndexOf "`" rest)
+  do
+    i <- stringIndexOf "reads `" lower
+    let start = i + stringLength "reads `"
+    let rest = stringSlice start (stringLength t) t
+    map (j => stringSlice 0 j rest) (stringIndexOf "`" rest)
 
 -- The first declaration at or after `line`: a signature, clause head, field or
 -- data/type name; `export` lines are skipped; a blank line ends the search (the
@@ -267,7 +267,7 @@ readerFinding path subject (line, _, _) (firstReader :: more) = [
       "comment claims nothing reads `\{subject}` yet, but it is read on line \{firstReader}\{readerCountSuffix (listLen more)}. Restate the claim as what is measured today, or delete it",
     severity = SevWarning,
     loc = Some (Loc path line 1 line 1),
-    fix = None,
+    fix = noFix,
   },
 ]
 
@@ -276,10 +276,12 @@ declaredInFile subject codeLines =
   declaredInFileGo subject codeLines (arrayLength codeLines) 1
 
 declaredInFileGo : String -> Array String -> Int -> Int -> Bool
-declaredInFileGo subject codeLines n line
-  | line > n = False
-  | isDefinitionLine subject (arrayGetUnsafe (line - 1) codeLines) = True
-  | otherwise = declaredInFileGo subject codeLines n (line + 1)
+declaredInFileGo subject codeLines n line0 = go line0
+  where
+    go line
+      | line > n = False
+      | isDefinitionLine subject (arrayGetUnsafe (line - 1) codeLines) = True
+      | otherwise = go (line + 1)
 
 readerCountSuffix : Int -> String
 readerCountSuffix 0 = ""
@@ -291,6 +293,8 @@ readerLines subject codeLines =
   readerLinesGo subject codeLines (arrayLength codeLines) 1
 
 readerLinesGo : String -> Array String -> Int -> Int -> List Int
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 readerLinesGo subject codeLines n line
   | line > n = []
   | isReaderLine subject (arrayGetUnsafe (line - 1) codeLines) =
@@ -338,10 +342,13 @@ wordReadOk cs n m =
     && not (assignFollows cs n m.end)
 
 assignFollows : Array Char -> Int -> Int -> Bool
-assignFollows cs n i
-  | i < n && arrayGetUnsafe i cs == ' ' = assignFollows cs n (i + 1)
-  | i + 1 < n = arrayGetUnsafe i cs == ':' && arrayGetUnsafe (i + 1) cs == '='
-  | otherwise = False
+assignFollows cs n i0 = go i0
+  where
+    go i
+      | i < n && arrayGetUnsafe i cs == ' ' = go (i + 1)
+      | i + 1 < n =
+        arrayGetUnsafe i cs == ':' && arrayGetUnsafe (i + 1) cs == '='
+      | otherwise = False
 # DESUGAR
 (DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Decl" true))))
@@ -351,7 +358,7 @@ assignFollows cs n i
 (DUse false (UseGroup ("list") ((mem "last" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isAlnum" false))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "Match" false) (mem "mustCompile" false) (mem "isMatch" false) (mem "find" false "reFind") (mem "findAll" false "reFindAll") (mem "replaceAll" false) (mem "escape" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "factComments" false) (mem "mkRule" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "factComments" false) (mem "mkRule" false) (mem "noFix" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "CommentBlock" true) (mem "codeLineAt" false) (mem "codePortions" false) (mem "commentBlocks" false) (mem "ruleNamePromissoryReader" false) (mem "trimWs" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNamePromissoryReader")) (fa "summary" (ELit (LString "comment claims a symbol has no reader yet (\"nothing reads this yet\", \"no reader yet\", \"do not add a reader\") but the file reads it (#2550)"))) (fa "doc" (ELit (LString "A comment claiming a symbol has no reader yet (\"nothing reads this yet\", \"no reader yet\", \"do not add a reader\") while the file reads it is stale and misleads the next editor (#2550). This enforces the repository comment register.\n\nBefore:\n  -- nothing reads this yet\n  cache = ...   -- read two screens down\nAfter:\n  delete or correct the comment"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Internal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "NotFixable")) (fa "needs" (EListLit))))) (EVar "rulePromissoryReader")) (EVar "None")))
@@ -383,7 +390,7 @@ assignFollows cs n i
 (DTypeSig false "claimSubject" (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyTuple (TyCon "Int") (TyCon "String") (TyCon "CommentBlock")) (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "claimSubject" ((PVar "codeLines") (PTuple (PVar "line") (PVar "text") (PCon "CommentBlock" PWild (PVar "last") (PVar "trailing") PWild))) (EMatch (EApp (EVar "backtickedAfterReads") (EVar "text")) (arm (PCon "Some" (PVar "n")) () (EApp (EVar "Some") (EVar "n"))) (arm (PCon "None") () (EIf (EVar "trailing") (EApp (EVar "declaredNameOf") (EApp (EApp (EVar "codeLineAt") (EVar "codeLines")) (EVar "line"))) (EApp (EApp (EVar "nextDeclaredName") (EVar "codeLines")) (EBinOp "+" (EVar "last") (ELit (LInt 1))))))))
 (DTypeSig false "backtickedAfterReads" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "backtickedAfterReads" ((PVar "t")) (EBlock (DoLet false false (PVar "lower") (EApp (EVar "stringToLower") (EVar "t"))) (DoExpr (EMatch (EApp (EApp (EVar "stringIndexOf") (ELit (LString "reads `"))) (EVar "lower")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "i")) () (EBlock (DoLet false false (PVar "start") (EBinOp "+" (EVar "i") (EApp (EVar "stringLength") (ELit (LString "reads `"))))) (DoLet false false (PVar "rest") (EApp (EApp (EApp (EVar "stringSlice") (EVar "start")) (EApp (EVar "stringLength") (EVar "t"))) (EVar "t"))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "j")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "j")) (EVar "rest")))) (EApp (EApp (EVar "stringIndexOf") (ELit (LString "`"))) (EVar "rest"))))))))))
+(DFunDef false "backtickedAfterReads" ((PVar "t")) (EBlock (DoLet false false (PVar "lower") (EApp (EVar "stringToLower") (EVar "t"))) (DoExpr (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "stringIndexOf") (ELit (LString "reads `"))) (EVar "lower"))) (ELam ((PVar "i")) (ELet false (PVar "start") (EBinOp "+" (EVar "i") (EApp (EVar "stringLength") (ELit (LString "reads `")))) (ELet false (PVar "rest") (EApp (EApp (EApp (EVar "stringSlice") (EVar "start")) (EApp (EVar "stringLength") (EVar "t"))) (EVar "t")) (EApp (EApp (EVar "map") (ELam ((PVar "j")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "j")) (EVar "rest")))) (EApp (EApp (EVar "stringIndexOf") (ELit (LString "`"))) (EVar "rest"))))))))))
 (DTypeSig false "nextDeclaredName" (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "nextDeclaredName" ((PVar "codeLines") (PVar "line")) (EIf (EBinOp ">" (EVar "line") (EApp (EVar "arrayLength") (EVar "codeLines"))) (EVar "None") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "t") (EApp (EVar "trimWs") (EApp (EApp (EVar "codeLineAt") (EVar "codeLines")) (EVar "line")))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "t") (ELit (LString "export"))) (EBinOp "==" (EVar "t") (ELit (LString "public export")))) (EApp (EApp (EVar "nextDeclaredName") (EVar "codeLines")) (EBinOp "+" (EVar "line") (ELit (LInt 1)))) (EApp (EVar "declaredNameOf") (EVar "t"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "declaredNameOf" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
@@ -400,11 +407,11 @@ assignFollows cs n i
 (DFunDef false "promissoryFinding" ((PVar "path") (PVar "codeLines") (PVar "claim")) (EMatch (EApp (EApp (EVar "claimSubject") (EVar "codeLines")) (EVar "claim")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "subject")) () (EIf (EApp (EApp (EVar "declaredInFile") (EVar "subject")) (EVar "codeLines")) (EApp (EApp (EApp (EApp (EVar "readerFinding") (EVar "path")) (EVar "subject")) (EVar "claim")) (EApp (EApp (EVar "readerLines") (EVar "subject")) (EVar "codeLines"))) (EListLit)))))
 (DTypeSig false "readerFinding" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "Int") (TyCon "String") (TyCon "CommentBlock")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Finding")))))))
 (DFunDef false "readerFinding" (PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "readerFinding" ((PVar "path") (PVar "subject") (PTuple (PVar "line") PWild PWild) (PCons (PVar "firstReader") (PVar "more"))) (EListLit (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNamePromissoryReader")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "comment claims nothing reads `")) (EApp (EVar "$core.display") (EVar "subject"))) (ELit (LString "` yet, but it is read on line "))) (EApp (EVar "$core.display") (EVar "firstReader"))) (ELit (LString ""))) (EApp (EVar "$core.display") (EApp (EVar "readerCountSuffix") (EApp (EVar "listLen") (EVar "more"))))) (ELit (LString ". Restate the claim as what is measured today, or delete it")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "path")) (EVar "line")) (ELit (LInt 1))) (EVar "line")) (ELit (LInt 1))))) (fa "fix" (EVar "None"))))))
+(DFunDef false "readerFinding" ((PVar "path") (PVar "subject") (PTuple (PVar "line") PWild PWild) (PCons (PVar "firstReader") (PVar "more"))) (EListLit (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNamePromissoryReader")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "comment claims nothing reads `")) (EApp (EVar "$core.display") (EVar "subject"))) (ELit (LString "` yet, but it is read on line "))) (EApp (EVar "$core.display") (EVar "firstReader"))) (ELit (LString ""))) (EApp (EVar "$core.display") (EApp (EVar "readerCountSuffix") (EApp (EVar "listLen") (EVar "more"))))) (ELit (LString ". Restate the claim as what is measured today, or delete it")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "path")) (EVar "line")) (ELit (LInt 1))) (EVar "line")) (ELit (LInt 1))))) (fa "fix" (EVar "noFix"))))))
 (DTypeSig false "declaredInFile" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyCon "Bool"))))
 (DFunDef false "declaredInFile" ((PVar "subject") (PVar "codeLines")) (EApp (EApp (EApp (EApp (EVar "declaredInFileGo") (EVar "subject")) (EVar "codeLines")) (EApp (EVar "arrayLength") (EVar "codeLines"))) (ELit (LInt 1))))
 (DTypeSig false "declaredInFileGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))))
-(DFunDef false "declaredInFileGo" ((PVar "subject") (PVar "codeLines") (PVar "n") (PVar "line")) (EIf (EBinOp ">" (EVar "line") (EVar "n")) (EVar "False") (EIf (EApp (EApp (EVar "isDefinitionLine") (EVar "subject")) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "line") (ELit (LInt 1)))) (EVar "codeLines"))) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "declaredInFileGo") (EVar "subject")) (EVar "codeLines")) (EVar "n")) (EBinOp "+" (EVar "line") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "declaredInFileGo" ((PVar "subject") (PVar "codeLines") (PVar "n") (PVar "line0")) (ELetGroup ((lgb "go" (clause ((PVar "line")) (EIf (EBinOp ">" (EVar "line") (EVar "n")) (EVar "False") (EIf (EApp (EApp (EVar "isDefinitionLine") (EVar "subject")) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "line") (ELit (LInt 1)))) (EVar "codeLines"))) (EVar "True") (EIf (EVar "otherwise") (EApp (EVar "go") (EBinOp "+" (EVar "line") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))) (EApp (EVar "go") (EVar "line0"))))
 (DTypeSig false "readerCountSuffix" (TyFun (TyCon "Int") (TyCon "String")))
 (DFunDef false "readerCountSuffix" ((PLit (LInt 0))) (ELit (LString "")))
 (DFunDef false "readerCountSuffix" ((PVar "n")) (EBinOp "++" (EBinOp "++" (ELit (LString " and ")) (EApp (EVar "$core.display") (EVar "n"))) (ELit (LString " more line(s)"))))
@@ -423,7 +430,7 @@ assignFollows cs n i
 (DTypeSig false "wordReadOk" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Match") (TyCon "Bool")))))
 (DFunDef false "wordReadOk" ((PVar "cs") (PVar "n") (PVar "m")) (EBinOp "&&" (EBinOp "&&" (EBinOp "||" (EBinOp "==" (EFieldAccess (EVar "m") "start") (ELit (LInt 0))) (EApp (EVar "not") (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EFieldAccess (EVar "m") "start") (ELit (LInt 1)))) (EVar "cs"))))) (EApp (EApp (EVar "identBoundaryAt") (EVar "cs")) (EFieldAccess (EVar "m") "end"))) (EApp (EVar "not") (EApp (EApp (EApp (EVar "assignFollows") (EVar "cs")) (EVar "n")) (EFieldAccess (EVar "m") "end")))))
 (DTypeSig false "assignFollows" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
-(DFunDef false "assignFollows" ((PVar "cs") (PVar "n") (PVar "i")) (EIf (EBinOp "&&" (EBinOp "<" (EVar "i") (EVar "n")) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar " ")))) (EApp (EApp (EApp (EVar "assignFollows") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EBinOp "<" (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EVar "n")) (EBinOp "&&" (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar ":"))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "cs")) (ELit (LChar "=")))) (EIf (EVar "otherwise") (EVar "False") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "assignFollows" ((PVar "cs") (PVar "n") (PVar "i0")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EIf (EBinOp "&&" (EBinOp "<" (EVar "i") (EVar "n")) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar " ")))) (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EBinOp "<" (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EVar "n")) (EBinOp "&&" (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar ":"))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "cs")) (ELit (LChar "=")))) (EIf (EVar "otherwise") (EVar "False") (EApp (EVar "__fallthrough__") (ELit LUnit)))))))) (EApp (EVar "go") (EVar "i0"))))
 # MARK
 (DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Decl" true))))
@@ -433,7 +440,7 @@ assignFollows cs n i
 (DUse false (UseGroup ("list") ((mem "last" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isAlnum" false))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "Match" false) (mem "mustCompile" false) (mem "isMatch" false) (mem "find" false "reFind") (mem "findAll" false "reFindAll") (mem "replaceAll" false) (mem "escape" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "factComments" false) (mem "mkRule" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "factComments" false) (mem "mkRule" false) (mem "noFix" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "CommentBlock" true) (mem "codeLineAt" false) (mem "codePortions" false) (mem "commentBlocks" false) (mem "ruleNamePromissoryReader" false) (mem "trimWs" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNamePromissoryReader")) (fa "summary" (ELit (LString "comment claims a symbol has no reader yet (\"nothing reads this yet\", \"no reader yet\", \"do not add a reader\") but the file reads it (#2550)"))) (fa "doc" (ELit (LString "A comment claiming a symbol has no reader yet (\"nothing reads this yet\", \"no reader yet\", \"do not add a reader\") while the file reads it is stale and misleads the next editor (#2550). This enforces the repository comment register.\n\nBefore:\n  -- nothing reads this yet\n  cache = ...   -- read two screens down\nAfter:\n  delete or correct the comment"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Internal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "NotFixable")) (fa "needs" (EListLit))))) (EVar "rulePromissoryReader")) (EVar "None")))
@@ -465,7 +472,7 @@ assignFollows cs n i
 (DTypeSig false "claimSubject" (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyTuple (TyCon "Int") (TyCon "String") (TyCon "CommentBlock")) (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "claimSubject" ((PVar "codeLines") (PTuple (PVar "line") (PVar "text") (PCon "CommentBlock" PWild (PVar "last") (PVar "trailing") PWild))) (EMatch (EApp (EVar "backtickedAfterReads") (EVar "text")) (arm (PCon "Some" (PVar "n")) () (EApp (EVar "Some") (EVar "n"))) (arm (PCon "None") () (EIf (EVar "trailing") (EApp (EVar "declaredNameOf") (EApp (EApp (EVar "codeLineAt") (EVar "codeLines")) (EVar "line"))) (EApp (EApp (EVar "nextDeclaredName") (EVar "codeLines")) (EBinOp "+" (EVar "last") (ELit (LInt 1))))))))
 (DTypeSig false "backtickedAfterReads" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
-(DFunDef false "backtickedAfterReads" ((PVar "t")) (EBlock (DoLet false false (PVar "lower") (EApp (EVar "stringToLower") (EVar "t"))) (DoExpr (EMatch (EApp (EApp (EVar "stringIndexOf") (ELit (LString "reads `"))) (EVar "lower")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "i")) () (EBlock (DoLet false false (PVar "start") (EBinOp "+" (EVar "i") (EApp (EVar "stringLength") (ELit (LString "reads `"))))) (DoLet false false (PVar "rest") (EApp (EApp (EApp (EVar "stringSlice") (EVar "start")) (EApp (EVar "stringLength") (EVar "t"))) (EVar "t"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "j")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "j")) (EVar "rest")))) (EApp (EApp (EVar "stringIndexOf") (ELit (LString "`"))) (EVar "rest"))))))))))
+(DFunDef false "backtickedAfterReads" ((PVar "t")) (EBlock (DoLet false false (PVar "lower") (EApp (EVar "stringToLower") (EVar "t"))) (DoExpr (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "stringIndexOf") (ELit (LString "reads `"))) (EVar "lower"))) (ELam ((PVar "i")) (ELet false (PVar "start") (EBinOp "+" (EVar "i") (EApp (EVar "stringLength") (ELit (LString "reads `")))) (ELet false (PVar "rest") (EApp (EApp (EApp (EVar "stringSlice") (EVar "start")) (EApp (EVar "stringLength") (EVar "t"))) (EVar "t")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "j")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "j")) (EVar "rest")))) (EApp (EApp (EVar "stringIndexOf") (ELit (LString "`"))) (EVar "rest"))))))))))
 (DTypeSig false "nextDeclaredName" (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "nextDeclaredName" ((PVar "codeLines") (PVar "line")) (EIf (EBinOp ">" (EVar "line") (EApp (EVar "arrayLength") (EVar "codeLines"))) (EVar "None") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "t") (EApp (EVar "trimWs") (EApp (EApp (EVar "codeLineAt") (EVar "codeLines")) (EVar "line")))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "t") (ELit (LString "export"))) (EBinOp "==" (EVar "t") (ELit (LString "public export")))) (EApp (EApp (EVar "nextDeclaredName") (EVar "codeLines")) (EBinOp "+" (EVar "line") (ELit (LInt 1)))) (EApp (EVar "declaredNameOf") (EVar "t"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "declaredNameOf" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
@@ -482,11 +489,11 @@ assignFollows cs n i
 (DFunDef false "promissoryFinding" ((PVar "path") (PVar "codeLines") (PVar "claim")) (EMatch (EApp (EApp (EVar "claimSubject") (EVar "codeLines")) (EVar "claim")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "subject")) () (EIf (EApp (EApp (EVar "declaredInFile") (EVar "subject")) (EVar "codeLines")) (EApp (EApp (EApp (EApp (EVar "readerFinding") (EVar "path")) (EVar "subject")) (EVar "claim")) (EApp (EApp (EVar "readerLines") (EVar "subject")) (EVar "codeLines"))) (EListLit)))))
 (DTypeSig false "readerFinding" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "Int") (TyCon "String") (TyCon "CommentBlock")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Finding")))))))
 (DFunDef false "readerFinding" (PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "readerFinding" ((PVar "path") (PVar "subject") (PTuple (PVar "line") PWild PWild) (PCons (PVar "firstReader") (PVar "more"))) (EListLit (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNamePromissoryReader")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "comment claims nothing reads `")) (EApp (EVar "$core.display") (EVar "subject"))) (ELit (LString "` yet, but it is read on line "))) (EApp (EVar "$core.display") (EVar "firstReader"))) (ELit (LString ""))) (EApp (EVar "$core.display") (EApp (EVar "readerCountSuffix") (EApp (EVar "listLen") (EVar "more"))))) (ELit (LString ". Restate the claim as what is measured today, or delete it")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "path")) (EVar "line")) (ELit (LInt 1))) (EVar "line")) (ELit (LInt 1))))) (fa "fix" (EVar "None"))))))
+(DFunDef false "readerFinding" ((PVar "path") (PVar "subject") (PTuple (PVar "line") PWild PWild) (PCons (PVar "firstReader") (PVar "more"))) (EListLit (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNamePromissoryReader")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "comment claims nothing reads `")) (EApp (EVar "$core.display") (EVar "subject"))) (ELit (LString "` yet, but it is read on line "))) (EApp (EVar "$core.display") (EVar "firstReader"))) (ELit (LString ""))) (EApp (EVar "$core.display") (EApp (EVar "readerCountSuffix") (EApp (EVar "listLen") (EVar "more"))))) (ELit (LString ". Restate the claim as what is measured today, or delete it")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "path")) (EVar "line")) (ELit (LInt 1))) (EVar "line")) (ELit (LInt 1))))) (fa "fix" (EVar "noFix"))))))
 (DTypeSig false "declaredInFile" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyCon "Bool"))))
 (DFunDef false "declaredInFile" ((PVar "subject") (PVar "codeLines")) (EApp (EApp (EApp (EApp (EVar "declaredInFileGo") (EVar "subject")) (EVar "codeLines")) (EApp (EVar "arrayLength") (EVar "codeLines"))) (ELit (LInt 1))))
 (DTypeSig false "declaredInFileGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))))
-(DFunDef false "declaredInFileGo" ((PVar "subject") (PVar "codeLines") (PVar "n") (PVar "line")) (EIf (EBinOp ">" (EVar "line") (EVar "n")) (EVar "False") (EIf (EApp (EApp (EVar "isDefinitionLine") (EVar "subject")) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "line") (ELit (LInt 1)))) (EVar "codeLines"))) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "declaredInFileGo") (EVar "subject")) (EVar "codeLines")) (EVar "n")) (EBinOp "+" (EVar "line") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "declaredInFileGo" ((PVar "subject") (PVar "codeLines") (PVar "n") (PVar "line0")) (ELetGroup ((lgb "go" (clause ((PVar "line")) (EIf (EBinOp ">" (EVar "line") (EVar "n")) (EVar "False") (EIf (EApp (EApp (EVar "isDefinitionLine") (EVar "subject")) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "line") (ELit (LInt 1)))) (EVar "codeLines"))) (EVar "True") (EIf (EVar "otherwise") (EApp (EVar "go") (EBinOp "+" (EVar "line") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))) (EApp (EVar "go") (EVar "line0"))))
 (DTypeSig false "readerCountSuffix" (TyFun (TyCon "Int") (TyCon "String")))
 (DFunDef false "readerCountSuffix" ((PLit (LInt 0))) (ELit (LString "")))
 (DFunDef false "readerCountSuffix" ((PVar "n")) (EBinOp "++" (EBinOp "++" (ELit (LString " and ")) (EApp (EVar "$core.display") (EVar "n"))) (ELit (LString " more line(s)"))))
@@ -505,4 +512,4 @@ assignFollows cs n i
 (DTypeSig false "wordReadOk" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Match") (TyCon "Bool")))))
 (DFunDef false "wordReadOk" ((PVar "cs") (PVar "n") (PVar "m")) (EBinOp "&&" (EBinOp "&&" (EBinOp "||" (EBinOp "==" (EFieldAccess (EVar "m") "start") (ELit (LInt 0))) (EApp (EVar "not") (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EFieldAccess (EVar "m") "start") (ELit (LInt 1)))) (EVar "cs"))))) (EApp (EApp (EVar "identBoundaryAt") (EVar "cs")) (EFieldAccess (EVar "m") "end"))) (EApp (EVar "not") (EApp (EApp (EApp (EVar "assignFollows") (EVar "cs")) (EVar "n")) (EFieldAccess (EVar "m") "end")))))
 (DTypeSig false "assignFollows" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
-(DFunDef false "assignFollows" ((PVar "cs") (PVar "n") (PVar "i")) (EIf (EBinOp "&&" (EBinOp "<" (EVar "i") (EVar "n")) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar " ")))) (EApp (EApp (EApp (EVar "assignFollows") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EBinOp "<" (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EVar "n")) (EBinOp "&&" (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar ":"))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "cs")) (ELit (LChar "=")))) (EIf (EVar "otherwise") (EVar "False") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "assignFollows" ((PVar "cs") (PVar "n") (PVar "i0")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EIf (EBinOp "&&" (EBinOp "<" (EVar "i") (EVar "n")) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar " ")))) (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EBinOp "<" (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EVar "n")) (EBinOp "&&" (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar ":"))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "cs")) (ELit (LChar "=")))) (EIf (EVar "otherwise") (EVar "False") (EApp (EVar "__fallthrough__") (ELit LUnit)))))))) (EApp (EVar "go") (EVar "i0"))))

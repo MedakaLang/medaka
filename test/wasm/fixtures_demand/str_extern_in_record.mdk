@@ -1,0 +1,5 @@
+-- The only string-mode extern sits inside a record field, so only the structural
+-- string-demand walk sees it; the emitted module must still define its helpers.
+data R = R { s : Int, n : Int }
+
+main = (R { s = stringLength (intToString 99), n = 4 }).s

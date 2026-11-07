@@ -39,3 +39,8 @@ Dynamic and indirect uses remain unknown. The previous broad-seal rejection in
 The registered `test/process_authority_test.mdk` replay also checks the descriptor
 experiment's separate 77 blocker, mutation effects, non-Linux refusal, and an
 empty, duplicate, missing and substituted matrix rejection, plus historic census receipt integrity and candidate source pins. Later tree changes are outside that historic survey. See `docs/findings/mcp-runtime-stdio-descriptor/REPORT.md`.
+
+The experimental stdio lease handoff and replay scope are recorded in
+[the lease findings](../../../docs/findings/mcp-runtime-stdio-lease/REPORT.md).
+Its observer returns 77 for a witnessed blocker; that status alone is not a
+qualification or a successful replay.

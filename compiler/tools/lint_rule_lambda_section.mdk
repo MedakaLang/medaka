@@ -18,12 +18,14 @@ import tools.lint_core.{
   Finding(..),
   Fix,
   Fixability(..),
+  Memo,
   Ratchet(..),
   Rule,
   RuleMeta(..),
   Scope(..),
   StdlibIndex,
   Visitor(..),
+  fixLater,
   mkVisitorRule,
 }
 import tools.lint_shared.{
@@ -149,12 +151,12 @@ lambdaSectionAt facts ctx (ELam pats body) = match lamSection pats body
     lambdaSectionFinding
       ctx.ctxDeclLoc
       sec
-      (lambdaSectionFix facts ctx pats sec),
+      (fixLater (_ => lambdaSectionFix facts ctx pats sec)),
   ]
   None => []
 lambdaSectionAt _ _ _ = []
 
-lambdaSectionFinding : Option Loc -> Section -> Option Fix -> Finding
+lambdaSectionFinding : Option Loc -> Section -> Memo (Option Fix) -> Finding
 lambdaSectionFinding loc s fix = Finding {
   rule = ruleNameLambdaSection,
   message =
@@ -186,19 +188,15 @@ lambdaSectionFix facts ctx pats sec =
 -- its first parameter, found by reading the parameter names back from the
 -- arrow; any other spacing leaves the finding without a fix.
 lambdaSpan : FileFacts -> Ctx -> List Pat -> Option Loc
-lambdaSpan facts ctx pats = match ctx.ctxOwn
-  Some (own@(Loc f sl sc el ec)) =>
-    if parenAt facts sl sc then
-      Some own
-    else match sourceLine facts sl
-      Some line =>
-        map
-          (start => Loc f sl start el ec)
-          (paramsStart
-            (stringSlice 0 sc line)
-            (unwords (flatMap patVarName pats)))
-      None => None
-  None => None
+lambdaSpan facts ctx pats = do
+  own@(Loc f sl sc el ec) <- ctx.ctxOwn
+  if parenAt facts sl sc then
+    Some own
+  else do
+    line <- sourceLine facts sl
+    map
+      (start => Loc f sl start el ec)
+      (paramsStart (stringSlice 0 sc line) (unwords (flatMap patVarName pats)))
 
 patVarName : Pat -> List String
 patVarName (PVar x _ _) = [x]
@@ -206,9 +204,9 @@ patVarName _ = []
 
 -- The column where `params` begins, given the text before the arrow.
 paramsStart : String -> String -> Option Int
-paramsStart before params = match stripSuffix params (trimRight before)
-  Some rest => if endsInIdent rest then None else Some (stringLength rest)
-  None => None
+paramsStart before params = do
+  rest <- stripSuffix params (trimRight before)
+  if endsInIdent rest then None else Some (stringLength rest)
 
 endsInIdent : String -> Bool
 endsInIdent text = match last (toList (stringToChars text))

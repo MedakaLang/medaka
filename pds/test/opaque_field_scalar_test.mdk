@@ -157,9 +157,9 @@ prependSome (Some x) xs = x :: xs
 exportKeyword : String -> Option String
 exportKeyword line = match stripPrefix "public export" line
   Some rest => afterKeyword rest
-  None => match stripPrefix "export" line
-    Some rest => afterKeyword rest
-    None => None
+  None => do
+    rest <- stripPrefix "export" line
+    afterKeyword rest
 
 -- | `rest` trimmed, if the keyword it follows was separated from it by
 -- whitespace rather than running into a longer word.
@@ -339,21 +339,21 @@ hooks () = match !hooksCell
 
 allEdges : List Src -> Result String (List (String, String, String))
 allEdges [] = Ok []
-allEdges (src :: rest) = match edgesOf src
-  Err e => Err e
-  Ok edges => map (edges ++ _) (allEdges rest)
+allEdges (src :: rest) = do
+  edges <- edgesOf src
+  map (edges ++ _) (allEdges rest)
 
 productionEdges : Unit ->
   <FileRead, IO> Result String (List (String, String, String))
-productionEdges () = match production ()
-  Err e => Err e
-  Ok srcs => allEdges srcs
+productionEdges () = do
+  srcs <- production ()
+  allEdges srcs
 
 driverEdges : Unit ->
   <FileRead, IO> Result String (List (String, String, String))
-driverEdges () = match drivers ()
-  Err e => Err e
-  Ok srcs => allEdges srcs
+driverEdges () = do
+  srcs <- drivers ()
+  allEdges srcs
 
 -- | The violations a source set's edges commit against the real hook set.
 breachesOf : Result String (List (String, String, String)) ->
@@ -379,9 +379,9 @@ test "the deployment scan found at least one exported test-only API" =
   expectAtLeast "exported test-only APIs" 1 (map length (hooks ()))
 
 driverReach : Unit -> <FileRead, IO> Result String (List String)
-driverReach () = match driverEdges ()
-  Err e => Err e
-  Ok edges => map (h => reaches h edges) (hooks ())
+driverReach () = do
+  edges <- driverEdges ()
+  map (h => reaches h edges) (hooks ())
 
 test "the test drivers keep at least one explicit route to a test-only API" =
   expectAtLeast "test-only API consumer edges" 1 (map length (driverReach ()))
@@ -444,9 +444,9 @@ prependTo extra src =
     src
 
 mutantBreaches : String -> <FileRead, IO> Result String (List String)
-mutantBreaches extra = match withPrepended extra
-  Err e => Err e
-  Ok srcs => breachesOf (allEdges srcs)
+mutantBreaches extra = do
+  srcs <- withPrepended extra
+  breachesOf (allEdges srcs)
 
 {- | An alias of a module that has no test-only exports must still be
    accepted.

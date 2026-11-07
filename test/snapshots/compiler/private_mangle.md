@@ -1,5 +1,5 @@
 # META
-source_lines=2031
+source_lines=2032
 stages=DESUGAR,MARK
 # SOURCE
 import frontend.runtime_constructors.{namedRuntimeCtor}
@@ -1986,7 +1986,8 @@ patVarsPM (PList ps) = patVarsListPM ps
 patVarsPM (PAs x _ _ p) = x :: patVarsPM p
 patVarsPM (POr (p :: _)) = patVarsPM p
 patVarsPM (PRec _ fields _) = flatMap recPatFieldVarsPM fields
-patVarsPM _ = []
+patVarsPM (PAnn p _) = patVarsPM p
+patVarsPM (POr [] | PWild | PLit _ | PRng _ _ _) = []
 
 patVarsListPM : List Pat -> List String
 patVarsListPM ps = flatMap patVarsPM ps
@@ -2443,7 +2444,8 @@ recPatFieldVarsPM (RecPatField _ _ _ (Some p)) = patVarsPM p
 (DFunDef false "patVarsPM" ((PCon "PAs" (PVar "x") PWild PWild (PVar "p"))) (EBinOp "::" (EVar "x") (EApp (EVar "patVarsPM") (EVar "p"))))
 (DFunDef false "patVarsPM" ((PCon "POr" (PCons (PVar "p") PWild))) (EApp (EVar "patVarsPM") (EVar "p")))
 (DFunDef false "patVarsPM" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EVar "flatMap") (EVar "recPatFieldVarsPM")) (EVar "fields")))
-(DFunDef false "patVarsPM" (PWild) (EListLit))
+(DFunDef false "patVarsPM" ((PCon "PAnn" (PVar "p") PWild)) (EApp (EVar "patVarsPM") (EVar "p")))
+(DFunDef false "patVarsPM" ((POr (PCon "POr" (PList)) (PCon "PWild") (PCon "PLit" PWild) (PCon "PRng" PWild PWild PWild))) (EListLit))
 (DTypeSig false "patVarsListPM" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "patVarsListPM" ((PVar "ps")) (EApp (EApp (EVar "flatMap") (EVar "patVarsPM")) (EVar "ps")))
 (DTypeSig false "renamePat" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "Pat") (TyCon "Pat"))))
@@ -2877,7 +2879,8 @@ recPatFieldVarsPM (RecPatField _ _ _ (Some p)) = patVarsPM p
 (DFunDef false "patVarsPM" ((PCon "PAs" (PVar "x") PWild PWild (PVar "p"))) (EBinOp "::" (EVar "x") (EApp (EVar "patVarsPM") (EVar "p"))))
 (DFunDef false "patVarsPM" ((PCon "POr" (PCons (PVar "p") PWild))) (EApp (EVar "patVarsPM") (EVar "p")))
 (DFunDef false "patVarsPM" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EDictApp "flatMap") (EVar "recPatFieldVarsPM")) (EVar "fields")))
-(DFunDef false "patVarsPM" (PWild) (EListLit))
+(DFunDef false "patVarsPM" ((PCon "PAnn" (PVar "p") PWild)) (EApp (EVar "patVarsPM") (EVar "p")))
+(DFunDef false "patVarsPM" ((POr (PCon "POr" (PList)) (PCon "PWild") (PCon "PLit" PWild) (PCon "PRng" PWild PWild PWild))) (EListLit))
 (DTypeSig false "patVarsListPM" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "patVarsListPM" ((PVar "ps")) (EApp (EApp (EDictApp "flatMap") (EVar "patVarsPM")) (EVar "ps")))
 (DTypeSig false "renamePat" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "Pat") (TyCon "Pat"))))

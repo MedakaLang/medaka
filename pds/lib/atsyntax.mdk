@@ -64,15 +64,17 @@ validateHandleLabel bytes start end isFinal =
     Ok ()
 
 validateHandleLabels : Bytes -> Int -> Int -> Int -> Int -> Result String Int
-validateHandleLabels bytes i end labelStart labelCount =
-  if i >= end then do
-    () <- validateHandleLabel bytes labelStart end True
-    Ok (labelCount + 1)
-  else if byteAt bytes i == 46 then do
-    () <- validateHandleLabel bytes labelStart i False
-    validateHandleLabels bytes (i + 1) end (i + 1) (labelCount + 1)
-  else
-    validateHandleLabels bytes (i + 1) end labelStart labelCount
+validateHandleLabels bytes i0 end start0 count0 = go i0 start0 count0
+  where
+    go i labelStart labelCount =
+      if i >= end then do
+        () <- validateHandleLabel bytes labelStart end True
+        Ok (labelCount + 1)
+      else if byteAt bytes i == 46 then do
+        () <- validateHandleLabel bytes labelStart i False
+        go (i + 1) (i + 1) (labelCount + 1)
+      else
+        go (i + 1) labelStart labelCount
 
 {- | Validate an atproto handle: an ASCII domain name of 1..253 bytes, 2+
    dot-separated labels each 1..63 bytes of `[a-zA-Z0-9-]` not starting or
@@ -84,10 +86,9 @@ validateHandle handle =
   let len = B.length bytes
   if len < 1 || len > 253 then
     Err "handle: length must be 1..253 characters"
-  else match validateHandleLabels bytes 0 len 0 0
-    Err message => Err message
-    Ok labelCount =>
-      if labelCount < 2 then Err "handle: needs at least two labels" else Ok ()
+  else do
+    labelCount <- validateHandleLabels bytes 0 len 0 0
+    if labelCount < 2 then Err "handle: needs at least two labels" else Ok ()
 
 -- did ---------------------------------------------------------------------------
 
@@ -102,15 +103,17 @@ hasDidPrefix : Bytes -> Bool
 hasDidPrefix bytes = B.startsWith (encodeUtf8 "did:") bytes
 
 didMethodEnd : Bytes -> Int -> Int -> Option Int
-didMethodEnd bytes i end =
-  if i >= end then
-    None
-  else if byteAt bytes i == 58 then
-    Some i
-  else if lowerByte (byteAt bytes i) then
-    didMethodEnd bytes (i + 1) end
-  else
-    None
+didMethodEnd bytes i0 end = go i0
+  where
+    go i =
+      if i >= end then
+        None
+      else if byteAt bytes i == 58 then
+        Some i
+      else if lowerByte (byteAt bytes i) then
+        go (i + 1)
+      else
+        None
 
 {- | Validate an atproto DID: `did:` + one or more lowercase-letter method
    bytes + `:` + a non-empty method-specific identifier

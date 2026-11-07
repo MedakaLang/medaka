@@ -410,9 +410,9 @@ lookupMethodResult : OrdMap (OrdMap MethodResultFact) ->
   String ->
   String ->
   Option MethodResultFact
-lookupMethodResult index iface method = match omLookup iface index
-  Some methods => omLookup method methods
-  None => None
+lookupMethodResult index iface method = do
+  methods <- omLookup iface index
+  omLookup method methods
 
 -- a function binding: it takes parameters, and it is not `main`
 isTopFn : CBind -> Bool

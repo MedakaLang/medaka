@@ -1,6 +1,6 @@
 import support.symbol_encoding.{encodePair}
 import frontend.ast.{Addr(..), Pat}
-import ir.core_walk.{patBinders}
+import ir.core_walk.{bindPats, patBinders}
 import ir.core_ir.{
   CProgram(..), CBind(..), CClause(..), CExpr(..), CImplEntry(..),
   CImplBody(..), CArm(..), CGuard(..), CStmt(..), CField(..),
@@ -109,9 +109,6 @@ walkExternVars f (CProgram groups ca ct impls mc facts) =
 bindPatScope : Pat -> OrdMap Unit -> OrdMap Unit
 bindPatScope pat scope = omFromNames (patBinders pat) scope
 
-bindPatsScope : List Pat -> OrdMap Unit -> OrdMap Unit
-bindPatsScope pats scope = omFromNames (flatMap patBinders pats) scope
-
 bindLetScope : Pat -> CExpr -> OrdMap Unit -> OrdMap Unit
 bindLetScope pat _ scope = bindPatScope pat scope
 
@@ -137,11 +134,11 @@ externHeadRows (CProgram _ _ _ _ _ facts) =
 
 export
 externRuntimeKey : OrdMap ExternDeclFact -> String -> Option String
-externRuntimeKey inventory symbol = match omLookup symbol inventory
-  Some fact => match fact.bindingKind
+externRuntimeKey inventory symbol = do
+  fact <- omLookup symbol inventory
+  match fact.bindingKind
     RuntimeBinding key => Some key
     ForeignBinding => None
-  None => None
 
 walkBind : ExternVisitor -> OrdMap Unit -> CBind -> CBind
 walkBind env scope (CBind name clauses site bid) =
@@ -149,7 +146,7 @@ walkBind env scope (CBind name clauses site bid) =
 
 walkClause : ExternVisitor -> OrdMap Unit -> CClause -> CClause
 walkClause env scope (CClause pats body) =
-  CClause pats (walkExpr env (bindPatsScope pats scope) body)
+  CClause pats (walkExpr env (bindPats pats scope) body)
 
 walkEntry : ExternVisitor -> CImplEntry -> CImplEntry
 walkEntry env (CImplEntry m s d (CImplTagged tag key iface sym pos pats body)) =
@@ -164,7 +161,7 @@ walkEntry env (CImplEntry m s d (CImplTagged tag key iface sym pos pats body)) =
       sym
       pos
       pats
-      (walkExpr env (bindPatsScope pats omEmpty) body))
+      (walkExpr env (bindPats pats omEmpty) body))
 walkEntry env (CImplEntry m s d (CImplDefault w tag key sym pos pats body)) =
   CImplEntry
     m
@@ -177,7 +174,7 @@ walkEntry env (CImplEntry m s d (CImplDefault w tag key sym pos pats body)) =
       sym
       pos
       pats
-      (walkExpr env (bindPatsScope pats omEmpty) body))
+      (walkExpr env (bindPats pats omEmpty) body))
 
 -- Every constructor is listed, with no catch-all arm, so a new expression form
 -- must decide where its binders scope.
@@ -189,7 +186,7 @@ walkExpr env scope (CApp f args site) =
 walkExpr _ _ (CLit l) = CLit l
 walkExpr env scope (CVar x addr) = env scope (0 - 1) x addr
 walkExpr env scope (CLam pats body) =
-  CLam pats (walkExpr env (bindPatsScope pats scope) body)
+  CLam pats (walkExpr env (bindPats pats scope) body)
 walkExpr env scope (CLet recF pat rhs body) =
   let inner = bindLetScope pat rhs scope
   CLet

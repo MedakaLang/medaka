@@ -1,5 +1,5 @@
 # META
-source_lines=220
+source_lines=221
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-accumulator-append: `acc ++ e` grown across iterations of a loop (a self-call argument, `r := !r ++ e`, a fold lambda). Cons then `reverse`, collect then join once, or use a builder.
@@ -31,6 +31,7 @@ import tools.lint_core.{
   Visitor(..),
   factScopes,
   mkVisitorRule,
+  noFix,
 }
 import tools.lint_recursion.{
   ArgRole(..),
@@ -200,7 +201,7 @@ report loc message = Finding {
   message = message,
   severity = SevWarning,
   loc = loc,
-  fix = None,
+  fix = noFix,
 }
 
 fixes : Operand -> String
@@ -230,7 +231,7 @@ foldMessage =
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
 (DUse false (UseGroup ("list") ((mem "get" false))))
 (DUse false (UseGroup ("string") ((mem "contains" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "Ctx" true) (mem "FileFacts" false) (mem "Finding" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "factScopes" false) (mem "mkVisitorRule" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "Ctx" true) (mem "FileFacts" false) (mem "Finding" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "factScopes" false) (mem "mkVisitorRule" false) (mem "noFix" false))))
 (DUse false (UseGroup ("tools" "lint_recursion") ((mem "ArgRole" true) (mem "FoldVerdict" true) (mem "Owner" true) (mem "SelfCall" true) (mem "foldVerdict" false) (mem "letOwners" false) (mem "selfCalls" false))))
 (DUse false (UseGroup ("tools" "lint_scope") ((mem "FileScopes" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "appArgsOf" false) (mem "firstLoc" false) (mem "ruleNameAccumulatorAppend" false) (mem "unwrapLoc" false))))
@@ -278,7 +279,7 @@ foldMessage =
 (DTypeSig false "foldFindings" (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding")))))
 (DFunDef false "foldFindings" ((PVar "ctx") (PVar "e")) (EIf (EFieldAccess (EVar "ctx") "ctxInTest") (EListLit) (EIf (EVar "otherwise") (EMatch (EVar "e") (arm (PCon "EApp" PWild (PVar "a")) () (EMatch (EApp (EVar "unwrapLoc") (EVar "a")) (arm (PCon "ELam" PWild PWild) () (EMatch (EApp (EVar "foldVerdict") (EVar "e")) (arm (PCon "FoldAppends") () (EListLit (EApp (EApp (EVar "report") (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstLoc") (EVar "e"))) (EFieldAccess (EVar "ctx") "ctxSpan"))) (EVar "foldMessage")))) (arm PWild () (EListLit)))) (arm PWild () (EListLit)))) (arm PWild () (EListLit))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "report" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyCon "Finding"))))
-(DFunDef false "report" ((PVar "loc") (PVar "message")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameAccumulatorAppend")) (fa "message" (EVar "message")) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None")))))
+(DFunDef false "report" ((PVar "loc") (PVar "message")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameAccumulatorAppend")) (fa "message" (EVar "message")) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "noFix")))))
 (DTypeSig false "fixes" (TyFun (TyCon "Operand") (TyCon "String")))
 (DFunDef false "fixes" ((PCon "OpString")) (ELit (LString "Collect the pieces and join them once (`joinWith`, `concat`), or build the `String` with a builder")))
 (DFunDef false "fixes" ((PCon "OpList")) (ELit (LString "Cons the element onto the accumulator and `reverse` once at the end, or collect the pieces and `concat` once")))
@@ -297,7 +298,7 @@ foldMessage =
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
 (DUse false (UseGroup ("list") ((mem "get" false))))
 (DUse false (UseGroup ("string") ((mem "contains" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "Ctx" true) (mem "FileFacts" false) (mem "Finding" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "factScopes" false) (mem "mkVisitorRule" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "Ctx" true) (mem "FileFacts" false) (mem "Finding" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "factScopes" false) (mem "mkVisitorRule" false) (mem "noFix" false))))
 (DUse false (UseGroup ("tools" "lint_recursion") ((mem "ArgRole" true) (mem "FoldVerdict" true) (mem "Owner" true) (mem "SelfCall" true) (mem "foldVerdict" false) (mem "letOwners" false) (mem "selfCalls" false))))
 (DUse false (UseGroup ("tools" "lint_scope") ((mem "FileScopes" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "appArgsOf" false) (mem "firstLoc" false) (mem "ruleNameAccumulatorAppend" false) (mem "unwrapLoc" false))))
@@ -345,7 +346,7 @@ foldMessage =
 (DTypeSig false "foldFindings" (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding")))))
 (DFunDef false "foldFindings" ((PVar "ctx") (PVar "e")) (EIf (EFieldAccess (EVar "ctx") "ctxInTest") (EListLit) (EIf (EVar "otherwise") (EMatch (EVar "e") (arm (PCon "EApp" PWild (PVar "a")) () (EMatch (EApp (EVar "unwrapLoc") (EVar "a")) (arm (PCon "ELam" PWild PWild) () (EMatch (EApp (EVar "foldVerdict") (EVar "e")) (arm (PCon "FoldAppends") () (EListLit (EApp (EApp (EVar "report") (EApp (EApp (EVar "orElseLoc") (EApp (EVar "firstLoc") (EVar "e"))) (EFieldAccess (EVar "ctx") "ctxSpan"))) (EVar "foldMessage")))) (arm PWild () (EListLit)))) (arm PWild () (EListLit)))) (arm PWild () (EListLit))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "report" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyCon "Finding"))))
-(DFunDef false "report" ((PVar "loc") (PVar "message")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameAccumulatorAppend")) (fa "message" (EVar "message")) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None")))))
+(DFunDef false "report" ((PVar "loc") (PVar "message")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameAccumulatorAppend")) (fa "message" (EVar "message")) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "noFix")))))
 (DTypeSig false "fixes" (TyFun (TyCon "Operand") (TyCon "String")))
 (DFunDef false "fixes" ((PCon "OpString")) (ELit (LString "Collect the pieces and join them once (`joinWith`, `concat`), or build the `String` with a builder")))
 (DFunDef false "fixes" ((PCon "OpList")) (ELit (LString "Cons the element onto the accumulator and `reverse` once at the end, or collect the pieces and `concat` once")))

@@ -1118,12 +1118,12 @@ floodLoopGo : Connection * ->
   Int ->
   Bytes ->
   <Net> (Int, String, Bytes)
-floodLoopGo conn count buildRequest i pending =
-  let (status, headerText, body, rest) = floodStep conn pending (buildRequest i)
-  if i >= count then
-    (status, headerText, body)
-  else
-    floodLoopGo conn count buildRequest (i + 1) rest
+floodLoopGo conn count buildRequest i0 pending0 = go i0 pending0
+  where
+    go i pending =
+      let (status, headerText, body, rest) =
+        floodStep conn pending (buildRequest i)
+      if i >= count then (status, headerText, body) else go (i + 1) rest
 
 -- | The connections-class case needs a NEW connection each time — that class
 -- is charged once per connection, on its first request, never on a reused
@@ -1132,15 +1132,14 @@ floodConnections : Int -> String -> Int -> <Net> (Int, String, Bytes)
 floodConnections port xff count = floodConnectionsGo port xff count 1
 
 floodConnectionsGo : Int -> String -> Int -> Int -> <Net> (Int, String, Bytes)
-floodConnectionsGo port xff count i =
-  let conn = mustConnect port
-  let (status, headerText, body, _) =
-    floodStep conn empty (getRequestXff xff atprotoDidPath)
-  let () = ignoreResult (close conn)
-  if i >= count then
-    (status, headerText, body)
-  else
-    floodConnectionsGo port xff count (i + 1)
+floodConnectionsGo port xff count i0 = go i0
+  where
+    go i =
+      let conn = mustConnect port
+      let (status, headerText, body, _) =
+        floodStep conn empty (getRequestXff xff atprotoDidPath)
+      let () = ignoreResult (close conn)
+      if i >= count then (status, headerText, body) else go (i + 1)
 
 -- | Grades one rate-limit case's last response against `want`. A 429 must
 -- also carry all three `RateLimit-*` headers and the `RateLimitExceeded`
@@ -1211,15 +1210,14 @@ floodMalformed : Int -> String -> Int -> <Net> (Int, String, Bytes)
 floodMalformed port shape count = floodMalformedGo port shape count 1
 
 floodMalformedGo : Int -> String -> Int -> Int -> <Net> (Int, String, Bytes)
-floodMalformedGo port shape count i =
-  let conn = mustConnect port
-  let (status, headerText, body, _) =
-    floodStep conn empty (malformedRequest shape)
-  let () = ignoreResult (close conn)
-  if i >= count then
-    (status, headerText, body)
-  else
-    floodMalformedGo port shape count (i + 1)
+floodMalformedGo port shape count i0 = go i0
+  where
+    go i =
+      let conn = mustConnect port
+      let (status, headerText, body, _) =
+        floodStep conn empty (malformedRequest shape)
+      let () = ignoreResult (close conn)
+      if i >= count then (status, headerText, body) else go (i + 1)
 
 runRateLimitMalformed : Int -> String -> Int -> Int -> <IO, Net> Unit
 runRateLimitMalformed port shape count want =
@@ -1380,14 +1378,16 @@ probeOnce port = match connect "127.0.0.1" port
 -- | Probe until one attempt is answered or `budgetSeconds` have passed since
 -- `t0`, reporting the status and how long it took.
 probeWithin : Int -> Float -> Int -> <Net, Clock> Option (Int, Float)
-probeWithin port t0 budgetSeconds = match probeOnce port
-  Some status => Some (status, elapsedSince t0)
-  None =>
-    if elapsedSince t0 >= intToFloat budgetSeconds then
-      None
-    else
-      let () = sleep probeInterval
-      probeWithin port t0 budgetSeconds
+probeWithin port t0 budgetSeconds = go ()
+  where
+    go () = match probeOnce port
+      Some status => Some (status, elapsedSince t0)
+      None =>
+        if elapsedSince t0 >= intToFloat budgetSeconds then
+          None
+        else
+          let () = sleep probeInterval
+          go ()
 
 {- | #2772: a stranger holds `sockets` connections open having never
    terminated a header, and an unrelated caller must still be ANSWERED —
@@ -1628,13 +1628,15 @@ openProxyCalls : Int ->
   Int ->
   List (Connection *) ->
   <Net> List (Connection *)
-openProxyCalls port token service path remaining acc =
-  if remaining <= 0 then
-    acc
-  else
-    let conn = mustConnect port
-    let () = mustSend conn (proxyRequest "" token service path)
-    openProxyCalls port token service path (remaining - 1) (conn :: acc)
+openProxyCalls port token service path remaining0 acc0 = go remaining0 acc0
+  where
+    go remaining acc =
+      if remaining <= 0 then
+        acc
+      else
+        let conn = mustConnect port
+        let () = mustSend conn (proxyRequest "" token service path)
+        go (remaining - 1) (conn :: acc)
 
 closeProxyCalls : List (Connection *) -> <Net> Unit
 closeProxyCalls [] = ()
@@ -1748,22 +1750,19 @@ probeRefusals : Int ->
   Bool ->
   String ->
   <Net, Clock> (Bool, String)
-probeRefusals port token service path remaining maxMs ok detail =
-  if remaining <= 0 then
-    (ok, detail)
-  else
-    let (status, bodyText, elapsed) = timedProxyRead port token service path
-    let ms = elapsed * 1000.0
-    let refused = status == 503 && contains "ProxyLimitExceeded" bodyText
-    probeRefusals
-      port
-      token
-      service
-      path
-      (remaining - 1)
-      maxMs
-      (ok && refused && ms <= intToFloat maxMs)
-      "\{detail} \{intToString status}@\{floatToString ms}ms"
+probeRefusals port token service path rem0 maxMs ok0 d0 = go rem0 ok0 d0
+  where
+    go remaining ok detail =
+      if remaining <= 0 then
+        (ok, detail)
+      else
+        let (status, bodyText, elapsed) = timedProxyRead port token service path
+        let ms = elapsed * 1000.0
+        let refused = status == 503 && contains "ProxyLimitExceeded" bodyText
+        go
+          (remaining - 1)
+          (ok && refused && ms <= intToFloat maxMs)
+          "\{detail} \{intToString status}@\{floatToString ms}ms"
 
 {- | The overload control: `held` proxied reads are sent and left outstanding,
    filling the in-flight ceiling and the admission queue behind it, and then
@@ -2568,13 +2567,15 @@ runSlowUpload port token mimeType =
 -- | Sends `body` from `offset` onward in `piece`-byte pieces, pausing
 -- `slowUploadGap` before every piece after the first.
 sendInPieces : Connection * -> Bytes -> Int -> Int -> <Net, Clock> Unit
-sendInPieces conn body offset piece =
-  if offset >= B.length body then
-    ()
-  else
-    let () = if offset == 0 then () else sleep slowUploadGap
-    let () = mustSend conn (B.sliceClamped offset (offset + piece) body)
-    sendInPieces conn body (offset + piece) piece
+sendInPieces conn body offset0 piece = go offset0
+  where
+    go offset =
+      if offset >= B.length body then
+        ()
+      else
+        let () = if offset == 0 then () else sleep slowUploadGap
+        let () = mustSend conn (B.sliceClamped offset (offset + piece) body)
+        go (offset + piece)
 
 -- | The `ref.$link` CID of an `uploadBlob` response's `blob` value.
 blobRefCidText : Bytes -> String

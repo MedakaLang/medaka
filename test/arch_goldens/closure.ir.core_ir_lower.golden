@@ -8,7 +8,7 @@ frontend.visibility
 ir.core_ir
 ir.core_ir_sexp
 ir.core_lint
-ir.core_opt_num
+ir.core_opt_unfold
 ir.core_pass
 ir.core_walk
 ir.extern_lower

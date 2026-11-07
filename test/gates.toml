@@ -354,7 +354,7 @@ link = "production"
 [[gate]]
 name = "gzip/test/deflate_oracle"
 area = "engines"
-shard = "gates_2"
+shard = "gates_4"
 project = "gzip"
 tiers = ["merge"]
 cost = "cheap"
@@ -718,7 +718,7 @@ link = "production"
 [[gate]]
 name = "pds/test/field_vectors"
 area = "engines"
-shard = "gates_8"
+shard = "gates_1"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -819,7 +819,7 @@ link = "production"
 [[gate]]
 name = "pds/test/pbkdf2"
 area = "engines"
-shard = "gates_5"
+shard = "gates_7"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -920,7 +920,7 @@ link = "production"
 [[gate]]
 name = "pds/test/scalar_vectors"
 area = "engines"
-shard = "gates_8"
+shard = "gates_1"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -1185,7 +1185,7 @@ link = "production"
 [[gate]]
 name = "sqlite/test/writer_oracle"
 area = "engines"
-shard = "gates_4"
+shard = "gates_5"
 project = "sqlite"
 tiers = ["merge"]
 cost = "medium"
@@ -1727,7 +1727,7 @@ link = "differential"
 [[gate]]
 name = "diff_compiler_dict_semantics_ir"
 area = "infra"
-shard = "gates_2"
+shard = "gates_4"
 project = "compiler"
 tiers = ["merge"]
 cost = "medium"
@@ -1749,7 +1749,7 @@ link = "differential"
 [[gate]]
 name = "diff_compiler_dict_semantics_permute"
 area = "infra"
-shard = "gates_7"
+shard = "gates_4"
 project = "compiler"
 tiers = ["merge"]
 cost = "medium"
@@ -2005,7 +2005,7 @@ link = "differential"
 [[gate]]
 name = "diff_compiler_fmt_roundtrip"
 area = "frontend"
-shard = "gates_4"
+shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2069,7 +2069,7 @@ link = "differential"
 [[gate]]
 name = "diff_compiler_import_order"
 area = "infra"
-shard = "gates_4"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2253,7 +2253,7 @@ kind = "exec"
 migration = "native-rewrite"
 run = "test/diff_compiler_lint_baseline.sh"
 oracles = []
-sources = ["compiler/support/cli_targets.mdk", "compiler/tools/lint*.mdk", "compiler/driver/medaka_cli.mdk", "compiler/driver/loader.mdk", "compiler/medaka.toml", "test/lint_baseline.toml", "test/diff_compiler_lint_baseline.sh", "test/lint_rule_lists.sh", ".githooks/pre-commit"]
+sources = ["compiler/support/cli_targets.mdk", "compiler/tools/lint*.mdk", "compiler/driver/medaka_cli.mdk", "compiler/driver/loader.mdk", "compiler/medaka.toml", "test/lint_baseline.toml", "test/lint_path_exempt.toml", "test/diff_compiler_lint_baseline.sh", "test/lint_rule_lists.sh", ".githooks/pre-commit"]
 corpus = []
 toolchain = []
 link = "production"
@@ -2313,7 +2313,7 @@ link = "production"
 [[gate]]
 name = "diff_compiler_llvm_modules"
 area = "backend"
-shard = "gates_4"
+shard = "gates_5"
 project = "compiler"
 tiers = ["merge"]
 cost = "medium"
@@ -2425,7 +2425,7 @@ link = "production"
 [[gate]]
 name = "diff_compiler_os_entropy"
 area = "infra"
-shard = "gates_8"
+shard = "gates_1"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2561,7 +2561,7 @@ link = "production"
 [[gate]]
 name = "diff_compiler_preflight_base"
 area = "infra"
-shard = "gates_6"
+shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2866,7 +2866,7 @@ link = "production"
 [[gate]]
 name = "diff_compiler_snapshot_frontend"
 area = "frontend"
-shard = "gates_7"
+shard = "gates_5"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2949,7 +2949,7 @@ link = "production"
 [[gate]]
 name = "diff_compiler_stage_ir_scaling"
 area = "infra"
-shard = "gates_4"
+shard = "gates_2"
 project = "compiler"
 tiers = ["merge", "nightly/STAGE_IR_TIER=full"]
 cost = "heavy"
@@ -3045,7 +3045,7 @@ link = "production"
 [[gate]]
 name = "wasm_host_probes"
 area = "wasm"
-shard = "gates_8"
+shard = "gates_1"
 project = "compiler"
 tiers = ["merge"]
 cost = "medium"
@@ -3797,6 +3797,24 @@ corpus = ["test/bench_fixtures"]
 toolchain = ["clang", "valgrind"]
 link = "production"
 
+# The red/green pin for scripts/emit_identity.sh, the same-source emit differential
+# sprint packets cite (#4930).
+[[gate]]
+name = "emit_identity_selftest"
+area = "infra"
+shard = "gates_5"
+project = "compiler"
+tiers = ["merge"]
+cost = "cheap"
+kind = "exec"
+migration = "shell:external-harness"
+run = "test/emit_identity_selftest.sh"
+oracles = []
+sources = ["scripts/emit_identity.sh", "scripts/emit_identity_norm.py", "test/emit_identity_selftest.sh"]
+corpus = []
+toolchain = ["clang"]
+link = "production"
+
 # Every help/usage string must describe the CLI that actually exists (#2354,
 # S-help-truthfulness). Asserts three agreement properties, all derived from the
 # BINARY through test/cli_conformance_lib.sh — the same derivation
@@ -3854,7 +3872,7 @@ link = "production"
 [[gate]]
 name = "diff_compiler_cli_reject_floor"
 area = "cli"
-shard = "gates_2"
+shard = "gates_4"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"

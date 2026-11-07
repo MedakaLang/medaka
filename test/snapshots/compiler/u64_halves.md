@@ -1,5 +1,5 @@
 # META
-source_lines=227
+source_lines=229
 stages=DESUGAR,MARK
 # SOURCE
 -- The interpreter's `U64` and `I64` arithmetic (`docs/design/INTEGER-TYPES-DESIGN.md` §6.2).
@@ -125,14 +125,16 @@ divModGo : Int ->
   (Int, Int) ->
   (Int, Int) ->
   ((Int, Int), (Int, Int))
-divModGo bit a b q r
-  | bit < 0 = (q, r)
-  | otherwise =
-    let r1 = bitOrU64 (shiftLeft64 r 1) (0, bitAt a bit)
-    if compareU64 r1 b == Lt then
-      divModGo (bit - 1) a b q r1
-    else
-      divModGo (bit - 1) a b (bitOrU64 q (shiftLeft64 (0, 1) bit)) (sub r1 b)
+divModGo bit0 a b q0 r0 = go bit0 q0 r0
+  where
+    go bit q r
+      | bit < 0 = (q, r)
+      | otherwise =
+        let r1 = bitOrU64 (shiftLeft64 r 1) (0, bitAt a bit)
+        if compareU64 r1 b == Lt then
+          go (bit - 1) q r1
+        else
+          go (bit - 1) (bitOrU64 q (shiftLeft64 (0, 1) bit)) (sub r1 b)
 
 bitAt : (Int, Int) -> Int -> Int
 bitAt (hi, lo) k
@@ -261,7 +263,7 @@ toDecimalI64 v
 (DTypeSig true "divMod" (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyTuple (TyCon "Int") (TyCon "Int"))))))
 (DFunDef false "divMod" ((PTuple (PVar "ah") (PVar "al")) (PTuple (PVar "bh") (PVar "bl"))) (EIf (EBinOp "&&" (EBinOp "<" (EVar "ah") (ELit (LInt 1073741824))) (EBinOp "<" (EVar "bh") (ELit (LInt 1073741824)))) (EBlock (DoLet false false (PVar "a") (EBinOp "+" (EBinOp "*" (EVar "ah") (EVar "half")) (EVar "al"))) (DoLet false false (PVar "b") (EBinOp "+" (EBinOp "*" (EVar "bh") (EVar "half")) (EVar "bl"))) (DoExpr (ETuple (EApp (EVar "fromInt") (EBinOp "/" (EVar "a") (EVar "b"))) (EApp (EVar "fromInt") (EBinOp "%" (EVar "a") (EVar "b")))))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "divModGo") (ELit (LInt 63))) (ETuple (EVar "ah") (EVar "al"))) (ETuple (EVar "bh") (EVar "bl"))) (ETuple (ELit (LInt 0)) (ELit (LInt 0)))) (ETuple (ELit (LInt 0)) (ELit (LInt 0)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "divModGo" (TyFun (TyCon "Int") (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyTuple (TyCon "Int") (TyCon "Int")))))))))
-(DFunDef false "divModGo" ((PVar "bit") (PVar "a") (PVar "b") (PVar "q") (PVar "r")) (EIf (EBinOp "<" (EVar "bit") (ELit (LInt 0))) (ETuple (EVar "q") (EVar "r")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "r1") (EApp (EApp (EVar "bitOrU64") (EApp (EApp (EVar "shiftLeft64") (EVar "r")) (ELit (LInt 1)))) (ETuple (ELit (LInt 0)) (EApp (EApp (EVar "bitAt") (EVar "a")) (EVar "bit"))))) (DoExpr (EIf (EBinOp "==" (EApp (EApp (EVar "compareU64") (EVar "r1")) (EVar "b")) (EVar "Lt")) (EApp (EApp (EApp (EApp (EApp (EVar "divModGo") (EBinOp "-" (EVar "bit") (ELit (LInt 1)))) (EVar "a")) (EVar "b")) (EVar "q")) (EVar "r1")) (EApp (EApp (EApp (EApp (EApp (EVar "divModGo") (EBinOp "-" (EVar "bit") (ELit (LInt 1)))) (EVar "a")) (EVar "b")) (EApp (EApp (EVar "bitOrU64") (EVar "q")) (EApp (EApp (EVar "shiftLeft64") (ETuple (ELit (LInt 0)) (ELit (LInt 1)))) (EVar "bit")))) (EApp (EApp (EVar "sub") (EVar "r1")) (EVar "b")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "divModGo" ((PVar "bit0") (PVar "a") (PVar "b") (PVar "q0") (PVar "r0")) (ELetGroup ((lgb "go" (clause ((PVar "bit") (PVar "q") (PVar "r")) (EIf (EBinOp "<" (EVar "bit") (ELit (LInt 0))) (ETuple (EVar "q") (EVar "r")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "r1") (EApp (EApp (EVar "bitOrU64") (EApp (EApp (EVar "shiftLeft64") (EVar "r")) (ELit (LInt 1)))) (ETuple (ELit (LInt 0)) (EApp (EApp (EVar "bitAt") (EVar "a")) (EVar "bit"))))) (DoExpr (EIf (EBinOp "==" (EApp (EApp (EVar "compareU64") (EVar "r1")) (EVar "b")) (EVar "Lt")) (EApp (EApp (EApp (EVar "go") (EBinOp "-" (EVar "bit") (ELit (LInt 1)))) (EVar "q")) (EVar "r1")) (EApp (EApp (EApp (EVar "go") (EBinOp "-" (EVar "bit") (ELit (LInt 1)))) (EApp (EApp (EVar "bitOrU64") (EVar "q")) (EApp (EApp (EVar "shiftLeft64") (ETuple (ELit (LInt 0)) (ELit (LInt 1)))) (EVar "bit")))) (EApp (EApp (EVar "sub") (EVar "r1")) (EVar "b")))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EApp (EApp (EVar "go") (EVar "bit0")) (EVar "q0")) (EVar "r0"))))
 (DTypeSig false "bitAt" (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "bitAt" ((PTuple (PVar "hi") (PVar "lo")) (PVar "k")) (EIf (EBinOp ">=" (EVar "k") (ELit (LInt 32))) (EApp (EApp (EVar "bitAnd") (EApp (EApp (EVar "shiftRight") (EVar "hi")) (EBinOp "-" (EVar "k") (ELit (LInt 32))))) (ELit (LInt 1))) (EIf (EVar "otherwise") (EApp (EApp (EVar "bitAnd") (EApp (EApp (EVar "shiftRight") (EVar "lo")) (EVar "k"))) (ELit (LInt 1))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "bitAndU64" (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyTuple (TyCon "Int") (TyCon "Int")))))
@@ -322,7 +324,7 @@ toDecimalI64 v
 (DTypeSig true "divMod" (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyTuple (TyCon "Int") (TyCon "Int"))))))
 (DFunDef false "divMod" ((PTuple (PVar "ah") (PVar "al")) (PTuple (PVar "bh") (PVar "bl"))) (EIf (EBinOp "&&" (EBinOp "<" (EVar "ah") (ELit (LInt 1073741824))) (EBinOp "<" (EVar "bh") (ELit (LInt 1073741824)))) (EBlock (DoLet false false (PVar "a") (EBinOp "+" (EBinOp "*" (EVar "ah") (EVar "half")) (EVar "al"))) (DoLet false false (PVar "b") (EBinOp "+" (EBinOp "*" (EVar "bh") (EVar "half")) (EVar "bl"))) (DoExpr (ETuple (EApp (EVar "fromInt#shadow") (EBinOp "/" (EVar "a") (EVar "b"))) (EApp (EVar "fromInt#shadow") (EBinOp "%" (EVar "a") (EVar "b")))))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "divModGo") (ELit (LInt 63))) (ETuple (EVar "ah") (EVar "al"))) (ETuple (EVar "bh") (EVar "bl"))) (ETuple (ELit (LInt 0)) (ELit (LInt 0)))) (ETuple (ELit (LInt 0)) (ELit (LInt 0)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "divModGo" (TyFun (TyCon "Int") (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyTuple (TyTuple (TyCon "Int") (TyCon "Int")) (TyTuple (TyCon "Int") (TyCon "Int")))))))))
-(DFunDef false "divModGo" ((PVar "bit") (PVar "a") (PVar "b") (PVar "q") (PVar "r")) (EIf (EBinOp "<" (EVar "bit") (ELit (LInt 0))) (ETuple (EVar "q") (EVar "r")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "r1") (EApp (EApp (EVar "bitOrU64") (EApp (EApp (EVar "shiftLeft64") (EVar "r")) (ELit (LInt 1)))) (ETuple (ELit (LInt 0)) (EApp (EApp (EVar "bitAt") (EVar "a")) (EVar "bit"))))) (DoExpr (EIf (EBinOp "==" (EApp (EApp (EVar "compareU64") (EVar "r1")) (EVar "b")) (EVar "Lt")) (EApp (EApp (EApp (EApp (EApp (EVar "divModGo") (EBinOp "-" (EVar "bit") (ELit (LInt 1)))) (EVar "a")) (EVar "b")) (EVar "q")) (EVar "r1")) (EApp (EApp (EApp (EApp (EApp (EVar "divModGo") (EBinOp "-" (EVar "bit") (ELit (LInt 1)))) (EVar "a")) (EVar "b")) (EApp (EApp (EVar "bitOrU64") (EVar "q")) (EApp (EApp (EVar "shiftLeft64") (ETuple (ELit (LInt 0)) (ELit (LInt 1)))) (EVar "bit")))) (EApp (EApp (EVar "sub#shadow") (EVar "r1")) (EVar "b")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "divModGo" ((PVar "bit0") (PVar "a") (PVar "b") (PVar "q0") (PVar "r0")) (ELetGroup ((lgb "go" (clause ((PVar "bit") (PVar "q") (PVar "r")) (EIf (EBinOp "<" (EVar "bit") (ELit (LInt 0))) (ETuple (EVar "q") (EVar "r")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "r1") (EApp (EApp (EVar "bitOrU64") (EApp (EApp (EVar "shiftLeft64") (EVar "r")) (ELit (LInt 1)))) (ETuple (ELit (LInt 0)) (EApp (EApp (EVar "bitAt") (EVar "a")) (EVar "bit"))))) (DoExpr (EIf (EBinOp "==" (EApp (EApp (EVar "compareU64") (EVar "r1")) (EVar "b")) (EVar "Lt")) (EApp (EApp (EApp (EVar "go") (EBinOp "-" (EVar "bit") (ELit (LInt 1)))) (EVar "q")) (EVar "r1")) (EApp (EApp (EApp (EVar "go") (EBinOp "-" (EVar "bit") (ELit (LInt 1)))) (EApp (EApp (EVar "bitOrU64") (EVar "q")) (EApp (EApp (EVar "shiftLeft64") (ETuple (ELit (LInt 0)) (ELit (LInt 1)))) (EVar "bit")))) (EApp (EApp (EVar "sub#shadow") (EVar "r1")) (EVar "b")))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EApp (EApp (EVar "go") (EVar "bit0")) (EVar "q0")) (EVar "r0"))))
 (DTypeSig false "bitAt" (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "bitAt" ((PTuple (PVar "hi") (PVar "lo")) (PVar "k")) (EIf (EBinOp ">=" (EVar "k") (ELit (LInt 32))) (EApp (EApp (EVar "bitAnd") (EApp (EApp (EVar "shiftRight") (EVar "hi")) (EBinOp "-" (EVar "k") (ELit (LInt 32))))) (ELit (LInt 1))) (EIf (EVar "otherwise") (EApp (EApp (EVar "bitAnd") (EApp (EApp (EVar "shiftRight") (EVar "lo")) (EVar "k"))) (ELit (LInt 1))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "bitAndU64" (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyTuple (TyCon "Int") (TyCon "Int")))))

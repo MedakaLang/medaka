@@ -23,10 +23,11 @@ import tools.lint_core.{
   Scope(..),
   StdlibIndex,
   mkRule,
+  noFix,
+  factDeclLocs,
 }
 import tools.lint_shared.{
   armToClause,
-  declLocList,
   isBareParam,
   matchBodyOnBareParam,
   patIsWild,
@@ -65,7 +66,7 @@ ruleMatchOnParam : StdlibIndex ->
   Positions ->
   List Decl ->
   List Finding
-ruleMatchOnParam _ _ _ pos prog = flatMap matchParamDeclL (declLocList pos prog)
+ruleMatchOnParam _ _ facts _ _ = flatMap matchParamDeclL (factDeclLocs facts)
 
 matchParamDeclL : (Decl, Option Loc) -> List Finding
 matchParamDeclL (d, loc) = matchParamDecl loc d
@@ -108,7 +109,7 @@ matchParamHit loc name pats p
         "function '\{name}' matches on parameter '\{p}' — use a multi-clause function definition",
       severity = SevWarning,
       loc = loc,
-      fix = None,
+      fix = noFix,
     },
   ]
   | otherwise = []
@@ -131,10 +132,9 @@ matchParamHit loc name pats p
 --     as the token `p`, so a real reference is never missed (the scan can only
 --     over-bail, which is safe).
 matchParamFix : Oracle -> Decl -> Option (List Decl)
-matchParamFix _ (DFunDef vis name pats body _ _) =
-  match matchBodyOnBareParam pats body
-    Some (p, k, arms) => matchParamFixArms vis name pats p k arms
-    None => None
+matchParamFix _ (DFunDef vis name pats body _ _) = do
+  (p, k, arms) <- matchBodyOnBareParam pats body
+  matchParamFixArms vis name pats p k arms
 matchParamFix _ _ = None
 
 matchParamFixArms : Bool ->
@@ -176,12 +176,12 @@ armPatIsWild (Arm pat _ _) = patIsWild pat
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "anyList" false) (mem "isNonEmptyL" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "exprToString" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "mkRule" false))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "armToClause" false) (mem "declLocList" false) (mem "isBareParam" false) (mem "matchBodyOnBareParam" false) (mem "patIsWild" false) (mem "ruleNameMatchParam" false) (mem "unwrapLoc" false) (mem "wholeWordIn" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "mkRule" false) (mem "noFix" false) (mem "factDeclLocs" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "armToClause" false) (mem "isBareParam" false) (mem "matchBodyOnBareParam" false) (mem "patIsWild" false) (mem "ruleNameMatchParam" false) (mem "unwrapLoc" false) (mem "wholeWordIn" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameMatchParam")) (fa "summary" (ELit (LString "function body is a `match` on a bare parameter (prefer multi-clause; STYLE §8)"))) (fa "doc" (ELit (LString "A function whose whole body is a `match` on one of its own parameters is clearer as several clauses: the patterns move into the parameter position and the extra indentation level goes away. This enforces STYLE section 8, a repository taste ruling.\n\nBefore:\n  len xs = match xs\n    [] => 0\n    _ :: t => 1 + len t\nAfter:\n  len [] = 0\n  len (_ :: t) = 1 + len t"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Internal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "Fixable")) (fa "needs" (EListLit))))) (EVar "ruleMatchOnParam")) (EApp (EVar "Some") (EVar "matchParamFix"))))
 (DTypeSig false "ruleMatchOnParam" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "ruleMatchOnParam" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "matchParamDeclL")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))
+(DFunDef false "ruleMatchOnParam" (PWild PWild (PVar "facts") PWild PWild) (EApp (EApp (EVar "flatMap") (EVar "matchParamDeclL")) (EApp (EVar "factDeclLocs") (EVar "facts"))))
 (DTypeSig false "matchParamDeclL" (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding"))))
 (DFunDef false "matchParamDeclL" ((PTuple (PVar "d") (PVar "loc"))) (EApp (EApp (EVar "matchParamDecl") (EVar "loc")) (EVar "d")))
 (DTypeSig false "matchParamDecl" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Finding")))))
@@ -196,9 +196,9 @@ armPatIsWild (Arm pat _ _) = patIsWild pat
 (DTypeSig false "matchParamArms" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "matchParamArms" ((PVar "loc") (PVar "name") (PVar "pats") (PVar "scrut") (PVar "arms")) (EIf (EBinOp "<" (EApp (EVar "listLen") (EVar "arms")) (ELit (LInt 2))) (EListLit) (EIf (EVar "otherwise") (EMatch (EApp (EVar "unwrapLoc") (EVar "scrut")) (arm (PCon "EVar" (PVar "p")) () (EApp (EApp (EApp (EApp (EVar "matchParamHit") (EVar "loc")) (EVar "name")) (EVar "pats")) (EVar "p"))) (arm PWild () (EListLit))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "matchParamHit" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Finding")))))))
-(DFunDef false "matchParamHit" ((PVar "loc") (PVar "name") (PVar "pats") (PVar "p")) (EIf (EApp (EApp (EVar "anyList") (EApp (EVar "isBareParam") (EVar "p"))) (EVar "pats")) (EListLit (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameMatchParam")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "function '")) (EApp (EVar "$core.display") (EVar "name"))) (ELit (LString "' matches on parameter '"))) (EApp (EVar "$core.display") (EVar "p"))) (ELit (LString "' — use a multi-clause function definition")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None"))))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "matchParamHit" ((PVar "loc") (PVar "name") (PVar "pats") (PVar "p")) (EIf (EApp (EApp (EVar "anyList") (EApp (EVar "isBareParam") (EVar "p"))) (EVar "pats")) (EListLit (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameMatchParam")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "function '")) (EApp (EVar "$core.display") (EVar "name"))) (ELit (LString "' matches on parameter '"))) (EApp (EVar "$core.display") (EVar "p"))) (ELit (LString "' — use a multi-clause function definition")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "noFix"))))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "matchParamFix" (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl"))))))
-(DFunDef false "matchParamFix" (PWild (PCon "DFunDef" (PVar "vis") (PVar "name") (PVar "pats") (PVar "body") PWild PWild)) (EMatch (EApp (EApp (EVar "matchBodyOnBareParam") (EVar "pats")) (EVar "body")) (arm (PCon "Some" (PTuple (PVar "p") (PVar "k") (PVar "arms"))) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchParamFixArms") (EVar "vis")) (EVar "name")) (EVar "pats")) (EVar "p")) (EVar "k")) (EVar "arms"))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "matchParamFix" (PWild (PCon "DFunDef" (PVar "vis") (PVar "name") (PVar "pats") (PVar "body") PWild PWild)) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "matchBodyOnBareParam") (EVar "pats")) (EVar "body"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "p") (PVar "k") (PVar "arms")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchParamFixArms") (EVar "vis")) (EVar "name")) (EVar "pats")) (EVar "p")) (EVar "k")) (EVar "arms")))))))
 (DFunDef false "matchParamFix" (PWild PWild) (EVar "None"))
 (DTypeSig false "matchParamFixArms" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl"))))))))))
 (DFunDef false "matchParamFixArms" ((PVar "vis") (PVar "name") (PVar "pats") (PVar "p") (PVar "k") (PVar "arms")) (EIf (EBinOp "<" (EApp (EVar "listLen") (EVar "arms")) (ELit (LInt 2))) (EVar "None") (EIf (EApp (EApp (EVar "anyList") (EVar "armHasGuard")) (EVar "arms")) (EVar "None") (EIf (EApp (EApp (EVar "anyList") (EApp (EVar "armUnsafeMention") (EVar "p"))) (EVar "arms")) (EVar "None") (EIf (EVar "otherwise") (EApp (EVar "Some") (EApp (EApp (EVar "map") (EApp (EApp (EApp (EApp (EApp (EVar "armToClause") (EVar "vis")) (EVar "name")) (EVar "p")) (EVar "pats")) (EVar "k"))) (EVar "arms"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
@@ -218,12 +218,12 @@ armPatIsWild (Arm pat _ _) = patIsWild pat
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "anyList" false) (mem "isNonEmptyL" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "exprToString" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "mkRule" false))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "armToClause" false) (mem "declLocList" false) (mem "isBareParam" false) (mem "matchBodyOnBareParam" false) (mem "patIsWild" false) (mem "ruleNameMatchParam" false) (mem "unwrapLoc" false) (mem "wholeWordIn" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "mkRule" false) (mem "noFix" false) (mem "factDeclLocs" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "armToClause" false) (mem "isBareParam" false) (mem "matchBodyOnBareParam" false) (mem "patIsWild" false) (mem "ruleNameMatchParam" false) (mem "unwrapLoc" false) (mem "wholeWordIn" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameMatchParam")) (fa "summary" (ELit (LString "function body is a `match` on a bare parameter (prefer multi-clause; STYLE §8)"))) (fa "doc" (ELit (LString "A function whose whole body is a `match` on one of its own parameters is clearer as several clauses: the patterns move into the parameter position and the extra indentation level goes away. This enforces STYLE section 8, a repository taste ruling.\n\nBefore:\n  len xs = match xs\n    [] => 0\n    _ :: t => 1 + len t\nAfter:\n  len [] = 0\n  len (_ :: t) = 1 + len t"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Internal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "Fixable")) (fa "needs" (EListLit))))) (EVar "ruleMatchOnParam")) (EApp (EVar "Some") (EVar "matchParamFix"))))
 (DTypeSig false "ruleMatchOnParam" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "ruleMatchOnParam" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "matchParamDeclL")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))
+(DFunDef false "ruleMatchOnParam" (PWild PWild (PVar "facts") PWild PWild) (EApp (EApp (EDictApp "flatMap") (EVar "matchParamDeclL")) (EApp (EVar "factDeclLocs") (EVar "facts"))))
 (DTypeSig false "matchParamDeclL" (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding"))))
 (DFunDef false "matchParamDeclL" ((PTuple (PVar "d") (PVar "loc"))) (EApp (EApp (EVar "matchParamDecl") (EVar "loc")) (EVar "d")))
 (DTypeSig false "matchParamDecl" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Finding")))))
@@ -238,9 +238,9 @@ armPatIsWild (Arm pat _ _) = patIsWild pat
 (DTypeSig false "matchParamArms" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
 (DFunDef false "matchParamArms" ((PVar "loc") (PVar "name") (PVar "pats") (PVar "scrut") (PVar "arms")) (EIf (EBinOp "<" (EApp (EVar "listLen") (EVar "arms")) (ELit (LInt 2))) (EListLit) (EIf (EVar "otherwise") (EMatch (EApp (EVar "unwrapLoc") (EVar "scrut")) (arm (PCon "EVar" (PVar "p")) () (EApp (EApp (EApp (EApp (EVar "matchParamHit") (EVar "loc")) (EVar "name")) (EVar "pats")) (EVar "p"))) (arm PWild () (EListLit))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "matchParamHit" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Finding")))))))
-(DFunDef false "matchParamHit" ((PVar "loc") (PVar "name") (PVar "pats") (PVar "p")) (EIf (EApp (EApp (EVar "anyList") (EApp (EVar "isBareParam") (EVar "p"))) (EVar "pats")) (EListLit (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameMatchParam")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "function '")) (EApp (EVar "$core.display") (EVar "name"))) (ELit (LString "' matches on parameter '"))) (EApp (EVar "$core.display") (EVar "p"))) (ELit (LString "' — use a multi-clause function definition")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None"))))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "matchParamHit" ((PVar "loc") (PVar "name") (PVar "pats") (PVar "p")) (EIf (EApp (EApp (EVar "anyList") (EApp (EVar "isBareParam") (EVar "p"))) (EVar "pats")) (EListLit (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameMatchParam")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "function '")) (EApp (EVar "$core.display") (EVar "name"))) (ELit (LString "' matches on parameter '"))) (EApp (EVar "$core.display") (EVar "p"))) (ELit (LString "' — use a multi-clause function definition")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "noFix"))))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "matchParamFix" (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl"))))))
-(DFunDef false "matchParamFix" (PWild (PCon "DFunDef" (PVar "vis") (PVar "name") (PVar "pats") (PVar "body") PWild PWild)) (EMatch (EApp (EApp (EVar "matchBodyOnBareParam") (EVar "pats")) (EVar "body")) (arm (PCon "Some" (PTuple (PVar "p") (PVar "k") (PVar "arms"))) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchParamFixArms") (EVar "vis")) (EVar "name")) (EVar "pats")) (EVar "p")) (EVar "k")) (EVar "arms"))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "matchParamFix" (PWild (PCon "DFunDef" (PVar "vis") (PVar "name") (PVar "pats") (PVar "body") PWild PWild)) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "matchBodyOnBareParam") (EVar "pats")) (EVar "body"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "p") (PVar "k") (PVar "arms")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "matchParamFixArms") (EVar "vis")) (EVar "name")) (EVar "pats")) (EVar "p")) (EVar "k")) (EVar "arms")))))))
 (DFunDef false "matchParamFix" (PWild PWild) (EVar "None"))
 (DTypeSig false "matchParamFixArms" (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Arm")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl"))))))))))
 (DFunDef false "matchParamFixArms" ((PVar "vis") (PVar "name") (PVar "pats") (PVar "p") (PVar "k") (PVar "arms")) (EIf (EBinOp "<" (EApp (EVar "listLen") (EVar "arms")) (ELit (LInt 2))) (EVar "None") (EIf (EApp (EApp (EVar "anyList") (EVar "armHasGuard")) (EVar "arms")) (EVar "None") (EIf (EApp (EApp (EVar "anyList") (EApp (EVar "armUnsafeMention") (EVar "p"))) (EVar "arms")) (EVar "None") (EIf (EVar "otherwise") (EApp (EVar "Some") (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EApp (EApp (EVar "armToClause") (EVar "vis")) (EVar "name")) (EVar "p")) (EVar "pats")) (EVar "k"))) (EVar "arms"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))

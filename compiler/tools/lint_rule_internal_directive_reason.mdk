@@ -27,6 +27,7 @@ import tools.lint_core.{
   StdlibIndex,
   factComments,
   mkRule,
+  noFix,
 }
 import tools.lint_shared.{
   CommentBlock(..),
@@ -153,25 +154,23 @@ declGapReasoned : List Comment ->
   Option String ->
   Int ->
   Bool
-declGapReasoned comments blocks declZips targetName line =
-  match find (commentBlockEndsAt (line - 1)) blocks
-    Some b => blockHasReason comments b
-    None => match find (declZipEndsAt (line - 1)) declZips
-      Some (d, dp) =>
-        if declGapNameMatches targetName d then
-          declGapReasoned comments blocks declZips targetName (declPosLine dp)
-        else
-          False
-      None => False
+declGapReasoned comments blocks declZips targetName line0 = go line0
+  where
+    go line = match find (commentBlockEndsAt (line - 1)) blocks
+      Some b => blockHasReason comments b
+      None => match find (declZipEndsAt (line - 1)) declZips
+        Some (d, dp) =>
+          if declGapNameMatches targetName d then go (declPosLine dp) else False
+        None => False
 
 -- The name of the declaration the directive's target `line` falls inside —
 -- `None` when no top-level `DTypeSig`/`DFunDef` covers that line (a
 -- different decl kind, or the directive is the last thing in the file), in
 -- which case `declGapNameMatches` below never credits a gap hop.
 declZipNameAt : List (Decl, DeclPos) -> Int -> Option String
-declZipNameAt declZips line = match find (declZipContainsLine line) declZips
-  Some (d, _) => declBridgeName d
-  None => None
+declZipNameAt declZips line = do
+  (d, _) <- find (declZipContainsLine line) declZips
+  declBridgeName d
 
 declZipContainsLine : Int -> (Decl, DeclPos) -> Bool
 declZipContainsLine line (_, dp) =
@@ -270,5 +269,5 @@ directiveReasonFinding c = Finding {
     "`-- lint-disable-*` directive has no comment in its own comment block stating the constraint that forced it -- an issue number alone is not a reason",
   severity = SevWarning,
   loc = Some (Loc "" (commentLine c) 1 (commentLine c) 1),
-  fix = None,
+  fix = noFix,
 }

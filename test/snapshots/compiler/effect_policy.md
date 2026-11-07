@@ -1,5 +1,5 @@
 # META
-source_lines=257
+source_lines=255
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/types/effect_policy.mdk — does an entry's invocation summary fit a
@@ -132,7 +132,8 @@ collectEVars (ESlice a b c _) =
 collectEVars (EIndex a b) = collectEVars a ++ collectEVars b
 collectEVars (EBlock stmts) = concatMapCP collectStmt stmts
 collectEVars (EDo _ stmts) = concatMapCP collectStmt stmts
-collectEVars _ = []
+collectEVars (ELit _ | ESection _ | EStringInterp _ | EGuards _ | EMapLit _ _ | ESetLit _ _ | EAsPat _ _ | EOrPat _ | EVarAt _ _ | EVarId _ _ | EMethodAt _ _ _ | EDictAt _ _ | EDoOrigin _ _ | ENumLit _ _ _ | EWideLit _ _ _ _) =
+  []
 
 collectBind : LetBind -> List String
 collectBind (LetBind _ clauses _ _) = concatMapCP collectClause clauses
@@ -214,7 +215,7 @@ resultSpineRows : Mono -> List Atom
 resultSpineRows m = match normalize m
   TFun _ row res => atomsUnion (effrowLabels row) (resultSpineRows res)
   TEff row => effrowLabels row
-  _ => []
+  TVar _ | TCon _ _ | TRigid _ | TApp _ _ | TQual _ _ | TAuth _ => []
 
 -- Does fn `name` carry an atom whose LABEL is `label`?  (Chain reconstruction
 -- stays label-keyed — the param does not participate in the call-graph trace.)
@@ -238,27 +239,24 @@ traceChain : CallGraph ->
   String ->
   List String ->
   List String
-traceChain callGraph effTable forbiddenLabel fn visited =
-  let callees = match omLookup fn callGraph
-    None => []
-    Some s => s
-  match firstWithEffect effTable forbiddenLabel (sortUniqS callees)
-    None => [fn]
-    Some c =>
-      -- Bound: runs only while rendering a refusal's via-chain, and `visited` is one call-graph path that ends at the first revisit.
-      -- lint-disable-next-line rule-list-as-set
-      if contains c visited then
-        [fn, c]
-      else
-        fn :: traceChain callGraph effTable forbiddenLabel c (c :: visited)
+traceChain callGraph effTable forbiddenLabel fn0 visited0 = go fn0 visited0
+  where
+    go fn visited =
+      let callees = match omLookup fn callGraph
+        None => []
+        Some s => s
+      match firstWithEffect effTable forbiddenLabel (sortUniqS callees)
+        None => [fn]
+        Some c =>
+          -- Bound: runs only while rendering a refusal's via-chain, and `visited` is one call-graph path that ends at the first revisit.
+          -- lint-disable-next-line rule-list-as-set
+          if contains c visited then [fn, c] else fn :: go c (c :: visited)
 
 firstWithEffect : EffectTable -> String -> List String -> Option String
-firstWithEffect _ _ [] = None
-firstWithEffect effTable label (c :: rest) =
-  if fnHasEffect effTable c label then
-    Some c
-  else
-    firstWithEffect effTable label rest
+firstWithEffect effTable label xs0 = go xs0
+  where
+    go [] = None
+    go (c :: rest) = if fnHasEffect effTable c label then Some c else go rest
 # DESUGAR
 (DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("frontend" "ast") ((mem "EffParamTy" true) (mem "TyConOrigin" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "Expr" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "LetBind" true) (mem "FunClause" true) (mem "FieldAssign" true))))
@@ -311,7 +309,7 @@ firstWithEffect effTable label (c :: rest) =
 (DFunDef false "collectEVars" ((PCon "EIndex" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "collectEVars") (EVar "a")) (EApp (EVar "collectEVars") (EVar "b"))))
 (DFunDef false "collectEVars" ((PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EVar "concatMapCP") (EVar "collectStmt")) (EVar "stmts")))
 (DFunDef false "collectEVars" ((PCon "EDo" PWild (PVar "stmts"))) (EApp (EApp (EVar "concatMapCP") (EVar "collectStmt")) (EVar "stmts")))
-(DFunDef false "collectEVars" (PWild) (EListLit))
+(DFunDef false "collectEVars" ((POr (PCon "ELit" PWild) (PCon "ESection" PWild) (PCon "EStringInterp" PWild) (PCon "EGuards" PWild) (PCon "EMapLit" PWild PWild) (PCon "ESetLit" PWild PWild) (PCon "EAsPat" PWild PWild) (PCon "EOrPat" PWild) (PCon "EVarAt" PWild PWild) (PCon "EVarId" PWild PWild) (PCon "EMethodAt" PWild PWild PWild) (PCon "EDictAt" PWild PWild) (PCon "EDoOrigin" PWild PWild) (PCon "ENumLit" PWild PWild PWild) (PCon "EWideLit" PWild PWild PWild PWild))) (EListLit))
 (DTypeSig false "collectBind" (TyFun (TyCon "LetBind") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "collectBind" ((PCon "LetBind" PWild (PVar "clauses") PWild PWild)) (EApp (EApp (EVar "concatMapCP") (EVar "collectClause")) (EVar "clauses")))
 (DTypeSig false "collectClause" (TyFun (TyCon "FunClause") (TyApp (TyCon "List") (TyCon "String"))))
@@ -357,16 +355,15 @@ firstWithEffect effTable label (c :: rest) =
 (DTypeSig false "callPerformed" (TyFun (TyCon "Scheme") (TyApp (TyCon "List") (TyCon "Atom"))))
 (DFunDef false "callPerformed" ((PCon "Forall" PWild PWild PWild PWild (PVar "force") (PVar "mono"))) (EApp (EApp (EVar "atomsUnion") (EApp (EVar "effrowLabels") (EVar "force"))) (EApp (EVar "resultSpineRows") (EVar "mono"))))
 (DTypeSig false "resultSpineRows" (TyFun (TyCon "Mono") (TyApp (TyCon "List") (TyCon "Atom"))))
-(DFunDef false "resultSpineRows" ((PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TFun" PWild (PVar "row") (PVar "res")) () (EApp (EApp (EVar "atomsUnion") (EApp (EVar "effrowLabels") (EVar "row"))) (EApp (EVar "resultSpineRows") (EVar "res")))) (arm (PCon "TEff" (PVar "row")) () (EApp (EVar "effrowLabels") (EVar "row"))) (arm PWild () (EListLit))))
+(DFunDef false "resultSpineRows" ((PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TFun" PWild (PVar "row") (PVar "res")) () (EApp (EApp (EVar "atomsUnion") (EApp (EVar "effrowLabels") (EVar "row"))) (EApp (EVar "resultSpineRows") (EVar "res")))) (arm (PCon "TEff" (PVar "row")) () (EApp (EVar "effrowLabels") (EVar "row"))) (arm (POr (PCon "TVar" PWild) (PCon "TCon" PWild PWild) (PCon "TRigid" PWild) (PCon "TApp" PWild PWild) (PCon "TQual" PWild PWild) (PCon "TAuth" PWild)) () (EListLit))))
 (DTypeSig false "fnHasEffect" (TyFun (TyCon "EffectTable") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "fnHasEffect" ((PVar "table") (PVar "name") (PVar "label")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "table")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PVar "effs")) () (EApp (EApp (EVar "anyList") (ELam ((PVar "a")) (EBinOp "==" (EApp (EVar "atomLabel") (EVar "a")) (EVar "label")))) (EVar "effs")))))
 (DTypeSig true "viaChain" (TyFun (TyCon "CallGraph") (TyFun (TyCon "EffectTable") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "viaChain" ((PVar "callGraph") (PVar "effTable") (PVar "start") (PVar "forbiddenLabel")) (EApp (EApp (EApp (EApp (EApp (EVar "traceChain") (EVar "callGraph")) (EVar "effTable")) (EVar "forbiddenLabel")) (EVar "start")) (EListLit (EVar "start"))))
 (DTypeSig false "traceChain" (TyFun (TyCon "CallGraph") (TyFun (TyCon "EffectTable") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "traceChain" ((PVar "callGraph") (PVar "effTable") (PVar "forbiddenLabel") (PVar "fn") (PVar "visited")) (EBlock (DoLet false false (PVar "callees") (EMatch (EApp (EApp (EVar "omLookup") (EVar "fn")) (EVar "callGraph")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "s")) () (EVar "s")))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "firstWithEffect") (EVar "effTable")) (EVar "forbiddenLabel")) (EApp (EVar "sortUniqS") (EVar "callees"))) (arm (PCon "None") () (EListLit (EVar "fn"))) (arm (PCon "Some" (PVar "c")) () (EIf (EApp (EApp (EVar "contains") (EVar "c")) (EVar "visited")) (EListLit (EVar "fn") (EVar "c")) (EBinOp "::" (EVar "fn") (EApp (EApp (EApp (EApp (EApp (EVar "traceChain") (EVar "callGraph")) (EVar "effTable")) (EVar "forbiddenLabel")) (EVar "c")) (EBinOp "::" (EVar "c") (EVar "visited"))))))))))
+(DFunDef false "traceChain" ((PVar "callGraph") (PVar "effTable") (PVar "forbiddenLabel") (PVar "fn0") (PVar "visited0")) (ELetGroup ((lgb "go" (clause ((PVar "fn") (PVar "visited")) (EBlock (DoLet false false (PVar "callees") (EMatch (EApp (EApp (EVar "omLookup") (EVar "fn")) (EVar "callGraph")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "s")) () (EVar "s")))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "firstWithEffect") (EVar "effTable")) (EVar "forbiddenLabel")) (EApp (EVar "sortUniqS") (EVar "callees"))) (arm (PCon "None") () (EListLit (EVar "fn"))) (arm (PCon "Some" (PVar "c")) () (EIf (EApp (EApp (EVar "contains") (EVar "c")) (EVar "visited")) (EListLit (EVar "fn") (EVar "c")) (EBinOp "::" (EVar "fn") (EApp (EApp (EVar "go") (EVar "c")) (EBinOp "::" (EVar "c") (EVar "visited")))))))))))) (EApp (EApp (EVar "go") (EVar "fn0")) (EVar "visited0"))))
 (DTypeSig false "firstWithEffect" (TyFun (TyCon "EffectTable") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String"))))))
-(DFunDef false "firstWithEffect" (PWild PWild (PList)) (EVar "None"))
-(DFunDef false "firstWithEffect" ((PVar "effTable") (PVar "label") (PCons (PVar "c") (PVar "rest"))) (EIf (EApp (EApp (EApp (EVar "fnHasEffect") (EVar "effTable")) (EVar "c")) (EVar "label")) (EApp (EVar "Some") (EVar "c")) (EApp (EApp (EApp (EVar "firstWithEffect") (EVar "effTable")) (EVar "label")) (EVar "rest"))))
+(DFunDef false "firstWithEffect" ((PVar "effTable") (PVar "label") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EVar "None")) (clause ((PCons (PVar "c") (PVar "rest"))) (EIf (EApp (EApp (EApp (EVar "fnHasEffect") (EVar "effTable")) (EVar "c")) (EVar "label")) (EApp (EVar "Some") (EVar "c")) (EApp (EVar "go") (EVar "rest")))))) (EApp (EVar "go") (EVar "xs0"))))
 # MARK
 (DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("frontend" "ast") ((mem "EffParamTy" true) (mem "TyConOrigin" true) (mem "Decl" true) (mem "ExternDecl" true) (mem "Expr" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "LetBind" true) (mem "FunClause" true) (mem "FieldAssign" true))))
@@ -419,7 +416,7 @@ firstWithEffect effTable label (c :: rest) =
 (DFunDef false "collectEVars" ((PCon "EIndex" (PVar "a") (PVar "b"))) (EBinOp "++" (EApp (EVar "collectEVars") (EVar "a")) (EApp (EVar "collectEVars") (EVar "b"))))
 (DFunDef false "collectEVars" ((PCon "EBlock" (PVar "stmts"))) (EApp (EApp (EVar "concatMapCP") (EVar "collectStmt")) (EVar "stmts")))
 (DFunDef false "collectEVars" ((PCon "EDo" PWild (PVar "stmts"))) (EApp (EApp (EVar "concatMapCP") (EVar "collectStmt")) (EVar "stmts")))
-(DFunDef false "collectEVars" (PWild) (EListLit))
+(DFunDef false "collectEVars" ((POr (PCon "ELit" PWild) (PCon "ESection" PWild) (PCon "EStringInterp" PWild) (PCon "EGuards" PWild) (PCon "EMapLit" PWild PWild) (PCon "ESetLit" PWild PWild) (PCon "EAsPat" PWild PWild) (PCon "EOrPat" PWild) (PCon "EVarAt" PWild PWild) (PCon "EVarId" PWild PWild) (PCon "EMethodAt" PWild PWild PWild) (PCon "EDictAt" PWild PWild) (PCon "EDoOrigin" PWild PWild) (PCon "ENumLit" PWild PWild PWild) (PCon "EWideLit" PWild PWild PWild PWild))) (EListLit))
 (DTypeSig false "collectBind" (TyFun (TyCon "LetBind") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "collectBind" ((PCon "LetBind" PWild (PVar "clauses") PWild PWild)) (EApp (EApp (EVar "concatMapCP") (EVar "collectClause")) (EVar "clauses")))
 (DTypeSig false "collectClause" (TyFun (TyCon "FunClause") (TyApp (TyCon "List") (TyCon "String"))))
@@ -465,13 +462,12 @@ firstWithEffect effTable label (c :: rest) =
 (DTypeSig false "callPerformed" (TyFun (TyCon "Scheme") (TyApp (TyCon "List") (TyCon "Atom"))))
 (DFunDef false "callPerformed" ((PCon "Forall" PWild PWild PWild PWild (PVar "force") (PVar "mono"))) (EApp (EApp (EVar "atomsUnion") (EApp (EVar "effrowLabels") (EVar "force"))) (EApp (EVar "resultSpineRows") (EVar "mono"))))
 (DTypeSig false "resultSpineRows" (TyFun (TyCon "Mono") (TyApp (TyCon "List") (TyCon "Atom"))))
-(DFunDef false "resultSpineRows" ((PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TFun" PWild (PVar "row") (PVar "res")) () (EApp (EApp (EVar "atomsUnion") (EApp (EVar "effrowLabels") (EVar "row"))) (EApp (EVar "resultSpineRows") (EVar "res")))) (arm (PCon "TEff" (PVar "row")) () (EApp (EVar "effrowLabels") (EVar "row"))) (arm PWild () (EListLit))))
+(DFunDef false "resultSpineRows" ((PVar "m")) (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TFun" PWild (PVar "row") (PVar "res")) () (EApp (EApp (EVar "atomsUnion") (EApp (EVar "effrowLabels") (EVar "row"))) (EApp (EVar "resultSpineRows") (EVar "res")))) (arm (PCon "TEff" (PVar "row")) () (EApp (EVar "effrowLabels") (EVar "row"))) (arm (POr (PCon "TVar" PWild) (PCon "TCon" PWild PWild) (PCon "TRigid" PWild) (PCon "TApp" PWild PWild) (PCon "TQual" PWild PWild) (PCon "TAuth" PWild)) () (EListLit))))
 (DTypeSig false "fnHasEffect" (TyFun (TyCon "EffectTable") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "fnHasEffect" ((PVar "table") (PVar "name") (PVar "label")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "table")) (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PVar "effs")) () (EApp (EApp (EVar "anyList") (ELam ((PVar "a")) (EBinOp "==" (EApp (EVar "atomLabel") (EVar "a")) (EVar "label")))) (EVar "effs")))))
 (DTypeSig true "viaChain" (TyFun (TyCon "CallGraph") (TyFun (TyCon "EffectTable") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "viaChain" ((PVar "callGraph") (PVar "effTable") (PVar "start") (PVar "forbiddenLabel")) (EApp (EApp (EApp (EApp (EApp (EVar "traceChain") (EVar "callGraph")) (EVar "effTable")) (EVar "forbiddenLabel")) (EVar "start")) (EListLit (EVar "start"))))
 (DTypeSig false "traceChain" (TyFun (TyCon "CallGraph") (TyFun (TyCon "EffectTable") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "traceChain" ((PVar "callGraph") (PVar "effTable") (PVar "forbiddenLabel") (PVar "fn") (PVar "visited")) (EBlock (DoLet false false (PVar "callees") (EMatch (EApp (EApp (EVar "omLookup") (EVar "fn")) (EVar "callGraph")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "s")) () (EVar "s")))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "firstWithEffect") (EVar "effTable")) (EVar "forbiddenLabel")) (EApp (EVar "sortUniqS") (EVar "callees"))) (arm (PCon "None") () (EListLit (EVar "fn"))) (arm (PCon "Some" (PVar "c")) () (EIf (EApp (EApp (EVar "contains") (EVar "c")) (EVar "visited")) (EListLit (EVar "fn") (EVar "c")) (EBinOp "::" (EVar "fn") (EApp (EApp (EApp (EApp (EApp (EVar "traceChain") (EVar "callGraph")) (EVar "effTable")) (EVar "forbiddenLabel")) (EVar "c")) (EBinOp "::" (EVar "c") (EVar "visited"))))))))))
+(DFunDef false "traceChain" ((PVar "callGraph") (PVar "effTable") (PVar "forbiddenLabel") (PVar "fn0") (PVar "visited0")) (ELetGroup ((lgb "go" (clause ((PVar "fn") (PVar "visited")) (EBlock (DoLet false false (PVar "callees") (EMatch (EApp (EApp (EVar "omLookup") (EVar "fn")) (EVar "callGraph")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "s")) () (EVar "s")))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "firstWithEffect") (EVar "effTable")) (EVar "forbiddenLabel")) (EApp (EVar "sortUniqS") (EVar "callees"))) (arm (PCon "None") () (EListLit (EVar "fn"))) (arm (PCon "Some" (PVar "c")) () (EIf (EApp (EApp (EVar "contains") (EVar "c")) (EVar "visited")) (EListLit (EVar "fn") (EVar "c")) (EBinOp "::" (EVar "fn") (EApp (EApp (EVar "go") (EVar "c")) (EBinOp "::" (EVar "c") (EVar "visited")))))))))))) (EApp (EApp (EVar "go") (EVar "fn0")) (EVar "visited0"))))
 (DTypeSig false "firstWithEffect" (TyFun (TyCon "EffectTable") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String"))))))
-(DFunDef false "firstWithEffect" (PWild PWild (PList)) (EVar "None"))
-(DFunDef false "firstWithEffect" ((PVar "effTable") (PVar "label") (PCons (PVar "c") (PVar "rest"))) (EIf (EApp (EApp (EApp (EVar "fnHasEffect") (EVar "effTable")) (EVar "c")) (EVar "label")) (EApp (EVar "Some") (EVar "c")) (EApp (EApp (EApp (EVar "firstWithEffect") (EVar "effTable")) (EVar "label")) (EVar "rest"))))
+(DFunDef false "firstWithEffect" ((PVar "effTable") (PVar "label") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EVar "None")) (clause ((PCons (PVar "c") (PVar "rest"))) (EIf (EApp (EApp (EApp (EVar "fnHasEffect") (EVar "effTable")) (EVar "c")) (EVar "label")) (EApp (EVar "Some") (EVar "c")) (EApp (EVar "go") (EVar "rest")))))) (EApp (EVar "go") (EVar "xs0"))))

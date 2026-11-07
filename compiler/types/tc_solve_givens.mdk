@@ -145,22 +145,20 @@ scalarGivenProjection : GraphCtx ->
   IfaceRef ->
   ScopeId ->
   Option (List Int)
-scalarGivenProjection gctx binder goalIface useScope =
-  match directGivenIfaceOf binder (givensForScope gctx useScope)
-    None => None
-    Some declared =>
-      if declared.irName == goalIface.irName then
-        None
-      else
-        map
-          (n => drop 1 n.superPath)
-          (find
-            (n => n.superIface.irName == goalIface.irName)
-            (superClosure
-              (superLookup gctx)
-              (_ _ _ => Some ())
-              (ir _ => regKeyRender (regKeyOfTab (oblIfaceKey ir)))
-              [(declared, ())]))
+scalarGivenProjection gctx binder goalIface useScope = do
+  declared <- directGivenIfaceOf binder (givensForScope gctx useScope)
+  if declared.irName == goalIface.irName then
+    None
+  else
+    map
+      (n => drop 1 n.superPath)
+      (find
+        (n => n.superIface.irName == goalIface.irName)
+        (superClosure
+          (superLookup gctx)
+          (_ _ _ => Some ())
+          (ir _ => regKeyRender (regKeyOfTab (oblIfaceKey ir)))
+          [(declared, ())]))
 
 -- Whether the tyvar-keyed binder [binder] can answer a goal of [goalIface]: its own
 -- predicate is the goal's interface or has it as a superclass.  A binder with no
@@ -281,15 +279,17 @@ givenRoute gctx isReturnPosition binder =
 -- which has none, still sees the givens of a local binding it sits in.
 export
 activeDictVarOf : GraphCtx -> Mono -> ScopeId -> Option EvidenceBinderId
-activeDictVarOf gctx m useScope = match peelQual m
-  TVar cell =>
-    firstDictForEncl
-      gctx
-      (tyvarId cell)
-      useScope
-      gctx.graphRun.activeDictVars.value
-  TApp a _ => activeDictVarOf gctx a useScope
-  _ => None
+activeDictVarOf gctx m0 useScope = go m0
+  where
+    go m = match peelQual m
+      TVar cell =>
+        firstDictForEncl
+          gctx
+          (tyvarId cell)
+          useScope
+          gctx.graphRun.activeDictVars.value
+      TApp a _ => go a
+      _ => None
 
 -- The lexical active-dict lookup restricted to binders [answers] accepts: the
 -- registry keeps every binder registered for the variable, most recent first.
@@ -299,23 +299,27 @@ activeDictVarAnswering : GraphCtx ->
   ScopeId ->
   (EvidenceBinderId -> Bool) ->
   Option EvidenceBinderId
-activeDictVarAnswering gctx m useScope answers = match peelQual m
-  TVar cell =>
-    find
-      (b => answers b)
-      (visibleDictsFor
-        gctx
-        (tyvarId cell)
-        useScope
-        gctx.graphRun.activeDictVars.value)
-  TApp a _ => activeDictVarAnswering gctx a useScope answers
-  _ => None
+activeDictVarAnswering gctx m0 useScope answers = go m0
+  where
+    go m = match peelQual m
+      TVar cell =>
+        find
+          (b => answers b)
+          (visibleDictsFor
+            gctx
+            (tyvarId cell)
+            useScope
+            gctx.graphRun.activeDictVars.value)
+      TApp a _ => go a
+      _ => None
 
 visibleDictsFor : GraphCtx ->
   Int ->
   ScopeId ->
   List (Int, EvidenceBinderId) ->
   List EvidenceBinderId
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 visibleDictsFor _gctx _ _ [] = []
 visibleDictsFor gctx id useScope ((eid, binder) :: rest)
   | eid == id
@@ -331,14 +335,16 @@ firstDictForEncl : GraphCtx ->
   ScopeId ->
   List (Int, EvidenceBinderId) ->
   Option EvidenceBinderId
-firstDictForEncl _gctx _ _ [] = None
-firstDictForEncl gctx id useScope ((eid, binder) :: rest)
-  | eid == id
-    && Scopes.givenVisibleFrom
-      (currentScopeStore gctx ())
-      useScope
-      (Scopes.binderScope binder) = Some binder
-  | otherwise = firstDictForEncl gctx id useScope rest
+firstDictForEncl gctx id useScope xs0 = go xs0
+  where
+    go [] = None
+    go ((eid, binder) :: rest)
+      | eid == id
+        && Scopes.givenVisibleFrom
+          (currentScopeStore gctx ())
+          useScope
+          (Scopes.binderScope binder) = Some binder
+      | otherwise = go rest
 
 -- activeDictVarOf, but for a constraint var that is the ENCLOSING fn's OWN constraint
 -- var, return [encl]'s in-scope dict param (the slot it sits at) rather than the
@@ -400,18 +406,20 @@ implReqDictVarOf : GraphCtx ->
   Mono ->
   ScopeId ->
   Option AssumAnswer
-implReqDictVarOf _gctx None _ _ = None
-implReqDictVarOf gctx (Some request) m useScope = match peelQual m
-  TVar cell =>
-    firstPredForEnclAt
-      gctx
-      GSImplRequires
-      (tyvarId cell)
-      request
-      useScope
-      (givensForScope gctx useScope)
-  TApp a _ => implReqDictVarOf gctx (Some request) a useScope
-  _ => None
+implReqDictVarOf gctx x0 m0 useScope = go x0 m0
+  where
+    go None _ = None
+    go (Some request) m = match peelQual m
+      TVar cell =>
+        firstPredForEnclAt
+          gctx
+          GSImplRequires
+          (tyvarId cell)
+          request
+          useScope
+          (givensForScope gctx useScope)
+      TApp a _ => go (Some request) a
+      TCon _ _ | TRigid _ | TFun _ _ _ | TEff _ | TQual _ _ | TAuth _ => None
 
 -- #1177: A use site is resolved by its predicate, not by its constraint var'S ID.
 -- A function's slots are one per predicate, each carrying its variables' ids, so a
@@ -432,18 +440,20 @@ enclDictVarOf : ModuleCtx ->
   String ->
   ScopeId ->
   Option EvidenceBinderId
-enclDictVarOf mctx goal m encl useScope
-  | encl == "" = None
-  | otherwise = match peelQual m
-    TVar cell =>
-      map
-        (Scopes.binderAt
-          (Scopes.declarationScope
-            (currentScopeStore mctx.mcGraph ())
-            useScope))
-        (enclSlotIndex mctx goal (tyvarId cell) encl)
-    TApp a _ => enclDictVarOf mctx goal a encl useScope
-    _ => None
+enclDictVarOf mctx goal m0 encl useScope = go m0
+  where
+    go m
+      | encl == "" = None
+      | otherwise = match peelQual m
+        TVar cell =>
+          map
+            (Scopes.binderAt
+              (Scopes.declarationScope
+                (currentScopeStore mctx.mcGraph ())
+                useScope))
+            (enclSlotIndex mctx goal (tyvarId cell) encl)
+        TApp a _ => go a
+        _ => None
 
 -- the slot index [target]'s dict param sits at in [encl]'s own constraint slots:
 -- by PREDICATE when the goal supplies one and a slot answers it, else the historical
@@ -479,6 +489,8 @@ indexOfPredGo : Int ->
   PredicateRequest ->
   List PredicateSlot ->
   Option Int
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
 indexOfPredGo _ _ _ [] = None
 indexOfPredGo i target request (sp :: rest)
   | containsI target sp.psBoundIds && predicateRequestMatchesSlot request sp =
@@ -517,12 +529,12 @@ methodLevelPredicateSlots : ModuleCtx ->
   Ty ->
   List (String, Mono) ->
   List PredicateSlot
-methodLevelPredicateSlots mctx typarams (TyConstrained cs t) tvMap =
-  flatMap (methodLevelPredicateSlot mctx typarams tvMap) cs
-    ++ methodLevelPredicateSlots mctx typarams t tvMap
-methodLevelPredicateSlots mctx typarams (TyEffect _ _ t) tvMap =
-  methodLevelPredicateSlots mctx typarams t tvMap
-methodLevelPredicateSlots _mctx _ _ _ = []
+methodLevelPredicateSlots mctx typarams x0 tvMap = go x0
+  where
+    go (TyConstrained cs t) =
+      flatMap (methodLevelPredicateSlot mctx typarams tvMap) cs ++ go t
+    go (TyEffect _ _ t) = go t
+    go _ = []
 
 methodLevelPredicateSlot : ModuleCtx ->
   List String ->
@@ -565,10 +577,12 @@ registerMethodDictSlots : GraphCtx ->
   List Int ->
   List (Int, Mono) ->
   Unit
-registerMethodDictSlots _gctx _ _ [] _ = ()
-registerMethodDictSlots gctx scope slot (id :: rest) subst =
-  registerOneMethodDict gctx scope slot id subst
-  registerMethodDictSlots gctx scope (slot + 1) rest subst
+registerMethodDictSlots gctx scope slot0 xs0 subst = go slot0 xs0
+  where
+    go _ [] = ()
+    go slot (id :: rest) =
+      registerOneMethodDict gctx scope slot id subst
+      go (slot + 1) rest
 
 registerOneMethodDict : GraphCtx ->
   ScopeId ->
@@ -637,10 +651,12 @@ registerImplMethodDictsGo : GraphCtx ->
   List String ->
   List (String, Mono) ->
   Unit
-registerImplMethodDictsGo _gctx _ _ [] _ = ()
-registerImplMethodDictsGo gctx scope slot (vname :: rest) tvMap =
-  registerImplMethodDictOne gctx scope slot vname tvMap
-  registerImplMethodDictsGo gctx scope (slot + 1) rest tvMap
+registerImplMethodDictsGo gctx scope slot0 xs0 tvMap = go slot0 xs0
+  where
+    go _ [] = ()
+    go slot (vname :: rest) =
+      registerImplMethodDictOne gctx scope slot vname tvMap
+      go (slot + 1) rest
 
 registerImplMethodDictOne : GraphCtx ->
   ScopeId ->
@@ -744,10 +760,9 @@ activeDictPredOf gctx request targetMono useScope =
   let preds = givensForScope gctx useScope
   match request.prArgs
     PSArgsKnown _ => firstPredForEncl gctx request useScope preds
-    PSArgsUnknown => match predicateTargetId targetMono
-      Some target =>
-        firstPredForEnclAt gctx GSPredicateOnly target request useScope preds
-      None => None
+    PSArgsUnknown => do
+      target <- predicateTargetId targetMono
+      firstPredForEnclAt gctx GSPredicateOnly target request useScope preds
 
 predicateTargetId : Mono -> Option Int
 predicateTargetId m = match peelQual m
@@ -782,6 +797,8 @@ firstPredOnChain : PredicateRequest ->
   List Int ->
   List GivenEntry ->
   Option AssumAnswer
+-- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 firstPredOnChain _ _ [] = None
 firstPredOnChain request chain (g :: rest)
   | givenInScope GSPredicateOnly g
@@ -843,14 +860,16 @@ firstPredAtOnChain : GivenScope ->
   List Int ->
   List GivenEntry ->
   Option AssumAnswer
-firstPredAtOnChain _ _ _ _ [] = None
-firstPredAtOnChain scope target request chain (g :: rest)
-  | givenInScope scope g
-    && containsI target g.geSlot.psBoundIds
-    && Scopes.visibleOnChain chain (Scopes.binderScope g.geBinder)
-    && predicateRequestMatchesSlot request g.geSlot =
-    Some (givenAnswerForRequest request g)
-  | otherwise = firstPredAtOnChain scope target request chain rest
+firstPredAtOnChain scope target request chain xs0 = go xs0
+  where
+    go [] = None
+    go (g :: rest)
+      | givenInScope scope g
+        && containsI target g.geSlot.psBoundIds
+        && Scopes.visibleOnChain chain (Scopes.binderScope g.geBinder)
+        && predicateRequestMatchesSlot request g.geSlot =
+        Some (givenAnswerForRequest request g)
+      | otherwise = go rest
 
 -- Explicit #1318 EKNestedTop residual: this is the one spelling-keyed lookup retained
 -- for a producer that can still supply OriginUnresolved.  Complete method requests do
@@ -876,6 +895,8 @@ firstPredForEnclResidual : GraphCtx ->
   ScopeId ->
   List GivenEntry ->
   Option AssumAnswer
+-- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 firstPredForEnclResidual _gctx _ _ _ [] = None
 firstPredForEnclResidual gctx iface args useScope (g :: rest)
   | givenInScope GSPredicateOnly g
@@ -890,11 +911,13 @@ firstPredForEnclResidual gctx iface args useScope (g :: rest)
 
 export
 registerEachActive : GraphCtx -> List Int -> EvidenceBinderId -> Unit
-registerEachActive _gctx [] _ = ()
-registerEachActive gctx (id :: rest) dname =
-  gctx.graphRun.activeDictVars :=
-    (id, dname) :: gctx.graphRun.activeDictVars.value
-  registerEachActive gctx rest dname
+registerEachActive gctx xs0 dname = go xs0
+  where
+    go [] = ()
+    go (id :: rest) =
+      gctx.graphRun.activeDictVars :=
+        (id, dname) :: gctx.graphRun.activeDictVars.value
+      go rest
 
 -- #1909: the SIGNATURE channel's `registerPredGiven` call — the one `registerReqSlots`
 -- has made since #412 and this side never did.  `registerEachActive` above registers a
@@ -921,10 +944,12 @@ registerSlotPredGivens : GraphCtx ->
   Int ->
   List PredicateSlot ->
   Unit
-registerSlotPredGivens _gctx _ _ [] = ()
-registerSlotPredGivens gctx scope slot (s :: srest) =
-  registerFunPredGiven gctx s (Scopes.binderAt scope slot)
-  registerSlotPredGivens gctx scope (slot + 1) srest
+registerSlotPredGivens gctx scope slot0 xs0 = go slot0 xs0
+  where
+    go _ [] = ()
+    go slot (s :: srest) =
+      registerFunPredGiven gctx s (Scopes.binderAt scope slot)
+      go (slot + 1) srest
 
 export
 registerFunPredGiven : GraphCtx -> PredicateSlot -> EvidenceBinderId -> Unit
@@ -941,10 +966,12 @@ registerFunPredGivenSlots : GraphCtx ->
   List (PredicateSlot, List Int) ->
   EvidenceBinderId ->
   Unit
-registerFunPredGivenSlots _gctx [] _ = ()
-registerFunPredGivenSlots gctx ((slot, path) :: rest) binder =
-  pushGiven gctx GMPredicate (ProjectedGiven binder path) slot binder
-  registerFunPredGivenSlots gctx rest binder
+registerFunPredGivenSlots gctx xs0 binder = go xs0
+  where
+    go [] = ()
+    go ((slot, path) :: rest) =
+      pushGiven gctx GMPredicate (ProjectedGiven binder path) slot binder
+      go rest
 
 -- A dictionary supplied for one predicate also supplies every transitive
 -- superinterface.  The original predicate is registered separately as direct evidence;
@@ -1022,12 +1049,14 @@ anyGivenMatches gctx request scope givens =
     givens
 
 anyGivenOnChain : PredicateRequest -> List Int -> List GivenEntry -> Bool
-anyGivenOnChain _ _ [] = False
-anyGivenOnChain request chain (g :: rest) =
-  givenInScope GSPredicateOnly g
-      && Scopes.visibleOnChain chain (Scopes.binderScope g.geBinder)
-      && predicateRequestMatchesSlot request g.geSlot
-    || anyGivenOnChain request chain rest
+anyGivenOnChain request chain xs0 = go xs0
+  where
+    go [] = False
+    go (g :: rest) =
+      givenInScope GSPredicateOnly g
+          && Scopes.visibleOnChain chain (Scopes.binderScope g.geBinder)
+          && predicateRequestMatchesSlot request g.geSlot
+        || go rest
 
 export
 registerActiveDictVars : GraphCtx ->
@@ -1035,7 +1064,9 @@ registerActiveDictVars : GraphCtx ->
   Int ->
   List PredicateSlot ->
   Unit
-registerActiveDictVars _gctx _ _ [] = ()
-registerActiveDictVars gctx scope slot (s :: rest) =
-  registerEachActive gctx s.psBoundIds (Scopes.binderAt scope slot)
-  registerActiveDictVars gctx scope (slot + 1) rest
+registerActiveDictVars gctx scope x20 xs0 = go x20 xs0
+  where
+    go _ [] = ()
+    go slot (s :: rest) =
+      registerEachActive gctx s.psBoundIds (Scopes.binderAt scope slot)
+      go (slot + 1) rest

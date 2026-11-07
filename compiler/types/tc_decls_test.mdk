@@ -134,11 +134,10 @@ schemeOf src =
   let ds = parse src
   let m = fresh ()
   m.mcCells.aliasTableRef := flatMap graphAliasRow ds
-  withDeclParamKinds m ds (_ => match firstSig src
-    Some t =>
-      let rendered = ppScheme (sigToScheme m t)
-      Some (rendered, codesOf m)
-    None => None)
+  withDeclParamKinds m ds (_ => do
+    t <- firstSig src
+    let rendered = ppScheme (sigToScheme m t)
+    Some (rendered, codesOf m))
 
 -- Public data, abstract data, private data and a public newtype.  The kind-public
 -- projection keeps the first, second and fourth, so dropping its abstract-data arm or its

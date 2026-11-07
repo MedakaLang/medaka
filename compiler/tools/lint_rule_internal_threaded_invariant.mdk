@@ -1,0 +1,940 @@
+-- lint rule rule-threaded-invariant: a top-level self-recursive function whose self-calls all pass two or more of its own parameters through unchanged. Close over them in a where-local `go`. The `--fix` rewrite can leave a let-generalised loop that dictionary-dispatches (#4921); see the notes above `threadFix`.
+
+import driver.diagnostics.{Severity(..)}
+import frontend.ast.{
+  Arm(..),
+  Constraint(..),
+  Decl(..),
+  Expr(..),
+  FunClause(..),
+  Guard(..),
+  LetBind(..),
+  Loc(..),
+  Pat(..),
+  Ty(..),
+  patBoundNames,
+}
+import frontend.ast_walk.{childExprs}
+import frontend.marker.{localBoundNames}
+import frontend.parser.{Positions(..)}
+import list.{dropWhile, findMap, get, last, lookup, reverse, sortBy, zip}
+import string.{contains, repeat, startsWith, trim, trimLeft, trimRight}
+import support.char.{isIdentChar}
+import support.util.{allList, anyList, filterList, joinWith, listLen}
+import tools.lint_core.{
+  Applicability(..),
+  Category(..),
+  FileFacts,
+  Finding(..),
+  Fix(..),
+  FixEdit(..),
+  Fixability(..),
+  Memo,
+  Need(..),
+  Ratchet(..),
+  Rule,
+  RuleMeta(..),
+  Scope(..),
+  StdlibIndex,
+  factLines,
+  factScopes,
+  fixLater,
+  mkRule,
+  factDeclLocs,
+}
+import tools.lint_recursion.{
+  ArgRole(..), Owner(..), SelfCall(..), selfCalls, spineOf
+}
+import tools.lint_scope.{FileScopes}
+import tools.lint_shared.{
+  indentWidth,
+  isCodeText,
+  isCtorName,
+  isEVarNamed,
+  mentionsVar,
+  ruleNameThreadedInvariant,
+  sourceLine,
+  unwrapLoc,
+  varSite,
+}
+
+export
+rule : Rule
+rule =
+  mkRule
+    RuleMeta {
+      name = ruleNameThreadedInvariant,
+      summary =
+        "a self-recursive function passes two or more of its parameters through every self-call unchanged: close over them in a where-local `go`",
+      doc =
+        "A top-level function that calls itself with the same two or more parameters, in the same positions, in every self-call carries those parameters through the whole recursion for nothing. A local `go` in a `where` closes over them, so the recursion names only what changes. The rule reads each function as a group of clauses: a position counts when every full-arity self-call of every clause that makes one passes that clause's own parameter there, unchanged. One invariant parameter is not reported, nor is a `go` that already closes over its invariants, a partial application, mutual recursion, or a loop local to a `let` or `where`.\n\n`--fix --unsafe-fixes` writes the `go` form when the whole shape is known: a signature whose class constraints the closed-over parameters carry, each invariant parameter a plain name (or ignored) in every clause, no list builder in tail position modulo cons, no invariant parameter used only to be passed on, and a `where` of its own only on a single clause. The rest are reported only. Run `medaka fmt --write` after it, then check the converted loop for dictionary dispatch: `go` is inferred, not declared, so a changing parameter whose type only the signature fixes (a counter under `+` or `==`, an element that is interpolated) is let-generalised and the loop passes a dictionary on every call (#4921, MonoLocalBinds). The fix does not see that shape.\n\nBefore:\n  extractFold bare heads acc (x :: xs) = extractFold bare heads (step bare heads acc x) xs\n  extractFold _ _ acc [] = acc\nAfter:\n  extractFold bare heads acc0 xs0 = go acc0 xs0\n    where\n      go acc [] = acc\n      go acc (x :: xs) = go (step bare heads acc x) xs",
+      category = Style,
+      scope = Internal,
+      ratchet = Gated,
+      defaultSeverity = SevWarning,
+      fixability = FixableUnsafe,
+      needs = [NeedsScopes],
+    }
+    ruleThreadedInvariant
+    None
+
+ruleThreadedInvariant : StdlibIndex ->
+  String ->
+  FileFacts ->
+  Positions ->
+  List Decl ->
+  List Finding
+ruleThreadedInvariant _ _ facts _ prog =
+  let groups = functionGroups (factDeclLocs facts)
+  flatMap (functionFindings facts prog) groups
+
+-- ── the functions of a file ──────────────────────────────────────────────────
+
+-- One clause: the line its name starts (0 when it carries an attribute), its
+-- parameters and its body.
+data Clause = Clause Int (List Pat) Expr
+
+-- A top-level function: its name, the start line of its first clause, its
+-- clauses in order and the start line of the declaration after it (0 at the
+-- end of the file).
+data Group = Group String (Option Loc) (List Clause) Int
+
+-- Adjacent clauses of one name make one function.
+functionGroups : List (Decl, Option Loc) -> List Group
+functionGroups dls = foldRight joinClause [] (flatMap clauseOf (withNext dls))
+
+-- Each declaration with the start line of the one after it.
+withNext : List (Decl, Option Loc) -> List (Decl, Option Loc, Int)
+withNext [] = []
+withNext ((d, loc) :: rest) = (d, loc, startOf rest) :: withNext rest
+
+startOf : List (Decl, Option Loc) -> Int
+startOf ((_, Some (Loc _ l _ _ _)) :: _) = l
+startOf _ = 0
+
+clauseOf : (Decl, Option Loc, Int) -> List (String, Option Loc, Int, Clause)
+clauseOf (DFunDef _ n ps body (Loc _ l _ _ _) _, loc, next) =
+  [(n, loc, next, Clause l ps body)]
+clauseOf (DAttrib _ d, loc, next) = map unplaced (clauseOf (d, loc, next))
+clauseOf _ = []
+
+unplaced : (String, Option Loc, Int, Clause) ->
+  (String, Option Loc, Int, Clause)
+unplaced (n, loc, next, Clause _ ps body) = (n, loc, next, Clause 0 ps body)
+
+joinClause : (String, Option Loc, Int, Clause) -> List Group -> List Group
+joinClause (n, loc, _, c) ((Group m _ cs next) :: rest)
+  | n == m = Group n loc (c :: cs) next :: rest
+joinClause (n, loc, next, c) groups = Group n loc [c] next :: groups
+
+-- ── one function ─────────────────────────────────────────────────────────────
+
+-- A clause that makes self-calls, with the positions all of them pass through
+-- unchanged, and the calls.
+data Threaded = Threaded (List Pat) (List Int) (List SelfCall)
+
+functionFindings : FileFacts -> List Decl -> Group -> List Finding
+functionFindings facts prog (g@(Group name loc clauses _)) =
+  match flatMap (clauseThreaded (factScopes facts) name) clauses
+    [] => []
+    ts@((Threaded ps first _) :: _) =>
+      let shared = filterList (inAll ts) first
+      if listLen shared >= 2 then
+        let names = map (i => paramName ps i) shared
+        let calls = flatMap threadedCalls ts
+        [
+          report
+            name
+            loc
+            names
+            (fixLater (_ => threadFix facts prog g shared names calls)),
+        ]
+      else
+        []
+
+-- A clause that never names its own function makes no self-call, and that is
+-- nearly every clause, so the scope-aware walk runs only on the rest.
+clauseThreaded : FileScopes -> String -> Clause -> List Threaded
+clauseThreaded scopes name (Clause _ ps body)
+  | listLen ps < 2 || not (mentionsVar name body) = []
+  | otherwise = match selfCalls scopes (Owner name ps None) body
+    [] => []
+    calls =>
+      [Threaded ps (filterList (unchangedIn calls) [0..=listLen ps - 1]) calls]
+
+threadedCalls : Threaded -> List SelfCall
+threadedCalls (Threaded _ _ calls) = calls
+
+inAll : List Threaded -> Int -> Bool
+inAll ts i = allList (t => hasPosition i t) ts
+
+hasPosition : Int -> Threaded -> Bool
+hasPosition i (Threaded _ positions _) = anyList (== i) positions
+
+unchangedIn : List SelfCall -> Int -> Bool
+unchangedIn calls i = allList (callKeeps i) calls
+
+callKeeps : Int -> SelfCall -> Bool
+callKeeps i (SelfCall _ _ roles) = match get i roles
+  Some (Unchanged j) => j == i
+  _ => False
+
+paramName : List Pat -> Int -> String
+paramName ps i = match get i ps
+  Some (PVar n _ _) => n
+  Some (PAs n _ _ _) => n
+  _ => "_"
+
+-- ── findings ─────────────────────────────────────────────────────────────────
+
+report : String -> Option Loc -> List String -> Memo (Option Fix) -> Finding
+report name loc names fix =
+  let listed = joinWith ", " (map quoted names)
+  Finding {
+    rule = ruleNameThreadedInvariant,
+    message =
+      "`\{name}` passes \{listed} through every self-call unchanged: close over them in a where-local `go`",
+    severity = SevWarning,
+    loc = loc,
+    fix = fix,
+  }
+
+quoted : String -> String
+quoted n = "`\{n}`"
+
+-- ── the fix ──────────────────────────────────────────────────────────────────
+
+-- Unsafe: `--fix --unsafe-fixes` rewrites
+--
+--   f a b (x :: xs) = ... f a b xs ...      f a b xs0 = go xs0
+--   f _ _ [] = e                     ==>      where
+--                                               go (x :: xs) = ... go xs ...
+--                                               go [] = e
+--
+-- as text edits: the first clause's head becomes the outer line and the
+-- `where`, each clause head becomes `go` over the parameters that change, the
+-- clause lines move four columns right, and each self-call loses its invariant
+-- arguments. The signature, the doc comment and every comment stay where they
+-- are; the driver demotes a fix whose edit would cut through a comment. The
+-- outer function keeps its name and signature, so a partial application of it
+-- elsewhere still means the same.
+--
+-- A line whose later tokens would move against the next line (a block opened
+-- after an edit on that line) is padded with spaces instead, so every column
+-- the layout reads keeps its place relative to the lines below.
+--
+-- The fix is withheld, the finding still reported, when:
+--   * a clause pattern-matches an invariant parameter, names it differently,
+--     or ignores it (`_`, `_x`) while its body mentions the name, which the
+--     closed-over parameter would capture;
+--   * a clause head is not one line `f p1 .. pn` followed by `=` or a guard,
+--     or carries an attribute;
+--   * the function has no signature, or a class constraint of the signature
+--     constrains a type variable that no invariant parameter's type mentions:
+--     the local `go` would be generalised over it on its own;
+--   * a self-call is the tail of `::` or the last field of a constructor: the
+--     backend builds such a list in constant stack for a top-level function
+--     only (tail recursion modulo cons);
+--   * an invariant parameter is used only to be passed on (a dead parameter,
+--     which wants deleting, not closing over);
+--   * a clause has a `where` of its own, unless it is the only clause, its
+--     `where` stands on its own line and no binding in it mentions a name the
+--     changing parameters bind: the bindings then join the new `where`;
+--   * an invariant argument of a self-call is bracketed, or starts its line
+--     with more after it;
+--   * the signature has an effect row variable: `go` would infer and
+--     generalise a row of its own;
+--   * a match-arm guard reads an invariant parameter (#4901);
+--   * a field read or record update reads a record that is neither an
+--     invariant parameter nor a name no clause binds: `go` learns the types of
+--     its parameters only by inference, too late to choose between records
+--     that share the field name;
+--   * a triple-quoted string or a tab sits in the function, where moving a
+--     line would change text or columns.
+-- Not seen by shape: a method whose impl only the type of a changing parameter
+-- selects can resolve to another impl in scope while `go` is inferred. That
+-- impl fixes the parameter's type, which the call of `go` then contradicts, so
+-- the result does not type-check; a rewrite that does type-check has the same
+-- types and so the same impls.
+-- Not seen either, and not decidable from syntax: `go` is let-generalised, so a
+-- changing parameter whose type only the outer signature fixes becomes a type
+-- variable of its own. Under an overloaded operator, literal or interpolation
+-- it carries a class constraint, and the loop then dictionary-dispatches on
+-- every call (#4921, MonoLocalBinds). Whether a captured variable or a
+-- monomorphic callee fixes that type takes type inference, which this rule
+-- does not run; check the converted loop's IR for a `mdk.gen.dictcell`.
+-- The local is `go`, or `go1`, `go2`, ... when the function mentions `go`, and
+-- the outer parameters get fresh names no clause mentions. `go` always takes
+-- its parameters explicitly, `()` when every parameter is invariant, so the
+-- value restriction never applies to it. A self-call partially applied, over-
+-- applied or made under a shadowing binder is not a self-call and stays.
+threadFix : FileFacts ->
+  List Decl ->
+  Group ->
+  List Int ->
+  List String ->
+  List SelfCall ->
+  Option Fix
+threadFix facts prog (Group name _ clauses next) shared names calls = do
+  first <- clauseHead clauses
+  let plan = Plan {
+    plFacts = facts,
+    plName = name,
+    plArity = listLen (clausePats first),
+    plShared = shared,
+    plNames = names,
+    plCalls = calls,
+    plBound = localBoundNames (filterList (definesName name) prog),
+  }
+  let bodies = map clauseBody clauses
+  guard (allList (usedBeyondCalls plan bodies) names)
+  guard (not (anyList (buildsModuloCons plan) bodies))
+  guard (allList (recordTargetsFit plan) bodies)
+  guard (not (anyList (armGuardReadsInvariant plan) bodies))
+  guard (signatureFits plan prog)
+  spans <- traverse (clauseSpan plan) (withBounds (lineCount plan next) clauses)
+  guard (allList (spanFits plan) spans)
+  merge <- whereMerge plan spans
+  edits <- rewriteEdits plan spans merge
+  Some Fix {
+    fixApplicability = Unsafe,
+    fixEdits = edits,
+    fixMessage = "close over the invariant parameters in a where-local `go`",
+  }
+
+clauseHead : List Clause -> Option Clause
+clauseHead (c :: _) = Some c
+clauseHead [] = None
+
+clausePats : Clause -> List Pat
+clausePats (Clause _ ps _) = ps
+
+clauseBody : Clause -> Expr
+clauseBody (Clause _ _ body) = body
+
+definesName : String -> Decl -> Bool
+definesName name (DFunDef _ n _ _ _ _) = n == name
+definesName _ _ = False
+
+-- What the rewrite of one function reads: the file (its lines, split on the
+-- first read of one), the function's name and arity, its invariant positions
+-- with their names, every self-call it makes, and every name its clauses bind
+-- (parameters included).  The conditions that read only the syntax tree come
+-- first, so a function that fails one never splits its file into lines.
+data Plan = Plan {
+  plFacts : FileFacts,
+  plName : String,
+  plArity : Int,
+  plShared : List Int,
+  plNames : List String,
+  plCalls : List SelfCall,
+  plBound : List String,
+}
+
+-- One clause as written: its head line, its last code line, its parameters,
+-- its body and the columns of its parameters in the head.
+data Span = Span {
+  spFirst : Int,
+  spLast : Int,
+  spPats : List Pat,
+  spBody : Expr,
+  spAtoms : List (Int, Int),
+}
+
+-- The line after the last of the file, for a function that ends it.
+lineCount : Plan -> Int -> Int
+lineCount plan next =
+  if next > 0 then next else arrayLength (factLines plan.plFacts) + 1
+
+-- Each clause with the line its successor starts on.
+withBounds : Int -> List Clause -> List (Clause, Int)
+withBounds bound cs0 = go cs0
+  where
+    go [] = []
+    go [c] = [(c, bound)]
+    go (c :: rest@((Clause l _ _) :: _)) = (c, l) :: go rest
+
+clauseSpan : Plan -> (Clause, Int) -> Option Span
+clauseSpan plan (Clause l ps body, bound) = do
+  guard (l > 0)
+  let text = lineText plan l
+  guard (startsWith (plan.plName ++ " ") text)
+  atoms <- headAtoms text (stringLength plan.plName)
+  guard (listLen atoms == listLen ps && listLen ps == plan.plArity)
+  Some Span {
+    spFirst = l,
+    spLast = lastCode plan l (bound - 1),
+    spPats = ps,
+    spBody = body,
+    spAtoms = atoms,
+  }
+
+lineText : Plan -> Int -> String
+lineText plan n = optionOr "" (sourceLine plan.plFacts n)
+
+indentAt : Plan -> Int -> Int
+indentAt plan n =
+  let s = lineText plan n
+  indentWidth s
+
+-- The last code line from `lo` up to `hi`, `lo` itself when there is none.
+lastCode : Plan -> Int -> Int -> Int
+lastCode plan lo hi0 = go hi0
+  where
+    go hi
+      | hi <= lo = lo
+      | isCodeText (lineText plan hi) = hi
+      | otherwise = go (hi - 1)
+
+-- The columns of the parameter patterns of a head line, from `start` (just
+-- after the function's name) to the first `=` or `|` outside brackets.
+-- `None` for a head that runs on, holds a comment or a character literal, or
+-- whose brackets do not balance.
+headAtoms : String -> Int -> Option (List (Int, Int))
+headAtoms text start =
+  let cs = stringToChars text
+  headAtomsFrom cs (arrayLength cs) start 0 (0 - 1) []
+
+-- Top level rather than a where-local loop: a local `go` here is let-generalised
+-- over `depth` and dictionary-passes the walk (#4921, MonoLocalBinds).
+headAtomsFrom : Array Char ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  List (Int, Int) ->
+  Option (List (Int, Int))
+headAtomsFrom cs n i depth from acc
+  | i >= n = if depth == 0 then Some (reverse (closed from i acc)) else None
+  | otherwise = headAtomStep cs n i depth from acc (arrayGetUnsafe i cs)
+
+headAtomStep : Array Char ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  List (Int, Int) ->
+  Char ->
+  Option (List (Int, Int))
+headAtomStep cs n i depth from acc c
+  | depth == 0 && (c == '=' || c == '|') =
+    if from >= 0 then None else Some (reverse acc)
+  | depth == 0 && c == ' ' =
+    headAtomsFrom cs n (i + 1) 0 (0 - 1) (closed from i acc)
+  | c == '"' =
+    headAtomsFrom cs n (stringLitEnd cs n (i + 1)) depth (opened from i) acc
+  | c == '-' && i + 1 < n && arrayGetUnsafe (i + 1) cs == '-' = None
+  | c == '\'' && not (i > 0 && isIdentChar (arrayGetUnsafe (i - 1) cs)) = None
+  | c == '(' || c == '[' || c == '{' =
+    headAtomsFrom cs n (i + 1) (depth + 1) (opened from i) acc
+  | c == ')' || c == ']' || c == '}' =
+    if depth == 0 then None else headAtomsFrom cs n (i + 1) (depth - 1) from acc
+  | otherwise = headAtomsFrom cs n (i + 1) depth (opened from i) acc
+
+-- The index just past the closing quote of a string literal whose body starts
+-- at `j0`; `n` when the text runs out first.
+stringLitEnd : Array Char -> Int -> Int -> Int
+stringLitEnd cs n j0 = go j0
+  where
+    go j
+      | j >= n = n
+      | arrayGetUnsafe j cs == '\\' = go (j + 2)
+      | arrayGetUnsafe j cs == '"' = j + 1
+      | otherwise = go (j + 1)
+
+closed : Int -> Int -> List (Int, Int) -> List (Int, Int)
+closed from i acc = if from >= 0 then (from, i) :: acc else acc
+
+opened : Int -> Int -> Int
+opened from i = if from >= 0 then from else i
+
+atomText : Plan -> Span -> Int -> String
+atomText plan sp i = match get i sp.spAtoms
+  Some (a, b) => stringSlice a b (lineText plan sp.spFirst)
+  None => ""
+
+headEnd : Span -> Int
+headEnd sp = match last sp.spAtoms
+  Some (_, b) => b
+  None => 0
+
+-- ── the conditions ───────────────────────────────────────────────────────────
+
+-- Every clause binds each invariant parameter to its name, or ignores it and
+-- does not mention the name; no line of it is a triple-quoted string, holds a
+-- tab, or starts at column 0 after the head.
+spanFits : Plan -> Span -> Bool
+spanFits plan sp =
+  allList (invariantFits plan sp) (zip plan.plShared plan.plNames)
+    && allList (lineFits plan sp) [sp.spFirst..=sp.spLast]
+
+invariantFits : Plan -> Span -> (Int, String) -> Bool
+invariantFits plan sp (i, v) = match get i sp.spPats
+  Some (PVar x _ _) =>
+    atomText plan sp i == x
+      && (x == v
+        || startsWith "_" x
+          && not (mentionsVar v sp.spBody || mentionsVar x sp.spBody))
+  Some PWild => atomText plan sp i == "_" && not (mentionsVar v sp.spBody)
+  _ => False
+
+lineFits : Plan -> Span -> Int -> Bool
+lineFits plan sp l =
+  let s = lineText plan l
+  not (contains "\"\"\"" s || contains "\t" s)
+    && (l == sp.spFirst || not (isCodeText s) || indentAt plan l > 0)
+
+-- An invariant parameter that the clauses mention only as the arguments of the
+-- self-calls is dead.
+usedBeyondCalls : Plan -> List Expr -> String -> Bool
+usedBeyondCalls plan bodies v =
+  sum (map (countVar v) bodies) > listLen plan.plCalls
+
+countVar : String -> Expr -> Int
+countVar x e = match unwrapLoc e
+  EVar w => if w == x then 1 else 0
+  e2 => sum (map (countVar x) (childExprs e2))
+
+-- A self-call as the tail of `::` or as the last field of a constructor.
+buildsModuloCons : Plan -> Expr -> Bool
+buildsModuloCons plan e =
+  consTail plan (unwrapLoc e)
+    || anyList (buildsModuloCons plan) (childExprs (unwrapLoc e))
+
+consTail : Plan -> Expr -> Bool
+consTail plan (EBinOp "::" _ tl _) = isSelfApp plan tl
+consTail plan (e@(EApp _ _)) = match spineOf e []
+  (hd, args) =>
+    isCtorHead hd
+      && (match last args
+        Some a => isSelfApp plan a
+        None => False)
+consTail _ _ = False
+
+isCtorHead : Expr -> Bool
+isCtorHead e = match unwrapLoc e
+  EVar c => isCtorName c
+  _ => False
+
+isSelfApp : Plan -> Expr -> Bool
+isSelfApp plan e = match spineOf e []
+  (hd, args) => isEVarNamed plan.plName hd && listLen args == plan.plArity
+
+-- A match-arm guard that reads an invariant parameter: the emitter cannot
+-- capture it in the local `go` (#4901).
+armGuardReadsInvariant : Plan -> Expr -> Bool
+armGuardReadsInvariant plan e =
+  armGuards plan (unwrapLoc e)
+    || anyList (armGuardReadsInvariant plan) (childExprs (unwrapLoc e))
+
+armGuards : Plan -> Expr -> Bool
+armGuards plan (EMatch _ arms) = anyList (armReads plan) arms
+armGuards _ _ = False
+
+armReads : Plan -> Arm -> Bool
+armReads plan (Arm _ gs _) = anyList (guardReads plan) gs
+
+guardReads : Plan -> Guard -> Bool
+guardReads plan (GBool g) = readsInvariant plan g
+guardReads plan (GBind _ g) = readsInvariant plan g
+
+readsInvariant : Plan -> Expr -> Bool
+readsInvariant plan g = anyList (n => mentionsVar n g) plan.plNames
+
+-- A field read or record update whose record is an invariant parameter or a
+-- name no clause binds. The type of anything else may reach the local `go`
+-- only through its inferred parameters, too late to choose between records
+-- that share the field name.
+recordTargetsFit : Plan -> Expr -> Bool
+recordTargetsFit plan e =
+  targetFits plan (unwrapLoc e)
+    && allList (recordTargetsFit plan) (childExprs (unwrapLoc e))
+
+targetFits : Plan -> Expr -> Bool
+targetFits plan (EFieldAccess r _ _) = recordRootFits plan r
+targetFits plan (ERecordUpdate r _ _) = recordRootFits plan r
+targetFits _ _ = True
+
+recordRootFits : Plan -> Expr -> Bool
+recordRootFits plan r = match unwrapLoc r
+  EFieldAccess inner _ _ => recordRootFits plan inner
+  EVar n => anyList (== n) plan.plNames || not (anyList (== n) plan.plBound)
+  _ => False
+
+-- A signature exists, it has no effect row variable (the local `go` would
+-- infer its own row and generalise it), and every type variable a class
+-- constraint names is mentioned by the type of an invariant parameter, so
+-- `go` sees it fixed.
+signatureFits : Plan -> List Decl -> Bool
+signatureFits plan prog = match findMap (sigNamed plan.plName) prog
+  None => False
+  Some t => tyEvery (_ => True) isEmpty t && constraintsHeld plan t
+
+constraintsHeld : Plan -> Ty -> Bool
+constraintsHeld plan (TyConstrained cs t) =
+  let doms = domains plan.plArity t
+  let held = flatMap (i => toList (get i doms)) plan.plShared
+  listLen doms == plan.plArity
+    && allList
+      (c =>
+        allList
+          (tyEvery (v => anyList (tyMentions v) held) (_ => True))
+          c.constraintArgs)
+      cs
+constraintsHeld _ _ = True
+
+sigNamed : String -> Decl -> Option Ty
+sigNamed n (DTypeSig _ m t _) = if m == n then Some t else None
+sigNamed _ _ = None
+
+-- The first `k` parameter types of a function type.
+domains : Int -> Ty -> List Ty
+domains k (TyFun a b)
+  | k > 0 = a :: domains (k - 1) b
+domains _ _ = []
+
+tyMentions : String -> Ty -> Bool
+tyMentions v t = not (tyEvery (/= v) (_ => True) t)
+
+-- Whether every type variable `t` names satisfies `ok` and every effect row
+-- tail in it satisfies `okTail`.
+tyEvery : (String -> Bool) -> (List String -> Bool) -> Ty -> Bool
+tyEvery ok okTail t0 = go t0
+  where
+    go (TyVar v) = ok v
+    go (TyApp f x) = go f && go x
+    go (TyFun a b) = go a && go b
+    go (TyTuple ts) = allList go ts
+    go (TyEffect _ tl t) = okTail tl && go t
+    go (TyConstrained cs t) =
+      allList (c => allList go c.constraintArgs) cs && go t
+    go (TyNamed _ t _) = go t
+    go (TyQual t _ _) = go t
+    go (TyRow _ tl _) = okTail tl
+    go (TyCon { tyConName = _ }) = True
+    go (TyAuth _ _) = True
+
+-- `Some None` when no clause has a `where`, `Some (Some w)` when the only
+-- clause has one on line `w` whose bindings can join the new `where`, and
+-- `None` otherwise.
+whereMerge : Plan -> List Span -> Option (Option Int)
+whereMerge plan spans =
+  match (flatMap
+    (sp => filterList (hasWhere plan) [sp.spFirst..=sp.spLast])
+    spans)
+    [] => Some None
+    [w] => match spans
+      [sp] =>
+        if trim (lineText plan w) == "where"
+          && indentAt plan w == 2
+          && bindingsFit plan sp w then
+          Some (Some w)
+        else
+          None
+      _ => None
+    _ => None
+
+hasWhere : Plan -> Int -> Bool
+hasWhere plan l = anyList (== "where") (identifiersIn (lineText plan l))
+
+bindingsFit : Plan -> Span -> Int -> Bool
+bindingsFit plan sp w = match unwrapLoc sp.spBody
+  ELetGroup binds _ =>
+    let changing = flatMap patBoundNames (restPats plan sp)
+    allList (b => not (anyList (n => bindMentions n b) changing)) binds
+      && allList
+        (l => not (isCodeText (lineText plan l)) || indentAt plan l >= 4)
+        [w + 1..=sp.spLast]
+  _ => False
+
+bindMentions : String -> LetBind -> Bool
+bindMentions n (LetBind _ clauses _ _) =
+  anyList ((FunClause _ body) => mentionsVar n body) clauses
+
+-- ── the edits ────────────────────────────────────────────────────────────────
+
+-- One edit inside a line of a self-call: line, columns and replacement.
+data Cut = Cut Int Int Int String
+
+-- The positions that change, in order.
+restOf : Plan -> List Int
+restOf plan =
+  filterList (i => not (anyList (== i) plan.plShared)) [0..=plan.plArity - 1]
+
+restPats : Plan -> Span -> List Pat
+restPats plan sp = flatMap (i => toList (get i sp.spPats)) (restOf plan)
+
+rewriteEdits : Plan -> List Span -> Option Int -> Option (List FixEdit)
+rewriteEdits plan spans merge = do
+  let taken = flatMap (sp => regionWords plan sp) spans
+  let goName = if anyList (== "go") taken then freshFrom taken "go" 1 else "go"
+  let fresh = outerNames plan spans taken goName
+  let goArgs = if listLen fresh == 0 then " ()" else ""
+  let callHead = goName ++ goArgs
+  pieces <- traverse (callPieces plan callHead) plan.plCalls
+  let cuts = flatMap fst pieces
+  let dropped = flatMap snd pieces ++ toList merge
+  guard (allList (cutInside spans) cuts)
+  lineCuts <- traverse (lineEdits plan spans dropped merge) (cutLines cuts)
+  heads <- traverse
+    (headEdit plan dropped merge goName fresh)
+    (indexedSpans spans)
+  let shifts = flatMap (shiftEdits plan dropped merge) spans
+  Some
+    (heads
+      ++ flatMap (es => es) lineCuts
+      ++ shifts
+      ++ map (dropLine plan) dropped)
+
+indexedSpans : List Span -> List (Int, Span)
+indexedSpans spans = zip [0..=listLen spans - 1] spans
+
+-- Every identifier-like word of a clause's lines, comments and strings too.
+regionWords : Plan -> Span -> List String
+regionWords plan sp =
+  flatMap (l => identifiersIn (lineText plan l)) [sp.spFirst..=sp.spLast]
+
+identifiersIn : String -> List String
+identifiersIn s = go 0 (0 - 1) []
+  where
+    cs = stringToChars s
+    n = arrayLength cs
+    go i from acc
+      | i >= n = reverse (word from i acc)
+      | isIdentChar (arrayGetUnsafe i cs) = go (i + 1) (opened from i) acc
+      | otherwise = go (i + 1) (0 - 1) (word from i acc)
+    word from i acc = if from >= 0 then stringSlice from i s :: acc else acc
+
+-- `base` followed by the first number from `k0` on that no word of the
+-- function spells.
+freshFrom : List String -> String -> Int -> String
+freshFrom taken base k0 = go k0
+  where
+    go k =
+      let candidate = base ++ intToString k
+      if anyList (== candidate) taken then go (k + 1) else candidate
+
+-- Names for the outer parameters that change: the clauses' own name with its
+-- trailing digits replaced by the first free number.
+outerNames : Plan -> List Span -> List String -> String -> List String
+outerNames plan spans taken goName = go (goName :: taken) (restOf plan)
+  where
+    go _ [] = []
+    go used (i :: is) =
+      let n = freshFrom used (baseName spans i) 0
+      n :: go (n :: used) is
+
+baseName : List Span -> Int -> String
+baseName spans i = match findMap (sp => namedAt sp i) spans
+  Some n => stripDigits n
+  None => if anyList (sp => listLike sp i) spans then "xs" else "x"
+
+namedAt : Span -> Int -> Option String
+namedAt sp i = match get i sp.spPats
+  Some (PVar n _ _) => if startsWith "_" n then None else Some n
+  Some (PAs n _ _ _) => Some n
+  _ => None
+
+listLike : Span -> Int -> Bool
+listLike sp i = match get i sp.spPats
+  Some (PCons _ _) => True
+  Some (PList _) => True
+  _ => False
+
+stripDigits : String -> String
+stripDigits n =
+  let cs = toList (stringToChars n)
+  let kept =
+    reverse (dropWhile (c => c >= '0' && c <= '9' || c == '\'') (reverse cs))
+  if listLen kept == 0 then "x" else stringFromChars (arrayFromList kept)
+
+-- The cuts of one self-call, and the lines it leaves empty: the head becomes
+-- `go`, each invariant argument goes with the spaces before it, or with its
+-- whole line when it stands alone there.
+callPieces : Plan -> String -> SelfCall -> Option (List Cut, List Int)
+callPieces plan callHead (SelfCall _ e _) = match spineOf e []
+  (hd, args) => do
+    (Loc _ hl hc _ hec) <- varSite hd
+    guard (stringSlice hc hec (lineText plan hl) == plan.plName)
+    pieces <- traverse (argPiece plan args) (zip plan.plShared plan.plNames)
+    Some (Cut hl hc hec callHead :: flatMap fst pieces, flatMap snd pieces)
+
+argPiece : Plan -> List Expr -> (Int, String) -> Option (List Cut, List Int)
+argPiece plan args (i, v) = do
+  a <- get i args
+  (Loc _ al ac el aec) <- varSite a
+  let s = lineText plan al
+  guard (el == al && stringSlice ac aec s == v)
+  if trim s == v then
+    Some ([], [al])
+  else
+    let kept = stringLength (trimRight (stringSlice 0 ac s))
+    if kept > 0 && kept < ac then Some ([Cut al kept aec ""], []) else None
+
+cutInside : List Span -> Cut -> Bool
+cutInside spans (Cut l c _ _) =
+  anyList
+    (sp =>
+      l >= sp.spFirst && l <= sp.spLast && (l > sp.spFirst || c >= headEnd sp))
+    spans
+
+cutLine : Cut -> Int
+cutLine (Cut l _ _ _) = l
+
+cutStart : Cut -> Int
+cutStart (Cut _ c _ _) = c
+
+cutKey : Cut -> (Int, Int)
+cutKey (Cut l c _ _) = (l, c)
+
+cutLines : List Cut -> List (Int, List Cut)
+cutLines cuts =
+  let sorted = sortBy (a b => compare (cutKey a) (cutKey b)) cuts
+  foldRight addCut [] sorted
+
+addCut : Cut -> List (Int, List Cut) -> List (Int, List Cut)
+addCut c ((l, cs) :: rest)
+  | l == cutLine c = (l, c :: cs) :: rest
+addCut c groups = (cutLine c, [c]) :: groups
+
+-- The cuts of one line, padded with spaces to their own width when a token
+-- after them would move against the next line.
+lineEdits : Plan ->
+  List Span ->
+  List Int ->
+  Option Int ->
+  (Int, List Cut) ->
+  Option (List FixEdit)
+lineEdits plan spans dropped merge (l, cs) = do
+  sp <- findMap
+    (s => if l >= s.spFirst && l <= s.spLast then Some s else None)
+    spans
+  let s = lineText plan l
+  let start = match cs
+    c :: _ => cutStart c
+    [] => 0
+  let below = nextCodeLine plan dropped l (limitFor merge sp l)
+  let pad =
+    if l == sp.spFirst then
+      isSome below
+    else
+      movesTokens s cs
+        && (match below
+          Some b => indentAt plan b >= start
+          None => False)
+  traverse (cutEdit pad) cs
+
+movesTokens : String -> List Cut -> Bool
+movesTokens _ [] = False
+movesTokens s (cs@(_ :: rest)) =
+  let ends = map cutEnd cs
+  let starts = map cutStart rest ++ [stringLength s]
+  anyList ((a, b) => trim (stringSlice a b s) /= "") (zip ends starts)
+
+cutEnd : Cut -> Int
+cutEnd (Cut _ _ e _) = e
+
+cutEdit : Bool -> Cut -> Option FixEdit
+cutEdit pad (Cut l c e text)
+  | not pad = Some (FixEdit (Loc "" l c l e) text)
+  | stringLength text <= e - c =
+    Some
+      (FixEdit
+        (Loc "" l c l e)
+        (text ++ repeat (e - c - stringLength text) " "))
+  | otherwise = None
+
+-- The last line the layout of line `l` answers to: a body line answers to the
+-- body, which ends before a `where` that joins the new one.
+limitFor : Option Int -> Span -> Int -> Int
+limitFor (Some w) sp l = if l < w then w - 1 else sp.spLast
+limitFor None sp _ = sp.spLast
+
+nextCodeLine : Plan -> List Int -> Int -> Int -> Option Int
+nextCodeLine plan dropped l0 limit = go (l0 + 1)
+  where
+    go l
+      | l > limit = None
+      | anyList (== l) dropped || not (isCodeText (lineText plan l)) =
+        go (l + 1)
+      | otherwise = Some l
+
+-- The head of clause `k`: the outer line and the `where` before the first.
+headEdit : Plan ->
+  List Int ->
+  Option Int ->
+  String ->
+  List String ->
+  (Int, Span) ->
+  Option FixEdit
+headEdit plan dropped merge goName fresh (k, sp) = do
+  let s = lineText plan sp.spFirst
+  let he = headEnd sp
+  let changing = map (i => " " ++ atomText plan sp i) (restOf plan)
+  let goHead =
+    goName ++ (if listLen changing == 0 then " ()" else stringConcat changing)
+  let d = 4 + stringLength goHead - he
+  guard (d <= 4)
+  let post = stringSlice he (stringLength s) s
+  let at = he + stringLength post - stringLength (trimLeft post)
+  let lead = trim post
+  let below =
+    nextCodeLine plan dropped sp.spFirst (limitFor merge sp sp.spFirst)
+  let pad =
+    lead /= ""
+      && lead /= "="
+      && (match below
+        Some b => indentAt plan b + 4 > at + d
+        None => False)
+  let padding = if pad then repeat (4 - d) " " else ""
+  let prefix =
+    if k == 0 then outerLine plan goName fresh ++ "\n  where\n    " else "    "
+  Some
+    (FixEdit (Loc "" sp.spFirst 0 sp.spFirst he) (prefix ++ goHead ++ padding))
+
+outerLine : Plan -> String -> List String -> String
+outerLine plan goName fresh =
+  let params = outerParams plan fresh
+  let args =
+    if listLen fresh == 0 then " ()" else stringConcat (map (" " ++ _) fresh)
+  let spaced = stringConcat (map (" " ++ _) params)
+  "\{plan.plName}\{spaced} = \{goName}\{args}"
+
+-- The invariant positions keep their names; the others take the fresh ones.
+outerParams : Plan -> List String -> List String
+outerParams plan fresh = map (i => paramAt plan fresh i) [0..=plan.plArity - 1]
+
+paramAt : Plan -> List String -> Int -> String
+paramAt plan fresh i = match lookup i (zip plan.plShared plan.plNames)
+  Some v => v
+  None => optionOr "_" (lookup i (zip (restOf plan) fresh))
+
+-- Four columns right for every line of a clause after its head, but the lines
+-- that go and the bindings of a `where` that joins the new one.
+shiftEdits : Plan -> List Int -> Option Int -> Span -> List FixEdit
+shiftEdits plan dropped merge sp =
+  map
+    (l => FixEdit (Loc "" l 0 l 0) "    ")
+    (filterList
+      (l => shifted plan dropped merge l)
+      [sp.spFirst + 1..=sp.spLast])
+
+shifted : Plan -> List Int -> Option Int -> Int -> Bool
+shifted plan dropped merge l =
+  not (anyList (== l) dropped)
+    && trim (lineText plan l) /= ""
+    && (match merge
+      Some w => l < w
+      None => True)
+
+-- Removes line `l` with the newline before it.
+dropLine : Plan -> Int -> FixEdit
+dropLine plan l =
+  FixEdit
+    (Loc
+      ""
+      (l - 1)
+      (stringLength (lineText plan (l - 1)))
+      l
+      (stringLength (lineText plan l)))
+    ""

@@ -1,5 +1,5 @@
 # META
-source_lines=326
+source_lines=327
 stages=DESUGAR,MARK
 # SOURCE
 -- The declaration rules for a user `extern`'s host bindings and declared row,
@@ -179,8 +179,9 @@ isIdentWith start rest s =
   arrayLength cs > 0 && start (arrayGetUnsafe 0 cs) && identCharsFrom rest cs 1
 
 identCharsFrom : (Char -> Bool) -> Array Char -> Int -> Bool
-identCharsFrom p cs i =
-  i >= arrayLength cs || p (arrayGetUnsafe i cs) && identCharsFrom p cs (i + 1)
+identCharsFrom p cs i0 = go i0
+  where
+    go i = i >= arrayLength cs || p (arrayGetUnsafe i cs) && go (i + 1)
 
 -- A Medaka identifier character less the apostrophe.
 isCIdentChar : Char -> Bool
@@ -370,7 +371,7 @@ paramIsTopDomain _ = False
 (DTypeSig false "isIdentWith" (TyFun (TyFun (TyCon "Char") (TyCon "Bool")) (TyFun (TyFun (TyCon "Char") (TyCon "Bool")) (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "isIdentWith" ((PVar "start") (PVar "rest") (PVar "s")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "s"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp ">" (EApp (EVar "arrayLength") (EVar "cs")) (ELit (LInt 0))) (EApp (EVar "start") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "cs")))) (EApp (EApp (EApp (EVar "identCharsFrom") (EVar "rest")) (EVar "cs")) (ELit (LInt 1)))))))
 (DTypeSig false "identCharsFrom" (TyFun (TyFun (TyCon "Char") (TyCon "Bool")) (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "Bool")))))
-(DFunDef false "identCharsFrom" ((PVar "p") (PVar "cs") (PVar "i")) (EBinOp "||" (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "cs"))) (EBinOp "&&" (EApp (EVar "p") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))) (EApp (EApp (EApp (EVar "identCharsFrom") (EVar "p")) (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))))
+(DFunDef false "identCharsFrom" ((PVar "p") (PVar "cs") (PVar "i0")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EBinOp "||" (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "cs"))) (EBinOp "&&" (EApp (EVar "p") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))) (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1))))))))) (EApp (EVar "go") (EVar "i0"))))
 (DTypeSig false "isCIdentChar" (TyFun (TyCon "Char") (TyCon "Bool")))
 (DFunDef false "isCIdentChar" ((PVar "c")) (EBinOp "&&" (EApp (EVar "isAlnum") (EVar "c")) (EApp (EVar "not") (EApp (EVar "isApos") (EVar "c")))))
 (DTypeSig false "isCIdentStart" (TyFun (TyCon "Char") (TyCon "Bool")))
@@ -467,7 +468,7 @@ paramIsTopDomain _ = False
 (DTypeSig false "isIdentWith" (TyFun (TyFun (TyCon "Char") (TyCon "Bool")) (TyFun (TyFun (TyCon "Char") (TyCon "Bool")) (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "isIdentWith" ((PVar "start") (PVar "rest") (PVar "s")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "s"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp ">" (EApp (EVar "arrayLength") (EVar "cs")) (ELit (LInt 0))) (EApp (EVar "start") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "cs")))) (EApp (EApp (EApp (EVar "identCharsFrom") (EVar "rest")) (EVar "cs")) (ELit (LInt 1)))))))
 (DTypeSig false "identCharsFrom" (TyFun (TyFun (TyCon "Char") (TyCon "Bool")) (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "Bool")))))
-(DFunDef false "identCharsFrom" ((PVar "p") (PVar "cs") (PVar "i")) (EBinOp "||" (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "cs"))) (EBinOp "&&" (EApp (EVar "p") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))) (EApp (EApp (EApp (EVar "identCharsFrom") (EVar "p")) (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))))
+(DFunDef false "identCharsFrom" ((PVar "p") (PVar "cs") (PVar "i0")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EBinOp "||" (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "cs"))) (EBinOp "&&" (EApp (EVar "p") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))) (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1))))))))) (EApp (EVar "go") (EVar "i0"))))
 (DTypeSig false "isCIdentChar" (TyFun (TyCon "Char") (TyCon "Bool")))
 (DFunDef false "isCIdentChar" ((PVar "c")) (EBinOp "&&" (EApp (EVar "isAlnum") (EVar "c")) (EApp (EVar "not") (EApp (EVar "isApos") (EVar "c")))))
 (DTypeSig false "isCIdentStart" (TyFun (TyCon "Char") (TyCon "Bool")))

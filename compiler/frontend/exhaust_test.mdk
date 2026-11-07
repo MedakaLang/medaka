@@ -21,7 +21,7 @@ import frontend.parser.{parse}
 import fs.{fixtureFiles}
 import list.{sort}
 import path.{dirname, stem}
-import string.{endsWith, lines, trim, unlines}
+import string.{endsWith, indexOf, lines, trim, unlines}
 import support.util.{joinWith}
 import test.{
   Expectation,
@@ -29,6 +29,8 @@ import test.{
   expectAtLeast,
   expectEqual,
   expectNoFindings,
+  expectNone,
+  expectSome,
   fail,
 }
 
@@ -174,3 +176,23 @@ test "a column of byte-literal ranges leaves a witness until a catch-all joins i
       witnessOf [POr [byteRng, PRng (LByte 65) (LByte 90) True]],
       witnessOf [byteRng, PWild],
     )
+
+-- ── local clause groups are found inside every container literal ──────────
+
+nonExhaustiveWarning : String -> Option Int
+nonExhaustiveWarning src = indexOf "non-exhaustive" (exhaustToLines (parse src))
+
+test "a non-exhaustive local function inside a map literal is warned about" =
+  expectSome
+    (nonExhaustiveWarning
+      "main =\n  let t = Map { \"k\" => (let rec f (Some x) = x in f (Some 1)) }\n  println t\n")
+
+test "a non-exhaustive local function inside a set literal is warned about" =
+  expectSome
+    (nonExhaustiveWarning
+      "main =\n  let t = Set { (let rec f (Some x) = x in f (Some 1)), 2 }\n  println t\n")
+
+test "an exhaustive local function inside a map literal is not warned about" =
+  expectNone
+    (nonExhaustiveWarning
+      "main =\n  let t = Map { \"k\" => (let rec f x = x in f 1) }\n  println t\n")

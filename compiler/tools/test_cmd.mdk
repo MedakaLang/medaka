@@ -423,12 +423,10 @@ pinIndexForTarget target userDecls = do
       context.contextFile
       (propNamesOf userDecls)
       (testNamesOf userDecls)
-  match names
-    Err err => Err err
-    Ok () =>
-      map
-        (index => (context.contextFile, index))
-        (buildPinIndex context.contextPins)
+  _ <- names
+  map
+    (index => (context.contextFile, index))
+    (buildPinIndex context.contextPins)
 
 -- ── typecheck gate (issues #260, #1229) ──────────────────────────────────────
 -- `medaka test` must not GREEN-LIGHT a module whose DOCTESTS `medaka check`
@@ -1915,6 +1913,8 @@ runEnginesTagged : List Engine ->
   List Example ->
   List (Result String (List Decl)) ->
   <IO> Bool
+-- Bound: the where-go head line would exceed 80 columns and fmt lays it out as a head the parser rejects (#4896); convert when that is fixed.
+-- lint-disable-next-line rule-threaded-invariant
 runEnginesTagged [] _ _ _ _ _ _ _ = True
 runEnginesTagged (e :: rest) trees native target tsrc userDecls examples synthResults =
   putStrLn ""
@@ -2039,6 +2039,8 @@ renderExamplesGo : List (String, Value e) ->
   Int ->
   List Example ->
   <e> List (Result String String)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 renderExamplesGo _ _ _ _ [] = []
 renderExamplesGo env diags (sr :: srRest) i (ex :: rest) =
   renderOneExample env diags sr i ex
@@ -2389,14 +2391,18 @@ printGradedTestEngineGroups : List Engine ->
   String ->
   List GradedTest ->
   <IO> Bool
-printGradedTestEngineGroups [] _ _ = True
-printGradedTestEngineGroups (engine :: rest) target rows =
-  putStrLn ""
-  putStrLn "-- \{engineName engine} --"
-  let passed =
-    printGradedTestGroup target (gradedTestsForEngine (engineName engine) rows)
-  let restPassed = printGradedTestEngineGroups rest target rows
-  passed && restPassed
+printGradedTestEngineGroups xs0 target rows = go xs0
+  where
+    go [] = True
+    go (engine :: rest) =
+      putStrLn ""
+      putStrLn "-- \{engineName engine} --"
+      let passed =
+        printGradedTestGroup
+          target
+          (gradedTestsForEngine (engineName engine) rows)
+      let restPassed = go rest
+      passed && restPassed
 
 gradedTestsForEngine : String -> List GradedTest -> List GradedTest
 gradedTestsForEngine _ [] = []
@@ -3101,6 +3107,8 @@ doctestReportGo : List Engine ->
   List Example ->
   List (Result String (List Decl)) ->
   <IO> List (Engine, RunResult)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 doctestReportGo [] _ _ _ _ _ _ _ = []
 doctestReportGo (e :: rest) trees native target tsrc userDecls examples synthResults =
   (e, runChosenOn e trees native target tsrc userDecls examples synthResults)
@@ -3260,6 +3268,8 @@ propsReportEngines : List Engine ->
   String ->
   PinIndex ->
   <IO> List PropResult
+-- Bound: the where-go head line would exceed 80 columns and fmt lays it out as a head the parser rejects (#4896); convert when that is fixed.
+-- lint-disable-next-line rule-threaded-invariant
 propsReportEngines [] _ _ _ _ _ _ _ _ _ _ _ _ _ _ = []
 propsReportEngines (EngInterp :: rest) stdlibDir runtimeM rawCoreM coreM rawM modsM factsM target tsrc userDecls cases filterOpt file index =
   superviseEvalProps
@@ -3635,6 +3645,8 @@ propsReportEnginesPlain : NativePropLeaf ->
   String ->
   PinIndex ->
   <IO> List PropResult
+-- Bound: the where-go head line would exceed 80 columns and fmt lays it out as a head the parser rejects (#4896); convert when that is fixed.
+-- lint-disable-next-line rule-threaded-invariant
 propsReportEnginesPlain _ [] _ _ _ _ _ _ _ _ _ _ _ _ = []
 propsReportEnginesPlain leaf (EngInterp :: rest) rawCoreM coreM rawM modsM factsM target tsrc userDecls cases filterOpt file index =
   withRootEvalEnv factsM coreM modsM (evalEnv =>
@@ -3724,6 +3736,8 @@ validateHelperPlansGo : PlanEnv ->
   OrdMap Unit ->
   OrdMap String ->
   HelperValidation
+-- Bound: the where-go head line would exceed 80 columns and fmt lays it out as a head the parser rejects (#4896); convert when that is fixed.
+-- lint-disable-next-line rule-threaded-invariant
 validateHelperPlansGo planEnv runtimeM rawCoreM rawM plans baseline rejected =
   let (PropHelpers helpers decls) = propHelpersForPlans planEnv plans
   match helpers
@@ -3965,6 +3979,8 @@ runProtocolHelperEnginesGo : NativePropLeaf ->
   String ->
   PinIndex ->
   <IO> List PropResult
+-- Bound: the where-go head line would exceed 80 columns and fmt lays it out as a head the parser rejects (#4896); convert when that is fixed.
+-- lint-disable-next-line rule-threaded-invariant
 runProtocolHelperEnginesGo _ [] _ _ _ _ _ _ _ _ _ _ _ _ _ = []
 runProtocolHelperEnginesGo leaf (engine :: rest) message rawCoreM coreM rawM modsM factsM target tsrc userDecls cases filterOpt file index =
   let engineText = engineName engine
@@ -4026,6 +4042,8 @@ runValidatedPropEnginesGo : NativePropLeaf ->
   String ->
   PinIndex ->
   <IO> List PropResult
+-- Bound: the where-go head line would exceed 80 columns and fmt lays it out as a head the parser rejects (#4896); convert when that is fixed.
+-- lint-disable-next-line rule-threaded-invariant
 runValidatedPropEnginesGo _ [] _helpers _rejected _rawCoreM _coreM _rawM _modsM _factsM _target _tsrc _userDecls _cases _filterOpt _file _index =
   []
 runValidatedPropEnginesGo leaf (engine :: rest) helpers rejected rawCoreM coreM rawM modsM factsM target tsrc userDecls cases filterOpt file index =
@@ -4140,30 +4158,34 @@ rejectPreparedHelpers : PlanEnv ->
   OrdMap String ->
   List PreparedPropRequest ->
   List PreparedPropRequest
-rejectPreparedHelpers _ _ _ [] = []
-rejectPreparedHelpers env engine rejected ((row@(PreparedResult _)) :: rest) =
-  row :: rejectPreparedHelpers env engine rejected rest
-rejectPreparedHelpers env engine rejected ((row@(PreparedRun request _ plans)) :: rest) =
-  let next = rejectPreparedHelpers env engine rejected rest
-  if plansHaveNoRejectedCarrier env rejected plans then
-    row :: next
-  else
-    PreparedResult (helperCapabilityResult env engine request rejected plans)
-      :: next
+rejectPreparedHelpers env engine rejected requests = go requests
+  where
+    go [] = []
+    go ((row@(PreparedResult _)) :: rest) = row :: go rest
+    go ((row@(PreparedRun request _ plans)) :: rest) =
+      let next = go rest
+      if plansHaveNoRejectedCarrier env rejected plans then
+        row :: next
+      else
+        PreparedResult
+            (helperCapabilityResult env engine request rejected plans)
+          :: next
 
 rejectPreparedProtocolCustom : PlanEnv ->
   String ->
   String ->
   List PreparedPropRequest ->
   List PreparedPropRequest
-rejectPreparedProtocolCustom _ _ _ [] = []
-rejectPreparedProtocolCustom env engine message ((row@(PreparedResult _)) :: rest) =
-  row :: rejectPreparedProtocolCustom env engine message rest
-rejectPreparedProtocolCustom env engine message ((row@(PreparedRun request _ plans)) :: rest) =
-  let next = rejectPreparedProtocolCustom env engine message rest
-  match customPlansReachable env plans
-    [] => row :: next
-    _ => PreparedResult (helperProtocolResult engine message request) :: next
+rejectPreparedProtocolCustom env engine message requests = go requests
+  where
+    go [] = []
+    go ((row@(PreparedResult _)) :: rest) = row :: go rest
+    go ((row@(PreparedRun request _ plans)) :: rest) =
+      let next = go rest
+      match customPlansReachable env plans
+        [] => row :: next
+        _ =>
+          PreparedResult (helperProtocolResult engine message request) :: next
 
 helperProtocolResult : String -> String -> PropRequest -> PropResult
 helperProtocolResult engine message (PropRequest name seed cases) =
@@ -4245,16 +4267,20 @@ protocolPropResults : List Engine ->
   Int ->
   Option String ->
   List PropResult
-protocolPropResults [] _ _ _ _ = []
-protocolPropResults (engine :: rest) message userDecls cases filterOpt =
-  protocolPropsForEngine
-      (engineName engine)
-      message
-      (filterPropsByName filterOpt (filterProps userDecls))
-      cases
-    ++ protocolPropResults rest message userDecls cases filterOpt
+protocolPropResults xs0 message userDecls cases filterOpt = go xs0
+  where
+    go [] = []
+    go (engine :: rest) =
+      protocolPropsForEngine
+          (engineName engine)
+          message
+          (filterPropsByName filterOpt (filterProps userDecls))
+          cases
+        ++ go rest
 
 protocolPropsForEngine : String -> String -> List Decl -> Int -> List PropResult
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 protocolPropsForEngine _ _ [] _ = []
 protocolPropsForEngine engine message ((DProp _ name _ _) :: rest) cases =
   PropResult
@@ -4318,6 +4344,8 @@ propRequestsForGo : PinIndex ->
   Int ->
   List Decl ->
   List PropRequest
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 propRequestsForGo _ _ _ _ _ [] = []
 propRequestsForGo index file engine seed cases ((DProp _ name _ _) :: rest) =
   let request = match pinFromIndex index file PropPin name engine
@@ -4385,6 +4413,8 @@ testDeclsReportEngines : List Engine ->
   String ->
   PinIndex ->
   <IO> List (Engine, String, Int, ExResult)
+-- Bound: the where-go head line would exceed 80 columns and fmt lays it out as a head the parser rejects (#4896); convert when that is fixed.
+-- lint-disable-next-line rule-threaded-invariant
 testDeclsReportEngines [] _ _ _ _ _ _ _ _ _ = []
 testDeclsReportEngines (e :: rest) pair native runtimeDecls target tsrc userDecls filterOpt file index =
   map
@@ -4484,6 +4514,8 @@ nativeTestsWithPinnedErrors : PinIndex ->
   List ExResult ->
   List (List ExResult) ->
   List (String, Int, ExResult)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 nativeTestsWithPinnedErrors _ _ [] _ _ = []
 nativeTestsWithPinnedErrors index file ((name, line, _) :: rest) ordinary pinned =
   if isExpectedNativeError index file name then match pinned

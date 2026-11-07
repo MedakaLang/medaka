@@ -414,9 +414,9 @@ lookupMethodResult : OrdMap (OrdMap MethodResultFact) ->
   String ->
   String ->
   Option MethodResultFact
-lookupMethodResult index iface method = match omLookup iface index
-  Some methods => omLookup method methods
-  None => None
+lookupMethodResult index iface method = do
+  methods <- omLookup iface index
+  omLookup method methods
 
 -- a function binding: it takes parameters, and it is not `main`
 isTopFn : CBind -> Bool
@@ -639,7 +639,7 @@ data DemandScope = DemandScope {
 (DTypeSig false "insertMethodResult" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "MethodResultFact"))) (TyFun (TyCon "MethodResultFact") (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "MethodResultFact"))))))
 (DFunDef false "insertMethodResult" ((PVar "acc") (PVar "row")) (EBlock (DoLet false false (PVar "methods") (EApp (EApp (EVar "optionOr") (EVar "omEmpty")) (EApp (EApp (EVar "omLookup") (EFieldAccess (EVar "row") "iface")) (EVar "acc")))) (DoExpr (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "row") "iface")) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "row") "method")) (EVar "row")) (EVar "methods"))) (EVar "acc")))))
 (DTypeSig true "lookupMethodResult" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "MethodResultFact"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "MethodResultFact"))))))
-(DFunDef false "lookupMethodResult" ((PVar "index") (PVar "iface") (PVar "method")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "iface")) (EVar "index")) (arm (PCon "Some" (PVar "methods")) () (EApp (EApp (EVar "omLookup") (EVar "method")) (EVar "methods"))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "lookupMethodResult" ((PVar "index") (PVar "iface") (PVar "method")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "omLookup") (EVar "iface")) (EVar "index"))) (ELam ((PVar "methods")) (EApp (EApp (EVar "omLookup") (EVar "method")) (EVar "methods")))))
 (DTypeSig false "isTopFn" (TyFun (TyCon "CBind") (TyCon "Bool")))
 (DFunDef false "isTopFn" ((PCon "CBind" (PLit (LString "main")) PWild PWild PWild)) (EVar "False"))
 (DFunDef false "isTopFn" ((PCon "CBind" PWild (PCons (PCon "CClause" (PCons PWild PWild) PWild) PWild) PWild PWild)) (EVar "True"))
@@ -746,7 +746,7 @@ data DemandScope = DemandScope {
 (DTypeSig false "insertMethodResult" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "MethodResultFact"))) (TyFun (TyCon "MethodResultFact") (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "MethodResultFact"))))))
 (DFunDef false "insertMethodResult" ((PVar "acc") (PVar "row")) (EBlock (DoLet false false (PVar "methods") (EApp (EApp (EVar "optionOr") (EVar "omEmpty")) (EApp (EApp (EVar "omLookup") (EFieldAccess (EVar "row") "iface")) (EVar "acc")))) (DoExpr (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "row") "iface")) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "row") "method")) (EVar "row")) (EVar "methods"))) (EVar "acc")))))
 (DTypeSig true "lookupMethodResult" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "MethodResultFact"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "MethodResultFact"))))))
-(DFunDef false "lookupMethodResult" ((PVar "index") (PVar "iface") (PVar "method")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "iface")) (EMethodRef "index")) (arm (PCon "Some" (PVar "methods")) () (EApp (EApp (EVar "omLookup") (EVar "method")) (EVar "methods"))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "lookupMethodResult" ((PVar "index") (PVar "iface") (PVar "method")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "omLookup") (EVar "iface")) (EMethodRef "index"))) (ELam ((PVar "methods")) (EApp (EApp (EVar "omLookup") (EVar "method")) (EVar "methods")))))
 (DTypeSig false "isTopFn" (TyFun (TyCon "CBind") (TyCon "Bool")))
 (DFunDef false "isTopFn" ((PCon "CBind" (PLit (LString "main")) PWild PWild PWild)) (EVar "False"))
 (DFunDef false "isTopFn" ((PCon "CBind" PWild (PCons (PCon "CClause" (PCons PWild PWild) PWild) PWild) PWild PWild)) (EVar "True"))

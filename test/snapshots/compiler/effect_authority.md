@@ -1,5 +1,5 @@
 # META
-source_lines=533
+source_lines=537
 stages=DESUGAR,MARK
 # SOURCE
 -- Authority terms: the parameter of an effect atom as inference sees it. A
@@ -62,7 +62,7 @@ authLevelOf (AVar cell) = authvarLevel cell
 authLevelOf (AJoin ms) = fold (acc m => max acc (authLevelOf m)) 0 ms
 authLevelOf (AProduct axes) =
   fold (acc a => max acc (authLevelOf (snd a))) 0 axes
-authLevelOf _ = 0
+authLevelOf (AConst _) = 0
 
 export
 authvarDomain : Ref Authvar -> Param
@@ -265,7 +265,7 @@ authRetag : Param -> Authority -> Authority
 authRetag top a = match authNorm a
   AConst p => AConst (retagParam top p)
   AJoin ms => authJoinAll (map (authRetag top) ms)
-  other => other
+  other@(AVar _ | AProduct _) => other
 
 -- A value's abstraction may over-approximate it, so a value whose authority
 -- would hold more than `setCardCap` constants is folded by the domain join
@@ -412,33 +412,37 @@ projections : String ->
   List (String, Authority) ->
   Authority ->
   Option (List (Authority, Authority))
-projections _ [] _ = Some []
-projections schema ((name, t) :: rest) lo = match (
-  projectAxis schema name lo,
-  projections schema rest lo,
-)
-  (Some p, Some more) => Some ((p, t) :: more)
-  _ => None
+projections schema xs0 lo = go xs0
+  where
+    go [] = Some []
+    go ((name, t) :: rest) = match (
+      projectAxis schema name lo,
+      go rest,
+    )
+      (Some p, Some more) => Some ((p, t) :: more)
+      _ => None
 
 -- A term's values on one axis of the Product domain keyed [schema].
 projectAxis : String -> String -> Authority -> Option Authority
-projectAxis schema name lo = match authNorm lo
-  AJoin [] => Some (AJoin [])
-  AConst (p@(PProduct ax)) =>
-    if domainKey p == schema then map AConst (lookupAxis name ax) else None
-  AProduct axes =>
-    if domainKey (authDomainTop (AProduct axes)) == schema then
-      lookupTerm name axes
-    else
-      None
-  AJoin ms =>
-    fold
-      (acc m => match (acc, projectAxis schema name m)
-        (Some a, Some b) => Some (authJoin a b)
-        _ => None)
-      (Some (AJoin []))
-      ms
-  _ => None
+projectAxis schema name lo0 = go lo0
+  where
+    go lo = match authNorm lo
+      AJoin [] => Some (AJoin [])
+      AConst (p@(PProduct ax)) =>
+        if domainKey p == schema then map AConst (lookupAxis name ax) else None
+      AProduct axes =>
+        if domainKey (authDomainTop (AProduct axes)) == schema then
+          lookupTerm name axes
+        else
+          None
+      AJoin ms =>
+        fold
+          (acc m => match (acc, go m)
+            (Some a, Some b) => Some (authJoin a b)
+            _ => None)
+          (Some (AJoin []))
+          ms
+      AVar _ | AConst _ => None
 
 constantsOf : List Authority -> List Param
 constantsOf [] = []
@@ -552,7 +556,7 @@ paramElements p = [trimLeft (drender p)]
 (DFunDef false "authLevelOf" ((PCon "AVar" (PVar "cell"))) (EApp (EVar "authvarLevel") (EVar "cell")))
 (DFunDef false "authLevelOf" ((PCon "AJoin" (PVar "ms"))) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "m")) (EApp (EApp (EVar "max") (EVar "acc")) (EApp (EVar "authLevelOf") (EVar "m"))))) (ELit (LInt 0))) (EVar "ms")))
 (DFunDef false "authLevelOf" ((PCon "AProduct" (PVar "axes"))) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "a")) (EApp (EApp (EVar "max") (EVar "acc")) (EApp (EVar "authLevelOf") (EApp (EVar "snd") (EVar "a")))))) (ELit (LInt 0))) (EVar "axes")))
-(DFunDef false "authLevelOf" (PWild) (ELit (LInt 0)))
+(DFunDef false "authLevelOf" ((PCon "AConst" PWild)) (ELit (LInt 0)))
 (DTypeSig true "authvarDomain" (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyCon "Param")))
 (DFunDef false "authvarDomain" ((PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "AUnbound" PWild PWild (PVar "top") PWild PWild) () (EVar "top")) (arm (PCon "ALink" PWild (PVar "top") PWild) () (EVar "top"))))
 (DTypeSig true "authvarName" (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyApp (TyCon "Option") (TyCon "String"))))
@@ -609,7 +613,7 @@ paramElements p = [trimLeft (drender p)]
 (DFunDef false "termKey" ((PCon "AProduct" (PVar "axes"))) (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EVar "map") (ELam ((PVar "a")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EApp (EVar "fst") (EVar "a")))) (ELit (LString "="))) (EApp (EVar "$core.display") (EApp (EApp (EVar "renderAxisTerm") (ELam ((PVar "cell")) (EBinOp "++" (ELit (LString "#")) (EApp (EVar "intToString") (EApp (EVar "authvarId") (EVar "cell")))))) (EApp (EVar "snd") (EVar "a"))))) (ELit (LString ""))))) (EVar "axes"))))
 (DFunDef false "termKey" (PWild) (ELit (LString "")))
 (DTypeSig true "authRetag" (TyFun (TyCon "Param") (TyFun (TyCon "Authority") (TyCon "Authority"))))
-(DFunDef false "authRetag" ((PVar "top") (PVar "a")) (EMatch (EApp (EVar "authNorm") (EVar "a")) (arm (PCon "AConst" (PVar "p")) () (EApp (EVar "AConst") (EApp (EApp (EVar "retagParam") (EVar "top")) (EVar "p")))) (arm (PCon "AJoin" (PVar "ms")) () (EApp (EVar "authJoinAll") (EApp (EApp (EVar "map") (EApp (EVar "authRetag") (EVar "top"))) (EVar "ms")))) (arm (PVar "other") () (EVar "other"))))
+(DFunDef false "authRetag" ((PVar "top") (PVar "a")) (EMatch (EApp (EVar "authNorm") (EVar "a")) (arm (PCon "AConst" (PVar "p")) () (EApp (EVar "AConst") (EApp (EApp (EVar "retagParam") (EVar "top")) (EVar "p")))) (arm (PCon "AJoin" (PVar "ms")) () (EApp (EVar "authJoinAll") (EApp (EApp (EVar "map") (EApp (EVar "authRetag") (EVar "top"))) (EVar "ms")))) (arm (PAs "other" (POr (PCon "AVar" PWild) (PCon "AProduct" PWild))) () (EVar "other"))))
 (DTypeSig true "authWidenValue" (TyFun (TyCon "Authority") (TyCon "Authority")))
 (DFunDef false "authWidenValue" ((PVar "a")) (EBlock (DoLet false false (PTuple (PVar "consts") (PVar "tuples") (PVar "vars")) (EApp (EApp (EVar "collect") (EListLit (EVar "a"))) (EApp (EApp (EApp (EVar "Parts") (EListLit)) (EListLit)) (EVar "Tip")))) (DoLet false false (PVar "cs") (EApp (EVar "dantichain") (EVar "consts"))) (DoExpr (EIf (EBinOp ">" (EApp (EVar "listLen") (EVar "cs")) (EVar "setCardCap")) (EApp (EApp (EApp (EVar "assemble") (EListLit (EApp (EApp (EApp (EVar "fold") (EVar "djoinN")) (EApp (EVar "headOr") (EVar "cs"))) (EVar "cs")))) (EVar "tuples")) (EVar "vars")) (EApp (EVar "authNorm") (EVar "a"))))))
 (DTypeSig false "headOr" (TyFun (TyApp (TyCon "List") (TyCon "Param")) (TyCon "Param")))
@@ -658,10 +662,9 @@ paramElements p = [trimLeft (drender p)]
 (DTypeSig true "authSplit" (TyFun (TyCon "Authority") (TyFun (TyCon "Authority") (TyApp (TyCon "List") (TyTuple (TyCon "Authority") (TyCon "Authority"))))))
 (DFunDef false "authSplit" ((PVar "lo") (PVar "hi")) (EMatch (EApp (EVar "authNorm") (EVar "hi")) (arm (PCon "AProduct" (PVar "axes")) () (EBlock (DoLet false false (PVar "schema") (EApp (EVar "domainKey") (EApp (EVar "authDomainTop") (EApp (EVar "AProduct") (EVar "axes"))))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "projections") (EVar "schema")) (EVar "axes")) (EVar "lo")) (arm (PCon "Some" (PVar "parts")) () (EVar "parts")) (arm (PCon "None") () (EListLit (ETuple (EVar "lo") (EVar "hi")))))))) (arm PWild () (EListLit (ETuple (EVar "lo") (EVar "hi"))))))
 (DTypeSig false "projections" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Authority"))) (TyFun (TyCon "Authority") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "Authority") (TyCon "Authority"))))))))
-(DFunDef false "projections" (PWild (PList) PWild) (EApp (EVar "Some") (EListLit)))
-(DFunDef false "projections" ((PVar "schema") (PCons (PTuple (PVar "name") (PVar "t")) (PVar "rest")) (PVar "lo")) (EMatch (ETuple (EApp (EApp (EApp (EVar "projectAxis") (EVar "schema")) (EVar "name")) (EVar "lo")) (EApp (EApp (EApp (EVar "projections") (EVar "schema")) (EVar "rest")) (EVar "lo"))) (arm (PTuple (PCon "Some" (PVar "p")) (PCon "Some" (PVar "more"))) () (EApp (EVar "Some") (EBinOp "::" (ETuple (EVar "p") (EVar "t")) (EVar "more")))) (arm PWild () (EVar "None"))))
+(DFunDef false "projections" ((PVar "schema") (PVar "xs0") (PVar "lo")) (ELetGroup ((lgb "go" (clause ((PList)) (EApp (EVar "Some") (EListLit))) (clause ((PCons (PTuple (PVar "name") (PVar "t")) (PVar "rest"))) (EMatch (ETuple (EApp (EApp (EApp (EVar "projectAxis") (EVar "schema")) (EVar "name")) (EVar "lo")) (EApp (EVar "go") (EVar "rest"))) (arm (PTuple (PCon "Some" (PVar "p")) (PCon "Some" (PVar "more"))) () (EApp (EVar "Some") (EBinOp "::" (ETuple (EVar "p") (EVar "t")) (EVar "more")))) (arm PWild () (EVar "None")))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "projectAxis" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Authority") (TyApp (TyCon "Option") (TyCon "Authority"))))))
-(DFunDef false "projectAxis" ((PVar "schema") (PVar "name") (PVar "lo")) (EMatch (EApp (EVar "authNorm") (EVar "lo")) (arm (PCon "AJoin" (PList)) () (EApp (EVar "Some") (EApp (EVar "AJoin") (EListLit)))) (arm (PCon "AConst" (PAs "p" (PCon "PProduct" (PVar "ax")))) () (EIf (EBinOp "==" (EApp (EVar "domainKey") (EVar "p")) (EVar "schema")) (EApp (EApp (EVar "map") (EVar "AConst")) (EApp (EApp (EVar "lookupAxis") (EVar "name")) (EVar "ax"))) (EVar "None"))) (arm (PCon "AProduct" (PVar "axes")) () (EIf (EBinOp "==" (EApp (EVar "domainKey") (EApp (EVar "authDomainTop") (EApp (EVar "AProduct") (EVar "axes")))) (EVar "schema")) (EApp (EApp (EVar "lookupTerm") (EVar "name")) (EVar "axes")) (EVar "None"))) (arm (PCon "AJoin" (PVar "ms")) () (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "m")) (EMatch (ETuple (EVar "acc") (EApp (EApp (EApp (EVar "projectAxis") (EVar "schema")) (EVar "name")) (EVar "m"))) (arm (PTuple (PCon "Some" (PVar "a")) (PCon "Some" (PVar "b"))) () (EApp (EVar "Some") (EApp (EApp (EVar "authJoin") (EVar "a")) (EVar "b")))) (arm PWild () (EVar "None"))))) (EApp (EVar "Some") (EApp (EVar "AJoin") (EListLit)))) (EVar "ms"))) (arm PWild () (EVar "None"))))
+(DFunDef false "projectAxis" ((PVar "schema") (PVar "name") (PVar "lo0")) (ELetGroup ((lgb "go" (clause ((PVar "lo")) (EMatch (EApp (EVar "authNorm") (EVar "lo")) (arm (PCon "AJoin" (PList)) () (EApp (EVar "Some") (EApp (EVar "AJoin") (EListLit)))) (arm (PCon "AConst" (PAs "p" (PCon "PProduct" (PVar "ax")))) () (EIf (EBinOp "==" (EApp (EVar "domainKey") (EVar "p")) (EVar "schema")) (EApp (EApp (EVar "map") (EVar "AConst")) (EApp (EApp (EVar "lookupAxis") (EVar "name")) (EVar "ax"))) (EVar "None"))) (arm (PCon "AProduct" (PVar "axes")) () (EIf (EBinOp "==" (EApp (EVar "domainKey") (EApp (EVar "authDomainTop") (EApp (EVar "AProduct") (EVar "axes")))) (EVar "schema")) (EApp (EApp (EVar "lookupTerm") (EVar "name")) (EVar "axes")) (EVar "None"))) (arm (PCon "AJoin" (PVar "ms")) () (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "m")) (EMatch (ETuple (EVar "acc") (EApp (EVar "go") (EVar "m"))) (arm (PTuple (PCon "Some" (PVar "a")) (PCon "Some" (PVar "b"))) () (EApp (EVar "Some") (EApp (EApp (EVar "authJoin") (EVar "a")) (EVar "b")))) (arm PWild () (EVar "None"))))) (EApp (EVar "Some") (EApp (EVar "AJoin") (EListLit)))) (EVar "ms"))) (arm (POr (PCon "AVar" PWild) (PCon "AConst" PWild)) () (EVar "None")))))) (EApp (EVar "go") (EVar "lo0"))))
 (DTypeSig false "constantsOf" (TyFun (TyApp (TyCon "List") (TyCon "Authority")) (TyApp (TyCon "List") (TyCon "Param"))))
 (DFunDef false "constantsOf" ((PList)) (EListLit))
 (DFunDef false "constantsOf" ((PCons (PCon "AConst" (PVar "p")) (PVar "ms"))) (EBinOp "::" (EVar "p") (EApp (EVar "constantsOf") (EVar "ms"))))
@@ -717,7 +720,7 @@ paramElements p = [trimLeft (drender p)]
 (DFunDef false "authLevelOf" ((PCon "AVar" (PVar "cell"))) (EApp (EVar "authvarLevel") (EVar "cell")))
 (DFunDef false "authLevelOf" ((PCon "AJoin" (PVar "ms"))) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "m")) (EApp (EApp (EMethodRef "max") (EVar "acc")) (EApp (EVar "authLevelOf") (EVar "m"))))) (ELit (LInt 0))) (EVar "ms")))
 (DFunDef false "authLevelOf" ((PCon "AProduct" (PVar "axes"))) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "a")) (EApp (EApp (EMethodRef "max") (EVar "acc")) (EApp (EVar "authLevelOf") (EApp (EVar "snd") (EVar "a")))))) (ELit (LInt 0))) (EVar "axes")))
-(DFunDef false "authLevelOf" (PWild) (ELit (LInt 0)))
+(DFunDef false "authLevelOf" ((PCon "AConst" PWild)) (ELit (LInt 0)))
 (DTypeSig true "authvarDomain" (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyCon "Param")))
 (DFunDef false "authvarDomain" ((PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "AUnbound" PWild PWild (PVar "top") PWild PWild) () (EVar "top")) (arm (PCon "ALink" PWild (PVar "top") PWild) () (EVar "top"))))
 (DTypeSig true "authvarName" (TyFun (TyApp (TyCon "Ref") (TyCon "Authvar")) (TyApp (TyCon "Option") (TyCon "String"))))
@@ -774,7 +777,7 @@ paramElements p = [trimLeft (drender p)]
 (DFunDef false "termKey" ((PCon "AProduct" (PVar "axes"))) (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "a")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EApp (EVar "fst") (EVar "a")))) (ELit (LString "="))) (EApp (EVar "$core.display") (EApp (EApp (EVar "renderAxisTerm") (ELam ((PVar "cell")) (EBinOp "++" (ELit (LString "#")) (EApp (EVar "intToString") (EApp (EVar "authvarId") (EVar "cell")))))) (EApp (EVar "snd") (EVar "a"))))) (ELit (LString ""))))) (EVar "axes"))))
 (DFunDef false "termKey" (PWild) (ELit (LString "")))
 (DTypeSig true "authRetag" (TyFun (TyCon "Param") (TyFun (TyCon "Authority") (TyCon "Authority"))))
-(DFunDef false "authRetag" ((PVar "top") (PVar "a")) (EMatch (EApp (EVar "authNorm") (EVar "a")) (arm (PCon "AConst" (PVar "p")) () (EApp (EVar "AConst") (EApp (EApp (EVar "retagParam") (EVar "top")) (EVar "p")))) (arm (PCon "AJoin" (PVar "ms")) () (EApp (EVar "authJoinAll") (EApp (EApp (EMethodRef "map") (EApp (EVar "authRetag") (EVar "top"))) (EVar "ms")))) (arm (PVar "other") () (EVar "other"))))
+(DFunDef false "authRetag" ((PVar "top") (PVar "a")) (EMatch (EApp (EVar "authNorm") (EVar "a")) (arm (PCon "AConst" (PVar "p")) () (EApp (EVar "AConst") (EApp (EApp (EVar "retagParam") (EVar "top")) (EVar "p")))) (arm (PCon "AJoin" (PVar "ms")) () (EApp (EVar "authJoinAll") (EApp (EApp (EMethodRef "map") (EApp (EVar "authRetag") (EVar "top"))) (EVar "ms")))) (arm (PAs "other" (POr (PCon "AVar" PWild) (PCon "AProduct" PWild))) () (EVar "other"))))
 (DTypeSig true "authWidenValue" (TyFun (TyCon "Authority") (TyCon "Authority")))
 (DFunDef false "authWidenValue" ((PVar "a")) (EBlock (DoLet false false (PTuple (PVar "consts") (PVar "tuples") (PVar "vars")) (EApp (EApp (EVar "collect") (EListLit (EVar "a"))) (EApp (EApp (EApp (EVar "Parts") (EListLit)) (EListLit)) (EVar "Tip")))) (DoLet false false (PVar "cs") (EApp (EVar "dantichain") (EVar "consts"))) (DoExpr (EIf (EBinOp ">" (EApp (EVar "listLen") (EVar "cs")) (EVar "setCardCap")) (EApp (EApp (EApp (EVar "assemble") (EListLit (EApp (EApp (EApp (EMethodRef "fold") (EVar "djoinN")) (EApp (EVar "headOr") (EVar "cs"))) (EVar "cs")))) (EVar "tuples")) (EVar "vars")) (EApp (EVar "authNorm") (EVar "a"))))))
 (DTypeSig false "headOr" (TyFun (TyApp (TyCon "List") (TyCon "Param")) (TyCon "Param")))
@@ -823,10 +826,9 @@ paramElements p = [trimLeft (drender p)]
 (DTypeSig true "authSplit" (TyFun (TyCon "Authority") (TyFun (TyCon "Authority") (TyApp (TyCon "List") (TyTuple (TyCon "Authority") (TyCon "Authority"))))))
 (DFunDef false "authSplit" ((PVar "lo") (PVar "hi")) (EMatch (EApp (EVar "authNorm") (EVar "hi")) (arm (PCon "AProduct" (PVar "axes")) () (EBlock (DoLet false false (PVar "schema") (EApp (EVar "domainKey") (EApp (EVar "authDomainTop") (EApp (EVar "AProduct") (EVar "axes"))))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "projections") (EVar "schema")) (EVar "axes")) (EVar "lo")) (arm (PCon "Some" (PVar "parts")) () (EVar "parts")) (arm (PCon "None") () (EListLit (ETuple (EVar "lo") (EVar "hi")))))))) (arm PWild () (EListLit (ETuple (EVar "lo") (EVar "hi"))))))
 (DTypeSig false "projections" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Authority"))) (TyFun (TyCon "Authority") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "Authority") (TyCon "Authority"))))))))
-(DFunDef false "projections" (PWild (PList) PWild) (EApp (EVar "Some") (EListLit)))
-(DFunDef false "projections" ((PVar "schema") (PCons (PTuple (PVar "name") (PVar "t")) (PVar "rest")) (PVar "lo")) (EMatch (ETuple (EApp (EApp (EApp (EVar "projectAxis") (EVar "schema")) (EVar "name")) (EVar "lo")) (EApp (EApp (EApp (EVar "projections") (EVar "schema")) (EVar "rest")) (EVar "lo"))) (arm (PTuple (PCon "Some" (PVar "p")) (PCon "Some" (PVar "more"))) () (EApp (EVar "Some") (EBinOp "::" (ETuple (EVar "p") (EVar "t")) (EVar "more")))) (arm PWild () (EVar "None"))))
+(DFunDef false "projections" ((PVar "schema") (PVar "xs0") (PVar "lo")) (ELetGroup ((lgb "go" (clause ((PList)) (EApp (EVar "Some") (EListLit))) (clause ((PCons (PTuple (PVar "name") (PVar "t")) (PVar "rest"))) (EMatch (ETuple (EApp (EApp (EApp (EVar "projectAxis") (EVar "schema")) (EVar "name")) (EVar "lo")) (EApp (EVar "go") (EVar "rest"))) (arm (PTuple (PCon "Some" (PVar "p")) (PCon "Some" (PVar "more"))) () (EApp (EVar "Some") (EBinOp "::" (ETuple (EVar "p") (EVar "t")) (EVar "more")))) (arm PWild () (EVar "None")))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "projectAxis" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Authority") (TyApp (TyCon "Option") (TyCon "Authority"))))))
-(DFunDef false "projectAxis" ((PVar "schema") (PVar "name") (PVar "lo")) (EMatch (EApp (EVar "authNorm") (EVar "lo")) (arm (PCon "AJoin" (PList)) () (EApp (EVar "Some") (EApp (EVar "AJoin") (EListLit)))) (arm (PCon "AConst" (PAs "p" (PCon "PProduct" (PVar "ax")))) () (EIf (EBinOp "==" (EApp (EVar "domainKey") (EVar "p")) (EVar "schema")) (EApp (EApp (EMethodRef "map") (EVar "AConst")) (EApp (EApp (EVar "lookupAxis") (EVar "name")) (EVar "ax"))) (EVar "None"))) (arm (PCon "AProduct" (PVar "axes")) () (EIf (EBinOp "==" (EApp (EVar "domainKey") (EApp (EVar "authDomainTop") (EApp (EVar "AProduct") (EVar "axes")))) (EVar "schema")) (EApp (EApp (EVar "lookupTerm") (EVar "name")) (EVar "axes")) (EVar "None"))) (arm (PCon "AJoin" (PVar "ms")) () (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "m")) (EMatch (ETuple (EVar "acc") (EApp (EApp (EApp (EVar "projectAxis") (EVar "schema")) (EVar "name")) (EVar "m"))) (arm (PTuple (PCon "Some" (PVar "a")) (PCon "Some" (PVar "b"))) () (EApp (EVar "Some") (EApp (EApp (EVar "authJoin") (EVar "a")) (EVar "b")))) (arm PWild () (EVar "None"))))) (EApp (EVar "Some") (EApp (EVar "AJoin") (EListLit)))) (EVar "ms"))) (arm PWild () (EVar "None"))))
+(DFunDef false "projectAxis" ((PVar "schema") (PVar "name") (PVar "lo0")) (ELetGroup ((lgb "go" (clause ((PVar "lo")) (EMatch (EApp (EVar "authNorm") (EVar "lo")) (arm (PCon "AJoin" (PList)) () (EApp (EVar "Some") (EApp (EVar "AJoin") (EListLit)))) (arm (PCon "AConst" (PAs "p" (PCon "PProduct" (PVar "ax")))) () (EIf (EBinOp "==" (EApp (EVar "domainKey") (EVar "p")) (EVar "schema")) (EApp (EApp (EMethodRef "map") (EVar "AConst")) (EApp (EApp (EVar "lookupAxis") (EVar "name")) (EVar "ax"))) (EVar "None"))) (arm (PCon "AProduct" (PVar "axes")) () (EIf (EBinOp "==" (EApp (EVar "domainKey") (EApp (EVar "authDomainTop") (EApp (EVar "AProduct") (EVar "axes")))) (EVar "schema")) (EApp (EApp (EVar "lookupTerm") (EVar "name")) (EVar "axes")) (EVar "None"))) (arm (PCon "AJoin" (PVar "ms")) () (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "m")) (EMatch (ETuple (EVar "acc") (EApp (EVar "go") (EVar "m"))) (arm (PTuple (PCon "Some" (PVar "a")) (PCon "Some" (PVar "b"))) () (EApp (EVar "Some") (EApp (EApp (EVar "authJoin") (EVar "a")) (EVar "b")))) (arm PWild () (EVar "None"))))) (EApp (EVar "Some") (EApp (EVar "AJoin") (EListLit)))) (EVar "ms"))) (arm (POr (PCon "AVar" PWild) (PCon "AConst" PWild)) () (EVar "None")))))) (EApp (EVar "go") (EVar "lo0"))))
 (DTypeSig false "constantsOf" (TyFun (TyApp (TyCon "List") (TyCon "Authority")) (TyApp (TyCon "List") (TyCon "Param"))))
 (DFunDef false "constantsOf" ((PList)) (EListLit))
 (DFunDef false "constantsOf" ((PCons (PCon "AConst" (PVar "p")) (PVar "ms"))) (EBinOp "::" (EVar "p") (EApp (EVar "constantsOf") (EVar "ms"))))

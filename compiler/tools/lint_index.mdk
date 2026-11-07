@@ -180,26 +180,28 @@ sigOf : Ty -> SigSlot
 sigOf t = SigVal (stripTy t)
 
 sigRowsOf : String -> HashMap String Unit -> Decl -> List IndexRow
-sigRowsOf m signed (DTypeSig pub name ty loc) =
-  setInPlace name () signed
-  [mkRow m name RkValue (sigOf ty) "" [] 0 pub (Some loc)]
-sigRowsOf m signed (DExtern (ExternDecl { edPub = pub, edName = name, edTy = ty, edLoc = loc, ... })) =
-  setInPlace name () signed
-  [mkRow m name RkValue (sigOf ty) "" [] 0 pub (Some loc)]
-sigRowsOf m signed (DAttrib _ d) = sigRowsOf m signed d
-sigRowsOf m _ (DData { dataVis = vis, dataName = name, dataParams = ps, dataCtors = ctors, dataNameLoc = loc, ... }) =
-  mkRow m name RkType NoSig "" [] (listLen ps) (visExported vis) loc
-    :: map (ctorRow m name ps (isPublicVis vis) loc) ctors
-sigRowsOf m _ (DNewtype { newtypePub = pub, newtypeName = name, newtypeParams = ps, newtypeCtor = c, newtypeFieldTy = fty, newtypeNameLoc = loc, ... }) = [
-  mkRow m name RkType NoSig "" [] (listLen ps) pub loc,
-  mkRow m c RkCtor (sigOf (TyFun fty (resultTy name ps))) name [] 1 pub loc,
-]
-sigRowsOf m _ (DTypeAlias { tyAliasPub = pub, tyAliasName = name, tyAliasParams = ps, tyAliasRhs = rhs, tyAliasNameLoc = loc, ... }) =
-  [mkRow m name RkType (sigOf rhs) "" [] (listLen ps) pub loc]
-sigRowsOf m _ (DInterface { pub = pub, name = name, typarams = ps, methods = ms, ifaceNameLoc = loc, ... }) =
-  mkRow m name RkIface NoSig "" [] (listLen ps) pub loc
-    :: map (methodRow m name pub) ms
-sigRowsOf _ _ _ = []
+sigRowsOf m signed d0 = go d0
+  where
+    go (DTypeSig pub name ty loc) =
+      setInPlace name () signed
+      [mkRow m name RkValue (sigOf ty) "" [] 0 pub (Some loc)]
+    go (DExtern (ExternDecl { edPub = pub, edName = name, edTy = ty, edLoc = loc, ... })) =
+      setInPlace name () signed
+      [mkRow m name RkValue (sigOf ty) "" [] 0 pub (Some loc)]
+    go (DAttrib _ d) = go d
+    go (DData { dataVis = vis, dataName = name, dataParams = ps, dataCtors = ctors, dataNameLoc = loc, ... }) =
+      mkRow m name RkType NoSig "" [] (listLen ps) (visExported vis) loc
+        :: map (ctorRow m name ps (isPublicVis vis) loc) ctors
+    go (DNewtype { newtypePub = pub, newtypeName = name, newtypeParams = ps, newtypeCtor = c, newtypeFieldTy = fty, newtypeNameLoc = loc, ... }) = [
+      mkRow m name RkType NoSig "" [] (listLen ps) pub loc,
+      mkRow m c RkCtor (sigOf (TyFun fty (resultTy name ps))) name [] 1 pub loc,
+    ]
+    go (DTypeAlias { tyAliasPub = pub, tyAliasName = name, tyAliasParams = ps, tyAliasRhs = rhs, tyAliasNameLoc = loc, ... }) =
+      [mkRow m name RkType (sigOf rhs) "" [] (listLen ps) pub loc]
+    go (DInterface { pub = pub, name = name, typarams = ps, methods = ms, ifaceNameLoc = loc, ... }) =
+      mkRow m name RkIface NoSig "" [] (listLen ps) pub loc
+        :: map (methodRow m name pub) ms
+    go _ = []
 
 isPublicVis : DataVis -> Bool
 isPublicVis VisPublic = True
@@ -270,12 +272,12 @@ unsignedRowsOf : String ->
   HashMap String Unit ->
   Decl ->
   List IndexRow
-unsignedRowsOf m signed seen (DFunDef pub name _ _ loc _) =
-  unsignedRow m signed seen pub name loc
-unsignedRowsOf m signed seen (DLetGroup pub binds) =
-  flatMap (b => letRow m signed seen pub b) binds
-unsignedRowsOf m signed seen (DAttrib _ d) = unsignedRowsOf m signed seen d
-unsignedRowsOf _ _ _ _ = []
+unsignedRowsOf m signed seen x0 = go x0
+  where
+    go (DFunDef pub name _ _ loc _) = unsignedRow m signed seen pub name loc
+    go (DLetGroup pub binds) = flatMap (b => letRow m signed seen pub b) binds
+    go (DAttrib _ d) = go d
+    go _ = []
 
 letRow : String ->
   HashMap String Unit ->

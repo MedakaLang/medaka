@@ -70,11 +70,10 @@ refCodepoint raw i width =
   refFold raw (i + 1) (i + width) lead
 
 refFold : Array Int -> Int -> Int -> Int -> Int
-refFold raw i end acc =
-  if i >= end then
-    acc
-  else
-    refFold raw (i + 1) end (acc * 64 + refByte raw i % 64)
+refFold raw i0 end acc0 = go i0 acc0
+  where
+    go i acc =
+      if i >= end then acc else go (i + 1) (acc * 64 + refByte raw i % 64)
 
 refChar : Int -> Char
 refChar cp = optionOr '�' (charFromCode cp)
@@ -84,6 +83,8 @@ refChars : Array Int -> List Char
 refChars raw = refCharsFrom raw 0 (arrayLength raw)
 
 refCharsFrom : Array Int -> Int -> Int -> List Char
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 refCharsFrom raw i n =
   if i >= n then
     []

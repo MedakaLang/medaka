@@ -20,6 +20,7 @@ import tools.lint_core.{
   Finding(..),
   Fix,
   Fixability(..),
+  Memo,
   Need(..),
   Ratchet(..),
   Rule,
@@ -133,7 +134,7 @@ ruleOptionEliminators idx _ facts _ _ =
     (optionElimEdit idx facts)
     optionElimFinding
 
-optionElimFinding : Option Loc -> Expr -> Option Fix -> Finding
+optionElimFinding : Option Loc -> Expr -> Memo (Option Fix) -> Finding
 optionElimFinding loc rewritten fix = Finding {
   rule = ruleNameOptionEliminators,
   message =

@@ -334,6 +334,8 @@ arrayToListG : Array a -> List a
 arrayToListG arr = arrayToListGo arr 0 (arrayLength arr)
 
 arrayToListGo : Array a -> Int -> Int -> List a
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 arrayToListGo arr i n
   | i >= n = []
   | otherwise = arrayGetUnsafe i arr :: arrayToListGo arr (i + 1) n
@@ -539,9 +541,9 @@ takeN n (x :: rest) = x :: takeN (n - 1) rest
 -- Callers take the indexed Option once and derive every consumer from it (see
 -- applyMethodDicts).
 lookupMethodReqCountOpt : String -> String -> Option Int
-lookupMethodReqCountOpt mname tag = match omLookup mname !methodReqCountRef
-  Some routes => omLookup tag routes
-  None => None
+lookupMethodReqCountOpt mname tag = do
+  routes <- omLookup mname !methodReqCountRef
+  omLookup tag routes
 
 export
 buildCtorFieldOrders : List Decl -> List (String, List String)
@@ -657,14 +659,16 @@ lookupMethodFrames : List (EnvFrame (Value e)) ->
   List (EnvFrame (Value e)) ->
   String ->
   <e> Value e
-lookupMethodFrames all [] name = lookupFrames all name
-lookupMethodFrames all (frame :: rest) name = match lookupFrameCell frame name
-  Some cell =>
-    if isMethodBinding (readCell cell name) then
-      readCell cell name
-    else
-      lookupMethodFrames all rest name
-  None => lookupMethodFrames all rest name
+lookupMethodFrames all frames0 name = go frames0
+  where
+    go [] = lookupFrames all name
+    go (frame :: rest) = match lookupFrameCell frame name
+      Some cell =>
+        if isMethodBinding (readCell cell name) then
+          readCell cell name
+        else
+          go rest
+      None => go rest
 
 -- a method dispatcher binding: a bare VTypedImpl, or a VMulti containing at least one
 -- VTypedImpl candidate.  A standalone function (VClosure / VMulti of VClosures) is not.
@@ -787,6 +791,8 @@ valueEq (VU64 _ _) _ = u64ShapeMismatch ()
 valueEq _ (VU64 _ _) = u64ShapeMismatch ()
 valueEq (VI64 _ _) _ = u64ShapeMismatch ()
 valueEq _ (VI64 _ _) = u64ShapeMismatch ()
+-- Bound: a pairwise fallthrough: two values with different constructors, and any function, thunk or primitive value, are never equal, so naming the swallowed constructors could not make the match total.
+-- lint-disable-next-line rule-walker-wildcard
 valueEq _ _ = False
 
 valueListEq : List (Value e) -> List (Value e) -> Bool
@@ -906,9 +912,9 @@ matchPat (PRec ctor fields _) (VRecord ctor2 recFields)
   | ctor == ctor2 = matchRecFields fields recFields
   | otherwise = None
 matchPat (PRec ctor fields _) (VCon ctor2 vals)
-  | ctor == ctor2 = match lookupAssoc ctor !ctorFieldOrdersRef
-    Some order => matchRecFields fields (zipFieldOrder order vals)
-    None => None
+  | ctor == ctor2 = do
+    order <- lookupAssoc ctor !ctorFieldOrdersRef
+    matchRecFields fields (zipFieldOrder order vals)
   | otherwise = None
 matchPat (PRng (LInt lo) (LInt hi) incl) (VInt v)
   | inIntRange v lo hi incl = Some []
@@ -920,6 +926,7 @@ matchPat (PRng (LByte lo) (LByte hi) incl) (VInt v)
 -- binds them (its first alternative's), which the slots `annotate` numbers follow
 matchPat (POr alts) v =
   map (orderBinds (patBindings (POr alts))) (findMap (a => matchPat a v) alts)
+matchPat (PAnn p _) v = matchPat p v
 matchPat _ _ = None
 
 orderBinds : List String -> List (String, Value e) -> List (String, Value e)
@@ -945,10 +952,13 @@ matchRecFields : List RecPatField ->
   List (String, Value e) ->
   Option (List (String, Value e))
 matchRecFields [] _ = Some []
-matchRecFields ((RecPatField fname _ _ mp) :: rest) recFields =
-  match lookupAssoc fname recFields
-    None => None
-    Some v => matchRecField fname mp v rest recFields
+-- Bound: runs once per field of every record pattern, mutually recursive with
+-- `matchRecField` through `map`; the `do` form allocated a closure per field and
+-- measurably slowed record patterns in `medaka run`.
+-- lint-disable-next-line rule-passthrough-arm
+matchRecFields ((RecPatField f _ _ mp) :: rest) fs = match lookupAssoc f fs
+  None => None
+  Some v => matchRecField f mp v rest fs
 
 -- Zip a registered ctor's field order with its positional VCon vals into a
 -- name->value assoc, so a record pattern can match a named-field data variant
@@ -966,6 +976,10 @@ matchRecField : String ->
   Option (List (String, Value e))
 matchRecField fname None v rest recFields =
   map ((fname, v) :: _) (matchRecFields rest recFields)
+-- Bound: runs once per labelled field of every record pattern, a recursion through
+-- `map` that is not a tail call; the `do` form allocated a closure per field and
+-- measurably slowed record patterns in `medaka run`.
+-- lint-disable-next-line rule-passthrough-arm
 matchRecField _ (Some q) v rest recFields = match matchPat q v
   None => None
   Some b => map (b ++ _) (matchRecFields rest recFields)
@@ -975,6 +989,10 @@ matchCons : Pat ->
   Value e ->
   List (Value e) ->
   Option (List (String, Value e))
+-- Bound: runs once per cons cell of every list pattern, a recursion through `map` that is
+-- not a tail call; the `do` form allocated a closure per cell and measurably slowed
+-- list recursion in `medaka run`.
+-- lint-disable-next-line rule-passthrough-arm
 matchCons h t x xs = match matchPat h x
   None => None
   Some b1 => map (b1 ++ _) (matchPat t (VList xs))
@@ -984,6 +1002,10 @@ matchAs x p v = map ((x, v) :: _) (matchPat p v)
 
 matchPats : List Pat -> List (Value e) -> Option (List (String, Value e))
 matchPats [] [] = Some []
+-- Bound: the pattern matcher's list-and-tuple spine, a recursion through `map` that is
+-- not a tail call; the `do` form allocated a closure per sub-pattern and measurably
+-- slowed tuple and list patterns in `medaka run`.
+-- lint-disable-next-line rule-passthrough-arm
 matchPats (p :: ps) (v :: vs) = match matchPat p v
   None => None
   Some b => map (b ++ _) (matchPats ps vs)
@@ -1466,10 +1488,9 @@ applyClosure _ [] _ _ _ = panic "applied closure with no parameters"
 applyClosure env [PVar name _ _] body _ arg =
   fallthroughToNone
     (withCallFile env (() => eval (pushFrame env [(name, Ref arg)]) body))
-applyClosure env [p] body _ arg = match matchPat p arg
-  None => None
-  Some binds =>
-    fallthroughToNone (withCallFile env (() => eval (extendEnv env binds) body))
+applyClosure env [p] body _ arg = do
+  binds <- matchPat p arg
+  fallthroughToNone (withCallFile env (() => eval (extendEnv env binds) body))
 applyClosure env ((PVar name _ _) :: ps) body site arg =
   Some (VClosure (pushFrame env [(name, Ref arg)]) ps body site)
 applyClosure env (p :: ps) body site arg =
@@ -1488,10 +1509,9 @@ applyClosureF _ [] _ _ = panic "applied closure with no parameters"
 applyClosureF env [PVar name _ _] f arg =
   fallthroughToNone
     (withCallFile env (() => f (pushFrame env [(name, Ref arg)])))
-applyClosureF env [p] f arg = match matchPat p arg
-  None => None
-  Some binds =>
-    fallthroughToNone (withCallFile env (() => f (extendEnv env binds)))
+applyClosureF env [p] f arg = do
+  binds <- matchPat p arg
+  fallthroughToNone (withCallFile env (() => f (extendEnv env binds)))
 applyClosureF env ((PVar name _ _) :: ps) f arg =
   Some (VClosureF (pushFrame env [(name, Ref arg)]) ps f)
 applyClosureF env (p :: ps) f arg =
@@ -1849,6 +1869,8 @@ recordCreateVals : String ->
   List String ->
   List (String, Value e) ->
   List (Value e)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 recordCreateVals _ [] _ = []
 recordCreateVals con (f :: fs) assigns = match lookupAssoc f assigns
   Some v => v :: recordCreateVals con fs assigns
@@ -1988,10 +2010,13 @@ installGroup : EvalEnv (Value e) ->
   List (String, Ref (Value e)) ->
   List LetBind ->
   <e> Unit
-installGroup _ _ [] = ()
-installGroup env cells ((LetBind name clauses site _) :: rest) =
-  findCell cells name := groupValue env (map (funClauseToClause site) clauses)
-  installGroup env cells rest
+installGroup env cells binds0 = go binds0
+  where
+    go [] = ()
+    go ((LetBind name clauses site _) :: rest) =
+      findCell cells name :=
+        groupValue env (map (funClauseToClause site) clauses)
+      go rest
 
 funClauseToClause : Loc -> FunClause -> (List Pat, Expr, Loc)
 funClauseToClause site (FunClause pats body) = (pats, body, site)
@@ -2110,6 +2135,8 @@ isNullary _ = False
 -- arms' patterns and guards move the evaluator's location, so a fall-through
 -- re-points it before raising.
 evalMatch : Loc -> EvalEnv (Value e) -> Value e -> List Arm -> <e> Value e
+-- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 evalMatch site _ _ [] =
   updateEvalLoc site
   runtimePanic ENonexhaustiveMatch "non-exhaustive match"
@@ -2133,12 +2160,14 @@ evalOrArm : Loc ->
   Expr ->
   List Arm ->
   <e> Value e
-evalOrArm site env sv [] _ rest = evalMatch site env sv rest
-evalOrArm site env sv ((pat, guards) :: cands) body rest = match matchPat pat sv
-  None => evalOrArm site env sv cands body rest
-  Some binds => match runGuards (extendEnv env binds) guards
-    Some env2 => eval env2 body
-    None => evalOrArm site env sv cands body rest
+evalOrArm site env sv cands0 body rest = go cands0
+  where
+    go [] = evalMatch site env sv rest
+    go ((pat, guards) :: cands) = match matchPat pat sv
+      None => go cands
+      Some binds => match runGuards (extendEnv env binds) guards
+        Some env2 => eval env2 body
+        None => go cands
 
 runGuards : EvalEnv (Value e) -> List Guard -> <e> Option (EvalEnv (Value e))
 runGuards env [] = Some env
@@ -2538,15 +2567,19 @@ positionsById : String ->
   String ->
   List ((String, String, String), List Int) ->
   Option (List Int)
-positionsById _ _ [] = None
-positionsById ifaceId mname (((i, _, m), p) :: rest)
-  | ifaceIdMatches ifaceId i && mname == m = Some p
-  | otherwise = positionsById ifaceId mname rest
+positionsById ifaceId mname xs0 = go xs0
+  where
+    go [] = None
+    go (((i, _, m), p) :: rest)
+      | ifaceIdMatches ifaceId i && mname == m = Some p
+      | otherwise = go rest
 
 positionsByName : String ->
   String ->
   List ((String, String, String), List Int) ->
   List Int
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
 positionsByName _ _ [] = [0]
 positionsByName iface mname (((_, i, m), p) :: rest)
   | iface == i && mname == m = p
@@ -2574,35 +2607,41 @@ declImplEntries : Option DispositionTable ->
   List ((String, String, String), List Int) ->
   Decl ->
   List (String, (Int, Value e))
--- #1037: an ATTRIBUTE IS METADATA — it must never change which impls exist.  A
--- decl attribute parses to `DAttrib attrs <decl>`, and without this arm
--- `@deprecated "…" impl Speak Cat where …` fell through to `_ => []`: the impl
--- contributed no VTypedImpl at all, so `speak Cat` silently answered from the
--- interface DEFAULT (wrong value, exit 0).  Fixed in LOCKSTEP with
--- core_ir_lower's `lowerDeclImpl` — the two are parallel projections of the same
--- decl set and a fix to one is silently absent from the other (AGENTS.md).
-declImplEntries dispositions env disp (DAttrib _ d) =
-  declImplEntries dispositions env disp d
--- B-2.2-e: `implOrigin` is bound here purely to reach `implMethodEntry`'s route
--- word — the DEFINITION side's half of the identity-bearing key the typechecker
--- stamps at the call site (`keyForSite`).  Matched arm-for-arm by
--- `core_ir_lower.lowerDeclImpl`, which threads the same field for the same reason.
-declImplEntries _ env disp (DImpl { iface = ifaceName, implOrigin = o, tys = typeArgs, methods, ... }) =
-  map (implMethodEntry env disp o ifaceName typeArgs) (flatMap orMethod methods)
--- An interface installs one entry for each default per instance the disposition
--- table says inherits it, all sharing one value closed over the INTERFACE module's
--- env (the body's names resolve there), each tagged with the instance's head and
--- key, so it is dispatched exactly like the instance's own methods and nothing
--- chooses a default.
--- The interface word comes straight off `ifaceOrigin` (resolve stamps it in
--- `elaborateModules`' preamble, the seam `run` and the separate `medaka_emitter`
--- BUILD process share), the spelling the table's producer keys the slot by.
-declImplEntries (Some dt) env disp (DInterface { name = ifaceName, ifaceOrigin = o, methods, ... }) =
-  flatMap (inheritedDefaultEntries env disp dt o ifaceName) methods
--- An interface under untyped eval has no elaboration, so no instance identity to
--- specialize for; an impl inheriting another module's default has no body for it
--- here (the same limit the untyped Core-IR probes have).
-declImplEntries _ _ _ _ = []
+declImplEntries dispositions env disp decl0 = go decl0
+  where
+    -- #1037: an attribute is metadata: it must never change which impls exist.  A
+    -- decl attribute parses to `DAttrib attrs <decl>`, and without this arm
+    -- `@deprecated "…" impl Speak Cat where …` fell through to `_ => []`: the impl
+    -- contributed no VTypedImpl at all, so `speak Cat` silently answered from the
+    -- interface DEFAULT (wrong value, exit 0).  Fixed in LOCKSTEP with
+    -- core_ir_lower's `lowerDeclImpl` — the two are parallel projections of the same
+    -- decl set and a fix to one is silently absent from the other (AGENTS.md).
+    go (DAttrib _ d) = go d
+    -- B-2.2-e: `implOrigin` is bound here purely to reach `implMethodEntry`'s route
+    -- word — the DEFINITION side's half of the identity-bearing key the typechecker
+    -- stamps at the call site (`keyForSite`).  Matched arm-for-arm by
+    -- `core_ir_lower.lowerDeclImpl`, which threads the same field for the same reason.
+    go (DImpl { iface = ifaceName, implOrigin = o, tys = typeArgs, methods, ... }) =
+      map
+        (implMethodEntry env disp o ifaceName typeArgs)
+        (flatMap orMethod methods)
+    -- An interface installs one entry for each default per instance the disposition
+    -- table says inherits it, all sharing one value closed over the INTERFACE module's
+    -- env (the body's names resolve there), each tagged with the instance's head and
+    -- key, so it is dispatched exactly like the instance's own methods and nothing
+    -- chooses a default.
+    -- The interface word comes straight off `ifaceOrigin` (resolve stamps it in
+    -- `elaborateModules`' preamble, the seam `run` and the separate `medaka_emitter`
+    -- BUILD process share), the spelling the table's producer keys the slot by.
+    go (DInterface { name = ifaceName, ifaceOrigin = o, methods, ... }) =
+      match dispositions
+        Some dt =>
+          flatMap (inheritedDefaultEntries env disp dt o ifaceName) methods
+        None => []
+    -- An interface under untyped eval has no elaboration, so no instance identity to
+    -- specialize for; an impl inheriting another module's default has no body for it
+    -- here (the same limit the untyped Core-IR probes have).
+    go _ = []
 
 -- An impl method clause whose parameters hold or-patterns, once per candidate
 -- (`orClauses`).
@@ -2852,16 +2891,18 @@ confineEnclosing : Bool ->
   String ->
   List (Bool, List String) ->
   <FileRead | e> Option String
-confineEnclosing _ _ _ [] = None
-confineEnclosing write entry path ((mode, grant) :: rest) =
-  let refused =
-    if mode == write && isNonEmptyL grant then
-      confinePath entry grant path
-    else
-      None
-  match refused
-    Some msg => Some msg
-    None => confineEnclosing write entry path rest
+confineEnclosing write entry path modes0 = go modes0
+  where
+    go [] = None
+    go ((mode, grant) :: rest) =
+      let refused =
+        if mode == write && isNonEmptyL grant then
+          confinePath entry grant path
+        else
+          None
+      match refused
+        Some msg => Some msg
+        None => go rest
 
 -- ── Confinement ───────────────────────────────────────────────────────────
 -- `mdk_confine` in runtime/medaka_rt.c states the rules and the reason for
@@ -2955,12 +2996,14 @@ canonPath entry p =
 
 -- The realpath of the longest resolving prefix, extended by the rest.
 canonFrom : Bool -> List String -> Int -> <FileRead | e> Option String
-canonFrom absolute cs k =
-  if k < 0 then
-    None
-  else match resolvePath (joinComponents absolute (takeN k cs))
-    Some r => extendAbsent r (drop k cs)
-    None => canonFrom absolute cs (k - 1)
+canonFrom absolute cs k0 = go k0
+  where
+    go k =
+      if k < 0 then
+        None
+      else match resolvePath (joinComponents absolute (takeN k cs))
+        Some r => extendAbsent r (drop k cs)
+        None => go (k - 1)
 
 -- The unresolved rest may not climb, and its first component must be absent
 -- (lstat fails in the runtime).  A directory that cannot be listed cannot show
@@ -4060,6 +4103,8 @@ pArrayFill _ _ = panic "arrayFill: not an Array"
 -- Copies len elements from src[srcOff..] into dst[dstOff..] in place.
 -- Mirrors OCaml Array.blit semantics (memmove; handles overlapping regions).
 blitGo : Array (Value e) -> Int -> Array (Value e) -> Int -> Int -> <e> Unit
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
 blitGo src srcOff dst dstOff len
   | len <= 0 = ()
   | otherwise =
@@ -4160,6 +4205,8 @@ pByteBlockWriteStdout (VByteBlock b) = appendOutput (stringFromUtf8Bytes b)
 pByteBlockWriteStdout _ = panic "byteBlockWriteStdout: not a ByteBlock"
 
 buildWith : Value e -> Int -> Int -> <e> List (Value e)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 buildWith f i n =
   if i >= n then [] else apply f (VInt i) :: buildWith f (i + 1) n
 
@@ -4197,10 +4244,12 @@ installGroups : EvalEnv (Value e) ->
   List (String, Ref (Value e)) ->
   List (String, List (List Pat, Expr, Loc)) ->
   <e> Unit
-installGroups _ _ [] = ()
-installGroups env cells ((n, clauses) :: rest) =
-  findCell cells n := topGroupValue env n clauses
-  installGroups env cells rest
+installGroups env cells groups0 = go groups0
+  where
+    go [] = ()
+    go ((n, clauses) :: rest) =
+      findCell cells n := topGroupValue env n clauses
+      go rest
 
 export
 lookupBinding : String -> List (String, Value e) -> Option (Value e)
@@ -4761,10 +4810,11 @@ rootFullEvalEnv : ProgramFacts ->
   List (ModInfo (Value e)) ->
   List (String, Ref (Value e)) ->
   EvalEnv (Value e)
-rootFullEvalEnv facts [] globalCells = EvalEnv facts [ScanFrame globalCells]
-rootFullEvalEnv _ [ModInfo _ _ _ _ menv] _ = menv
-rootFullEvalEnv facts (_ :: rest) globalCells =
-  rootFullEvalEnv facts rest globalCells
+rootFullEvalEnv facts xs0 globalCells = go xs0
+  where
+    go [] = EvalEnv facts [ScanFrame globalCells]
+    go [ModInfo _ _ _ _ menv] = menv
+    go (_ :: rest) = go rest
 
 flattenEnv : EvalEnv (Value e) -> <e> List (String, Value e)
 flattenEnv env = map cellResult (concatList (envFrameCells env))
