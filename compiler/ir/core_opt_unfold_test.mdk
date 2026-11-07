@@ -352,6 +352,22 @@ f x = m + x
 main = f 2
 """)
 
+test "a read of a Float literal global stays a read" =
+  expectCase
+    "(CVar \"k\" AGlobal)"
+    "(CVar \"k\" AGlobal)"
+    "2.5"
+    (passCase
+      propagateAll
+      "f"
+      """
+k : Float
+k = 2.5
+f : Float
+f = k
+main = f
+""")
+
 test "a read whose name a local binder rebinds is left alone" =
   expectCase
     "(CVar \"k\" AGlobal)"
