@@ -65,6 +65,7 @@ reexportedOriginsOf : UsePath -> String -> List (String, String)
 rejectAdmittedValueOccurrence : ModuleCtx -> String -> Unit
 resolveRLocalSite : SiteCtx -> String -> Ref Route -> Mono -> String -> ScopeId -> String -> List Mono -> List IfaceRef -> List (List Mono) -> Unit
 sameWrittenAtoms : List EffAtomTy -> List EffAtomTy -> Bool
+sameWrittenParams : List EffParamTy -> List EffParamTy -> Bool
 schemesAgree : Option Ty -> Ty -> Bool
 shadowDeclaredFor : ModuleCtx -> String -> String -> CDeclared
 shadowDomainForAt : TcEnv -> String -> String -> Int -> Option Mono

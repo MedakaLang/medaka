@@ -339,14 +339,17 @@ evidenceRowsProblem counter rows
   | otherwise = rowsProblem (arrayMake counter False) counter rows
 
 rowsProblem : Array Bool -> Int -> List EvEntry -> Option String
-rowsProblem _ _ [] = None
-rowsProblem seen counter ((EvEntry (EvId _ i) _) :: rest)
-  | i < 0 = Some "an evidence row has a negative ordinal"
-  | i >= counter = Some "an evidence row is at or above the evidence counter"
-  | arrayGetUnsafe i seen = Some "two evidence rows share one ordinal"
-  | otherwise =
-    arraySetUnsafe i True seen
-    rowsProblem seen counter rest
+rowsProblem seen counter xs0 = go xs0
+  where
+    go [] = None
+    go ((EvEntry (EvId _ i) _) :: rest)
+      | i < 0 = Some "an evidence row has a negative ordinal"
+      | i >= counter =
+        Some "an evidence row is at or above the evidence counter"
+      | arrayGetUnsafe i seen = Some "two evidence rows share one ordinal"
+      | otherwise =
+        arraySetUnsafe i True seen
+        go rest
 
 -- Whether a tree site of module `""` names an ordinal at or above the counter.
 treeSitesProblem : PreludeElab -> Option (String, String)

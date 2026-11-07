@@ -355,7 +355,7 @@ The result is one element longer than the input.
 
 ```
 scanRight : (a -> b -> <e> b) -> b -> List a -> <e> List b
-scanRight f z _
+scanRight f z xs
 ```
 
 Every intermediate value of a right fold, ending with the seed.
@@ -563,7 +563,7 @@ mapped element. The result is the final state and the mapped list.
 
 ```
 mapAccumR : (s -> a -> <e> (s, b)) -> s -> List a -> <e> (s, List b)
-mapAccumR f s _
+mapAccumR f s xs
 ```
 
 Like `mapAccumL`, but threads the state from right to left.

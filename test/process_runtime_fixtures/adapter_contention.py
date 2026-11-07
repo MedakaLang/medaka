@@ -37,7 +37,7 @@ for mode in ("eventual", "expiry", "cancel"):
 
 shutil.copy(fixture / "adapter_contention.mdk", scratch / "adapter_contention.mdk")
 source = (root / "stdlib/process_async.mdk").read_text()
-old = "        Err ProcessBusy => deferThen (park deadline token []) (_ =>\n          startUntil program opts deadline token)\n"
+old = "            Err ProcessBusy => deferThen (park deadline token []) (_ => go ())\n"
 assert source.count(old) == 1
 (scratch / "process_async.mdk").write_text(source.replace(old, ""))
 mutant = build(scratch / "adapter_contention.mdk", "broken-retry")

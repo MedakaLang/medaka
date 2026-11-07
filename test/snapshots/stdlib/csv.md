@@ -1,5 +1,5 @@
 # META
-source_lines=178
+source_lines=180
 stages=DESUGAR,MARK
 # SOURCE
 {- | Reading and writing delimiter-separated text: CSV, and TSV by choosing a
@@ -109,23 +109,25 @@ scan : String ->
   Option (String, Int) ->
   List String ->
   (List String, Option (String, Int))
-scan _ _ fs pend [] = (fs, pend)
-scan dl n fs pend (p :: rest) =
-  let raw = match pend
-    None => p
-    Some (r, _) => r ++ p
-  let opened = match pend
-    None => n
-    Some (_, m) => m
-  let last = isEmpty rest
-  let shown = if last then stripCR raw else raw
-  match field shown
-    Some v => scan dl n (v :: fs) None rest
-    None =>
-      if last then
-        (fs, Some (raw ++ "\n", opened))
-      else
-        scan dl n fs (Some (raw ++ dl, opened)) rest
+scan dl n fields0 pending0 xs0 = go fields0 pending0 xs0
+  where
+    go fs pend [] = (fs, pend)
+    go fs pend (p :: rest) =
+      let raw = match pend
+        None => p
+        Some (r, _) => r ++ p
+      let opened = match pend
+        None => n
+        Some (_, m) => m
+      let last = isEmpty rest
+      let shown = if last then stripCR raw else raw
+      match field shown
+        Some v => go (v :: fs) None rest
+        None =>
+          if last then
+            (fs, Some (raw ++ "\n", opened))
+          else
+            go fs (Some (raw ++ dl, opened)) rest
 
 -- The value of a complete field, or None when it opens a quote that is still
 -- open. An unquoted field is its own value.
@@ -201,8 +203,7 @@ quoteField dl f =
 (DTypeSig false "finishLine" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "St"))))))))
 (DFunDef false "finishLine" ((PVar "dl") (PVar "rows") (PVar "fs") (PVar "pend") (PVar "n") (PVar "line")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "dl")) (EVar "n")) (EVar "fs")) (EVar "pend")) (EApp (EApp (EVar "split") (EVar "dl")) (EVar "line"))) (arm (PTuple (PVar "fs2") (PCon "None")) () (EApp (EApp (EApp (EApp (EVar "St") (EBinOp "::" (EApp (EVar "reverse") (EVar "fs2")) (EVar "rows"))) (EListLit)) (EVar "None")) (EVar "n"))) (arm (PTuple (PVar "fs2") (PVar "p")) () (EApp (EApp (EApp (EApp (EVar "St") (EVar "rows")) (EVar "fs2")) (EVar "p")) (EVar "n")))))
 (DTypeSig false "scan" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Int"))))))))))
-(DFunDef false "scan" (PWild PWild (PVar "fs") (PVar "pend") (PList)) (ETuple (EVar "fs") (EVar "pend")))
-(DFunDef false "scan" ((PVar "dl") (PVar "n") (PVar "fs") (PVar "pend") (PCons (PVar "p") (PVar "rest"))) (EBlock (DoLet false false (PVar "raw") (EMatch (EVar "pend") (arm (PCon "None") () (EVar "p")) (arm (PCon "Some" (PTuple (PVar "r") PWild)) () (EBinOp "++" (EVar "r") (EVar "p"))))) (DoLet false false (PVar "opened") (EMatch (EVar "pend") (arm (PCon "None") () (EVar "n")) (arm (PCon "Some" (PTuple PWild (PVar "m"))) () (EVar "m")))) (DoLet false false (PVar "last") (EApp (EVar "isEmpty") (EVar "rest"))) (DoLet false false (PVar "shown") (EIf (EVar "last") (EApp (EVar "stripCR") (EVar "raw")) (EVar "raw"))) (DoExpr (EMatch (EApp (EVar "field") (EVar "shown")) (arm (PCon "Some" (PVar "v")) () (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "dl")) (EVar "n")) (EBinOp "::" (EVar "v") (EVar "fs"))) (EVar "None")) (EVar "rest"))) (arm (PCon "None") () (EIf (EVar "last") (ETuple (EVar "fs") (EApp (EVar "Some") (ETuple (EBinOp "++" (EVar "raw") (ELit (LString "\n"))) (EVar "opened")))) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "dl")) (EVar "n")) (EVar "fs")) (EApp (EVar "Some") (ETuple (EBinOp "++" (EVar "raw") (EVar "dl")) (EVar "opened")))) (EVar "rest"))))))))
+(DFunDef false "scan" ((PVar "dl") (PVar "n") (PVar "fields0") (PVar "pending0") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PVar "fs") (PVar "pend") (PList)) (ETuple (EVar "fs") (EVar "pend"))) (clause ((PVar "fs") (PVar "pend") (PCons (PVar "p") (PVar "rest"))) (EBlock (DoLet false false (PVar "raw") (EMatch (EVar "pend") (arm (PCon "None") () (EVar "p")) (arm (PCon "Some" (PTuple (PVar "r") PWild)) () (EBinOp "++" (EVar "r") (EVar "p"))))) (DoLet false false (PVar "opened") (EMatch (EVar "pend") (arm (PCon "None") () (EVar "n")) (arm (PCon "Some" (PTuple PWild (PVar "m"))) () (EVar "m")))) (DoLet false false (PVar "last") (EApp (EVar "isEmpty") (EVar "rest"))) (DoLet false false (PVar "shown") (EIf (EVar "last") (EApp (EVar "stripCR") (EVar "raw")) (EVar "raw"))) (DoExpr (EMatch (EApp (EVar "field") (EVar "shown")) (arm (PCon "Some" (PVar "v")) () (EApp (EApp (EApp (EVar "go") (EBinOp "::" (EVar "v") (EVar "fs"))) (EVar "None")) (EVar "rest"))) (arm (PCon "None") () (EIf (EVar "last") (ETuple (EVar "fs") (EApp (EVar "Some") (ETuple (EBinOp "++" (EVar "raw") (ELit (LString "\n"))) (EVar "opened")))) (EApp (EApp (EApp (EVar "go") (EVar "fs")) (EApp (EVar "Some") (ETuple (EBinOp "++" (EVar "raw") (EVar "dl")) (EVar "opened")))) (EVar "rest")))))))))) (EApp (EApp (EApp (EVar "go") (EVar "fields0")) (EVar "pending0")) (EVar "xs0"))))
 (DTypeSig false "field" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "field" ((PVar "raw")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "\""))) (EVar "raw")) (EApp (EApp (EVar "quoted") (EApp (EApp (EVar "split") (ELit (LString "\""))) (EApp (EApp (EVar "drop") (ELit (LInt 1))) (EVar "raw")))) (ELit (LString ""))) (EApp (EVar "Some") (EVar "raw"))))
 (DTypeSig false "quoted" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
@@ -240,8 +241,7 @@ quoteField dl f =
 (DTypeSig false "finishLine" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "St"))))))))
 (DFunDef false "finishLine" ((PVar "dl") (PVar "rows") (PVar "fs") (PVar "pend") (PVar "n") (PVar "line")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "dl")) (EVar "n")) (EVar "fs")) (EVar "pend")) (EApp (EApp (EVar "split") (EVar "dl")) (EVar "line"))) (arm (PTuple (PVar "fs2") (PCon "None")) () (EApp (EApp (EApp (EApp (EVar "St") (EBinOp "::" (EApp (EVar "reverse") (EVar "fs2")) (EVar "rows"))) (EListLit)) (EVar "None")) (EVar "n"))) (arm (PTuple (PVar "fs2") (PVar "p")) () (EApp (EApp (EApp (EApp (EVar "St") (EVar "rows")) (EVar "fs2")) (EVar "p")) (EVar "n")))))
 (DTypeSig false "scan" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Int"))))))))))
-(DFunDef false "scan" (PWild PWild (PVar "fs") (PVar "pend") (PList)) (ETuple (EVar "fs") (EVar "pend")))
-(DFunDef false "scan" ((PVar "dl") (PVar "n") (PVar "fs") (PVar "pend") (PCons (PVar "p") (PVar "rest"))) (EBlock (DoLet false false (PVar "raw") (EMatch (EVar "pend") (arm (PCon "None") () (EVar "p")) (arm (PCon "Some" (PTuple (PVar "r") PWild)) () (EBinOp "++" (EVar "r") (EVar "p"))))) (DoLet false false (PVar "opened") (EMatch (EVar "pend") (arm (PCon "None") () (EVar "n")) (arm (PCon "Some" (PTuple PWild (PVar "m"))) () (EVar "m")))) (DoLet false false (PVar "last") (EApp (EMethodRef "isEmpty") (EVar "rest"))) (DoLet false false (PVar "shown") (EIf (EVar "last") (EApp (EVar "stripCR") (EVar "raw")) (EVar "raw"))) (DoExpr (EMatch (EApp (EVar "field") (EVar "shown")) (arm (PCon "Some" (PVar "v")) () (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "dl")) (EVar "n")) (EBinOp "::" (EVar "v") (EVar "fs"))) (EVar "None")) (EVar "rest"))) (arm (PCon "None") () (EIf (EVar "last") (ETuple (EVar "fs") (EApp (EVar "Some") (ETuple (EBinOp "++" (EVar "raw") (ELit (LString "\n"))) (EVar "opened")))) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "dl")) (EVar "n")) (EVar "fs")) (EApp (EVar "Some") (ETuple (EBinOp "++" (EVar "raw") (EVar "dl")) (EVar "opened")))) (EVar "rest"))))))))
+(DFunDef false "scan" ((PVar "dl") (PVar "n") (PVar "fields0") (PVar "pending0") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PVar "fs") (PVar "pend") (PList)) (ETuple (EVar "fs") (EVar "pend"))) (clause ((PVar "fs") (PVar "pend") (PCons (PVar "p") (PVar "rest"))) (EBlock (DoLet false false (PVar "raw") (EMatch (EVar "pend") (arm (PCon "None") () (EVar "p")) (arm (PCon "Some" (PTuple (PVar "r") PWild)) () (EBinOp "++" (EVar "r") (EVar "p"))))) (DoLet false false (PVar "opened") (EMatch (EVar "pend") (arm (PCon "None") () (EVar "n")) (arm (PCon "Some" (PTuple PWild (PVar "m"))) () (EVar "m")))) (DoLet false false (PVar "last") (EApp (EMethodRef "isEmpty") (EVar "rest"))) (DoLet false false (PVar "shown") (EIf (EVar "last") (EApp (EVar "stripCR") (EVar "raw")) (EVar "raw"))) (DoExpr (EMatch (EApp (EVar "field") (EVar "shown")) (arm (PCon "Some" (PVar "v")) () (EApp (EApp (EApp (EVar "go") (EBinOp "::" (EVar "v") (EVar "fs"))) (EVar "None")) (EVar "rest"))) (arm (PCon "None") () (EIf (EVar "last") (ETuple (EVar "fs") (EApp (EVar "Some") (ETuple (EBinOp "++" (EVar "raw") (ELit (LString "\n"))) (EVar "opened")))) (EApp (EApp (EApp (EVar "go") (EVar "fs")) (EApp (EVar "Some") (ETuple (EBinOp "++" (EVar "raw") (EVar "dl")) (EVar "opened")))) (EVar "rest")))))))))) (EApp (EApp (EApp (EVar "go") (EVar "fields0")) (EVar "pending0")) (EVar "xs0"))))
 (DTypeSig false "field" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "field" ((PVar "raw")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "\""))) (EVar "raw")) (EApp (EApp (EVar "quoted") (EApp (EApp (EVar "split") (ELit (LString "\""))) (EApp (EApp (EVar "drop") (ELit (LInt 1))) (EVar "raw")))) (ELit (LString ""))) (EApp (EVar "Some") (EVar "raw"))))
 (DTypeSig false "quoted" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))

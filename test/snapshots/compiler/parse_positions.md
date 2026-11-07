@@ -1,5 +1,5 @@
 # META
-source_lines=526
+source_lines=542
 stages=DESUGAR,MARK
 # SOURCE
 import array
@@ -83,10 +83,12 @@ declPosChildLocs : DeclPos -> List (Option Loc)
 declPosChildLocs (DeclPos _ _ _ cs) = cs
 
 lastContentIdx : Array Token -> Int -> Int -> Int
-lastContentIdx toks s i
-  | i < s = s
-  | isNoiseTok (arrayGetUnsafe i toks) = lastContentIdx toks s (i - 1)
-  | otherwise = i
+lastContentIdx toks s i0 = go i0
+  where
+    go i
+      | i < s = s
+      | isNoiseTok (arrayGetUnsafe i toks) = go (i - 1)
+      | otherwise = i
 lineAt : Array Int -> Int -> Int
 lineAt lines i
   | i < arrayLength lines = arrayGetUnsafe i lines
@@ -230,6 +232,8 @@ zipVariantIdxs : Array Token ->
   List Variant ->
   List Int ->
   List (Option Int)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 zipVariantIdxs _ _ [] _ = []
 zipVariantIdxs toks e ((Variant _ (ConNamed fs True)) :: vs) (b :: bs) =
   zipFieldIdxs fs (fieldNameIdxsIn toks (b + 1) e)
@@ -273,15 +277,18 @@ methodNameIdxs toks s e = match findWhereIdx toks s e
       []
 
 findWhereIdx : Array Token -> Int -> Int -> Option Int
-findWhereIdx toks i e
-  | i >= e = None
-  | isWhereTok (arrayGetUnsafe i toks) = Some i
-  | otherwise = findWhereIdx toks (i + 1) e
+findWhereIdx toks i0 e = go i0
+  where
+    go i
+      | i >= e = None
+      | isWhereTok (arrayGetUnsafe i toks) = Some i
+      | otherwise = go (i + 1)
 skipNewlineToks : Array Token -> Int -> Int -> Int
-skipNewlineToks toks i e
-  | i < e && isNewlineTok (arrayGetUnsafe i toks) =
-    skipNewlineToks toks (i + 1) e
-  | otherwise = i
+skipNewlineToks toks i0 e = go i0
+  where
+    go i
+      | i < e && isNewlineTok (arrayGetUnsafe i toks) = go (i + 1)
+      | otherwise = i
 
 methodNameGo : Array Token -> Int -> Int -> Int -> Bool -> List (Option Int)
 methodNameGo toks i e depth atStart
@@ -359,19 +366,22 @@ variantStartsAt toks lines i e depth seenEq t
     lineAt lines (i + 1) :: variantStartsGo toks lines (i + 1) e depth seenEq
   | otherwise = variantStartsGo toks lines (i + 1) e depth seenEq
 nextSigIsPipe : Array Token -> Int -> Int -> Bool
-nextSigIsPipe toks e j
-  | j >= e = False
-  | isLayoutTok (arrayGetUnsafe j toks) = nextSigIsPipe toks e (j + 1)
-  | otherwise = isPipeTok (arrayGetUnsafe j toks)
+nextSigIsPipe toks e j0 = go j0
+  where
+    go j
+      | j >= e = False
+      | isLayoutTok (arrayGetUnsafe j toks) = go (j + 1)
+      | otherwise = isPipeTok (arrayGetUnsafe j toks)
 isDataDecl : Decl -> Bool
 isDataDecl (DData { dataOrigin = _ }) = True
 isDataDecl _ = False
 allVariantLines : Array Token -> Array Int -> List (Decl, Int, Int) -> List Int
-allVariantLines _toks _lines [] = []
-allVariantLines toks lines ((d, s, e) :: rest)
-  | isDataDecl d =
-    variantStartsIn toks lines s e ++ allVariantLines toks lines rest
-  | otherwise = allVariantLines toks lines rest
+allVariantLines toks lines xs0 = go xs0
+  where
+    go [] = []
+    go ((d, s, e) :: rest)
+      | isDataDecl d = variantStartsIn toks lines s e ++ go rest
+      | otherwise = go rest
 isContinuationOpStr : String -> Bool
 isContinuationOpStr op =
   op == "|>"
@@ -399,11 +409,15 @@ bodyChainTopOp (EBinOp op _ _ _) =
   if isContinuationOpStr op then Some op else None
 bodyChainTopOp _ = None
 firstContentAt : Array Token -> Int -> Int -> Int
-firstContentAt toks i e
-  | i >= e = e
-  | isNoiseTok (arrayGetUnsafe i toks) = firstContentAt toks (i + 1) e
-  | otherwise = i
+firstContentAt toks i0 e = go i0
+  where
+    go i
+      | i >= e = e
+      | isNoiseTok (arrayGetUnsafe i toks) = go (i + 1)
+      | otherwise = i
 rhsStartIdx : Array Token -> Int -> Int -> Int -> Int
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
 rhsStartIdx toks i e depth
   | i >= e = e
   | isOpenDelim (arrayGetUnsafe i toks) = rhsStartIdx toks (i + 1) e (depth + 1)
@@ -454,10 +468,12 @@ bodyIsBlock (EBlock _) = True
 bodyIsBlock (EDo _ _) = True
 bodyIsBlock _ = False
 firstIndentIdx : Array Token -> Int -> Int -> Int
-firstIndentIdx toks i e
-  | i >= e = e
-  | isIndentTok (arrayGetUnsafe i toks) = i + 1
-  | otherwise = firstIndentIdx toks (i + 1) e
+firstIndentIdx toks i0 e = go i0
+  where
+    go i
+      | i >= e = e
+      | isIndentTok (arrayGetUnsafe i toks) = i + 1
+      | otherwise = go (i + 1)
 
 blockStmtLines : Array Token -> Array Int -> Int -> Int -> List Int
 blockStmtLines toks lines rs e =
@@ -496,6 +512,8 @@ allChainLines : Array Token ->
   Array Int ->
   List (Decl, Int, Int) ->
   List (List Int)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 allChainLines _toks _lines [] = []
 allChainLines toks lines ((d, s, e) :: rest) =
   declChainLines toks lines d s e :: allChainLines toks lines rest
@@ -507,13 +525,11 @@ lastContentLineGo : Array Token ->
   List (Decl, Int, Int) ->
   Int ->
   Int
-lastContentLineGo _toks _lines [] acc = acc
-lastContentLineGo toks lines ((_, s, e) :: rest) _acc =
-  lastContentLineGo
-    toks
-    lines
-    rest
-    (lineAt lines (lastContentIdx toks s (e - 1)))
+lastContentLineGo toks lines xs0 acc0 = go xs0 acc0
+  where
+    go [] acc = acc
+    go ((_, s, e) :: rest) _acc =
+      go rest (lineAt lines (lastContentIdx toks s (e - 1)))
 
 export
 positionsFromSpans : Array Int ->
@@ -552,7 +568,7 @@ positionsFromSpans lineStarts toks offs spans =
 (DTypeSig true "declPosChildLocs" (TyFun (TyCon "DeclPos") (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Loc")))))
 (DFunDef false "declPosChildLocs" ((PCon "DeclPos" PWild PWild PWild (PVar "cs"))) (EVar "cs"))
 (DTypeSig false "lastContentIdx" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "lastContentIdx" ((PVar "toks") (PVar "s") (PVar "i")) (EIf (EBinOp "<" (EVar "i") (EVar "s")) (EVar "s") (EIf (EApp (EVar "isNoiseTok") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "toks"))) (EApp (EApp (EApp (EVar "lastContentIdx") (EVar "toks")) (EVar "s")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "lastContentIdx" ((PVar "toks") (PVar "s") (PVar "i0")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EIf (EBinOp "<" (EVar "i") (EVar "s")) (EVar "s") (EIf (EApp (EVar "isNoiseTok") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "toks"))) (EApp (EVar "go") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit)))))))) (EApp (EVar "go") (EVar "i0"))))
 (DTypeSig false "lineAt" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "lineAt" ((PVar "lines") (PVar "i")) (EIf (EBinOp "<" (EVar "i") (EApp (EVar "arrayLength") (EVar "lines"))) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "lines")) (EIf (EVar "otherwise") (ELit (LInt 0)) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "locOfSpanWith" (TyFun (TyApp (TyCon "Array") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Loc"))))))
@@ -629,9 +645,9 @@ positionsFromSpans lineStarts toks offs spans =
 (DTypeSig false "methodNameIdxs" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Int")))))))
 (DFunDef false "methodNameIdxs" ((PVar "toks") (PVar "s") (PVar "e")) (EMatch (EApp (EApp (EApp (EVar "findWhereIdx") (EVar "toks")) (EVar "s")) (EVar "e")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "w")) () (EBlock (DoLet false false (PVar "after") (EApp (EApp (EApp (EVar "skipNewlineToks") (EVar "toks")) (EBinOp "+" (EVar "w") (ELit (LInt 1)))) (EVar "e"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "<" (EVar "after") (EVar "e")) (EApp (EVar "isIndentTok") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "after")) (EVar "toks")))) (EApp (EApp (EApp (EApp (EApp (EVar "methodNameGo") (EVar "toks")) (EBinOp "+" (EVar "after") (ELit (LInt 1)))) (EVar "e")) (ELit (LInt 1))) (EVar "True")) (EListLit)))))))
 (DTypeSig false "findWhereIdx" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))))
-(DFunDef false "findWhereIdx" ((PVar "toks") (PVar "i") (PVar "e")) (EIf (EBinOp ">=" (EVar "i") (EVar "e")) (EVar "None") (EIf (EApp (EVar "isWhereTok") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "toks"))) (EApp (EVar "Some") (EVar "i")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "findWhereIdx") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "e")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "findWhereIdx" ((PVar "toks") (PVar "i0") (PVar "e")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "e")) (EVar "None") (EIf (EApp (EVar "isWhereTok") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "toks"))) (EApp (EVar "Some") (EVar "i")) (EIf (EVar "otherwise") (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))) (EApp (EVar "go") (EVar "i0"))))
 (DTypeSig false "skipNewlineToks" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "skipNewlineToks" ((PVar "toks") (PVar "i") (PVar "e")) (EIf (EBinOp "&&" (EBinOp "<" (EVar "i") (EVar "e")) (EApp (EVar "isNewlineTok") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "toks")))) (EApp (EApp (EApp (EVar "skipNewlineToks") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "e")) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "skipNewlineToks" ((PVar "toks") (PVar "i0") (PVar "e")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EIf (EBinOp "&&" (EBinOp "<" (EVar "i") (EVar "e")) (EApp (EVar "isNewlineTok") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "toks")))) (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EVar "go") (EVar "i0"))))
 (DTypeSig false "methodNameGo" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Int")))))))))
 (DFunDef false "methodNameGo" ((PVar "toks") (PVar "i") (PVar "e") (PVar "depth") (PVar "atStart")) (EIf (EBinOp ">=" (EVar "i") (EVar "e")) (EListLit) (EIf (EBinOp "<=" (EVar "depth") (ELit (LInt 0))) (EListLit) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "methodNameStep") (EVar "toks")) (EVar "i")) (EVar "e")) (EVar "depth")) (EVar "atStart")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "toks"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "methodNameStep" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyFun (TyCon "Token") (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Int"))))))))))
@@ -650,13 +666,12 @@ positionsFromSpans lineStarts toks offs spans =
 (DTypeSig false "variantStartsAt" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyFun (TyCon "Token") (TyApp (TyCon "List") (TyCon "Int"))))))))))
 (DFunDef false "variantStartsAt" ((PVar "toks") (PVar "lines") (PVar "i") (PVar "e") (PVar "depth") (PVar "seenEq") (PVar "t")) (EIf (EApp (EVar "isOpenDelim") (EVar "t")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "variantStartsGo") (EVar "toks")) (EVar "lines")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "e")) (EBinOp "+" (EVar "depth") (ELit (LInt 1)))) (EVar "seenEq")) (EIf (EApp (EVar "isCloseDelim") (EVar "t")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "variantStartsGo") (EVar "toks")) (EVar "lines")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "e")) (EBinOp "-" (EVar "depth") (ELit (LInt 1)))) (EVar "seenEq")) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "depth") (ELit (LInt 0))) (EApp (EVar "not") (EVar "seenEq"))) (EApp (EVar "isEqualTok") (EVar "t"))) (EApp (EApp (EApp (EVar "nextSigIsPipe") (EVar "toks")) (EVar "e")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "variantStartsGo") (EVar "toks")) (EVar "lines")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "e")) (EVar "depth")) (EVar "True")) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "depth") (ELit (LInt 0))) (EApp (EVar "not") (EVar "seenEq"))) (EApp (EVar "isEqualTok") (EVar "t"))) (EBinOp "::" (EApp (EApp (EVar "lineAt") (EVar "lines")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "variantStartsGo") (EVar "toks")) (EVar "lines")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "e")) (EVar "depth")) (EVar "True"))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "depth") (ELit (LInt 0))) (EVar "seenEq")) (EApp (EVar "isPipeTok") (EVar "t"))) (EBinOp "::" (EApp (EApp (EVar "lineAt") (EVar "lines")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "variantStartsGo") (EVar "toks")) (EVar "lines")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "e")) (EVar "depth")) (EVar "seenEq"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "variantStartsGo") (EVar "toks")) (EVar "lines")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "e")) (EVar "depth")) (EVar "seenEq")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))
 (DTypeSig false "nextSigIsPipe" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
-(DFunDef false "nextSigIsPipe" ((PVar "toks") (PVar "e") (PVar "j")) (EIf (EBinOp ">=" (EVar "j") (EVar "e")) (EVar "False") (EIf (EApp (EVar "isLayoutTok") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "j")) (EVar "toks"))) (EApp (EApp (EApp (EVar "nextSigIsPipe") (EVar "toks")) (EVar "e")) (EBinOp "+" (EVar "j") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EApp (EVar "isPipeTok") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "j")) (EVar "toks"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "nextSigIsPipe" ((PVar "toks") (PVar "e") (PVar "j0")) (ELetGroup ((lgb "go" (clause ((PVar "j")) (EIf (EBinOp ">=" (EVar "j") (EVar "e")) (EVar "False") (EIf (EApp (EVar "isLayoutTok") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "j")) (EVar "toks"))) (EApp (EVar "go") (EBinOp "+" (EVar "j") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EApp (EVar "isPipeTok") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "j")) (EVar "toks"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))) (EApp (EVar "go") (EVar "j0"))))
 (DTypeSig false "isDataDecl" (TyFun (TyCon "Decl") (TyCon "Bool")))
 (DFunDef false "isDataDecl" ((PRec "DData" ((rf "dataOrigin" PWild)) false)) (EVar "True"))
 (DFunDef false "isDataDecl" (PWild) (EVar "False"))
 (DTypeSig false "allVariantLines" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "Int") (TyCon "Int"))) (TyApp (TyCon "List") (TyCon "Int"))))))
-(DFunDef false "allVariantLines" ((PVar "_toks") (PVar "_lines") (PList)) (EListLit))
-(DFunDef false "allVariantLines" ((PVar "toks") (PVar "lines") (PCons (PTuple (PVar "d") (PVar "s") (PVar "e")) (PVar "rest"))) (EIf (EApp (EVar "isDataDecl") (EVar "d")) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "variantStartsIn") (EVar "toks")) (EVar "lines")) (EVar "s")) (EVar "e")) (EApp (EApp (EApp (EVar "allVariantLines") (EVar "toks")) (EVar "lines")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "allVariantLines") (EVar "toks")) (EVar "lines")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "allVariantLines" ((PVar "toks") (PVar "lines") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EListLit)) (clause ((PCons (PTuple (PVar "d") (PVar "s") (PVar "e")) (PVar "rest"))) (EIf (EApp (EVar "isDataDecl") (EVar "d")) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "variantStartsIn") (EVar "toks")) (EVar "lines")) (EVar "s")) (EVar "e")) (EApp (EVar "go") (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EVar "go") (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "isContinuationOpStr" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isContinuationOpStr" ((PVar "op")) (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "op") (ELit (LString "|>"))) (EBinOp "==" (EVar "op") (ELit (LString ">>")))) (EBinOp "==" (EVar "op") (ELit (LString "<<")))) (EBinOp "==" (EVar "op") (ELit (LString "&&")))) (EBinOp "==" (EVar "op") (ELit (LString "||")))) (EBinOp "==" (EVar "op") (ELit (LString "++")))))
 (DTypeSig false "chainOpTokEq" (TyFun (TyCon "String") (TyFun (TyCon "Token") (TyCon "Bool"))))
@@ -676,7 +691,7 @@ positionsFromSpans lineStarts toks offs spans =
 (DFunDef false "bodyChainTopOp" ((PCon "EBinOp" (PVar "op") PWild PWild PWild)) (EIf (EApp (EVar "isContinuationOpStr") (EVar "op")) (EApp (EVar "Some") (EVar "op")) (EVar "None")))
 (DFunDef false "bodyChainTopOp" (PWild) (EVar "None"))
 (DTypeSig false "firstContentAt" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "firstContentAt" ((PVar "toks") (PVar "i") (PVar "e")) (EIf (EBinOp ">=" (EVar "i") (EVar "e")) (EVar "e") (EIf (EApp (EVar "isNoiseTok") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "toks"))) (EApp (EApp (EApp (EVar "firstContentAt") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "e")) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "firstContentAt" ((PVar "toks") (PVar "i0") (PVar "e")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "e")) (EVar "e") (EIf (EApp (EVar "isNoiseTok") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "toks"))) (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit)))))))) (EApp (EVar "go") (EVar "i0"))))
 (DTypeSig false "rhsStartIdx" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
 (DFunDef false "rhsStartIdx" ((PVar "toks") (PVar "i") (PVar "e") (PVar "depth")) (EIf (EBinOp ">=" (EVar "i") (EVar "e")) (EVar "e") (EIf (EApp (EVar "isOpenDelim") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "toks"))) (EApp (EApp (EApp (EApp (EVar "rhsStartIdx") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "e")) (EBinOp "+" (EVar "depth") (ELit (LInt 1)))) (EIf (EApp (EVar "isCloseDelim") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "toks"))) (EApp (EApp (EApp (EApp (EVar "rhsStartIdx") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "e")) (EBinOp "-" (EVar "depth") (ELit (LInt 1)))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "depth") (ELit (LInt 0))) (EApp (EVar "isEqualTok") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "toks")))) (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "rhsStartIdx") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "e")) (EVar "depth")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
 (DTypeSig false "chainOperandLines" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int"))))))))
@@ -695,7 +710,7 @@ positionsFromSpans lineStarts toks offs spans =
 (DFunDef false "bodyIsBlock" ((PCon "EDo" PWild PWild)) (EVar "True"))
 (DFunDef false "bodyIsBlock" (PWild) (EVar "False"))
 (DTypeSig false "firstIndentIdx" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "firstIndentIdx" ((PVar "toks") (PVar "i") (PVar "e")) (EIf (EBinOp ">=" (EVar "i") (EVar "e")) (EVar "e") (EIf (EApp (EVar "isIndentTok") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "toks"))) (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "firstIndentIdx") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "e")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "firstIndentIdx" ((PVar "toks") (PVar "i0") (PVar "e")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "e")) (EVar "e") (EIf (EApp (EVar "isIndentTok") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "toks"))) (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EIf (EVar "otherwise") (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))) (EApp (EVar "go") (EVar "i0"))))
 (DTypeSig false "blockStmtLines" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int")))))))
 (DFunDef false "blockStmtLines" ((PVar "toks") (PVar "lines") (PVar "rs") (PVar "e")) (EBlock (DoLet false false (PVar "bi") (EApp (EApp (EApp (EVar "firstIndentIdx") (EVar "toks")) (EVar "rs")) (EVar "e"))) (DoExpr (EIf (EBinOp ">=" (EVar "bi") (EVar "e")) (EListLit) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "blockStmtGo") (EVar "toks")) (EVar "lines")) (EVar "bi")) (EVar "e")) (ELit (LInt 1))) (EVar "True"))))))
 (DTypeSig false "blockStmtGo" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "Int")))))))))
@@ -710,8 +725,7 @@ positionsFromSpans lineStarts toks offs spans =
 (DTypeSig false "lastContentLineOf" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "Int") (TyCon "Int"))) (TyCon "Int")))))
 (DFunDef false "lastContentLineOf" ((PVar "toks") (PVar "lines") (PVar "spans")) (EApp (EApp (EApp (EApp (EVar "lastContentLineGo") (EVar "toks")) (EVar "lines")) (EVar "spans")) (ELit (LInt 0))))
 (DTypeSig false "lastContentLineGo" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "Int") (TyCon "Int"))))))
-(DFunDef false "lastContentLineGo" ((PVar "_toks") (PVar "_lines") (PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "lastContentLineGo" ((PVar "toks") (PVar "lines") (PCons (PTuple PWild (PVar "s") (PVar "e")) (PVar "rest")) (PVar "_acc")) (EApp (EApp (EApp (EApp (EVar "lastContentLineGo") (EVar "toks")) (EVar "lines")) (EVar "rest")) (EApp (EApp (EVar "lineAt") (EVar "lines")) (EApp (EApp (EApp (EVar "lastContentIdx") (EVar "toks")) (EVar "s")) (EBinOp "-" (EVar "e") (ELit (LInt 1)))))))
+(DFunDef false "lastContentLineGo" ((PVar "toks") (PVar "lines") (PVar "xs0") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "acc")) (EVar "acc")) (clause ((PCons (PTuple PWild (PVar "s") (PVar "e")) (PVar "rest")) (PVar "_acc")) (EApp (EApp (EVar "go") (EVar "rest")) (EApp (EApp (EVar "lineAt") (EVar "lines")) (EApp (EApp (EApp (EVar "lastContentIdx") (EVar "toks")) (EVar "s")) (EBinOp "-" (EVar "e") (ELit (LInt 1))))))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "acc0"))))
 (DTypeSig true "positionsFromSpans" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "Int") (TyCon "Int"))) (TyCon "Positions"))))))
 (DFunDef false "positionsFromSpans" ((PVar "lineStarts") (PVar "toks") (PVar "offs") (PVar "spans")) (EBlock (DoLet false false (PVar "lines") (EApp (EApp (EVar "map") (ELam ((PVar "off")) (EApp (EVar "fst") (EApp (EApp (EVar "offsetToLineColFast") (EVar "lineStarts")) (EApp (EVar "fst") (EVar "off")))))) (EVar "offs"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "Positions") (EApp (EApp (EVar "map") (EApp (EApp (EApp (EApp (EVar "declPosOf") (EVar "toks")) (EVar "lines")) (EVar "offs")) (EVar "lineStarts"))) (EVar "spans"))) (EApp (EApp (EApp (EVar "allVariantLines") (EVar "toks")) (EVar "lines")) (EVar "spans"))) (EApp (EApp (EApp (EVar "lastContentLineOf") (EVar "toks")) (EVar "lines")) (EVar "spans"))) (EApp (EApp (EApp (EVar "allChainLines") (EVar "toks")) (EVar "lines")) (EVar "spans"))))))
 # MARK
@@ -738,7 +752,7 @@ positionsFromSpans lineStarts toks offs spans =
 (DTypeSig true "declPosChildLocs" (TyFun (TyCon "DeclPos") (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Loc")))))
 (DFunDef false "declPosChildLocs" ((PCon "DeclPos" PWild PWild PWild (PVar "cs"))) (EVar "cs"))
 (DTypeSig false "lastContentIdx" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "lastContentIdx" ((PVar "toks") (PVar "s") (PVar "i")) (EIf (EBinOp "<" (EVar "i") (EVar "s")) (EVar "s") (EIf (EApp (EVar "isNoiseTok") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "toks"))) (EApp (EApp (EApp (EVar "lastContentIdx") (EVar "toks")) (EVar "s")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "lastContentIdx" ((PVar "toks") (PVar "s") (PVar "i0")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EIf (EBinOp "<" (EVar "i") (EVar "s")) (EVar "s") (EIf (EApp (EVar "isNoiseTok") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "toks"))) (EApp (EVar "go") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit)))))))) (EApp (EVar "go") (EVar "i0"))))
 (DTypeSig false "lineAt" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "lineAt" ((PVar "lines") (PVar "i")) (EIf (EBinOp "<" (EVar "i") (EApp (EVar "arrayLength") (EVar "lines"))) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "lines")) (EIf (EVar "otherwise") (ELit (LInt 0)) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "locOfSpanWith" (TyFun (TyApp (TyCon "Array") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Loc"))))))
@@ -815,9 +829,9 @@ positionsFromSpans lineStarts toks offs spans =
 (DTypeSig false "methodNameIdxs" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Int")))))))
 (DFunDef false "methodNameIdxs" ((PVar "toks") (PVar "s") (PVar "e")) (EMatch (EApp (EApp (EApp (EVar "findWhereIdx") (EVar "toks")) (EVar "s")) (EVar "e")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "w")) () (EBlock (DoLet false false (PVar "after") (EApp (EApp (EApp (EVar "skipNewlineToks") (EVar "toks")) (EBinOp "+" (EVar "w") (ELit (LInt 1)))) (EVar "e"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "<" (EVar "after") (EVar "e")) (EApp (EVar "isIndentTok") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "after")) (EVar "toks")))) (EApp (EApp (EApp (EApp (EApp (EVar "methodNameGo") (EVar "toks")) (EBinOp "+" (EVar "after") (ELit (LInt 1)))) (EVar "e")) (ELit (LInt 1))) (EVar "True")) (EListLit)))))))
 (DTypeSig false "findWhereIdx" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))))
-(DFunDef false "findWhereIdx" ((PVar "toks") (PVar "i") (PVar "e")) (EIf (EBinOp ">=" (EVar "i") (EVar "e")) (EVar "None") (EIf (EApp (EVar "isWhereTok") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "toks"))) (EApp (EVar "Some") (EVar "i")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "findWhereIdx") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "e")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "findWhereIdx" ((PVar "toks") (PVar "i0") (PVar "e")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "e")) (EVar "None") (EIf (EApp (EVar "isWhereTok") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "toks"))) (EApp (EVar "Some") (EVar "i")) (EIf (EVar "otherwise") (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))) (EApp (EVar "go") (EVar "i0"))))
 (DTypeSig false "skipNewlineToks" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "skipNewlineToks" ((PVar "toks") (PVar "i") (PVar "e")) (EIf (EBinOp "&&" (EBinOp "<" (EVar "i") (EVar "e")) (EApp (EVar "isNewlineTok") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "toks")))) (EApp (EApp (EApp (EVar "skipNewlineToks") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "e")) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "skipNewlineToks" ((PVar "toks") (PVar "i0") (PVar "e")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EIf (EBinOp "&&" (EBinOp "<" (EVar "i") (EVar "e")) (EApp (EVar "isNewlineTok") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "toks")))) (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EVar "go") (EVar "i0"))))
 (DTypeSig false "methodNameGo" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Int")))))))))
 (DFunDef false "methodNameGo" ((PVar "toks") (PVar "i") (PVar "e") (PVar "depth") (PVar "atStart")) (EIf (EBinOp ">=" (EVar "i") (EVar "e")) (EListLit) (EIf (EBinOp "<=" (EVar "depth") (ELit (LInt 0))) (EListLit) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "methodNameStep") (EVar "toks")) (EVar "i")) (EVar "e")) (EVar "depth")) (EVar "atStart")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "toks"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "methodNameStep" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyFun (TyCon "Token") (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Int"))))))))))
@@ -836,13 +850,12 @@ positionsFromSpans lineStarts toks offs spans =
 (DTypeSig false "variantStartsAt" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyFun (TyCon "Token") (TyApp (TyCon "List") (TyCon "Int"))))))))))
 (DFunDef false "variantStartsAt" ((PVar "toks") (PVar "lines") (PVar "i") (PVar "e") (PVar "depth") (PVar "seenEq") (PVar "t")) (EIf (EApp (EVar "isOpenDelim") (EVar "t")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "variantStartsGo") (EVar "toks")) (EVar "lines")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "e")) (EBinOp "+" (EVar "depth") (ELit (LInt 1)))) (EVar "seenEq")) (EIf (EApp (EVar "isCloseDelim") (EVar "t")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "variantStartsGo") (EVar "toks")) (EVar "lines")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "e")) (EBinOp "-" (EVar "depth") (ELit (LInt 1)))) (EVar "seenEq")) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "depth") (ELit (LInt 0))) (EApp (EVar "not") (EVar "seenEq"))) (EApp (EVar "isEqualTok") (EVar "t"))) (EApp (EApp (EApp (EVar "nextSigIsPipe") (EVar "toks")) (EVar "e")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "variantStartsGo") (EVar "toks")) (EVar "lines")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "e")) (EVar "depth")) (EVar "True")) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "depth") (ELit (LInt 0))) (EApp (EVar "not") (EVar "seenEq"))) (EApp (EVar "isEqualTok") (EVar "t"))) (EBinOp "::" (EApp (EApp (EVar "lineAt") (EVar "lines")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "variantStartsGo") (EVar "toks")) (EVar "lines")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "e")) (EVar "depth")) (EVar "True"))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "depth") (ELit (LInt 0))) (EVar "seenEq")) (EApp (EVar "isPipeTok") (EVar "t"))) (EBinOp "::" (EApp (EApp (EVar "lineAt") (EVar "lines")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "variantStartsGo") (EVar "toks")) (EVar "lines")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "e")) (EVar "depth")) (EVar "seenEq"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "variantStartsGo") (EVar "toks")) (EVar "lines")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "e")) (EVar "depth")) (EVar "seenEq")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))
 (DTypeSig false "nextSigIsPipe" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
-(DFunDef false "nextSigIsPipe" ((PVar "toks") (PVar "e") (PVar "j")) (EIf (EBinOp ">=" (EVar "j") (EVar "e")) (EVar "False") (EIf (EApp (EVar "isLayoutTok") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "j")) (EVar "toks"))) (EApp (EApp (EApp (EVar "nextSigIsPipe") (EVar "toks")) (EVar "e")) (EBinOp "+" (EVar "j") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EApp (EVar "isPipeTok") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "j")) (EVar "toks"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "nextSigIsPipe" ((PVar "toks") (PVar "e") (PVar "j0")) (ELetGroup ((lgb "go" (clause ((PVar "j")) (EIf (EBinOp ">=" (EVar "j") (EVar "e")) (EVar "False") (EIf (EApp (EVar "isLayoutTok") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "j")) (EVar "toks"))) (EApp (EVar "go") (EBinOp "+" (EVar "j") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EApp (EVar "isPipeTok") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "j")) (EVar "toks"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))) (EApp (EVar "go") (EVar "j0"))))
 (DTypeSig false "isDataDecl" (TyFun (TyCon "Decl") (TyCon "Bool")))
 (DFunDef false "isDataDecl" ((PRec "DData" ((rf "dataOrigin" PWild)) false)) (EVar "True"))
 (DFunDef false "isDataDecl" (PWild) (EVar "False"))
 (DTypeSig false "allVariantLines" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "Int") (TyCon "Int"))) (TyApp (TyCon "List") (TyCon "Int"))))))
-(DFunDef false "allVariantLines" ((PVar "_toks") (PVar "_lines") (PList)) (EListLit))
-(DFunDef false "allVariantLines" ((PVar "toks") (PVar "lines") (PCons (PTuple (PVar "d") (PVar "s") (PVar "e")) (PVar "rest"))) (EIf (EApp (EVar "isDataDecl") (EVar "d")) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "variantStartsIn") (EVar "toks")) (EVar "lines")) (EVar "s")) (EVar "e")) (EApp (EApp (EApp (EVar "allVariantLines") (EVar "toks")) (EVar "lines")) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "allVariantLines") (EVar "toks")) (EVar "lines")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "allVariantLines" ((PVar "toks") (PVar "lines") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EListLit)) (clause ((PCons (PTuple (PVar "d") (PVar "s") (PVar "e")) (PVar "rest"))) (EIf (EApp (EVar "isDataDecl") (EVar "d")) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "variantStartsIn") (EVar "toks")) (EVar "lines")) (EVar "s")) (EVar "e")) (EApp (EVar "go") (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EVar "go") (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "isContinuationOpStr" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isContinuationOpStr" ((PVar "op")) (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "op") (ELit (LString "|>"))) (EBinOp "==" (EVar "op") (ELit (LString ">>")))) (EBinOp "==" (EVar "op") (ELit (LString "<<")))) (EBinOp "==" (EVar "op") (ELit (LString "&&")))) (EBinOp "==" (EVar "op") (ELit (LString "||")))) (EBinOp "==" (EVar "op") (ELit (LString "++")))))
 (DTypeSig false "chainOpTokEq" (TyFun (TyCon "String") (TyFun (TyCon "Token") (TyCon "Bool"))))
@@ -862,7 +875,7 @@ positionsFromSpans lineStarts toks offs spans =
 (DFunDef false "bodyChainTopOp" ((PCon "EBinOp" (PVar "op") PWild PWild PWild)) (EIf (EApp (EVar "isContinuationOpStr") (EVar "op")) (EApp (EVar "Some") (EVar "op")) (EVar "None")))
 (DFunDef false "bodyChainTopOp" (PWild) (EVar "None"))
 (DTypeSig false "firstContentAt" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "firstContentAt" ((PVar "toks") (PVar "i") (PVar "e")) (EIf (EBinOp ">=" (EVar "i") (EVar "e")) (EVar "e") (EIf (EApp (EVar "isNoiseTok") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "toks"))) (EApp (EApp (EApp (EVar "firstContentAt") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "e")) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "firstContentAt" ((PVar "toks") (PVar "i0") (PVar "e")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "e")) (EVar "e") (EIf (EApp (EVar "isNoiseTok") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "toks"))) (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit)))))))) (EApp (EVar "go") (EVar "i0"))))
 (DTypeSig false "rhsStartIdx" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
 (DFunDef false "rhsStartIdx" ((PVar "toks") (PVar "i") (PVar "e") (PVar "depth")) (EIf (EBinOp ">=" (EVar "i") (EVar "e")) (EVar "e") (EIf (EApp (EVar "isOpenDelim") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "toks"))) (EApp (EApp (EApp (EApp (EVar "rhsStartIdx") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "e")) (EBinOp "+" (EVar "depth") (ELit (LInt 1)))) (EIf (EApp (EVar "isCloseDelim") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "toks"))) (EApp (EApp (EApp (EApp (EVar "rhsStartIdx") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "e")) (EBinOp "-" (EVar "depth") (ELit (LInt 1)))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "depth") (ELit (LInt 0))) (EApp (EVar "isEqualTok") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "toks")))) (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "rhsStartIdx") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "e")) (EVar "depth")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))
 (DTypeSig false "chainOperandLines" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int"))))))))
@@ -881,7 +894,7 @@ positionsFromSpans lineStarts toks offs spans =
 (DFunDef false "bodyIsBlock" ((PCon "EDo" PWild PWild)) (EVar "True"))
 (DFunDef false "bodyIsBlock" (PWild) (EVar "False"))
 (DTypeSig false "firstIndentIdx" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "firstIndentIdx" ((PVar "toks") (PVar "i") (PVar "e")) (EIf (EBinOp ">=" (EVar "i") (EVar "e")) (EVar "e") (EIf (EApp (EVar "isIndentTok") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "toks"))) (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "firstIndentIdx") (EVar "toks")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "e")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "firstIndentIdx" ((PVar "toks") (PVar "i0") (PVar "e")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "e")) (EVar "e") (EIf (EApp (EVar "isIndentTok") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "toks"))) (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EIf (EVar "otherwise") (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))) (EApp (EVar "go") (EVar "i0"))))
 (DTypeSig false "blockStmtLines" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int")))))))
 (DFunDef false "blockStmtLines" ((PVar "toks") (PVar "lines") (PVar "rs") (PVar "e")) (EBlock (DoLet false false (PVar "bi") (EApp (EApp (EApp (EVar "firstIndentIdx") (EVar "toks")) (EVar "rs")) (EVar "e"))) (DoExpr (EIf (EBinOp ">=" (EVar "bi") (EVar "e")) (EListLit) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "blockStmtGo") (EVar "toks")) (EVar "lines")) (EVar "bi")) (EVar "e")) (ELit (LInt 1))) (EVar "True"))))))
 (DTypeSig false "blockStmtGo" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "Int")))))))))
@@ -896,7 +909,6 @@ positionsFromSpans lineStarts toks offs spans =
 (DTypeSig false "lastContentLineOf" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "Int") (TyCon "Int"))) (TyCon "Int")))))
 (DFunDef false "lastContentLineOf" ((PVar "toks") (PVar "lines") (PVar "spans")) (EApp (EApp (EApp (EApp (EVar "lastContentLineGo") (EVar "toks")) (EVar "lines")) (EVar "spans")) (ELit (LInt 0))))
 (DTypeSig false "lastContentLineGo" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "Int") (TyCon "Int"))))))
-(DFunDef false "lastContentLineGo" ((PVar "_toks") (PVar "_lines") (PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "lastContentLineGo" ((PVar "toks") (PVar "lines") (PCons (PTuple PWild (PVar "s") (PVar "e")) (PVar "rest")) (PVar "_acc")) (EApp (EApp (EApp (EApp (EVar "lastContentLineGo") (EVar "toks")) (EVar "lines")) (EVar "rest")) (EApp (EApp (EVar "lineAt") (EVar "lines")) (EApp (EApp (EApp (EVar "lastContentIdx") (EVar "toks")) (EVar "s")) (EBinOp "-" (EVar "e") (ELit (LInt 1)))))))
+(DFunDef false "lastContentLineGo" ((PVar "toks") (PVar "lines") (PVar "xs0") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "acc")) (EVar "acc")) (clause ((PCons (PTuple PWild (PVar "s") (PVar "e")) (PVar "rest")) (PVar "_acc")) (EApp (EApp (EVar "go") (EVar "rest")) (EApp (EApp (EVar "lineAt") (EVar "lines")) (EApp (EApp (EApp (EVar "lastContentIdx") (EVar "toks")) (EVar "s")) (EBinOp "-" (EVar "e") (ELit (LInt 1))))))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "acc0"))))
 (DTypeSig true "positionsFromSpans" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "Int") (TyCon "Int"))) (TyCon "Positions"))))))
 (DFunDef false "positionsFromSpans" ((PVar "lineStarts") (PVar "toks") (PVar "offs") (PVar "spans")) (EBlock (DoLet false false (PVar "lines") (EApp (EApp (EMethodRef "map") (ELam ((PVar "off")) (EApp (EVar "fst") (EApp (EApp (EVar "offsetToLineColFast") (EVar "lineStarts")) (EApp (EVar "fst") (EVar "off")))))) (EVar "offs"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "Positions") (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EApp (EVar "declPosOf") (EVar "toks")) (EVar "lines")) (EVar "offs")) (EVar "lineStarts"))) (EVar "spans"))) (EApp (EApp (EApp (EVar "allVariantLines") (EVar "toks")) (EVar "lines")) (EVar "spans"))) (EApp (EApp (EApp (EVar "lastContentLineOf") (EVar "toks")) (EVar "lines")) (EVar "spans"))) (EApp (EApp (EApp (EVar "allChainLines") (EVar "toks")) (EVar "lines")) (EVar "spans"))))))

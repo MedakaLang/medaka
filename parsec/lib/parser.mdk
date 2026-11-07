@@ -223,13 +223,13 @@ many : Parser a -> Parser (List a)
 many p = ParserE (input pos => manyGo p input pos [])
 
 manyGo : Parser a -> Array Char -> Int -> List a -> PResult (List a)
-manyGo p input pos acc = match runP p input pos
-  PErr _ _ => POk (reverse acc) pos
-  POk a pos2 =>
-    if pos2 == pos then
-      POk (reverse acc) pos2  -- no progress: stop to avoid a loop
-    else
-      manyGo p input pos2 (a :: acc)
+manyGo p input pos0 acc0 = go pos0 acc0
+  where
+    go pos acc = match runP p input pos
+      PErr _ _ => POk (reverse acc) pos
+      POk a pos2 =>
+        -- no progress: stop to avoid a loop
+        if pos2 == pos then POk (reverse acc) pos2 else go pos2 (a :: acc)
 
 -- | One-or-more.  Written with `do`-notation to EXERCISE Thenable Parser.
 export
@@ -285,15 +285,17 @@ string : String -> Parser String
 string s = ParserE (input pos => stringGo (toChars s) 0 input pos s)
 
 stringGo : Array Char -> Int -> Array Char -> Int -> String -> PResult String
-stringGo want wi input pos original =
-  if wi >= arrayLength want then
-    POk original pos
-  else if pos >= arrayLength input then
-    PErr "unexpected end of input" pos
-  else if input[pos] == want[wi] then
-    stringGo want (wi + 1) input (pos + 1) original
-  else
-    PErr "string: mismatch" pos
+stringGo want wi0 input pos0 original = go wi0 pos0
+  where
+    go wi pos =
+      if wi >= arrayLength want then
+        POk original pos
+      else if pos >= arrayLength input then
+        PErr "unexpected end of input" pos
+      else if input[pos] == want[wi] then
+        go (wi + 1) (pos + 1)
+      else
+        PErr "string: mismatch" pos
 
 -- | Left-associative chaining of `p` separated by an operator parser `op`
 --   whose value is a binary function.  `1-2-3` parses as `((1-2)-3)`.

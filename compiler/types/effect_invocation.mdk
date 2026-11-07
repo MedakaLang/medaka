@@ -85,8 +85,10 @@ chargeRow _ row (Walk atoms done) =
   Walk (atomsUnion atoms (effrowLabels row)) done
 
 reachAll : InvocationOps -> Variance -> List Mono -> Walk -> Walk
-reachAll _ _ [] st = st
-reachAll ops pol (m :: rest) st = reachAll ops pol rest (reach ops pol m st)
+reachAll ops pol xs0 st0 = go xs0 st0
+  where
+    go [] st = st
+    go (m :: rest) st = go rest (reach ops pol m st)
 
 -- Each argument at the head's variance for its slot, composed with the
 -- context; a slot the head does not declare is invariant.
@@ -97,12 +99,14 @@ reachArgs : InvocationOps ->
   List Mono ->
   Walk ->
   Walk
-reachArgs _ _ _ _ [] st = st
-reachArgs ops pol vs i (arg :: rest) st =
-  let slot = match vs
-    Some known => varianceAt known i
-    None => VInv
-  reachArgs ops pol vs (i + 1) rest (reach ops (mulV pol slot) arg st)
+reachArgs ops pol vs i0 xs0 st0 = go i0 xs0 st0
+  where
+    go _ [] st = st
+    go i (arg :: rest) st =
+      let slot = match vs
+        Some known => varianceAt known i
+        None => VInv
+      go (i + 1) rest (reach ops (mulV pol slot) arg st)
 
 -- Open an applied head once per (position, authority arguments).
 openHead : InvocationOps ->

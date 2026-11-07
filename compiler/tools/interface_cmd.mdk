@@ -226,9 +226,9 @@ buildBoth modulePath targets = match (
 )
   (Ok runtimeSrc, Ok coreSrc) =>
     let elab = elaborateCore runtimeSrc coreSrc
-    match buildInterfaceFileFrom modulePath runtimeSrc coreSrc targets
-      Err e => Err e
-      Ok file => do
+    do
+      file <- buildInterfaceFileFrom modulePath runtimeSrc coreSrc targets
+      do
         e <- elab
         pd <- declsOf runtimeSrc coreSrc e
         Ok (file, e, pd)

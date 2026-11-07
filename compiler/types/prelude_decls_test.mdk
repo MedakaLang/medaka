@@ -51,12 +51,11 @@ why (Err f) = renderDeclsFault f
 why (Ok _) = "ok"
 
 writtenFile : Unit -> <Env "MEDAKA_ROOT", FileRead> Option String
-writtenFile _ = match sources ()
-  None => None
-  Some (rsrc, csrc) =>
-    match preludeDeclsOf (desugaredPrelude rsrc) (desugaredPrelude csrc)
-      Ok pd => Some (encodeDeclsFile testKey pd)
-      Err _ => None
+writtenFile _ = do
+  (rsrc, csrc) <- sources ()
+  match preludeDeclsOf (desugaredPrelude rsrc) (desugaredPrelude csrc)
+    Ok pd => Some (encodeDeclsFile testKey pd)
+    Err _ => None
 
 test "the file round-trips byte for byte and equals the desugar of each source" =
   match sources ()

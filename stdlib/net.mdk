@@ -121,13 +121,15 @@ sendAllFrom : (Int -> <e> Result String Int) ->
   Int ->
   Int ->
   <e> Result String Unit
-sendAllFrom write end off =
-  if off >= end then
-    Ok ()
-  else match write off
-    Err e => Err e
-    Ok 0 => Err "net.sendAll: 0 bytes written (connection stalled)"
-    Ok n => sendAllFrom write end (off + n)
+sendAllFrom write end off0 = go off0
+  where
+    go off =
+      if off >= end then
+        Ok ()
+      else match write off
+        Err e => Err e
+        Ok 0 => Err "net.sendAll: 0 bytes written (connection stalled)"
+        Ok n => go (off + n)
 
 testScriptedSend : Ref Int ->
   Ref (List Int) ->
@@ -223,19 +225,21 @@ sendLine conn s = sendString conn (s ++ "\n")
 recvLineLoop : Connection h ->
   Vector Int ->
   <Net h> Result String (Option String)
-recvLineLoop conn buf = match recv conn 1
-  Err e => Err e
-  Ok chunk =>
-    if B.isEmpty chunk then
-      -- EOF: no trailing newline seen. Report whatever was buffered, if any.
-      if isEmpty buf then Ok None else Ok (Some (fromUtf8 (toArray buf)))
-    else
-      let b = U8.toInt chunk[0]
-      if b == 10 then
-        Ok (Some (fromUtf8 (toArray buf)))
-      else
-        push b buf
-        recvLineLoop conn buf
+recvLineLoop conn buf = go ()
+  where
+    go () = match recv conn 1
+      Err e => Err e
+      Ok chunk =>
+        if B.isEmpty chunk then
+          -- EOF: no trailing newline seen. Report whatever was buffered, if any.
+          if isEmpty buf then Ok None else Ok (Some (fromUtf8 (toArray buf)))
+        else
+          let b = U8.toInt chunk[0]
+          if b == 10 then
+            Ok (Some (fromUtf8 (toArray buf)))
+          else
+            push b buf
+            go ()
 
 {- | Receives one line, without its newline.
 
@@ -290,14 +294,14 @@ withConnection : (host : String) ->
   Int ->
   (Connection host -> <Net host | e> Result String a) ->
   <Net host | e> Result String a
-withConnection host port body = match connect host port
-  Err e => Err e
-  Ok conn =>
-    let r = body conn
+withConnection host port body = do
+  conn <- connect host port
+  let r = body conn
+  let _ =
     bestEffort
       "the connection is being torn down and `body`'s result is what the caller needs; a failed close has no recovery"
       (close conn)
-    r
+  r
 
 {- | Listens on `addr` and `port`, runs `body` on the listener, and closes
    it whatever `body` returns.
@@ -308,14 +312,14 @@ withListener : (addr : String) ->
   Int ->
   (Listener addr -> <Net addr | e> Result String a) ->
   <Net addr | e> Result String a
-withListener addr port body = match listen addr port
-  Err e => Err e
-  Ok lis =>
-    let r = body lis
+withListener addr port body = do
+  lis <- listen addr port
+  let r = body lis
+  let _ =
     bestEffort
       "the listener is being torn down and `body`'s result is what the caller needs; a failed close has no recovery"
       (closeListener lis)
-    r
+  r
 
 {- | Accepts connections forever, running `handle` on each and closing it
    afterwards.
@@ -327,11 +331,13 @@ export
 serveLoop : Listener a ->
   (Connection a -> <Net a | e> Result String Unit) ->
   <Net a | e> Result String Unit
-serveLoop lis handle = match accept lis
-  Err e => Err e
-  Ok conn =>
-    let _ = handle conn
-    bestEffort
-      "the connection is finished whether or not `handle` succeeded and the loop must go on to the next one; a failed close has no recovery"
-      (close conn)
-    serveLoop lis handle
+serveLoop lis handle = go ()
+  where
+    go () = match accept lis
+      Err e => Err e
+      Ok conn =>
+        let _ = handle conn
+        bestEffort
+          "the connection is finished whether or not `handle` succeeded and the loop must go on to the next one; a failed close has no recovery"
+          (close conn)
+        go ()

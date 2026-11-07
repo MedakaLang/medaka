@@ -14,14 +14,14 @@ import support.util.{
 }
 import list.{sortBy, last, reverse, findMap}
 import array.{get as arrayGet}
-import string.{split, isUpper, words, unwords}
+import string.{split, isUpper, words, unwords, trim, trimLeft}
 import support.path.{stripMdk}
 import regex.{Regex, mustCompile, find as reFind, escape, isMatch}
 import frontend.lexer.{Comment, commentLine, commentText, commentCol}
 import tools.lint_core.{
   Applicability(..), Ctx(..), DirScope(..), Directive(..), FileFacts(..),
-  Finding(..), Fix(..), FixEdit(..), StdlibIndex, Visitor(..), factLines,
-  factScopes, stdlibKnowsModule, stdlibSigIn
+  Finding(..), Fix(..), FixEdit(..), Memo, StdlibIndex, Visitor(..), factLines,
+  factScopes, fixLater, stdlibKnowsModule, stdlibSigIn
 }
 import tools.lint_fix.{Binding(..), parenIfNeeded}
 import tools.lint_scope.{
@@ -307,11 +307,11 @@ parseDirectiveKeyword line s = match matchKeyword lintDisableNextLineRe s
 -- If `s` matches `re` (`keywordRe`'s keyword-plus-boundary shape), return the
 -- trimmed remainder (the rule-name list) captured in group 1; else None.
 matchKeyword : Regex -> String -> Option String
-matchKeyword re s = match reFind re s
-  Some m => match m.groups
+matchKeyword re s = do
+  m <- reFind re s
+  match m.groups
     (Some g) :: _ => Some (trimWs g.text)
     _ => None
-  None => None
 
 -- Split a rule-name list on commas and/or spaces, dropping empty fragments.
 parseRuleNames : String -> List String
@@ -338,16 +338,20 @@ trimWs s =
   stringSlice a b s
 
 trimWsStart : Array Char -> Int -> Int -> Int
-trimWsStart cs n i
-  | i >= n = i
-  | isWsChar (arrayGetUnsafe i cs) = trimWsStart cs n (i + 1)
-  | otherwise = i
+trimWsStart cs n i0 = go i0
+  where
+    go i
+      | i >= n = i
+      | isWsChar (arrayGetUnsafe i cs) = go (i + 1)
+      | otherwise = i
 
 trimWsEnd : Array Char -> Int -> Int -> Int
-trimWsEnd cs a n
-  | n <= a = a
-  | isWsChar (arrayGetUnsafe (n - 1) cs) = trimWsEnd cs a (n - 1)
-  | otherwise = n
+trimWsEnd cs a n0 = go n0
+  where
+    go n
+      | n <= a = a
+      | isWsChar (arrayGetUnsafe (n - 1) cs) = go (n - 1)
+      | otherwise = n
 
 isWsChar : Char -> Bool
 isWsChar c = c == ' ' || c == '\t' || c == '\r' || c == '\n'
@@ -613,7 +617,7 @@ export
 exprRuleEditVisitors : (String -> Bool) ->
   (Expr -> Option Expr) ->
   (Ctx -> Expr -> Expr -> Option Fix) ->
-  (Option Loc -> Expr -> Option Fix -> Finding) ->
+  (Option Loc -> Expr -> Memo (Option Fix) -> Finding) ->
   List Visitor
 exprRuleEditVisitors excl det fixOf mkFinding =
   [OnAnyExpr (exprRuleEditHit excl det fixOf mkFinding)]
@@ -621,14 +625,14 @@ exprRuleEditVisitors excl det fixOf mkFinding =
 exprRuleEditHit : (String -> Bool) ->
   (Expr -> Option Expr) ->
   (Ctx -> Expr -> Expr -> Option Fix) ->
-  (Option Loc -> Expr -> Option Fix -> Finding) ->
+  (Option Loc -> Expr -> Memo (Option Fix) -> Finding) ->
   Ctx ->
   Expr ->
   List Finding
 exprRuleEditHit excl det fixOf mkFinding ctx e
   | not ctx.ctxInTest && excl ctx.ctxDeclName = []
   | otherwise = match det e
-    Some hit => [mkFinding ctx.ctxSpan hit (fixOf ctx e hit)]
+    Some hit => [mkFinding ctx.ctxSpan hit (fixLater (_ => fixOf ctx e hit))]
     None => []
 
 -- ── generic fix driver ────────────────────────────────────────────────────────
@@ -644,23 +648,27 @@ declBodyFix : Bool ->
   (Expr -> Expr) ->
   Decl ->
   Option (List Decl)
-declBodyFix _ excl rw (DFunDef vis name pats body site bid)
-  | excl name = None
-  | otherwise = bodyFix (b => DFunDef vis name pats b site bid) rw body
-declBodyFix tests excl rw (DAttrib a d) = match declBodyFix tests excl rw d
-  Some [d2] => Some [DAttrib a d2]
-  _ => None
-declBodyFix _ excl rw (d@(DImpl { implOrigin = _, methods })) =
-  let methods2 = map (fixImplMethodWith excl rw) methods
-  if implMethodsBodyKey methods2 == implMethodsBodyKey methods then
-    None
-  else
-    -- #1110: record UPDATE — re-synthesising would reset the acquired identity.
-    Some [DImpl { d | methods = methods2 }]
-declBodyFix True _ rw (DTest pub name body) = bodyFix (DTest pub name) rw body
-declBodyFix True _ rw (DProp pub name ps body) =
-  bodyFix (DProp pub name ps) rw body
-declBodyFix _ _ _ _ = None
+declBodyFix tests excl rw d0 = go d0
+  where
+    go (DFunDef vis name pats body site bid)
+      | excl name = None
+      | otherwise = bodyFix (b => DFunDef vis name pats b site bid) rw body
+    go (DAttrib a d) = match go d
+      Some [d2] => Some [DAttrib a d2]
+      _ => None
+    go (d@(DImpl { implOrigin = _, methods })) =
+      let methods2 = map (fixImplMethodWith excl rw) methods
+      if implMethodsBodyKey methods2 == implMethodsBodyKey methods then
+        None
+      else
+        -- #1110: record UPDATE — re-synthesising would reset the acquired identity.
+        Some [DImpl { d | methods = methods2 }]
+    go (DTest pub name body)
+      | tests = bodyFix (DTest pub name) rw body
+    go (DProp pub name ps body)
+      | tests = bodyFix (DProp pub name ps) rw body
+    go (DTypeSig _ _ _ _ | DExtern _ | DData {  } | DUse _ _ _ | DEffect _ _ _ _ _ _ | DInterface {  } | DTypeAlias {  } | DNewtype {  } | DLetGroup _ _ | DTest _ _ _ | DProp _ _ _ _) =
+      None
 
 fixImplMethodWith : (String -> Bool) ->
   (Expr -> Expr) ->
@@ -758,7 +766,8 @@ tightSpan : Expr -> Option Loc
 tightSpan (ELoc l _) = Some l
 tightSpan (EApp f x) = joinLocs (tightSpan f) (tightSpan x)
 tightSpan (EBinOp _ a b _) = joinLocs (tightSpan a) (tightSpan b)
-tightSpan _ = None
+tightSpan (ELit _ | EVar _ | ELam _ _ | ELet _ _ _ _ _ | EMatch _ _ | EIf _ _ _ | EUnOp _ _ _ | EInfix _ _ _ | EFieldAccess _ _ _ | ETuple _ | EListLit _ | EArrayLit _ | ERangeList _ _ _ | ERangeArray _ _ _ | ESlice _ _ _ _ | ELetGroup _ _ | ESection _ | EIndex _ _ | EAnnot _ _ | EHeadAnnot _ _ | EBlock _ | EDo _ _ | EStringInterp _ | EGuards _ | ERecordCreate _ _ | ERecordUpdate _ _ _ | EVariantUpdate _ _ _ | EMapLit _ _ | ESetLit _ _ | EAsPat _ _ | EOrPat _ | EMethodRef _ | EDictApp _ | EVarAt _ _ | EVarId _ _ | EMethodAt _ _ _ | EDictAt _ _ | EDoOrigin _ _ | ENumLit _ _ _ | EWideLit _ _ _ _) =
+  None
 
 -- The span a replacement of the node being visited takes: the node's own
 -- wrapper, brackets included, else the extent of its operands.
@@ -1078,9 +1087,9 @@ matchSpan facts ctx (EMatch _ arms) = match (ctx.ctxOwn, lastArmSpan arms)
 matchSpan _ _ _ = None
 
 lastArmSpan : List Arm -> Option Loc
-lastArmSpan arms = match last arms
-  Some (Arm _ _ body) => tightSpan body
-  None => None
+lastArmSpan arms = do
+  (Arm _ _ body) <- last arms
+  tightSpan body
 
 export
 ruleNameResliceInLoop : String
@@ -1089,3 +1098,25 @@ ruleNameResliceInLoop = "rule-reslice-in-loop"
 export
 ruleNameListAsSet : String
 ruleNameListAsSet = "rule-list-as-set"
+
+export
+ruleNameWalkerWildcard : String
+ruleNameWalkerWildcard = "rule-walker-wildcard"
+
+export
+ruleNameThreadedInvariant : String
+ruleNameThreadedInvariant = "rule-threaded-invariant"
+
+export
+ruleNamePassthroughArm : String
+ruleNamePassthroughArm = "rule-passthrough-arm"
+
+-- Columns of leading whitespace on a source line.
+export
+indentWidth : String -> Int
+indentWidth l = stringLength l - stringLength (trimLeft l)
+
+-- A line that is neither blank nor a `--` comment.
+export
+isCodeText : String -> Bool
+isCodeText l = not (trim l == "" || startsWith "--" (trim l))

@@ -1,5 +1,5 @@
 # META
-source_lines=503
+source_lines=515
 stages=DESUGAR,MARK
 # SOURCE
 -- Indentation-sensitive layout over raw tokens.
@@ -141,6 +141,8 @@ layoutWith : (Token -> Int -> Int -> a) ->
   Token ->
   Bool ->
   List a
+-- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 layoutWith project [] stack _frames _prev _opener =
   closeAllPairs project stack 0
 layoutWith project ((RTok t s e) :: rest) stack frames _prev opener
@@ -177,6 +179,8 @@ clauseOpenPairs : (Token -> Int -> Int -> a) ->
   List BracketFrame ->
   Bool ->
   List a
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 clauseOpenPairs project col off _base rest [] frames opener =
   applyNlPairs project col off rest [] frames TNewline opener
 clauseOpenPairs project col off base rest (top :: tl) frames opener
@@ -211,6 +215,8 @@ flushSepPairsGo : (Token -> Int -> Int -> a) ->
   List BracketFrame ->
   Bool ->
   List a
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 flushSepPairsGo project t s e rest [] _ frames opener =
   project t s e :: layoutWith project rest [] frames t opener
 flushSepPairsGo project t s e rest (top :: tl) f frames opener
@@ -245,6 +251,8 @@ flushClosePairsGo : (Token -> Int -> Int -> a) ->
   List BracketFrame ->
   Bool ->
   List a
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 flushClosePairsGo project t s e rest [] _f fs opener =
   project t s e :: layoutWith project rest [] fs t (opener || isOpener t)
 flushClosePairsGo project t s e rest (top :: tl) f fs opener
@@ -386,6 +394,8 @@ popDedentsPairs : (Token -> Int -> Int -> a) ->
   List RawTok ->
   List BracketFrame ->
   List a
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 popDedentsPairs project _col _off [] rest frames =
   layoutWith project rest [] frames TNewline False
 popDedentsPairs project col off (top :: tl) rest frames
@@ -400,6 +410,8 @@ closeAllPairs project stack off =
   project TNewline off off :: closeDedentsPairs project stack off
 
 closeDedentsPairs : (Token -> Int -> Int -> a) -> List Int -> Int -> List a
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 closeDedentsPairs project [] off = [project TEof off off]
 closeDedentsPairs project [_] off = [project TEof off off]
 closeDedentsPairs project (_ :: tl) off =

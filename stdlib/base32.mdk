@@ -138,20 +138,19 @@ decodeChars chars i bits buffer acc =
    Err "base32: uppercase is not canonical" -}
 export
 base32Decode : String -> Result String Bytes
-base32Decode text = match decodeChars (toChars text) 0 0 0 []
-  Err message => Err message
-  Ok (decoded, bits, residual) =>
-    if residual /= 0 then
-      Err "base32: non-zero trailing bits"
+base32Decode text = do
+  (decoded, bits, residual) <- decodeChars (toChars text) 0 0 0 []
+  if residual /= 0 then
+    Err "base32: non-zero trailing bits"
+  else
+    -- Each decoded byte is `bitAnd (shiftRight next remaining) 255`, so
+    -- the byte domain holds by construction and the checked door would
+    -- only add a scan.
+    let bytes = fromArrayAssumeByteDomain (arrayFromList decoded)
+    if base32Encode bytes /= text then
+      Err "base32: non-canonical length"
     else
-      -- Each decoded byte is `bitAnd (shiftRight next remaining) 255`, so
-      -- the byte domain holds by construction and the checked door would
-      -- only add a scan.
-      let bytes = fromArrayAssumeByteDomain (arrayFromList decoded)
-      if base32Encode bytes /= text then
-        Err "base32: non-canonical length"
-      else
-        Ok bytes
+      Ok bytes
 
 -- > map toArray (base32Decode "")
 -- Ok [||]

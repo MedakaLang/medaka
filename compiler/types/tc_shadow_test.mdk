@@ -201,6 +201,46 @@ test "an alpha-equal standalone and method are not reported" =
     []
     (collisions (joinNl ["size : b -> Int", "size x = 1"]) importsSize)
 
+-- An importer that selects `size` from `lib` and declares an interface whose method
+-- writes [sig].
+importsSizeOf : String -> String
+importsSizeOf sig = joinNl [
+  "import lib.{size}",
+  "interface Sizeable a where",
+  "  size : \{sig}",
+]
+
+-- The collisions of `size : [standalone]` against an interface method `size : [method]`.
+collisionsOfSigs : String -> String -> List (String, String)
+collisionsOfSigs standaloneSig methodSig =
+  collisions
+    (joinNl ["size : \{standaloneSig}", "size x = x"])
+    (importsSizeOf methodSig)
+
+test "an alpha-equal standalone and method that name an argument are not reported" = expectAll
+  [
+    expectEqual
+      []
+      (collisionsOfSigs "b -> (n : Int) -> Int" "a -> (n : Int) -> Int"),
+    expectEqual
+      [("size", "Sizeable")]
+      (collisionsOfSigs "b -> (k : Int) -> Int" "a -> (n : Int) -> Int"),
+  ]
+
+test "an alpha-equal standalone and method that qualify a result are not reported" = expectAll
+  [
+    expectEqual
+      []
+      (collisionsOfSigs
+        "b -> (p : String @FileRead) -> String @p"
+        "a -> (p : String @FileRead) -> String @p"),
+    expectEqual
+      [("size", "Sizeable")]
+      (collisionsOfSigs
+        "b -> (p : String @FileRead) -> String @\"x/*\""
+        "a -> (p : String @FileRead) -> String @p"),
+  ]
+
 test "a standalone declared without a signature counts as differing" =
   expectEqual [("size", "Sizeable")] (collisions "size x = 1" importsSize)
 

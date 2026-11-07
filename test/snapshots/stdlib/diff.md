@@ -1,5 +1,5 @@
 # META
-source_lines=304
+source_lines=306
 stages=DESUGAR,MARK
 # SOURCE
 {- | Differences between two sequences, and between two texts in the unified
@@ -56,7 +56,7 @@ shortest a b =
   let off = n + m + 1
   let v = arrayMake (2 * (n + m) + 3) 0
   let (d, snaps) = forward xs ys n m off v 0 []
-  backtrack xs ys off n m d snaps []
+  backtrack xs ys n m d snaps []
 
 -- Within each run of changes, moves the deletions ahead of the insertions.
 deletesFirst : List (Edit a) -> List (Edit a)
@@ -88,13 +88,15 @@ forward : Eq a =>
   Int ->
   List (Array Int) ->
   (Int, List (Array Int))
-forward xs ys n m off v d snaps =
-  let saved =
-    arrayMakeWith (2 * d + 3) (i => arrayGetUnsafe (off - d - 1 + i) v)
-  if sweep xs ys n m off v d (0 - d) then
-    (d, saved :: snaps)
-  else
-    forward xs ys n m off v (d + 1) (saved :: snaps)
+forward xs ys n m off v d0 snaps0 = go d0 snaps0
+  where
+    go d snaps =
+      let saved =
+        arrayMakeWith (2 * d + 3) (i => arrayGetUnsafe (off - d - 1 + i) v)
+      if sweep xs ys n m off v d (0 - d) then
+        (d, saved :: snaps)
+      else
+        go (d + 1) (saved :: snaps)
 
 sweep : Eq a =>
   Array a ->
@@ -106,15 +108,17 @@ sweep : Eq a =>
   Int ->
   Int ->
   Bool
-sweep xs ys n m off v d k
-  | k > d = False
-  | otherwise =
-    let up = arrayGetUnsafe (off + k + 1) v
-    let left = arrayGetUnsafe (off + k - 1) v
-    let x0 = if comesFromAbove d k left up then up else left + 1
-    let x = snake xs ys n m x0 (x0 - k)
-    arraySetUnsafe (off + k) x v
-    if x >= n && x - k >= m then True else sweep xs ys n m off v d (k + 2)
+sweep xs ys n m off v d k0 = go k0
+  where
+    go k
+      | k > d = False
+      | otherwise =
+        let up = arrayGetUnsafe (off + k + 1) v
+        let left = arrayGetUnsafe (off + k - 1) v
+        let x0 = if comesFromAbove d k left up then up else left + 1
+        let x = snake xs ys n m x0 (x0 - k)
+        arraySetUnsafe (off + k) x v
+        if x >= n && x - k >= m then True else go (k + 2)
 
 -- Diagonal k is reached from diagonal k + 1 by an insertion, or from k - 1 by
 -- a deletion. The edge diagonals have one choice; otherwise the further one
@@ -123,10 +127,12 @@ comesFromAbove : Int -> Int -> Int -> Int -> Bool
 comesFromAbove d k left up = k == 0 - d || k /= d && left < up
 
 snake : Eq a => Array a -> Array a -> Int -> Int -> Int -> Int -> Int
-snake xs ys n m x y
-  | x < n && y < m && arrayGetUnsafe x xs == arrayGetUnsafe y ys =
-    snake xs ys n m (x + 1) (y + 1)
-  | otherwise = x
+snake xs ys n m x0 y0 = go x0 y0
+  where
+    go x y
+      | x < n && y < m && arrayGetUnsafe x xs == arrayGetUnsafe y ys =
+        go (x + 1) (y + 1)
+      | otherwise = x
 
 -- Walks from (x, y) back to the origin, one edit distance at a time, building
 -- the script front to back.
@@ -135,42 +141,37 @@ backtrack : Array a ->
   Int ->
   Int ->
   Int ->
-  Int ->
   List (Array Int) ->
   List (Edit a) ->
   List (Edit a)
-backtrack xs ys off x y d (saved :: rest) acc
-  | d > 0 =
-    let k = x - y
-    let up = arrayGetUnsafe (k + d + 2) saved
-    let left = arrayGetUnsafe (k + d) saved
-    let fromAbove = comesFromAbove d k left up
-    let prevX = if fromAbove then up else left
-    let prevY = prevX - (if fromAbove then k + 1 else k - 1)
-    let midX = if fromAbove then prevX else prevX + 1
-    let edit =
-      if fromAbove then
-        Insert (arrayGetUnsafe prevY ys)
-      else
-        Delete (arrayGetUnsafe prevX xs)
-    backtrack
-      xs
-      ys
-      off
-      prevX
-      prevY
-      (d - 1)
-      rest
-      (edit :: keepsBetween xs midX x acc)
-backtrack xs _ _ x _ _ _ acc = keepsBetween xs 0 x acc
+backtrack xs ys x0 y0 d0 hist0 acc0 = go x0 y0 d0 hist0 acc0
+  where
+    go x y d (saved :: rest) acc
+      | d > 0 =
+        let k = x - y
+        let up = arrayGetUnsafe (k + d + 2) saved
+        let left = arrayGetUnsafe (k + d) saved
+        let fromAbove = comesFromAbove d k left up
+        let prevX = if fromAbove then up else left
+        let prevY = prevX - (if fromAbove then k + 1 else k - 1)
+        let midX = if fromAbove then prevX else prevX + 1
+        let edit =
+          if fromAbove then
+            Insert (arrayGetUnsafe prevY ys)
+          else
+            Delete (arrayGetUnsafe prevX xs)
+        go prevX prevY (d - 1) rest (edit :: keepsBetween xs midX x acc)
+    go x _ _ _ acc = keepsBetween xs 0 x acc
 
 -- Prepends `Keep xs[i]` for each `i` in `[lo, hi)`.
 keepsBetween : Array a -> Int -> Int -> List (Edit a) -> List (Edit a)
-keepsBetween xs lo hi acc =
-  if hi <= lo then
-    acc
-  else
-    keepsBetween xs lo (hi - 1) (Keep (arrayGetUnsafe (hi - 1) xs) :: acc)
+keepsBetween xs lo hi0 acc0 = go hi0 acc0
+  where
+    go hi acc =
+      if hi <= lo then
+        acc
+      else
+        go (hi - 1) (Keep (arrayGetUnsafe (hi - 1) xs) :: acc)
 
 -- # Unified format
 
@@ -241,11 +242,12 @@ hunksGo : Int ->
   List Entry ->
   List (List Entry) ->
   List (List Entry)
-hunksGo _ [] _ cur acc = reverse (closeHunk cur acc)
-hunksGo ctx ((run@(entry :: _)) :: rest) _prev cur acc
-  | isKeep entry = keepRun ctx run rest cur acc
-hunksGo ctx (run :: rest) prev cur acc =
-  hunksGo ctx rest prev (reverse run ++ opened ctx prev cur) acc
+hunksGo ctx xs0 prev cur0 acc = go xs0 cur0
+  where
+    go [] cur = reverse (closeHunk cur acc)
+    go ((run@(entry :: _)) :: rest) cur
+      | isKeep entry = keepRun ctx run rest cur acc
+    go (run :: rest) cur = go rest (reverse run ++ opened ctx prev cur)
 
 -- The open hunk, or the context that opens one when none is open.
 opened : Int -> List Entry -> List Entry -> List Entry
@@ -317,7 +319,7 @@ renderLine sign l =
 (DTypeSig true "editScript" (TyConstrained ((cstr "Eq" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyApp (TyCon "Edit") (TyVar "a")))))))
 (DFunDef false "editScript" ((PVar "a") (PVar "b")) (EApp (EVar "deletesFirst") (EApp (EApp (EVar "shortest") (EVar "a")) (EVar "b"))))
 (DTypeSig false "shortest" (TyConstrained ((cstr "Eq" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyApp (TyCon "Edit") (TyVar "a")))))))
-(DFunDef false "shortest" ((PVar "a") (PVar "b")) (EBlock (DoLet false false (PVar "xs") (EApp (EVar "arrayFromList") (EVar "a"))) (DoLet false false (PVar "ys") (EApp (EVar "arrayFromList") (EVar "b"))) (DoLet false false (PVar "n") (EApp (EVar "arrayLength") (EVar "xs"))) (DoLet false false (PVar "m") (EApp (EVar "arrayLength") (EVar "ys"))) (DoLet false false (PVar "off") (EBinOp "+" (EBinOp "+" (EVar "n") (EVar "m")) (ELit (LInt 1)))) (DoLet false false (PVar "v") (EApp (EApp (EVar "arrayMake") (EBinOp "+" (EBinOp "*" (ELit (LInt 2)) (EBinOp "+" (EVar "n") (EVar "m"))) (ELit (LInt 3)))) (ELit (LInt 0)))) (DoLet false false (PTuple (PVar "d") (PVar "snaps")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "forward") (EVar "xs")) (EVar "ys")) (EVar "n")) (EVar "m")) (EVar "off")) (EVar "v")) (ELit (LInt 0))) (EListLit))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "backtrack") (EVar "xs")) (EVar "ys")) (EVar "off")) (EVar "n")) (EVar "m")) (EVar "d")) (EVar "snaps")) (EListLit)))))
+(DFunDef false "shortest" ((PVar "a") (PVar "b")) (EBlock (DoLet false false (PVar "xs") (EApp (EVar "arrayFromList") (EVar "a"))) (DoLet false false (PVar "ys") (EApp (EVar "arrayFromList") (EVar "b"))) (DoLet false false (PVar "n") (EApp (EVar "arrayLength") (EVar "xs"))) (DoLet false false (PVar "m") (EApp (EVar "arrayLength") (EVar "ys"))) (DoLet false false (PVar "off") (EBinOp "+" (EBinOp "+" (EVar "n") (EVar "m")) (ELit (LInt 1)))) (DoLet false false (PVar "v") (EApp (EApp (EVar "arrayMake") (EBinOp "+" (EBinOp "*" (ELit (LInt 2)) (EBinOp "+" (EVar "n") (EVar "m"))) (ELit (LInt 3)))) (ELit (LInt 0)))) (DoLet false false (PTuple (PVar "d") (PVar "snaps")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "forward") (EVar "xs")) (EVar "ys")) (EVar "n")) (EVar "m")) (EVar "off")) (EVar "v")) (ELit (LInt 0))) (EListLit))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "backtrack") (EVar "xs")) (EVar "ys")) (EVar "n")) (EVar "m")) (EVar "d")) (EVar "snaps")) (EListLit)))))
 (DTypeSig false "deletesFirst" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Edit") (TyVar "a"))) (TyApp (TyCon "List") (TyApp (TyCon "Edit") (TyVar "a")))))
 (DFunDef false "deletesFirst" ((PVar "script")) (EApp (EApp (EApp (EApp (EVar "deletesFirstGo") (EVar "script")) (EListLit)) (EListLit)) (EListLit)))
 (DTypeSig false "deletesFirstGo" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Edit") (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Edit") (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Edit") (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Edit") (TyVar "a"))) (TyApp (TyCon "List") (TyApp (TyCon "Edit") (TyVar "a"))))))))
@@ -326,18 +328,17 @@ renderLine sign l =
 (DFunDef false "deletesFirstGo" ((PCons (PCon "Insert" (PVar "x")) (PVar "rest")) (PVar "dels") (PVar "ins") (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "deletesFirstGo") (EVar "rest")) (EVar "dels")) (EBinOp "::" (EApp (EVar "Insert") (EVar "x")) (EVar "ins"))) (EVar "acc")))
 (DFunDef false "deletesFirstGo" ((PCons (PCon "Keep" (PVar "x")) (PVar "rest")) (PVar "dels") (PVar "ins") (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "deletesFirstGo") (EVar "rest")) (EListLit)) (EListLit)) (EBinOp "::" (EApp (EVar "Keep") (EVar "x")) (EBinOp "++" (EBinOp "++" (EVar "ins") (EVar "dels")) (EVar "acc")))))
 (DTypeSig false "forward" (TyConstrained ((cstr "Eq" (TyVar "a"))) (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Array") (TyCon "Int"))) (TyTuple (TyCon "Int") (TyApp (TyCon "List") (TyApp (TyCon "Array") (TyCon "Int"))))))))))))))
-(DFunDef false "forward" ((PVar "xs") (PVar "ys") (PVar "n") (PVar "m") (PVar "off") (PVar "v") (PVar "d") (PVar "snaps")) (EBlock (DoLet false false (PVar "saved") (EApp (EApp (EVar "arrayMakeWith") (EBinOp "+" (EBinOp "*" (ELit (LInt 2)) (EVar "d")) (ELit (LInt 3)))) (ELam ((PVar "i")) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EBinOp "-" (EBinOp "-" (EVar "off") (EVar "d")) (ELit (LInt 1))) (EVar "i"))) (EVar "v"))))) (DoExpr (EIf (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "sweep") (EVar "xs")) (EVar "ys")) (EVar "n")) (EVar "m")) (EVar "off")) (EVar "v")) (EVar "d")) (EBinOp "-" (ELit (LInt 0)) (EVar "d"))) (ETuple (EVar "d") (EBinOp "::" (EVar "saved") (EVar "snaps"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "forward") (EVar "xs")) (EVar "ys")) (EVar "n")) (EVar "m")) (EVar "off")) (EVar "v")) (EBinOp "+" (EVar "d") (ELit (LInt 1)))) (EBinOp "::" (EVar "saved") (EVar "snaps")))))))
+(DFunDef false "forward" ((PVar "xs") (PVar "ys") (PVar "n") (PVar "m") (PVar "off") (PVar "v") (PVar "d0") (PVar "snaps0")) (ELetGroup ((lgb "go" (clause ((PVar "d") (PVar "snaps")) (EBlock (DoLet false false (PVar "saved") (EApp (EApp (EVar "arrayMakeWith") (EBinOp "+" (EBinOp "*" (ELit (LInt 2)) (EVar "d")) (ELit (LInt 3)))) (ELam ((PVar "i")) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EBinOp "-" (EBinOp "-" (EVar "off") (EVar "d")) (ELit (LInt 1))) (EVar "i"))) (EVar "v"))))) (DoExpr (EIf (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "sweep") (EVar "xs")) (EVar "ys")) (EVar "n")) (EVar "m")) (EVar "off")) (EVar "v")) (EVar "d")) (EBinOp "-" (ELit (LInt 0)) (EVar "d"))) (ETuple (EVar "d") (EBinOp "::" (EVar "saved") (EVar "snaps"))) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "d") (ELit (LInt 1)))) (EBinOp "::" (EVar "saved") (EVar "snaps"))))))))) (EApp (EApp (EVar "go") (EVar "d0")) (EVar "snaps0"))))
 (DTypeSig false "sweep" (TyConstrained ((cstr "Eq" (TyVar "a"))) (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))))))))
-(DFunDef false "sweep" ((PVar "xs") (PVar "ys") (PVar "n") (PVar "m") (PVar "off") (PVar "v") (PVar "d") (PVar "k")) (EIf (EBinOp ">" (EVar "k") (EVar "d")) (EVar "False") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "up") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EBinOp "+" (EVar "off") (EVar "k")) (ELit (LInt 1)))) (EVar "v"))) (DoLet false false (PVar "left") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EBinOp "+" (EVar "off") (EVar "k")) (ELit (LInt 1)))) (EVar "v"))) (DoLet false false (PVar "x0") (EIf (EApp (EApp (EApp (EApp (EVar "comesFromAbove") (EVar "d")) (EVar "k")) (EVar "left")) (EVar "up")) (EVar "up") (EBinOp "+" (EVar "left") (ELit (LInt 1))))) (DoLet false false (PVar "x") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "snake") (EVar "xs")) (EVar "ys")) (EVar "n")) (EVar "m")) (EVar "x0")) (EBinOp "-" (EVar "x0") (EVar "k")))) (DoExpr (EApp (EApp (EApp (EVar "arraySetUnsafe") (EBinOp "+" (EVar "off") (EVar "k"))) (EVar "x")) (EVar "v"))) (DoExpr (EIf (EBinOp "&&" (EBinOp ">=" (EVar "x") (EVar "n")) (EBinOp ">=" (EBinOp "-" (EVar "x") (EVar "k")) (EVar "m"))) (EVar "True") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "sweep") (EVar "xs")) (EVar "ys")) (EVar "n")) (EVar "m")) (EVar "off")) (EVar "v")) (EVar "d")) (EBinOp "+" (EVar "k") (ELit (LInt 2))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "sweep" ((PVar "xs") (PVar "ys") (PVar "n") (PVar "m") (PVar "off") (PVar "v") (PVar "d") (PVar "k0")) (ELetGroup ((lgb "go" (clause ((PVar "k")) (EIf (EBinOp ">" (EVar "k") (EVar "d")) (EVar "False") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "up") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EBinOp "+" (EVar "off") (EVar "k")) (ELit (LInt 1)))) (EVar "v"))) (DoLet false false (PVar "left") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EBinOp "+" (EVar "off") (EVar "k")) (ELit (LInt 1)))) (EVar "v"))) (DoLet false false (PVar "x0") (EIf (EApp (EApp (EApp (EApp (EVar "comesFromAbove") (EVar "d")) (EVar "k")) (EVar "left")) (EVar "up")) (EVar "up") (EBinOp "+" (EVar "left") (ELit (LInt 1))))) (DoLet false false (PVar "x") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "snake") (EVar "xs")) (EVar "ys")) (EVar "n")) (EVar "m")) (EVar "x0")) (EBinOp "-" (EVar "x0") (EVar "k")))) (DoExpr (EApp (EApp (EApp (EVar "arraySetUnsafe") (EBinOp "+" (EVar "off") (EVar "k"))) (EVar "x")) (EVar "v"))) (DoExpr (EIf (EBinOp "&&" (EBinOp ">=" (EVar "x") (EVar "n")) (EBinOp ">=" (EBinOp "-" (EVar "x") (EVar "k")) (EVar "m"))) (EVar "True") (EApp (EVar "go") (EBinOp "+" (EVar "k") (ELit (LInt 2))))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EVar "go") (EVar "k0"))))
 (DTypeSig false "comesFromAbove" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))))
 (DFunDef false "comesFromAbove" ((PVar "d") (PVar "k") (PVar "left") (PVar "up")) (EBinOp "||" (EBinOp "==" (EVar "k") (EBinOp "-" (ELit (LInt 0)) (EVar "d"))) (EBinOp "&&" (EBinOp "/=" (EVar "k") (EVar "d")) (EBinOp "<" (EVar "left") (EVar "up")))))
 (DTypeSig false "snake" (TyConstrained ((cstr "Eq" (TyVar "a"))) (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))))))
-(DFunDef false "snake" ((PVar "xs") (PVar "ys") (PVar "n") (PVar "m") (PVar "x") (PVar "y")) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "<" (EVar "x") (EVar "n")) (EBinOp "<" (EVar "y") (EVar "m"))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "x")) (EVar "xs")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "y")) (EVar "ys")))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "snake") (EVar "xs")) (EVar "ys")) (EVar "n")) (EVar "m")) (EBinOp "+" (EVar "x") (ELit (LInt 1)))) (EBinOp "+" (EVar "y") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "x") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "backtrack" (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Array") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Edit") (TyVar "a"))) (TyApp (TyCon "List") (TyApp (TyCon "Edit") (TyVar "a"))))))))))))
-(DFunDef false "backtrack" ((PVar "xs") (PVar "ys") (PVar "off") (PVar "x") (PVar "y") (PVar "d") (PCons (PVar "saved") (PVar "rest")) (PVar "acc")) (EIf (EBinOp ">" (EVar "d") (ELit (LInt 0))) (EBlock (DoLet false false (PVar "k") (EBinOp "-" (EVar "x") (EVar "y"))) (DoLet false false (PVar "up") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EBinOp "+" (EVar "k") (EVar "d")) (ELit (LInt 2)))) (EVar "saved"))) (DoLet false false (PVar "left") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "k") (EVar "d"))) (EVar "saved"))) (DoLet false false (PVar "fromAbove") (EApp (EApp (EApp (EApp (EVar "comesFromAbove") (EVar "d")) (EVar "k")) (EVar "left")) (EVar "up"))) (DoLet false false (PVar "prevX") (EIf (EVar "fromAbove") (EVar "up") (EVar "left"))) (DoLet false false (PVar "prevY") (EBinOp "-" (EVar "prevX") (EIf (EVar "fromAbove") (EBinOp "+" (EVar "k") (ELit (LInt 1))) (EBinOp "-" (EVar "k") (ELit (LInt 1)))))) (DoLet false false (PVar "midX") (EIf (EVar "fromAbove") (EVar "prevX") (EBinOp "+" (EVar "prevX") (ELit (LInt 1))))) (DoLet false false (PVar "edit") (EIf (EVar "fromAbove") (EApp (EVar "Insert") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "prevY")) (EVar "ys"))) (EApp (EVar "Delete") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "prevX")) (EVar "xs"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "backtrack") (EVar "xs")) (EVar "ys")) (EVar "off")) (EVar "prevX")) (EVar "prevY")) (EBinOp "-" (EVar "d") (ELit (LInt 1)))) (EVar "rest")) (EBinOp "::" (EVar "edit") (EApp (EApp (EApp (EApp (EVar "keepsBetween") (EVar "xs")) (EVar "midX")) (EVar "x")) (EVar "acc")))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
-(DFunDef false "backtrack" ((PVar "xs") PWild PWild (PVar "x") PWild PWild PWild (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "keepsBetween") (EVar "xs")) (ELit (LInt 0))) (EVar "x")) (EVar "acc")))
+(DFunDef false "snake" ((PVar "xs") (PVar "ys") (PVar "n") (PVar "m") (PVar "x0") (PVar "y0")) (ELetGroup ((lgb "go" (clause ((PVar "x") (PVar "y")) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "<" (EVar "x") (EVar "n")) (EBinOp "<" (EVar "y") (EVar "m"))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "x")) (EVar "xs")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "y")) (EVar "ys")))) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "x") (ELit (LInt 1)))) (EBinOp "+" (EVar "y") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "x") (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EApp (EVar "go") (EVar "x0")) (EVar "y0"))))
+(DTypeSig false "backtrack" (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Array") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Edit") (TyVar "a"))) (TyApp (TyCon "List") (TyApp (TyCon "Edit") (TyVar "a")))))))))))
+(DFunDef false "backtrack" ((PVar "xs") (PVar "ys") (PVar "x0") (PVar "y0") (PVar "d0") (PVar "hist0") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PVar "x") (PVar "y") (PVar "d") (PCons (PVar "saved") (PVar "rest")) (PVar "acc")) (EIf (EBinOp ">" (EVar "d") (ELit (LInt 0))) (EBlock (DoLet false false (PVar "k") (EBinOp "-" (EVar "x") (EVar "y"))) (DoLet false false (PVar "up") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EBinOp "+" (EVar "k") (EVar "d")) (ELit (LInt 2)))) (EVar "saved"))) (DoLet false false (PVar "left") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "k") (EVar "d"))) (EVar "saved"))) (DoLet false false (PVar "fromAbove") (EApp (EApp (EApp (EApp (EVar "comesFromAbove") (EVar "d")) (EVar "k")) (EVar "left")) (EVar "up"))) (DoLet false false (PVar "prevX") (EIf (EVar "fromAbove") (EVar "up") (EVar "left"))) (DoLet false false (PVar "prevY") (EBinOp "-" (EVar "prevX") (EIf (EVar "fromAbove") (EBinOp "+" (EVar "k") (ELit (LInt 1))) (EBinOp "-" (EVar "k") (ELit (LInt 1)))))) (DoLet false false (PVar "midX") (EIf (EVar "fromAbove") (EVar "prevX") (EBinOp "+" (EVar "prevX") (ELit (LInt 1))))) (DoLet false false (PVar "edit") (EIf (EVar "fromAbove") (EApp (EVar "Insert") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "prevY")) (EVar "ys"))) (EApp (EVar "Delete") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "prevX")) (EVar "xs"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "go") (EVar "prevX")) (EVar "prevY")) (EBinOp "-" (EVar "d") (ELit (LInt 1)))) (EVar "rest")) (EBinOp "::" (EVar "edit") (EApp (EApp (EApp (EApp (EVar "keepsBetween") (EVar "xs")) (EVar "midX")) (EVar "x")) (EVar "acc")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))) (clause ((PVar "x") PWild PWild PWild (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "keepsBetween") (EVar "xs")) (ELit (LInt 0))) (EVar "x")) (EVar "acc"))))) (EApp (EApp (EApp (EApp (EApp (EVar "go") (EVar "x0")) (EVar "y0")) (EVar "d0")) (EVar "hist0")) (EVar "acc0"))))
 (DTypeSig false "keepsBetween" (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Edit") (TyVar "a"))) (TyApp (TyCon "List") (TyApp (TyCon "Edit") (TyVar "a"))))))))
-(DFunDef false "keepsBetween" ((PVar "xs") (PVar "lo") (PVar "hi") (PVar "acc")) (EIf (EBinOp "<=" (EVar "hi") (EVar "lo")) (EVar "acc") (EApp (EApp (EApp (EApp (EVar "keepsBetween") (EVar "xs")) (EVar "lo")) (EBinOp "-" (EVar "hi") (ELit (LInt 1)))) (EBinOp "::" (EApp (EVar "Keep") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "hi") (ELit (LInt 1)))) (EVar "xs"))) (EVar "acc")))))
+(DFunDef false "keepsBetween" ((PVar "xs") (PVar "lo") (PVar "hi0") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PVar "hi") (PVar "acc")) (EIf (EBinOp "<=" (EVar "hi") (EVar "lo")) (EVar "acc") (EApp (EApp (EVar "go") (EBinOp "-" (EVar "hi") (ELit (LInt 1)))) (EBinOp "::" (EApp (EVar "Keep") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "hi") (ELit (LInt 1)))) (EVar "xs"))) (EVar "acc"))))))) (EApp (EApp (EVar "go") (EVar "hi0")) (EVar "acc0"))))
 (DTypeSig true "unified" (TyFun (TyCon "Int") (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyCon "String")))))
 (DFunDef false "unified" ((PVar "ctx") (PTuple (PVar "labelA") (PVar "a")) (PTuple (PVar "labelB") (PVar "b"))) (EIf (EBinOp "==" (EVar "a") (EVar "b")) (ELit (LString "")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "script") (EApp (EApp (EVar "editScript") (EApp (EVar "splitLines") (EVar "a"))) (EApp (EVar "splitLines") (EVar "b")))) (DoLet false false (PVar "hs") (EApp (EApp (EVar "hunks") (EIf (EBinOp "<" (EVar "ctx") (ELit (LInt 0))) (ELit (LInt 0)) (EVar "ctx"))) (EApp (EVar "runs") (EApp (EApp (EApp (EApp (EVar "annotate") (EVar "script")) (ELit (LInt 0))) (ELit (LInt 0))) (EListLit))))) (DoExpr (EApp (EVar "concat") (EBinOp "::" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "--- ")) (EApp (EVar "$core.display") (EVar "labelA"))) (ELit (LString "\n+++ "))) (EApp (EVar "$core.display") (EVar "labelB"))) (ELit (LString "\n"))) (EApp (EApp (EVar "map") (EVar "renderHunk")) (EVar "hs")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DData Private "Entry" () ((variant "Entry" (ConPos (TyApp (TyCon "Edit") (TyCon "String")) (TyCon "Int") (TyCon "Int")))) ())
@@ -360,9 +361,7 @@ renderLine sign l =
 (DTypeSig false "hunks" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Entry"))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Entry"))))))
 (DFunDef false "hunks" ((PVar "ctx") (PVar "rs")) (EApp (EApp (EApp (EApp (EApp (EVar "hunksGo") (EVar "ctx")) (EVar "rs")) (EListLit)) (EListLit)) (EListLit)))
 (DTypeSig false "hunksGo" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Entry"))) (TyFun (TyApp (TyCon "List") (TyCon "Entry")) (TyFun (TyApp (TyCon "List") (TyCon "Entry")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Entry"))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Entry")))))))))
-(DFunDef false "hunksGo" (PWild (PList) PWild (PVar "cur") (PVar "acc")) (EApp (EVar "reverse") (EApp (EApp (EVar "closeHunk") (EVar "cur")) (EVar "acc"))))
-(DFunDef false "hunksGo" ((PVar "ctx") (PCons (PAs "run" (PCons (PVar "entry") PWild)) (PVar "rest")) (PVar "_prev") (PVar "cur") (PVar "acc")) (EIf (EApp (EVar "isKeep") (EVar "entry")) (EApp (EApp (EApp (EApp (EApp (EVar "keepRun") (EVar "ctx")) (EVar "run")) (EVar "rest")) (EVar "cur")) (EVar "acc")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
-(DFunDef false "hunksGo" ((PVar "ctx") (PCons (PVar "run") (PVar "rest")) (PVar "prev") (PVar "cur") (PVar "acc")) (EApp (EApp (EApp (EApp (EApp (EVar "hunksGo") (EVar "ctx")) (EVar "rest")) (EVar "prev")) (EBinOp "++" (EApp (EVar "reverse") (EVar "run")) (EApp (EApp (EApp (EVar "opened") (EVar "ctx")) (EVar "prev")) (EVar "cur")))) (EVar "acc")))
+(DFunDef false "hunksGo" ((PVar "ctx") (PVar "xs0") (PVar "prev") (PVar "cur0") (PVar "acc")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "cur")) (EApp (EVar "reverse") (EApp (EApp (EVar "closeHunk") (EVar "cur")) (EVar "acc")))) (clause ((PCons (PAs "run" (PCons (PVar "entry") PWild)) (PVar "rest")) (PVar "cur")) (EIf (EApp (EVar "isKeep") (EVar "entry")) (EApp (EApp (EApp (EApp (EApp (EVar "keepRun") (EVar "ctx")) (EVar "run")) (EVar "rest")) (EVar "cur")) (EVar "acc")) (EApp (EVar "__fallthrough__") (ELit LUnit)))) (clause ((PCons (PVar "run") (PVar "rest")) (PVar "cur")) (EApp (EApp (EVar "go") (EVar "rest")) (EBinOp "++" (EApp (EVar "reverse") (EVar "run")) (EApp (EApp (EApp (EVar "opened") (EVar "ctx")) (EVar "prev")) (EVar "cur"))))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "cur0"))))
 (DTypeSig false "opened" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Entry")) (TyFun (TyApp (TyCon "List") (TyCon "Entry")) (TyApp (TyCon "List") (TyCon "Entry"))))))
 (DFunDef false "opened" ((PVar "ctx") (PVar "prev") (PList)) (EApp (EApp (EVar "take") (EVar "ctx")) (EApp (EVar "reverse") (EVar "prev"))))
 (DFunDef false "opened" (PWild PWild (PVar "cur")) (EVar "cur"))
@@ -399,7 +398,7 @@ renderLine sign l =
 (DTypeSig true "editScript" (TyConstrained ((cstr "Eq" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyApp (TyCon "Edit") (TyVar "a")))))))
 (DFunDef false "editScript" ((PVar "a") (PVar "b")) (EApp (EVar "deletesFirst") (EApp (EApp (EDictApp "shortest") (EVar "a")) (EVar "b"))))
 (DTypeSig false "shortest" (TyConstrained ((cstr "Eq" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyApp (TyCon "Edit") (TyVar "a")))))))
-(DFunDef false "shortest" ((PVar "a") (PVar "b")) (EBlock (DoLet false false (PVar "xs") (EApp (EVar "arrayFromList") (EVar "a"))) (DoLet false false (PVar "ys") (EApp (EVar "arrayFromList") (EVar "b"))) (DoLet false false (PVar "n") (EApp (EVar "arrayLength") (EVar "xs"))) (DoLet false false (PVar "m") (EApp (EVar "arrayLength") (EVar "ys"))) (DoLet false false (PVar "off") (EBinOp "+" (EBinOp "+" (EVar "n") (EVar "m")) (ELit (LInt 1)))) (DoLet false false (PVar "v") (EApp (EApp (EVar "arrayMake") (EBinOp "+" (EBinOp "*" (ELit (LInt 2)) (EBinOp "+" (EVar "n") (EVar "m"))) (ELit (LInt 3)))) (ELit (LInt 0)))) (DoLet false false (PTuple (PVar "d") (PVar "snaps")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EDictApp "forward") (EVar "xs")) (EVar "ys")) (EVar "n")) (EVar "m")) (EVar "off")) (EVar "v")) (ELit (LInt 0))) (EListLit))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "backtrack") (EVar "xs")) (EVar "ys")) (EVar "off")) (EVar "n")) (EVar "m")) (EVar "d")) (EVar "snaps")) (EListLit)))))
+(DFunDef false "shortest" ((PVar "a") (PVar "b")) (EBlock (DoLet false false (PVar "xs") (EApp (EVar "arrayFromList") (EVar "a"))) (DoLet false false (PVar "ys") (EApp (EVar "arrayFromList") (EVar "b"))) (DoLet false false (PVar "n") (EApp (EVar "arrayLength") (EVar "xs"))) (DoLet false false (PVar "m") (EApp (EVar "arrayLength") (EVar "ys"))) (DoLet false false (PVar "off") (EBinOp "+" (EBinOp "+" (EVar "n") (EVar "m")) (ELit (LInt 1)))) (DoLet false false (PVar "v") (EApp (EApp (EVar "arrayMake") (EBinOp "+" (EBinOp "*" (ELit (LInt 2)) (EBinOp "+" (EVar "n") (EVar "m"))) (ELit (LInt 3)))) (ELit (LInt 0)))) (DoLet false false (PTuple (PVar "d") (PVar "snaps")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EDictApp "forward") (EVar "xs")) (EVar "ys")) (EVar "n")) (EVar "m")) (EVar "off")) (EVar "v")) (ELit (LInt 0))) (EListLit))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "backtrack") (EVar "xs")) (EVar "ys")) (EVar "n")) (EVar "m")) (EVar "d")) (EVar "snaps")) (EListLit)))))
 (DTypeSig false "deletesFirst" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Edit") (TyVar "a"))) (TyApp (TyCon "List") (TyApp (TyCon "Edit") (TyVar "a")))))
 (DFunDef false "deletesFirst" ((PVar "script")) (EApp (EApp (EApp (EApp (EVar "deletesFirstGo") (EVar "script")) (EListLit)) (EListLit)) (EListLit)))
 (DTypeSig false "deletesFirstGo" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Edit") (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Edit") (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Edit") (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Edit") (TyVar "a"))) (TyApp (TyCon "List") (TyApp (TyCon "Edit") (TyVar "a"))))))))
@@ -408,18 +407,17 @@ renderLine sign l =
 (DFunDef false "deletesFirstGo" ((PCons (PCon "Insert" (PVar "x")) (PVar "rest")) (PVar "dels") (PVar "ins") (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "deletesFirstGo") (EVar "rest")) (EVar "dels")) (EBinOp "::" (EApp (EVar "Insert") (EVar "x")) (EVar "ins"))) (EVar "acc")))
 (DFunDef false "deletesFirstGo" ((PCons (PCon "Keep" (PVar "x")) (PVar "rest")) (PVar "dels") (PVar "ins") (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "deletesFirstGo") (EVar "rest")) (EListLit)) (EListLit)) (EBinOp "::" (EApp (EVar "Keep") (EVar "x")) (EBinOp "++" (EBinOp "++" (EVar "ins") (EVar "dels")) (EVar "acc")))))
 (DTypeSig false "forward" (TyConstrained ((cstr "Eq" (TyVar "a"))) (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Array") (TyCon "Int"))) (TyTuple (TyCon "Int") (TyApp (TyCon "List") (TyApp (TyCon "Array") (TyCon "Int"))))))))))))))
-(DFunDef false "forward" ((PVar "xs") (PVar "ys") (PVar "n") (PVar "m") (PVar "off") (PVar "v") (PVar "d") (PVar "snaps")) (EBlock (DoLet false false (PVar "saved") (EApp (EApp (EVar "arrayMakeWith") (EBinOp "+" (EBinOp "*" (ELit (LInt 2)) (EVar "d")) (ELit (LInt 3)))) (ELam ((PVar "i")) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EBinOp "-" (EBinOp "-" (EVar "off") (EVar "d")) (ELit (LInt 1))) (EVar "i"))) (EVar "v"))))) (DoExpr (EIf (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EDictApp "sweep") (EVar "xs")) (EVar "ys")) (EVar "n")) (EVar "m")) (EVar "off")) (EVar "v")) (EVar "d")) (EBinOp "-" (ELit (LInt 0)) (EVar "d"))) (ETuple (EVar "d") (EBinOp "::" (EVar "saved") (EVar "snaps"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EDictApp "forward") (EVar "xs")) (EVar "ys")) (EVar "n")) (EVar "m")) (EVar "off")) (EVar "v")) (EBinOp "+" (EVar "d") (ELit (LInt 1)))) (EBinOp "::" (EVar "saved") (EVar "snaps")))))))
+(DFunDef false "forward" ((PVar "xs") (PVar "ys") (PVar "n") (PVar "m") (PVar "off") (PVar "v") (PVar "d0") (PVar "snaps0")) (ELetGroup ((lgb "go" (clause ((PVar "d") (PVar "snaps")) (EBlock (DoLet false false (PVar "saved") (EApp (EApp (EVar "arrayMakeWith") (EBinOp "+" (EBinOp "*" (ELit (LInt 2)) (EVar "d")) (ELit (LInt 3)))) (ELam ((PVar "i")) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EBinOp "-" (EBinOp "-" (EVar "off") (EVar "d")) (ELit (LInt 1))) (EVar "i"))) (EVar "v"))))) (DoExpr (EIf (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EDictApp "sweep") (EVar "xs")) (EVar "ys")) (EVar "n")) (EVar "m")) (EVar "off")) (EVar "v")) (EVar "d")) (EBinOp "-" (ELit (LInt 0)) (EVar "d"))) (ETuple (EVar "d") (EBinOp "::" (EVar "saved") (EVar "snaps"))) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "d") (ELit (LInt 1)))) (EBinOp "::" (EVar "saved") (EVar "snaps"))))))))) (EApp (EApp (EVar "go") (EVar "d0")) (EVar "snaps0"))))
 (DTypeSig false "sweep" (TyConstrained ((cstr "Eq" (TyVar "a"))) (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))))))))
-(DFunDef false "sweep" ((PVar "xs") (PVar "ys") (PVar "n") (PVar "m") (PVar "off") (PVar "v") (PVar "d") (PVar "k")) (EIf (EBinOp ">" (EVar "k") (EVar "d")) (EVar "False") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "up") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EBinOp "+" (EVar "off") (EVar "k")) (ELit (LInt 1)))) (EVar "v"))) (DoLet false false (PVar "left") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EBinOp "+" (EVar "off") (EVar "k")) (ELit (LInt 1)))) (EVar "v"))) (DoLet false false (PVar "x0") (EIf (EApp (EApp (EApp (EApp (EVar "comesFromAbove") (EVar "d")) (EVar "k")) (EVar "left")) (EVar "up")) (EVar "up") (EBinOp "+" (EVar "left") (ELit (LInt 1))))) (DoLet false false (PVar "x") (EApp (EApp (EApp (EApp (EApp (EApp (EDictApp "snake") (EVar "xs")) (EVar "ys")) (EVar "n")) (EVar "m")) (EVar "x0")) (EBinOp "-" (EVar "x0") (EVar "k")))) (DoExpr (EApp (EApp (EApp (EVar "arraySetUnsafe") (EBinOp "+" (EVar "off") (EVar "k"))) (EVar "x")) (EVar "v"))) (DoExpr (EIf (EBinOp "&&" (EBinOp ">=" (EVar "x") (EVar "n")) (EBinOp ">=" (EBinOp "-" (EVar "x") (EVar "k")) (EVar "m"))) (EVar "True") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EDictApp "sweep") (EVar "xs")) (EVar "ys")) (EVar "n")) (EVar "m")) (EVar "off")) (EVar "v")) (EVar "d")) (EBinOp "+" (EVar "k") (ELit (LInt 2))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "sweep" ((PVar "xs") (PVar "ys") (PVar "n") (PVar "m") (PVar "off") (PVar "v") (PVar "d") (PVar "k0")) (ELetGroup ((lgb "go" (clause ((PVar "k")) (EIf (EBinOp ">" (EVar "k") (EVar "d")) (EVar "False") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "up") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EBinOp "+" (EVar "off") (EVar "k")) (ELit (LInt 1)))) (EVar "v"))) (DoLet false false (PVar "left") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EBinOp "+" (EVar "off") (EVar "k")) (ELit (LInt 1)))) (EVar "v"))) (DoLet false false (PVar "x0") (EIf (EApp (EApp (EApp (EApp (EVar "comesFromAbove") (EVar "d")) (EVar "k")) (EVar "left")) (EVar "up")) (EVar "up") (EBinOp "+" (EVar "left") (ELit (LInt 1))))) (DoLet false false (PVar "x") (EApp (EApp (EApp (EApp (EApp (EApp (EDictApp "snake") (EVar "xs")) (EVar "ys")) (EVar "n")) (EVar "m")) (EVar "x0")) (EBinOp "-" (EVar "x0") (EVar "k")))) (DoExpr (EApp (EApp (EApp (EVar "arraySetUnsafe") (EBinOp "+" (EVar "off") (EVar "k"))) (EVar "x")) (EVar "v"))) (DoExpr (EIf (EBinOp "&&" (EBinOp ">=" (EVar "x") (EVar "n")) (EBinOp ">=" (EBinOp "-" (EVar "x") (EVar "k")) (EVar "m"))) (EVar "True") (EApp (EVar "go") (EBinOp "+" (EVar "k") (ELit (LInt 2))))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EVar "go") (EVar "k0"))))
 (DTypeSig false "comesFromAbove" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))))
 (DFunDef false "comesFromAbove" ((PVar "d") (PVar "k") (PVar "left") (PVar "up")) (EBinOp "||" (EBinOp "==" (EVar "k") (EBinOp "-" (ELit (LInt 0)) (EVar "d"))) (EBinOp "&&" (EBinOp "/=" (EVar "k") (EVar "d")) (EBinOp "<" (EVar "left") (EVar "up")))))
 (DTypeSig false "snake" (TyConstrained ((cstr "Eq" (TyVar "a"))) (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))))))
-(DFunDef false "snake" ((PVar "xs") (PVar "ys") (PVar "n") (PVar "m") (PVar "x") (PVar "y")) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "<" (EVar "x") (EVar "n")) (EBinOp "<" (EVar "y") (EVar "m"))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "x")) (EVar "xs")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "y")) (EVar "ys")))) (EApp (EApp (EApp (EApp (EApp (EApp (EDictApp "snake") (EVar "xs")) (EVar "ys")) (EVar "n")) (EVar "m")) (EBinOp "+" (EVar "x") (ELit (LInt 1)))) (EBinOp "+" (EVar "y") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "x") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "backtrack" (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Array") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Edit") (TyVar "a"))) (TyApp (TyCon "List") (TyApp (TyCon "Edit") (TyVar "a"))))))))))))
-(DFunDef false "backtrack" ((PVar "xs") (PVar "ys") (PVar "off") (PVar "x") (PVar "y") (PVar "d") (PCons (PVar "saved") (PVar "rest")) (PVar "acc")) (EIf (EBinOp ">" (EVar "d") (ELit (LInt 0))) (EBlock (DoLet false false (PVar "k") (EBinOp "-" (EVar "x") (EVar "y"))) (DoLet false false (PVar "up") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EBinOp "+" (EVar "k") (EVar "d")) (ELit (LInt 2)))) (EVar "saved"))) (DoLet false false (PVar "left") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "k") (EVar "d"))) (EVar "saved"))) (DoLet false false (PVar "fromAbove") (EApp (EApp (EApp (EApp (EVar "comesFromAbove") (EVar "d")) (EVar "k")) (EVar "left")) (EVar "up"))) (DoLet false false (PVar "prevX") (EIf (EVar "fromAbove") (EVar "up") (EVar "left"))) (DoLet false false (PVar "prevY") (EBinOp "-" (EVar "prevX") (EIf (EVar "fromAbove") (EBinOp "+" (EVar "k") (ELit (LInt 1))) (EBinOp "-" (EVar "k") (ELit (LInt 1)))))) (DoLet false false (PVar "midX") (EIf (EVar "fromAbove") (EVar "prevX") (EBinOp "+" (EVar "prevX") (ELit (LInt 1))))) (DoLet false false (PVar "edit") (EIf (EVar "fromAbove") (EApp (EVar "Insert") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "prevY")) (EVar "ys"))) (EApp (EVar "Delete") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "prevX")) (EVar "xs"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "backtrack") (EVar "xs")) (EVar "ys")) (EVar "off")) (EVar "prevX")) (EVar "prevY")) (EBinOp "-" (EVar "d") (ELit (LInt 1)))) (EVar "rest")) (EBinOp "::" (EVar "edit") (EApp (EApp (EApp (EApp (EVar "keepsBetween") (EVar "xs")) (EVar "midX")) (EVar "x")) (EVar "acc")))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
-(DFunDef false "backtrack" ((PVar "xs") PWild PWild (PVar "x") PWild PWild PWild (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "keepsBetween") (EVar "xs")) (ELit (LInt 0))) (EVar "x")) (EVar "acc")))
+(DFunDef false "snake" ((PVar "xs") (PVar "ys") (PVar "n") (PVar "m") (PVar "x0") (PVar "y0")) (ELetGroup ((lgb "go" (clause ((PVar "x") (PVar "y")) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "<" (EVar "x") (EVar "n")) (EBinOp "<" (EVar "y") (EVar "m"))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "x")) (EVar "xs")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "y")) (EVar "ys")))) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "x") (ELit (LInt 1)))) (EBinOp "+" (EVar "y") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "x") (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EApp (EVar "go") (EVar "x0")) (EVar "y0"))))
+(DTypeSig false "backtrack" (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Array") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Edit") (TyVar "a"))) (TyApp (TyCon "List") (TyApp (TyCon "Edit") (TyVar "a")))))))))))
+(DFunDef false "backtrack" ((PVar "xs") (PVar "ys") (PVar "x0") (PVar "y0") (PVar "d0") (PVar "hist0") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PVar "x") (PVar "y") (PVar "d") (PCons (PVar "saved") (PVar "rest")) (PVar "acc")) (EIf (EBinOp ">" (EVar "d") (ELit (LInt 0))) (EBlock (DoLet false false (PVar "k") (EBinOp "-" (EVar "x") (EVar "y"))) (DoLet false false (PVar "up") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EBinOp "+" (EVar "k") (EVar "d")) (ELit (LInt 2)))) (EVar "saved"))) (DoLet false false (PVar "left") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "k") (EVar "d"))) (EVar "saved"))) (DoLet false false (PVar "fromAbove") (EApp (EApp (EApp (EApp (EVar "comesFromAbove") (EVar "d")) (EVar "k")) (EVar "left")) (EVar "up"))) (DoLet false false (PVar "prevX") (EIf (EVar "fromAbove") (EVar "up") (EVar "left"))) (DoLet false false (PVar "prevY") (EBinOp "-" (EVar "prevX") (EIf (EVar "fromAbove") (EBinOp "+" (EVar "k") (ELit (LInt 1))) (EBinOp "-" (EVar "k") (ELit (LInt 1)))))) (DoLet false false (PVar "midX") (EIf (EVar "fromAbove") (EVar "prevX") (EBinOp "+" (EVar "prevX") (ELit (LInt 1))))) (DoLet false false (PVar "edit") (EIf (EVar "fromAbove") (EApp (EVar "Insert") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "prevY")) (EVar "ys"))) (EApp (EVar "Delete") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "prevX")) (EVar "xs"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "go") (EVar "prevX")) (EVar "prevY")) (EBinOp "-" (EVar "d") (ELit (LInt 1)))) (EVar "rest")) (EBinOp "::" (EVar "edit") (EApp (EApp (EApp (EApp (EVar "keepsBetween") (EVar "xs")) (EVar "midX")) (EVar "x")) (EVar "acc")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))) (clause ((PVar "x") PWild PWild PWild (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "keepsBetween") (EVar "xs")) (ELit (LInt 0))) (EVar "x")) (EVar "acc"))))) (EApp (EApp (EApp (EApp (EApp (EVar "go") (EVar "x0")) (EVar "y0")) (EVar "d0")) (EVar "hist0")) (EVar "acc0"))))
 (DTypeSig false "keepsBetween" (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Edit") (TyVar "a"))) (TyApp (TyCon "List") (TyApp (TyCon "Edit") (TyVar "a"))))))))
-(DFunDef false "keepsBetween" ((PVar "xs") (PVar "lo") (PVar "hi") (PVar "acc")) (EIf (EBinOp "<=" (EVar "hi") (EVar "lo")) (EVar "acc") (EApp (EApp (EApp (EApp (EVar "keepsBetween") (EVar "xs")) (EVar "lo")) (EBinOp "-" (EVar "hi") (ELit (LInt 1)))) (EBinOp "::" (EApp (EVar "Keep") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "hi") (ELit (LInt 1)))) (EVar "xs"))) (EVar "acc")))))
+(DFunDef false "keepsBetween" ((PVar "xs") (PVar "lo") (PVar "hi0") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PVar "hi") (PVar "acc")) (EIf (EBinOp "<=" (EVar "hi") (EVar "lo")) (EVar "acc") (EApp (EApp (EVar "go") (EBinOp "-" (EVar "hi") (ELit (LInt 1)))) (EBinOp "::" (EApp (EVar "Keep") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "hi") (ELit (LInt 1)))) (EVar "xs"))) (EVar "acc"))))))) (EApp (EApp (EVar "go") (EVar "hi0")) (EVar "acc0"))))
 (DTypeSig true "unified" (TyFun (TyCon "Int") (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyFun (TyTuple (TyCon "String") (TyCon "String")) (TyCon "String")))))
 (DFunDef false "unified" ((PVar "ctx") (PTuple (PVar "labelA") (PVar "a")) (PTuple (PVar "labelB") (PVar "b"))) (EIf (EBinOp "==" (EVar "a") (EVar "b")) (ELit (LString "")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "script") (EApp (EApp (EDictApp "editScript") (EApp (EVar "splitLines") (EVar "a"))) (EApp (EVar "splitLines") (EVar "b")))) (DoLet false false (PVar "hs") (EApp (EApp (EVar "hunks") (EIf (EBinOp "<" (EVar "ctx") (ELit (LInt 0))) (ELit (LInt 0)) (EVar "ctx"))) (EApp (EVar "runs") (EApp (EApp (EApp (EApp (EVar "annotate") (EVar "script")) (ELit (LInt 0))) (ELit (LInt 0))) (EListLit))))) (DoExpr (EApp (EVar "concat") (EBinOp "::" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "--- ")) (EApp (EVar "$core.display") (EVar "labelA"))) (ELit (LString "\n+++ "))) (EApp (EVar "$core.display") (EVar "labelB"))) (ELit (LString "\n"))) (EApp (EApp (EMethodRef "map") (EVar "renderHunk")) (EVar "hs")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DData Private "Entry" () ((variant "Entry" (ConPos (TyApp (TyCon "Edit") (TyCon "String")) (TyCon "Int") (TyCon "Int")))) ())
@@ -442,9 +440,7 @@ renderLine sign l =
 (DTypeSig false "hunks" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Entry"))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Entry"))))))
 (DFunDef false "hunks" ((PVar "ctx") (PVar "rs")) (EApp (EApp (EApp (EApp (EApp (EVar "hunksGo") (EVar "ctx")) (EVar "rs")) (EListLit)) (EListLit)) (EListLit)))
 (DTypeSig false "hunksGo" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Entry"))) (TyFun (TyApp (TyCon "List") (TyCon "Entry")) (TyFun (TyApp (TyCon "List") (TyCon "Entry")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Entry"))) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Entry")))))))))
-(DFunDef false "hunksGo" (PWild (PList) PWild (PVar "cur") (PVar "acc")) (EApp (EVar "reverse") (EApp (EApp (EVar "closeHunk") (EVar "cur")) (EVar "acc"))))
-(DFunDef false "hunksGo" ((PVar "ctx") (PCons (PAs "run" (PCons (PVar "entry") PWild)) (PVar "rest")) (PVar "_prev") (PVar "cur") (PVar "acc")) (EIf (EApp (EVar "isKeep") (EVar "entry")) (EApp (EApp (EApp (EApp (EApp (EVar "keepRun") (EVar "ctx")) (EVar "run")) (EVar "rest")) (EVar "cur")) (EVar "acc")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
-(DFunDef false "hunksGo" ((PVar "ctx") (PCons (PVar "run") (PVar "rest")) (PVar "prev") (PVar "cur") (PVar "acc")) (EApp (EApp (EApp (EApp (EApp (EVar "hunksGo") (EVar "ctx")) (EVar "rest")) (EVar "prev")) (EBinOp "++" (EApp (EVar "reverse") (EVar "run")) (EApp (EApp (EApp (EVar "opened") (EVar "ctx")) (EVar "prev")) (EVar "cur")))) (EVar "acc")))
+(DFunDef false "hunksGo" ((PVar "ctx") (PVar "xs0") (PVar "prev") (PVar "cur0") (PVar "acc")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "cur")) (EApp (EVar "reverse") (EApp (EApp (EVar "closeHunk") (EVar "cur")) (EVar "acc")))) (clause ((PCons (PAs "run" (PCons (PVar "entry") PWild)) (PVar "rest")) (PVar "cur")) (EIf (EApp (EVar "isKeep") (EVar "entry")) (EApp (EApp (EApp (EApp (EApp (EVar "keepRun") (EVar "ctx")) (EVar "run")) (EVar "rest")) (EVar "cur")) (EVar "acc")) (EApp (EVar "__fallthrough__") (ELit LUnit)))) (clause ((PCons (PVar "run") (PVar "rest")) (PVar "cur")) (EApp (EApp (EVar "go") (EVar "rest")) (EBinOp "++" (EApp (EVar "reverse") (EVar "run")) (EApp (EApp (EApp (EVar "opened") (EVar "ctx")) (EVar "prev")) (EVar "cur"))))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "cur0"))))
 (DTypeSig false "opened" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Entry")) (TyFun (TyApp (TyCon "List") (TyCon "Entry")) (TyApp (TyCon "List") (TyCon "Entry"))))))
 (DFunDef false "opened" ((PVar "ctx") (PVar "prev") (PList)) (EApp (EApp (EVar "take") (EVar "ctx")) (EApp (EVar "reverse") (EVar "prev"))))
 (DFunDef false "opened" (PWild PWild (PVar "cur")) (EVar "cur"))

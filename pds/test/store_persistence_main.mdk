@@ -739,19 +739,21 @@ churnSeed : String ->
   Int ->
   Store ->
   <FileRead, FileWrite> Result String Store
-churnSeed dir index limit store =
-  if index > limit then
-    Ok store
-  else
-    let next = putBlobs [churnRow index] store
-    match (persistTransition
-      (dataDirAt dir)
-      accountDid
-      eventFixtureTime
-      store
-      next)
-      Err message => Err message
-      Ok () => churnSeed dir (index + 1) limit next
+churnSeed dir index0 limit store0 = go index0 store0
+  where
+    go index store =
+      if index > limit then
+        Ok store
+      else
+        let next = putBlobs [churnRow index] store
+        match (persistTransition
+          (dataDirAt dir)
+          accountDid
+          eventFixtureTime
+          store
+          next)
+          Err message => Err message
+          Ok () => go (index + 1) next
 
 runBlobChurnSeed : String -> <FileRead, FileWrite, IO, Sign "commit"> Unit
 runBlobChurnSeed dir =

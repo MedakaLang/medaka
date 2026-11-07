@@ -311,7 +311,7 @@ export
 finishScratch : List String -> Result String a -> <Exec, IO> Result String a
 finishScratch paths out =
   match spawnOut cleanupTimeoutSeconds "rm" ("-rf" :: paths)
-    Err e => match out
-      Err first => Err first
-      Ok _ => Err "scratch cleanup failed: \{e}"
+    Err e => do
+      _ <- out
+      Err "scratch cleanup failed: \{e}"
     Ok _ => out

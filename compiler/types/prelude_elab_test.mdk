@@ -55,13 +55,12 @@ coreElab _ = match (
         (desugaredPrelude rsrc)
         (desugaredPrelude csrc)
         []
-    match report.trChecked
-      None => None
-      Some c =>
-        map
-          ((trees, _) =>
-            preludeElabOf trees c.cpEvidence (map snd (entries c.cpBinders)))
-          c.cpTrees
+    do
+      c <- report.trChecked
+      map
+        ((trees, _) =>
+          preludeElabOf trees c.cpEvidence (map snd (entries c.cpBinders)))
+        c.cpTrees
   _ => None
 
 -- How a read ended, as text: the fault class and path, or `ok`.

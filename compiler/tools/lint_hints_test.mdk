@@ -8,7 +8,9 @@ import test.{
 import frontend.ast.{Decl(..), Expr}
 import frontend.parser.{parseResult}
 import tools.lint.{emptyStdlibIndex, lintParseSource, lintProgram}
-import tools.lint_core.{Applicability(..), Ctx(..), Finding(..), Rule}
+import tools.lint_core.{
+  Applicability(..), Ctx(..), Finding(..), Rule, findingFixOf
+}
 import tools.lint_hints.{
   HintCond(..), HintRow(..), compileHint, inOwnDefinition, matchHint
 }
@@ -62,6 +64,7 @@ declCtx name inTest = Ctx {
   ctxSpan = None,
   ctxOwn = None,
   ctxDeclLoc = None,
+  ctxBinding = None,
 }
 
 findingsOf : Rule -> String -> List Finding
@@ -156,13 +159,13 @@ test "a ported rule reports its message and fix" =
         "message",
         expectEqual "negated equality. Rewrite as 'a /= b'" f.message,
       ),
-      ("fix", expectTrue (isSome f.fix)),
+      ("fix", expectTrue (isSome (findingFixOf f))),
     ]
     _ => expectTrue False
 
 fixOf : String -> Option Bool
 fixOf src = match findingsOf FuseListPipeline.rule src
-  [f] => Some (isSome f.fix)
+  [f] => Some (isSome (findingFixOf f))
   _ => None
 
 test "a name the right side writes is guarded like the names it reads" = expectEach

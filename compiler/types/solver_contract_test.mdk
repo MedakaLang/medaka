@@ -546,14 +546,17 @@ instantiateQualifiers : InstantiationServices subst ->
   GoalOrigin ->
   List Qualifier ->
   List InstantiationArgument
-instantiateQualifiers _ _ _ _ [] = []
-instantiateQualifiers services subst scope origin (qualifier :: rest) =
-  let wanted = Wanted {
-    id = services.freshGoal origin scope,
-    predicate = substitutePredicate services subst qualifier.predicate,
-    origin = origin,
-    scope = scope,
-    destination = services.freshDestination origin scope,
-  }
-  InstantiationArgument { formal = qualifier.formal, wanted = wanted }
-    :: instantiateQualifiers services subst scope origin rest
+instantiateQualifiers services subst scope origin xs0 = go xs0
+  where
+    go [] = []
+    go (qualifier :: rest) =
+      let wanted = Wanted {
+        id = services.freshGoal origin scope,
+        predicate =
+          substitutePredicate services subst (qualifier : Qualifier).predicate,
+        origin = origin,
+        scope = scope,
+        destination = services.freshDestination origin scope,
+      }
+      InstantiationArgument { formal = qualifier.formal, wanted = wanted }
+        :: go rest

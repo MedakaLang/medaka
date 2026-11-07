@@ -39,9 +39,9 @@ matchContinuationHint toks offs lines matchPos armPos =
       HintInput { hintTokens = toks, hintOffsets = offs, hintLines = lines }
     let (header, left) = matchHeaderStart input lineStart matchPos 4088
     let anchor = matchHeaderAnchor input header matchPos matchCol
-    match anchor
-      None => None
-      Some col => matchCandidate input armPos col left
+    do
+      col <- anchor
+      matchCandidate input armPos col left
 
 -- At a `.` glued to a raw string literal (`p.r"x"`), the token index of that
 -- literal; the lexer reads `r"` after a `.` as the literal's prefix, never as a
@@ -64,6 +64,8 @@ rawLiteralAfterDot src toks offs pos =
     _ => None
 
 matchHeaderStart : HintInput -> Int -> Int -> Int -> (Int, Int)
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
 matchHeaderStart input start i left
   | left <= 0 || i <= 0 = (i, left)
   | i - 1 >= arrayLength input.hintOffsets = (i, 0)
@@ -802,6 +804,8 @@ prescanWalk : Array Token ->
   Bool ->
   PrescanHits ->
   PrescanHits
+-- Bound: inlined hot path (hot-list): the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 prescanWalk toks offs n i depth ls sb im h
   | i >= n = h
   | otherwise =

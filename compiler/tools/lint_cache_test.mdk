@@ -59,6 +59,7 @@ import tools.lint.{
 import tools.lint_core.{
   mkRule,
   FileFacts(..),
+  noFix,
   stdlibSigTextIn,
   recordingStdlibIndex,
 }
@@ -106,7 +107,7 @@ probeCheck name idx _ _ _ _ = [
     message = probeText idx,
     severity = SevWarning,
     loc = None,
-    fix = None,
+    fix = noFix,
   },
 ]
 
@@ -212,16 +213,15 @@ runWith : (List Rule -> StdlibIndex -> String) ->
   List Rule ->
   Env ->
   <IO, FileRead, FileWrite, Exec> Option Run
-runWith keyOf indexRoster roster e = match indexOf indexRoster e
-  None => None
-  Some idx =>
-    let ea = entryFor keyOf roster idx e (aPath e)
-    let eb = entryFor keyOf roster idx e (bPath e)
-    match (ea, eb)
-      (Some xa, Some xb) =>
-        storeEntries e.cacheDir stampOf [xa, xb]
-        Some Run { fileA = fileRun xa, fileB = fileRun xb }
-      _ => None
+runWith keyOf indexRoster roster e = do
+  idx <- indexOf indexRoster e
+  let ea = entryFor keyOf roster idx e (aPath e)
+  let eb = entryFor keyOf roster idx e (bPath e)
+  match (ea, eb)
+    (Some xa, Some xb) =>
+      storeEntries e.cacheDir stampOf [xa, xb]
+      Some Run { fileA = fileRun xa, fileB = fileRun xb }
+    _ => None
 
 entryFor : (List Rule -> StdlibIndex -> String) ->
   List Rule ->
@@ -607,7 +607,7 @@ askerCheck questions idx _ _ _ _ = [
     message = joinWith "; " (map (q => q idx) questions),
     severity = SevWarning,
     loc = None,
-    fix = None,
+    fix = noFix,
   },
 ]
 
@@ -679,16 +679,15 @@ askCase view questions bSrc cSrc edits dir =
   setup e
   resultOrPanic "test setup: writeFile bPath e" (writeFile (bPath e) bSrc)
   resultOrPanic "test setup: writeFile cPath e" (writeFile (cPath e) cSrc)
-  match runAsk view rule e
-    None => None
-    Some _ =>
-      applyEdits e edits
-      match (runAsk view rule e, indexOf [rule] e)
-        (Some warm, Some fresh) => Some Outcome {
-          warmA = warm,
-          truth = messagesOf rule fresh,
-        }
-        _ => None
+  do
+    _ <- runAsk view rule e
+    let _ = applyEdits e edits
+    match (runAsk view rule e, indexOf [rule] e)
+      (Some warm, Some fresh) => Some Outcome {
+        warmA = warm,
+        truth = messagesOf rule fresh,
+      }
+      _ => None
 
 applyEdits : Env -> List Edit -> <IO, FileRead, FileWrite, Exec> Unit
 applyEdits _ [] = ()
@@ -703,14 +702,13 @@ runAsk : (StdlibIndex -> StdlibIndex) ->
   Rule ->
   Env ->
   <IO, FileRead, FileWrite, Exec> Option FileRun
-runAsk view rule e = match indexOf [rule] e
-  None => None
-  Some idx =>
-    let found = flatMap (askEntry view rule idx e) [aPath e, bPath e, cPath e]
-    storeEntries e.cacheDir stampOf (map snd found)
-    match filterList (pe => fst pe == aPath e) found
-      [(_, a)] => Some (fileRun a)
-      _ => None
+runAsk view rule e = do
+  idx <- indexOf [rule] e
+  let found = flatMap (askEntry view rule idx e) [aPath e, bPath e, cPath e]
+  let _ = storeEntries e.cacheDir stampOf (map snd found)
+  match filterList (pe => fst pe == aPath e) found
+    [(_, a)] => Some (fileRun a)
+    _ => None
 
 askEntry : (StdlibIndex -> StdlibIndex) ->
   Rule ->
@@ -1000,7 +998,7 @@ localCheck _ _ facts _ _ = [
     message = "local: \{joinWith "," facts.ffLocalMods}",
     severity = SevWarning,
     loc = None,
-    fix = None,
+    fix = noFix,
   },
 ]
 
@@ -1043,16 +1041,15 @@ wildCase view mStart edits dir =
   let _ = match mStart
     Some text => writeFile (mPath e) text
     None => Ok ()
-  match runAsk view localRule e
-    None => None
-    Some _ =>
-      applyEdits e edits
-      match (runAsk view localRule e, indexOf [localRule] e)
-        (Some warm, Some fresh) => Some Outcome {
-          warmA = warm,
-          truth = wildTruth e fresh,
-        }
-        _ => None
+  do
+    _ <- runAsk view localRule e
+    let _ = applyEdits e edits
+    match (runAsk view localRule e, indexOf [localRule] e)
+      (Some warm, Some fresh) => Some Outcome {
+        warmA = warm,
+        truth = wildTruth e fresh,
+      }
+      _ => None
 
 test "(w1) creating the project module A imports with * re-lints A" = withScratchDir
   (dir => relintsA (wildCase recorded None [Edit mPath (Some mSource)] dir))

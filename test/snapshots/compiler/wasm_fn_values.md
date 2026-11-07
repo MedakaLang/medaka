@@ -110,28 +110,28 @@ walkApp : ValueScope ->
   CExpr ->
   List (List CExpr) ->
   OrdMap Unit
-walkApp scope acc exact (CApp head args _) pending =
-  walkApp scope acc exact head (args :: pending)
-walkApp scope acc exact (CVar name _) pending =
-  if rawSentinel name || omHasKey name scope.selected then
-    acc
-  else
-    fold
-      (walkExprs scope)
-      (if exact then acc else noteName scope acc name)
-      pending
-walkApp scope acc exact (CMethod method (MethodEvidence _ _ (RLocal sym dicts) _ _)) pending =
-  let target = if sym == "" then method else sym
-  let headUses = match dicts
-    [] =>
-      if not exact && omHasKey target scope.functions then
-        omInsert target () acc
-      else
+walkApp scope acc exact head0 pending0 = go head0 pending0
+  where
+    go (CApp head args _) pending = go head (args :: pending)
+    go (CVar name _) pending =
+      if rawSentinel name || omHasKey name scope.selected then
         acc
-    _ => acc
-  fold (walkExprs scope) headUses pending
-walkApp scope acc _ head pending =
-  fold (walkExprs scope) (walkExpr scope acc head) pending
+      else
+        fold
+          (walkExprs scope)
+          (if exact then acc else noteName scope acc name)
+          pending
+    go (CMethod method (MethodEvidence _ _ (RLocal sym dicts) _ _)) pending =
+      let target = if sym == "" then method else sym
+      let headUses = match dicts
+        [] =>
+          if not exact && omHasKey target scope.functions then
+            omInsert target () acc
+          else
+            acc
+        _ => acc
+      fold (walkExprs scope) headUses pending
+    go head pending = fold (walkExprs scope) (walkExpr scope acc head) pending
 
 walkExpr : ValueScope -> OrdMap Unit -> CExpr -> OrdMap Unit
 walkExpr _ acc (CLit _) = acc
@@ -251,10 +251,7 @@ walkBlock scope acc ((CSLet _ pat expr) :: rest) =
 (DTypeSig false "walkFields" (TyFun (TyCon "ValueScope") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))
 (DFunDef false "walkFields" ((PVar "scope")) (EApp (EVar "fold") (ELam ((PVar "acc") (PCon "CField" PWild PWild (PVar "expr"))) (EApp (EApp (EApp (EVar "walkExpr") (EVar "scope")) (EVar "acc")) (EVar "expr")))))
 (DTypeSig false "walkApp" (TyFun (TyCon "ValueScope") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Bool") (TyFun (TyCon "CExpr") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "CExpr"))) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))))
-(DFunDef false "walkApp" ((PVar "scope") (PVar "acc") (PVar "exact") (PCon "CApp" (PVar "head") (PVar "args") PWild) (PVar "pending")) (EApp (EApp (EApp (EApp (EApp (EVar "walkApp") (EVar "scope")) (EVar "acc")) (EVar "exact")) (EVar "head")) (EBinOp "::" (EVar "args") (EVar "pending"))))
-(DFunDef false "walkApp" ((PVar "scope") (PVar "acc") (PVar "exact") (PCon "CVar" (PVar "name") PWild) (PVar "pending")) (EIf (EBinOp "||" (EApp (EVar "rawSentinel") (EVar "name")) (EApp (EApp (EVar "omHasKey") (EVar "name")) (EFieldAccess (EVar "scope") "selected"))) (EVar "acc") (EApp (EApp (EApp (EVar "fold") (EApp (EVar "walkExprs") (EVar "scope"))) (EIf (EVar "exact") (EVar "acc") (EApp (EApp (EApp (EVar "noteName") (EVar "scope")) (EVar "acc")) (EVar "name")))) (EVar "pending"))))
-(DFunDef false "walkApp" ((PVar "scope") (PVar "acc") (PVar "exact") (PCon "CMethod" (PVar "method") (PCon "MethodEvidence" PWild PWild (PCon "RLocal" (PVar "sym") (PVar "dicts")) PWild PWild)) (PVar "pending")) (EBlock (DoLet false false (PVar "target") (EIf (EBinOp "==" (EVar "sym") (ELit (LString ""))) (EVar "method") (EVar "sym"))) (DoLet false false (PVar "headUses") (EMatch (EVar "dicts") (arm (PList) () (EIf (EBinOp "&&" (EApp (EVar "not") (EVar "exact")) (EApp (EApp (EVar "omHasKey") (EVar "target")) (EFieldAccess (EVar "scope") "functions"))) (EApp (EApp (EApp (EVar "omInsert") (EVar "target")) (ELit LUnit)) (EVar "acc")) (EVar "acc"))) (arm PWild () (EVar "acc")))) (DoExpr (EApp (EApp (EApp (EVar "fold") (EApp (EVar "walkExprs") (EVar "scope"))) (EVar "headUses")) (EVar "pending")))))
-(DFunDef false "walkApp" ((PVar "scope") (PVar "acc") PWild (PVar "head") (PVar "pending")) (EApp (EApp (EApp (EVar "fold") (EApp (EVar "walkExprs") (EVar "scope"))) (EApp (EApp (EApp (EVar "walkExpr") (EVar "scope")) (EVar "acc")) (EVar "head"))) (EVar "pending")))
+(DFunDef false "walkApp" ((PVar "scope") (PVar "acc") (PVar "exact") (PVar "head0") (PVar "pending0")) (ELetGroup ((lgb "go" (clause ((PCon "CApp" (PVar "head") (PVar "args") PWild) (PVar "pending")) (EApp (EApp (EVar "go") (EVar "head")) (EBinOp "::" (EVar "args") (EVar "pending")))) (clause ((PCon "CVar" (PVar "name") PWild) (PVar "pending")) (EIf (EBinOp "||" (EApp (EVar "rawSentinel") (EVar "name")) (EApp (EApp (EVar "omHasKey") (EVar "name")) (EFieldAccess (EVar "scope") "selected"))) (EVar "acc") (EApp (EApp (EApp (EVar "fold") (EApp (EVar "walkExprs") (EVar "scope"))) (EIf (EVar "exact") (EVar "acc") (EApp (EApp (EApp (EVar "noteName") (EVar "scope")) (EVar "acc")) (EVar "name")))) (EVar "pending")))) (clause ((PCon "CMethod" (PVar "method") (PCon "MethodEvidence" PWild PWild (PCon "RLocal" (PVar "sym") (PVar "dicts")) PWild PWild)) (PVar "pending")) (EBlock (DoLet false false (PVar "target") (EIf (EBinOp "==" (EVar "sym") (ELit (LString ""))) (EVar "method") (EVar "sym"))) (DoLet false false (PVar "headUses") (EMatch (EVar "dicts") (arm (PList) () (EIf (EBinOp "&&" (EApp (EVar "not") (EVar "exact")) (EApp (EApp (EVar "omHasKey") (EVar "target")) (EFieldAccess (EVar "scope") "functions"))) (EApp (EApp (EApp (EVar "omInsert") (EVar "target")) (ELit LUnit)) (EVar "acc")) (EVar "acc"))) (arm PWild () (EVar "acc")))) (DoExpr (EApp (EApp (EApp (EVar "fold") (EApp (EVar "walkExprs") (EVar "scope"))) (EVar "headUses")) (EVar "pending"))))) (clause ((PVar "head") (PVar "pending")) (EApp (EApp (EApp (EVar "fold") (EApp (EVar "walkExprs") (EVar "scope"))) (EApp (EApp (EApp (EVar "walkExpr") (EVar "scope")) (EVar "acc")) (EVar "head"))) (EVar "pending"))))) (EApp (EApp (EVar "go") (EVar "head0")) (EVar "pending0"))))
 (DTypeSig false "walkExpr" (TyFun (TyCon "ValueScope") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CExpr") (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))
 (DFunDef false "walkExpr" (PWild (PVar "acc") (PCon "CLit" PWild)) (EVar "acc"))
 (DFunDef false "walkExpr" ((PVar "scope") (PVar "acc") (PCon "CVar" (PVar "name") PWild)) (EIf (EBinOp "||" (EApp (EVar "rawSentinel") (EVar "name")) (EBinOp "&&" (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "name")) (EFieldAccess (EVar "scope") "locals"))) (EApp (EApp (EVar "omHasKey") (EVar "name")) (EFieldAccess (EVar "scope") "selected")))) (EVar "acc") (EApp (EApp (EApp (EVar "noteName") (EVar "scope")) (EVar "acc")) (EVar "name"))))
@@ -323,10 +320,7 @@ walkBlock scope acc ((CSLet _ pat expr) :: rest) =
 (DTypeSig false "walkFields" (TyFun (TyCon "ValueScope") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))
 (DFunDef false "walkFields" ((PVar "scope")) (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PCon "CField" PWild PWild (PVar "expr"))) (EApp (EApp (EApp (EVar "walkExpr") (EVar "scope")) (EVar "acc")) (EVar "expr")))))
 (DTypeSig false "walkApp" (TyFun (TyCon "ValueScope") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Bool") (TyFun (TyCon "CExpr") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "CExpr"))) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))))
-(DFunDef false "walkApp" ((PVar "scope") (PVar "acc") (PVar "exact") (PCon "CApp" (PVar "head") (PVar "args") PWild) (PVar "pending")) (EApp (EApp (EApp (EApp (EApp (EVar "walkApp") (EVar "scope")) (EVar "acc")) (EVar "exact")) (EVar "head")) (EBinOp "::" (EVar "args") (EVar "pending"))))
-(DFunDef false "walkApp" ((PVar "scope") (PVar "acc") (PVar "exact") (PCon "CVar" (PVar "name") PWild) (PVar "pending")) (EIf (EBinOp "||" (EApp (EVar "rawSentinel") (EVar "name")) (EApp (EApp (EVar "omHasKey") (EVar "name")) (EFieldAccess (EVar "scope") "selected"))) (EVar "acc") (EApp (EApp (EApp (EMethodRef "fold") (EApp (EVar "walkExprs") (EVar "scope"))) (EIf (EVar "exact") (EVar "acc") (EApp (EApp (EApp (EVar "noteName") (EVar "scope")) (EVar "acc")) (EVar "name")))) (EVar "pending"))))
-(DFunDef false "walkApp" ((PVar "scope") (PVar "acc") (PVar "exact") (PCon "CMethod" (PVar "method") (PCon "MethodEvidence" PWild PWild (PCon "RLocal" (PVar "sym") (PVar "dicts")) PWild PWild)) (PVar "pending")) (EBlock (DoLet false false (PVar "target") (EIf (EBinOp "==" (EVar "sym") (ELit (LString ""))) (EVar "method") (EVar "sym"))) (DoLet false false (PVar "headUses") (EMatch (EVar "dicts") (arm (PList) () (EIf (EBinOp "&&" (EApp (EVar "not") (EVar "exact")) (EApp (EApp (EVar "omHasKey") (EVar "target")) (EFieldAccess (EVar "scope") "functions"))) (EApp (EApp (EApp (EVar "omInsert") (EVar "target")) (ELit LUnit)) (EVar "acc")) (EVar "acc"))) (arm PWild () (EVar "acc")))) (DoExpr (EApp (EApp (EApp (EMethodRef "fold") (EApp (EVar "walkExprs") (EVar "scope"))) (EVar "headUses")) (EVar "pending")))))
-(DFunDef false "walkApp" ((PVar "scope") (PVar "acc") PWild (PVar "head") (PVar "pending")) (EApp (EApp (EApp (EMethodRef "fold") (EApp (EVar "walkExprs") (EVar "scope"))) (EApp (EApp (EApp (EVar "walkExpr") (EVar "scope")) (EVar "acc")) (EVar "head"))) (EVar "pending")))
+(DFunDef false "walkApp" ((PVar "scope") (PVar "acc") (PVar "exact") (PVar "head0") (PVar "pending0")) (ELetGroup ((lgb "go" (clause ((PCon "CApp" (PVar "head") (PVar "args") PWild) (PVar "pending")) (EApp (EApp (EVar "go") (EVar "head")) (EBinOp "::" (EVar "args") (EVar "pending")))) (clause ((PCon "CVar" (PVar "name") PWild) (PVar "pending")) (EIf (EBinOp "||" (EApp (EVar "rawSentinel") (EVar "name")) (EApp (EApp (EVar "omHasKey") (EVar "name")) (EFieldAccess (EVar "scope") "selected"))) (EVar "acc") (EApp (EApp (EApp (EMethodRef "fold") (EApp (EVar "walkExprs") (EVar "scope"))) (EIf (EVar "exact") (EVar "acc") (EApp (EApp (EApp (EVar "noteName") (EVar "scope")) (EVar "acc")) (EVar "name")))) (EVar "pending")))) (clause ((PCon "CMethod" (PVar "method") (PCon "MethodEvidence" PWild PWild (PCon "RLocal" (PVar "sym") (PVar "dicts")) PWild PWild)) (PVar "pending")) (EBlock (DoLet false false (PVar "target") (EIf (EBinOp "==" (EVar "sym") (ELit (LString ""))) (EVar "method") (EVar "sym"))) (DoLet false false (PVar "headUses") (EMatch (EVar "dicts") (arm (PList) () (EIf (EBinOp "&&" (EApp (EVar "not") (EVar "exact")) (EApp (EApp (EVar "omHasKey") (EVar "target")) (EFieldAccess (EVar "scope") "functions"))) (EApp (EApp (EApp (EVar "omInsert") (EVar "target")) (ELit LUnit)) (EVar "acc")) (EVar "acc"))) (arm PWild () (EVar "acc")))) (DoExpr (EApp (EApp (EApp (EMethodRef "fold") (EApp (EVar "walkExprs") (EVar "scope"))) (EVar "headUses")) (EVar "pending"))))) (clause ((PVar "head") (PVar "pending")) (EApp (EApp (EApp (EMethodRef "fold") (EApp (EVar "walkExprs") (EVar "scope"))) (EApp (EApp (EApp (EVar "walkExpr") (EVar "scope")) (EVar "acc")) (EVar "head"))) (EVar "pending"))))) (EApp (EApp (EVar "go") (EVar "head0")) (EVar "pending0"))))
 (DTypeSig false "walkExpr" (TyFun (TyCon "ValueScope") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CExpr") (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))
 (DFunDef false "walkExpr" (PWild (PVar "acc") (PCon "CLit" PWild)) (EVar "acc"))
 (DFunDef false "walkExpr" ((PVar "scope") (PVar "acc") (PCon "CVar" (PVar "name") PWild)) (EIf (EBinOp "||" (EApp (EVar "rawSentinel") (EVar "name")) (EBinOp "&&" (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "name")) (EFieldAccess (EVar "scope") "locals"))) (EApp (EApp (EVar "omHasKey") (EVar "name")) (EFieldAccess (EVar "scope") "selected")))) (EVar "acc") (EApp (EApp (EApp (EVar "noteName") (EVar "scope")) (EVar "acc")) (EVar "name"))))

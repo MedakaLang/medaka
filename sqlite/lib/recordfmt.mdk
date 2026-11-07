@@ -180,15 +180,17 @@ readSerialTypes : Bytes ->
   Int ->
   List SerialType ->
   BResult (List SerialType)
-readSerialTypes input pos headerEnd end acc
-  | pos >= headerEnd = BOk (reverse acc) pos
-  | otherwise = onOk (runBP
-    sqVarint
-    input
-    pos
-    end) (code pos2 => match serialOf code
-    Err e => BErr e pos
-    Ok st => readSerialTypes input pos2 headerEnd end (st :: acc))
+readSerialTypes input pos0 headerEnd end acc0 = go pos0 acc0
+  where
+    go pos acc
+      | pos >= headerEnd = BOk (reverse acc) pos
+      | otherwise = onOk (runBP
+        sqVarint
+        input
+        pos
+        end) (code pos2 => match serialOf code
+        Err e => BErr e pos
+        Ok st => go pos2 (st :: acc))
 
 -- Read the body bytes for each serial type in order.
 readBodies : Bytes ->
@@ -197,13 +199,11 @@ readBodies : Bytes ->
   List SerialType ->
   List Cell ->
   BResult (List Cell)
-readBodies _input pos _ [] acc = BOk (reverse acc) pos
-readBodies input pos end (st :: rest) acc = onOk (readBody
-  input
-  pos
-  end
-  st) (cell pos2 =>
-  readBodies input pos2 end rest (cell :: acc))
+readBodies input pos0 end xs0 acc0 = go pos0 xs0 acc0
+  where
+    go pos [] acc = BOk (reverse acc) pos
+    go pos (st :: rest) acc =
+      onOk (readBody input pos end st) (cell pos2 => go pos2 rest (cell :: acc))
 
 -- Read one cell's body given its serial type.
 readBody : Bytes -> Int -> Int -> SerialType -> BResult Cell
@@ -249,14 +249,16 @@ compareBytesLex : Array Int -> Array Int -> Ordering
 compareBytesLex a b = compareBytesGo a b 0 (arrayLength a) (arrayLength b)
 
 compareBytesGo : Array Int -> Array Int -> Int -> Int -> Int -> Ordering
-compareBytesGo a b i la lb =
-  if i >= la && i >= lb then
-    Eq
-  else if i >= la then
-    Lt
-  else if i >= lb then
-    Gt
-  else if a[i] /= b[i] then
-    compare a[i] b[i]
-  else
-    compareBytesGo a b (i + 1) la lb
+compareBytesGo a b i0 la lb = go i0
+  where
+    go i =
+      if i >= la && i >= lb then
+        Eq
+      else if i >= la then
+        Lt
+      else if i >= lb then
+        Gt
+      else if a[i] /= b[i] then
+        compare a[i] b[i]
+      else
+        go (i + 1)

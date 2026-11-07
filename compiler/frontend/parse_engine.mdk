@@ -236,21 +236,23 @@ many : ParserE e a -> ParserE e (List a)
 many p = ParserE (ctx pos => manyGo p ctx pos [])
 
 manyGo : ParserE e a -> ParseContext -> Int -> List a -> <e> PR (List a)
-manyGo p ctx pos acc =
-  let saved = mark ctx
-  match runPWith ctx p pos
-    POk x q =>
-      if q > pos then
-        manyGo p ctx q (x :: acc)
-      else
-        rewind saved
-        POk (reverseL (x :: acc)) q
-    PFatal e q =>
-      rewind saved
-      PFatal e q
-    PErr _ _ =>
-      rewind saved
-      POk (reverseL acc) pos
+manyGo p ctx pos0 acc0 = go pos0 acc0
+  where
+    go pos acc =
+      let saved = mark ctx
+      match runPWith ctx p pos
+        POk x q =>
+          if q > pos then
+            go q (x :: acc)
+          else
+            rewind saved
+            POk (reverseL (x :: acc)) q
+        PFatal e q =>
+          rewind saved
+          PFatal e q
+        PErr _ _ =>
+          rewind saved
+          POk (reverseL acc) pos
 
 export
 sepThen : ParserE e b -> ParserE e a -> ParserE e a

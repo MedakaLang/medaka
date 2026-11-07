@@ -388,6 +388,8 @@ localAbsSlots mctx name boundIds oblN0 callN0 =
   inferredPredicateSlots mctx name (dedupI (map inferredPredLead vecs)) vecs
 
 localAbsParams : GraphCtx -> ScopeId -> Int -> List PredicateSlot -> List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 localAbsParams _gctx _ _ [] = []
 localAbsParams gctx lscope i (_ :: rest) =
   renderEvidenceBinder gctx (Scopes.binderAt lscope i)
@@ -865,10 +867,12 @@ defaultEachMemberWith : DynCtx ->
   List UObligation ->
   List Mono ->
   Unit
-defaultEachMemberWith _dyn _ _ _ _ [] = ()
-defaultEachMemberWith dyn ownerPolicy guard protectedIds obls (m :: rest) =
-  defaultAmbiguousNumWith dyn ownerPolicy guard protectedIds obls m
-  defaultEachMemberWith dyn ownerPolicy guard protectedIds obls rest
+defaultEachMemberWith dyn ownerPolicy guard protectedIds obls xs0 = go xs0
+  where
+    go [] = ()
+    go (m :: rest) =
+      defaultAmbiguousNumWith dyn ownerPolicy guard protectedIds obls m
+      go rest
 
 -- RETPOS soundness — ambiguous interface constraint (run≠build hole).
 -- A method obligation recorded inside a binding whose discriminating tyvar is
@@ -949,36 +953,38 @@ registerAmbiguousGo : ModuleCtx ->
   List Int ->
   List Int ->
   Unit
-registerAmbiguousGo _mctx [] _ _ _ = ()
-registerAmbiguousGo mctx (o :: rest) groupLevel memberIds anchoredIds =
-  match o.oblProj
-    OpMethodOcc typarams mty occ _ =>
-      registerOneAmbiguous
-        mctx
-        o.pred.iface
-        typarams
-        mty
-        occ
-        o.loc
-        o.uoScope
-        groupLevel
-        memberIds
-        anchoredIds
-    OpExactReturn request =>
-      registerOneAmbiguous
-        mctx
-        request.mrrIface
-        request.mrrTyparams
-        request.mrrType
-        request.mrrOccurrence
-        request.mrrLoc
-        request.mrrScope
-        groupLevel
-        memberIds
-        anchoredIds
-    OpProjected => ()
-    OpNumLit _ => ()
-  registerAmbiguousGo mctx rest groupLevel memberIds anchoredIds
+registerAmbiguousGo mctx xs0 groupLevel memberIds anchoredIds = go xs0
+  where
+    go [] = ()
+    go (o :: rest) =
+      match o.oblProj
+        OpMethodOcc typarams mty occ _ =>
+          registerOneAmbiguous
+            mctx
+            o.pred.iface
+            typarams
+            mty
+            occ
+            o.loc
+            o.uoScope
+            groupLevel
+            memberIds
+            anchoredIds
+        OpExactReturn request =>
+          registerOneAmbiguous
+            mctx
+            request.mrrIface
+            request.mrrTyparams
+            request.mrrType
+            request.mrrOccurrence
+            request.mrrLoc
+            request.mrrScope
+            groupLevel
+            memberIds
+            anchoredIds
+        OpProjected => ()
+        OpNumLit _ => ()
+      go rest
 
 -- For each of this obligation's DISPATCH monos (the interface-param positions, via
 -- dispatchMonosOf — NOT the whole method type), register it as a call obligation
@@ -1024,34 +1030,28 @@ registerDispatchMonos : ModuleCtx ->
   List Int ->
   List Int ->
   Unit
-registerDispatchMonos _mctx _ [] _ _ _ _ _ = ()
-registerDispatchMonos mctx iface (dm :: rest) loc scope groupLevel memberIds anchoredIds =
-  let ambig =
-    filterList
-      (p =>
-        snd p <= groupLevel
-          && not (containsI (fst p) memberIds)
-          && not (containsI (fst p) anchoredIds))
-      (monoUnboundVarLevels dm)
-  if isEmptyL ambig then
-    ()
-  else
-    recordOblAt
-      mctx
-      Predicate { iface = iface, args = [dm] }
-      0
-      PCallSlot
-      loc
-      scope
-  registerDispatchMonos
-    mctx
-    iface
-    rest
-    loc
-    scope
-    groupLevel
-    memberIds
-    anchoredIds
+registerDispatchMonos mctx iface xs0 loc scope lvl members anchors = go xs0
+  where
+    go [] = ()
+    go (dm :: rest) =
+      let ambig =
+        filterList
+          (p =>
+            snd p <= lvl
+              && not (containsI (fst p) members)
+              && not (containsI (fst p) anchors))
+          (monoUnboundVarLevels dm)
+      if isEmptyL ambig then
+        ()
+      else
+        recordOblAt
+          mctx
+          Predicate { iface = iface, args = [dm] }
+          0
+          PCallSlot
+          loc
+          scope
+      go rest
 
 -- Ownership is exact at lexical boundaries: an outer or deeper root survives.
 -- None preserves the legacy SCC/body-local policy until graph-end defaulting (#2646)
@@ -1093,19 +1093,20 @@ groundNumVarsWith : DynCtx ->
   List UObligation ->
   List Int ->
   Unit
-groundNumVarsWith _dyn _ _ _ [] = ()
-groundNumVarsWith dyn ownerPolicy guard obls (id :: rest)
-  | omHasKey
-    (intToString id)
-    dyn.dcModule.mcGraph.graphRun.localAbs.lasQuantified.value =
-    groundNumVarsWith dyn ownerPolicy guard obls rest
-groundNumVarsWith dyn ownerPolicy guard obls (id :: rest) =
-  match liveNumVarGo id obls
-    Some m =>
-      if numDefaultOwnerAllows ownerPolicy m then
-        groundOrWithhold dyn guard id m
-    None => ()
-  groundNumVarsWith dyn ownerPolicy guard obls rest
+groundNumVarsWith dyn ownerPolicy guard obls xs0 = go xs0
+  where
+    go [] = ()
+    go (id :: rest)
+      | omHasKey
+        (intToString id)
+        dyn.dcModule.mcGraph.graphRun.localAbs.lasQuantified.value = go rest
+    go (id :: rest) =
+      match liveNumVarGo id obls
+        Some m =>
+          if numDefaultOwnerAllows ownerPolicy m then
+            groundOrWithhold dyn guard id m
+        None => ()
+      go rest
 
 groundOrWithhold : DynCtx -> ArmedGuard -> Int -> Mono -> Unit
 groundOrWithhold dyn guard id m =
@@ -1199,37 +1200,49 @@ checkCallObligationsU : ModuleCtx ->
   ImplUniverse ->
   List UObligation ->
   Unit
-checkCallObligationsU _mctx _ _ [] = ()
-checkCallObligationsU mctx deferNonGround univ (o :: rest) =
-  let iface = o.pred.iface
-  -- `uOblArgs`, NOT `o.pred.args`: an impl-channel obligation carries an EMPTY
-  -- `pred.args` and projects its dispatch vector at CHECK time (see `OblProjection`).
-  -- Reading the field directly makes every method-occurrence obligation inert here —
-  -- `checkOneCallObligation` returns on `isEmptyL args` — which is SILENT.  Measured:
-  -- with this line reading the field, `test/dict_fixtures/s6-2-t3-closed-goal-reported`
-  -- flipped from its `T-AMBIGUOUS-INSTANCE` reject to an ACCEPT printing an
-  -- order-decided 1-or-2, and `diff_compiler_dict_semantics_permute`'s
-  -- differential was the only thing in the tree that caught it.
-  let occs = uOblArgs mctx.mcGraph o
-  let loc = o.loc
-  match o.oblProj
-    -- The ambiguity rule reads the present positions before the omitted
-    -- variables can complete the goal.
-    OpExactReturn request =>
-      if methodReturnAmbiguousWithoutGiven mctx request then
-        pushAmbiguityAt
-          mctx
-          False
-          loc
-          (ambiguousImplMsg request.mrrIface.irName)
-      else match methodReturnWanted mctx request
-        Some _ =>
-          consumeExactReturnOutcome
-            mctx
-            univ
-            request
-            (solveExactReturnOnce (siteFor mctx) request)
-        None =>
+checkCallObligationsU mctx deferNonGround univ xs0 = go xs0
+  where
+    go [] = ()
+    go (o :: rest) =
+      let iface = o.pred.iface
+      -- `uOblArgs`, NOT `o.pred.args`: an impl-channel obligation carries an EMPTY
+      -- `pred.args` and projects its dispatch vector at CHECK time (see `OblProjection`).
+      -- Reading the field directly makes every method-occurrence obligation inert here —
+      -- `checkOneCallObligation` returns on `isEmptyL args` — which is SILENT.  Measured:
+      -- with this line reading the field, `test/dict_fixtures/s6-2-t3-closed-goal-reported`
+      -- flipped from its `T-AMBIGUOUS-INSTANCE` reject to an ACCEPT printing an
+      -- order-decided 1-or-2, and `diff_compiler_dict_semantics_permute`'s
+      -- differential was the only thing in the tree that caught it.
+      let occs = uOblArgs mctx.mcGraph o
+      let loc = o.loc
+      match o.oblProj
+        -- The ambiguity rule reads the present positions before the omitted
+        -- variables can complete the goal.
+        OpExactReturn request =>
+          if methodReturnAmbiguousWithoutGiven mctx request then
+            pushAmbiguityAt
+              mctx
+              False
+              loc
+              (ambiguousImplMsg request.mrrIface.irName)
+          else match methodReturnWanted mctx request
+            Some _ =>
+              consumeExactReturnOutcome
+                mctx
+                univ
+                request
+                (solveExactReturnOnce (siteFor mctx) request)
+            None =>
+              checkOneCallObligation
+                mctx
+                deferNonGround
+                univ
+                iface
+                occs
+                loc
+                o.uoScope
+          noteMethodReturnTrace mctx MRTChecked request None []
+        _ =>
           checkOneCallObligation
             mctx
             deferNonGround
@@ -1238,11 +1251,8 @@ checkCallObligationsU mctx deferNonGround univ (o :: rest) =
             occs
             loc
             o.uoScope
-      noteMethodReturnTrace mctx MRTChecked request None []
-    _ =>
-      checkOneCallObligation mctx deferNonGround univ iface occs loc o.uoScope
-  noteNumericObligationChecked mctx.mcGraph o occs
-  checkCallObligationsU mctx deferNonGround univ rest
+      noteNumericObligationChecked mctx.mcGraph o occs
+      go rest
 
 consumeExactReturnOutcome : ModuleCtx ->
   ImplUniverse ->
@@ -2088,10 +2098,12 @@ checkReqObligations : SiteCtx ->
   ScopeId ->
   List (IfaceRef, List Mono) ->
   Unit
-checkReqObligations _sx _ _ _ _ [] = ()
-checkReqObligations sx univ walk loc scope ((ifaceR, monoArgs) :: rest) =
-  checkReqOne sx univ walk ifaceR monoArgs loc scope
-  checkReqObligations sx univ walk loc scope rest
+checkReqObligations sx univ walk loc scope xs0 = go xs0
+  where
+    go [] = ()
+    go ((ifaceR, monoArgs) :: rest) =
+      checkReqOne sx univ walk ifaceR monoArgs loc scope
+      go rest
 
 -- One nested `requires` goal, judged as `checkOneCallObligation` judges a top-level one.
 -- An arrow is a constructed head, so a ground `requires Ord k` at k = (Int -> Int) —
@@ -2224,59 +2236,53 @@ checkSurvivorObligations : ModuleCtx ->
   List UObligation ->
   Option Loc ->
   Unit
-checkSurvivorObligations _mctx _ _ _ _ _ [] _ = ()
-checkSurvivorObligations mctx subject ownIface ownTyparams mty extraMap (o :: rest) loc =
-  -- the obligation's occurrence mono is the FULL instantiated occurrence type (`Int -> a`
-  -- for a literal's `fromInt`); the constrained position is extracted by the
-  -- same declared-type walk checkImplObligations uses.  Dispatch (receiver)
-  -- typarams only, per the F0 stance: a non-receiver typaram is impl-determined.
-  match o.oblProj
-    OpProjected => ()
-    OpMethodOcc otyparams omty occ _ =>
-      checkSurvivorDispatchMonos
-        mctx
-        subject
-        ownIface
-        ownTyparams
-        mty
-        extraMap
-        o.pred.iface.irName
-        (dispatchMonosOf (dispatchTyparams otyparams) omty occ)
-        loc
-    OpExactReturn request =>
-      checkSurvivorDispatchMonos
-        mctx
-        subject
-        ownIface
-        ownTyparams
-        mty
-        extraMap
-        request.mrrIface.irName
-        (dispatchMonosOf
-          (dispatchTyparams request.mrrTyparams)
-          request.mrrType
-          request.mrrOccurrence)
-        loc
-    OpNumLit _ =>
-      checkSurvivorDispatchMonos
-        mctx
-        subject
-        ownIface
-        ownTyparams
-        mty
-        extraMap
-        o.pred.iface.irName
-        o.pred.args
-        loc
-  checkSurvivorObligations
-    mctx
-    subject
-    ownIface
-    ownTyparams
-    mty
-    extraMap
-    rest
-    loc
+checkSurvivorObligations mctx subj ownI ownTps mty extra l0 loc = go l0
+  where
+    go [] = ()
+    go (o :: rest) =
+      -- the obligation's occurrence mono is the FULL instantiated occurrence type (`Int -> a`
+      -- for a literal's `fromInt`); the constrained position is extracted by the
+      -- same declared-type walk checkImplObligations uses.  Dispatch (receiver)
+      -- typarams only, per the F0 stance: a non-receiver typaram is impl-determined.
+      match o.oblProj
+        OpProjected => ()
+        OpMethodOcc otyparams omty occ _ =>
+          checkSurvivorDispatchMonos
+            mctx
+            subj
+            ownI
+            ownTps
+            mty
+            extra
+            o.pred.iface.irName
+            (dispatchMonosOf (dispatchTyparams otyparams) omty occ)
+            loc
+        OpExactReturn request =>
+          checkSurvivorDispatchMonos
+            mctx
+            subj
+            ownI
+            ownTps
+            mty
+            extra
+            request.mrrIface.irName
+            (dispatchMonosOf
+              (dispatchTyparams request.mrrTyparams)
+              request.mrrType
+              request.mrrOccurrence)
+            loc
+        OpNumLit _ =>
+          checkSurvivorDispatchMonos
+            mctx
+            subj
+            ownI
+            ownTps
+            mty
+            extra
+            o.pred.iface.irName
+            o.pred.args
+            loc
+      go rest
 
 -- The head variables are matched as constants, the representation a declared
 -- signature's variables have in every instance matcher (`sigRigidBindings`): an
@@ -2295,65 +2301,60 @@ implGoalResiduals : SiteCtx ->
   IfaceRef ->
   List Mono ->
   List (IfaceRef, List Mono)
-implGoalResiduals sx walk headIds givens iface args
-  | anyList (givenAnswers iface args) givens = []
-  | not (anyConcreteHead args) = [(iface, args)]
-  | otherwise =
-    match reqWalkReported sx.sxModule sx.sxSite (reqWalkEnter walk iface args)
-      None => []
-      Some next => solvedOnWalk sx.sxModule next iface args (_ =>
-        let univ = sx.sxModule.mcCells.residualUnivRef.value
-        let cells = sigCellsOf headIds (flatMap monoVarCells args)
-        let toRigid = sigRigidBindings headIds cells
-        match (findMatchingImplReqsU
-          sx
-          univ
-          iface
-          (map (substMono sx.sxModule.mcGraph toRigid [] []) args))
-          None =>
-            if implMatchesU sx.sxModule univ iface args
-              || answeredOnlyByBindingHead sx.sxModule headIds iface args
-              || not (allConcreteHeads args) then
-              [(iface, args)]
-            else
-              []
-          Some (subst, reqs) =>
-            let own =
-              flatMap
-                (r =>
-                  implGoalResiduals
-                    sx
-                    next
-                    headIds
-                    givens
-                    (fst r)
-                    (map (unrigidSig cells) (snd r)))
-                (map (reqToObligation sx.sxModule subst) reqs)
-            superCarriedResiduals
-              sx.sxModule.mcGraph
-              own
-              (flatMap
-                (e =>
+implGoalResiduals sx walk0 headIds givens iface0 args0 = go walk0 iface0 args0
+  where
+    go walk iface args
+      | anyList (givenAnswers iface args) givens = []
+      | not (anyConcreteHead args) = [(iface, args)]
+      | otherwise =
+        match (reqWalkReported
+          sx.sxModule
+          sx.sxSite
+          (reqWalkEnter walk iface args))
+          None => []
+          Some next => solvedOnWalk sx.sxModule next iface args (_ =>
+            let univ = sx.sxModule.mcCells.residualUnivRef.value
+            let cells = sigCellsOf headIds (flatMap monoVarCells args)
+            let toRigid = sigRigidBindings headIds cells
+            match (findMatchingImplReqsU
+              sx
+              univ
+              iface
+              (map (substMono sx.sxModule.mcGraph toRigid [] []) args))
+              None =>
+                if implMatchesU sx.sxModule univ iface args
+                  || answeredOnlyByBindingHead sx.sxModule headIds iface args
+                  || not (allConcreteHeads args) then
+                  [(iface, args)]
+                else
+                  []
+              Some (subst, reqs) =>
+                let own =
                   flatMap
-                    (g =>
-                      implGoalResiduals
-                        sx
-                        e.sgWalk
-                        headIds
-                        givens
-                        (fst g)
-                        (snd g))
-                    (optionOr
-                      []
-                      (rigidHeadInstanceContext sx headIds e.sgIface e.sgArgs)))
-                (superGoalsEntered
-                  sx.sxModule
-                  univ
-                  walk
-                  sx.sxSite
+                    (r => go next (fst r) (map (unrigidSig cells) (snd r)))
+                    (map (reqToObligation sx.sxModule subst) reqs)
+                superCarriedResiduals
+                  sx.sxModule.mcGraph
                   own
-                  iface
-                  args)))
+                  (flatMap
+                    (e =>
+                      flatMap
+                        (g => go e.sgWalk (fst g) (snd g))
+                        (optionOr
+                          []
+                          (rigidHeadInstanceContext
+                            sx
+                            headIds
+                            e.sgIface
+                            e.sgArgs)))
+                    (superGoalsEntered
+                      sx.sxModule
+                      univ
+                      walk
+                      sx.sxSite
+                      own
+                      iface
+                      args)))
 
 export
 checkSurvivorDispatchMonos : ModuleCtx ->
@@ -2366,35 +2367,22 @@ checkSurvivorDispatchMonos : ModuleCtx ->
   List Mono ->
   Option Loc ->
   Unit
-checkSurvivorDispatchMonos _mctx _ _ _ _ _ _ [] _ = ()
-checkSurvivorDispatchMonos mctx subject ownIface ownTyparams mty extraMap oiface (dm :: rest) loc =
-  match survivorNameOf dm extraMap
-    Some vname =>
-      if survivorObligationEntailed
-        mctx
-        ownIface
-        ownTyparams
-        oiface
-        vname
-        mty then
-        ()
-      else
-        pushTypeErrorOnceAt
-          mctx
-          TImplTooSpecific
-          loc
-          (undeclaredConstraintMsg subject mty oiface vname)
-    None => ()
-  checkSurvivorDispatchMonos
-    mctx
-    subject
-    ownIface
-    ownTyparams
-    mty
-    extraMap
-    oiface
-    rest
-    loc
+checkSurvivorDispatchMonos mctx subj ownI ownTps mty extra oi l0 loc = go l0
+  where
+    go [] = ()
+    go (dm :: rest) =
+      match survivorNameOf dm extra
+        Some vname =>
+          if survivorObligationEntailed mctx ownI ownTps oi vname mty then
+            ()
+          else
+            pushTypeErrorOnceAt
+              mctx
+              TImplTooSpecific
+              loc
+              (undeclaredConstraintMsg subj mty oi vname)
+        None => ()
+      go rest
 
 -- entailment base per var kind: a RECEIVER typaram (default path only) is
 -- entailed by the owning interface itself + requires-closure, and by the method's
@@ -2466,16 +2454,15 @@ registerImplRequires : ModuleCtx ->
   List Require ->
   List ScopedImplMethod ->
   Unit
-registerImplRequires _mctx _ _ _ _ _ _ [] = ()
-registerImplRequires mctx ce cur iface implTvMap rpNames reqs (scoped :: rest)
-  | registersElementDict mctx mname rpNames =
-    let methodArity = methodDictArityInClassEnv mctx ce cur iface mname
-    registerReqSlots mctx scoped.simScope implTvMap methodArity reqs
-    registerImplRequires mctx ce cur iface implTvMap rpNames reqs rest
-  | otherwise =
-    registerImplRequires mctx ce cur iface implTvMap rpNames reqs rest
+registerImplRequires mctx ce cur iface implTvMap rpNames reqs l0 = go l0
   where
-    mname = implMethodName scoped.simMethod
+    go [] = ()
+    go (scoped :: rest) =
+      let mname = implMethodName scoped.simMethod
+      if registersElementDict mctx mname rpNames then
+        let methodArity = methodDictArityInClassEnv mctx ce cur iface mname
+        registerReqSlots mctx scoped.simScope implTvMap methodArity reqs
+      go rest
 
 methodDictArityInClassEnv : ModuleCtx ->
   ClassEnv ->
@@ -2505,29 +2492,31 @@ registerReqSlots : ModuleCtx ->
   Int ->
   List Require ->
   Unit
-registerReqSlots _mctx _ _ _ [] = ()
-registerReqSlots mctx scope implTvMap slot ((Require { requireHead = iface, requireArgs = rargs, requireOrigin = ro }) :: rest) =
-  let argMonos = map (a => fromAstType mctx implTvMap a) rargs
-  let ids = flatMap monoTyvarIds argMonos
-  let binder = Scopes.binderAt scope slot
-  let reqIface = IfaceRef { irName = iface, irOrigin = ro }
-  let slotPred = PredicateSlot {
-    psIface = reqIface,
-    psArgs = PSArgsKnown argMonos,
-    psBoundIds = ids,
-  }
-  registerEachActive mctx.mcGraph ids binder
-  registerPredGiven mctx.mcGraph reqIface argMonos binder
-  -- #1154 RESIDUAL: record the WHOLE predicate beside the ids, in the SAME op that
-  -- registers them, so the two can never be written apart (`setFunConstraintEntry`'s
-  -- rule, one channel over).  `registerPredGiven` above cannot serve this: it is
-  -- single-subject and STRUCTURED-only, so `requires Ix a Char` registers nothing there.
-  pushGiven mctx.mcGraph GMIdWitnessed DirectGiven slotPred binder
-  registerFunPredGivenSlots
-    mctx.mcGraph
-    (predicateSlotKnownSupers mctx.mcGraph slotPred)
-    binder
-  registerReqSlots mctx scope implTvMap (slot + 1) rest
+registerReqSlots mctx scope implTvMap slot0 xs0 = go slot0 xs0
+  where
+    go _ [] = ()
+    go slot ((Require { requireHead = iface, requireArgs = rargs, requireOrigin = ro }) :: rest) =
+      let argMonos = map (a => fromAstType mctx implTvMap a) rargs
+      let ids = flatMap monoTyvarIds argMonos
+      let binder = Scopes.binderAt scope slot
+      let reqIface = IfaceRef { irName = iface, irOrigin = ro }
+      let slotPred = PredicateSlot {
+        psIface = reqIface,
+        psArgs = PSArgsKnown argMonos,
+        psBoundIds = ids,
+      }
+      registerEachActive mctx.mcGraph ids binder
+      registerPredGiven mctx.mcGraph reqIface argMonos binder
+      -- #1154 RESIDUAL: record the WHOLE predicate beside the ids, in the SAME op that
+      -- registers them, so the two can never be written apart (`setFunConstraintEntry`'s
+      -- rule, one channel over).  `registerPredGiven` above cannot serve this: it is
+      -- single-subject and STRUCTURED-only, so `requires Ix a Char` registers nothing there.
+      pushGiven mctx.mcGraph GMIdWitnessed DirectGiven slotPred binder
+      registerFunPredGivenSlots
+        mctx.mcGraph
+        (predicateSlotKnownSupers mctx.mcGraph slotPred)
+        binder
+      go (slot + 1) rest
 
 -- the (interface, argument-vector) predicate a constrained-callee call-delta entry
 -- carries.  An entry whose interface name is unrecoverable contributes nothing: the
@@ -2677,10 +2666,12 @@ registerPredicateSlotIds : GraphCtx ->
   Int ->
   List PredicateSlot ->
   Unit
-registerPredicateSlotIds _gctx _ _ [] = ()
-registerPredicateSlotIds gctx scope kept (slot :: rest) =
-  registerEachActive gctx slot.psBoundIds (Scopes.binderAt scope kept)
-  registerPredicateSlotIds gctx scope (kept + 1) rest
+registerPredicateSlotIds gctx scope x20 xs0 = go x20 xs0
+  where
+    go _ [] = ()
+    go kept (slot :: rest) =
+      registerEachActive gctx slot.psBoundIds (Scopes.binderAt scope kept)
+      go (kept + 1) rest
 
 -- ── inferred-constraint promotion (unsignatured `=>` — the two-pass layer) ──
 -- After a group is generalized, an UNSIGNATURED eligible member that uses a
@@ -2706,17 +2697,19 @@ registerInferredConstraints : ModuleCtx ->
   List UObligation ->
   List ScopedScheme ->
   Unit
-registerInferredConstraints _mctx _ _ _ [] = ()
-registerInferredConstraints mctx sigs callObls addedObls (scoped :: rest) =
-  maybeInferConstraint
-    mctx
-    sigs
-    callObls
-    addedObls
-    scoped.ssName
-    scoped.ssScope
-    scoped.ssScheme
-  registerInferredConstraints mctx sigs callObls addedObls rest
+registerInferredConstraints mctx sigs callObls addedObls xs0 = go xs0
+  where
+    go [] = ()
+    go (scoped :: rest) =
+      maybeInferConstraint
+        mctx
+        sigs
+        callObls
+        addedObls
+        scoped.ssName
+        scoped.ssScope
+        scoped.ssScheme
+      go rest
 
 maybeInferConstraint : ModuleCtx ->
   List (String, Ty) ->
@@ -2887,43 +2880,50 @@ residualPredsOf : SiteCtx ->
   IfaceRef ->
   List Mono ->
   List (IfaceRef, List Mono)
-residualPredsOf sx chosen walk iface args
-  | not (anyConcreteHead args) = [(iface, args)]
-  | otherwise =
-    match reqWalkReported sx.sxModule sx.sxSite (reqWalkEnter walk iface args)
-      None => []
-      Some next => solvedOnWalk sx.sxModule next iface args (_ =>
-        let univ = sx.sxModule.mcCells.residualUnivRef.value
-        match findMatchingImplReqsU sx univ iface args
-          None => unroutedResidual sx iface args
-          Some (subst, reqs) if not
-            (residualSelectionStable
-              sx.sxModule
-              chosen
-              (map (reqToObligation sx.sxModule subst) reqs)
-              iface
-              args) => [(iface, args)]
-          Some (subst, reqs) =>
-            let own =
-              flatMap
-                (r => residualPredsOf sx chosen next (fst r) (snd r))
-                (map (reqToObligation sx.sxModule subst) reqs)
-            superCarriedResiduals
-              sx.sxModule.mcGraph
-              own
-              (flatMap
-                (e =>
-                  flatMap
-                    (r => residualPredsOf sx chosen e.sgWalk (fst r) (snd r))
-                    (reqObligationsFor sx univ e.sgIface e.sgArgs))
-                (superGoalsEntered
-                  sx.sxModule
-                  univ
-                  walk
-                  sx.sxSite
-                  own
-                  iface
-                  args)))
+residualPredsOf sx chosen walk0 iface0 args0 = go walk0 iface0 args0
+  where
+    go walk iface args
+      | not (anyConcreteHead args) = [(iface, args)]
+      | otherwise =
+        match (reqWalkReported
+          sx.sxModule
+          sx.sxSite
+          (reqWalkEnter walk iface args))
+          None => []
+          Some next => solvedOnWalk sx.sxModule next iface args (_ =>
+            let univ = sx.sxModule.mcCells.residualUnivRef.value
+            match findMatchingImplReqsU sx univ iface args
+              None => unroutedResidual sx iface args
+              Some (subst, reqs) =>
+                if not
+                  (residualSelectionStable
+                    sx.sxModule
+                    chosen
+                    (map (reqToObligation sx.sxModule subst) reqs)
+                    iface
+                    args) then
+                  [(iface, args)]
+                else
+                  let own =
+                    flatMap
+                      (r => go next (fst r) (snd r))
+                      (map (reqToObligation sx.sxModule subst) reqs)
+                  superCarriedResiduals
+                    sx.sxModule.mcGraph
+                    own
+                    (flatMap
+                      (e =>
+                        flatMap
+                          (r => go e.sgWalk (fst r) (snd r))
+                          (reqObligationsFor sx univ e.sgIface e.sgArgs))
+                      (superGoalsEntered
+                        sx.sxModule
+                        univ
+                        walk
+                        sx.sxSite
+                        own
+                        iface
+                        args)))
 
 -- ── #1564 / Stage A "Door 4": the un-plumbed case is a LOUD reject ────────────
 -- `residualPredsOf`'s `None` arm conflates TWO facts, and since the instance axis went
@@ -3270,26 +3270,21 @@ inferredPredicateSlotsGo : ModuleCtx ->
   OrdMap Unit ->
   List PredicateSlot ->
   List PredicateSlot
-inferredPredicateSlotsGo _mctx _ [] _ _ acc = reverse acc
-inferredPredicateSlotsGo mctx m (id :: rest) buckets covered acc =
-  match omLookup (intToString id) buckets
-    Some bucket =>
-      inferredPredicateSlotsGo
-        mctx
-        m
-        rest
-        buckets
-        covered
-        (prependPredicateSlots bucket acc)
-    None if omHasKey (intToString id) covered =>
-      inferredPredicateSlotsGo mctx m rest buckets covered acc
-    None =>
-      let slot = PredicateSlot {
-        psIface = ifaceForInferredId mctx m id,
-        psArgs = PSArgsUnknown,
-        psBoundIds = [id],
-      }
-      inferredPredicateSlotsGo mctx m rest buckets covered (slot :: acc)
+inferredPredicateSlotsGo mctx m xs0 buckets covered acc0 = go xs0 acc0
+  where
+    go [] acc = reverse acc
+    go (id :: rest) acc = match omLookup (intToString id) buckets
+      Some bucket => go rest (prependPredicateSlots bucket acc)
+      None =>
+        if omHasKey (intToString id) covered then
+          go rest acc
+        else
+          let slot = PredicateSlot {
+            psIface = ifaceForInferredId mctx m id,
+            psArgs = PSArgsUnknown,
+            psBoundIds = [id],
+          }
+          go rest (slot :: acc)
 
 prependPredicateSlots : List PredicateSlot ->
   List PredicateSlot ->
@@ -3347,12 +3342,14 @@ lookupSchemeIface : String ->
   Int ->
   List ((String, Int), List VecObl) ->
   Option IfaceRef
-lookupSchemeIface _ _ [] = None
-lookupSchemeIface m id (((m2, _), obs) :: rest)
-  | m == m2 = match lookupIfaceById id obs
-    Some iface => Some iface
-    None => lookupSchemeIface m id rest
-  | otherwise = lookupSchemeIface m id rest
+lookupSchemeIface m id xs0 = go xs0
+  where
+    go [] = None
+    go (((m2, _), obs) :: rest)
+      | m == m2 = match lookupIfaceById id obs
+        Some iface => Some iface
+        None => go rest
+      | otherwise = go rest
 
 -- the iface of the first recorded predicate whose ARGUMENT VECTOR mentions [id].
 -- (#607: an obligation's ids became a vector; at arity 1 this is the old `id == oid`.)

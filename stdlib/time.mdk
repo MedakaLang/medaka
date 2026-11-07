@@ -287,9 +287,9 @@ isoRe = mustCompile "^(\\d{4})-(\\d{2})-(\\d{2})T(\\d{2}):(\\d{2}):(\\d{2})Z$"
    None -}
 export
 parseIso : String -> Option DateTime
-parseIso s = match reFind isoRe s
-  None => None
-  Some m => match m.groups
+parseIso s = do
+  m <- reFind isoRe s
+  match m.groups
     (Some gy) :: (Some gmo) :: (Some gd) :: (Some gh) :: (Some gmi) :: (Some gs) :: [] =>
       let y = toInt gy.text
       let mo = toInt gmo.text
@@ -297,9 +297,9 @@ parseIso s = match reFind isoRe s
       let h = toInt gh.text
       let mi = toInt gmi.text
       let sec = toInt gs.text
-      match isoFields y mo d h mi sec
-        Some dt => if formatIso dt == s then Some dt else None
-        None => None
+      do
+        dt <- isoFields y mo d h mi sec
+        if formatIso dt == s then Some dt else None
     _ => None
 
 -- > parseIso "2024-03-05T07:08:09Z" == Some (DateTime { year = 2024, month = 3, day = 5, hour = 7, minute = 8, second = 9 })

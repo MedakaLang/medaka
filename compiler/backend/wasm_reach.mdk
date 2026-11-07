@@ -88,6 +88,7 @@ import ir.core_ir.{
   CImplBody(..),
 }
 import support.util.{filterList, startsWith}
+import support.graph.{markReachable}
 import backend.emit_support.{forEachU}
 import hash_map.{HashMap, new, setInPlace, has, findWithDefault}
 
@@ -121,7 +122,7 @@ reachKeys groups impls =
   let graph = refGraph defined groups impls
   let seen = new ()
   let roots = map (canonKey defined) ("main" :: memoRootNames groups)
-  closure graph seen roots
+  markReachable graph seen roots
   seen
 
 -- every key the graph can name: top-level binding names + impl method names.
@@ -182,18 +183,6 @@ addEdges : HashMap String Unit ->
   Unit
 addEdges defined g key refs =
   setInPlace key (map (canonKey defined) refs ++ findWithDefault [] key g) g
-
--- BFS worklist closure; `has` skips already-processed keys so each is expanded once.
-closure : HashMap String (List String) ->
-  HashMap String Unit ->
-  List String ->
-  Unit
-closure _ _ [] = ()
-closure graph seen (w :: work)
-  | has w seen = closure graph seen work
-  | otherwise =
-    setInPlace w () seen
-    closure graph seen (findWithDefault [] w graph ++ work)
 
 -- ── structural reference collection ────────────────────────────────────────
 -- Every name a body can turn into a call/global reference at emit time.  Binder

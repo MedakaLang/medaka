@@ -1084,7 +1084,7 @@ test "a member with a signature is unified with the signature's type and registe
   withFirstSig "f : a -> Int" (ty =>
     m.mcCells.sigTyMapRef := omInsert "f" ty m.mcCells.sigTyMapRef.value
     let member = memberOf m "f"
-    let (regs, tvs) = preunifySigsEx m [("f", ty)] [member]
+    let (regs, tvs) = preunifySigsEx m [member]
     expectEqual
       (["f"], [("f", ["a"])], True, "a -> Int")
       (
@@ -1097,7 +1097,7 @@ test "a member with a signature is unified with the signature's type and registe
 test "a member without a signature is unified with the type its clauses own" =
   let m = summarized ()
   let member = memberOf m "g"
-  let (regs, tvs) = preunifySigsEx m [] [member]
+  let (regs, tvs) = preunifySigsEx m [member]
   expectEqual
     (True, True, False, ppMono member.smOwned.bsValue)
     (isEmptyL regs, isEmptyL tvs, member.smSigned.value, ppMono member.smMono)
@@ -1107,10 +1107,7 @@ test "pre-unification takes each member in order and collects their registration
   withFirstSig "f : Int -> Int" (ty =>
     m.mcCells.sigTyMapRef := omInsert "f" ty m.mcCells.sigTyMapRef.value
     let (regs, tvs) =
-      preunifySigsEx
-        m
-        [("f", ty)]
-        [memberOf m "f", memberOf m "g", memberOf m "f"]
+      preunifySigsEx m [memberOf m "f", memberOf m "g", memberOf m "f"]
     expectEqual
       (["f", "f"], ["f", "f"])
       (map (r => r.crName) regs, map fst3 tvs))
@@ -1273,10 +1270,7 @@ test "pre-unification keeps the members in order, one registration per signed me
     let sigs = omInsert "h" hty (omInsert "f" fty omEmpty)
     m.mcCells.sigTyMapRef := sigs
     let (regs, tvs) =
-      preunifySigsEx
-        m
-        [("f", fty), ("h", hty)]
-        [memberOf m "f", memberOf m "g", memberOf m "h"]
+      preunifySigsEx m [memberOf m "f", memberOf m "g", memberOf m "h"]
     expectEqual
       (["f", "h"], ["f", "h"])
       (map (r => r.crName) regs, map fst3 tvs)))

@@ -1,0 +1,18 @@
+import helper.{count, describe, square}
+
+-- A signed value, an unsigned value and a signed function-valued value, each
+-- named like one of helper's private constrained functions.
+pick : Int
+pick = 7
+
+label = "plain"
+
+step : Int -> Int
+step = x => x + 1
+
+main =
+  println (debug (pick + count 1 [1, 2, 1]))
+  println label
+  println (debug (step 41))
+  println (debug (square 5))
+  println (describe pick)

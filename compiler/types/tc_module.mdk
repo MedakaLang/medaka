@@ -257,20 +257,21 @@ recordTopDeclBinderTypes : GraphCtx ->
   OrdMap Unit ->
   Decl ->
   Unit
-recordTopDeclBinderTypes gctx schemes signed (DFunDef _ n ps _ _ bid) =
-  recordTopFunBinderType gctx schemes signed n bid (listLen ps)
-recordTopDeclBinderTypes gctx schemes signed (DLetGroup _ binds) =
-  fold
-    (_ b => match b
-      LetBind n clauses _ bid => match clauses
-        (FunClause ps _) :: _ =>
-          recordTopFunBinderType gctx schemes signed n bid (listLen ps)
-        [] => recordTopFunBinderType gctx schemes signed n bid 0)
-    ()
-    binds
-recordTopDeclBinderTypes gctx schemes signed (DAttrib _ d) =
-  recordTopDeclBinderTypes gctx schemes signed d
-recordTopDeclBinderTypes _gctx _ _ _ = ()
+recordTopDeclBinderTypes gctx schemes signed x0 = go x0
+  where
+    go (DFunDef _ n ps _ _ bid) =
+      recordTopFunBinderType gctx schemes signed n bid (listLen ps)
+    go (DLetGroup _ binds) =
+      fold
+        (_ b => match b
+          LetBind n clauses _ bid => match clauses
+            (FunClause ps _) :: _ =>
+              recordTopFunBinderType gctx schemes signed n bid (listLen ps)
+            [] => recordTopFunBinderType gctx schemes signed n bid 0)
+        ()
+        binds
+    go (DAttrib _ d) = go d
+    go _ = ()
 
 recordTopFunBinderType : GraphCtx ->
   OrdMap Scheme ->
@@ -500,10 +501,12 @@ ifaceDfsCycleSupers : ClassEnv ->
   List CeRow ->
   List Super ->
   List String
-ifaceDfsCycleSupers _ _ _ _ [] = []
-ifaceDfsCycleSupers ce cur done path ((Super { superHead = superName, superOrigin = so }) :: rest) =
-  let msgs1 = ifaceDfsCycleOneSuper ce cur done path so superName
-  msgs1 ++ ifaceDfsCycleSupers ce cur done path rest
+ifaceDfsCycleSupers ce cur done path xs0 = go xs0
+  where
+    go [] = []
+    go ((Super { superHead = superName, superOrigin = so }) :: rest) =
+      let msgs1 = ifaceDfsCycleOneSuper ce cur done path so superName
+      msgs1 ++ go rest
 
 -- check one super edge: cycle if the super's IDENTITY is on the DFS path; skip if
 -- done; else recurse into the row that identity names.  A super naming no visible
@@ -1585,13 +1588,15 @@ cachedVariantRows : SpellingPop Scheme ->
   TyConOrigin ->
   List Variant ->
   Option (List (String, Scheme), List (String, RecordInfo))
-cachedVariantRows _ _ _ [] = Some ([], [])
-cachedVariantRows ctorPop recordPop o ((Variant cn payload) :: rest) = do
-  ident <- mkIdent NsCtor o cn
-  s <- spLookupIdent ident cn ctorPop
-  recs <- cachedRecordRow recordPop ident cn payload
-  later <- cachedVariantRows ctorPop recordPop o rest
-  Some ((cn, s) :: fst later, recs ++ snd later)
+cachedVariantRows ctorPop recordPop o xs0 = go xs0
+  where
+    go [] = Some ([], [])
+    go ((Variant cn payload) :: rest) = do
+      ident <- mkIdent NsCtor o cn
+      s <- spLookupIdent ident cn ctorPop
+      recs <- cachedRecordRow recordPop ident cn payload
+      later <- go rest
+      Some ((cn, s) :: fst later, recs ++ snd later)
 
 -- A named-field variant's cached `RecordInfo`, as a zero- or one-row list; a
 -- positional variant has none to look up.
@@ -1751,7 +1756,7 @@ processSCC outer sigs grouped0 members =
       (captureScope env.teDyn.dcModule ())
       groupedStamped
       placeholders
-  let (regs, sigTvMaps) = preunifySigsEx env.teDyn.dcModule sigs scopedMembers
+  let (regs, sigTvMaps) = preunifySigsEx env.teDyn.dcModule scopedMembers
   let savedRigidEffects = env.teDyn.dcModule.mcCells.rigidEffvarsRef.value
   let savedRigidAuths = env.teDyn.dcModule.mcCells.rigidAuthvarsRef.value
   env.teDyn.dcModule.mcCells.rigidEffvarsRef :=
@@ -1976,6 +1981,8 @@ scopeMembers : ModuleCtx ->
   OrdMap (List (List Pat, Expr)) ->
   List (String, Mono) ->
   List ScopedMember
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 scopeMembers _mctx _ _ [] = []
 scopeMembers mctx parent grouped ((name, mono) :: rest) =
   let sid =
@@ -2039,44 +2046,49 @@ inferMembers : TcEnv ->
   OrdMap (List (List Pat, Expr)) ->
   List ScopedMember ->
   Unit
-inferMembers _env _ _ [] = ()
-inferMembers outer sigs grouped (member :: rest) =
-  let m = member.smName
-  -- A member's own checks (its signature against its value, its forcing
-  -- bound, its effect escape) are located at its clauses' bodies.
-  let env = envAtIfSome (membersSpanLoc grouped [m]) outer
-  let v = member.smMono
-  openScope env.teDyn.dcModule member.smScope
-  env.teDyn.dcModule.mcCells.currentFn := m
-  let peel = memberPeelSource env.teDyn.dcModule sigs m v
-  let effs = inferMemberClauses env peel member.smOwned (clausesOf m grouped)
-  -- The signature is checked against the value the clauses return.
-  if member.smSigned.value then
-    unifyInto
-      (dynAtIfSome (joinLocs (clauseSpans valueSpanLoc grouped [m])) env.teDyn)
-      True
-      member.smMono
-      member.smOwned.bsValue
-  match member.smForceBound.value
-    Some bound =>
-      fold
-        (_ cl => recordFileBound env.teDyn.dcModule (snd cl) bound)
-        ()
-        (clausesOf m grouped)
-      rowInto
-        env.teDyn
-        True
-        (effrowNorm bound)
-        (effrowNorm (optionOr pureRow member.smForce))
-    None => ()
-  env.teDyn.dcModule.mcCells.currentFn := ""
-  closeScope env.teDyn.dcModule ()
-  -- A value signature constrains the returned value, not the cost of forcing
-  -- its initializer. That cost travels on the binding and is checked at uses.
-  match member.smForce
-    None => checkEffectEscape env.teDyn sigs m effs
-    Some _ => ()
-  inferMembers outer sigs grouped rest
+inferMembers outer sigs grouped xs0 = go xs0
+  where
+    go [] = ()
+    go (member :: rest) =
+      let m = member.smName
+      -- A member's own checks (its signature against its value, its forcing
+      -- bound, its effect escape) are located at its clauses' bodies.
+      let env = envAtIfSome (membersSpanLoc grouped [m]) outer
+      let v = member.smMono
+      openScope env.teDyn.dcModule member.smScope
+      env.teDyn.dcModule.mcCells.currentFn := m
+      let peel = memberPeelSource env.teDyn.dcModule sigs m v
+      let effs =
+        inferMemberClauses env peel member.smOwned (clausesOf m grouped)
+      -- The signature is checked against the value the clauses return.
+      if member.smSigned.value then
+        unifyInto
+          (dynAtIfSome
+            (joinLocs (clauseSpans valueSpanLoc grouped [m]))
+            env.teDyn)
+          True
+          member.smMono
+          member.smOwned.bsValue
+      match member.smForceBound.value
+        Some bound =>
+          fold
+            (_ cl => recordFileBound env.teDyn.dcModule (snd cl) bound)
+            ()
+            (clausesOf m grouped)
+          rowInto
+            env.teDyn
+            True
+            (effrowNorm bound)
+            (effrowNorm (optionOr pureRow member.smForce))
+        None => ()
+      env.teDyn.dcModule.mcCells.currentFn := ""
+      closeScope env.teDyn.dcModule ()
+      -- A value signature constrains the returned value, not the cost of forcing
+      -- its initializer. That cost travels on the binding and is checked at uses.
+      match member.smForce
+        None => checkEffectEscape env.teDyn sigs m effs
+        Some _ => ()
+      go rest
 
 -- The span of the named members' clause bodies (`exprSpanLoc`), joined.
 membersSpanLoc : OrdMap (List (List Pat, Expr)) -> List String -> Option Loc
@@ -2590,12 +2602,14 @@ importedCtorTypeDeclsLastWins unitDecls cur rows =
 -- any other reader the visible row is the public projection and this adds nothing.  The
 -- rows come first so that a named or wildcard row for the same spelling outranks them.
 aliasOverlayDecls : Int -> List DeclEnvModule -> Decl -> List Decl
-aliasOverlayDecls cur rows (DAttrib _ d) = aliasOverlayDecls cur rows d
-aliasOverlayDecls cur rows (DUse _ (p@(UseAlias _ _)) _) =
-  filterList
-    (d => not (publicDataDecl d))
-    (wildOverlayDecls cur rows (useModId p))
-aliasOverlayDecls _ _ _ = []
+aliasOverlayDecls cur rows x0 = go x0
+  where
+    go (DAttrib _ d) = go d
+    go (DUse _ (p@(UseAlias _ _)) _) =
+      filterList
+        (d => not (publicDataDecl d))
+        (wildOverlayDecls cur rows (useModId p))
+    go _ = []
 
 -- One half of the partition, in the unit's own source order.  `wildHalf` selects which:
 -- True = `UseWild` rows only, False = `UseGroup` rows only.
@@ -2604,13 +2618,17 @@ overlayHalf wildHalf unitDecls cur rows =
   flatMap (importOverlayDecls wildHalf cur rows) unitDecls
 
 importOverlayDecls : Bool -> Int -> List DeclEnvModule -> Decl -> List Decl
-importOverlayDecls wildHalf cur rows (DAttrib _ d) =
-  importOverlayDecls wildHalf cur rows d
-importOverlayDecls wildHalf cur rows (DUse _ (p@(UseGroup _ ms)) _) =
-  if wildHalf then [] else flatMap (memberOverlayDecl cur rows (useModId p)) ms
-importOverlayDecls wildHalf cur rows (DUse _ (p@(UseWild _)) _) =
-  if wildHalf then wildOverlayDecls cur rows (useModId p) else []
-importOverlayDecls _ _ _ _ = []
+importOverlayDecls wildHalf cur rows x0 = go x0
+  where
+    go (DAttrib _ d) = go d
+    go (DUse _ (p@(UseGroup _ ms)) _) =
+      if wildHalf then
+        []
+      else
+        flatMap (memberOverlayDecl cur rows (useModId p)) ms
+    go (DUse _ (p@(UseWild _)) _) =
+      if wildHalf then wildOverlayDecls cur rows (useModId p) else []
+    go _ = []
 
 -- The exhaustiveness oracle's import rows beyond `importedCtorTypeDeclsFirstWins`:
 -- every decl a module ALIAS import's module publishes, and the declarations of the
@@ -2632,14 +2650,15 @@ oracleImportDecls gctx unitDecls cur rows =
   flatMap (oracleImportDeclsOf gctx cur rows) unitDecls
 
 oracleImportDeclsOf : GraphCtx -> Int -> List DeclEnvModule -> Decl -> List Decl
-oracleImportDeclsOf gctx cur rows (DAttrib _ d) =
-  oracleImportDeclsOf gctx cur rows d
-oracleImportDeclsOf gctx cur rows (DUse _ (p@(UseAlias _ _)) _) =
-  let dep = useModId p
-  wildOverlayDecls cur rows dep ++ reexportedCtorDecls gctx cur rows dep
-oracleImportDeclsOf gctx cur rows (DUse _ (p@(UseWild _)) _) =
-  reexportedCtorDecls gctx cur rows (useModId p)
-oracleImportDeclsOf _gctx _ _ _ = []
+oracleImportDeclsOf gctx cur rows x0 = go x0
+  where
+    go (DAttrib _ d) = go d
+    go (DUse _ (p@(UseAlias _ _)) _) =
+      let dep = useModId p
+      wildOverlayDecls cur rows dep ++ reexportedCtorDecls gctx cur rows dep
+    go (DUse _ (p@(UseWild _)) _) =
+      reexportedCtorDecls gctx cur rows (useModId p)
+    go _ = []
 
 -- The decls declaring the constructors `dep` re-exports from other modules, found
 -- through the graph's constructor export index, whose rows carry each constructor's
@@ -2664,22 +2683,26 @@ reexportedOwner dep (_, owner, Ident _ io _) =
   identOriginFold [] (m => if m == dep then [] else [(m, owner)]) io
 
 reexportedTypeDecl : Int -> List DeclEnvModule -> String -> String -> List Decl
-reexportedTypeDecl _ [] _ _ = []
-reexportedTypeDecl cur (m :: rest) declarer tyName =
-  if m.demId == declarer then
-    filterList (declIsOwnedType declarer tyName) (declEnvRowVisible cur m)
-  else
-    reexportedTypeDecl cur rest declarer tyName
+reexportedTypeDecl cur xs0 declarer tyName = go xs0
+  where
+    go [] = []
+    go (m :: rest) =
+      if m.demId == declarer then
+        filterList (declIsOwnedType declarer tyName) (declEnvRowVisible cur m)
+      else
+        go rest
 
 -- Only a `data` or `newtype` declaration declares constructors, so no other decl owns
 -- a type whose constructors a re-export reaches.
 declIsOwnedType : String -> String -> Decl -> Bool
-declIsOwnedType mid tyName (DAttrib _ d) = declIsOwnedType mid tyName d
-declIsOwnedType mid tyName (DData { dataName = tn, dataOrigin = o }) =
-  tn == tyName && declOwnedBy mid tn o
-declIsOwnedType mid tyName (DNewtype { newtypeName = tn, newtypeOrigin = o }) =
-  tn == tyName && declOwnedBy mid tn o
-declIsOwnedType _ _ _ = False
+declIsOwnedType mid tyName x0 = go x0
+  where
+    go (DAttrib _ d) = go d
+    go (DData { dataName = tn, dataOrigin = o }) =
+      tn == tyName && declOwnedBy mid tn o
+    go (DNewtype { newtypeName = tn, newtypeOrigin = o }) =
+      tn == tyName && declOwnedBy mid tn o
+    go _ = False
 
 -- A wildcard import's overlay: EVERY decl the named module publishes, as the reader at
 -- ordinal `cur` may see it.  A wildcard names no member, so there is nothing to look up
@@ -2702,12 +2725,10 @@ declIsOwnedType _ _ _ = False
 -- materialised, per `declEnvRowVisible`'s zero-allocation contract.  It does move the
 -- RESULT bound: see the `the real bound` note above.
 wildOverlayDecls : Int -> List DeclEnvModule -> String -> List Decl
-wildOverlayDecls _ [] _ = []
-wildOverlayDecls cur (m :: rest) mid =
-  if m.demId == mid then
-    declEnvRowVisible cur m
-  else
-    wildOverlayDecls cur rest mid
+wildOverlayDecls cur xs0 mid = go xs0
+  where
+    go [] = []
+    go (m :: rest) = if m.demId == mid then declEnvRowVisible cur m else go rest
 
 -- One member's overlay decl.  The bare-name fallback is kept for the `(..)` spelling
 -- ALONE, so no overlay that fired on the bare name is lost where the identity cannot
@@ -2802,6 +2823,8 @@ overlayScanRows : String ->
   (Option Decl, Option Decl, Option Decl) ->
   List DeclEnvModule ->
   (Option Decl, Option Decl, Option Decl)
+-- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 overlayScanRows _ _ _ _ acc [] = acc
 overlayScanRows mid n ctors cur acc (m :: rest) =
   let acc2 = overlayScan mid n ctors acc (declEnvRowVisible cur m)
@@ -2816,6 +2839,8 @@ overlayScan : String ->
   (Option Decl, Option Decl, Option Decl) ->
   List Decl ->
   (Option Decl, Option Decl, Option Decl)
+-- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 overlayScan _ _ _ acc [] = acc
 overlayScan mid n ctors acc (d :: rest) =
   let acc2 = overlayScanOne mid n acc d
@@ -2830,6 +2855,8 @@ overlayScanOne : String ->
   (Option Decl, Option Decl, Option Decl) ->
   Decl ->
   (Option Decl, Option Decl, Option Decl)
+-- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 overlayScanOne mid n acc (DAttrib _ d) = overlayScanOne mid n acc d
 overlayScanOne mid n acc (d@(DData { dataName = tn, dataOrigin = o })) =
   overlayNote mid n tn o d acc
@@ -2965,12 +2992,12 @@ useAdmittedRows : (String -> List (String, (String, String))) ->
   Bool ->
   List Decl ->
   List (String, (String, String))
-useAdmittedRows _defs _ [] = []
-useAdmittedRows defs wild ((DAttrib _ d) :: rest) =
-  useAdmittedRows defs wild [d] ++ useAdmittedRows defs wild rest
-useAdmittedRows defs wild ((DUse _ path _) :: rest) =
-  useDefinerRows defs wild path ++ useAdmittedRows defs wild rest
-useAdmittedRows defs wild (_ :: rest) = useAdmittedRows defs wild rest
+useAdmittedRows defs wild xs0 = go xs0
+  where
+    go [] = []
+    go ((DAttrib _ d) :: rest) = go [d] ++ go rest
+    go ((DUse _ path _) :: rest) = useDefinerRows defs wild path ++ go rest
+    go (_ :: rest) = go rest
 
 -- `core` is skipped: the implicit prelude is never an explicit provenance (every reader
 -- of these rows relies on that — see `declaredConstraintFor`).
@@ -3298,6 +3325,8 @@ attributeSchemeOblsGo : String ->
   OrdMap Unit ->
   List ((String, Int), List VecObl) ->
   List ((String, String), List VecObl)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 attributeSchemeOblsGo _ _ _ [] = []
 attributeSchemeOblsGo mid progNames seen (e :: rest)
   | not (omHasKey (fst (fst e)) progNames) =

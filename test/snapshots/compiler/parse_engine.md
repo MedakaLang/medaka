@@ -1,5 +1,5 @@
 # META
-source_lines=348
+source_lines=350
 stages=DESUGAR,MARK
 # SOURCE
 import frontend.lex_token.{Token(..), describeToken, peekTok as tokenPeekTok}
@@ -240,21 +240,23 @@ many : ParserE e a -> ParserE e (List a)
 many p = ParserE (ctx pos => manyGo p ctx pos [])
 
 manyGo : ParserE e a -> ParseContext -> Int -> List a -> <e> PR (List a)
-manyGo p ctx pos acc =
-  let saved = mark ctx
-  match runPWith ctx p pos
-    POk x q =>
-      if q > pos then
-        manyGo p ctx q (x :: acc)
-      else
-        rewind saved
-        POk (reverseL (x :: acc)) q
-    PFatal e q =>
-      rewind saved
-      PFatal e q
-    PErr _ _ =>
-      rewind saved
-      POk (reverseL acc) pos
+manyGo p ctx pos0 acc0 = go pos0 acc0
+  where
+    go pos acc =
+      let saved = mark ctx
+      match runPWith ctx p pos
+        POk x q =>
+          if q > pos then
+            go q (x :: acc)
+          else
+            rewind saved
+            POk (reverseL (x :: acc)) q
+        PFatal e q =>
+          rewind saved
+          PFatal e q
+        PErr _ _ =>
+          rewind saved
+          POk (reverseL acc) pos
 
 export
 sepThen : ParserE e b -> ParserE e a -> ParserE e a
@@ -435,7 +437,7 @@ expectedTokenMsg t = describeToken t
 (DTypeSig true "many" (TyFun (TyApp (TyApp (TyCon "ParserE") (TyVar "e")) (TyVar "a")) (TyApp (TyApp (TyCon "ParserE") (TyVar "e")) (TyApp (TyCon "List") (TyVar "a")))))
 (DFunDef false "many" ((PVar "p")) (EApp (EVar "ParserE") (ELam ((PVar "ctx") (PVar "pos")) (EApp (EApp (EApp (EApp (EVar "manyGo") (EVar "p")) (EVar "ctx")) (EVar "pos")) (EListLit)))))
 (DTypeSig false "manyGo" (TyFun (TyApp (TyApp (TyCon "ParserE") (TyVar "e")) (TyVar "a")) (TyFun (TyCon "ParseContext") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyApp (TyCon "PR") (TyApp (TyCon "List") (TyVar "a")))))))))
-(DFunDef false "manyGo" ((PVar "p") (PVar "ctx") (PVar "pos") (PVar "acc")) (EBlock (DoLet false false (PVar "saved") (EApp (EVar "mark") (EVar "ctx"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "runPWith") (EVar "ctx")) (EVar "p")) (EVar "pos")) (arm (PCon "POk" (PVar "x") (PVar "q")) () (EIf (EBinOp ">" (EVar "q") (EVar "pos")) (EApp (EApp (EApp (EApp (EVar "manyGo") (EVar "p")) (EVar "ctx")) (EVar "q")) (EBinOp "::" (EVar "x") (EVar "acc"))) (EBlock (DoExpr (EApp (EVar "rewind") (EVar "saved"))) (DoExpr (EApp (EApp (EVar "POk") (EApp (EVar "reverseL") (EBinOp "::" (EVar "x") (EVar "acc")))) (EVar "q")))))) (arm (PCon "PFatal" (PVar "e") (PVar "q")) () (EBlock (DoExpr (EApp (EVar "rewind") (EVar "saved"))) (DoExpr (EApp (EApp (EVar "PFatal") (EVar "e")) (EVar "q"))))) (arm (PCon "PErr" PWild PWild) () (EBlock (DoExpr (EApp (EVar "rewind") (EVar "saved"))) (DoExpr (EApp (EApp (EVar "POk") (EApp (EVar "reverseL") (EVar "acc"))) (EVar "pos")))))))))
+(DFunDef false "manyGo" ((PVar "p") (PVar "ctx") (PVar "pos0") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PVar "pos") (PVar "acc")) (EBlock (DoLet false false (PVar "saved") (EApp (EVar "mark") (EVar "ctx"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "runPWith") (EVar "ctx")) (EVar "p")) (EVar "pos")) (arm (PCon "POk" (PVar "x") (PVar "q")) () (EIf (EBinOp ">" (EVar "q") (EVar "pos")) (EApp (EApp (EVar "go") (EVar "q")) (EBinOp "::" (EVar "x") (EVar "acc"))) (EBlock (DoExpr (EApp (EVar "rewind") (EVar "saved"))) (DoExpr (EApp (EApp (EVar "POk") (EApp (EVar "reverseL") (EBinOp "::" (EVar "x") (EVar "acc")))) (EVar "q")))))) (arm (PCon "PFatal" (PVar "e") (PVar "q")) () (EBlock (DoExpr (EApp (EVar "rewind") (EVar "saved"))) (DoExpr (EApp (EApp (EVar "PFatal") (EVar "e")) (EVar "q"))))) (arm (PCon "PErr" PWild PWild) () (EBlock (DoExpr (EApp (EVar "rewind") (EVar "saved"))) (DoExpr (EApp (EApp (EVar "POk") (EApp (EVar "reverseL") (EVar "acc"))) (EVar "pos"))))))))))) (EApp (EApp (EVar "go") (EVar "pos0")) (EVar "acc0"))))
 (DTypeSig true "sepThen" (TyFun (TyApp (TyApp (TyCon "ParserE") (TyVar "e")) (TyVar "b")) (TyFun (TyApp (TyApp (TyCon "ParserE") (TyVar "e")) (TyVar "a")) (TyApp (TyApp (TyCon "ParserE") (TyVar "e")) (TyVar "a")))))
 (DFunDef false "sepThen" ((PVar "sep") (PVar "p")) (EApp (EApp (EVar "$core.deferThen") (EVar "sep")) (ELam (PWild) (EVar "p"))))
 (DTypeSig true "sepBy1" (TyFun (TyApp (TyApp (TyCon "ParserE") (TyVar "e")) (TyVar "a")) (TyFun (TyApp (TyApp (TyCon "ParserE") (TyVar "e")) (TyVar "b")) (TyApp (TyApp (TyCon "ParserE") (TyVar "e")) (TyApp (TyCon "List") (TyVar "a"))))))
@@ -561,7 +563,7 @@ expectedTokenMsg t = describeToken t
 (DTypeSig true "many" (TyFun (TyApp (TyApp (TyCon "ParserE") (TyVar "e")) (TyVar "a")) (TyApp (TyApp (TyCon "ParserE") (TyVar "e")) (TyApp (TyCon "List") (TyVar "a")))))
 (DFunDef false "many" ((PVar "p")) (EApp (EVar "ParserE") (ELam ((PVar "ctx") (PVar "pos")) (EApp (EApp (EApp (EApp (EVar "manyGo") (EVar "p")) (EVar "ctx")) (EVar "pos")) (EListLit)))))
 (DTypeSig false "manyGo" (TyFun (TyApp (TyApp (TyCon "ParserE") (TyVar "e")) (TyVar "a")) (TyFun (TyCon "ParseContext") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyApp (TyCon "PR") (TyApp (TyCon "List") (TyVar "a")))))))))
-(DFunDef false "manyGo" ((PVar "p") (PVar "ctx") (PVar "pos") (PVar "acc")) (EBlock (DoLet false false (PVar "saved") (EApp (EVar "mark") (EVar "ctx"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "runPWith") (EVar "ctx")) (EVar "p")) (EVar "pos")) (arm (PCon "POk" (PVar "x") (PVar "q")) () (EIf (EBinOp ">" (EVar "q") (EVar "pos")) (EApp (EApp (EApp (EApp (EVar "manyGo") (EVar "p")) (EVar "ctx")) (EVar "q")) (EBinOp "::" (EVar "x") (EVar "acc"))) (EBlock (DoExpr (EApp (EVar "rewind") (EVar "saved"))) (DoExpr (EApp (EApp (EVar "POk") (EApp (EVar "reverseL") (EBinOp "::" (EVar "x") (EVar "acc")))) (EVar "q")))))) (arm (PCon "PFatal" (PVar "e") (PVar "q")) () (EBlock (DoExpr (EApp (EVar "rewind") (EVar "saved"))) (DoExpr (EApp (EApp (EVar "PFatal") (EVar "e")) (EVar "q"))))) (arm (PCon "PErr" PWild PWild) () (EBlock (DoExpr (EApp (EVar "rewind") (EVar "saved"))) (DoExpr (EApp (EApp (EVar "POk") (EApp (EVar "reverseL") (EVar "acc"))) (EVar "pos")))))))))
+(DFunDef false "manyGo" ((PVar "p") (PVar "ctx") (PVar "pos0") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PVar "pos") (PVar "acc")) (EBlock (DoLet false false (PVar "saved") (EApp (EVar "mark") (EVar "ctx"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "runPWith") (EVar "ctx")) (EVar "p")) (EVar "pos")) (arm (PCon "POk" (PVar "x") (PVar "q")) () (EIf (EBinOp ">" (EVar "q") (EVar "pos")) (EApp (EApp (EVar "go") (EVar "q")) (EBinOp "::" (EVar "x") (EVar "acc"))) (EBlock (DoExpr (EApp (EVar "rewind") (EVar "saved"))) (DoExpr (EApp (EApp (EVar "POk") (EApp (EVar "reverseL") (EBinOp "::" (EVar "x") (EVar "acc")))) (EVar "q")))))) (arm (PCon "PFatal" (PVar "e") (PVar "q")) () (EBlock (DoExpr (EApp (EVar "rewind") (EVar "saved"))) (DoExpr (EApp (EApp (EVar "PFatal") (EVar "e")) (EVar "q"))))) (arm (PCon "PErr" PWild PWild) () (EBlock (DoExpr (EApp (EVar "rewind") (EVar "saved"))) (DoExpr (EApp (EApp (EVar "POk") (EApp (EVar "reverseL") (EVar "acc"))) (EVar "pos"))))))))))) (EApp (EApp (EVar "go") (EVar "pos0")) (EVar "acc0"))))
 (DTypeSig true "sepThen" (TyFun (TyApp (TyApp (TyCon "ParserE") (TyVar "e")) (TyVar "b")) (TyFun (TyApp (TyApp (TyCon "ParserE") (TyVar "e")) (TyVar "a")) (TyApp (TyApp (TyCon "ParserE") (TyVar "e")) (TyVar "a")))))
 (DFunDef false "sepThen" ((PVar "sep") (PVar "p")) (EApp (EApp (EVar "$core.deferThen") (EVar "sep")) (ELam (PWild) (EVar "p"))))
 (DTypeSig true "sepBy1" (TyFun (TyApp (TyApp (TyCon "ParserE") (TyVar "e")) (TyVar "a")) (TyFun (TyApp (TyApp (TyCon "ParserE") (TyVar "e")) (TyVar "b")) (TyApp (TyApp (TyCon "ParserE") (TyVar "e")) (TyApp (TyCon "List") (TyVar "a"))))))

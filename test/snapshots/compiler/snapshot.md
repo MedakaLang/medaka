@@ -1,5 +1,5 @@
 # META
-source_lines=1520
+source_lines=1528
 stages=DESUGAR,MARK
 # SOURCE
 import types.program_facts.{withSymbolOrigins}
@@ -790,10 +790,12 @@ workerLoop : String ->
   List Decl ->
   List String ->
   <IO> Unit
-workerLoop _ _ _ _ [] = ()
-workerLoop root sel runtimeDecls coreDecls (f :: rest) =
-  workerOne root sel runtimeDecls coreDecls f
-  workerLoop root sel runtimeDecls coreDecls rest
+workerLoop root sel runtimeDecls coreDecls xs0 = go xs0
+  where
+    go [] = ()
+    go (f :: rest) =
+      workerOne root sel runtimeDecls coreDecls f
+      go rest
 
 workerOne : String ->
   List String ->
@@ -961,6 +963,8 @@ chunksOf : String ->
   List String ->
   List String ->
   <IO> List Chunk
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 chunksOf _ _ _ _ [] = []
 chunksOf root outDir forceIsolate cli (f :: rest) =
   let meta = metaOf root outDir f
@@ -982,6 +986,8 @@ takeRun : String ->
   Int ->
   List String ->
   <IO> (List String, List String)
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
 takeRun _ _ _ _ _ _ [] = ([], [])
 takeRun root outDir forceIsolate cli sel n (f :: rest) =
   if n <= 0 then
@@ -1028,10 +1034,12 @@ superviseChunks : String ->
   Option String ->
   List Chunk ->
   <IO> List SnapResult
-superviseChunks _ _ _ [] = []
-superviseChunks root mode outDir ((sel, fs) :: rest) =
-  let here = runChunk root mode outDir sel fs
-  here ++ superviseChunks root mode outDir rest
+superviseChunks root mode outDir xs0 = go xs0
+  where
+    go [] = []
+    go ((sel, fs) :: rest) =
+      let here = runChunk root mode outDir sel fs
+      here ++ go rest
 
 -- Run one chunk in a child.  On a crash: bank every fixture the child COMPLETED, write
 -- the crasher's snapshot from the sections it managed to stream plus its stderr, then
@@ -1042,45 +1050,45 @@ runChunk : String ->
   List String ->
   List String ->
   <IO> List SnapResult
-runChunk _ _ _ _ [] = []
-runChunk root mode outDir sel pending =
-  match runCommand (executablePath ()) (workerArgv root sel pending)
-    Err e => map (f => (f, "ERROR spawn failed: \{e}", False)) pending
-    Ok (code, out, err) =>
-      let streamed = parseStream out
-      let done = map fixtureOf streamed
-      let banked = map (settle root mode outDir sel) streamed
-      let missing = notIn done pending
-      -- COMPLETENESS, not exit code, decides whether the worker survived.  A fixture that
-      -- calls `exit 0` kills the worker with a SUCCESS status, so `code == 0` would report
-      -- a clean run while silently dropping every fixture after it.  "Every pending fixture
-      -- reached its END" is the only claim worth trusting.
-      if isEmpty missing then
-        banked
-      else match lastBegun out
-        -- the child died: the last BEGIN with no END names the killer.
+runChunk root mode outDir sel pending0 = go pending0
+  where
+    go [] = []
+    go pending =
+      match runCommand (executablePath ()) (workerArgv root sel pending)
+        Err e => map (f => (f, "ERROR spawn failed: \{e}", False)) pending
+        Ok (code, out, err) =>
+          let streamed = parseStream out
+          let done = map fixtureOf streamed
+          let banked = map (settle root mode outDir sel) streamed
+          let missing = notIn done pending
+          -- COMPLETENESS, not exit code, decides whether the worker survived.  A fixture that
+          -- calls `exit 0` kills the worker with a SUCCESS status, so `code == 0` would report
+          -- a clean run while silently dropping every fixture after it.  "Every pending fixture
+          -- reached its END" is the only claim worth trusting.
+          if isEmpty missing then
+            banked
+          else match lastBegun out
+            -- the child died: the last BEGIN with no END names the killer.
 
-        None =>
-          banked
-            ++ map
-              (f => (
-                f,
-                "ERROR worker died with no BEGIN (exit \{intToString code})",
-                False,
-              ))
-              missing
-        Some victim =>
-          -- the victim's own snapshot = whatever it streamed before dying + its stderr.
-          -- `# CRASH` is a stderr dump, so it is diagnostic BY CONSTRUCTION — which makes
-          -- a crashing fixture's snapshot permanently unblessable.  That is intended: the
-          -- day a panic message changes, someone reads it.
-          let crashSecs =
-            streamTail out ++ [("CRASH", normalizeText root err, True)]
-          let (_, v, _) = settle root mode outDir sel (victim, crashSecs)
-          let remaining = afterFirst victim pending
-          banked
-            ++ [(victim, v, True)]
-            ++ runChunk root mode outDir sel remaining
+            None =>
+              banked
+                ++ map
+                  (f => (
+                    f,
+                    "ERROR worker died with no BEGIN (exit \{intToString code})",
+                    False,
+                  ))
+                  missing
+            Some victim =>
+              -- the victim's own snapshot = whatever it streamed before dying + its stderr.
+              -- `# CRASH` is a stderr dump, so it is diagnostic BY CONSTRUCTION — which makes
+              -- a crashing fixture's snapshot permanently unblessable.  That is intended: the
+              -- day a panic message changes, someone reads it.
+              let crashSecs =
+                streamTail out ++ [("CRASH", normalizeText root err, True)]
+              let (_, v, _) = settle root mode outDir sel (victim, crashSecs)
+              let remaining = afterFirst victim pending
+              banked ++ [(victim, v, True)] ++ go remaining
 
 workerArgv : String -> List String -> List String -> List String
 workerArgv root [] files = ["snapshot", "--worker", "--root", root] ++ files
@@ -1681,8 +1689,7 @@ mapUnit f (x :: rest) =
 (DTypeSig false "loadPrelude" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))))
 (DFunDef false "loadPrelude" ((PVar "root")) (EMatch (EApp (EVar "readFile") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "root"))) (ELit (LString "/stdlib/runtime.mdk")))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "snapshot: cannot read stdlib/runtime.mdk: ")) (EApp (EVar "$core.display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "rsrc")) () (EMatch (EApp (EVar "readFile") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "root"))) (ELit (LString "/stdlib/core.mdk")))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "snapshot: cannot read stdlib/core.mdk: ")) (EApp (EVar "$core.display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "csrc")) () (EMatch (EApp (EVar "parseResult") (EVar "rsrc")) (arm (PCon "Err" PWild) () (EApp (EVar "Err") (ELit (LString "snapshot: stdlib/runtime.mdk does not parse")))) (arm (PCon "Ok" (PVar "rd")) () (EMatch (EApp (EVar "parseResult") (EVar "csrc")) (arm (PCon "Err" PWild) () (EApp (EVar "Err") (ELit (LString "snapshot: stdlib/core.mdk does not parse")))) (arm (PCon "Ok" (PVar "cd")) () (EApp (EVar "Ok") (ETuple (EApp (EVar "desugar") (EVar "rd")) (EApp (EVar "desugar") (EVar "cd")))))))))))))
 (DTypeSig false "workerLoop" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))))))
-(DFunDef false "workerLoop" (PWild PWild PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "workerLoop" ((PVar "root") (PVar "sel") (PVar "runtimeDecls") (PVar "coreDecls") (PCons (PVar "f") (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "workerOne") (EVar "root")) (EVar "sel")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "f"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "workerLoop") (EVar "root")) (EVar "sel")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "rest")))))
+(DFunDef false "workerLoop" ((PVar "root") (PVar "sel") (PVar "runtimeDecls") (PVar "coreDecls") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PVar "f") (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "workerOne") (EVar "root")) (EVar "sel")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "f"))) (DoExpr (EApp (EVar "go") (EVar "rest"))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "workerOne" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))))))
 (DFunDef false "workerOne" ((PVar "root") (PVar "sel") (PVar "runtimeDecls") (PVar "coreDecls") (PVar "path")) (EBlock (DoExpr (EApp (EVar "putLineFlush") (EBinOp "++" (EBinOp "++" (ELit (LString "BEGIN ")) (EApp (EVar "$core.display") (EVar "path"))) (ELit (LString ""))))) (DoLet false false PWild (EMatch (EApp (EApp (EVar "carryProjectProfile") (EVar "None")) (EVar "path")) (arm (PCon "Err" (PVar "msg")) () (EApp (EApp (EApp (EVar "emitDiagSection") (EVar "root")) (ELit (LString "CRASH"))) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "msg"))) (ELit (LString "\n"))))) (arm (PCon "Ok" PWild) () (ELit LUnit)))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "workerRender") (EVar "root")) (EVar "sel")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "path"))) (DoExpr (EApp (EVar "putLineFlush") (EBinOp "++" (EBinOp "++" (ELit (LString "END ")) (EApp (EVar "$core.display") (EVar "path"))) (ELit (LString "")))))))
 (DTypeSig false "workerRender" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))))))
@@ -1717,11 +1724,9 @@ mapUnit f (x :: rest) =
 (DFunDef false "metaStages" ((PList)) (EListLit))
 (DFunDef false "metaStages" ((PCons (PVar "l") (PVar "rest"))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "stages="))) (EVar "l")) (EMatch (EApp (EVar "parseStages") (EApp (EApp (EVar "drop") (ELit (LInt 7))) (EVar "l"))) (arm (PCon "Ok" (PVar "ns")) () (EVar "ns")) (arm (PCon "Err" PWild) () (EListLit))) (EApp (EVar "metaStages") (EVar "rest"))))
 (DTypeSig false "superviseChunks" (TyFun (TyCon "String") (TyFun (TyCon "SnapMode") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Chunk")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "SnapResult"))))))))
-(DFunDef false "superviseChunks" (PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "superviseChunks" ((PVar "root") (PVar "mode") (PVar "outDir") (PCons (PTuple (PVar "sel") (PVar "fs")) (PVar "rest"))) (EBlock (DoLet false false (PVar "here") (EApp (EApp (EApp (EApp (EApp (EVar "runChunk") (EVar "root")) (EVar "mode")) (EVar "outDir")) (EVar "sel")) (EVar "fs"))) (DoExpr (EBinOp "++" (EVar "here") (EApp (EApp (EApp (EApp (EVar "superviseChunks") (EVar "root")) (EVar "mode")) (EVar "outDir")) (EVar "rest"))))))
+(DFunDef false "superviseChunks" ((PVar "root") (PVar "mode") (PVar "outDir") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EListLit)) (clause ((PCons (PTuple (PVar "sel") (PVar "fs")) (PVar "rest"))) (EBlock (DoLet false false (PVar "here") (EApp (EApp (EApp (EApp (EApp (EVar "runChunk") (EVar "root")) (EVar "mode")) (EVar "outDir")) (EVar "sel")) (EVar "fs"))) (DoExpr (EBinOp "++" (EVar "here") (EApp (EVar "go") (EVar "rest")))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "runChunk" (TyFun (TyCon "String") (TyFun (TyCon "SnapMode") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "SnapResult")))))))))
-(DFunDef false "runChunk" (PWild PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "runChunk" ((PVar "root") (PVar "mode") (PVar "outDir") (PVar "sel") (PVar "pending")) (EMatch (EApp (EApp (EVar "runCommand") (EApp (EVar "executablePath") (ELit LUnit))) (EApp (EApp (EApp (EVar "workerArgv") (EVar "root")) (EVar "sel")) (EVar "pending"))) (arm (PCon "Err" (PVar "e")) () (EApp (EApp (EVar "map") (ELam ((PVar "f")) (ETuple (EVar "f") (EBinOp "++" (EBinOp "++" (ELit (LString "ERROR spawn failed: ")) (EApp (EVar "$core.display") (EVar "e"))) (ELit (LString ""))) (EVar "False")))) (EVar "pending"))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "out") (PVar "err"))) () (EBlock (DoLet false false (PVar "streamed") (EApp (EVar "parseStream") (EVar "out"))) (DoLet false false (PVar "done") (EApp (EApp (EVar "map") (EVar "fixtureOf")) (EVar "streamed"))) (DoLet false false (PVar "banked") (EApp (EApp (EVar "map") (EApp (EApp (EApp (EApp (EVar "settle") (EVar "root")) (EVar "mode")) (EVar "outDir")) (EVar "sel"))) (EVar "streamed"))) (DoLet false false (PVar "missing") (EApp (EApp (EVar "notIn") (EVar "done")) (EVar "pending"))) (DoExpr (EIf (EApp (EVar "isEmpty") (EVar "missing")) (EVar "banked") (EMatch (EApp (EVar "lastBegun") (EVar "out")) (arm (PCon "None") () (EBinOp "++" (EVar "banked") (EApp (EApp (EVar "map") (ELam ((PVar "f")) (ETuple (EVar "f") (EBinOp "++" (EBinOp "++" (ELit (LString "ERROR worker died with no BEGIN (exit ")) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ")"))) (EVar "False")))) (EVar "missing")))) (arm (PCon "Some" (PVar "victim")) () (EBlock (DoLet false false (PVar "crashSecs") (EBinOp "++" (EApp (EVar "streamTail") (EVar "out")) (EListLit (ETuple (ELit (LString "CRASH")) (EApp (EApp (EVar "normalizeText") (EVar "root")) (EVar "err")) (EVar "True"))))) (DoLet false false (PTuple PWild (PVar "v") PWild) (EApp (EApp (EApp (EApp (EApp (EVar "settle") (EVar "root")) (EVar "mode")) (EVar "outDir")) (EVar "sel")) (ETuple (EVar "victim") (EVar "crashSecs")))) (DoLet false false (PVar "remaining") (EApp (EApp (EVar "afterFirst") (EVar "victim")) (EVar "pending"))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "banked") (EListLit (ETuple (EVar "victim") (EVar "v") (EVar "True")))) (EApp (EApp (EApp (EApp (EApp (EVar "runChunk") (EVar "root")) (EVar "mode")) (EVar "outDir")) (EVar "sel")) (EVar "remaining")))))))))))))
+(DFunDef false "runChunk" ((PVar "root") (PVar "mode") (PVar "outDir") (PVar "sel") (PVar "pending0")) (ELetGroup ((lgb "go" (clause ((PList)) (EListLit)) (clause ((PVar "pending")) (EMatch (EApp (EApp (EVar "runCommand") (EApp (EVar "executablePath") (ELit LUnit))) (EApp (EApp (EApp (EVar "workerArgv") (EVar "root")) (EVar "sel")) (EVar "pending"))) (arm (PCon "Err" (PVar "e")) () (EApp (EApp (EVar "map") (ELam ((PVar "f")) (ETuple (EVar "f") (EBinOp "++" (EBinOp "++" (ELit (LString "ERROR spawn failed: ")) (EApp (EVar "$core.display") (EVar "e"))) (ELit (LString ""))) (EVar "False")))) (EVar "pending"))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "out") (PVar "err"))) () (EBlock (DoLet false false (PVar "streamed") (EApp (EVar "parseStream") (EVar "out"))) (DoLet false false (PVar "done") (EApp (EApp (EVar "map") (EVar "fixtureOf")) (EVar "streamed"))) (DoLet false false (PVar "banked") (EApp (EApp (EVar "map") (EApp (EApp (EApp (EApp (EVar "settle") (EVar "root")) (EVar "mode")) (EVar "outDir")) (EVar "sel"))) (EVar "streamed"))) (DoLet false false (PVar "missing") (EApp (EApp (EVar "notIn") (EVar "done")) (EVar "pending"))) (DoExpr (EIf (EApp (EVar "isEmpty") (EVar "missing")) (EVar "banked") (EMatch (EApp (EVar "lastBegun") (EVar "out")) (arm (PCon "None") () (EBinOp "++" (EVar "banked") (EApp (EApp (EVar "map") (ELam ((PVar "f")) (ETuple (EVar "f") (EBinOp "++" (EBinOp "++" (ELit (LString "ERROR worker died with no BEGIN (exit ")) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ")"))) (EVar "False")))) (EVar "missing")))) (arm (PCon "Some" (PVar "victim")) () (EBlock (DoLet false false (PVar "crashSecs") (EBinOp "++" (EApp (EVar "streamTail") (EVar "out")) (EListLit (ETuple (ELit (LString "CRASH")) (EApp (EApp (EVar "normalizeText") (EVar "root")) (EVar "err")) (EVar "True"))))) (DoLet false false (PTuple PWild (PVar "v") PWild) (EApp (EApp (EApp (EApp (EApp (EVar "settle") (EVar "root")) (EVar "mode")) (EVar "outDir")) (EVar "sel")) (ETuple (EVar "victim") (EVar "crashSecs")))) (DoLet false false (PVar "remaining") (EApp (EApp (EVar "afterFirst") (EVar "victim")) (EVar "pending"))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "banked") (EListLit (ETuple (EVar "victim") (EVar "v") (EVar "True")))) (EApp (EVar "go") (EVar "remaining"))))))))))))))) (EApp (EVar "go") (EVar "pending0"))))
 (DTypeSig false "workerArgv" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "workerArgv" ((PVar "root") (PList) (PVar "files")) (EBinOp "++" (EListLit (ELit (LString "snapshot")) (ELit (LString "--worker")) (ELit (LString "--root")) (EVar "root")) (EVar "files")))
 (DFunDef false "workerArgv" ((PVar "root") (PVar "sel") (PVar "files")) (EBinOp "++" (EListLit (ELit (LString "snapshot")) (ELit (LString "--worker")) (ELit (LString "--root")) (EVar "root") (ELit (LString "--stages")) (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EVar "sel"))) (EVar "files")))
@@ -2024,8 +2029,7 @@ mapUnit f (x :: rest) =
 (DTypeSig false "loadPrelude" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))))
 (DFunDef false "loadPrelude" ((PVar "root")) (EMatch (EApp (EVar "readFile") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "root"))) (ELit (LString "/stdlib/runtime.mdk")))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "snapshot: cannot read stdlib/runtime.mdk: ")) (EApp (EVar "$core.display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "rsrc")) () (EMatch (EApp (EVar "readFile") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "root"))) (ELit (LString "/stdlib/core.mdk")))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "snapshot: cannot read stdlib/core.mdk: ")) (EApp (EVar "$core.display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "csrc")) () (EMatch (EApp (EVar "parseResult") (EVar "rsrc")) (arm (PCon "Err" PWild) () (EApp (EVar "Err") (ELit (LString "snapshot: stdlib/runtime.mdk does not parse")))) (arm (PCon "Ok" (PVar "rd")) () (EMatch (EApp (EVar "parseResult") (EVar "csrc")) (arm (PCon "Err" PWild) () (EApp (EVar "Err") (ELit (LString "snapshot: stdlib/core.mdk does not parse")))) (arm (PCon "Ok" (PVar "cd")) () (EApp (EVar "Ok") (ETuple (EApp (EVar "desugar") (EVar "rd")) (EApp (EVar "desugar") (EVar "cd")))))))))))))
 (DTypeSig false "workerLoop" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))))))
-(DFunDef false "workerLoop" (PWild PWild PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "workerLoop" ((PVar "root") (PVar "sel") (PVar "runtimeDecls") (PVar "coreDecls") (PCons (PVar "f") (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "workerOne") (EVar "root")) (EVar "sel")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "f"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "workerLoop") (EVar "root")) (EVar "sel")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "rest")))))
+(DFunDef false "workerLoop" ((PVar "root") (PVar "sel") (PVar "runtimeDecls") (PVar "coreDecls") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PVar "f") (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "workerOne") (EVar "root")) (EVar "sel")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "f"))) (DoExpr (EApp (EVar "go") (EVar "rest"))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "workerOne" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))))))
 (DFunDef false "workerOne" ((PVar "root") (PVar "sel") (PVar "runtimeDecls") (PVar "coreDecls") (PVar "path")) (EBlock (DoExpr (EApp (EVar "putLineFlush") (EBinOp "++" (EBinOp "++" (ELit (LString "BEGIN ")) (EApp (EVar "$core.display") (EVar "path"))) (ELit (LString ""))))) (DoLet false false PWild (EMatch (EApp (EApp (EVar "carryProjectProfile") (EVar "None")) (EVar "path")) (arm (PCon "Err" (PVar "msg")) () (EApp (EApp (EApp (EVar "emitDiagSection") (EVar "root")) (ELit (LString "CRASH"))) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "msg"))) (ELit (LString "\n"))))) (arm (PCon "Ok" PWild) () (ELit LUnit)))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "workerRender") (EVar "root")) (EVar "sel")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "path"))) (DoExpr (EApp (EVar "putLineFlush") (EBinOp "++" (EBinOp "++" (ELit (LString "END ")) (EApp (EVar "$core.display") (EVar "path"))) (ELit (LString "")))))))
 (DTypeSig false "workerRender" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))))))
@@ -2060,11 +2064,9 @@ mapUnit f (x :: rest) =
 (DFunDef false "metaStages" ((PList)) (EListLit))
 (DFunDef false "metaStages" ((PCons (PVar "l") (PVar "rest"))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "stages="))) (EVar "l")) (EMatch (EApp (EVar "parseStages") (EApp (EApp (EVar "drop") (ELit (LInt 7))) (EVar "l"))) (arm (PCon "Ok" (PVar "ns")) () (EVar "ns")) (arm (PCon "Err" PWild) () (EListLit))) (EApp (EVar "metaStages") (EVar "rest"))))
 (DTypeSig false "superviseChunks" (TyFun (TyCon "String") (TyFun (TyCon "SnapMode") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Chunk")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "SnapResult"))))))))
-(DFunDef false "superviseChunks" (PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "superviseChunks" ((PVar "root") (PVar "mode") (PVar "outDir") (PCons (PTuple (PVar "sel") (PVar "fs")) (PVar "rest"))) (EBlock (DoLet false false (PVar "here") (EApp (EApp (EApp (EApp (EApp (EVar "runChunk") (EVar "root")) (EVar "mode")) (EVar "outDir")) (EVar "sel")) (EVar "fs"))) (DoExpr (EBinOp "++" (EVar "here") (EApp (EApp (EApp (EApp (EVar "superviseChunks") (EVar "root")) (EVar "mode")) (EVar "outDir")) (EVar "rest"))))))
+(DFunDef false "superviseChunks" ((PVar "root") (PVar "mode") (PVar "outDir") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EListLit)) (clause ((PCons (PTuple (PVar "sel") (PVar "fs")) (PVar "rest"))) (EBlock (DoLet false false (PVar "here") (EApp (EApp (EApp (EApp (EApp (EVar "runChunk") (EVar "root")) (EVar "mode")) (EVar "outDir")) (EVar "sel")) (EVar "fs"))) (DoExpr (EBinOp "++" (EVar "here") (EApp (EVar "go") (EVar "rest")))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "runChunk" (TyFun (TyCon "String") (TyFun (TyCon "SnapMode") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "SnapResult")))))))))
-(DFunDef false "runChunk" (PWild PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "runChunk" ((PVar "root") (PVar "mode") (PVar "outDir") (PVar "sel") (PVar "pending")) (EMatch (EApp (EApp (EVar "runCommand") (EApp (EVar "executablePath") (ELit LUnit))) (EApp (EApp (EApp (EVar "workerArgv") (EVar "root")) (EVar "sel")) (EVar "pending"))) (arm (PCon "Err" (PVar "e")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "f")) (ETuple (EVar "f") (EBinOp "++" (EBinOp "++" (ELit (LString "ERROR spawn failed: ")) (EApp (EVar "$core.display") (EVar "e"))) (ELit (LString ""))) (EVar "False")))) (EVar "pending"))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "out") (PVar "err"))) () (EBlock (DoLet false false (PVar "streamed") (EApp (EVar "parseStream") (EVar "out"))) (DoLet false false (PVar "done") (EApp (EApp (EMethodRef "map") (EVar "fixtureOf")) (EVar "streamed"))) (DoLet false false (PVar "banked") (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EApp (EVar "settle") (EVar "root")) (EVar "mode")) (EVar "outDir")) (EVar "sel"))) (EVar "streamed"))) (DoLet false false (PVar "missing") (EApp (EApp (EVar "notIn") (EVar "done")) (EVar "pending"))) (DoExpr (EIf (EApp (EMethodRef "isEmpty") (EVar "missing")) (EVar "banked") (EMatch (EApp (EVar "lastBegun") (EVar "out")) (arm (PCon "None") () (EBinOp "++" (EVar "banked") (EApp (EApp (EMethodRef "map") (ELam ((PVar "f")) (ETuple (EVar "f") (EBinOp "++" (EBinOp "++" (ELit (LString "ERROR worker died with no BEGIN (exit ")) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ")"))) (EVar "False")))) (EVar "missing")))) (arm (PCon "Some" (PVar "victim")) () (EBlock (DoLet false false (PVar "crashSecs") (EBinOp "++" (EApp (EVar "streamTail") (EVar "out")) (EListLit (ETuple (ELit (LString "CRASH")) (EApp (EApp (EVar "normalizeText") (EVar "root")) (EVar "err")) (EVar "True"))))) (DoLet false false (PTuple PWild (PVar "v") PWild) (EApp (EApp (EApp (EApp (EApp (EVar "settle") (EVar "root")) (EVar "mode")) (EVar "outDir")) (EVar "sel")) (ETuple (EVar "victim") (EVar "crashSecs")))) (DoLet false false (PVar "remaining") (EApp (EApp (EVar "afterFirst") (EVar "victim")) (EVar "pending"))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "banked") (EListLit (ETuple (EVar "victim") (EVar "v") (EVar "True")))) (EApp (EApp (EApp (EApp (EApp (EVar "runChunk") (EVar "root")) (EVar "mode")) (EVar "outDir")) (EVar "sel")) (EVar "remaining")))))))))))))
+(DFunDef false "runChunk" ((PVar "root") (PVar "mode") (PVar "outDir") (PVar "sel") (PVar "pending0")) (ELetGroup ((lgb "go" (clause ((PList)) (EListLit)) (clause ((PVar "pending")) (EMatch (EApp (EApp (EVar "runCommand") (EApp (EVar "executablePath") (ELit LUnit))) (EApp (EApp (EApp (EVar "workerArgv") (EVar "root")) (EVar "sel")) (EVar "pending"))) (arm (PCon "Err" (PVar "e")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "f")) (ETuple (EVar "f") (EBinOp "++" (EBinOp "++" (ELit (LString "ERROR spawn failed: ")) (EApp (EVar "$core.display") (EVar "e"))) (ELit (LString ""))) (EVar "False")))) (EVar "pending"))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "out") (PVar "err"))) () (EBlock (DoLet false false (PVar "streamed") (EApp (EVar "parseStream") (EVar "out"))) (DoLet false false (PVar "done") (EApp (EApp (EMethodRef "map") (EVar "fixtureOf")) (EVar "streamed"))) (DoLet false false (PVar "banked") (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EApp (EVar "settle") (EVar "root")) (EVar "mode")) (EVar "outDir")) (EVar "sel"))) (EVar "streamed"))) (DoLet false false (PVar "missing") (EApp (EApp (EVar "notIn") (EVar "done")) (EVar "pending"))) (DoExpr (EIf (EApp (EMethodRef "isEmpty") (EVar "missing")) (EVar "banked") (EMatch (EApp (EVar "lastBegun") (EVar "out")) (arm (PCon "None") () (EBinOp "++" (EVar "banked") (EApp (EApp (EMethodRef "map") (ELam ((PVar "f")) (ETuple (EVar "f") (EBinOp "++" (EBinOp "++" (ELit (LString "ERROR worker died with no BEGIN (exit ")) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ")"))) (EVar "False")))) (EVar "missing")))) (arm (PCon "Some" (PVar "victim")) () (EBlock (DoLet false false (PVar "crashSecs") (EBinOp "++" (EApp (EVar "streamTail") (EVar "out")) (EListLit (ETuple (ELit (LString "CRASH")) (EApp (EApp (EVar "normalizeText") (EVar "root")) (EVar "err")) (EVar "True"))))) (DoLet false false (PTuple PWild (PVar "v") PWild) (EApp (EApp (EApp (EApp (EApp (EVar "settle") (EVar "root")) (EVar "mode")) (EVar "outDir")) (EVar "sel")) (ETuple (EVar "victim") (EVar "crashSecs")))) (DoLet false false (PVar "remaining") (EApp (EApp (EVar "afterFirst") (EVar "victim")) (EVar "pending"))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "banked") (EListLit (ETuple (EVar "victim") (EVar "v") (EVar "True")))) (EApp (EVar "go") (EVar "remaining"))))))))))))))) (EApp (EVar "go") (EVar "pending0"))))
 (DTypeSig false "workerArgv" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "workerArgv" ((PVar "root") (PList) (PVar "files")) (EBinOp "++" (EListLit (ELit (LString "snapshot")) (ELit (LString "--worker")) (ELit (LString "--root")) (EVar "root")) (EVar "files")))
 (DFunDef false "workerArgv" ((PVar "root") (PVar "sel") (PVar "files")) (EBinOp "++" (EListLit (ELit (LString "snapshot")) (ELit (LString "--worker")) (ELit (LString "--root")) (EVar "root") (ELit (LString "--stages")) (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EVar "sel"))) (EVar "files")))

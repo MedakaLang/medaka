@@ -51,29 +51,33 @@ testEqual harness context left right =
   equalGo harness context (normalize left) (normalize right)
 
 equalGo : Harness -> String -> Mono -> Mono -> Unit
-equalGo harness context (TVar cell) right = match !cell
-  Unbound id _ =>
-    if occurs id right then
-      recordMismatch harness context
-    else
-      cell := Link right
-  Link _ => ()
-equalGo harness context left (TVar cell) = match !cell
-  Unbound id _ =>
-    if occurs id left then recordMismatch harness context else cell := Link left
-  Link _ => ()
-equalGo harness context (TRigid left) (TRigid right) =
-  if left == right then () else recordMismatch harness context
-equalGo harness context (TFun leftDomain leftRow leftResult) (TFun rightDomain rightRow rightResult) =
-  equalGo harness context leftDomain rightDomain
-  recordRowMismatch harness context leftRow rightRow
-  equalGo harness context leftResult rightResult
-equalGo harness context (TApp leftHead leftArg) (TApp rightHead rightArg) =
-  equalGo harness context leftHead rightHead
-  equalGo harness context leftArg rightArg
-equalGo harness context (TEff left) (TEff right) =
-  recordRowMismatch harness context left right
-equalGo harness context _ _ = recordMismatch harness context
+equalGo harness context left0 right0 = go left0 right0
+  where
+    go (TVar cell) right = match !cell
+      Unbound id _ =>
+        if occurs id right then
+          recordMismatch harness context
+        else
+          cell := Link right
+      Link _ => ()
+    go left (TVar cell) = match !cell
+      Unbound id _ =>
+        if occurs id left then
+          recordMismatch harness context
+        else
+          cell := Link left
+      Link _ => ()
+    go (TRigid left) (TRigid right) =
+      if left == right then () else recordMismatch harness context
+    go (TFun leftDomain leftRow leftResult) (TFun rightDomain rightRow rightResult) =
+      go leftDomain rightDomain
+      recordRowMismatch harness context leftRow rightRow
+      go leftResult rightResult
+    go (TApp leftHead leftArg) (TApp rightHead rightArg) =
+      go leftHead rightHead
+      go leftArg rightArg
+    go (TEff left) (TEff right) = recordRowMismatch harness context left right
+    go _ _ = recordMismatch harness context
 
 occurs : Int -> Mono -> Bool
 occurs id value = match normalize value
@@ -82,7 +86,8 @@ occurs id value = match normalize value
     Link _ => False
   TFun domain _ result => occurs id domain || occurs id result
   TApp head argument => occurs id head || occurs id argument
-  _ => False
+  TQual inner _ => occurs id inner
+  TCon _ _ | TRigid _ | TEff _ | TAuth _ => False
 
 freshType : Harness -> Unit -> Mono
 freshType harness () =

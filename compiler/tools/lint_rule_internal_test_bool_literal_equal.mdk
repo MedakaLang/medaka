@@ -22,6 +22,7 @@ import tools.lint_core.{
   StdlibIndex,
   Visitor,
   mkVisitorRule,
+  noFix,
 }
 import tools.lint_shared.{
   detApply,
@@ -96,7 +97,7 @@ testBoolLitEqFinding loc rewritten = Finding {
     "`expectEqual` against a boolean literal. Rewrite as '\{exprToString rewritten}'",
   severity = SevWarning,
   loc = loc,
-  fix = None,
+  fix = noFix,
 }
 
 testBoolLiteralEqualFix : Oracle -> Decl -> Option (List Decl)

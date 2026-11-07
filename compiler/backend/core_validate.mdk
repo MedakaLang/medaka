@@ -427,15 +427,15 @@ findingBinding (ExternFinding _ _ _ _ binding) = binding
 -- or `None` for an extern it lowers and for a name that is not a runtime extern.
 export
 unprovidedOn : Backend -> String -> Option (GapKind, String)
-unprovidedOn LlvmBackend name = match catalogRow name
-  Some r => notProvidedOf (rowLlvm r)
-  None => None
-unprovidedOn WasmBackend name = match catalogRow name
-  Some r => notProvidedOf (rowWasm r)
-  None => None
-unprovidedOn EvalBackend name = match catalogRow name
-  Some r => notProvidedOf (rowEval r)
-  None => None
+unprovidedOn LlvmBackend name = do
+  r <- catalogRow name
+  notProvidedOf (rowLlvm r)
+unprovidedOn WasmBackend name = do
+  r <- catalogRow name
+  notProvidedOf (rowWasm r)
+unprovidedOn EvalBackend name = do
+  r <- catalogRow name
+  notProvidedOf (rowEval r)
 
 notProvidedOf : Disposition f -> Option (GapKind, String)
 notProvidedOf (NotProvided kind why) = Some (kind, why)
@@ -964,7 +964,7 @@ routeProjectionFaults bound (RKey _ reqs sups) =
   flatMap (routeProjectionFaults bound) (reqs ++ sups)
 routeProjectionFaults bound (RLocal _ ds) =
   flatMap (routeProjectionFaults bound) ds
-routeProjectionFaults _ _ = []
+routeProjectionFaults _ (RNone | RDict _ | RDictFwd _ | RScalar _) = []
 
 rootProjectionFaults : ProjBound -> Route -> List Int -> List String
 rootProjectionFaults (ProjBound recv limit cap) (RDict d) (i :: rest) =
@@ -1008,9 +1008,11 @@ walkImplBody ctx (CImplDefault iface tag key _ _ pats body) w =
     w
 
 walkClauses : Ctx -> CallScope -> List CClause -> Walk -> Walk
-walkClauses _ _ [] w = w
-walkClauses ctx scope ((CClause pats body) :: rest) w =
-  walkClauses ctx scope rest (walkE ctx (bindPatsScope pats scope) body w)
+walkClauses ctx scope xs0 walk0 = go xs0 walk0
+  where
+    go [] w = w
+    go ((CClause pats body) :: rest) w =
+      go rest (walkE ctx (bindPatsScope pats scope) body w)
 
 -- Every constructor is listed, with no catch-all arm, so a new expression form
 -- must decide where its binders scope.
@@ -1211,7 +1213,7 @@ builtDictFaults facts (RKey key reqs sups) =
     ++ flatMap (builtDictFaults facts) (reqs ++ sups)
 builtDictFaults facts (RLocal _ ds) = flatMap (builtDictFaults facts) ds
 builtDictFaults facts (RProj r _) = builtDictFaults facts r
-builtDictFaults _ _ = []
+builtDictFaults _ (RNone | RDict _ | RDictFwd _ | RScalar _) = []
 
 -- An occurrence answered by a dictionary names the interface whose method it is.
 ifaceWordFaults : String -> Route -> List String
@@ -1255,7 +1257,7 @@ routeShapeFaults (RProj r _) =
     ++ routeShapeFaults r
 routeShapeFaults (RKey _ reqs sups) = flatMap routeShapeFaults (reqs ++ sups)
 routeShapeFaults (RLocal _ ds) = flatMap routeShapeFaults ds
-routeShapeFaults _ = []
+routeShapeFaults (RNone | RDict _ | RDictFwd _) = []
 
 -- Stricter than core_ir.isGivenRooted, which accepts any projection: a projection
 -- is rooted only when the route it projects from is.
@@ -1417,31 +1419,34 @@ noteVar (Ctx backend top _ _ _ facts binding _) scope x (w@(Walk seen found bad 
           results
 
 walkList : Ctx -> CallScope -> List CExpr -> Walk -> Walk
-walkList _ _ [] w = w
-walkList ctx scope (e :: rest) w = walkList ctx scope rest (walkE ctx scope e w)
+walkList ctx scope xs0 walk0 = go xs0 walk0
+  where
+    go [] w = w
+    go (e :: rest) w = go rest (walkE ctx scope e w)
 
 walkFields : Ctx -> CallScope -> List CField -> Walk -> Walk
-walkFields _ _ [] w = w
-walkFields ctx scope ((CField _ _ e) :: rest) w =
-  walkFields ctx scope rest (walkE ctx scope e w)
+walkFields ctx scope xs0 walk0 = go xs0 walk0
+  where
+    go [] w = w
+    go ((CField _ _ e) :: rest) w = go rest (walkE ctx scope e w)
 
 walkLocalBinds : Ctx -> CallScope -> List CBind -> Walk -> Walk
-walkLocalBinds _ _ [] w = w
-walkLocalBinds ctx scope ((CBind _ clauses _ _) :: rest) w =
-  walkLocalBinds ctx scope rest (walkClauses ctx scope clauses w)
+walkLocalBinds ctx scope xs0 walk0 = go xs0 walk0
+  where
+    go [] w = w
+    go ((CBind _ clauses _ _) :: rest) w =
+      go rest (walkClauses ctx scope clauses w)
 
 -- An arm's pattern scopes over its guards and body; a `Pat <- e` guard's
 -- pattern scopes over the guards after it and the body.
 walkArms : Ctx -> CallScope -> List CArm -> Walk -> Walk
-walkArms _ _ [] w = w
-walkArms ctx scope ((CArm pat guards body) :: rest) w =
-  walkArms
-    ctx
-    scope
-    rest
-    (walkGuarded ctx (bindPatScope pat scope) guards body w)
-walkArms ctx scope ((CArmAlt pat guards _) :: rest) w =
-  walkArms ctx scope rest (walkGuards ctx (bindPatScope pat scope) guards w)
+walkArms ctx scope xs0 walk0 = go xs0 walk0
+  where
+    go [] w = w
+    go ((CArm pat guards body) :: rest) w =
+      go rest (walkGuarded ctx (bindPatScope pat scope) guards body w)
+    go ((CArmAlt pat guards _) :: rest) w =
+      go rest (walkGuards ctx (bindPatScope pat scope) guards w)
 
 walkGuards : Ctx -> CallScope -> List CGuard -> Walk -> Walk
 walkGuards _ _ [] w = w
@@ -1451,11 +1456,12 @@ walkGuards ctx scope ((CGBind pat e) :: rest) w =
   walkGuards ctx (bindPatScope pat scope) rest (walkE ctx scope e w)
 
 walkGuarded : Ctx -> CallScope -> List CGuard -> CExpr -> Walk -> Walk
-walkGuarded ctx scope [] body w = walkE ctx scope body w
-walkGuarded ctx scope ((CGBool c) :: rest) body w =
-  walkGuarded ctx scope rest body (walkE ctx scope c w)
-walkGuarded ctx scope ((CGBind pat e) :: rest) body w =
-  walkGuarded ctx (bindPatScope pat scope) rest body (walkE ctx scope e w)
+walkGuarded ctx scope0 xs0 body walk0 = go scope0 xs0 walk0
+  where
+    go scope [] w = walkE ctx scope body w
+    go scope ((CGBool c) :: rest) w = go scope rest (walkE ctx scope c w)
+    go scope ((CGBind pat e) :: rest) w =
+      go (bindPatScope pat scope) rest (walkE ctx scope e w)
 
 walkStmts : Ctx -> CallScope -> List CStmt -> Walk -> Walk
 walkStmts _ _ [] w = w
@@ -1577,11 +1583,12 @@ tailLocalBinds b ((CBind _ clauses _ _) :: rest) acc =
   tailLocalBinds b rest (tailClauses b clauses acc)
 
 tailArms : String -> Bool -> List CArm -> List String -> List String
-tailArms _ _ [] acc = acc
-tailArms b tl ((CArm _ guards body) :: rest) acc =
-  tailArms b tl rest (tailE b tl body (tailGuards b guards acc))
-tailArms b tl ((CArmAlt _ guards _) :: rest) acc =
-  tailArms b tl rest (tailGuards b guards acc)
+tailArms b tl xs0 acc0 = go xs0 acc0
+  where
+    go [] acc = acc
+    go ((CArm _ guards body) :: rest) acc =
+      go rest (tailE b tl body (tailGuards b guards acc))
+    go ((CArmAlt _ guards _) :: rest) acc = go rest (tailGuards b guards acc)
 
 -- [arms] is the whole list, [i] the index of the head of [rest].
 armAltFaults : String ->
@@ -1590,17 +1597,19 @@ armAltFaults : String ->
   List CArm ->
   List String ->
   List String
-armAltFaults _ _ _ [] acc = acc
-armAltFaults b arms i ((CArmAlt _ _ owner) :: rest) acc =
-  let ok = owner < i && bodyArmAt arms owner
-  let acc2 =
-    if ok then
-      acc
-    else
-      "arm: or-pattern candidate \{intToString i} shares the body of arm \{intToString owner}, which is not an earlier arm with a body [in \{b}]"
-        :: acc
-  armAltFaults b arms (i + 1) rest acc2
-armAltFaults b arms i (_ :: rest) acc = armAltFaults b arms (i + 1) rest acc
+armAltFaults b arms i0 xs0 acc0 = go i0 xs0 acc0
+  where
+    go _ [] acc = acc
+    go i ((CArmAlt _ _ owner) :: rest) acc =
+      let ok = owner < i && bodyArmAt arms owner
+      let acc2 =
+        if ok then
+          acc
+        else
+          "arm: or-pattern candidate \{intToString i} shares the body of arm \{intToString owner}, which is not an earlier arm with a body [in \{b}]"
+            :: acc
+      go (i + 1) rest acc2
+    go i (_ :: rest) acc = go (i + 1) rest acc
 
 bodyArmAt : List CArm -> Int -> Bool
 bodyArmAt ((CArm _ _ _) :: _) 0 = True
@@ -1614,9 +1623,11 @@ tailGuards b ((CGBind _ e) :: rest) acc =
   tailGuards b rest (tailE b False e acc)
 
 tailStmts : String -> Bool -> List CStmt -> List String -> List String
-tailStmts _ _ [] acc = acc
-tailStmts b tl [CSExpr e] acc = tailE b tl e acc
-tailStmts b tl (st :: rest) acc = tailStmts b tl rest (tailStmt b st acc)
+tailStmts b tl xs0 acc0 = go xs0 acc0
+  where
+    go [] acc = acc
+    go [CSExpr e] acc = tailE b tl e acc
+    go (st :: rest) acc = go rest (tailStmt b st acc)
 
 tailStmt : String -> CStmt -> List String -> List String
 tailStmt b (CSExpr e) acc = tailE b False e acc
@@ -1725,16 +1736,15 @@ stampFault rows ctors arities rhs x (BinderId _ n) =
     Some "\{x} has no id, so no stamped type"
   else match BM.get n rows
     None => Some "\{x} has no stamped type"
-    Some row => match rhs
-      None => None
-      Some e => match boundShape ctors arities e
-        None => None
-        Some shape =>
-          if stampAllows shape row.brType then
-            None
-          else
-            Some
-              "\{x} is stamped \{runtimeTypeName row.brType} but is bound to \{shapeName shape}"
+    Some row => do
+      e <- rhs
+      do
+        shape <- boundShape ctors arities e
+        if stampAllows shape row.brType then
+          None
+        else
+          Some
+            "\{x} is stamped \{runtimeTypeName row.brType} but is bound to \{shapeName shape}"
 
 -- What a `let` right-hand side is, where that fixes what its binder holds.
 data BoundShape = BoundLit RuntimeType | BoundInt | BoundCell

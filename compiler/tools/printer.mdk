@@ -458,15 +458,17 @@ popTrailingAt line col =
       mine
 
 partTrailing : Int -> Int -> List PComment -> (List PComment, List PComment)
-partTrailing _ _ [] = ([], [])
-partTrailing line col (c :: rest)
-  | pcLine c > line = ([], c :: rest)
-  | pcLine c == line
-    && not (pcStandalone c)
-    && pcCol c >= col = match partTrailing line col rest
-    (mine, left) => (c :: mine, left)
-  | otherwise = match partTrailing line col rest
-    (mine, left) => (mine, c :: left)
+partTrailing line col xs0 = go xs0
+  where
+    go [] = ([], [])
+    go (c :: rest)
+      | pcLine c > line = ([], c :: rest)
+      | pcLine c == line
+        && not (pcStandalone c)
+        && pcCol c >= col = match go rest
+        (mine, left) => (c :: mine, left)
+      | otherwise = match go rest
+        (mine, left) => (mine, c :: left)
 
 -- Pop the pending comments strictly above `line` that sit at column `col` or
 -- deeper (the dangling comments of the sequence just printed).
@@ -480,13 +482,15 @@ popDanglingBefore line col =
       mine
 
 partDangling : Int -> Int -> List PComment -> (List PComment, List PComment)
-partDangling _ _ [] = ([], [])
-partDangling line col ((PComment cl cc t st) :: rest)
-  | cl >= line = ([], PComment cl cc t st :: rest)
-  | cc >= col = match partDangling line col rest
-    (mine, left) => (PComment cl cc t st :: mine, left)
-  | otherwise = match partDangling line col rest
-    (mine, left) => (mine, PComment cl cc t st :: left)
+partDangling line col xs0 = go xs0
+  where
+    go [] = ([], [])
+    go ((PComment cl cc t st) :: rest)
+      | cl >= line = ([], PComment cl cc t st :: rest)
+      | cc >= col = match go rest
+        (mine, left) => (PComment cl cc t st :: mine, left)
+      | otherwise = match go rest
+        (mine, left) => (mine, PComment cl cc t st :: left)
 
 -- Build a sub-document whose comments may not reach past line `b` (the start
 -- line of whatever follows it): a condition before its `then` branch, a
@@ -521,9 +525,10 @@ pendingWithin : Int -> Int -> Bool
 pendingWithin lo hi = anyWithin lo hi !commentsRef
 
 anyWithin : Int -> Int -> List PComment -> Bool
-anyWithin _ _ [] = False
-anyWithin lo hi (c :: rest) =
-  pcLine c >= lo && pcLine c <= hi || anyWithin lo hi rest
+anyWithin lo hi xs0 = go xs0
+  where
+    go [] = False
+    go (c :: rest) = pcLine c >= lo && pcLine c <= hi || go rest
 
 -- Any pending comment strictly inside the span (startLine, startCol) ..
 -- (endLine, endCol)?  A comment trailing the span on its last line is not
@@ -532,11 +537,13 @@ pendingInside : Int -> Int -> Int -> Int -> Bool
 pendingInside sl sc el ec = anyInside sl sc el ec !commentsRef
 
 anyInside : Int -> Int -> Int -> Int -> List PComment -> Bool
-anyInside _ _ _ _ [] = False
-anyInside sl sc el ec ((PComment cl cc _ _) :: rest) =
-  let afterStart = cl > sl || cl == sl && cc >= sc
-  let beforeEnd = cl < el || cl == el && cc < ec
-  afterStart && beforeEnd || anyInside sl sc el ec rest
+anyInside sl sc el ec xs0 = go xs0
+  where
+    go [] = False
+    go ((PComment cl cc _ _) :: rest) =
+      let afterStart = cl > sl || cl == sl && cc >= sc
+      let beforeEnd = cl < el || cl == el && cc < ec
+      afterStart && beforeEnd || go rest
 
 -- ── Source spans ──────────────────────────────────
 -- (firstLine, firstCol, lastLine, lastCol) of a node, from the `ELoc`/pattern
@@ -712,6 +719,8 @@ firstPieceCol [] = 0
 -- follows this sequence in the declaration — otherwise the enclosing
 -- sequence's next unit takes it as its leading comment.
 pieceDocsGo : (Bool -> Doc) -> Int -> Int -> List Piece -> List PieceOut
+-- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 pieceDocsGo _ _ _ [] = []
 pieceDocsGo sepAfter dangCol prevEnd ((Piece s _sc en ec mk) :: rest) =
   let isLast = isEmptyL rest
@@ -867,6 +876,8 @@ cmpPos (l1, c1) (l2, c2) = if l1 == l2 then compare c1 c2 else compare l1 l2
 
 -- number of entries strictly before (line, col)
 posLowerBound : Array (Int, Int) -> Int -> Int -> Int -> Int -> Int
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
 posLowerBound arr line col lo hi =
   if lo >= hi then
     lo
@@ -1386,7 +1397,8 @@ isFillAtom e = match stripLocE e
   EMethodRef _ => True
   EDictApp _ => True
   EUnOp op inner _ => op == "-" && isFillAtom inner
-  _ => False
+  EApp _ _ | ELam _ _ | ELet _ _ _ _ _ | EMatch _ _ | EIf _ _ _ | EBinOp _ _ _ _ | EInfix _ _ _ | EFieldAccess _ _ _ | ETuple _ | EListLit _ | EArrayLit _ | ERangeList _ _ _ | ERangeArray _ _ _ | ESlice _ _ _ _ | ELetGroup _ _ | ESection _ | EIndex _ _ | EAnnot _ _ | EHeadAnnot _ _ | EBlock _ | EDo _ _ | EStringInterp _ | EGuards _ | ERecordCreate _ _ | ERecordUpdate _ _ _ | EVariantUpdate _ _ _ | EMapLit _ _ | ESetLit _ _ | EAsPat _ _ | EOrPat _ | EVarAt _ _ | EMethodAt _ _ _ | EDictAt _ _ | ELoc _ _ | EDoOrigin _ _ =>
+    False
 
 isFillable : List Expr -> Bool
 isFillable es = listLen es >= 2 && allList isFillAtom es
@@ -1739,25 +1751,28 @@ letRecInDoc binds body = letRecInDocWith printExprBody binds body
 
 -- `final` prints the innermost body.
 letRecInDocWith : (Expr -> Doc) -> List LetBind -> Expr -> Doc
-letRecInDocWith final [] body = final body
-letRecInDocWith final ((LetBind name clauses _ _) :: rest) body =
-  let inner = letRecInDocWith final rest body
-  match clauses
-    [FunClause pats rhs] =>
-      let headD =
-        Cat
-          (text "let rec ")
-          (Cat
-            (text name)
-            (concatD (map (p => Cat (text " ") (printPatAtom p)) pats)))
-      let rhsD = withBound (spanStart (exprSpan body)) (_ => printExprBody rhs)
-      group
-        (Cat
-          headD
-          (Cat
-            (text " = ")
-            (Cat rhsD (Cat (text " in") (nest (Cat Line inner))))))
-    _ => inner
+letRecInDocWith final xs0 body = go xs0
+  where
+    go [] = final body
+    go ((LetBind name clauses _ _) :: rest) =
+      let inner = go rest
+      match clauses
+        [FunClause pats rhs] =>
+          let headD =
+            Cat
+              (text "let rec ")
+              (Cat
+                (text name)
+                (concatD (map (p => Cat (text " ") (printPatAtom p)) pats)))
+          let rhsD =
+            withBound (spanStart (exprSpan body)) (_ => printExprBody rhs)
+          group
+            (Cat
+              headD
+              (Cat
+                (text " = ")
+                (Cat rhsD (Cat (text " in") (nest (Cat Line inner))))))
+        _ => inner
 
 -- ── if / then / else ──────────────────────────────
 
@@ -1833,7 +1848,7 @@ docHasHardline (FlatAlt _ b) = docHasHardline b
 docHasHardline (Alt a _) = docHasHardline a
 docHasHardline (Hang _ d) = docHasHardline d
 docHasHardline (Fill _ ds) = docsHaveHardline ds
-docHasHardline _ = False
+docHasHardline (Nil | Text _ | Line | Softline) = False
 
 docsHaveHardline : List Doc -> Bool
 docsHaveHardline [] = False
@@ -1870,6 +1885,8 @@ cmpUnit (k1, l1, c1) (k2, l2, c2) =
 
 -- number of entries at or before (kind, line, col)
 unitUpperBound : Array (Int, Int, Int) -> Int -> Int -> Int -> Int -> Int -> Int
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
 unitUpperBound arr kind line col lo hi =
   if lo >= hi then
     lo
@@ -1980,7 +1997,8 @@ endsInLayoutBlock e = match stripLocE e
   EAnnot body _ => endsInLayoutBlock body
   EHeadAnnot body _ => endsInLayoutBlock body
   EBinOp ":=" _ r _ => endsInLayoutBlock r
-  _ => False
+  ELit _ | EVar _ | EApp _ _ | EUnOp _ _ _ | EInfix _ _ _ | EFieldAccess _ _ _ | ETuple _ | EListLit _ | EArrayLit _ | ERangeList _ _ _ | ERangeArray _ _ _ | ESlice _ _ _ _ | ESection _ | EIndex _ _ | EStringInterp _ | ERecordCreate _ _ | ERecordUpdate _ _ _ | EVariantUpdate _ _ _ | EMapLit _ _ | ESetLit _ _ | EAsPat _ _ | EOrPat _ | EMethodRef _ | EDictApp _ | EVarAt _ _ | EVarId _ _ | EMethodAt _ _ _ | EDictAt _ _ | ELoc _ _ | EDoOrigin _ _ | ENumLit _ _ _ | EWideLit _ _ _ _ | EBinOp _ _ _ _ =>
+    False
 
 isMultiBindGroup : List LetBind -> Bool
 isMultiBindGroup (_ :: _ :: _) = True
@@ -2455,31 +2473,36 @@ dataBodyDoc : List Variant ->
   List (List (String, KindAnn)) ->
   List DeriveRef ->
   Doc
-dataBodyDoc [] _ derives = derivesInline derives
-dataBodyDoc [Variant name (ConNamed fields nameOmitted)] [[]] derives =
-  Cat (text " = ") (recordVariantDoc name [] fields nameOmitted derives)
-dataBodyDoc [v] [b] derives =
-  group
-    (Cat
-      (text " =")
-      (nest (Cat (Cat Line (printVariant b v)) (derivesLineOrInline derives))))
-dataBodyDoc (v :: vs) (b :: bs) derives =
-  group
-    (Cat
-      (text " =")
-      (nest
+dataBodyDoc vs0 arg10 derives = go vs0 arg10
+  where
+    go [] _ = derivesInline derives
+    go [Variant name (ConNamed fields nameOmitted)] [[]] =
+      Cat (text " = ") (recordVariantDoc name [] fields nameOmitted derives)
+    go [v] [b] =
+      group
         (Cat
-          (Cat (FlatAlt (Cat Line (text "| ")) (text " ")) (printVariant b v))
-          (Cat
-            (concatD
-              (map
-                (vb =>
-                  Cat
-                    (FlatAlt (Cat Line (text "| ")) (text " | "))
-                    (printVariant (snd vb) (fst vb)))
-                (zipL vs bs)))
-            (derivesLineOrInline derives)))))
-dataBodyDoc vs [] derives = dataBodyDoc vs (padBindersP vs []) derives
+          (text " =")
+          (nest
+            (Cat (Cat Line (printVariant b v)) (derivesLineOrInline derives))))
+    go (v :: vs) (b :: bs) =
+      group
+        (Cat
+          (text " =")
+          (nest
+            (Cat
+              (Cat
+                (FlatAlt (Cat Line (text "| ")) (text " "))
+                (printVariant b v))
+              (Cat
+                (concatD
+                  (map
+                    (vb =>
+                      Cat
+                        (FlatAlt (Cat Line (text "| ")) (text " | "))
+                        (printVariant (snd vb) (fst vb)))
+                    (zipL vs bs)))
+                (derivesLineOrInline derives)))))
+    go vs [] = go vs (padBindersP vs [])
 
 derivesInline : List DeriveRef -> Doc
 derivesInline [] = Nil
@@ -2536,15 +2559,16 @@ dataVariantDocsCommented : List Variant ->
   Doc
 dataVariantDocsCommented [] _ _ = Nil
 dataVariantDocsCommented _ _ [] = Nil
-dataVariantDocsCommented (v :: vs) (b :: bs) (vc :: vcs) =
+dataVariantDocsCommented (v :: vs) binders (vc :: vcs) =
+  let (b, bs) = match binders
+    b0 :: rest => (b0, rest)
+    [] => ([], padBindersP vs [])
   Cat
     (text " =")
     (nest
       (Cat
         (variantCommentedDoc b v vc)
         (concatD (map2VariantComment vs bs vcs))))
-dataVariantDocsCommented vs [] vcs =
-  dataVariantDocsCommented vs (padBindersP vs []) vcs
 
 map2VariantComment : List Variant ->
   List (List (String, KindAnn)) ->

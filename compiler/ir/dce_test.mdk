@@ -69,11 +69,13 @@ reachable : List (String, String) -> String -> Bool
 reachable edges wanted = walk edges wanted ["main"] []
 
 walk : List (String, String) -> String -> List String -> List String -> Bool
-walk _ _ [] _ = False
-walk edges wanted (here :: todo) seen
-  | here == wanted = True
-  | contains here seen = walk edges wanted todo seen
-  | otherwise = walk edges wanted (targetsOf here edges ++ todo) (here :: seen)
+walk edges wanted xs0 seen0 = go xs0 seen0
+  where
+    go [] _ = False
+    go (here :: todo) seen
+      | here == wanted = True
+      | contains here seen = go todo seen
+      | otherwise = go (targetsOf here edges ++ todo) (here :: seen)
 
 expectedFunctionNames : List (String, String) -> List String
 expectedFunctionNames edges = filter (reachable edges) names

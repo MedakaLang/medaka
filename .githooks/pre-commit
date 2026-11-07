@@ -112,6 +112,9 @@ set -u
 # Lint enforcement reads its rule lists from the binary (see check 2), so a rule
 # added to the registry is enforced here without touching this file.
 LINT_BASELINE_FILE="test/lint_baseline.toml"
+# Hand-written per-file rule exemptions for bytes another gate pins (check 2
+# passes it to lint; check 1 skips its files, whose pinned bytes fmt may not move).
+LINT_EXEMPT_FILE="test/lint_path_exempt.toml"
 # Roots of the project-wide cross-file scan. Narrower than the per-file check on
 # purpose: the other projects carry cross-file findings that are not yet drained
 # (#2881), so scanning them would block every commit.
@@ -156,8 +159,10 @@ fi
 
 # ── 1. formatter check ───────────────────────────────────────────────────────
 bad=""
+fmt_exempt="$(sed -n 's/^file = "\(.*\)"$/\1/p' "$ROOT/$LINT_EXEMPT_FILE" 2>/dev/null)"
 for f in $files; do
   [ -f "$f" ] || continue
+  printf '%s\n' "$fmt_exempt" | grep -qxF "$f" && continue
   "$MEDAKA" fmt --check "$f" >/dev/null 2>&1 || bad="$bad $f"
 done
 
@@ -215,7 +220,7 @@ if [ -n "$lintfiles" ]; then
   # lines and the filter below reads a location-less finding (#4859).
   # shellcheck disable=SC2086
   "$MEDAKA" lint --cache --internal --baseline="$ROOT/$LINT_BASELINE_FILE" \
-    --only="$ONLY_RULES" --deny="$ALL_GATED" \
+    --exempt="$ROOT/$LINT_EXEMPT_FILE" --only="$ONLY_RULES" --deny="$ALL_GATED" \
     $targets >"$lintout" 2>"$lintErr" || lintst=$?
   if [ "$lintst" -ne 0 ]; then
     # An error counts when it is in a staged file or in the cross-file section.
@@ -235,7 +240,7 @@ if [ -n "$lintfiles" ]; then
       printf '%s\n' "$blocking" | while IFS= read -r f; do [ -n "$f" ] && echo "      $f" >&2; done
       grep -q '^error: ' "$lintout" || cat "$lintErr" "$lintout" | sed 's/^/      /' | head -20 >&2
       echo "" >&2
-      echo "  See findings:  medaka lint --internal --baseline=$LINT_BASELINE_FILE --only=$ONLY_RULES$lintfiles" >&2
+      echo "  See findings:  medaka lint --internal --baseline=$LINT_BASELINE_FILE --exempt=$LINT_EXEMPT_FILE --only=$ONLY_RULES$lintfiles" >&2
       echo "  If intentional, silence inline with a directive comment above the site:" >&2
       echo "                 -- lint-disable-next-line <rule>" >&2
       echo "  A count that legitimately moves is re-pinned by REGENERATING the file," >&2

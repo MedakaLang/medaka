@@ -1,5 +1,5 @@
 # META
-source_lines=1350
+source_lines=1358
 stages=DESUGAR,MARK
 # SOURCE
 {- | Operations on `List a`.
@@ -327,10 +327,12 @@ scanLeft f z (x :: xs) = z :: scanLeft f (f z x) xs
    [6, 5, 3, 0] -}
 export
 scanRight : (a -> b -> <e> b) -> b -> List a -> <e> List b
-scanRight _ z [] = [z]
-scanRight f z (x :: xs) = match scanRight f z xs
-  q :: qs => f x q :: q :: qs
-  [] => [f x z]
+scanRight f z xs = go xs
+  where
+    go [] = [z]
+    go (x :: rest) = match go rest
+      q :: qs => f x q :: q :: qs
+      [] => [f x z]
 
 {- | A left fold that uses the first element as the seed.
 
@@ -517,11 +519,13 @@ mapAccumL f s (x :: xs) =
    (6, [5, 3, 0]) -}
 export
 mapAccumR : (s -> a -> <e> (s, b)) -> s -> List a -> <e> (s, List b)
-mapAccumR _ s [] = (s, [])
-mapAccumR f s (x :: xs) =
-  let (s2, ys) = mapAccumR f s xs
-  let (s3, y) = f s2 x
-  (s3, y :: ys)
+mapAccumR f s xs = go xs
+  where
+    go [] = (s, [])
+    go (x :: rest) =
+      let (s2, ys) = go rest
+      let (s3, y) = f s2 x
+      (s3, y :: ys)
 
 -- # Positional edits
 
@@ -986,6 +990,8 @@ nub xs = nubBy (==) xs
    [1, 3, 2] -}
 export
 deleteBy : (a -> a -> <e> Bool) -> a -> List a -> <e> List a
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 deleteBy _ _ [] = []
 deleteBy same x (y :: rest)
   | same x y = rest
@@ -1251,6 +1257,8 @@ prop "sort is ascending and length-preserving" (xs : List Int) =
 
 -- Reference stable sort: insert each element after the last element that does not compare greater.
 refInsert : (a -> a -> <e> Ordering) -> a -> List a -> <e> List a
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 refInsert _ x [] = [x]
 refInsert cmp x (y :: ys) = match cmp y x
   Gt => x :: y :: ys
@@ -1418,8 +1426,7 @@ prop "elemIndices agrees with the plain findIndices reference on [] and singleto
 (DFunDef false "scanLeft" (PWild (PVar "z") (PList)) (EListLit (EVar "z")))
 (DFunDef false "scanLeft" ((PVar "f") (PVar "z") (PCons (PVar "x") (PVar "xs"))) (EBinOp "::" (EVar "z") (EApp (EApp (EApp (EVar "scanLeft") (EVar "f")) (EApp (EApp (EVar "f") (EVar "z")) (EVar "x"))) (EVar "xs"))))
 (DTypeSig true "scanRight" (TyFun (TyFun (TyVar "a") (TyFun (TyVar "b") (TyEffect () (Some "e") (TyVar "b")))) (TyFun (TyVar "b") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyVar "b")))))))
-(DFunDef false "scanRight" (PWild (PVar "z") (PList)) (EListLit (EVar "z")))
-(DFunDef false "scanRight" ((PVar "f") (PVar "z") (PCons (PVar "x") (PVar "xs"))) (EMatch (EApp (EApp (EApp (EVar "scanRight") (EVar "f")) (EVar "z")) (EVar "xs")) (arm (PCons (PVar "q") (PVar "qs")) () (EBinOp "::" (EApp (EApp (EVar "f") (EVar "x")) (EVar "q")) (EBinOp "::" (EVar "q") (EVar "qs")))) (arm (PList) () (EListLit (EApp (EApp (EVar "f") (EVar "x")) (EVar "z"))))))
+(DFunDef false "scanRight" ((PVar "f") (PVar "z") (PVar "xs")) (ELetGroup ((lgb "go" (clause ((PList)) (EListLit (EVar "z"))) (clause ((PCons (PVar "x") (PVar "rest"))) (EMatch (EApp (EVar "go") (EVar "rest")) (arm (PCons (PVar "q") (PVar "qs")) () (EBinOp "::" (EApp (EApp (EVar "f") (EVar "x")) (EVar "q")) (EBinOp "::" (EVar "q") (EVar "qs")))) (arm (PList) () (EListLit (EApp (EApp (EVar "f") (EVar "x")) (EVar "z")))))))) (EApp (EVar "go") (EVar "xs"))))
 (DTypeSig true "reduce" (TyFun (TyFun (TyVar "a") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyVar "a")))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyApp (TyCon "Option") (TyVar "a"))))))
 (DFunDef false "reduce" (PWild (PList)) (EVar "None"))
 (DFunDef false "reduce" ((PVar "f") (PCons (PVar "x") (PVar "xs"))) (ELetGroup ((lgb "go" (clause ((PVar "acc") (PList)) (EVar "acc")) (clause ((PVar "acc") (PCons (PVar "y") (PVar "rest"))) (EApp (EApp (EVar "go") (EApp (EApp (EVar "f") (EVar "acc")) (EVar "y"))) (EVar "rest"))))) (EApp (EVar "Some") (EApp (EApp (EVar "go") (EVar "x")) (EVar "xs")))))
@@ -1449,8 +1456,7 @@ prop "elemIndices agrees with the plain findIndices reference on [] and singleto
 (DFunDef false "mapAccumL" (PWild (PVar "s") (PList)) (ETuple (EVar "s") (EListLit)))
 (DFunDef false "mapAccumL" ((PVar "f") (PVar "s") (PCons (PVar "x") (PVar "xs"))) (EBlock (DoLet false false (PTuple (PVar "s2") (PVar "y")) (EApp (EApp (EVar "f") (EVar "s")) (EVar "x"))) (DoLet false false (PTuple (PVar "s3") (PVar "ys")) (EApp (EApp (EApp (EVar "mapAccumL") (EVar "f")) (EVar "s2")) (EVar "xs"))) (DoExpr (ETuple (EVar "s3") (EBinOp "::" (EVar "y") (EVar "ys"))))))
 (DTypeSig true "mapAccumR" (TyFun (TyFun (TyVar "s") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyTuple (TyVar "s") (TyVar "b"))))) (TyFun (TyVar "s") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyTuple (TyVar "s") (TyApp (TyCon "List") (TyVar "b"))))))))
-(DFunDef false "mapAccumR" (PWild (PVar "s") (PList)) (ETuple (EVar "s") (EListLit)))
-(DFunDef false "mapAccumR" ((PVar "f") (PVar "s") (PCons (PVar "x") (PVar "xs"))) (EBlock (DoLet false false (PTuple (PVar "s2") (PVar "ys")) (EApp (EApp (EApp (EVar "mapAccumR") (EVar "f")) (EVar "s")) (EVar "xs"))) (DoLet false false (PTuple (PVar "s3") (PVar "y")) (EApp (EApp (EVar "f") (EVar "s2")) (EVar "x"))) (DoExpr (ETuple (EVar "s3") (EBinOp "::" (EVar "y") (EVar "ys"))))))
+(DFunDef false "mapAccumR" ((PVar "f") (PVar "s") (PVar "xs")) (ELetGroup ((lgb "go" (clause ((PList)) (ETuple (EVar "s") (EListLit))) (clause ((PCons (PVar "x") (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "s2") (PVar "ys")) (EApp (EVar "go") (EVar "rest"))) (DoLet false false (PTuple (PVar "s3") (PVar "y")) (EApp (EApp (EVar "f") (EVar "s2")) (EVar "x"))) (DoExpr (ETuple (EVar "s3") (EBinOp "::" (EVar "y") (EVar "ys")))))))) (EApp (EVar "go") (EVar "xs"))))
 (DTypeSig true "insertAt" (TyFun (TyCon "Int") (TyFun (TyVar "a") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))))))
 (DFunDef false "insertAt" (PWild (PVar "x") (PList)) (EListLit (EVar "x")))
 (DFunDef false "insertAt" ((PVar "i") (PVar "x") (PCons (PVar "y") (PVar "rest"))) (EIf (EBinOp "<=" (EVar "i") (ELit (LInt 0))) (EBinOp "::" (EVar "x") (EBinOp "::" (EVar "y") (EVar "rest"))) (EIf (EVar "otherwise") (EBinOp "::" (EVar "y") (EApp (EApp (EApp (EVar "insertAt") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "x")) (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -1703,8 +1709,7 @@ prop "elemIndices agrees with the plain findIndices reference on [] and singleto
 (DFunDef false "scanLeft" (PWild (PVar "z") (PList)) (EListLit (EVar "z")))
 (DFunDef false "scanLeft" ((PVar "f") (PVar "z") (PCons (PVar "x") (PVar "xs"))) (EBinOp "::" (EVar "z") (EApp (EApp (EApp (EVar "scanLeft") (EVar "f")) (EApp (EApp (EVar "f") (EVar "z")) (EVar "x"))) (EVar "xs"))))
 (DTypeSig true "scanRight" (TyFun (TyFun (TyVar "a") (TyFun (TyVar "b") (TyEffect () (Some "e") (TyVar "b")))) (TyFun (TyVar "b") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyVar "b")))))))
-(DFunDef false "scanRight" (PWild (PVar "z") (PList)) (EListLit (EVar "z")))
-(DFunDef false "scanRight" ((PVar "f") (PVar "z") (PCons (PVar "x") (PVar "xs"))) (EMatch (EApp (EApp (EApp (EVar "scanRight") (EVar "f")) (EVar "z")) (EVar "xs")) (arm (PCons (PVar "q") (PVar "qs")) () (EBinOp "::" (EApp (EApp (EVar "f") (EVar "x")) (EVar "q")) (EBinOp "::" (EVar "q") (EVar "qs")))) (arm (PList) () (EListLit (EApp (EApp (EVar "f") (EVar "x")) (EVar "z"))))))
+(DFunDef false "scanRight" ((PVar "f") (PVar "z") (PVar "xs")) (ELetGroup ((lgb "go" (clause ((PList)) (EListLit (EVar "z"))) (clause ((PCons (PVar "x") (PVar "rest"))) (EMatch (EApp (EVar "go") (EVar "rest")) (arm (PCons (PVar "q") (PVar "qs")) () (EBinOp "::" (EApp (EApp (EVar "f") (EVar "x")) (EVar "q")) (EBinOp "::" (EVar "q") (EVar "qs")))) (arm (PList) () (EListLit (EApp (EApp (EVar "f") (EVar "x")) (EVar "z")))))))) (EApp (EVar "go") (EVar "xs"))))
 (DTypeSig true "reduce" (TyFun (TyFun (TyVar "a") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyVar "a")))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyApp (TyCon "Option") (TyVar "a"))))))
 (DFunDef false "reduce" (PWild (PList)) (EVar "None"))
 (DFunDef false "reduce" ((PVar "f") (PCons (PVar "x") (PVar "xs"))) (ELetGroup ((lgb "go" (clause ((PVar "acc") (PList)) (EVar "acc")) (clause ((PVar "acc") (PCons (PVar "y") (PVar "rest"))) (EApp (EApp (EVar "go") (EApp (EApp (EVar "f") (EVar "acc")) (EVar "y"))) (EVar "rest"))))) (EApp (EVar "Some") (EApp (EApp (EVar "go") (EVar "x")) (EVar "xs")))))
@@ -1734,8 +1739,7 @@ prop "elemIndices agrees with the plain findIndices reference on [] and singleto
 (DFunDef false "mapAccumL" (PWild (PVar "s") (PList)) (ETuple (EVar "s") (EListLit)))
 (DFunDef false "mapAccumL" ((PVar "f") (PVar "s") (PCons (PVar "x") (PVar "xs"))) (EBlock (DoLet false false (PTuple (PVar "s2") (PVar "y")) (EApp (EApp (EVar "f") (EVar "s")) (EVar "x"))) (DoLet false false (PTuple (PVar "s3") (PVar "ys")) (EApp (EApp (EApp (EVar "mapAccumL") (EVar "f")) (EVar "s2")) (EVar "xs"))) (DoExpr (ETuple (EVar "s3") (EBinOp "::" (EVar "y") (EVar "ys"))))))
 (DTypeSig true "mapAccumR" (TyFun (TyFun (TyVar "s") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyTuple (TyVar "s") (TyVar "b"))))) (TyFun (TyVar "s") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyTuple (TyVar "s") (TyApp (TyCon "List") (TyVar "b"))))))))
-(DFunDef false "mapAccumR" (PWild (PVar "s") (PList)) (ETuple (EVar "s") (EListLit)))
-(DFunDef false "mapAccumR" ((PVar "f") (PVar "s") (PCons (PVar "x") (PVar "xs"))) (EBlock (DoLet false false (PTuple (PVar "s2") (PVar "ys")) (EApp (EApp (EApp (EVar "mapAccumR") (EVar "f")) (EVar "s")) (EVar "xs"))) (DoLet false false (PTuple (PVar "s3") (PVar "y")) (EApp (EApp (EVar "f") (EVar "s2")) (EVar "x"))) (DoExpr (ETuple (EVar "s3") (EBinOp "::" (EVar "y") (EVar "ys"))))))
+(DFunDef false "mapAccumR" ((PVar "f") (PVar "s") (PVar "xs")) (ELetGroup ((lgb "go" (clause ((PList)) (ETuple (EVar "s") (EListLit))) (clause ((PCons (PVar "x") (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "s2") (PVar "ys")) (EApp (EVar "go") (EVar "rest"))) (DoLet false false (PTuple (PVar "s3") (PVar "y")) (EApp (EApp (EVar "f") (EVar "s2")) (EVar "x"))) (DoExpr (ETuple (EVar "s3") (EBinOp "::" (EVar "y") (EVar "ys")))))))) (EApp (EVar "go") (EVar "xs"))))
 (DTypeSig true "insertAt" (TyFun (TyCon "Int") (TyFun (TyVar "a") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))))))
 (DFunDef false "insertAt" (PWild (PVar "x") (PList)) (EListLit (EVar "x")))
 (DFunDef false "insertAt" ((PVar "i") (PVar "x") (PCons (PVar "y") (PVar "rest"))) (EIf (EBinOp "<=" (EVar "i") (ELit (LInt 0))) (EBinOp "::" (EVar "x") (EBinOp "::" (EVar "y") (EVar "rest"))) (EIf (EVar "otherwise") (EBinOp "::" (EVar "y") (EApp (EApp (EApp (EVar "insertAt") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "x")) (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))

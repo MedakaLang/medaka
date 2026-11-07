@@ -139,9 +139,9 @@ rootsPresent (root :: rest) store =
 
 makeCar : List Cid -> List (Cid, Bytes) -> Result String Car
 makeCar [] _ = Err "car: atproto profile requires at least one root"
-makeCar roots blocks = match checkCarBlocks (length blocks)
-  Err message => Err message
-  Ok () => match blockStoreFromBlocks blocks
+makeCar roots blocks = do
+  _ <- checkCarBlocks (length blocks)
+  match blockStoreFromBlocks blocks
     Err message => Err "car: \{message}"
     Ok store => map (() => Car roots blocks store) (rootsPresent roots store)
 
@@ -179,23 +179,21 @@ carEncodeChecked : List Cid ->
   List (Cid, Bytes) ->
   Result String Unit ->
   Result String Bytes
-carEncodeChecked roots blocks verified = match checkCarBlocks (length blocks)
-  Err message => Err message
-  Ok () => match dagCborEncode (headerValue roots 1)
+carEncodeChecked roots blocks verified = do
+  _ <- checkCarBlocks (length blocks)
+  match dagCborEncode (headerValue roots 1)
     Err message => Err "car: header encoding failed: \{message}"
     Ok header =>
       let headerPrefix = uvarintEncode (bytesLength header)
       let headerSize = bytesLength headerPrefix + bytesLength header
-      match encodedSectionsSize blocks headerSize
-        Err message => Err message
-        Ok _ => match verified
-          Err message => Err message
-          Ok () =>
-            let out = newBuilder ()
-            let () = emitBytes headerPrefix out
-            let () = emitBytes header out
-            let () = emitSections blocks out
-            Ok (buildBytes out)
+      do
+        _ <- encodedSectionsSize blocks headerSize
+        _ <- verified
+        let out = newBuilder ()
+        let () = emitBytes headerPrefix out
+        let () = emitBytes header out
+        let () = emitSections blocks out
+        Ok (buildBytes out)
 
 {- | Canonically encode the header and preserve the caller's explicit block
    order. Every row is verified before any bytes are returned. -}
@@ -228,19 +226,21 @@ carEncodeRootless blocks = carEncodeChecked [] blocks (rowsVerified blocks)
 -- | Strictly decode one complete CARv1 byte array.
 export
 carDecode : Bytes -> Result String Car
-carDecode input = match checkCarBytes (bytesLength input)
-  Err message => Err message
-  Ok () => match readVarintAt "header length" input 0 (bytesLength input)
-    Err message => Err message
-    Ok (headerLength, headerPos) =>
-      if headerLength == 0 then
-        Err "car: zero-length header section"
-      else if headerLength > bytesLength input - headerPos then
-        Err "car: truncated header section"
-      else
-        let header = carSlice input headerPos headerLength
-        match decodeHeader header
-          Err message => Err message
-          Ok roots => match decodeSections input (headerPos + headerLength) 0 []
-            Err message => Err message
-            Ok blocks => makeCar roots blocks
+carDecode input = do
+  _ <- checkCarBytes (bytesLength input)
+  (headerLength, headerPos) <- readVarintAt
+    "header length"
+    input
+    0
+    (bytesLength input)
+  if headerLength == 0 then
+    Err "car: zero-length header section"
+  else if headerLength > bytesLength input - headerPos then
+    Err "car: truncated header section"
+  else
+    let header = carSlice input headerPos headerLength
+    do
+      roots <- decodeHeader header
+      do
+        blocks <- decodeSections input (headerPos + headerLength) 0 []
+        makeCar roots blocks

@@ -509,53 +509,65 @@ checkDeclaredKinds : ModuleCtx -> KindScope -> List Decl -> Unit
 checkDeclaredKinds mctx sc prog = checkDeclaredKindsGo mctx sc prog prog
 
 checkDeclaredKindsGo : ModuleCtx -> KindScope -> List Decl -> List Decl -> Unit
-checkDeclaredKindsGo _mctx _ _ [] = ()
-checkDeclaredKindsGo mctx sc prog (d :: rest) =
-  checkDeclaredKindsDecl mctx sc prog d
-  checkDeclaredKindsGo mctx sc prog rest
+checkDeclaredKindsGo mctx sc prog xs0 = go xs0
+  where
+    go [] = ()
+    go (d :: rest) =
+      checkDeclaredKindsDecl mctx sc prog d
+      go rest
 
 checkDeclaredKindsDecl : ModuleCtx -> KindScope -> List Decl -> Decl -> Unit
-checkDeclaredKindsDecl mctx sc prog (DAttrib _ d) =
-  checkDeclaredKindsDecl mctx sc prog d
--- An effect label's domain schema is declared on its head as a data type's
--- kinds are: a Product declares its axes, nothing else does.
-checkDeclaredKindsDecl mctx _ _ (DEffect _ name domain axes _ loc) =
-  checkDomainAxes mctx loc name domain axes
-checkDeclaredKindsDecl mctx sc _ (DData { dataVis = vis, dataName = n, dataParams = ps, dataParamKinds = ks, dataCtors = vs, dataCtorBinders = bs, dataOrigin = o, dataNameLoc = nloc }) =
-  let fieldTys = flatMap (v => payloadAstTypes (variantPayload v)) vs
-  checkAuthorityKindLabels
-    mctx
-    (ks ++ flatMap (b => map (x => Some (snd x)) b) bs)
-  checkHeadKinds mctx n ps ks fieldTys
-  checkPhantomAuthorityExport mctx vis n (authorityParamNames ps ks) vs
-  reportWrittenKinds
-    mctx
-    sc
-    (headParamKinds sc o n ps)
-    nloc
-    (map (t => (Some KType, t)) fieldTys)
-checkDeclaredKindsDecl mctx sc _ (DNewtype { newtypeName = n, newtypeParams = ps, newtypeParamKinds = ks, newtypeFieldTy = fty, newtypeCtorBinders = bs, newtypeOrigin = o, newtypeNameLoc = nloc }) =
-  checkAuthorityKindLabels mctx (ks ++ map (b => Some (snd b)) bs)
-  checkHeadKinds mctx n ps ks [fty]
-  reportWrittenKinds mctx sc (headParamKinds sc o n ps) nloc [(Some KType, fty)]
-checkDeclaredKindsDecl mctx sc _ (DTypeAlias { tyAliasName = n, tyAliasParams = ps, tyAliasParamKinds = ks, tyAliasRhs = rhs, tyAliasOrigin = o, tyAliasNameLoc = nloc }) =
-  checkAuthorityKindLabels mctx ks
-  checkAliasPatternSlots mctx (zipParamKinds ps ks) rhs
-  checkHeadKinds mctx n ps ks [rhs]
-  reportWrittenKinds mctx sc (headParamKinds sc o n ps) nloc [(Some KType, rhs)]
-checkDeclaredKindsDecl mctx sc prog (DInterface { name, typarams, typaramKinds, supers, methods, ifaceOrigin = o, ... }) =
-  checkIfaceHeadKinds mctx name typarams (padAnns typarams typaramKinds) methods
-  let declared = zipL typarams (optionOr [] (sc.ksIfaces o name))
-  checkSuperKinds mctx sc prog name declared methods supers
-  each
-    ((IfaceMethod _ mty _ mloc) =>
-      reportWrittenKinds mctx sc declared mloc [(Some KType, mty)])
-    methods
-checkDeclaredKindsDecl mctx sc _ (DTypeSig _ _ ty loc) =
-  reportWrittenKinds mctx sc [] (Some loc) [(Some KType, ty)]
-checkDeclaredKindsDecl mctx sc _ (DExtern (ExternDecl { edTy = ty, edLoc = loc })) =
-  reportWrittenKinds mctx sc [] (Some loc) [(Some KType, ty)]
-checkDeclaredKindsDecl _ _ _ _ = ()
+checkDeclaredKindsDecl mctx sc prog x0 = go x0
+  where
+    go (DAttrib _ d) = go d
+    -- An effect label's domain schema is declared on its head as a data type's
+    -- kinds are: a Product declares its axes, nothing else does.
+    go (DEffect _ name domain axes _ loc) =
+      checkDomainAxes mctx loc name domain axes
+    go (DData { dataVis = vis, dataName = n, dataParams = ps, dataParamKinds = ks, dataCtors = vs, dataCtorBinders = bs, dataOrigin = o, dataNameLoc = nloc }) =
+      let fieldTys = flatMap (v => payloadAstTypes (variantPayload v)) vs
+      checkAuthorityKindLabels
+        mctx
+        (ks ++ flatMap (b => map (x => Some (snd x)) b) bs)
+      checkHeadKinds mctx n ps ks fieldTys
+      checkPhantomAuthorityExport mctx vis n (authorityParamNames ps ks) vs
+      reportWrittenKinds
+        mctx
+        sc
+        (headParamKinds sc o n ps)
+        nloc
+        (map (t => (Some KType, t)) fieldTys)
+    go (DNewtype { newtypeName = n, newtypeParams = ps, newtypeParamKinds = ks, newtypeFieldTy = fty, newtypeCtorBinders = bs, newtypeOrigin = o, newtypeNameLoc = nloc }) =
+      checkAuthorityKindLabels mctx (ks ++ map (b => Some (snd b)) bs)
+      checkHeadKinds mctx n ps ks [fty]
+      reportWrittenKinds mctx sc (headParamKinds sc o n ps) nloc [
+        (Some KType, fty),
+      ]
+    go (DTypeAlias { tyAliasName = n, tyAliasParams = ps, tyAliasParamKinds = ks, tyAliasRhs = rhs, tyAliasOrigin = o, tyAliasNameLoc = nloc }) =
+      checkAuthorityKindLabels mctx ks
+      checkAliasPatternSlots mctx (zipParamKinds ps ks) rhs
+      checkHeadKinds mctx n ps ks [rhs]
+      reportWrittenKinds mctx sc (headParamKinds sc o n ps) nloc [
+        (Some KType, rhs),
+      ]
+    go (DInterface { name, typarams, typaramKinds, supers, methods, ifaceOrigin = o, ... }) =
+      checkIfaceHeadKinds
+        mctx
+        name
+        typarams
+        (padAnns typarams typaramKinds)
+        methods
+      let declared = zipL typarams (optionOr [] (sc.ksIfaces o name))
+      checkSuperKinds mctx sc prog name declared methods supers
+      each
+        ((IfaceMethod _ mty _ mloc) =>
+          reportWrittenKinds mctx sc declared mloc [(Some KType, mty)])
+        methods
+    go (DTypeSig _ _ ty loc) =
+      reportWrittenKinds mctx sc [] (Some loc) [(Some KType, ty)]
+    go (DExtern (ExternDecl { edTy = ty, edLoc = loc })) =
+      reportWrittenKinds mctx sc [] (Some loc) [(Some KType, ty)]
+    go _ = ()
 
 -- An alias parameter of an ordinary `Authority L` kind admits an exact
 -- element, which an `Authority L*` slot of the right-hand side refuses, so
@@ -629,22 +641,24 @@ checkPhantomAuthorityExport : ModuleCtx ->
   List String ->
   List Variant ->
   Unit
-checkPhantomAuthorityExport mctx VisPublic tyName (p :: ps) variants =
-  fold
-    (_ v =>
-      let tys = payloadAstTypes (variantPayload v)
-      if anyList (tyCarries mctx.mcGraph [] p) tys then
+checkPhantomAuthorityExport mctx x0 tyName xs0 variants = go x0 xs0
+  where
+    go VisPublic (p :: ps) =
+      fold
+        (_ v =>
+          let tys = payloadAstTypes (variantPayload v)
+          if anyList (tyCarries mctx.mcGraph [] p) tys then
+            ()
+          else
+            pushTypeErrorOnceAt
+              mctx
+              TAuthorityPhantomExport
+              (firstTyLocList tys)
+              (phantomExportMsg tyName (variantName v) p))
         ()
-      else
-        pushTypeErrorOnceAt
-          mctx
-          TAuthorityPhantomExport
-          (firstTyLocList tys)
-          (phantomExportMsg tyName (variantName v) p))
-    ()
-    variants
-  checkPhantomAuthorityExport mctx VisPublic tyName ps variants
-checkPhantomAuthorityExport _mctx _ _ _ _ = ()
+        variants
+      go VisPublic ps
+    go _ _ = ()
 
 -- The head's `Authority`-kinded parameter names, positional with the kinds.
 authorityParamNames : List String -> List (Option KindAnn) -> List String
@@ -668,18 +682,20 @@ authorityParamNames params anns =
 -- assumes the head carries (the greatest fixpoint): a finite value bottoms
 -- out in a carrying constructor, or the type is empty.
 tyCarries : GraphCtx -> List TabKey -> String -> Ty -> Bool
-tyCarries _gctx _ p (TyVar n) = n == p
-tyCarries gctx seen p (TyQual t ps _) =
-  isNonEmptyL ps && allList (q => authTermNames [q] == [p]) ps
-    || tyCarries gctx seen p t
-tyCarries gctx seen p (TyTuple ts) = anyList (tyCarries gctx seen p) ts
-tyCarries gctx seen p (TyConstrained _ t) = tyCarries gctx seen p t
-tyCarries gctx seen p (TyNamed _ t _) = tyCarries gctx seen p t
-tyCarries gctx seen p (TyApp a b) = match tyAppSpine (TyApp a b)
-  (TyCon { tyConName = n, tyConOrigin = o }, args) =>
-    argsCarry gctx seen p (tyTabKey o n) 0 args
-  _ => False
-tyCarries _gctx _ _ _ = False
+tyCarries gctx seen p x0 = go x0
+  where
+    go (TyVar n) = n == p
+    go (TyQual t ps _) =
+      isNonEmptyL ps && allList (q => authTermNames [q] == [p]) ps || go t
+    go (TyTuple ts) = anyList (tyCarries gctx seen p) ts
+    go (TyConstrained _ t) = go t
+    go (TyNamed _ t _) = go t
+    go (TyApp a b) = match tyAppSpine (TyApp a b)
+      (TyCon { tyConName = n, tyConOrigin = o }, args) =>
+        argsCarry gctx seen p (tyTabKey o n) 0 args
+      _ => False
+    go (TyCon {  } | TyFun _ _ | TyEffect _ _ _ | TyRow _ _ _ | TyAuth _ _) =
+      False
 
 -- Argument [i] of head [key] carries [p] when the head's parameter [i]
 -- carries and the argument is [p] itself or carries it.
@@ -690,10 +706,12 @@ argsCarry : GraphCtx ->
   Int ->
   List Ty ->
   Bool
-argsCarry _gctx _ _ _ _ [] = False
-argsCarry gctx seen p key i (arg :: rest) =
-  paramCarries gctx seen key i && tyCarries gctx seen p arg
-    || argsCarry gctx seen p key (i + 1) rest
+argsCarry gctx seen p key i0 xs0 = go i0 xs0
+  where
+    go _ [] = False
+    go i (arg :: rest) =
+      paramCarries gctx seen key i && tyCarries gctx seen p arg
+        || go (i + 1) rest
 
 paramCarries : GraphCtx -> List TabKey -> TabKey -> Int -> Bool
 paramCarries gctx seen key i
@@ -731,84 +749,87 @@ checkHeadKindsGo : ModuleCtx ->
   List String ->
   List (Option KindAnn) ->
   Unit
-checkHeadKindsGo _mctx _ _ _ [] _ = ()
-checkHeadKindsGo mctx name rowNames fieldTys (p :: ps) (a :: anns) =
-  let loc = firstTyLocList fieldTys
-  match a
-    None =>
-      if contains p rowNames then
-        pushTypeErrorOnceAt
-          mctx
-          TEffectKindMismatch
-          loc
-          (unannotatedRowParamMsg name p)
-    Some KindEffect =>
-      if anyList (tyVarTypeOcc mctx p) fieldTys then
-        pushTypeErrorOnceAt
-          mctx
-          TEffectKindMismatch
-          loc
-          (effectParamAsTypeMsg name p)
-    Some (k@(KindArrow _ _)) =>
-      if kindAnnHasEffect k then
-        pushTypeErrorOnceAt
-          mctx
-          TEffectKindMismatch
-          loc
-          (effectArrowOnDataHeadMsg name p k)
-    Some KindType =>
-      if contains p rowNames then
-        pushTypeErrorOnceAt
-          mctx
-          TEffectKindMismatch
-          loc
-          (typeParamAsRowMsg name p)
-    Some (KindAuthority _ _ _ _) =>
-      if contains p rowNames then
-        pushTypeErrorOnceAt
-          mctx
-          TAuthorityKind
-          loc
-          (authorityParamAsRowMsg name p)
-      else if anyList (tyVarTypeOcc mctx p) fieldTys then
-        pushTypeErrorOnceAt
-          mctx
-          TAuthorityKind
-          loc
-          (authorityParamAsTypeMsg name p)
-  checkHeadKindsGo mctx name rowNames fieldTys ps anns
-checkHeadKindsGo _mctx _ _ _ _ [] = ()
+checkHeadKindsGo mctx name rowNames fieldTys xs0 xs1 = go xs0 xs1
+  where
+    go [] _ = ()
+    go (p :: ps) (a :: anns) =
+      let loc = firstTyLocList fieldTys
+      match a
+        None =>
+          if contains p rowNames then
+            pushTypeErrorOnceAt
+              mctx
+              TEffectKindMismatch
+              loc
+              (unannotatedRowParamMsg name p)
+        Some KindEffect =>
+          if anyList (tyVarTypeOcc mctx p) fieldTys then
+            pushTypeErrorOnceAt
+              mctx
+              TEffectKindMismatch
+              loc
+              (effectParamAsTypeMsg name p)
+        Some (k@(KindArrow _ _)) =>
+          if kindAnnHasEffect k then
+            pushTypeErrorOnceAt
+              mctx
+              TEffectKindMismatch
+              loc
+              (effectArrowOnDataHeadMsg name p k)
+        Some KindType =>
+          if contains p rowNames then
+            pushTypeErrorOnceAt
+              mctx
+              TEffectKindMismatch
+              loc
+              (typeParamAsRowMsg name p)
+        Some (KindAuthority _ _ _ _) =>
+          if contains p rowNames then
+            pushTypeErrorOnceAt
+              mctx
+              TAuthorityKind
+              loc
+              (authorityParamAsRowMsg name p)
+          else if anyList (tyVarTypeOcc mctx p) fieldTys then
+            pushTypeErrorOnceAt
+              mctx
+              TAuthorityKind
+              loc
+              (authorityParamAsTypeMsg name p)
+      go ps anns
+    go _ [] = ()
 
 -- does the type variable [p] occur in a TYPE position of [t] — anywhere but an
 -- effect tail or an `Effect`-kinded argument slot of a registered head?
 tyVarTypeOcc : ModuleCtx -> String -> Ty -> Bool
-tyVarTypeOcc _mctx p (TyVar n) = n == p
-tyVarTypeOcc mctx p (TyEffect _ _ t) = tyVarTypeOcc mctx p t
-tyVarTypeOcc _mctx _ (TyRow _ _ _) = False
-tyVarTypeOcc mctx p (TyNamed _ t _) = tyVarTypeOcc mctx p t
-tyVarTypeOcc mctx p (TyQual t _ _) = tyVarTypeOcc mctx p t
-tyVarTypeOcc mctx p (TyFun a b) = tyVarTypeOcc mctx p a || tyVarTypeOcc mctx p b
-tyVarTypeOcc mctx p (TyTuple ts) = anyList (tyVarTypeOcc mctx p) ts
-tyVarTypeOcc mctx p (TyConstrained _ t) = tyVarTypeOcc mctx p t
-tyVarTypeOcc mctx p (TyApp a b) = match tyAppSpine (TyApp a b)
-  (TyCon { tyConName = n, tyConOrigin = o }, args) =>
-    match lookupTab (tyTabKey o n) mctx.mcCells.dataParamKindsRef.value
-      Some kinds if listLen kinds == listLen args =>
-        tyVarTypeOccSlots mctx p kinds args
-      _ => anyList (tyVarTypeOcc mctx p) args
-  (hd, args) => tyVarTypeOcc mctx p hd || anyList (tyVarTypeOcc mctx p) args
-tyVarTypeOcc _mctx _ _ = False
+tyVarTypeOcc mctx p x0 = go x0
+  where
+    go (TyVar n) = n == p
+    go (TyEffect _ _ t) = go t
+    go (TyRow _ _ _) = False
+    go (TyNamed _ t _) = go t
+    go (TyQual t _ _) = go t
+    go (TyFun a b) = go a || go b
+    go (TyTuple ts) = anyList (tyVarTypeOcc mctx p) ts
+    go (TyConstrained _ t) = go t
+    go (TyApp a b) = match tyAppSpine (TyApp a b)
+      (TyCon { tyConName = n, tyConOrigin = o }, args) =>
+        match lookupTab (tyTabKey o n) mctx.mcCells.dataParamKindsRef.value
+          Some kinds if listLen kinds == listLen args =>
+            tyVarTypeOccSlots mctx p kinds args
+          _ => anyList (tyVarTypeOcc mctx p) args
+      (hd, args) => go hd || anyList (tyVarTypeOcc mctx p) args
+    go (TyCon {  } | TyAuth _ _) = False
 
 -- per slot: a bare `p` at a KRow slot is a ROW occurrence (skipped); anything
 -- else is walked as a type.
 tyVarTypeOccSlots : ModuleCtx -> String -> List Kind -> List Ty -> Bool
-tyVarTypeOccSlots mctx p (KRow :: ks) ((TyVar _) :: ts) =
-  tyVarTypeOccSlots mctx p ks ts
-tyVarTypeOccSlots mctx p ((KAuth _ _) :: ks) ((TyVar _) :: ts) =
-  tyVarTypeOccSlots mctx p ks ts
-tyVarTypeOccSlots mctx p (_ :: ks) (t :: ts) =
-  tyVarTypeOcc mctx p t || tyVarTypeOccSlots mctx p ks ts
-tyVarTypeOccSlots _mctx _ _ _ = False
+tyVarTypeOccSlots mctx p xs0 xs1 = go xs0 xs1
+  where
+    go (KRow :: ks) ((TyVar _) :: ts) = go ks ts
+    go ((KAuth _ _) :: ks) ((TyVar _) :: ts) = go ks ts
+    go (_ :: ks) (t :: ts) = tyVarTypeOcc mctx p t || go ks ts
+    go _ _ = False
 
 -- interface heads (c): the retired co-occurrence inference is the EVIDENCE.
 checkIfaceHeadKinds : ModuleCtx ->
@@ -817,42 +838,44 @@ checkIfaceHeadKinds : ModuleCtx ->
   List (Option KindAnn) ->
   List IfaceMethod ->
   Unit
-checkIfaceHeadKinds _mctx _ [] _ _ = ()
-checkIfaceHeadKinds mctx name (p :: ps) (a :: anns) methods =
-  let inferred = ifaceParamKindsOf p methods
-  let loc = firstIfaceMethodLoc methods
-  match a
-    Some (k@(KindArrow _ _)) =>
-      let want = kindAnnSlots mctx.mcGraph k
-      if isNonEmptyL inferred
-        && listLen inferred == listLen want
-        && anyRowDeclaredType inferred want then
-        pushTypeErrorOnceAt
-          mctx
-          TEffectKindMismatch
-          loc
-          (ifaceSlotDeclaredTypeMsg name p k)
-    Some KindEffect =>
-      pushTypeErrorOnceAt
-        mctx
-        TEffectKindMismatch
-        loc
-        (ifaceParamEffectKindMsg name p)
-    Some (KindAuthority _ _ _ _) =>
-      pushTypeErrorOnceAt
-        mctx
-        TAuthorityKind
-        loc
-        (ifaceParamAuthorityKindMsg name p)
-    _ =>
-      if anyKRow inferred then
-        pushTypeErrorOnceAt
-          mctx
-          TEffectKindMismatch
-          loc
-          (unannotatedGradedParamMsg name p inferred)
-  checkIfaceHeadKinds mctx name ps anns methods
-checkIfaceHeadKinds _mctx _ _ [] _ = ()
+checkIfaceHeadKinds mctx name xs0 xs1 methods = go xs0 xs1
+  where
+    go [] _ = ()
+    go (p :: ps) (a :: anns) =
+      let inferred = ifaceParamKindsOf p methods
+      let loc = firstIfaceMethodLoc methods
+      match a
+        Some (k@(KindArrow _ _)) =>
+          let want = kindAnnSlots mctx.mcGraph k
+          if isNonEmptyL inferred
+            && listLen inferred == listLen want
+            && anyRowDeclaredType inferred want then
+            pushTypeErrorOnceAt
+              mctx
+              TEffectKindMismatch
+              loc
+              (ifaceSlotDeclaredTypeMsg name p k)
+        Some KindEffect =>
+          pushTypeErrorOnceAt
+            mctx
+            TEffectKindMismatch
+            loc
+            (ifaceParamEffectKindMsg name p)
+        Some (KindAuthority _ _ _ _) =>
+          pushTypeErrorOnceAt
+            mctx
+            TAuthorityKind
+            loc
+            (ifaceParamAuthorityKindMsg name p)
+        _ =>
+          if anyKRow inferred then
+            pushTypeErrorOnceAt
+              mctx
+              TEffectKindMismatch
+              loc
+              (unannotatedGradedParamMsg name p inferred)
+      go ps anns
+    go _ [] = ()
 
 -- a slot the methods use as an effect row that the annotation declares `Type`
 anyRowDeclaredType : List Kind -> List Kind -> Bool
@@ -875,22 +898,24 @@ checkSuperKinds : ModuleCtx ->
   List IfaceMethod ->
   List Super ->
   Unit
-checkSuperKinds _mctx _ _ _ _ _ [] = ()
-checkSuperKinds mctx sc prog name own methods ((Super { superHead = sh, superParams = sps, superOrigin = so }) :: rest) =
-  if declaresIface prog sh then
-    let subKinds = map (p => optionOr KType (lookupAssoc p own)) sps
-    let superKinds = optionOr [] (sc.ksIfaces so sh)
-    if listLen subKinds == listLen superKinds
-      && not
-        (allList
-          (pair => kindEq (fst pair) (snd pair))
-          (zipL subKinds superKinds)) then
-      pushTypeErrorOnceAt
-        mctx
-        TEffectKindMismatch
-        (firstIfaceMethodLoc methods)
-        (requiresKindMsg name sh)
-  checkSuperKinds mctx sc prog name own methods rest
+checkSuperKinds mctx sc prog name own methods xs0 = go xs0
+  where
+    go [] = ()
+    go ((Super { superHead = sh, superParams = sps, superOrigin = so }) :: rest) =
+      if declaresIface prog sh then
+        let subKinds = map (p => optionOr KType (lookupAssoc p own)) sps
+        let superKinds = optionOr [] (sc.ksIfaces so sh)
+        if listLen subKinds == listLen superKinds
+          && not
+            (allList
+              (pair => kindEq (fst pair) (snd pair))
+              (zipL subKinds superKinds)) then
+          pushTypeErrorOnceAt
+            mctx
+            TEffectKindMismatch
+            (firstIfaceMethodLoc methods)
+            (requiresKindMsg name sh)
+      go rest
 
 declaresIface : List Decl -> String -> Bool
 declaresIface [] _ = False
@@ -926,7 +951,9 @@ checkEffectParamsTy mctx (TyEffect labels _ t) =
 -- no other spelling admits).
 checkEffectParamsTy mctx (TyRow labels _ _) = checkEffectAtoms mctx labels
 checkEffectParamsTy mctx (TyConstrained _ t) = checkEffectParamsTy mctx t
-checkEffectParamsTy _mctx _ = ()
+checkEffectParamsTy mctx (TyNamed _ t _) = checkEffectParamsTy mctx t
+checkEffectParamsTy mctx (TyQual t _ _) = checkEffectParamsTy mctx t
+checkEffectParamsTy _mctx (TyCon {  } | TyVar _) = ()
 
 checkEffectParamsTys : ModuleCtx -> List Ty -> Unit
 checkEffectParamsTys _mctx [] = ()
@@ -1176,7 +1203,7 @@ writtenQualifiers (TyFun a b) = writtenQualifiers a ++ writtenQualifiers b
 writtenQualifiers (TyTuple ts) = flatMap writtenQualifiers ts
 writtenQualifiers (TyConstrained _ t) = writtenQualifiers t
 writtenQualifiers (TyNamed _ t _) = writtenQualifiers t
-writtenQualifiers _ = []
+writtenQualifiers (TyCon {  } | TyVar _ | TyRow _ _ _ | TyAuth _ _) = []
 
 -- The names written in authority position, atom parameters and qualifiers,
 -- each with the span of the atom or qualifier that writes it.
@@ -1195,7 +1222,7 @@ authorityNamesWritten gctx (TyTuple ts) =
   flatMap (authorityNamesWritten gctx) ts
 authorityNamesWritten gctx (TyConstrained _ t) = authorityNamesWritten gctx t
 authorityNamesWritten gctx (TyNamed _ t _) = authorityNamesWritten gctx t
-authorityNamesWritten _gctx _ = []
+authorityNamesWritten _gctx (TyCon {  } | TyVar _ | TyAuth _ _) = []
 
 atomAuthorityName : GraphCtx -> EffAtomTy -> List (String, Option Loc)
 atomAuthorityName gctx a = map (b => (fst b, a.eatLoc)) (namedAtomBinder gctx a)
@@ -1238,7 +1265,7 @@ binderDomainsIn gctx (TyTuple ts) = flatMap (binderDomainsIn gctx) ts
 binderDomainsIn gctx (TyEffect _ _ t) = binderDomainsIn gctx t
 binderDomainsIn gctx (TyConstrained _ t) = binderDomainsIn gctx t
 binderDomainsIn gctx (TyQual t _ _) = binderDomainsIn gctx t
-binderDomainsIn _gctx _ = []
+binderDomainsIn _gctx (TyCon {  } | TyVar _ | TyRow _ _ _ | TyAuth _ _) = []
 
 -- The bare names sitting in `Authority`-kinded argument slots of registered
 -- heads, with the slot's domain: the twin of `rowArgNamesIn` for authorities.
@@ -1373,6 +1400,8 @@ fromAstTypeE : ModuleCtx -> SigVars -> List (String, Mono) -> Ty -> Mono
 -- stamped on the `Ty.TyCon` this conversion is reading, and the record pattern
 -- puts it in scope for free — there is nowhere else it could come from and no
 -- ambient module id to get it wrong from.
+-- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 fromAstTypeE mctx etbl tvs (TyCon { tyConName = n, tyConOrigin = o }) =
   match lookupTab (tyTabKey o n) mctx.mcCells.aliasTableRef.value
     -- Transparent non-parameterized alias (`type Foo = Int`): expand to its RHS,
@@ -1588,9 +1617,10 @@ foldAppFallback : ModuleCtx ->
   Mono ->
   List Ty ->
   Mono
-foldAppFallback _mctx _ _ acc [] = acc
-foldAppFallback mctx etbl tvs acc (a :: as2) =
-  foldAppFallback mctx etbl tvs (TApp acc (fromAstTypeE mctx etbl tvs a)) as2
+foldAppFallback mctx etbl tvs acc0 xs0 = go acc0 xs0
+  where
+    go acc [] = acc
+    go acc (a :: as2) = go (TApp acc (fromAstTypeE mctx etbl tvs a)) as2
 
 -- a TyCon-headed type-app: a parameterized type-ALIAS head is expanded by binding
 -- its params to the supplied argument Monos and recursing on the RHS (transparent,
@@ -1694,22 +1724,24 @@ aliasArgBindings : ModuleCtx ->
   List Kind ->
   List Ty ->
   (SigVars, List (String, Mono))
-aliasArgBindings mctx etbl tvs (p :: ps) (KRow :: ks) (arg :: args) =
-  let cell = aliasRowParamCell mctx.mcGraph (rowArgOf mctx etbl arg)
-  let rest = aliasArgBindings mctx etbl tvs ps ks args
-  (sigVarsWithRows [(p, cell)] (fst rest), snd rest)
--- An `Authority` alias parameter stands for the written argument wherever
--- the right-hand side names it: a cell linked to the term, so expansion is a
--- substitution and records no obligation.
-aliasArgBindings mctx etbl tvs (p :: ps) ((KAuth l pat) :: ks) (arg :: args) =
-  let cell = freshAuthvarRanged mctx (dtopFor mctx.mcGraph l) pat (Some p)
-  linkAuthvar cell (authArgOf mctx etbl tvs l pat arg)
-  let rest = aliasArgBindings mctx etbl tvs ps ks args
-  (sigVarsWithAuths [(p, cell)] (fst rest), snd rest)
-aliasArgBindings mctx etbl tvs (p :: ps) (_ :: ks) (arg :: args) =
-  let rest = aliasArgBindings mctx etbl tvs ps ks args
-  (fst rest, (p, fromAstTypeE mctx etbl tvs arg) :: snd rest)
-aliasArgBindings _mctx _ _ _ _ _ = (emptySigVars, [])
+aliasArgBindings mctx etbl tvs xs0 xs1 xs2 = go xs0 xs1 xs2
+  where
+    go (p :: ps) (KRow :: ks) (arg :: args) =
+      let cell = aliasRowParamCell mctx.mcGraph (rowArgOf mctx etbl arg)
+      let rest = go ps ks args
+      (sigVarsWithRows [(p, cell)] (fst rest), snd rest)
+    -- An `Authority` alias parameter stands for the written argument wherever
+    -- the right-hand side names it: a cell linked to the term, so expansion is a
+    -- substitution and records no obligation.
+    go (p :: ps) ((KAuth l pat) :: ks) (arg :: args) =
+      let cell = freshAuthvarRanged mctx (dtopFor mctx.mcGraph l) pat (Some p)
+      linkAuthvar cell (authArgOf mctx etbl tvs l pat arg)
+      let rest = go ps ks args
+      (sigVarsWithAuths [(p, cell)] (fst rest), snd rest)
+    go (p :: ps) (_ :: ks) (arg :: args) =
+      let rest = go ps ks args
+      (fst rest, (p, fromAstTypeE mctx etbl tvs arg) :: snd rest)
+    go _ _ _ = (emptySigVars, [])
 
 -- The effect-table cell an `Effect` alias parameter reads as.  A bare row
 -- variable argument (`S e Int`) is the caller's own cell for `e`, the one the
@@ -1784,9 +1816,10 @@ isRowSlotArg _ _ _ = False
 -- monomorphic and short-circuiting on purpose (compiler/AGENTS.md): this runs on
 -- every var-headed type-application node the elaborator meets.
 anyRowSlotArg : SigVars -> List (String, Mono) -> List Ty -> Bool
-anyRowSlotArg _ _ [] = False
-anyRowSlotArg etbl tvs (t :: rest) =
-  isRowSlotArg etbl tvs t || anyRowSlotArg etbl tvs rest
+anyRowSlotArg etbl tvs xs0 = go xs0
+  where
+    go [] = False
+    go (t :: rest) = isRowSlotArg etbl tvs t || go rest
 
 foldRowSlotArgs : ModuleCtx ->
   SigVars ->
@@ -1794,14 +1827,10 @@ foldRowSlotArgs : ModuleCtx ->
   Mono ->
   List Ty ->
   Mono
-foldRowSlotArgs _mctx _ _ acc [] = acc
-foldRowSlotArgs mctx etbl tvs acc (arg :: rest) =
-  foldRowSlotArgs
-    mctx
-    etbl
-    tvs
-    (TApp acc (rowSlotArgMono mctx etbl tvs arg))
-    rest
+foldRowSlotArgs mctx etbl tvs acc0 xs0 = go acc0 xs0
+  where
+    go acc [] = acc
+    go acc (arg :: rest) = go (TApp acc (rowSlotArgMono mctx etbl tvs arg)) rest
 
 rowSlotArgMono : ModuleCtx -> SigVars -> List (String, Mono) -> Ty -> Mono
 rowSlotArgMono mctx etbl tvs arg
@@ -1817,10 +1846,12 @@ foldAppKinds : ModuleCtx ->
   List Kind ->
   List Ty ->
   Mono
-foldAppKinds _mctx _ _ acc [] [] = acc
-foldAppKinds mctx etbl tvs acc (k :: ks) (a :: as2) =
-  foldAppKinds mctx etbl tvs (TApp acc (kindArgMono mctx etbl tvs k a)) ks as2
-foldAppKinds _mctx _ _ acc _ _ = acc
+foldAppKinds mctx etbl tvs acc0 xs0 xs1 = go acc0 xs0 xs1
+  where
+    go acc [] [] = acc
+    go acc (k :: ks) (a :: as2) =
+      go (TApp acc (kindArgMono mctx etbl tvs k a)) ks as2
+    go acc _ _ = acc
 
 kindArgMono : ModuleCtx -> SigVars -> List (String, Mono) -> Kind -> Ty -> Mono
 kindArgMono mctx etbl tvs KType arg = fromAstTypeE mctx etbl tvs arg
@@ -1993,16 +2024,23 @@ qualifiedConstraintKinds : ModuleCtx ->
   List (String, List Kind) ->
   List Constraint ->
   List (String, List Kind)
-qualifiedConstraintKinds _mctx _ scope [] = scope
-qualifiedConstraintKinds mctx loc scope ((Constraint { constraintHead, constraintOrigin, constraintArgs }) :: rest) =
-  let envs = mctx.mcGraph.declEnvsRef.value
-  let cur = declEnvsOrdOf mctx.mcCells.currentModuleRef.value envs
-  let key = regKeyOfTab (ifaceTabKey constraintOrigin constraintHead)
-  let next = match ceLookupAt key cur envs.deIfaces
-    None => scope
-    Some row =>
-      qualifiedArgumentKinds mctx loc scope (ceRowParamKinds row) constraintArgs
-  qualifiedConstraintKinds mctx loc next rest
+qualifiedConstraintKinds mctx loc scope0 xs0 = go scope0 xs0
+  where
+    go scope [] = scope
+    go scope ((Constraint { constraintHead, constraintOrigin, constraintArgs }) :: rest) =
+      let envs = mctx.mcGraph.declEnvsRef.value
+      let cur = declEnvsOrdOf mctx.mcCells.currentModuleRef.value envs
+      let key = regKeyOfTab (ifaceTabKey constraintOrigin constraintHead)
+      let next = match ceLookupAt key cur envs.deIfaces
+        None => scope
+        Some row =>
+          qualifiedArgumentKinds
+            mctx
+            loc
+            scope
+            (ceRowParamKinds row)
+            constraintArgs
+      go next rest
 
 qualifiedArgumentKinds : ModuleCtx ->
   Option Loc ->
@@ -2010,23 +2048,24 @@ qualifiedArgumentKinds : ModuleCtx ->
   List (List Kind) ->
   List Ty ->
   List (String, List Kind)
-qualifiedArgumentKinds mctx loc scope (kinds :: restKinds) ((TyVar name) :: restArgs) =
-  let next = match lookupAssoc name scope
-    None => (name, kinds) :: scope
-    Some previous =>
-      if kindsEq previous kinds then
-        ()
-      else
-        pushTypeErrorOncePerSite
-          mctx
-          TEffectKindMismatch
-          loc
-          "signature parameter `\{name}` has incompatible required kinds `\{renderKindArrow previous}` and `\{renderKindArrow kinds}`; use separate parameters, or constraints requiring one kind"
-      scope
-  qualifiedArgumentKinds mctx loc next restKinds restArgs
-qualifiedArgumentKinds mctx loc scope (_ :: restKinds) (_ :: restArgs) =
-  qualifiedArgumentKinds mctx loc scope restKinds restArgs
-qualifiedArgumentKinds _mctx _ scope _ _ = scope
+qualifiedArgumentKinds mctx loc scope0 xs0 xs1 = go scope0 xs0 xs1
+  where
+    go scope (kinds :: restKinds) ((TyVar name) :: restArgs) =
+      let next = match lookupAssoc name scope
+        None => (name, kinds) :: scope
+        Some previous =>
+          if kindsEq previous kinds then
+            ()
+          else
+            pushTypeErrorOncePerSite
+              mctx
+              TEffectKindMismatch
+              loc
+              "signature parameter `\{name}` has incompatible required kinds `\{renderKindArrow previous}` and `\{renderKindArrow kinds}`; use separate parameters, or constraints requiring one kind"
+          scope
+      go next restKinds restArgs
+    go scope (_ :: restKinds) (_ :: restArgs) = go scope restKinds restArgs
+    go scope _ _ = scope
 
 -- [scope] comes from the enclosing interface or the signature's own predicates.
 -- Abstract heads have no ambient name-keyed kind lookup.
@@ -2036,23 +2075,26 @@ qualifiedArgumentKinds _mctx _ scope _ _ = scope
 -- per level, so `Wrap^25 Int` costs 2^25 visits (#1837).
 export
 rowArgNamesIn : ModuleCtx -> List (String, List Kind) -> Ty -> List String
-rowArgNamesIn mctx scope (TyApp a b) =
-  let kinded = match tyAppSpine (TyApp a b)
-    -- OCCURRENCE MINT (#1110/#1111 A-2.3), same source as `fromAstTypeE`'s.
-    (TyCon { tyConName = n, tyConOrigin = o }, args) =>
-      rowArgNamesApp mctx scope o n args
-    -- #822: the abstract-head half — an interface typaram of graded kind, in scope.
-    (TyVar h, args) => rowArgNamesVarApp mctx scope h args
-    _ => None
-  match kinded
-    Some names => names
-    None => rowArgNamesIn mctx scope a ++ rowArgNamesIn mctx scope b
-rowArgNamesIn mctx scope (TyFun a b) =
-  rowArgNamesIn mctx scope a ++ rowArgNamesIn mctx scope b
-rowArgNamesIn mctx scope (TyTuple ts) = flatMap (rowArgNamesIn mctx scope) ts
-rowArgNamesIn mctx scope (TyEffect _ _ t) = rowArgNamesIn mctx scope t
-rowArgNamesIn mctx scope (TyConstrained _ t) = rowArgNamesIn mctx scope t
-rowArgNamesIn _mctx _ _ = []
+rowArgNamesIn mctx scope x0 = go x0
+  where
+    go (TyApp a b) =
+      let kinded = match tyAppSpine (TyApp a b)
+        -- OCCURRENCE MINT (#1110/#1111 A-2.3), same source as `fromAstTypeE`'s.
+        (TyCon { tyConName = n, tyConOrigin = o }, args) =>
+          rowArgNamesApp mctx scope o n args
+        -- #822: the abstract-head half — an interface typaram of graded kind, in scope.
+        (TyVar h, args) => rowArgNamesVarApp mctx scope h args
+        _ => None
+      match kinded
+        Some names => names
+        None => go a ++ go b
+    go (TyFun a b) = go a ++ go b
+    go (TyTuple ts) = flatMap (rowArgNamesIn mctx scope) ts
+    go (TyEffect _ _ t) = go t
+    go (TyConstrained _ t) = go t
+    go (TyNamed _ t _) = go t
+    go (TyQual t _ _) = go t
+    go (TyCon {  } | TyVar _ | TyRow _ _ _ | TyAuth _ _) = []
 
 rowArgNamesApp : ModuleCtx ->
   List (String, List Kind) ->
@@ -2137,30 +2179,28 @@ fieldTypeE mctx etbl tvs (Field _ ty) = fromAstTypeE mctx etbl tvs ty
 -- unbound name gets a fresh var (defers, never a spurious concrete head).
 export
 reqTyToMono : ModuleCtx -> List (String, Mono) -> Ty -> Mono
-reqTyToMono mctx sub (TyVar n) =
-  optionOrElse (_ => freshVar mctx ()) (lookupAssoc n sub)
-reqTyToMono _mctx _ (TyCon { tyConName = n, tyConOrigin = o }) = tconFrom o n
-reqTyToMono mctx sub (TyApp a b) =
-  TApp (reqTyToMono mctx sub a) (reqTyToMono mctx sub b)
-reqTyToMono mctx sub (TyFun a b) =
-  TFun (reqTyToMono mctx sub a) (openRow mctx ()) (reqTyToMono mctx sub b)
-reqTyToMono mctx sub (TyTuple ts) =
-  tupleSpineOf (tconTupleHead (listLen ts)) (map (reqTyToMono mctx sub) ts)
-reqTyToMono mctx sub (TyEffect _ _ t) = reqTyToMono mctx sub t
-reqTyToMono mctx sub (TyConstrained _ t) = reqTyToMono mctx sub t
--- Same diagnostic + recovery as `fromAstTypeE`'s `TyRow` arm: `reqTyToMono`
--- has no kind-directed KRow branch at all (its `TyApp` arm is unconditional),
--- so a row written in a `requires` clause's type argument was ALREADY a
--- silent `Unit` mistype before #997 for the degenerate spelling — push the
--- same diagnostic rather than let #997's new syntax spelling reach it in
--- silence too.
-reqTyToMono mctx _ (TyRow labels tail loc) =
-  pushTypeErrorOncePerSite
-    mctx
-    TEffectKindMismatch
-    loc
-    (rowKindMismatchMsg labels tail)
-  tconBuiltin "Unit"
+reqTyToMono mctx sub ty0 = go ty0
+  where
+    go (TyVar n) = optionOrElse (_ => freshVar mctx ()) (lookupAssoc n sub)
+    go (TyCon { tyConName = n, tyConOrigin = o }) = tconFrom o n
+    go (TyApp a b) = TApp (go a) (go b)
+    go (TyFun a b) = TFun (go a) (openRow mctx ()) (go b)
+    go (TyTuple ts) = tupleSpineOf (tconTupleHead (listLen ts)) (map go ts)
+    go (TyEffect _ _ t) = go t
+    go (TyConstrained _ t) = go t
+    -- Same diagnostic + recovery as `fromAstTypeE`'s `TyRow` arm: `reqTyToMono` has no
+    -- kind-directed KRow branch at all (its `TyApp` arm is unconditional),
+    -- so a row written in a `requires` clause's type argument was ALREADY a
+    -- silent `Unit` mistype before #997 for the degenerate spelling — push the
+    -- same diagnostic rather than let #997's new syntax spelling reach it in
+    -- silence too.
+    go (TyRow labels tail loc) =
+      pushTypeErrorOncePerSite
+        mctx
+        TEffectKindMismatch
+        loc
+        (rowKindMismatchMsg labels tail)
+      tconBuiltin "Unit"
 
 -- Make an alias-NAMED arrow structurally visible, at the `Ty` (pre-`Mono`) level.
 --
@@ -2212,7 +2252,8 @@ expandAliasHeadTyWith aliases (t@(TyApp _ _)) = match tyAppSpine t
         expandAliasHeadTyWith aliases (substAliasArgs (zipL params args) rhs)
       _ => t
   _ => t
-expandAliasHeadTyWith _ t = t
+expandAliasHeadTyWith _ (t@(TyVar _ | TyFun _ _ | TyTuple _ | TyEffect _ _ _ | TyConstrained _ _ | TyNamed _ _ _ | TyQual _ _ _ | TyRow _ _ _ | TyAuth _ _)) =
+  t
 
 -- substitute interface-typaram NAMES → impl type PATTERNS inside a declared Ty.
 --
@@ -2689,13 +2730,15 @@ recoverArgs : ModuleCtx ->
   Int ->
   List Ty ->
   (Ty, Int)
-recoverArgs _ _ hd _ n [] = (hd, n)
-recoverArgs mctx kj hd kinds n (a :: rest) =
-  let (k, ks) = match kinds
-    k1 :: more => (k1, more)
-    [] => (None, [])
-  let (a2, n2) = recoverIn mctx kj k n a
-  recoverArgs mctx kj (TyApp hd a2) ks n2 rest
+recoverArgs mctx kj hd0 kinds0 n0 xs0 = go hd0 kinds0 n0 xs0
+  where
+    go hd _ n [] = (hd, n)
+    go hd kinds n (a :: rest) =
+      let (k, ks) = match kinds
+        k1 :: more => (k1, more)
+        [] => (None, [])
+      let (a2, n2) = recoverIn mctx kj k n a
+      go (TyApp hd a2) ks n2 rest
 
 recoverForm : ModuleCtx -> KindJudge -> Option Kind -> Int -> Ty -> (Ty, Int)
 recoverForm mctx kj _ n (TyFun a b) =
@@ -2720,11 +2763,13 @@ recoverForm mctx kj want n (TyQual t ps loc) =
 recoverForm _ _ _ n ty = (ty, n)
 
 recoverAll : ModuleCtx -> KindJudge -> Int -> List Ty -> (List Ty, Int)
-recoverAll _ _ n [] = ([], n)
-recoverAll mctx kj n (t :: rest) =
-  let (t2, n2) = recoverIn mctx kj (Some KType) n t
-  let (rest2, n3) = recoverAll mctx kj n2 rest
-  (t2 :: rest2, n3)
+recoverAll mctx kj n0 xs0 = go n0 xs0
+  where
+    go n [] = ([], n)
+    go n (t :: rest) =
+      let (t2, n2) = recoverIn mctx kj (Some KType) n t
+      let (rest2, n3) = go n2 rest
+      (t2 :: rest2, n3)
 
 -- Whether the alias [o]/[n], applied at its arity, has a right-hand side the
 -- check of its declaration rejects.

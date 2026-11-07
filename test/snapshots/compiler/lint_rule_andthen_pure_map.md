@@ -1,5 +1,5 @@
 # META
-source_lines=189
+source_lines=191
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-andthen-pure-map: a monadic bind whose continuation only wraps a pure transformation (`andThen m (x => pure body)`). Prefer `map`.
@@ -17,6 +17,7 @@ import tools.lint_core.{
   Finding(..),
   Fix,
   Fixability(..),
+  Memo,
   Need(..),
   Ratchet(..),
   Rule,
@@ -24,6 +25,7 @@ import tools.lint_core.{
   Scope(..),
   StdlibIndex,
   Visitor(..),
+  fixLater,
   mkVisitorRule,
 }
 import tools.lint_shared.{
@@ -142,11 +144,11 @@ andThenPureMapAt idx facts ctx e = match andThenPureMapOf e
     andThenPureMapFinding
       ctx.ctxDeclLoc
       rewritten
-      (andThenPureMapFix idx facts ctx e rewritten),
+      (fixLater (_ => andThenPureMapFix idx facts ctx e rewritten)),
   ]
   None => []
 
-andThenPureMapFinding : Option Loc -> Expr -> Option Fix -> Finding
+andThenPureMapFinding : Option Loc -> Expr -> Memo (Option Fix) -> Finding
 andThenPureMapFinding loc rewritten fix = Finding {
   rule = ruleNameAndThenPureMap,
   message =
@@ -197,7 +199,7 @@ andThenPureHeads e = match unwrapLoc e
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("tools" "printer") ((mem "exprToString" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" false) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "mkVisitorRule" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" false) (mem "Fixability" true) (mem "Memo" false) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "fixLater" false) (mem "mkVisitorRule" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "andThenEtaFn" false) (mem "rebinds" false) (mem "childExprs" false) (mem "isEVarNamed" false) (mem "replaceNodeFix" false) (mem "ruleNameAndThenPureMap" false) (mem "unwrapLoc" false) (mem "usesPreludeName" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameAndThenPureMap")) (fa "summary" (ELit (LString "monadic bind whose continuation just wraps a pure transformation (`andThen m (x => pure body)`). Prefer `map` (functor law: m >>= (pure . f) ≡ fmap f m)"))) (fa "doc" (ELit (LString "A monadic bind whose continuation only wraps a pure transformation in `pure` is `map`, by the functor law `m >>= (pure . f) == fmap f m`.\n\nBefore:\n  andThen m (x => pure (f x))\nAfter:\n  map f m"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "Fixable")) (fa "needs" (EListLit (EVar "NeedsScopes") (EVar "NeedsWildIndex")))))) (EVar "ruleAndThenPureMap")) (EVar "None")))
@@ -222,8 +224,8 @@ andThenPureHeads e = match unwrapLoc e
 (DTypeSig false "ruleAndThenPureMap" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor"))))))))
 (DFunDef false "ruleAndThenPureMap" ((PVar "idx") PWild (PVar "facts") PWild PWild) (EListLit (EApp (EApp (EVar "OnExpr") (EListLit (EVar "KApp"))) (EApp (EApp (EVar "andThenPureMapAt") (EVar "idx")) (EVar "facts")))))
 (DTypeSig false "andThenPureMapAt" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding")))))))
-(DFunDef false "andThenPureMapAt" ((PVar "idx") (PVar "facts") (PVar "ctx") (PVar "e")) (EMatch (EApp (EVar "andThenPureMapOf") (EVar "e")) (arm (PCon "Some" (PVar "rewritten")) () (EListLit (EApp (EApp (EApp (EVar "andThenPureMapFinding") (EFieldAccess (EVar "ctx") "ctxDeclLoc")) (EVar "rewritten")) (EApp (EApp (EApp (EApp (EApp (EVar "andThenPureMapFix") (EVar "idx")) (EVar "facts")) (EVar "ctx")) (EVar "e")) (EVar "rewritten"))))) (arm (PCon "None") () (EListLit))))
-(DTypeSig false "andThenPureMapFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "Option") (TyCon "Fix")) (TyCon "Finding")))))
+(DFunDef false "andThenPureMapAt" ((PVar "idx") (PVar "facts") (PVar "ctx") (PVar "e")) (EMatch (EApp (EVar "andThenPureMapOf") (EVar "e")) (arm (PCon "Some" (PVar "rewritten")) () (EListLit (EApp (EApp (EApp (EVar "andThenPureMapFinding") (EFieldAccess (EVar "ctx") "ctxDeclLoc")) (EVar "rewritten")) (EApp (EVar "fixLater") (ELam (PWild) (EApp (EApp (EApp (EApp (EApp (EVar "andThenPureMapFix") (EVar "idx")) (EVar "facts")) (EVar "ctx")) (EVar "e")) (EVar "rewritten"))))))) (arm (PCon "None") () (EListLit))))
+(DTypeSig false "andThenPureMapFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "Memo") (TyApp (TyCon "Option") (TyCon "Fix"))) (TyCon "Finding")))))
 (DFunDef false "andThenPureMapFinding" ((PVar "loc") (PVar "rewritten") (PVar "fix")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameAndThenPureMap")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "monadic bind wraps a pure transformation of its result — rewrite as '")) (EApp (EVar "exprToString") (EVar "rewritten"))) (ELit (LString "'")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "fix")))))
 (DTypeSig false "andThenPureMapFix" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Fix"))))))))
 (DFunDef false "andThenPureMapFix" ((PVar "idx") (PVar "facts") (PVar "ctx") (PVar "e") (PVar "rewritten")) (EIf (EBinOp "&&" (EApp (EApp (EApp (EVar "andThenPureMapUsesPrelude") (EVar "idx")) (EVar "facts")) (EVar "e")) (EApp (EVar "not") (EApp (EApp (EApp (EApp (EVar "rebinds") (EVar "idx")) (EVar "facts")) (EVar "ctx")) (ELit (LString "map"))))) (EApp (EApp (EApp (EApp (EApp (EVar "replaceNodeFix") (EVar "Safe")) (ELit (LString "rewrite the bind as a map"))) (EVar "ctx")) (EVar "e")) (EVar "rewritten")) (EVar "None")))
@@ -237,7 +239,7 @@ andThenPureHeads e = match unwrapLoc e
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("tools" "printer") ((mem "exprToString" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" false) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "mkVisitorRule" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Applicability" true) (mem "Category" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fix" false) (mem "Fixability" true) (mem "Memo" false) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "fixLater" false) (mem "mkVisitorRule" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "andThenEtaFn" false) (mem "rebinds" false) (mem "childExprs" false) (mem "isEVarNamed" false) (mem "replaceNodeFix" false) (mem "ruleNameAndThenPureMap" false) (mem "unwrapLoc" false) (mem "usesPreludeName" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameAndThenPureMap")) (fa "summary" (ELit (LString "monadic bind whose continuation just wraps a pure transformation (`andThen m (x => pure body)`). Prefer `map` (functor law: m >>= (pure . f) ≡ fmap f m)"))) (fa "doc" (ELit (LString "A monadic bind whose continuation only wraps a pure transformation in `pure` is `map`, by the functor law `m >>= (pure . f) == fmap f m`.\n\nBefore:\n  andThen m (x => pure (f x))\nAfter:\n  map f m"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "Fixable")) (fa "needs" (EListLit (EVar "NeedsScopes") (EVar "NeedsWildIndex")))))) (EVar "ruleAndThenPureMap")) (EVar "None")))
@@ -262,8 +264,8 @@ andThenPureHeads e = match unwrapLoc e
 (DTypeSig false "ruleAndThenPureMap" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor"))))))))
 (DFunDef false "ruleAndThenPureMap" ((PVar "idx") PWild (PVar "facts") PWild PWild) (EListLit (EApp (EApp (EVar "OnExpr") (EListLit (EVar "KApp"))) (EApp (EApp (EVar "andThenPureMapAt") (EVar "idx")) (EVar "facts")))))
 (DTypeSig false "andThenPureMapAt" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding")))))))
-(DFunDef false "andThenPureMapAt" ((PVar "idx") (PVar "facts") (PVar "ctx") (PVar "e")) (EMatch (EApp (EVar "andThenPureMapOf") (EVar "e")) (arm (PCon "Some" (PVar "rewritten")) () (EListLit (EApp (EApp (EApp (EVar "andThenPureMapFinding") (EFieldAccess (EVar "ctx") "ctxDeclLoc")) (EVar "rewritten")) (EApp (EApp (EApp (EApp (EApp (EVar "andThenPureMapFix") (EVar "idx")) (EVar "facts")) (EVar "ctx")) (EVar "e")) (EVar "rewritten"))))) (arm (PCon "None") () (EListLit))))
-(DTypeSig false "andThenPureMapFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "Option") (TyCon "Fix")) (TyCon "Finding")))))
+(DFunDef false "andThenPureMapAt" ((PVar "idx") (PVar "facts") (PVar "ctx") (PVar "e")) (EMatch (EApp (EVar "andThenPureMapOf") (EVar "e")) (arm (PCon "Some" (PVar "rewritten")) () (EListLit (EApp (EApp (EApp (EVar "andThenPureMapFinding") (EFieldAccess (EVar "ctx") "ctxDeclLoc")) (EVar "rewritten")) (EApp (EVar "fixLater") (ELam (PWild) (EApp (EApp (EApp (EApp (EApp (EVar "andThenPureMapFix") (EVar "idx")) (EVar "facts")) (EVar "ctx")) (EVar "e")) (EVar "rewritten"))))))) (arm (PCon "None") () (EListLit))))
+(DTypeSig false "andThenPureMapFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "Memo") (TyApp (TyCon "Option") (TyCon "Fix"))) (TyCon "Finding")))))
 (DFunDef false "andThenPureMapFinding" ((PVar "loc") (PVar "rewritten") (PVar "fix")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameAndThenPureMap")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "monadic bind wraps a pure transformation of its result — rewrite as '")) (EApp (EVar "exprToString") (EVar "rewritten"))) (ELit (LString "'")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "fix")))))
 (DTypeSig false "andThenPureMapFix" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Fix"))))))))
 (DFunDef false "andThenPureMapFix" ((PVar "idx") (PVar "facts") (PVar "ctx") (PVar "e") (PVar "rewritten")) (EIf (EBinOp "&&" (EApp (EApp (EApp (EVar "andThenPureMapUsesPrelude") (EVar "idx")) (EVar "facts")) (EVar "e")) (EApp (EVar "not") (EApp (EApp (EApp (EApp (EVar "rebinds") (EVar "idx")) (EVar "facts")) (EVar "ctx")) (ELit (LString "map"))))) (EApp (EApp (EApp (EApp (EApp (EVar "replaceNodeFix") (EVar "Safe")) (ELit (LString "rewrite the bind as a map"))) (EVar "ctx")) (EVar "e")) (EVar "rewritten")) (EVar "None")))

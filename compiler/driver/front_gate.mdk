@@ -261,12 +261,9 @@ resolveRefusal allowInternal stdlibDir trusted rsrc csrc entry g =
 -- A program `build` cannot start: a function-shaped `main` or none at all in
 -- the entry, which the loader puts last.
 mainRefusal : String -> List (String, List Decl) -> <IO> Option String
-mainRefusal entry pairs = match splitLast pairs
-  None => None
-  Some (_, (_, decls)) =>
-    map
-      (d => ppMainEntryError (entrySource entry) entry d)
-      (mainEntryError decls)
+mainRefusal entry pairs = do
+  (_, (_, decls)) <- splitLast pairs
+  map (d => ppMainEntryError (entrySource entry) entry d) (mainEntryError decls)
 
 -- The entry's text, for rendering a refusal; the loader has already read it.
 entrySource : String -> <IO> String
@@ -434,12 +431,11 @@ jsonFrontKey front _ path = relDiagPath (dirOf front.jfStdlibDir) path
 mainRefusalJson : String ->
   List (String, String, List Decl) ->
   <IO> Option CheckJson
-mainRefusalJson entry mods = match splitLast mods
-  None => None
-  Some (_, (_, _, decls)) =>
-    map
-      (d => CjParts entry [(entry, readFileSafe entry, [d])])
-      (mainEntryError decls)
+mainRefusalJson entry mods = do
+  (_, (_, _, decls)) <- splitLast mods
+  map
+    (d => CjParts entry [(entry, readFileSafe entry, [d])])
+    (mainEntryError decls)
 
 -- The child's write: the key line, then the envelope.  A file it cannot write
 -- is a build failure in its own words, not an envelope the parent never sees.
@@ -462,9 +458,9 @@ export
 readDiagJson : String -> <IO> Option (String, String)
 readDiagJson path = match readFile path
   Err _ => None
-  Ok text => match stringIndexOf "\n" text
-    None => None
-    Some i => match parse (stringSlice 0 i text)
+  Ok text => do
+    i <- stringIndexOf "\n" text
+    match parse (stringSlice 0 i text)
       Ok (JString key) =>
         Some (key, stringSlice (i + 1) (stringLength text) text)
       _ => None
@@ -491,6 +487,8 @@ filesWithNotes key notes ("files", JArray files) = (
 filesWithNotes _ _ member = member
 
 foldNotesInto : String -> List Diag -> List Json -> List Json
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 foldNotesInto _ _ [] = []
 foldNotesInto key notes (file :: rest) = match fileWithNotes key notes file
   Some folded => folded :: rest

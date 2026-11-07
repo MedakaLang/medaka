@@ -199,7 +199,7 @@ monoLinks (TVar cell) = match !cell
 monoLinks (TApp a b) = monoLinks a + monoLinks b
 monoLinks (TFun a _ b) = monoLinks a + monoLinks b
 monoLinks (TQual a _) = monoLinks a
-monoLinks _ = 0
+monoLinks (TCon _ _ | TRigid _ | TEff _ | TAuth _) = 0
 
 -- The evidence in ordinal order, each id replaced by its rank, then the
 -- disposition rows; `withheld` when there is no checked program.

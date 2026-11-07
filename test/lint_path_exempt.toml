@@ -1,0 +1,65 @@
+# lint path exemption table — HAND-EDITED, not generated.
+#
+# Read by `medaka lint --exempt=<this file>`: each [[entry]] drops the findings
+# of `rules` in `file` before `--deny` and the count baseline see them. Every row
+# needs a non-empty `reason`; a row with no reason, an unknown rule, or a file
+# that does not exist makes the lint run fail (exit 1, naming the row).
+#
+# Consumers: .githooks/pre-commit (lint check, and its fmt check skips these
+# files) and test/diff_compiler_lint_baseline.sh (both assertions). That gate
+# also bounds the table: every row names, in `pinned-by`, the
+# pds/test/constant_time_*.sh gate (or test/process_authority_fixtures/lease_replay.py)
+# that pins it. That script must name `file` on
+# a non-comment line, or the row's reason must name the emitted closure the
+# script pins. This table is for bytes another gate pins, not a general way to
+# silence a rule.
+#
+# Paths are relative to the repo root, where both consumers run.
+
+[[entry]]
+file = "pds/lib/field.mdk"
+rules = ["rule-threaded-invariant"]
+reason = "constant-time audited source, byte-pinned by pds/test/constant_time_*.sh"
+pinned-by = "pds/test/constant_time_signing.sh"
+
+[[entry]]
+file = "pds/lib/secp256k1.mdk"
+rules = ["rule-threaded-invariant"]
+reason = "constant-time audited source, byte-pinned by pds/test/constant_time_*.sh"
+pinned-by = "pds/test/constant_time_signing.sh"
+
+[[entry]]
+file = "pds/lib/store.mdk"
+rules = ["rule-passthrough-arm", "rule-threaded-invariant"]
+reason = "constant-time audited source, byte-pinned by pds/test/constant_time_*.sh"
+pinned-by = "pds/test/constant_time_reductions.sh"
+
+[[entry]]
+file = "stdlib/bytes.mdk"
+rules = ["rule-threaded-invariant"]
+reason = "fromU8ArrayFill is in the emitted closure pinned by pds/test/constant_time_signing.sh"
+pinned-by = "pds/test/constant_time_signing.sh"
+
+[[entry]]
+file = "stdlib/crypto/hmac.mdk"
+rules = ["rule-threaded-invariant"]
+reason = "constant-time audited source, byte-pinned by pds/test/constant_time_*.sh"
+pinned-by = "pds/test/constant_time_signing.sh"
+
+[[entry]]
+file = "stdlib/crypto/sha256.mdk"
+rules = ["rule-threaded-invariant"]
+reason = "constant-time audited source, byte-pinned by pds/test/constant_time_*.sh"
+pinned-by = "pds/test/constant_time_signing.sh"
+
+[[entry]]
+file = "stdlib/mut_bytes.mdk"
+rules = ["rule-threaded-invariant"]
+reason = "fillFrom is in the emitted closure pinned by pds/test/constant_time_signing.sh"
+pinned-by = "pds/test/constant_time_signing.sh"
+
+[[entry]]
+file = "stdlib/core.mdk"
+rules = ["rule-threaded-invariant"]
+reason = "byte-pinned by the source pins in docs/findings/mcp-runtime-stdio-lease/summary.json, which test/process_authority_fixtures/lease_replay.py replays"
+pinned-by = "test/process_authority_fixtures/lease_replay.py"

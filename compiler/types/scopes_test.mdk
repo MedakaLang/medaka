@@ -316,11 +316,13 @@ scopeParentOf sid ((other, parent) :: rest) =
   if sid == other then parent else scopeParentOf sid rest
 
 modelVisible : List (Int, Option Int) -> Int -> Int -> Bool
-modelVisible _ use binder
-  | use == binder = True
-modelVisible parents use binder = match scopeParentOf use parents
-  None => False
-  Some parent => modelVisible parents parent binder
+modelVisible parents use0 binder = go use0
+  where
+    go use
+      | use == binder = True
+    go use = match scopeParentOf use parents
+      None => False
+      Some parent => go parent
 
 buildScopeTree : ScopeStore ->
   List Int ->
@@ -363,23 +365,25 @@ allScopeUsesMatch : ScopeStore ->
   List ScopeId ->
   List (Int, Option Int) ->
   Bool
-allScopeUsesMatch _ _ [] _ = True
-allScopeUsesMatch store allIds (use :: rest) parents =
-  allBindersMatch store use allIds parents
-    && allScopeUsesMatch store allIds rest parents
+allScopeUsesMatch store allIds xs0 parents = go xs0
+  where
+    go [] = True
+    go (use :: rest) = allBindersMatch store use allIds parents && go rest
 
 allBindersMatch : ScopeStore ->
   ScopeId ->
   List ScopeId ->
   List (Int, Option Int) ->
   Bool
-allBindersMatch _ _ [] _ = True
-allBindersMatch store use (binder :: rest) parents =
-  givenVisibleFrom store use binder
-      == modelVisible parents (scopeInt use) (scopeInt binder)
-    && visibleOnChain (visibleChain store use) binder
-      == modelVisible parents (scopeInt use) (scopeInt binder)
-    && allBindersMatch store use rest parents
+allBindersMatch store use xs0 parents = go xs0
+  where
+    go [] = True
+    go (binder :: rest) =
+      givenVisibleFrom store use binder
+          == modelVisible parents (scopeInt use) (scopeInt binder)
+        && visibleOnChain (visibleChain store use) binder
+          == modelVisible parents (scopeInt use) (scopeInt binder)
+        && go rest
 
 scopeTreeLaw : List Int -> Bool
 scopeTreeLaw raw =

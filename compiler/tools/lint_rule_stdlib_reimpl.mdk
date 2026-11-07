@@ -23,14 +23,15 @@ import tools.lint_core.{
   Scope(..),
   StdlibIndex,
   mkRule,
+  noFix,
   stdlibEntriesOf,
   stdlibIndexNames,
+  factDeclLocs,
 }
 import tools.lint_shared.{
   appSpineOf,
   clausesOf,
   dedupeNamesLoc,
-  declLocList,
   lastSegOf,
   memberLocalIfOrigin,
   nameSetOf,
@@ -126,7 +127,7 @@ ruleStdlibReimpl : StdlibIndex ->
   Positions ->
   List Decl ->
   List Finding
-ruleStdlibReimpl idx path _ pos prog =
+ruleStdlibReimpl idx path facts _ prog =
   -- both hoisted out of the per-def loop: `stdlibIndexNames` sorts the whole
   -- key set on every call, and the signature map is one pass over the file.
   let ownMod = stdlibModuleOf path
@@ -139,7 +140,7 @@ ruleStdlibReimpl idx path _ pos prog =
   -- keeping the FIRST clause's location.
   flatMap
     (reimplHit idx ownMod names sigs locals prog)
-    (dedupeNamesLoc (flatMap topDefNameL (declLocList pos prog)))
+    (dedupeNamesLoc (flatMap topDefNameL (factDeclLocs facts)))
 
 -- ── homonym guard (#2327 finding 2) ───────────────────────────────────────────
 -- `tyCanon` compares type constructors, constraint heads and effect labels by
@@ -328,11 +329,11 @@ firstJustL f (x :: rest) = match f x
   None => firstJustL f rest
 
 localNameForStdlibInDecl : String -> String -> Decl -> Option String
-localNameForStdlibInDecl modName stdName (DUse _ path _) =
-  localNameForStdlibInPath modName stdName path
-localNameForStdlibInDecl modName stdName (DAttrib _ d) =
-  localNameForStdlibInDecl modName stdName d
-localNameForStdlibInDecl _ _ _ = None
+localNameForStdlibInDecl modName stdName x0 = go x0
+  where
+    go (DUse _ path _) = localNameForStdlibInPath modName stdName path
+    go (DAttrib _ d) = go d
+    go _ = None
 
 localNameForStdlibInPath : String -> String -> UsePath -> Option String
 localNameForStdlibInPath modName stdName (UseGroup path members) =
@@ -363,11 +364,13 @@ firstMatchingExport : StdlibIndex ->
   String ->
   List String ->
   Option (String, String)
-firstMatchingExport _ _ _ [] = None
-firstMatchingExport idx ownMod canon (std :: rest) =
-  match firstMatchingModule ownMod canon (stdlibEntriesOf idx std)
-    Some modName => Some (modName, std)
-    None => firstMatchingExport idx ownMod canon rest
+firstMatchingExport idx ownMod canon xs0 = go xs0
+  where
+    go [] = None
+    go (std :: rest) =
+      match firstMatchingModule ownMod canon (stdlibEntriesOf idx std)
+        Some modName => Some (modName, std)
+        None => go rest
 
 -- Skip a candidate OWNED by `ownMod` (the linted file's own module) before
 -- testing the signature at all: the true owner's definition can never be a
@@ -377,11 +380,13 @@ firstMatchingModule : Option String ->
   String ->
   List (String, Ty) ->
   Option String
-firstMatchingModule _ _ [] = None
-firstMatchingModule ownMod canon ((modName, ty) :: rest)
-  | ownsModule ownMod modName = firstMatchingModule ownMod canon rest
-  | tyCanon ty == canon = Some modName
-  | otherwise = firstMatchingModule ownMod canon rest
+firstMatchingModule ownMod canon xs0 = go xs0
+  where
+    go [] = None
+    go ((modName, ty) :: rest)
+      | ownsModule ownMod modName = go rest
+      | tyCanon ty == canon = Some modName
+      | otherwise = go rest
 
 -- The linted file owns a candidate module iff it HAS an owning module id at all
 -- (i.e. it is under `stdlib/`) and that id is the candidate's.
@@ -417,7 +422,7 @@ stdlibFinding name modName stdName loc = Finding {
     "top-level '\{name}' reimplements stdlib '\{modName}.\{stdName}' (same declared signature) — use the stdlib version",
   severity = SevWarning,
   loc = loc,
-  fix = None,
+  fix = noFix,
 }
 
 -- ── declared-signature identity, up to renaming ───────────────────────────────
@@ -478,26 +483,22 @@ constrRowVars : Constraint -> List String
 constrRowVars (Constraint { constraintArgs = args }) = flatMap rowVarsOf args
 
 tyCanonIn : List String -> List String -> Ty -> String
-tyCanonIn tvs _ (TyVar v) = "%t" ++ intToString (indexIn v tvs)
-tyCanonIn _ _ (TyCon { tyConName = n }) = "#" ++ n
-tyCanonIn tvs rvs (TyApp f x) =
-  "(@ \{tyCanonIn tvs rvs f} \{tyCanonIn tvs rvs x})"
-tyCanonIn tvs rvs (TyFun a b) =
-  "(-> \{tyCanonIn tvs rvs a} \{tyCanonIn tvs rvs b})"
-tyCanonIn tvs rvs (TyTuple ts) =
-  "(, \{joinWith " " (map (tyCanonIn tvs rvs) ts)})"
-tyCanonIn tvs rvs (TyEffect es tl t) =
-  "(eff \{rowCanon rvs es tl} \{tyCanonIn tvs rvs t})"
-tyCanonIn _ rvs (TyRow es tl _) = "(row " ++ rowCanon rvs es tl ++ ")"
-tyCanonIn _ _ (TyAuth ps _) = "(auth " ++ authTermsSurface escStr ps ++ ")"
--- An authority binder and a qualifier are part of what a declared type
--- means: two signatures differing only in them are different signatures.
-tyCanonIn tvs rvs (TyNamed n t d) =
-  "(named \{n} \{tyCanonIn tvs rvs t}\{binderDomainSurface d})"
-tyCanonIn tvs rvs (TyQual t ns _) =
-  "(qual \{tyCanonIn tvs rvs t} \{qualifierSource escStr ns})"
-tyCanonIn tvs rvs (TyConstrained cs t) =
-  "(=> \{joinWith " " (sortUniqS (map (constrCanon tvs rvs) cs))} \{tyCanonIn tvs rvs t})"
+tyCanonIn tvs rvs x0 = go x0
+  where
+    go (TyVar v) = "%t" ++ intToString (indexIn v tvs)
+    go (TyCon { tyConName = n }) = "#" ++ n
+    go (TyApp f x) = "(@ \{go f} \{go x})"
+    go (TyFun a b) = "(-> \{go a} \{go b})"
+    go (TyTuple ts) = "(, \{joinWith " " (map (tyCanonIn tvs rvs) ts)})"
+    go (TyEffect es tl t) = "(eff \{rowCanon rvs es tl} \{go t})"
+    go (TyRow es tl _) = "(row " ++ rowCanon rvs es tl ++ ")"
+    go (TyAuth ps _) = "(auth " ++ authTermsSurface escStr ps ++ ")"
+    -- An authority binder and a qualifier are part of what a declared type
+    -- means: two signatures differing only in them are different signatures.
+    go (TyNamed n t d) = "(named \{n} \{go t}\{binderDomainSurface d})"
+    go (TyQual t ns _) = "(qual \{go t} \{qualifierSource escStr ns})"
+    go (TyConstrained cs t) =
+      "(=> \{joinWith " " (sortUniqS (map (constrCanon tvs rvs) cs))} \{go t})"
 
 constrCanon : List String -> List String -> Constraint -> String
 constrCanon tvs rvs (Constraint { constraintHead = h, constraintArgs = args }) =

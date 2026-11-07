@@ -1,5 +1,5 @@
 # META
-source_lines=57
+source_lines=58
 stages=DESUGAR,MARK
 # SOURCE
 import list.{sortBy}
@@ -21,14 +21,16 @@ validateEach : SourceSnapshot ->
   String ->
   List SourceEdit ->
   Result EditError Unit
-validateEach _ _ [] = Ok ()
-validateEach snapshot text ((SourceEdit id (SourceSpan lo hi) expected _) :: rest)
-  | not (matchesSnapshot id snapshot) = Err StaleSnapshot
-  | lo < 0 || hi < lo || hi > stringLength text = Err InvalidRange
-  -- Bound: one text sliced once per edit, linear on the native runtime (cursor cache) when edits arrive in ascending order; unsorted input re-walks from the cached point.
-  -- lint-disable-next-line rule-reslice-in-loop
-  | stringSlice lo hi text /= expected = Err ExpectedTextMismatch
-  | otherwise = validateEach snapshot text rest
+validateEach snapshot text xs0 = go xs0
+  where
+    go [] = Ok ()
+    go ((SourceEdit id (SourceSpan lo hi) expected _) :: rest)
+      | not (matchesSnapshot id snapshot) = Err StaleSnapshot
+      | lo < 0 || hi < lo || hi > stringLength text = Err InvalidRange
+      -- Bound: one text sliced once per edit, linear on the native runtime (cursor cache) when edits arrive in ascending order; unsorted input re-walks from the cached point.
+      -- lint-disable-next-line rule-reslice-in-loop
+      | stringSlice lo hi text /= expected = Err ExpectedTextMismatch
+      | otherwise = go rest
 
 validateOverlap : List SourceEdit -> Result EditError Unit
 validateOverlap [] = Ok ()
@@ -41,10 +43,9 @@ validateOverlap ((SourceEdit _ (SourceSpan a b) _ _) :: (next@(SourceEdit _ (Sou
 
 export
 validateSourceEdits : SourceSnapshot -> List SourceEdit -> Result EditError Unit
-validateSourceEdits (snapshot@(SourceSnapshot _ _ _ text _)) edits =
-  match validateEach snapshot text edits
-    Err e => Err e
-    Ok _ => validateOverlap (sortBy compareEdit edits)
+validateSourceEdits (snapshot@(SourceSnapshot _ _ _ text _)) edits = do
+  _ <- validateEach snapshot text edits
+  validateOverlap (sortBy compareEdit edits)
 
 editParts : String -> Int -> List SourceEdit -> List String
 editParts text pos [] = [stringSlice pos (stringLength text) text]
@@ -60,6 +61,7 @@ applySourceEdits (snapshot@(SourceSnapshot _ _ _ text _)) edits =
     (_ => stringConcat (editParts text 0 (sortBy compareEdit edits)))
     (validateSourceEdits snapshot edits)
 # DESUGAR
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("list") ((mem "sortBy" false))))
 (DUse false (UseGroup ("tools" "source_snapshot") ((mem "SourceSnapshot" true) (mem "SnapshotId" false) (mem "matchesSnapshot" false))))
 (DUse false (UseGroup ("frontend" "syntax_source") ((mem "SourceSpan" true))))
@@ -68,20 +70,20 @@ applySourceEdits (snapshot@(SourceSnapshot _ _ _ text _)) edits =
 (DTypeSig false "compareEdit" (TyFun (TyCon "SourceEdit") (TyFun (TyCon "SourceEdit") (TyCon "Ordering"))))
 (DFunDef false "compareEdit" ((PCon "SourceEdit" PWild (PCon "SourceSpan" (PVar "a") (PVar "b")) PWild PWild) (PCon "SourceEdit" PWild (PCon "SourceSpan" (PVar "c") (PVar "d")) PWild PWild)) (EIf (EBinOp "==" (EVar "a") (EVar "c")) (EApp (EApp (EVar "compare") (EVar "b")) (EVar "d")) (EApp (EApp (EVar "compare") (EVar "a")) (EVar "c"))))
 (DTypeSig false "validateEach" (TyFun (TyCon "SourceSnapshot") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "SourceEdit")) (TyApp (TyApp (TyCon "Result") (TyCon "EditError")) (TyCon "Unit"))))))
-(DFunDef false "validateEach" (PWild PWild (PList)) (EApp (EVar "Ok") (ELit LUnit)))
-(DFunDef false "validateEach" ((PVar "snapshot") (PVar "text") (PCons (PCon "SourceEdit" (PVar "id") (PCon "SourceSpan" (PVar "lo") (PVar "hi")) (PVar "expected") PWild) (PVar "rest"))) (EIf (EApp (EVar "not") (EApp (EApp (EVar "matchesSnapshot") (EVar "id")) (EVar "snapshot"))) (EApp (EVar "Err") (EVar "StaleSnapshot")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (EBinOp "<" (EVar "hi") (EVar "lo"))) (EBinOp ">" (EVar "hi") (EApp (EVar "stringLength") (EVar "text")))) (EApp (EVar "Err") (EVar "InvalidRange")) (EIf (EBinOp "/=" (EApp (EApp (EApp (EVar "stringSlice") (EVar "lo")) (EVar "hi")) (EVar "text")) (EVar "expected")) (EApp (EVar "Err") (EVar "ExpectedTextMismatch")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "validateEach") (EVar "snapshot")) (EVar "text")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DFunDef false "validateEach" ((PVar "snapshot") (PVar "text") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EApp (EVar "Ok") (ELit LUnit))) (clause ((PCons (PCon "SourceEdit" (PVar "id") (PCon "SourceSpan" (PVar "lo") (PVar "hi")) (PVar "expected") PWild) (PVar "rest"))) (EIf (EApp (EVar "not") (EApp (EApp (EVar "matchesSnapshot") (EVar "id")) (EVar "snapshot"))) (EApp (EVar "Err") (EVar "StaleSnapshot")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (EBinOp "<" (EVar "hi") (EVar "lo"))) (EBinOp ">" (EVar "hi") (EApp (EVar "stringLength") (EVar "text")))) (EApp (EVar "Err") (EVar "InvalidRange")) (EIf (EBinOp "/=" (EApp (EApp (EApp (EVar "stringSlice") (EVar "lo")) (EVar "hi")) (EVar "text")) (EVar "expected")) (EApp (EVar "Err") (EVar "ExpectedTextMismatch")) (EIf (EVar "otherwise") (EApp (EVar "go") (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "validateOverlap" (TyFun (TyApp (TyCon "List") (TyCon "SourceEdit")) (TyApp (TyApp (TyCon "Result") (TyCon "EditError")) (TyCon "Unit"))))
 (DFunDef false "validateOverlap" ((PList)) (EApp (EVar "Ok") (ELit LUnit)))
 (DFunDef false "validateOverlap" ((PList PWild)) (EApp (EVar "Ok") (ELit LUnit)))
 (DFunDef false "validateOverlap" ((PCons (PCon "SourceEdit" PWild (PCon "SourceSpan" (PVar "a") (PVar "b")) PWild PWild) (PCons (PAs "next" (PCon "SourceEdit" PWild (PCon "SourceSpan" (PVar "c") (PVar "d")) PWild PWild)) (PVar "rest")))) (EIf (EBinOp "||" (EBinOp "<" (EVar "c") (EVar "b")) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "a") (EVar "b")) (EBinOp "==" (EVar "c") (EVar "d"))) (EBinOp "==" (EVar "a") (EVar "c")))) (EApp (EVar "Err") (EVar "OverlappingEdits")) (EApp (EVar "validateOverlap") (EBinOp "::" (EVar "next") (EVar "rest")))))
 (DTypeSig true "validateSourceEdits" (TyFun (TyCon "SourceSnapshot") (TyFun (TyApp (TyCon "List") (TyCon "SourceEdit")) (TyApp (TyApp (TyCon "Result") (TyCon "EditError")) (TyCon "Unit")))))
-(DFunDef false "validateSourceEdits" ((PAs "snapshot" (PCon "SourceSnapshot" PWild PWild PWild (PVar "text") PWild)) (PVar "edits")) (EMatch (EApp (EApp (EApp (EVar "validateEach") (EVar "snapshot")) (EVar "text")) (EVar "edits")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" PWild) () (EApp (EVar "validateOverlap") (EApp (EApp (EVar "sortBy") (EVar "compareEdit")) (EVar "edits"))))))
+(DFunDef false "validateSourceEdits" ((PAs "snapshot" (PCon "SourceSnapshot" PWild PWild PWild (PVar "text") PWild)) (PVar "edits")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EVar "validateEach") (EVar "snapshot")) (EVar "text")) (EVar "edits"))) (ELam (PWild) (EApp (EVar "validateOverlap") (EApp (EApp (EVar "sortBy") (EVar "compareEdit")) (EVar "edits"))))))
 (DTypeSig false "editParts" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "SourceEdit")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "editParts" ((PVar "text") (PVar "pos") (PList)) (EListLit (EApp (EApp (EApp (EVar "stringSlice") (EVar "pos")) (EApp (EVar "stringLength") (EVar "text"))) (EVar "text"))))
 (DFunDef false "editParts" ((PVar "text") (PVar "pos") (PCons (PCon "SourceEdit" PWild (PCon "SourceSpan" (PVar "lo") (PVar "hi")) PWild (PVar "replacement")) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EVar "stringSlice") (EVar "pos")) (EVar "lo")) (EVar "text")) (EBinOp "::" (EVar "replacement") (EApp (EApp (EApp (EVar "editParts") (EVar "text")) (EVar "hi")) (EVar "rest")))))
 (DTypeSig true "applySourceEdits" (TyFun (TyCon "SourceSnapshot") (TyFun (TyApp (TyCon "List") (TyCon "SourceEdit")) (TyApp (TyApp (TyCon "Result") (TyCon "EditError")) (TyCon "String")))))
 (DFunDef false "applySourceEdits" ((PAs "snapshot" (PCon "SourceSnapshot" PWild PWild PWild (PVar "text") PWild)) (PVar "edits")) (EApp (EApp (EVar "map") (ELam (PWild) (EApp (EVar "stringConcat") (EApp (EApp (EApp (EVar "editParts") (EVar "text")) (ELit (LInt 0))) (EApp (EApp (EVar "sortBy") (EVar "compareEdit")) (EVar "edits")))))) (EApp (EApp (EVar "validateSourceEdits") (EVar "snapshot")) (EVar "edits"))))
 # MARK
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("list") ((mem "sortBy" false))))
 (DUse false (UseGroup ("tools" "source_snapshot") ((mem "SourceSnapshot" true) (mem "SnapshotId" false) (mem "matchesSnapshot" false))))
 (DUse false (UseGroup ("frontend" "syntax_source") ((mem "SourceSpan" true))))
@@ -90,14 +92,13 @@ applySourceEdits (snapshot@(SourceSnapshot _ _ _ text _)) edits =
 (DTypeSig false "compareEdit" (TyFun (TyCon "SourceEdit") (TyFun (TyCon "SourceEdit") (TyCon "Ordering"))))
 (DFunDef false "compareEdit" ((PCon "SourceEdit" PWild (PCon "SourceSpan" (PVar "a") (PVar "b")) PWild PWild) (PCon "SourceEdit" PWild (PCon "SourceSpan" (PVar "c") (PVar "d")) PWild PWild)) (EIf (EBinOp "==" (EVar "a") (EVar "c")) (EApp (EApp (EMethodRef "compare") (EVar "b")) (EVar "d")) (EApp (EApp (EMethodRef "compare") (EVar "a")) (EVar "c"))))
 (DTypeSig false "validateEach" (TyFun (TyCon "SourceSnapshot") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "SourceEdit")) (TyApp (TyApp (TyCon "Result") (TyCon "EditError")) (TyCon "Unit"))))))
-(DFunDef false "validateEach" (PWild PWild (PList)) (EApp (EVar "Ok") (ELit LUnit)))
-(DFunDef false "validateEach" ((PVar "snapshot") (PVar "text") (PCons (PCon "SourceEdit" (PVar "id") (PCon "SourceSpan" (PVar "lo") (PVar "hi")) (PVar "expected") PWild) (PVar "rest"))) (EIf (EApp (EVar "not") (EApp (EApp (EVar "matchesSnapshot") (EVar "id")) (EVar "snapshot"))) (EApp (EVar "Err") (EVar "StaleSnapshot")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (EBinOp "<" (EVar "hi") (EVar "lo"))) (EBinOp ">" (EVar "hi") (EApp (EVar "stringLength") (EVar "text")))) (EApp (EVar "Err") (EVar "InvalidRange")) (EIf (EBinOp "/=" (EApp (EApp (EApp (EVar "stringSlice") (EVar "lo")) (EVar "hi")) (EVar "text")) (EVar "expected")) (EApp (EVar "Err") (EVar "ExpectedTextMismatch")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "validateEach") (EVar "snapshot")) (EVar "text")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DFunDef false "validateEach" ((PVar "snapshot") (PVar "text") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EApp (EVar "Ok") (ELit LUnit))) (clause ((PCons (PCon "SourceEdit" (PVar "id") (PCon "SourceSpan" (PVar "lo") (PVar "hi")) (PVar "expected") PWild) (PVar "rest"))) (EIf (EApp (EVar "not") (EApp (EApp (EVar "matchesSnapshot") (EVar "id")) (EVar "snapshot"))) (EApp (EVar "Err") (EVar "StaleSnapshot")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (EBinOp "<" (EVar "hi") (EVar "lo"))) (EBinOp ">" (EVar "hi") (EApp (EVar "stringLength") (EVar "text")))) (EApp (EVar "Err") (EVar "InvalidRange")) (EIf (EBinOp "/=" (EApp (EApp (EApp (EVar "stringSlice") (EVar "lo")) (EVar "hi")) (EVar "text")) (EVar "expected")) (EApp (EVar "Err") (EVar "ExpectedTextMismatch")) (EIf (EVar "otherwise") (EApp (EVar "go") (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "validateOverlap" (TyFun (TyApp (TyCon "List") (TyCon "SourceEdit")) (TyApp (TyApp (TyCon "Result") (TyCon "EditError")) (TyCon "Unit"))))
 (DFunDef false "validateOverlap" ((PList)) (EApp (EVar "Ok") (ELit LUnit)))
 (DFunDef false "validateOverlap" ((PList PWild)) (EApp (EVar "Ok") (ELit LUnit)))
 (DFunDef false "validateOverlap" ((PCons (PCon "SourceEdit" PWild (PCon "SourceSpan" (PVar "a") (PVar "b")) PWild PWild) (PCons (PAs "next" (PCon "SourceEdit" PWild (PCon "SourceSpan" (PVar "c") (PVar "d")) PWild PWild)) (PVar "rest")))) (EIf (EBinOp "||" (EBinOp "<" (EVar "c") (EVar "b")) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "a") (EVar "b")) (EBinOp "==" (EVar "c") (EVar "d"))) (EBinOp "==" (EVar "a") (EVar "c")))) (EApp (EVar "Err") (EVar "OverlappingEdits")) (EApp (EVar "validateOverlap") (EBinOp "::" (EVar "next") (EVar "rest")))))
 (DTypeSig true "validateSourceEdits" (TyFun (TyCon "SourceSnapshot") (TyFun (TyApp (TyCon "List") (TyCon "SourceEdit")) (TyApp (TyApp (TyCon "Result") (TyCon "EditError")) (TyCon "Unit")))))
-(DFunDef false "validateSourceEdits" ((PAs "snapshot" (PCon "SourceSnapshot" PWild PWild PWild (PVar "text") PWild)) (PVar "edits")) (EMatch (EApp (EApp (EApp (EVar "validateEach") (EVar "snapshot")) (EVar "text")) (EVar "edits")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" PWild) () (EApp (EVar "validateOverlap") (EApp (EApp (EVar "sortBy") (EVar "compareEdit")) (EVar "edits"))))))
+(DFunDef false "validateSourceEdits" ((PAs "snapshot" (PCon "SourceSnapshot" PWild PWild PWild (PVar "text") PWild)) (PVar "edits")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EVar "validateEach") (EVar "snapshot")) (EVar "text")) (EVar "edits"))) (ELam (PWild) (EApp (EVar "validateOverlap") (EApp (EApp (EVar "sortBy") (EVar "compareEdit")) (EVar "edits"))))))
 (DTypeSig false "editParts" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "SourceEdit")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "editParts" ((PVar "text") (PVar "pos") (PList)) (EListLit (EApp (EApp (EApp (EVar "stringSlice") (EVar "pos")) (EApp (EVar "stringLength") (EVar "text"))) (EVar "text"))))
 (DFunDef false "editParts" ((PVar "text") (PVar "pos") (PCons (PCon "SourceEdit" PWild (PCon "SourceSpan" (PVar "lo") (PVar "hi")) PWild (PVar "replacement")) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EVar "stringSlice") (EVar "pos")) (EVar "lo")) (EVar "text")) (EBinOp "::" (EVar "replacement") (EApp (EApp (EApp (EVar "editParts") (EVar "text")) (EVar "hi")) (EVar "rest")))))

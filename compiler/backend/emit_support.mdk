@@ -100,7 +100,7 @@ eagerVars b (CRangeArray lo hi _) = eagerVars b lo ++ eagerVars b hi
 -- a `CDict` head is a saturated call to the named top-level function — an eager
 -- callee edge (the routes it carries hold no CExpr, so nothing to descend).
 eagerVars b (CDict name _) = if omHasKey name b then [] else [name]
-eagerVars _ _ = []
+eagerVars _ (CMethod _ _) = []
 
 eagerVarsList : OrdMap Unit -> List CExpr -> List String
 eagerVarsList _ [] = []
@@ -260,17 +260,20 @@ foldReachSCCs : OrdMap Unit ->
   List (List String) ->
   OrdMap (List String, OrdMap Unit) ->
   OrdMap (List String, OrdMap Unit)
-foldReachSCCs _ _ [] acc = acc
-foldReachSCCs valSet adj (scc :: rest) acc =
-  let direct = dedup (unionLookup scc adj)
-  -- sources, in the order the old `dedup (… ++ …)` saw them: this SCC's own
-  -- direct value-global callees, then each callee's reach list.  The LAST
-  -- callee's list is held back as the shareable tail; everything before it is
-  -- concatenated and deduped as `earlier`.
-  let earlier =
-    dedup (filterList (n => omHasKey n valSet) direct ++ initReach direct acc)
-  let reached = mergeReach earlier (lastReach direct acc)
-  foldReachSCCs valSet adj rest (insertReach scc reached acc)
+foldReachSCCs valSet adj xs0 acc0 = go xs0 acc0
+  where
+    go [] acc = acc
+    go (scc :: rest) acc =
+      let direct = dedup (unionLookup scc adj)
+      -- sources, in the order the old `dedup (… ++ …)` saw them: this SCC's own
+      -- direct value-global callees, then each callee's reach list.  The LAST
+      -- callee's list is held back as the shareable tail; everything before it is
+      -- concatenated and deduped as `earlier`.
+      let earlier =
+        dedup
+          (filterList (n => omHasKey n valSet) direct ++ initReach direct acc)
+      let reached = mergeReach earlier (lastReach direct acc)
+      go rest (insertReach scc reached acc)
 
 -- `dedup (earlier ++ tailList)` where `earlier` is already deduped, i.e.
 -- `earlier ++ (tailList \ earlier)`, paired with its own membership set.
@@ -419,7 +422,8 @@ speculationSafe ctors (CList es) = allList (speculationSafe ctors) es
 speculationSafe ctors (CArray es) = allList (speculationSafe ctors) es
 speculationSafe ctors (CRecord _ fields) =
   allList (f => speculationSafeField ctors f) fields
-speculationSafe _ _ = False
+speculationSafe _ (CApp _ _ _ | CLet _ _ _ _ | CLetGroup _ _ | CMatch _ _ | CDecision _ _ _ | CIf _ _ _ | CBinPrim _ _ _ _ _ | CUnOp _ _ | CFieldAccess _ _ _ _ | CRecordUpdate _ _ _ | CVariantUpdate _ _ _ | CRangeList _ _ _ | CRangeArray _ _ _ | CBlock _ | CMethod _ _ | CDict _ _) =
+  False
 
 speculationSafeField : OrdMap Int -> CField -> Bool
 speculationSafeField ctors (CField _ _ ex) = speculationSafe ctors ex
@@ -566,13 +570,15 @@ foldTaintSCCs : OrdMap (List String) ->
   List (List String) ->
   OrdMap Unit ->
   OrdMap Unit
-foldTaintSCCs _ _ [] acc = acc
-foldTaintSCCs adj sources (scc :: rest) acc =
-  let cyclic = lengthGt1 scc || anySelfLoop scc adj
-  let direct = anyKeyIn scc sources
-  let succ = anyKeyIn (sccCallees scc adj) acc
-  let acc2 = if cyclic || direct || succ then insertAllKeys scc acc else acc
-  foldTaintSCCs adj sources rest acc2
+foldTaintSCCs adj sources xs0 acc0 = go xs0 acc0
+  where
+    go [] acc = acc
+    go (scc :: rest) acc =
+      let cyclic = lengthGt1 scc || anySelfLoop scc adj
+      let direct = anyKeyIn scc sources
+      let succ = anyKeyIn (sccCallees scc adj) acc
+      let acc2 = if cyclic || direct || succ then insertAllKeys scc acc else acc
+      go rest acc2
 
 -- the value globals that both backends must emit LAZY: those reaching a taint
 -- source (`taintSourceSet`) or a cycle, transitively over the eager call graph.
@@ -658,7 +664,8 @@ labelFallthrough (CDecision scrut arms tree) label =
     (labelFallthrough scrut label)
     (map (a => labelFallthroughArm a label) arms)
     tree
-labelFallthrough e _ = e
+labelFallthrough (e@(CLit _ | CLam _ _ | CMatch _ _ | CBinPrim _ _ _ _ _ | CUnOp _ _ | CTuple _ | CList _ | CRecord _ _ | CFieldAccess _ _ _ _ | CRecordUpdate _ _ _ | CVariantUpdate _ _ _ | CArray _ | CRangeList _ _ _ | CRangeArray _ _ _ | CMethod _ _ | CDict _ _)) _ =
+  e
 
 labelFallthroughStmt : CStmt -> String -> CStmt
 labelFallthroughStmt (CSExpr e) label = CSExpr (labelFallthrough e label)

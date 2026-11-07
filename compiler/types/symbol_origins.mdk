@@ -101,23 +101,24 @@ unitDecl : (String -> SymbolOrigin) ->
   SymbolOrigins ->
   Decl ->
   SymbolOrigins
-unitDecl origin rm acc (DFunDef _ n _ _ _ bid) =
-  addFunction (renamed rm n) bid (origin n) acc
-unitDecl origin rm acc (DLetGroup _ binds) = fold (unitBind origin rm) acc binds
-unitDecl origin rm acc (DData { dataName = n, dataOrigin = o, dataCtors = variants }) =
-  fold
-    (a v =>
-      addConstructor
-        (typeTagOf o n)
-        (renamed rm (variantName v))
-        (origin (variantName v))
-        a)
-    acc
-    variants
-unitDecl origin rm acc (DNewtype { newtypeName = n, newtypeOrigin = o, newtypeCtor = c }) =
-  addConstructor (typeTagOf o n) (renamed rm c) (origin c) acc
-unitDecl origin rm acc (DAttrib _ d) = unitDecl origin rm acc d
-unitDecl _ _ acc _ = acc
+unitDecl origin rm acc x0 = go x0
+  where
+    go (DFunDef _ n _ _ _ bid) = addFunction (renamed rm n) bid (origin n) acc
+    go (DLetGroup _ binds) = fold (unitBind origin rm) acc binds
+    go (DData { dataName = n, dataOrigin = o, dataCtors = variants }) =
+      fold
+        (a v =>
+          addConstructor
+            (typeTagOf o n)
+            (renamed rm (variantName v))
+            (origin (variantName v))
+            a)
+        acc
+        variants
+    go (DNewtype { newtypeName = n, newtypeOrigin = o, newtypeCtor = c }) =
+      addConstructor (typeTagOf o n) (renamed rm c) (origin c) acc
+    go (DAttrib _ d) = go d
+    go _ = acc
 
 unitBind : (String -> SymbolOrigin) ->
   OrdMap String ->

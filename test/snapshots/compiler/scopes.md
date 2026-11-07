@@ -1,5 +1,5 @@
 # META
-source_lines=187
+source_lines=189
 stages=DESUGAR,MARK
 # SOURCE
 -- Nominal lexical scope storage for one typechecking graph.  Raw ScopeIds are
@@ -97,6 +97,8 @@ freshScope store parent level moduleId owner =
 
 export
 givenVisibleFrom : ScopeStore -> ScopeId -> ScopeId -> Bool
+-- Bound: inlined hot path (hot-list): the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 givenVisibleFrom store useScope binderScope
   | useScope == binderScope = True
   | otherwise = match (scopeFrame store useScope).sfParent

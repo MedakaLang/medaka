@@ -1,5 +1,5 @@
 # META
-source_lines=1643
+source_lines=1664
 stages=DESUGAR,MARK
 # SOURCE
 -- Binding-owned effect equations. Operational lower bounds and compatibility
@@ -309,17 +309,19 @@ relationNodes : SummaryScope c ->
   List (RowRelation c) ->
   Map Int WorkNode ->
   Map Int WorkNode
-relationNodes _ _ [] nodes = nodes
-relationNodes scope protected (rel :: rest) nodes =
-  let candidates =
-    filter (eligibleUpper scope protected) (snd (rowFlat rel.esrUpper))
-  let nodes2 = match candidates
-    [cell] => match !cell
-      EUnbound id _ =>
-        if M.has id nodes then nodes else M.set id (newWorkNode cell) nodes
-      _ => nodes
-    _ => nodes
-  relationNodes scope protected rest nodes2
+relationNodes scope protected xs0 nodes0 = go xs0 nodes0
+  where
+    go [] nodes = nodes
+    go (rel :: rest) nodes =
+      let candidates =
+        filter (eligibleUpper scope protected) (snd (rowFlat rel.esrUpper))
+      let nodes2 = match candidates
+        [cell] => match !cell
+          EUnbound id _ =>
+            if M.has id nodes then nodes else M.set id (newWorkNode cell) nodes
+          _ => nodes
+        _ => nodes
+      go rest nodes2
 
 enqueue : SolveWork -> Int -> Unit
 enqueue work id =
@@ -379,25 +381,27 @@ addEdges : SolveWork ->
   Bool ->
   Map Int (Ref Effvar) ->
   Map Int (Ref Effvar)
-addEdges _ _ [] _ _ _ leaves = leaves
-addEdges work target (cell :: rest) coverAtoms coverLeaves exact leaves =
-  let id = effvarId cell
-  let leaves2 =
-    if M.has id coverLeaves then
-      leaves
-    else match M.get id work.eswNodes
-      Some node =>
-        node.ewnEdges :=
-          SolveEdge {
-              eseTarget = target,
-              eseCoverAtoms = coverAtoms,
-              eseCoverLeaves = coverLeaves,
-              eseExact = exact,
-            }
-            :: node.ewnEdges.value
-        leaves
-      None => M.set id cell leaves
-  addEdges work target rest coverAtoms coverLeaves exact leaves2
+addEdges work target xs0 coverAtoms coverLeaves exact leaves0 = go xs0 leaves0
+  where
+    go [] leaves = leaves
+    go (cell :: rest) leaves =
+      let id = effvarId cell
+      let leaves2 =
+        if M.has id coverLeaves then
+          leaves
+        else match M.get id work.eswNodes
+          Some node =>
+            node.ewnEdges :=
+              SolveEdge {
+                  eseTarget = target,
+                  eseCoverAtoms = coverAtoms,
+                  eseCoverLeaves = coverLeaves,
+                  eseExact = exact,
+                }
+                :: node.ewnEdges.value
+            leaves
+          None => M.set id cell leaves
+      go rest leaves2
 
 addBodyEquations : SolveWork -> List SummaryNode -> Unit
 addBodyEquations _ [] = ()
@@ -406,10 +410,12 @@ addBodyEquations work (node :: rest) =
   addBodyEquations work rest
 
 addLowers : SolveWork -> Int -> List EffRow -> Unit
-addLowers _ _ [] = ()
-addLowers work id (row :: rest) =
-  addEquation work id row [] Tip False
-  addLowers work id rest
+addLowers work id xs0 = go xs0
+  where
+    go [] = ()
+    go (row :: rest) =
+      addEquation work id row [] Tip False
+      go rest
 
 leafSet : List (Ref Effvar) -> Map Int Unit
 leafSet cells = leafSetGo cells Tip
@@ -461,35 +467,39 @@ propagate : SolveWork ->
   Map Int (Ref Effvar) ->
   List SolveEdge ->
   Unit
-propagate _ _ _ [] = ()
-propagate work atoms delta (edge :: rest) =
-  let leaves =
-    M.foldlWithKey
-      (acc id cell =>
-        if M.has id edge.eseCoverLeaves then acc else M.set id cell acc)
-      Tip
-      delta
-  grow
-    work
-    edge.eseTarget
-    (work.eswEscape edge.eseExact atoms edge.eseCoverAtoms)
-    leaves
-  propagate work atoms delta rest
+propagate work atoms delta xs0 = go xs0
+  where
+    go [] = ()
+    go (edge :: rest) =
+      let leaves =
+        M.foldlWithKey
+          (acc id cell =>
+            if M.has id edge.eseCoverLeaves then acc else M.set id cell acc)
+          Tip
+          delta
+      grow
+        work
+        edge.eseTarget
+        (work.eswEscape edge.eseExact atoms edge.eseCoverAtoms)
+        leaves
+      go rest
 
 linkSolutions : Int ->
   (List (Ref Effvar) -> Ref Effvar) ->
   List WorkNode ->
   Unit
-linkSolutions _ _ [] = ()
-linkSolutions owner makeJoin (node :: rest) =
-  let row = match M.values node.ewnLeaves.value
-    [] => EffRow node.ewnAtoms.value None
-    [cell] => EffRow node.ewnAtoms.value (Some cell)
-    cells => EffRow node.ewnAtoms.value (Some (makeJoin cells))
-  match !node.ewnCell
-    ESummary _ _ _ => solveSummaryCell owner node.ewnCell row
-    _ => linkRow node.ewnCell row
-  linkSolutions owner makeJoin rest
+linkSolutions owner makeJoin xs0 = go xs0
+  where
+    go [] = ()
+    go (node :: rest) =
+      let row = match M.values node.ewnLeaves.value
+        [] => EffRow node.ewnAtoms.value None
+        [cell] => EffRow node.ewnAtoms.value (Some cell)
+        cells => EffRow node.ewnAtoms.value (Some (makeJoin cells))
+      match !node.ewnCell
+        ESummary _ _ _ => solveSummaryCell owner node.ewnCell row
+        _ => linkRow node.ewnCell row
+      go rest
 
 missingLeaves : List (Ref Effvar) -> Map Int Unit -> Bool
 missingLeaves [] _ = False
@@ -501,66 +511,73 @@ validateRelations : SummarySolver c ->
   (Bool -> List Atom -> List Atom -> List Atom) ->
   List (RowRelation c) ->
   List (SummaryFailure c)
-validateRelations _ _ _ [] = []
-validateRelations solver protected escape (rel :: rest) =
-  if rowHasSummary rel.esrLower
-    || rowHasSummary rel.esrUpper then match solver.essStack.value
-    _ :: parent :: _ =>
-      retainRowAt parent.essLevel rel.esrLower
-      retainRowAt parent.essLevel rel.esrUpper
-      parent.essRelations :=
-        RowRelation {
-            esrLower = rel.esrLower,
-            esrUpper = rel.esrUpper,
-            esrExact = rel.esrExact,
-            esrContext = rel.esrContext,
-            esrProtected = protected,
-          }
-          :: parent.essRelations.value
-      validateRelations solver protected escape rest
-    -- An unresolved summary relation at the outermost boundary is a real
-    -- unsatisfied effect obligation, not a reason to reach for a nonexistent
-    -- parent scope. Keep it observable as a normal failure so laundering
-    -- cannot turn into a stack panic or an implicit acceptance.
-    _ =>
-      SummaryFailure {
-          esfLower = rel.esrLower,
-          esfUpper = rel.esrUpper,
-          esfExact = rel.esrExact,
-          esfContext = rel.esrContext,
-          esfAuthority = None,
-          esfWrittenUpper = None,
-          esfLabel = None,
-          esfResidualOf = None,
-        }
-        :: validateRelations solver protected escape rest
-  else
-    let (lowerAtoms, lowerCells) = rowFlat rel.esrLower
-    let (upperAtoms, upperCells) = rowFlat rel.esrUpper
-    let failures = validateRelations solver protected escape rest
-    let escaping =
-      authorityEscapes
-        (currentScope solver)
-        rel.esrContext
-        rel.esrExact
-        upperAtoms
-        (escape rel.esrExact lowerAtoms upperAtoms)
-    if isNonEmptyL escaping
-      || missingLeaves lowerCells (leafSet upperCells) then
-      SummaryFailure {
-          esfLower = rel.esrLower,
-          esfUpper = rel.esrUpper,
-          esfExact = rel.esrExact,
-          esfContext = rel.esrContext,
-          esfAuthority = None,
-          esfWrittenUpper = None,
-          esfLabel =
-            firstEscapingKey escaping lowerAtoms upperAtoms escape rel.esrExact,
-          esfResidualOf = None,
-        }
-        :: failures
-    else
-      failures
+validateRelations solver protected escape xs0 = go xs0
+  where
+    go [] = []
+    go (rel :: rest) =
+      if rowHasSummary rel.esrLower
+        || rowHasSummary rel.esrUpper then match solver.essStack.value
+        _ :: parent :: _ =>
+          retainRowAt parent.essLevel rel.esrLower
+          retainRowAt parent.essLevel rel.esrUpper
+          parent.essRelations :=
+            RowRelation {
+                esrLower = rel.esrLower,
+                esrUpper = rel.esrUpper,
+                esrExact = rel.esrExact,
+                esrContext = rel.esrContext,
+                esrProtected = protected,
+              }
+              :: parent.essRelations.value
+          go rest
+        -- An unresolved summary relation at the outermost boundary is a real
+        -- unsatisfied effect obligation, not a reason to reach for a nonexistent
+        -- parent scope. Keep it observable as a normal failure so laundering
+        -- cannot turn into a stack panic or an implicit acceptance.
+        _ =>
+          SummaryFailure {
+              esfLower = rel.esrLower,
+              esfUpper = rel.esrUpper,
+              esfExact = rel.esrExact,
+              esfContext = rel.esrContext,
+              esfAuthority = None,
+              esfWrittenUpper = None,
+              esfLabel = None,
+              esfResidualOf = None,
+            }
+            :: go rest
+      else
+        let (lowerAtoms, lowerCells) = rowFlat rel.esrLower
+        let (upperAtoms, upperCells) = rowFlat rel.esrUpper
+        let failures = go rest
+        let escaping =
+          authorityEscapes
+            (currentScope solver)
+            rel.esrContext
+            rel.esrExact
+            upperAtoms
+            (escape rel.esrExact lowerAtoms upperAtoms)
+        if isNonEmptyL escaping
+          || missingLeaves lowerCells (leafSet upperCells) then
+          SummaryFailure {
+              esfLower = rel.esrLower,
+              esfUpper = rel.esrUpper,
+              esfExact = rel.esrExact,
+              esfContext = rel.esrContext,
+              esfAuthority = None,
+              esfWrittenUpper = None,
+              esfLabel =
+                firstEscapingKey
+                  escaping
+                  lowerAtoms
+                  upperAtoms
+                  escape
+                  rel.esrExact,
+              esfResidualOf = None,
+            }
+            :: failures
+        else
+          failures
 
 -- The key of the first atom left escaping, for the report's location.
 firstEscapingKey : List Atom ->
@@ -586,28 +603,30 @@ authorityEscapes : SummaryScope c ->
   List Atom ->
   List Atom ->
   List Atom
-authorityEscapes _ _ _ _ [] = []
-authorityEscapes scope context exact upper (x :: rest) =
-  let others = authorityEscapes scope context exact upper rest
-  match findAtom (atomKey x) upper
-    Some y =>
-      if isSymbolic (atomAuth x) || isSymbolic (atomAuth y) then
-        scope.essAuthorities :=
-          map
-              (pair => AuthWanted {
-                awLower = fst pair,
-                awUpper = snd pair,
-                awContext = context,
-                awLabel = Some (atomKey x),
-                awExact = exact,
-                awResidualOf = None,
-              })
-              (authSplit (atomAuth x) (atomAuth y))
-            ++ scope.essAuthorities.value
-        others
-      else
-        x :: others
-    None => x :: others
+authorityEscapes scope context exact upper xs0 = go xs0
+  where
+    go [] = []
+    go (x :: rest) =
+      let others = go rest
+      match findAtom (atomKey x) upper
+        Some y =>
+          if isSymbolic (atomAuth x) || isSymbolic (atomAuth y) then
+            scope.essAuthorities :=
+              map
+                  (pair => AuthWanted {
+                    awLower = fst pair,
+                    awUpper = snd pair,
+                    awContext = context,
+                    awLabel = Some (atomKey x),
+                    awExact = exact,
+                    awResidualOf = None,
+                  })
+                  (authSplit (atomAuth x) (atomAuth y))
+                ++ scope.essAuthorities.value
+            others
+          else
+            x :: others
+        None => x :: others
 
 isSymbolic : Authority -> Bool
 isSymbolic q = match authVars q
@@ -1456,23 +1475,25 @@ partitionTransferred : SummaryScope c ->
   Int ->
   List (RowRelation c) ->
   List (RowRelation c)
-partitionTransferred _ _ _ _ [] = []
-partitionTransferred parent protected selected id (rel :: rest) =
-  if M.has id selected then
-    retainRowAt parent.essLevel rel.esrLower
-    retainRowAt parent.essLevel rel.esrUpper
-    parent.essRelations :=
-      RowRelation {
-          esrLower = rel.esrLower,
-          esrUpper = rel.esrUpper,
-          esrExact = rel.esrExact,
-          esrContext = rel.esrContext,
-          esrProtected = protected,
-        }
-        :: parent.essRelations.value
-    partitionTransferred parent protected selected (id + 1) rest
-  else
-    rel :: partitionTransferred parent protected selected (id + 1) rest
+partitionTransferred parent protected selected id0 xs0 = go id0 xs0
+  where
+    go _ [] = []
+    go id (rel :: rest) =
+      if M.has id selected then
+        retainRowAt parent.essLevel rel.esrLower
+        retainRowAt parent.essLevel rel.esrUpper
+        parent.essRelations :=
+          RowRelation {
+              esrLower = rel.esrLower,
+              esrUpper = rel.esrUpper,
+              esrExact = rel.esrExact,
+              esrContext = rel.esrContext,
+              esrProtected = protected,
+            }
+            :: parent.essRelations.value
+        go (id + 1) rest
+      else
+        rel :: go (id + 1) rest
 
 -- Transfer before solving: only original inference choices carry this role,
 -- never external leaves introduced by a solution's borrowed residual.
@@ -1699,8 +1720,7 @@ relationProven escape rel =
 (DTypeSig false "eligibleUpper" (TyFun (TyApp (TyCon "SummaryScope") (TyVar "c")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyFun (TyApp (TyCon "Ref") (TyCon "Effvar")) (TyCon "Bool")))))
 (DFunDef false "eligibleUpper" ((PVar "scope") (PVar "protected") (PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "EUnbound" (PVar "id") (PVar "level")) () (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "level") (EFieldAccess (EVar "scope") "essLevel")) (EBinOp ">" (EVar "id") (EFieldAccess (EVar "scope") "essEffvarFloor"))) (EApp (EVar "not") (EApp (EApp (EVar "M.has") (EVar "id")) (EVar "protected"))))) (arm (PCon "ESummary" PWild PWild PWild) () (EVar "False")) (arm PWild () (EVar "False"))))
 (DTypeSig false "relationNodes" (TyFun (TyApp (TyCon "SummaryScope") (TyVar "c")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "RowRelation") (TyVar "c"))) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "WorkNode")) (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "WorkNode")))))))
-(DFunDef false "relationNodes" (PWild PWild (PList) (PVar "nodes")) (EVar "nodes"))
-(DFunDef false "relationNodes" ((PVar "scope") (PVar "protected") (PCons (PVar "rel") (PVar "rest")) (PVar "nodes")) (EBlock (DoLet false false (PVar "candidates") (EApp (EApp (EVar "filter") (EApp (EApp (EVar "eligibleUpper") (EVar "scope")) (EVar "protected"))) (EApp (EVar "snd") (EApp (EVar "rowFlat") (EFieldAccess (EVar "rel") "esrUpper"))))) (DoLet false false (PVar "nodes2") (EMatch (EVar "candidates") (arm (PList (PVar "cell")) () (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "EUnbound" (PVar "id") PWild) () (EIf (EApp (EApp (EVar "M.has") (EVar "id")) (EVar "nodes")) (EVar "nodes") (EApp (EApp (EApp (EVar "M.set") (EVar "id")) (EApp (EVar "newWorkNode") (EVar "cell"))) (EVar "nodes")))) (arm PWild () (EVar "nodes")))) (arm PWild () (EVar "nodes")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "relationNodes") (EVar "scope")) (EVar "protected")) (EVar "rest")) (EVar "nodes2")))))
+(DFunDef false "relationNodes" ((PVar "scope") (PVar "protected") (PVar "xs0") (PVar "nodes0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "nodes")) (EVar "nodes")) (clause ((PCons (PVar "rel") (PVar "rest")) (PVar "nodes")) (EBlock (DoLet false false (PVar "candidates") (EApp (EApp (EVar "filter") (EApp (EApp (EVar "eligibleUpper") (EVar "scope")) (EVar "protected"))) (EApp (EVar "snd") (EApp (EVar "rowFlat") (EFieldAccess (EVar "rel") "esrUpper"))))) (DoLet false false (PVar "nodes2") (EMatch (EVar "candidates") (arm (PList (PVar "cell")) () (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "EUnbound" (PVar "id") PWild) () (EIf (EApp (EApp (EVar "M.has") (EVar "id")) (EVar "nodes")) (EVar "nodes") (EApp (EApp (EApp (EVar "M.set") (EVar "id")) (EApp (EVar "newWorkNode") (EVar "cell"))) (EVar "nodes")))) (arm PWild () (EVar "nodes")))) (arm PWild () (EVar "nodes")))) (DoExpr (EApp (EApp (EVar "go") (EVar "rest")) (EVar "nodes2"))))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "nodes0"))))
 (DTypeSig false "enqueue" (TyFun (TyCon "SolveWork") (TyFun (TyCon "Int") (TyCon "Unit"))))
 (DFunDef false "enqueue" ((PVar "work") (PVar "id")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "M.has") (EVar "id")) (EFieldAccess (EFieldAccess (EVar "work") "eswQueued") "value"))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "work") "eswQueued")) (EApp (EApp (EApp (EVar "M.set") (EVar "id")) (ELit LUnit)) (EFieldAccess (EFieldAccess (EVar "work") "eswQueued") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "work") "eswQueue")) (EBinOp "::" (EVar "id") (EFieldAccess (EFieldAccess (EVar "work") "eswQueue") "value"))))) (ELit LUnit)))
 (DTypeSig false "grow" (TyFun (TyCon "SolveWork") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyApp (TyCon "Ref") (TyCon "Effvar"))) (TyCon "Unit"))))))
@@ -1708,14 +1728,12 @@ relationProven escape rel =
 (DTypeSig false "addEquation" (TyFun (TyCon "SolveWork") (TyFun (TyCon "Int") (TyFun (TyCon "EffRow") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyFun (TyCon "Bool") (TyCon "Unit"))))))))
 (DFunDef false "addEquation" ((PVar "work") (PVar "target") (PVar "rhs") (PVar "coverAtoms") (PVar "coverLeaves") (PVar "exact")) (EBlock (DoLet false false (PTuple (PVar "atoms") (PVar "cells")) (EApp (EVar "rowFlat") (EVar "rhs"))) (DoLet false false (PVar "leaves") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "addEdges") (EVar "work")) (EVar "target")) (EVar "cells")) (EVar "coverAtoms")) (EVar "coverLeaves")) (EVar "exact")) (EVar "Tip"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "grow") (EVar "work")) (EVar "target")) (EApp (EApp (EApp (EFieldAccess (EVar "work") "eswEscape") (EVar "exact")) (EVar "atoms")) (EVar "coverAtoms"))) (EVar "leaves")))))
 (DTypeSig false "addEdges" (TyFun (TyCon "SolveWork") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Effvar"))) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyFun (TyCon "Bool") (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyApp (TyCon "Ref") (TyCon "Effvar"))) (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyApp (TyCon "Ref") (TyCon "Effvar")))))))))))
-(DFunDef false "addEdges" (PWild PWild (PList) PWild PWild PWild (PVar "leaves")) (EVar "leaves"))
-(DFunDef false "addEdges" ((PVar "work") (PVar "target") (PCons (PVar "cell") (PVar "rest")) (PVar "coverAtoms") (PVar "coverLeaves") (PVar "exact") (PVar "leaves")) (EBlock (DoLet false false (PVar "id") (EApp (EVar "effvarId") (EVar "cell"))) (DoLet false false (PVar "leaves2") (EIf (EApp (EApp (EVar "M.has") (EVar "id")) (EVar "coverLeaves")) (EVar "leaves") (EMatch (EApp (EApp (EVar "M.get") (EVar "id")) (EFieldAccess (EVar "work") "eswNodes")) (arm (PCon "Some" (PVar "node")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "node") "ewnEdges")) (EBinOp "::" (ERecordCreate "SolveEdge" ((fa "eseTarget" (EVar "target")) (fa "eseCoverAtoms" (EVar "coverAtoms")) (fa "eseCoverLeaves" (EVar "coverLeaves")) (fa "eseExact" (EVar "exact")))) (EFieldAccess (EFieldAccess (EVar "node") "ewnEdges") "value")))) (DoExpr (EVar "leaves")))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "M.set") (EVar "id")) (EVar "cell")) (EVar "leaves")))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "addEdges") (EVar "work")) (EVar "target")) (EVar "rest")) (EVar "coverAtoms")) (EVar "coverLeaves")) (EVar "exact")) (EVar "leaves2")))))
+(DFunDef false "addEdges" ((PVar "work") (PVar "target") (PVar "xs0") (PVar "coverAtoms") (PVar "coverLeaves") (PVar "exact") (PVar "leaves0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "leaves")) (EVar "leaves")) (clause ((PCons (PVar "cell") (PVar "rest")) (PVar "leaves")) (EBlock (DoLet false false (PVar "id") (EApp (EVar "effvarId") (EVar "cell"))) (DoLet false false (PVar "leaves2") (EIf (EApp (EApp (EVar "M.has") (EVar "id")) (EVar "coverLeaves")) (EVar "leaves") (EMatch (EApp (EApp (EVar "M.get") (EVar "id")) (EFieldAccess (EVar "work") "eswNodes")) (arm (PCon "Some" (PVar "node")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "node") "ewnEdges")) (EBinOp "::" (ERecordCreate "SolveEdge" ((fa "eseTarget" (EVar "target")) (fa "eseCoverAtoms" (EVar "coverAtoms")) (fa "eseCoverLeaves" (EVar "coverLeaves")) (fa "eseExact" (EVar "exact")))) (EFieldAccess (EFieldAccess (EVar "node") "ewnEdges") "value")))) (DoExpr (EVar "leaves")))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "M.set") (EVar "id")) (EVar "cell")) (EVar "leaves")))))) (DoExpr (EApp (EApp (EVar "go") (EVar "rest")) (EVar "leaves2"))))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "leaves0"))))
 (DTypeSig false "addBodyEquations" (TyFun (TyCon "SolveWork") (TyFun (TyApp (TyCon "List") (TyCon "SummaryNode")) (TyCon "Unit"))))
 (DFunDef false "addBodyEquations" (PWild (PList)) (ELit LUnit))
 (DFunDef false "addBodyEquations" ((PVar "work") (PCons (PVar "node") (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EApp (EVar "addLowers") (EVar "work")) (EApp (EVar "effvarId") (EFieldAccess (EVar "node") "esnCell"))) (EFieldAccess (EFieldAccess (EVar "node") "esnLowers") "value"))) (DoExpr (EApp (EApp (EVar "addBodyEquations") (EVar "work")) (EVar "rest")))))
 (DTypeSig false "addLowers" (TyFun (TyCon "SolveWork") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "EffRow")) (TyCon "Unit")))))
-(DFunDef false "addLowers" (PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "addLowers" ((PVar "work") (PVar "id") (PCons (PVar "row") (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "addEquation") (EVar "work")) (EVar "id")) (EVar "row")) (EListLit)) (EVar "Tip")) (EVar "False"))) (DoExpr (EApp (EApp (EApp (EVar "addLowers") (EVar "work")) (EVar "id")) (EVar "rest")))))
+(DFunDef false "addLowers" ((PVar "work") (PVar "id") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PVar "row") (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "addEquation") (EVar "work")) (EVar "id")) (EVar "row")) (EListLit)) (EVar "Tip")) (EVar "False"))) (DoExpr (EApp (EVar "go") (EVar "rest"))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "leafSet" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Effvar"))) (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit"))))
 (DFunDef false "leafSet" ((PVar "cells")) (EApp (EApp (EVar "leafSetGo") (EVar "cells")) (EVar "Tip")))
 (DTypeSig false "leafSetGo" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Effvar"))) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")))))
@@ -1727,23 +1745,19 @@ relationProven escape rel =
 (DTypeSig false "drainWork" (TyFun (TyCon "SolveWork") (TyCon "Unit")))
 (DFunDef false "drainWork" ((PVar "work")) (EMatch (EFieldAccess (EFieldAccess (EVar "work") "eswQueue") "value") (arm (PList) () (ELit LUnit)) (arm (PCons (PVar "id") (PVar "rest")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "work") "eswQueue")) (EVar "rest"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "work") "eswQueued")) (EApp (EApp (EVar "M.delete") (EVar "id")) (EFieldAccess (EFieldAccess (EVar "work") "eswQueued") "value")))) (DoExpr (EMatch (EApp (EApp (EVar "M.get") (EVar "id")) (EFieldAccess (EVar "work") "eswNodes")) (arm (PCon "Some" (PVar "node")) () (EBlock (DoLet false false (PVar "atoms") (EFieldAccess (EFieldAccess (EVar "node") "ewnPendingAtoms") "value")) (DoLet false false (PVar "leaves") (EFieldAccess (EFieldAccess (EVar "node") "ewnPendingLeaves") "value")) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "node") "ewnPendingAtoms")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "node") "ewnPendingLeaves")) (EVar "Tip"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "propagate") (EVar "work")) (EVar "atoms")) (EVar "leaves")) (EFieldAccess (EFieldAccess (EVar "node") "ewnEdges") "value"))))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "missing queued effect equation")))))) (DoExpr (EApp (EVar "drainWork") (EVar "work")))))))
 (DTypeSig false "propagate" (TyFun (TyCon "SolveWork") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyApp (TyCon "Ref") (TyCon "Effvar"))) (TyFun (TyApp (TyCon "List") (TyCon "SolveEdge")) (TyCon "Unit"))))))
-(DFunDef false "propagate" (PWild PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "propagate" ((PVar "work") (PVar "atoms") (PVar "delta") (PCons (PVar "edge") (PVar "rest"))) (EBlock (DoLet false false (PVar "leaves") (EApp (EApp (EApp (EVar "M.foldlWithKey") (ELam ((PVar "acc") (PVar "id") (PVar "cell")) (EIf (EApp (EApp (EVar "M.has") (EVar "id")) (EFieldAccess (EVar "edge") "eseCoverLeaves")) (EVar "acc") (EApp (EApp (EApp (EVar "M.set") (EVar "id")) (EVar "cell")) (EVar "acc"))))) (EVar "Tip")) (EVar "delta"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "grow") (EVar "work")) (EFieldAccess (EVar "edge") "eseTarget")) (EApp (EApp (EApp (EFieldAccess (EVar "work") "eswEscape") (EFieldAccess (EVar "edge") "eseExact")) (EVar "atoms")) (EFieldAccess (EVar "edge") "eseCoverAtoms"))) (EVar "leaves"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "propagate") (EVar "work")) (EVar "atoms")) (EVar "delta")) (EVar "rest")))))
+(DFunDef false "propagate" ((PVar "work") (PVar "atoms") (PVar "delta") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PVar "edge") (PVar "rest"))) (EBlock (DoLet false false (PVar "leaves") (EApp (EApp (EApp (EVar "M.foldlWithKey") (ELam ((PVar "acc") (PVar "id") (PVar "cell")) (EIf (EApp (EApp (EVar "M.has") (EVar "id")) (EFieldAccess (EVar "edge") "eseCoverLeaves")) (EVar "acc") (EApp (EApp (EApp (EVar "M.set") (EVar "id")) (EVar "cell")) (EVar "acc"))))) (EVar "Tip")) (EVar "delta"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "grow") (EVar "work")) (EFieldAccess (EVar "edge") "eseTarget")) (EApp (EApp (EApp (EFieldAccess (EVar "work") "eswEscape") (EFieldAccess (EVar "edge") "eseExact")) (EVar "atoms")) (EFieldAccess (EVar "edge") "eseCoverAtoms"))) (EVar "leaves"))) (DoExpr (EApp (EVar "go") (EVar "rest"))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "linkSolutions" (TyFun (TyCon "Int") (TyFun (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Effvar"))) (TyApp (TyCon "Ref") (TyCon "Effvar"))) (TyFun (TyApp (TyCon "List") (TyCon "WorkNode")) (TyCon "Unit")))))
-(DFunDef false "linkSolutions" (PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "linkSolutions" ((PVar "owner") (PVar "makeJoin") (PCons (PVar "node") (PVar "rest"))) (EBlock (DoLet false false (PVar "row") (EMatch (EApp (EVar "M.values") (EFieldAccess (EFieldAccess (EVar "node") "ewnLeaves") "value")) (arm (PList) () (EApp (EApp (EVar "EffRow") (EFieldAccess (EFieldAccess (EVar "node") "ewnAtoms") "value")) (EVar "None"))) (arm (PList (PVar "cell")) () (EApp (EApp (EVar "EffRow") (EFieldAccess (EFieldAccess (EVar "node") "ewnAtoms") "value")) (EApp (EVar "Some") (EVar "cell")))) (arm (PVar "cells") () (EApp (EApp (EVar "EffRow") (EFieldAccess (EFieldAccess (EVar "node") "ewnAtoms") "value")) (EApp (EVar "Some") (EApp (EVar "makeJoin") (EVar "cells"))))))) (DoExpr (EMatch (EUnOp "!" (EFieldAccess (EVar "node") "ewnCell")) (arm (PCon "ESummary" PWild PWild PWild) () (EApp (EApp (EApp (EVar "solveSummaryCell") (EVar "owner")) (EFieldAccess (EVar "node") "ewnCell")) (EVar "row"))) (arm PWild () (EApp (EApp (EVar "linkRow") (EFieldAccess (EVar "node") "ewnCell")) (EVar "row"))))) (DoExpr (EApp (EApp (EApp (EVar "linkSolutions") (EVar "owner")) (EVar "makeJoin")) (EVar "rest")))))
+(DFunDef false "linkSolutions" ((PVar "owner") (PVar "makeJoin") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PVar "node") (PVar "rest"))) (EBlock (DoLet false false (PVar "row") (EMatch (EApp (EVar "M.values") (EFieldAccess (EFieldAccess (EVar "node") "ewnLeaves") "value")) (arm (PList) () (EApp (EApp (EVar "EffRow") (EFieldAccess (EFieldAccess (EVar "node") "ewnAtoms") "value")) (EVar "None"))) (arm (PList (PVar "cell")) () (EApp (EApp (EVar "EffRow") (EFieldAccess (EFieldAccess (EVar "node") "ewnAtoms") "value")) (EApp (EVar "Some") (EVar "cell")))) (arm (PVar "cells") () (EApp (EApp (EVar "EffRow") (EFieldAccess (EFieldAccess (EVar "node") "ewnAtoms") "value")) (EApp (EVar "Some") (EApp (EVar "makeJoin") (EVar "cells"))))))) (DoExpr (EMatch (EUnOp "!" (EFieldAccess (EVar "node") "ewnCell")) (arm (PCon "ESummary" PWild PWild PWild) () (EApp (EApp (EApp (EVar "solveSummaryCell") (EVar "owner")) (EFieldAccess (EVar "node") "ewnCell")) (EVar "row"))) (arm PWild () (EApp (EApp (EVar "linkRow") (EFieldAccess (EVar "node") "ewnCell")) (EVar "row"))))) (DoExpr (EApp (EVar "go") (EVar "rest"))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "missingLeaves" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Effvar"))) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyCon "Bool"))))
 (DFunDef false "missingLeaves" ((PList) PWild) (EVar "False"))
 (DFunDef false "missingLeaves" ((PCons (PVar "cell") (PVar "rest")) (PVar "upper")) (EBinOp "||" (EApp (EVar "not") (EApp (EApp (EVar "M.has") (EApp (EVar "effvarId") (EVar "cell"))) (EVar "upper"))) (EApp (EApp (EVar "missingLeaves") (EVar "rest")) (EVar "upper"))))
 (DTypeSig false "validateRelations" (TyFun (TyApp (TyCon "SummarySolver") (TyVar "c")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyFun (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom"))))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "RowRelation") (TyVar "c"))) (TyApp (TyCon "List") (TyApp (TyCon "SummaryFailure") (TyVar "c"))))))))
-(DFunDef false "validateRelations" (PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "validateRelations" ((PVar "solver") (PVar "protected") (PVar "escape") (PCons (PVar "rel") (PVar "rest"))) (EIf (EBinOp "||" (EApp (EVar "rowHasSummary") (EFieldAccess (EVar "rel") "esrLower")) (EApp (EVar "rowHasSummary") (EFieldAccess (EVar "rel") "esrUpper"))) (EMatch (EFieldAccess (EFieldAccess (EVar "solver") "essStack") "value") (arm (PCons PWild (PCons (PVar "parent") PWild)) () (EBlock (DoExpr (EApp (EApp (EVar "retainRowAt") (EFieldAccess (EVar "parent") "essLevel")) (EFieldAccess (EVar "rel") "esrLower"))) (DoExpr (EApp (EApp (EVar "retainRowAt") (EFieldAccess (EVar "parent") "essLevel")) (EFieldAccess (EVar "rel") "esrUpper"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "parent") "essRelations")) (EBinOp "::" (ERecordCreate "RowRelation" ((fa "esrLower" (EFieldAccess (EVar "rel") "esrLower")) (fa "esrUpper" (EFieldAccess (EVar "rel") "esrUpper")) (fa "esrExact" (EFieldAccess (EVar "rel") "esrExact")) (fa "esrContext" (EFieldAccess (EVar "rel") "esrContext")) (fa "esrProtected" (EVar "protected")))) (EFieldAccess (EFieldAccess (EVar "parent") "essRelations") "value")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "validateRelations") (EVar "solver")) (EVar "protected")) (EVar "escape")) (EVar "rest"))))) (arm PWild () (EBinOp "::" (ERecordCreate "SummaryFailure" ((fa "esfLower" (EFieldAccess (EVar "rel") "esrLower")) (fa "esfUpper" (EFieldAccess (EVar "rel") "esrUpper")) (fa "esfExact" (EFieldAccess (EVar "rel") "esrExact")) (fa "esfContext" (EFieldAccess (EVar "rel") "esrContext")) (fa "esfAuthority" (EVar "None")) (fa "esfWrittenUpper" (EVar "None")) (fa "esfLabel" (EVar "None")) (fa "esfResidualOf" (EVar "None")))) (EApp (EApp (EApp (EApp (EVar "validateRelations") (EVar "solver")) (EVar "protected")) (EVar "escape")) (EVar "rest"))))) (EBlock (DoLet false false (PTuple (PVar "lowerAtoms") (PVar "lowerCells")) (EApp (EVar "rowFlat") (EFieldAccess (EVar "rel") "esrLower"))) (DoLet false false (PTuple (PVar "upperAtoms") (PVar "upperCells")) (EApp (EVar "rowFlat") (EFieldAccess (EVar "rel") "esrUpper"))) (DoLet false false (PVar "failures") (EApp (EApp (EApp (EApp (EVar "validateRelations") (EVar "solver")) (EVar "protected")) (EVar "escape")) (EVar "rest"))) (DoLet false false (PVar "escaping") (EApp (EApp (EApp (EApp (EApp (EVar "authorityEscapes") (EApp (EVar "currentScope") (EVar "solver"))) (EFieldAccess (EVar "rel") "esrContext")) (EFieldAccess (EVar "rel") "esrExact")) (EVar "upperAtoms")) (EApp (EApp (EApp (EVar "escape") (EFieldAccess (EVar "rel") "esrExact")) (EVar "lowerAtoms")) (EVar "upperAtoms")))) (DoExpr (EIf (EBinOp "||" (EApp (EVar "isNonEmptyL") (EVar "escaping")) (EApp (EApp (EVar "missingLeaves") (EVar "lowerCells")) (EApp (EVar "leafSet") (EVar "upperCells")))) (EBinOp "::" (ERecordCreate "SummaryFailure" ((fa "esfLower" (EFieldAccess (EVar "rel") "esrLower")) (fa "esfUpper" (EFieldAccess (EVar "rel") "esrUpper")) (fa "esfExact" (EFieldAccess (EVar "rel") "esrExact")) (fa "esfContext" (EFieldAccess (EVar "rel") "esrContext")) (fa "esfAuthority" (EVar "None")) (fa "esfWrittenUpper" (EVar "None")) (fa "esfLabel" (EApp (EApp (EApp (EApp (EApp (EVar "firstEscapingKey") (EVar "escaping")) (EVar "lowerAtoms")) (EVar "upperAtoms")) (EVar "escape")) (EFieldAccess (EVar "rel") "esrExact"))) (fa "esfResidualOf" (EVar "None")))) (EVar "failures")) (EVar "failures"))))))
+(DFunDef false "validateRelations" ((PVar "solver") (PVar "protected") (PVar "escape") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EListLit)) (clause ((PCons (PVar "rel") (PVar "rest"))) (EIf (EBinOp "||" (EApp (EVar "rowHasSummary") (EFieldAccess (EVar "rel") "esrLower")) (EApp (EVar "rowHasSummary") (EFieldAccess (EVar "rel") "esrUpper"))) (EMatch (EFieldAccess (EFieldAccess (EVar "solver") "essStack") "value") (arm (PCons PWild (PCons (PVar "parent") PWild)) () (EBlock (DoExpr (EApp (EApp (EVar "retainRowAt") (EFieldAccess (EVar "parent") "essLevel")) (EFieldAccess (EVar "rel") "esrLower"))) (DoExpr (EApp (EApp (EVar "retainRowAt") (EFieldAccess (EVar "parent") "essLevel")) (EFieldAccess (EVar "rel") "esrUpper"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "parent") "essRelations")) (EBinOp "::" (ERecordCreate "RowRelation" ((fa "esrLower" (EFieldAccess (EVar "rel") "esrLower")) (fa "esrUpper" (EFieldAccess (EVar "rel") "esrUpper")) (fa "esrExact" (EFieldAccess (EVar "rel") "esrExact")) (fa "esrContext" (EFieldAccess (EVar "rel") "esrContext")) (fa "esrProtected" (EVar "protected")))) (EFieldAccess (EFieldAccess (EVar "parent") "essRelations") "value")))) (DoExpr (EApp (EVar "go") (EVar "rest"))))) (arm PWild () (EBinOp "::" (ERecordCreate "SummaryFailure" ((fa "esfLower" (EFieldAccess (EVar "rel") "esrLower")) (fa "esfUpper" (EFieldAccess (EVar "rel") "esrUpper")) (fa "esfExact" (EFieldAccess (EVar "rel") "esrExact")) (fa "esfContext" (EFieldAccess (EVar "rel") "esrContext")) (fa "esfAuthority" (EVar "None")) (fa "esfWrittenUpper" (EVar "None")) (fa "esfLabel" (EVar "None")) (fa "esfResidualOf" (EVar "None")))) (EApp (EVar "go") (EVar "rest"))))) (EBlock (DoLet false false (PTuple (PVar "lowerAtoms") (PVar "lowerCells")) (EApp (EVar "rowFlat") (EFieldAccess (EVar "rel") "esrLower"))) (DoLet false false (PTuple (PVar "upperAtoms") (PVar "upperCells")) (EApp (EVar "rowFlat") (EFieldAccess (EVar "rel") "esrUpper"))) (DoLet false false (PVar "failures") (EApp (EVar "go") (EVar "rest"))) (DoLet false false (PVar "escaping") (EApp (EApp (EApp (EApp (EApp (EVar "authorityEscapes") (EApp (EVar "currentScope") (EVar "solver"))) (EFieldAccess (EVar "rel") "esrContext")) (EFieldAccess (EVar "rel") "esrExact")) (EVar "upperAtoms")) (EApp (EApp (EApp (EVar "escape") (EFieldAccess (EVar "rel") "esrExact")) (EVar "lowerAtoms")) (EVar "upperAtoms")))) (DoExpr (EIf (EBinOp "||" (EApp (EVar "isNonEmptyL") (EVar "escaping")) (EApp (EApp (EVar "missingLeaves") (EVar "lowerCells")) (EApp (EVar "leafSet") (EVar "upperCells")))) (EBinOp "::" (ERecordCreate "SummaryFailure" ((fa "esfLower" (EFieldAccess (EVar "rel") "esrLower")) (fa "esfUpper" (EFieldAccess (EVar "rel") "esrUpper")) (fa "esfExact" (EFieldAccess (EVar "rel") "esrExact")) (fa "esfContext" (EFieldAccess (EVar "rel") "esrContext")) (fa "esfAuthority" (EVar "None")) (fa "esfWrittenUpper" (EVar "None")) (fa "esfLabel" (EApp (EApp (EApp (EApp (EApp (EVar "firstEscapingKey") (EVar "escaping")) (EVar "lowerAtoms")) (EVar "upperAtoms")) (EVar "escape")) (EFieldAccess (EVar "rel") "esrExact"))) (fa "esfResidualOf" (EVar "None")))) (EVar "failures")) (EVar "failures")))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "firstEscapingKey" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom"))))) (TyFun (TyCon "Bool") (TyApp (TyCon "Option") (TyCon "String"))))))))
 (DFunDef false "firstEscapingKey" ((PCons (PVar "x") PWild) PWild PWild PWild PWild) (EApp (EVar "Some") (EApp (EVar "atomKey") (EVar "x"))))
 (DFunDef false "firstEscapingKey" ((PList) (PVar "lowerAtoms") (PVar "upperAtoms") (PVar "escape") (PVar "exact")) (EMatch (EApp (EApp (EApp (EVar "escape") (EVar "exact")) (EVar "lowerAtoms")) (EVar "upperAtoms")) (arm (PCons (PVar "x") PWild) () (EApp (EVar "Some") (EApp (EVar "atomKey") (EVar "x")))) (arm (PList) () (EVar "None"))))
 (DTypeSig false "authorityEscapes" (TyFun (TyApp (TyCon "SummaryScope") (TyVar "c")) (TyFun (TyVar "c") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom"))))))))
-(DFunDef false "authorityEscapes" (PWild PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "authorityEscapes" ((PVar "scope") (PVar "context") (PVar "exact") (PVar "upper") (PCons (PVar "x") (PVar "rest"))) (EBlock (DoLet false false (PVar "others") (EApp (EApp (EApp (EApp (EApp (EVar "authorityEscapes") (EVar "scope")) (EVar "context")) (EVar "exact")) (EVar "upper")) (EVar "rest"))) (DoExpr (EMatch (EApp (EApp (EVar "findAtom") (EApp (EVar "atomKey") (EVar "x"))) (EVar "upper")) (arm (PCon "Some" (PVar "y")) () (EIf (EBinOp "||" (EApp (EVar "isSymbolic") (EApp (EVar "atomAuth") (EVar "x"))) (EApp (EVar "isSymbolic") (EApp (EVar "atomAuth") (EVar "y")))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "scope") "essAuthorities")) (EBinOp "++" (EApp (EApp (EVar "map") (ELam ((PVar "pair")) (ERecordCreate "AuthWanted" ((fa "awLower" (EApp (EVar "fst") (EVar "pair"))) (fa "awUpper" (EApp (EVar "snd") (EVar "pair"))) (fa "awContext" (EVar "context")) (fa "awLabel" (EApp (EVar "Some") (EApp (EVar "atomKey") (EVar "x")))) (fa "awExact" (EVar "exact")) (fa "awResidualOf" (EVar "None")))))) (EApp (EApp (EVar "authSplit") (EApp (EVar "atomAuth") (EVar "x"))) (EApp (EVar "atomAuth") (EVar "y")))) (EFieldAccess (EFieldAccess (EVar "scope") "essAuthorities") "value")))) (DoExpr (EVar "others"))) (EBinOp "::" (EVar "x") (EVar "others")))) (arm (PCon "None") () (EBinOp "::" (EVar "x") (EVar "others")))))))
+(DFunDef false "authorityEscapes" ((PVar "scope") (PVar "context") (PVar "exact") (PVar "upper") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EListLit)) (clause ((PCons (PVar "x") (PVar "rest"))) (EBlock (DoLet false false (PVar "others") (EApp (EVar "go") (EVar "rest"))) (DoExpr (EMatch (EApp (EApp (EVar "findAtom") (EApp (EVar "atomKey") (EVar "x"))) (EVar "upper")) (arm (PCon "Some" (PVar "y")) () (EIf (EBinOp "||" (EApp (EVar "isSymbolic") (EApp (EVar "atomAuth") (EVar "x"))) (EApp (EVar "isSymbolic") (EApp (EVar "atomAuth") (EVar "y")))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "scope") "essAuthorities")) (EBinOp "++" (EApp (EApp (EVar "map") (ELam ((PVar "pair")) (ERecordCreate "AuthWanted" ((fa "awLower" (EApp (EVar "fst") (EVar "pair"))) (fa "awUpper" (EApp (EVar "snd") (EVar "pair"))) (fa "awContext" (EVar "context")) (fa "awLabel" (EApp (EVar "Some") (EApp (EVar "atomKey") (EVar "x")))) (fa "awExact" (EVar "exact")) (fa "awResidualOf" (EVar "None")))))) (EApp (EApp (EVar "authSplit") (EApp (EVar "atomAuth") (EVar "x"))) (EApp (EVar "atomAuth") (EVar "y")))) (EFieldAccess (EFieldAccess (EVar "scope") "essAuthorities") "value")))) (DoExpr (EVar "others"))) (EBinOp "::" (EVar "x") (EVar "others")))) (arm (PCon "None") () (EBinOp "::" (EVar "x") (EVar "others"))))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "isSymbolic" (TyFun (TyCon "Authority") (TyCon "Bool")))
 (DFunDef false "isSymbolic" ((PVar "q")) (EMatch (EApp (EVar "authVars") (EVar "q")) (arm (PList) () (EVar "False")) (arm PWild () (EVar "True"))))
 (DTypeSig false "retainRowAt" (TyFun (TyCon "Int") (TyFun (TyCon "EffRow") (TyCon "Unit"))))
@@ -1842,8 +1856,7 @@ relationProven escape rel =
 (DTypeSig false "transferAllowanceRelations" (TyFun (TyApp (TyCon "SummarySolver") (TyVar "c")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "RowRelation") (TyVar "c"))) (TyApp (TyCon "List") (TyApp (TyCon "RowRelation") (TyVar "c"))))))))
 (DFunDef false "transferAllowanceRelations" ((PVar "solver") (PVar "protected") (PVar "outward") (PVar "relations")) (EMatch (EFieldAccess (EFieldAccess (EVar "solver") "essStack") "value") (arm (PCons PWild (PCons (PVar "parent") PWild)) () (EMatch (EVar "outward") (arm (PCon "Tip") () (EVar "relations")) (arm PWild () (EBlock (DoLet false false (PVar "work") (EApp (EApp (EApp (EApp (EVar "indexTransferRelations") (EVar "relations")) (ELit (LInt 0))) (EVar "Tip")) (EVar "Tip"))) (DoExpr (EApp (EApp (EVar "selectTransferRows") (EVar "work")) (EApp (EVar "M.keys") (EVar "outward")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "partitionTransferred") (EVar "parent")) (EVar "protected")) (EFieldAccess (EFieldAccess (EVar "work") "etwSelected") "value")) (ELit (LInt 0))) (EVar "relations"))))))) (arm PWild () (EVar "relations"))))
 (DTypeSig false "partitionTransferred" (TyFun (TyApp (TyCon "SummaryScope") (TyVar "c")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "RowRelation") (TyVar "c"))) (TyApp (TyCon "List") (TyApp (TyCon "RowRelation") (TyVar "c")))))))))
-(DFunDef false "partitionTransferred" (PWild PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "partitionTransferred" ((PVar "parent") (PVar "protected") (PVar "selected") (PVar "id") (PCons (PVar "rel") (PVar "rest"))) (EIf (EApp (EApp (EVar "M.has") (EVar "id")) (EVar "selected")) (EBlock (DoExpr (EApp (EApp (EVar "retainRowAt") (EFieldAccess (EVar "parent") "essLevel")) (EFieldAccess (EVar "rel") "esrLower"))) (DoExpr (EApp (EApp (EVar "retainRowAt") (EFieldAccess (EVar "parent") "essLevel")) (EFieldAccess (EVar "rel") "esrUpper"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "parent") "essRelations")) (EBinOp "::" (ERecordCreate "RowRelation" ((fa "esrLower" (EFieldAccess (EVar "rel") "esrLower")) (fa "esrUpper" (EFieldAccess (EVar "rel") "esrUpper")) (fa "esrExact" (EFieldAccess (EVar "rel") "esrExact")) (fa "esrContext" (EFieldAccess (EVar "rel") "esrContext")) (fa "esrProtected" (EVar "protected")))) (EFieldAccess (EFieldAccess (EVar "parent") "essRelations") "value")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "partitionTransferred") (EVar "parent")) (EVar "protected")) (EVar "selected")) (EBinOp "+" (EVar "id") (ELit (LInt 1)))) (EVar "rest")))) (EBinOp "::" (EVar "rel") (EApp (EApp (EApp (EApp (EApp (EVar "partitionTransferred") (EVar "parent")) (EVar "protected")) (EVar "selected")) (EBinOp "+" (EVar "id") (ELit (LInt 1)))) (EVar "rest")))))
+(DFunDef false "partitionTransferred" ((PVar "parent") (PVar "protected") (PVar "selected") (PVar "id0") (PVar "xs0")) (ELetGroup ((lgb "go" (clause (PWild (PList)) (EListLit)) (clause ((PVar "id") (PCons (PVar "rel") (PVar "rest"))) (EIf (EApp (EApp (EVar "M.has") (EVar "id")) (EVar "selected")) (EBlock (DoExpr (EApp (EApp (EVar "retainRowAt") (EFieldAccess (EVar "parent") "essLevel")) (EFieldAccess (EVar "rel") "esrLower"))) (DoExpr (EApp (EApp (EVar "retainRowAt") (EFieldAccess (EVar "parent") "essLevel")) (EFieldAccess (EVar "rel") "esrUpper"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "parent") "essRelations")) (EBinOp "::" (ERecordCreate "RowRelation" ((fa "esrLower" (EFieldAccess (EVar "rel") "esrLower")) (fa "esrUpper" (EFieldAccess (EVar "rel") "esrUpper")) (fa "esrExact" (EFieldAccess (EVar "rel") "esrExact")) (fa "esrContext" (EFieldAccess (EVar "rel") "esrContext")) (fa "esrProtected" (EVar "protected")))) (EFieldAccess (EFieldAccess (EVar "parent") "essRelations") "value")))) (DoExpr (EApp (EApp (EVar "go") (EBinOp "+" (EVar "id") (ELit (LInt 1)))) (EVar "rest")))) (EBinOp "::" (EVar "rel") (EApp (EApp (EVar "go") (EBinOp "+" (EVar "id") (ELit (LInt 1)))) (EVar "rest"))))))) (EApp (EApp (EVar "go") (EVar "id0")) (EVar "xs0"))))
 (DTypeSig false "transferAllowances" (TyFun (TyApp (TyCon "SummarySolver") (TyVar "c")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Effvar"))) (TyCon "Unit"))))
 (DFunDef false "transferAllowances" ((PVar "solver") (PVar "cells")) (EMatch (EFieldAccess (EFieldAccess (EVar "solver") "essStack") "value") (arm (PCons PWild (PCons (PVar "parent") PWild)) () (EApp (EApp (EApp (EVar "fold") (ELam (PWild (PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "EUnbound" (PVar "id") (PVar "level")) () (EIf (EBinOp "<=" (EVar "level") (EFieldAccess (EVar "parent") "essLevel")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "parent") "essExistentials")) (EApp (EApp (EApp (EVar "M.set") (EVar "id")) (EVar "cell")) (EFieldAccess (EFieldAccess (EVar "parent") "essExistentials") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "parent") "essAllowances")) (EApp (EApp (EApp (EVar "M.set") (EVar "id")) (EVar "cell")) (EFieldAccess (EFieldAccess (EVar "parent") "essAllowances") "value"))))) (ELit LUnit))) (arm PWild () (ELit LUnit))))) (ELit LUnit)) (EVar "cells"))) (arm PWild () (ELit LUnit))))
 (DTypeSig false "summaryFreeRelation" (TyFun (TyApp (TyCon "RowRelation") (TyVar "c")) (TyCon "Bool")))
@@ -1922,8 +1935,7 @@ relationProven escape rel =
 (DTypeSig false "eligibleUpper" (TyFun (TyApp (TyCon "SummaryScope") (TyVar "c")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyFun (TyApp (TyCon "Ref") (TyCon "Effvar")) (TyCon "Bool")))))
 (DFunDef false "eligibleUpper" ((PVar "scope") (PVar "protected") (PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "EUnbound" (PVar "id") (PVar "level")) () (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "level") (EFieldAccess (EVar "scope") "essLevel")) (EBinOp ">" (EVar "id") (EFieldAccess (EVar "scope") "essEffvarFloor"))) (EApp (EVar "not") (EApp (EApp (EVar "M.has") (EVar "id")) (EVar "protected"))))) (arm (PCon "ESummary" PWild PWild PWild) () (EVar "False")) (arm PWild () (EVar "False"))))
 (DTypeSig false "relationNodes" (TyFun (TyApp (TyCon "SummaryScope") (TyVar "c")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "RowRelation") (TyVar "c"))) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "WorkNode")) (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "WorkNode")))))))
-(DFunDef false "relationNodes" (PWild PWild (PList) (PVar "nodes")) (EVar "nodes"))
-(DFunDef false "relationNodes" ((PVar "scope") (PVar "protected") (PCons (PVar "rel") (PVar "rest")) (PVar "nodes")) (EBlock (DoLet false false (PVar "candidates") (EApp (EApp (EMethodRef "filter") (EApp (EApp (EVar "eligibleUpper") (EVar "scope")) (EVar "protected"))) (EApp (EVar "snd") (EApp (EVar "rowFlat") (EFieldAccess (EVar "rel") "esrUpper"))))) (DoLet false false (PVar "nodes2") (EMatch (EVar "candidates") (arm (PList (PVar "cell")) () (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "EUnbound" (PVar "id") PWild) () (EIf (EApp (EApp (EVar "M.has") (EVar "id")) (EVar "nodes")) (EVar "nodes") (EApp (EApp (EApp (EVar "M.set") (EVar "id")) (EApp (EVar "newWorkNode") (EVar "cell"))) (EVar "nodes")))) (arm PWild () (EVar "nodes")))) (arm PWild () (EVar "nodes")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "relationNodes") (EVar "scope")) (EVar "protected")) (EVar "rest")) (EVar "nodes2")))))
+(DFunDef false "relationNodes" ((PVar "scope") (PVar "protected") (PVar "xs0") (PVar "nodes0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "nodes")) (EVar "nodes")) (clause ((PCons (PVar "rel") (PVar "rest")) (PVar "nodes")) (EBlock (DoLet false false (PVar "candidates") (EApp (EApp (EMethodRef "filter") (EApp (EApp (EVar "eligibleUpper") (EVar "scope")) (EVar "protected"))) (EApp (EVar "snd") (EApp (EVar "rowFlat") (EFieldAccess (EVar "rel") "esrUpper"))))) (DoLet false false (PVar "nodes2") (EMatch (EVar "candidates") (arm (PList (PVar "cell")) () (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "EUnbound" (PVar "id") PWild) () (EIf (EApp (EApp (EVar "M.has") (EVar "id")) (EVar "nodes")) (EVar "nodes") (EApp (EApp (EApp (EVar "M.set") (EVar "id")) (EApp (EVar "newWorkNode") (EVar "cell"))) (EVar "nodes")))) (arm PWild () (EVar "nodes")))) (arm PWild () (EVar "nodes")))) (DoExpr (EApp (EApp (EVar "go") (EVar "rest")) (EVar "nodes2"))))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "nodes0"))))
 (DTypeSig false "enqueue" (TyFun (TyCon "SolveWork") (TyFun (TyCon "Int") (TyCon "Unit"))))
 (DFunDef false "enqueue" ((PVar "work") (PVar "id")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "M.has") (EVar "id")) (EFieldAccess (EFieldAccess (EVar "work") "eswQueued") "value"))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "work") "eswQueued")) (EApp (EApp (EApp (EVar "M.set") (EVar "id")) (ELit LUnit)) (EFieldAccess (EFieldAccess (EVar "work") "eswQueued") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "work") "eswQueue")) (EBinOp "::" (EVar "id") (EFieldAccess (EFieldAccess (EVar "work") "eswQueue") "value"))))) (ELit LUnit)))
 (DTypeSig false "grow" (TyFun (TyCon "SolveWork") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyApp (TyCon "Ref") (TyCon "Effvar"))) (TyCon "Unit"))))))
@@ -1931,14 +1943,12 @@ relationProven escape rel =
 (DTypeSig false "addEquation" (TyFun (TyCon "SolveWork") (TyFun (TyCon "Int") (TyFun (TyCon "EffRow") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyFun (TyCon "Bool") (TyCon "Unit"))))))))
 (DFunDef false "addEquation" ((PVar "work") (PVar "target") (PVar "rhs") (PVar "coverAtoms") (PVar "coverLeaves") (PVar "exact")) (EBlock (DoLet false false (PTuple (PVar "atoms") (PVar "cells")) (EApp (EVar "rowFlat") (EVar "rhs"))) (DoLet false false (PVar "leaves") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "addEdges") (EVar "work")) (EVar "target")) (EVar "cells")) (EVar "coverAtoms")) (EVar "coverLeaves")) (EVar "exact")) (EVar "Tip"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "grow") (EVar "work")) (EVar "target")) (EApp (EApp (EApp (EFieldAccess (EVar "work") "eswEscape") (EVar "exact")) (EVar "atoms")) (EVar "coverAtoms"))) (EVar "leaves")))))
 (DTypeSig false "addEdges" (TyFun (TyCon "SolveWork") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Effvar"))) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyFun (TyCon "Bool") (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyApp (TyCon "Ref") (TyCon "Effvar"))) (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyApp (TyCon "Ref") (TyCon "Effvar")))))))))))
-(DFunDef false "addEdges" (PWild PWild (PList) PWild PWild PWild (PVar "leaves")) (EVar "leaves"))
-(DFunDef false "addEdges" ((PVar "work") (PVar "target") (PCons (PVar "cell") (PVar "rest")) (PVar "coverAtoms") (PVar "coverLeaves") (PVar "exact") (PVar "leaves")) (EBlock (DoLet false false (PVar "id") (EApp (EVar "effvarId") (EVar "cell"))) (DoLet false false (PVar "leaves2") (EIf (EApp (EApp (EVar "M.has") (EVar "id")) (EVar "coverLeaves")) (EVar "leaves") (EMatch (EApp (EApp (EVar "M.get") (EVar "id")) (EFieldAccess (EVar "work") "eswNodes")) (arm (PCon "Some" (PVar "node")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "node") "ewnEdges")) (EBinOp "::" (ERecordCreate "SolveEdge" ((fa "eseTarget" (EVar "target")) (fa "eseCoverAtoms" (EVar "coverAtoms")) (fa "eseCoverLeaves" (EVar "coverLeaves")) (fa "eseExact" (EVar "exact")))) (EFieldAccess (EFieldAccess (EVar "node") "ewnEdges") "value")))) (DoExpr (EVar "leaves")))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "M.set") (EVar "id")) (EVar "cell")) (EVar "leaves")))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "addEdges") (EVar "work")) (EVar "target")) (EVar "rest")) (EVar "coverAtoms")) (EVar "coverLeaves")) (EVar "exact")) (EVar "leaves2")))))
+(DFunDef false "addEdges" ((PVar "work") (PVar "target") (PVar "xs0") (PVar "coverAtoms") (PVar "coverLeaves") (PVar "exact") (PVar "leaves0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "leaves")) (EVar "leaves")) (clause ((PCons (PVar "cell") (PVar "rest")) (PVar "leaves")) (EBlock (DoLet false false (PVar "id") (EApp (EVar "effvarId") (EVar "cell"))) (DoLet false false (PVar "leaves2") (EIf (EApp (EApp (EVar "M.has") (EVar "id")) (EVar "coverLeaves")) (EVar "leaves") (EMatch (EApp (EApp (EVar "M.get") (EVar "id")) (EFieldAccess (EVar "work") "eswNodes")) (arm (PCon "Some" (PVar "node")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "node") "ewnEdges")) (EBinOp "::" (ERecordCreate "SolveEdge" ((fa "eseTarget" (EVar "target")) (fa "eseCoverAtoms" (EVar "coverAtoms")) (fa "eseCoverLeaves" (EVar "coverLeaves")) (fa "eseExact" (EVar "exact")))) (EFieldAccess (EFieldAccess (EVar "node") "ewnEdges") "value")))) (DoExpr (EVar "leaves")))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "M.set") (EVar "id")) (EVar "cell")) (EVar "leaves")))))) (DoExpr (EApp (EApp (EVar "go") (EVar "rest")) (EVar "leaves2"))))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "leaves0"))))
 (DTypeSig false "addBodyEquations" (TyFun (TyCon "SolveWork") (TyFun (TyApp (TyCon "List") (TyCon "SummaryNode")) (TyCon "Unit"))))
 (DFunDef false "addBodyEquations" (PWild (PList)) (ELit LUnit))
 (DFunDef false "addBodyEquations" ((PVar "work") (PCons (PVar "node") (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EApp (EVar "addLowers") (EVar "work")) (EApp (EVar "effvarId") (EFieldAccess (EVar "node") "esnCell"))) (EFieldAccess (EFieldAccess (EVar "node") "esnLowers") "value"))) (DoExpr (EApp (EApp (EVar "addBodyEquations") (EVar "work")) (EVar "rest")))))
 (DTypeSig false "addLowers" (TyFun (TyCon "SolveWork") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "EffRow")) (TyCon "Unit")))))
-(DFunDef false "addLowers" (PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "addLowers" ((PVar "work") (PVar "id") (PCons (PVar "row") (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "addEquation") (EVar "work")) (EVar "id")) (EVar "row")) (EListLit)) (EVar "Tip")) (EVar "False"))) (DoExpr (EApp (EApp (EApp (EVar "addLowers") (EVar "work")) (EVar "id")) (EVar "rest")))))
+(DFunDef false "addLowers" ((PVar "work") (PVar "id") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PVar "row") (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "addEquation") (EVar "work")) (EVar "id")) (EVar "row")) (EListLit)) (EVar "Tip")) (EVar "False"))) (DoExpr (EApp (EVar "go") (EVar "rest"))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "leafSet" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Effvar"))) (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit"))))
 (DFunDef false "leafSet" ((PVar "cells")) (EApp (EApp (EVar "leafSetGo") (EVar "cells")) (EVar "Tip")))
 (DTypeSig false "leafSetGo" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Effvar"))) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")))))
@@ -1950,23 +1960,19 @@ relationProven escape rel =
 (DTypeSig false "drainWork" (TyFun (TyCon "SolveWork") (TyCon "Unit")))
 (DFunDef false "drainWork" ((PVar "work")) (EMatch (EFieldAccess (EFieldAccess (EVar "work") "eswQueue") "value") (arm (PList) () (ELit LUnit)) (arm (PCons (PVar "id") (PVar "rest")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "work") "eswQueue")) (EVar "rest"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "work") "eswQueued")) (EApp (EApp (EVar "M.delete") (EVar "id")) (EFieldAccess (EFieldAccess (EVar "work") "eswQueued") "value")))) (DoExpr (EMatch (EApp (EApp (EVar "M.get") (EVar "id")) (EFieldAccess (EVar "work") "eswNodes")) (arm (PCon "Some" (PVar "node")) () (EBlock (DoLet false false (PVar "atoms") (EFieldAccess (EFieldAccess (EVar "node") "ewnPendingAtoms") "value")) (DoLet false false (PVar "leaves") (EFieldAccess (EFieldAccess (EVar "node") "ewnPendingLeaves") "value")) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "node") "ewnPendingAtoms")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "node") "ewnPendingLeaves")) (EVar "Tip"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "propagate") (EVar "work")) (EVar "atoms")) (EVar "leaves")) (EFieldAccess (EFieldAccess (EVar "node") "ewnEdges") "value"))))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "missing queued effect equation")))))) (DoExpr (EApp (EVar "drainWork") (EVar "work")))))))
 (DTypeSig false "propagate" (TyFun (TyCon "SolveWork") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyApp (TyCon "Ref") (TyCon "Effvar"))) (TyFun (TyApp (TyCon "List") (TyCon "SolveEdge")) (TyCon "Unit"))))))
-(DFunDef false "propagate" (PWild PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "propagate" ((PVar "work") (PVar "atoms") (PVar "delta") (PCons (PVar "edge") (PVar "rest"))) (EBlock (DoLet false false (PVar "leaves") (EApp (EApp (EApp (EVar "M.foldlWithKey") (ELam ((PVar "acc") (PVar "id") (PVar "cell")) (EIf (EApp (EApp (EVar "M.has") (EVar "id")) (EFieldAccess (EVar "edge") "eseCoverLeaves")) (EVar "acc") (EApp (EApp (EApp (EVar "M.set") (EVar "id")) (EVar "cell")) (EVar "acc"))))) (EVar "Tip")) (EVar "delta"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "grow") (EVar "work")) (EFieldAccess (EVar "edge") "eseTarget")) (EApp (EApp (EApp (EFieldAccess (EVar "work") "eswEscape") (EFieldAccess (EVar "edge") "eseExact")) (EVar "atoms")) (EFieldAccess (EVar "edge") "eseCoverAtoms"))) (EVar "leaves"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "propagate") (EVar "work")) (EVar "atoms")) (EVar "delta")) (EVar "rest")))))
+(DFunDef false "propagate" ((PVar "work") (PVar "atoms") (PVar "delta") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PVar "edge") (PVar "rest"))) (EBlock (DoLet false false (PVar "leaves") (EApp (EApp (EApp (EVar "M.foldlWithKey") (ELam ((PVar "acc") (PVar "id") (PVar "cell")) (EIf (EApp (EApp (EVar "M.has") (EVar "id")) (EFieldAccess (EVar "edge") "eseCoverLeaves")) (EVar "acc") (EApp (EApp (EApp (EVar "M.set") (EVar "id")) (EVar "cell")) (EVar "acc"))))) (EVar "Tip")) (EVar "delta"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "grow") (EVar "work")) (EFieldAccess (EVar "edge") "eseTarget")) (EApp (EApp (EApp (EFieldAccess (EVar "work") "eswEscape") (EFieldAccess (EVar "edge") "eseExact")) (EVar "atoms")) (EFieldAccess (EVar "edge") "eseCoverAtoms"))) (EVar "leaves"))) (DoExpr (EApp (EVar "go") (EVar "rest"))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "linkSolutions" (TyFun (TyCon "Int") (TyFun (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Effvar"))) (TyApp (TyCon "Ref") (TyCon "Effvar"))) (TyFun (TyApp (TyCon "List") (TyCon "WorkNode")) (TyCon "Unit")))))
-(DFunDef false "linkSolutions" (PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "linkSolutions" ((PVar "owner") (PVar "makeJoin") (PCons (PVar "node") (PVar "rest"))) (EBlock (DoLet false false (PVar "row") (EMatch (EApp (EVar "M.values") (EFieldAccess (EFieldAccess (EVar "node") "ewnLeaves") "value")) (arm (PList) () (EApp (EApp (EVar "EffRow") (EFieldAccess (EFieldAccess (EVar "node") "ewnAtoms") "value")) (EVar "None"))) (arm (PList (PVar "cell")) () (EApp (EApp (EVar "EffRow") (EFieldAccess (EFieldAccess (EVar "node") "ewnAtoms") "value")) (EApp (EVar "Some") (EVar "cell")))) (arm (PVar "cells") () (EApp (EApp (EVar "EffRow") (EFieldAccess (EFieldAccess (EVar "node") "ewnAtoms") "value")) (EApp (EVar "Some") (EApp (EVar "makeJoin") (EVar "cells"))))))) (DoExpr (EMatch (EUnOp "!" (EFieldAccess (EVar "node") "ewnCell")) (arm (PCon "ESummary" PWild PWild PWild) () (EApp (EApp (EApp (EVar "solveSummaryCell") (EVar "owner")) (EFieldAccess (EVar "node") "ewnCell")) (EVar "row"))) (arm PWild () (EApp (EApp (EVar "linkRow") (EFieldAccess (EVar "node") "ewnCell")) (EVar "row"))))) (DoExpr (EApp (EApp (EApp (EVar "linkSolutions") (EVar "owner")) (EVar "makeJoin")) (EVar "rest")))))
+(DFunDef false "linkSolutions" ((PVar "owner") (PVar "makeJoin") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PVar "node") (PVar "rest"))) (EBlock (DoLet false false (PVar "row") (EMatch (EApp (EVar "M.values") (EFieldAccess (EFieldAccess (EVar "node") "ewnLeaves") "value")) (arm (PList) () (EApp (EApp (EVar "EffRow") (EFieldAccess (EFieldAccess (EVar "node") "ewnAtoms") "value")) (EVar "None"))) (arm (PList (PVar "cell")) () (EApp (EApp (EVar "EffRow") (EFieldAccess (EFieldAccess (EVar "node") "ewnAtoms") "value")) (EApp (EVar "Some") (EVar "cell")))) (arm (PVar "cells") () (EApp (EApp (EVar "EffRow") (EFieldAccess (EFieldAccess (EVar "node") "ewnAtoms") "value")) (EApp (EVar "Some") (EApp (EVar "makeJoin") (EVar "cells"))))))) (DoExpr (EMatch (EUnOp "!" (EFieldAccess (EVar "node") "ewnCell")) (arm (PCon "ESummary" PWild PWild PWild) () (EApp (EApp (EApp (EVar "solveSummaryCell") (EVar "owner")) (EFieldAccess (EVar "node") "ewnCell")) (EVar "row"))) (arm PWild () (EApp (EApp (EVar "linkRow") (EFieldAccess (EVar "node") "ewnCell")) (EVar "row"))))) (DoExpr (EApp (EVar "go") (EVar "rest"))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "missingLeaves" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Effvar"))) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyCon "Bool"))))
 (DFunDef false "missingLeaves" ((PList) PWild) (EVar "False"))
 (DFunDef false "missingLeaves" ((PCons (PVar "cell") (PVar "rest")) (PVar "upper")) (EBinOp "||" (EApp (EVar "not") (EApp (EApp (EVar "M.has") (EApp (EVar "effvarId") (EVar "cell"))) (EVar "upper"))) (EApp (EApp (EVar "missingLeaves") (EVar "rest")) (EVar "upper"))))
 (DTypeSig false "validateRelations" (TyFun (TyApp (TyCon "SummarySolver") (TyVar "c")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyFun (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom"))))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "RowRelation") (TyVar "c"))) (TyApp (TyCon "List") (TyApp (TyCon "SummaryFailure") (TyVar "c"))))))))
-(DFunDef false "validateRelations" (PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "validateRelations" ((PVar "solver") (PVar "protected") (PVar "escape") (PCons (PVar "rel") (PVar "rest"))) (EIf (EBinOp "||" (EApp (EVar "rowHasSummary") (EFieldAccess (EVar "rel") "esrLower")) (EApp (EVar "rowHasSummary") (EFieldAccess (EVar "rel") "esrUpper"))) (EMatch (EFieldAccess (EFieldAccess (EVar "solver") "essStack") "value") (arm (PCons PWild (PCons (PVar "parent") PWild)) () (EBlock (DoExpr (EApp (EApp (EVar "retainRowAt") (EFieldAccess (EVar "parent") "essLevel")) (EFieldAccess (EVar "rel") "esrLower"))) (DoExpr (EApp (EApp (EVar "retainRowAt") (EFieldAccess (EVar "parent") "essLevel")) (EFieldAccess (EVar "rel") "esrUpper"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "parent") "essRelations")) (EBinOp "::" (ERecordCreate "RowRelation" ((fa "esrLower" (EFieldAccess (EVar "rel") "esrLower")) (fa "esrUpper" (EFieldAccess (EVar "rel") "esrUpper")) (fa "esrExact" (EFieldAccess (EVar "rel") "esrExact")) (fa "esrContext" (EFieldAccess (EVar "rel") "esrContext")) (fa "esrProtected" (EVar "protected")))) (EFieldAccess (EFieldAccess (EVar "parent") "essRelations") "value")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "validateRelations") (EVar "solver")) (EVar "protected")) (EVar "escape")) (EVar "rest"))))) (arm PWild () (EBinOp "::" (ERecordCreate "SummaryFailure" ((fa "esfLower" (EFieldAccess (EVar "rel") "esrLower")) (fa "esfUpper" (EFieldAccess (EVar "rel") "esrUpper")) (fa "esfExact" (EFieldAccess (EVar "rel") "esrExact")) (fa "esfContext" (EFieldAccess (EVar "rel") "esrContext")) (fa "esfAuthority" (EVar "None")) (fa "esfWrittenUpper" (EVar "None")) (fa "esfLabel" (EVar "None")) (fa "esfResidualOf" (EVar "None")))) (EApp (EApp (EApp (EApp (EVar "validateRelations") (EVar "solver")) (EVar "protected")) (EVar "escape")) (EVar "rest"))))) (EBlock (DoLet false false (PTuple (PVar "lowerAtoms") (PVar "lowerCells")) (EApp (EVar "rowFlat") (EFieldAccess (EVar "rel") "esrLower"))) (DoLet false false (PTuple (PVar "upperAtoms") (PVar "upperCells")) (EApp (EVar "rowFlat") (EFieldAccess (EVar "rel") "esrUpper"))) (DoLet false false (PVar "failures") (EApp (EApp (EApp (EApp (EVar "validateRelations") (EVar "solver")) (EVar "protected")) (EVar "escape")) (EVar "rest"))) (DoLet false false (PVar "escaping") (EApp (EApp (EApp (EApp (EApp (EVar "authorityEscapes") (EApp (EVar "currentScope") (EVar "solver"))) (EFieldAccess (EVar "rel") "esrContext")) (EFieldAccess (EVar "rel") "esrExact")) (EVar "upperAtoms")) (EApp (EApp (EApp (EVar "escape") (EFieldAccess (EVar "rel") "esrExact")) (EVar "lowerAtoms")) (EVar "upperAtoms")))) (DoExpr (EIf (EBinOp "||" (EApp (EVar "isNonEmptyL") (EVar "escaping")) (EApp (EApp (EVar "missingLeaves") (EVar "lowerCells")) (EApp (EVar "leafSet") (EVar "upperCells")))) (EBinOp "::" (ERecordCreate "SummaryFailure" ((fa "esfLower" (EFieldAccess (EVar "rel") "esrLower")) (fa "esfUpper" (EFieldAccess (EVar "rel") "esrUpper")) (fa "esfExact" (EFieldAccess (EVar "rel") "esrExact")) (fa "esfContext" (EFieldAccess (EVar "rel") "esrContext")) (fa "esfAuthority" (EVar "None")) (fa "esfWrittenUpper" (EVar "None")) (fa "esfLabel" (EApp (EApp (EApp (EApp (EApp (EVar "firstEscapingKey") (EVar "escaping")) (EVar "lowerAtoms")) (EVar "upperAtoms")) (EVar "escape")) (EFieldAccess (EVar "rel") "esrExact"))) (fa "esfResidualOf" (EVar "None")))) (EVar "failures")) (EVar "failures"))))))
+(DFunDef false "validateRelations" ((PVar "solver") (PVar "protected") (PVar "escape") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EListLit)) (clause ((PCons (PVar "rel") (PVar "rest"))) (EIf (EBinOp "||" (EApp (EVar "rowHasSummary") (EFieldAccess (EVar "rel") "esrLower")) (EApp (EVar "rowHasSummary") (EFieldAccess (EVar "rel") "esrUpper"))) (EMatch (EFieldAccess (EFieldAccess (EVar "solver") "essStack") "value") (arm (PCons PWild (PCons (PVar "parent") PWild)) () (EBlock (DoExpr (EApp (EApp (EVar "retainRowAt") (EFieldAccess (EVar "parent") "essLevel")) (EFieldAccess (EVar "rel") "esrLower"))) (DoExpr (EApp (EApp (EVar "retainRowAt") (EFieldAccess (EVar "parent") "essLevel")) (EFieldAccess (EVar "rel") "esrUpper"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "parent") "essRelations")) (EBinOp "::" (ERecordCreate "RowRelation" ((fa "esrLower" (EFieldAccess (EVar "rel") "esrLower")) (fa "esrUpper" (EFieldAccess (EVar "rel") "esrUpper")) (fa "esrExact" (EFieldAccess (EVar "rel") "esrExact")) (fa "esrContext" (EFieldAccess (EVar "rel") "esrContext")) (fa "esrProtected" (EVar "protected")))) (EFieldAccess (EFieldAccess (EVar "parent") "essRelations") "value")))) (DoExpr (EApp (EVar "go") (EVar "rest"))))) (arm PWild () (EBinOp "::" (ERecordCreate "SummaryFailure" ((fa "esfLower" (EFieldAccess (EVar "rel") "esrLower")) (fa "esfUpper" (EFieldAccess (EVar "rel") "esrUpper")) (fa "esfExact" (EFieldAccess (EVar "rel") "esrExact")) (fa "esfContext" (EFieldAccess (EVar "rel") "esrContext")) (fa "esfAuthority" (EVar "None")) (fa "esfWrittenUpper" (EVar "None")) (fa "esfLabel" (EVar "None")) (fa "esfResidualOf" (EVar "None")))) (EApp (EVar "go") (EVar "rest"))))) (EBlock (DoLet false false (PTuple (PVar "lowerAtoms") (PVar "lowerCells")) (EApp (EVar "rowFlat") (EFieldAccess (EVar "rel") "esrLower"))) (DoLet false false (PTuple (PVar "upperAtoms") (PVar "upperCells")) (EApp (EVar "rowFlat") (EFieldAccess (EVar "rel") "esrUpper"))) (DoLet false false (PVar "failures") (EApp (EVar "go") (EVar "rest"))) (DoLet false false (PVar "escaping") (EApp (EApp (EApp (EApp (EApp (EVar "authorityEscapes") (EApp (EVar "currentScope") (EVar "solver"))) (EFieldAccess (EVar "rel") "esrContext")) (EFieldAccess (EVar "rel") "esrExact")) (EVar "upperAtoms")) (EApp (EApp (EApp (EVar "escape") (EFieldAccess (EVar "rel") "esrExact")) (EVar "lowerAtoms")) (EVar "upperAtoms")))) (DoExpr (EIf (EBinOp "||" (EApp (EVar "isNonEmptyL") (EVar "escaping")) (EApp (EApp (EVar "missingLeaves") (EVar "lowerCells")) (EApp (EVar "leafSet") (EVar "upperCells")))) (EBinOp "::" (ERecordCreate "SummaryFailure" ((fa "esfLower" (EFieldAccess (EVar "rel") "esrLower")) (fa "esfUpper" (EFieldAccess (EVar "rel") "esrUpper")) (fa "esfExact" (EFieldAccess (EVar "rel") "esrExact")) (fa "esfContext" (EFieldAccess (EVar "rel") "esrContext")) (fa "esfAuthority" (EVar "None")) (fa "esfWrittenUpper" (EVar "None")) (fa "esfLabel" (EApp (EApp (EApp (EApp (EApp (EVar "firstEscapingKey") (EVar "escaping")) (EVar "lowerAtoms")) (EVar "upperAtoms")) (EVar "escape")) (EFieldAccess (EVar "rel") "esrExact"))) (fa "esfResidualOf" (EVar "None")))) (EVar "failures")) (EVar "failures")))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "firstEscapingKey" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom"))))) (TyFun (TyCon "Bool") (TyApp (TyCon "Option") (TyCon "String"))))))))
 (DFunDef false "firstEscapingKey" ((PCons (PVar "x") PWild) PWild PWild PWild PWild) (EApp (EVar "Some") (EApp (EVar "atomKey") (EVar "x"))))
 (DFunDef false "firstEscapingKey" ((PList) (PVar "lowerAtoms") (PVar "upperAtoms") (PVar "escape") (PVar "exact")) (EMatch (EApp (EApp (EApp (EVar "escape") (EVar "exact")) (EVar "lowerAtoms")) (EVar "upperAtoms")) (arm (PCons (PVar "x") PWild) () (EApp (EVar "Some") (EApp (EVar "atomKey") (EVar "x")))) (arm (PList) () (EVar "None"))))
 (DTypeSig false "authorityEscapes" (TyFun (TyApp (TyCon "SummaryScope") (TyVar "c")) (TyFun (TyVar "c") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom"))))))))
-(DFunDef false "authorityEscapes" (PWild PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "authorityEscapes" ((PVar "scope") (PVar "context") (PVar "exact") (PVar "upper") (PCons (PVar "x") (PVar "rest"))) (EBlock (DoLet false false (PVar "others") (EApp (EApp (EApp (EApp (EApp (EVar "authorityEscapes") (EVar "scope")) (EVar "context")) (EVar "exact")) (EVar "upper")) (EVar "rest"))) (DoExpr (EMatch (EApp (EApp (EVar "findAtom") (EApp (EVar "atomKey") (EVar "x"))) (EVar "upper")) (arm (PCon "Some" (PVar "y")) () (EIf (EBinOp "||" (EApp (EVar "isSymbolic") (EApp (EVar "atomAuth") (EVar "x"))) (EApp (EVar "isSymbolic") (EApp (EVar "atomAuth") (EVar "y")))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "scope") "essAuthorities")) (EBinOp "++" (EApp (EApp (EMethodRef "map") (ELam ((PVar "pair")) (ERecordCreate "AuthWanted" ((fa "awLower" (EApp (EVar "fst") (EVar "pair"))) (fa "awUpper" (EApp (EVar "snd") (EVar "pair"))) (fa "awContext" (EVar "context")) (fa "awLabel" (EApp (EVar "Some") (EApp (EVar "atomKey") (EVar "x")))) (fa "awExact" (EVar "exact")) (fa "awResidualOf" (EVar "None")))))) (EApp (EApp (EVar "authSplit") (EApp (EVar "atomAuth") (EVar "x"))) (EApp (EVar "atomAuth") (EVar "y")))) (EFieldAccess (EFieldAccess (EVar "scope") "essAuthorities") "value")))) (DoExpr (EVar "others"))) (EBinOp "::" (EVar "x") (EVar "others")))) (arm (PCon "None") () (EBinOp "::" (EVar "x") (EVar "others")))))))
+(DFunDef false "authorityEscapes" ((PVar "scope") (PVar "context") (PVar "exact") (PVar "upper") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EListLit)) (clause ((PCons (PVar "x") (PVar "rest"))) (EBlock (DoLet false false (PVar "others") (EApp (EVar "go") (EVar "rest"))) (DoExpr (EMatch (EApp (EApp (EVar "findAtom") (EApp (EVar "atomKey") (EVar "x"))) (EVar "upper")) (arm (PCon "Some" (PVar "y")) () (EIf (EBinOp "||" (EApp (EVar "isSymbolic") (EApp (EVar "atomAuth") (EVar "x"))) (EApp (EVar "isSymbolic") (EApp (EVar "atomAuth") (EVar "y")))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "scope") "essAuthorities")) (EBinOp "++" (EApp (EApp (EMethodRef "map") (ELam ((PVar "pair")) (ERecordCreate "AuthWanted" ((fa "awLower" (EApp (EVar "fst") (EVar "pair"))) (fa "awUpper" (EApp (EVar "snd") (EVar "pair"))) (fa "awContext" (EVar "context")) (fa "awLabel" (EApp (EVar "Some") (EApp (EVar "atomKey") (EVar "x")))) (fa "awExact" (EVar "exact")) (fa "awResidualOf" (EVar "None")))))) (EApp (EApp (EVar "authSplit") (EApp (EVar "atomAuth") (EVar "x"))) (EApp (EVar "atomAuth") (EVar "y")))) (EFieldAccess (EFieldAccess (EVar "scope") "essAuthorities") "value")))) (DoExpr (EVar "others"))) (EBinOp "::" (EVar "x") (EVar "others")))) (arm (PCon "None") () (EBinOp "::" (EVar "x") (EVar "others"))))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "isSymbolic" (TyFun (TyCon "Authority") (TyCon "Bool")))
 (DFunDef false "isSymbolic" ((PVar "q")) (EMatch (EApp (EVar "authVars") (EVar "q")) (arm (PList) () (EVar "False")) (arm PWild () (EVar "True"))))
 (DTypeSig false "retainRowAt" (TyFun (TyCon "Int") (TyFun (TyCon "EffRow") (TyCon "Unit"))))
@@ -2065,8 +2071,7 @@ relationProven escape rel =
 (DTypeSig false "transferAllowanceRelations" (TyFun (TyApp (TyCon "SummarySolver") (TyVar "c")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "RowRelation") (TyVar "c"))) (TyApp (TyCon "List") (TyApp (TyCon "RowRelation") (TyVar "c"))))))))
 (DFunDef false "transferAllowanceRelations" ((PVar "solver") (PVar "protected") (PVar "outward") (PVar "relations")) (EMatch (EFieldAccess (EFieldAccess (EVar "solver") "essStack") "value") (arm (PCons PWild (PCons (PVar "parent") PWild)) () (EMatch (EVar "outward") (arm (PCon "Tip") () (EVar "relations")) (arm PWild () (EBlock (DoLet false false (PVar "work") (EApp (EApp (EApp (EApp (EVar "indexTransferRelations") (EVar "relations")) (ELit (LInt 0))) (EVar "Tip")) (EVar "Tip"))) (DoExpr (EApp (EApp (EVar "selectTransferRows") (EVar "work")) (EApp (EVar "M.keys") (EVar "outward")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "partitionTransferred") (EVar "parent")) (EVar "protected")) (EFieldAccess (EFieldAccess (EVar "work") "etwSelected") "value")) (ELit (LInt 0))) (EVar "relations"))))))) (arm PWild () (EVar "relations"))))
 (DTypeSig false "partitionTransferred" (TyFun (TyApp (TyCon "SummaryScope") (TyVar "c")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Unit")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "RowRelation") (TyVar "c"))) (TyApp (TyCon "List") (TyApp (TyCon "RowRelation") (TyVar "c")))))))))
-(DFunDef false "partitionTransferred" (PWild PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "partitionTransferred" ((PVar "parent") (PVar "protected") (PVar "selected") (PVar "id") (PCons (PVar "rel") (PVar "rest"))) (EIf (EApp (EApp (EVar "M.has") (EVar "id")) (EVar "selected")) (EBlock (DoExpr (EApp (EApp (EVar "retainRowAt") (EFieldAccess (EVar "parent") "essLevel")) (EFieldAccess (EVar "rel") "esrLower"))) (DoExpr (EApp (EApp (EVar "retainRowAt") (EFieldAccess (EVar "parent") "essLevel")) (EFieldAccess (EVar "rel") "esrUpper"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "parent") "essRelations")) (EBinOp "::" (ERecordCreate "RowRelation" ((fa "esrLower" (EFieldAccess (EVar "rel") "esrLower")) (fa "esrUpper" (EFieldAccess (EVar "rel") "esrUpper")) (fa "esrExact" (EFieldAccess (EVar "rel") "esrExact")) (fa "esrContext" (EFieldAccess (EVar "rel") "esrContext")) (fa "esrProtected" (EVar "protected")))) (EFieldAccess (EFieldAccess (EVar "parent") "essRelations") "value")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "partitionTransferred") (EVar "parent")) (EVar "protected")) (EVar "selected")) (EBinOp "+" (EVar "id") (ELit (LInt 1)))) (EVar "rest")))) (EBinOp "::" (EVar "rel") (EApp (EApp (EApp (EApp (EApp (EVar "partitionTransferred") (EVar "parent")) (EVar "protected")) (EVar "selected")) (EBinOp "+" (EVar "id") (ELit (LInt 1)))) (EVar "rest")))))
+(DFunDef false "partitionTransferred" ((PVar "parent") (PVar "protected") (PVar "selected") (PVar "id0") (PVar "xs0")) (ELetGroup ((lgb "go" (clause (PWild (PList)) (EListLit)) (clause ((PVar "id") (PCons (PVar "rel") (PVar "rest"))) (EIf (EApp (EApp (EVar "M.has") (EVar "id")) (EVar "selected")) (EBlock (DoExpr (EApp (EApp (EVar "retainRowAt") (EFieldAccess (EVar "parent") "essLevel")) (EFieldAccess (EVar "rel") "esrLower"))) (DoExpr (EApp (EApp (EVar "retainRowAt") (EFieldAccess (EVar "parent") "essLevel")) (EFieldAccess (EVar "rel") "esrUpper"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "parent") "essRelations")) (EBinOp "::" (ERecordCreate "RowRelation" ((fa "esrLower" (EFieldAccess (EVar "rel") "esrLower")) (fa "esrUpper" (EFieldAccess (EVar "rel") "esrUpper")) (fa "esrExact" (EFieldAccess (EVar "rel") "esrExact")) (fa "esrContext" (EFieldAccess (EVar "rel") "esrContext")) (fa "esrProtected" (EVar "protected")))) (EFieldAccess (EFieldAccess (EVar "parent") "essRelations") "value")))) (DoExpr (EApp (EApp (EVar "go") (EBinOp "+" (EVar "id") (ELit (LInt 1)))) (EVar "rest")))) (EBinOp "::" (EVar "rel") (EApp (EApp (EVar "go") (EBinOp "+" (EVar "id") (ELit (LInt 1)))) (EVar "rest"))))))) (EApp (EApp (EVar "go") (EVar "id0")) (EVar "xs0"))))
 (DTypeSig false "transferAllowances" (TyFun (TyApp (TyCon "SummarySolver") (TyVar "c")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Ref") (TyCon "Effvar"))) (TyCon "Unit"))))
 (DFunDef false "transferAllowances" ((PVar "solver") (PVar "cells")) (EMatch (EFieldAccess (EFieldAccess (EVar "solver") "essStack") "value") (arm (PCons PWild (PCons (PVar "parent") PWild)) () (EApp (EApp (EApp (EMethodRef "fold") (ELam (PWild (PVar "cell")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "EUnbound" (PVar "id") (PVar "level")) () (EIf (EBinOp "<=" (EVar "level") (EFieldAccess (EVar "parent") "essLevel")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "parent") "essExistentials")) (EApp (EApp (EApp (EVar "M.set") (EVar "id")) (EVar "cell")) (EFieldAccess (EFieldAccess (EVar "parent") "essExistentials") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "parent") "essAllowances")) (EApp (EApp (EApp (EVar "M.set") (EVar "id")) (EVar "cell")) (EFieldAccess (EFieldAccess (EVar "parent") "essAllowances") "value"))))) (ELit LUnit))) (arm PWild () (ELit LUnit))))) (ELit LUnit)) (EVar "cells"))) (arm PWild () (ELit LUnit))))
 (DTypeSig false "summaryFreeRelation" (TyFun (TyApp (TyCon "RowRelation") (TyVar "c")) (TyCon "Bool")))

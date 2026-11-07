@@ -274,7 +274,8 @@ annotateDecl (d@(DInterface { ifaceOrigin = _, methods })) =
 annotateDecl (d@(DImpl { implOrigin = _, methods })) =
   DImpl { d | methods = map annotateImplMethod methods }
 annotateDecl (DAttrib attrs inner) = DAttrib attrs (annotateDecl inner)
-annotateDecl d = d
+annotateDecl (d@(DTypeSig _ _ _ _ | DExtern _ | DData {  } | DUse _ _ _ | DEffect _ _ _ _ _ _ | DTypeAlias {  } | DNewtype {  })) =
+  d
 
 annotateIfaceMethod : IfaceMethod -> IfaceMethod
 annotateIfaceMethod (IfaceMethod nm ty None mloc) = IfaceMethod nm ty None mloc

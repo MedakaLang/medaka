@@ -82,29 +82,31 @@ subjectInputs : GraphCtx ->
   Int ->
   List (String, List Decl) ->
   InitInputs
-subjectInputs _ _ _ _ [] = panic "subjectInputs: no module"
-subjectInputs g seed imported ord ((mid, ds) :: rest) =
-  let plain = plainModuleSeed seed
-  let ms = { plain |
-    msImportedNames =
-      omFromNames (if isEmptyL rest then imported else []) omEmpty,
-  }
-  let (b, marked, _, _, mctx) = checkModuleFullDiags g mid ms [] [] ds
-  match rest
-    [] =>
-      initInputsAt
-        mid
-        ms
-        b
-        marked
-        mctx
-        g.declEnvsRef.value
-        ord
-        binopDispatchMethod
-        unopMethod
-    -- Bound: one step per module of a test program, at most two.
-    -- lint-disable-next-line rule-accumulator-append
-    _ => subjectInputs g (seed ++ b.mbSchemes) imported (ord + 1) rest
+subjectInputs g seed0 imported ord0 xs0 = go seed0 ord0 xs0
+  where
+    go _ _ [] = panic "subjectInputs: no module"
+    go seed ord ((mid, ds) :: rest) =
+      let plain = plainModuleSeed seed
+      let ms = { plain |
+        msImportedNames =
+          omFromNames (if isEmptyL rest then imported else []) omEmpty,
+      }
+      let (b, marked, _, _, mctx) = checkModuleFullDiags g mid ms [] [] ds
+      match rest
+        [] =>
+          initInputsAt
+            mid
+            ms
+            b
+            marked
+            mctx
+            g.declEnvsRef.value
+            ord
+            binopDispatchMethod
+            unopMethod
+        -- Bound: one step per module of a test program, at most two.
+        -- lint-disable-next-line rule-accumulator-append
+        _ => go (seed ++ b.mbSchemes) (ord + 1) rest
 
 kindTag : InitEdgeKind -> String
 kindTag ByName = "name"

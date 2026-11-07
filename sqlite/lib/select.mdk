@@ -1107,13 +1107,15 @@ validIdent s =
     validIdentGo chars 0 (arrayLength chars)
 
 validIdentGo : Array Char -> Int -> Int -> Bool
-validIdentGo chars i n =
-  if i >= n then
-    True
-  else if identChar (charCode chars[i]) then
-    validIdentGo chars (i + 1) n
-  else
-    False
+validIdentGo chars i0 n = go i0
+  where
+    go i =
+      if i >= n then
+        True
+      else if identChar (charCode chars[i]) then
+        go (i + 1)
+      else
+        False
 
 identChar : Int -> Bool
 identChar c =
@@ -1136,11 +1138,13 @@ validQualIdent s =
     _ => False
 
 countDots : Array Char -> Int -> Int -> Int -> Int
-countDots chars i n acc =
-  if i >= n then
-    acc
-  else
-    countDots chars (i + 1) n (if charCode chars[i] == 46 then acc + 1 else acc)
+countDots chars i0 n acc0 = go i0 acc0
+  where
+    go i acc =
+      if i >= n then
+        acc
+      else
+        go (i + 1) (if charCode chars[i] == 46 then acc + 1 else acc)
 
 -- Split on the first '.' (caller guarantees exactly one).  Returns (before, after).
 splitOnDot : String -> (String, String)
@@ -1151,13 +1155,10 @@ splitOnDot s =
   (stringSlice 0 di s, stringSlice (di + 1) n s)
 
 dotIndex : Array Char -> Int -> Int -> Int
-dotIndex chars i n =
-  if i >= n then
-    n
-  else if charCode chars[i] == 46 then
-    i
-  else
-    dotIndex chars (i + 1) n
+dotIndex chars i0 n = go i0
+  where
+    go i =
+      if i >= n then n else if charCode chars[i] == 46 then i else go (i + 1)
 
 -- ---------------------------------------------------------------------------
 -- compilePred : SqlExpr -> (List Cell -> Bool)
@@ -1357,7 +1358,7 @@ compileOperand _ (EAgg fn _) =
 -- `EIsNull`/`ENotNull`) are not usable as VALUE operands — a pre-existing
 -- limitation this task does not extend (real SQLite treats a boolean as an
 -- Int 0/1/NULL value; this engine does not, for ANY of these nodes).
-compileOperand _lookup _ =
+compileOperand _lookup (EBin _ _ _ | EAnd _ _ | EOr _ _ | ENot _ | EIsNull _ | ENotNull _ | ELike _ _ | EIn _ _ | EInSubquery _ _) =
   Err "compilePred: operand must be a column or literal"
 
 -- | Compile any `SqlExpr` value operand to a per-row `List Cell -> Cell`
@@ -1399,9 +1400,10 @@ evalCaseGo : List (List Cell -> Tri, List Cell -> Cell) ->
   (List Cell -> Cell) ->
   List Cell ->
   Cell
-evalCaseGo [] gEls cells = gEls cells
-evalCaseGo ((ct, cr) :: rest) gEls cells =
-  if ct cells == TTrue then cr cells else evalCaseGo rest gEls cells
+evalCaseGo xs0 gEls cells = go xs0
+  where
+    go [] = gEls cells
+    go ((ct, cr) :: rest) = if ct cells == TTrue then cr cells else go rest
 
 -- ---------------------------------------------------------------------------
 -- COALESCE / IFNULL evaluation: the first non-NULL argument, NULL if all are
@@ -1452,6 +1454,8 @@ blobToText : Array Int -> String
 blobToText b = fromChars (blobToCharsGo b 0 (arrayLength b))
 
 blobToCharsGo : Array Int -> Int -> Int -> List Char
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 blobToCharsGo b i n =
   if i >= n then
     []
@@ -1481,24 +1485,28 @@ likeMatch text pat =
   likeMatchGo tc (arrayLength tc) 0 pc (arrayLength pc) 0
 
 likeMatchGo : Array Char -> Int -> Int -> Array Char -> Int -> Int -> Bool
-likeMatchGo tc tn ti pc pn pi =
-  if pi >= pn then
-    ti >= tn
-  else if pc[pi] == '%' then
-    likeMatchStar tc tn ti pc pn (pi + 1)
-  else if pc[pi] == '_' then
-    ti < tn && likeMatchGo tc tn (ti + 1) pc pn (pi + 1)
-  else
-    ti < tn && tc[ti] == pc[pi] && likeMatchGo tc tn (ti + 1) pc pn (pi + 1)
+likeMatchGo tc tn ti0 pc pn pi0 = go ti0 pi0
+  where
+    go ti pi =
+      if pi >= pn then
+        ti >= tn
+      else if pc[pi] == '%' then
+        likeMatchStar tc tn ti pc pn (pi + 1)
+      else if pc[pi] == '_' then
+        ti < tn && go (ti + 1) (pi + 1)
+      else
+        ti < tn && tc[ti] == pc[pi] && go (ti + 1) (pi + 1)
 
 likeMatchStar : Array Char -> Int -> Int -> Array Char -> Int -> Int -> Bool
-likeMatchStar tc tn ti pc pn pi =
-  if likeMatchGo tc tn ti pc pn pi then
-    True
-  else if ti < tn then
-    likeMatchStar tc tn (ti + 1) pc pn pi
-  else
-    False
+likeMatchStar tc tn ti0 pc pn pi = go ti0
+  where
+    go ti =
+      if likeMatchGo tc tn ti pc pn pi then
+        True
+      else if ti < tn then
+        go (ti + 1)
+      else
+        False
 
 -- ---------------------------------------------------------------------------
 -- ASCII-only case fold.  SQLite's built-in `LIKE`/`UPPER`/`LOWER` fold ONLY
@@ -1536,6 +1544,8 @@ asciiFold f s =
   fromChars (asciiFoldGo f chars 0 (arrayLength chars))
 
 asciiFoldGo : (Char -> Char) -> Array Char -> Int -> Int -> List Char
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 asciiFoldGo f chars i n =
   if i >= n then [] else f chars[i] :: asciiFoldGo f chars (i + 1) n
 
@@ -1611,11 +1621,9 @@ spaceTrimLeft s =
   stringSlice (spaceTrimLeftIdx chars 0 n) n s
 
 spaceTrimLeftIdx : Array Char -> Int -> Int -> Int
-spaceTrimLeftIdx chars i n =
-  if i < n && charCode chars[i] == 32 then
-    spaceTrimLeftIdx chars (i + 1) n
-  else
-    i
+spaceTrimLeftIdx chars i0 n = go i0
+  where
+    go i = if i < n && charCode chars[i] == 32 then go (i + 1) else i
 
 -- Same declared signature as `string.trimRight`, but narrower: SQL
 -- `rtrim(X)`/`trim(X)` strip only the literal space char (0x20), never
@@ -1791,15 +1799,14 @@ isDigitCode : Int -> Bool
 isDigitCode k = k >= 48 && k <= 57
 
 skipNumWs : Array Char -> Int -> Int -> Int
-skipNumWs chars i n =
-  if i < n && isNumWs chars[i] then skipNumWs chars (i + 1) n else i
+skipNumWs chars i0 n = go i0
+  where
+    go i = if i < n && isNumWs chars[i] then go (i + 1) else i
 
 skipDigits : Array Char -> Int -> Int -> Int
-skipDigits chars i n =
-  if i < n && isDigitCode (charCode chars[i]) then
-    skipDigits chars (i + 1) n
-  else
-    i
+skipDigits chars i0 n = go i0
+  where
+    go i = if i < n && isDigitCode (charCode chars[i]) then go (i + 1) else i
 
 -- The end index of a VALID exponent starting at `i` (`e`/`E`, optional sign,
 -- ≥1 digit), or `i` itself when there is no valid exponent — so a dangling
@@ -2082,15 +2089,17 @@ foldSetOps : Db ->
   List (List Cell) ->
   List (SetOp, Select) ->
   Result String (List (List Cell))
-foldSetOps _ _ acc [] = Ok acc
-foldSetOps db n acc ((op, sel) :: rest) = do
-  m <- selectColumnCount db sel
-  if m /= n then
-    Err
-      "SELECTs to the left and right of \{setOpSql op} do not have the same number of result columns"
-  else do
-    rhs <- runArmCells db sel
-    foldSetOps db n (applySetOp op acc rhs) rest
+foldSetOps db n acc0 xs0 = go acc0 xs0
+  where
+    go acc [] = Ok acc
+    go acc ((op, sel) :: rest) = do
+      m <- selectColumnCount db sel
+      if m /= n then
+        Err
+          "SELECTs to the left and right of \{setOpSql op} do not have the same number of result columns"
+      else do
+        rhs <- runArmCells db sel
+        go (applySetOp op acc rhs) rest
 
 -- The set operator over two projected row sets.  UNION ALL concatenates; UNION
 -- concatenates then dedups; INTERSECT keeps left rows also present on the right;
@@ -2492,17 +2501,19 @@ planRowCells db plan tbl createSql = do
 -- does not model, a corrupt one — falls back to the full scan.  Narrowing is
 -- an optimization, never a precondition.
 planRows : Db -> Plan -> String -> Result String (List Row)
-planRows db PlanScan tbl = do
-  (_, rows) <- scanTableRowsIpk db tbl
-  Ok rows
-planRows db (PlanSeekRowid rid) tbl = do
-  found <- seekTableRow db tbl rid
-  match found
-    None => Ok []
-    Some row => Ok [row]
-planRows db (PlanSeekIndex col target) tbl = match seekByIndex db tbl col target
-  Ok rows => Ok rows
-  Err _ => planRows db PlanScan tbl
+planRows db x0 tbl = go x0
+  where
+    go PlanScan = do
+      (_, rows) <- scanTableRowsIpk db tbl
+      Ok rows
+    go (PlanSeekRowid rid) = do
+      found <- seekTableRow db tbl rid
+      match found
+        None => Ok []
+        Some row => Ok [row]
+    go (PlanSeekIndex col target) = match seekByIndex db tbl col target
+      Ok rows => Ok rows
+      Err _ => go PlanScan
 
 -- | The single-table pipeline under an explicit plan.  Same stages, same order,
 --   same errors as the joined path (`findTable` → row production →
@@ -2876,11 +2887,13 @@ rewriteAllPostGroup : List SqlExpr ->
   List SqlExpr ->
   List SqlExpr ->
   Result String (List SqlExpr)
-rewriteAllPostGroup _ _ [] = Ok []
-rewriteAllPostGroup gb aggs (e :: rest) = do
-  e2 <- rewritePostGroup gb aggs e
-  rest2 <- rewriteAllPostGroup gb aggs rest
-  Ok (e2 :: rest2)
+rewriteAllPostGroup gb aggs xs0 = go xs0
+  where
+    go [] = Ok []
+    go (e :: rest) = do
+      e2 <- rewritePostGroup gb aggs e
+      rest2 <- go rest
+      Ok (e2 :: rest2)
 
 rewriteOptPostGroup : List SqlExpr ->
   List SqlExpr ->
@@ -2893,12 +2906,14 @@ rewriteCaseWhens : List SqlExpr ->
   List SqlExpr ->
   List (SqlExpr, SqlExpr) ->
   Result String (List (SqlExpr, SqlExpr))
-rewriteCaseWhens _ _ [] = Ok []
-rewriteCaseWhens gb aggs ((c, r) :: rest) = do
-  c2 <- rewritePostGroup gb aggs c
-  r2 <- rewritePostGroup gb aggs r
-  rest2 <- rewriteCaseWhens gb aggs rest
-  Ok ((c2, r2) :: rest2)
+rewriteCaseWhens gb aggs xs0 = go xs0
+  where
+    go [] = Ok []
+    go ((c, r) :: rest) = do
+      c2 <- rewritePostGroup gb aggs c
+      r2 <- rewritePostGroup gb aggs r
+      rest2 <- go rest
+      Ok ((c2, r2) :: rest2)
 
 -- A whole sub-expression that IS a GROUP BY key resolves to that key's slot —
 -- checked FIRST, so `GROUP BY (a + b)` makes `SELECT a + b` legal.  Otherwise we
@@ -3170,12 +3185,11 @@ mkJoinLookup infos =
     _ => lookupBare infos name
 
 lookupQualified : List (String, String, Int) -> String -> String -> Option Int
-lookupQualified [] _ _ = None
-lookupQualified ((name, sql, off) :: rest) tbl col =
-  if name == tbl then
-    map (off + _) (colOrRowid sql col)
-  else
-    lookupQualified rest tbl col
+lookupQualified xs0 tbl col = go xs0
+  where
+    go [] = None
+    go ((name, sql, off) :: rest) =
+      if name == tbl then map (off + _) (colOrRowid sql col) else go rest
 
 lookupBare : List (String, String, Int) -> String -> Option Int
 lookupBare [] _ = None
@@ -3276,9 +3290,10 @@ matchedRows : (List Cell -> Bool) ->
   List (List Cell) ->
   List (List Cell) ->
   List (List Cell)
-matchedRows _ [] _ = []
-matchedRows onPred (l :: lefts) rights =
-  crossOneMatches onPred l rights ++ matchedRows onPred lefts rights
+matchedRows onPred xs0 rights = go xs0
+  where
+    go [] = []
+    go (l :: lefts) = crossOneMatches onPred l rights ++ go lefts
 
 -- LEFT-join rows: matched pairs, but a left row with ZERO matches emits one
 -- right-null-padded row (`l ++ nullPad w`) instead of vanishing.
@@ -3287,9 +3302,10 @@ leftPaddedRows : Int ->
   List (List Cell) ->
   List (List Cell) ->
   List (List Cell)
-leftPaddedRows _ _ [] _ = []
-leftPaddedRows w onPred (l :: lefts) rights =
-  crossOneLeft w onPred l rights ++ leftPaddedRows w onPred lefts rights
+leftPaddedRows w onPred xs0 rights = go xs0
+  where
+    go [] = []
+    go (l :: lefts) = crossOneLeft w onPred l rights ++ go lefts
 
 crossOneLeft : Int ->
   (List Cell -> Bool) ->
@@ -3307,6 +3323,8 @@ unmatchedRightRows : Int ->
   List (List Cell) ->
   List (List Cell) ->
   List (List Cell)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 unmatchedRightRows _ _ _ [] = []
 unmatchedRightRows lw onPred lefts (r :: rights) =
   if anyLeftMatches onPred lefts r then
@@ -3315,14 +3333,17 @@ unmatchedRightRows lw onPred lefts (r :: rights) =
     nullPad lw ++ r :: unmatchedRightRows lw onPred lefts rights
 
 anyLeftMatches : (List Cell -> Bool) -> List (List Cell) -> List Cell -> Bool
-anyLeftMatches _ [] _ = False
-anyLeftMatches onPred (l :: lefts) r =
-  if onPred (l ++ r) then True else anyLeftMatches onPred lefts r
+anyLeftMatches onPred xs0 r = go xs0
+  where
+    go [] = False
+    go (l :: lefts) = if onPred (l ++ r) then True else go lefts
 
 crossOneMatches : (List Cell -> Bool) ->
   List Cell ->
   List (List Cell) ->
   List (List Cell)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 crossOneMatches _ _ [] = []
 crossOneMatches onPred l (r :: rights) =
   let combined = l ++ r

@@ -186,9 +186,9 @@ dirWithKnobProbe : String -> <FileWrite> Result String Unit
 dirWithKnobProbe dir = dirWithKnobProbeFor dir knobProbeSource
 
 dirWithKnobProbeFor : String -> String -> <FileWrite> Result String Unit
-dirWithKnobProbeFor dir src = match writeFile (probeFile dir "a") src
-  Err e => Err e
-  Ok () => writeFile (probeFile dir "b") src
+dirWithKnobProbeFor dir src = do
+  _ <- writeFile (probeFile dir "a") src
+  writeFile (probeFile dir "b") src
 
 knobProbeSource : String
 knobProbeSource = knobProbeSourceFor 2
@@ -640,13 +640,12 @@ firstFileName out = match J.get "file" (firstFileEntry out)
 
 -- The code of the first diagnostic of the first file of the envelope; None when absent.
 firstDiagCode : String -> Option String
-firstDiagCode out = match J.get "diagnostics" (firstFileEntry out)
-  Some ds => match J.at 0 ds
-    Some d => match J.get "code" d
-      Some (JString c) => Some c
-      _ => None
-    None => None
-  None => None
+firstDiagCode out = do
+  ds <- J.get "diagnostics" (firstFileEntry out)
+  d <- J.at 0 ds
+  match J.get "code" d
+    Some (JString c) => Some c
+    _ => None
 
 test "an aborted --json run emits the run envelope with the seed on stderr" =
   withFixtures
@@ -1266,11 +1265,10 @@ staleNeedle = "built from compiler source that differs from"
 
 -- Make `<dir>/root` a stale MEDAKA_ROOT; Err names the step that failed.
 mkStaleRoot : String -> <Exec, IO, FileRead, FileWrite> Result String Unit
-mkStaleRoot dir = match runVerb "mkdir" ["-p", "\{dir}/root/compiler"]
-  Err e => Err e
-  Ok _ => match runVerb "cp" ["-r", underRoot "stdlib", "\{dir}/root/stdlib"]
-    Err e => Err e
-    Ok _ => writeFile "\{dir}/root/compiler/x.mdk" "x = 1\n"
+mkStaleRoot dir = do
+  _ <- runVerb "mkdir" ["-p", "\{dir}/root/compiler"]
+  _ <- runVerb "cp" ["-r", underRoot "stdlib", "\{dir}/root/stdlib"]
+  writeFile "\{dir}/root/compiler/x.mdk" "x = 1\n"
 
 -- `medaka <args>` under `root` with MEDAKA_SEED=7 and `strict` as MEDAKA_STRICT
 -- (cleared when empty).

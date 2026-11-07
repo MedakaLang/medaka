@@ -106,28 +106,28 @@ walkApp : ValueScope ->
   CExpr ->
   List (List CExpr) ->
   OrdMap Unit
-walkApp scope acc exact (CApp head args _) pending =
-  walkApp scope acc exact head (args :: pending)
-walkApp scope acc exact (CVar name _) pending =
-  if rawSentinel name || omHasKey name scope.selected then
-    acc
-  else
-    fold
-      (walkExprs scope)
-      (if exact then acc else noteName scope acc name)
-      pending
-walkApp scope acc exact (CMethod method (MethodEvidence _ _ (RLocal sym dicts) _ _)) pending =
-  let target = if sym == "" then method else sym
-  let headUses = match dicts
-    [] =>
-      if not exact && omHasKey target scope.functions then
-        omInsert target () acc
-      else
+walkApp scope acc exact head0 pending0 = go head0 pending0
+  where
+    go (CApp head args _) pending = go head (args :: pending)
+    go (CVar name _) pending =
+      if rawSentinel name || omHasKey name scope.selected then
         acc
-    _ => acc
-  fold (walkExprs scope) headUses pending
-walkApp scope acc _ head pending =
-  fold (walkExprs scope) (walkExpr scope acc head) pending
+      else
+        fold
+          (walkExprs scope)
+          (if exact then acc else noteName scope acc name)
+          pending
+    go (CMethod method (MethodEvidence _ _ (RLocal sym dicts) _ _)) pending =
+      let target = if sym == "" then method else sym
+      let headUses = match dicts
+        [] =>
+          if not exact && omHasKey target scope.functions then
+            omInsert target () acc
+          else
+            acc
+        _ => acc
+      fold (walkExprs scope) headUses pending
+    go head pending = fold (walkExprs scope) (walkExpr scope acc head) pending
 
 walkExpr : ValueScope -> OrdMap Unit -> CExpr -> OrdMap Unit
 walkExpr _ acc (CLit _) = acc

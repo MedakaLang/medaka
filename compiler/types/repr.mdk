@@ -431,26 +431,30 @@ renderConstraintCtx : Ref (List (Int, String)) ->
   Ref Int ->
   List VecObl ->
   List String
-renderConstraintCtx _ _ [] = []
-renderConstraintCtx ctx cnt (o :: rest) =
-  -- #1161: a vector-carrying entry renders its WHOLE argument vector under the SAME
-  -- naming context as the body, so `Ix a Bool =>` prints with its ground argument
-  -- instead of degrading to `Ix a`.  An ids-only entry renders exactly as before.
-  -- #1952: ARGUMENT precedence (3), not 2.  At prec 2 `wrapIf (prec > 2)` leaves an
-  -- application BARE, so a STRUCTURED predicate argument printed as `Conv Wrap a b =>` —
-  -- which is not the same predicate: it reads as a four-argument context and does not
-  -- round-trip through the parser.  This is SOURCE SYNTAX (`check --types`, LSP hover,
-  -- inlay hints all show it as a signature), so it owes the parens unconditionally, at
-  -- arity 1 as much as at arity 2.  Bare-tyvar and nullary-`TCon` arguments are atoms and
-  -- render identically at either precedence, so `Num a =>` / `Ix a Bool =>` do not move —
-  -- and the compiler's and stdlib's own declared contexts are all bare-tyvar 1-ary, so
-  -- neither the snapshot corpus nor the self-compile fixpoint sees this at all.
-  let s =
-    if isEmptyL o.voArgs then
-      joinWith " " (o.voIface.irName :: map (id => nameOf ctx cnt id) o.voIds)
-    else
-      joinWith " " (o.voIface.irName :: map (ppGo ctx cnt 3) o.voArgs)
-  s :: renderConstraintCtx ctx cnt rest
+renderConstraintCtx ctx cnt xs0 = go xs0
+  where
+    go [] = []
+    go (o :: rest) =
+      -- #1161: a vector-carrying entry renders its WHOLE argument vector under the SAME
+      -- naming context as the body, so `Ix a Bool =>` prints with its ground argument
+      -- instead of degrading to `Ix a`.  An ids-only entry renders exactly as before.
+      -- #1952: ARGUMENT precedence (3), not 2.  At prec 2 `wrapIf (prec > 2)` leaves an
+      -- application BARE, so a STRUCTURED predicate argument printed as `Conv Wrap a b =>` —
+      -- which is not the same predicate: it reads as a four-argument context and does not
+      -- round-trip through the parser.  This is SOURCE SYNTAX (`check --types`, LSP hover,
+      -- inlay hints all show it as a signature), so it owes the parens unconditionally, at
+      -- arity 1 as much as at arity 2.  Bare-tyvar and nullary-`TCon` arguments are atoms and
+      -- render identically at either precedence, so `Num a =>` / `Ix a Bool =>` do not move —
+      -- and the compiler's and stdlib's own declared contexts are all bare-tyvar 1-ary, so
+      -- neither the snapshot corpus nor the self-compile fixpoint sees this at all.
+      let s =
+        if isEmptyL o.voArgs then
+          joinWith
+            " "
+            (o.voIface.irName :: map (id => nameOf ctx cnt id) o.voIds)
+        else
+          joinWith " " (o.voIface.irName :: map (ppGo ctx cnt 3) o.voArgs)
+      s :: go rest
 
 export
 ppMono : Mono -> String
@@ -473,15 +477,18 @@ export
 -- authority takes its binder's own name (`ppAuthvarName`), so a letter handed
 -- out later must skip it, or `<Net a | a>` would name two variables one way.
 assignName : Ref (List (Int, String)) -> Ref Int -> Int -> String
-assignName ctx cnt id =
-  let n = !cnt
-  cnt := n + 1
-  let s = if n < 26 then stringSlice n (n + 1) letters else "t" ++ intToString n
-  if nameTaken s !ctx then
-    assignName ctx cnt id
-  else
-    ctx := (id, s) :: !ctx
-    s
+assignName ctx cnt id = go ()
+  where
+    go () =
+      let n = !cnt
+      cnt := n + 1
+      let s =
+        if n < 26 then stringSlice n (n + 1) letters else "t" ++ intToString n
+      if nameTaken s !ctx then
+        go ()
+      else
+        ctx := (id, s) :: !ctx
+        s
 
 export
 ppGo : Ref (List (Int, String)) -> Ref Int -> Int -> Mono -> String
@@ -656,10 +663,12 @@ effStr labels = "<" ++ renderAtoms labels ++ "> "
 
 export
 ppEach : Ref (List (Int, String)) -> Ref Int -> Int -> List Mono -> List String
-ppEach _ _ _ [] = []
-ppEach ctx cnt prec (t :: ts) =
-  let s = ppGo ctx cnt prec t
-  s :: ppEach ctx cnt prec ts
+ppEach ctx cnt prec xs0 = go xs0
+  where
+    go [] = []
+    go (t :: ts) =
+      let s = ppGo ctx cnt prec t
+      s :: go ts
 
 export
 wrapIf : Bool -> String -> String

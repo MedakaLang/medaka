@@ -1,5 +1,5 @@
 # META
-source_lines=497
+source_lines=510
 stages=DESUGAR,MARK
 # SOURCE
 -- S-expression values with one canonical rendering and a fail-closed reader.
@@ -103,9 +103,11 @@ failAt off what = Err SexpError { seOffset = off, sePath = "", seWhat = what }
 -- costs one slice and no per-character value.
 
 skipWsAt : ByteBlock -> Int -> Int -> Int
-skipWsAt b n p
-  | p < n && isWsByte (byteBlockGetUnsafe p b) = skipWsAt b n (p + 1)
-  | otherwise = p
+skipWsAt b n p0 = go p0
+  where
+    go p
+      | p < n && isWsByte (byteBlockGetUnsafe p b) = go (p + 1)
+      | otherwise = p
 
 sliceText : ByteBlock -> Int -> Int -> String
 sliceText b i j =
@@ -114,6 +116,8 @@ sliceText b i j =
   byteBlockToString blk
 
 bareEnd : ByteBlock -> Int -> Int -> Int
+-- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 bareEnd b n p
   | p < n && not (isSpecialByte (byteBlockGetUnsafe p b)) = bareEnd b n (p + 1)
   | otherwise = p
@@ -126,21 +130,23 @@ isStrayByte b = isQuoteByte b || isSemiByte b || isBackslashByte b
 -- an escape occurred, or `(-1, _)` when the string never closes, or
 -- `(-2 - i, _)` when the escape at index `i` is not one the renderer writes.
 scanQuote : ByteBlock -> Int -> Int -> Bool -> (Int, Bool)
-scanQuote b n p esc
-  | p >= n = (-1, esc)
-  | otherwise =
-    let c = byteBlockGetUnsafe p b
-    if isQuoteByte c then
-      (p, esc)
-    else if isBackslashByte c then
-      if p + 1 >= n then
-        (-1, esc)
-      else if isNone (unescapeByte (byteBlockGetUnsafe (p + 1) b)) then
-        (-2 - p, esc)
-      else
-        scanQuote b n (p + 2) True
-    else
-      scanQuote b n (p + 1) esc
+scanQuote b n p0 esc0 = go p0 esc0
+  where
+    go p esc
+      | p >= n = (-1, esc)
+      | otherwise =
+        let c = byteBlockGetUnsafe p b
+        if isQuoteByte c then
+          (p, esc)
+        else if isBackslashByte c then
+          if p + 1 >= n then
+            (-1, esc)
+          else if isNone (unescapeByte (byteBlockGetUnsafe (p + 1) b)) then
+            (-2 - p, esc)
+          else
+            go (p + 2) True
+        else
+          go (p + 1) esc
 
 -- The byte an escape letter stands for, if the renderer writes one.
 unescapeByte : Int -> Option Int
@@ -149,17 +155,19 @@ unescapeByte b
   | otherwise = lookup b (map (p => (snd p, fst p)) letterEscapes)
 
 unescapeGo : ByteBlock -> Int -> Int -> ByteBlock -> Int -> Int
-unescapeGo b i j out k
-  | i >= j = k
-  | otherwise =
-    let c = byteBlockGetUnsafe i b
-    if isBackslashByte c then
-      let letter = byteBlockGetUnsafe (i + 1) b
-      byteBlockSetUnsafe k (optionOr letter (unescapeByte letter)) out
-      unescapeGo b (i + 2) j out (k + 1)
-    else
-      byteBlockSetUnsafe k c out
-      unescapeGo b (i + 1) j out (k + 1)
+unescapeGo b i0 j out k0 = go i0 k0
+  where
+    go i k
+      | i >= j = k
+      | otherwise =
+        let c = byteBlockGetUnsafe i b
+        if isBackslashByte c then
+          let letter = byteBlockGetUnsafe (i + 1) b
+          byteBlockSetUnsafe k (optionOr letter (unescapeByte letter)) out
+          go (i + 2) (k + 1)
+        else
+          byteBlockSetUnsafe k c out
+          go (i + 1) (k + 1)
 
 -- The text of the quoted atom whose body is the bytes `i` up to `j`.
 quotedText : ByteBlock -> Int -> Int -> Bool -> String
@@ -207,15 +215,17 @@ readItems : ByteBlock ->
   Int ->
   List SExp ->
   Result SexpError (SExp, Int)
-readItems b n open p0 acc =
-  let p = skipWsAt b n p0
-  if p >= n then
-    failAt open "unbalanced open paren"
-  else if isCloseByte (byteBlockGetUnsafe p b) then
-    Ok (SList (reverse acc), p + 1)
-  else match readNode b n p
-    Err e => Err e
-    Ok (item, q) => readItems b n open q (item :: acc)
+readItems b n open p1 acc0 = go p1 acc0
+  where
+    go p0 acc =
+      let p = skipWsAt b n p0
+      if p >= n then
+        failAt open "unbalanced open paren"
+      else if isCloseByte (byteBlockGetUnsafe p b) then
+        Ok (SList (reverse acc), p + 1)
+      else match readNode b n p
+        Err e => Err e
+        Ok (item, q) => go q (item :: acc)
 
 export
 parseSExp : String -> Result SexpError SExp
@@ -225,11 +235,10 @@ parseSExp text =
   let p = skipWsAt b n 0
   if p >= n then
     failAt p "empty input"
-  else match readNode b n p
-    Err e => Err e
-    Ok (node, q) =>
-      let r = skipWsAt b n q
-      if r >= n then Ok node else failAt r "trailing text after the first node"
+  else do
+    (node, q) <- readNode b n p
+    let r = skipWsAt b n q
+    if r >= n then Ok node else failAt r "trailing text after the first node"
 
 -- ── the cursor ──────────────────────────────────────────────────────────────
 -- A decoder reads values straight off the bytes, with no `SExp` in between.
@@ -413,6 +422,8 @@ cursorList f cur =
   cursorItems f cur []
 
 cursorItems : (SexpCursor -> a) -> SexpCursor -> List a -> List a
+-- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 cursorItems f cur acc =
   let c = cursorPeek cur
   if isCloseByte c then
@@ -434,9 +445,9 @@ expectAtom path _ = shapeError path "expected an atom"
 
 export
 atomInt : String -> SExp -> Result SexpError Int
-atomInt path node = match expectAtom path node
-  Err e => Err e
-  Ok s => match stringToInt s
+atomInt path node = do
+  s <- expectAtom path node
+  match stringToInt s
     Some n => Ok n
     None => shapeError path "expected an integer"
 
@@ -472,6 +483,8 @@ cursorSkipText cur =
     sliceText cur.scBytes p e
 
 skipNodeAt : ByteBlock -> Int -> Int -> Int -> Bool -> Int
+-- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 skipNodeAt b n p depth inQ
   | p >= n = n
   | inQ =
@@ -547,7 +560,7 @@ skipNodeAt b n p depth inQ
 (DTypeSig false "failAt" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyVar "a")))))
 (DFunDef false "failAt" ((PVar "off") (PVar "what")) (EApp (EVar "Err") (ERecordCreate "SexpError" ((fa "seOffset" (EVar "off")) (fa "sePath" (ELit (LString ""))) (fa "seWhat" (EVar "what"))))))
 (DTypeSig false "skipWsAt" (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "skipWsAt" ((PVar "b") (PVar "n") (PVar "p")) (EIf (EBinOp "&&" (EBinOp "<" (EVar "p") (EVar "n")) (EApp (EVar "isWsByte") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "p")) (EVar "b")))) (EApp (EApp (EApp (EVar "skipWsAt") (EVar "b")) (EVar "n")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "p") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "skipWsAt" ((PVar "b") (PVar "n") (PVar "p0")) (ELetGroup ((lgb "go" (clause ((PVar "p")) (EIf (EBinOp "&&" (EBinOp "<" (EVar "p") (EVar "n")) (EApp (EVar "isWsByte") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "p")) (EVar "b")))) (EApp (EVar "go") (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "p") (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EVar "go") (EVar "p0"))))
 (DTypeSig false "sliceText" (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
 (DFunDef false "sliceText" ((PVar "b") (PVar "i") (PVar "j")) (EBlock (DoLet false false (PVar "blk") (EApp (EVar "byteBlockMake") (EBinOp "-" (EVar "j") (EVar "i")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EVar "b")) (EVar "i")) (EVar "blk")) (ELit (LInt 0))) (EBinOp "-" (EVar "j") (EVar "i")))) (DoExpr (EApp (EVar "byteBlockToString") (EVar "blk")))))
 (DTypeSig false "bareEnd" (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
@@ -555,19 +568,19 @@ skipNodeAt b n p depth inQ
 (DTypeSig false "isStrayByte" (TyFun (TyCon "Int") (TyCon "Bool")))
 (DFunDef false "isStrayByte" ((PVar "b")) (EBinOp "||" (EBinOp "||" (EApp (EVar "isQuoteByte") (EVar "b")) (EApp (EVar "isSemiByte") (EVar "b"))) (EApp (EVar "isBackslashByte") (EVar "b"))))
 (DTypeSig false "scanQuote" (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyTuple (TyCon "Int") (TyCon "Bool")))))))
-(DFunDef false "scanQuote" ((PVar "b") (PVar "n") (PVar "p") (PVar "esc")) (EIf (EBinOp ">=" (EVar "p") (EVar "n")) (ETuple (EUnOp "-" (ELit (LInt 1))) (EVar "esc")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "p")) (EVar "b"))) (DoExpr (EIf (EApp (EVar "isQuoteByte") (EVar "c")) (ETuple (EVar "p") (EVar "esc")) (EIf (EApp (EVar "isBackslashByte") (EVar "c")) (EIf (EBinOp ">=" (EBinOp "+" (EVar "p") (ELit (LInt 1))) (EVar "n")) (ETuple (EUnOp "-" (ELit (LInt 1))) (EVar "esc")) (EIf (EApp (EVar "isNone") (EApp (EVar "unescapeByte") (EApp (EApp (EVar "byteBlockGetUnsafe") (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "b")))) (ETuple (EBinOp "-" (EUnOp "-" (ELit (LInt 2))) (EVar "p")) (EVar "esc")) (EApp (EApp (EApp (EApp (EVar "scanQuote") (EVar "b")) (EVar "n")) (EBinOp "+" (EVar "p") (ELit (LInt 2)))) (EVar "True")))) (EApp (EApp (EApp (EApp (EVar "scanQuote") (EVar "b")) (EVar "n")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "esc")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "scanQuote" ((PVar "b") (PVar "n") (PVar "p0") (PVar "esc0")) (ELetGroup ((lgb "go" (clause ((PVar "p") (PVar "esc")) (EIf (EBinOp ">=" (EVar "p") (EVar "n")) (ETuple (EUnOp "-" (ELit (LInt 1))) (EVar "esc")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "p")) (EVar "b"))) (DoExpr (EIf (EApp (EVar "isQuoteByte") (EVar "c")) (ETuple (EVar "p") (EVar "esc")) (EIf (EApp (EVar "isBackslashByte") (EVar "c")) (EIf (EBinOp ">=" (EBinOp "+" (EVar "p") (ELit (LInt 1))) (EVar "n")) (ETuple (EUnOp "-" (ELit (LInt 1))) (EVar "esc")) (EIf (EApp (EVar "isNone") (EApp (EVar "unescapeByte") (EApp (EApp (EVar "byteBlockGetUnsafe") (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "b")))) (ETuple (EBinOp "-" (EUnOp "-" (ELit (LInt 2))) (EVar "p")) (EVar "esc")) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "p") (ELit (LInt 2)))) (EVar "True")))) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "esc")))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EApp (EVar "go") (EVar "p0")) (EVar "esc0"))))
 (DTypeSig false "unescapeByte" (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))
 (DFunDef false "unescapeByte" ((PVar "b")) (EIf (EBinOp "||" (EApp (EVar "isBackslashByte") (EVar "b")) (EApp (EVar "isQuoteByte") (EVar "b"))) (EApp (EVar "Some") (EVar "b")) (EIf (EVar "otherwise") (EApp (EApp (EVar "lookup") (EVar "b")) (EApp (EApp (EVar "map") (ELam ((PVar "p")) (ETuple (EApp (EVar "snd") (EVar "p")) (EApp (EVar "fst") (EVar "p"))))) (EVar "letterEscapes"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "unescapeGo" (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyCon "Int")))))))
-(DFunDef false "unescapeGo" ((PVar "b") (PVar "i") (PVar "j") (PVar "out") (PVar "k")) (EIf (EBinOp ">=" (EVar "i") (EVar "j")) (EVar "k") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "b"))) (DoExpr (EIf (EApp (EVar "isBackslashByte") (EVar "c")) (EBlock (DoLet false false (PVar "letter") (EApp (EApp (EVar "byteBlockGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "b"))) (DoExpr (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EVar "k")) (EApp (EApp (EVar "optionOr") (EVar "letter")) (EApp (EVar "unescapeByte") (EVar "letter")))) (EVar "out"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "unescapeGo") (EVar "b")) (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "j")) (EVar "out")) (EBinOp "+" (EVar "k") (ELit (LInt 1)))))) (EBlock (DoExpr (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EVar "k")) (EVar "c")) (EVar "out"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "unescapeGo") (EVar "b")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "j")) (EVar "out")) (EBinOp "+" (EVar "k") (ELit (LInt 1))))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "unescapeGo" ((PVar "b") (PVar "i0") (PVar "j") (PVar "out") (PVar "k0")) (ELetGroup ((lgb "go" (clause ((PVar "i") (PVar "k")) (EIf (EBinOp ">=" (EVar "i") (EVar "j")) (EVar "k") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "b"))) (DoExpr (EIf (EApp (EVar "isBackslashByte") (EVar "c")) (EBlock (DoLet false false (PVar "letter") (EApp (EApp (EVar "byteBlockGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "b"))) (DoExpr (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EVar "k")) (EApp (EApp (EVar "optionOr") (EVar "letter")) (EApp (EVar "unescapeByte") (EVar "letter")))) (EVar "out"))) (DoExpr (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EBinOp "+" (EVar "k") (ELit (LInt 1)))))) (EBlock (DoExpr (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EVar "k")) (EVar "c")) (EVar "out"))) (DoExpr (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EVar "k") (ELit (LInt 1))))))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EApp (EVar "go") (EVar "i0")) (EVar "k0"))))
 (DTypeSig false "quotedText" (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyCon "String"))))))
 (DFunDef false "quotedText" ((PVar "b") (PVar "i") (PVar "j") (PVar "esc")) (EIf (EVar "esc") (EBlock (DoLet false false (PVar "out") (EApp (EVar "byteBlockMake") (EBinOp "-" (EVar "j") (EVar "i")))) (DoLet false false (PVar "k") (EApp (EApp (EApp (EApp (EApp (EVar "unescapeGo") (EVar "b")) (EVar "i")) (EVar "j")) (EVar "out")) (ELit (LInt 0)))) (DoExpr (EApp (EVar "byteBlockToString") (EApp (EApp (EVar "byteBlockCopyUnsafe") (EVar "k")) (EVar "out"))))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "sliceText") (EVar "b")) (EVar "i")) (EVar "j")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "readNode" (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyTuple (TyCon "SExp") (TyCon "Int")))))))
 (DFunDef false "readNode" ((PVar "b") (PVar "n") (PVar "p0")) (EBlock (DoLet false false (PVar "p") (EApp (EApp (EApp (EVar "skipWsAt") (EVar "b")) (EVar "n")) (EVar "p0"))) (DoExpr (EIf (EBinOp ">=" (EVar "p") (EVar "n")) (EApp (EApp (EVar "failAt") (EVar "p")) (ELit (LString "unexpected end of input"))) (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "p")) (EVar "b"))) (DoExpr (EIf (EApp (EVar "isOpenByte") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EVar "readItems") (EVar "b")) (EVar "n")) (EVar "p")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EListLit)) (EIf (EApp (EVar "isQuoteByte") (EVar "c")) (EMatch (EApp (EApp (EApp (EApp (EVar "scanQuote") (EVar "b")) (EVar "n")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "False")) (arm (PTuple (PVar "e") (PVar "esc")) () (EIf (EBinOp ">=" (EVar "e") (ELit (LInt 0))) (EApp (EVar "Ok") (ETuple (EApp (EVar "SAtom") (EApp (EApp (EApp (EApp (EVar "quotedText") (EVar "b")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "e")) (EVar "esc"))) (EBinOp "+" (EVar "e") (ELit (LInt 1))))) (EIf (EBinOp "==" (EVar "e") (EUnOp "-" (ELit (LInt 1)))) (EApp (EApp (EVar "failAt") (EVar "p")) (ELit (LString "unterminated string"))) (EApp (EApp (EVar "failAt") (EBinOp "-" (EUnOp "-" (ELit (LInt 2))) (EVar "e"))) (ELit (LString "bad escape"))))))) (EIf (EApp (EVar "isCloseByte") (EVar "c")) (EApp (EApp (EVar "failAt") (EVar "p")) (ELit (LString "unbalanced close paren"))) (EIf (EBinOp "||" (EApp (EVar "isSemiByte") (EVar "c")) (EApp (EVar "isBackslashByte") (EVar "c"))) (EApp (EApp (EVar "failAt") (EVar "p")) (ELit (LString "unexpected character outside a quoted atom"))) (EBlock (DoLet false false (PVar "e") (EApp (EApp (EApp (EVar "bareEnd") (EVar "b")) (EVar "n")) (EVar "p"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "<" (EVar "e") (EVar "n")) (EApp (EVar "isStrayByte") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "e")) (EVar "b")))) (EApp (EApp (EVar "failAt") (EVar "e")) (ELit (LString "unexpected character inside a bare atom"))) (EApp (EVar "Ok") (ETuple (EApp (EVar "SAtom") (EApp (EApp (EApp (EVar "sliceText") (EVar "b")) (EVar "p")) (EVar "e"))) (EVar "e"))))))))))))))))
 (DTypeSig false "readItems" (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "SExp")) (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyTuple (TyCon "SExp") (TyCon "Int")))))))))
-(DFunDef false "readItems" ((PVar "b") (PVar "n") (PVar "open") (PVar "p0") (PVar "acc")) (EBlock (DoLet false false (PVar "p") (EApp (EApp (EApp (EVar "skipWsAt") (EVar "b")) (EVar "n")) (EVar "p0"))) (DoExpr (EIf (EBinOp ">=" (EVar "p") (EVar "n")) (EApp (EApp (EVar "failAt") (EVar "open")) (ELit (LString "unbalanced open paren"))) (EIf (EApp (EVar "isCloseByte") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "p")) (EVar "b"))) (EApp (EVar "Ok") (ETuple (EApp (EVar "SList") (EApp (EVar "reverse") (EVar "acc"))) (EBinOp "+" (EVar "p") (ELit (LInt 1))))) (EMatch (EApp (EApp (EApp (EVar "readNode") (EVar "b")) (EVar "n")) (EVar "p")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PVar "item") (PVar "q"))) () (EApp (EApp (EApp (EApp (EApp (EVar "readItems") (EVar "b")) (EVar "n")) (EVar "open")) (EVar "q")) (EBinOp "::" (EVar "item") (EVar "acc"))))))))))
+(DFunDef false "readItems" ((PVar "b") (PVar "n") (PVar "open") (PVar "p1") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PVar "p0") (PVar "acc")) (EBlock (DoLet false false (PVar "p") (EApp (EApp (EApp (EVar "skipWsAt") (EVar "b")) (EVar "n")) (EVar "p0"))) (DoExpr (EIf (EBinOp ">=" (EVar "p") (EVar "n")) (EApp (EApp (EVar "failAt") (EVar "open")) (ELit (LString "unbalanced open paren"))) (EIf (EApp (EVar "isCloseByte") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "p")) (EVar "b"))) (EApp (EVar "Ok") (ETuple (EApp (EVar "SList") (EApp (EVar "reverse") (EVar "acc"))) (EBinOp "+" (EVar "p") (ELit (LInt 1))))) (EMatch (EApp (EApp (EApp (EVar "readNode") (EVar "b")) (EVar "n")) (EVar "p")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PVar "item") (PVar "q"))) () (EApp (EApp (EVar "go") (EVar "q")) (EBinOp "::" (EVar "item") (EVar "acc")))))))))))) (EApp (EApp (EVar "go") (EVar "p1")) (EVar "acc0"))))
 (DTypeSig true "parseSExp" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyCon "SExp"))))
-(DFunDef false "parseSExp" ((PVar "text")) (EBlock (DoLet false false (PVar "b") (EApp (EVar "byteBlockFromString") (EVar "text"))) (DoLet false false (PVar "n") (EApp (EVar "byteBlockLength") (EVar "b"))) (DoLet false false (PVar "p") (EApp (EApp (EApp (EVar "skipWsAt") (EVar "b")) (EVar "n")) (ELit (LInt 0)))) (DoExpr (EIf (EBinOp ">=" (EVar "p") (EVar "n")) (EApp (EApp (EVar "failAt") (EVar "p")) (ELit (LString "empty input"))) (EMatch (EApp (EApp (EApp (EVar "readNode") (EVar "b")) (EVar "n")) (EVar "p")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PVar "node") (PVar "q"))) () (EBlock (DoLet false false (PVar "r") (EApp (EApp (EApp (EVar "skipWsAt") (EVar "b")) (EVar "n")) (EVar "q"))) (DoExpr (EIf (EBinOp ">=" (EVar "r") (EVar "n")) (EApp (EVar "Ok") (EVar "node")) (EApp (EApp (EVar "failAt") (EVar "r")) (ELit (LString "trailing text after the first node"))))))))))))
+(DFunDef false "parseSExp" ((PVar "text")) (EBlock (DoLet false false (PVar "b") (EApp (EVar "byteBlockFromString") (EVar "text"))) (DoLet false false (PVar "n") (EApp (EVar "byteBlockLength") (EVar "b"))) (DoLet false false (PVar "p") (EApp (EApp (EApp (EVar "skipWsAt") (EVar "b")) (EVar "n")) (ELit (LInt 0)))) (DoExpr (EIf (EBinOp ">=" (EVar "p") (EVar "n")) (EApp (EApp (EVar "failAt") (EVar "p")) (ELit (LString "empty input"))) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EVar "readNode") (EVar "b")) (EVar "n")) (EVar "p"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "node") (PVar "q")) () (ELet false (PVar "r") (EApp (EApp (EApp (EVar "skipWsAt") (EVar "b")) (EVar "n")) (EVar "q")) (EIf (EBinOp ">=" (EVar "r") (EVar "n")) (EApp (EVar "Ok") (EVar "node")) (EApp (EApp (EVar "failAt") (EVar "r")) (ELit (LString "trailing text after the first node")))))))))))))
 (DData Abstract "SexpCursor" () ((variant "SexpCursor" (ConNamed (field "scBytes" (TyCon "ByteBlock")) (field "scLen" (TyCon "Int")) (field "scPos" (TyApp (TyCon "Ref") (TyCon "Int"))) (field "scFailAt" (TyApp (TyCon "Ref") (TyCon "Int")))))) ())
 (DTypeSig true "cursorOf" (TyFun (TyCon "String") (TyCon "SexpCursor")))
 (DFunDef false "cursorOf" ((PVar "text")) (EBlock (DoLet false false (PVar "b") (EApp (EVar "byteBlockFromString") (EVar "text"))) (DoExpr (ERecordCreate "SexpCursor" ((fa "scBytes" (EVar "b")) (fa "scLen" (EApp (EVar "byteBlockLength") (EVar "b"))) (fa "scPos" (EApp (EVar "Ref") (ELit (LInt 0)))) (fa "scFailAt" (EApp (EVar "Ref") (EUnOp "-" (ELit (LInt 1))))))))))
@@ -611,7 +624,7 @@ skipNodeAt b n p depth inQ
 (DFunDef false "expectAtom" (PWild (PCon "SAtom" (PVar "s"))) (EApp (EVar "Ok") (EVar "s")))
 (DFunDef false "expectAtom" ((PVar "path") PWild) (EApp (EApp (EVar "shapeError") (EVar "path")) (ELit (LString "expected an atom"))))
 (DTypeSig true "atomInt" (TyFun (TyCon "String") (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyCon "Int")))))
-(DFunDef false "atomInt" ((PVar "path") (PVar "node")) (EMatch (EApp (EApp (EVar "expectAtom") (EVar "path")) (EVar "node")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "s")) () (EMatch (EApp (EVar "stringToInt") (EVar "s")) (arm (PCon "Some" (PVar "n")) () (EApp (EVar "Ok") (EVar "n"))) (arm (PCon "None") () (EApp (EApp (EVar "shapeError") (EVar "path")) (ELit (LString "expected an integer"))))))))
+(DFunDef false "atomInt" ((PVar "path") (PVar "node")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "expectAtom") (EVar "path")) (EVar "node"))) (ELam ((PVar "s")) (EMatch (EApp (EVar "stringToInt") (EVar "s")) (arm (PCon "Some" (PVar "n")) () (EApp (EVar "Ok") (EVar "n"))) (arm (PCon "None") () (EApp (EApp (EVar "shapeError") (EVar "path")) (ELit (LString "expected an integer"))))))))
 (DTypeSig true "atomBool" (TyFun (TyCon "String") (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyCon "Bool")))))
 (DFunDef false "atomBool" ((PVar "path") (PVar "node")) (EMatch (EApp (EApp (EVar "expectAtom") (EVar "path")) (EVar "node")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PLit (LString "true"))) () (EApp (EVar "Ok") (EVar "True"))) (arm (PCon "Ok" (PLit (LString "false"))) () (EApp (EVar "Ok") (EVar "False"))) (arm (PCon "Ok" PWild) () (EApp (EApp (EVar "shapeError") (EVar "path")) (ELit (LString "expected true or false"))))))
 (DTypeSig true "cursorSkip" (TyFun (TyCon "SexpCursor") (TyCon "Unit")))
@@ -668,7 +681,7 @@ skipNodeAt b n p depth inQ
 (DTypeSig false "failAt" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyVar "a")))))
 (DFunDef false "failAt" ((PVar "off") (PVar "what")) (EApp (EVar "Err") (ERecordCreate "SexpError" ((fa "seOffset" (EVar "off")) (fa "sePath" (ELit (LString ""))) (fa "seWhat" (EVar "what"))))))
 (DTypeSig false "skipWsAt" (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "skipWsAt" ((PVar "b") (PVar "n") (PVar "p")) (EIf (EBinOp "&&" (EBinOp "<" (EVar "p") (EVar "n")) (EApp (EVar "isWsByte") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "p")) (EVar "b")))) (EApp (EApp (EApp (EVar "skipWsAt") (EVar "b")) (EVar "n")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "p") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "skipWsAt" ((PVar "b") (PVar "n") (PVar "p0")) (ELetGroup ((lgb "go" (clause ((PVar "p")) (EIf (EBinOp "&&" (EBinOp "<" (EVar "p") (EVar "n")) (EApp (EVar "isWsByte") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "p")) (EVar "b")))) (EApp (EVar "go") (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "p") (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EVar "go") (EVar "p0"))))
 (DTypeSig false "sliceText" (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
 (DFunDef false "sliceText" ((PVar "b") (PVar "i") (PVar "j")) (EBlock (DoLet false false (PVar "blk") (EApp (EVar "byteBlockMake") (EBinOp "-" (EVar "j") (EVar "i")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EVar "b")) (EVar "i")) (EVar "blk")) (ELit (LInt 0))) (EBinOp "-" (EVar "j") (EVar "i")))) (DoExpr (EApp (EVar "byteBlockToString") (EVar "blk")))))
 (DTypeSig false "bareEnd" (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
@@ -676,19 +689,19 @@ skipNodeAt b n p depth inQ
 (DTypeSig false "isStrayByte" (TyFun (TyCon "Int") (TyCon "Bool")))
 (DFunDef false "isStrayByte" ((PVar "b")) (EBinOp "||" (EBinOp "||" (EApp (EVar "isQuoteByte") (EVar "b")) (EApp (EVar "isSemiByte") (EVar "b"))) (EApp (EVar "isBackslashByte") (EVar "b"))))
 (DTypeSig false "scanQuote" (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyTuple (TyCon "Int") (TyCon "Bool")))))))
-(DFunDef false "scanQuote" ((PVar "b") (PVar "n") (PVar "p") (PVar "esc")) (EIf (EBinOp ">=" (EVar "p") (EVar "n")) (ETuple (EUnOp "-" (ELit (LInt 1))) (EVar "esc")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "p")) (EVar "b"))) (DoExpr (EIf (EApp (EVar "isQuoteByte") (EVar "c")) (ETuple (EVar "p") (EVar "esc")) (EIf (EApp (EVar "isBackslashByte") (EVar "c")) (EIf (EBinOp ">=" (EBinOp "+" (EVar "p") (ELit (LInt 1))) (EVar "n")) (ETuple (EUnOp "-" (ELit (LInt 1))) (EVar "esc")) (EIf (EApp (EVar "isNone") (EApp (EVar "unescapeByte") (EApp (EApp (EVar "byteBlockGetUnsafe") (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "b")))) (ETuple (EBinOp "-" (EUnOp "-" (ELit (LInt 2))) (EVar "p")) (EVar "esc")) (EApp (EApp (EApp (EApp (EVar "scanQuote") (EVar "b")) (EVar "n")) (EBinOp "+" (EVar "p") (ELit (LInt 2)))) (EVar "True")))) (EApp (EApp (EApp (EApp (EVar "scanQuote") (EVar "b")) (EVar "n")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "esc")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "scanQuote" ((PVar "b") (PVar "n") (PVar "p0") (PVar "esc0")) (ELetGroup ((lgb "go" (clause ((PVar "p") (PVar "esc")) (EIf (EBinOp ">=" (EVar "p") (EVar "n")) (ETuple (EUnOp "-" (ELit (LInt 1))) (EVar "esc")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "p")) (EVar "b"))) (DoExpr (EIf (EApp (EVar "isQuoteByte") (EVar "c")) (ETuple (EVar "p") (EVar "esc")) (EIf (EApp (EVar "isBackslashByte") (EVar "c")) (EIf (EBinOp ">=" (EBinOp "+" (EVar "p") (ELit (LInt 1))) (EVar "n")) (ETuple (EUnOp "-" (ELit (LInt 1))) (EVar "esc")) (EIf (EApp (EVar "isNone") (EApp (EVar "unescapeByte") (EApp (EApp (EVar "byteBlockGetUnsafe") (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "b")))) (ETuple (EBinOp "-" (EUnOp "-" (ELit (LInt 2))) (EVar "p")) (EVar "esc")) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "p") (ELit (LInt 2)))) (EVar "True")))) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "esc")))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EApp (EVar "go") (EVar "p0")) (EVar "esc0"))))
 (DTypeSig false "unescapeByte" (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))
 (DFunDef false "unescapeByte" ((PVar "b")) (EIf (EBinOp "||" (EApp (EVar "isBackslashByte") (EVar "b")) (EApp (EVar "isQuoteByte") (EVar "b"))) (EApp (EVar "Some") (EVar "b")) (EIf (EVar "otherwise") (EApp (EApp (EVar "lookup") (EVar "b")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (ETuple (EApp (EVar "snd") (EVar "p")) (EApp (EVar "fst") (EVar "p"))))) (EVar "letterEscapes"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "unescapeGo" (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyCon "Int")))))))
-(DFunDef false "unescapeGo" ((PVar "b") (PVar "i") (PVar "j") (PVar "out") (PVar "k")) (EIf (EBinOp ">=" (EVar "i") (EVar "j")) (EVar "k") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "b"))) (DoExpr (EIf (EApp (EVar "isBackslashByte") (EVar "c")) (EBlock (DoLet false false (PVar "letter") (EApp (EApp (EVar "byteBlockGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "b"))) (DoExpr (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EVar "k")) (EApp (EApp (EVar "optionOr") (EVar "letter")) (EApp (EVar "unescapeByte") (EVar "letter")))) (EVar "out"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "unescapeGo") (EVar "b")) (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "j")) (EVar "out")) (EBinOp "+" (EVar "k") (ELit (LInt 1)))))) (EBlock (DoExpr (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EVar "k")) (EVar "c")) (EVar "out"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "unescapeGo") (EVar "b")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "j")) (EVar "out")) (EBinOp "+" (EVar "k") (ELit (LInt 1))))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "unescapeGo" ((PVar "b") (PVar "i0") (PVar "j") (PVar "out") (PVar "k0")) (ELetGroup ((lgb "go" (clause ((PVar "i") (PVar "k")) (EIf (EBinOp ">=" (EVar "i") (EVar "j")) (EVar "k") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "b"))) (DoExpr (EIf (EApp (EVar "isBackslashByte") (EVar "c")) (EBlock (DoLet false false (PVar "letter") (EApp (EApp (EVar "byteBlockGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "b"))) (DoExpr (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EVar "k")) (EApp (EApp (EVar "optionOr") (EVar "letter")) (EApp (EVar "unescapeByte") (EVar "letter")))) (EVar "out"))) (DoExpr (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EBinOp "+" (EVar "k") (ELit (LInt 1)))))) (EBlock (DoExpr (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EVar "k")) (EVar "c")) (EVar "out"))) (DoExpr (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EVar "k") (ELit (LInt 1))))))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EApp (EVar "go") (EVar "i0")) (EVar "k0"))))
 (DTypeSig false "quotedText" (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyCon "String"))))))
 (DFunDef false "quotedText" ((PVar "b") (PVar "i") (PVar "j") (PVar "esc")) (EIf (EVar "esc") (EBlock (DoLet false false (PVar "out") (EApp (EVar "byteBlockMake") (EBinOp "-" (EVar "j") (EVar "i")))) (DoLet false false (PVar "k") (EApp (EApp (EApp (EApp (EApp (EVar "unescapeGo") (EVar "b")) (EVar "i")) (EVar "j")) (EVar "out")) (ELit (LInt 0)))) (DoExpr (EApp (EVar "byteBlockToString") (EApp (EApp (EVar "byteBlockCopyUnsafe") (EVar "k")) (EVar "out"))))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "sliceText") (EVar "b")) (EVar "i")) (EVar "j")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "readNode" (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyTuple (TyCon "SExp") (TyCon "Int")))))))
 (DFunDef false "readNode" ((PVar "b") (PVar "n") (PVar "p0")) (EBlock (DoLet false false (PVar "p") (EApp (EApp (EApp (EVar "skipWsAt") (EVar "b")) (EVar "n")) (EVar "p0"))) (DoExpr (EIf (EBinOp ">=" (EVar "p") (EVar "n")) (EApp (EApp (EVar "failAt") (EVar "p")) (ELit (LString "unexpected end of input"))) (EBlock (DoLet false false (PVar "c") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "p")) (EVar "b"))) (DoExpr (EIf (EApp (EVar "isOpenByte") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EVar "readItems") (EVar "b")) (EVar "n")) (EVar "p")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EListLit)) (EIf (EApp (EVar "isQuoteByte") (EVar "c")) (EMatch (EApp (EApp (EApp (EApp (EVar "scanQuote") (EVar "b")) (EVar "n")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "False")) (arm (PTuple (PVar "e") (PVar "esc")) () (EIf (EBinOp ">=" (EVar "e") (ELit (LInt 0))) (EApp (EVar "Ok") (ETuple (EApp (EVar "SAtom") (EApp (EApp (EApp (EApp (EVar "quotedText") (EVar "b")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "e")) (EVar "esc"))) (EBinOp "+" (EVar "e") (ELit (LInt 1))))) (EIf (EBinOp "==" (EVar "e") (EUnOp "-" (ELit (LInt 1)))) (EApp (EApp (EVar "failAt") (EVar "p")) (ELit (LString "unterminated string"))) (EApp (EApp (EVar "failAt") (EBinOp "-" (EUnOp "-" (ELit (LInt 2))) (EVar "e"))) (ELit (LString "bad escape"))))))) (EIf (EApp (EVar "isCloseByte") (EVar "c")) (EApp (EApp (EVar "failAt") (EVar "p")) (ELit (LString "unbalanced close paren"))) (EIf (EBinOp "||" (EApp (EVar "isSemiByte") (EVar "c")) (EApp (EVar "isBackslashByte") (EVar "c"))) (EApp (EApp (EVar "failAt") (EVar "p")) (ELit (LString "unexpected character outside a quoted atom"))) (EBlock (DoLet false false (PVar "e") (EApp (EApp (EApp (EVar "bareEnd") (EVar "b")) (EVar "n")) (EVar "p"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "<" (EVar "e") (EVar "n")) (EApp (EVar "isStrayByte") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "e")) (EVar "b")))) (EApp (EApp (EVar "failAt") (EVar "e")) (ELit (LString "unexpected character inside a bare atom"))) (EApp (EVar "Ok") (ETuple (EApp (EVar "SAtom") (EApp (EApp (EApp (EVar "sliceText") (EVar "b")) (EVar "p")) (EVar "e"))) (EVar "e"))))))))))))))))
 (DTypeSig false "readItems" (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "SExp")) (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyTuple (TyCon "SExp") (TyCon "Int")))))))))
-(DFunDef false "readItems" ((PVar "b") (PVar "n") (PVar "open") (PVar "p0") (PVar "acc")) (EBlock (DoLet false false (PVar "p") (EApp (EApp (EApp (EVar "skipWsAt") (EVar "b")) (EVar "n")) (EVar "p0"))) (DoExpr (EIf (EBinOp ">=" (EVar "p") (EVar "n")) (EApp (EApp (EVar "failAt") (EVar "open")) (ELit (LString "unbalanced open paren"))) (EIf (EApp (EVar "isCloseByte") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "p")) (EVar "b"))) (EApp (EVar "Ok") (ETuple (EApp (EVar "SList") (EApp (EVar "reverse") (EVar "acc"))) (EBinOp "+" (EVar "p") (ELit (LInt 1))))) (EMatch (EApp (EApp (EApp (EVar "readNode") (EVar "b")) (EVar "n")) (EVar "p")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PVar "item") (PVar "q"))) () (EApp (EApp (EApp (EApp (EApp (EVar "readItems") (EVar "b")) (EVar "n")) (EVar "open")) (EVar "q")) (EBinOp "::" (EVar "item") (EVar "acc"))))))))))
+(DFunDef false "readItems" ((PVar "b") (PVar "n") (PVar "open") (PVar "p1") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PVar "p0") (PVar "acc")) (EBlock (DoLet false false (PVar "p") (EApp (EApp (EApp (EVar "skipWsAt") (EVar "b")) (EVar "n")) (EVar "p0"))) (DoExpr (EIf (EBinOp ">=" (EVar "p") (EVar "n")) (EApp (EApp (EVar "failAt") (EVar "open")) (ELit (LString "unbalanced open paren"))) (EIf (EApp (EVar "isCloseByte") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "p")) (EVar "b"))) (EApp (EVar "Ok") (ETuple (EApp (EVar "SList") (EApp (EVar "reverse") (EVar "acc"))) (EBinOp "+" (EVar "p") (ELit (LInt 1))))) (EMatch (EApp (EApp (EApp (EVar "readNode") (EVar "b")) (EVar "n")) (EVar "p")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PVar "item") (PVar "q"))) () (EApp (EApp (EVar "go") (EVar "q")) (EBinOp "::" (EVar "item") (EVar "acc")))))))))))) (EApp (EApp (EVar "go") (EVar "p1")) (EVar "acc0"))))
 (DTypeSig true "parseSExp" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyCon "SExp"))))
-(DFunDef false "parseSExp" ((PVar "text")) (EBlock (DoLet false false (PVar "b") (EApp (EVar "byteBlockFromString") (EVar "text"))) (DoLet false false (PVar "n") (EApp (EVar "byteBlockLength") (EVar "b"))) (DoLet false false (PVar "p") (EApp (EApp (EApp (EVar "skipWsAt") (EVar "b")) (EVar "n")) (ELit (LInt 0)))) (DoExpr (EIf (EBinOp ">=" (EVar "p") (EVar "n")) (EApp (EApp (EVar "failAt") (EVar "p")) (ELit (LString "empty input"))) (EMatch (EApp (EApp (EApp (EVar "readNode") (EVar "b")) (EVar "n")) (EVar "p")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PVar "node") (PVar "q"))) () (EBlock (DoLet false false (PVar "r") (EApp (EApp (EApp (EVar "skipWsAt") (EVar "b")) (EVar "n")) (EVar "q"))) (DoExpr (EIf (EBinOp ">=" (EVar "r") (EVar "n")) (EApp (EVar "Ok") (EVar "node")) (EApp (EApp (EVar "failAt") (EVar "r")) (ELit (LString "trailing text after the first node"))))))))))))
+(DFunDef false "parseSExp" ((PVar "text")) (EBlock (DoLet false false (PVar "b") (EApp (EVar "byteBlockFromString") (EVar "text"))) (DoLet false false (PVar "n") (EApp (EVar "byteBlockLength") (EVar "b"))) (DoLet false false (PVar "p") (EApp (EApp (EApp (EVar "skipWsAt") (EVar "b")) (EVar "n")) (ELit (LInt 0)))) (DoExpr (EIf (EBinOp ">=" (EVar "p") (EVar "n")) (EApp (EApp (EVar "failAt") (EVar "p")) (ELit (LString "empty input"))) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EVar "readNode") (EVar "b")) (EVar "n")) (EVar "p"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "node") (PVar "q")) () (ELet false (PVar "r") (EApp (EApp (EApp (EVar "skipWsAt") (EVar "b")) (EVar "n")) (EVar "q")) (EIf (EBinOp ">=" (EVar "r") (EVar "n")) (EApp (EVar "Ok") (EVar "node")) (EApp (EApp (EVar "failAt") (EVar "r")) (ELit (LString "trailing text after the first node")))))))))))))
 (DData Abstract "SexpCursor" () ((variant "SexpCursor" (ConNamed (field "scBytes" (TyCon "ByteBlock")) (field "scLen" (TyCon "Int")) (field "scPos" (TyApp (TyCon "Ref") (TyCon "Int"))) (field "scFailAt" (TyApp (TyCon "Ref") (TyCon "Int")))))) ())
 (DTypeSig true "cursorOf" (TyFun (TyCon "String") (TyCon "SexpCursor")))
 (DFunDef false "cursorOf" ((PVar "text")) (EBlock (DoLet false false (PVar "b") (EApp (EVar "byteBlockFromString") (EVar "text"))) (DoExpr (ERecordCreate "SexpCursor" ((fa "scBytes" (EVar "b")) (fa "scLen" (EApp (EVar "byteBlockLength") (EVar "b"))) (fa "scPos" (EApp (EVar "Ref") (ELit (LInt 0)))) (fa "scFailAt" (EApp (EVar "Ref") (EUnOp "-" (ELit (LInt 1))))))))))
@@ -732,7 +745,7 @@ skipNodeAt b n p depth inQ
 (DFunDef false "expectAtom" (PWild (PCon "SAtom" (PVar "s"))) (EApp (EVar "Ok") (EVar "s")))
 (DFunDef false "expectAtom" ((PVar "path") PWild) (EApp (EApp (EVar "shapeError") (EVar "path")) (ELit (LString "expected an atom"))))
 (DTypeSig true "atomInt" (TyFun (TyCon "String") (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyCon "Int")))))
-(DFunDef false "atomInt" ((PVar "path") (PVar "node")) (EMatch (EApp (EApp (EVar "expectAtom") (EVar "path")) (EVar "node")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "s")) () (EMatch (EApp (EVar "stringToInt") (EVar "s")) (arm (PCon "Some" (PVar "n")) () (EApp (EVar "Ok") (EVar "n"))) (arm (PCon "None") () (EApp (EApp (EVar "shapeError") (EVar "path")) (ELit (LString "expected an integer"))))))))
+(DFunDef false "atomInt" ((PVar "path") (PVar "node")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "expectAtom") (EVar "path")) (EVar "node"))) (ELam ((PVar "s")) (EMatch (EApp (EVar "stringToInt") (EVar "s")) (arm (PCon "Some" (PVar "n")) () (EApp (EVar "Ok") (EVar "n"))) (arm (PCon "None") () (EApp (EApp (EVar "shapeError") (EVar "path")) (ELit (LString "expected an integer"))))))))
 (DTypeSig true "atomBool" (TyFun (TyCon "String") (TyFun (TyCon "SExp") (TyApp (TyApp (TyCon "Result") (TyCon "SexpError")) (TyCon "Bool")))))
 (DFunDef false "atomBool" ((PVar "path") (PVar "node")) (EMatch (EApp (EApp (EVar "expectAtom") (EVar "path")) (EVar "node")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PLit (LString "true"))) () (EApp (EVar "Ok") (EVar "True"))) (arm (PCon "Ok" (PLit (LString "false"))) () (EApp (EVar "Ok") (EVar "False"))) (arm (PCon "Ok" PWild) () (EApp (EApp (EVar "shapeError") (EVar "path")) (ELit (LString "expected true or false"))))))
 (DTypeSig true "cursorSkip" (TyFun (TyCon "SexpCursor") (TyCon "Unit")))

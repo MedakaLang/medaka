@@ -1,0 +1,15 @@
+data Ghost (e : Effect) = Ghost
+
+interface Same a b where
+  same : a -> b -> String
+
+impl Same a a where
+  same _ _ = "general"
+
+impl Same (Ghost <Stdout>) (Ghost <Stdout>) where
+  same _ _ = "specific"
+
+g : Ghost <Stdout>
+g = Ghost
+
+main = println (same g g)

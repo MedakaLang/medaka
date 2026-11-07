@@ -250,9 +250,9 @@ cycleViolation : Option MayReach ->
   InitNode ->
   List InitViolation
 cycleViolation reach valueNames labels n =
-  let c = match reach
-    Some r => omLookup n.inodeName r.mrComp
-    None => None
+  let c = do
+    r <- reach
+    omLookup n.inodeName r.mrComp
   let inGroup t = match reach
     Some r => omLookup t r.mrComp == c
     None => t == n.inodeName
@@ -299,26 +299,28 @@ searchBack : MayReach ->
   List String ->
   OrdMap (Option String) ->
   List String
-searchBack _ _ goal [] _ = [goal]
-searchBack reach c goal frontier parents =
-  let (next, seen) =
-    fold
-      (st x =>
+searchBack reach c goal frontier0 parents0 = go frontier0 parents0
+  where
+    go [] _ = [goal]
+    go frontier parents =
+      let (next, seen) =
         fold
-          (st2 t => match st2
-            (nx, ps) =>
-              if omLookup t reach.mrComp == c && not (omHasKey t ps) then
-                (t :: nx, omInsert t (Some x) ps)
-              else
-                (nx, ps))
-          st
-          (optionOr [] (omLookup x reach.mrAdj)))
-      ([], parents)
-      frontier
-  if omHasKey goal seen then
-    unwindPath seen goal []
-  else
-    searchBack reach c goal (reverseL next) seen
+          (st x =>
+            fold
+              (st2 t => match st2
+                (nx, ps) =>
+                  if omLookup t reach.mrComp == c && not (omHasKey t ps) then
+                    (t :: nx, omInsert t (Some x) ps)
+                  else
+                    (nx, ps))
+              st
+              (optionOr [] (omLookup x reach.mrAdj)))
+          ([], parents)
+          frontier
+      if omHasKey goal seen then
+        unwindPath seen goal []
+      else
+        go (reverseL next) seen
 
 unwindPath : OrdMap (Option String) -> String -> List String -> List String
 unwindPath parents x acc = match omLookup x parents
@@ -695,28 +697,28 @@ walkNodes : InitWalk ->
   List RawNode ->
   List InitNode ->
   List InitNode
-walkNodes _ _ _ [] acc = reverseL acc
-walkNodes w defaults k (n :: rest) acc =
-  let own = walkBodies w n.rnodeBodies []
-  let mentions =
-    if n.rnodeKind == ImplNode then
-      walkBodies w (optionOr [] (omLookup n.rnodeKey defaults)) own
-    else
-      own
-  walkNodes
-    w
-    defaults
-    (k + 1)
-    rest
-    (InitNode {
-        inodeName = n.rnodeName,
-        inodeLabel = n.rnodeLabel,
-        inodeKind = n.rnodeKind,
-        inodeOrder = k,
-        inodeLoc = n.rnodeLoc,
-        inodeMentions = reverseL mentions,
-      }
-      :: acc)
+walkNodes w defaults k0 xs0 acc0 = go k0 xs0 acc0
+  where
+    go _ [] acc = reverseL acc
+    go k (n :: rest) acc =
+      let own = walkBodies w n.rnodeBodies []
+      let mentions =
+        if n.rnodeKind == ImplNode then
+          walkBodies w (optionOr [] (omLookup n.rnodeKey defaults)) own
+        else
+          own
+      go
+        (k + 1)
+        rest
+        (InitNode {
+            inodeName = n.rnodeName,
+            inodeLabel = n.rnodeLabel,
+            inodeKind = n.rnodeKind,
+            inodeOrder = k,
+            inodeLoc = n.rnodeLoc,
+            inodeMentions = reverseL mentions,
+          }
+          :: acc)
 
 walkBodies : InitWalk ->
   List (List Pat, Expr) ->
@@ -960,11 +962,13 @@ walkGuarded : InitWalk ->
   Expr ->
   List InitMention ->
   List InitMention
-walkGuarded w ctx bound [] body acc = walk w ctx bound body acc
-walkGuarded w ctx bound ((GBool e) :: gs) body acc =
-  walkGuarded w ctx bound gs body (walk w (evalCtx ctx) bound e acc)
-walkGuarded w ctx bound ((GBind p e) :: gs) body acc =
-  walkGuarded w ctx (bindPat p bound) gs body (walk w (evalCtx ctx) bound e acc)
+walkGuarded w ctx bound0 xs0 body acc0 = go bound0 xs0 acc0
+  where
+    go bound [] acc = walk w ctx bound body acc
+    go bound ((GBool e) :: gs) acc =
+      go bound gs (walk w (evalCtx ctx) bound e acc)
+    go bound ((GBind p e) :: gs) acc =
+      go (bindPat p bound) gs (walk w (evalCtx ctx) bound e acc)
 
 -- A block's last statement is its result and keeps [ctx]; every earlier one is evaluated.
 walkStmts : InitWalk ->
@@ -973,24 +977,21 @@ walkStmts : InitWalk ->
   List DoStmt ->
   List InitMention ->
   List InitMention
-walkStmts _ _ _ [] acc = acc
-walkStmts w ctx bound [DoExpr e] acc = walk w ctx bound e acc
-walkStmts w ctx bound ((DoExpr e) :: rest) acc =
-  walkStmts w ctx bound rest (walk w (evalCtx ctx) bound e acc)
-walkStmts w ctx bound ((DoBind p e) :: rest) acc =
-  walkStmts w ctx (bindPat p bound) rest (walk w (evalCtx ctx) bound e acc)
-walkStmts w ctx bound ((DoLet _ r p e _) :: rest) acc =
-  let after = bindPat p bound
-  walkStmts
-    w
-    ctx
-    after
-    rest
-    (walk w (evalCtx ctx) (if r then after else bound) e acc)
-walkStmts w ctx bound ((DoAssign x e) :: rest) acc =
-  walkStmts w ctx (omInsert x () bound) rest (walk w (evalCtx ctx) bound e acc)
-walkStmts w ctx bound ((DoFieldAssign _ _ e) :: rest) acc =
-  walkStmts w ctx bound rest (walk w (evalCtx ctx) bound e acc)
+walkStmts w ctx bound0 xs0 acc0 = go bound0 xs0 acc0
+  where
+    go _ [] acc = acc
+    go bound [DoExpr e] acc = walk w ctx bound e acc
+    go bound ((DoExpr e) :: rest) acc =
+      go bound rest (walk w (evalCtx ctx) bound e acc)
+    go bound ((DoBind p e) :: rest) acc =
+      go (bindPat p bound) rest (walk w (evalCtx ctx) bound e acc)
+    go bound ((DoLet _ r p e _) :: rest) acc =
+      let after = bindPat p bound
+      go after rest (walk w (evalCtx ctx) (if r then after else bound) e acc)
+    go bound ((DoAssign x e) :: rest) acc =
+      go (omInsert x () bound) rest (walk w (evalCtx ctx) bound e acc)
+    go bound ((DoFieldAssign _ _ e) :: rest) acc =
+      go bound rest (walk w (evalCtx ctx) bound e acc)
 
 walkSection : InitWalk ->
   WalkCtx ->
@@ -1420,6 +1421,8 @@ kahn : InitGraph ->
   M.Map Int Int ->
   List String ->
   List String
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
 kahn g members dependents indegree ready out = match M.minView ready
   None => out
   Some (_, s, rest) =>

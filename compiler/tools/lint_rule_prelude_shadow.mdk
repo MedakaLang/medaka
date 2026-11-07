@@ -16,10 +16,11 @@ import tools.lint_core.{
   Scope(..),
   StdlibIndex,
   mkRule,
+  noFix,
+  factDeclLocs,
 }
 import tools.lint_shared.{
   dedupeNamesLoc,
-  declLocList,
   ruleNamePreludeShadow,
   topDefNameL,
 }
@@ -77,10 +78,10 @@ rulePreludeShadow : StdlibIndex ->
   Positions ->
   List Decl ->
   List Finding
-rulePreludeShadow _ _ _ pos prog =
+rulePreludeShadow _ _ facts _ prog =
   flatMap
     (preludeShadowHit (declaredTypes prog))
-    (dedupeNamesLoc (flatMap topDefNameL (declLocList pos prog)))
+    (dedupeNamesLoc (flatMap topDefNameL (factDeclLocs facts)))
 
 declaredTypes : List Decl -> List String
 declaredTypes prog = flatMap declaredType prog
@@ -101,5 +102,5 @@ preludeShadowFinding name loc = Finding {
     "top-level `\{name}` shadows the prelude function of that name for this file only; other modules, and any `deriving` impl, keep calling the prelude one. Remove the local declaration",
   severity = SevWarning,
   loc = loc,
-  fix = None,
+  fix = noFix,
 }

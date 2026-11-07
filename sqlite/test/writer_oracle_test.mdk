@@ -219,12 +219,11 @@ writerExpectedLines = [
 ]
 
 writerResult : Unit -> <Exec, IO> Result String WriterRun
-writerResult () = match rowScratch "writer"
-  Err e => Err e
-  Ok prefix =>
-    let db = "\{prefix}.db"
-    let out = runWriter db
-    finishScratch [db] out
+writerResult () = do
+  prefix <- rowScratch "writer"
+  let db = "\{prefix}.db"
+  let out = runWriter db
+  finishScratch [db] out
 
 runWriter : String -> <Exec, IO> Result String WriterRun
 runWriter db = do
@@ -405,15 +404,14 @@ writerApiExpectedLines = [
 ]
 
 writerApiResult : Unit -> <Exec, IO> Result String WriterApiRun
-writerApiResult () = match rowScratch "writer-api"
-  Err e => Err e
-  Ok prefix =>
-    let dbUsers = "\{prefix}-users.db"
-    let dbKv = "\{prefix}-kv.db"
-    let dbBlob = "\{prefix}-blob.db"
-    let dbReals = "\{prefix}-reals.db"
-    let out = runWriterApi dbUsers dbKv dbBlob dbReals
-    finishScratch [dbUsers, dbKv, dbBlob, dbReals] out
+writerApiResult () = do
+  prefix <- rowScratch "writer-api"
+  let dbUsers = "\{prefix}-users.db"
+  let dbKv = "\{prefix}-kv.db"
+  let dbBlob = "\{prefix}-blob.db"
+  let dbReals = "\{prefix}-reals.db"
+  let out = runWriterApi dbUsers dbKv dbBlob dbReals
+  finishScratch [dbUsers, dbKv, dbBlob, dbReals] out
 
 runWriterApi : String ->
   String ->
@@ -573,12 +571,11 @@ multipageResult : Unit -> <Exec, IO> Result String MultipageRun
 multipageResult () = match !multipageResultCell
   Some v => v
   None =>
-    let v = match rowScratch "multipage-write"
-      Err e => Err e
-      Ok prefix =>
-        let db = "\{prefix}.db"
-        let out = runMultipage db
-        finishScratch [db] out
+    let v = do
+      prefix <- rowScratch "multipage-write"
+      let db = "\{prefix}.db"
+      let out = runMultipage db
+      finishScratch [db] out
     multipageResultCell := Some v
     v
 
@@ -750,12 +747,11 @@ multitableResult : Unit -> <Exec, IO> Result String MultitableRun
 multitableResult () = match !multitableResultCell
   Some v => v
   None =>
-    let v = match rowScratch "multitable-write"
-      Err e => Err e
-      Ok prefix =>
-        let db = "\{prefix}.db"
-        let out = runMultitable db
-        finishScratch [db] out
+    let v = do
+      prefix <- rowScratch "multitable-write"
+      let db = "\{prefix}.db"
+      let out = runMultitable db
+      finishScratch [db] out
     multitableResultCell := Some v
     v
 
@@ -948,13 +944,12 @@ rowidResult : Unit -> <Exec, IO> Result String RowidRun
 rowidResult () = match !rowidResultCell
   Some v => v
   None =>
-    let v = match rowScratch "rowid-roundtrip"
-      Err e => Err e
-      Ok prefix =>
-        let src = "\{prefix}-src.db"
-        let dst = "\{prefix}-dst.db"
-        let out = runRowid src dst
-        finishScratch [src, dst] out
+    let v = do
+      prefix <- rowScratch "rowid-roundtrip"
+      let src = "\{prefix}-src.db"
+      let dst = "\{prefix}-dst.db"
+      let out = runRowid src dst
+      finishScratch [src, dst] out
     rowidResultCell := Some v
     v
 

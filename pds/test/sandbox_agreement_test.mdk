@@ -149,10 +149,12 @@ beneath : String ->
   (String -> List String) ->
   List String ->
   Result String (List String)
-beneath _ _ [] = Ok []
-beneath root grant (path :: rest) = match stripPrefix "\{root}/" path
-  Some rel if rel /= "" => map (grant rel ++ _) (beneath root grant rest)
-  _ => Err "\{path} is not beneath WorkingDirectory=\{root}"
+beneath root grant xs0 = go xs0
+  where
+    go [] = Ok []
+    go (path :: rest) = match stripPrefix "\{root}/" path
+      Some rel if rel /= "" => map (grant rel ++ _) (go rest)
+      _ => Err "\{path} is not beneath WorkingDirectory=\{root}"
 
 netEntry : String -> String
 netEntry "localhost" = "Net=127.0.0.1"

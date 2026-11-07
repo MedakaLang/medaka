@@ -22,6 +22,7 @@ import tools.lint_core.{
   StdlibIndex,
   factComments,
   mkRule,
+  noFix,
 }
 import tools.lint_shared.{
   CommentBlock(..),
@@ -183,12 +184,11 @@ claimSubject codeLines (line, text, CommentBlock _ last trailing _) =
 backtickedAfterReads : String -> Option String
 backtickedAfterReads t =
   let lower = stringToLower t
-  match stringIndexOf "reads `" lower
-    None => None
-    Some i =>
-      let start = i + stringLength "reads `"
-      let rest = stringSlice start (stringLength t) t
-      map (j => stringSlice 0 j rest) (stringIndexOf "`" rest)
+  do
+    i <- stringIndexOf "reads `" lower
+    let start = i + stringLength "reads `"
+    let rest = stringSlice start (stringLength t) t
+    map (j => stringSlice 0 j rest) (stringIndexOf "`" rest)
 
 -- The first declaration at or after `line`: a signature, clause head, field or
 -- data/type name; `export` lines are skipped; a blank line ends the search (the
@@ -263,7 +263,7 @@ readerFinding path subject (line, _, _) (firstReader :: more) = [
       "comment claims nothing reads `\{subject}` yet, but it is read on line \{firstReader}\{readerCountSuffix (listLen more)}. Restate the claim as what is measured today, or delete it",
     severity = SevWarning,
     loc = Some (Loc path line 1 line 1),
-    fix = None,
+    fix = noFix,
   },
 ]
 
@@ -272,10 +272,12 @@ declaredInFile subject codeLines =
   declaredInFileGo subject codeLines (arrayLength codeLines) 1
 
 declaredInFileGo : String -> Array String -> Int -> Int -> Bool
-declaredInFileGo subject codeLines n line
-  | line > n = False
-  | isDefinitionLine subject (arrayGetUnsafe (line - 1) codeLines) = True
-  | otherwise = declaredInFileGo subject codeLines n (line + 1)
+declaredInFileGo subject codeLines n line0 = go line0
+  where
+    go line
+      | line > n = False
+      | isDefinitionLine subject (arrayGetUnsafe (line - 1) codeLines) = True
+      | otherwise = go (line + 1)
 
 readerCountSuffix : Int -> String
 readerCountSuffix 0 = ""
@@ -287,6 +289,8 @@ readerLines subject codeLines =
   readerLinesGo subject codeLines (arrayLength codeLines) 1
 
 readerLinesGo : String -> Array String -> Int -> Int -> List Int
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 readerLinesGo subject codeLines n line
   | line > n = []
   | isReaderLine subject (arrayGetUnsafe (line - 1) codeLines) =
@@ -334,7 +338,10 @@ wordReadOk cs n m =
     && not (assignFollows cs n m.end)
 
 assignFollows : Array Char -> Int -> Int -> Bool
-assignFollows cs n i
-  | i < n && arrayGetUnsafe i cs == ' ' = assignFollows cs n (i + 1)
-  | i + 1 < n = arrayGetUnsafe i cs == ':' && arrayGetUnsafe (i + 1) cs == '='
-  | otherwise = False
+assignFollows cs n i0 = go i0
+  where
+    go i
+      | i < n && arrayGetUnsafe i cs == ' ' = go (i + 1)
+      | i + 1 < n =
+        arrayGetUnsafe i cs == ':' && arrayGetUnsafe (i + 1) cs == '='
+      | otherwise = False

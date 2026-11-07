@@ -379,13 +379,15 @@ gradeProofRows : String ->
   List ProofRow ->
   (Int, Int) ->
   <IO> (Int, Int)
-gradeProofRows _ _ _ [] totals = totals
-gradeProofRows name tree nodes (row :: rest) (passed, narrower) =
-  let (rowPassed, rowNarrower) = gradeProofRow name tree nodes row
-  gradeProofRows name tree nodes rest (
-    passed + rowPassed,
-    narrower + rowNarrower,
-  )
+gradeProofRows name tree nodes xs0 totals0 = go xs0 totals0
+  where
+    go [] totals = totals
+    go (row :: rest) (passed, narrower) =
+      let (rowPassed, rowNarrower) = gradeProofRow name tree nodes row
+      go rest (
+        passed + rowPassed,
+        narrower + rowNarrower,
+      )
 
 gradeProofCase : ProofCase -> <IO> (Int, Int, Int)
 gradeProofCase (ProofCase name tree expectedRoot expectedNodes rows) =

@@ -201,14 +201,15 @@ entryOrdinal (EvEntry (EvId _ i) _) = i
 -- The position of the last of [runs] starting at or below ordinal [i], searched
 -- in positions [a] up to [b]; one less than [a] when none there does.
 runAt : Array EvRun -> Int -> Int -> Int -> Int
-runAt runs i a b =
-  if a >= b then
-    a - 1
-  else
-    let mid = (a + b) / 2
-    match arrayGetUnsafe mid runs
-      EvRun lo _ =>
-        if lo <= i then runAt runs i (mid + 1) b else runAt runs i a mid
+runAt runs i lo0 hi0 = go lo0 hi0
+  where
+    go a b =
+      if a >= b then
+        a - 1
+      else
+        let mid = (a + b) / 2
+        match arrayGetUnsafe mid runs
+          EvRun lo _ => if lo <= i then go (mid + 1) b else go a mid
 
 -- The run of [idx] holding ordinal [i]'s slot; panics when none does.
 runFor : EvIndex -> String -> Int -> EvRun

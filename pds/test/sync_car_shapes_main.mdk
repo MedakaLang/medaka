@@ -292,11 +292,13 @@ gradeRecordProbes : Server e ->
   List (String, String) ->
   List String ->
   <IO | e> Bool
-gradeRecordProbes _ _ _ _ [] = True
-gradeRecordProbes server store did rows (tag :: rest) =
-  let here = gradeRecordShape server store did rows tag
-  let later = gradeRecordProbes server store did rows rest
-  here && later
+gradeRecordProbes server store did rows tags0 = go tags0
+  where
+    go [] = True
+    go (tag :: rest) =
+      let here = gradeRecordShape server store did rows tag
+      let later = go rest
+      here && later
 
 {- | One `getRecord` probe, asked about the key its own `-PATH` row names.
 

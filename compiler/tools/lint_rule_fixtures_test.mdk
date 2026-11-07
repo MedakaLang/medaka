@@ -124,6 +124,7 @@ fixtureNames = [
   "not-eq",
   "option-eliminators",
   "orelse-staircase",
+  "passthrough-arm",
   "prefer-assign-op",
   "prelude-shadow",
   "promissory-reader",
@@ -135,9 +136,11 @@ fixtureNames = [
   "test-bool-helper",
   "test-bool-literal-equal",
   "test-equal-in-true",
+  "threaded-invariant",
   "unused-import",
   "unused-local",
   "unused-param",
+  "walker-wildcard",
   "when-unless",
 ]
 
@@ -453,11 +456,17 @@ test "rule-test-bool-literal-equal fixture" =
 
 test "rule-test-equal-in-true fixture" = fixtureHolds "test-equal-in-true"
 
+test "rule-threaded-invariant fixture" = fixtureHolds "threaded-invariant"
+
+test "rule-passthrough-arm fixture" = fixtureHolds "passthrough-arm"
+
 test "rule-unused-import fixture" = fixtureHolds "unused-import"
 
 test "rule-unused-local fixture" = fixtureHolds "unused-local"
 
 test "rule-unused-param fixture" = fixtureHolds "unused-param"
+
+test "rule-walker-wildcard fixture" = fixtureHolds "walker-wildcard"
 
 test "rule-when-unless fixture" = fixtureHolds "when-unless"
 

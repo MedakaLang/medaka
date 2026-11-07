@@ -1,5 +1,5 @@
 # META
-source_lines=1278
+source_lines=1280
 stages=DESUGAR,MARK
 # SOURCE
 -- A module's export surface, built from its declarations and the surfaces of
@@ -1231,6 +1231,8 @@ carriedTypeCtors : OrdMap Unit ->
   OrdMap Unit ->
   List (String, List String) ->
   List (String, List String)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 carriedTypeCtors _ _ [] = []
 carriedTypeCtors types carried ((t, cs) :: rest)
   | not (omHasKey t types) = carriedTypeCtors types carried rest

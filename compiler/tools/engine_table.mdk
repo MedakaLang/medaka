@@ -138,25 +138,20 @@ mkRow : S.Set String ->
   S.Set String ->
   (String, Bool) ->
   Option EngineRow
-mkRow oracle run tst (name, effectful) =
-  match find (r => rowName r == name) catalogRows
-    None => None
-    Some r =>
-      let oracleCell =
-        if S.has name oracle then
-          if effectful then Canned else Real
-        else
-          Refused
-      let runCell = if S.has name run then Real else oracleCell
-      let testCell = if S.has name tst then Real else oracleCell
-      Some
-        (EngineRow
-          name
-          oracleCell
-          runCell
-          testCell
-          (cellOfDisposition (rowLlvm r))
-          (cellOfDisposition (rowWasm r)))
+mkRow oracle run tst (name, effectful) = do
+  r <- find (r => rowName r == name) catalogRows
+  let oracleCell =
+    if S.has name oracle then if effectful then Canned else Real else Refused
+  let runCell = if S.has name run then Real else oracleCell
+  let testCell = if S.has name tst then Real else oracleCell
+  Some
+    (EngineRow
+      name
+      oracleCell
+      runCell
+      testCell
+      (cellOfDisposition (rowLlvm r))
+      (cellOfDisposition (rowWasm r)))
 
 -- (name, has an effect row) for every extern declared in runtime.mdk.
 declaredExterns : List Decl -> List (String, Bool)

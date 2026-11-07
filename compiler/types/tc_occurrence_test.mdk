@@ -309,7 +309,8 @@ nodesOf (EApp f x) = nodesOf f ++ nodesOf x
 nodesOf (ELoc _ e) = nodesOf e
 nodesOf (ELam _ e) = nodesOf e
 nodesOf (ETuple es) = flatMap nodesOf es
-nodesOf _ = []
+nodesOf (ELit _ | EVar _ | ELet _ _ _ _ _ | EMatch _ _ | EIf _ _ _ | EInfix _ _ _ | EListLit _ | EArrayLit _ | ERangeList _ _ _ | ERangeArray _ _ _ | ESlice _ _ _ _ | ELetGroup _ _ | ESection _ | EIndex _ _ | EAnnot _ _ | EHeadAnnot _ _ | EBlock _ | EDo _ _ | EStringInterp _ | EGuards _ | ERecordCreate _ _ | ERecordUpdate _ _ _ | EVariantUpdate _ _ _ | EMapLit _ _ | ESetLit _ _ | EAsPat _ _ | EOrPat _ | EMethodRef _ | EDictApp _ | EVarAt _ _ | EVarId _ _ | EDoOrigin _ _ | EWideLit _ _ _ _) =
+  []
 
 -- The node [kind] with id [ev], when [ev] was minted; the parser leaves a node unminted.
 minted : String -> EvId -> List (String, EvId)
@@ -637,9 +638,9 @@ shadowReader _ =
 -- The parameter type the occurrence of the standalone `size` in [env] instantiated its
 -- scheme to, rendered; the obligations its context re-records are over it.
 occurrenceParam : TcEnv -> Option String
-occurrenceParam env = match standaloneOccurrence env "size" "" None
-  Some o => map ppMono (nthFunDomain 0 o.svoInstance.mtiBody)
-  None => None
+occurrenceParam env = do
+  o <- standaloneOccurrence env "size" "" None
+  map ppMono (nthFunDomain 0 o.svoInstance.mtiBody)
 
 -- The (interface, arguments) of each obligation [m] has recorded.
 recorded : ModuleCtx -> List (String, List String)

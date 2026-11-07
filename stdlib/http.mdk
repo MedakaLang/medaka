@@ -369,11 +369,13 @@ isTokenByte byte =
     || byte == 126
 
 allToken : Bytes -> Int -> Int -> Bool
-allToken input pos end =
-  if pos >= end then
-    True
-  else
-    isTokenByte (byteAt input pos) && allToken input (pos + 1) end
+allToken input pos0 end = go pos0
+  where
+    go pos =
+      if pos >= end then
+        True
+      else
+        isTokenByte (byteAt input pos) && go (pos + 1)
 
 isHexByte : Int -> Bool
 isHexByte byte =
@@ -406,28 +408,30 @@ isSubDelimiterByte byte =
     || byte == 61
 
 validTarget : Bytes -> Int -> Int -> Bool -> Bool
-validTarget input pos end query =
-  if pos >= end then
-    True
-  else
-    let byte = byteAt input pos
-    if byte == 37 then
-      pos + 2 < end
-        && isHexByte (byteAt input (pos + 1))
-        && isHexByte (byteAt input (pos + 2))
-        && validTarget input (pos + 3) end query
-    else
-      let pchar =
-        isUnreservedByte byte
-          || isSubDelimiterByte byte
-          || byte == 58
-          || byte == 64
-      if pchar || byte == 47 || query && byte == 63 then
-        validTarget input (pos + 1) end query
-      else if not query && byte == 63 then
-        validTarget input (pos + 1) end True
+validTarget input pos0 end query0 = go pos0 query0
+  where
+    go pos query =
+      if pos >= end then
+        True
       else
-        False
+        let byte = byteAt input pos
+        if byte == 37 then
+          pos + 2 < end
+            && isHexByte (byteAt input (pos + 1))
+            && isHexByte (byteAt input (pos + 2))
+            && go (pos + 3) query
+        else
+          let pchar =
+            isUnreservedByte byte
+              || isSubDelimiterByte byte
+              || byte == 58
+              || byte == 64
+          if pchar || byte == 47 || query && byte == 63 then
+            go (pos + 1) query
+          else if not query && byte == 63 then
+            go (pos + 1) True
+          else
+            False
 
 exactAsciiAt : Bytes -> Int -> String -> Bool
 exactAsciiAt input start expected =
@@ -436,25 +440,28 @@ exactAsciiAt input start expected =
   start + size <= B.length input && slice input start (start + size) == wanted
 
 validFieldValue : Bytes -> Int -> Int -> Bool
-validFieldValue input pos end =
-  if pos >= end then
-    True
-  else
-    let byte = byteAt input pos
-    (byte == 9 || byte >= 32 && byte /= 127)
-      && validFieldValue input (pos + 1) end
+validFieldValue input pos0 end = go pos0
+  where
+    go pos =
+      if pos >= end then
+        True
+      else
+        let byte = byteAt input pos
+        (byte == 9 || byte >= 32 && byte /= 127) && go (pos + 1)
 
 -- | The index of the first `wanted` in `value[pos, end)`, or `None`. No
 -- byte at or past `end` is read.
 export
 findByte : Bytes -> Int -> Int -> Int -> Option Int
-findByte value pos end wanted =
-  if pos >= end then
-    None
-  else if byteAt value pos == wanted then
-    Some pos
-  else
-    findByte value (pos + 1) end wanted
+findByte value pos end wanted = go pos
+  where
+    go at =
+      if at >= end then
+        None
+      else if byteAt value at == wanted then
+        Some at
+      else
+        go (at + 1)
 
 -- `avail` is how many bytes of `input` the caller has actually received; the
 -- search runs out of input there, not at `B.length input`.
@@ -465,24 +472,28 @@ findCrlfChecked : String ->
   Int ->
   Int ->
   Result FrameError Int
-findCrlfChecked label input avail start pos limit =
-  if pos - start > limit then
-    Err (Fatal (HttpResourceExcess "http: \{label} exceeds its resource limit"))
-  else if pos >= avail then
-    incomplete "http: truncated \{label}; expected CRLF"
-  else if byteAt input pos == 10 then
-    malformed "http: bare LF in \{label}"
-  else if byteAt input pos == 13 then
-    -- A trailing CR is the one-shot parser's bare CR and a stream's half-read
-    -- CRLF, so it keeps that diagnostic while staying completable.
-    if pos + 1 >= avail then
-      incomplete "http: bare CR in \{label}"
-    else if byteAt input (pos + 1) /= 10 then
-      malformed "http: bare CR in \{label}"
-    else
-      Ok pos
-  else
-    findCrlfChecked label input avail start (pos + 1) limit
+findCrlfChecked label input avail start pos0 limit = go pos0
+  where
+    go pos =
+      if pos - start > limit then
+        Err
+          (Fatal
+            (HttpResourceExcess "http: \{label} exceeds its resource limit"))
+      else if pos >= avail then
+        incomplete "http: truncated \{label}; expected CRLF"
+      else if byteAt input pos == 10 then
+        malformed "http: bare LF in \{label}"
+      else if byteAt input pos == 13 then
+        -- A trailing CR is the one-shot parser's bare CR and a stream's half-read
+        -- CRLF, so it keeps that diagnostic while staying completable.
+        if pos + 1 >= avail then
+          incomplete "http: bare CR in \{label}"
+        else if byteAt input (pos + 1) /= 10 then
+          malformed "http: bare CR in \{label}"
+        else
+          Ok pos
+      else
+        go (pos + 1)
 
 -- `cursor` is where the CRLF search resumes; it is `start` for a fresh scan
 -- and a later, already-searched offset when a suspended scan continues.
@@ -532,22 +543,26 @@ parseRequestLine input avail start cursor = do
 -- a tab, or `end` when they all are.
 export
 trimLeftOws : Bytes -> Int -> Int -> Int
-trimLeftOws value pos end =
-  if pos < end && (byteAt value pos == 32 || byteAt value pos == 9) then
-    trimLeftOws value (pos + 1) end
-  else
-    pos
+trimLeftOws value pos end = go pos
+  where
+    go at =
+      if at < end && (byteAt value at == 32 || byteAt value at == 9) then
+        go (at + 1)
+      else
+        at
 
 -- | The index one past the last byte in `value[start, end)` that is not a
 -- space or a tab, or `start` when they all are.
 export
 trimRightOws : Bytes -> Int -> Int -> Int
-trimRightOws value start end =
-  if end > start
-    && (byteAt value (end - 1) == 32 || byteAt value (end - 1) == 9) then
-    trimRightOws value start (end - 1)
-  else
-    end
+trimRightOws value start end = go end
+  where
+    go stop =
+      if stop > start
+        && (byteAt value (stop - 1) == 32 || byteAt value (stop - 1) == 9) then
+        go (stop - 1)
+      else
+        stop
 
 parseHeaderLine : Bytes -> Int -> Int -> Result FrameError Header
 parseHeaderLine input start end =
@@ -629,27 +644,14 @@ parseFieldsChecked : Bytes ->
   Bool ->
   List Header ->
   Result FrameError HeaderBlock
-parseFieldsChecked input pos sectionStart priorBytes count trailer acc = do
-  step <- fieldStep
-    input
-    (B.length input)
-    pos
-    pos
-    sectionStart
-    priorBytes
-    count
-    trailer
-  match step
-    FieldDone next totalBytes => Ok (HeaderBlock (reverse acc) next totalBytes)
-    FieldMore field next =>
-      parseFieldsChecked
-        input
-        next
-        sectionStart
-        priorBytes
-        (count + 1)
-        trailer
-        (field :: acc)
+parseFieldsChecked inp pos0 secBeg prior n0 trailer acc0 = go pos0 n0 acc0
+  where
+    go pos count acc = do
+      step <- fieldStep inp (B.length inp) pos pos secBeg prior count trailer
+      match step
+        FieldDone next totalBytes =>
+          Ok (HeaderBlock (reverse acc) next totalBytes)
+        FieldMore field next => go next (count + 1) (field :: acc)
 
 {- | The fields of the header or trailer section starting at `pos`, and the
    offset just past the blank line that ends it.
@@ -676,14 +678,16 @@ findNamed wanted ((Header name value) :: rest) =
   if name == wanted then Some value else findNamed wanted rest
 
 asciiEqualCiGo : Bytes -> Bytes -> Int -> Bool
-asciiEqualCiGo value expected i =
-  if i >= B.length value then
-    i == B.length expected
-  else
-    i < B.length expected
-      && byteAt value i <= 127
-      && lowerByte (byteAt value i) == lowerByte (byteAt expected i)
-      && asciiEqualCiGo value expected (i + 1)
+asciiEqualCiGo value expected i0 = go i0
+  where
+    go i =
+      if i >= B.length value then
+        i == B.length expected
+      else
+        i < B.length expected
+          && byteAt value i <= 127
+          && lowerByte (byteAt value i) == lowerByte (byteAt expected i)
+          && go (i + 1)
 
 asciiEqualCi : Bytes -> String -> Bool
 asciiEqualCi value expected = asciiEqualCiGo value (encodeUtf8 expected) 0
@@ -738,11 +742,10 @@ selectBodyMode headers =
     Ok NoBody
 
 scanTokenEnd : Bytes -> Int -> Int -> Int
-scanTokenEnd value pos end =
-  if pos < end && isTokenByte (byteAt value pos) then
-    scanTokenEnd value (pos + 1) end
-  else
-    pos
+scanTokenEnd value pos0 end = go pos0
+  where
+    go pos =
+      if pos < end && isTokenByte (byteAt value pos) then go (pos + 1) else pos
 
 parseConnectionValue : Bytes -> Int -> Bool -> Result FrameError Bool
 parseConnectionValue value pos sawClose =
@@ -775,85 +778,92 @@ keepAliveFromHeaders ((Header name value) :: rest) = do
     Ok (restKeepAlive && not closes)
 
 validRegName : Bytes -> Int -> Int -> Bool
-validRegName value pos end =
-  if pos >= end then
-    True
-  else
-    let byte = byteAt value pos
-    if byte == 37 then
-      pos + 2 < end
-        && isHexByte (byteAt value (pos + 1))
-        && isHexByte (byteAt value (pos + 2))
-        && validRegName value (pos + 3) end
-    else
-      (isUnreservedByte byte || isSubDelimiterByte byte)
-        && validRegName value (pos + 1) end
+validRegName value pos0 end = go pos0
+  where
+    go pos =
+      if pos >= end then
+        True
+      else
+        let byte = byteAt value pos
+        if byte == 37 then
+          pos + 2 < end
+            && isHexByte (byteAt value (pos + 1))
+            && isHexByte (byteAt value (pos + 2))
+            && go (pos + 3)
+        else
+          (isUnreservedByte byte || isSubDelimiterByte byte) && go (pos + 1)
 
 allDigits : Bytes -> Int -> Int -> Bool
-allDigits value pos end =
-  if pos >= end then
-    True
-  else
-    byteAt value pos >= 48
-      && byteAt value pos <= 57
-      && allDigits value (pos + 1) end
+allDigits value pos0 end = go pos0
+  where
+    go pos =
+      if pos >= end then
+        True
+      else
+        byteAt value pos >= 48 && byteAt value pos <= 57 && go (pos + 1)
 
 decimalValue : Bytes -> Int -> Int -> Int -> Int
-decimalValue value pos end acc =
-  if pos >= end then
-    acc
-  else
-    decimalValue value (pos + 1) end (acc * 10 + byteAt value pos - 48)
+decimalValue value pos0 end acc0 = go pos0 acc0
+  where
+    go pos acc =
+      if pos >= end then
+        acc
+      else
+        go (pos + 1) (acc * 10 + byteAt value pos - 48)
 
 validIpv4 : Bytes -> Int -> Int -> Int -> Bool
-validIpv4 value start end parts =
-  if parts >= 4 || start >= end then
-    False
-  else
-    let dot = optionOr end (findByte value start end 46)
-    let size = dot - start
-    let validPart =
-      size >= 1
-        && size <= 3
-        && allDigits value start dot
-        && decimalValue value start dot 0 <= 255
-        && (size == 1 || byteAt value start /= 48)
-    if not validPart then
-      False
-    else if dot == end then
-      parts == 3
-    else
-      validIpv4 value (dot + 1) end (parts + 1)
+validIpv4 value start0 end parts0 = go start0 parts0
+  where
+    go start parts =
+      if parts >= 4 || start >= end then
+        False
+      else
+        let dot = optionOr end (findByte value start end 46)
+        let size = dot - start
+        let validPart =
+          size >= 1
+            && size <= 3
+            && allDigits value start dot
+            && decimalValue value start dot 0 <= 255
+            && (size == 1 || byteAt value start /= 48)
+        if not validPart then
+          False
+        else if dot == end then
+          parts == 3
+        else
+          go (dot + 1) (parts + 1)
 
 allHex : Bytes -> Int -> Int -> Bool
-allHex value pos end =
-  if pos >= end then
-    True
-  else
-    isHexByte (byteAt value pos) && allHex value (pos + 1) end
+allHex value pos0 end = go pos0
+  where
+    go pos =
+      if pos >= end then True else isHexByte (byteAt value pos) && go (pos + 1)
 
 validIpv6Go : Bytes -> Int -> Int -> Int -> Bool -> Bool
-validIpv6Go value pos end groups compressed =
-  if pos >= end then
-    if compressed then groups < 8 else groups == 8
-  else
-    let colon = optionOr end (findByte value pos end 58)
-    if colon == pos then
-      False
-    else
-      let dot = findByte value pos colon 46
-      let componentGroups = match dot
-        None => if colon - pos <= 4 && allHex value pos colon then 1 else 9
-        Some _ => if colon == end && validIpv4 value pos colon 0 then 2 else 9
-      let nextGroups = groups + componentGroups
-      if nextGroups > 8 then
-        False
-      else if colon == end then
-        if compressed then nextGroups < 8 else nextGroups == 8
-      else if colon + 1 < end && byteAt value (colon + 1) == 58 then
-        not compressed && validIpv6Go value (colon + 2) end nextGroups True
+validIpv6Go value pos0 end groups0 compressed0 = go pos0 groups0 compressed0
+  where
+    go pos groups compressed =
+      if pos >= end then
+        if compressed then groups < 8 else groups == 8
       else
-        validIpv6Go value (colon + 1) end nextGroups compressed
+        let colon = optionOr end (findByte value pos end 58)
+        if colon == pos then
+          False
+        else
+          let dot = findByte value pos colon 46
+          let componentGroups = match dot
+            None => if colon - pos <= 4 && allHex value pos colon then 1 else 9
+            Some _ =>
+              if colon == end && validIpv4 value pos colon 0 then 2 else 9
+          let nextGroups = groups + componentGroups
+          if nextGroups > 8 then
+            False
+          else if colon == end then
+            if compressed then nextGroups < 8 else nextGroups == 8
+          else if colon + 1 < end && byteAt value (colon + 1) == 58 then
+            not compressed && go (colon + 2) nextGroups True
+          else
+            go (colon + 1) nextGroups compressed
 
 validIpv6 : Bytes -> Int -> Int -> Bool
 validIpv6 value start end =
@@ -867,20 +877,21 @@ validIpv6 value start end =
     validIpv6Go value start end 0 False
 
 scanHex : Bytes -> Int -> Int -> Int
-scanHex value pos end =
-  if pos < end && isHexByte (byteAt value pos) then
-    scanHex value (pos + 1) end
-  else
-    pos
+scanHex value pos0 end = go pos0
+  where
+    go pos =
+      if pos < end && isHexByte (byteAt value pos) then go (pos + 1) else pos
 
 validIpvFutureTail : Bytes -> Int -> Int -> Bool
-validIpvFutureTail value pos end =
-  if pos >= end then
-    True
-  else
-    let byte = byteAt value pos
-    (isUnreservedByte byte || isSubDelimiterByte byte || byte == 58)
-      && validIpvFutureTail value (pos + 1) end
+validIpvFutureTail value pos0 end = go pos0
+  where
+    go pos =
+      if pos >= end then
+        True
+      else
+        let byte = byteAt value pos
+        (isUnreservedByte byte || isSubDelimiterByte byte || byte == 58)
+          && go (pos + 1)
 
 validIpvFuture : Bytes -> Int -> Int -> Bool
 validIpvFuture value start end =
@@ -954,52 +965,55 @@ hexDigit byte =
     None
 
 parseHexSizeGo : Bytes -> Int -> Int -> Int -> Result FrameError Int
-parseHexSizeGo input pos end acc =
-  if pos >= end then
-    Ok acc
-  else match hexDigit (byteAt input pos)
-    None => malformed "http: invalid chunk size"
-    Some digit =>
-      if acc > (maxHttpBodyBytes - digit) / 16 then
-        Err
-          (Fatal
-            (HttpResourceExcess "http: chunk size exceeds decoded body limit"))
-      else
-        parseHexSizeGo input (pos + 1) end (acc * 16 + digit)
+parseHexSizeGo input pos0 end acc0 = go pos0 acc0
+  where
+    go pos acc =
+      if pos >= end then
+        Ok acc
+      else match hexDigit (byteAt input pos)
+        None => malformed "http: invalid chunk size"
+        Some digit =>
+          if acc > (maxHttpBodyBytes - digit) / 16 then
+            Err
+              (Fatal
+                (HttpResourceExcess
+                  "http: chunk size exceeds decoded body limit"))
+          else
+            go (pos + 1) (acc * 16 + digit)
 
 -- | The index of the first byte in `value[pos, end)` that is not a space or
 -- a tab, or `end` when they all are. The same as `trimLeftOws`.
 export
 skipOws : Bytes -> Int -> Int -> Int
-skipOws value pos end =
-  if pos < end && (byteAt value pos == 32 || byteAt value pos == 9) then
-    skipOws value (pos + 1) end
-  else
-    pos
+skipOws value pos end = trimLeftOws value pos end
 
 scanQuoted : Bytes -> Int -> Int -> Result FrameError Int
-scanQuoted input pos end =
-  if pos >= end then
-    malformed "http: unterminated quoted chunk extension"
-  else if byteAt input pos == 34 then
-    Ok (pos + 1)
-  else if byteAt input pos == 92 then
-    if pos + 1 >= end then
-      malformed "http: truncated quoted-pair in chunk extension"
-    else
-      let escaped = byteAt input (pos + 1)
-      if escaped == 9 || escaped == 32 || escaped >= 33 && escaped /= 127 then
-        scanQuoted input (pos + 2) end
+scanQuoted input pos0 end = go pos0
+  where
+    go pos =
+      if pos >= end then
+        malformed "http: unterminated quoted chunk extension"
+      else if byteAt input pos == 34 then
+        Ok (pos + 1)
+      else if byteAt input pos == 92 then
+        if pos + 1 >= end then
+          malformed "http: truncated quoted-pair in chunk extension"
+        else
+          let escaped = byteAt input (pos + 1)
+          if escaped == 9
+            || escaped == 32
+            || escaped >= 33 && escaped /= 127 then
+            go (pos + 2)
+          else
+            malformed "http: control byte in quoted chunk extension"
       else
-        malformed "http: control byte in quoted chunk extension"
-  else
-    let byte = byteAt input pos
-    if byte == 9
-      || byte == 32
-      || byte >= 33 && byte /= 34 && byte /= 92 && byte /= 127 then
-      scanQuoted input (pos + 1) end
-    else
-      malformed "http: control byte in quoted chunk extension"
+        let byte = byteAt input pos
+        if byte == 9
+          || byte == 32
+          || byte >= 33 && byte /= 34 && byte /= 92 && byte /= 127 then
+          go (pos + 1)
+        else
+          malformed "http: control byte in quoted chunk extension"
 
 parseChunkExtensionValue : Bytes -> Int -> Int -> Result FrameError Int
 parseChunkExtensionValue input pos end =
@@ -1015,27 +1029,29 @@ parseChunkExtensionValue input pos end =
       Ok valueEnd
 
 parseChunkExtensionsGo : Bytes -> Int -> Int -> Result FrameError Unit
-parseChunkExtensionsGo input pos end =
-  let start = skipOws input pos end
-  if start == end then
-    Ok ()
-  else if byteAt input start /= 59 then
-    malformed "http: invalid chunk extension separator"
-  else
-    let nameStart = skipOws input (start + 1) end
-    let nameEnd = scanTokenEnd input nameStart end
-    if nameEnd == nameStart then
-      malformed "http: empty chunk extension name"
-    else
-      let afterName = skipOws input nameEnd end
-      if afterName < end && byteAt input afterName == 61 then do
-        valueEnd <- parseChunkExtensionValue
-          input
-          (skipOws input (afterName + 1) end)
-          end
-        parseChunkExtensionsGo input valueEnd end
+parseChunkExtensionsGo input pos0 end = go pos0
+  where
+    go pos =
+      let start = skipOws input pos end
+      if start == end then
+        Ok ()
+      else if byteAt input start /= 59 then
+        malformed "http: invalid chunk extension separator"
       else
-        parseChunkExtensionsGo input afterName end
+        let nameStart = skipOws input (start + 1) end
+        let nameEnd = scanTokenEnd input nameStart end
+        if nameEnd == nameStart then
+          malformed "http: empty chunk extension name"
+        else
+          let afterName = skipOws input nameEnd end
+          if afterName < end && byteAt input afterName == 61 then do
+            valueEnd <- parseChunkExtensionValue
+              input
+              (skipOws input (afterName + 1) end)
+              end
+            go valueEnd
+          else
+            go afterName
 
 parseChunkSize : Bytes -> Int -> Int -> Result FrameError Int
 parseChunkSize input start end =
@@ -1054,24 +1070,26 @@ parseChunkedChecked : Bytes ->
   Int ->
   Int ->
   Result FrameError ParsedBody
-parseChunkedChecked input pos headerBytes out total count = do
-  head <- chunkHeadStep input (B.length input) pos pos total count
-  match head
-    ChunkEnd dataPos => do
-      (HeaderBlock trailers finalPos _) <- parseFieldsChecked
-        input
-        dataPos
-        dataPos
-        headerBytes
-        0
-        True
-        []
-      Ok (ParsedBody (buildBytes out) trailers finalPos)
-    ChunkBody dataPos size => do
-      (chunk, _) <- readSliceAt input dataPos size
-      next <- chunkDataEnd input (B.length input) dataPos size
-      let () = emitBytes chunk out
-      parseChunkedChecked input next headerBytes out (total + size) (count + 1)
+parseChunkedChecked inp pos0 hdrBytes out total0 count0 = go pos0 total0 count0
+  where
+    go pos total count = do
+      head <- chunkHeadStep inp (B.length inp) pos pos total count
+      match head
+        ChunkEnd dataPos => do
+          (HeaderBlock trailers finalPos _) <- parseFieldsChecked
+            inp
+            dataPos
+            dataPos
+            hdrBytes
+            0
+            True
+            []
+          Ok (ParsedBody (buildBytes out) trailers finalPos)
+        ChunkBody dataPos size => do
+          (chunk, _) <- readSliceAt inp dataPos size
+          next <- chunkDataEnd inp (B.length inp) dataPos size
+          let () = emitBytes chunk out
+          go next (total + size) (count + 1)
 
 {- | The decoded bytes of the chunked body starting at `pos`, its trailer
    fields, and the offset just past the trailer section.
@@ -1222,106 +1240,96 @@ headBodyPhase (FrameHead _ _ ChunkedBody _ bodyPos _) =
   BodyChunkSize bodyPos 0 0 bodyPos
 
 scanBody : Bytes -> Int -> FrameHead -> BodyPhase -> ScanOutcome
-scanBody _ avail head (BodyUntil finalPos) =
-  if finalPos <= avail then
-    ScanFramed (FrameSpan head finalPos)
-  else
-    ScanSuspend
-      "http: truncated body at byte \{intToString avail}"
-      (PhaseBody head (BodyUntil finalPos))
-scanBody input avail head (BodyChunkSize chunkPos total count cursor) =
-  match chunkHeadStep input avail chunkPos (max chunkPos cursor) total count
-    Err (Incomplete message) =>
-      ScanSuspend
-        message
-        (PhaseBody
-          head
-          (BodyChunkSize chunkPos total count (crlfResume avail chunkPos)))
-    Err (Fatal failure) => ScanFatal failure
-    Ok (ChunkEnd dataPos) =>
-      scanBody input avail head (BodyTrailers dataPos dataPos 0 dataPos)
-    Ok (ChunkBody dataPos size) =>
-      scanBody input avail head (BodyChunkData dataPos size total count)
-scanBody input avail head (BodyChunkData dataPos size total count) =
-  match chunkDataEnd input avail dataPos size
-    Err (Incomplete message) =>
-      ScanSuspend
-        message
-        (PhaseBody head (BodyChunkData dataPos size total count))
-    Err (Fatal failure) => ScanFatal failure
-    Ok next =>
-      scanBody
-        input
-        avail
-        head
-        (BodyChunkSize next (total + size) (count + 1) next)
-scanBody input avail head (BodyTrailers sectionStart pos count cursor) =
-  let step =
-    fieldStep
-      input
-      avail
-      pos
-      (max pos cursor)
-      sectionStart
-      (headHeaderBytes head)
-      count
-      True
-  match step
-    Err (Incomplete message) =>
-      ScanSuspend
-        message
-        (PhaseBody
-          head
-          (BodyTrailers sectionStart pos count (crlfResume avail pos)))
-    Err (Fatal failure) => ScanFatal failure
-    Ok (FieldMore _ next) =>
-      scanBody
-        input
-        avail
-        head
-        (BodyTrailers sectionStart next (count + 1) next)
-    Ok (FieldDone finalPos _) => ScanFramed (FrameSpan head finalPos)
+scanBody input avail head x0 = go x0
+  where
+    go (BodyUntil finalPos) =
+      if finalPos <= avail then
+        ScanFramed (FrameSpan head finalPos)
+      else
+        ScanSuspend
+          "http: truncated body at byte \{intToString avail}"
+          (PhaseBody head (BodyUntil finalPos))
+    go (BodyChunkSize chunkPos total count cursor) =
+      match chunkHeadStep input avail chunkPos (max chunkPos cursor) total count
+        Err (Incomplete message) =>
+          ScanSuspend
+            message
+            (PhaseBody
+              head
+              (BodyChunkSize chunkPos total count (crlfResume avail chunkPos)))
+        Err (Fatal failure) => ScanFatal failure
+        Ok (ChunkEnd dataPos) => go (BodyTrailers dataPos dataPos 0 dataPos)
+        Ok (ChunkBody dataPos size) =>
+          go (BodyChunkData dataPos size total count)
+    go (BodyChunkData dataPos size total count) =
+      match chunkDataEnd input avail dataPos size
+        Err (Incomplete message) =>
+          ScanSuspend
+            message
+            (PhaseBody head (BodyChunkData dataPos size total count))
+        Err (Fatal failure) => ScanFatal failure
+        Ok next => go (BodyChunkSize next (total + size) (count + 1) next)
+    go (BodyTrailers sectionStart pos count cursor) =
+      let step =
+        fieldStep
+          input
+          avail
+          pos
+          (max pos cursor)
+          sectionStart
+          (headHeaderBytes head)
+          count
+          True
+      match step
+        Err (Incomplete message) =>
+          ScanSuspend
+            message
+            (PhaseBody
+              head
+              (BodyTrailers sectionStart pos count (crlfResume avail pos)))
+        Err (Fatal failure) => ScanFatal failure
+        Ok (FieldMore _ next) =>
+          go (BodyTrailers sectionStart next (count + 1) next)
+        Ok (FieldDone finalPos _) => ScanFramed (FrameSpan head finalPos)
 
 -- Advance a scan of the request starting at `start` from `phase`. Every
 -- framing decision in this module is taken here or in a step this calls, so
 -- the resumable scanner and the one-shot parser are the same framer.
 scanFrom : Bytes -> Int -> Int -> ScanPhase -> ScanOutcome
-scanFrom input avail start (PhaseLine cursor) =
-  match parseRequestLine input avail start (max start cursor)
-    Err (Incomplete message) =>
-      ScanSuspend message (PhaseLine (crlfResume avail start))
-    Err (Fatal failure) => ScanFatal failure
-    Ok line =>
-      let headerPos = requestLineHeaderPos line
-      scanFrom input avail start (PhaseFields line [] headerPos 0 headerPos)
-scanFrom input avail start (PhaseFields line acc pos count cursor) =
-  let step =
-    fieldStep
-      input
-      avail
-      pos
-      (max pos cursor)
-      (requestLineHeaderPos line)
-      0
-      count
-      False
-  match step
-    Err (Incomplete message) =>
-      ScanSuspend
-        message
-        (PhaseFields line acc pos count (crlfResume avail pos))
-    Err (Fatal failure) => ScanFatal failure
-    Ok (FieldMore field next) =>
-      scanFrom
-        input
-        avail
-        start
-        (PhaseFields line (field :: acc) next (count + 1) next)
-    Ok (FieldDone bodyPos headerBytes) =>
-      match settle (buildHead line (reverse acc) bodyPos headerBytes)
-        Err failure => ScanFatal failure
-        Ok head => scanBody input avail head (headBodyPhase head)
-scanFrom input avail _ (PhaseBody head phase) = scanBody input avail head phase
+scanFrom input avail start x0 = go x0
+  where
+    go (PhaseLine cursor) =
+      match parseRequestLine input avail start (max start cursor)
+        Err (Incomplete message) =>
+          ScanSuspend message (PhaseLine (crlfResume avail start))
+        Err (Fatal failure) => ScanFatal failure
+        Ok line =>
+          let headerPos = requestLineHeaderPos line
+          go (PhaseFields line [] headerPos 0 headerPos)
+    go (PhaseFields line acc pos count cursor) =
+      let step =
+        fieldStep
+          input
+          avail
+          pos
+          (max pos cursor)
+          (requestLineHeaderPos line)
+          0
+          count
+          False
+      match step
+        Err (Incomplete message) =>
+          ScanSuspend
+            message
+            (PhaseFields line acc pos count (crlfResume avail pos))
+        Err (Fatal failure) => ScanFatal failure
+        Ok (FieldMore field next) =>
+          go (PhaseFields line (field :: acc) next (count + 1) next)
+        Ok (FieldDone bodyPos headerBytes) =>
+          match settle (buildHead line (reverse acc) bodyPos headerBytes)
+            Err failure => ScanFatal failure
+            Ok head => scanBody input avail head (headBodyPhase head)
+    go (PhaseBody head phase) = scanBody input avail head phase
 
 frameSpanAt : Bytes -> Int -> Result FrameError FrameSpan
 frameSpanAt input start =
@@ -1571,20 +1579,24 @@ responseFindCrlfGo : String ->
   Int ->
   Int ->
   Result FrameError Int
-responseFindCrlfGo label input avail start pos limit =
-  if pos - start > limit then
-    Err (Fatal (HttpResourceExcess "http: \{label} exceeds its resource limit"))
-  else if pos >= avail then
-    responseMalformed "http: truncated \{label}; expected CRLF"
-  else if byteAt input pos == 10 then
-    responseMalformed "http: bare LF in \{label}"
-  else if byteAt input pos == 13 then
-    if pos + 1 >= avail || byteAt input (pos + 1) /= 10 then
-      responseMalformed "http: bare CR in \{label}"
-    else
-      Ok pos
-  else
-    responseFindCrlfGo label input avail start (pos + 1) limit
+responseFindCrlfGo label input avail start pos0 limit = go pos0
+  where
+    go pos =
+      if pos - start > limit then
+        Err
+          (Fatal
+            (HttpResourceExcess "http: \{label} exceeds its resource limit"))
+      else if pos >= avail then
+        responseMalformed "http: truncated \{label}; expected CRLF"
+      else if byteAt input pos == 10 then
+        responseMalformed "http: bare LF in \{label}"
+      else if byteAt input pos == 13 then
+        if pos + 1 >= avail || byteAt input (pos + 1) /= 10 then
+          responseMalformed "http: bare CR in \{label}"
+        else
+          Ok pos
+      else
+        go (pos + 1)
 
 responseParseDecimalGo : Bytes -> Int -> Int -> Result FrameError Int
 responseParseDecimalGo value i acc =
@@ -1696,19 +1708,13 @@ responseParseFields : Bytes ->
   Int ->
   List Header ->
   Result FrameError (List Header, Int, Int)
-responseParseFields input avail pos sectionStart priorBytes count acc = do
-  step <- responseFieldStep input avail pos sectionStart priorBytes count
-  match step
-    ResponseFieldDone next totalBytes => Ok (reverse acc, next, totalBytes)
-    ResponseFieldMore field next =>
-      responseParseFields
-        input
-        avail
-        next
-        sectionStart
-        priorBytes
-        (count + 1)
-        (field :: acc)
+responseParseFields inp av pos0 secBeg prior count0 acc0 = go pos0 count0 acc0
+  where
+    go pos count acc = do
+      step <- responseFieldStep inp av pos secBeg prior count
+      match step
+        ResponseFieldDone next totalBytes => Ok (reverse acc, next, totalBytes)
+        ResponseFieldMore field next => go next (count + 1) (field :: acc)
 
 responseImpliesNoBody : Int -> Bool
 responseImpliesNoBody status =
@@ -1749,17 +1755,20 @@ responseSelectBodyMode status headers =
           Ok (FixedBody size)
 
 responseParseHexSizeGo : Bytes -> Int -> Int -> Int -> Result FrameError Int
-responseParseHexSizeGo input pos end acc =
-  if pos >= end then
-    Ok acc
-  else match hexDigit (byteAt input pos)
-    None => responseMalformed "http: invalid chunk size"
-    Some digit =>
-      if acc > (maxHttpResponseChunkBytes - digit) / 16 then
-        Err
-          (Fatal (HttpResourceExcess "http: chunk size exceeds resource limit"))
-      else
-        responseParseHexSizeGo input (pos + 1) end (acc * 16 + digit)
+responseParseHexSizeGo input pos0 end acc0 = go pos0 acc0
+  where
+    go pos acc =
+      if pos >= end then
+        Ok acc
+      else match hexDigit (byteAt input pos)
+        None => responseMalformed "http: invalid chunk size"
+        Some digit =>
+          if acc > (maxHttpResponseChunkBytes - digit) / 16 then
+            Err
+              (Fatal
+                (HttpResourceExcess "http: chunk size exceeds resource limit"))
+          else
+            go (pos + 1) (acc * 16 + digit)
 
 responseParseChunkSize : Bytes -> Int -> Int -> Result FrameError Int
 responseParseChunkSize input start end =
@@ -1828,30 +1837,32 @@ responseParseChunked : Bytes ->
   Int ->
   Int ->
   Result FrameError (Bytes, List Header, Int)
-responseParseChunked input avail pos out total count = do
-  head <- responseChunkHeadStep input avail pos count
-  match head
-    ResponseChunkEnd dataPos => do
-      (trailers, finalPos, _) <- responseParseFields
-        input
-        avail
-        dataPos
-        dataPos
-        0
-        0
-        []
-      Ok (buildBytes out, trailers, finalPos)
-    ResponseChunkBody dataPos size => do
-      if total + size > maxHttpBodyBytes then
-        Err
-          (Fatal
-            (HttpResourceExcess
-              "http: decoded body exceeds 5242880-byte resource limit"))
-      else do
-        (chunk, _) <- responseReadSliceAt input avail dataPos size
-        next <- responseChunkDataEnd input avail dataPos size
-        let () = emitBytes chunk out
-        responseParseChunked input avail next out (total + size) (count + 1)
+responseParseChunked input avail pos0 out total0 count0 = go pos0 total0 count0
+  where
+    go pos total count = do
+      head <- responseChunkHeadStep input avail pos count
+      match head
+        ResponseChunkEnd dataPos => do
+          (trailers, finalPos, _) <- responseParseFields
+            input
+            avail
+            dataPos
+            dataPos
+            0
+            0
+            []
+          Ok (buildBytes out, trailers, finalPos)
+        ResponseChunkBody dataPos size => do
+          if total + size > maxHttpBodyBytes then
+            Err
+              (Fatal
+                (HttpResourceExcess
+                  "http: decoded body exceeds 5242880-byte resource limit"))
+          else do
+            (chunk, _) <- responseReadSliceAt input avail dataPos size
+            next <- responseChunkDataEnd input avail dataPos size
+            let () = emitBytes chunk out
+            go next (total + size) (count + 1)
 
 responseParseBody : BodyMode ->
   Bytes ->
@@ -1924,15 +1935,24 @@ test "response resource diagnostics use the public http vocabulary" =
     _ => expectTrue False
 
 responseScanChunkedEnd : Bytes -> Int -> Int -> Int -> Result FrameError Int
-responseScanChunkedEnd input avail pos count = do
-  head <- responseChunkHeadStep input avail pos count
-  match head
-    ResponseChunkEnd dataPos => do
-      (_, finalPos, _) <- responseParseFields input avail dataPos dataPos 0 0 []
-      Ok finalPos
-    ResponseChunkBody dataPos size => do
-      next <- responseChunkDataEnd input avail dataPos size
-      responseScanChunkedEnd input avail next (count + 1)
+responseScanChunkedEnd input avail pos0 count0 = go pos0 count0
+  where
+    go pos count = do
+      head <- responseChunkHeadStep input avail pos count
+      match head
+        ResponseChunkEnd dataPos => do
+          (_, finalPos, _) <- responseParseFields
+            input
+            avail
+            dataPos
+            dataPos
+            0
+            0
+            []
+          Ok finalPos
+        ResponseChunkBody dataPos size => do
+          next <- responseChunkDataEnd input avail dataPos size
+          go next (count + 1)
 
 responseScanBodyEnd : BodyMode -> Bytes -> Int -> Int -> Result FrameError Int
 responseScanBodyEnd NoBody _ _ pos = Ok pos
@@ -2123,22 +2143,24 @@ percentNibble : Int -> Option Int
 percentNibble byte = hexDigit byte
 
 decodeQueryBytes : Bytes -> Int -> Int -> Builder -> Result String Unit
-decodeQueryBytes input pos end out =
-  if pos >= end then
-    Ok ()
-  else if byteAt input pos /= 37 then
-    let () = emitU8 input[pos] out
-    decodeQueryBytes input (pos + 1) end out
-  else if pos + 2 >= end then
-    Err "http: malformed percent escape in query"
-  else match (
-    percentNibble (byteAt input (pos + 1)),
-    percentNibble (byteAt input (pos + 2)),
-  )
-    (Some high, Some low) =>
-      let () = emitU8 (fromInt (high * 16 + low)) out
-      decodeQueryBytes input (pos + 3) end out
-    _ => Err "http: malformed percent escape in query"
+decodeQueryBytes input pos0 end out = go pos0
+  where
+    go pos =
+      if pos >= end then
+        Ok ()
+      else if byteAt input pos /= 37 then
+        let () = emitU8 input[pos] out
+        go (pos + 1)
+      else if pos + 2 >= end then
+        Err "http: malformed percent escape in query"
+      else match (
+        percentNibble (byteAt input (pos + 1)),
+        percentNibble (byteAt input (pos + 2)),
+      )
+        (Some high, Some low) =>
+          let () = emitU8 (fromInt (high * 16 + low)) out
+          go (pos + 3)
+        _ => Err "http: malformed percent escape in query"
 
 continuation : Int -> Bool
 continuation byte = byte >= 128 && byte <= 191
@@ -2346,55 +2368,59 @@ validMediaBytes bytes i =
     (byte == 9 || byte >= 32 && byte <= 126) && validMediaBytes bytes (i + 1)
 
 scanMediaQuoted : Bytes -> Int -> Int -> Result String Int
-scanMediaQuoted value pos end =
-  if pos >= end then
-    Err "http: unterminated quoted media-type parameter"
-  else if byteAt value pos == 34 then
-    Ok (pos + 1)
-  else if byteAt value pos == 92 then
-    if pos + 1 >= end
-      || byteAt value (pos + 1) < 32
-      || byteAt value (pos + 1) > 126 then
-      Err "http: invalid quoted media-type parameter"
-    else
-      scanMediaQuoted value (pos + 2) end
-  else if byteAt value pos < 32 || byteAt value pos == 127 then
-    Err "http: control byte in media-type parameter"
-  else
-    scanMediaQuoted value (pos + 1) end
+scanMediaQuoted value pos0 end = go pos0
+  where
+    go pos =
+      if pos >= end then
+        Err "http: unterminated quoted media-type parameter"
+      else if byteAt value pos == 34 then
+        Ok (pos + 1)
+      else if byteAt value pos == 92 then
+        if pos + 1 >= end
+          || byteAt value (pos + 1) < 32
+          || byteAt value (pos + 1) > 126 then
+          Err "http: invalid quoted media-type parameter"
+        else
+          go (pos + 2)
+      else if byteAt value pos < 32 || byteAt value pos == 127 then
+        Err "http: control byte in media-type parameter"
+      else
+        go (pos + 1)
 
 parseMediaParameters : Bytes -> Int -> Int -> Int -> Result String Unit
-parseMediaParameters value pos end count =
-  let start = skipOws value pos end
-  if start == end then
-    Ok ()
-  else if count >= 32 then
-    Err "http: media type has too many parameters"
-  else if byteAt value start /= 59 then
-    Err "http: invalid media-type parameter separator"
-  else
-    let nameStart = skipOws value (start + 1) end
-    let nameEnd = scanTokenEnd value nameStart end
-    if nameEnd == nameStart then
-      Err "http: empty media-type parameter name"
-    else
-      let afterName = skipOws value nameEnd end
-      if afterName >= end || byteAt value afterName /= 61 then
-        Err "http: media-type parameter requires a value"
+parseMediaParameters value pos0 end count0 = go pos0 count0
+  where
+    go pos count =
+      let start = skipOws value pos end
+      if start == end then
+        Ok ()
+      else if count >= 32 then
+        Err "http: media type has too many parameters"
+      else if byteAt value start /= 59 then
+        Err "http: invalid media-type parameter separator"
       else
-        let valueStart = skipOws value (afterName + 1) end
-        if valueStart >= end then
-          Err "http: media-type parameter requires a value"
-        else do
-          valueEnd <- if byteAt value valueStart == 34 then
-            scanMediaQuoted value (valueStart + 1) end
+        let nameStart = skipOws value (start + 1) end
+        let nameEnd = scanTokenEnd value nameStart end
+        if nameEnd == nameStart then
+          Err "http: empty media-type parameter name"
+        else
+          let afterName = skipOws value nameEnd end
+          if afterName >= end || byteAt value afterName /= 61 then
+            Err "http: media-type parameter requires a value"
           else
-            let tokenEnd = scanTokenEnd value valueStart end
-            if tokenEnd == valueStart then
-              Err "http: invalid media-type parameter value"
-            else
-              Ok tokenEnd
-          parseMediaParameters value valueEnd end (count + 1)
+            let valueStart = skipOws value (afterName + 1) end
+            if valueStart >= end then
+              Err "http: media-type parameter requires a value"
+            else do
+              valueEnd <- if byteAt value valueStart == 34 then
+                scanMediaQuoted value (valueStart + 1) end
+              else
+                let tokenEnd = scanTokenEnd value valueStart end
+                if tokenEnd == valueStart then
+                  Err "http: invalid media-type parameter value"
+                else
+                  Ok tokenEnd
+              go valueEnd (count + 1)
 
 -- | The media type in `value`, with type and subtype lowercased, or `Err`
 -- when it is not one. Parameters are checked for form and then dropped.

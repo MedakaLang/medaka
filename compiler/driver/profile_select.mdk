@@ -26,9 +26,9 @@ manifestProfileOf : String -> <IO> Result String (Option String)
 manifestProfileOf entry = match manifestPathOf entry
   None => Ok None
   Some path =>
-    let read = match readFile path
-      Err e => Err e
-      Ok text => match parseToml text
+    let read = do
+      text <- readFile path
+      match parseToml text
         Err e =>
           if statesTargetSection text then
             Err "not valid TOML: \{e}"

@@ -100,9 +100,9 @@ externDisplayName : String -> Option String
 externDisplayName symbol =
   if stringStartsWith "$extern$u" symbol then
     let bytes = stringToUtf8Bytes (stringSlice 9 (stringLength symbol) symbol)
-    match readLenKey bytes
-      Some (_, rest) => map fst (readLenKey rest)
-      None => None
+    do
+      (_, rest) <- readLenKey bytes
+      map fst (readLenKey rest)
   else if stringStartsWith "$extern$r" symbol then
     map
       fst

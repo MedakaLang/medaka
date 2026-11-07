@@ -128,11 +128,10 @@ buildRowsGo : String ->
   Int ->
   List (Bytes, Cid, Bytes) ->
   List (Bytes, Cid, Bytes)
-buildRowsGo shape seed count i acc =
-  if i < 0 then
-    acc
-  else
-    buildRowsGo shape seed count (i - 1) (buildRow shape seed count i :: acc)
+buildRowsGo shape seed count i0 acc0 = go i0 acc0
+  where
+    go i acc =
+      if i < 0 then acc else go (i - 1) (buildRow shape seed count i :: acc)
 
 buildRows : String -> Int -> Int -> List (Bytes, Cid, Bytes)
 buildRows shape seed count = buildRowsGo shape seed count (count - 1) []

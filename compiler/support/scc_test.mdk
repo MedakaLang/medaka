@@ -58,26 +58,31 @@ reachable : OrdMap (List String) -> String -> String -> Bool
 reachable graph start goal = reachWalk graph goal [start] []
 
 reachWalk : OrdMap (List String) -> String -> List String -> List String -> Bool
-reachWalk _ _ [] _ = False
-reachWalk graph goal (here :: todo) seen
-  | here == goal = True
-  | contains here seen = reachWalk graph goal todo seen
-  | otherwise =
-    let next = optionOr [] (omLookup here graph)
-    reachWalk graph goal (next ++ todo) (here :: seen)
+reachWalk graph goal xs0 seen0 = go xs0 seen0
+  where
+    go [] _ = False
+    go (here :: todo) seen
+      | here == goal = True
+      | contains here seen = go todo seen
+      | otherwise =
+        let next = optionOr [] (omLookup here graph)
+        go (next ++ todo) (here :: seen)
 
 inSameOutputGroup : List (List String) -> String -> String -> Bool
-inSameOutputGroup [] _ _ = False
-inSameOutputGroup (group :: rest) x y =
-  contains x group && contains y group || inSameOutputGroup rest x y
+inSameOutputGroup xs0 x y = go xs0
+  where
+    go [] = False
+    go (group :: rest) = contains x group && contains y group || go rest
 
 allPairs : List String -> (String -> String -> Bool) -> Bool
 allPairs [] _ = True
 allPairs (x :: xs) p = allWith x (x :: xs) p && allPairs xs p
 
 allWith : String -> List String -> (String -> String -> Bool) -> Bool
-allWith _ [] _ = True
-allWith x (y :: ys) p = p x y && allWith x ys p
+allWith x xs0 p = go xs0
+  where
+    go [] = True
+    go (y :: ys) = p x y && go ys
 
 namesAppearOnce : List String -> List (List String) -> Bool
 namesAppearOnce [] _ = True
@@ -133,17 +138,19 @@ dependencyOrder : List String ->
   OrdMap (List String) ->
   List (List String) ->
   Bool
-dependencyOrder [] _ _ = True
-dependencyOrder (from :: rest) graph groups =
-  outgoingOrder from (optionOr [] (omLookup from graph)) groups
-    && dependencyOrder rest graph groups
+dependencyOrder xs0 graph groups = go xs0
+  where
+    go [] = True
+    go (from :: rest) =
+      outgoingOrder from (optionOr [] (omLookup from graph)) groups && go rest
 
 outgoingOrder : String -> List String -> List (List String) -> Bool
-outgoingOrder _ [] _ = True
-outgoingOrder from (to :: rest) groups =
-  let same = groupIndex groups from == groupIndex groups to
-  (same || groupIndex groups to < groupIndex groups from)
-    && outgoingOrder from rest groups
+outgoingOrder from xs0 groups = go xs0
+  where
+    go [] = True
+    go (to :: rest) =
+      let same = groupIndex groups from == groupIndex groups to
+      (same || groupIndex groups to < groupIndex groups from) && go rest
 
 samePartition : List String -> List (List String) -> List (List String) -> Bool
 samePartition names left right = allPairs names (x =>
@@ -157,16 +164,19 @@ matrixEdges : List String -> Int -> List (String, String)
 matrixEdges names bits = matrixRows names names bits 0
 
 matrixRows : List String -> List String -> Int -> Int -> List (String, String)
-matrixRows [] _ _ _ = []
-matrixRows (from :: rest) names bits place =
-  matrixRow from names bits place
-    ++ matrixRows rest names bits (place + length names)
+matrixRows xs0 names bits place0 = go xs0 place0
+  where
+    go [] _ = []
+    go (from :: rest) place =
+      matrixRow from names bits place ++ go rest (place + length names)
 
 matrixRow : String -> List String -> Int -> Int -> List (String, String)
-matrixRow _ [] _ _ = []
-matrixRow from (to :: rest) bits place =
-  let tail = matrixRow from rest bits (place + 1)
-  if bitAt bits place == 1 then (from, to) :: tail else tail
+matrixRow from xs0 bits place0 = go xs0 place0
+  where
+    go [] _ = []
+    go (to :: rest) place =
+      let tail = go rest (place + 1)
+      if bitAt bits place == 1 then (from, to) :: tail else tail
 
 threeNodeGraphSatisfies : Int -> Expectation
 threeNodeGraphSatisfies bits =

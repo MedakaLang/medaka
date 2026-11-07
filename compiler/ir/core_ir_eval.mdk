@@ -207,14 +207,16 @@ cevalMatchFrom : EvalEnv (Value e) ->
   List CArm ->
   List CArm ->
   <e> Value e
-cevalMatchFrom _ _ _ [] = panic "no matching clause in match"
-cevalMatchFrom env sv arms (arm :: rest) = match cArmParts arms arm
-  Some (pat, guards, body) => match matchPat pat sv
-    None => cevalMatchFrom env sv arms rest
-    Some binds => match cevalGuards (extendEnv env binds) guards
-      Some env2 => ceval env2 body
-      None => cevalMatchFrom env sv arms rest
-  None => panic "core_ir match: or-pattern candidate names no arm"
+cevalMatchFrom env sv arms rest0 = go rest0
+  where
+    go [] = panic "no matching clause in match"
+    go (arm :: rest) = match cArmParts arms arm
+      Some (pat, guards, body) => match matchPat pat sv
+        None => go rest
+        Some binds => match cevalGuards (extendEnv env binds) guards
+          Some env2 => ceval env2 body
+          None => go rest
+      None => panic "core_ir match: or-pattern candidate names no arm"
 
 -- An arm's pattern, guards and body; a `CArmAlt` candidate's body is the one its
 -- index names in [arms].
@@ -255,16 +257,16 @@ cevalTree : EvalEnv (Value e) ->
   List (Value e) ->
   CTree ->
   <e> Value e
--- a refutable `let` reaches here only through a lowering that keeps its decision
-cevalTree _ _ _ _ (CTFail (LetRefuted _)) = panic "let pattern match failure"
-cevalTree _ _ _ _ (CTFail (NoArm _)) = panic "no matching clause in match"
-cevalTree env root arms _ (CTLeaf i) = cevalArm env root arms i
-cevalTree env root arms occs (CTGuard i fail) =
-  cevalGuardedArm env root arms occs i fail
-cevalTree env root arms occs (CTDrop sub) =
-  cevalTree env root arms (cOccsTail occs) sub
-cevalTree env root arms occs (CTSwitch branches dft) =
-  cevalSwitch env root arms occs branches dft
+cevalTree env root arms occs0 tree0 = go occs0 tree0
+  where
+    -- a refutable `let` reaches here only through a lowering that keeps its decision
+    go _ (CTFail (LetRefuted _)) = panic "let pattern match failure"
+    go _ (CTFail (NoArm _)) = panic "no matching clause in match"
+    go _ (CTLeaf i) = cevalArm env root arms i
+    go occs (CTGuard i fail) = cevalGuardedArm env root arms occs i fail
+    go occs (CTDrop sub) = go (cOccsTail occs) sub
+    go occs (CTSwitch branches dft) =
+      cevalSwitch env root arms occs branches dft
 
 cOccsTail : List (Value e) -> List (Value e)
 cOccsTail [] = []
@@ -279,9 +281,9 @@ cevalArm env root arms i = match nthArmParts arms i
   None => panic "core_ir decision tree: arm index out of range"
 
 nthArmParts : List CArm -> Int -> Option (Pat, List CGuard, CExpr)
-nthArmParts arms i = match nthArm arms i
-  Some arm => cArmParts arms arm
-  None => None
+nthArmParts arms i = do
+  arm <- nthArm arms i
+  cArmParts arms arm
 
 cevalArmBody : EvalEnv (Value e) -> Value e -> Pat -> CExpr -> <e> Value e
 cevalArmBody env root pat body = match matchPat pat root
@@ -349,11 +351,12 @@ cevalSwitchOn : EvalEnv (Value e) ->
   List CTBranch ->
   CTree ->
   <e> Value e
-cevalSwitchOn env root arms _ rest [] dft = cevalTree env root arms rest dft
-cevalSwitchOn env root arms v rest ((CTBranch head sub) :: more) dft =
-  match headExtract head v
-    Some subs => cevalTree env root arms (subs ++ rest) sub
-    None => cevalSwitchOn env root arms v rest more dft
+cevalSwitchOn env root arms v rest branches0 dft = go branches0
+  where
+    go [] = cevalTree env root arms rest dft
+    go ((CTBranch head sub) :: more) = match headExtract head v
+      Some subs => cevalTree env root arms (subs ++ rest) sub
+      None => go more
 
 -- test a head against a value, returning its decomposed sub-values when it
 -- matches.  Reuses matchPat (with fresh binders) for BOTH the test and the
@@ -467,10 +470,12 @@ cInstallGroup : EvalEnv (Value e) ->
   List (String, Ref (Value e)) ->
   List CBind ->
   <e> Unit
-cInstallGroup _ _ [] = ()
-cInstallGroup env cells ((CBind name clauses _ _) :: rest) =
-  findCell cells name := cGroupValue env clauses
-  cInstallGroup env cells rest
+cInstallGroup env cells binds0 = go binds0
+  where
+    go [] = ()
+    go ((CBind name clauses _ _) :: rest) =
+      findCell cells name := cGroupValue env clauses
+      go rest
 
 -- let-group binding value: a nullary single clause is eager (recursive let);
 -- multi-clause coalesces into a VMulti dispatched by arg pattern + fall-through.
@@ -581,10 +586,12 @@ cInstallTopGroups : EvalEnv (Value e) ->
   List (String, Ref (Value e)) ->
   List CBind ->
   <e> Unit
-cInstallTopGroups _ _ [] = ()
-cInstallTopGroups env cells ((CBind n clauses _ _) :: rest) =
-  findCell cells n := cTopGroupValue env clauses
-  cInstallTopGroups env cells rest
+cInstallTopGroups env cells binds0 = go binds0
+  where
+    go [] = ()
+    go ((CBind n clauses _ _) :: rest) =
+      findCell cells n := cTopGroupValue env clauses
+      go rest
 
 cTopGroupValue : EvalEnv (Value e) -> List CClause -> Value e
 cTopGroupValue env [CClause pats body]

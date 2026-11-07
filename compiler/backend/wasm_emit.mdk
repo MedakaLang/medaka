@@ -878,18 +878,16 @@ jsImportForW prog name = match selectedJsImport prog name
 
 selectedJsImport : Prog -> String -> Option JsImport
 selectedJsImport prog name = match omLookup name (progEmit prog).externFacts
-  Some fact if fact.bindingKind
-    == ForeignBinding => match hostSymbol "js" fact.hostBindings
-    Some host =>
-      map
-        (shape => JsImport {
-          medakaName = name,
-          jsName = host,
-          params = shape.parameterHeads,
-          result = shape.resultHead,
-        })
-        fact.callableShape
-    None => None
+  Some fact if fact.bindingKind == ForeignBinding => do
+    host <- hostSymbol "js" fact.hostBindings
+    map
+      (shape => JsImport {
+        medakaName = name,
+        jsName = host,
+        params = shape.parameterHeads,
+        result = shape.resultHead,
+      })
+      fact.callableShape
   _ => None
 
 -- A user extern applied: with all its arguments, the arguments and then its
@@ -1720,14 +1718,13 @@ emitProgramWith : WasmEmit ->
   EmitPlan ->
   CProgram ->
   Result (List SymbolDefect) String
-emitProgramWith emit input plan cp = match emitProgramCore emit input plan cp
-  Err defects => Err defects
-  Ok text =>
-    finishCheckedText
-      (RecordedGaps !emit.gapSymbols)
-      !emit.symbols
-      !emit.callCoverage
-      text
+emitProgramWith emit input plan cp = do
+  text <- emitProgramCore emit input plan cp
+  finishCheckedText
+    (RecordedGaps !emit.gapSymbols)
+    !emit.symbols
+    !emit.callCoverage
+    text
 
 -- Strict and record modes share one semantic gateway; only target gaps may
 -- become record events instead of a refusal.
@@ -1890,36 +1887,42 @@ emitProgramGaps input plan cp0 =
     defects => Err defects
 
 emitFnsGapsW : Prog -> Ref (List (List String)) -> List CBind -> Unit
-emitFnsGapsW _ _ [] = ()
-emitFnsGapsW prog fragments ((CBind name cs site bid) :: rest) =
-  setGapBindingOfW (progEmit prog) ("fn " ++ name)
-  let lines = emitRefFnBind prog (CBind name cs site bid)
-  setRef fragments (lines :: !fragments)
-  emitFnsGapsW prog fragments rest
+emitFnsGapsW prog fragments xs0 = go xs0
+  where
+    go [] = ()
+    go ((CBind name cs site bid) :: rest) =
+      setGapBindingOfW (progEmit prog) ("fn " ++ name)
+      let lines = emitRefFnBind prog (CBind name cs site bid)
+      setRef fragments (lines :: !fragments)
+      go rest
 
 emitImplsGapsW : Prog -> Ref (List (List String)) -> List ImplG -> Unit
-emitImplsGapsW _ _ [] = ()
-emitImplsGapsW prog fragments ((g@(ImplG method headTag _ _ _ _)) :: rest) =
-  setGapBindingOfW (progEmit prog) "impl \{method}@\{headTag}"
-  let lines = emitImplGroup prog g
-  setRef fragments (lines :: !fragments)
-  emitImplsGapsW prog fragments rest
+emitImplsGapsW prog fragments xs0 = go xs0
+  where
+    go [] = ()
+    go ((g@(ImplG method headTag _ _ _ _)) :: rest) =
+      setGapBindingOfW (progEmit prog) "impl \{method}@\{headTag}"
+      let lines = emitImplGroup prog g
+      setRef fragments (lines :: !fragments)
+      go rest
 
 emitValsGapsW : Prog -> Ref (List (List String)) -> List CBind -> Unit
-emitValsGapsW _ _ [] = ()
-emitValsGapsW prog fragments (b :: rest) =
-  setGapBindingOfW (progEmit prog) ("val " ++ bindName b)
-  let lines = emitRefValInit prog b
-  setRef fragments (lines :: !fragments)
-  emitValsGapsW prog fragments rest
+emitValsGapsW prog fragments xs0 = go xs0
+  where
+    go [] = ()
+    go (b :: rest) =
+      setGapBindingOfW (progEmit prog) ("val " ++ bindName b)
+      let lines = emitRefValInit prog b
+      setRef fragments (lines :: !fragments)
+      go rest
 
 externFamilyW : WasmEmit -> String -> Option WasmFamily
 externFamilyW emit name =
   if name == siteSentinelName then
     Some WasmLeaf
-  else match lookupAssoc name (emitDemandW emit).catalogFamilies
-    Some f => if isWasmExternFamily f then Some f else None
-    None => None
+  else do
+    f <- lookupAssoc name (emitDemandW emit).catalogFamilies
+    if isWasmExternFamily f then Some f else None
 
 isWasmEtaExtern : WasmEmit -> String -> Bool
 isWasmEtaExtern emit name = isSome (externFamilyW emit name)
@@ -2797,7 +2800,8 @@ mainBodyIsUnit prog cafs (CLet _ pat _ b) =
 mainBodyIsUnit prog cafs (CDecision _ arms _) = allArmsUnit prog cafs arms
 mainBodyIsUnit prog cafs (CMatch _ arms) = allArmsUnit prog cafs arms
 mainBodyIsUnit prog cafs (CBlock stmts) = blockTailIsUnit prog cafs stmts
-mainBodyIsUnit _ _ _ = False
+mainBodyIsUnit _ _ (CLit _ | CLam _ _ | CLetGroup _ _ | CIf _ _ _ | CBinPrim _ _ _ _ _ | CUnOp _ _ | CTuple _ | CList _ | CRecord _ _ | CFieldAccess _ _ _ _ | CRecordUpdate _ _ _ | CVariantUpdate _ _ _ | CArray _ | CRangeList _ _ _ | CRangeArray _ _ _ | CMethod _ _) =
+  False
 
 -- True iff every match/decision arm body is itself a Unit main body.  Empty ⇒ False
 -- (no leaves to prove Unit ⇒ don't suppress).
@@ -2806,13 +2810,15 @@ allArmsUnit _ _ [] = False
 allArmsUnit prog cafs arms = allArmsUnitGo prog cafs arms
 
 allArmsUnitGo : Prog -> OrdMap CExpr -> List CArm -> Bool
-allArmsUnitGo _ _ [] = True
-allArmsUnitGo prog cafs ((CArm pat _ body) :: rest) =
-  if mainBodyIsUnit prog (shadowCafs (patBinders pat) cafs) body then
-    allArmsUnitGo prog cafs rest
-  else
-    False
-allArmsUnitGo prog cafs ((CArmAlt _ _ _) :: rest) = allArmsUnitGo prog cafs rest
+allArmsUnitGo prog cafs xs0 = go xs0
+  where
+    go [] = True
+    go ((CArm pat _ body) :: rest) =
+      if mainBodyIsUnit prog (shadowCafs (patBinders pat) cafs) body then
+        go rest
+      else
+        False
+    go ((CArmAlt _ _ _) :: rest) = go rest
 
 blockTailIsUnit : Prog -> OrdMap CExpr -> List CStmt -> Bool
 blockTailIsUnit _ _ [] = False
@@ -3183,24 +3189,27 @@ emitClauseChainGo : Prog ->
   Int ->
   List String
 -- B5: the last clause fell through (non-exhaustive function) → coded trap.
-emitClauseChainGo prog _ _ _ _ [] _ site = wasmNonexhTrap (progEmit prog) site
-emitClauseChainGo prog baseEnv name params arity ((CClause pats body) :: rest) i site =
-  let clLabel = labelName WN.WClause i
-  let (tests, binds, env) = clausePatCodeEnv prog baseEnv pats params clLabel
-  -- A guard chain inside this clause's body desugars to `__fallthrough__` (the
-  -- "no arm matched, try the next clause" sentinel).  We REWRITE each such occurrence
-  -- in the body to a label-carrying sentinel `__ft__<clLabel>` BEFORE emitting, so the
-  -- emitter lowers it to `br <clLabel>` as a PURE function of the var name.  (A mutable
-  -- "current label" ref does NOT work here: this emitter builds the instruction list
-  -- lazily and forces the strings at final assembly, long after any setRef/restore —
-  -- so the read would see a stale/default label.  Encoding the target in the node is
-  -- timing-independent.)  `br <clLabel>` exits this clause's block, landing on the next
-  -- clause (or the chain's trailing `unreachable` for the last clause).
-  let body2 = labelFallthrough body clLabel
-  ["block " ++ clLabel]
-    ++ indent (tests ++ binds ++ emitRefTail prog env arity body2)
-    ++ ["end"]
-    ++ emitClauseChainGo prog baseEnv name params arity rest (i + 1) site
+emitClauseChainGo prog baseEnv _name params arity cls0 i0 site = go cls0 i0
+  where
+    go [] _ = wasmNonexhTrap (progEmit prog) site
+    go ((CClause pats body) :: rest) i =
+      let clLabel = labelName WN.WClause i
+      let (tests, binds, env) =
+        clausePatCodeEnv prog baseEnv pats params clLabel
+      -- A guard chain inside this clause's body desugars to `__fallthrough__` (the
+      -- "no arm matched, try the next clause" sentinel).  We REWRITE each such occurrence
+      -- in the body to a label-carrying sentinel `__ft__<clLabel>` BEFORE emitting, so the
+      -- emitter lowers it to `br <clLabel>` as a PURE function of the var name.  (A mutable
+      -- "current label" ref does NOT work here: this emitter builds the instruction list
+      -- lazily and forces the strings at final assembly, long after any setRef/restore —
+      -- so the read would see a stale/default label.  Encoding the target in the node is
+      -- timing-independent.)  `br <clLabel>` exits this clause's block, landing on the next
+      -- clause (or the chain's trailing `unreachable` for the last clause).
+      let body2 = labelFallthrough body clLabel
+      ["block " ++ clLabel]
+        ++ indent (tests ++ binds ++ emitRefTail prog env arity body2)
+        ++ ["end"]
+        ++ go rest (i + 1)
 
 -- `ftPrefix` / `labelFallthrough` are the BACKEND-NEUTRAL sentinel-labelling pass —
 -- they now live in `backend/emit_support.mdk` and are shared with the LLVM emitter,
@@ -3227,13 +3236,15 @@ clausePatGo : Prog ->
   List String ->
   Env ->
   (List String, List String, Env)
-clausePatGo _ [] _ tAcc bAcc env = (tAcc, bAcc, env)
-clausePatGo prog ((pat, a) :: rest) clLabel tAcc bAcc env =
-  let occ = ["local.get $" ++ wParamId a]
-  let (t, b, env2) = patTestBind prog pat occ clLabel env
-  -- Bound: one step per clause parameter, bounded by the clause arity.
-  -- lint-disable-next-line rule-accumulator-append
-  clausePatGo prog rest clLabel (tAcc ++ t) (bAcc ++ b) env2
+clausePatGo prog xs0 clLabel tAcc0 bAcc0 env0 = go xs0 tAcc0 bAcc0 env0
+  where
+    go [] tAcc bAcc env = (tAcc, bAcc, env)
+    go ((pat, a) :: rest) tAcc bAcc env =
+      let occ = ["local.get $" ++ wParamId a]
+      let (t, b, env2) = patTestBind prog pat occ clLabel env
+      -- Bound: one step per clause parameter, bounded by the clause arity.
+      -- lint-disable-next-line rule-accumulator-append
+      go rest (tAcc ++ t) (bAcc ++ b) env2
 
 -- (tests, binds, env') for matching `pat` against the value snippet `occ`.
 patTestBind : Prog ->
@@ -3242,133 +3253,139 @@ patTestBind : Prog ->
   String ->
   Env ->
   (List String, List String, Env)
-patTestBind _prog PWild _occ _clLabel env = ([], [], env)
-patTestBind _prog (PVar x _ bid) occ _clLabel env =
-  ([], occ ++ ["local.set $" ++ gname x], envBind x bid env)
--- #759: unbox the scrutinee through the $mdk_unbox_int seam (i31 OR $boxint) and
--- compare at full i64 width.  An `i31.get_s` + `i32.const n` path truncates to
--- 31 bits — for |n| >= 2^30 the `i32.const` overflows (wasm-tools REJECTS the module)
--- and a boxed scrutinee ref.casts to i31 and TRAPS.
-patTestBind prog (PLit (LInt n)) occ clLabel env = (
-  occ
-    ++ [
-      unboxIntW prog,
-      "i64.const " ++ intToString n,
-      "i64.ne",
-      "br_if " ++ clLabel,
-    ],
-  [],
-  env,
-)
-patTestBind _prog (PLit (LBool b)) occ clLabel env = (
-  occ
-    ++ [
-      "ref.cast (ref i31)",
-      "i31.get_u",
-      "i32.const " ++ (if b then "1" else "0"),
-      "i32.ne",
-      "br_if " ++ clLabel,
-    ],
-  [],
-  env,
-)
--- W9: a `()` (Unit) clause head — Unit is the i31 0 immediate, irrefutable here
--- (the type guarantees the value is Unit), so no test and no binding.
-patTestBind _prog (PLit LUnit) _occ _clLabel env = ([], [], env)
--- W9: a Char-literal clause head — a Char is an i31 codepoint immediate (same rep
--- as emitLitRef (LChar)); compare the i31 against the codepoint constant.
-patTestBind _prog (PLit (LChar c)) occ clLabel env = (
-  occ
-    ++ [
-      "ref.cast (ref i31)",
-      "i31.get_u",
-      "i32.const "
-        ++ intToString (charCode (arrayGetUnsafe 0 (stringToChars c))),
-      "i32.ne",
-      "br_if " ++ clLabel,
-    ],
-  [],
-  env,
-)
-patTestBind prog (PLit (LString s)) occ clLabel env =
-  let cmpSuffix = [
-    rtCallW prog "mdk_str_compare" 2,
-    "ref.cast (ref i31)",
-    "i31.get_u",
-    "i32.const 1",
-    "i32.ne",
-    "br_if " ++ clLabel,
-  ]
-  (
-    occ ++ ["ref.cast (ref $str)"] ++ emitLitRef prog (LString s) ++ cmpSuffix,
-    [],
-    env,
-  )
--- W10: a constructor clause head — test the discriminant, then descend into each
--- field with patTestBind (NOT bindConFields).  A nested field pattern can itself be
--- refutable (e.g. `Variant cname (ConNamed fs)` — the inner `ConNamed` discriminates
--- against a sibling `ConPos` of the same payload type), so the field must emit its own
--- discriminant test, else its struct cast runs unconditionally and traps `illegal
--- cast` on the sibling shape.  bindConFields only binds (no tests), so it is unsound
--- for refutable nested ctors — mirror PCons/PTuple/PList, which recurse via patTestBind.
-patTestBind prog (PCon c args) occ clLabel env =
-  let ctest =
-    discrimReadOf prog occ (ctorTypeName prog c)
-      ++ [
-        "i32.const " ++ intToString (ctorOrdinal prog c),
+patTestBind prog pat0 occ0 clLabel env0 = go pat0 occ0 env0
+  where
+    go PWild _occ env = ([], [], env)
+    go (PVar x _ bid) occ env =
+      ([], occ ++ ["local.set $" ++ gname x], envBind x bid env)
+    -- #759: unbox the scrutinee through the $mdk_unbox_int seam (i31 OR $boxint) and
+    -- compare at full i64 width.  An `i31.get_s` + `i32.const n` path truncates to
+    -- 31 bits — for |n| >= 2^30 the `i32.const` overflows (wasm-tools REJECTS the module)
+    -- and a boxed scrutinee ref.casts to i31 and TRAPS.
+    go (PLit (LInt n)) occ env = (
+      occ
+        ++ [
+          unboxIntW prog,
+          "i64.const " ++ intToString n,
+          "i64.ne",
+          "br_if " ++ clLabel,
+        ],
+      [],
+      env,
+    )
+    go (PLit (LBool b)) occ env = (
+      occ
+        ++ [
+          "ref.cast (ref i31)",
+          "i31.get_u",
+          "i32.const " ++ (if b then "1" else "0"),
+          "i32.ne",
+          "br_if " ++ clLabel,
+        ],
+      [],
+      env,
+    )
+    -- W9: a `()` (Unit) clause head — Unit is the i31 0 immediate, irrefutable here
+    -- (the type guarantees the value is Unit), so no test and no binding.
+    go (PLit LUnit) _occ env = ([], [], env)
+    -- W9: a Char-literal clause head — a Char is an i31 codepoint immediate (same rep
+    -- as emitLitRef (LChar)); compare the i31 against the codepoint constant.
+    go (PLit (LChar c)) occ env = (
+      occ
+        ++ [
+          "ref.cast (ref i31)",
+          "i31.get_u",
+          "i32.const "
+            ++ intToString (charCode (arrayGetUnsafe 0 (stringToChars c))),
+          "i32.ne",
+          "br_if " ++ clLabel,
+        ],
+      [],
+      env,
+    )
+    go (PLit (LString s)) occ env =
+      let cmpSuffix = [
+        rtCallW prog "mdk_str_compare" 2,
+        "ref.cast (ref i31)",
+        "i31.get_u",
+        "i32.const 1",
         "i32.ne",
         "br_if " ++ clLabel,
       ]
-  let (ft, fb, env2) = patTestBindCon prog c args occ clLabel env 0
-  (ctest ++ ft, fb, env2)
-patTestBind prog (PAs x _ bid p) occ clLabel env =
-  let setX = occ ++ ["local.set $" ++ gname x]
-  let (t, b, env2) = patTestBind prog p occ clLabel (envBind x bid env)
-  (t, setX ++ b, env2)
--- W9: a refutable cons-cell clause head `(h :: t)` — the focus must be a Cons
--- (ordinal 0; Nil is ordinal 1), else fall to the next clause.  Then test+bind
--- the head (field 1) and tail (field 2) recursively (nested patterns may also be
--- refutable, e.g. `[x] = (x :: [])`).
-patTestBind prog (PCons h t) occ clLabel env =
-  let consTest =
-    discrimReadOf prog occ "List"
-      ++ ["i32.const 0", "i32.ne", "br_if " ++ clLabel]
-  let hSnip = occ ++ ["ref.cast (ref $C_Cons)", "struct.get $C_Cons 1"]
-  let tSnip = occ ++ ["ref.cast (ref $C_Cons)", "struct.get $C_Cons 2"]
-  let (ht, hb, env2) = patTestBind prog h hSnip clLabel env
-  let (tt, tb, env3) = patTestBind prog t tSnip clLabel env2
-  (consTest ++ ht ++ tt, hb ++ tb, env3)
--- W9: a refutable fixed-length list clause head `[p0, p1, …]` — descend the Cons
--- spine: each element's cell must be a Cons (else fall through), then the final
--- tail must be Nil (ordinal 1).
-patTestBind prog (PList ps) occ clLabel env =
-  patTestBindList prog ps occ clLabel env
--- W9: a tuple clause head `(p0, p1, …)` — a tuple is single-shape (irrefutable),
--- so no test; bind each field (field i+1 of $C_Tup<n>) and recurse for nested
--- refutable subpatterns.
-patTestBind prog (PTuple ps) occ clLabel env =
-  patTestBindTuple prog (tupleCtorName (listLen ps)) ps occ clLabel env 0
--- G6 (#379): a range pattern `lo..=hi` / `lo..hi`.  PRng canonicalizes to PWild in the
--- decision matrix (core_ir_lower's canonPat), so the tree routes to this arm
--- UNCONDITIONALLY and marks it patNeedsGuard — the actual comparison must happen here,
--- in the guarded-arm re-match.  Peer of llvm_emit's `emitRefutMatch (PRng ...)`.
--- One signed i64 test serves both Int and Char (Char = its codepoint, cf. the PLit
--- LChar arm above); rngCmpW unboxes via $mdk_unbox_int so NEGATIVE bounds (`-1..1`) and
--- Int bounds >= 2^30 are both correct.  Fail-fast, mirroring eval.mdk's inIntRange/inCharRange:
--- `v < lo` fails; then `v > hi` (incl) / `v >= hi` (exclusive `..`) fails.
-patTestBind prog (PRng lo hi incl) occ clLabel env = (
-  rngCmpW prog occ (rngBound lo) "i64.lt_s" clLabel
-    ++ rngCmpW
-      prog
-      occ
-      (rngBound hi)
-      (if incl then "i64.gt_s" else "i64.ge_s")
-      clLabel,
-  [],
-  env,
-)
-patTestBind prog other _occ _clLabel _env =
-  gapL3P prog ("ref-mode: unsupported clause parameter pattern " ++ ptag other)
+      (
+        occ
+          ++ ["ref.cast (ref $str)"]
+          ++ emitLitRef prog (LString s)
+          ++ cmpSuffix,
+        [],
+        env,
+      )
+    -- W10: a constructor clause head — test the discriminant, then descend into each
+    -- field with go . A field pattern can itself be
+    -- refutable (e.g. `Variant cname (ConNamed fs)` — the inner `ConNamed` discriminates
+    -- against a sibling `ConPos` of the same payload type), so the field must emit its own
+    -- discriminant test, else its struct cast runs unconditionally and traps `illegal
+    -- cast` on the sibling shape.  bindConFields only binds (no tests), so it is unsound
+    -- for refutable nested ctors — mirror PCons/PTuple/PList, which recurse via go
+    go (PCon c args) occ env =
+      let ctest =
+        discrimReadOf prog occ (ctorTypeName prog c)
+          ++ [
+            "i32.const " ++ intToString (ctorOrdinal prog c),
+            "i32.ne",
+            "br_if " ++ clLabel,
+          ]
+      let (ft, fb, env2) = patTestBindCon prog c args occ clLabel env 0
+      (ctest ++ ft, fb, env2)
+    go (PAs x _ bid p) occ env =
+      let setX = occ ++ ["local.set $" ++ gname x]
+      let (t, b, env2) = go p occ (envBind x bid env)
+      (t, setX ++ b, env2)
+    -- W9: a refutable cons-cell clause head `(h :: t)` — the focus must be a Cons
+    -- (ordinal 0; Nil is ordinal 1), else fall to the next clause.  Then test+bind
+    -- the head (field 1) and tail (field 2) recursively (nested patterns may also be
+    -- refutable, e.g. `[x] = (x :: [])`).
+    go (PCons h t) occ env =
+      let consTest =
+        discrimReadOf prog occ "List"
+          ++ ["i32.const 0", "i32.ne", "br_if " ++ clLabel]
+      let hSnip = occ ++ ["ref.cast (ref $C_Cons)", "struct.get $C_Cons 1"]
+      let tSnip = occ ++ ["ref.cast (ref $C_Cons)", "struct.get $C_Cons 2"]
+      let (ht, hb, env2) = go h hSnip env
+      let (tt, tb, env3) = go t tSnip env2
+      (consTest ++ ht ++ tt, hb ++ tb, env3)
+    -- W9: a refutable fixed-length list clause head `[p0, p1, …]` — descend the Cons
+    -- spine: each element's cell must be a Cons (else fall through), then the final
+    -- tail must be Nil (ordinal 1).
+    go (PList ps) occ env = patTestBindList prog ps occ clLabel env
+    -- W9: a tuple clause head `(p0, p1, …)` — a tuple is single-shape (irrefutable),
+    -- so no test; bind each field (field i+1 of $C_Tup<n>) and recurse for nested
+    -- refutable subpatterns.
+    go (PTuple ps) occ env =
+      patTestBindTuple prog (tupleCtorName (listLen ps)) ps occ clLabel env 0
+    -- G6 (#379): a range pattern `lo..=hi` / `lo..hi`.  PRng canonicalizes to PWild in the
+    -- decision matrix (core_ir_lower's canonPat), so the tree routes to this arm
+    -- UNCONDITIONALLY and marks it patNeedsGuard — the actual comparison must happen here,
+    -- in the guarded-arm re-match.  Peer of llvm_emit's `emitRefutMatch (PRng ...)`.
+    -- One signed i64 test serves both Int and Char (Char = its codepoint, cf. the PLit
+    -- LChar arm above); rngCmpW unboxes via $mdk_unbox_int so NEGATIVE bounds (`-1..1`) and
+    -- Int bounds >= 2^30 are both correct.  Fail-fast, mirroring eval.mdk's inIntRange/inCharRange:
+    -- `v < lo` fails; then `v > hi` (incl) / `v >= hi` (exclusive `..`) fails.
+    go (PRng lo hi incl) occ env = (
+      rngCmpW prog occ (rngBound lo) "i64.lt_s" clLabel
+        ++ rngCmpW
+          prog
+          occ
+          (rngBound hi)
+          (if incl then "i64.gt_s" else "i64.ge_s")
+          clLabel,
+      [],
+      env,
+    )
+    go other _occ _env =
+      gapL3P
+        prog
+        ("ref-mode: unsupported clause parameter pattern " ++ ptag other)
 
 -- one half of a range test: unbox `occ` to i64 and `br_if clLabel` when `cmp` against
 -- `bound` holds (i.e. when the value is OUT of range).  `occ` is re-embedded per half —
@@ -3395,21 +3412,23 @@ patTestBindList : Prog ->
   String ->
   Env ->
   (List String, List String, Env)
-patTestBindList prog [] occ clLabel env = (
-  discrimReadOf prog occ "List"
-    ++ ["i32.const 1", "i32.ne", "br_if " ++ clLabel],
-  [],
-  env,
-)
-patTestBindList prog (p :: ps) occ clLabel env =
-  let consTest =
-    discrimReadOf prog occ "List"
-      ++ ["i32.const 0", "i32.ne", "br_if " ++ clLabel]
-  let hSnip = occ ++ ["ref.cast (ref $C_Cons)", "struct.get $C_Cons 1"]
-  let tSnip = occ ++ ["ref.cast (ref $C_Cons)", "struct.get $C_Cons 2"]
-  let (ht, hb, env2) = patTestBind prog p hSnip clLabel env
-  let (tt, tb, env3) = patTestBindList prog ps tSnip clLabel env2
-  (consTest ++ ht ++ tt, hb ++ tb, env3)
+patTestBindList prog ps0 occ0 clLabel env0 = go ps0 occ0 env0
+  where
+    go [] occ env = (
+      discrimReadOf prog occ "List"
+        ++ ["i32.const 1", "i32.ne", "br_if " ++ clLabel],
+      [],
+      env,
+    )
+    go (p :: ps) occ env =
+      let consTest =
+        discrimReadOf prog occ "List"
+          ++ ["i32.const 0", "i32.ne", "br_if " ++ clLabel]
+      let hSnip = occ ++ ["ref.cast (ref $C_Cons)", "struct.get $C_Cons 1"]
+      let tSnip = occ ++ ["ref.cast (ref $C_Cons)", "struct.get $C_Cons 2"]
+      let (ht, hb, env2) = patTestBind prog p hSnip clLabel env
+      let (tt, tb, env3) = go ps tSnip env2
+      (consTest ++ ht ++ tt, hb ++ tb, env3)
 
 -- (tests, binds, env') for a tuple clause head: each field i+1 of $C_Tup<n> (after
 -- the i32 tag), recursing into the sub-pattern (which may itself be refutable).
@@ -3421,17 +3440,19 @@ patTestBindTuple : Prog ->
   Env ->
   Int ->
   (List String, List String, Env)
-patTestBindTuple _ _ [] _ _ env _ = ([], [], env)
-patTestBindTuple prog tc (p :: rest) occ clLabel env i =
-  let fieldSnip =
-    occ
-      ++ [
-        "ref.cast (ref $" ++ typeNameW prog (ctorStructName tc) ++ ")",
-        "struct.get $\{typeNameW prog (ctorStructName tc)} \{intToString (i + 1)}",
-      ]
-  let (ft, fb, env2) = patTestBind prog p fieldSnip clLabel env
-  let (rt, rb, env3) = patTestBindTuple prog tc rest occ clLabel env2 (i + 1)
-  (ft ++ rt, fb ++ rb, env3)
+patTestBindTuple prog tc xs0 occ clLabel env0 i0 = go xs0 env0 i0
+  where
+    go [] env _ = ([], [], env)
+    go (p :: rest) env i =
+      let fieldSnip =
+        occ
+          ++ [
+            "ref.cast (ref $" ++ typeNameW prog (ctorStructName tc) ++ ")",
+            "struct.get $\{typeNameW prog (ctorStructName tc)} \{intToString (i + 1)}",
+          ]
+      let (ft, fb, env2) = patTestBind prog p fieldSnip clLabel env
+      let (rt, rb, env3) = go rest env2 (i + 1)
+      (ft ++ rt, fb ++ rb, env3)
 
 -- (tests, binds, env') for a constructor clause head's fields: field i+1 of the ctor's
 -- struct (after the i32 tag), recursing into each sub-pattern with patTestBind so a
@@ -3444,17 +3465,19 @@ patTestBindCon : Prog ->
   Env ->
   Int ->
   (List String, List String, Env)
-patTestBindCon _ _ [] _ _ env _ = ([], [], env)
-patTestBindCon prog c (p :: rest) occ clLabel env i =
-  let fieldSnip =
-    occ
-      ++ [
-        "ref.cast (ref $" ++ typeNameW prog (ctorStructName c) ++ ")",
-        "struct.get $\{typeNameW prog (ctorStructName c)} \{intToString (i + 1)}",
-      ]
-  let (ft, fb, env2) = patTestBind prog p fieldSnip clLabel env
-  let (rt, rb, env3) = patTestBindCon prog c rest occ clLabel env2 (i + 1)
-  (ft ++ rt, fb ++ rb, env3)
+patTestBindCon prog c xs0 occ clLabel env0 i0 = go xs0 env0 i0
+  where
+    go [] env _ = ([], [], env)
+    go (p :: rest) env i =
+      let fieldSnip =
+        occ
+          ++ [
+            "ref.cast (ref $" ++ typeNameW prog (ctorStructName c) ++ ")",
+            "struct.get $\{typeNameW prog (ctorStructName c)} \{intToString (i + 1)}",
+          ]
+      let (ft, fb, env2) = patTestBind prog p fieldSnip clLabel env
+      let (rt, rb, env3) = go rest env2 (i + 1)
+      (ft ++ rt, fb ++ rb, env3)
 
 -- all locals a clause group needs: every clause's param-bound vars + body locals.
 clauseLocals : List CClause -> List String
@@ -3861,45 +3884,45 @@ routeWitness : Prog -> Env -> Int -> Route -> List String
 -- The array holds the dictionary's direct supers first, then its requires (the
 -- LLVM cell's order), so a projection indexes the same field whichever instance
 -- the dictionary is.
-routeWitness prog env d (route@(RKey tag reqs sups)) =
-  match closedDictW prog route
-    Some initBody => wConstDict prog initBody
-    None =>
-      let fieldWitnesses = flatMap (routeWitness prog env d) (sups ++ reqs)
-      ["i32.const " ++ intToString (dictTag tag)]
-        ++ fieldWitnesses
-        ++ [
-          "array.new_fixed $dictarr "
-            ++ intToString (listLen sups + listLen reqs),
-        ]
-        ++ slotArraysW prog tag
-        ++ ["struct.new $dict"]
--- a super projected out of a dictionary: a dictionary with supers is always a table
-routeWitness prog env d (RProj r path) =
-  routeWitness prog env d r ++ flatMap superFieldW path
-routeWitness prog env _ (RDict dpar) =
-  if envHas dpar env then
-    ["local.get $" ++ gname dpar]
-  else
-    gapLP prog ("wasm W5: forwarded dict '" ++ dpar ++ "' not in scope")
-routeWitness prog env _ (RDictFwd dpar) =
-  if envHas dpar env then
-    ["local.get $" ++ gname dpar]
-  else
-    gapLP prog ("wasm W5: forwarded dict '" ++ dpar ++ "' not in scope")
--- RNone as a witness is the dictionary for an unconstrained type variable under a
--- `requires` (the element of `None : Option a`, the error of `Ok 1 : Result e Int`).
--- There is no value of that type for a method to take, so no value-position
--- dispatch goes through it: the constructor-only and Display/Eq/Ord shapes never
--- call it.  It is the no-op i31 (dict tag 0), mirroring llvm_emit's
--- `dictWordOfRoute _ _ RNone = "0"`.
-routeWitness _ _ _ RNone = ["i32.const 0", "ref.i31"]
--- S-1: RLocal's own dicts are the call's leading dict ARGS (pushed by emitMethodRef's
--- RLocal arm via emitDictRef), not a dict WITNESS for this route — so as a witness it
--- stays the no-op i31 (dict tag 0), mirroring llvm_emit's
--- `dictWordOfRoute (RLocal _ _) = "0"`.  RScalar (scalar-tag) likewise.
-routeWitness _ _ _ (RLocal _ _) = ["i32.const 0", "ref.i31"]
-routeWitness _ _ _ (RScalar _) = ["i32.const 0", "ref.i31"]
+routeWitness prog env d route0 = go route0
+  where
+    go (route@(RKey tag reqs sups)) = match closedDictW prog route
+      Some initBody => wConstDict prog initBody
+      None =>
+        let fieldWitnesses = flatMap (routeWitness prog env d) (sups ++ reqs)
+        ["i32.const " ++ intToString (dictTag tag)]
+          ++ fieldWitnesses
+          ++ [
+            "array.new_fixed $dictarr "
+              ++ intToString (listLen sups + listLen reqs),
+          ]
+          ++ slotArraysW prog tag
+          ++ ["struct.new $dict"]
+    -- a super projected out of a dictionary: a dictionary with supers is always a table
+    go (RProj r path) = go r ++ flatMap superFieldW path
+    go (RDict dpar) =
+      if envHas dpar env then
+        ["local.get $" ++ gname dpar]
+      else
+        gapLP prog ("wasm W5: forwarded dict '" ++ dpar ++ "' not in scope")
+    go (RDictFwd dpar) =
+      if envHas dpar env then
+        ["local.get $" ++ gname dpar]
+      else
+        gapLP prog ("wasm W5: forwarded dict '" ++ dpar ++ "' not in scope")
+    -- RNone as a witness is the dictionary for an unconstrained type variable under a
+    -- `requires` (the element of `None : Option a`, the error of `Ok 1 : Result e Int`).
+    -- There is no value of that type for a method to take, so no value-position
+    -- dispatch goes through it: the constructor-only and Display/Eq/Ord shapes never
+    -- call it.  It is the no-op i31 (dict tag 0), mirroring llvm_emit's
+    -- `dictWordOfRoute _ _ RNone = "0"`.
+    go RNone = ["i32.const 0", "ref.i31"]
+    -- S-1: RLocal's own dicts are the call's leading dict ARGS (pushed by emitMethodRef's
+    -- RLocal arm via emitDictRef), not a dict WITNESS for this route — so as a witness it
+    -- stays the no-op i31 (dict tag 0), mirroring llvm_emit's
+    -- `dictWordOfRoute (RLocal _ _) = "0"`.  RScalar (scalar-tag) likewise.
+    go (RLocal _ _) = ["i32.const 0", "ref.i31"]
+    go (RScalar _) = ["i32.const 0", "ref.i31"]
 
 superFieldW : Int -> List String
 superFieldW i = [
@@ -3947,22 +3970,20 @@ instanceFillsW prog key =
 -- concrete route, its supers and `requires` likewise, and the null word of an
 -- unconstrained witness.
 closedDictW : Prog -> Route -> Option String
-closedDictW prog (RKey tag reqs sups) =
-  match allSomeW (map (closedDictW prog) (sups ++ reqs))
-    None => None
-    Some fields =>
-      let fills = instanceFillsW prog tag
-      let functions = flatMap (slotFunctionW prog tag) fills
-      let closures = flatMap (slotClosureW prog tag) fills
-      let tag32 = intToString (dictTag tag)
-      let slotText = constArrayW "$slotarr" (map foldedW functions)
-      let closureText = constArrayW "$dictarr" (map foldedW closures)
-      Some
-        "(struct.new $dict (i32.const \{tag32}) \{constArrayW "$dictarr" fields} \{slotText} \{closureText})"
+closedDictW prog (RKey tag reqs sups) = do
+  fields <- allSomeW (map (closedDictW prog) (sups ++ reqs))
+  let fills = instanceFillsW prog tag
+  let functions = flatMap (slotFunctionW prog tag) fills
+  let closures = flatMap (slotClosureW prog tag) fills
+  let tag32 = intToString (dictTag tag)
+  let slotText = constArrayW "$slotarr" (map foldedW functions)
+  let closureText = constArrayW "$dictarr" (map foldedW closures)
+  Some
+    "(struct.new $dict (i32.const \{tag32}) \{constArrayW "$dictarr" fields} \{slotText} \{closureText})"
 closedDictW _ RNone = Some "(ref.i31 (i32.const 0))"
 closedDictW _ (RLocal _ _) = Some "(ref.i31 (i32.const 0))"
 closedDictW _ (RScalar _) = Some "(ref.i31 (i32.const 0))"
-closedDictW _ _ = None
+closedDictW _ (RDict _ | RDictFwd _ | RProj _ _) = None
 
 -- the constant array of type [ty] holding [elements], each a folded expression
 constArrayW : String -> List String -> String
@@ -4491,25 +4512,20 @@ groupEntryW prog (ImplG method _ _ _ _ fnName) =
 implForWSite : Prog -> String -> String -> String -> Int -> Option CImplEntry
 implForWSite prog method iface tag siteArity =
   findByKeyArityW
-    prog
-    method
     tag
     siteArity
     (narrowByIfaceW iface (methodEntriesW prog method))
 
-findByKeyArityW : Prog ->
-  String ->
-  String ->
-  Int ->
-  List CImplEntry ->
-  Option CImplEntry
-findByKeyArityW _ _ _ _ [] = None
-findByKeyArityW prog method tag siteArity (entry :: rest) =
-  if implEntryAnswersW tag entry
-    && implEntryDeclaredArity entry == siteArity then
-    Some entry
-  else
-    findByKeyArityW prog method tag siteArity rest
+findByKeyArityW : String -> Int -> List CImplEntry -> Option CImplEntry
+findByKeyArityW tag siteArity xs0 = go xs0
+  where
+    go [] = None
+    go (entry :: rest) =
+      if implEntryAnswersW tag entry
+        && implEntryDeclaredArity entry == siteArity then
+        Some entry
+      else
+        go rest
 
 -- `hashName` (djb2, seed 5381) and `dictTag` (its 30-bit mask, the i32 dictionary
 -- header) live in `types.private_mangle`, shared with the LLVM emitter.  The header
@@ -4534,86 +4550,103 @@ refOnlyValueW prog expr body =
     WasmValue WBoxEq (body ())
 
 emitValueW : Prog -> Env -> Int -> CExpr -> WasmValue
-emitValueW prog _env _d (CLit l) =
-  if rawProgramW prog then
-    let (lines, ty) = emitLitI32 (progEmit prog) l
-    WasmValue (rawReprW ty) lines
-  else
-    WasmValue WBoxEq (emitLitRef prog l)
-emitValueW prog env d (CVar x _) = programValueW prog (emitVarRef prog env d x)
-emitValueW prog env d (CBinPrim op l r tag loc) =
-  let code =
-    if rawProgramW prog then
-      emitIntBinRef prog env d op l r tag (sitePackedW (progEmit prog) loc)
-    else
-      emitBinRef prog env d op l r tag (sitePackedW (progEmit prog) loc)
-  WasmValue (if rawProgramW prog then rawReprW (binOpTy op) else WBoxEq) code
-emitValueW prog env d (CUnOp op x) =
-  programValueW prog (emitUnRef prog env d op x)
-emitValueW prog env d (CIf c t f) =
-  let ci = emitRefExpr prog env d c ++ conditionW prog
-  let tv = emitValueW prog env d t
-  let fv = emitValueW prog env d f
-  WasmValue
-    (valueRepr tv)
-    (ci
-      ++ ["if (result " ++ physicalType (programReprW prog) ++ ")"]
-      ++ indent (valueLines tv)
-      ++ ["else"]
-      ++ indent (valueLines fv)
-      ++ ["end"])
-emitValueW prog env d (CLet recF pat e1 e2) =
-  let (prefix, env2) = emitLetBindingW prog env d recF pat e1
-  prependValueW prefix (emitValueW prog env2 d e2)
-emitValueW prog env d (CLetGroup binds body) = refOnlyValueW prog (CLetGroup
-  binds
-  body) (() =>
-  emitLetGroupWith prog env d (env2 b => emitRefExpr prog env2 d b) binds body)
-emitValueW prog env d (CBlock stmts) = emitBlockRef prog env d stmts
-emitValueW prog env d (app@(CApp _ _ _)) =
-  programValueW prog (emitAppRef prog env d app)
-emitValueW prog env d (node@(CDecision scrut arms tree)) =
-  refOnlyValueW prog node (() => emitDecisionRef prog env d scrut arms tree)
-emitValueW prog env d (node@(CLam pats body)) =
-  refOnlyValueW prog node (() => emitClosure prog env d pats body)
-emitValueW prog env d (node@(CMethod name (MethodEvidence iface arity route implRoutes methRoutes))) = refOnlyValueW
-  prog
-  node
-  (() =>
-    emitMethodValueRef prog env d name iface arity route implRoutes methRoutes)
-emitValueW prog env d (node@(CDict name routes)) =
-  refOnlyValueW prog node (() => emitDictValueRef prog env d name routes)
-emitValueW prog env d (node@(CTuple es)) =
-  refOnlyValueW prog node (() => emitTupleRef prog env d es)
-emitValueW prog env d (node@(CList es)) =
-  refOnlyValueW prog node (() => emitListRef prog env d es)
-emitValueW prog env d (node@(CRangeList lo hi incl)) =
-  refOnlyValueW prog node (() => emitRangeListRef prog env d lo hi incl)
-emitValueW prog env d (node@(CArray es)) =
-  refOnlyValueW prog node (() => emitArrayCreateRef prog env d es)
-emitValueW prog env d (node@(CRangeArray lo hi incl)) =
-  refOnlyValueW prog node (() => emitRangeArrayRef prog env d lo hi incl)
-emitValueW prog env d (node@(CRecord name fields)) =
-  refOnlyValueW prog node (() => emitRecordRef prog env d name fields)
-emitValueW prog env d (node@(CFieldAccess ex label recName ord)) = refOnlyValueW
-  prog
-  node
-  (() => emitFieldAccessRef prog env d ex label recName ord)
-emitValueW prog env d (node@(CRecordUpdate recName base fields)) = refOnlyValueW
-  prog
-  node
-  (() => emitRecordUpdateRef prog env d recName base fields)
-emitValueW prog env d (node@(CVariantUpdate con base fields)) = refOnlyValueW
-  prog
-  node
-  (() => emitVariantUpdateRef prog env d con base fields)
-emitValueW prog _env _d other =
-  programValueW
-    prog
-    (gapLP prog (if rawProgramW prog then
-      "scalar-mode: unsupported Core IR node " ++ ctag other
-    else
-      "ref-mode: unsupported Core IR node \{ctag other} [in \{progBinding prog}]"))
+emitValueW prog env0 d app0 = go env0 app0
+  where
+    go _env (CLit l) =
+      if rawProgramW prog then
+        let (lines, ty) = emitLitI32 (progEmit prog) l
+        WasmValue (rawReprW ty) lines
+      else
+        WasmValue WBoxEq (emitLitRef prog l)
+    go env (CVar x _) = programValueW prog (emitVarRef prog env d x)
+    go env (CBinPrim op l r tag loc) =
+      let code =
+        if rawProgramW prog then
+          emitIntBinRef prog env d op l r tag (sitePackedW (progEmit prog) loc)
+        else
+          emitBinRef prog env d op l r tag (sitePackedW (progEmit prog) loc)
+      WasmValue
+        (if rawProgramW prog then rawReprW (binOpTy op) else WBoxEq)
+        code
+    go env (CUnOp op x) = programValueW prog (emitUnRef prog env d op x)
+    go env (CIf c t f) =
+      let ci = emitRefExpr prog env d c ++ conditionW prog
+      let tv = go env t
+      let fv = go env f
+      WasmValue
+        (valueRepr tv)
+        (ci
+          ++ ["if (result " ++ physicalType (programReprW prog) ++ ")"]
+          ++ indent (valueLines tv)
+          ++ ["else"]
+          ++ indent (valueLines fv)
+          ++ ["end"])
+    go env (CLet recF pat e1 e2) =
+      let (prefix, env2) = emitLetBindingW prog env d recF pat e1
+      prependValueW prefix (go env2 e2)
+    go env (CLetGroup binds body) = refOnlyValueW prog (CLetGroup
+      binds
+      body) (() =>
+      emitLetGroupWith
+        prog
+        env
+        d
+        (env2 b => emitRefExpr prog env2 d b)
+        binds
+        body)
+    go env (CBlock stmts) = emitBlockRef prog env d stmts
+    go env (app@(CApp _ _ _)) = programValueW prog (emitAppRef prog env d app)
+    go env (node@(CDecision scrut arms tree)) =
+      refOnlyValueW prog node (() => emitDecisionRef prog env d scrut arms tree)
+    go env (node@(CLam pats body)) =
+      refOnlyValueW prog node (() => emitClosure prog env d pats body)
+    go env (node@(CMethod name (MethodEvidence iface arity route implRoutes methRoutes))) = refOnlyValueW
+      prog
+      node
+      (() =>
+        emitMethodValueRef
+          prog
+          env
+          d
+          name
+          iface
+          arity
+          route
+          implRoutes
+          methRoutes)
+    go env (node@(CDict name routes)) =
+      refOnlyValueW prog node (() => emitDictValueRef prog env d name routes)
+    go env (node@(CTuple es)) =
+      refOnlyValueW prog node (() => emitTupleRef prog env d es)
+    go env (node@(CList es)) =
+      refOnlyValueW prog node (() => emitListRef prog env d es)
+    go env (node@(CRangeList lo hi incl)) =
+      refOnlyValueW prog node (() => emitRangeListRef prog env d lo hi incl)
+    go env (node@(CArray es)) =
+      refOnlyValueW prog node (() => emitArrayCreateRef prog env d es)
+    go env (node@(CRangeArray lo hi incl)) =
+      refOnlyValueW prog node (() => emitRangeArrayRef prog env d lo hi incl)
+    go env (node@(CRecord name fields)) =
+      refOnlyValueW prog node (() => emitRecordRef prog env d name fields)
+    go env (node@(CFieldAccess ex label recName ord)) = refOnlyValueW
+      prog
+      node
+      (() => emitFieldAccessRef prog env d ex label recName ord)
+    go env (node@(CRecordUpdate recName base fields)) = refOnlyValueW
+      prog
+      node
+      (() => emitRecordUpdateRef prog env d recName base fields)
+    go env (node@(CVariantUpdate con base fields)) = refOnlyValueW
+      prog
+      node
+      (() => emitVariantUpdateRef prog env d con base fields)
+    go _env other =
+      programValueW
+        prog
+        (gapLP prog (if rawProgramW prog then
+          "scalar-mode: unsupported Core IR node " ++ ctag other
+        else
+          "ref-mode: unsupported Core IR node \{ctag other} [in \{progBinding prog}]"))
 
 -- a scalar literal → an i31 immediate.  Int: ref.i31 of the value.  Bool: 1/0.
 -- Unit: i31 0 (a placeholder immediate; Unit is never inspected in this slice).
@@ -5590,25 +5623,27 @@ emitLetBindingW prog env _ _ _ _ = (
 )
 
 emitBlockRef : Prog -> Env -> Int -> List CStmt -> WasmValue
-emitBlockRef prog env d [CSExpr ex] = emitValueW prog env d ex
-emitBlockRef prog env d ((CSExpr ex) :: rest) =
-  let prefix = emitRefExpr prog env d ex ++ ["drop"]
-  prependValueW prefix (emitBlockRef prog env d rest)
-emitBlockRef prog env d ((CSLet recF pat ex) :: rest) =
-  let (prefix, env2) = emitBlockBindingW prog env d recF pat ex
-  prependValueW prefix (emitBlockRef prog env2 d rest)
-emitBlockRef prog env d ((CSAssign x ex) :: rest) =
-  let prefix =
-    emitRefExpr prog env d ex ++ ["local.set " ++ localTargetW prog env x]
-  prependValueW prefix (emitBlockRef prog env d rest)
-emitBlockRef prog env d [] = emitValueW prog env d (CLit LUnit)
-emitBlockRef prog _ _ _ =
-  programValueW
-    prog
-    (gapLP prog (if rawProgramW prog then
-      "scalar-mode: unsupported block statement"
-    else
-      "ref-mode: unsupported block statement"))
+emitBlockRef prog env0 d xs0 = go env0 xs0
+  where
+    go env [CSExpr ex] = emitValueW prog env d ex
+    go env ((CSExpr ex) :: rest) =
+      let prefix = emitRefExpr prog env d ex ++ ["drop"]
+      prependValueW prefix (go env rest)
+    go env ((CSLet recF pat ex) :: rest) =
+      let (prefix, env2) = emitBlockBindingW prog env d recF pat ex
+      prependValueW prefix (go env2 rest)
+    go env ((CSAssign x ex) :: rest) =
+      let prefix =
+        emitRefExpr prog env d ex ++ ["local.set " ++ localTargetW prog env x]
+      prependValueW prefix (go env rest)
+    go env [] = emitValueW prog env d (CLit LUnit)
+    go _ _ =
+      programValueW
+        prog
+        (gapLP prog (if rawProgramW prog then
+          "scalar-mode: unsupported block statement"
+        else
+          "ref-mode: unsupported block statement"))
 
 emitBlockBindingW : Prog ->
   Env ->
@@ -6053,664 +6088,652 @@ emitLeafExternRef : Prog -> Env -> Int -> String -> List CExpr -> List String
 -- draws 457532755261734).  $mdk_random_int is i64→i64 (mirrors native mdk_random_int:
 -- inclusive, unsigned modulus of hi-lo+1).
 -- lo > hi answers lo; every other span, the full Int range's 2^63 included, draws.
-emitLeafExternRef prog env d "randomInt" [lo, hi] =
-  emitRefExpr prog env d lo
-    ++ [unboxIntW prog]
-    ++ emitRefExpr prog env d hi
-    ++ [unboxIntW prog]
-    ++ [rtCallW prog "mdk_random_int" 2, boxIntW prog]
-emitLeafExternRef prog _env _d "randomInt" _ =
-  gapLP prog "wasm W8: randomInt takes exactly two arguments"
-emitLeafExternRef prog env d "randomBool" [u] =
-  emitRefExpr prog env d u
-    ++ ["drop", rtCallW prog "mdk_random_bool" 0, "ref.i31"]
-emitLeafExternRef prog _env _d "randomBool" _ =
-  gapLP prog "wasm W8: randomBool takes exactly one (Unit) argument"
-emitLeafExternRef prog env d "randomChar" [u] =
-  emitRefExpr prog env d u
-    ++ ["drop", rtCallW prog "mdk_random_char" 0, "ref.i31"]
-emitLeafExternRef prog _env _d "randomChar" _ =
-  gapLP prog "wasm W8: randomChar takes exactly one (Unit) argument"
--- #199: the seed is a general Int; unbox the full width through $mdk_unbox_int (→ i64)
--- so `setSeed 4503599627370497` no longer traps the i31 cast.
-emitLeafExternRef prog env d "setSeed" [n] =
-  emitRefExpr prog env d n
-    ++ [
-      unboxIntW prog,
-      globalW prog "global.set" rngStateW,
-      "i32.const 1",
-      globalW prog "global.set" rngSeededW,
-      "i32.const 0",
-      "ref.i31",
-    ]
-emitLeafExternRef prog _env _d "setSeed" _ =
-  gapLP prog "wasm W8: setSeed takes exactly one argument"
-emitLeafExternRef prog env d "randomState" [u] =
-  emitRefExpr prog env d u
-    ++ [
-      "drop",
-      rtCallW prog "mdk_rng_ensure" 0,
-      globalW prog "global.get" rngStateW,
-      "struct.new $u64",
-    ]
-emitLeafExternRef prog _env _d "randomState" _ =
-  gapLP prog "wasm W8: randomState takes exactly one (Unit) argument"
-emitLeafExternRef prog env d "restoreRandomState" [state] =
-  emitRefExpr prog env d state
-    ++ unboxU64W
-    ++ [
-      globalW prog "global.set" rngStateW,
-      "i32.const 1",
-      globalW prog "global.set" rngSeededW,
-      "i32.const 0",
-      "ref.i31",
-    ]
-emitLeafExternRef prog _env _d "restoreRandomState" _ =
-  gapLP prog "wasm W8: restoreRandomState takes exactly one argument"
--- #199: hashInt unboxes the FULL-WIDTH Int (via $mdk_unbox_int → i64) so an Int key
--- outside ±2^30 (e.g. a HashMap Int) hashes correctly instead of trapping the i31 cast;
--- $mdk_hash_int now takes i64.  hashChar's codepoint fits i32 → sign-extend to i64.
-emitLeafExternRef prog env d "hashInt" [a] =
-  emitRefExpr prog env d a
-    ++ [unboxIntW prog, rtCallW prog "mdk_hash_int" 1, "ref.i31"]
-emitLeafExternRef prog _env _d "hashInt" _ =
-  gapLP prog "wasm W8: hashInt takes exactly one argument"
-emitLeafExternRef prog env d "hashChar" [a] =
-  emitRefExpr prog env d a
-    ++ [
-      "ref.cast (ref i31)",
-      "i31.get_u",
-      "i64.extend_i32_s",
-      rtCallW prog "mdk_hash_int" 1,
-      "ref.i31",
-    ]
-emitLeafExternRef prog _env _d "hashChar" _ =
-  gapLP prog "wasm W8: hashChar takes exactly one argument"
-emitLeafExternRef prog env d "hashBool" [a] =
-  emitRefExpr prog env d a
-    ++ [
-      "ref.cast (ref i31)",
-      "i31.get_u",
-      rtCallW prog "mdk_hash_bool" 1,
-      "ref.i31",
-    ]
-emitLeafExternRef prog _env _d "hashBool" _ =
-  gapLP prog "wasm W8: hashBool takes exactly one argument"
--- W11: charCode : Char -> Int — a Char is an i31 codepoint immediate.  Cast to i31,
--- read the unsigned payload (the codepoint), wrap back as an i31 Int.  The unbox +
--- rebox is identity on the bits (both Char and Int are i31 codepoint / integer), but
--- the cast ensures Wasm's type-safe path through (ref eq).
-emitLeafExternRef prog env d "charCode" [a] =
-  emitRefExpr prog env d a ++ ["ref.cast (ref i31)", "i31.get_u", "ref.i31"]
-emitLeafExternRef prog _env _d "charCode" _ =
-  gapLP prog "wasm W11: charCode takes exactly one argument"
--- W11b: char classification predicates (ASCII-only, byte-identical to medaka_rt.c).
--- Char is i31 codepoint; unbox with i31.get_u, call WAT helper, result is i32 0/1 → ref.i31.
--- charIsAlpha c → (c>='a'&&c<='z')||(c>='A'&&c<='Z')
-emitLeafExternRef prog env d "charIsAlpha" [a] =
-  emitRefExpr prog env d a
-    ++ [
-      "ref.cast (ref i31)",
-      "i31.get_u",
-      rtCallW prog "mdk_char_is_alpha" 1,
-      "ref.i31",
-    ]
-emitLeafExternRef prog _env _d "charIsAlpha" _ =
-  gapLP prog "wasm W11b: charIsAlpha takes exactly one argument"
--- charIsSpace c → c==32 || (c>=9 && c<=13)
-emitLeafExternRef prog env d "charIsSpace" [a] =
-  emitRefExpr prog env d a
-    ++ [
-      "ref.cast (ref i31)",
-      "i31.get_u",
-      rtCallW prog "mdk_char_is_space" 1,
-      "ref.i31",
-    ]
-emitLeafExternRef prog _env _d "charIsSpace" _ =
-  gapLP prog "wasm W11b: charIsSpace takes exactly one argument"
--- charIsUpper c → c>='A'&&c<='Z'
-emitLeafExternRef prog env d "charIsUpper" [a] =
-  emitRefExpr prog env d a
-    ++ [
-      "ref.cast (ref i31)",
-      "i31.get_u",
-      rtCallW prog "mdk_char_is_upper" 1,
-      "ref.i31",
-    ]
-emitLeafExternRef prog _env _d "charIsUpper" _ =
-  gapLP prog "wasm W11b: charIsUpper takes exactly one argument"
--- charIsLower c → c>='a'&&c<='z'
-emitLeafExternRef prog env d "charIsLower" [a] =
-  emitRefExpr prog env d a
-    ++ [
-      "ref.cast (ref i31)",
-      "i31.get_u",
-      rtCallW prog "mdk_char_is_lower" 1,
-      "ref.i31",
-    ]
-emitLeafExternRef prog _env _d "charIsLower" _ =
-  gapLP prog "wasm W11b: charIsLower takes exactly one argument"
--- charIsPunct: exact set from medaka_rt.c switch — Unicode Pc/Pd/Pe/Pf/Pi/Po/Ps for ASCII.
-emitLeafExternRef prog env d "charIsPunct" [a] =
-  emitRefExpr prog env d a
-    ++ [
-      "ref.cast (ref i31)",
-      "i31.get_u",
-      rtCallW prog "mdk_char_is_punct" 1,
-      "ref.i31",
-    ]
-emitLeafExternRef prog _env _d "charIsPunct" _ =
-  gapLP prog "wasm W11b: charIsPunct takes exactly one argument"
--- charToUpper c → if c>='a'&&c<='z' then c-32 else c  (result = Char i31 codepoint)
-emitLeafExternRef prog env d "charToUpper" [a] =
-  emitRefExpr prog env d a
-    ++ [
-      "ref.cast (ref i31)",
-      "i31.get_u",
-      rtCallW prog "mdk_char_to_upper" 1,
-      "ref.i31",
-    ]
-emitLeafExternRef prog _env _d "charToUpper" _ =
-  gapLP prog "wasm W11b: charToUpper takes exactly one argument"
--- charToLower c → if c>='A'&&c<='Z' then c+32 else c  (result = Char i31 codepoint)
-emitLeafExternRef prog env d "charToLower" [a] =
-  emitRefExpr prog env d a
-    ++ [
-      "ref.cast (ref i31)",
-      "i31.get_u",
-      rtCallW prog "mdk_char_to_lower" 1,
-      "ref.i31",
-    ]
-emitLeafExternRef prog _env _d "charToLower" _ =
-  gapLP prog "wasm W11b: charToLower takes exactly one argument"
--- W8b Float leaf externs.  #199: intToFloat unboxes its Int arg through the $mdk_unbox_int
--- (→ i64) seam, and floatToInt reboxes its i64 truncation via $mdk_box_int — the SAME seam
--- randomInt/bitAnd use — so full-width Ints outside ±2^30 no longer trap the i31 cast.
--- hashFloat : $float → masked i32 → i31.  randomFloat : Unit arg dropped → $mdk_random_float.
-emitLeafExternRef prog env d "intToFloat" [a] =
-  emitRefExpr prog env d a
-    ++ [unboxIntW prog, rtCallW prog "mdk_int_to_float" 1]
-emitLeafExternRef prog _env _d "intToFloat" _ =
-  gapLP prog "wasm W8b: intToFloat takes exactly one argument"
-emitLeafExternRef prog env d "floatToInt" [a] =
-  emitRefExpr prog env d a
-    ++ [
-      "ref.cast (ref $float)",
-      rtCallW prog "mdk_float_to_int" 1,
-      boxIntW prog,
-    ]
-emitLeafExternRef prog _env _d "floatToInt" _ =
-  gapLP prog "wasm W8b: floatToInt takes exactly one argument"
-emitLeafExternRef prog env d "hashFloat" [a] =
-  emitRefExpr prog env d a
-    ++ ["ref.cast (ref $float)", rtCallW prog "mdk_hash_float" 1, "ref.i31"]
-emitLeafExternRef prog _env _d "hashFloat" _ =
-  gapLP prog "wasm W8b: hashFloat takes exactly one argument"
-emitLeafExternRef prog env d "randomFloat" [u] =
-  emitRefExpr prog env d u ++ ["drop", rtCallW prog "mdk_random_float" 0]
-emitLeafExternRef prog _env _d "randomFloat" _ =
-  gapLP prog "wasm W8b: randomFloat takes exactly one (Unit) argument"
--- W12 IO host-surface externs.  readFile/fileExists/getEnv take a $str path/name;
--- args takes a Unit (dropped); exit takes an i31 Int.  Each routes through the
--- byte-channel host-import runtime (ioHostRuntimeLines).  readFile returns a Result
--- (ref eq), fileExists a Bool i31, getEnv an Option (ref eq), args a List (ref eq),
--- exit traps (mdk_exit + unreachable, stack-polymorphic like panic).
--- A file extern whose path is an authority takes its grant last
--- (EFFECTS-SEMANTICS §8), and its runtime body hands both to the host, which
--- confines the path (`ioHostRuntimeLines`).
-emitLeafExternRef prog env d "readFile" [p, g] =
-  emitRefExpr prog env d p
-    ++ ["ref.cast (ref $str)"]
-    ++ emitRefExpr prog env d g
-    ++ [rtCallW prog "mdk_read_file_io" 2]
-emitLeafExternRef prog _env _d "readFile" _ =
-  gapLP prog "wasm W12: readFile takes exactly one argument and its grant"
-emitLeafExternRef prog env d "canonicalizePath" [p, g] =
-  emitRefExpr prog env d p
-    ++ ["ref.cast (ref $str)"]
-    ++ emitRefExpr prog env d g
-    ++ [rtCallW prog "mdk_canonicalize_path_io" 2]
-emitLeafExternRef prog _env _d "canonicalizePath" _ =
-  gapLP prog "wasm: canonicalizePath takes exactly one argument and its grant"
-emitLeafExternRef prog env d "fileExists" [p, g] =
-  emitRefExpr prog env d p
-    ++ ["ref.cast (ref $str)"]
-    ++ emitRefExpr prog env d g
-    ++ [rtCallW prog "mdk_file_exists_io" 2]
-emitLeafExternRef prog _env _d "fileExists" _ =
-  gapLP prog "wasm W12: fileExists takes exactly one argument and its grant"
-emitLeafExternRef prog env d "getEnv" [n] =
-  emitRefExpr prog env d n
-    ++ ["ref.cast (ref $str)", rtCallW prog "mdk_get_env_io" 1]
-emitLeafExternRef prog _env _d "getEnv" _ =
-  gapLP prog "wasm W12: getEnv takes exactly one argument"
--- The stdin readers share one host-side buffer: a Unit argument is dropped, and
--- readExactly's Int is unboxed to the i64 the import takes.
-emitLeafExternRef prog env d "readLine" [u] =
-  emitRefExpr prog env d u ++ ["drop", rtCallW prog "mdk_read_line_io" 0]
-emitLeafExternRef prog _env _d "readLine" _ =
-  gapLP prog "wasm: readLine takes exactly one (Unit) argument"
-emitLeafExternRef prog env d "readLineOpt" [u] =
-  emitRefExpr prog env d u ++ ["drop", rtCallW prog "mdk_read_line_opt_io" 0]
-emitLeafExternRef prog _env _d "readLineOpt" _ =
-  gapLP prog "wasm: readLineOpt takes exactly one (Unit) argument"
-emitLeafExternRef prog env d "readAll" [u] =
-  emitRefExpr prog env d u ++ ["drop", rtCallW prog "mdk_read_all_io" 0]
-emitLeafExternRef prog _env _d "readAll" _ =
-  gapLP prog "wasm: readAll takes exactly one (Unit) argument"
-emitLeafExternRef prog env d "readExactly" [n] =
-  emitRefExpr prog env d n
-    ++ [unboxIntW prog, rtCallW prog "mdk_read_exactly_io" 1]
-emitLeafExternRef prog _env _d "readExactly" _ =
-  gapLP prog "wasm: readExactly takes exactly one argument"
--- osEntropyBytes unboxes its Int to the i64 the import takes and builds an Array Int;
--- executablePath takes a Unit (dropped) and answers its String through the result channel.
-emitLeafExternRef prog env d "osEntropyBytes" [n] =
-  emitRefExpr prog env d n
-    ++ [unboxIntW prog, rtCallW prog "mdk_os_entropy_io" 1]
-emitLeafExternRef prog _env _d "osEntropyBytes" _ =
-  gapLP prog "wasm: osEntropyBytes takes exactly one argument"
-emitLeafExternRef prog env d "executablePath" [u] =
-  emitRefExpr prog env d u ++ ["drop", rtCallW prog "mdk_executable_path_io" 0]
-emitLeafExternRef prog _env _d "executablePath" _ =
-  gapLP prog "wasm: executablePath takes exactly one (Unit) argument"
-emitLeafExternRef prog env d "args" [u] =
-  emitRefExpr prog env d u ++ ["drop", rtCallW prog "mdk_args_io" 0]
-emitLeafExternRef prog _env _d "args" _args =
-  gapLP prog "wasm W12: args takes exactly one (Unit) argument"
-emitLeafExternRef prog env d "exit" [code] =
-  emitRefExpr prog env d code
-    ++ [
-      "ref.cast (ref i31)",
-      "i31.get_s",
-      rtCallW prog "mdk_exit" 1,
-      "unreachable",
-    ]
-emitLeafExternRef prog _env _d "exit" _ =
-  gapLP prog "wasm W12: exit takes exactly one argument"
--- The clock externs: the two reads box the host's f64 seconds; sleepMs unboxes its
--- Int to the i64 the import takes (a non-positive count returns at once, host-side,
--- as medaka_rt.c's mdk_sleep_ms does).
-emitLeafExternRef prog env d "wallTimeSec" [u] =
-  emitRefExpr prog env d u
-    ++ ["drop", rtCallW prog "mdk_wall_time_sec" 0, "struct.new $float"]
-emitLeafExternRef prog _env _d "wallTimeSec" _ =
-  gapLP prog "wasm: wallTimeSec takes exactly one (Unit) argument"
-emitLeafExternRef prog env d "monotonicSec" [u] =
-  emitRefExpr prog env d u
-    ++ ["drop", rtCallW prog "mdk_monotonic_sec" 0, "struct.new $float"]
-emitLeafExternRef prog _env _d "monotonicSec" _ =
-  gapLP prog "wasm: monotonicSec takes exactly one (Unit) argument"
-emitLeafExternRef prog env d "sleepMs" [n] =
-  emitRefExpr prog env d n
-    ++ [unboxIntW prog, rtCallW prog "mdk_sleep_ms" 1, "i32.const 0", "ref.i31"]
-emitLeafExternRef prog _env _d "sleepMs" _ =
-  gapLP prog "wasm: sleepMs takes exactly one argument"
--- fetchText pushes its url through the path channel and answers a Result through the
--- result channel, as readFile does; Net carries no grant argument.
-emitLeafExternRef prog env d "fetchText" [u] =
-  emitRefExpr prog env d u
-    ++ ["ref.cast (ref $str)", rtCallW prog "mdk_fetch_text_io" 1]
-emitLeafExternRef prog _env _d "fetchText" _ =
-  gapLP prog "wasm: fetchText takes exactly one argument"
--- ioPoll: no wasm host binds descriptor readiness, so a call stops with a coded
--- runtime error.  It traps at run time, not at build time, because the async
--- scheduler (`systemPoller`) names ioPoll and calls it only when a task waits on
--- a descriptor; a clock-only async program must still build.  The arguments are
--- evaluated left to right first, as native evaluates them.
-emitLeafExternRef prog env d "ioPoll" [fds, interests, timeout] =
-  emitRefExpr prog env d fds
-    ++ ["drop"]
-    ++ emitRefExpr prog env d interests
-    ++ ["drop"]
-    ++ emitRefExpr prog env d timeout
-    ++ ["drop"]
-    ++ wasmTrap
-      (progEmit prog)
-      EWasmNoBinding
-      "ioPoll: descriptor readiness has no wasm binding (Net and Stdin bindings: #3666); build for a native target"
-emitLeafExternRef prog _env _d "ioPoll" _ =
-  gapLP prog "wasm: ioPoll takes exactly three arguments"
--- stage-D: byte-clean file I/O.  readFileBytes returns a Result String (Array Int);
--- writeFileBytes takes (path, Array Int) and returns Result String Unit.  Both route
--- into the fileBytes host seam ($mdk_read_file_bytes_io / $mdk_write_file_bytes_io).
-emitLeafExternRef prog env d "readFileBytes" [p, g] =
-  emitRefExpr prog env d p
-    ++ ["ref.cast (ref $str)"]
-    ++ emitRefExpr prog env d g
-    ++ [rtCallW prog "mdk_read_file_bytes_io" 2]
-emitLeafExternRef prog _env _d "readFileBytes" _ =
-  gapLP
-    prog
-    "wasm stage-D: readFileBytes takes exactly one argument and its grant"
-emitLeafExternRef prog env d "writeFileBytes" [p, arr, g] =
-  emitRefExpr prog env d p
-    ++ ["ref.cast (ref $str)"]
-    ++ emitRefExpr prog env d arr
-    ++ ["ref.cast (ref $arr)"]
-    ++ emitRefExpr prog env d g
-    ++ [rtCallW prog "mdk_write_file_bytes_io" 3]
-emitLeafExternRef prog _env _d "writeFileBytes" _ =
-  gapLP
-    prog
-    "wasm stage-D: writeFileBytes takes exactly two arguments and its grant"
-emitLeafExternRef prog env d "writeFile" [p, s, g] =
-  emitRefExpr prog env d p
-    ++ ["ref.cast (ref $str)"]
-    ++ emitRefExpr prog env d s
-    ++ ["ref.cast (ref $str)"]
-    ++ emitRefExpr prog env d g
-    ++ [rtCallW prog "mdk_write_file_io" 3]
-emitLeafExternRef prog _env _d "writeFile" _ =
-  gapLP prog "wasm: writeFile takes exactly two arguments and its grant"
-emitLeafExternRef prog env d "appendFile" [p, s, g] =
-  emitRefExpr prog env d p
-    ++ ["ref.cast (ref $str)"]
-    ++ emitRefExpr prog env d s
-    ++ ["ref.cast (ref $str)"]
-    ++ emitRefExpr prog env d g
-    ++ [rtCallW prog "mdk_append_file_io" 3]
-emitLeafExternRef prog _env _d "appendFile" _ =
-  gapLP prog "wasm: appendFile takes exactly two arguments and its grant"
-emitLeafExternRef prog env d "rename" [src, dst, gs, gd] =
-  emitRefExpr prog env d src
-    ++ ["ref.cast (ref $str)"]
-    ++ emitRefExpr prog env d dst
-    ++ ["ref.cast (ref $str)"]
-    ++ emitRefExpr prog env d gs
-    ++ emitRefExpr prog env d gd
-    ++ [rtCallW prog "mdk_rename_io" 4]
-emitLeafExternRef prog _env _d "rename" _ =
-  gapLP prog "wasm: rename takes exactly two arguments and the grant of each"
-emitLeafExternRef prog env d "listDir" [p, g] =
-  emitRefExpr prog env d p
-    ++ ["ref.cast (ref $str)"]
-    ++ emitRefExpr prog env d g
-    ++ [rtCallW prog "mdk_list_dir_io" 2]
-emitLeafExternRef prog _env _d "listDir" _ =
-  gapLP prog "wasm: listDir takes exactly one argument and its grant"
-emitLeafExternRef prog env d "statFile" [p, g] =
-  emitRefExpr prog env d p
-    ++ ["ref.cast (ref $str)"]
-    ++ emitRefExpr prog env d g
-    ++ [rtCallW prog "mdk_stat_file_io" 2]
-emitLeafExternRef prog _env _d "statFile" _ =
-  gapLP prog "wasm: statFile takes exactly one argument and its grant"
-emitLeafExternRef prog env d "makeDir" [p, g] =
-  emitRefExpr prog env d p
-    ++ ["ref.cast (ref $str)"]
-    ++ emitRefExpr prog env d g
-    ++ [rtCallW prog "mdk_make_dir_io" 2]
-emitLeafExternRef prog _env _d "makeDir" _ =
-  gapLP prog "wasm: makeDir takes exactly one argument and its grant"
-emitLeafExternRef prog env d "removeFile" [p, g] =
-  emitRefExpr prog env d p
-    ++ ["ref.cast (ref $str)"]
-    ++ emitRefExpr prog env d g
-    ++ [rtCallW prog "mdk_remove_file_io" 2]
-emitLeafExternRef prog _env _d "removeFile" _ =
-  gapLP prog "wasm: removeFile takes exactly one argument and its grant"
-emitLeafExternRef prog env d "removeDir" [p, g] =
-  emitRefExpr prog env d p
-    ++ ["ref.cast (ref $str)"]
-    ++ emitRefExpr prog env d g
-    ++ [rtCallW prog "mdk_remove_dir_io" 2]
-emitLeafExternRef prog _env _d "removeDir" _ =
-  gapLP prog "wasm: removeDir takes exactly one argument and its grant"
-emitLeafExternRef prog env d "fsync" [p, g] =
-  emitRefExpr prog env d p
-    ++ ["ref.cast (ref $str)"]
-    ++ emitRefExpr prog env d g
-    ++ [rtCallW prog "mdk_fsync_io" 2]
-emitLeafExternRef prog _env _d "fsync" _ =
-  gapLP prog "wasm: fsync takes exactly one argument and its grant"
-emitLeafExternRef prog env d "fileMode" [p, g] =
-  emitRefExpr prog env d p
-    ++ ["ref.cast (ref $str)"]
-    ++ emitRefExpr prog env d g
-    ++ [rtCallW prog "mdk_file_mode_io" 2]
-emitLeafExternRef prog _env _d "fileMode" _ =
-  gapLP prog "wasm: fileMode takes exactly one argument and its grant"
-emitLeafExternRef prog env d "writeFileMode" [p, m, s, g] =
-  emitRefExpr prog env d p
-    ++ ["ref.cast (ref $str)"]
-    ++ emitRefExpr prog env d m
-    ++ emitRefExpr prog env d s
-    ++ ["ref.cast (ref $str)"]
-    ++ emitRefExpr prog env d g
-    ++ [rtCallW prog "mdk_write_file_mode_io" 4]
-emitLeafExternRef prog _env _d "writeFileMode" _ =
-  gapLP prog "wasm: writeFileMode takes three arguments and its grant"
--- W10/B5: `panic msg` → stream the coded line `runtime error [E-PANIC]: <msg>\n` to
--- stderr, then `unreachable` (peer of native @mdk_panic / the interp's runtimePanic).
--- The fixed prefix is unrolled to byte-writes; the user message (a $str (ref eq), any
--- expression) is streamed through $mdk_eprint_str (forced via `WasmEmit.useEPut`, which the
--- catalog demands for `panic`), then a trailing newline byte.  `unreachable` is stack-polymorphic, so it
--- validates as any result type.
-emitLeafExternRef prog env d "panic" [msg] =
-  wasmTrapBytes (progEmit prog) "runtime error [\{EPanic}]: "
-    ++ emitRefExpr prog env d msg
-    ++ ["ref.cast (ref $str)", rtCallW prog "mdk_eprint_str" 1]
-    ++ trapByteInstr (progEmit prog) 10
-    ++ ["unreachable"]
-emitLeafExternRef prog _env _d "panic" _ =
-  gapLP prog "wasm W10: panic takes exactly one argument"
--- Index-16a: `indexError msg` streams the coded line `runtime error
--- [E-INDEX-OOB]: <msg>` to stderr and traps, the same shape `panic` uses above
--- and the same line native's @mdk_oob_msg and the interpreter both print.  The
--- $str rep and $mdk_eprint_str are demanded for `indexError` in the catalog.
-emitLeafExternRef prog env d "indexError" [msg] =
-  wasmTrapBytes (progEmit prog) "runtime error [\{EIndexOob}]: "
-    ++ emitRefExpr prog env d msg
-    ++ ["ref.cast (ref $str)", rtCallW prog "mdk_eprint_str" 1]
-    ++ trapByteInstr (progEmit prog) 10
-    ++ ["unreachable"]
-emitLeafExternRef prog _env _d "indexError" _ =
-  gapLP prog "wasm Index-16a: indexError takes exactly one argument"
--- #1787: `indexErrorAt idx` raises E-INDEX-OOB naming the offending index, so all
--- three engines print the SAME line.  Dropping it here instead (as sliceError's
--- bounds still are) would redden test/wasm/diff_wasm_modules.sh, which since #531
--- compares stderr and exit code as well as stdout -- w7_array_oob.mdk exists to
--- assert exactly this parity.
-emitLeafExternRef prog env d "indexErrorAt" [idx] =
-  wasmTrapNum
-    (progEmit prog)
-    EIndexOob
-    "index "
-    (emitRefExpr prog env d idx)
-    " out of bounds"
-emitLeafExternRef prog _env _d "indexErrorAt" _ =
-  gapLP prog "wasm #1787: indexErrorAt takes exactly one argument"
-emitLeafExternRef prog env d "indexErrorAtSite" [site, idx] =
-  siteExprInstrs prog env d site
-    ++ emitLeafExternRef prog env d "indexErrorAt" [idx]
-emitLeafExternRef prog _env _d "indexErrorAtSite" _ =
-  gapLP prog "wasm: indexErrorAtSite takes exactly two arguments"
-emitLeafExternRef prog env d "panicAt" [site, msg] =
-  siteExprInstrs prog env d site ++ emitLeafExternRef prog env d "panic" [msg]
-emitLeafExternRef prog _env _d "__site__" [CLit (LString f), CLit (LInt line), CLit (LInt col)] =
-  emitLitRef
-    prog
-    (LInt (sitePackedW (progEmit prog) (Loc f line col line (col + 1))))
-emitLeafExternRef prog _env _d "__site__" _ =
-  gapLP prog "wasm: a trap-site literal takes a file, a line and a column"
-emitLeafExternRef prog _env _d "panicAt" _ =
-  gapLP prog "wasm: panicAt takes exactly two arguments"
--- #670: `sliceError lo hiIncl` reuses the existing coded E-SLICE-OOB trap (the
--- same fixed text the built-in slice path emits) -- both bound arguments are
--- dropped, where native's @mdk_slice_oob formats them into the line.
-emitLeafExternRef prog _env _d "sliceError" [_lo, _hi] =
-  wasmTrap (progEmit prog) ESliceOob "slice out of bounds"
-emitLeafExternRef prog _env _d "sliceError" _ =
-  gapLP prog "wasm #670: sliceError takes exactly two arguments"
--- The `int`-prefixed bit externs are the originals under unshadowable names.
-emitLeafExternRef prog env d "intBitAnd" args =
-  emitLeafExternRef prog env d "bitAnd" args
-emitLeafExternRef prog env d "intBitOr" args =
-  emitLeafExternRef prog env d "bitOr" args
-emitLeafExternRef prog env d "intBitXor" args =
-  emitLeafExternRef prog env d "bitXor" args
-emitLeafExternRef prog env d "intBitNot" args =
-  emitLeafExternRef prog env d "bitNot" args
-emitLeafExternRef prog env d "intShiftLeft" args =
-  emitLeafExternRef prog env d "shiftLeft" args
-emitLeafExternRef prog env d "intShiftRight" args =
-  emitLeafExternRef prog env d "shiftRight" args
--- stage-A: bitwise / shift externs (Int -> Int -> Int).  Args are (ref eq) boxed Ints;
--- unbox both to i64 via $mdk_unbox_int, apply the i64 op, rebox via $mdk_box_int.
--- The shifts call `$mdk_shift_left`/`$mdk_shift_right` (intRuntimeLines), which
--- define every amount as native's mdk_shift_left/right do: a negative amount panics,
--- 63 or more shifts every bit out, and shiftRight is arithmetic.  shiftLeft's bits
--- past bit 62 are dropped by $mdk_box_int's sign-extend, as native's retag drops them.
-emitLeafExternRef prog env d "bitAnd" [a, b] =
-  emitRefExpr prog env d a
-    ++ [unboxIntW prog]
-    ++ emitRefExpr prog env d b
-    ++ [unboxIntW prog]
-    ++ ["i64.and", boxIntW prog]
-emitLeafExternRef prog _env _d "bitAnd" _ =
-  gapLP prog "wasm stage-A: bitAnd takes exactly two arguments"
-emitLeafExternRef prog env d "shiftLeft" [a, b] =
-  emitRefExpr prog env d a
-    ++ [unboxIntW prog]
-    ++ emitRefExpr prog env d b
-    ++ [unboxIntW prog]
-    ++ intShiftCall prog "left"
-    ++ [boxIntW prog]
-emitLeafExternRef prog _env _d "shiftLeft" _ =
-  gapLP prog "wasm stage-A: shiftLeft takes exactly two arguments"
-emitLeafExternRef prog env d "shiftRight" [a, b] =
-  emitRefExpr prog env d a
-    ++ [unboxIntW prog]
-    ++ emitRefExpr prog env d b
-    ++ [unboxIntW prog]
-    ++ intShiftCall prog "right"
-    ++ [boxIntW prog]
-emitLeafExternRef prog _env _d "shiftRight" _ =
-  gapLP prog "wasm stage-A: shiftRight takes exactly two arguments"
--- #101: bitwise completion (mirror llvm mdk_bit_or/xor/not).  bitOr/bitXor are exact
--- i64 two's-complement ops; bitNot n = n xor -1 (== ~n = -n-1, matches native mdk_bit_not
--- for all in-range Ints).  intBitsToFloat reinterprets the unboxed i64 bit pattern as f64.
-emitLeafExternRef prog env d "bitOr" [a, b] =
-  emitRefExpr prog env d a
-    ++ [unboxIntW prog]
-    ++ emitRefExpr prog env d b
-    ++ [unboxIntW prog]
-    ++ ["i64.or", boxIntW prog]
-emitLeafExternRef prog env d "bitXor" [a, b] =
-  emitRefExpr prog env d a
-    ++ [unboxIntW prog]
-    ++ emitRefExpr prog env d b
-    ++ [unboxIntW prog]
-    ++ ["i64.xor", boxIntW prog]
-emitLeafExternRef prog env d "bitNot" [a] =
-  emitRefExpr prog env d a
-    ++ [unboxIntW prog, "i64.const -1", "i64.xor", boxIntW prog]
-emitLeafExternRef prog env d "intBitsToFloat" [a] =
-  emitRefExpr prog env d a
-    ++ [unboxIntW prog, "f64.reinterpret_i64", "struct.new $float"]
--- `u8Truncate`/`u16Truncate`/`u32Truncate` keep the low n bits of the Int (a
--- non-negative result, so a U32 above 2^30 reboxes into `$boxint`); the `ToInt`
--- forms are the identity on the word.
-emitLeafExternRef prog env d "u8Truncate" [a] =
-  emitTruncateRef prog env d "U8" a
-emitLeafExternRef prog env d "u16Truncate" [a] =
-  emitTruncateRef prog env d "U16" a
-emitLeafExternRef prog env d "u32Truncate" [a] =
-  emitTruncateRef prog env d "U32" a
-emitLeafExternRef prog env d "u8ToInt" [a] = emitRefExpr prog env d a
-emitLeafExternRef prog env d "u16ToInt" [a] = emitRefExpr prog env d a
-emitLeafExternRef prog env d "u32ToInt" [a] = emitRefExpr prog env d a
--- `i32Truncate` sign-extends the Int's low 32 bits, so a negative `I32` stays an
--- i31 or `$boxint` word like any Int; `i32ToInt` is the identity on that word.
-emitLeafExternRef prog env d "i32Truncate" [a] =
-  emitRefExpr prog env d a ++ [unboxIntW prog, "i64.extend32_s", boxIntW prog]
-emitLeafExternRef prog env d "i32ToInt" [a] = emitRefExpr prog env d a
--- the `I64` doors keep the 64 bits and change the cell they are read from.
-emitLeafExternRef prog env d "i64FromBits" [a] =
-  emitRefExpr prog env d a ++ unboxU64W ++ ["struct.new $i64"]
-emitLeafExternRef prog env d "i64ToBits" [a] =
-  emitRefExpr prog env d a ++ unboxI64W ++ ["struct.new $u64"]
--- `u64Truncate` boxes the Int's sign-extended i64, which is its value modulo
--- 2^64; `u64TruncateToInt` reboxes the payload as an Int, and `$mdk_box_int`'s
--- renormalization from bit 62 is exactly "the low 63 bits, bit 62 the sign".
-emitLeafExternRef prog env d "u64Truncate" [a] =
-  emitRefExpr prog env d a ++ [unboxIntW prog, "struct.new $u64"]
-emitLeafExternRef prog env d "u64TruncateToInt" [a] =
-  emitRefExpr prog env d a ++ unboxU64W ++ [boxIntW prog]
-emitLeafExternRef prog env d "u64BitAnd" [a, b] =
-  emitU64KernelRef prog env d a b "i64.and"
-emitLeafExternRef prog env d "u64BitOr" [a, b] =
-  emitU64KernelRef prog env d a b "i64.or"
-emitLeafExternRef prog env d "u64BitXor" [a, b] =
-  emitU64KernelRef prog env d a b "i64.xor"
-emitLeafExternRef prog env d "u64MulHigh" [a, b] =
-  emitU64KernelRef prog env d a b (rtCallW prog "mdk_u64_mulhi" 2)
-emitLeafExternRef prog env d "u64ShiftLeft" [a, k] =
-  emitU64ShiftRef prog env d a k (rtCallW prog "mdk_u64_shl" 2)
-emitLeafExternRef prog env d "u64ShiftRight" [a, k] =
-  emitU64ShiftRef prog env d a k (rtCallW prog "mdk_u64_shr" 2)
--- #101: libm math externs.  IEEE-exact unary ops → native f64 opcodes (correctly-rounded,
--- byte-match native libm); round → $mdk_round (C round(): half away from zero);
--- transcendentals → JS Math.* host imports; binary pow/atan2/hypot → host imports;
--- floatRem → $mdk_float_rem (WAT fmod, floatRemRuntimeLines).  A $float is
--- unboxed to f64, the op runs, the f64 result reboxes into a fresh (struct $float).
-emitLeafExternRef prog env d "sqrt" [a] =
-  floatArgW prog env d a ++ ["f64.sqrt", "struct.new $float"]
-emitLeafExternRef prog env d "floor" [a] =
-  floatArgW prog env d a ++ ["f64.floor", "struct.new $float"]
-emitLeafExternRef prog env d "ceil" [a] =
-  floatArgW prog env d a ++ ["f64.ceil", "struct.new $float"]
-emitLeafExternRef prog env d "trunc" [a] =
-  floatArgW prog env d a ++ ["f64.trunc", "struct.new $float"]
-emitLeafExternRef prog env d "round" [a] =
-  floatArgW prog env d a ++ [rtCallW prog "mdk_round" 1, "struct.new $float"]
-emitLeafExternRef prog env d "cbrt" [a] =
-  floatArgW prog env d a ++ [rtCallW prog "mdk_cbrt" 1, "struct.new $float"]
-emitLeafExternRef prog env d "exp" [a] =
-  floatArgW prog env d a ++ [rtCallW prog "mdk_exp" 1, "struct.new $float"]
-emitLeafExternRef prog env d "log" [a] =
-  floatArgW prog env d a ++ [rtCallW prog "mdk_log" 1, "struct.new $float"]
-emitLeafExternRef prog env d "log2" [a] =
-  floatArgW prog env d a ++ [rtCallW prog "mdk_log2" 1, "struct.new $float"]
-emitLeafExternRef prog env d "log10" [a] =
-  floatArgW prog env d a ++ [rtCallW prog "mdk_log10" 1, "struct.new $float"]
-emitLeafExternRef prog env d "sin" [a] =
-  floatArgW prog env d a ++ [rtCallW prog "mdk_sin" 1, "struct.new $float"]
-emitLeafExternRef prog env d "cos" [a] =
-  floatArgW prog env d a ++ [rtCallW prog "mdk_cos" 1, "struct.new $float"]
-emitLeafExternRef prog env d "tan" [a] =
-  floatArgW prog env d a ++ [rtCallW prog "mdk_tan" 1, "struct.new $float"]
-emitLeafExternRef prog env d "asin" [a] =
-  floatArgW prog env d a ++ [rtCallW prog "mdk_asin" 1, "struct.new $float"]
-emitLeafExternRef prog env d "acos" [a] =
-  floatArgW prog env d a ++ [rtCallW prog "mdk_acos" 1, "struct.new $float"]
-emitLeafExternRef prog env d "atan" [a] =
-  floatArgW prog env d a ++ [rtCallW prog "mdk_atan" 1, "struct.new $float"]
-emitLeafExternRef prog env d "sinh" [a] =
-  floatArgW prog env d a ++ [rtCallW prog "mdk_sinh" 1, "struct.new $float"]
-emitLeafExternRef prog env d "cosh" [a] =
-  floatArgW prog env d a ++ [rtCallW prog "mdk_cosh" 1, "struct.new $float"]
-emitLeafExternRef prog env d "tanh" [a] =
-  floatArgW prog env d a ++ [rtCallW prog "mdk_tanh" 1, "struct.new $float"]
-emitLeafExternRef prog env d "pow" [a, b] =
-  floatArgW prog env d a
-    ++ floatArgW prog env d b
-    ++ [rtCallW prog "mdk_pow" 2, "struct.new $float"]
-emitLeafExternRef prog env d "atan2" [a, b] =
-  floatArgW prog env d a
-    ++ floatArgW prog env d b
-    ++ [rtCallW prog "mdk_atan2" 2, "struct.new $float"]
-emitLeafExternRef prog env d "hypot" [a, b] =
-  floatArgW prog env d a
-    ++ floatArgW prog env d b
-    ++ [rtCallW prog "mdk_hypot" 2, "struct.new $float"]
-emitLeafExternRef prog env d "floatRem" [a, b] =
-  floatArgW prog env d a
-    ++ floatArgW prog env d b
-    ++ [rtCallW prog "mdk_float_rem" 2, "struct.new $float"]
-emitLeafExternRef prog _ _ name _ =
-  gapLP prog ("wasm W8: unsupported leaf extern '" ++ name ++ "'")
+emitLeafExternRef prog env d name0 args0 = go name0 args0
+  where
+    go "randomInt" [lo, hi] =
+      emitRefExpr prog env d lo
+        ++ [unboxIntW prog]
+        ++ emitRefExpr prog env d hi
+        ++ [unboxIntW prog]
+        ++ [rtCallW prog "mdk_random_int" 2, boxIntW prog]
+    go "randomInt" _ =
+      gapLP prog "wasm W8: randomInt takes exactly two arguments"
+    go "randomBool" [u] =
+      emitRefExpr prog env d u
+        ++ ["drop", rtCallW prog "mdk_random_bool" 0, "ref.i31"]
+    go "randomBool" _ =
+      gapLP prog "wasm W8: randomBool takes exactly one (Unit) argument"
+    go "randomChar" [u] =
+      emitRefExpr prog env d u
+        ++ ["drop", rtCallW prog "mdk_random_char" 0, "ref.i31"]
+    go "randomChar" _ =
+      gapLP prog "wasm W8: randomChar takes exactly one (Unit) argument"
+    -- #199: the seed is a general Int; unbox the full width through $mdk_unbox_int (→ i64)
+    -- so `setSeed 4503599627370497` no longer traps the i31 cast.
+    go "setSeed" [n] =
+      emitRefExpr prog env d n
+        ++ [
+          unboxIntW prog,
+          globalW prog "global.set" rngStateW,
+          "i32.const 1",
+          globalW prog "global.set" rngSeededW,
+          "i32.const 0",
+          "ref.i31",
+        ]
+    go "setSeed" _ = gapLP prog "wasm W8: setSeed takes exactly one argument"
+    go "randomState" [u] =
+      emitRefExpr prog env d u
+        ++ [
+          "drop",
+          rtCallW prog "mdk_rng_ensure" 0,
+          globalW prog "global.get" rngStateW,
+          "struct.new $u64",
+        ]
+    go "randomState" _ =
+      gapLP prog "wasm W8: randomState takes exactly one (Unit) argument"
+    go "restoreRandomState" [state] =
+      emitRefExpr prog env d state
+        ++ unboxU64W
+        ++ [
+          globalW prog "global.set" rngStateW,
+          "i32.const 1",
+          globalW prog "global.set" rngSeededW,
+          "i32.const 0",
+          "ref.i31",
+        ]
+    go "restoreRandomState" _ =
+      gapLP prog "wasm W8: restoreRandomState takes exactly one argument"
+    -- #199: hashInt unboxes the FULL-WIDTH Int (via $mdk_unbox_int → i64) so an Int key
+    -- outside ±2^30 (e.g. a HashMap Int) hashes correctly instead of trapping the i31 cast;
+    -- $mdk_hash_int now takes i64.  hashChar's codepoint fits i32 → sign-extend to i64.
+    go "hashInt" [a] =
+      emitRefExpr prog env d a
+        ++ [unboxIntW prog, rtCallW prog "mdk_hash_int" 1, "ref.i31"]
+    go "hashInt" _ = gapLP prog "wasm W8: hashInt takes exactly one argument"
+    go "hashChar" [a] =
+      emitRefExpr prog env d a
+        ++ [
+          "ref.cast (ref i31)",
+          "i31.get_u",
+          "i64.extend_i32_s",
+          rtCallW prog "mdk_hash_int" 1,
+          "ref.i31",
+        ]
+    go "hashChar" _ = gapLP prog "wasm W8: hashChar takes exactly one argument"
+    go "hashBool" [a] =
+      emitRefExpr prog env d a
+        ++ [
+          "ref.cast (ref i31)",
+          "i31.get_u",
+          rtCallW prog "mdk_hash_bool" 1,
+          "ref.i31",
+        ]
+    go "hashBool" _ = gapLP prog "wasm W8: hashBool takes exactly one argument"
+    -- W11: charCode : Char -> Int — a Char is an i31 codepoint immediate.  Cast to i31,
+    -- read the unsigned payload (the codepoint), wrap back as an i31 Int.  The unbox +
+    -- rebox is identity on the bits (both Char and Int are i31 codepoint / integer), but
+    -- the cast ensures Wasm's type-safe path through (ref eq).
+    go "charCode" [a] =
+      emitRefExpr prog env d a ++ ["ref.cast (ref i31)", "i31.get_u", "ref.i31"]
+    go "charCode" _ = gapLP prog "wasm W11: charCode takes exactly one argument"
+    -- W11b: char classification predicates (ASCII-only, byte-identical to medaka_rt.c).
+    -- Char is i31 codepoint; unbox with i31.get_u, call WAT helper, result is i32 0/1 → ref.i31.
+    -- charIsAlpha c → (c>='a'&&c<='z')||(c>='A'&&c<='Z')
+    go "charIsAlpha" [a] =
+      emitRefExpr prog env d a
+        ++ [
+          "ref.cast (ref i31)",
+          "i31.get_u",
+          rtCallW prog "mdk_char_is_alpha" 1,
+          "ref.i31",
+        ]
+    go "charIsAlpha" _ =
+      gapLP prog "wasm W11b: charIsAlpha takes exactly one argument"
+    -- charIsSpace c → c==32 || (c>=9 && c<=13)
+    go "charIsSpace" [a] =
+      emitRefExpr prog env d a
+        ++ [
+          "ref.cast (ref i31)",
+          "i31.get_u",
+          rtCallW prog "mdk_char_is_space" 1,
+          "ref.i31",
+        ]
+    go "charIsSpace" _ =
+      gapLP prog "wasm W11b: charIsSpace takes exactly one argument"
+    -- charIsUpper c → c>='A'&&c<='Z'
+    go "charIsUpper" [a] =
+      emitRefExpr prog env d a
+        ++ [
+          "ref.cast (ref i31)",
+          "i31.get_u",
+          rtCallW prog "mdk_char_is_upper" 1,
+          "ref.i31",
+        ]
+    go "charIsUpper" _ =
+      gapLP prog "wasm W11b: charIsUpper takes exactly one argument"
+    -- charIsLower c → c>='a'&&c<='z'
+    go "charIsLower" [a] =
+      emitRefExpr prog env d a
+        ++ [
+          "ref.cast (ref i31)",
+          "i31.get_u",
+          rtCallW prog "mdk_char_is_lower" 1,
+          "ref.i31",
+        ]
+    go "charIsLower" _ =
+      gapLP prog "wasm W11b: charIsLower takes exactly one argument"
+    -- charIsPunct: exact set from medaka_rt.c switch — Unicode Pc/Pd/Pe/Pf/Pi/Po/Ps for ASCII.
+    go "charIsPunct" [a] =
+      emitRefExpr prog env d a
+        ++ [
+          "ref.cast (ref i31)",
+          "i31.get_u",
+          rtCallW prog "mdk_char_is_punct" 1,
+          "ref.i31",
+        ]
+    go "charIsPunct" _ =
+      gapLP prog "wasm W11b: charIsPunct takes exactly one argument"
+    -- charToUpper c → if c>='a'&&c<='z' then c-32 else c  (result = Char i31 codepoint)
+    go "charToUpper" [a] =
+      emitRefExpr prog env d a
+        ++ [
+          "ref.cast (ref i31)",
+          "i31.get_u",
+          rtCallW prog "mdk_char_to_upper" 1,
+          "ref.i31",
+        ]
+    go "charToUpper" _ =
+      gapLP prog "wasm W11b: charToUpper takes exactly one argument"
+    -- charToLower c → if c>='A'&&c<='Z' then c+32 else c  (result = Char i31 codepoint)
+    go "charToLower" [a] =
+      emitRefExpr prog env d a
+        ++ [
+          "ref.cast (ref i31)",
+          "i31.get_u",
+          rtCallW prog "mdk_char_to_lower" 1,
+          "ref.i31",
+        ]
+    go "charToLower" _ =
+      gapLP prog "wasm W11b: charToLower takes exactly one argument"
+    -- W8b Float leaf externs.  #199: intToFloat unboxes its Int arg through the $mdk_unbox_int
+    -- (→ i64) seam, and floatToInt reboxes its i64 truncation via $mdk_box_int — the SAME seam
+    -- randomInt/bitAnd use — so full-width Ints outside ±2^30 no longer trap the i31 cast.
+    -- hashFloat : $float → masked i32 → i31.  randomFloat : Unit arg dropped → $mdk_random_float.
+    go "intToFloat" [a] =
+      emitRefExpr prog env d a
+        ++ [unboxIntW prog, rtCallW prog "mdk_int_to_float" 1]
+    go "intToFloat" _ =
+      gapLP prog "wasm W8b: intToFloat takes exactly one argument"
+    go "floatToInt" [a] =
+      emitRefExpr prog env d a
+        ++ [
+          "ref.cast (ref $float)",
+          rtCallW prog "mdk_float_to_int" 1,
+          boxIntW prog,
+        ]
+    go "floatToInt" _ =
+      gapLP prog "wasm W8b: floatToInt takes exactly one argument"
+    go "hashFloat" [a] =
+      emitRefExpr prog env d a
+        ++ ["ref.cast (ref $float)", rtCallW prog "mdk_hash_float" 1, "ref.i31"]
+    go "hashFloat" _ =
+      gapLP prog "wasm W8b: hashFloat takes exactly one argument"
+    go "randomFloat" [u] =
+      emitRefExpr prog env d u ++ ["drop", rtCallW prog "mdk_random_float" 0]
+    go "randomFloat" _ =
+      gapLP prog "wasm W8b: randomFloat takes exactly one (Unit) argument"
+    -- W12 IO host-surface externs.  readFile/fileExists/getEnv take a $str path/name;
+    -- args takes a Unit (dropped); exit takes an i31 Int.  Each routes through the
+    -- byte-channel host-import runtime (ioHostRuntimeLines).  readFile returns a Result
+    -- (ref eq), fileExists a Bool i31, getEnv an Option (ref eq), args a List (ref eq),
+    -- exit traps (mdk_exit + unreachable, stack-polymorphic like panic).
+    -- A file extern whose path is an authority takes its grant last
+    -- (EFFECTS-SEMANTICS §8), and its runtime body hands both to the host, which
+    -- confines the path (`ioHostRuntimeLines`).
+    go "readFile" [p, g] =
+      emitRefExpr prog env d p
+        ++ ["ref.cast (ref $str)"]
+        ++ emitRefExpr prog env d g
+        ++ [rtCallW prog "mdk_read_file_io" 2]
+    go "readFile" _ =
+      gapLP prog "wasm W12: readFile takes exactly one argument and its grant"
+    go "canonicalizePath" [p, g] =
+      emitRefExpr prog env d p
+        ++ ["ref.cast (ref $str)"]
+        ++ emitRefExpr prog env d g
+        ++ [rtCallW prog "mdk_canonicalize_path_io" 2]
+    go "canonicalizePath" _ =
+      gapLP
+        prog
+        "wasm: canonicalizePath takes exactly one argument and its grant"
+    go "fileExists" [p, g] =
+      emitRefExpr prog env d p
+        ++ ["ref.cast (ref $str)"]
+        ++ emitRefExpr prog env d g
+        ++ [rtCallW prog "mdk_file_exists_io" 2]
+    go "fileExists" _ =
+      gapLP prog "wasm W12: fileExists takes exactly one argument and its grant"
+    go "getEnv" [n] =
+      emitRefExpr prog env d n
+        ++ ["ref.cast (ref $str)", rtCallW prog "mdk_get_env_io" 1]
+    go "getEnv" _ = gapLP prog "wasm W12: getEnv takes exactly one argument"
+    -- The stdin readers share one host-side buffer: a Unit argument is dropped, and
+    -- readExactly's Int is unboxed to the i64 the import takes.
+    go "readLine" [u] =
+      emitRefExpr prog env d u ++ ["drop", rtCallW prog "mdk_read_line_io" 0]
+    go "readLine" _ =
+      gapLP prog "wasm: readLine takes exactly one (Unit) argument"
+    go "readLineOpt" [u] =
+      emitRefExpr prog env d u
+        ++ ["drop", rtCallW prog "mdk_read_line_opt_io" 0]
+    go "readLineOpt" _ =
+      gapLP prog "wasm: readLineOpt takes exactly one (Unit) argument"
+    go "readAll" [u] =
+      emitRefExpr prog env d u ++ ["drop", rtCallW prog "mdk_read_all_io" 0]
+    go "readAll" _ =
+      gapLP prog "wasm: readAll takes exactly one (Unit) argument"
+    go "readExactly" [n] =
+      emitRefExpr prog env d n
+        ++ [unboxIntW prog, rtCallW prog "mdk_read_exactly_io" 1]
+    go "readExactly" _ =
+      gapLP prog "wasm: readExactly takes exactly one argument"
+    -- osEntropyBytes unboxes its Int to the i64 the import takes and builds an Array Int;
+    -- executablePath takes a Unit (dropped) and answers its String through the result channel.
+    go "osEntropyBytes" [n] =
+      emitRefExpr prog env d n
+        ++ [unboxIntW prog, rtCallW prog "mdk_os_entropy_io" 1]
+    go "osEntropyBytes" _ =
+      gapLP prog "wasm: osEntropyBytes takes exactly one argument"
+    go "executablePath" [u] =
+      emitRefExpr prog env d u
+        ++ ["drop", rtCallW prog "mdk_executable_path_io" 0]
+    go "executablePath" _ =
+      gapLP prog "wasm: executablePath takes exactly one (Unit) argument"
+    go "args" [u] =
+      emitRefExpr prog env d u ++ ["drop", rtCallW prog "mdk_args_io" 0]
+    go "args" _args =
+      gapLP prog "wasm W12: args takes exactly one (Unit) argument"
+    go "exit" [code] =
+      emitRefExpr prog env d code
+        ++ [
+          "ref.cast (ref i31)",
+          "i31.get_s",
+          rtCallW prog "mdk_exit" 1,
+          "unreachable",
+        ]
+    go "exit" _ = gapLP prog "wasm W12: exit takes exactly one argument"
+    -- The clock externs: the two reads box the host's f64 seconds; sleepMs unboxes its
+    -- Int to the i64 the import takes (a non-positive count returns at once, host-side,
+    -- as medaka_rt.c's mdk_sleep_ms does).
+    go "wallTimeSec" [u] =
+      emitRefExpr prog env d u
+        ++ ["drop", rtCallW prog "mdk_wall_time_sec" 0, "struct.new $float"]
+    go "wallTimeSec" _ =
+      gapLP prog "wasm: wallTimeSec takes exactly one (Unit) argument"
+    go "monotonicSec" [u] =
+      emitRefExpr prog env d u
+        ++ ["drop", rtCallW prog "mdk_monotonic_sec" 0, "struct.new $float"]
+    go "monotonicSec" _ =
+      gapLP prog "wasm: monotonicSec takes exactly one (Unit) argument"
+    go "sleepMs" [n] =
+      emitRefExpr prog env d n
+        ++ [
+          unboxIntW prog,
+          rtCallW prog "mdk_sleep_ms" 1,
+          "i32.const 0",
+          "ref.i31",
+        ]
+    go "sleepMs" _ = gapLP prog "wasm: sleepMs takes exactly one argument"
+    -- fetchText pushes its url through the path channel and answers a Result through the
+    -- result channel, as readFile does; Net carries no grant argument.
+    go "fetchText" [u] =
+      emitRefExpr prog env d u
+        ++ ["ref.cast (ref $str)", rtCallW prog "mdk_fetch_text_io" 1]
+    go "fetchText" _ = gapLP prog "wasm: fetchText takes exactly one argument"
+    -- ioPoll: no wasm host binds descriptor readiness, so a call stops with a coded
+    -- runtime error.  It traps at run time, not at build time, because the async
+    -- scheduler (`systemPoller`) names ioPoll and calls it only when a task waits on
+    -- a descriptor; a clock-only async program must still build.  The arguments are
+    -- evaluated left to right first, as native evaluates them.
+    go "ioPoll" [fds, interests, timeout] =
+      emitRefExpr prog env d fds
+        ++ ["drop"]
+        ++ emitRefExpr prog env d interests
+        ++ ["drop"]
+        ++ emitRefExpr prog env d timeout
+        ++ ["drop"]
+        ++ wasmTrap
+          (progEmit prog)
+          EWasmNoBinding
+          "ioPoll: descriptor readiness has no wasm binding (Net and Stdin bindings: #3666); build for a native target"
+    go "ioPoll" _ = gapLP prog "wasm: ioPoll takes exactly three arguments"
+    -- stage-D: byte-clean file I/O.  readFileBytes returns a Result String (Array Int);
+    -- writeFileBytes takes (path, Array Int) and returns Result String Unit.  Both route
+    -- into the fileBytes host seam ($mdk_read_file_bytes_io / $mdk_write_file_bytes_io).
+    go "readFileBytes" [p, g] =
+      emitRefExpr prog env d p
+        ++ ["ref.cast (ref $str)"]
+        ++ emitRefExpr prog env d g
+        ++ [rtCallW prog "mdk_read_file_bytes_io" 2]
+    go "readFileBytes" _ =
+      gapLP
+        prog
+        "wasm stage-D: readFileBytes takes exactly one argument and its grant"
+    go "writeFileBytes" [p, arr, g] =
+      emitRefExpr prog env d p
+        ++ ["ref.cast (ref $str)"]
+        ++ emitRefExpr prog env d arr
+        ++ ["ref.cast (ref $arr)"]
+        ++ emitRefExpr prog env d g
+        ++ [rtCallW prog "mdk_write_file_bytes_io" 3]
+    go "writeFileBytes" _ =
+      gapLP
+        prog
+        "wasm stage-D: writeFileBytes takes exactly two arguments and its grant"
+    go "writeFile" [p, s, g] =
+      emitRefExpr prog env d p
+        ++ ["ref.cast (ref $str)"]
+        ++ emitRefExpr prog env d s
+        ++ ["ref.cast (ref $str)"]
+        ++ emitRefExpr prog env d g
+        ++ [rtCallW prog "mdk_write_file_io" 3]
+    go "writeFile" _ =
+      gapLP prog "wasm: writeFile takes exactly two arguments and its grant"
+    go "appendFile" [p, s, g] =
+      emitRefExpr prog env d p
+        ++ ["ref.cast (ref $str)"]
+        ++ emitRefExpr prog env d s
+        ++ ["ref.cast (ref $str)"]
+        ++ emitRefExpr prog env d g
+        ++ [rtCallW prog "mdk_append_file_io" 3]
+    go "appendFile" _ =
+      gapLP prog "wasm: appendFile takes exactly two arguments and its grant"
+    go "rename" [src, dst, gs, gd] =
+      emitRefExpr prog env d src
+        ++ ["ref.cast (ref $str)"]
+        ++ emitRefExpr prog env d dst
+        ++ ["ref.cast (ref $str)"]
+        ++ emitRefExpr prog env d gs
+        ++ emitRefExpr prog env d gd
+        ++ [rtCallW prog "mdk_rename_io" 4]
+    go "rename" _ =
+      gapLP
+        prog
+        "wasm: rename takes exactly two arguments and the grant of each"
+    go "listDir" [p, g] =
+      emitRefExpr prog env d p
+        ++ ["ref.cast (ref $str)"]
+        ++ emitRefExpr prog env d g
+        ++ [rtCallW prog "mdk_list_dir_io" 2]
+    go "listDir" _ =
+      gapLP prog "wasm: listDir takes exactly one argument and its grant"
+    go "statFile" [p, g] =
+      emitRefExpr prog env d p
+        ++ ["ref.cast (ref $str)"]
+        ++ emitRefExpr prog env d g
+        ++ [rtCallW prog "mdk_stat_file_io" 2]
+    go "statFile" _ =
+      gapLP prog "wasm: statFile takes exactly one argument and its grant"
+    go "makeDir" [p, g] =
+      emitRefExpr prog env d p
+        ++ ["ref.cast (ref $str)"]
+        ++ emitRefExpr prog env d g
+        ++ [rtCallW prog "mdk_make_dir_io" 2]
+    go "makeDir" _ =
+      gapLP prog "wasm: makeDir takes exactly one argument and its grant"
+    go "removeFile" [p, g] =
+      emitRefExpr prog env d p
+        ++ ["ref.cast (ref $str)"]
+        ++ emitRefExpr prog env d g
+        ++ [rtCallW prog "mdk_remove_file_io" 2]
+    go "removeFile" _ =
+      gapLP prog "wasm: removeFile takes exactly one argument and its grant"
+    go "removeDir" [p, g] =
+      emitRefExpr prog env d p
+        ++ ["ref.cast (ref $str)"]
+        ++ emitRefExpr prog env d g
+        ++ [rtCallW prog "mdk_remove_dir_io" 2]
+    go "removeDir" _ =
+      gapLP prog "wasm: removeDir takes exactly one argument and its grant"
+    go "fsync" [p, g] =
+      emitRefExpr prog env d p
+        ++ ["ref.cast (ref $str)"]
+        ++ emitRefExpr prog env d g
+        ++ [rtCallW prog "mdk_fsync_io" 2]
+    go "fsync" _ =
+      gapLP prog "wasm: fsync takes exactly one argument and its grant"
+    go "fileMode" [p, g] =
+      emitRefExpr prog env d p
+        ++ ["ref.cast (ref $str)"]
+        ++ emitRefExpr prog env d g
+        ++ [rtCallW prog "mdk_file_mode_io" 2]
+    go "fileMode" _ =
+      gapLP prog "wasm: fileMode takes exactly one argument and its grant"
+    go "writeFileMode" [p, m, s, g] =
+      emitRefExpr prog env d p
+        ++ ["ref.cast (ref $str)"]
+        ++ emitRefExpr prog env d m
+        ++ emitRefExpr prog env d s
+        ++ ["ref.cast (ref $str)"]
+        ++ emitRefExpr prog env d g
+        ++ [rtCallW prog "mdk_write_file_mode_io" 4]
+    go "writeFileMode" _ =
+      gapLP prog "wasm: writeFileMode takes three arguments and its grant"
+    -- W10/B5: `panic msg` → stream the coded line `runtime error [E-PANIC]: <msg>\n` to
+    -- stderr, then `unreachable` (peer of native @mdk_panic / the interp's runtimePanic).
+    -- The fixed prefix is unrolled to byte-writes; the user message (a $str (ref eq), any
+    -- expression) is streamed through $mdk_eprint_str (forced via `WasmEmit.useEPut`, which the
+    -- catalog demands for `panic`), then a trailing newline byte.  `unreachable` is stack-polymorphic, so it
+    -- validates as any result type.
+    go "panic" [msg] =
+      wasmTrapBytes (progEmit prog) "runtime error [\{EPanic}]: "
+        ++ emitRefExpr prog env d msg
+        ++ ["ref.cast (ref $str)", rtCallW prog "mdk_eprint_str" 1]
+        ++ trapByteInstr (progEmit prog) 10
+        ++ ["unreachable"]
+    go "panic" _ = gapLP prog "wasm W10: panic takes exactly one argument"
+    -- Index-16a: `indexError msg` streams the coded line `runtime error
+    -- [E-INDEX-OOB]: <msg>` to stderr and traps, the same shape `panic` uses above
+    -- and the same line native's @mdk_oob_msg and the interpreter both print.  The
+    -- $str rep and $mdk_eprint_str are demanded for `indexError` in the catalog.
+    go "indexError" [msg] =
+      wasmTrapBytes (progEmit prog) "runtime error [\{EIndexOob}]: "
+        ++ emitRefExpr prog env d msg
+        ++ ["ref.cast (ref $str)", rtCallW prog "mdk_eprint_str" 1]
+        ++ trapByteInstr (progEmit prog) 10
+        ++ ["unreachable"]
+    go "indexError" _ =
+      gapLP prog "wasm Index-16a: indexError takes exactly one argument"
+    -- #1787: `indexErrorAt idx` raises E-INDEX-OOB naming the offending index, so all
+    -- three engines print the SAME line.  Dropping it here instead (as sliceError's
+    -- bounds still are) would redden test/wasm/diff_wasm_modules.sh, which since #531
+    -- compares stderr and exit code as well as stdout -- w7_array_oob.mdk exists to
+    -- assert exactly this parity.
+    go "indexErrorAt" [idx] =
+      wasmTrapNum
+        (progEmit prog)
+        EIndexOob
+        "index "
+        (emitRefExpr prog env d idx)
+        " out of bounds"
+    go "indexErrorAt" _ =
+      gapLP prog "wasm #1787: indexErrorAt takes exactly one argument"
+    go "indexErrorAtSite" [site, idx] =
+      siteExprInstrs prog env d site ++ go "indexErrorAt" [idx]
+    go "indexErrorAtSite" _ =
+      gapLP prog "wasm: indexErrorAtSite takes exactly two arguments"
+    go "panicAt" [site, msg] =
+      siteExprInstrs prog env d site ++ go "panic" [msg]
+    go "__site__" [CLit (LString f), CLit (LInt line), CLit (LInt col)] =
+      emitLitRef
+        prog
+        (LInt (sitePackedW (progEmit prog) (Loc f line col line (col + 1))))
+    go "__site__" _ =
+      gapLP prog "wasm: a trap-site literal takes a file, a line and a column"
+    go "panicAt" _ = gapLP prog "wasm: panicAt takes exactly two arguments"
+    -- #670: `sliceError lo hiIncl` reuses the existing coded E-SLICE-OOB trap (the
+    -- same fixed text the built-in slice path emits) -- both bound arguments are
+    -- dropped, where native's @mdk_slice_oob formats them into the line.
+    go "sliceError" [_lo, _hi] =
+      wasmTrap (progEmit prog) ESliceOob "slice out of bounds"
+    go "sliceError" _ =
+      gapLP prog "wasm #670: sliceError takes exactly two arguments"
+    -- The `int`-prefixed bit externs are the originals under unshadowable names.
+    go "intBitAnd" args = go "bitAnd" args
+    go "intBitOr" args = go "bitOr" args
+    go "intBitXor" args = go "bitXor" args
+    go "intBitNot" args = go "bitNot" args
+    go "intShiftLeft" args = go "shiftLeft" args
+    go "intShiftRight" args = go "shiftRight" args
+    -- stage-A: bitwise / shift externs (Int -> Int -> Int).  Args are (ref eq) boxed Ints;
+    -- unbox both to i64 via $mdk_unbox_int, apply the i64 op, rebox via $mdk_box_int.
+    -- The shifts call `$mdk_shift_left`/`$mdk_shift_right` (intRuntimeLines), which
+    -- define every amount as native's mdk_shift_left/right do: a negative amount panics,
+    -- 63 or more shifts every bit out, and shiftRight is arithmetic.  shiftLeft's bits
+    -- past bit 62 are dropped by $mdk_box_int's sign-extend, as native's retag drops them.
+    go "bitAnd" [a, b] =
+      emitRefExpr prog env d a
+        ++ [unboxIntW prog]
+        ++ emitRefExpr prog env d b
+        ++ [unboxIntW prog]
+        ++ ["i64.and", boxIntW prog]
+    go "bitAnd" _ =
+      gapLP prog "wasm stage-A: bitAnd takes exactly two arguments"
+    go "shiftLeft" [a, b] =
+      emitRefExpr prog env d a
+        ++ [unboxIntW prog]
+        ++ emitRefExpr prog env d b
+        ++ [unboxIntW prog]
+        ++ intShiftCall prog "left"
+        ++ [boxIntW prog]
+    go "shiftLeft" _ =
+      gapLP prog "wasm stage-A: shiftLeft takes exactly two arguments"
+    go "shiftRight" [a, b] =
+      emitRefExpr prog env d a
+        ++ [unboxIntW prog]
+        ++ emitRefExpr prog env d b
+        ++ [unboxIntW prog]
+        ++ intShiftCall prog "right"
+        ++ [boxIntW prog]
+    go "shiftRight" _ =
+      gapLP prog "wasm stage-A: shiftRight takes exactly two arguments"
+    -- #101: bitwise completion (mirror llvm mdk_bit_or/xor/not).  bitOr/bitXor are exact
+    -- i64 two's-complement ops; bitNot n = n xor -1 (== ~n = -n-1, matches native mdk_bit_not
+    -- for all in-range Ints).  intBitsToFloat reinterprets the unboxed i64 bit pattern as f64.
+    go "bitOr" [a, b] =
+      emitRefExpr prog env d a
+        ++ [unboxIntW prog]
+        ++ emitRefExpr prog env d b
+        ++ [unboxIntW prog]
+        ++ ["i64.or", boxIntW prog]
+    go "bitXor" [a, b] =
+      emitRefExpr prog env d a
+        ++ [unboxIntW prog]
+        ++ emitRefExpr prog env d b
+        ++ [unboxIntW prog]
+        ++ ["i64.xor", boxIntW prog]
+    go "bitNot" [a] =
+      emitRefExpr prog env d a
+        ++ [unboxIntW prog, "i64.const -1", "i64.xor", boxIntW prog]
+    go "intBitsToFloat" [a] =
+      emitRefExpr prog env d a
+        ++ [unboxIntW prog, "f64.reinterpret_i64", "struct.new $float"]
+    -- `u8Truncate`/`u16Truncate`/`u32Truncate` keep the low n bits of the Int (a
+    -- non-negative result, so a U32 above 2^30 reboxes into `$boxint`); the `ToInt`
+    -- forms are the identity on the word.
+    go "u8Truncate" [a] = emitTruncateRef prog env d "U8" a
+    go "u16Truncate" [a] = emitTruncateRef prog env d "U16" a
+    go "u32Truncate" [a] = emitTruncateRef prog env d "U32" a
+    go "u8ToInt" [a] = emitRefExpr prog env d a
+    go "u16ToInt" [a] = emitRefExpr prog env d a
+    go "u32ToInt" [a] = emitRefExpr prog env d a
+    -- `i32Truncate` sign-extends the Int's low 32 bits, so a negative `I32` stays an
+    -- i31 or `$boxint` word like any Int; `i32ToInt` is the identity on that word.
+    go "i32Truncate" [a] =
+      emitRefExpr prog env d a
+        ++ [unboxIntW prog, "i64.extend32_s", boxIntW prog]
+    go "i32ToInt" [a] = emitRefExpr prog env d a
+    -- the `I64` doors keep the 64 bits and change the cell they are read from.
+    go "i64FromBits" [a] =
+      emitRefExpr prog env d a ++ unboxU64W ++ ["struct.new $i64"]
+    go "i64ToBits" [a] =
+      emitRefExpr prog env d a ++ unboxI64W ++ ["struct.new $u64"]
+    -- `u64Truncate` boxes the Int's sign-extended i64, which is its value modulo
+    -- 2^64; `u64TruncateToInt` reboxes the payload as an Int, and `$mdk_box_int`'s
+    -- renormalization from bit 62 is exactly "the low 63 bits, bit 62 the sign".
+    go "u64Truncate" [a] =
+      emitRefExpr prog env d a ++ [unboxIntW prog, "struct.new $u64"]
+    go "u64TruncateToInt" [a] =
+      emitRefExpr prog env d a ++ unboxU64W ++ [boxIntW prog]
+    go "u64BitAnd" [a, b] = emitU64KernelRef prog env d a b "i64.and"
+    go "u64BitOr" [a, b] = emitU64KernelRef prog env d a b "i64.or"
+    go "u64BitXor" [a, b] = emitU64KernelRef prog env d a b "i64.xor"
+    go "u64MulHigh" [a, b] =
+      emitU64KernelRef prog env d a b (rtCallW prog "mdk_u64_mulhi" 2)
+    go "u64ShiftLeft" [a, k] =
+      emitU64ShiftRef prog env d a k (rtCallW prog "mdk_u64_shl" 2)
+    go "u64ShiftRight" [a, k] =
+      emitU64ShiftRef prog env d a k (rtCallW prog "mdk_u64_shr" 2)
+    -- #101: libm math externs.  IEEE-exact unary ops → native f64 opcodes (correctly-rounded,
+    -- byte-match native libm); round → $mdk_round (C round(): half away from zero);
+    -- transcendentals → JS Math.* host imports; binary pow/atan2/hypot → host imports;
+    -- floatRem → $mdk_float_rem (WAT fmod, floatRemRuntimeLines).  A $float is
+    -- unboxed to f64, the op runs, the f64 result reboxes into a fresh (struct $float).
+    go "sqrt" [a] = floatArgW prog env d a ++ ["f64.sqrt", "struct.new $float"]
+    go "floor" [a] =
+      floatArgW prog env d a ++ ["f64.floor", "struct.new $float"]
+    go "ceil" [a] = floatArgW prog env d a ++ ["f64.ceil", "struct.new $float"]
+    go "trunc" [a] =
+      floatArgW prog env d a ++ ["f64.trunc", "struct.new $float"]
+    go "round" [a] =
+      floatArgW prog env d a
+        ++ [rtCallW prog "mdk_round" 1, "struct.new $float"]
+    go "cbrt" [a] =
+      floatArgW prog env d a ++ [rtCallW prog "mdk_cbrt" 1, "struct.new $float"]
+    go "exp" [a] =
+      floatArgW prog env d a ++ [rtCallW prog "mdk_exp" 1, "struct.new $float"]
+    go "log" [a] =
+      floatArgW prog env d a ++ [rtCallW prog "mdk_log" 1, "struct.new $float"]
+    go "log2" [a] =
+      floatArgW prog env d a ++ [rtCallW prog "mdk_log2" 1, "struct.new $float"]
+    go "log10" [a] =
+      floatArgW prog env d a
+        ++ [rtCallW prog "mdk_log10" 1, "struct.new $float"]
+    go "sin" [a] =
+      floatArgW prog env d a ++ [rtCallW prog "mdk_sin" 1, "struct.new $float"]
+    go "cos" [a] =
+      floatArgW prog env d a ++ [rtCallW prog "mdk_cos" 1, "struct.new $float"]
+    go "tan" [a] =
+      floatArgW prog env d a ++ [rtCallW prog "mdk_tan" 1, "struct.new $float"]
+    go "asin" [a] =
+      floatArgW prog env d a ++ [rtCallW prog "mdk_asin" 1, "struct.new $float"]
+    go "acos" [a] =
+      floatArgW prog env d a ++ [rtCallW prog "mdk_acos" 1, "struct.new $float"]
+    go "atan" [a] =
+      floatArgW prog env d a ++ [rtCallW prog "mdk_atan" 1, "struct.new $float"]
+    go "sinh" [a] =
+      floatArgW prog env d a ++ [rtCallW prog "mdk_sinh" 1, "struct.new $float"]
+    go "cosh" [a] =
+      floatArgW prog env d a ++ [rtCallW prog "mdk_cosh" 1, "struct.new $float"]
+    go "tanh" [a] =
+      floatArgW prog env d a ++ [rtCallW prog "mdk_tanh" 1, "struct.new $float"]
+    go "pow" [a, b] =
+      floatArgW prog env d a
+        ++ floatArgW prog env d b
+        ++ [rtCallW prog "mdk_pow" 2, "struct.new $float"]
+    go "atan2" [a, b] =
+      floatArgW prog env d a
+        ++ floatArgW prog env d b
+        ++ [rtCallW prog "mdk_atan2" 2, "struct.new $float"]
+    go "hypot" [a, b] =
+      floatArgW prog env d a
+        ++ floatArgW prog env d b
+        ++ [rtCallW prog "mdk_hypot" 2, "struct.new $float"]
+    go "floatRem" [a, b] =
+      floatArgW prog env d a
+        ++ floatArgW prog env d b
+        ++ [rtCallW prog "mdk_float_rem" 2, "struct.new $float"]
+    go name _ = gapLP prog ("wasm W8: unsupported leaf extern '" ++ name ++ "'")
 
 -- #101: unbox a boxed $float argument to a raw f64 on the WAT stack.  Shared by every
 -- libm math arm above (unary opcode, host-import transcendental, and binary).
@@ -7556,15 +7579,22 @@ wTrmcLinkChain : Prog ->
   Int ->
   List String ->
   List String
-wTrmcLinkChain _ _ [] _ _ = []
-wTrmcLinkChain prog isBuiltinList [(ctorName, selfIdx)] _ valInstrs =
-  wTrmcLinkOne prog isBuiltinList ctorName selfIdx valInstrs
-wTrmcLinkChain prog isBuiltinList ((ctorName, selfIdx) :: rest) k valInstrs =
-  ["local.get " ++ wTrmcDctorL, "i32.const " ++ intToString k, "i32.eq", "if"]
-    ++ indent (wTrmcLinkOne prog isBuiltinList ctorName selfIdx valInstrs)
-    ++ ["else"]
-    ++ indent (wTrmcLinkChain prog isBuiltinList rest (k + 1) valInstrs)
-    ++ ["end"]
+wTrmcLinkChain prog isBuiltinList xs0 k0 valInstrs = go xs0 k0
+  where
+    go [] _ = []
+    go [(ctorName, selfIdx)] _ =
+      wTrmcLinkOne prog isBuiltinList ctorName selfIdx valInstrs
+    go ((ctorName, selfIdx) :: rest) k =
+      [
+          "local.get " ++ wTrmcDctorL,
+          "i32.const " ++ intToString k,
+          "i32.eq",
+          "if",
+        ]
+        ++ indent (wTrmcLinkOne prog isBuiltinList ctorName selfIdx valInstrs)
+        ++ ["else"]
+        ++ indent (go rest (k + 1))
+        ++ ["end"]
 
 -- record which ctor the NEW dest cell is (mixed sets only; a singleton set needs
 -- no tracking — the parent type is static).
@@ -7623,11 +7653,13 @@ wTrmcEmitArgsToTemps : Prog -> Env -> List CExpr -> Int -> List String
 wTrmcEmitArgsToTemps prog env args base = wTrmcArgsGo prog env args base 0
 
 wTrmcArgsGo : Prog -> Env -> List CExpr -> Int -> Int -> List String
-wTrmcArgsGo _ _ [] _ _ = []
-wTrmcArgsGo prog env (a :: rest) base k =
-  emitRefExpr prog env 0 a
-    ++ ["local.set " ++ wTrmcTempL (base + k)]
-    ++ wTrmcArgsGo prog env rest base (k + 1)
+wTrmcArgsGo prog env xs0 base k0 = go xs0 k0
+  where
+    go [] _ = []
+    go (a :: rest) k =
+      emitRefExpr prog env 0 a
+        ++ ["local.set " ++ wTrmcTempL (base + k)]
+        ++ go rest (k + 1)
 
 -- store each recomputed temp into the matching param slot ($a<i>), left-to-right.
 wTrmcStoreSlots : List String -> List CExpr -> Int -> List String
@@ -7758,39 +7790,47 @@ snd (_, b) = b
 -- collect the (ctor name, selfIdx) of every cons/ctor-tail leaf reachable through
 -- the tail wrappers (if/let/block/decision).  Mirrors trmcBodyHasCons's descent.
 wTrmcCtorTailsOf : Prog -> SelfRef -> Int -> CExpr -> List (String, Int)
-wTrmcCtorTailsOf prog self arity (CIf _ t f) =
-  wTrmcCtorTailsOf prog self arity t ++ wTrmcCtorTailsOf prog self arity f
-wTrmcCtorTailsOf prog self arity (CLet _ _ _ b) =
-  wTrmcCtorTailsOf prog self arity b
-wTrmcCtorTailsOf prog self arity (CBlock stmts) = match lastStmtExpr stmts
-  Some ex => wTrmcCtorTailsOf prog self arity ex
-  None => []
-wTrmcCtorTailsOf prog self arity (CDecision _ arms _) =
-  flatMap (a => wTrmcCtorTailsOf prog self arity (armBody a)) arms
-wTrmcCtorTailsOf prog self arity ex =
-  if isCtorTail (c => isCtor prog c) (c => ctorArity prog c) self arity ex then
-    [(ctorTailName ex, ctorTailSelfIdx ex)]
-  else
-    []
+wTrmcCtorTailsOf prog self arity ex0 = go ex0
+  where
+    go (CIf _ t f) = go t ++ go f
+    go (CLet _ _ _ b) = go b
+    go (CBlock stmts) = match lastStmtExpr stmts
+      Some ex => go ex
+      None => []
+    go (CDecision _ arms _) = flatMap (a => go (armBody a)) arms
+    go ex =
+      if isCtorTail
+        (c => isCtor prog c)
+        (c => ctorArity prog c)
+        self
+        arity
+        ex then
+        [(ctorTailName ex, ctorTailSelfIdx ex)]
+      else
+        []
 
 -- #712: the ctor-tail LEAF exprs (same descent as wTrmcCtorTailsOf), so the caller
 -- can ask `ctorTailIsCons` per leaf.  Used to decide whether a fn builds the
 -- built-in list (`::` → `$C_Cons`) or a user ADT (`$C_<ctor>` / `$CU_Cons`).
 wTrmcCtorTailExprs : Prog -> SelfRef -> Int -> CExpr -> List CExpr
-wTrmcCtorTailExprs prog self arity (CIf _ t f) =
-  wTrmcCtorTailExprs prog self arity t ++ wTrmcCtorTailExprs prog self arity f
-wTrmcCtorTailExprs prog self arity (CLet _ _ _ b) =
-  wTrmcCtorTailExprs prog self arity b
-wTrmcCtorTailExprs prog self arity (CBlock stmts) = match lastStmtExpr stmts
-  Some ex => wTrmcCtorTailExprs prog self arity ex
-  None => []
-wTrmcCtorTailExprs prog self arity (CDecision _ arms _) =
-  flatMap (a => wTrmcCtorTailExprs prog self arity (armBody a)) arms
-wTrmcCtorTailExprs prog self arity ex =
-  if isCtorTail (c => isCtor prog c) (c => ctorArity prog c) self arity ex then
-    [ex]
-  else
-    []
+wTrmcCtorTailExprs prog self arity ex0 = go ex0
+  where
+    go (CIf _ t f) = go t ++ go f
+    go (CLet _ _ _ b) = go b
+    go (CBlock stmts) = match lastStmtExpr stmts
+      Some ex => go ex
+      None => []
+    go (CDecision _ arms _) = flatMap (a => go (armBody a)) arms
+    go ex =
+      if isCtorTail
+        (c => isCtor prog c)
+        (c => ctorArity prog c)
+        self
+        arity
+        ex then
+        [ex]
+      else
+        []
 
 -- whether an eligible TRMC fn's cons leaves are the built-in `h :: t` (homogeneous
 -- per fn — a fn returns one type).  Governs the cons-cell struct id (#712).
@@ -8358,21 +8398,23 @@ emitTailCallW prog env app =
 -- statement (effect/let).  (W4 blocks in tail position only appear via desugared
 -- sequencing; the last expr is the result.)
 emitBlockTail : Prog -> Env -> Int -> List CStmt -> List String
-emitBlockTail prog env arity [CSExpr ex] = emitRefTail prog env arity ex
-emitBlockTail prog env arity ((CSExpr ex) :: rest) =
-  emitRefExpr prog env 0 ex ++ ["drop"] ++ emitBlockTail prog env arity rest
-emitBlockTail prog env arity ((CSLet recF pat ex) :: rest) =
-  let (prefix, env2) = emitBlockBindingW prog env 0 recF pat ex
-  prefix ++ emitBlockTail prog env2 arity rest
-emitBlockTail prog env arity ((CSAssign x ex) :: rest) =
-  emitRefExpr prog env 0 ex
-    ++ ["local.set " ++ localTargetW prog env x]
-    ++ emitBlockTail prog env arity rest
-emitBlockTail prog env arity [] = emitRefTail prog env arity (CLit LUnit)
-emitBlockTail prog _ _ _ = gapLP prog (if rawProgramW prog then
-  "scalar-mode: unsupported block statement"
-else
-  "ref-mode: unsupported block statement in tail position")
+emitBlockTail prog env0 arity ss0 = go env0 ss0
+  where
+    go env [CSExpr ex] = emitRefTail prog env arity ex
+    go env ((CSExpr ex) :: rest) =
+      emitRefExpr prog env 0 ex ++ ["drop"] ++ go env rest
+    go env ((CSLet recF pat ex) :: rest) =
+      let (prefix, env2) = emitBlockBindingW prog env 0 recF pat ex
+      prefix ++ go env2 rest
+    go env ((CSAssign x ex) :: rest) =
+      emitRefExpr prog env 0 ex
+        ++ ["local.set " ++ localTargetW prog env x]
+        ++ go env rest
+    go env [] = emitRefTail prog env arity (CLit LUnit)
+    go _ _ = gapLP prog (if rawProgramW prog then
+      "scalar-mode: unsupported block statement"
+    else
+      "ref-mode: unsupported block statement in tail position")
 
 -- a CDecision in tail position: each arm body is itself in tail position.  Reuse the
 -- W3 decision machinery but route arm bodies through emitRefTail (so a tail call in
@@ -8422,16 +8464,15 @@ emitTreeTail : Prog ->
   List CArm ->
   CTree ->
   List String
-emitTreeTail prog _env _arity _d _root _occs _arms (CTFail fs) =
-  wasmFailTrap (progEmit prog) fs
-emitTreeTail prog env arity _d root _occs arms (CTLeaf i) =
-  emitLeafTail prog env arity root arms i
-emitTreeTail prog env arity d root occs arms (CTGuard i fail) =
-  emitGuardArmTail prog env arity d root occs arms i fail
-emitTreeTail prog env arity d root occs arms (CTDrop sub) =
-  emitTreeTail prog env arity d root (tailList occs) arms sub
-emitTreeTail prog env arity d root occs arms (CTSwitch branches dft) =
-  emitSwitchTail prog env arity d root occs arms branches dft
+emitTreeTail prog env arity d root occs0 arms x0 = go occs0 x0
+  where
+    go _occs (CTFail fs) = wasmFailTrap (progEmit prog) fs
+    go _occs (CTLeaf i) = emitLeafTail prog env arity root arms i
+    go occs (CTGuard i fail) =
+      emitGuardArmTail prog env arity d root occs arms i fail
+    go occs (CTDrop sub) = go (tailList occs) sub
+    go occs (CTSwitch branches dft) =
+      emitSwitchTail prog env arity d root occs arms branches dft
 
 -- Like emitLeafRef, for an arm body in TAIL POSITION (emitRefTail path).
 emitLeafTail : Prog ->
@@ -8599,38 +8640,15 @@ towerBodiesTail : Prog ->
   Int ->
   Int ->
   List String
-towerBodiesTail prog env arity d root svRead rest arms branches dft ty sd k =
-  if k < 0 then
-    ["end"] ++ emitTreeTail prog env arity d root rest arms dft
-  else
-    ["end"]
-      ++ emitOrdinalSlotTail
-        prog
-        env
-        arity
-        d
-        root
-        svRead
-        rest
-        arms
-        branches
-        ty
-        sd
-        k
-      ++ towerBodiesTail
-        prog
-        env
-        arity
-        d
-        root
-        svRead
-        rest
-        arms
-        branches
-        dft
-        ty
-        sd
-        (k - 1)
+towerBodiesTail prog env arity d root sr rest arms brs dft ty sd k0 = go k0
+  where
+    go k =
+      if k < 0 then
+        ["end"] ++ emitTreeTail prog env arity d root rest arms dft
+      else
+        ["end"]
+          ++ emitOrdinalSlotTail prog env arity d root sr rest arms brs ty sd k
+          ++ go (k - 1)
 
 emitOrdinalSlotTail : Prog ->
   Env ->
@@ -8678,61 +8696,61 @@ emitLitSwitchTail : Prog ->
   CTree ->
   Int ->
   List String
-emitLitSwitchTail prog env arity d root _foc rest arms [] dft idt =
-  indentBy idt (emitTreeTail prog env arity d root rest arms dft)
--- #759: unbox to i64 ($mdk_unbox_int handles i31 immediate OR $boxint) and compare at
--- full width, so a head |k| >= 2^30 neither overflows `i32.const` (module rejected) nor
--- ref.casts a boxed scrutinee to i31 (trap).
-emitLitSwitchTail prog env arity d root foc rest arms ((CTBranch (HLit (LInt k)) sub) :: more) dft idt =
-  indentBy
-      idt
-      (foc
-        ++ [unboxIntW prog, "i64.const " ++ intToString k, "i64.eq"]
-        ++ ["if"])
-    ++ indentBy (idt + 1) (emitTreeTail prog env arity d root rest arms sub)
-    ++ indentBy idt ["else"]
-    ++ emitLitSwitchTail prog env arity d root foc rest arms more dft (idt + 1)
-    ++ indentBy idt ["end", "unreachable"]
--- W6: Char-literal switch head — a Char is an i31 codepoint immediate (cf.
--- `PLit (LChar)`); compare the i31 against the codepoint constant.
-emitLitSwitchTail prog env arity d root foc rest arms ((CTBranch (HLit (LChar c)) sub) :: more) dft idt =
-  indentBy
-      idt
-      (foc
-        ++ [
-          "ref.cast (ref i31)",
-          "i31.get_u",
-          "i32.const "
-            ++ intToString (charCode (arrayGetUnsafe 0 (stringToChars c))),
-          "i32.eq",
-        ]
-        ++ ["if"])
-    ++ indentBy (idt + 1) (emitTreeTail prog env arity d root rest arms sub)
-    ++ indentBy idt ["else"]
-    ++ emitLitSwitchTail prog env arity d root foc rest arms more dft (idt + 1)
-    ++ indentBy idt ["end", "unreachable"]
--- W6: String-literal switch head — compare the focus $str against each literal via
--- `$mdk_str_compare` (returns the i31 1 on equal), reusing the `PLit (LString)` logic.
-emitLitSwitchTail prog env arity d root foc rest arms ((CTBranch (HLit (LString s)) sub) :: more) dft idt =
-  indentBy
-      idt
-      (foc
-        ++ ["ref.cast (ref $str)"]
-        ++ emitLitRef prog (LString s)
-        ++ [
-          rtCallW prog "mdk_str_compare" 2,
-          "ref.cast (ref i31)",
-          "i31.get_u",
-          "i32.const 1",
-          "i32.eq",
-        ]
-        ++ ["if"])
-    ++ indentBy (idt + 1) (emitTreeTail prog env arity d root rest arms sub)
-    ++ indentBy idt ["else"]
-    ++ emitLitSwitchTail prog env arity d root foc rest arms more dft (idt + 1)
-    ++ indentBy idt ["end", "unreachable"]
-emitLitSwitchTail prog _ _ _ _ _ _ _ _ _ _ =
-  gapLP prog "ref-mode: non-Int literal tail switch head"
+emitLitSwitchTail prog env arity d root foc rest arms xs0 dft idt0 = go xs0 idt0
+  where
+    go [] idt = indentBy idt (emitTreeTail prog env arity d root rest arms dft)
+    -- #759: unbox to i64 ($mdk_unbox_int handles i31 immediate OR $boxint) and compare at
+    -- full width, so a head |k| >= 2^30 neither overflows `i32.const` (module rejected) nor
+    -- ref.casts a boxed scrutinee to i31 (trap).
+    go ((CTBranch (HLit (LInt k)) sub) :: more) idt =
+      indentBy
+          idt
+          (foc
+            ++ [unboxIntW prog, "i64.const " ++ intToString k, "i64.eq"]
+            ++ ["if"])
+        ++ indentBy (idt + 1) (emitTreeTail prog env arity d root rest arms sub)
+        ++ indentBy idt ["else"]
+        ++ go more (idt + 1)
+        ++ indentBy idt ["end", "unreachable"]
+    -- W6: Char-literal switch head — a Char is an i31 codepoint immediate (cf.
+    -- `PLit (LChar)`); compare the i31 against the codepoint constant.
+    go ((CTBranch (HLit (LChar c)) sub) :: more) idt =
+      indentBy
+          idt
+          (foc
+            ++ [
+              "ref.cast (ref i31)",
+              "i31.get_u",
+              "i32.const "
+                ++ intToString (charCode (arrayGetUnsafe 0 (stringToChars c))),
+              "i32.eq",
+            ]
+            ++ ["if"])
+        ++ indentBy (idt + 1) (emitTreeTail prog env arity d root rest arms sub)
+        ++ indentBy idt ["else"]
+        ++ go more (idt + 1)
+        ++ indentBy idt ["end", "unreachable"]
+    -- W6: String-literal switch head — compare the focus $str against each literal via
+    -- `$mdk_str_compare` (returns the i31 1 on equal), reusing the `PLit (LString)` logic.
+    go ((CTBranch (HLit (LString s)) sub) :: more) idt =
+      indentBy
+          idt
+          (foc
+            ++ ["ref.cast (ref $str)"]
+            ++ emitLitRef prog (LString s)
+            ++ [
+              rtCallW prog "mdk_str_compare" 2,
+              "ref.cast (ref i31)",
+              "i31.get_u",
+              "i32.const 1",
+              "i32.eq",
+            ]
+            ++ ["if"])
+        ++ indentBy (idt + 1) (emitTreeTail prog env arity d root rest arms sub)
+        ++ indentBy idt ["else"]
+        ++ go more (idt + 1)
+        ++ indentBy idt ["end", "unreachable"]
+    go _ _ = gapLP prog "ref-mode: non-Int literal tail switch head"
 
 -- ── §4 closure (CLam) lowering — lambda-lift + arity-in-struct ───────────────
 -- A CLam is lambda-lifted to a top-level $codety function `$mdk_lamN`.  Its FREE
@@ -8987,18 +9005,20 @@ emitLetGroupWith prog env d emitBody binds body =
 -- knot is tied by RECONSTRUCTION inside `emitLgLifted`'s prologue — which this never
 -- touches — and not by patching the use-site struct.
 useSiteRebuilds : Prog -> Int -> List String -> List CBind -> List String
-useSiteRebuilds _ _ _ [] = []
-useSiteRebuilds prog gid groupCaps (b :: rest) =
-  let laterNames = map lgBindName rest
-  let hoistable =
-    listLen groupCaps == 0
-      && not (anyOfList laterNames (freeVarsClauses omEmpty b))
-  let here =
-    if hoistable then
-      constLgClosure prog gid b
-    else
-      rebuildLgClosure prog gid groupCaps b
-  here ++ useSiteRebuilds prog gid groupCaps rest
+useSiteRebuilds prog gid groupCaps xs0 = go xs0
+  where
+    go [] = []
+    go (b :: rest) =
+      let laterNames = map lgBindName rest
+      let hoistable =
+        listLen groupCaps == 0
+          && not (anyOfList laterNames (freeVarsClauses omEmpty b))
+      let here =
+        if hoistable then
+          constLgClosure prog gid b
+        else
+          rebuildLgClosure prog gid groupCaps b
+      here ++ go rest
 
 -- S-4 (prologue half): the member-closure rebuilds a LIFTED member runs on every
 -- entry, including a tail self-call's re-entry.  Its hoist condition is weaker than
@@ -9032,12 +9052,14 @@ isLgValBind _ = False
 -- P1: evaluate each value binding's rhs into its local, threading the bound names
 -- through the env so a later value binding can reference an earlier one.
 emitLgValBinds : Prog -> Env -> Int -> List CBind -> List String
-emitLgValBinds _ _ _ [] = []
-emitLgValBinds prog env d ((CBind name [CClause [] rhs] _ bid) :: rest) =
-  emitRefExpr prog env d rhs
-    ++ ["local.set $" ++ gname name]
-    ++ emitLgValBinds prog (envBind name bid env) d rest
-emitLgValBinds prog env d (_ :: rest) = emitLgValBinds prog env d rest
+emitLgValBinds prog env0 d xs0 = go env0 xs0
+  where
+    go _ [] = []
+    go env ((CBind name [CClause [] rhs] _ bid) :: rest) =
+      emitRefExpr prog env d rhs
+        ++ ["local.set $" ++ gname name]
+        ++ go (envBind name bid env) rest
+    go env (_ :: rest) = go env rest
 
 -- P1: does any name in `xs` occur in `ys`?
 anyOfList : List String -> List String -> Bool
@@ -9189,7 +9211,6 @@ freeVarsExpr bound (CMethod _ (MethodEvidence _ _ route implRoutes methRoutes)) 
   freeGivens bound (route :: implRoutes ++ methRoutes)
 freeVarsExpr bound (CDict name routes) =
   (if omHasKey name bound then [] else [name]) ++ freeGivens bound routes
-freeVarsExpr _bound _ = []
 
 -- free vars of a CLetGroup binding's clauses (each clause's params are locally bound).
 freeVarsClauses : OrdMap Unit -> CBind -> List String
@@ -9622,6 +9643,8 @@ orOwnerStep seen (CArmAlt _ _ owner) = omInsert (intToString owner) () seen
 orOwnerStep seen _ = seen
 
 orArmsFrom : String -> OrdMap Unit -> Int -> List CArm -> List OrArm
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 orArmsFrom _ _ _ [] = []
 orArmsFrom prefix owners i ((CArm pat guards body) :: rest)
   | omHasKey (intToString i) owners =
@@ -9699,16 +9722,15 @@ emitTreeRef : Prog ->
   List CArm ->
   CTree ->
   List String
-emitTreeRef prog _env _d _decLabel _root _occs _arms (CTFail fs) =
-  wasmFailTrap (progEmit prog) fs
-emitTreeRef prog env d decLabel root _occs arms (CTLeaf i) =
-  emitLeafRef prog env d decLabel root arms i
-emitTreeRef prog env d decLabel root occs arms (CTGuard i fail) =
-  emitGuardArmRef prog env d decLabel root occs arms i fail
-emitTreeRef prog env d decLabel root occs arms (CTDrop sub) =
-  emitTreeRef prog env d decLabel root (tailList occs) arms sub
-emitTreeRef prog env d decLabel root occs arms (CTSwitch branches dft) =
-  emitSwitchRef prog env d decLabel root occs arms branches dft
+emitTreeRef prog env d decLabel root occs0 arms x0 = go occs0 x0
+  where
+    go _occs (CTFail fs) = wasmFailTrap (progEmit prog) fs
+    go _occs (CTLeaf i) = emitLeafRef prog env d decLabel root arms i
+    go occs (CTGuard i fail) =
+      emitGuardArmRef prog env d decLabel root occs arms i fail
+    go occs (CTDrop sub) = go (tailList occs) sub
+    go occs (CTSwitch branches dft) =
+      emitSwitchRef prog env d decLabel root occs arms branches dft
 
 -- a leaf: re-match arm i's pattern against `root` to bind its PVars (loading struct
 -- fields), then emit the body, then `br decLabel` with the value.
@@ -9803,18 +9825,22 @@ emitGuardChainRef : Prog ->
   String ->
   List CGuard ->
   (List String, Env)
-emitGuardChainRef _ env _ _ [] = ([], env)
-emitGuardChainRef prog env d gLabel ((CGBool g) :: rest) =
-  let unbox = ["ref.cast (ref i31)", "i31.get_u", "i32.eqz", "br_if " ++ gLabel]
-  let boolTest = emitRefExpr prog env d g ++ unbox
-  let (more, env2) = emitGuardChainRef prog env d gLabel rest
-  (boolTest ++ more, env2)
-emitGuardChainRef prog env d gLabel ((CGBind p ex) :: rest) =
-  let sv = WN.wasmName (WN.WSyntheticLocal WN.WGuard 0)
-  let rhs = emitRefExpr prog env d ex ++ ["local.set $" ++ sv]
-  let (tests, binds, env2) = patTestBind prog p ["local.get $" ++ sv] gLabel env
-  let (more, env3) = emitGuardChainRef prog env2 d gLabel rest
-  (rhs ++ tests ++ binds ++ more, env3)
+emitGuardChainRef prog env0 d gLabel xs0 = go env0 xs0
+  where
+    go env [] = ([], env)
+    go env ((CGBool g) :: rest) =
+      let unbox =
+        ["ref.cast (ref i31)", "i31.get_u", "i32.eqz", "br_if " ++ gLabel]
+      let boolTest = emitRefExpr prog env d g ++ unbox
+      let (more, env2) = go env rest
+      (boolTest ++ more, env2)
+    go env ((CGBind p ex) :: rest) =
+      let sv = WN.wasmName (WN.WSyntheticLocal WN.WGuard 0)
+      let rhs = emitRefExpr prog env d ex ++ ["local.set $" ++ sv]
+      let (tests, binds, env2) =
+        patTestBind prog p ["local.get $" ++ sv] gLabel env
+      let (more, env3) = go env2 rest
+      (rhs ++ tests ++ binds ++ more, env3)
 
 -- a CTSwitch on the focus column.  All heads in one switch are homogeneous.  ADT
 -- heads → discriminant + br_table on the dense per-type ordinal.  Int-literal heads
@@ -9972,38 +9998,15 @@ towerBodies : Prog ->
   Int ->
   Int ->
   List String
-towerBodies prog env d decLabel root svRead rest arms branches dft ty sd k =
-  if k < 0 then
-    ["end"] ++ emitTreeRef prog env d decLabel root rest arms dft
-  else
-    ["end"]
-      ++ emitOrdinalSlot
-        prog
-        env
-        d
-        decLabel
-        root
-        svRead
-        rest
-        arms
-        branches
-        ty
-        sd
-        k
-      ++ towerBodies
-        prog
-        env
-        d
-        decLabel
-        root
-        svRead
-        rest
-        arms
-        branches
-        dft
-        ty
-        sd
-        (k - 1)
+towerBodies prog env d decLabel root sr rest arms brs dft ty sd k0 = go k0
+  where
+    go k =
+      if k < 0 then
+        ["end"] ++ emitTreeRef prog env d decLabel root rest arms dft
+      else
+        ["end"]
+          ++ emitOrdinalSlot prog env d decLabel root sr rest arms brs ty sd k
+          ++ go (k - 1)
 
 -- ordinal k's arm: the branch whose head has ordinal k.  Present → extract its
 -- fields (ref.cast to the ctor struct + struct.get i+1) as new leading occurrences,
@@ -10059,112 +10062,80 @@ emitLitSwitchRef : Prog ->
   CTree ->
   Int ->
   List String
-emitLitSwitchRef prog env d decLabel root _foc rest arms [] dft idt =
-  indentBy idt (emitTreeRef prog env d decLabel root rest arms dft)
-emitLitSwitchRef prog env d decLabel root foc rest arms ((CTBranch (HLit (LInt k)) sub) :: more) dft idt =
-  -- W6 (validate fix): a NO-RESULT `if`.  Every decision-tree path is `br`-terminated
-  -- (leaves `br decLabel`, CTFail → unreachable, the else-chain recurses to another
-  -- br-terminated `if` or the br-terminated `dft`), so the `if` never falls through
-  -- with a value.  A `(result (ref eq))` form leaves a PHANTOM `(ref eq)` on the stack
-  -- when this switch is NESTED inside a con-tower slot — at the slot's untyped `end`
-  -- that strands the value ("values remaining on stack at end of block").  No result
-  -- type ⇒ nothing stranded.
-  --
-  -- …but a no-result `if` is REACHABLE-after: wasm types it `[] -> []` and does NOT
-  -- propagate "both arms diverged", so control notionally falls out of `end` with an
-  -- empty stack.  Under a `block $dec… (result (ref eq))` head (a value-position
-  -- scrutinee, e.g. `main = match "if"`) that fall-out hits the block's end owing a
-  -- `(ref eq)` and strands it the other way — "expected (ref eq) but nothing on
-  -- stack", an INVALID module (#374).  Every path here really is `br`-terminated, so
-  -- close with `unreachable`: the fall-out goes stack-polymorphic and validates under
-  -- BOTH a result-typed head and an untyped con-tower slot.  This is exactly what the
-  -- `emitLitSwitchTail` twin already does — the fix was ported to only one of the pair.
-  -- #759: unbox to i64 ($mdk_unbox_int handles i31 immediate OR $boxint); see
-  -- emitLitSwitchTail — the i31/i32 path truncated/trapped for |k| >= 2^30.
-  indentBy
-      idt
-      (foc
-        ++ [unboxIntW prog, "i64.const " ++ intToString k, "i64.eq"]
-        ++ ["if"])
-    ++ indentBy (idt + 1) (emitTreeRef prog env d decLabel root rest arms sub)
-    ++ indentBy idt ["else"]
-    ++ emitLitSwitchRef
-      prog
-      env
-      d
-      decLabel
-      root
-      foc
-      rest
-      arms
-      more
-      dft
-      (idt + 1)
-    ++ indentBy idt ["end", "unreachable"]
--- W6: Char-literal switch head — a Char is an i31 codepoint immediate (cf.
--- `PLit (LChar)`); compare the i31 against the codepoint constant.
-emitLitSwitchRef prog env d decLabel root foc rest arms ((CTBranch (HLit (LChar c)) sub) :: more) dft idt =
-  indentBy
-      idt
-      (foc
-        ++ [
-          "ref.cast (ref i31)",
-          "i31.get_u",
-          "i32.const "
-            ++ intToString (charCode (arrayGetUnsafe 0 (stringToChars c))),
-          "i32.eq",
-        ]
-        ++ ["if"])
-    ++ indentBy (idt + 1) (emitTreeRef prog env d decLabel root rest arms sub)
-    ++ indentBy idt ["else"]
-    ++ emitLitSwitchRef
-      prog
-      env
-      d
-      decLabel
-      root
-      foc
-      rest
-      arms
-      more
-      dft
-      (idt + 1)
-    ++ indentBy idt ["end", "unreachable"]
--- W6: String-literal switch head — compare the focus $str against each literal via
--- `$mdk_str_compare` (returns the i31 1 on equal), reusing the `PLit (LString)` logic.
-emitLitSwitchRef prog env d decLabel root foc rest arms ((CTBranch (HLit (LString s)) sub) :: more) dft idt =
-  indentBy
-      idt
-      (foc
-        ++ ["ref.cast (ref $str)"]
-        ++ emitLitRef prog (LString s)
-        ++ [
-          rtCallW prog "mdk_str_compare" 2,
-          "ref.cast (ref i31)",
-          "i31.get_u",
-          "i32.const 1",
-          "i32.eq",
-        ]
-        ++ ["if"])
-    ++ indentBy (idt + 1) (emitTreeRef prog env d decLabel root rest arms sub)
-    ++ indentBy idt ["else"]
-    ++ emitLitSwitchRef
-      prog
-      env
-      d
-      decLabel
-      root
-      foc
-      rest
-      arms
-      more
-      dft
-      (idt + 1)
-    ++ indentBy idt ["end", "unreachable"]
-emitLitSwitchRef prog _ _ _ _ _ _ _ _ _ _ =
-  gapLP
-    prog
-    "ref-mode: non-Int literal switch head (Char/String literals are W6)"
+emitLitSwitchRef prog env d dl root foc rest arms xs0 dft idt0 = go xs0 idt0
+  where
+    go [] idt = indentBy idt (emitTreeRef prog env d dl root rest arms dft)
+    go ((CTBranch (HLit (LInt k)) sub) :: more) idt =
+      -- W6 (validate fix): a NO-RESULT `if`.  Every decision-tree path is `br`-terminated
+      -- (leaves `br dl`, CTFail → unreachable, the else-chain recurses to another
+      -- br-terminated `if` or the br-terminated `dft`), so the `if` never falls through
+      -- with a value.  A `(result (ref eq))` form leaves a PHANTOM `(ref eq)` on the stack
+      -- when this switch is NESTED inside a con-tower slot — at the slot's untyped `end`
+      -- that strands the value ("values remaining on stack at end of block").  No result
+      -- type ⇒ nothing stranded.
+      --
+      -- …but a no-result `if` is REACHABLE-after: wasm types it `[] -> []` and does NOT
+      -- propagate "both arms diverged", so control notionally falls out of `end` with an
+      -- empty stack.  Under a `block $dec… (result (ref eq))` head (a value-position
+      -- scrutinee, e.g. `main = match "if"`) that fall-out hits the block's end owing a
+      -- `(ref eq)` and strands it the other way — "expected (ref eq) but nothing on
+      -- stack", an INVALID module (#374).  Every path here really is `br`-terminated, so
+      -- close with `unreachable`: the fall-out goes stack-polymorphic and validates under
+      -- BOTH a result-typed head and an untyped con-tower slot.  This is exactly what the
+      -- `emitLitSwitchTail` twin already does — the fix was ported to only one of the pair.
+      -- #759: unbox to i64 ($mdk_unbox_int handles i31 immediate OR $boxint); see
+      -- emitLitSwitchTail — the i31/i32 path truncated/trapped for |k| >= 2^30.
+      indentBy
+          idt
+          (foc
+            ++ [unboxIntW prog, "i64.const " ++ intToString k, "i64.eq"]
+            ++ ["if"])
+        ++ indentBy (idt + 1) (emitTreeRef prog env d dl root rest arms sub)
+        ++ indentBy idt ["else"]
+        ++ go more (idt + 1)
+        ++ indentBy idt ["end", "unreachable"]
+    -- W6: Char-literal switch head — a Char is an i31 codepoint immediate (cf.
+    -- `PLit (LChar)`); compare the i31 against the codepoint constant.
+    go ((CTBranch (HLit (LChar c)) sub) :: more) idt =
+      indentBy
+          idt
+          (foc
+            ++ [
+              "ref.cast (ref i31)",
+              "i31.get_u",
+              "i32.const "
+                ++ intToString (charCode (arrayGetUnsafe 0 (stringToChars c))),
+              "i32.eq",
+            ]
+            ++ ["if"])
+        ++ indentBy (idt + 1) (emitTreeRef prog env d dl root rest arms sub)
+        ++ indentBy idt ["else"]
+        ++ go more (idt + 1)
+        ++ indentBy idt ["end", "unreachable"]
+    -- W6: String-literal switch head — compare the focus $str against each literal via
+    -- `$mdk_str_compare` (returns the i31 1 on equal), reusing the `PLit (LString)` logic.
+    go ((CTBranch (HLit (LString s)) sub) :: more) idt =
+      indentBy
+          idt
+          (foc
+            ++ ["ref.cast (ref $str)"]
+            ++ emitLitRef prog (LString s)
+            ++ [
+              rtCallW prog "mdk_str_compare" 2,
+              "ref.cast (ref i31)",
+              "i31.get_u",
+              "i32.const 1",
+              "i32.eq",
+            ]
+            ++ ["if"])
+        ++ indentBy (idt + 1) (emitTreeRef prog env d dl root rest arms sub)
+        ++ indentBy idt ["else"]
+        ++ go more (idt + 1)
+        ++ indentBy idt ["end", "unreachable"]
+    go _ _ =
+      gapLP
+        prog
+        "ref-mode: non-Int literal switch head (Char/String literals are W6)"
 
 -- ── pattern binding (leaf re-match) ──────────────────────────────────────────
 -- bind a pattern's PVars against the value the snippet `v` produces, emitting struct
@@ -10218,17 +10189,19 @@ bindTupleFields : Prog ->
   List String ->
   Int ->
   (List String, Env)
-bindTupleFields _ env _ [] _ _ = ([], env)
-bindTupleFields prog env tc (p :: rest) v i =
-  let fieldSnippet =
-    v
-      ++ [
-        "ref.cast (ref $" ++ typeNameW prog (ctorStructName tc) ++ ")",
-        "struct.get $\{typeNameW prog (ctorStructName tc)} \{intToString (i + 1)}",
-      ]
-  let (cur, env2) = bindPatRef prog env p fieldSnippet
-  let (more, env3) = bindTupleFields prog env2 tc rest v (i + 1)
-  (cur ++ more, env3)
+bindTupleFields prog env0 tc xs0 v i0 = go env0 xs0 i0
+  where
+    go env [] _ = ([], env)
+    go env (p :: rest) i =
+      let fieldSnippet =
+        v
+          ++ [
+            "ref.cast (ref $" ++ typeNameW prog (ctorStructName tc) ++ ")",
+            "struct.get $\{typeNameW prog (ctorStructName tc)} \{intToString (i + 1)}",
+          ]
+      let (cur, env2) = bindPatRef prog env p fieldSnippet
+      let (more, env3) = go env2 rest (i + 1)
+      (cur ++ more, env3)
 
 -- bind a constructor pattern's fields: for each field i, extract via ref.cast +
 -- struct.get (field i+1, after the i32 tag), then recurse into the sub-pattern.
@@ -10247,17 +10220,19 @@ bindConFieldsGo : Prog ->
   List String ->
   Int ->
   (List String, Env)
-bindConFieldsGo _ env _ [] _ _ = ([], env)
-bindConFieldsGo prog env c (p :: rest) v i =
-  let fieldSnippet =
-    v
-      ++ [
-        "ref.cast (ref $" ++ typeNameW prog (ctorStructName c) ++ ")",
-        "struct.get $\{typeNameW prog (ctorStructName c)} \{intToString (i + 1)}",
-      ]
-  let (cur, env2) = bindPatRef prog env p fieldSnippet
-  let (more, env3) = bindConFieldsGo prog env2 c rest v (i + 1)
-  (cur ++ more, env3)
+bindConFieldsGo prog env0 c xs0 v i0 = go env0 xs0 i0
+  where
+    go env [] _ = ([], env)
+    go env (p :: rest) i =
+      let fieldSnippet =
+        v
+          ++ [
+            "ref.cast (ref $" ++ typeNameW prog (ctorStructName c) ++ ")",
+            "struct.get $\{typeNameW prog (ctorStructName c)} \{intToString (i + 1)}",
+          ]
+      let (cur, env2) = bindPatRef prog env p fieldSnippet
+      let (more, env3) = go env2 rest (i + 1)
+      (cur ++ more, env3)
 
 -- ── helpers shared by both modes ─────────────────────────────────────────────
 
@@ -10347,7 +10322,7 @@ collectExprLocals (CLetGroup binds body) =
 -- a method dispatched on a projected super dictionary reads it through a local
 collectExprLocals (CMethod _ (MethodEvidence _ _ (RProj r path) _ _)) =
   [projLocalName r path]
-collectExprLocals _ = []
+collectExprLocals (CMethod _ _ | CLit _ | CVar _ _ | CLam _ _ | CDict _ _) = []
 
 collectFieldLocals : CField -> List String
 collectFieldLocals (CField _ _ value) = collectExprLocals value

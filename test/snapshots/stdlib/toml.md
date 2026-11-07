@@ -1,5 +1,5 @@
 # META
-source_lines=1033
+source_lines=1040
 stages=DESUGAR,MARK
 # SOURCE
 {- | A reader for a subset of TOML.
@@ -94,22 +94,24 @@ parseQuotedBody : String ->
   Int ->
   List Char ->
   Result String (String, Int)
-parseQuotedBody key arr i acc
-  | i >= arrayLength arr = Err (unterminatedMsg key)
-  | c == '"' = Ok (stringFromChars (arrayFromList (reverse acc)), i + 1)
-  | c == '\\' = parseEscape key arr (i + 1) acc
-  | isRawControl c =
-    Err
-      (stringConcat [
-        "invalid string for key '",
-        key,
-        "': raw control character ",
-        describeChar c,
-        " must be escaped",
-      ])
-  | otherwise = parseQuotedBody key arr (i + 1) (c :: acc)
+parseQuotedBody key arr i0 acc0 = go i0 acc0
   where
-    c = arrayGetUnsafe i arr
+    go i acc
+      | i >= arrayLength arr = Err (unterminatedMsg key)
+      | otherwise = bodyChar i acc (arrayGetUnsafe i arr)
+    bodyChar i acc c
+      | c == '"' = Ok (stringFromChars (arrayFromList (reverse acc)), i + 1)
+      | c == '\\' = parseEscape key arr (i + 1) acc
+      | isRawControl c =
+        Err
+          (stringConcat [
+            "invalid string for key '",
+            key,
+            "': raw control character ",
+            describeChar c,
+            " must be escaped",
+          ])
+      | otherwise = go (i + 1) (c :: acc)
 
 -- The reader is line-based, so a missing closing quote and a string broken
 -- across lines both reach here as the line ending early.
@@ -245,28 +247,30 @@ parseArrayItems : String ->
   Int ->
   List String ->
   Result String (List String, Int)
-parseArrayItems key arr i acc
-  | i >= arrayLength arr = Err "unterminated array"
-  | arrayGetUnsafe i arr == ']' = Ok (reverse acc, i + 1)
-  | arrayGetUnsafe i arr == ' ' = parseArrayItems key arr (i + 1) acc
-  | arrayGetUnsafe i arr == '\t' = parseArrayItems key arr (i + 1) acc
-  | arrayGetUnsafe i arr == '"' = parseArrayItemStr key arr i acc
-  | otherwise =
-    Err
-      (stringConcat [
-        "unexpected char in array: '",
-        charToStr (arrayGetUnsafe i arr),
-        "'",
-      ])
+parseArrayItems key arr i0 acc = go i0
+  where
+    go i
+      | i >= arrayLength arr = Err "unterminated array"
+      | arrayGetUnsafe i arr == ']' = Ok (reverse acc, i + 1)
+      | arrayGetUnsafe i arr == ' ' = go (i + 1)
+      | arrayGetUnsafe i arr == '\t' = go (i + 1)
+      | arrayGetUnsafe i arr == '"' = parseArrayItemStr key arr i acc
+      | otherwise =
+        Err
+          (stringConcat [
+            "unexpected char in array: '",
+            charToStr (arrayGetUnsafe i arr),
+            "'",
+          ])
 
 parseArrayItemStr : String ->
   Array Char ->
   Int ->
   List String ->
   Result String (List String, Int)
-parseArrayItemStr key arr i acc = match parseQuotedStr key arr i
-  Err e => Err e
-  Ok (s, j) => parseArraySep key arr j (s :: acc)
+parseArrayItemStr key arr i acc = do
+  (s, j) <- parseQuotedStr key arr i
+  parseArraySep key arr j (s :: acc)
 
 -- After a parsed item: only a `,` (another item may follow, a trailing comma
 -- before `]` is fine) or `]` (close) is valid next.  Anything else, most
@@ -278,28 +282,32 @@ parseArraySep : String ->
   Int ->
   List String ->
   Result String (List String, Int)
-parseArraySep key arr i acc
-  | i >= arrayLength arr = Err "unterminated array"
-  | arrayGetUnsafe i arr == ' ' = parseArraySep key arr (i + 1) acc
-  | arrayGetUnsafe i arr == '\t' = parseArraySep key arr (i + 1) acc
-  | arrayGetUnsafe i arr == ',' = parseArrayItems key arr (i + 1) acc
-  | arrayGetUnsafe i arr == ']' = Ok (reverse acc, i + 1)
-  | otherwise =
-    Err
-      (stringConcat [
-        "expected ',' or ']' in array, found: '",
-        charToStr (arrayGetUnsafe i arr),
-        "'",
-      ])
+parseArraySep key arr i0 acc = go i0
+  where
+    go i
+      | i >= arrayLength arr = Err "unterminated array"
+      | arrayGetUnsafe i arr == ' ' = go (i + 1)
+      | arrayGetUnsafe i arr == '\t' = go (i + 1)
+      | arrayGetUnsafe i arr == ',' = parseArrayItems key arr (i + 1) acc
+      | arrayGetUnsafe i arr == ']' = Ok (reverse acc, i + 1)
+      | otherwise =
+        Err
+          (stringConcat [
+            "expected ',' or ']' in array, found: '",
+            charToStr (arrayGetUnsafe i arr),
+            "'",
+          ])
 
 -- ── Key-value line parser ────────────────────────────────────────────────────
 
 skipSpaces : Array Char -> Int -> Int -> Int
-skipSpaces arr i n
-  | i >= n = n
-  | arrayGetUnsafe i arr == ' ' = skipSpaces arr (i + 1) n
-  | arrayGetUnsafe i arr == '\t' = skipSpaces arr (i + 1) n
-  | otherwise = i
+skipSpaces arr i0 n = go i0
+  where
+    go i
+      | i >= n = n
+      | arrayGetUnsafe i arr == ' ' = go (i + 1)
+      | arrayGetUnsafe i arr == '\t' = go (i + 1)
+      | otherwise = i
 
 -- Parse `key = value` where value is a quoted string or array.
 parseKv : String -> Result String (String, TomlValue)
@@ -309,10 +317,12 @@ parseKv line =
   findEq arr n 0
 
 findEq : Array Char -> Int -> Int -> Result String (String, TomlValue)
-findEq arr n i
-  | i >= n = Err (stringConcat ["expected '=' in: ", stringFromChars arr])
-  | arrayGetUnsafe i arr == '=' = parseKvAfterEq arr n i
-  | otherwise = findEq arr n (i + 1)
+findEq arr n i0 = go i0
+  where
+    go i
+      | i >= n = Err (stringConcat ["expected '=' in: ", stringFromChars arr])
+      | arrayGetUnsafe i arr == '=' = parseKvAfterEq arr n i
+      | otherwise = go (i + 1)
 
 parseKvAfterEq : Array Char -> Int -> Int -> Result String (String, TomlValue)
 parseKvAfterEq arr n eq =
@@ -359,14 +369,14 @@ checkLineConsumed arr j key =
       ])
 
 parseKvStr : Array Char -> Int -> String -> Result String (String, TomlValue)
-parseKvStr arr i key = match parseQuotedStr key arr i
-  Err e => Err e
-  Ok (s, j) => map (_ => (key, TString s)) (checkLineConsumed arr j key)
+parseKvStr arr i key = do
+  (s, j) <- parseQuotedStr key arr i
+  map (_ => (key, TString s)) (checkLineConsumed arr j key)
 
 parseKvArr : Array Char -> Int -> String -> Result String (String, TomlValue)
-parseKvArr arr i key = match parseArrayValue key arr i
-  Err e => Err e
-  Ok (xs, j) => map (_ => (key, TArray xs)) (checkLineConsumed arr j key)
+parseKvArr arr i key = do
+  (xs, j) <- parseArrayValue key arr i
+  map (_ => (key, TArray xs)) (checkLineConsumed arr j key)
 
 -- The remaining characters of the line from `i`, trimmed.  Used for the
 -- unquoted scalar forms (integer / boolean), which run to end-of-line.
@@ -407,11 +417,11 @@ tableRe = mustCompile "^\\[(.+)\\]$"
 
 -- The single group of `re`'s match on `s`, trimmed.
 headerName : Regex -> String -> Option String
-headerName re s = match reFind re s
-  Some m => match m.groups
+headerName re s = do
+  m <- reFind re s
+  match m.groups
     (Some g) :: [] => Some (trimAscii g.text)
     _ => None
-  None => None
 
 -- Detect a section header and classify it, or return None.
 -- `[[t]]` is checked first: it also satisfies the `[t]` shape.
@@ -588,9 +598,9 @@ parseTableCount name src = match parse src
 parseTableEntryStr : String -> Int -> String -> String -> Option String
 parseTableEntryStr name i field src = match parse src
   Err _ => None
-  Ok doc => match tableEntry name i doc
-    None => None
-    Some e => getString field e
+  Ok doc => do
+    e <- tableEntry name i doc
+    getString field e
 
 {- | The string at a qualified key, or `None` when the key is absent or
    holds another kind of value.
@@ -669,9 +679,9 @@ tableIdxOf prefix key =
     None
   else
     let rest = drop (stringLength prefix) key
-    match indexOf "." rest
-      None => None
-      Some d => toInt (stringSlice 0 d rest)
+    do
+      d <- indexOf "." rest
+      toInt (stringSlice 0 d rest)
 
 -- The largest entry index of `prefix` over all keys, or -1 when there is none.
 -- It is an index, not a count, so an index at the top of `Int` is not
@@ -703,20 +713,17 @@ tableEntryGo : String ->
   Int ->
   List (String, TomlValue) ->
   (Int, List (String, TomlValue))
-tableEntryGo _ _ [] best acc = (best, acc)
-tableEntryGo prefix entryPrefix ((k, v) :: rest) best acc =
-  let best2 = match tableIdxOf prefix k
-    None => best
-    Some j => max j best
-  if startsWith entryPrefix k then
-    tableEntryGo
-      prefix
-      entryPrefix
-      rest
-      best2
-      ((drop (stringLength entryPrefix) k, v) :: acc)
-  else
-    tableEntryGo prefix entryPrefix rest best2 acc
+tableEntryGo prefix entryPrefix kvs0 best0 acc0 = go kvs0 best0 acc0
+  where
+    go [] best acc = (best, acc)
+    go ((k, v) :: rest) best acc =
+      let best2 = match tableIdxOf prefix k
+        None => best
+        Some j => max j best
+      if startsWith entryPrefix k then
+        go rest best2 ((drop (stringLength entryPrefix) k, v) :: acc)
+      else
+        go rest best2 acc
 
 {- | The `i`-th `[[name]]` entry, counting from `0`, as a document of its
    own, or `None` when `i` is out of range.
@@ -1053,7 +1060,7 @@ prop "Display Toml renders every entry" (k : String) (n : Int) =
 (DTypeSig false "parseQuotedStr" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "Int")))))))
 (DFunDef false "parseQuotedStr" ((PVar "key") (PVar "arr") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (EApp (EVar "Err") (ELit (LString "unexpected end of input"))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar "\""))) (EApp (EApp (EApp (EApp (EVar "parseQuotedBody") (EVar "key")) (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EListLit)) (EIf (EVar "otherwise") (EApp (EVar "Err") (ELit (LString "expected '\"'"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "parseQuotedBody" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Char")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "Int"))))))))
-(DFunDef false "parseQuotedBody" ((PVar "key") (PVar "arr") (PVar "i") (PVar "acc")) (ELetGroup ((lgb "c" (clause () (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))))) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (EApp (EVar "Err") (EApp (EVar "unterminatedMsg") (EVar "key"))) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\""))) (EApp (EVar "Ok") (ETuple (EApp (EVar "stringFromChars") (EApp (EVar "arrayFromList") (EApp (EVar "reverse") (EVar "acc")))) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\\"))) (EApp (EApp (EApp (EApp (EVar "parseEscape") (EVar "key")) (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "acc")) (EIf (EApp (EVar "isRawControl") (EVar "c")) (EApp (EVar "Err") (EApp (EVar "stringConcat") (EListLit (ELit (LString "invalid string for key '")) (EVar "key") (ELit (LString "': raw control character ")) (EApp (EVar "describeChar") (EVar "c")) (ELit (LString " must be escaped"))))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "parseQuotedBody") (EVar "key")) (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "::" (EVar "c") (EVar "acc"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))
+(DFunDef false "parseQuotedBody" ((PVar "key") (PVar "arr") (PVar "i0") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (EApp (EVar "Err") (EApp (EVar "unterminatedMsg") (EVar "key"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "bodyChar") (EVar "i")) (EVar "acc")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))) (lgb "bodyChar" (clause ((PVar "i") (PVar "acc") (PVar "c")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\""))) (EApp (EVar "Ok") (ETuple (EApp (EVar "stringFromChars") (EApp (EVar "arrayFromList") (EApp (EVar "reverse") (EVar "acc")))) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\\"))) (EApp (EApp (EApp (EApp (EVar "parseEscape") (EVar "key")) (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "acc")) (EIf (EApp (EVar "isRawControl") (EVar "c")) (EApp (EVar "Err") (EApp (EVar "stringConcat") (EListLit (ELit (LString "invalid string for key '")) (EVar "key") (ELit (LString "': raw control character ")) (EApp (EVar "describeChar") (EVar "c")) (ELit (LString " must be escaped"))))) (EIf (EVar "otherwise") (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "::" (EVar "c") (EVar "acc"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))) (EApp (EApp (EVar "go") (EVar "i0")) (EVar "acc0"))))
 (DTypeSig false "unterminatedMsg" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "unterminatedMsg" ((PVar "key")) (EApp (EVar "stringConcat") (EListLit (ELit (LString "invalid string for key '")) (EVar "key") (ELit (LString "': unterminated string (a string must close on the same line; write a newline as \\n)")))))
 (DTypeSig false "isRawControl" (TyFun (TyCon "Char") (TyCon "Bool")))
@@ -1077,17 +1084,17 @@ prop "Display Toml renders every entry" (k : String) (n : Int) =
 (DTypeSig false "parseArrayValue" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Int")))))))
 (DFunDef false "parseArrayValue" ((PVar "key") (PVar "arr") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (EApp (EVar "Err") (ELit (LString "unexpected end of input"))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar "["))) (EApp (EApp (EApp (EApp (EVar "parseArrayItems") (EVar "key")) (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EListLit)) (EIf (EVar "otherwise") (EApp (EVar "Err") (ELit (LString "expected '['"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "parseArrayItems" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Int"))))))))
-(DFunDef false "parseArrayItems" ((PVar "key") (PVar "arr") (PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (EApp (EVar "Err") (ELit (LString "unterminated array"))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar "]"))) (EApp (EVar "Ok") (ETuple (EApp (EVar "reverse") (EVar "acc")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar " "))) (EApp (EApp (EApp (EApp (EVar "parseArrayItems") (EVar "key")) (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "acc")) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar "\t"))) (EApp (EApp (EApp (EApp (EVar "parseArrayItems") (EVar "key")) (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "acc")) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar "\""))) (EApp (EApp (EApp (EApp (EVar "parseArrayItemStr") (EVar "key")) (EVar "arr")) (EVar "i")) (EVar "acc")) (EIf (EVar "otherwise") (EApp (EVar "Err") (EApp (EVar "stringConcat") (EListLit (ELit (LString "unexpected char in array: '")) (EApp (EVar "charToStr") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))) (ELit (LString "'"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))
+(DFunDef false "parseArrayItems" ((PVar "key") (PVar "arr") (PVar "i0") (PVar "acc")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (EApp (EVar "Err") (ELit (LString "unterminated array"))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar "]"))) (EApp (EVar "Ok") (ETuple (EApp (EVar "reverse") (EVar "acc")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar " "))) (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar "\t"))) (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar "\""))) (EApp (EApp (EApp (EApp (EVar "parseArrayItemStr") (EVar "key")) (EVar "arr")) (EVar "i")) (EVar "acc")) (EIf (EVar "otherwise") (EApp (EVar "Err") (EApp (EVar "stringConcat") (EListLit (ELit (LString "unexpected char in array: '")) (EApp (EVar "charToStr") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))) (ELit (LString "'"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))) (EApp (EVar "go") (EVar "i0"))))
 (DTypeSig false "parseArrayItemStr" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Int"))))))))
-(DFunDef false "parseArrayItemStr" ((PVar "key") (PVar "arr") (PVar "i") (PVar "acc")) (EMatch (EApp (EApp (EApp (EVar "parseQuotedStr") (EVar "key")) (EVar "arr")) (EVar "i")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PVar "s") (PVar "j"))) () (EApp (EApp (EApp (EApp (EVar "parseArraySep") (EVar "key")) (EVar "arr")) (EVar "j")) (EBinOp "::" (EVar "s") (EVar "acc"))))))
+(DFunDef false "parseArrayItemStr" ((PVar "key") (PVar "arr") (PVar "i") (PVar "acc")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EVar "parseQuotedStr") (EVar "key")) (EVar "arr")) (EVar "i"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "s") (PVar "j")) () (EApp (EApp (EApp (EApp (EVar "parseArraySep") (EVar "key")) (EVar "arr")) (EVar "j")) (EBinOp "::" (EVar "s") (EVar "acc"))))))))
 (DTypeSig false "parseArraySep" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Int"))))))))
-(DFunDef false "parseArraySep" ((PVar "key") (PVar "arr") (PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (EApp (EVar "Err") (ELit (LString "unterminated array"))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar " "))) (EApp (EApp (EApp (EApp (EVar "parseArraySep") (EVar "key")) (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "acc")) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar "\t"))) (EApp (EApp (EApp (EApp (EVar "parseArraySep") (EVar "key")) (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "acc")) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar ","))) (EApp (EApp (EApp (EApp (EVar "parseArrayItems") (EVar "key")) (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "acc")) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar "]"))) (EApp (EVar "Ok") (ETuple (EApp (EVar "reverse") (EVar "acc")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EIf (EVar "otherwise") (EApp (EVar "Err") (EApp (EVar "stringConcat") (EListLit (ELit (LString "expected ',' or ']' in array, found: '")) (EApp (EVar "charToStr") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))) (ELit (LString "'"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))
+(DFunDef false "parseArraySep" ((PVar "key") (PVar "arr") (PVar "i0") (PVar "acc")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (EApp (EVar "Err") (ELit (LString "unterminated array"))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar " "))) (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar "\t"))) (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar ","))) (EApp (EApp (EApp (EApp (EVar "parseArrayItems") (EVar "key")) (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "acc")) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar "]"))) (EApp (EVar "Ok") (ETuple (EApp (EVar "reverse") (EVar "acc")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EIf (EVar "otherwise") (EApp (EVar "Err") (EApp (EVar "stringConcat") (EListLit (ELit (LString "expected ',' or ']' in array, found: '")) (EApp (EVar "charToStr") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))) (ELit (LString "'"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))) (EApp (EVar "go") (EVar "i0"))))
 (DTypeSig false "skipSpaces" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "skipSpaces" ((PVar "arr") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "n") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar " "))) (EApp (EApp (EApp (EVar "skipSpaces") (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar "\t"))) (EApp (EApp (EApp (EVar "skipSpaces") (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DFunDef false "skipSpaces" ((PVar "arr") (PVar "i0") (PVar "n")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "n") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar " "))) (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar "\t"))) (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit))))))))) (EApp (EVar "go") (EVar "i0"))))
 (DTypeSig false "parseKv" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "TomlValue")))))
 (DFunDef false "parseKv" ((PVar "line")) (EBlock (DoLet false false (PVar "arr") (EApp (EVar "stringToChars") (EVar "line"))) (DoLet false false (PVar "n") (EApp (EVar "arrayLength") (EVar "arr"))) (DoExpr (EApp (EApp (EApp (EVar "findEq") (EVar "arr")) (EVar "n")) (ELit (LInt 0))))))
 (DTypeSig false "findEq" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "TomlValue")))))))
-(DFunDef false "findEq" ((PVar "arr") (PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EApp (EVar "Err") (EApp (EVar "stringConcat") (EListLit (ELit (LString "expected '=' in: ")) (EApp (EVar "stringFromChars") (EVar "arr"))))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar "="))) (EApp (EApp (EApp (EVar "parseKvAfterEq") (EVar "arr")) (EVar "n")) (EVar "i")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "findEq") (EVar "arr")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "findEq" ((PVar "arr") (PVar "n") (PVar "i0")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EApp (EVar "Err") (EApp (EVar "stringConcat") (EListLit (ELit (LString "expected '=' in: ")) (EApp (EVar "stringFromChars") (EVar "arr"))))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar "="))) (EApp (EApp (EApp (EVar "parseKvAfterEq") (EVar "arr")) (EVar "n")) (EVar "i")) (EIf (EVar "otherwise") (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))) (EApp (EVar "go") (EVar "i0"))))
 (DTypeSig false "parseKvAfterEq" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "TomlValue")))))))
 (DFunDef false "parseKvAfterEq" ((PVar "arr") (PVar "n") (PVar "eq")) (EBlock (DoLet false false (PVar "keyRaw") (EApp (EVar "stringFromChars") (EApp (EApp (EVar "arrayMakeWith") (EVar "eq")) (ELam ((PVar "k")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "k")) (EVar "arr")))))) (DoLet false false (PVar "key") (EApp (EVar "trimAscii") (EVar "keyRaw"))) (DoExpr (EIf (EApp (EApp (EVar "contains") (ELit (LString "."))) (EVar "key")) (EApp (EVar "Err") (EApp (EVar "stringConcat") (EListLit (ELit (LString "dotted key '")) (EVar "key") (ELit (LString "' is not supported: use table headers instead"))))) (EBlock (DoLet false false (PVar "valStart") (EApp (EApp (EApp (EVar "skipSpaces") (EVar "arr")) (EBinOp "+" (EVar "eq") (ELit (LInt 1)))) (EVar "n"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "parseKvValue") (EVar "arr")) (EVar "n")) (EVar "valStart")) (EVar "key"))))))))
 (DTypeSig false "parseKvValue" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "TomlValue"))))))))
@@ -1095,9 +1102,9 @@ prop "Display Toml renders every entry" (k : String) (n : Int) =
 (DTypeSig false "checkLineConsumed" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
 (DFunDef false "checkLineConsumed" ((PVar "arr") (PVar "j") (PVar "key")) (EBlock (DoLet false false (PVar "trailing") (EApp (EApp (EApp (EVar "restOfLine") (EVar "arr")) (EApp (EVar "arrayLength") (EVar "arr"))) (EVar "j"))) (DoExpr (EIf (EBinOp "==" (EVar "trailing") (ELit (LString ""))) (EApp (EVar "Ok") (ELit LUnit)) (EApp (EVar "Err") (EApp (EVar "stringConcat") (EListLit (ELit (LString "trailing content after value for key '")) (EVar "key") (ELit (LString "': ")) (EVar "trailing"))))))))
 (DTypeSig false "parseKvStr" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "TomlValue")))))))
-(DFunDef false "parseKvStr" ((PVar "arr") (PVar "i") (PVar "key")) (EMatch (EApp (EApp (EApp (EVar "parseQuotedStr") (EVar "key")) (EVar "arr")) (EVar "i")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PVar "s") (PVar "j"))) () (EApp (EApp (EVar "map") (ELam (PWild) (ETuple (EVar "key") (EApp (EVar "TString") (EVar "s"))))) (EApp (EApp (EApp (EVar "checkLineConsumed") (EVar "arr")) (EVar "j")) (EVar "key"))))))
+(DFunDef false "parseKvStr" ((PVar "arr") (PVar "i") (PVar "key")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EVar "parseQuotedStr") (EVar "key")) (EVar "arr")) (EVar "i"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "s") (PVar "j")) () (EApp (EApp (EVar "map") (ELam (PWild) (ETuple (EVar "key") (EApp (EVar "TString") (EVar "s"))))) (EApp (EApp (EApp (EVar "checkLineConsumed") (EVar "arr")) (EVar "j")) (EVar "key"))))))))
 (DTypeSig false "parseKvArr" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "TomlValue")))))))
-(DFunDef false "parseKvArr" ((PVar "arr") (PVar "i") (PVar "key")) (EMatch (EApp (EApp (EApp (EVar "parseArrayValue") (EVar "key")) (EVar "arr")) (EVar "i")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PVar "xs") (PVar "j"))) () (EApp (EApp (EVar "map") (ELam (PWild) (ETuple (EVar "key") (EApp (EVar "TArray") (EVar "xs"))))) (EApp (EApp (EApp (EVar "checkLineConsumed") (EVar "arr")) (EVar "j")) (EVar "key"))))))
+(DFunDef false "parseKvArr" ((PVar "arr") (PVar "i") (PVar "key")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EVar "parseArrayValue") (EVar "key")) (EVar "arr")) (EVar "i"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "xs") (PVar "j")) () (EApp (EApp (EVar "map") (ELam (PWild) (ETuple (EVar "key") (EApp (EVar "TArray") (EVar "xs"))))) (EApp (EApp (EApp (EVar "checkLineConsumed") (EVar "arr")) (EVar "j")) (EVar "key"))))))))
 (DTypeSig false "restOfLine" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
 (DFunDef false "restOfLine" ((PVar "arr") (PVar "n") (PVar "i")) (EApp (EVar "trimAscii") (EApp (EVar "stringFromChars") (EApp (EApp (EVar "arrayMakeWith") (EBinOp "-" (EVar "n") (EVar "i"))) (ELam ((PVar "j")) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (EVar "j"))) (EVar "arr")))))))
 (DTypeSig false "parseKvScalar" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "TomlValue"))))))
@@ -1108,7 +1115,7 @@ prop "Display Toml renders every entry" (k : String) (n : Int) =
 (DTypeSig false "tableRe" (TyCon "Regex"))
 (DFunDef false "tableRe" () (EApp (EVar "mustCompile") (ELit (LString "^\\[(.+)\\]$"))))
 (DTypeSig false "headerName" (TyFun (TyCon "Regex") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "headerName" ((PVar "re") (PVar "s")) (EMatch (EApp (EApp (EVar "reFind") (EVar "re")) (EVar "s")) (arm (PCon "Some" (PVar "m")) () (EMatch (EFieldAccess (EVar "m") "groups") (arm (PCons (PCon "Some" (PVar "g")) (PList)) () (EApp (EVar "Some") (EApp (EVar "trimAscii") (EFieldAccess (EVar "g") "text")))) (arm PWild () (EVar "None")))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "headerName" ((PVar "re") (PVar "s")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "reFind") (EVar "re")) (EVar "s"))) (ELam ((PVar "m")) (EMatch (EFieldAccess (EVar "m") "groups") (arm (PCons (PCon "Some" (PVar "g")) (PList)) () (EApp (EVar "Some") (EApp (EVar "trimAscii") (EFieldAccess (EVar "g") "text")))) (arm PWild () (EVar "None"))))))
 (DTypeSig false "parseHeader" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Header"))))
 (DFunDef false "parseHeader" ((PVar "s")) (EMatch (EApp (EApp (EVar "headerName") (EVar "arrayTableRe")) (EVar "s")) (arm (PCon "Some" (PVar "name")) () (EApp (EVar "Some") (EApp (EVar "HArrayTable") (EVar "name")))) (arm (PCon "None") () (EApp (EApp (EVar "map") (EVar "HTable")) (EApp (EApp (EVar "headerName") (EVar "tableRe")) (EVar "s"))))))
 (DTypeSig false "qualifyKey" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
@@ -1138,7 +1145,7 @@ prop "Display Toml renders every entry" (k : String) (n : Int) =
 (DTypeSig false "parseTableCount" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Int"))))
 (DFunDef false "parseTableCount" ((PVar "name") (PVar "src")) (EMatch (EApp (EVar "parse") (EVar "src")) (arm (PCon "Err" PWild) () (ELit (LInt 0))) (arm (PCon "Ok" (PVar "doc")) () (EApp (EApp (EVar "tableCount") (EVar "name")) (EVar "doc")))))
 (DTypeSig false "parseTableEntryStr" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))))
-(DFunDef false "parseTableEntryStr" ((PVar "name") (PVar "i") (PVar "field") (PVar "src")) (EMatch (EApp (EVar "parse") (EVar "src")) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "doc")) () (EMatch (EApp (EApp (EApp (EVar "tableEntry") (EVar "name")) (EVar "i")) (EVar "doc")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "e")) () (EApp (EApp (EVar "getString") (EVar "field")) (EVar "e")))))))
+(DFunDef false "parseTableEntryStr" ((PVar "name") (PVar "i") (PVar "field") (PVar "src")) (EMatch (EApp (EVar "parse") (EVar "src")) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "doc")) () (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EVar "tableEntry") (EVar "name")) (EVar "i")) (EVar "doc"))) (ELam ((PVar "e")) (EApp (EApp (EVar "getString") (EVar "field")) (EVar "e")))))))
 (DTypeSig true "getString" (TyFun (TyCon "String") (TyFun (TyCon "Toml") (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "getString" ((PVar "key") (PCon "Toml" (PVar "kvs"))) (EMatch (EApp (EApp (EVar "lookupKvs") (EVar "key")) (EVar "kvs")) (arm (PCon "Some" (PCon "TString" (PVar "s"))) () (EApp (EVar "Some") (EVar "s"))) (arm PWild () (EVar "None"))))
 (DTypeSig true "getArray" (TyFun (TyCon "String") (TyFun (TyCon "Toml") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))))
@@ -1148,15 +1155,14 @@ prop "Display Toml renders every entry" (k : String) (n : Int) =
 (DTypeSig true "getBool" (TyFun (TyCon "String") (TyFun (TyCon "Toml") (TyApp (TyCon "Option") (TyCon "Bool")))))
 (DFunDef false "getBool" ((PVar "key") (PCon "Toml" (PVar "kvs"))) (EMatch (EApp (EApp (EVar "lookupKvs") (EVar "key")) (EVar "kvs")) (arm (PCon "Some" (PCon "TBool" (PVar "b"))) () (EApp (EVar "Some") (EVar "b"))) (arm PWild () (EVar "None"))))
 (DTypeSig false "tableIdxOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int")))))
-(DFunDef false "tableIdxOf" ((PVar "prefix") (PVar "key")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "startsWith") (EVar "prefix")) (EVar "key"))) (EVar "None") (EBlock (DoLet false false (PVar "rest") (EApp (EApp (EVar "drop") (EApp (EVar "stringLength") (EVar "prefix"))) (EVar "key"))) (DoExpr (EMatch (EApp (EApp (EVar "indexOf") (ELit (LString "."))) (EVar "rest")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "d")) () (EApp (EVar "toInt") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "d")) (EVar "rest")))))))))
+(DFunDef false "tableIdxOf" ((PVar "prefix") (PVar "key")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "startsWith") (EVar "prefix")) (EVar "key"))) (EVar "None") (EBlock (DoLet false false (PVar "rest") (EApp (EApp (EVar "drop") (EApp (EVar "stringLength") (EVar "prefix"))) (EVar "key"))) (DoExpr (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "indexOf") (ELit (LString "."))) (EVar "rest"))) (ELam ((PVar "d")) (EApp (EVar "toInt") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "d")) (EVar "rest")))))))))
 (DTypeSig false "tableLastGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TomlValue"))) (TyFun (TyCon "Int") (TyCon "Int")))))
 (DFunDef false "tableLastGo" (PWild (PList) (PVar "best")) (EVar "best"))
 (DFunDef false "tableLastGo" ((PVar "prefix") (PCons (PTuple (PVar "k") PWild) (PVar "rest")) (PVar "best")) (EMatch (EApp (EApp (EVar "tableIdxOf") (EVar "prefix")) (EVar "k")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "tableLastGo") (EVar "prefix")) (EVar "rest")) (EVar "best"))) (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EApp (EVar "tableLastGo") (EVar "prefix")) (EVar "rest")) (EApp (EApp (EVar "max") (EVar "i")) (EVar "best"))))))
 (DTypeSig true "tableCount" (TyFun (TyCon "String") (TyFun (TyCon "Toml") (TyCon "Int"))))
 (DFunDef false "tableCount" ((PVar "name") (PCon "Toml" (PVar "kvs"))) (EBlock (DoLet false false (PVar "last") (EApp (EApp (EApp (EVar "tableLastGo") (EApp (EVar "stringConcat") (EListLit (EVar "name") (ELit (LString "."))))) (EVar "kvs")) (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1))))) (DoExpr (EIf (EBinOp "==" (EVar "last") (EVar "intMaxBound")) (EVar "last") (EBinOp "+" (EVar "last") (ELit (LInt 1)))))))
 (DTypeSig false "tableEntryGo" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TomlValue"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TomlValue"))) (TyTuple (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TomlValue"))))))))))
-(DFunDef false "tableEntryGo" (PWild PWild (PList) (PVar "best") (PVar "acc")) (ETuple (EVar "best") (EVar "acc")))
-(DFunDef false "tableEntryGo" ((PVar "prefix") (PVar "entryPrefix") (PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest")) (PVar "best") (PVar "acc")) (EBlock (DoLet false false (PVar "best2") (EMatch (EApp (EApp (EVar "tableIdxOf") (EVar "prefix")) (EVar "k")) (arm (PCon "None") () (EVar "best")) (arm (PCon "Some" (PVar "j")) () (EApp (EApp (EVar "max") (EVar "j")) (EVar "best"))))) (DoExpr (EIf (EApp (EApp (EVar "startsWith") (EVar "entryPrefix")) (EVar "k")) (EApp (EApp (EApp (EApp (EApp (EVar "tableEntryGo") (EVar "prefix")) (EVar "entryPrefix")) (EVar "rest")) (EVar "best2")) (EBinOp "::" (ETuple (EApp (EApp (EVar "drop") (EApp (EVar "stringLength") (EVar "entryPrefix"))) (EVar "k")) (EVar "v")) (EVar "acc"))) (EApp (EApp (EApp (EApp (EApp (EVar "tableEntryGo") (EVar "prefix")) (EVar "entryPrefix")) (EVar "rest")) (EVar "best2")) (EVar "acc"))))))
+(DFunDef false "tableEntryGo" ((PVar "prefix") (PVar "entryPrefix") (PVar "kvs0") (PVar "best0") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "best") (PVar "acc")) (ETuple (EVar "best") (EVar "acc"))) (clause ((PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest")) (PVar "best") (PVar "acc")) (EBlock (DoLet false false (PVar "best2") (EMatch (EApp (EApp (EVar "tableIdxOf") (EVar "prefix")) (EVar "k")) (arm (PCon "None") () (EVar "best")) (arm (PCon "Some" (PVar "j")) () (EApp (EApp (EVar "max") (EVar "j")) (EVar "best"))))) (DoExpr (EIf (EApp (EApp (EVar "startsWith") (EVar "entryPrefix")) (EVar "k")) (EApp (EApp (EApp (EVar "go") (EVar "rest")) (EVar "best2")) (EBinOp "::" (ETuple (EApp (EApp (EVar "drop") (EApp (EVar "stringLength") (EVar "entryPrefix"))) (EVar "k")) (EVar "v")) (EVar "acc"))) (EApp (EApp (EApp (EVar "go") (EVar "rest")) (EVar "best2")) (EVar "acc")))))))) (EApp (EApp (EApp (EVar "go") (EVar "kvs0")) (EVar "best0")) (EVar "acc0"))))
 (DTypeSig true "tableEntry" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Toml") (TyApp (TyCon "Option") (TyCon "Toml"))))))
 (DFunDef false "tableEntry" ((PVar "name") (PVar "i") (PCon "Toml" (PVar "kvs"))) (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EVar "None") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "entryPrefix") (EApp (EVar "stringConcat") (EListLit (EVar "name") (ELit (LString ".")) (EApp (EVar "intToString") (EVar "i")) (ELit (LString "."))))) (DoLet false false (PTuple (PVar "last") (PVar "entry")) (EApp (EApp (EApp (EApp (EApp (EVar "tableEntryGo") (EApp (EVar "stringConcat") (EListLit (EVar "name") (ELit (LString "."))))) (EVar "entryPrefix")) (EVar "kvs")) (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1)))) (EListLit))) (DoExpr (EIf (EBinOp ">" (EVar "i") (EVar "last")) (EVar "None") (EApp (EVar "Some") (EApp (EVar "Toml") (EApp (EVar "reverse") (EVar "entry"))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "entryKeyOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "String"))))))
@@ -1259,7 +1265,7 @@ prop "Display Toml renders every entry" (k : String) (n : Int) =
 (DTypeSig false "parseQuotedStr" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "Int")))))))
 (DFunDef false "parseQuotedStr" ((PVar "key") (PVar "arr") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (EApp (EVar "Err") (ELit (LString "unexpected end of input"))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar "\""))) (EApp (EApp (EApp (EApp (EVar "parseQuotedBody") (EVar "key")) (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EListLit)) (EIf (EVar "otherwise") (EApp (EVar "Err") (ELit (LString "expected '\"'"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "parseQuotedBody" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Char")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "Int"))))))))
-(DFunDef false "parseQuotedBody" ((PVar "key") (PVar "arr") (PVar "i") (PVar "acc")) (ELetGroup ((lgb "c" (clause () (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))))) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (EApp (EVar "Err") (EApp (EVar "unterminatedMsg") (EVar "key"))) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\""))) (EApp (EVar "Ok") (ETuple (EApp (EVar "stringFromChars") (EApp (EVar "arrayFromList") (EApp (EVar "reverse") (EVar "acc")))) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\\"))) (EApp (EApp (EApp (EApp (EVar "parseEscape") (EVar "key")) (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "acc")) (EIf (EApp (EVar "isRawControl") (EVar "c")) (EApp (EVar "Err") (EApp (EVar "stringConcat") (EListLit (ELit (LString "invalid string for key '")) (EVar "key") (ELit (LString "': raw control character ")) (EApp (EVar "describeChar") (EVar "c")) (ELit (LString " must be escaped"))))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "parseQuotedBody") (EVar "key")) (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "::" (EVar "c") (EVar "acc"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))
+(DFunDef false "parseQuotedBody" ((PVar "key") (PVar "arr") (PVar "i0") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (EApp (EVar "Err") (EApp (EVar "unterminatedMsg") (EVar "key"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "bodyChar") (EVar "i")) (EVar "acc")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))) (lgb "bodyChar" (clause ((PVar "i") (PVar "acc") (PVar "c")) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\""))) (EApp (EVar "Ok") (ETuple (EApp (EVar "stringFromChars") (EApp (EVar "arrayFromList") (EApp (EVar "reverse") (EVar "acc")))) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EIf (EBinOp "==" (EVar "c") (ELit (LChar "\\"))) (EApp (EApp (EApp (EApp (EVar "parseEscape") (EVar "key")) (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "acc")) (EIf (EApp (EVar "isRawControl") (EVar "c")) (EApp (EVar "Err") (EApp (EVar "stringConcat") (EListLit (ELit (LString "invalid string for key '")) (EVar "key") (ELit (LString "': raw control character ")) (EApp (EVar "describeChar") (EVar "c")) (ELit (LString " must be escaped"))))) (EIf (EVar "otherwise") (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "::" (EVar "c") (EVar "acc"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))) (EApp (EApp (EVar "go") (EVar "i0")) (EVar "acc0"))))
 (DTypeSig false "unterminatedMsg" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "unterminatedMsg" ((PVar "key")) (EApp (EVar "stringConcat") (EListLit (ELit (LString "invalid string for key '")) (EVar "key") (ELit (LString "': unterminated string (a string must close on the same line; write a newline as \\n)")))))
 (DTypeSig false "isRawControl" (TyFun (TyCon "Char") (TyCon "Bool")))
@@ -1283,17 +1289,17 @@ prop "Display Toml renders every entry" (k : String) (n : Int) =
 (DTypeSig false "parseArrayValue" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Int")))))))
 (DFunDef false "parseArrayValue" ((PVar "key") (PVar "arr") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (EApp (EVar "Err") (ELit (LString "unexpected end of input"))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar "["))) (EApp (EApp (EApp (EApp (EVar "parseArrayItems") (EVar "key")) (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EListLit)) (EIf (EVar "otherwise") (EApp (EVar "Err") (ELit (LString "expected '['"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "parseArrayItems" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Int"))))))))
-(DFunDef false "parseArrayItems" ((PVar "key") (PVar "arr") (PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (EApp (EVar "Err") (ELit (LString "unterminated array"))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar "]"))) (EApp (EVar "Ok") (ETuple (EApp (EVar "reverse") (EVar "acc")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar " "))) (EApp (EApp (EApp (EApp (EVar "parseArrayItems") (EVar "key")) (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "acc")) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar "\t"))) (EApp (EApp (EApp (EApp (EVar "parseArrayItems") (EVar "key")) (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "acc")) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar "\""))) (EApp (EApp (EApp (EApp (EVar "parseArrayItemStr") (EVar "key")) (EVar "arr")) (EVar "i")) (EVar "acc")) (EIf (EVar "otherwise") (EApp (EVar "Err") (EApp (EVar "stringConcat") (EListLit (ELit (LString "unexpected char in array: '")) (EApp (EVar "charToStr") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))) (ELit (LString "'"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))
+(DFunDef false "parseArrayItems" ((PVar "key") (PVar "arr") (PVar "i0") (PVar "acc")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (EApp (EVar "Err") (ELit (LString "unterminated array"))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar "]"))) (EApp (EVar "Ok") (ETuple (EApp (EVar "reverse") (EVar "acc")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar " "))) (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar "\t"))) (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar "\""))) (EApp (EApp (EApp (EApp (EVar "parseArrayItemStr") (EVar "key")) (EVar "arr")) (EVar "i")) (EVar "acc")) (EIf (EVar "otherwise") (EApp (EVar "Err") (EApp (EVar "stringConcat") (EListLit (ELit (LString "unexpected char in array: '")) (EApp (EVar "charToStr") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))) (ELit (LString "'"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))) (EApp (EVar "go") (EVar "i0"))))
 (DTypeSig false "parseArrayItemStr" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Int"))))))))
-(DFunDef false "parseArrayItemStr" ((PVar "key") (PVar "arr") (PVar "i") (PVar "acc")) (EMatch (EApp (EApp (EApp (EVar "parseQuotedStr") (EVar "key")) (EVar "arr")) (EVar "i")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PVar "s") (PVar "j"))) () (EApp (EApp (EApp (EApp (EVar "parseArraySep") (EVar "key")) (EVar "arr")) (EVar "j")) (EBinOp "::" (EVar "s") (EVar "acc"))))))
+(DFunDef false "parseArrayItemStr" ((PVar "key") (PVar "arr") (PVar "i") (PVar "acc")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EVar "parseQuotedStr") (EVar "key")) (EVar "arr")) (EVar "i"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "s") (PVar "j")) () (EApp (EApp (EApp (EApp (EVar "parseArraySep") (EVar "key")) (EVar "arr")) (EVar "j")) (EBinOp "::" (EVar "s") (EVar "acc"))))))))
 (DTypeSig false "parseArraySep" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Int"))))))))
-(DFunDef false "parseArraySep" ((PVar "key") (PVar "arr") (PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (EApp (EVar "Err") (ELit (LString "unterminated array"))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar " "))) (EApp (EApp (EApp (EApp (EVar "parseArraySep") (EVar "key")) (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "acc")) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar "\t"))) (EApp (EApp (EApp (EApp (EVar "parseArraySep") (EVar "key")) (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "acc")) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar ","))) (EApp (EApp (EApp (EApp (EVar "parseArrayItems") (EVar "key")) (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "acc")) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar "]"))) (EApp (EVar "Ok") (ETuple (EApp (EVar "reverse") (EVar "acc")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EIf (EVar "otherwise") (EApp (EVar "Err") (EApp (EVar "stringConcat") (EListLit (ELit (LString "expected ',' or ']' in array, found: '")) (EApp (EVar "charToStr") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))) (ELit (LString "'"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))
+(DFunDef false "parseArraySep" ((PVar "key") (PVar "arr") (PVar "i0") (PVar "acc")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (EApp (EVar "Err") (ELit (LString "unterminated array"))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar " "))) (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar "\t"))) (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar ","))) (EApp (EApp (EApp (EApp (EVar "parseArrayItems") (EVar "key")) (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "acc")) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar "]"))) (EApp (EVar "Ok") (ETuple (EApp (EVar "reverse") (EVar "acc")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EIf (EVar "otherwise") (EApp (EVar "Err") (EApp (EVar "stringConcat") (EListLit (ELit (LString "expected ',' or ']' in array, found: '")) (EApp (EVar "charToStr") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))) (ELit (LString "'"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))) (EApp (EVar "go") (EVar "i0"))))
 (DTypeSig false "skipSpaces" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "skipSpaces" ((PVar "arr") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "n") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar " "))) (EApp (EApp (EApp (EVar "skipSpaces") (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar "\t"))) (EApp (EApp (EApp (EVar "skipSpaces") (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DFunDef false "skipSpaces" ((PVar "arr") (PVar "i0") (PVar "n")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "n") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar " "))) (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar "\t"))) (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit))))))))) (EApp (EVar "go") (EVar "i0"))))
 (DTypeSig false "parseKv" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "TomlValue")))))
 (DFunDef false "parseKv" ((PVar "line")) (EBlock (DoLet false false (PVar "arr") (EApp (EVar "stringToChars") (EVar "line"))) (DoLet false false (PVar "n") (EApp (EVar "arrayLength") (EVar "arr"))) (DoExpr (EApp (EApp (EApp (EVar "findEq") (EVar "arr")) (EVar "n")) (ELit (LInt 0))))))
 (DTypeSig false "findEq" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "TomlValue")))))))
-(DFunDef false "findEq" ((PVar "arr") (PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EApp (EVar "Err") (EApp (EVar "stringConcat") (EListLit (ELit (LString "expected '=' in: ")) (EApp (EVar "stringFromChars") (EVar "arr"))))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar "="))) (EApp (EApp (EApp (EVar "parseKvAfterEq") (EVar "arr")) (EVar "n")) (EVar "i")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "findEq") (EVar "arr")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "findEq" ((PVar "arr") (PVar "n") (PVar "i0")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EApp (EVar "Err") (EApp (EVar "stringConcat") (EListLit (ELit (LString "expected '=' in: ")) (EApp (EVar "stringFromChars") (EVar "arr"))))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar "="))) (EApp (EApp (EApp (EVar "parseKvAfterEq") (EVar "arr")) (EVar "n")) (EVar "i")) (EIf (EVar "otherwise") (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))) (EApp (EVar "go") (EVar "i0"))))
 (DTypeSig false "parseKvAfterEq" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "TomlValue")))))))
 (DFunDef false "parseKvAfterEq" ((PVar "arr") (PVar "n") (PVar "eq")) (EBlock (DoLet false false (PVar "keyRaw") (EApp (EVar "stringFromChars") (EApp (EApp (EVar "arrayMakeWith") (EMethodRef "eq")) (ELam ((PVar "k")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "k")) (EVar "arr")))))) (DoLet false false (PVar "key") (EApp (EVar "trimAscii") (EVar "keyRaw"))) (DoExpr (EIf (EApp (EApp (EVar "contains") (ELit (LString "."))) (EVar "key")) (EApp (EVar "Err") (EApp (EVar "stringConcat") (EListLit (ELit (LString "dotted key '")) (EVar "key") (ELit (LString "' is not supported: use table headers instead"))))) (EBlock (DoLet false false (PVar "valStart") (EApp (EApp (EApp (EVar "skipSpaces") (EVar "arr")) (EBinOp "+" (EMethodRef "eq") (ELit (LInt 1)))) (EVar "n"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "parseKvValue") (EVar "arr")) (EVar "n")) (EVar "valStart")) (EVar "key"))))))))
 (DTypeSig false "parseKvValue" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "TomlValue"))))))))
@@ -1301,9 +1307,9 @@ prop "Display Toml renders every entry" (k : String) (n : Int) =
 (DTypeSig false "checkLineConsumed" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
 (DFunDef false "checkLineConsumed" ((PVar "arr") (PVar "j") (PVar "key")) (EBlock (DoLet false false (PVar "trailing") (EApp (EApp (EApp (EVar "restOfLine") (EVar "arr")) (EApp (EVar "arrayLength") (EVar "arr"))) (EVar "j"))) (DoExpr (EIf (EBinOp "==" (EVar "trailing") (ELit (LString ""))) (EApp (EVar "Ok") (ELit LUnit)) (EApp (EVar "Err") (EApp (EVar "stringConcat") (EListLit (ELit (LString "trailing content after value for key '")) (EVar "key") (ELit (LString "': ")) (EVar "trailing"))))))))
 (DTypeSig false "parseKvStr" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "TomlValue")))))))
-(DFunDef false "parseKvStr" ((PVar "arr") (PVar "i") (PVar "key")) (EMatch (EApp (EApp (EApp (EVar "parseQuotedStr") (EVar "key")) (EVar "arr")) (EVar "i")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PVar "s") (PVar "j"))) () (EApp (EApp (EMethodRef "map") (ELam (PWild) (ETuple (EVar "key") (EApp (EVar "TString") (EVar "s"))))) (EApp (EApp (EApp (EVar "checkLineConsumed") (EVar "arr")) (EVar "j")) (EVar "key"))))))
+(DFunDef false "parseKvStr" ((PVar "arr") (PVar "i") (PVar "key")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EVar "parseQuotedStr") (EVar "key")) (EVar "arr")) (EVar "i"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "s") (PVar "j")) () (EApp (EApp (EMethodRef "map") (ELam (PWild) (ETuple (EVar "key") (EApp (EVar "TString") (EVar "s"))))) (EApp (EApp (EApp (EVar "checkLineConsumed") (EVar "arr")) (EVar "j")) (EVar "key"))))))))
 (DTypeSig false "parseKvArr" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "TomlValue")))))))
-(DFunDef false "parseKvArr" ((PVar "arr") (PVar "i") (PVar "key")) (EMatch (EApp (EApp (EApp (EVar "parseArrayValue") (EVar "key")) (EVar "arr")) (EVar "i")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PVar "xs") (PVar "j"))) () (EApp (EApp (EMethodRef "map") (ELam (PWild) (ETuple (EVar "key") (EApp (EVar "TArray") (EVar "xs"))))) (EApp (EApp (EApp (EVar "checkLineConsumed") (EVar "arr")) (EVar "j")) (EVar "key"))))))
+(DFunDef false "parseKvArr" ((PVar "arr") (PVar "i") (PVar "key")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EVar "parseArrayValue") (EVar "key")) (EVar "arr")) (EVar "i"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "xs") (PVar "j")) () (EApp (EApp (EMethodRef "map") (ELam (PWild) (ETuple (EVar "key") (EApp (EVar "TArray") (EVar "xs"))))) (EApp (EApp (EApp (EVar "checkLineConsumed") (EVar "arr")) (EVar "j")) (EVar "key"))))))))
 (DTypeSig false "restOfLine" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
 (DFunDef false "restOfLine" ((PVar "arr") (PVar "n") (PVar "i")) (EApp (EVar "trimAscii") (EApp (EVar "stringFromChars") (EApp (EApp (EVar "arrayMakeWith") (EBinOp "-" (EVar "n") (EVar "i"))) (ELam ((PVar "j")) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (EVar "j"))) (EVar "arr")))))))
 (DTypeSig false "parseKvScalar" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "TomlValue"))))))
@@ -1314,7 +1320,7 @@ prop "Display Toml renders every entry" (k : String) (n : Int) =
 (DTypeSig false "tableRe" (TyCon "Regex"))
 (DFunDef false "tableRe" () (EApp (EVar "mustCompile") (ELit (LString "^\\[(.+)\\]$"))))
 (DTypeSig false "headerName" (TyFun (TyCon "Regex") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "headerName" ((PVar "re") (PVar "s")) (EMatch (EApp (EApp (EVar "reFind") (EVar "re")) (EVar "s")) (arm (PCon "Some" (PVar "m")) () (EMatch (EFieldAccess (EVar "m") "groups") (arm (PCons (PCon "Some" (PVar "g")) (PList)) () (EApp (EVar "Some") (EApp (EVar "trimAscii") (EFieldAccess (EVar "g") "text")))) (arm PWild () (EVar "None")))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "headerName" ((PVar "re") (PVar "s")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "reFind") (EVar "re")) (EVar "s"))) (ELam ((PVar "m")) (EMatch (EFieldAccess (EVar "m") "groups") (arm (PCons (PCon "Some" (PVar "g")) (PList)) () (EApp (EVar "Some") (EApp (EVar "trimAscii") (EFieldAccess (EVar "g") "text")))) (arm PWild () (EVar "None"))))))
 (DTypeSig false "parseHeader" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Header"))))
 (DFunDef false "parseHeader" ((PVar "s")) (EMatch (EApp (EApp (EVar "headerName") (EVar "arrayTableRe")) (EVar "s")) (arm (PCon "Some" (PVar "name")) () (EApp (EVar "Some") (EApp (EVar "HArrayTable") (EVar "name")))) (arm (PCon "None") () (EApp (EApp (EMethodRef "map") (EVar "HTable")) (EApp (EApp (EVar "headerName") (EVar "tableRe")) (EVar "s"))))))
 (DTypeSig false "qualifyKey" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
@@ -1344,7 +1350,7 @@ prop "Display Toml renders every entry" (k : String) (n : Int) =
 (DTypeSig false "parseTableCount" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Int"))))
 (DFunDef false "parseTableCount" ((PVar "name") (PVar "src")) (EMatch (EApp (EVar "parse") (EVar "src")) (arm (PCon "Err" PWild) () (ELit (LInt 0))) (arm (PCon "Ok" (PVar "doc")) () (EApp (EApp (EVar "tableCount") (EVar "name")) (EVar "doc")))))
 (DTypeSig false "parseTableEntryStr" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))))
-(DFunDef false "parseTableEntryStr" ((PVar "name") (PVar "i") (PVar "field") (PVar "src")) (EMatch (EApp (EVar "parse") (EVar "src")) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "doc")) () (EMatch (EApp (EApp (EApp (EVar "tableEntry") (EVar "name")) (EVar "i")) (EVar "doc")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "e")) () (EApp (EApp (EVar "getString") (EVar "field")) (EVar "e")))))))
+(DFunDef false "parseTableEntryStr" ((PVar "name") (PVar "i") (PVar "field") (PVar "src")) (EMatch (EApp (EVar "parse") (EVar "src")) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "doc")) () (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EVar "tableEntry") (EVar "name")) (EVar "i")) (EVar "doc"))) (ELam ((PVar "e")) (EApp (EApp (EVar "getString") (EVar "field")) (EVar "e")))))))
 (DTypeSig true "getString" (TyFun (TyCon "String") (TyFun (TyCon "Toml") (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "getString" ((PVar "key") (PCon "Toml" (PVar "kvs"))) (EMatch (EApp (EApp (EVar "lookupKvs") (EVar "key")) (EVar "kvs")) (arm (PCon "Some" (PCon "TString" (PVar "s"))) () (EApp (EVar "Some") (EVar "s"))) (arm PWild () (EVar "None"))))
 (DTypeSig true "getArray" (TyFun (TyCon "String") (TyFun (TyCon "Toml") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))))
@@ -1354,15 +1360,14 @@ prop "Display Toml renders every entry" (k : String) (n : Int) =
 (DTypeSig true "getBool" (TyFun (TyCon "String") (TyFun (TyCon "Toml") (TyApp (TyCon "Option") (TyCon "Bool")))))
 (DFunDef false "getBool" ((PVar "key") (PCon "Toml" (PVar "kvs"))) (EMatch (EApp (EApp (EVar "lookupKvs") (EVar "key")) (EVar "kvs")) (arm (PCon "Some" (PCon "TBool" (PVar "b"))) () (EApp (EVar "Some") (EVar "b"))) (arm PWild () (EVar "None"))))
 (DTypeSig false "tableIdxOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int")))))
-(DFunDef false "tableIdxOf" ((PVar "prefix") (PVar "key")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "startsWith") (EVar "prefix")) (EVar "key"))) (EVar "None") (EBlock (DoLet false false (PVar "rest") (EApp (EApp (EVar "drop") (EApp (EVar "stringLength") (EVar "prefix"))) (EVar "key"))) (DoExpr (EMatch (EApp (EApp (EVar "indexOf") (ELit (LString "."))) (EVar "rest")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "d")) () (EApp (EVar "toInt") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "d")) (EVar "rest")))))))))
+(DFunDef false "tableIdxOf" ((PVar "prefix") (PVar "key")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "startsWith") (EVar "prefix")) (EVar "key"))) (EVar "None") (EBlock (DoLet false false (PVar "rest") (EApp (EApp (EVar "drop") (EApp (EVar "stringLength") (EVar "prefix"))) (EVar "key"))) (DoExpr (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "indexOf") (ELit (LString "."))) (EVar "rest"))) (ELam ((PVar "d")) (EApp (EVar "toInt") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "d")) (EVar "rest")))))))))
 (DTypeSig false "tableLastGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TomlValue"))) (TyFun (TyCon "Int") (TyCon "Int")))))
 (DFunDef false "tableLastGo" (PWild (PList) (PVar "best")) (EVar "best"))
 (DFunDef false "tableLastGo" ((PVar "prefix") (PCons (PTuple (PVar "k") PWild) (PVar "rest")) (PVar "best")) (EMatch (EApp (EApp (EVar "tableIdxOf") (EVar "prefix")) (EVar "k")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "tableLastGo") (EVar "prefix")) (EVar "rest")) (EVar "best"))) (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EApp (EVar "tableLastGo") (EVar "prefix")) (EVar "rest")) (EApp (EApp (EMethodRef "max") (EVar "i")) (EVar "best"))))))
 (DTypeSig true "tableCount" (TyFun (TyCon "String") (TyFun (TyCon "Toml") (TyCon "Int"))))
 (DFunDef false "tableCount" ((PVar "name") (PCon "Toml" (PVar "kvs"))) (EBlock (DoLet false false (PVar "last") (EApp (EApp (EApp (EVar "tableLastGo") (EApp (EVar "stringConcat") (EListLit (EVar "name") (ELit (LString "."))))) (EVar "kvs")) (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1))))) (DoExpr (EIf (EBinOp "==" (EVar "last") (EVar "intMaxBound")) (EVar "last") (EBinOp "+" (EVar "last") (ELit (LInt 1)))))))
 (DTypeSig false "tableEntryGo" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TomlValue"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TomlValue"))) (TyTuple (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TomlValue"))))))))))
-(DFunDef false "tableEntryGo" (PWild PWild (PList) (PVar "best") (PVar "acc")) (ETuple (EVar "best") (EVar "acc")))
-(DFunDef false "tableEntryGo" ((PVar "prefix") (PVar "entryPrefix") (PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest")) (PVar "best") (PVar "acc")) (EBlock (DoLet false false (PVar "best2") (EMatch (EApp (EApp (EVar "tableIdxOf") (EVar "prefix")) (EVar "k")) (arm (PCon "None") () (EVar "best")) (arm (PCon "Some" (PVar "j")) () (EApp (EApp (EMethodRef "max") (EVar "j")) (EVar "best"))))) (DoExpr (EIf (EApp (EApp (EVar "startsWith") (EVar "entryPrefix")) (EVar "k")) (EApp (EApp (EApp (EApp (EApp (EVar "tableEntryGo") (EVar "prefix")) (EVar "entryPrefix")) (EVar "rest")) (EVar "best2")) (EBinOp "::" (ETuple (EApp (EApp (EVar "drop") (EApp (EVar "stringLength") (EVar "entryPrefix"))) (EVar "k")) (EVar "v")) (EVar "acc"))) (EApp (EApp (EApp (EApp (EApp (EVar "tableEntryGo") (EVar "prefix")) (EVar "entryPrefix")) (EVar "rest")) (EVar "best2")) (EVar "acc"))))))
+(DFunDef false "tableEntryGo" ((PVar "prefix") (PVar "entryPrefix") (PVar "kvs0") (PVar "best0") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "best") (PVar "acc")) (ETuple (EVar "best") (EVar "acc"))) (clause ((PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest")) (PVar "best") (PVar "acc")) (EBlock (DoLet false false (PVar "best2") (EMatch (EApp (EApp (EVar "tableIdxOf") (EVar "prefix")) (EVar "k")) (arm (PCon "None") () (EVar "best")) (arm (PCon "Some" (PVar "j")) () (EApp (EApp (EMethodRef "max") (EVar "j")) (EVar "best"))))) (DoExpr (EIf (EApp (EApp (EVar "startsWith") (EVar "entryPrefix")) (EVar "k")) (EApp (EApp (EApp (EVar "go") (EVar "rest")) (EVar "best2")) (EBinOp "::" (ETuple (EApp (EApp (EVar "drop") (EApp (EVar "stringLength") (EVar "entryPrefix"))) (EVar "k")) (EVar "v")) (EVar "acc"))) (EApp (EApp (EApp (EVar "go") (EVar "rest")) (EVar "best2")) (EVar "acc")))))))) (EApp (EApp (EApp (EVar "go") (EVar "kvs0")) (EVar "best0")) (EVar "acc0"))))
 (DTypeSig true "tableEntry" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Toml") (TyApp (TyCon "Option") (TyCon "Toml"))))))
 (DFunDef false "tableEntry" ((PVar "name") (PVar "i") (PCon "Toml" (PVar "kvs"))) (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EVar "None") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "entryPrefix") (EApp (EVar "stringConcat") (EListLit (EVar "name") (ELit (LString ".")) (EApp (EVar "intToString") (EVar "i")) (ELit (LString "."))))) (DoLet false false (PTuple (PVar "last") (PVar "entry")) (EApp (EApp (EApp (EApp (EApp (EVar "tableEntryGo") (EApp (EVar "stringConcat") (EListLit (EVar "name") (ELit (LString "."))))) (EVar "entryPrefix")) (EVar "kvs")) (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1)))) (EListLit))) (DoExpr (EIf (EBinOp ">" (EVar "i") (EVar "last")) (EVar "None") (EApp (EVar "Some") (EApp (EVar "Toml") (EApp (EVar "reverse") (EVar "entry"))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "entryKeyOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "String"))))))

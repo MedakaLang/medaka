@@ -1,5 +1,5 @@
 # META
-source_lines=274
+source_lines=273
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-directive-reason: a `-- lint-disable-*` directive with no comment in its own comment block stating the constraint that forced it. An issue number alone is not a reason.
@@ -31,6 +31,7 @@ import tools.lint_core.{
   StdlibIndex,
   factComments,
   mkRule,
+  noFix,
 }
 import tools.lint_shared.{
   CommentBlock(..),
@@ -157,25 +158,23 @@ declGapReasoned : List Comment ->
   Option String ->
   Int ->
   Bool
-declGapReasoned comments blocks declZips targetName line =
-  match find (commentBlockEndsAt (line - 1)) blocks
-    Some b => blockHasReason comments b
-    None => match find (declZipEndsAt (line - 1)) declZips
-      Some (d, dp) =>
-        if declGapNameMatches targetName d then
-          declGapReasoned comments blocks declZips targetName (declPosLine dp)
-        else
-          False
-      None => False
+declGapReasoned comments blocks declZips targetName line0 = go line0
+  where
+    go line = match find (commentBlockEndsAt (line - 1)) blocks
+      Some b => blockHasReason comments b
+      None => match find (declZipEndsAt (line - 1)) declZips
+        Some (d, dp) =>
+          if declGapNameMatches targetName d then go (declPosLine dp) else False
+        None => False
 
 -- The name of the declaration the directive's target `line` falls inside —
 -- `None` when no top-level `DTypeSig`/`DFunDef` covers that line (a
 -- different decl kind, or the directive is the last thing in the file), in
 -- which case `declGapNameMatches` below never credits a gap hop.
 declZipNameAt : List (Decl, DeclPos) -> Int -> Option String
-declZipNameAt declZips line = match find (declZipContainsLine line) declZips
-  Some (d, _) => declBridgeName d
-  None => None
+declZipNameAt declZips line = do
+  (d, _) <- find (declZipContainsLine line) declZips
+  declBridgeName d
 
 declZipContainsLine : Int -> (Decl, DeclPos) -> Bool
 declZipContainsLine line (_, dp) =
@@ -274,9 +273,10 @@ directiveReasonFinding c = Finding {
     "`-- lint-disable-*` directive has no comment in its own comment block stating the constraint that forced it -- an issue number alone is not a reason",
   severity = SevWarning,
   loc = Some (Loc "" (commentLine c) 1 (commentLine c) 1),
-  fix = None,
+  fix = noFix,
 }
 # DESUGAR
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false) (mem "declPosEndLine" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
@@ -284,7 +284,7 @@ directiveReasonFinding c = Finding {
 (DUse false (UseGroup ("string") ((mem "toLower" false) (mem "words" false))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "mustCompile" false) (mem "isMatch" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "commentLine" false) (mem "commentText" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "DirScope" true) (mem "Directive" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "factComments" false) (mem "mkRule" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "DirScope" true) (mem "Directive" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "factComments" false) (mem "mkRule" false) (mem "noFix" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "CommentBlock" true) (mem "codePortions" false) (mem "commentBlocks" false) (mem "parseDirective" false) (mem "ruleNameDirectiveReason" false) (mem "zipDeclPos" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameDirectiveReason")) (fa "summary" (ELit (LString "a `-- lint-disable-*` directive with no comment in its own comment block stating the constraint that forced it — an issue number alone is not a reason (#2862)"))) (fa "doc" (ELit (LString "A `-- lint-disable-*` directive needs a comment in its own comment block stating the constraint that forced it; an issue number alone is not a reason (#2862). This enforces the repository suppression convention.\n\nBefore:\n  -- lint-disable-next-line rule-x\nAfter:\n  -- bounded: at most 3 fields, so a list lookup is cheaper\n  -- lint-disable-next-line rule-x"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Internal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "NotFixable")) (fa "needs" (EListLit))))) (EVar "ruleDirectiveReason")) (EVar "None")))
@@ -295,9 +295,9 @@ directiveReasonFinding c = Finding {
 (DTypeSig false "directiveReasoned" (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyFun (TyApp (TyCon "List") (TyCon "CommentBlock")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "DeclPos"))) (TyFun (TyCon "Comment") (TyCon "Bool"))))))
 (DFunDef false "directiveReasoned" ((PVar "comments") (PVar "blocks") (PVar "declZips") (PVar "c")) (EBlock (DoLet false false (PVar "ownReasoned") (EMatch (EApp (EApp (EVar "find") (EApp (EVar "commentBlockContainsLine") (EApp (EVar "commentLine") (EVar "c")))) (EVar "blocks")) (arm (PCon "Some" (PVar "b")) () (EApp (EApp (EVar "blockHasReason") (EVar "comments")) (EVar "b"))) (arm (PCon "None") () (EVar "False")))) (DoExpr (EIf (EVar "ownReasoned") (EVar "True") (EMatch (EApp (EVar "parseDirective") (EVar "c")) (arm (PCon "Some" (PCon "Directive" (PCon "DScopeLine" (PVar "target")) PWild)) () (EApp (EApp (EApp (EApp (EApp (EVar "declGapReasoned") (EVar "comments")) (EVar "blocks")) (EVar "declZips")) (EApp (EApp (EVar "declZipNameAt") (EVar "declZips")) (EVar "target"))) (EApp (EVar "commentLine") (EVar "c")))) (arm (PCon "Some" (PCon "Directive" (PCon "DScopeFile") PWild)) () (EVar "False")) (arm (PCon "None") () (EVar "False")))))))
 (DTypeSig false "declGapReasoned" (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyFun (TyApp (TyCon "List") (TyCon "CommentBlock")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "DeclPos"))) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "Int") (TyCon "Bool")))))))
-(DFunDef false "declGapReasoned" ((PVar "comments") (PVar "blocks") (PVar "declZips") (PVar "targetName") (PVar "line")) (EMatch (EApp (EApp (EVar "find") (EApp (EVar "commentBlockEndsAt") (EBinOp "-" (EVar "line") (ELit (LInt 1))))) (EVar "blocks")) (arm (PCon "Some" (PVar "b")) () (EApp (EApp (EVar "blockHasReason") (EVar "comments")) (EVar "b"))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "find") (EApp (EVar "declZipEndsAt") (EBinOp "-" (EVar "line") (ELit (LInt 1))))) (EVar "declZips")) (arm (PCon "Some" (PTuple (PVar "d") (PVar "dp"))) () (EIf (EApp (EApp (EVar "declGapNameMatches") (EVar "targetName")) (EVar "d")) (EApp (EApp (EApp (EApp (EApp (EVar "declGapReasoned") (EVar "comments")) (EVar "blocks")) (EVar "declZips")) (EVar "targetName")) (EApp (EVar "declPosLine") (EVar "dp"))) (EVar "False"))) (arm (PCon "None") () (EVar "False"))))))
+(DFunDef false "declGapReasoned" ((PVar "comments") (PVar "blocks") (PVar "declZips") (PVar "targetName") (PVar "line0")) (ELetGroup ((lgb "go" (clause ((PVar "line")) (EMatch (EApp (EApp (EVar "find") (EApp (EVar "commentBlockEndsAt") (EBinOp "-" (EVar "line") (ELit (LInt 1))))) (EVar "blocks")) (arm (PCon "Some" (PVar "b")) () (EApp (EApp (EVar "blockHasReason") (EVar "comments")) (EVar "b"))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "find") (EApp (EVar "declZipEndsAt") (EBinOp "-" (EVar "line") (ELit (LInt 1))))) (EVar "declZips")) (arm (PCon "Some" (PTuple (PVar "d") (PVar "dp"))) () (EIf (EApp (EApp (EVar "declGapNameMatches") (EVar "targetName")) (EVar "d")) (EApp (EVar "go") (EApp (EVar "declPosLine") (EVar "dp"))) (EVar "False"))) (arm (PCon "None") () (EVar "False")))))))) (EApp (EVar "go") (EVar "line0"))))
 (DTypeSig false "declZipNameAt" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "DeclPos"))) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "declZipNameAt" ((PVar "declZips") (PVar "line")) (EMatch (EApp (EApp (EVar "find") (EApp (EVar "declZipContainsLine") (EVar "line"))) (EVar "declZips")) (arm (PCon "Some" (PTuple (PVar "d") PWild)) () (EApp (EVar "declBridgeName") (EVar "d"))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "declZipNameAt" ((PVar "declZips") (PVar "line")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "find") (EApp (EVar "declZipContainsLine") (EVar "line"))) (EVar "declZips"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "d") PWild) () (EApp (EVar "declBridgeName") (EVar "d")))))))
 (DTypeSig false "declZipContainsLine" (TyFun (TyCon "Int") (TyFun (TyTuple (TyCon "Decl") (TyCon "DeclPos")) (TyCon "Bool"))))
 (DFunDef false "declZipContainsLine" ((PVar "line") (PTuple PWild (PVar "dp"))) (EBinOp "&&" (EBinOp "<=" (EApp (EVar "declPosLine") (EVar "dp")) (EVar "line")) (EBinOp ">=" (EApp (EVar "declPosEndLine") (EVar "dp")) (EVar "line"))))
 (DTypeSig false "declBridgeName" (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "String"))))
@@ -338,8 +338,9 @@ directiveReasonFinding c = Finding {
 (DTypeSig false "hasSubstantiveWord" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "hasSubstantiveWord" ((PVar "s")) (EApp (EApp (EVar "isMatch") (EVar "substantiveWordRe")) (EVar "s")))
 (DTypeSig false "directiveReasonFinding" (TyFun (TyCon "Comment") (TyCon "Finding")))
-(DFunDef false "directiveReasonFinding" ((PVar "c")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDirectiveReason")) (fa "message" (ELit (LString "`-- lint-disable-*` directive has no comment in its own comment block stating the constraint that forced it -- an issue number alone is not a reason"))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (EApp (EVar "commentLine") (EVar "c"))) (ELit (LInt 1))) (EApp (EVar "commentLine") (EVar "c"))) (ELit (LInt 1))))) (fa "fix" (EVar "None")))))
+(DFunDef false "directiveReasonFinding" ((PVar "c")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDirectiveReason")) (fa "message" (ELit (LString "`-- lint-disable-*` directive has no comment in its own comment block stating the constraint that forced it -- an issue number alone is not a reason"))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (EApp (EVar "commentLine") (EVar "c"))) (ELit (LInt 1))) (EApp (EVar "commentLine") (EVar "c"))) (ELit (LInt 1))))) (fa "fix" (EVar "noFix")))))
 # MARK
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false) (mem "declPosEndLine" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
@@ -347,7 +348,7 @@ directiveReasonFinding c = Finding {
 (DUse false (UseGroup ("string") ((mem "toLower" false) (mem "words" false))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "mustCompile" false) (mem "isMatch" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "commentLine" false) (mem "commentText" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "DirScope" true) (mem "Directive" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "factComments" false) (mem "mkRule" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "DirScope" true) (mem "Directive" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "factComments" false) (mem "mkRule" false) (mem "noFix" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "CommentBlock" true) (mem "codePortions" false) (mem "commentBlocks" false) (mem "parseDirective" false) (mem "ruleNameDirectiveReason" false) (mem "zipDeclPos" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameDirectiveReason")) (fa "summary" (ELit (LString "a `-- lint-disable-*` directive with no comment in its own comment block stating the constraint that forced it — an issue number alone is not a reason (#2862)"))) (fa "doc" (ELit (LString "A `-- lint-disable-*` directive needs a comment in its own comment block stating the constraint that forced it; an issue number alone is not a reason (#2862). This enforces the repository suppression convention.\n\nBefore:\n  -- lint-disable-next-line rule-x\nAfter:\n  -- bounded: at most 3 fields, so a list lookup is cheaper\n  -- lint-disable-next-line rule-x"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Internal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "NotFixable")) (fa "needs" (EListLit))))) (EVar "ruleDirectiveReason")) (EVar "None")))
@@ -358,9 +359,9 @@ directiveReasonFinding c = Finding {
 (DTypeSig false "directiveReasoned" (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyFun (TyApp (TyCon "List") (TyCon "CommentBlock")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "DeclPos"))) (TyFun (TyCon "Comment") (TyCon "Bool"))))))
 (DFunDef false "directiveReasoned" ((PVar "comments") (PVar "blocks") (PVar "declZips") (PVar "c")) (EBlock (DoLet false false (PVar "ownReasoned") (EMatch (EApp (EApp (EDictApp "find") (EApp (EVar "commentBlockContainsLine") (EApp (EVar "commentLine") (EVar "c")))) (EVar "blocks")) (arm (PCon "Some" (PVar "b")) () (EApp (EApp (EVar "blockHasReason") (EVar "comments")) (EVar "b"))) (arm (PCon "None") () (EVar "False")))) (DoExpr (EIf (EVar "ownReasoned") (EVar "True") (EMatch (EApp (EVar "parseDirective") (EVar "c")) (arm (PCon "Some" (PCon "Directive" (PCon "DScopeLine" (PVar "target")) PWild)) () (EApp (EApp (EApp (EApp (EApp (EVar "declGapReasoned") (EVar "comments")) (EVar "blocks")) (EVar "declZips")) (EApp (EApp (EVar "declZipNameAt") (EVar "declZips")) (EVar "target"))) (EApp (EVar "commentLine") (EVar "c")))) (arm (PCon "Some" (PCon "Directive" (PCon "DScopeFile") PWild)) () (EVar "False")) (arm (PCon "None") () (EVar "False")))))))
 (DTypeSig false "declGapReasoned" (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyFun (TyApp (TyCon "List") (TyCon "CommentBlock")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "DeclPos"))) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "Int") (TyCon "Bool")))))))
-(DFunDef false "declGapReasoned" ((PVar "comments") (PVar "blocks") (PVar "declZips") (PVar "targetName") (PVar "line")) (EMatch (EApp (EApp (EDictApp "find") (EApp (EVar "commentBlockEndsAt") (EBinOp "-" (EVar "line") (ELit (LInt 1))))) (EVar "blocks")) (arm (PCon "Some" (PVar "b")) () (EApp (EApp (EVar "blockHasReason") (EVar "comments")) (EVar "b"))) (arm (PCon "None") () (EMatch (EApp (EApp (EDictApp "find") (EApp (EVar "declZipEndsAt") (EBinOp "-" (EVar "line") (ELit (LInt 1))))) (EVar "declZips")) (arm (PCon "Some" (PTuple (PVar "d") (PVar "dp"))) () (EIf (EApp (EApp (EVar "declGapNameMatches") (EVar "targetName")) (EVar "d")) (EApp (EApp (EApp (EApp (EApp (EVar "declGapReasoned") (EVar "comments")) (EVar "blocks")) (EVar "declZips")) (EVar "targetName")) (EApp (EVar "declPosLine") (EVar "dp"))) (EVar "False"))) (arm (PCon "None") () (EVar "False"))))))
+(DFunDef false "declGapReasoned" ((PVar "comments") (PVar "blocks") (PVar "declZips") (PVar "targetName") (PVar "line0")) (ELetGroup ((lgb "go" (clause ((PVar "line")) (EMatch (EApp (EApp (EDictApp "find") (EApp (EVar "commentBlockEndsAt") (EBinOp "-" (EVar "line") (ELit (LInt 1))))) (EVar "blocks")) (arm (PCon "Some" (PVar "b")) () (EApp (EApp (EVar "blockHasReason") (EVar "comments")) (EVar "b"))) (arm (PCon "None") () (EMatch (EApp (EApp (EDictApp "find") (EApp (EVar "declZipEndsAt") (EBinOp "-" (EVar "line") (ELit (LInt 1))))) (EVar "declZips")) (arm (PCon "Some" (PTuple (PVar "d") (PVar "dp"))) () (EIf (EApp (EApp (EVar "declGapNameMatches") (EVar "targetName")) (EVar "d")) (EApp (EVar "go") (EApp (EVar "declPosLine") (EVar "dp"))) (EVar "False"))) (arm (PCon "None") () (EVar "False")))))))) (EApp (EVar "go") (EVar "line0"))))
 (DTypeSig false "declZipNameAt" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "DeclPos"))) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "declZipNameAt" ((PVar "declZips") (PVar "line")) (EMatch (EApp (EApp (EDictApp "find") (EApp (EVar "declZipContainsLine") (EVar "line"))) (EVar "declZips")) (arm (PCon "Some" (PTuple (PVar "d") PWild)) () (EApp (EVar "declBridgeName") (EVar "d"))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "declZipNameAt" ((PVar "declZips") (PVar "line")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EDictApp "find") (EApp (EVar "declZipContainsLine") (EVar "line"))) (EVar "declZips"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "d") PWild) () (EApp (EVar "declBridgeName") (EVar "d")))))))
 (DTypeSig false "declZipContainsLine" (TyFun (TyCon "Int") (TyFun (TyTuple (TyCon "Decl") (TyCon "DeclPos")) (TyCon "Bool"))))
 (DFunDef false "declZipContainsLine" ((PVar "line") (PTuple PWild (PVar "dp"))) (EBinOp "&&" (EBinOp "<=" (EApp (EVar "declPosLine") (EVar "dp")) (EVar "line")) (EBinOp ">=" (EApp (EVar "declPosEndLine") (EVar "dp")) (EVar "line"))))
 (DTypeSig false "declBridgeName" (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "String"))))
@@ -401,4 +402,4 @@ directiveReasonFinding c = Finding {
 (DTypeSig false "hasSubstantiveWord" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "hasSubstantiveWord" ((PVar "s")) (EApp (EApp (EVar "isMatch") (EVar "substantiveWordRe")) (EVar "s")))
 (DTypeSig false "directiveReasonFinding" (TyFun (TyCon "Comment") (TyCon "Finding")))
-(DFunDef false "directiveReasonFinding" ((PVar "c")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDirectiveReason")) (fa "message" (ELit (LString "`-- lint-disable-*` directive has no comment in its own comment block stating the constraint that forced it -- an issue number alone is not a reason"))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (EApp (EVar "commentLine") (EVar "c"))) (ELit (LInt 1))) (EApp (EVar "commentLine") (EVar "c"))) (ELit (LInt 1))))) (fa "fix" (EVar "None")))))
+(DFunDef false "directiveReasonFinding" ((PVar "c")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDirectiveReason")) (fa "message" (ELit (LString "`-- lint-disable-*` directive has no comment in its own comment block stating the constraint that forced it -- an issue number alone is not a reason"))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (EApp (EVar "commentLine") (EVar "c"))) (ELit (LInt 1))) (EApp (EVar "commentLine") (EVar "c"))) (ELit (LInt 1))))) (fa "fix" (EVar "noFix")))))

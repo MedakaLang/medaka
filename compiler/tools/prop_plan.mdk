@@ -233,19 +233,15 @@ buildPlanEnvModules root modules =
 
 pairModules : List PlanModule -> PlanEnv -> Result PlanError PlanEnv
 pairModules [] env = Ok env
-pairModules ((PlanModule mid raw runtime) :: rest) env =
-  match pairModuleDecls mid raw runtime env
+pairModules ((PlanModule _ raw runtime) :: rest) env =
+  match pairModuleDecls raw runtime env
     Ok env2 => pairModules rest env2
     Err e => Err e
 
-pairModuleDecls : String ->
-  List Decl ->
-  List Decl ->
-  PlanEnv ->
-  Result PlanError PlanEnv
-pairModuleDecls mid raw runtime env =
+pairModuleDecls : List Decl -> List Decl -> PlanEnv -> Result PlanError PlanEnv
+pairModuleDecls raw runtime env =
   if rawNominalsPresent raw runtime then
-    pairRuntimeDecls mid (rawNominalMap raw omEmpty) runtime env
+    pairRuntimeDecls (rawNominalMap raw omEmpty) runtime env
   else
     Err (pairError "raw nominal declaration has no runtime counterpart")
 
@@ -282,35 +278,32 @@ rawNominalMap ((d@(DNewtype { newtypeName = name })) :: rest) acc =
   rawNominalMap rest (omInsert name d acc)
 rawNominalMap (_ :: rest) acc = rawNominalMap rest acc
 
-pairRuntimeDecls : String ->
-  OrdMap Decl ->
+pairRuntimeDecls : OrdMap Decl ->
   List Decl ->
   PlanEnv ->
   Result PlanError PlanEnv
-pairRuntimeDecls _ _ [] env = Ok env
-pairRuntimeDecls mid rawMap (runtime :: rest) env =
-  match pairRuntimeDecl mid rawMap runtime env
-    Ok env2 => pairRuntimeDecls mid rawMap rest env2
-    Err e => Err e
+pairRuntimeDecls rawMap xs0 env0 = go xs0 env0
+  where
+    go [] env = Ok env
+    go (runtime :: rest) env = match pairRuntimeDecl rawMap runtime env
+      Ok env2 => go rest env2
+      Err e => Err e
 
-pairRuntimeDecl : String ->
-  OrdMap Decl ->
-  Decl ->
-  PlanEnv ->
-  Result PlanError PlanEnv
-pairRuntimeDecl mid rawMap (DAttrib _ d) env = pairRuntimeDecl mid rawMap d env
-pairRuntimeDecl mid rawMap (runtime@(DData { dataName = name })) env =
-  match omLookup name rawMap
-    Some raw => pairPlanDecl mid raw runtime env
-    None =>
-      Err (pairError ("runtime data '" ++ name ++ "' has no raw declaration"))
-pairRuntimeDecl mid rawMap (runtime@(DNewtype { newtypeName = name })) env =
-  match omLookup name rawMap
-    Some raw => pairPlanDecl mid raw runtime env
-    None =>
-      Err
-        (pairError ("runtime newtype '" ++ name ++ "' has no raw declaration"))
-pairRuntimeDecl _ _ runtime env = Ok (addPlanDeclRuntimeOnly runtime env)
+pairRuntimeDecl : OrdMap Decl -> Decl -> PlanEnv -> Result PlanError PlanEnv
+pairRuntimeDecl rawMap runtime0 env = go runtime0
+  where
+    go (DAttrib _ d) = go d
+    go (runtime@(DData { dataName = name })) = match omLookup name rawMap
+      Some raw => pairPlanDecl raw runtime env
+      None =>
+        Err (pairError ("runtime data '" ++ name ++ "' has no raw declaration"))
+    go (runtime@(DNewtype { newtypeName = name })) = match omLookup name rawMap
+      Some raw => pairPlanDecl raw runtime env
+      None =>
+        Err
+          (pairError
+            ("runtime newtype '" ++ name ++ "' has no raw declaration"))
+    go runtime = Ok (addPlanDeclRuntimeOnly runtime env)
 
 addPlanDeclRuntimeOnly : Decl -> PlanEnv -> PlanEnv
 addPlanDeclRuntimeOnly runtime env = addPlanDecl runtime env
@@ -318,25 +311,25 @@ addPlanDeclRuntimeOnly runtime env = addPlanDecl runtime env
 pairError : String -> PlanError
 pairError detail = PlanError "" "" (TyVar "") PEUnsupportedType detail
 
-pairPlanDecl : String -> Decl -> Decl -> PlanEnv -> Result PlanError PlanEnv
-pairPlanDecl mid (DAttrib _ raw) (DAttrib _ runtime) env =
-  pairPlanDecl mid raw runtime env
-pairPlanDecl _mid (DData { dataName = rawName, dataCtors = rawCtors }) (DData { dataName = runtimeName, dataParams = ps, dataCtors = runtimeCtors, dataVis = vis, dataOrigin = o }) env
-  | rawName == runtimeName =
-    let key = TypeKey runtimeName o
-    map
-      (ctors =>
-        insertDef (PlanDef key (ownerOf o) ps (visibilityOf vis) ctors) env)
-      (pairCtors rawCtors runtimeCtors)
-pairPlanDecl _mid (DNewtype { newtypeName = rawName, newtypeCtor = rawCtor }) (DNewtype { newtypeName = runtimeName, newtypeParams = ps, newtypeCtor = runtimeCtor, newtypeFieldTy = fieldTy, newtypePub = pub, newtypeOrigin = o }) env
-  | rawName == runtimeName =
-    let key = TypeKey runtimeName o
-    let def = PlanDef key (ownerOf o) ps (newtypeVisibility pub) [
-      PlanCtor rawCtor runtimeCtor [PlanField None fieldTy],
-    ]
-    Ok (insertDef def env)
-pairPlanDecl _ _ _ _ =
-  Err (pairError "raw and runtime nominal declarations disagree")
+pairPlanDecl : Decl -> Decl -> PlanEnv -> Result PlanError PlanEnv
+pairPlanDecl raw0 runtime0 env = go raw0 runtime0
+  where
+    go (DAttrib _ raw) (DAttrib _ runtime) = go raw runtime
+    go (DData { dataName = rawName, dataCtors = rawCtors }) (DData { dataName = runtimeName, dataParams = ps, dataCtors = runtimeCtors, dataVis = vis, dataOrigin = o })
+      | rawName == runtimeName =
+        let key = TypeKey runtimeName o
+        map
+          (ctors =>
+            insertDef (PlanDef key (ownerOf o) ps (visibilityOf vis) ctors) env)
+          (pairCtors rawCtors runtimeCtors)
+    go (DNewtype { newtypeName = rawName, newtypeCtor = rawCtor }) (DNewtype { newtypeName = runtimeName, newtypeParams = ps, newtypeCtor = runtimeCtor, newtypeFieldTy = fieldTy, newtypePub = pub, newtypeOrigin = o })
+      | rawName == runtimeName =
+        let key = TypeKey runtimeName o
+        let def = PlanDef key (ownerOf o) ps (newtypeVisibility pub) [
+          PlanCtor rawCtor runtimeCtor [PlanField None fieldTy],
+        ]
+        Ok (insertDef def env)
+    go _ _ = Err (pairError "raw and runtime nominal declarations disagree")
 
 pairCtors : List Variant -> List Variant -> Result PlanError (List PlanCtor)
 pairCtors [] [] = Ok []
@@ -442,46 +435,35 @@ optionList (Some xs) = xs
 -- A type is built from references, never recursively expanded.  That keeps
 -- mutually recursive declarations finite in the plan itself.
 planForGo : PlanEnv -> String -> String -> Ty -> Result PlanError GenPlan
-planForGo _ propName param (ty@(TyVar _)) =
-  Err (PlanError propName param ty PEUnboundTyVar "")
-planForGo _ _ _ (TyCon { tyConName = "Int", tyConOrigin = OriginBuiltin }) =
-  Ok GInt
-planForGo _ _ _ (TyCon { tyConName = "Bool", tyConOrigin = OriginBuiltin }) =
-  Ok GBool
-planForGo _ _ _ (TyCon { tyConName = "Float", tyConOrigin = OriginBuiltin }) =
-  Ok GFloat
-planForGo _ _ _ (TyCon { tyConName = "Char", tyConOrigin = OriginBuiltin }) =
-  Ok GChar
-planForGo _ _ _ (TyCon { tyConName = "String", tyConOrigin = OriginBuiltin }) =
-  Ok GString
-planForGo _ _ _ (TyCon { tyConName = "Unit", tyConOrigin = OriginBuiltin }) =
-  Ok GUnit
-planForGo env propName param (TyApp (TyCon { tyConName = "List", tyConOrigin = o }) t)
-  | builtinOrigin o = map GList (planForGo env propName param t)
-planForGo env propName param (TyApp (TyCon { tyConName = "Array", tyConOrigin = o }) t)
-  | builtinOrigin o = map GArray (planForGo env propName param t)
-planForGo env propName param (TyApp (TyCon { tyConName = "Option", tyConOrigin = o }) t)
-  | builtinOrigin o = map GOption (planForGo env propName param t)
-planForGo env propName param (TyApp (TyApp (TyCon { tyConName = "Result", tyConOrigin = o }) e) a)
-  | builtinOrigin o =
-    map2
-      GResult
-      (planForGo env propName param e)
-      (planForGo env propName param a)
-planForGo env propName param ty
-  | builtinTupleSpine ty =
-    map GTuple (planMany env propName param (planArgs ty))
-planForGo env propName param (TyTuple ts) =
-  map GTuple (planMany env propName param ts)
-planForGo _ propName param (ty@(TyFun _ _)) =
-  Err (PlanError propName param ty PEFunction "")
-planForGo env propName param (TyNamed _ t _) = planForGo env propName param t
-planForGo env propName param (TyQual t _ _) = planForGo env propName param t
-planForGo env propName param (TyConstrained _ t) =
-  planForGo env propName param t
-planForGo env propName param ty = match headKey ty
-  None => Err (PlanError propName param ty PEUnsupportedType "")
-  Some key => planNominal env propName param key (planArgs ty)
+planForGo env propName param ty0 = go ty0
+  where
+    go (ty@(TyVar _)) = Err (PlanError propName param ty PEUnboundTyVar "")
+    go (TyCon { tyConName = "Int", tyConOrigin = OriginBuiltin }) = Ok GInt
+    go (TyCon { tyConName = "Bool", tyConOrigin = OriginBuiltin }) = Ok GBool
+    go (TyCon { tyConName = "Float", tyConOrigin = OriginBuiltin }) = Ok GFloat
+    go (TyCon { tyConName = "Char", tyConOrigin = OriginBuiltin }) = Ok GChar
+    go (TyCon { tyConName = "String", tyConOrigin = OriginBuiltin }) =
+      Ok GString
+    go (TyCon { tyConName = "Unit", tyConOrigin = OriginBuiltin }) = Ok GUnit
+    go (TyApp (TyCon { tyConName = "List", tyConOrigin = o }) t)
+      | builtinOrigin o = map GList (go t)
+    go (TyApp (TyCon { tyConName = "Array", tyConOrigin = o }) t)
+      | builtinOrigin o = map GArray (go t)
+    go (TyApp (TyCon { tyConName = "Option", tyConOrigin = o }) t)
+      | builtinOrigin o = map GOption (go t)
+    go (TyApp (TyApp (TyCon { tyConName = "Result", tyConOrigin = o }) e) a)
+      | builtinOrigin o = map2 GResult (go e) (go a)
+    go ty
+      | builtinTupleSpine ty =
+        map GTuple (planMany env propName param (planArgs ty))
+    go (TyTuple ts) = map GTuple (planMany env propName param ts)
+    go (ty@(TyFun _ _)) = Err (PlanError propName param ty PEFunction "")
+    go (TyNamed _ t _) = go t
+    go (TyQual t _ _) = go t
+    go (TyConstrained _ t) = go t
+    go ty = match headKey ty
+      None => Err (PlanError propName param ty PEUnsupportedType "")
+      Some key => planNominal env propName param key (planArgs ty)
 
 builtinOrigin : TyConOrigin -> Bool
 builtinOrigin OriginBuiltin = True
@@ -655,14 +637,16 @@ planMany : PlanEnv ->
   String ->
   List Ty ->
   Result PlanError (List GenPlan)
-planMany _ _ _ [] = Ok []
-planMany env propName param (t :: rest) = match (
-  planForGo env propName param t,
-  planMany env propName param rest,
-)
-  (Ok p, Ok ps) => Ok (p :: ps)
-  (Err e, _) => Err e
-  (_, Err e) => Err e
+planMany env propName param tys0 = go tys0
+  where
+    go [] = Ok []
+    go (t :: rest) = match (
+      planForGo env propName param t,
+      go rest,
+    )
+      (Ok p, Ok ps) => Ok (p :: ps)
+      (Err e, _) => Err e
+      (_, Err e) => Err e
 
 export
 planDef : PlanEnv -> TypeKey -> Result PlanError PlanDef
@@ -679,10 +663,9 @@ instantiateCtor : PlanEnv ->
   GenPlan ->
   PlanCtor ->
   Result PlanError (List (Option String, GenPlan))
-instantiateCtor env (GNominal key args) (PlanCtor _ _ fields) =
-  match planDef env key
-    Ok (PlanDef _ _ params _ _) => instantiateFields env params args fields
-    Err e => Err e
+instantiateCtor env (GNominal key args) (PlanCtor _ _ fields) = do
+  (PlanDef _ _ params _ _) <- planDef env key
+  instantiateFields env params args fields
 instantiateCtor _ p _ =
   Err
     (PlanError
@@ -726,33 +709,35 @@ customPlansIn : PlanEnv ->
   OrdMap Unit ->
   List CustomPlan ->
   (OrdMap Unit, List CustomPlan)
-customPlansIn env depth plan seen found =
-  let word = arbCarrierWord (planTy plan)
-  if omHasKey word seen then
-    (seen, found)
-  else
-    let visited = omInsert word () seen
-    match plan
-      GCustom custom => (visited, custom :: found)
-      GList item => customPlansIn env depth item visited found
-      GArray item => customPlansIn env depth item visited found
-      GOption item => customPlansIn env depth item visited found
-      GResult err ok =>
-        let (afterErr, foundErr) = customPlansIn env depth err visited found
-        customPlansIn env depth ok afterErr foundErr
-      GTuple items => customPlansState env depth items visited found
-      nominal@(GNominal key _) => match planDef env key
-        Ok (PlanDef _ _ _ _ ctors) =>
-          customPlansCtors
-            env
-            (depth + 1)
-            nominal
-            ctors
-            (ctorWeights env nominal depth)
-            visited
-            found
-        Err _ => (visited, found)
-      _ => (visited, found)
+customPlansIn env depth plan0 seen0 found0 = go plan0 seen0 found0
+  where
+    go plan seen found =
+      let word = arbCarrierWord (planTy plan)
+      if omHasKey word seen then
+        (seen, found)
+      else
+        let visited = omInsert word () seen
+        match plan
+          GCustom custom => (visited, custom :: found)
+          GList item => go item visited found
+          GArray item => go item visited found
+          GOption item => go item visited found
+          GResult err ok =>
+            let (afterErr, foundErr) = go err visited found
+            go ok afterErr foundErr
+          GTuple items => customPlansState env depth items visited found
+          nominal@(GNominal key _) => match planDef env key
+            Ok (PlanDef _ _ _ _ ctors) =>
+              customPlansCtors
+                env
+                (depth + 1)
+                nominal
+                ctors
+                (ctorWeights env nominal depth)
+                visited
+                found
+            Err _ => (visited, found)
+          _ => (visited, found)
 
 customPlansState : PlanEnv ->
   Int ->
@@ -760,10 +745,12 @@ customPlansState : PlanEnv ->
   OrdMap Unit ->
   List CustomPlan ->
   (OrdMap Unit, List CustomPlan)
-customPlansState _ _ [] seen found = (seen, found)
-customPlansState env depth (plan :: rest) seen found =
-  let (seen2, found2) = customPlansIn env depth plan seen found
-  customPlansState env depth rest seen2 found2
+customPlansState env depth xs0 seen0 found0 = go xs0 seen0 found0
+  where
+    go [] seen found = (seen, found)
+    go (plan :: rest) seen found =
+      let (seen2, found2) = customPlansIn env depth plan seen found
+      go rest seen2 found2
 
 customPlansCtors : PlanEnv ->
   Int ->
@@ -773,6 +760,8 @@ customPlansCtors : PlanEnv ->
   OrdMap Unit ->
   List CustomPlan ->
   (OrdMap Unit, List CustomPlan)
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
 customPlansCtors _ _ _ [] _ seen found = (seen, found)
 customPlansCtors _ _ _ _ [] seen found = (seen, found)
 customPlansCtors env depth nominal (ctor :: rest) (weight :: weights) seen found =
@@ -790,10 +779,12 @@ customPlansFields : PlanEnv ->
   OrdMap Unit ->
   List CustomPlan ->
   (OrdMap Unit, List CustomPlan)
-customPlansFields _ _ [] seen found = (seen, found)
-customPlansFields env depth ((_, plan) :: rest) seen found =
-  let (seen2, found2) = customPlansIn env depth plan seen found
-  customPlansFields env depth rest seen2 found2
+customPlansFields env depth xs0 seen0 found0 = go xs0 seen0 found0
+  where
+    go [] seen found = (seen, found)
+    go ((_, plan) :: rest) seen found =
+      let (seen2, found2) = customPlansIn env depth plan seen found
+      go rest seen2 found2
 
 planKind : GenPlan -> String
 planKind GInt = "Int"
@@ -809,14 +800,16 @@ instantiateFields : PlanEnv ->
   List GenPlan ->
   List PlanField ->
   Result PlanError (List (Option String, GenPlan))
-instantiateFields _ _ _ [] = Ok []
-instantiateFields env params args ((PlanField name ty) :: rest) = match (
-  planTyWithPlans env "" (zipL params args) ty,
-  instantiateFields env params args rest,
-)
-  (Ok p, Ok ps) => Ok ((name, p) :: ps)
-  (Err e, _) => Err e
-  (_, Err e) => Err e
+instantiateFields env params args fields0 = go fields0
+  where
+    go [] = Ok []
+    go ((PlanField name ty) :: rest) = match (
+      planTyWithPlans env "" (zipL params args) ty,
+      go rest,
+    )
+      (Ok p, Ok ps) => Ok ((name, p) :: ps)
+      (Err e, _) => Err e
+      (_, Err e) => Err e
 
 planTyWithPlans : PlanEnv ->
   String ->
@@ -837,14 +830,16 @@ planManySubst : PlanEnv ->
   List (String, GenPlan) ->
   List Ty ->
   Result PlanError (List GenPlan)
-planManySubst _ _ _ [] = Ok []
-planManySubst env param subst (t :: rest) = match (
-  planTyWithPlans env param subst t,
-  planManySubst env param subst rest,
-)
-  (Ok p, Ok ps) => Ok (p :: ps)
-  (Err e, _) => Err e
-  (_, Err e) => Err e
+planManySubst env param subst tys0 = go tys0
+  where
+    go [] = Ok []
+    go (t :: rest) = match (
+      planTyWithPlans env param subst t,
+      go rest,
+    )
+      (Ok p, Ok ps) => Ok (p :: ps)
+      (Err e, _) => Err e
+      (_, Err e) => Err e
 
 substTy : List (String, GenPlan) -> Ty -> Ty
 substTy subst t = substTyRaw (map planSubstPair subst) t
@@ -867,7 +862,7 @@ substTyRaw subst (TyEffect es tail t) = TyEffect es tail (substTyRaw subst t)
 substTyRaw subst (TyNamed n t dom) = TyNamed n (substTyRaw subst t) dom
 substTyRaw subst (TyQual t qs loc) = TyQual (substTyRaw subst t) qs loc
 substTyRaw subst (TyConstrained cs t) = TyConstrained cs (substTyRaw subst t)
-substTyRaw _ t = t
+substTyRaw _ (t@(TyCon {  } | TyRow _ _ _ | TyAuth _ _)) = t
 
 export
 planTy : GenPlan -> Ty
@@ -1037,10 +1032,12 @@ finiteTruth : PlanEnv -> GenPlan -> OrdMap Unit
 finiteTruth env root = finiteTruthLoop env root omEmpty
 
 finiteTruthLoop : PlanEnv -> GenPlan -> OrdMap Unit -> OrdMap Unit
-finiteTruthLoop env root truth =
-  let states = reachableStates env truth root
-  let next = addFiniteStates env truth states truth
-  if omSize next == omSize truth then next else finiteTruthLoop env root next
+finiteTruthLoop env root truth0 = go truth0
+  where
+    go truth =
+      let states = reachableStates env truth root
+      let next = addFiniteStates env truth states truth
+      if omSize next == omSize truth then next else go next
 
 addFiniteStates : PlanEnv ->
   OrdMap Unit ->
@@ -1056,16 +1053,18 @@ addFiniteWords : PlanEnv ->
   OrdMap GenPlan ->
   OrdMap Unit ->
   OrdMap Unit
-addFiniteWords _ _ [] _ result = result
-addFiniteWords env truth (word :: rest) states result =
-  let next = match omLookup word states
-    Some state =>
-      if stateFiniteUnder env truth state then
-        omInsert word () result
-      else
-        result
-    None => result
-  addFiniteWords env truth rest states next
+addFiniteWords env truth xs0 states result0 = go xs0 result0
+  where
+    go [] result = result
+    go (word :: rest) result =
+      let next = match omLookup word states
+        Some state =>
+          if stateFiniteUnder env truth state then
+            omInsert word () result
+          else
+            result
+        None => result
+      go rest next
 
 stateFiniteUnder : PlanEnv -> OrdMap Unit -> GenPlan -> Bool
 stateFiniteUnder env truth (nominal@(GNominal key _)) = match planDef env key
@@ -1074,35 +1073,35 @@ stateFiniteUnder env truth (nominal@(GNominal key _)) = match planDef env key
 stateFiniteUnder _ _ _ = False
 
 anyCtorFiniteUnder : PlanEnv -> OrdMap Unit -> GenPlan -> List PlanCtor -> Bool
-anyCtorFiniteUnder _ _ _ [] = False
-anyCtorFiniteUnder env truth nominal (ctor :: rest) =
-  match instantiateCtor env nominal ctor
-    Ok fields =>
-      allFiniteUnder env truth (fieldPlansOnly fields)
-        || anyCtorFiniteUnder env truth nominal rest
-    Err _ => anyCtorFiniteUnder env truth nominal rest
+anyCtorFiniteUnder env truth nominal xs0 = go xs0
+  where
+    go [] = False
+    go (ctor :: rest) = match instantiateCtor env nominal ctor
+      Ok fields => allFiniteUnder env truth (fieldPlansOnly fields) || go rest
+      Err _ => go rest
 
 allFiniteUnder : PlanEnv -> OrdMap Unit -> List GenPlan -> Bool
-allFiniteUnder _ _ [] = True
-allFiniteUnder env truth (plan :: rest) =
-  abstractFinite env truth plan && allFiniteUnder env truth rest
+allFiniteUnder env truth xs0 = go xs0
+  where
+    go [] = True
+    go (plan :: rest) = abstractFinite env truth plan && go rest
 
 abstractFinite : PlanEnv -> OrdMap Unit -> GenPlan -> Bool
-abstractFinite _ _ GInt = True
-abstractFinite _ _ GBool = True
-abstractFinite _ _ GFloat = True
-abstractFinite _ _ GChar = True
-abstractFinite _ _ GString = True
-abstractFinite _ _ GUnit = True
-abstractFinite _ _ (GList _) = True
-abstractFinite _ _ (GArray _) = True
-abstractFinite _ _ (GOption _) = True
-abstractFinite env truth (GResult err ok) =
-  abstractFinite env truth err || abstractFinite env truth ok
-abstractFinite env truth (GTuple plans) = allFiniteUnder env truth plans
-abstractFinite _ _ (GCustom _) = True
-abstractFinite env truth (GNominal key args) =
-  omHasKey (stateWord env truth key args) truth
+abstractFinite env truth x0 = go x0
+  where
+    go GInt = True
+    go GBool = True
+    go GFloat = True
+    go GChar = True
+    go GString = True
+    go GUnit = True
+    go (GList _) = True
+    go (GArray _) = True
+    go (GOption _) = True
+    go (GResult err ok) = go err || go ok
+    go (GTuple plans) = allFiniteUnder env truth plans
+    go (GCustom _) = True
+    go (GNominal key args) = omHasKey (stateWord env truth key args) truth
 
 reachableStates : PlanEnv -> OrdMap Unit -> GenPlan -> OrdMap GenPlan
 reachableStates env truth root =
@@ -1122,57 +1121,58 @@ seedPlans : PlanEnv ->
   List GenPlan ->
   OrdMap GenPlan ->
   OrdMap GenPlan
-seedPlans _ _ [] states = states
-seedPlans env truth (plan :: rest) states =
-  seedPlans env truth rest (seedPlan env truth plan states)
+seedPlans env truth xs0 states0 = go xs0 states0
+  where
+    go [] states = states
+    go (plan :: rest) states = go rest (seedPlan env truth plan states)
 
 seedPlan : PlanEnv -> OrdMap Unit -> GenPlan -> OrdMap GenPlan -> OrdMap GenPlan
-seedPlan env truth (GList plan) states = seedPlan env truth plan states
-seedPlan env truth (GArray plan) states = seedPlan env truth plan states
-seedPlan env truth (GOption plan) states = seedPlan env truth plan states
-seedPlan env truth (GResult err ok) states =
-  seedPlan env truth ok (seedPlan env truth err states)
-seedPlan env truth (GTuple plans) states = seedPlans env truth plans states
-seedPlan env truth (nominal@(GNominal key args)) states =
-  seedPlans
-    env
-    truth
-    args
-    (omInsert (stateWord env truth key args) nominal states)
-seedPlan _ _ _ states = states
+seedPlan env truth nominal0 states0 = go nominal0 states0
+  where
+    go (GList plan) states = go plan states
+    go (GArray plan) states = go plan states
+    go (GOption plan) states = go plan states
+    go (GResult err ok) states = go ok (go err states)
+    go (GTuple plans) states = seedPlans env truth plans states
+    go (nominal@(GNominal key args)) states =
+      seedPlans
+        env
+        truth
+        args
+        (omInsert (stateWord env truth key args) nominal states)
+    go (GInt | GBool | GFloat | GChar | GString | GUnit | GCustom _) states =
+      states
 
 discoverStates : PlanEnv ->
   OrdMap Unit ->
   List GenPlan ->
   OrdMap GenPlan ->
   OrdMap GenPlan
-discoverStates _ _ [] states = states
-discoverStates env truth (plan :: rest) states = match plan
-  GList child => discoverStates env truth (child :: rest) states
-  GArray child => discoverStates env truth (child :: rest) states
-  GOption child => discoverStates env truth (child :: rest) states
-  GResult err ok =>
-    discoverStates env truth rest (discoverStates env truth [err, ok] states)
-  GTuple plans =>
-    discoverStates env truth rest (discoverStates env truth plans states)
-  nominal@(GNominal key args) =>
-    let word = stateWord env truth key args
-    if omHasKey word states then
-      discoverStates env truth rest (seedPlans env truth args states)
-    else match planDef env key
-      Ok (PlanDef _ _ _ _ ctors) =>
-        discoverStates
-          env
-          truth
-          rest
-          (discoverCtorFields
-            env
-            truth
-            nominal
-            ctors
-            (omInsert word nominal states))
-      Err _ => discoverStates env truth rest (omInsert word nominal states)
-  _ => discoverStates env truth rest states
+discoverStates env truth xs0 states0 = go xs0 states0
+  where
+    go [] states = states
+    go (plan :: rest) states = match plan
+      GList child => go (child :: rest) states
+      GArray child => go (child :: rest) states
+      GOption child => go (child :: rest) states
+      GResult err ok => go rest (go [err, ok] states)
+      GTuple plans => go rest (go plans states)
+      nominal@(GNominal key args) =>
+        let word = stateWord env truth key args
+        if omHasKey word states then
+          go rest (seedPlans env truth args states)
+        else match planDef env key
+          Ok (PlanDef _ _ _ _ ctors) =>
+            go
+              rest
+              (discoverCtorFields
+                env
+                truth
+                nominal
+                ctors
+                (omInsert word nominal states))
+          Err _ => go rest (omInsert word nominal states)
+      _ => go rest states
 
 discoverCtorFields : PlanEnv ->
   OrdMap Unit ->
@@ -1180,21 +1180,24 @@ discoverCtorFields : PlanEnv ->
   List PlanCtor ->
   OrdMap GenPlan ->
   OrdMap GenPlan
-discoverCtorFields _ _ _ [] states = states
-discoverCtorFields env truth nominal (ctor :: rest) states =
-  let afterCtor = match instantiateCtor env nominal ctor
-    Ok fields => discoverStates env truth (fieldPlansOnly fields) states
-    Err _ => states
-  discoverCtorFields env truth nominal rest afterCtor
+discoverCtorFields env truth nominal xs0 states0 = go xs0 states0
+  where
+    go [] states = states
+    go (ctor :: rest) states =
+      let afterCtor = match instantiateCtor env nominal ctor
+        Ok fields => discoverStates env truth (fieldPlansOnly fields) states
+        Err _ => states
+      go rest afterCtor
 
 stateWord : PlanEnv -> OrdMap Unit -> TypeKey -> List GenPlan -> String
 stateWord env truth key args = "\{typeKeyWord key}#\{stateBits env truth args}"
 
 stateBits : PlanEnv -> OrdMap Unit -> List GenPlan -> String
-stateBits _ _ [] = ""
-stateBits env truth (plan :: rest) =
-  (if abstractFinite env truth plan then "1" else "0")
-    ++ stateBits env truth rest
+stateBits env truth xs0 = go xs0
+  where
+    go [] = ""
+    go (plan :: rest) =
+      (if abstractFinite env truth plan then "1" else "0") ++ go rest
 
 greatestWitnessBound : PlanEnv -> List GenPlan -> Int
 greatestWitnessBound _ [] = 0
@@ -1220,51 +1223,52 @@ witnessBound env (nominal@(GNominal _ args)) =
 witnessBound _ (GCustom _) = 0
 
 findFiniteHeight : PlanEnv -> GenPlan -> Int -> Int -> Option Int
-findFiniteHeight _ _ height limit
-  | height > limit = None
-findFiniteHeight env plan height limit =
-  if planFitsHeight env plan height then
-    Some height
-  else
-    findFiniteHeight env plan (height + 1) limit
+findFiniteHeight env plan height0 limit = go height0
+  where
+    go height
+      | height > limit = None
+    go height =
+      if planFitsHeight env plan height then Some height else go (height + 1)
 
 planFitsHeight : PlanEnv -> GenPlan -> Int -> Bool
-planFitsHeight _ _ height
-  | height < 0 = False
-planFitsHeight _ GInt _ = True
-planFitsHeight _ GBool _ = True
-planFitsHeight _ GFloat _ = True
-planFitsHeight _ GChar _ = True
-planFitsHeight _ GString _ = True
-planFitsHeight _ GUnit _ = True
-planFitsHeight _ (GList _) _ = True
-planFitsHeight _ (GArray _) _ = True
-planFitsHeight _ (GOption _) _ = True
-planFitsHeight env (GResult err ok) height =
-  planFitsHeight env err height || planFitsHeight env ok height
-planFitsHeight env (GTuple plans) height = allPlansFitHeight env plans height
-planFitsHeight _ (GCustom _) _ = True
-planFitsHeight env (nominal@(GNominal key _)) height =
-  if height <= 0 then
-    False
-  else match planDef env key
-    Ok (PlanDef _ _ _ _ ctors) =>
-      anyCtorFitsHeight env nominal ctors (height - 1)
-    Err _ => False
+planFitsHeight env nominal0 height = go nominal0
+  where
+    go _
+      | height < 0 = False
+    go GInt = True
+    go GBool = True
+    go GFloat = True
+    go GChar = True
+    go GString = True
+    go GUnit = True
+    go (GList _) = True
+    go (GArray _) = True
+    go (GOption _) = True
+    go (GResult err ok) = go err || go ok
+    go (GTuple plans) = allPlansFitHeight env plans height
+    go (GCustom _) = True
+    go (nominal@(GNominal key _)) =
+      if height <= 0 then
+        False
+      else match planDef env key
+        Ok (PlanDef _ _ _ _ ctors) =>
+          anyCtorFitsHeight env nominal ctors (height - 1)
+        Err _ => False
 
 anyCtorFitsHeight : PlanEnv -> GenPlan -> List PlanCtor -> Int -> Bool
-anyCtorFitsHeight _ _ [] _ = False
-anyCtorFitsHeight env nominal (ctor :: rest) height =
-  match instantiateCtor env nominal ctor
-    Ok fields =>
-      allPlansFitHeight env (fieldPlansOnly fields) height
-        || anyCtorFitsHeight env nominal rest height
-    Err _ => anyCtorFitsHeight env nominal rest height
+anyCtorFitsHeight env nominal xs0 height = go xs0
+  where
+    go [] = False
+    go (ctor :: rest) = match instantiateCtor env nominal ctor
+      Ok fields =>
+        allPlansFitHeight env (fieldPlansOnly fields) height || go rest
+      Err _ => go rest
 
 allPlansFitHeight : PlanEnv -> List GenPlan -> Int -> Bool
-allPlansFitHeight _ [] _ = True
-allPlansFitHeight env (plan :: rest) height =
-  planFitsHeight env plan height && allPlansFitHeight env rest height
+allPlansFitHeight env xs0 height = go xs0
+  where
+    go [] = True
+    go (plan :: rest) = planFitsHeight env plan height && go rest
 
 allPlansFinite : PlanEnv -> List GenPlan -> Bool
 allPlansFinite _ [] = True
@@ -1276,30 +1280,31 @@ fieldPlansOnly [] = []
 fieldPlansOnly ((_, plan) :: rest) = plan :: fieldPlansOnly rest
 
 allPlansBelow : PlanEnv -> Int -> List GenPlan -> Bool
-allPlansBelow _ _ [] = True
-allPlansBelow env height (plan :: rest) = match planFiniteHeight env plan []
-  Some planHeight => planHeight < height && allPlansBelow env height rest
-  None => False
+allPlansBelow env height xs0 = go xs0
+  where
+    go [] = True
+    go (plan :: rest) = match planFiniteHeight env plan []
+      Some planHeight => planHeight < height && go rest
+      None => False
 
 export
 planFor : PlanEnv -> String -> String -> Ty -> Result PlanError GenPlan
-planFor env propName param ty = match planForGo env propName param ty
-  Ok plan =>
-    match validateReachableFields env (finiteTruth env plan) plan omEmpty
-      Err (PlanError _ _ badTy reason detail) =>
-        Err (PlanError propName param badTy reason detail)
-      Ok _ =>
-        if planHasFiniteValue env plan then
-          Ok plan
-        else
-          Err
-            (PlanError
-              propName
-              param
-              ty
-              PENoFiniteValue
-              "no constructor path reaches finite values")
-  Err e => Err e
+planFor env propName param ty = do
+  plan <- planForGo env propName param ty
+  match validateReachableFields env (finiteTruth env plan) plan omEmpty
+    Err (PlanError _ _ badTy reason detail) =>
+      Err (PlanError propName param badTy reason detail)
+    Ok _ =>
+      if planHasFiniteValue env plan then
+        Ok plan
+      else
+        Err
+          (PlanError
+            propName
+            param
+            ty
+            PENoFiniteValue
+            "no constructor path reaches finite values")
 
 -- A property may have one finite constructor while another reachable
 -- constructor contains a function or another unsupported field. The selected
@@ -1312,50 +1317,49 @@ validateReachableFields : PlanEnv ->
   GenPlan ->
   OrdMap Unit ->
   Result PlanError Unit
-validateReachableFields _ _ GInt _ = Ok ()
-validateReachableFields _ _ GBool _ = Ok ()
-validateReachableFields _ _ GFloat _ = Ok ()
-validateReachableFields _ _ GChar _ = Ok ()
-validateReachableFields _ _ GString _ = Ok ()
-validateReachableFields _ _ GUnit _ = Ok ()
-validateReachableFields env truth (GList plan) seen =
-  validateReachableFields env truth plan seen
-validateReachableFields env truth (GArray plan) seen =
-  validateReachableFields env truth plan seen
-validateReachableFields env truth (GOption plan) seen =
-  validateReachableFields env truth plan seen
-validateReachableFields env truth (GResult err ok) seen = match (
-  validateReachableFields env truth err seen,
-  validateReachableFields env truth ok seen,
-)
-  (Ok _, Ok _) => Ok ()
-  (Err e, _) => Err e
-  (_, Err e) => Err e
-validateReachableFields env truth (GTuple plans) seen =
-  validateReachablePlans env truth plans seen
-validateReachableFields _ _ (GCustom _) _ = Ok ()
-validateReachableFields env truth (nominal@(GNominal key args)) seen =
-  let word = stateWord env truth key args
-  if omHasKey word seen then
-    Ok ()
-  else match planDef env key
-    Ok (PlanDef _ _ _ _ ctors) =>
-      validateReachableCtors env truth nominal ctors (omInsert word () seen)
-    Err e => Err e
+validateReachableFields env truth plan0 seen0 = go plan0 seen0
+  where
+    go GInt _ = Ok ()
+    go GBool _ = Ok ()
+    go GFloat _ = Ok ()
+    go GChar _ = Ok ()
+    go GString _ = Ok ()
+    go GUnit _ = Ok ()
+    go (GList plan) seen = go plan seen
+    go (GArray plan) seen = go plan seen
+    go (GOption plan) seen = go plan seen
+    go (GResult err ok) seen = match (
+      go err seen,
+      go ok seen,
+    )
+      (Ok _, Ok _) => Ok ()
+      (Err e, _) => Err e
+      (_, Err e) => Err e
+    go (GTuple plans) seen = validateReachablePlans env truth plans seen
+    go (GCustom _) _ = Ok ()
+    go (nominal@(GNominal key args)) seen =
+      let word = stateWord env truth key args
+      if omHasKey word seen then
+        Ok ()
+      else do
+        (PlanDef _ _ _ _ ctors) <- planDef env key
+        validateReachableCtors env truth nominal ctors (omInsert word () seen)
 
 validateReachablePlans : PlanEnv ->
   OrdMap Unit ->
   List GenPlan ->
   OrdMap Unit ->
   Result PlanError Unit
-validateReachablePlans _ _ [] _ = Ok ()
-validateReachablePlans env truth (plan :: rest) seen = match (
-  validateReachableFields env truth plan seen,
-  validateReachablePlans env truth rest seen,
-)
-  (Ok _, Ok _) => Ok ()
-  (Err e, _) => Err e
-  (_, Err e) => Err e
+validateReachablePlans env truth plans0 seen = go plans0
+  where
+    go [] = Ok ()
+    go (plan :: rest) = match (
+      validateReachableFields env truth plan seen,
+      go rest,
+    )
+      (Ok _, Ok _) => Ok ()
+      (Err e, _) => Err e
+      (_, Err e) => Err e
 
 validateReachableCtors : PlanEnv ->
   OrdMap Unit ->
@@ -1363,15 +1367,17 @@ validateReachableCtors : PlanEnv ->
   List PlanCtor ->
   OrdMap Unit ->
   Result PlanError Unit
-validateReachableCtors _ _ _ [] _ = Ok ()
-validateReachableCtors env truth nominal (ctor :: rest) seen = match (
-  instantiateCtor env nominal ctor,
-  validateReachableCtors env truth nominal rest seen,
-)
-  (Ok fields, Ok _) =>
-    validateReachablePlans env truth (fieldPlansOnly fields) seen
-  (Err e, _) => Err e
-  (_, Err e) => Err e
+validateReachableCtors env truth nominal ctors0 seen = go ctors0
+  where
+    go [] = Ok ()
+    go (ctor :: rest) = match (
+      instantiateCtor env nominal ctor,
+      go rest,
+    )
+      (Ok fields, Ok _) =>
+        validateReachablePlans env truth (fieldPlansOnly fields) seen
+      (Err e, _) => Err e
+      (_, Err e) => Err e
 
 -- A list whose element reaches a cycle that crosses a list edge (`Rose Int
 -- (List Rose)`) shrinks its length bound by one per level of nominal depth, so
@@ -1418,35 +1424,35 @@ nominalLeaves (GResult err ok) crossed acc =
   nominalLeaves err crossed (nominalLeaves ok crossed acc)
 nominalLeaves (GTuple ps) crossed acc = nominalLeavesAll ps crossed acc
 nominalLeaves (nominal@(GNominal _ _)) crossed acc = (nominal, crossed) :: acc
-nominalLeaves _ _ acc = acc
+nominalLeaves (GInt | GBool | GFloat | GChar | GString | GUnit | GCustom _) _ acc =
+  acc
 
 nominalLeavesAll : List GenPlan ->
   Bool ->
   List (GenPlan, Bool) ->
   List (GenPlan, Bool)
-nominalLeavesAll [] _ acc = acc
-nominalLeavesAll (p :: ps) crossed acc =
-  nominalLeaves p crossed (nominalLeavesAll ps crossed acc)
+nominalLeavesAll xs0 crossed acc = go xs0
+  where
+    go [] = acc
+    go (p :: ps) = nominalLeaves p crossed (go ps)
 
 buildListGraph : PlanEnv ->
   OrdMap Unit ->
   List (GenPlan, Bool) ->
   OrdMap (List (String, Bool)) ->
   OrdMap (List (String, Bool))
-buildListGraph _ _ [] graph = graph
-buildListGraph env truth ((GNominal key args, _) :: rest) graph =
-  let word = stateWord env truth key args
-  if omHasKey word graph then
-    buildListGraph env truth rest graph
-  else
-    let nominal = GNominal key args
-    let leaves = stateLeaves env nominal
-    buildListGraph
-      env
-      truth
-      (leaves ++ rest)
-      (omInsert word (leafEdges env truth leaves) graph)
-buildListGraph env truth (_ :: rest) graph = buildListGraph env truth rest graph
+buildListGraph env truth xs0 graph0 = go xs0 graph0
+  where
+    go [] graph = graph
+    go ((GNominal key args, _) :: rest) graph =
+      let word = stateWord env truth key args
+      if omHasKey word graph then
+        go rest graph
+      else
+        let nominal = GNominal key args
+        let leaves = stateLeaves env nominal
+        go (leaves ++ rest) (omInsert word (leafEdges env truth leaves) graph)
+    go (_ :: rest) graph = go rest graph
 
 stateLeaves : PlanEnv -> GenPlan -> List (GenPlan, Bool)
 stateLeaves env (nominal@(GNominal key _)) = match planDef env key
@@ -1459,21 +1465,19 @@ ctorLeaves : PlanEnv ->
   List PlanCtor ->
   List (GenPlan, Bool) ->
   List (GenPlan, Bool)
-ctorLeaves _ _ [] acc = acc
-ctorLeaves env nominal (ctor :: rest) acc =
-  match instantiateCtor env nominal ctor
-    Ok fields =>
-      ctorLeaves
-        env
-        nominal
-        rest
-        (nominalLeavesAll (fieldPlansOnly fields) False acc)
-    Err _ => ctorLeaves env nominal rest acc
+ctorLeaves env nominal xs0 acc0 = go xs0 acc0
+  where
+    go [] acc = acc
+    go (ctor :: rest) acc = match instantiateCtor env nominal ctor
+      Ok fields => go rest (nominalLeavesAll (fieldPlansOnly fields) False acc)
+      Err _ => go rest acc
 
 leafEdges : PlanEnv ->
   OrdMap Unit ->
   List (GenPlan, Bool) ->
   List (String, Bool)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 leafEdges _ _ [] = []
 leafEdges env truth ((GNominal key args, crossed) :: rest) =
   (stateWord env truth key args, crossed) :: leafEdges env truth rest
@@ -1493,20 +1497,20 @@ walkReturns : OrdMap (List (String, Bool)) ->
   OrdMap Unit ->
   List (String, Bool) ->
   Bool
-walkReturns _ _ _ [] = False
-walkReturns graph target visited ((word, crossed) :: rest) =
-  if crossed && word == target then
-    True
-  else
-    let mark = if crossed then "\{word}|1" else "\{word}|0"
-    if omHasKey mark visited then
-      walkReturns graph target visited rest
-    else
-      walkReturns
-        graph
-        target
-        (omInsert mark () visited)
-        (crossEdges crossed (edgesOf graph word) ++ rest)
+walkReturns graph target visited0 xs0 = go visited0 xs0
+  where
+    go _ [] = False
+    go visited ((word, crossed) :: rest) =
+      if crossed && word == target then
+        True
+      else
+        let mark = if crossed then "\{word}|1" else "\{word}|0"
+        if omHasKey mark visited then
+          go visited rest
+        else
+          go
+            (omInsert mark () visited)
+            (crossEdges crossed (edgesOf graph word) ++ rest)
 
 edgesOf : OrdMap (List (String, Bool)) -> String -> List (String, Bool)
 edgesOf graph word = match omLookup word graph
@@ -1564,9 +1568,10 @@ planCanFinishAtBound env (nominal@(GNominal key _)) = match planDef env key
   Err _ => False
 
 anyBoundCtor : PlanEnv -> GenPlan -> List PlanCtor -> Bool
-anyBoundCtor _ _ [] = False
-anyBoundCtor env nominal (ctor :: rest) =
-  ctorLowersFiniteHeight env nominal ctor || anyBoundCtor env nominal rest
+anyBoundCtor env nominal xs0 = go xs0
+  where
+    go [] = False
+    go (ctor :: rest) = ctorLowersFiniteHeight env nominal ctor || go rest
 
 allPlansFinishAtBound : PlanEnv -> List GenPlan -> Bool
 allPlansFinishAtBound _ [] = True
@@ -1611,10 +1616,10 @@ anyCtorPlanDiverges : PlanEnv ->
   List PlanCtor ->
   OrdMap Unit ->
   Bool
-anyCtorPlanDiverges _ _ _ [] _ = False
-anyCtorPlanDiverges env truth nominal (ctor :: rest) seen =
-  ctorPlanDiverges env truth nominal ctor seen
-    || anyCtorPlanDiverges env truth nominal rest seen
+anyCtorPlanDiverges env truth nominal xs0 seen = go xs0
+  where
+    go [] = False
+    go (ctor :: rest) = ctorPlanDiverges env truth nominal ctor seen || go rest
 
 ctorPlanDiverges : PlanEnv ->
   OrdMap Unit ->
@@ -1632,31 +1637,27 @@ anyPlansDivergeSeen : PlanEnv ->
   List GenPlan ->
   OrdMap Unit ->
   Bool
-anyPlansDivergeSeen _ _ [] _ = False
-anyPlansDivergeSeen env truth (plan :: rest) seen =
-  planDivergesSeen env truth plan seen
-    || anyPlansDivergeSeen env truth rest seen
+anyPlansDivergeSeen env truth xs0 seen = go xs0
+  where
+    go [] = False
+    go (plan :: rest) = planDivergesSeen env truth plan seen || go rest
 
 planDivergesSeen : PlanEnv -> OrdMap Unit -> GenPlan -> OrdMap Unit -> Bool
-planDivergesSeen _ _ GInt _ = False
-planDivergesSeen _ _ GBool _ = False
-planDivergesSeen _ _ GFloat _ = False
-planDivergesSeen _ _ GChar _ = False
-planDivergesSeen _ _ GString _ = False
-planDivergesSeen _ _ GUnit _ = False
-planDivergesSeen env truth (GList plan) seen =
-  planDivergesSeen env truth plan seen
-planDivergesSeen env truth (GArray plan) seen =
-  planDivergesSeen env truth plan seen
-planDivergesSeen env truth (GOption plan) seen =
-  planDivergesSeen env truth plan seen
-planDivergesSeen env truth (GResult err ok) seen =
-  planDivergesSeen env truth err seen || planDivergesSeen env truth ok seen
-planDivergesSeen env truth (GTuple plans) seen =
-  anyPlansDivergeSeen env truth plans seen
-planDivergesSeen env truth (nominal@(GNominal _ _)) seen =
-  planCanDivergeNominal env truth nominal seen
-planDivergesSeen _ _ (GCustom _) _ = False
+planDivergesSeen env truth nominal0 seen = go nominal0
+  where
+    go GInt = False
+    go GBool = False
+    go GFloat = False
+    go GChar = False
+    go GString = False
+    go GUnit = False
+    go (GList plan) = go plan
+    go (GArray plan) = go plan
+    go (GOption plan) = go plan
+    go (GResult err ok) = go err || go ok
+    go (GTuple plans) = anyPlansDivergeSeen env truth plans seen
+    go (nominal@(GNominal _ _)) = planCanDivergeNominal env truth nominal seen
+    go (GCustom _) = False
 
 -- Structural shrink action ordering is shared as data. Both adapters consume
 -- these actions in order; value representation and emitted syntax never pick

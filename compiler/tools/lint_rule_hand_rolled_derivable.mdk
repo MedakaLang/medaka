@@ -17,9 +17,10 @@ import tools.lint_core.{
   StdlibIndex(..),
   mkRule,
   factOracle,
+  noFix,
+  factDeclLocs,
 }
 import tools.lint_shared.{
-  declLocList,
   isStdlibPath,
   ruleNameDerivable,
   tyHeadName,
@@ -64,20 +65,21 @@ ruleDerivable : StdlibIndex ->
   Positions ->
   List Decl ->
   List Finding
-ruleDerivable _ path facts pos prog
+ruleDerivable _ path facts _ _
   | isStdlibPath path = []
   | otherwise =
     let orc = factOracle facts
-    flatMap (derivableDeclL orc) (declLocList pos prog)
+    flatMap (derivableDeclL orc) (factDeclLocs facts)
 
 derivableDeclL : Oracle -> (Decl, Option Loc) -> List Finding
 derivableDeclL orc (d, loc) = derivableDecl orc loc d
 
 derivableDecl : Oracle -> Option Loc -> Decl -> List Finding
-derivableDecl orc loc (DImpl { iface, tys, ... }) =
-  derivableHit orc loc iface tys
-derivableDecl orc loc (DAttrib _ d) = derivableDecl orc loc d
-derivableDecl _ _ _ = []
+derivableDecl orc loc x0 = go x0
+  where
+    go (DImpl { iface, tys, ... }) = derivableHit orc loc iface tys
+    go (DAttrib _ d) = go d
+    go _ = []
 
 derivableHit : Oracle -> Option Loc -> String -> List Ty -> List Finding
 derivableHit orc loc iface tys
@@ -91,7 +93,7 @@ derivableHit orc loc iface tys
               "hand-written `impl \{iface}` for '\{tyName}' — use `deriving (\{iface})`",
             severity = SevWarning,
             loc = loc,
-            fix = None,
+            fix = noFix,
           },
         ]
       else

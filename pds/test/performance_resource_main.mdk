@@ -319,21 +319,23 @@ prefix3 prior key =
     3
 
 nodeEntries : Int -> Int -> Option Bytes -> Cid -> List DagCbor -> List DagCbor
-nodeEntries n i prior value acc =
-  if i >= n then
-    reverse acc
-  else
-    let key = intKey i
-    let prefix = match prior
-      None => 0
-      Some previous => prefix3 previous key
-    let entry = DcMap [
-      ("p", DcInt prefix),
-      ("k", DcBytes (B.drop prefix key)),
-      ("v", DcLink value),
-      ("t", DcNull),
-    ]
-    nodeEntries n (i + 1) (Some key) value (entry :: acc)
+nodeEntries n i0 prior0 value acc0 = go i0 prior0 acc0
+  where
+    go i prior acc =
+      if i >= n then
+        reverse acc
+      else
+        let key = intKey i
+        let prefix = match prior
+          None => 0
+          Some previous => prefix3 previous key
+        let entry = DcMap [
+          ("p", DcInt prefix),
+          ("k", DcBytes (B.drop prefix key)),
+          ("v", DcLink value),
+          ("t", DcNull),
+        ]
+        go (i + 1) (Some key) (entry :: acc)
 
 framedHeader : Cid -> Bytes
 framedHeader root =
@@ -550,12 +552,14 @@ mustInboundStore _ =
 -- store a write returns each time (mirrors `cost_curve_main.mdk`'s
 -- `repeatRequest` — a repetition must not grow the state it measures).
 repeatInbound : Server e -> Store -> Bytes -> Int -> Int -> <e> Int
-repeatInbound server store request n acc =
-  if n <= 0 then
-    acc
-  else
-    let (_, responseBytes) = handleBytes server inboundContext store request
-    repeatInbound server store request (n - 1) (acc + B.length responseBytes)
+repeatInbound server store request n0 acc0 = go n0 acc0
+  where
+    go n acc =
+      if n <= 0 then
+        acc
+      else
+        let (_, responseBytes) = handleBytes server inboundContext store request
+        go (n - 1) (acc + B.length responseBytes)
 
 {- | `retainedBytes` is not printed: this tree has no GC-forcing extern to
    read a steady-state figure cheaply (checked: no `gc`/`collect` entry in

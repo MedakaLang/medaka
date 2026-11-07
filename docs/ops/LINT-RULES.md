@@ -49,6 +49,9 @@ Every rule `medaka lint` knows. `universal` rules are meaningful in any Medaka p
 | [`rule-accumulator-append`](#rule-accumulator-append) | universal | perf | gated | not-fixable | file |
 | [`rule-reslice-in-loop`](#rule-reslice-in-loop) | universal | perf | gated | not-fixable | file |
 | [`rule-list-as-set`](#rule-list-as-set) | universal | perf | gated | not-fixable | file |
+| [`rule-walker-wildcard`](#rule-walker-wildcard) | internal | style | gated | not-fixable | file |
+| [`rule-threaded-invariant`](#rule-threaded-invariant) | internal | style | gated | fixable-unsafe | file |
+| [`rule-passthrough-arm`](#rule-passthrough-arm) | internal | style | gated | fixable-unsafe | file |
 
 ## rule-match-on-param
 
@@ -664,4 +667,62 @@ Before:
   go seen (x :: xs) = if contains x seen then go seen xs else go (x :: seen) xs
 After:
   go seen (x :: xs) = if has x seen then go seen xs else go (insert x seen) xs  -- with `seen : Set String`
+```
+
+## rule-walker-wildcard
+
+a self-recursive function over constructor patterns ends in a wildcard that returns a constant or its input without recursing: a new constructor is silently skipped
+
+A function that calls itself, has at least two clauses or match arms on constructors of one sum, and ends in a wildcard whose body is a literal, a constant constructor or its input unchanged, treats every constructor it does not name as a leaf. When the sum later gains a constructor, nothing goes red: the walker skips its subtree. The rule names the constructors the wildcard swallows, found in the file's own `data` declarations or the project index; when the sum cannot be resolved it says so and reports an unknown count.
+
+Name the swallowed constructors in an or-pattern, so adding one is a visible edit, or recurse into them. A wildcard that is a deliberate default for three or more constructors takes a `-- lint-disable-next-line rule-walker-wildcard` that says why. Recursion counts only in a clause whose body also uses a field its constructor pattern binds. A wildcard that swallows only constructors without fields hides no subtree and is not reported. A wildcard that recurses, a function with fewer than two constructor clauses, and a function that is not self-recursive are not reported.
+
+```
+Before:
+  usesVar x (EVar y) = x == y
+  usesVar x (EApp f a) = usesVar x f || usesVar x a
+  usesVar _ _ = False
+After:
+  usesVar x (EVar y) = x == y
+  usesVar x (EApp f a) = usesVar x f || usesVar x a
+  usesVar x (ELam _ body) = usesVar x body
+  usesVar _ (ELit _ | EListLit _) = False
+```
+
+## rule-threaded-invariant
+
+a self-recursive function passes two or more of its parameters through every self-call unchanged: close over them in a where-local `go`
+
+A top-level function that calls itself with the same two or more parameters, in the same positions, in every self-call carries those parameters through the whole recursion for nothing. A local `go` in a `where` closes over them, so the recursion names only what changes. The rule reads each function as a group of clauses: a position counts when every full-arity self-call of every clause that makes one passes that clause's own parameter there, unchanged. One invariant parameter is not reported, nor is a `go` that already closes over its invariants, a partial application, mutual recursion, or a loop local to a `let` or `where`.
+
+`--fix --unsafe-fixes` writes the `go` form when the whole shape is known: a signature whose class constraints the closed-over parameters carry, each invariant parameter a plain name (or ignored) in every clause, no list builder in tail position modulo cons, no invariant parameter used only to be passed on, and a `where` of its own only on a single clause. The rest are reported only. Run `medaka fmt --write` after it, then check the converted loop for dictionary dispatch: `go` is inferred, not declared, so a changing parameter whose type only the signature fixes (a counter under `+` or `==`, an element that is interpolated) is let-generalised and the loop passes a dictionary on every call (#4921, MonoLocalBinds). The fix does not see that shape.
+
+```
+Before:
+  extractFold bare heads acc (x :: xs) = extractFold bare heads (step bare heads acc x) xs
+  extractFold _ _ acc [] = acc
+After:
+  extractFold bare heads acc0 xs0 = go acc0 xs0
+    where
+      go acc [] = acc
+      go acc (x :: xs) = go (step bare heads acc x) xs
+```
+
+## rule-passthrough-arm
+
+a two-arm `match` over an Option/Result with a verbatim `None => None` / `Err e => Err e` arm: bind in a `do` block instead
+
+A `match` that passes a failure straight through (`None => None`, or `Err e => Err e` with the same variable) and continues in the other arm is a monadic bind written by hand. Write it as a `do` block, at any depth: one level is enough, unlike `rule-bind-chain-to-do`, which needs a pyramid of three. `--fix --unsafe-fixes` rewrites the statement-position cases; the rest are reported only.
+
+Not reported: a failure arm that rebuilds its value (`Err e => Err (wrap e)`), a match with a third arm or a guard, a success arm that re-wraps in the same constructor (`rule-match-to-map` owns it). A match whose success arm ends, through `if`, `let`, `match` arms and block tails, in a call of the enclosing function (a self-recursive tail, including a where-local `go`) is not reported: the `do` form lowers to `andThen`, which allocates a closure per iteration and measurably slows the loop.
+
+```
+Before:
+  match catalogRow n
+    Some r => g r
+    None => None
+After:
+  do
+    r <- catalogRow n
+    g r
 ```

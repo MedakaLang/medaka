@@ -497,16 +497,18 @@ minSecretDistinctBytes : Int
 minSecretDistinctBytes = 8
 
 distinctSeen : Bytes -> Array Bool -> Int -> Int -> Int
-distinctSeen bytes seen i found =
-  if i >= B.length bytes then
-    found
-  else
-    let byte = U8.toInt bytes[i]
-    if seen[byte] then
-      distinctSeen bytes seen (i + 1) found
-    else
-      let () = A.setInPlace byte True seen
-      distinctSeen bytes seen (i + 1) (found + 1)
+distinctSeen bytes seen i0 found0 = go i0 found0
+  where
+    go i found =
+      if i >= B.length bytes then
+        found
+      else
+        let byte = U8.toInt bytes[i]
+        if seen[byte] then
+          go (i + 1) found
+        else
+          let () = A.setInPlace byte True seen
+          go (i + 1) (found + 1)
 
 distinctByteValues : Bytes -> Int
 distinctByteValues bytes = distinctSeen bytes (arrayMake 256 False) 0 0
@@ -1149,6 +1151,8 @@ bound server store dir serving relay statsInterval (Ok lis) = defer
 lockBeatLoop : DataLock d ->
   Ref Bool ->
   Async <Clock, FileRead d, FileWrite d, Stderr | e> Unit
+-- Bound: the signature's effect row variable does not unify with the row of a where-local go: `check` rejects the go form with "effect rows ... cannot be made equal"; convert when a local function can inherit its parent's row.
+-- lint-disable-next-line rule-threaded-invariant
 lockBeatLoop lock stopping = defer
   if !stopping then
     deferPure ()

@@ -58,7 +58,7 @@ authLevelOf (AVar cell) = authvarLevel cell
 authLevelOf (AJoin ms) = fold (acc m => max acc (authLevelOf m)) 0 ms
 authLevelOf (AProduct axes) =
   fold (acc a => max acc (authLevelOf (snd a))) 0 axes
-authLevelOf _ = 0
+authLevelOf (AConst _) = 0
 
 export
 authvarDomain : Ref Authvar -> Param
@@ -261,7 +261,7 @@ authRetag : Param -> Authority -> Authority
 authRetag top a = match authNorm a
   AConst p => AConst (retagParam top p)
   AJoin ms => authJoinAll (map (authRetag top) ms)
-  other => other
+  other@(AVar _ | AProduct _) => other
 
 -- A value's abstraction may over-approximate it, so a value whose authority
 -- would hold more than `setCardCap` constants is folded by the domain join
@@ -408,33 +408,37 @@ projections : String ->
   List (String, Authority) ->
   Authority ->
   Option (List (Authority, Authority))
-projections _ [] _ = Some []
-projections schema ((name, t) :: rest) lo = match (
-  projectAxis schema name lo,
-  projections schema rest lo,
-)
-  (Some p, Some more) => Some ((p, t) :: more)
-  _ => None
+projections schema xs0 lo = go xs0
+  where
+    go [] = Some []
+    go ((name, t) :: rest) = match (
+      projectAxis schema name lo,
+      go rest,
+    )
+      (Some p, Some more) => Some ((p, t) :: more)
+      _ => None
 
 -- A term's values on one axis of the Product domain keyed [schema].
 projectAxis : String -> String -> Authority -> Option Authority
-projectAxis schema name lo = match authNorm lo
-  AJoin [] => Some (AJoin [])
-  AConst (p@(PProduct ax)) =>
-    if domainKey p == schema then map AConst (lookupAxis name ax) else None
-  AProduct axes =>
-    if domainKey (authDomainTop (AProduct axes)) == schema then
-      lookupTerm name axes
-    else
-      None
-  AJoin ms =>
-    fold
-      (acc m => match (acc, projectAxis schema name m)
-        (Some a, Some b) => Some (authJoin a b)
-        _ => None)
-      (Some (AJoin []))
-      ms
-  _ => None
+projectAxis schema name lo0 = go lo0
+  where
+    go lo = match authNorm lo
+      AJoin [] => Some (AJoin [])
+      AConst (p@(PProduct ax)) =>
+        if domainKey p == schema then map AConst (lookupAxis name ax) else None
+      AProduct axes =>
+        if domainKey (authDomainTop (AProduct axes)) == schema then
+          lookupTerm name axes
+        else
+          None
+      AJoin ms =>
+        fold
+          (acc m => match (acc, go m)
+            (Some a, Some b) => Some (authJoin a b)
+            _ => None)
+          (Some (AJoin []))
+          ms
+      AVar _ | AConst _ => None
 
 constantsOf : List Authority -> List Param
 constantsOf [] = []

@@ -114,14 +114,16 @@ declsFaults idx (d :: rest) acc = declsFaults idx rest (declFaults idx d acc)
 
 -- Every `Decl` that holds an expression.
 declFaults : EvIndex -> Decl -> List EvidenceFault -> List EvidenceFault
-declFaults idx (DFunDef _ _ _ e _ _) acc = exprFaults idx e acc
-declFaults idx (DInterface { methods = ms }) acc = ifaceMethodsFaults idx ms acc
-declFaults idx (DImpl { methods = ms }) acc = implMethodsFaults idx ms acc
-declFaults idx (DProp _ _ _ e) acc = exprFaults idx e acc
-declFaults idx (DTest _ _ e) acc = exprFaults idx e acc
-declFaults idx (DLetGroup _ bs) acc = letBindsFaults idx bs acc
-declFaults idx (DAttrib _ d) acc = declFaults idx d acc
-declFaults _ _ acc = acc
+declFaults idx x0 acc = go x0
+  where
+    go (DFunDef _ _ _ e _ _) = exprFaults idx e acc
+    go (DInterface { methods = ms }) = ifaceMethodsFaults idx ms acc
+    go (DImpl { methods = ms }) = implMethodsFaults idx ms acc
+    go (DProp _ _ _ e) = exprFaults idx e acc
+    go (DTest _ _ e) = exprFaults idx e acc
+    go (DLetGroup _ bs) = letBindsFaults idx bs acc
+    go (DAttrib _ d) = go d
+    go _ = acc
 
 ifaceMethodsFaults : EvIndex ->
   List IfaceMethod ->

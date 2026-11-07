@@ -79,15 +79,17 @@ indexSource source =
 
 -- First index in [lo, hi) whose value exceeds target, or hi.
 upperBound : Array Int -> Int -> Int -> Int -> Int
-upperBound values target lo hi =
-  if lo >= hi then
-    lo
-  else
-    let mid = (lo + hi) / 2
-    if arrayGetUnsafe mid values <= target then
-      upperBound values target (mid + 1) hi
-    else
-      upperBound values target lo mid
+upperBound values target lo0 hi0 = go lo0 hi0
+  where
+    go lo hi =
+      if lo >= hi then
+        lo
+      else
+        let mid = (lo + hi) / 2
+        if arrayGetUnsafe mid values <= target then
+          go (mid + 1) hi
+        else
+          go lo mid
 
 export
 offsetToSourcePosition : SourceIndex -> Int -> Option (Int, Int)
@@ -158,6 +160,8 @@ lineStartsOf s =
   arrayFromList (0 :: lineStartsGo src len 0)
 
 lineStartsGo : Array Char -> Int -> Int -> List Int
+-- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 lineStartsGo src len i
   | i >= len = []
   | arrayGetUnsafe i src == '\r'
@@ -181,6 +185,8 @@ offsetToLineColFast lineStarts off =
 -- Rightmost index `idx` in [lo, hi] with `lineStarts[idx] <= off`.
 -- `lineStarts[0]` is 0 and `off >= 0`, so such an index always exists in range.
 lineStartSearch : Array Int -> Int -> Int -> Int -> Int
+-- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 lineStartSearch arr off lo hi
   | lo >= hi = lo
   | otherwise =

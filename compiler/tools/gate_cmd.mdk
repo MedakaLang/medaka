@@ -237,12 +237,11 @@ data ListArgs = ListArgs {
 -- pre-existing bespoke text verbatim, per verb, deliberately not normalized
 -- this slice.
 missingValueOverride : ArgSpec -> List (String, String) -> String -> String
-missingValueOverride _ [] msg = msg
-missingValueOverride sp ((flg, custom) :: rest) msg =
-  if msg == missingValueMessage sp flg then
-    custom
-  else
-    missingValueOverride sp rest msg
+missingValueOverride sp xs0 msg = go xs0
+  where
+    go [] = msg
+    go ((flg, custom) :: rest) =
+      if msg == missingValueMessage sp flg then custom else go rest
 
 -- withStrictDash: see the note near the imports above.
 listArgSpec : ArgSpec
@@ -291,9 +290,9 @@ registryPath None =
 -- command a SINGLE exit site (`emit`), so no error path can grow a
 -- print-without-exit or an exit-without-print.
 listOutput : List String -> <IO> Result String String
-listOutput argv = match parseListArgs argv
-  Err m => Err m
-  Ok a => match parseSelectors a.selectors []
+listOutput argv = do
+  a <- parseListArgs argv
+  match parseSelectors a.selectors []
     Err m => Err "medaka gate list: \{m}"
     Ok sels =>
       let path = registryPath a.registry
@@ -452,13 +451,12 @@ stripSlash s =
 -- `mktemp -d` under the scratch root.  The 6-X template is accepted by both GNU
 -- and BSD mktemp; `mkdir -p` first because the root may not exist yet.
 makeGateScratch : String -> <IO> Result String String
-makeGateScratch root = match runCommand "mkdir" ["-p", root]
-  Err e => Err e
-  Ok _ => match runCommandOk "mktemp" ["-d", "\{root}/medaka_gate_XXXXXX"]
-    Err e => Err e
-    Ok (out, _) =>
-      let d = trimAscii out
-      if d == "" then Err "mktemp -d printed no path" else Ok d
+makeGateScratch root = do
+  _ <- runCommand "mkdir" ["-p", root]
+  do
+    (out, _) <- runCommandOk "mktemp" ["-d", "\{root}/medaka_gate_XXXXXX"]
+    let d = trimAscii out
+    if d == "" then Err "mktemp -d printed no path" else Ok d
 
 -- Best-effort recursive removal.  A gate writes an arbitrary TREE under its
 -- scratch dir (fixtures, oracle output, its own nested mktemp dirs), so the
@@ -578,6 +576,8 @@ balScrapeEach root (g :: gs)
 -- MISSING is not stale — the gate's own "oracle not built" exit-2 owns that
 -- case and says so in its own words.
 staleOf : String -> Float -> List String -> <IO> List String
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
 staleOf _ _ [] = []
 staleOf root newest (o :: os) =
   let rest = staleOf root newest os
@@ -844,6 +844,8 @@ runGatesLoop env (g :: gs) acc =
 -- dropped off the head of `splitNl`'s list and rejoined: one pass over the
 -- string, no intermediate list, for a 200-line output bound.
 afterNewlines : Array Char -> Int -> Int -> Int -> Int
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
 afterNewlines cs i len want
   | i >= len = len
   | want <= 0 = i
@@ -1004,21 +1006,20 @@ runJobs a = match flagValue "--jobs" a
 parseRunArgs : List String -> Result String RunArgs
 parseRunArgs argv = match parseArgs runArgSpec argv
   Err m => Err (missingValueOverride runArgSpec runMissingValue m)
-  Ok a => match runTimeout a
-    Err m => Err m
-    Ok timeoutSecs =>
-      map
-        (jobs => RunArgs {
-          registry = flagValue "--registry" a,
-          selectors = a.positionals,
-          dryRun = flag "--dry-run" a,
-          json = flag "--json" a,
-          report = flagValue "--report" a,
-          timeoutSecs = timeoutSecs,
-          jobs = jobs,
-          noStaleCheck = flag "--no-stale-check" a,
-        })
-        (runJobs a)
+  Ok a => do
+    timeoutSecs <- runTimeout a
+    map
+      (jobs => RunArgs {
+        registry = flagValue "--registry" a,
+        selectors = a.positionals,
+        dryRun = flag "--dry-run" a,
+        json = flag "--json" a,
+        report = flagValue "--report" a,
+        timeoutSecs = timeoutSecs,
+        jobs = jobs,
+        noStaleCheck = flag "--no-stale-check" a,
+      })
+      (runJobs a)
 
 -- The selection half, shared with `list`: read the registry, apply the
 -- selectors, and treat a zero-gate selection as a HARD ERROR.  A mistyped
@@ -1181,12 +1182,11 @@ gitLsFilesSh root args pattern =
 
 -- Every candidate for ONE glob pattern, tracked or untracked.
 candidatesFor : String -> String -> <IO> Result String (List String)
-candidatesFor root pattern = match gitLsFilesSh root ["ls-files"] pattern
-  Err m => Err m
-  Ok tracked =>
-    map
-      (tracked ++ _)
-      (gitLsFilesSh root ["ls-files", "-o", "--exclude-standard"] pattern)
+candidatesFor root pattern = do
+  tracked <- gitLsFilesSh root ["ls-files"] pattern
+  map
+    (tracked ++ _)
+    (gitLsFilesSh root ["ls-files", "-o", "--exclude-standard"] pattern)
 
 -- Check 1's candidate universe: every `.sh` (the original corpus) PLUS every
 -- `test/*_test.mdk` — the [P-TEST-SIBLING] native-gate naming convention
@@ -1214,13 +1214,12 @@ directlyUnderTest : String -> Bool
 directlyUnderTest p = listLen (splitOnChar '/' p) == 2
 
 gateCandidates : String -> <IO> Result String (List String)
-gateCandidates root = match candidatesFor root "*.sh"
-  Err m => Err m
-  Ok shScripts =>
-    map
-      (nativeTests =>
-        sortUniqS (shScripts ++ filterList directlyUnderTest nativeTests))
-      (candidatesFor root "test/*_test.mdk")
+gateCandidates root = do
+  shScripts <- candidatesFor root "*.sh"
+  map
+    (nativeTests =>
+      sortUniqS (shScripts ++ filterList directlyUnderTest nativeTests))
+    (candidatesFor root "test/*_test.mdk")
 
 -- test/CI-COVERAGE-TOOLS.txt: one non-comment, non-blank line per excluded
 -- tool, keyed by its FIRST whitespace-separated token (repo-relative path,
@@ -1251,6 +1250,8 @@ allRuns (g :: gs) = g.run :: allRuns gs
 -- Check 1: every candidate is enrolled (its path is some entry's `run`) or
 -- excluded (its path minus `.sh` is in test/CI-COVERAGE-TOOLS.txt).
 unenrolledViolations : List String -> List String -> List String -> List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 unenrolledViolations _ _ [] = []
 unenrolledViolations tools runs (c :: cs)
   | contains (stripSh c) tools = unenrolledViolations tools runs cs
@@ -1300,6 +1301,8 @@ foreignOracles : List String
 foreignOracles = ["wasm_emit_main", "wasm_emit_modules_main"]
 
 oracleNamesMissing : List String -> String -> List String -> List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 oracleNamesMissing _ _ [] = []
 oracleNamesMissing known gname (o :: os)
   | contains o known || contains o foreignOracles =
@@ -1348,13 +1351,15 @@ dirExists p = match listDir p
   Ok _ => True
 
 corpusDirsMissing : String -> String -> List String -> <IO> List String
-corpusDirsMissing _ _ [] = []
-corpusDirsMissing root gname (c :: cs) =
-  let rest = corpusDirsMissing root gname cs
-  if dirExists (joinPath root c) then
-    rest
-  else
-    "\{gname}: corpus directory does not exist: \{c}" :: rest
+corpusDirsMissing root gname xs0 = go xs0
+  where
+    go [] = []
+    go (c :: cs) =
+      let rest = go cs
+      if dirExists (joinPath root c) then
+        rest
+      else
+        "\{gname}: corpus directory does not exist: \{c}" :: rest
 
 corpusTargetViolations : String -> List Gate -> <IO> List String
 corpusTargetViolations _ [] = []
@@ -1501,20 +1506,24 @@ nameLeadOk c
   | otherwise = nameCharOk c
 
 nameCharsOk : Array Char -> Int -> Int -> Bool
-nameCharsOk cs i n
-  | i >= n = True
-  | nameCharOk (charToStr (arrayGetUnsafe i cs)) = nameCharsOk cs (i + 1) n
-  | otherwise = False
+nameCharsOk cs i0 n = go i0
+  where
+    go i
+      | i >= n = True
+      | nameCharOk (charToStr (arrayGetUnsafe i cs)) = go (i + 1)
+      | otherwise = False
 
 -- The first character outside the set, as `<char>` at 1-based position — the
 -- message has to name WHICH byte, or the reader is left eyeballing a string
 -- whose whole problem is that it contains something invisible.
 firstBadChar : Array Char -> Int -> Int -> String
-firstBadChar cs i n
-  | i >= n = "(none)"
-  | not (nameCharOk (charToStr (arrayGetUnsafe i cs))) =
-    "'\{charToStr (arrayGetUnsafe i cs)}' at position \{intToString (i + 1)}"
-  | otherwise = firstBadChar cs (i + 1) n
+firstBadChar cs i0 n = go i0
+  where
+    go i
+      | i >= n = "(none)"
+      | not (nameCharOk (charToStr (arrayGetUnsafe i cs))) =
+        "'\{charToStr (arrayGetUnsafe i cs)}' at position \{intToString (i + 1)}"
+      | otherwise = go (i + 1)
 
 unsafeName : String -> String -> List String
 unsafeName kind n
@@ -1766,9 +1775,10 @@ pairedHeaderViolations : HeaderPairing ->
   String ->
   List Gate ->
   <IO> List String
-pairedHeaderViolations _ _ [] = []
-pairedHeaderViolations p root (g :: gs) =
-  pairedHeaderErrors p root g ++ pairedHeaderViolations p root gs
+pairedHeaderViolations p root xs0 = go xs0
+  where
+    go [] = []
+    go (g :: gs) = pairedHeaderErrors p root g ++ go gs
 
 -- ── a native gate must grade the whole process it spawns (#2823, #2890) ─────
 
@@ -1838,10 +1848,12 @@ hasOkIntTuple text =
   okIntTupleAt cs (arrayLength cs) 0
 
 okIntTupleAt : Array Char -> Int -> Int -> Bool
-okIntTupleAt cs n i
-  | i + 4 > n = False
-  | okOpenAt cs i && okIntArmAt cs n i = True
-  | otherwise = okIntTupleAt cs n (i + 1)
+okIntTupleAt cs n i0 = go i0
+  where
+    go i
+      | i + 4 > n = False
+      | okOpenAt cs i && okIntArmAt cs n i = True
+      | otherwise = go (i + 1)
 
 okOpenAt : Array Char -> Int -> Bool
 okOpenAt cs i =
@@ -1862,10 +1874,12 @@ okIntArmAt cs n i =
 -- and a chunk's text carries its newlines. Separate from the shared
 -- `skipBlanks`, whose line-scoped callers must keep stopping at a newline.
 skipLayout : Array Char -> Int -> Int -> Int
-skipLayout cs n i
-  | i < n && (arrayGetUnsafe i cs == ' ' || arrayGetUnsafe i cs == '\n') =
-    skipLayout cs n (i + 1)
-  | otherwise = i
+skipLayout cs n i0 = go i0
+  where
+    go i
+      | i < n && (arrayGetUnsafe i cs == ' ' || arrayGetUnsafe i cs == '\n') =
+        go (i + 1)
+      | otherwise = i
 
 arrowAt : Array Char -> Int -> Int -> Bool
 arrowAt cs n i = charAtOr cs n i == '=' && charAtOr cs n (i + 1) == '>'
@@ -1875,6 +1889,8 @@ arrowAt cs n i = charAtOr cs n i == '=' && charAtOr cs n (i + 1) == '>'
 -- stepped over, so `Ok (127, _, Some (e)) =>` and `Ok (0, ")", "")` both
 -- close where the eye says they do. `n` when the text runs out first.
 closeParen : Array Char -> Int -> Int -> Int -> Int
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
 closeParen cs n i depth
   | i >= n = n
   | arrayGetUnsafe i cs == '"' = closeParen cs n (skipStrLit cs n (i + 1)) depth
@@ -1886,11 +1902,13 @@ closeParen cs n i depth
 -- Index just past the closing `"` of a string literal whose opening quote
 -- has already been consumed; a backslashed character never closes it.
 skipStrLit : Array Char -> Int -> Int -> Int
-skipStrLit cs n i
-  | i >= n = n
-  | arrayGetUnsafe i cs == '\\' = skipStrLit cs n (i + 2)
-  | arrayGetUnsafe i cs == '"' = i + 1
-  | otherwise = skipStrLit cs n (i + 1)
+skipStrLit cs n i0 = go i0
+  where
+    go i
+      | i >= n = n
+      | arrayGetUnsafe i cs == '\\' = go (i + 2)
+      | arrayGetUnsafe i cs == '"' = i + 1
+      | otherwise = go (i + 1)
 
 -- `i` sits just past `Ok (`, past any blanks: one or more digits followed
 -- by a comma is the exit-code-then-rest-of-tuple shape.
@@ -1899,9 +1917,11 @@ intLiteralThenComma cs n i =
   i < n && isDigit (arrayGetUnsafe i cs) && afterIntLiteral cs n (i + 1)
 
 afterIntLiteral : Array Char -> Int -> Int -> Bool
-afterIntLiteral cs n i
-  | i < n && isDigit (arrayGetUnsafe i cs) = afterIntLiteral cs n (i + 1)
-  | otherwise = i < n && arrayGetUnsafe i cs == ','
+afterIntLiteral cs n i0 = go i0
+  where
+    go i
+      | i < n && isDigit (arrayGetUnsafe i cs) = go (i + 1)
+      | otherwise = i < n && arrayGetUnsafe i cs == ','
 
 -- Grading evidence, either register: a textual marker, or the structural
 -- `Ok (<int>, ...)` shape. The three call sites below all reduce to this
@@ -1959,31 +1979,33 @@ stripLines (l :: ls) depth =
     (kept, depth2) => fromChars kept :: stripLines ls depth2
 
 stripLine : Array Char -> Int -> Int -> Int -> Bool -> (List Char, Int)
-stripLine cs n i depth inStr
-  | i >= n = ([], depth)
-  | otherwise =
-    let c = arrayGetUnsafe i cs
-    let d = charAtOr cs n (i + 1)
-    if depth > 0 then
-      if c == '{' && d == '-' then
-        stripLine cs n (i + 2) (depth + 1) False
-      else if c == '-' && d == '}' then
-        stripLine cs n (i + 2) (depth - 1) False
-      else
-        stripLine cs n (i + 1) depth False
-    else if inStr then
-      if c == '\\' then
-        blankTwo (stripLine cs n (i + 2) depth True)
-      else
-        keepChar c (stripLine cs n (i + 1) depth (c /= '"'))
-    else if c == '"' then
-      keepChar c (stripLine cs n (i + 1) depth True)
-    else if c == '-' && d == '-' then
-      ([], depth)
-    else if c == '{' && d == '-' then
-      stripLine cs n (i + 2) (depth + 1) False
-    else
-      keepChar c (stripLine cs n (i + 1) depth False)
+stripLine cs n i0 depth0 inStr0 = go i0 depth0 inStr0
+  where
+    go i depth inStr
+      | i >= n = ([], depth)
+      | otherwise =
+        let c = arrayGetUnsafe i cs
+        let d = charAtOr cs n (i + 1)
+        if depth > 0 then
+          if c == '{' && d == '-' then
+            go (i + 2) (depth + 1) False
+          else if c == '-' && d == '}' then
+            go (i + 2) (depth - 1) False
+          else
+            go (i + 1) depth False
+        else if inStr then
+          if c == '\\' then
+            blankTwo (go (i + 2) depth True)
+          else
+            keepChar c (go (i + 1) depth (c /= '"'))
+        else if c == '"' then
+          keepChar c (go (i + 1) depth True)
+        else if c == '-' && d == '-' then
+          ([], depth)
+        else if c == '{' && d == '-' then
+          go (i + 2) (depth + 1) False
+        else
+          keepChar c (go (i + 1) depth False)
 
 keepChar : Char -> (List Char, Int) -> (List Char, Int)
 keepChar c (cs, depth) = (c :: cs, depth)
@@ -2006,6 +2028,8 @@ identPrefix s =
   fromChars (identPrefixGo cs (arrayLength cs) 0)
 
 identPrefixGo : Array Char -> Int -> Int -> List Char
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 identPrefixGo cs n i
   | i >= n = []
   | isIdentChar (arrayGetUnsafe i cs) =
@@ -2110,24 +2134,27 @@ bindsWildcard prefix =
   bindsWildcardGo cs (arrayLength cs) 0
 
 bindsWildcardGo : Array Char -> Int -> Int -> Bool
-bindsWildcardGo cs n i
-  | i >= n = False
-  | arrayGetUnsafe i cs /= '_' = bindsWildcardGo cs n (i + 1)
-  | i > 0 && isIdentChar (arrayGetUnsafe (i - 1) cs) =
-    bindsWildcardGo cs n (i + 1)
-  | otherwise =
-    let j = skipBlanks cs n (i + 1)
-    if charAtOr cs n j == '='
-      && charAtOr cs n (j + 1) /= '>'
-      && precededByLet cs i then
-      True
-    else
-      bindsWildcardGo cs n (i + 1)
+bindsWildcardGo cs n i0 = go i0
+  where
+    go i
+      | i >= n = False
+      | arrayGetUnsafe i cs /= '_' = go (i + 1)
+      | i > 0 && isIdentChar (arrayGetUnsafe (i - 1) cs) = go (i + 1)
+      | otherwise =
+        let j = skipBlanks cs n (i + 1)
+        if charAtOr cs n j == '='
+          && charAtOr cs n (j + 1) /= '>'
+          && precededByLet cs i then
+          True
+        else
+          go (i + 1)
 
 skipBlanks : Array Char -> Int -> Int -> Int
-skipBlanks cs n i
-  | i < n && arrayGetUnsafe i cs == ' ' = skipBlanks cs n (i + 1)
-  | otherwise = i
+skipBlanks cs n i0 = go i0
+  where
+    go i
+      | i < n && arrayGetUnsafe i cs == ' ' = go (i + 1)
+      | otherwise = i
 
 skipBlanksBack : Array Char -> Int -> Int
 skipBlanksBack cs i
@@ -2343,6 +2370,8 @@ dottedPrefix s =
   fromChars (dottedPrefixGo cs (arrayLength cs) 0)
 
 dottedPrefixGo : Array Char -> Int -> Int -> List Char
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 dottedPrefixGo cs n i
   | i >= n = []
   | isIdentChar (arrayGetUnsafe i cs) || arrayGetUnsafe i cs == '.' =
@@ -2383,10 +2412,12 @@ followImports : (String -> <IO> ImportTarget) ->
   String ->
   List String ->
   <IO> (List String, List GateChunk)
-followImports _ _ [] = ([], [])
-followImports resolve file (m :: ms) = match followOne resolve file m
-  (errs, cs) => match followImports resolve file ms
-    (errs2, cs2) => (errs ++ errs2, cs ++ cs2)
+followImports resolve file xs0 = go xs0
+  where
+    go [] = ([], [])
+    go (m :: ms) = match followOne resolve file m
+      (errs, cs) => match go ms
+        (errs2, cs2) => (errs ++ errs2, cs ++ cs2)
 
 followOne : (String -> <IO> ImportTarget) ->
   String ->
@@ -2422,10 +2453,12 @@ importsBack : (String -> <IO> ImportTarget) ->
   String ->
   List String ->
   <IO> Bool
-importsBack _ _ [] = False
-importsBack resolve file (m :: ms) = match resolve m
-  Followed path _ => path == file || importsBack resolve file ms
-  _ => importsBack resolve file ms
+importsBack resolve file mods0 = go mods0
+  where
+    go [] = False
+    go (m :: ms) = match resolve m
+      Followed path _ => path == file || go ms
+      _ => go ms
 
 {- | `fileOfModuleId` in `compiler/driver/loader.mdk`, which is private to it:
    a module id maps to a path under a root by splitting on `.` and joining
@@ -2465,12 +2498,11 @@ depHolds deps m = match splitOnChar '.' m
   _ => False
 
 depHoldsGo : List (String, String) -> String -> String -> <IO> Bool
-depHoldsGo [] _ _ = False
-depHoldsGo ((nm, dr) :: rest) seg0 sub =
-  if nm == seg0 && fileExists (moduleFile dr sub) then
-    True
-  else
-    depHoldsGo rest seg0 sub
+depHoldsGo xs0 seg0 sub = go xs0
+  where
+    go [] = False
+    go ((nm, dr) :: rest) =
+      if nm == seg0 && fileExists (moduleFile dr sub) then True else go rest
 
 relToRoot : String -> String -> String
 relToRoot root p =
@@ -3049,6 +3081,8 @@ closeGo : Int ->
   List (String, List String) ->
   List String ->
   List String
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
 closeGo fuel deps ces sel
   | fuel <= 0 = sel
   | otherwise =
@@ -3127,18 +3161,22 @@ corpusProjectEdges univ (g :: gs) =
 -- realpath-compare one manifest-resolved dep root against each project dir, so
 -- `sqlite/../parsec` and `parsec` are recognised as the same directory.
 projectForRoot : String -> List String -> String -> <IO> Option String
-projectForRoot _ [] _ = None
-projectForRoot root (q :: qs) dr =
-  if canonicalizePath (joinPath root q) == canonicalizePath dr then
-    Some q
-  else
-    projectForRoot root qs dr
+projectForRoot root xs0 dr = go xs0
+  where
+    go [] = None
+    go (q :: qs) =
+      if canonicalizePath (joinPath root q) == canonicalizePath dr then
+        Some q
+      else
+        go qs
 
 depRootsOf : List (String, String) -> List String
 depRootsOf [] = []
 depRootsOf ((_, r) :: rest) = r :: depRootsOf rest
 
 depProjectsGo : String -> List String -> List String -> <IO> List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 depProjectsGo _ _ [] = []
 depProjectsGo root univ (dr :: rest) = match projectForRoot root univ dr
   Some q => q :: depProjectsGo root univ rest
@@ -3156,11 +3194,13 @@ projectDepEdges : String ->
   List String ->
   List String ->
   <IO> List (String, List String)
-projectDepEdges _ _ [] = []
-projectDepEdges root univ (p :: ps) =
-  let ds = depProjectsOf root univ p
-  let rest = projectDepEdges root univ ps
-  if isEmptyStrs ds then rest else (p, ds) :: rest
+projectDepEdges root univ xs0 = go xs0
+  where
+    go [] = []
+    go (p :: ps) =
+      let ds = depProjectsOf root univ p
+      let rest = go ps
+      if isEmptyStrs ds then rest else (p, ds) :: rest
 
 renderProjects : List String -> String
 renderProjects [] = ""
@@ -3416,10 +3456,12 @@ ciRowsLoop : String ->
   List Shard ->
   List String ->
   <IO> Result String (List String)
-ciRowsLoop _ _ [] acc = Ok (reverseL acc)
-ciRowsLoop root gates (sh :: shs) acc = match ciOneRow root gates sh
-  Err m => Err m
-  Ok ls => ciRowsLoop root gates shs (reverseL ls ++ acc)
+ciRowsLoop root gates xs0 acc0 = go xs0 acc0
+  where
+    go [] acc = Ok (reverseL acc)
+    go (sh :: shs) acc = match ciOneRow root gates sh
+      Err m => Err m
+      Ok ls => go shs (reverseL ls ++ acc)
 
 -- Is every gate's `shard` either a declared row or the `other-job` sentinel?
 -- A typo'd shard name would otherwise drop that gate from the matrix SILENTLY
@@ -3513,9 +3555,9 @@ ciNewText root regPath regSrc wfSrc = match parseRegistry regSrc
   Ok gates => match parseShards regSrc
     Err m => Err "medaka gate ci: \{m}"
     Ok shs => match ciUnknownShards shs gates
-      [] => match ciRowsLoop root gates shs []
-        Err m => Err m
-        Ok gen => map joinNl (ciSplice gen (splitNl wfSrc))
+      [] => do
+        gen <- ciRowsLoop root gates shs []
+        map joinNl (ciSplice gen (splitNl wfSrc))
       bad =>
         Err
           "medaka gate ci: \{regPath}: gate(s) name a shard with no [[shard]] row: \{joinSpace bad}"

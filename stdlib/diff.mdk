@@ -52,7 +52,7 @@ shortest a b =
   let off = n + m + 1
   let v = arrayMake (2 * (n + m) + 3) 0
   let (d, snaps) = forward xs ys n m off v 0 []
-  backtrack xs ys off n m d snaps []
+  backtrack xs ys n m d snaps []
 
 -- Within each run of changes, moves the deletions ahead of the insertions.
 deletesFirst : List (Edit a) -> List (Edit a)
@@ -84,13 +84,15 @@ forward : Eq a =>
   Int ->
   List (Array Int) ->
   (Int, List (Array Int))
-forward xs ys n m off v d snaps =
-  let saved =
-    arrayMakeWith (2 * d + 3) (i => arrayGetUnsafe (off - d - 1 + i) v)
-  if sweep xs ys n m off v d (0 - d) then
-    (d, saved :: snaps)
-  else
-    forward xs ys n m off v (d + 1) (saved :: snaps)
+forward xs ys n m off v d0 snaps0 = go d0 snaps0
+  where
+    go d snaps =
+      let saved =
+        arrayMakeWith (2 * d + 3) (i => arrayGetUnsafe (off - d - 1 + i) v)
+      if sweep xs ys n m off v d (0 - d) then
+        (d, saved :: snaps)
+      else
+        go (d + 1) (saved :: snaps)
 
 sweep : Eq a =>
   Array a ->
@@ -102,15 +104,17 @@ sweep : Eq a =>
   Int ->
   Int ->
   Bool
-sweep xs ys n m off v d k
-  | k > d = False
-  | otherwise =
-    let up = arrayGetUnsafe (off + k + 1) v
-    let left = arrayGetUnsafe (off + k - 1) v
-    let x0 = if comesFromAbove d k left up then up else left + 1
-    let x = snake xs ys n m x0 (x0 - k)
-    arraySetUnsafe (off + k) x v
-    if x >= n && x - k >= m then True else sweep xs ys n m off v d (k + 2)
+sweep xs ys n m off v d k0 = go k0
+  where
+    go k
+      | k > d = False
+      | otherwise =
+        let up = arrayGetUnsafe (off + k + 1) v
+        let left = arrayGetUnsafe (off + k - 1) v
+        let x0 = if comesFromAbove d k left up then up else left + 1
+        let x = snake xs ys n m x0 (x0 - k)
+        arraySetUnsafe (off + k) x v
+        if x >= n && x - k >= m then True else go (k + 2)
 
 -- Diagonal k is reached from diagonal k + 1 by an insertion, or from k - 1 by
 -- a deletion. The edge diagonals have one choice; otherwise the further one
@@ -119,10 +123,12 @@ comesFromAbove : Int -> Int -> Int -> Int -> Bool
 comesFromAbove d k left up = k == 0 - d || k /= d && left < up
 
 snake : Eq a => Array a -> Array a -> Int -> Int -> Int -> Int -> Int
-snake xs ys n m x y
-  | x < n && y < m && arrayGetUnsafe x xs == arrayGetUnsafe y ys =
-    snake xs ys n m (x + 1) (y + 1)
-  | otherwise = x
+snake xs ys n m x0 y0 = go x0 y0
+  where
+    go x y
+      | x < n && y < m && arrayGetUnsafe x xs == arrayGetUnsafe y ys =
+        go (x + 1) (y + 1)
+      | otherwise = x
 
 -- Walks from (x, y) back to the origin, one edit distance at a time, building
 -- the script front to back.
@@ -131,42 +137,37 @@ backtrack : Array a ->
   Int ->
   Int ->
   Int ->
-  Int ->
   List (Array Int) ->
   List (Edit a) ->
   List (Edit a)
-backtrack xs ys off x y d (saved :: rest) acc
-  | d > 0 =
-    let k = x - y
-    let up = arrayGetUnsafe (k + d + 2) saved
-    let left = arrayGetUnsafe (k + d) saved
-    let fromAbove = comesFromAbove d k left up
-    let prevX = if fromAbove then up else left
-    let prevY = prevX - (if fromAbove then k + 1 else k - 1)
-    let midX = if fromAbove then prevX else prevX + 1
-    let edit =
-      if fromAbove then
-        Insert (arrayGetUnsafe prevY ys)
-      else
-        Delete (arrayGetUnsafe prevX xs)
-    backtrack
-      xs
-      ys
-      off
-      prevX
-      prevY
-      (d - 1)
-      rest
-      (edit :: keepsBetween xs midX x acc)
-backtrack xs _ _ x _ _ _ acc = keepsBetween xs 0 x acc
+backtrack xs ys x0 y0 d0 hist0 acc0 = go x0 y0 d0 hist0 acc0
+  where
+    go x y d (saved :: rest) acc
+      | d > 0 =
+        let k = x - y
+        let up = arrayGetUnsafe (k + d + 2) saved
+        let left = arrayGetUnsafe (k + d) saved
+        let fromAbove = comesFromAbove d k left up
+        let prevX = if fromAbove then up else left
+        let prevY = prevX - (if fromAbove then k + 1 else k - 1)
+        let midX = if fromAbove then prevX else prevX + 1
+        let edit =
+          if fromAbove then
+            Insert (arrayGetUnsafe prevY ys)
+          else
+            Delete (arrayGetUnsafe prevX xs)
+        go prevX prevY (d - 1) rest (edit :: keepsBetween xs midX x acc)
+    go x _ _ _ acc = keepsBetween xs 0 x acc
 
 -- Prepends `Keep xs[i]` for each `i` in `[lo, hi)`.
 keepsBetween : Array a -> Int -> Int -> List (Edit a) -> List (Edit a)
-keepsBetween xs lo hi acc =
-  if hi <= lo then
-    acc
-  else
-    keepsBetween xs lo (hi - 1) (Keep (arrayGetUnsafe (hi - 1) xs) :: acc)
+keepsBetween xs lo hi0 acc0 = go hi0 acc0
+  where
+    go hi acc =
+      if hi <= lo then
+        acc
+      else
+        go (hi - 1) (Keep (arrayGetUnsafe (hi - 1) xs) :: acc)
 
 -- # Unified format
 
@@ -237,11 +238,12 @@ hunksGo : Int ->
   List Entry ->
   List (List Entry) ->
   List (List Entry)
-hunksGo _ [] _ cur acc = reverse (closeHunk cur acc)
-hunksGo ctx ((run@(entry :: _)) :: rest) _prev cur acc
-  | isKeep entry = keepRun ctx run rest cur acc
-hunksGo ctx (run :: rest) prev cur acc =
-  hunksGo ctx rest prev (reverse run ++ opened ctx prev cur) acc
+hunksGo ctx xs0 prev cur0 acc = go xs0 cur0
+  where
+    go [] cur = reverse (closeHunk cur acc)
+    go ((run@(entry :: _)) :: rest) cur
+      | isKeep entry = keepRun ctx run rest cur acc
+    go (run :: rest) cur = go rest (reverse run ++ opened ctx prev cur)
 
 -- The open hunk, or the context that opens one when none is open.
 opened : Int -> List Entry -> List Entry -> List Entry

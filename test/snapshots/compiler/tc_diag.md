@@ -1,5 +1,5 @@
 # META
-source_lines=424
+source_lines=423
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_diag: the emission API over `TcDiag` (`recordTypeError`, the `pushTypeError*` family,
@@ -359,13 +359,12 @@ boundaryOwnsOpen mctx rigidIds i =
 -- select the wrong module's row; the worst a collision can do is offer
 -- applicable advice for the right reason under the wrong module's declaration.
 noImplHint : ModuleCtx -> String -> List Mono -> Option String
-noImplHint mctx iface [arg] = match headTyconNameMono arg
-  Some n =>
-    if derivableIface iface && headIsStdlibOwned mctx.mcGraph arg then
-      None
-    else
-      noImplHintFor mctx iface n
-  None => None
+noImplHint mctx iface [arg] = do
+  n <- headTyconNameMono arg
+  if derivableIface iface && headIsStdlibOwned mctx.mcGraph arg then
+    None
+  else
+    noImplHintFor mctx iface n
 noImplHint _mctx _ _ = None
 
 -- A type declared in a stdlib-owned module cannot take `deriving`, and an
@@ -479,7 +478,7 @@ pushNoImplError mctx iface loc args = match firstTupleCallHint mctx args
 (DTypeSig true "boundaryOwnsOpen" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Int") (TyCon "Bool")))))
 (DFunDef false "boundaryOwnsOpen" ((PVar "mctx") (PVar "rigidIds") (PVar "i")) (EBinOp "&&" (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EApp (EVar "intToString") (EVar "i"))) (EVar "rigidIds"))) (EApp (EVar "not") (EApp (EApp (EVar "IdMap.has") (EVar "i")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "deferrableVarIds") "value")))))
 (DTypeSig false "noImplHint" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "Option") (TyCon "String"))))))
-(DFunDef false "noImplHint" ((PVar "mctx") (PVar "iface") (PList (PVar "arg"))) (EMatch (EApp (EVar "headTyconNameMono") (EVar "arg")) (arm (PCon "Some" (PVar "n")) () (EIf (EBinOp "&&" (EApp (EVar "derivableIface") (EVar "iface")) (EApp (EApp (EVar "headIsStdlibOwned") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "arg"))) (EVar "None") (EApp (EApp (EApp (EVar "noImplHintFor") (EVar "mctx")) (EVar "iface")) (EVar "n")))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "noImplHint" ((PVar "mctx") (PVar "iface") (PList (PVar "arg"))) (EApp (EApp (EVar "$core.andThen") (EApp (EVar "headTyconNameMono") (EVar "arg"))) (ELam ((PVar "n")) (EIf (EBinOp "&&" (EApp (EVar "derivableIface") (EVar "iface")) (EApp (EApp (EVar "headIsStdlibOwned") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "arg"))) (EVar "None") (EApp (EApp (EApp (EVar "noImplHintFor") (EVar "mctx")) (EVar "iface")) (EVar "n"))))))
 (DFunDef false "noImplHint" ((PVar "_mctx") PWild PWild) (EVar "None"))
 (DTypeSig false "headIsStdlibOwned" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Mono") (TyCon "Bool"))))
 (DFunDef false "headIsStdlibOwned" ((PVar "gctx") (PVar "arg")) (EMatch (EApp (EVar "headTyconMono") (EVar "arg")) (arm (PCon "Some" (PCon "HkDecl" (PCon "TkIdent" (PCon "Ident" PWild (PVar "io") PWild)))) () (EApp (EApp (EApp (EVar "identOriginFold") (EVar "False")) (ELam ((PVar "mid")) (EApp (EApp (EVar "omHasKey") (EVar "mid")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "config") "value") "tcStdlibOwned")))) (EVar "io"))) (arm PWild () (EVar "False"))))
@@ -542,7 +541,7 @@ pushNoImplError mctx iface loc args = match firstTupleCallHint mctx args
 (DTypeSig true "boundaryOwnsOpen" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Int") (TyCon "Bool")))))
 (DFunDef false "boundaryOwnsOpen" ((PVar "mctx") (PVar "rigidIds") (PVar "i")) (EBinOp "&&" (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EApp (EVar "intToString") (EVar "i"))) (EVar "rigidIds"))) (EApp (EVar "not") (EApp (EApp (EVar "IdMap.has") (EVar "i")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "deferrableVarIds") "value")))))
 (DTypeSig false "noImplHint" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "Option") (TyCon "String"))))))
-(DFunDef false "noImplHint" ((PVar "mctx") (PVar "iface") (PList (PVar "arg"))) (EMatch (EApp (EVar "headTyconNameMono") (EVar "arg")) (arm (PCon "Some" (PVar "n")) () (EIf (EBinOp "&&" (EApp (EVar "derivableIface") (EVar "iface")) (EApp (EApp (EVar "headIsStdlibOwned") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "arg"))) (EVar "None") (EApp (EApp (EApp (EVar "noImplHintFor") (EVar "mctx")) (EVar "iface")) (EVar "n")))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "noImplHint" ((PVar "mctx") (PVar "iface") (PList (PVar "arg"))) (EApp (EApp (EVar "$core.andThen") (EApp (EVar "headTyconNameMono") (EVar "arg"))) (ELam ((PVar "n")) (EIf (EBinOp "&&" (EApp (EVar "derivableIface") (EVar "iface")) (EApp (EApp (EVar "headIsStdlibOwned") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "arg"))) (EVar "None") (EApp (EApp (EApp (EVar "noImplHintFor") (EVar "mctx")) (EVar "iface")) (EVar "n"))))))
 (DFunDef false "noImplHint" ((PVar "_mctx") PWild PWild) (EVar "None"))
 (DTypeSig false "headIsStdlibOwned" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "Mono") (TyCon "Bool"))))
 (DFunDef false "headIsStdlibOwned" ((PVar "gctx") (PVar "arg")) (EMatch (EApp (EVar "headTyconMono") (EVar "arg")) (arm (PCon "Some" (PCon "HkDecl" (PCon "TkIdent" (PCon "Ident" PWild (PVar "io") PWild)))) () (EApp (EApp (EApp (EVar "identOriginFold") (EVar "False")) (ELam ((PVar "mid")) (EApp (EApp (EVar "omHasKey") (EVar "mid")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "config") "value") "tcStdlibOwned")))) (EVar "io"))) (arm PWild () (EVar "False"))))

@@ -335,7 +335,7 @@ dExpr sc acc (CMatch scrut arms) = walkEach (dArm sc) (dExpr sc acc scrut) arms
 dExpr sc acc (CLetGroup binds b) =
   let inner = { sc | locals = omFromNames (map bindName binds) sc.locals }
   dExpr inner (walkEach (dBind inner) acc binds) b
-dExpr _ acc _ = acc
+dExpr _ acc (CLit _ | CMethod _ _ | CDict _ _) = acc
 
 -- an applied name: a local is a closure call, a `core__` function a call to it
 dAppHead : DemandScope -> DemandAcc -> CExpr -> DemandAcc
@@ -388,7 +388,11 @@ dPat acc (PList ps) = walkEach dPat (noteUse acc UseList) ps
 dPat acc (PTuple ps) = walkEach dPat (noteArity acc (listLen ps)) ps
 dPat acc (PCon _ args) = walkEach dPat acc args
 dPat acc (PAs _ _ _ p) = dPat acc p
-dPat acc _ = acc
+-- `PRec` of a declared record is rewritten to `PCon` (`rewriteProgramRecPats`),
+-- `POr` is expanded into arm candidates (`lowerOrArms`) and desugar lifts `PAnn`
+-- out, so none of them reaches a backend.
+dPat acc (PVar _ _ _ | PWild | PLit _ | PRng _ _ _ | PRec _ _ _ | POr _ | PAnn _ _) =
+  acc
 
 -- a decision tree's switch heads, the lowered shape of list and tuple patterns
 dTree : DemandAcc -> CTree -> DemandAcc
@@ -444,7 +448,25 @@ exprUsesStr facts (CDecision scrut arms _) =
   exprUsesStr facts scrut || anyList (a => exprUsesStr facts (armBody a)) arms
 exprUsesStr facts (CMatch scrut arms) =
   exprUsesStr facts scrut || anyList (a => exprUsesStr facts (armBody a)) arms
-exprUsesStr _ _ = False
+exprUsesStr facts (CTuple es) = anyList (exprUsesStr facts) es
+exprUsesStr facts (CList es) = anyList (exprUsesStr facts) es
+exprUsesStr facts (CArray es) = anyList (exprUsesStr facts) es
+exprUsesStr facts (CRecord _ fields) = anyList (fieldUsesStr facts) fields
+exprUsesStr facts (CFieldAccess ex _ _ _) = exprUsesStr facts ex
+exprUsesStr facts (CRecordUpdate _ base fields) =
+  exprUsesStr facts base || anyList (fieldUsesStr facts) fields
+exprUsesStr facts (CVariantUpdate _ base fields) =
+  exprUsesStr facts base || anyList (fieldUsesStr facts) fields
+exprUsesStr facts (CRangeList lo hi _) =
+  exprUsesStr facts lo || exprUsesStr facts hi
+exprUsesStr facts (CRangeArray lo hi _) =
+  exprUsesStr facts lo || exprUsesStr facts hi
+-- A where-bound helper alone keeps a program in the legacy scalar mode
+-- (pinned by wasm_demand_test); evidence nodes hold no expressions.
+exprUsesStr _ (CLetGroup _ _ | CMethod _ _ | CDict _ _) = False
+
+fieldUsesStr : OrdMap ExternDeclFact -> CField -> Bool
+fieldUsesStr facts (CField _ _ e) = exprUsesStr facts e
 
 stmtUsesStr : OrdMap ExternDeclFact -> CStmt -> Bool
 stmtUsesStr facts (CSExpr e) = exprUsesStr facts e
@@ -495,37 +517,24 @@ clauseUsesClosures fnNames ctorArs (CClause pats body) =
 -- with a top-level `eq` in scope) is mis-judged "saturated direct call, no closure" and
 -- the closure types are never emitted though emit uses them (parse/validate failure).
 exprUsesClosures : OrdMap Unit -> List (String, Int) -> Env -> CExpr -> Bool
-exprUsesClosures _fnNames _ctorArs _locals (CLam _ _) = True
-exprUsesClosures fnNames ctorArs locals (app@(CApp _ _ _)) =
-  appUsesClosures fnNames ctorArs locals app
-exprUsesClosures fnNames _ctorArs locals (CVar x _) =
-  not (envHas x locals) && fnMemberIndexW fnNames x
-exprUsesClosures _fnNames _ctorArs _locals (CLit _) = False
-exprUsesClosures fnNames ctorArs locals (CBinPrim _ l r _ _) =
-  exprUsesClosures fnNames ctorArs locals l
-    || exprUsesClosures fnNames ctorArs locals r
-exprUsesClosures fnNames ctorArs locals (CUnOp _ x) =
-  exprUsesClosures fnNames ctorArs locals x
-exprUsesClosures fnNames ctorArs locals (CIf c t f) =
-  exprUsesClosures fnNames ctorArs locals c
-    || exprUsesClosures fnNames ctorArs locals t
-    || exprUsesClosures fnNames ctorArs locals f
-exprUsesClosures fnNames ctorArs locals (CLet _ pat a b) =
-  exprUsesClosures fnNames ctorArs locals a
-    || exprUsesClosures
-      fnNames
-      ctorArs
-      (envExtendUnstamped (CW.patBinders pat) locals)
-      b
-exprUsesClosures fnNames ctorArs locals (CBlock stmts) =
-  blockUsesClosures fnNames ctorArs locals stmts
-exprUsesClosures fnNames ctorArs locals (CDecision scrut arms _) =
-  exprUsesClosures fnNames ctorArs locals scrut
-    || anyList (a => exprUsesClosures fnNames ctorArs locals (armBody a)) arms
-exprUsesClosures fnNames ctorArs locals (CMatch scrut arms) =
-  exprUsesClosures fnNames ctorArs locals scrut
-    || anyList (a => exprUsesClosures fnNames ctorArs locals (armBody a)) arms
-exprUsesClosures _fnNames _ctorArs _locals _ = False
+exprUsesClosures fnNames ctorArs locals0 app0 = go locals0 app0
+  where
+    go _locals (CLam _ _) = True
+    go locals (app@(CApp _ _ _)) = appUsesClosures fnNames ctorArs locals app
+    go locals (CVar x _) = not (envHas x locals) && fnMemberIndexW fnNames x
+    go _locals (CLit _) = False
+    go locals (CBinPrim _ l r _ _) = go locals l || go locals r
+    go locals (CUnOp _ x) = go locals x
+    go locals (CIf c t f) = go locals c || go locals t || go locals f
+    go locals (CLet _ pat a b) =
+      go locals a || go (envExtendUnstamped (CW.patBinders pat) locals) b
+    go locals (CBlock stmts) = blockUsesClosures fnNames ctorArs locals stmts
+    go locals (CDecision scrut arms _) =
+      go locals scrut || anyList (a => go locals (armBody a)) arms
+    go locals (CMatch scrut arms) =
+      go locals scrut || anyList (a => go locals (armBody a)) arms
+    go _locals (CLetGroup _ _ | CTuple _ | CList _ | CArray _ | CRecord _ _ | CFieldAccess _ _ _ _ | CRecordUpdate _ _ _ | CVariantUpdate _ _ _ | CRangeList _ _ _ | CRangeArray _ _ _ | CMethod _ _ | CDict _ _) =
+      False
 
 -- thread let-bound names through a block so a later statement's shadowing local is seen.
 blockUsesClosures : OrdMap Unit ->
@@ -533,19 +542,15 @@ blockUsesClosures : OrdMap Unit ->
   Env ->
   List CStmt ->
   Bool
-blockUsesClosures _ _ _ [] = False
-blockUsesClosures fnNames ctorArs locals ((CSLet _ pat e) :: rest) =
-  exprUsesClosures fnNames ctorArs locals e
-    || blockUsesClosures
-      fnNames
-      ctorArs
-      (envExtendUnstamped (CW.patBinders pat) locals)
-      rest
-blockUsesClosures fnNames ctorArs locals ((CSExpr e) :: rest) =
-  exprUsesClosures fnNames ctorArs locals e
-    || blockUsesClosures fnNames ctorArs locals rest
-blockUsesClosures fnNames ctorArs locals (_ :: rest) =
-  blockUsesClosures fnNames ctorArs locals rest
+blockUsesClosures fnNames ctorArs locals0 xs0 = go locals0 xs0
+  where
+    go _ [] = False
+    go locals ((CSLet _ pat e) :: rest) =
+      exprUsesClosures fnNames ctorArs locals e
+        || go (envExtendUnstamped (CW.patBinders pat) locals) rest
+    go locals ((CSExpr e) :: rest) =
+      exprUsesClosures fnNames ctorArs locals e || go locals rest
+    go locals (_ :: rest) = go locals rest
 
 -- an application uses closures unless it is a saturated direct call to a known
 -- top-level fn (exact arity) or a ctor application.  Over/under application of a
@@ -596,7 +601,8 @@ exprHasDecision (CUnOp _ a) = exprHasDecision a
 exprHasDecision (CApp f args _) =
   exprHasDecision f || anyList exprHasDecision args
 exprHasDecision (CBlock stmts) = anyList stmtHasDecision stmts
-exprHasDecision _ = False
+exprHasDecision (CLit _ | CVar _ _ | CLam _ _ | CLetGroup _ _ | CTuple _ | CList _ | CRecord _ _ | CFieldAccess _ _ _ _ | CRecordUpdate _ _ _ | CVariantUpdate _ _ _ | CArray _ | CRangeList _ _ _ | CRangeArray _ _ _ | CMethod _ _ | CDict _ _) =
+  False
 
 stmtHasDecision : CStmt -> Bool
 stmtHasDecision (CSExpr e) = exprHasDecision e
@@ -746,7 +752,10 @@ patBinders (PCon _ args) = flatMap patBinders args
 patBinders (PTuple ps) = flatMap patBinders ps
 patBinders (PCons h t) = patBinders h ++ patBinders t
 patBinders (PList ps) = flatMap patBinders ps
-patBinders _ = []
+-- `PRec` of a declared record is rewritten to `PCon` (`rewriteProgramRecPats`),
+-- `POr` is expanded into arm candidates (`lowerOrArms`) and desugar lifts `PAnn`
+-- out, so none of them reaches a backend.
+patBinders (PWild | PLit _ | PRng _ _ _ | PRec _ _ _ | POr _ | PAnn _ _) = []
 
 -- [env] extended with every variable [pat] binds
 export
@@ -872,7 +881,9 @@ cexprStamp prog _ (CFieldAccess _ _ recName ord) =
     RTFloat
   else
     RTValue
-cexprStamp _ _ _ = RTValue
+-- These nodes state no scalar type.
+cexprStamp _ _ (CUnOp _ _ | CLam _ _ | CTuple _ | CList _ | CArray _ | CRecord _ _ | CRecordUpdate _ _ _ | CVariantUpdate _ _ _ | CRangeList _ _ _ | CRangeArray _ _ _ | CMethod _ _ | CDict _ _) =
+  RTValue
 
 -- `++` appends two Strings or two Lists.  Where neither operand states which,
 -- the result prints as a String: a List-valued `main` has no print.
@@ -917,12 +928,12 @@ blockStamp prog env ((CSLet _ pat _) :: rest) =
 blockStamp prog env (_ :: rest) = blockStamp prog env rest
 
 armsStamp : WasmTypeContext -> Env -> List CArm -> RuntimeType
-armsStamp _ _ [] = RTValue
-armsStamp prog env ((CArm pat _ body) :: rest) =
-  stampOrElse
-    (cexprStamp prog (envBindPat pat env) body)
-    (armsStamp prog env rest)
-armsStamp prog env ((CArmAlt _ _ _) :: rest) = armsStamp prog env rest
+armsStamp prog env xs0 = go xs0
+  where
+    go [] = RTValue
+    go ((CArm pat _ body) :: rest) =
+      stampOrElse (cexprStamp prog (envBindPat pat env) body) (go rest)
+    go ((CArmAlt _ _ _) :: rest) = go rest
 
 export
 isPolyNumBinop : WasmTypeContext -> Env -> CExpr -> CExpr -> Bool
@@ -1413,7 +1424,11 @@ hPat refMode acc (PList ps) =
 hPat refMode acc (PCons a b) =
   hPat refMode (hPat refMode { acc | patternList = True } a) b
 hPat refMode acc (PAs _ _ _ p) = hPat refMode acc p
-hPat _ acc _ = acc
+-- `PRec` of a declared record is rewritten to `PCon` (`rewriteProgramRecPats`),
+-- `POr` is expanded into arm candidates (`lowerOrArms`) and desugar lifts `PAnn`
+-- out, so none of them reaches a backend.
+hPat _ acc (PVar _ _ _ | PWild | PLit _ | PRng _ _ _ | PRec _ _ _ | POr _ | PAnn _ _) =
+  acc
 
 hExpr : WasmTypeContext ->
   Bool ->
@@ -1422,140 +1437,118 @@ hExpr : WasmTypeContext ->
   Env ->
   CExpr ->
   HelperAcc
-hExpr ctx refMode str acc env (CBinPrim op l r tag _) =
-  let branch = if refMode then selectWasmBin ctx str env op l r tag else "int"
-  let acc =
-    if branch == "compare" then
-      need acc "valueEqRuntimeLines"
-    else if branch == "compare-number" then
-      need acc "valueCmpNumRuntimeLines"
-    else
-      acc
-  let acc =
-    if startsWith "value-" branch then
-      need acc ("value" ++ valueOpBlock op ++ "RuntimeLines")
-    else
-      acc
-  let acc =
-    if (branch == "int" && not (isTaggedFixedHead tag)
-        || startsWith "value-" branch)
-      && contains op ["+", "-", "*", "/"] then
-      needInt acc (intOpName op)
-    else
-      acc
-  let acc =
-    if (op == "/" || op == "%") && branch /= "float" then needTrap acc else acc
-  hExpr ctx refMode str (hExpr ctx refMode str acc env l) env r
-hExpr ctx refMode str acc env (CUnOp "-" x) =
-  let acc =
-    if refMode && cexprStamp ctx env x == RTFloat then
-      acc
-    else
-      needInt acc "neg"
-  hExpr ctx refMode str acc env x
-hExpr ctx refMode str acc env (app@(CApp f args _)) =
-  let acc =
-    if refMode && appUsesClosures ctx.fnNames ctx.ctorArities env app then
-      need acc "closApplyLines"
-    else
-      acc
-  let acc = match f
-    CVar name _ => runtimeRoots ctx acc name args
-    _ => acc
-  fold
-    (a x => hExpr ctx refMode str a env x)
-    (match f
-      CVar _ _ => acc
-      _ => hExpr ctx refMode str acc env f)
-    args
-hExpr ctx refMode _str acc env (CVar name _) =
-  let acc =
-    if refMode
-      && not (envHas name env)
-      && (omHasKey name ctx.fnNames || externNeedsClosure ctx name) then
-      need acc "closApplyLines"
-    else
-      acc
-  runtimeRoots ctx acc name []
-hExpr _ True _ acc _ (CMethod _ _) = need acc "closApplyLines"
-hExpr _ True _ acc _ (CDict _ _) = need acc "closApplyLines"
-hExpr ctx refMode str acc env (CLam pats b) =
-  hExpr
-    ctx
-    refMode
-    str
-    (fold
-      (hPat refMode)
-      (if refMode then need acc "closApplyLines" else acc)
-      pats)
-    (fold (flip envBindPat) env pats)
-    b
-hExpr ctx refMode str acc env (CIf c t f) =
-  fold (a x => hExpr ctx refMode str a env x) acc [c, t, f]
-hExpr ctx refMode str acc env (CLet recFlag pat a b) =
-  let inner = envBindPat pat env
-  let acc = match (recFlag, pat, a)
-    (True, PVar _ _ _, CLam pats body) =>
-      localFunctionRoots refMode acc pats body
-    _ => acc
-  hExpr
-    ctx
-    refMode
-    str
-    (hExpr
-      ctx
-      refMode
-      str
-      (hPat refMode acc pat)
-      (if recFlag then inner else env)
-      a)
-    inner
-    b
-hExpr ctx refMode str acc env (CLetGroup binds b) =
-  let inner = envBindGroups binds env
-  let acc =
-    fold
-      (a (CBind _ cs loc bid) =>
-        hBind ctx refMode str inner a (CBind "$local" cs loc bid))
-      acc
-      binds
-  hExpr ctx refMode str acc inner b
-hExpr ctx refMode str acc env (CBlock stmts) =
-  hStmts ctx refMode str acc env stmts
-hExpr ctx refMode str acc env (CDecision scrut arms tree) =
-  hTree
-    refMode
-    (fold (hArm ctx refMode str env) (hExpr ctx refMode str acc env scrut) arms)
-    tree
-hExpr ctx refMode str acc env (CMatch scrut arms) =
-  fold (hArm ctx refMode str env) (hExpr ctx refMode str acc env scrut) arms
-hExpr ctx refMode str acc env (CTuple xs) =
-  fold (a x => hExpr ctx refMode str a env x) acc xs
-hExpr ctx refMode str acc env (CList xs) =
-  fold (a x => hExpr ctx refMode str a env x) acc xs
-hExpr ctx refMode str acc env (CArray xs) =
-  fold (a x => hExpr ctx refMode str a env x) acc xs
-hExpr ctx refMode str acc env (CRangeList lo hi _) =
-  fold (a x => hExpr ctx refMode str a env x) acc [lo, hi]
-hExpr ctx refMode str acc env (CRangeArray lo hi _) =
-  fold (a x => hExpr ctx refMode str a env x) acc [lo, hi]
-hExpr ctx refMode str acc env (CRecord _ fs) =
-  fold (a (CField _ _ x) => hExpr ctx refMode str a env x) acc fs
-hExpr ctx refMode str acc env (CFieldAccess x "value" _ _) =
-  hExpr ctx refMode str { acc | refRead = True } env x
-hExpr ctx refMode str acc env (CFieldAccess x _ _ _) =
-  hExpr ctx refMode str acc env x
-hExpr ctx refMode str acc env (CRecordUpdate _ x fs) =
-  fold
-    (a (CField _ _ e) => hExpr ctx refMode str a env e)
-    (hExpr ctx refMode str acc env x)
-    fs
-hExpr ctx refMode str acc env (CVariantUpdate _ x fs) =
-  fold
-    (a (CField _ _ e) => hExpr ctx refMode str a env e)
-    (hExpr ctx refMode str acc env x)
-    fs
-hExpr _ _ _ acc _ _ = acc
+hExpr ctx refMode str acc0 env0 ex0 = go acc0 env0 ex0
+  where
+    go acc env (CBinPrim op l r tag _) =
+      let branch =
+        if refMode then selectWasmBin ctx str env op l r tag else "int"
+      let acc =
+        if branch == "compare" then
+          need acc "valueEqRuntimeLines"
+        else if branch == "compare-number" then
+          need acc "valueCmpNumRuntimeLines"
+        else
+          acc
+      let acc =
+        if startsWith "value-" branch then
+          need acc ("value" ++ valueOpBlock op ++ "RuntimeLines")
+        else
+          acc
+      let acc =
+        if (branch == "int" && not (isTaggedFixedHead tag)
+            || startsWith "value-" branch)
+          && contains op ["+", "-", "*", "/"] then
+          needInt acc (intOpName op)
+        else
+          acc
+      let acc =
+        if (op == "/" || op == "%") && branch /= "float" then
+          needTrap acc
+        else
+          acc
+      go (go acc env l) env r
+    go acc env (CUnOp "-" x) =
+      let acc =
+        if refMode && cexprStamp ctx env x == RTFloat then
+          acc
+        else
+          needInt acc "neg"
+      go acc env x
+    go acc env (app@(CApp f args _)) =
+      let acc =
+        if refMode && appUsesClosures ctx.fnNames ctx.ctorArities env app then
+          need acc "closApplyLines"
+        else
+          acc
+      let acc = match f
+        CVar name _ => runtimeRoots ctx acc name args
+        _ => acc
+      fold
+        (a x => go a env x)
+        (match f
+          CVar _ _ => acc
+          _ => go acc env f)
+        args
+    go acc env (CVar name _) =
+      let acc =
+        if refMode
+          && not (envHas name env)
+          && (omHasKey name ctx.fnNames || externNeedsClosure ctx name) then
+          need acc "closApplyLines"
+        else
+          acc
+      runtimeRoots ctx acc name []
+    go acc _ (CMethod _ _)
+      | refMode = need acc "closApplyLines"
+    go acc _ (CDict _ _)
+      | refMode = need acc "closApplyLines"
+    go acc env (CLam pats b) =
+      go
+        (fold
+          (hPat refMode)
+          (if refMode then need acc "closApplyLines" else acc)
+          pats)
+        (fold (flip envBindPat) env pats)
+        b
+    go acc env (CIf c t f) = fold (a x => go a env x) acc [c, t, f]
+    go acc env (CLet recFlag pat a b) =
+      let inner = envBindPat pat env
+      let acc = match (recFlag, pat, a)
+        (True, PVar _ _ _, CLam pats body) =>
+          localFunctionRoots refMode acc pats body
+        _ => acc
+      go (go (hPat refMode acc pat) (if recFlag then inner else env) a) inner b
+    go acc env (CLetGroup binds b) =
+      let inner = envBindGroups binds env
+      let acc =
+        fold
+          (a (CBind _ cs loc bid) =>
+            hBind ctx refMode str inner a (CBind "$local" cs loc bid))
+          acc
+          binds
+      go acc inner b
+    go acc env (CBlock stmts) = hStmts ctx refMode str acc env stmts
+    go acc env (CDecision scrut arms tree) =
+      hTree
+        refMode
+        (fold (hArm ctx refMode str env) (go acc env scrut) arms)
+        tree
+    go acc env (CMatch scrut arms) =
+      fold (hArm ctx refMode str env) (go acc env scrut) arms
+    go acc env (CTuple xs) = fold (a x => go a env x) acc xs
+    go acc env (CList xs) = fold (a x => go a env x) acc xs
+    go acc env (CArray xs) = fold (a x => go a env x) acc xs
+    go acc env (CRangeList lo hi _) = fold (a x => go a env x) acc [lo, hi]
+    go acc env (CRangeArray lo hi _) = fold (a x => go a env x) acc [lo, hi]
+    go acc env (CRecord _ fs) = fold (a (CField _ _ x) => go a env x) acc fs
+    go acc env (CFieldAccess x "value" _ _) = go { acc | refRead = True } env x
+    go acc env (CFieldAccess x _ _ _) = go acc env x
+    go acc env (CRecordUpdate _ x fs) =
+      fold (a (CField _ _ e) => go a env e) (go acc env x) fs
+    go acc env (CVariantUpdate _ x fs) =
+      fold (a (CField _ _ e) => go a env e) (go acc env x) fs
+    go acc env (CUnOp _ x) = go acc env x
+    go acc _ (CLit _ | CMethod _ _ | CDict _ _) = acc
 
 externNeedsClosure : WasmTypeContext -> String -> Bool
 externNeedsClosure ctx symbol = match omLookup symbol ctx.externFacts
@@ -1579,41 +1572,37 @@ hStmts : WasmTypeContext ->
   Env ->
   List CStmt ->
   HelperAcc
-hStmts _ _ _ acc _ [] = acc
-hStmts ctx refMode str acc env ((CSLet recFlag (pat@(PVar _ _ _)) (lam@(CLam pats body))) :: rest) =
-  let inner = envBindPat pat env
-  hStmts
-    ctx
-    refMode
-    str
-    (hExpr
-      ctx
-      refMode
-      str
-      (localFunctionRoots refMode acc pats body)
-      (if recFlag then inner else env)
-      lam)
-    inner
-    rest
-hStmts ctx refMode str acc env ((CSLet recFlag pat x) :: rest) =
-  let inner = envBindPat pat env
-  hStmts
-    ctx
-    refMode
-    str
-    (hExpr
-      ctx
-      refMode
-      str
-      (hPat refMode acc pat)
-      (if recFlag then inner else env)
-      x)
-    inner
-    rest
-hStmts ctx refMode str acc env ((CSExpr x) :: rest) =
-  hStmts ctx refMode str (hExpr ctx refMode str acc env x) env rest
-hStmts ctx refMode str acc env ((CSAssign _ x) :: rest) =
-  hStmts ctx refMode str (hExpr ctx refMode str acc env x) env rest
+hStmts ctx refMode str acc0 env0 xs0 = go acc0 env0 xs0
+  where
+    go acc _ [] = acc
+    go acc env ((CSLet recFlag (pat@(PVar _ _ _)) (lam@(CLam pats body))) :: rest) =
+      let inner = envBindPat pat env
+      go
+        (hExpr
+          ctx
+          refMode
+          str
+          (localFunctionRoots refMode acc pats body)
+          (if recFlag then inner else env)
+          lam)
+        inner
+        rest
+    go acc env ((CSLet recFlag pat x) :: rest) =
+      let inner = envBindPat pat env
+      go
+        (hExpr
+          ctx
+          refMode
+          str
+          (hPat refMode acc pat)
+          (if recFlag then inner else env)
+          x)
+        inner
+        rest
+    go acc env ((CSExpr x) :: rest) =
+      go (hExpr ctx refMode str acc env x) env rest
+    go acc env ((CSAssign _ x) :: rest) =
+      go (hExpr ctx refMode str acc env x) env rest
 
 hArm : WasmTypeContext -> Bool -> Bool -> Env -> HelperAcc -> CArm -> HelperAcc
 hArm ctx refMode str env acc (CArm pat guards b) =
@@ -1649,7 +1638,7 @@ hTree refMode acc (CTGuard _ t) = hTree refMode acc t
 hTree refMode acc (CTDrop t) = hTree refMode acc t
 hTree refMode acc (CTSwitch branches dft) =
   hTree refMode (fold (hBranch refMode) acc branches) dft
-hTree _ acc _ = acc
+hTree _ acc (CTFail _ | CTLeaf _) = acc
 
 hBranch : Bool -> HelperAcc -> CTBranch -> HelperAcc
 hBranch refMode acc (CTBranch head tree) =
@@ -3001,7 +2990,8 @@ exprHasFallthrough (CLetGroup _ body) = exprHasFallthrough body
 exprHasFallthrough (CBlock stmts) = anyList stmtHasFallthrough stmts
 exprHasFallthrough (CDecision scrut arms _) =
   exprHasFallthrough scrut || anyList (a => exprHasFallthrough (armBody a)) arms
-exprHasFallthrough _ = False
+exprHasFallthrough (CLit _ | CLam _ _ | CMatch _ _ | CBinPrim _ _ _ _ _ | CUnOp _ _ | CTuple _ | CList _ | CRecord _ _ | CFieldAccess _ _ _ _ | CRecordUpdate _ _ _ | CVariantUpdate _ _ _ | CArray _ | CRangeList _ _ _ | CRangeArray _ _ _ | CMethod _ _ | CDict _ _) =
+  False
 
 stmtHasFallthrough : CStmt -> Bool
 stmtHasFallthrough (CSExpr e) = exprHasFallthrough e

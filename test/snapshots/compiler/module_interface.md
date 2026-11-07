@@ -1,5 +1,5 @@
 # META
-source_lines=679
+source_lines=680
 stages=DESUGAR,MARK
 # SOURCE
 -- One module's checked diagnostics-arm contribution as a value, the key it is
@@ -459,40 +459,41 @@ methodCellEntriesFrom : Array (Option EvCell) ->
   Int ->
   EvTable ->
   EvTable
-methodCellEntriesFrom arr lo i acc
-  | i < lo = acc
-  | otherwise = match arrayGetUnsafe i arr
-    None => methodCellEntriesFrom arr lo (i - 1) acc
-    Some c =>
-      let arity =
-        optionOrPanic
-          "method cell published before its selected scheme supplied an arity"
-          c.ecArity.value
-      methodCellEntriesFrom
-        arr
-        lo
-        (i - 1)
-        (EvEntry
-            c.ecId
-            (EvMethod
-              c.ecIface.value
-              arity
-              c.ecTag.value
-              c.ecImpl.value
-              c.ecMeth.value)
-          :: acc)
+methodCellEntriesFrom arr lo i0 acc0 = go i0 acc0
+  where
+    go i acc
+      | i < lo = acc
+      | otherwise = match arrayGetUnsafe i arr
+        None => go (i - 1) acc
+        Some c =>
+          let arity =
+            optionOrPanic
+              "method cell published before its selected scheme supplied an arity"
+              c.ecArity.value
+          go
+            (i - 1)
+            (EvEntry
+                c.ecId
+                (EvMethod
+                  c.ecIface.value
+                  arity
+                  c.ecTag.value
+                  c.ecImpl.value
+                  c.ecMeth.value)
+              :: acc)
 
 siteCellEntriesFrom : Array (Option (EvId, SiteCell)) ->
   Int ->
   Int ->
   EvTable ->
   EvTable
-siteCellEntriesFrom arr lo i acc
-  | i < lo = acc
-  | otherwise = match arrayGetUnsafe i arr
-    None => siteCellEntriesFrom arr lo (i - 1) acc
-    Some (ev, c) =>
-      siteCellEntriesFrom arr lo (i - 1) (EvEntry ev (siteCellValue c) :: acc)
+siteCellEntriesFrom arr lo i0 acc0 = go i0 acc0
+  where
+    go i acc
+      | i < lo = acc
+      | otherwise = match arrayGetUnsafe i arr
+        None => go (i - 1) acc
+        Some (ev, c) => go (i - 1) (EvEntry ev (siteCellValue c) :: acc)
 
 siteCellValue : SiteCell -> EvVal
 siteCellValue (OpSite r) = EvOne r.value
@@ -647,9 +648,9 @@ moduleInterfaceIdentity mi = intToString mi.miSerial
 
 export
 moduleCacheHit : ModuleKey -> Option ModuleInterface
-moduleCacheHit key = match omLookup key.mkModule moduleCacheRef.value.mcEntries
-  Some mi => if mi.miKeyText == moduleKeyText key then Some mi else None
-  None => None
+moduleCacheHit key = do
+  mi <- omLookup key.mkModule moduleCacheRef.value.mcEntries
+  if mi.miKeyText == moduleKeyText key then Some mi else None
 
 -- Keeps [mi] as its module's interface, replacing the one recorded before.
 export
@@ -737,9 +738,9 @@ currentModuleInterfaces _ = map snd (M.entries moduleCacheRef.value.mcEntries)
 (DTypeSig true "cellEntriesFrom" (TyFun (TyCon "GraphRun") (TyFun (TyCon "Int") (TyCon "EvTable"))))
 (DFunDef false "cellEntriesFrom" ((PVar "r") (PVar "lo")) (EBlock (DoLet false false (PVar "from") (EApp (EApp (EVar "max") (ELit (LInt 0))) (EBinOp "-" (EVar "lo") (EFieldAccess (EVar "r") "evBase")))) (DoLet false false (PVar "cells") (EFieldAccess (EFieldAccess (EVar "r") "evCells") "value")) (DoLet false false (PVar "sites") (EFieldAccess (EFieldAccess (EVar "r") "siteCells") "value")) (DoExpr (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "methodCellEntriesFrom") (EVar "cells")) (EVar "from")) (EBinOp "-" (EApp (EVar "arrayLength") (EVar "cells")) (ELit (LInt 1)))) (EListLit)) (EApp (EApp (EApp (EApp (EVar "siteCellEntriesFrom") (EVar "sites")) (EVar "from")) (EBinOp "-" (EApp (EVar "arrayLength") (EVar "sites")) (ELit (LInt 1)))) (EListLit))))))
 (DTypeSig false "methodCellEntriesFrom" (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "Option") (TyCon "EvCell"))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "EvTable") (TyCon "EvTable"))))))
-(DFunDef false "methodCellEntriesFrom" ((PVar "arr") (PVar "lo") (PVar "i") (PVar "acc")) (EIf (EBinOp "<" (EVar "i") (EVar "lo")) (EVar "acc") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "methodCellEntriesFrom") (EVar "arr")) (EVar "lo")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "acc"))) (arm (PCon "Some" (PVar "c")) () (EBlock (DoLet false false (PVar "arity") (EApp (EApp (EVar "optionOrPanic") (ELit (LString "method cell published before its selected scheme supplied an arity"))) (EFieldAccess (EFieldAccess (EVar "c") "ecArity") "value"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "methodCellEntriesFrom") (EVar "arr")) (EVar "lo")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EBinOp "::" (EApp (EApp (EVar "EvEntry") (EFieldAccess (EVar "c") "ecId")) (EApp (EApp (EApp (EApp (EApp (EVar "EvMethod") (EFieldAccess (EFieldAccess (EVar "c") "ecIface") "value")) (EVar "arity")) (EFieldAccess (EFieldAccess (EVar "c") "ecTag") "value")) (EFieldAccess (EFieldAccess (EVar "c") "ecImpl") "value")) (EFieldAccess (EFieldAccess (EVar "c") "ecMeth") "value"))) (EVar "acc"))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "methodCellEntriesFrom" ((PVar "arr") (PVar "lo") (PVar "i0") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PVar "i") (PVar "acc")) (EIf (EBinOp "<" (EVar "i") (EVar "lo")) (EVar "acc") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (arm (PCon "None") () (EApp (EApp (EVar "go") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "acc"))) (arm (PCon "Some" (PVar "c")) () (EBlock (DoLet false false (PVar "arity") (EApp (EApp (EVar "optionOrPanic") (ELit (LString "method cell published before its selected scheme supplied an arity"))) (EFieldAccess (EFieldAccess (EVar "c") "ecArity") "value"))) (DoExpr (EApp (EApp (EVar "go") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EBinOp "::" (EApp (EApp (EVar "EvEntry") (EFieldAccess (EVar "c") "ecId")) (EApp (EApp (EApp (EApp (EApp (EVar "EvMethod") (EFieldAccess (EFieldAccess (EVar "c") "ecIface") "value")) (EVar "arity")) (EFieldAccess (EFieldAccess (EVar "c") "ecTag") "value")) (EFieldAccess (EFieldAccess (EVar "c") "ecImpl") "value")) (EFieldAccess (EFieldAccess (EVar "c") "ecMeth") "value"))) (EVar "acc"))))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EApp (EVar "go") (EVar "i0")) (EVar "acc0"))))
 (DTypeSig false "siteCellEntriesFrom" (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "Option") (TyTuple (TyCon "EvId") (TyCon "SiteCell")))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "EvTable") (TyCon "EvTable"))))))
-(DFunDef false "siteCellEntriesFrom" ((PVar "arr") (PVar "lo") (PVar "i") (PVar "acc")) (EIf (EBinOp "<" (EVar "i") (EVar "lo")) (EVar "acc") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "siteCellEntriesFrom") (EVar "arr")) (EVar "lo")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "acc"))) (arm (PCon "Some" (PTuple (PVar "ev") (PVar "c"))) () (EApp (EApp (EApp (EApp (EVar "siteCellEntriesFrom") (EVar "arr")) (EVar "lo")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EBinOp "::" (EApp (EApp (EVar "EvEntry") (EVar "ev")) (EApp (EVar "siteCellValue") (EVar "c"))) (EVar "acc"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "siteCellEntriesFrom" ((PVar "arr") (PVar "lo") (PVar "i0") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PVar "i") (PVar "acc")) (EIf (EBinOp "<" (EVar "i") (EVar "lo")) (EVar "acc") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (arm (PCon "None") () (EApp (EApp (EVar "go") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "acc"))) (arm (PCon "Some" (PTuple (PVar "ev") (PVar "c"))) () (EApp (EApp (EVar "go") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EBinOp "::" (EApp (EApp (EVar "EvEntry") (EVar "ev")) (EApp (EVar "siteCellValue") (EVar "c"))) (EVar "acc"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EApp (EVar "go") (EVar "i0")) (EVar "acc0"))))
 (DTypeSig false "siteCellValue" (TyFun (TyCon "SiteCell") (TyCon "EvVal")))
 (DFunDef false "siteCellValue" ((PCon "OpSite" (PVar "r"))) (EApp (EVar "EvOne") (EFieldAccess (EVar "r") "value")))
 (DFunDef false "siteCellValue" ((PCon "LitSite" (PVar "f") (PVar "r"))) (EApp (EApp (EVar "EvLit") (EFieldAccess (EVar "f") "value")) (EFieldAccess (EVar "r") "value")))
@@ -769,7 +770,7 @@ currentModuleInterfaces _ = map snd (M.entries moduleCacheRef.value.mcEntries)
 (DTypeSig true "moduleInterfaceIdentity" (TyFun (TyCon "ModuleInterface") (TyCon "String")))
 (DFunDef false "moduleInterfaceIdentity" ((PVar "mi")) (EApp (EVar "intToString") (EFieldAccess (EVar "mi") "miSerial")))
 (DTypeSig true "moduleCacheHit" (TyFun (TyCon "ModuleKey") (TyApp (TyCon "Option") (TyCon "ModuleInterface"))))
-(DFunDef false "moduleCacheHit" ((PVar "key")) (EMatch (EApp (EApp (EVar "omLookup") (EFieldAccess (EVar "key") "mkModule")) (EFieldAccess (EFieldAccess (EVar "moduleCacheRef") "value") "mcEntries")) (arm (PCon "Some" (PVar "mi")) () (EIf (EBinOp "==" (EFieldAccess (EVar "mi") "miKeyText") (EApp (EVar "moduleKeyText") (EVar "key"))) (EApp (EVar "Some") (EVar "mi")) (EVar "None"))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "moduleCacheHit" ((PVar "key")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "omLookup") (EFieldAccess (EVar "key") "mkModule")) (EFieldAccess (EFieldAccess (EVar "moduleCacheRef") "value") "mcEntries"))) (ELam ((PVar "mi")) (EIf (EBinOp "==" (EFieldAccess (EVar "mi") "miKeyText") (EApp (EVar "moduleKeyText") (EVar "key"))) (EApp (EVar "Some") (EVar "mi")) (EVar "None")))))
 (DTypeSig true "recordModuleInterface" (TyFun (TyCon "ModuleInterface") (TyCon "Unit")))
 (DFunDef false "recordModuleInterface" ((PVar "mi")) (EApp (EApp (EVar "setRef") (EVar "moduleCacheRef")) (EApp (EApp (EVar "withInterface") (EFieldAccess (EVar "moduleCacheRef") "value")) (EVar "mi"))))
 (DTypeSig true "retainModuleInterfaces" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit")))
@@ -836,9 +837,9 @@ currentModuleInterfaces _ = map snd (M.entries moduleCacheRef.value.mcEntries)
 (DTypeSig true "cellEntriesFrom" (TyFun (TyCon "GraphRun") (TyFun (TyCon "Int") (TyCon "EvTable"))))
 (DFunDef false "cellEntriesFrom" ((PVar "r") (PVar "lo")) (EBlock (DoLet false false (PVar "from") (EApp (EApp (EMethodRef "max") (ELit (LInt 0))) (EBinOp "-" (EVar "lo") (EFieldAccess (EVar "r") "evBase")))) (DoLet false false (PVar "cells") (EFieldAccess (EFieldAccess (EVar "r") "evCells") "value")) (DoLet false false (PVar "sites") (EFieldAccess (EFieldAccess (EVar "r") "siteCells") "value")) (DoExpr (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "methodCellEntriesFrom") (EVar "cells")) (EVar "from")) (EBinOp "-" (EApp (EVar "arrayLength") (EVar "cells")) (ELit (LInt 1)))) (EListLit)) (EApp (EApp (EApp (EApp (EVar "siteCellEntriesFrom") (EVar "sites")) (EVar "from")) (EBinOp "-" (EApp (EVar "arrayLength") (EVar "sites")) (ELit (LInt 1)))) (EListLit))))))
 (DTypeSig false "methodCellEntriesFrom" (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "Option") (TyCon "EvCell"))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "EvTable") (TyCon "EvTable"))))))
-(DFunDef false "methodCellEntriesFrom" ((PVar "arr") (PVar "lo") (PVar "i") (PVar "acc")) (EIf (EBinOp "<" (EVar "i") (EVar "lo")) (EVar "acc") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "methodCellEntriesFrom") (EVar "arr")) (EVar "lo")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "acc"))) (arm (PCon "Some" (PVar "c")) () (EBlock (DoLet false false (PVar "arity") (EApp (EApp (EVar "optionOrPanic") (ELit (LString "method cell published before its selected scheme supplied an arity"))) (EFieldAccess (EFieldAccess (EVar "c") "ecArity") "value"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "methodCellEntriesFrom") (EVar "arr")) (EVar "lo")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EBinOp "::" (EApp (EApp (EVar "EvEntry") (EFieldAccess (EVar "c") "ecId")) (EApp (EApp (EApp (EApp (EApp (EVar "EvMethod") (EFieldAccess (EFieldAccess (EVar "c") "ecIface") "value")) (EVar "arity")) (EFieldAccess (EFieldAccess (EVar "c") "ecTag") "value")) (EFieldAccess (EFieldAccess (EVar "c") "ecImpl") "value")) (EFieldAccess (EFieldAccess (EVar "c") "ecMeth") "value"))) (EVar "acc"))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "methodCellEntriesFrom" ((PVar "arr") (PVar "lo") (PVar "i0") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PVar "i") (PVar "acc")) (EIf (EBinOp "<" (EVar "i") (EVar "lo")) (EVar "acc") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (arm (PCon "None") () (EApp (EApp (EVar "go") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "acc"))) (arm (PCon "Some" (PVar "c")) () (EBlock (DoLet false false (PVar "arity") (EApp (EApp (EVar "optionOrPanic") (ELit (LString "method cell published before its selected scheme supplied an arity"))) (EFieldAccess (EFieldAccess (EVar "c") "ecArity") "value"))) (DoExpr (EApp (EApp (EVar "go") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EBinOp "::" (EApp (EApp (EVar "EvEntry") (EFieldAccess (EVar "c") "ecId")) (EApp (EApp (EApp (EApp (EApp (EVar "EvMethod") (EFieldAccess (EFieldAccess (EVar "c") "ecIface") "value")) (EVar "arity")) (EFieldAccess (EFieldAccess (EVar "c") "ecTag") "value")) (EFieldAccess (EFieldAccess (EVar "c") "ecImpl") "value")) (EFieldAccess (EFieldAccess (EVar "c") "ecMeth") "value"))) (EVar "acc"))))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EApp (EVar "go") (EVar "i0")) (EVar "acc0"))))
 (DTypeSig false "siteCellEntriesFrom" (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "Option") (TyTuple (TyCon "EvId") (TyCon "SiteCell")))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "EvTable") (TyCon "EvTable"))))))
-(DFunDef false "siteCellEntriesFrom" ((PVar "arr") (PVar "lo") (PVar "i") (PVar "acc")) (EIf (EBinOp "<" (EVar "i") (EVar "lo")) (EVar "acc") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "siteCellEntriesFrom") (EVar "arr")) (EVar "lo")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "acc"))) (arm (PCon "Some" (PTuple (PVar "ev") (PVar "c"))) () (EApp (EApp (EApp (EApp (EVar "siteCellEntriesFrom") (EVar "arr")) (EVar "lo")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EBinOp "::" (EApp (EApp (EVar "EvEntry") (EVar "ev")) (EApp (EVar "siteCellValue") (EVar "c"))) (EVar "acc"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "siteCellEntriesFrom" ((PVar "arr") (PVar "lo") (PVar "i0") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PVar "i") (PVar "acc")) (EIf (EBinOp "<" (EVar "i") (EVar "lo")) (EVar "acc") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (arm (PCon "None") () (EApp (EApp (EVar "go") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "acc"))) (arm (PCon "Some" (PTuple (PVar "ev") (PVar "c"))) () (EApp (EApp (EVar "go") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EBinOp "::" (EApp (EApp (EVar "EvEntry") (EVar "ev")) (EApp (EVar "siteCellValue") (EVar "c"))) (EVar "acc"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EApp (EVar "go") (EVar "i0")) (EVar "acc0"))))
 (DTypeSig false "siteCellValue" (TyFun (TyCon "SiteCell") (TyCon "EvVal")))
 (DFunDef false "siteCellValue" ((PCon "OpSite" (PVar "r"))) (EApp (EVar "EvOne") (EFieldAccess (EVar "r") "value")))
 (DFunDef false "siteCellValue" ((PCon "LitSite" (PVar "f") (PVar "r"))) (EApp (EApp (EVar "EvLit") (EFieldAccess (EVar "f") "value")) (EFieldAccess (EVar "r") "value")))
@@ -868,7 +869,7 @@ currentModuleInterfaces _ = map snd (M.entries moduleCacheRef.value.mcEntries)
 (DTypeSig true "moduleInterfaceIdentity" (TyFun (TyCon "ModuleInterface") (TyCon "String")))
 (DFunDef false "moduleInterfaceIdentity" ((PVar "mi")) (EApp (EVar "intToString") (EFieldAccess (EVar "mi") "miSerial")))
 (DTypeSig true "moduleCacheHit" (TyFun (TyCon "ModuleKey") (TyApp (TyCon "Option") (TyCon "ModuleInterface"))))
-(DFunDef false "moduleCacheHit" ((PVar "key")) (EMatch (EApp (EApp (EVar "omLookup") (EFieldAccess (EVar "key") "mkModule")) (EFieldAccess (EFieldAccess (EVar "moduleCacheRef") "value") "mcEntries")) (arm (PCon "Some" (PVar "mi")) () (EIf (EBinOp "==" (EFieldAccess (EVar "mi") "miKeyText") (EApp (EVar "moduleKeyText") (EVar "key"))) (EApp (EVar "Some") (EVar "mi")) (EVar "None"))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "moduleCacheHit" ((PVar "key")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "omLookup") (EFieldAccess (EVar "key") "mkModule")) (EFieldAccess (EFieldAccess (EVar "moduleCacheRef") "value") "mcEntries"))) (ELam ((PVar "mi")) (EIf (EBinOp "==" (EFieldAccess (EVar "mi") "miKeyText") (EApp (EVar "moduleKeyText") (EVar "key"))) (EApp (EVar "Some") (EVar "mi")) (EVar "None")))))
 (DTypeSig true "recordModuleInterface" (TyFun (TyCon "ModuleInterface") (TyCon "Unit")))
 (DFunDef false "recordModuleInterface" ((PVar "mi")) (EApp (EApp (EVar "setRef") (EVar "moduleCacheRef")) (EApp (EApp (EVar "withInterface") (EFieldAccess (EVar "moduleCacheRef") "value")) (EVar "mi"))))
 (DTypeSig true "retainModuleInterfaces" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit")))

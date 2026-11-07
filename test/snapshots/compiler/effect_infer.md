@@ -1,5 +1,5 @@
 # META
-source_lines=342
+source_lines=348
 stages=DESUGAR,MARK
 # SOURCE
 -- Scoped effect collection. A capture observes performed rows without solving
@@ -145,7 +145,8 @@ alphaSyntax top env lets (EMatch scrut arms) =
   joinBranches (map (armAuthority top env lets scrut) arms)
 alphaSyntax top env lets (EApp f x)
   | displayHead env lets f = alphaSyntax top (stringNames env) lets x
-alphaSyntax _ _ _ _ = None
+alphaSyntax _ _ _ (ELit _ | ELam _ _ | EUnOp _ _ _ | EInfix _ _ _ | EFieldAccess _ _ _ | ETuple _ | EListLit _ | EArrayLit _ | ERangeList _ _ _ | ERangeArray _ _ _ | ESlice _ _ _ _ | ESection _ | EIndex _ _ | EDo _ _ | EStringInterp _ | EGuards _ | ERecordCreate _ _ | ERecordUpdate _ _ _ | EVariantUpdate _ _ _ | EMapLit _ _ | ESetLit _ _ | EAsPat _ _ | EOrPat _ | EMethodRef _ | EDictApp _ | EMethodAt _ _ _ | ENumLit _ _ _ | EWideLit _ _ _ _ | EApp _ _ | EBinOp _ _ _ _) =
+  None
 
 -- `display e` is `e` itself when `display` is the prelude method and `e` is a
 -- `String`: the prelude's `Display String` is the identity. String
@@ -153,12 +154,13 @@ alphaSyntax _ _ _ _ = None
 -- prelude alias. A written `display` that a local, top-level or imported
 -- definition shadows denotes some other function, so under one it is top.
 displayHead : AlphaEnv -> List (String, AlphaBinder) -> Expr -> Bool
-displayHead env lets (ELoc _ f) = displayHead env lets f
-displayHead env lets (EVar x) = preludeDisplay env lets x
-displayHead env lets (EVarId x _) = preludeDisplay env lets x
-displayHead env lets (EMethodAt x seed _) =
-  seed == "" && preludeDisplay env lets x
-displayHead _ _ _ = False
+displayHead env lets x0 = go x0
+  where
+    go (ELoc _ f) = go f
+    go (EVar x) = preludeDisplay env lets x
+    go (EVarId x _) = preludeDisplay env lets x
+    go (EMethodAt x seed _) = seed == "" && preludeDisplay env lets x
+    go _ = False
 
 preludeDisplay : AlphaEnv -> List (String, AlphaBinder) -> String -> Bool
 preludeDisplay env lets x =
@@ -171,9 +173,9 @@ preludeDisplay env lets x =
 stringNames : AlphaEnv -> AlphaEnv
 stringNames env = { env |
   aeVarType =
-    x => match env.aeVarType x
-      Some ty => if qualifiedString ty then Some ty else None
-      None => None,
+    x => do
+      ty <- env.aeVarType x
+      if qualifiedString ty then Some ty else None,
 }
 
 qualifiedString : Mono -> Bool
@@ -193,10 +195,11 @@ blockAuthority : Param ->
   List (String, AlphaBinder) ->
   List DoStmt ->
   Option Authority
-blockAuthority top env lets [DoExpr e] = alphaSyntax top env lets e
-blockAuthority top env lets (s :: rest@(_ :: _)) =
-  blockAuthority top env (stmtScope s lets) rest
-blockAuthority _ _ _ _ = None
+blockAuthority top env lets0 xs0 = go lets0 xs0
+  where
+    go lets [DoExpr e] = alphaSyntax top env lets e
+    go lets (s :: rest@(_ :: _)) = go (stmtScope s lets) rest
+    go _ _ = None
 
 stmtScope : DoStmt -> List (String, AlphaBinder) -> List (String, AlphaBinder)
 stmtScope (DoLet _ _ (PVar x _ _) e _) lets = (x, ALet e) :: lets
@@ -279,18 +282,21 @@ suffixed env lets b left = match exactString env lets b
 -- The string an expression denotes exactly: a literal, a concatenation of
 -- two such, or an interpolated part whose operand is one.
 exactString : AlphaEnv -> List (String, AlphaBinder) -> Expr -> Option String
-exactString env lets (ELoc _ e) = exactString env lets e
-exactString env lets (EDoOrigin _ e) = exactString env lets e
-exactString env lets (EAnnot e _) = exactString env lets e
-exactString env lets (EHeadAnnot e _) = exactString env lets e
-exactString _ _ (ELit (LString s)) = Some s
-exactString env lets (EBinOp op a b _)
-  | op == "++" = match (exactString env lets a, exactString env lets b)
-    (Some x, Some y) => Some (x ++ y)
-    _ => None
-exactString env lets (EApp f x)
-  | displayHead env lets f = exactString env lets x
-exactString _ _ _ = None
+exactString env lets x0 = go x0
+  where
+    go (ELoc _ e) = go e
+    go (EDoOrigin _ e) = go e
+    go (EAnnot e _) = go e
+    go (EHeadAnnot e _) = go e
+    go (ELit (LString s)) = Some s
+    go (EBinOp op a b _)
+      | op == "++" = match (go a, go b)
+        (Some x, Some y) => Some (x ++ y)
+        _ => None
+    go (EApp f x)
+      | displayHead env lets f = go x
+    go (ELit _ | EVar _ | ELam _ _ | ELet _ _ _ _ _ | EMatch _ _ | EIf _ _ _ | EUnOp _ _ _ | EInfix _ _ _ | EFieldAccess _ _ _ | ETuple _ | EListLit _ | EArrayLit _ | ERangeList _ _ _ | ERangeArray _ _ _ | ESlice _ _ _ _ | ELetGroup _ _ | ESection _ | EIndex _ _ | EBlock _ | EDo _ _ | EStringInterp _ | EGuards _ | ERecordCreate _ _ | ERecordUpdate _ _ _ | EVariantUpdate _ _ _ | EMapLit _ _ | ESetLit _ _ | EAsPat _ _ | EOrPat _ | EMethodRef _ | EDictApp _ | EVarAt _ _ | EVarId _ _ | EMethodAt _ _ _ | EDictAt _ _ | ENumLit _ _ _ | EWideLit _ _ _ _ | EApp _ _ | EBinOp _ _ _ _) =
+      None
 
 -- An operand that is exactly the empty string: appending it on either side
 -- leaves the other operand's value, and so its authority, unchanged. String
@@ -313,11 +319,11 @@ varAuthority top env lets x = match letInScope x lets
   None => typedAuthority top env x
 
 typedAuthority : Param -> AlphaEnv -> String -> Option Authority
-typedAuthority top env x = match env.aeVarType x
-  Some ty => match normalize ty
+typedAuthority top env x = do
+  ty <- env.aeVarType x
+  match normalize ty
     TQual _ q => Some (qualifierIn top q)
     _ => None
-  None => None
 
 -- A let's right-hand side is read in the scope it was bound in: the entries
 -- older than it, never a later rebinding of a name it mentions.
@@ -345,6 +351,7 @@ collectBinds ((LetBind n clauses _ _) :: rest) acc = match clauses
   [FunClause [] rhs] => collectBinds rest ((n, ALet rhs) :: acc)
   _ => collectBinds rest acc
 # DESUGAR
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "EffRow" true) (mem "Effvar" false) (mem "collectRows" false))))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true) (mem "canonParam" false) (mem "productPrimaryLift" false) (mem "domainKey" false))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "authJoin" false) (mem "authTop" false) (mem "authExtend" false) (mem "authAppend" false) (mem "authWidenValue" false) (mem "authDomainTop" false) (mem "authRetag" false))))
@@ -386,23 +393,17 @@ collectBinds ((LetBind n clauses _ _) :: rest) acc = match clauses
 (DFunDef false "alphaSyntax" ((PVar "top") (PVar "env") (PVar "lets") (PCon "EIf" PWild (PVar "t") (PVar "f"))) (EApp (EVar "joinBranches") (EListLit (EApp (EApp (EApp (EApp (EVar "alphaSyntax") (EVar "top")) (EVar "env")) (EVar "lets")) (EVar "t")) (EApp (EApp (EApp (EApp (EVar "alphaSyntax") (EVar "top")) (EVar "env")) (EVar "lets")) (EVar "f")))))
 (DFunDef false "alphaSyntax" ((PVar "top") (PVar "env") (PVar "lets") (PCon "EMatch" (PVar "scrut") (PVar "arms"))) (EApp (EVar "joinBranches") (EApp (EApp (EVar "map") (EApp (EApp (EApp (EApp (EVar "armAuthority") (EVar "top")) (EVar "env")) (EVar "lets")) (EVar "scrut"))) (EVar "arms"))))
 (DFunDef false "alphaSyntax" ((PVar "top") (PVar "env") (PVar "lets") (PCon "EApp" (PVar "f") (PVar "x"))) (EIf (EApp (EApp (EApp (EVar "displayHead") (EVar "env")) (EVar "lets")) (EVar "f")) (EApp (EApp (EApp (EApp (EVar "alphaSyntax") (EVar "top")) (EApp (EVar "stringNames") (EVar "env"))) (EVar "lets")) (EVar "x")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
-(DFunDef false "alphaSyntax" (PWild PWild PWild PWild) (EVar "None"))
+(DFunDef false "alphaSyntax" (PWild PWild PWild (POr (PCon "ELit" PWild) (PCon "ELam" PWild PWild) (PCon "EUnOp" PWild PWild PWild) (PCon "EInfix" PWild PWild PWild) (PCon "EFieldAccess" PWild PWild PWild) (PCon "ETuple" PWild) (PCon "EListLit" PWild) (PCon "EArrayLit" PWild) (PCon "ERangeList" PWild PWild PWild) (PCon "ERangeArray" PWild PWild PWild) (PCon "ESlice" PWild PWild PWild PWild) (PCon "ESection" PWild) (PCon "EIndex" PWild PWild) (PCon "EDo" PWild PWild) (PCon "EStringInterp" PWild) (PCon "EGuards" PWild) (PCon "ERecordCreate" PWild PWild) (PCon "ERecordUpdate" PWild PWild PWild) (PCon "EVariantUpdate" PWild PWild PWild) (PCon "EMapLit" PWild PWild) (PCon "ESetLit" PWild PWild) (PCon "EAsPat" PWild PWild) (PCon "EOrPat" PWild) (PCon "EMethodRef" PWild) (PCon "EDictApp" PWild) (PCon "EMethodAt" PWild PWild PWild) (PCon "ENumLit" PWild PWild PWild) (PCon "EWideLit" PWild PWild PWild PWild) (PCon "EApp" PWild PWild) (PCon "EBinOp" PWild PWild PWild PWild))) (EVar "None"))
 (DTypeSig false "displayHead" (TyFun (TyCon "AlphaEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "AlphaBinder"))) (TyFun (TyCon "Expr") (TyCon "Bool")))))
-(DFunDef false "displayHead" ((PVar "env") (PVar "lets") (PCon "ELoc" PWild (PVar "f"))) (EApp (EApp (EApp (EVar "displayHead") (EVar "env")) (EVar "lets")) (EVar "f")))
-(DFunDef false "displayHead" ((PVar "env") (PVar "lets") (PCon "EVar" (PVar "x"))) (EApp (EApp (EApp (EVar "preludeDisplay") (EVar "env")) (EVar "lets")) (EVar "x")))
-(DFunDef false "displayHead" ((PVar "env") (PVar "lets") (PCon "EVarId" (PVar "x") PWild)) (EApp (EApp (EApp (EVar "preludeDisplay") (EVar "env")) (EVar "lets")) (EVar "x")))
-(DFunDef false "displayHead" ((PVar "env") (PVar "lets") (PCon "EMethodAt" (PVar "x") (PVar "seed") PWild)) (EBinOp "&&" (EBinOp "==" (EVar "seed") (ELit (LString ""))) (EApp (EApp (EApp (EVar "preludeDisplay") (EVar "env")) (EVar "lets")) (EVar "x"))))
-(DFunDef false "displayHead" (PWild PWild PWild) (EVar "False"))
+(DFunDef false "displayHead" ((PVar "env") (PVar "lets") (PVar "x0")) (ELetGroup ((lgb "go" (clause ((PCon "ELoc" PWild (PVar "f"))) (EApp (EVar "go") (EVar "f"))) (clause ((PCon "EVar" (PVar "x"))) (EApp (EApp (EApp (EVar "preludeDisplay") (EVar "env")) (EVar "lets")) (EVar "x"))) (clause ((PCon "EVarId" (PVar "x") PWild)) (EApp (EApp (EApp (EVar "preludeDisplay") (EVar "env")) (EVar "lets")) (EVar "x"))) (clause ((PCon "EMethodAt" (PVar "x") (PVar "seed") PWild)) (EBinOp "&&" (EBinOp "==" (EVar "seed") (ELit (LString ""))) (EApp (EApp (EApp (EVar "preludeDisplay") (EVar "env")) (EVar "lets")) (EVar "x")))) (clause (PWild) (EVar "False")))) (EApp (EVar "go") (EVar "x0"))))
 (DTypeSig false "preludeDisplay" (TyFun (TyCon "AlphaEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "AlphaBinder"))) (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "preludeDisplay" ((PVar "env") (PVar "lets") (PVar "x")) (EBinOp "||" (EBinOp "==" (EVar "x") (EApp (EVar "preludeQualified") (ELit (LString "display")))) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "x") (ELit (LString "display"))) (EFieldAccess (EVar "env") "aeDisplayIsPrelude")) (EApp (EVar "isNone") (EApp (EApp (EVar "letInScope") (EVar "x")) (EVar "lets"))))))
 (DTypeSig false "stringNames" (TyFun (TyCon "AlphaEnv") (TyCon "AlphaEnv")))
-(DFunDef false "stringNames" ((PVar "env")) (ERecordUpdate (EVar "env") ((fa "aeVarType" (ELam ((PVar "x")) (EMatch (EApp (EFieldAccess (EVar "env") "aeVarType") (EVar "x")) (arm (PCon "Some" (PVar "ty")) () (EIf (EApp (EVar "qualifiedString") (EVar "ty")) (EApp (EVar "Some") (EVar "ty")) (EVar "None"))) (arm (PCon "None") () (EVar "None"))))))))
+(DFunDef false "stringNames" ((PVar "env")) (ERecordUpdate (EVar "env") ((fa "aeVarType" (ELam ((PVar "x")) (EApp (EApp (EVar "$core.andThen") (EApp (EFieldAccess (EVar "env") "aeVarType") (EVar "x"))) (ELam ((PVar "ty")) (EIf (EApp (EVar "qualifiedString") (EVar "ty")) (EApp (EVar "Some") (EVar "ty")) (EVar "None")))))))))
 (DTypeSig false "qualifiedString" (TyFun (TyCon "Mono") (TyCon "Bool")))
 (DFunDef false "qualifiedString" ((PVar "ty")) (EMatch (EApp (EVar "normalize") (EVar "ty")) (arm (PCon "TQual" (PVar "inner") PWild) () (EMatch (EApp (EVar "normalize") (EVar "inner")) (arm (PCon "TCon" (PVar "n") (PVar "o")) () (EApp (EApp (EApp (EApp (EVar "sameTyConHead") (EVar "n")) (EVar "o")) (ELit (LString "String"))) (EVar "OriginBuiltin"))) (arm PWild () (EVar "False")))) (arm PWild () (EVar "False"))))
 (DTypeSig false "blockAuthority" (TyFun (TyCon "Param") (TyFun (TyCon "AlphaEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "AlphaBinder"))) (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyApp (TyCon "Option") (TyCon "Authority")))))))
-(DFunDef false "blockAuthority" ((PVar "top") (PVar "env") (PVar "lets") (PList (PCon "DoExpr" (PVar "e")))) (EApp (EApp (EApp (EApp (EVar "alphaSyntax") (EVar "top")) (EVar "env")) (EVar "lets")) (EVar "e")))
-(DFunDef false "blockAuthority" ((PVar "top") (PVar "env") (PVar "lets") (PCons (PVar "s") (PAs "rest" (PCons PWild PWild)))) (EApp (EApp (EApp (EApp (EVar "blockAuthority") (EVar "top")) (EVar "env")) (EApp (EApp (EVar "stmtScope") (EVar "s")) (EVar "lets"))) (EVar "rest")))
-(DFunDef false "blockAuthority" (PWild PWild PWild PWild) (EVar "None"))
+(DFunDef false "blockAuthority" ((PVar "top") (PVar "env") (PVar "lets0") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PVar "lets") (PList (PCon "DoExpr" (PVar "e")))) (EApp (EApp (EApp (EApp (EVar "alphaSyntax") (EVar "top")) (EVar "env")) (EVar "lets")) (EVar "e"))) (clause ((PVar "lets") (PCons (PVar "s") (PAs "rest" (PCons PWild PWild)))) (EApp (EApp (EVar "go") (EApp (EApp (EVar "stmtScope") (EVar "s")) (EVar "lets"))) (EVar "rest"))) (clause (PWild PWild) (EVar "None")))) (EApp (EApp (EVar "go") (EVar "lets0")) (EVar "xs0"))))
 (DTypeSig false "stmtScope" (TyFun (TyCon "DoStmt") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "AlphaBinder"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "AlphaBinder"))))))
 (DFunDef false "stmtScope" ((PCon "DoLet" PWild PWild (PCon "PVar" (PVar "x") PWild PWild) (PVar "e") PWild) (PVar "lets")) (EBinOp "::" (ETuple (EVar "x") (EApp (EVar "ALet") (EVar "e"))) (EVar "lets")))
 (DFunDef false "stmtScope" ((PCon "DoLet" PWild PWild (PVar "pat") PWild PWild) (PVar "lets")) (EApp (EApp (EVar "shadowed") (EApp (EVar "patBoundNames") (EVar "pat"))) (EVar "lets")))
@@ -433,20 +434,13 @@ collectBinds ((LetBind n clauses _ _) :: rest) acc = match clauses
 (DTypeSig false "suffixed" (TyFun (TyCon "AlphaEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "AlphaBinder"))) (TyFun (TyCon "Expr") (TyFun (TyCon "Authority") (TyCon "Authority"))))))
 (DFunDef false "suffixed" ((PVar "env") (PVar "lets") (PVar "b") (PVar "left")) (EMatch (EApp (EApp (EApp (EVar "exactString") (EVar "env")) (EVar "lets")) (EVar "b")) (arm (PCon "Some" (PVar "s")) () (EApp (EApp (EVar "authAppend") (EVar "s")) (EVar "left"))) (arm (PCon "None") () (EApp (EVar "authExtend") (EVar "left")))))
 (DTypeSig false "exactString" (TyFun (TyCon "AlphaEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "AlphaBinder"))) (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "String"))))))
-(DFunDef false "exactString" ((PVar "env") (PVar "lets") (PCon "ELoc" PWild (PVar "e"))) (EApp (EApp (EApp (EVar "exactString") (EVar "env")) (EVar "lets")) (EVar "e")))
-(DFunDef false "exactString" ((PVar "env") (PVar "lets") (PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EApp (EApp (EVar "exactString") (EVar "env")) (EVar "lets")) (EVar "e")))
-(DFunDef false "exactString" ((PVar "env") (PVar "lets") (PCon "EAnnot" (PVar "e") PWild)) (EApp (EApp (EApp (EVar "exactString") (EVar "env")) (EVar "lets")) (EVar "e")))
-(DFunDef false "exactString" ((PVar "env") (PVar "lets") (PCon "EHeadAnnot" (PVar "e") PWild)) (EApp (EApp (EApp (EVar "exactString") (EVar "env")) (EVar "lets")) (EVar "e")))
-(DFunDef false "exactString" (PWild PWild (PCon "ELit" (PCon "LString" (PVar "s")))) (EApp (EVar "Some") (EVar "s")))
-(DFunDef false "exactString" ((PVar "env") (PVar "lets") (PCon "EBinOp" (PVar "op") (PVar "a") (PVar "b") PWild)) (EIf (EBinOp "==" (EVar "op") (ELit (LString "++"))) (EMatch (ETuple (EApp (EApp (EApp (EVar "exactString") (EVar "env")) (EVar "lets")) (EVar "a")) (EApp (EApp (EApp (EVar "exactString") (EVar "env")) (EVar "lets")) (EVar "b"))) (arm (PTuple (PCon "Some" (PVar "x")) (PCon "Some" (PVar "y"))) () (EApp (EVar "Some") (EBinOp "++" (EVar "x") (EVar "y")))) (arm PWild () (EVar "None"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
-(DFunDef false "exactString" ((PVar "env") (PVar "lets") (PCon "EApp" (PVar "f") (PVar "x"))) (EIf (EApp (EApp (EApp (EVar "displayHead") (EVar "env")) (EVar "lets")) (EVar "f")) (EApp (EApp (EApp (EVar "exactString") (EVar "env")) (EVar "lets")) (EVar "x")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
-(DFunDef false "exactString" (PWild PWild PWild) (EVar "None"))
+(DFunDef false "exactString" ((PVar "env") (PVar "lets") (PVar "x0")) (ELetGroup ((lgb "go" (clause ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "go") (EVar "e"))) (clause ((PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EVar "go") (EVar "e"))) (clause ((PCon "EAnnot" (PVar "e") PWild)) (EApp (EVar "go") (EVar "e"))) (clause ((PCon "EHeadAnnot" (PVar "e") PWild)) (EApp (EVar "go") (EVar "e"))) (clause ((PCon "ELit" (PCon "LString" (PVar "s")))) (EApp (EVar "Some") (EVar "s"))) (clause ((PCon "EBinOp" (PVar "op") (PVar "a") (PVar "b") PWild)) (EIf (EBinOp "==" (EVar "op") (ELit (LString "++"))) (EMatch (ETuple (EApp (EVar "go") (EVar "a")) (EApp (EVar "go") (EVar "b"))) (arm (PTuple (PCon "Some" (PVar "x")) (PCon "Some" (PVar "y"))) () (EApp (EVar "Some") (EBinOp "++" (EVar "x") (EVar "y")))) (arm PWild () (EVar "None"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))) (clause ((PCon "EApp" (PVar "f") (PVar "x"))) (EIf (EApp (EApp (EApp (EVar "displayHead") (EVar "env")) (EVar "lets")) (EVar "f")) (EApp (EVar "go") (EVar "x")) (EApp (EVar "__fallthrough__") (ELit LUnit)))) (clause ((POr (PCon "ELit" PWild) (PCon "EVar" PWild) (PCon "ELam" PWild PWild) (PCon "ELet" PWild PWild PWild PWild PWild) (PCon "EMatch" PWild PWild) (PCon "EIf" PWild PWild PWild) (PCon "EUnOp" PWild PWild PWild) (PCon "EInfix" PWild PWild PWild) (PCon "EFieldAccess" PWild PWild PWild) (PCon "ETuple" PWild) (PCon "EListLit" PWild) (PCon "EArrayLit" PWild) (PCon "ERangeList" PWild PWild PWild) (PCon "ERangeArray" PWild PWild PWild) (PCon "ESlice" PWild PWild PWild PWild) (PCon "ELetGroup" PWild PWild) (PCon "ESection" PWild) (PCon "EIndex" PWild PWild) (PCon "EBlock" PWild) (PCon "EDo" PWild PWild) (PCon "EStringInterp" PWild) (PCon "EGuards" PWild) (PCon "ERecordCreate" PWild PWild) (PCon "ERecordUpdate" PWild PWild PWild) (PCon "EVariantUpdate" PWild PWild PWild) (PCon "EMapLit" PWild PWild) (PCon "ESetLit" PWild PWild) (PCon "EAsPat" PWild PWild) (PCon "EOrPat" PWild) (PCon "EMethodRef" PWild) (PCon "EDictApp" PWild) (PCon "EVarAt" PWild PWild) (PCon "EVarId" PWild PWild) (PCon "EMethodAt" PWild PWild PWild) (PCon "EDictAt" PWild PWild) (PCon "ENumLit" PWild PWild PWild) (PCon "EWideLit" PWild PWild PWild PWild) (PCon "EApp" PWild PWild) (PCon "EBinOp" PWild PWild PWild PWild))) (EVar "None")))) (EApp (EVar "go") (EVar "x0"))))
 (DTypeSig false "emptyString" (TyFun (TyCon "AlphaEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "AlphaBinder"))) (TyFun (TyCon "Expr") (TyCon "Bool")))))
 (DFunDef false "emptyString" ((PVar "env") (PVar "lets") (PVar "e")) (EMatch (EApp (EApp (EApp (EVar "exactString") (EVar "env")) (EVar "lets")) (EVar "e")) (arm (PCon "Some" (PVar "s")) () (EBinOp "==" (EVar "s") (ELit (LString "")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "varAuthority" (TyFun (TyCon "Param") (TyFun (TyCon "AlphaEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "AlphaBinder"))) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Authority")))))))
 (DFunDef false "varAuthority" ((PVar "top") (PVar "env") (PVar "lets") (PVar "x")) (EMatch (EApp (EApp (EVar "letInScope") (EVar "x")) (EVar "lets")) (arm (PCon "Some" (PTuple (PCon "ALet" (PVar "rhs")) (PVar "older"))) () (EApp (EApp (EApp (EApp (EVar "alphaSyntax") (EVar "top")) (EVar "env")) (EVar "older")) (EVar "rhs"))) (arm (PCon "Some" (PTuple (PCon "AOpaque") PWild)) () (EVar "None")) (arm (PCon "Some" (PTuple (PCon "AParam") PWild)) () (EApp (EApp (EApp (EVar "typedAuthority") (EVar "top")) (EVar "env")) (EVar "x"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "typedAuthority") (EVar "top")) (EVar "env")) (EVar "x")))))
 (DTypeSig false "typedAuthority" (TyFun (TyCon "Param") (TyFun (TyCon "AlphaEnv") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Authority"))))))
-(DFunDef false "typedAuthority" ((PVar "top") (PVar "env") (PVar "x")) (EMatch (EApp (EFieldAccess (EVar "env") "aeVarType") (EVar "x")) (arm (PCon "Some" (PVar "ty")) () (EMatch (EApp (EVar "normalize") (EVar "ty")) (arm (PCon "TQual" PWild (PVar "q")) () (EApp (EVar "Some") (EApp (EApp (EVar "qualifierIn") (EVar "top")) (EVar "q")))) (arm PWild () (EVar "None")))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "typedAuthority" ((PVar "top") (PVar "env") (PVar "x")) (EApp (EApp (EVar "$core.andThen") (EApp (EFieldAccess (EVar "env") "aeVarType") (EVar "x"))) (ELam ((PVar "ty")) (EMatch (EApp (EVar "normalize") (EVar "ty")) (arm (PCon "TQual" PWild (PVar "q")) () (EApp (EVar "Some") (EApp (EApp (EVar "qualifierIn") (EVar "top")) (EVar "q")))) (arm PWild () (EVar "None"))))))
 (DTypeSig false "letInScope" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "AlphaBinder"))) (TyApp (TyCon "Option") (TyTuple (TyCon "AlphaBinder") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "AlphaBinder"))))))))
 (DFunDef false "letInScope" (PWild (PList)) (EVar "None"))
 (DFunDef false "letInScope" ((PVar "x") (PCons (PTuple (PVar "n") (PVar "e")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "n") (EVar "x")) (EApp (EVar "Some") (ETuple (EVar "e") (EVar "rest"))) (EApp (EApp (EVar "letInScope") (EVar "x")) (EVar "rest"))))
@@ -458,6 +452,7 @@ collectBinds ((LetBind n clauses _ _) :: rest) acc = match clauses
 (DFunDef false "collectBinds" ((PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "collectBinds" ((PCons (PCon "LetBind" (PVar "n") (PVar "clauses") PWild PWild) (PVar "rest")) (PVar "acc")) (EMatch (EVar "clauses") (arm (PList (PCon "FunClause" (PList) (PVar "rhs"))) () (EApp (EApp (EVar "collectBinds") (EVar "rest")) (EBinOp "::" (ETuple (EVar "n") (EApp (EVar "ALet") (EVar "rhs"))) (EVar "acc")))) (arm PWild () (EApp (EApp (EVar "collectBinds") (EVar "rest")) (EVar "acc")))))
 # MARK
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "EffRow" true) (mem "Effvar" false) (mem "collectRows" false))))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true) (mem "canonParam" false) (mem "productPrimaryLift" false) (mem "domainKey" false))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "authJoin" false) (mem "authTop" false) (mem "authExtend" false) (mem "authAppend" false) (mem "authWidenValue" false) (mem "authDomainTop" false) (mem "authRetag" false))))
@@ -499,23 +494,17 @@ collectBinds ((LetBind n clauses _ _) :: rest) acc = match clauses
 (DFunDef false "alphaSyntax" ((PVar "top") (PVar "env") (PVar "lets") (PCon "EIf" PWild (PVar "t") (PVar "f"))) (EApp (EVar "joinBranches") (EListLit (EApp (EApp (EApp (EApp (EVar "alphaSyntax") (EVar "top")) (EVar "env")) (EVar "lets")) (EVar "t")) (EApp (EApp (EApp (EApp (EVar "alphaSyntax") (EVar "top")) (EVar "env")) (EVar "lets")) (EVar "f")))))
 (DFunDef false "alphaSyntax" ((PVar "top") (PVar "env") (PVar "lets") (PCon "EMatch" (PVar "scrut") (PVar "arms"))) (EApp (EVar "joinBranches") (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EApp (EVar "armAuthority") (EVar "top")) (EVar "env")) (EVar "lets")) (EVar "scrut"))) (EVar "arms"))))
 (DFunDef false "alphaSyntax" ((PVar "top") (PVar "env") (PVar "lets") (PCon "EApp" (PVar "f") (PVar "x"))) (EIf (EApp (EApp (EApp (EVar "displayHead") (EVar "env")) (EVar "lets")) (EVar "f")) (EApp (EApp (EApp (EApp (EVar "alphaSyntax") (EVar "top")) (EApp (EVar "stringNames") (EVar "env"))) (EVar "lets")) (EVar "x")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
-(DFunDef false "alphaSyntax" (PWild PWild PWild PWild) (EVar "None"))
+(DFunDef false "alphaSyntax" (PWild PWild PWild (POr (PCon "ELit" PWild) (PCon "ELam" PWild PWild) (PCon "EUnOp" PWild PWild PWild) (PCon "EInfix" PWild PWild PWild) (PCon "EFieldAccess" PWild PWild PWild) (PCon "ETuple" PWild) (PCon "EListLit" PWild) (PCon "EArrayLit" PWild) (PCon "ERangeList" PWild PWild PWild) (PCon "ERangeArray" PWild PWild PWild) (PCon "ESlice" PWild PWild PWild PWild) (PCon "ESection" PWild) (PCon "EIndex" PWild PWild) (PCon "EDo" PWild PWild) (PCon "EStringInterp" PWild) (PCon "EGuards" PWild) (PCon "ERecordCreate" PWild PWild) (PCon "ERecordUpdate" PWild PWild PWild) (PCon "EVariantUpdate" PWild PWild PWild) (PCon "EMapLit" PWild PWild) (PCon "ESetLit" PWild PWild) (PCon "EAsPat" PWild PWild) (PCon "EOrPat" PWild) (PCon "EMethodRef" PWild) (PCon "EDictApp" PWild) (PCon "EMethodAt" PWild PWild PWild) (PCon "ENumLit" PWild PWild PWild) (PCon "EWideLit" PWild PWild PWild PWild) (PCon "EApp" PWild PWild) (PCon "EBinOp" PWild PWild PWild PWild))) (EVar "None"))
 (DTypeSig false "displayHead" (TyFun (TyCon "AlphaEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "AlphaBinder"))) (TyFun (TyCon "Expr") (TyCon "Bool")))))
-(DFunDef false "displayHead" ((PVar "env") (PVar "lets") (PCon "ELoc" PWild (PVar "f"))) (EApp (EApp (EApp (EVar "displayHead") (EVar "env")) (EVar "lets")) (EVar "f")))
-(DFunDef false "displayHead" ((PVar "env") (PVar "lets") (PCon "EVar" (PVar "x"))) (EApp (EApp (EApp (EVar "preludeDisplay") (EVar "env")) (EVar "lets")) (EVar "x")))
-(DFunDef false "displayHead" ((PVar "env") (PVar "lets") (PCon "EVarId" (PVar "x") PWild)) (EApp (EApp (EApp (EVar "preludeDisplay") (EVar "env")) (EVar "lets")) (EVar "x")))
-(DFunDef false "displayHead" ((PVar "env") (PVar "lets") (PCon "EMethodAt" (PVar "x") (PVar "seed") PWild)) (EBinOp "&&" (EBinOp "==" (EVar "seed") (ELit (LString ""))) (EApp (EApp (EApp (EVar "preludeDisplay") (EVar "env")) (EVar "lets")) (EVar "x"))))
-(DFunDef false "displayHead" (PWild PWild PWild) (EVar "False"))
+(DFunDef false "displayHead" ((PVar "env") (PVar "lets") (PVar "x0")) (ELetGroup ((lgb "go" (clause ((PCon "ELoc" PWild (PVar "f"))) (EApp (EVar "go") (EVar "f"))) (clause ((PCon "EVar" (PVar "x"))) (EApp (EApp (EApp (EVar "preludeDisplay") (EVar "env")) (EVar "lets")) (EVar "x"))) (clause ((PCon "EVarId" (PVar "x") PWild)) (EApp (EApp (EApp (EVar "preludeDisplay") (EVar "env")) (EVar "lets")) (EVar "x"))) (clause ((PCon "EMethodAt" (PVar "x") (PVar "seed") PWild)) (EBinOp "&&" (EBinOp "==" (EVar "seed") (ELit (LString ""))) (EApp (EApp (EApp (EVar "preludeDisplay") (EVar "env")) (EVar "lets")) (EVar "x")))) (clause (PWild) (EVar "False")))) (EApp (EVar "go") (EVar "x0"))))
 (DTypeSig false "preludeDisplay" (TyFun (TyCon "AlphaEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "AlphaBinder"))) (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "preludeDisplay" ((PVar "env") (PVar "lets") (PVar "x")) (EBinOp "||" (EBinOp "==" (EVar "x") (EApp (EVar "preludeQualified") (ELit (LString "display")))) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "x") (ELit (LString "display"))) (EFieldAccess (EVar "env") "aeDisplayIsPrelude")) (EApp (EVar "isNone") (EApp (EApp (EVar "letInScope") (EVar "x")) (EVar "lets"))))))
 (DTypeSig false "stringNames" (TyFun (TyCon "AlphaEnv") (TyCon "AlphaEnv")))
-(DFunDef false "stringNames" ((PVar "env")) (ERecordUpdate (EVar "env") ((fa "aeVarType" (ELam ((PVar "x")) (EMatch (EApp (EFieldAccess (EVar "env") "aeVarType") (EVar "x")) (arm (PCon "Some" (PVar "ty")) () (EIf (EApp (EVar "qualifiedString") (EVar "ty")) (EApp (EVar "Some") (EVar "ty")) (EVar "None"))) (arm (PCon "None") () (EVar "None"))))))))
+(DFunDef false "stringNames" ((PVar "env")) (ERecordUpdate (EVar "env") ((fa "aeVarType" (ELam ((PVar "x")) (EApp (EApp (EVar "$core.andThen") (EApp (EFieldAccess (EVar "env") "aeVarType") (EVar "x"))) (ELam ((PVar "ty")) (EIf (EApp (EVar "qualifiedString") (EVar "ty")) (EApp (EVar "Some") (EVar "ty")) (EVar "None")))))))))
 (DTypeSig false "qualifiedString" (TyFun (TyCon "Mono") (TyCon "Bool")))
 (DFunDef false "qualifiedString" ((PVar "ty")) (EMatch (EApp (EVar "normalize") (EVar "ty")) (arm (PCon "TQual" (PVar "inner") PWild) () (EMatch (EApp (EVar "normalize") (EVar "inner")) (arm (PCon "TCon" (PVar "n") (PVar "o")) () (EApp (EApp (EApp (EApp (EVar "sameTyConHead") (EVar "n")) (EVar "o")) (ELit (LString "String"))) (EVar "OriginBuiltin"))) (arm PWild () (EVar "False")))) (arm PWild () (EVar "False"))))
 (DTypeSig false "blockAuthority" (TyFun (TyCon "Param") (TyFun (TyCon "AlphaEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "AlphaBinder"))) (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyApp (TyCon "Option") (TyCon "Authority")))))))
-(DFunDef false "blockAuthority" ((PVar "top") (PVar "env") (PVar "lets") (PList (PCon "DoExpr" (PVar "e")))) (EApp (EApp (EApp (EApp (EVar "alphaSyntax") (EVar "top")) (EVar "env")) (EVar "lets")) (EVar "e")))
-(DFunDef false "blockAuthority" ((PVar "top") (PVar "env") (PVar "lets") (PCons (PVar "s") (PAs "rest" (PCons PWild PWild)))) (EApp (EApp (EApp (EApp (EVar "blockAuthority") (EVar "top")) (EVar "env")) (EApp (EApp (EVar "stmtScope") (EVar "s")) (EVar "lets"))) (EVar "rest")))
-(DFunDef false "blockAuthority" (PWild PWild PWild PWild) (EVar "None"))
+(DFunDef false "blockAuthority" ((PVar "top") (PVar "env") (PVar "lets0") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PVar "lets") (PList (PCon "DoExpr" (PVar "e")))) (EApp (EApp (EApp (EApp (EVar "alphaSyntax") (EVar "top")) (EVar "env")) (EVar "lets")) (EVar "e"))) (clause ((PVar "lets") (PCons (PVar "s") (PAs "rest" (PCons PWild PWild)))) (EApp (EApp (EVar "go") (EApp (EApp (EVar "stmtScope") (EVar "s")) (EVar "lets"))) (EVar "rest"))) (clause (PWild PWild) (EVar "None")))) (EApp (EApp (EVar "go") (EVar "lets0")) (EVar "xs0"))))
 (DTypeSig false "stmtScope" (TyFun (TyCon "DoStmt") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "AlphaBinder"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "AlphaBinder"))))))
 (DFunDef false "stmtScope" ((PCon "DoLet" PWild PWild (PCon "PVar" (PVar "x") PWild PWild) (PVar "e") PWild) (PVar "lets")) (EBinOp "::" (ETuple (EVar "x") (EApp (EVar "ALet") (EVar "e"))) (EVar "lets")))
 (DFunDef false "stmtScope" ((PCon "DoLet" PWild PWild (PVar "pat") PWild PWild) (PVar "lets")) (EApp (EApp (EVar "shadowed") (EApp (EVar "patBoundNames") (EVar "pat"))) (EVar "lets")))
@@ -546,20 +535,13 @@ collectBinds ((LetBind n clauses _ _) :: rest) acc = match clauses
 (DTypeSig false "suffixed" (TyFun (TyCon "AlphaEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "AlphaBinder"))) (TyFun (TyCon "Expr") (TyFun (TyCon "Authority") (TyCon "Authority"))))))
 (DFunDef false "suffixed" ((PVar "env") (PVar "lets") (PVar "b") (PVar "left")) (EMatch (EApp (EApp (EApp (EVar "exactString") (EVar "env")) (EVar "lets")) (EVar "b")) (arm (PCon "Some" (PVar "s")) () (EApp (EApp (EVar "authAppend") (EVar "s")) (EVar "left"))) (arm (PCon "None") () (EApp (EVar "authExtend") (EVar "left")))))
 (DTypeSig false "exactString" (TyFun (TyCon "AlphaEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "AlphaBinder"))) (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "String"))))))
-(DFunDef false "exactString" ((PVar "env") (PVar "lets") (PCon "ELoc" PWild (PVar "e"))) (EApp (EApp (EApp (EVar "exactString") (EVar "env")) (EVar "lets")) (EVar "e")))
-(DFunDef false "exactString" ((PVar "env") (PVar "lets") (PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EApp (EApp (EVar "exactString") (EVar "env")) (EVar "lets")) (EVar "e")))
-(DFunDef false "exactString" ((PVar "env") (PVar "lets") (PCon "EAnnot" (PVar "e") PWild)) (EApp (EApp (EApp (EVar "exactString") (EVar "env")) (EVar "lets")) (EVar "e")))
-(DFunDef false "exactString" ((PVar "env") (PVar "lets") (PCon "EHeadAnnot" (PVar "e") PWild)) (EApp (EApp (EApp (EVar "exactString") (EVar "env")) (EVar "lets")) (EVar "e")))
-(DFunDef false "exactString" (PWild PWild (PCon "ELit" (PCon "LString" (PVar "s")))) (EApp (EVar "Some") (EVar "s")))
-(DFunDef false "exactString" ((PVar "env") (PVar "lets") (PCon "EBinOp" (PVar "op") (PVar "a") (PVar "b") PWild)) (EIf (EBinOp "==" (EVar "op") (ELit (LString "++"))) (EMatch (ETuple (EApp (EApp (EApp (EVar "exactString") (EVar "env")) (EVar "lets")) (EVar "a")) (EApp (EApp (EApp (EVar "exactString") (EVar "env")) (EVar "lets")) (EVar "b"))) (arm (PTuple (PCon "Some" (PVar "x")) (PCon "Some" (PVar "y"))) () (EApp (EVar "Some") (EBinOp "++" (EVar "x") (EVar "y")))) (arm PWild () (EVar "None"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
-(DFunDef false "exactString" ((PVar "env") (PVar "lets") (PCon "EApp" (PVar "f") (PVar "x"))) (EIf (EApp (EApp (EApp (EVar "displayHead") (EVar "env")) (EVar "lets")) (EVar "f")) (EApp (EApp (EApp (EVar "exactString") (EVar "env")) (EVar "lets")) (EVar "x")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
-(DFunDef false "exactString" (PWild PWild PWild) (EVar "None"))
+(DFunDef false "exactString" ((PVar "env") (PVar "lets") (PVar "x0")) (ELetGroup ((lgb "go" (clause ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "go") (EVar "e"))) (clause ((PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EVar "go") (EVar "e"))) (clause ((PCon "EAnnot" (PVar "e") PWild)) (EApp (EVar "go") (EVar "e"))) (clause ((PCon "EHeadAnnot" (PVar "e") PWild)) (EApp (EVar "go") (EVar "e"))) (clause ((PCon "ELit" (PCon "LString" (PVar "s")))) (EApp (EVar "Some") (EVar "s"))) (clause ((PCon "EBinOp" (PVar "op") (PVar "a") (PVar "b") PWild)) (EIf (EBinOp "==" (EVar "op") (ELit (LString "++"))) (EMatch (ETuple (EApp (EVar "go") (EVar "a")) (EApp (EVar "go") (EVar "b"))) (arm (PTuple (PCon "Some" (PVar "x")) (PCon "Some" (PVar "y"))) () (EApp (EVar "Some") (EBinOp "++" (EVar "x") (EVar "y")))) (arm PWild () (EVar "None"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))) (clause ((PCon "EApp" (PVar "f") (PVar "x"))) (EIf (EApp (EApp (EApp (EVar "displayHead") (EVar "env")) (EVar "lets")) (EVar "f")) (EApp (EVar "go") (EVar "x")) (EApp (EVar "__fallthrough__") (ELit LUnit)))) (clause ((POr (PCon "ELit" PWild) (PCon "EVar" PWild) (PCon "ELam" PWild PWild) (PCon "ELet" PWild PWild PWild PWild PWild) (PCon "EMatch" PWild PWild) (PCon "EIf" PWild PWild PWild) (PCon "EUnOp" PWild PWild PWild) (PCon "EInfix" PWild PWild PWild) (PCon "EFieldAccess" PWild PWild PWild) (PCon "ETuple" PWild) (PCon "EListLit" PWild) (PCon "EArrayLit" PWild) (PCon "ERangeList" PWild PWild PWild) (PCon "ERangeArray" PWild PWild PWild) (PCon "ESlice" PWild PWild PWild PWild) (PCon "ELetGroup" PWild PWild) (PCon "ESection" PWild) (PCon "EIndex" PWild PWild) (PCon "EBlock" PWild) (PCon "EDo" PWild PWild) (PCon "EStringInterp" PWild) (PCon "EGuards" PWild) (PCon "ERecordCreate" PWild PWild) (PCon "ERecordUpdate" PWild PWild PWild) (PCon "EVariantUpdate" PWild PWild PWild) (PCon "EMapLit" PWild PWild) (PCon "ESetLit" PWild PWild) (PCon "EAsPat" PWild PWild) (PCon "EOrPat" PWild) (PCon "EMethodRef" PWild) (PCon "EDictApp" PWild) (PCon "EVarAt" PWild PWild) (PCon "EVarId" PWild PWild) (PCon "EMethodAt" PWild PWild PWild) (PCon "EDictAt" PWild PWild) (PCon "ENumLit" PWild PWild PWild) (PCon "EWideLit" PWild PWild PWild PWild) (PCon "EApp" PWild PWild) (PCon "EBinOp" PWild PWild PWild PWild))) (EVar "None")))) (EApp (EVar "go") (EVar "x0"))))
 (DTypeSig false "emptyString" (TyFun (TyCon "AlphaEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "AlphaBinder"))) (TyFun (TyCon "Expr") (TyCon "Bool")))))
 (DFunDef false "emptyString" ((PVar "env") (PVar "lets") (PVar "e")) (EMatch (EApp (EApp (EApp (EVar "exactString") (EVar "env")) (EVar "lets")) (EVar "e")) (arm (PCon "Some" (PVar "s")) () (EBinOp "==" (EVar "s") (ELit (LString "")))) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "varAuthority" (TyFun (TyCon "Param") (TyFun (TyCon "AlphaEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "AlphaBinder"))) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Authority")))))))
 (DFunDef false "varAuthority" ((PVar "top") (PVar "env") (PVar "lets") (PVar "x")) (EMatch (EApp (EApp (EVar "letInScope") (EVar "x")) (EVar "lets")) (arm (PCon "Some" (PTuple (PCon "ALet" (PVar "rhs")) (PVar "older"))) () (EApp (EApp (EApp (EApp (EVar "alphaSyntax") (EVar "top")) (EVar "env")) (EVar "older")) (EVar "rhs"))) (arm (PCon "Some" (PTuple (PCon "AOpaque") PWild)) () (EVar "None")) (arm (PCon "Some" (PTuple (PCon "AParam") PWild)) () (EApp (EApp (EApp (EVar "typedAuthority") (EVar "top")) (EVar "env")) (EVar "x"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "typedAuthority") (EVar "top")) (EVar "env")) (EVar "x")))))
 (DTypeSig false "typedAuthority" (TyFun (TyCon "Param") (TyFun (TyCon "AlphaEnv") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Authority"))))))
-(DFunDef false "typedAuthority" ((PVar "top") (PVar "env") (PVar "x")) (EMatch (EApp (EFieldAccess (EVar "env") "aeVarType") (EVar "x")) (arm (PCon "Some" (PVar "ty")) () (EMatch (EApp (EVar "normalize") (EVar "ty")) (arm (PCon "TQual" PWild (PVar "q")) () (EApp (EVar "Some") (EApp (EApp (EVar "qualifierIn") (EVar "top")) (EVar "q")))) (arm PWild () (EVar "None")))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "typedAuthority" ((PVar "top") (PVar "env") (PVar "x")) (EApp (EApp (EVar "$core.andThen") (EApp (EFieldAccess (EVar "env") "aeVarType") (EVar "x"))) (ELam ((PVar "ty")) (EMatch (EApp (EVar "normalize") (EVar "ty")) (arm (PCon "TQual" PWild (PVar "q")) () (EApp (EVar "Some") (EApp (EApp (EVar "qualifierIn") (EVar "top")) (EVar "q")))) (arm PWild () (EVar "None"))))))
 (DTypeSig false "letInScope" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "AlphaBinder"))) (TyApp (TyCon "Option") (TyTuple (TyCon "AlphaBinder") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "AlphaBinder"))))))))
 (DFunDef false "letInScope" (PWild (PList)) (EVar "None"))
 (DFunDef false "letInScope" ((PVar "x") (PCons (PTuple (PVar "n") (PVar "e")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "n") (EVar "x")) (EApp (EVar "Some") (ETuple (EVar "e") (EVar "rest"))) (EApp (EApp (EVar "letInScope") (EVar "x")) (EVar "rest"))))

@@ -363,9 +363,9 @@ readForeignLibs root =
 resolveDepFile : List (String, String) -> String -> <IO> Option (String, String)
 resolveDepFile deps modId = match splitOnChar "." modId
   [] => None
-  seg0 :: restSegs => match lookupAssoc seg0 deps
-    None => None
-    Some depRoot => match restSegs
+  seg0 :: restSegs => do
+    depRoot <- lookupAssoc seg0 deps
+    match restSegs
       [] => None
       _ =>
         let path = fileOfModuleId depRoot (joinDot restSegs)
@@ -444,16 +444,18 @@ moduleIdsUnder dir prefix = match listDir dir
   Ok entries => entryModuleIds dir prefix entries
 
 entryModuleIds : String -> String -> List String -> <IO> List String
-entryModuleIds _ _ [] = []
-entryModuleIds dir prefix (name :: rest) =
-  let here = match mdkBaseName name
-    Some base => ["\{prefix}\{base}"]
-    None =>
-      if startsWith "." name then
-        []
-      else
-        moduleIdsUnder "\{dir}/\{name}" "\{prefix}\{name}."
-  here ++ entryModuleIds dir prefix rest
+entryModuleIds dir prefix xs0 = go xs0
+  where
+    go [] = []
+    go (name :: rest) =
+      let here = match mdkBaseName name
+        Some base => ["\{prefix}\{base}"]
+        None =>
+          if startsWith "." name then
+            []
+          else
+            moduleIdsUnder "\{dir}/\{name}" "\{prefix}\{name}."
+      here ++ go rest
 
 -- `foo.mdk` -> `Some "foo"`; dotfiles, non-`.mdk` entries, the two implicit
 -- prelude modules, and a `*_test.mdk` sibling (a module's tests, never an
@@ -1027,6 +1029,8 @@ rewriteDecls : List (String, String) ->
   List String ->
   List Decl ->
   <IO> List Decl
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 rewriteDecls _ _ [] = []
 rewriteDecls deps roots (d :: ds) =
   let d2 = rewriteDecl deps roots d
@@ -1375,17 +1379,21 @@ trustedModsGo : List (String, String) ->
   List String ->
   List String ->
   <IO> List String
-trustedModsGo _ _ _ _ [] = []
-trustedModsGo deps roots stdlibRoot trustedRoots (m :: ms) =
-  let rest = trustedModsGo deps roots stdlibRoot trustedRoots ms
-  match findModuleFile deps roots m
-    Some (path, owningRoot) =>
-      if contains (canonicalizePath owningRoot) trustedRoots
-        || underDir (canonicalizePath stdlibRoot) (canonicalizePath path) then
-        m :: rest
-      else
-        rest
-    None => rest
+trustedModsGo deps roots stdlibRoot trustedRoots xs0 = go xs0
+  where
+    go [] = []
+    go (m :: ms) =
+      let rest = go ms
+      match findModuleFile deps roots m
+        Some (path, owningRoot) =>
+          if contains (canonicalizePath owningRoot) trustedRoots
+            || underDir
+              (canonicalizePath stdlibRoot)
+              (canonicalizePath path) then
+            m :: rest
+          else
+            rest
+        None => rest
 
 underDir : String -> String -> Bool
 underDir dir path = startsWith "\{dir}/" path
@@ -1486,18 +1494,17 @@ testImportViolation : List (String, String) ->
 testImportViolation deps roots importer entry modId =
   if importer == "" || endsWith testFileSuffix importer then
     None
-  else match findModuleOrEntryFile deps roots entry modId
-    Some (path, _) =>
-      if endsWith testFileSuffix path then
-        let (written, site) = importSite deps roots importer modId
-        Some
-          (LoadTestImport
-            "import `\{written}` in \{importer}: `\{written}` is a test module; only `*_test.mdk` files may import one. Move the shared code out of the test file."
-            importer
-            site)
-      else
-        None
-    None => None
+  else do
+    (path, _) <- findModuleOrEntryFile deps roots entry modId
+    if endsWith testFileSuffix path then
+      let (written, site) = importSite deps roots importer modId
+      Some
+        (LoadTestImport
+          "import `\{written}` in \{importer}: `\{written}` is a test module; only `*_test.mdk` files may import one. Move the shared code out of the test file."
+          importer
+          site)
+    else
+      None
 
 visitModF : (String -> String -> Result ParseError (List Decl)) ->
   (String -> Option String) ->
@@ -1551,25 +1558,29 @@ visitModChecked parseFn read deps roots stack visited acc importer entry modId =
         ])
         importer
         (cycleSite deps roots importer modId))
-  else match readModuleProgF parseFn read deps roots entry modId
-    Err e => Err e
-    Ok (owningRoot, path, prog) =>
-      let croots = childRoots owningRoot roots
-      let cdeps = childDeps deps owningRoot roots
-      let prog2 = rewriteDecls cdeps croots prog
-      map
-        ((visited2, acc2) =>
-          (modId :: visited2, acc2 ++ [(modId, path, prog2)]))
-        (visitModsF
-          parseFn
-          read
-          cdeps
-          croots
-          (modId :: stack)
-          visited
-          acc
-          path
-          (directImports prog2))
+  else do
+    (owningRoot, path, prog) <- readModuleProgF
+      parseFn
+      read
+      deps
+      roots
+      entry
+      modId
+    let croots = childRoots owningRoot roots
+    let cdeps = childDeps deps owningRoot roots
+    let prog2 = rewriteDecls cdeps croots prog
+    map
+      ((visited2, acc2) => (modId :: visited2, acc2 ++ [(modId, path, prog2)]))
+      (visitModsF
+        parseFn
+        read
+        cdeps
+        croots
+        (modId :: stack)
+        visited
+        acc
+        path
+        (directImports prog2))
 
 visitModsF : (String -> String -> Result ParseError (List Decl)) ->
   (String -> Option String) ->
@@ -1581,11 +1592,13 @@ visitModsF : (String -> String -> Result ParseError (List Decl)) ->
   String ->
   List String ->
   <IO> Result LoadError (List String, List (String, String, List Decl))
-visitModsF _ _ _ _ _ visited acc _ [] = Ok (visited, acc)
-visitModsF parseFn read deps roots stack visited acc importer (d :: ds) =
-  match visitModF parseFn read deps roots stack visited acc importer "" d
-    Err e => Err e
-    Ok (v2, a2) => visitModsF parseFn read deps roots stack v2 a2 importer ds
+visitModsF parseFn read deps roots stack seen0 a0 importer xs0 = go seen0 a0 xs0
+  where
+    go visited acc [] = Ok (visited, acc)
+    go visited acc (d :: ds) =
+      match visitModF parseFn read deps roots stack visited acc importer "" d
+        Err e => Err e
+        Ok (v2, a2) => go v2 a2 ds
 
 -- A walk's result as the loaders return it: the modules, with the source records
 -- narrowed to them.
@@ -1674,11 +1687,10 @@ parseCachedLocated : Ref (OrdMap (List Decl)) ->
   Result ParseError (List Decl)
 parseCachedLocated cacheRef src = match omLookup src !cacheRef
   Some decls => Ok decls
-  None => match parseLocatedResult src
-    Err e => Err e
-    Ok decls =>
-      cacheRef := omInsert src decls !cacheRef
-      Ok decls
+  None => do
+    decls <- parseLocatedResult src
+    let _ = cacheRef := omInsert src decls !cacheRef
+    Ok decls
 
 -- Narrow a parse memo to the entries whose source is in `srcs`: a caller that
 -- parsed through the memo without loading a graph (a buffer with no imports)

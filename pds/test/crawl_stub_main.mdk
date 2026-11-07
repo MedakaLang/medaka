@@ -71,16 +71,18 @@ recvBodyChunks : Connection * ->
   Int ->
   Int ->
   <Net> Result String Bytes
-recvBodyChunks conn parts have need =
-  if have >= need then
-    Ok (B.take need (B.concat (reverse parts)))
-  else match recv conn 65536
-    Err message => Err "crawl_stub: read failed: \{message}"
-    Ok chunk =>
-      if B.isEmpty chunk then
-        Err "crawl_stub: call closed before its declared body arrived"
-      else
-        recvBodyChunks conn (chunk :: parts) (have + B.length chunk) need
+recvBodyChunks conn parts0 have0 need = go parts0 have0
+  where
+    go parts have =
+      if have >= need then
+        Ok (B.take need (B.concat (reverse parts)))
+      else match recv conn 65536
+        Err message => Err "crawl_stub: read failed: \{message}"
+        Ok chunk =>
+          if B.isEmpty chunk then
+            Err "crawl_stub: call closed before its declared body arrived"
+          else
+            go (chunk :: parts) (have + B.length chunk)
 
 -- ── the answer ───────────────────────────────────────────────────────────
 
@@ -158,14 +160,16 @@ ready lis = match listenPort lis
 acceptLoop : Listener * ->
   (Connection * -> <FileWrite, Net> Result String Unit) ->
   <FileWrite, Net> Unit
-acceptLoop lis handle = match accept lis
-  Err message => panic "crawl_stub: accept failed: \{message}"
-  Ok conn =>
-    let _ = handle conn
-    bestEffort
-      "the call is finished and the peer may already have hung up; the loop goes on to the next one"
-      (close conn)
-    acceptLoop lis handle
+acceptLoop lis handle = go ()
+  where
+    go () = match accept lis
+      Err message => panic "crawl_stub: accept failed: \{message}"
+      Ok conn =>
+        let _ = handle conn
+        bestEffort
+          "the call is finished and the peer may already have hung up; the loop goes on to the next one"
+          (close conn)
+        go ()
 
 serve : Int ->
   (Connection * -> <FileWrite, Net> Result String Unit) ->

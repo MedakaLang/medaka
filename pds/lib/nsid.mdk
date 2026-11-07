@@ -55,24 +55,28 @@ validateAuthoritySegment bytes start end first =
     Ok ()
 
 validateAuthority : Bytes -> Int -> Int -> Int -> Int -> Result NsidError Int
-validateAuthority bytes i end segmentStart segments =
-  if i >= end then do
-    () <- validateAuthoritySegment bytes segmentStart end (segments == 0)
-    Ok (segments + 1)
-  else if byteAt bytes i == 46 then do
-    () <- validateAuthoritySegment bytes segmentStart i (segments == 0)
-    validateAuthority bytes (i + 1) end (i + 1) (segments + 1)
-  else
-    validateAuthority bytes (i + 1) end segmentStart segments
+validateAuthority bytes i0 end start0 segs0 = go i0 start0 segs0
+  where
+    go i segmentStart segments =
+      if i >= end then do
+        () <- validateAuthoritySegment bytes segmentStart end (segments == 0)
+        Ok (segments + 1)
+      else if byteAt bytes i == 46 then do
+        () <- validateAuthoritySegment bytes segmentStart i (segments == 0)
+        go (i + 1) (i + 1) (segments + 1)
+      else
+        go (i + 1) segmentStart segments
 
 lastDotBefore : Bytes -> Int -> Int -> Int -> Int
-lastDotBefore bytes i end last =
-  if i >= end then
-    last
-  else if byteAt bytes i == 46 then
-    lastDotBefore bytes (i + 1) end i
-  else
-    lastDotBefore bytes (i + 1) end last
+lastDotBefore bytes i0 end last0 = go i0 last0
+  where
+    go i last =
+      if i >= end then
+        last
+      else if byteAt bytes i == 46 then
+        go (i + 1) i
+      else
+        go (i + 1) last
 
 validateName : Bytes -> Int -> Int -> Result NsidError Unit
 validateName bytes start end =
@@ -124,18 +128,20 @@ lowerAsciiByte : U8 -> U8
 lowerAsciiByte byte = if byte >= 65 && byte <= 90 then byte + 32 else byte
 
 sameIdentityBytes : Bytes -> Bytes -> Int -> Int -> Bool
-sameIdentityBytes left right authorityEnd i =
-  if i >= B.length left then
-    True
-  else
-    let leftByte = left[i]
-    let rightByte = right[i]
-    let same =
-      if i < authorityEnd then
-        lowerAsciiByte leftByte == lowerAsciiByte rightByte
+sameIdentityBytes left right authorityEnd i0 = go i0
+  where
+    go i =
+      if i >= B.length left then
+        True
       else
-        leftByte == rightByte
-    same && sameIdentityBytes left right authorityEnd (i + 1)
+        let leftByte = left[i]
+        let rightByte = right[i]
+        let same =
+          if i < authorityEnd then
+            lowerAsciiByte leftByte == lowerAsciiByte rightByte
+          else
+            leftByte == rightByte
+        same && go (i + 1)
 
 -- | Compare NSID identity using a case-insensitive authority and a
 -- case-sensitive method name. Callers retain the original spelling.
