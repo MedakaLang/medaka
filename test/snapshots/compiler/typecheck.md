@@ -213,7 +213,7 @@ import frontend.resolve.{
   stampTyOrigins,
   runtimeExternTyOriginScope,
 }
--- The type-aware non-exhaustive-`match` check (`check_match` in compiler/frontend/exhaust.mdk)
+-- The type-aware non-exhaustive-`match` check (`checkMatchExhaustive` in compiler/frontend/exhaust.mdk)
 -- reuses the Maranget matrix machinery already ported in exhaust.mdk — the only
 -- difference from the guard-coverage pass is the ctor oracle (here it comes from
 -- the typechecked program's data decls + the inferred scrutinee type).
@@ -261,7 +261,7 @@ import types.registry.{
 }
 -- B-2.2-e: THE route-word mint, shared with `eval/eval.mdk` and
 -- `ir/core_ir_lower.mdk`.  Before this bite each of those spelled its own copy
--- (`implKeyTc` here, `implKeyOf` there) over its own `Ty` printer; they are now
+-- (`implKeyTc` here, eval's copy there) over its own `Ty` printer; they are now
 -- one function, so the caller side and the definition side of the dict-word seam
 -- agree BY CONSTRUCTION rather than by two mirrors staying in lockstep.
 import types.route_key.{
@@ -1123,7 +1123,7 @@ isMangledFor mid k =
 --
 -- ⚠️ The residual's true root is one level down and is NOT fixed here: private_mangle's
 -- `(module, name) -> symbol` encoding is not injective -- a module `lib.plain` and a
--- module literally named `lib_plain` both yield `lib_plain__g`.  That is the common root
+-- module literally named lib_plain both yield `lib_plain__g`.  That is the common root
 -- of both regressions above and is bigger than this function; do not try to repair it by
 -- editing this test.
 isMangledExportOfAny : List (String, List (String, a)) -> String -> Bool
@@ -1142,7 +1142,7 @@ isMangledExportOfAny ((m, pubV) :: rest) k =
 -- reach this only through a successful `lookupAssoc depId depEnv`, so the spelled module
 -- is in the list by construction and needs no separate term.
 --
--- 🚨 `"core"` IS DELIBERATELY **NOT** IN `mids`, AND MUST NOT BE ADDED BACK
+-- 🚨 `"core"` IS DELIBERATELY **NOT** IN the module-id list, AND MUST NOT BE ADDED BACK
 -- (RUN-XMOD-039).  It was, briefly.  The argument for it reads well — `reexportSeed`'s
 -- own comment records core as the one source NOT in depEnv, and private_mangle *does*
 -- mangle core's exports to `core__<name>` — but it was DERIVED, never witnessed: a
@@ -1171,7 +1171,7 @@ importFormSchemes _ path depSchemes = importFormRows path depSchemes
 -- No alias spelling is resolved here, module or member.  The alias spelling is what
 -- makes the occurrence decidable.  Erasing `A.area` makes it the same name as an
 -- unrelated imported standalone `area`, and the standalone shadow wins (#1386 Repro B);
--- erasing a member alias `import m.{area as computeArea}` makes `computeArea` and a bare
+-- erasing a member alias `import m.{area as computeArea}` makes the alias and a bare
 -- `area` one name, so the import's method captures an `area` that resolve bound to
 -- another declaration (#3708).  Inference gets the spelling supplied to it
 -- (`aliasQualifiedMethodEntries`, `moduleMarkCtx`, `originMethodName`) and
@@ -2194,8 +2194,8 @@ cmFold runtimeSeed coreSchemes coreCtx modules =
 -- `foldModules` never folds a module into its own
 -- `accAll` (see `checkModuleFullImpl`'s E5 note: "a caller that needs this module's own
 -- decls too must fold [prog] in itself"), so the readers of `checkBodyImpl`'s
--- `implDecls` on this arm — `visibleMethodRows`, `inferUserImplBodies`' field-type
--- universe, `superDecls` and the `importerShadows` emptiness test — see this
+-- `implDecls` on this arm — the visible-method-rows reader, `inferUserImplBodies`' field-type
+-- universe, the super decls and the importer-shadows emptiness test — see this
 -- module's own declarations only through this fold.  Return-only dispatch on an
 -- own-module impl (`test/engine_fixtures/return_only_param_dispatch.mdk`, and
 -- `test/run_check_agreement_fixtures/accept_own_module_impl_return_only_dispatch.mdk`
@@ -2268,7 +2268,7 @@ graphModuleWorker capture sel prev mid seed accData accAll prog =
 -- Both directions of that hole are pinned:
 --   * fresh process — the ref is `None`, `mainIsUnitNow` answers False on `None`,
 --     so W-MAIN-SHAPE FIRED on a clean Unit main (false positive on every
---     `check --json` / MCP `medaka_check` of a multi-module project);
+--     `check --json` / MCP check of a multi-module project);
 --   * long-lived process (`medaka mcp`, `medaka lsp`) — the ref held whatever an
 --     EARLIER request left, so a genuinely non-Unit `main` had its real warning
 --     SILENTLY VANISH behind a previous request's Unit scheme.  [W-QUIETER]: that
@@ -2650,7 +2650,7 @@ driveGraphK sel (DriveArgs inputs valueMain executes preludeKey keyed runtimeDec
   -- #1110: acquire type-constructor identity over the whole graph before anything
   -- typechecks; the rebind shadows the raw params so no line below can read the
   -- unstamped tree.  It is HERE, not in the preamble, because this is the seam the
-  -- RUN path and the separate `medaka_emitter` BUILD process share — the emitter
+  -- RUN path and the separate emitter BUILD process share — the emitter
   -- never runs resolve, so acquiring identity anywhere upstream would give `check`
   -- and `build` different trees.  Method-alias renaming comes first: it is a name
   -- rewrite on VALUES and cannot move a type head, so the graph reaches identity
@@ -3450,9 +3450,9 @@ allModuleLines [] = []
 allModuleLines ((mid, ss) :: rest) =
   "## MODULE " ++ mid :: schemeLines ss ++ allModuleLines rest
 
--- The multi-module analog of `elaborate`: the composition of `checkModules`
+-- The multi-module analog of single-module elaboration: the composition of `checkModules`
 -- (per-module-frame typecheck, dependency-first) and the EMethodAt route-
--- stamping `elaborate` does single-module.  prePasses the prelude + every module
+-- stamping single-module elaboration does.  prePasses the prelude + every module
 -- (rewriting return-position method occurrences to EMethodAt over the WHOLE
 -- program's RP method set), typechecks each module in dependency order (seeded
 -- like checkModules), and STAMPS each module's route refs from its now-resolved

@@ -21,7 +21,7 @@ import types.symbol_origins.{
 -- mangled name.  Collisions are then avoided FOR MODULE IDS THAT DON'T COLLIDE
 -- under `sanitizeId`'s mapping — NOT impossible by construction: `sanitizeId`
 -- maps every non-`[A-Za-z0-9_]` char (including the loader's own `.` module-id
--- separator) to `_`, so a flat module `lib_plain.mdk` (id `lib_plain`) and a
+-- separator) to `_`, so a flat module `lib_plain.mdk` (id lib_plain) and a
 -- nested module `lib/plain.mdk` (id `lib.plain`) sanitize to the identical
 -- string and produce the identical `@mdk_<sym>` symbol for a same-named export
 -- — a real, measured collision, not a hypothetical one. See #1677 (open).
@@ -62,7 +62,7 @@ import types.symbol_origins.{
 --     they are declared in runtime.mdk (NOT in core/modules), so they never appear
 --     as a definition here; a reference to one is excluded by rule 4 (not in any
 --     unit's defined-fn set nor import scope).  A module's OWN extern keeps its
---     spelling too unless it has `bind` clauses (`externSymbolName`).
+--     spelling too unless it has bind clauses (`externSymbolName`).
 --   • interface/impl method names, dict names — they have their own naming in the
 --     emitter (impl keys), and are not DFunDef/DData binders this pass touches.
 --   • RESERVED constructors (Cons/Nil/Some/None/Ok/Err/Lt/Eq/Gt/True/False) — the
@@ -206,11 +206,11 @@ mangleUnits coreDecls modules =
 
 -- The same rename for the target check's reach (`ir.dce.reachedExternChains`),
 -- which must tell which declaration each reference denotes.  Every extern takes
--- its module-scoped name, with `bind` clauses or without, so a reference
+-- its module-scoped name, with bind clauses or without, so a reference
 -- reaches exactly the declaration it resolves to, and a local binder, which
 -- the rename leaves alone, reaches none.  No injectivity guard: two module ids
 -- that sanitize alike merge their names, which only widens the reach.
--- `builtins` names the module of declarations every unit sees without an
+-- The builtins module is that of declarations every unit sees without an
 -- import, as it sees the prelude's, and that the prelude's own bindings shadow.
 export
 scopeUnitNames : Option (String, List Decl) ->
@@ -779,9 +779,9 @@ lookupDefiner k ((n, d) :: rest) =
 -- ── per-unit CONSTRUCTOR exports ──────────────────────────────────────────────
 -- (mid, [(typeName, definerMid, [ctorName])]) for the constructors the unit's
 -- surface offers an importer, its own and whatever its `export import`s carry.
--- `definerMid` is the DECLARING module, because a ctor's rename target is
--- `<definerMid>__<ctor>`: `bmod`'s row can offer `Wid` (declared in `amod`)
--- without `bmod` ever defining an `@amod__Wid`-shaped symbol.  A type row's
+-- The definer is the DECLARING module, because a ctor's rename target is
+-- `<definer>__<ctor>`: bmod's row can offer `Wid` (declared in `amod`)
+-- without bmod ever defining an `@amod__Wid`-shaped symbol.  A type row's
 -- definer is the first of the type's declaring modules (`expTypeOrigins`) that
 -- also declares every ctor in the row (`expCtorOrigins`): two carried types may
 -- share a type name, and two may share a ctor spelling, so neither name alone
@@ -1020,7 +1020,7 @@ useCtorPathEntries ctorExportsPerUnit path =
 -- Mirroring the arms is not mirroring the table.  These arms only ask questions;
 -- `ctorExportsFrom` answers them, from the export surface resolve reads, so the
 -- arms and resolve agree only while that table is the producer's answer.  Each type
--- entry carries its own `definerMid` (a re-exported entry's differs from the DUse
+-- entry carries its own definer module (a re-exported entry's differs from the DUse
 -- target module), so the mangled name is built from that, never from the import
 -- path's own module id.
 ctorMemberEntry : List (String, String, List String) ->
@@ -1037,7 +1037,7 @@ ctorMemberEntry typeEntries (UseMember name wild _ _) =
 
 -- `name` itself, iff M exports a CONSTRUCTOR so spelled.  Scans every type's ctor
 -- list because the question is about ctor-ness, not about which type owns it; the
--- OWNING entry's `definerMid`, not the DUse target, names the mangled origin.
+-- OWNING entry's definer module, not the DUse target, names the mangled origin.
 bareCtorMemberEntry : List (String, String, List String) ->
   String ->
   List (String, String)
@@ -1204,7 +1204,7 @@ externDeclEntries name ((DAttrib _ decl) :: rest) =
   externDeclEntries name [decl] ++ externDeclEntries name rest
 externDeclEntries name (_ :: rest) = externDeclEntries name rest
 
--- The program-wide name of an extern declared in module `mid`.  One with `bind`
+-- The program-wide name of an extern declared in module `mid`.  One with bind
 -- clauses names whatever its clauses bind, which another module may bind
 -- differently under the same Medaka name, so like a function it takes the
 -- module-scoped name and both emitters key its foreign call by that.  One with
@@ -1641,7 +1641,7 @@ renameDecl rm (DFunDef pub n ps e site bid) =
 -- a top-level signature (`f : …` / `export f : …`) shares the function's name; it
 -- MUST be renamed in lockstep with its DFunDef so the typechecker keys f's scheme
 -- under the SAME mangled name the call sites + def now use (else dictPass /
--- the exported-name facet see `clampU` while the def is `<mid>__clampU` → unbound).
+-- the exported-name facet see the bare name while the def is `<mid>__clampU` → unbound).
 renameDecl rm (DTypeSig pub n ty site) =
   DTypeSig pub (renameDefName rm n) ty site
 renameDecl rm (d@(DInterface { methods, ... })) =

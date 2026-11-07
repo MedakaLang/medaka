@@ -47,7 +47,7 @@ idxName I3 = "3"
 successors : List (Idx, Idx) -> Idx -> List Idx
 successors edges i = nub (map snd (filter ((from, _) => from == i) edges))
 
--- The interfaces reachable from `frontier` along one or more edges.
+-- The interfaces reachable from the frontier along one or more edges.
 reachable : List (Idx, Idx) -> List Idx -> List Idx -> List Idx
 reachable _ [] seen = seen
 reachable edges (i :: rest) seen =
@@ -73,7 +73,7 @@ superProgram edges =
         "interface I\{idxName i} a\{clause} where\n  m\{idxName i} : a -> Int\n")
       allIdx)
 
--- §3 W1: the superclass relation must be acyclic, else `super`-search loops.
+-- §3 W1: the superclass relation must be acyclic, else superclass search loops.
 prop "a superclass cycle is rejected and an acyclic superclass relation is accepted" (edges : List (Idx, Idx)) =
   let codes = codesFlat (superProgram edges)
   if superCyclic edges then
@@ -524,7 +524,7 @@ phantomProgram use blanket = join "" [
 ]
 
 {- §5.1 M3: a method whose type mentions no interface parameter is legal at
-   its declaration. A use under a given `Mk a` is discharged by `assum`; a
+   its declaration. A use under a given `Mk a` is discharged by the given; a
    bare use leaves `Mk ?a` undetermined and is rejected, by an empty matching
    set or, beside a blanket impl, at quiescence (§6.2 T4). -}
 phantomModel : PhantomUse -> Verdict

@@ -6103,7 +6103,7 @@ test "a served prefix reports as the checked one across requests" =
     ),
   ]
 
--- Production-path observation of `evidenceObservation`'s
+-- Production-path observation of the evidence observation's
 -- entries, one program per family the mission asks for. `elaborateOne`'s two-
 -- module shape mirrors `methodCarrierStages` above; the coreDecls half stays the
 -- numeric prelude so `intToString` and friends are the same environment those
@@ -6249,7 +6249,7 @@ test "the construction goal's pin is sensitive to identity, prerequisites, and s
     _ => fail "expected exactly one Box Int construction goal"
 
 -- The super `A Int` takes no slot of its own: it is solved at this same goal and
--- carried inside the `B Int` dictionary (#993), which `dict_semantics_ir` pins as the
+-- carried inside the `B Int` dictionary (#993), which the dict-semantics IR test pins as the
 -- constant's super segment.
 test "a super at an instance construction goal rides inside that goal's one slot (#2095, #993, DICT §3 construction)" =
   let trace =

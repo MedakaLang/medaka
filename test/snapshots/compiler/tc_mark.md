@@ -308,7 +308,7 @@ prePassImplMethodScoped mctx rw (ImplMethod n ps e) =
 -- #1031: `bound` is an OrdMap-backed SET (name -> ()), not a `List String`
 -- scanned by `contains` — a deep local nesting (N sequential lets, a reference
 -- to an outer binding) made `contains n bound` an O(depth) scan per EVar,
--- O(depth²) over the body (the `scoperefs` shape).  `boundInsert`/`boundOfList`
+-- O(depth²) over the body (the scope-refs shape).  `boundInsert`/`boundOfList`
 -- extend it; membership is `omHasKey`.  A name maps to "" for an ordinary binder
 -- and to the renamed binder for a candidate let binder (`letPatRename`).
 boundInsert : List String -> OrdMap String -> OrdMap String
@@ -403,7 +403,7 @@ rewriteArgScoped : ModuleCtx -> ArgRw -> OrdMap String -> Expr -> Expr
 -- lint-disable-next-line rule-threaded-invariant
 rewriteArgScoped mctx (ArgRw rp dn an sm onDict granted) bound (EVar n)
   -- P0-18: `n` is a MANGLED definer-shadow standalone (`<mid>__size`).  Mark it
-  -- `EMethodAt` with the BARE dispatch name (so `implFor` finds the impl when the
+  -- `EMethodAt` with the BARE dispatch name (so impl lookup finds the impl when the
   -- receiver has one) and seed the route's `RLocal <n>` fallback with the mangled
   -- symbol (so a no-impl receiver still reaches the standalone `@mdk_<mid>__size`).
   | omHasKey n bound = match omLookup n bound
@@ -1013,7 +1013,7 @@ computeMangledShadowMap allDecls units =
 -- The unit's funDef names are an INDEX, not a list: this probes once per interface
 -- method, so a `contains` here is O(methods x funDefs) — a shape where both grow
 -- together (N interfaces beside N top-level bindings) makes it quadratic.  Same
--- treatment as `prePassDictArg`'s name sets (#2189).
+-- treatment as the dict pre-pass's name sets (#2189).
 -- #2809: the bare row.  Mangling now runs AFTER elaboration, so a definer shadow's
 -- funDef carries the name its author wrote and the forward-constructed `<mid>__m` matches
 -- nothing.  The row is what `rewriteArgScoped`'s `sm` arm reads to seed the occurrence
@@ -1073,7 +1073,7 @@ buildStandaloneShadowsGraph sm allDecls userDecls =
 -- from the RAW graph-wide map.  That is
 -- fine for `rpNames`/`argNames` — they are BARE method names, and core's references to its
 -- own standalones are all mangled `core__<n>` by the time this runs, so neither set can
--- match one (the P0-21 argument `elaborateModules` states at `markRpNames`).  It is NOT
+-- match one (the P0-21 argument `elaborateModules` states where it builds its name sets).  It is NOT
 -- fine for the shadow map, which is keyed by exactly those mangled symbols.
 --
 -- MEASURED (#2153): `computeMangledShadowMap` walks `("core", coreDecls)` against the
@@ -1231,7 +1231,7 @@ methodMarkCtx gctx ms _ prog
   -- S4/#410 class.
   -- Guard the index this arm actually reads: the body reads `meIfaceExports`, so the
   -- guard tests that and not its sibling `meExports` — testing one while reading the
-  -- other is an implicit conjunction of exactly the kind `registry_keying_ratchet`
+  -- other is an implicit conjunction of exactly the kind the registry keying ratchet
   -- exists to forbid.  Run with an empty iface index, the other arm would filter out
   -- every imported and prelude shadow name, failing closed into the S4/#410 class that
   -- `nameableIfaceShadows` says must never happen.
@@ -1265,10 +1265,10 @@ methodMarkCtx gctx ms _ prog
     --                   names (`markSharedNames` concatenates both).  BOTH are interface
     --                   METHOD names — each walks `DInterface`'s `methods` — so both are the
     --                   same kind of set as `argNames` and both are filtered.
-    --   * `shadowNames` — via `shadowBareName`, because on the emit path these are mangled.
+    --   * shadow names — via `shadowBareName`, because on the emit path these are mangled.
     --   * `argNames`  — arg-position dispatch indices.
     --   * `shadowMap` — the emit-path peer of `argNames`.
-    -- `dictNames` is the ONE input deliberately NOT filtered, and it is not an input to
+    -- The dict-name set is the ONE input deliberately NOT filtered, and it is not an input to
     -- dispatch at all: it produces `EDictAt`, a dict application of a `=>`-constrained
     -- FUNCTION, which selects no impl from a receiver.  Filtering it would drop a dict
     -- argument and UNDER-APPLY the callee (`unbound identifier: $dict_…`, the Phase-134

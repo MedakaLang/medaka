@@ -105,7 +105,7 @@ assignedFieldNames : List FieldAssign -> List String
 assignedFieldNames fields = map (fa => fst (fieldAssignNamePair fa)) fields
 
 -- TYPECHECK-AUDIT OBS4: every declared field must be supplied in a record
--- construction.  Walk `declaredFields`, check each name is present
+-- construction.  Walk the declared fields, check each name is present
 -- among the supplied `FieldAssign` list; push MissingField for any absent one.
 -- `supplied` is the SET of supplied field names (built once by the caller), so the
 -- membership test is O(log N) instead of a per-declared-field O(N) list scan — a single
@@ -175,7 +175,7 @@ ownerQualifiedHead mid name
 
 -- the field's type from a resolved record `rname`, given the (already-inferred)
 -- receiver type `te` to unify against the record's instantiated result type.  A
--- field absent from a KNOWN record names it (mirrors the oracle's `resolve_in`,
+-- field absent from a KNOWN record names it (mirrors the oracle's record resolution,
 -- which raises UnknownField with the resolved record name).
 export
 inferFieldOfRecord : DynCtx -> Mono -> String -> RecordInfo -> String -> Mono
@@ -571,7 +571,7 @@ resolveFieldRecord mctx te fname = match headTyconNameMono te
 --     flat/loader-less driver path, where NO declaration is stamped (#1115 /
 --     E-1), and the `HkRigid` §8 I6.1 residual;
 --   * the key has no companion row — the module's OWN records (the companion is
---     grown from `pubDecls` at the END of a module's arm, so a module never sees
+--     grown from the public decls at the END of a module's arm, so a module never sees
 --     itself in it) and every non-`ConNamed` declaration;
 --   * no candidate's type identity equals the receiver's — e.g. a receiver whose
 --     head is the TYPE of a named-field variant (`data T = | Cfg { … }`, key
@@ -689,7 +689,7 @@ recordCandForType want ((ci, tyName, ri) :: rest)
 --
 -- It is observable in diagnostic text, in exactly one shape, and there it makes
 -- the message worse.  Measured: `amod` declaring BOTH `data Tag = TA | TB` and
--- `data Box = | Tag { bx : Int }`, `zmod` declaring `data Tag = { tx : Int }`,
+-- `data Box = | Tag { bx : Int }`, zmod declaring `data Tag = { tx : Int }`,
 -- receiver `aTag : amod.Tag`, access `aTag.bx`.  Exit 1 either way.  With both
 -- conjuncts: `Type mismatch: Tag vs Tag — … 'amod' … 'zmod'` plus a spurious
 -- `Field 'bx' does not belong to record 'Tag'`.  With the module conjunct alone:
@@ -1113,7 +1113,7 @@ pushUnknownField mctx fname rname =
 
 -- `declared`: the record's own field names, so a genuine typo (`aeg` for
 -- `age`) can be suggested (ERROR-QUALITY dim F).  When a close-enough
--- candidate exists the error gets a structured `help` + a machine `fix` that
+-- candidate exists the error gets a structured help + a machine `fix` that
 -- replaces the bad field name's span with the suggestion; otherwise unchanged.
 unknownFieldFresh : ModuleCtx -> String -> String -> List String -> Mono
 unknownFieldFresh mctx fname rname declared =

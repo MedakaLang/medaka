@@ -324,7 +324,7 @@ ffiCheckShadowGo mctx (_ :: rest) = ffiCheckShadowGo mctx rest
 -- some of its variables fixed, or `None` when it is not. A catalog type, row
 -- or authority variable binds to whatever the declaration writes at its first
 -- occurrence and must meet the same thing at every later one; the
--- declaration's own variables are rigid. An argument's binder (`host` in
+-- declaration's own variables are rigid. An argument's binder (host in
 -- `(host : String) -> … Socket host`) is fixed by the argument's value, not by
 -- the declaration, so it is bound up front to the binder the declaration
 -- writes at the same position. Rows are part of the type: off the arrow spine

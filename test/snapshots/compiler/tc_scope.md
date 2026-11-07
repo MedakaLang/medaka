@@ -558,7 +558,7 @@ argDispatchOf mctx name =
 --
 -- Both readers go through ONE accessor on purpose.  `argDispatchOf` has THREE callers
 -- (`inferMethodAt`'s return-route decision, `inferDefinerShadowApp`'s arg-stamp push, and
--- `stampWorthyMethod`'s predicate) and `methodDispatchIdx` has one (`recordRLocalSite`).
+-- the stamp-worthiness predicate) and `methodDispatchIdx` has one (`recordRLocalSite`).
 -- They answer ONE question, so they move as a SET (RUN-METHID-004/093); one shared accessor
 -- makes a partial move unrepresentable.
 --
@@ -577,7 +577,7 @@ argDispatchOf mctx name =
 --     decls) for the group marker, so a name this module cannot name is never marked
 --     `EMethodAt` and never reaches here.
 --   * Measured with the fall-back arm panic-instrumented: across 327 programs
---     (`shadow_fixtures`, `import_order_fixtures`, `must_fail_fixtures`) on `check`,
+--     (the shadow, import-order and must-fail fixture corpora) on `check`,
 --     `run` AND `build` — the last being the only path where `argDispatchOf`'s stamping
 --     gate is open — plus the compiler's own self-compile, the fall-back arm decided
 --     ZERO sites.  `methodIfaceHere` never missed at all; the id-table miss did occur
@@ -1074,7 +1074,7 @@ insertCtorRow env tyName o cn pop = match lookupCtor env cn
   Some s => spInsert (mkIdent NsCtor o cn) cn tyName s pop
 
 -- ── THIS module's scoped view of the bare-name constructor env ─────────────
--- Overlay [env] (the fully-registered `dataEnv`: universe < import overlay < prog0) with
+-- Overlay [env] (the fully-registered data env: universe < import overlay < prog0) with
 -- the declaration each COLLIDED constructor name resolves to in this module'S SCOPE.
 -- Iterates the collided list — not the table — so a program with no constructor-name
 -- collision pays ONE `[]` match per module and returns [env] itself, unchanged and
@@ -1323,7 +1323,7 @@ insertRecordRow mctx tyName o cn pop = match lookupRecordByName mctx cn
   Some ri => spInsert (mkIdent NsCtor o cn) cn tyName ri pop
 
 -- ── THIS module's scoped view of `recordByNameRef` ─────────────────────────
--- Runs at the `dataEnv` binding, immediately after `registerAllData … prog0` has written
+-- Runs at the data-env binding, immediately after `registerAllData … prog0` has written
 -- the floor (universe < import overlay < prog0) into the per-run ref, and iterates the
 -- collided-KEY list — a program in which no two modules declare the same record /
 -- named-field-variant name pays one `[]` match per module and mutates nothing.
@@ -1334,7 +1334,7 @@ insertRecordRow mctx tyName o cn pop = match lookupRecordByName mctx cn
 -- records anywhere in the graph sharing `name`/`id`/`size` put a name on it), and the
 -- per-module walk became 5.6x net allocation at 240 modules.  A collided record KEY means two modules declare a
 -- record spelled the same, which is the collision this unit exists for and is genuinely
--- rare — but it is an empirical claim, so `gen_modules` in
+-- rare — but it is an empirical claim, so the module generator in
 -- `test/diff_compiler_perf_scaling.sh` declares records per module; without that no
 -- multi-module generator in the gate exercises this code path.  Derive the generator set rather than trusting this
 -- sentence: `grep -n '^gen_[a-z_]*() {' test/diff_compiler_perf_scaling.sh`.
@@ -1432,7 +1432,7 @@ recordCandImported gctx prog n (ident, owner, _) =
 
 -- ── the IDENTITY-SCOPED picker for the shadow layer ──
 --
--- `pickSchemes` above answers "which scheme does the bare name [n] have" with
+-- The scheme pick above answers "which scheme does the bare name [n] have" with
 -- `lookupAssoc` — FIRST MATCH over the method-row decl-walk order.  When two
 -- interfaces declare the same method name, that order is module-processing order, so
 -- the scheme an importer shadow is CHECKED AGAINST is decided by import-clause order.
@@ -1447,10 +1447,10 @@ recordCandImported gctx prog n (ident, owner, _) =
 -- a second resolver: the resolution happened at `methodEntryHere`'s population
 -- site and is only consulted here (the named prohibition in this leaf's packet).
 --
--- Miss falls back to `pickSchemes`' OWN ANSWER, deliberately.  Both misses are
+-- Miss falls back to the scheme pick's OWN ANSWER, deliberately.  Both misses are
 -- real: `methodEntryHere` holds no entry for [n] (not an interface method at
 -- all), or the admitted declaration contributes no method row
--- (its interface is not among `implDecls`).  A miss must not DROP the binding — that
+-- (its interface is not among the impl decls).  A miss must not DROP the binding — that
 -- would remove a name from the shadow layer, i.e. turn a checked occurrence into an
 -- unchecked one, `exit 1 → exit 0`, a severity INCREASE.  Falling back keeps exactly
 -- today's answer for every shape this leaf does not decide.

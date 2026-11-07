@@ -36,7 +36,7 @@ export
 profileGrants : TargetProfile -> List (String, EffParamTy)
 profileGrants (TargetProfile _ _ _ g) = g
 
--- The host a foreign call is bound to under the profile, as an extern's `bind`
+-- The host a foreign call is bound to under the profile, as an extern's bind
 -- clause names it: `c` on llvm, `js` on wasmgc.  The interpreter binds foreign
 -- calls to no host.
 export

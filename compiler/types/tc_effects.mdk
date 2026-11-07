@@ -554,7 +554,7 @@ checkArgEffVarCoverage mctx iface scope mname mty =
 -- it and that was falsified: `use : (Unit -> <e> Unit) -> Int` with a body that
 -- calls `f ()` checks CLEAN, reported as `use : (Unit -> Unit) -> Int`):
 --   * callback arg — `use : (Unit -> <e> Unit) -> Int`, body `let _ = f ()`,
---     applied to an effectful `shout`: "Effectful value used where <> is
+--     applied to an effectful shout: "Effectful value used where <> is
 --     allowed, but it performs <Stdout>", at `use shout`;
 --   * row-kinded ctor arg — `force : Box e a -> a` forcing its `Susp` thunk,
 --     applied to `Susp loud`: the same diagnostic, at `force (Susp loud)`.
@@ -562,7 +562,7 @@ checkArgEffVarCoverage mctx iface scope mname mty =
 -- every honest INSPECTOR of a row-kinded value — also measured: 34 declarations
 -- in this compiler's own sources (`unInt : Value e -> Int`, `isPartial : Value e
 -- -> Bool`, … which pattern-match a `Value e` and never invoke the closure
--- inside it) plus `stdlib/async.mdk`'s `isDone`/`forceVal`.  Nothing at a
+-- inside it) plus `stdlib/async.mdk`'s done and force helpers.  Nothing at a
 -- declaration tells an inspector from a forcer; for a method that uncertainty IS
 -- the hazard, for a directly-called function the call site settles it.
 --
@@ -708,7 +708,7 @@ argPerformableOccs mctx scope perf0 x0 = go perf0 x0
 -- table and the same walker the RETURN side already consults — makes those
 -- <Stdout> atoms argument-side evidence, and the coverage rule ("every
 -- non-argument occurrence of `e` covers the union of its argument-side atoms")
--- then rejects `unslot` while still accepting `widen : Slot e -> Slot e`, whose
+-- then rejects unslot while still accepting `widen : Slot e -> Slot e`, whose
 -- return occurrence carries the same atoms.  Both halves are pinned:
 -- `test/typecheck_error_fixtures/effect_arg_slot_launder.mdk` and its
 -- `effect_arg_slot_unrelated_ok.mdk` accept-side twin.

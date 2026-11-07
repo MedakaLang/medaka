@@ -41,9 +41,9 @@ stages=DESUGAR,MARK
 -- `[W-MODULE-BLIND]`, `.claude/dossier/workflow.md` and `AGENTS.md`.
 --
 -- ── Why one `Ident` type generalizes a pattern already in the tree ─────────
--- `crossModuleFunConstraintsQualRef` (`types/typecheck.mdk`) is already keyed
+-- The cross-module function-constraints table is already keyed
 -- by `(module, name)` because its bare-name twin
--- `crossModuleFunConstraintsRef` collides across modules that declare the
+-- collides across modules that declare the
 -- same function name. `Ident` generalizes that pair to
 -- `(namespace, origin, name)` so the ~15 `universe*`/method/record/kind
 -- tables named in #1070 can all re-key onto ONE identity type — one
@@ -60,7 +60,7 @@ stages=DESUGAR,MARK
 -- gate arithmetic behind keeping the combinators OUT of `compiler/support/`:
 --   PREFLIGHT_DRY=1 PREFLIGHT_CHANGED_FILE=<file naming ONE path> sh test/preflight.sh
 -- gives 103 gates for `compiler/support/util.mdk` (`test/preflight.sh`'s
--- `mark_full` blast-radius arm — the whole-suite run `AGENTS.md` forbids as
+-- mark-full blast-radius arm — the whole-suite run `AGENTS.md` forbids as
 -- the everyday loop) versus 25 for `compiler/types/registry.mdk`, and that 25
 -- is the BYTE-IDENTICAL set `compiler/types/typecheck.mdk` selects, so this
 -- module costs a later A-2 unit nothing at all. For reference `ast.mdk`
@@ -259,7 +259,7 @@ ordKey n = lenKey "\{n}"
 -- TWO UNITS NEEDED IT, AND BOTH MOTIVATING TABLES ARE NAMED ON PURPOSE — the
 -- widening is not one table's special case:
 --
---   * A-2.4's `universeIfaceParamKinds` is the first table that needs BOTH at
+--   * A-2.4's the interface parameter-kinds table is the first table that needs BOTH at
 --     once: it is keyed by (interface × parameter slot) — so it needs the
 --     ordinal block, which only `RegKey` has — and it is read by
 --     `checkGradedImplTys`, reached from `checkBodyImpl`, which is shared by
@@ -305,12 +305,12 @@ public export data RegKey =
 regKeyOf : Ident -> RegKey
 regKeyOf ident = RegKey [TkIdent ident] []
 
--- An identity TUPLE (`ImplUniverse`'s concrete bucket, `ifaceDispatchRef`,
+-- An identity TUPLE (`ImplUniverse`'s concrete bucket, the interface-dispatch table,
 -- `checkCallObligationsU`'s dedup key).
 regKeyN : List Ident -> RegKey
 regKeyN idents = RegKey (map TkIdent idents) []
 
--- An identity plus an ordinal (`universeIfaceParamKinds`' `<iface>@<slot>`).
+-- An identity plus an ordinal (the interface parameter-kinds table's `<iface>@<slot>`).
 regKeyAt : Ident -> Int -> RegKey
 regKeyAt ident slot = RegKey [TkIdent ident] [slot]
 
@@ -335,9 +335,9 @@ export
 regKeyOfTab : TabKey -> RegKey
 regKeyOfTab key = RegKey [key] []
 
--- `universeIfaceParamKinds`' (interface × slot) key, in the shape that keeps
+-- The parameter-kinds table's (interface × slot) key, in the shape that keeps
 -- the slot an ORDINAL rather than text spliced into a name. This is the direct
--- replacement for `ifaceSlotKey`'s `"\{iface}@\{i}"` (`types/typecheck.mdk`).
+-- replacement for the text key `"\{iface}@\{i}"`.
 regKeyTabAt : TabKey -> Int -> RegKey
 regKeyTabAt key slot = RegKey [key] [slot]
 
@@ -345,7 +345,7 @@ regKeyTabAt key slot = RegKey [key] [slot]
 -- not carry identity. `ImplUniverse`'s concrete bucket `(interface, receiver head)`
 -- pair is the first table that needs it: its interface half is bare by derivation
 -- (`Predicate` carries no origin — see `builtinClassPresent` in
--- `types/typecheck.mdk`; #1539 retired the `ifaceRegistered` gate it replaced, and
+-- `types/typecheck.mdk`; #1539 retired the gate it replaced, and
 -- #1569 removed the write-only table behind it, so cite the live name) while its
 -- head half is whatever `headTyconTy` projected, so ONE key genuinely mixes the two
 -- populations.
@@ -480,7 +480,7 @@ mregAdd ident v mr = mregAddK (regKeyOf ident) v mr
 --
 -- 🚨 ANCHOR: the two buckets are `ImplUniverse`'s, written by `insertUnivImplAt`
 -- (`types/typecheck.mdk`). This paragraph named their
--- CARRIERS instead — the `obUnivConcreteRef`/`obUnivHeadlessRef` `CrossRun`
+-- CARRIERS instead — the concrete and headless obligation-universe `CrossRun`
 -- accumulators — and those three fields are now DELETED: the Module path's
 -- universe is a projection of stage K's `IE` (`ieUniverseAt`, selecting from the
 -- per-ordinal `ieUnivSnaps`), and the Flat path still calls `buildImplUniverse`.
@@ -497,7 +497,7 @@ mregAdd ident v mr = mregAddK (regKeyOf ident) v mr
 --     read by `findMatchingImplReqsU` at all. That function's concrete arm goes
 --     through `concreteReqMatchByIface` → `ieSelectRowByIface`, which reads
 --     `bodyImplEnvRef` — a DIFFERENT table (and a DIFFERENT population: ARCH
---     B-2.1-b2 repointed this leg off the topological-prefix `shadowKeyTableRef`
+--     B-2.1-b2 repointed this leg off the topological-prefix shadow-key table
 --     onto the graph-global `IE`; the order argument here is unaffected, since
 --     neither table is this bucket). The concrete bucket's own
 --     readers are `univConcreteBucket`'s, `implMatchesU`, `implMatchesWithReqsU`
@@ -707,7 +707,7 @@ spLookupIdent ident spelling pop =
 -- `TabKey`'s doc-comment above gives (allocation: comparison here builds
 -- nothing, while `Registry` renders a fresh `String` per lookup; and
 -- enumeration order, which an assoc list preserves by construction).
--- `universeIfaceParamKinds` is the first such table.
+-- The interface parameter-kinds table is the first such table.
 --
 -- ⚠️ ORDINALS FIRST, and it is the same "least discriminating first is wrong"
 -- argument `tabKeyEq` makes for names. Every entry this scans shares the
@@ -730,7 +730,7 @@ tabKeysEq _ _ = False
 
 -- FIRST match wins, exactly as `lookupTab` and the `lookupAssoc` it replaces —
 -- so a prepend still shadows, which is the overlay ordering
--- `registerIfaceParamKinds` relies on (a module's own decls are registered as a
+-- the registration of interface parameter kinds relies on (a module's own decls are registered as a
 -- FRONT overlay over the accumulated universe).
 export
 lookupReg : RegKey -> List (RegKey, v) -> Option v
@@ -844,7 +844,7 @@ public export data HeadKey =
 -- (`types/typecheck.mdk`), the mint that BUILT the head this projects, so a
 -- swapped pair does not typecheck.
 --
--- ⚠️ There is deliberately no `headKeyOfRigid`: `HkRigid` is applied at exactly
+-- ⚠️ There is deliberately no rigid-head key helper: `HkRigid` is applied at exactly
 -- one site (`headTyconMono`'s `TRigid` arm) and a one-line helper would make
 -- that site read like a routine mint rather than the flagged violation it is.
 export
@@ -905,11 +905,11 @@ headKeyTag (HkRigid name) = name
 --
 -- ⚠️ REFUSING TO KEY A RIGID IS ANSWER-PRESERVING HERE, not a narrowing, and
 -- the derivation is about the WRITER, not about this function: the only
--- writer of a head-keyed dispatch bucket is `keyEntryOf` via `headTyconTy`,
+-- writer of a head-keyed dispatch bucket is the key-entry mint via `headTyconTy`,
 -- whose arms are `TyCon`/`TyTuple` — it has no `TRigid` arm and structurally
 -- CANNOT emit one. So a rigid GOAL head looked up a bucket that no writer
 -- could have filled, and answering "no bucket" is the same empty list the
--- bare-name lookup returned. See `bucketOfHead` (`types/typecheck.mdk`).
+-- bare-name lookup returned. See `headBucketKey`.
 -- The DECLARATION half of a projected head, or `None` when the projection is
 -- the §8 I6.1 rigid residual. The peer of `headBucketKey` for a key that is a
 -- TUPLE — `ImplUniverse`'s concrete-bucket `(interface, receiver head)` pair, and
@@ -953,10 +953,10 @@ headBucketKey (Some (HkRigid _)) = None
 --     user-facing rendering is A-2.8's decision, and a derived instance would
 --     silently become the answer at the first interpolation. Affects A-2.8's
 --     ambiguity diagnostic, which must choose a rendering explicitly.
---   * NO `regAdjust`/`regAlter` (read-modify-write in one pass). Every target
+--   * NO adjust/alter combinator (read-modify-write in one pass). Every target
 --     table's writer is a plain overwrite or, for the multi-valued ones, an
---     `mregAdd`; `universeIfaceParamKinds` is the closest thing to a
---     read-modify-write and its writer (`insertIfaceParamKinds`) replaces the
+--     `mregAdd`; the interface parameter-kinds table is the closest thing to a
+--     read-modify-write and its writer replaces the
 --     whole slot list. Add it when a conversion actually needs it rather than
 --     shipping an untested combinator.
 --   * NO ordered/insertion-order enumeration. `rejectCyclicAliases` +
@@ -971,8 +971,8 @@ headBucketKey (Some (HkRigid _)) = None
 --     order is unchanged by construction and `rejectCyclicAliases` needed no
 --     ordering guarantee from this module at all. The bullet stands for the
 --     NEXT conversion that does swap a representation.
---   * NO `mregDelete` — no target table removes a value from a multi-bucket
---     (`ImplUniverse`'s buckets, `ifaceDispatchRef` and `methodReqCountRef` are
+--   * NO multi-bucket delete — no target table removes a value from a multi-bucket
+--     (`ImplUniverse`'s buckets, the interface-dispatch table and `methodReqCountRef` are
 --     grow-only within a run; the first is rebuilt per read/build rather than
 --     reset, the other two cleared wholesale by the module mint, `freshModuleCtx`).
 
@@ -1414,8 +1414,8 @@ tabTable = [(tabZ, 2), (tabA, 1)]
 -- "Box"
 
 -- ── F5: RegKey over TabKey — the COMPOSITE half of A-2.4 ──────────────────
--- `universeIfaceParamKinds`' real key shape: an INTERFACE identity plus a
--- parameter-SLOT ordinal. `slotGA`/`slotGB` are the same slot of two
+-- The interface parameter-kinds table's real key shape: an INTERFACE identity plus a
+-- parameter-SLOT ordinal. `slotGA`/`slotPA` are the same slot of two
 -- same-named interfaces declared by two unrelated modules — the #1257 shape
 -- verbatim; `slotUA` is what the flat/single-file driver mints for that same
 -- interface (no identity at all).
@@ -1463,7 +1463,7 @@ slotTable = [(slotGA, 2), (slotPA, 1)]
 -- Some 9
 
 -- First match wins, so a prepend still shadows under the SAME key — the
--- front-overlay ordering `registerIfaceParamKinds` relies on.
+-- front-overlay ordering the registration of interface parameter kinds relies on.
 -- > lookupReg slotPA ((slotPA, 99) :: slotTable)
 -- Some 99
 
@@ -1503,7 +1503,7 @@ slotTable = [(slotGA, 2), (slotPA, 1)]
 -- unseparated prose paragraph underneath is SWALLOWED INTO the expected text
 -- and the example fails with `expected: True <six lines of prose>` /
 -- `actual: True`. That is exactly how a count-prefix example here reddened
--- `inlang` on PR #1270: A-2.4 appended it and #1268 prepended the F5 header
+-- the in-language suite on PR #1270: A-2.4 appended it and #1268 prepended the F5 header
 -- below it, each green alone, and git merged the two seams unseparated —
 -- a conflict-free merge that no gate on either branch could have seen. Derive
 -- the whole file's exposure rather than eyeballing this one site: every

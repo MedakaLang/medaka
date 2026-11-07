@@ -637,7 +637,7 @@ test "class environment rows carry typarams and supers per row" = expectAll [
   expectEqual "Same" (ceRowIfaceNameAt "zmod" 1 (ceProbeEnv (probeGraphCtx ()))),
 ]
 
--- 5. graded kind inference, positional with `ceTyparams` (here `["f"]`):
+-- 5. graded kind inference, positional with the typarams (here `["f"]`):
 --    slot 0 (f's first argument, `e`) is `KRow`; slot 1 (`a`) is `KType`.
 test "graded kind inference is positional with the typarams" =
   expectEqual
@@ -881,7 +881,7 @@ ceSuperHead (Super { superHead = h, ... }) = h
 -- NAMED, NOT A WILDCARD — this tree's documented convention for a closed
 -- sum like `TyConOrigin`, not a style preference of this block's.
 -- `resolve.mdk:3783/3894/4087` and `originPhrase` (`typecheck.mdk`, pinned in
--- `tc_originun_allowed` below) all enumerate `TyConOrigin`'s three
+-- origin-unresolved allow-list below) all enumerate `TyConOrigin`'s three
 -- inhabitants explicitly *"so a fourth inhabitant is made to show up"* at
 -- every match, rather than being silently absorbed by a wildcard — a
 -- wildcard here would still be TOTAL, but totality is not what the
@@ -889,7 +889,7 @@ ceSuperHead (Super { superHead = h, ... }) = h
 -- is.  The tree already answers the wildcard question the other way in five
 -- places, so a wildcard here would settle it unilaterally.  Per the
 -- documented remedy those five sites use, these two eliminator arms are
--- listed in `test/typecheck_compiler_source.sh`'s `tc_originun_allowed`
+-- listed in `test/typecheck_compiler_source.sh`'s origin-unresolved allow-list
 -- rather than the ratchet's grep being widened.
 ceRowOriginTag : CeRow -> String
 ceRowOriginTag r = match (ceRowIface r).irOrigin
@@ -928,7 +928,7 @@ ceSuperParams (Super { superParams = ps, ... }) = ps
 
 -- NAMED, NOT A WILDCARD — same convention, same reason, as `ceRowOriginTag`
 -- above; see its comment. Both eliminator arms are pinned in
--- `tc_originun_allowed` alongside `ceRowOriginTag`'s.
+-- the origin-unresolved allow-list alongside `ceRowOriginTag`'s.
 ceSuperOrigin : Super -> String
 ceSuperOrigin (Super { superOrigin = (OriginModule m), ... }) = m
 ceSuperOrigin (Super { superOrigin = OriginBuiltin, ... }) = "<builtin>"

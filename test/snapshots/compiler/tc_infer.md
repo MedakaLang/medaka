@@ -706,7 +706,7 @@ checkStmtNotDiscarded dyn stmtObls t e
 -- is handed depends on the driver: this file has two output selections of the one
 -- graph driver, `driveGraphK` (`checkModulesDiagsChain`'s `None` arm, for `check`, vs
 -- `elaborateModules` for `build`/`run`; see harden-typechecker skill).  Both run the dict pre-pass
--- `prePassDictArg` now (#2705), which rewrites the call to
+-- now (#2705), which rewrites the call to
 -- `EMethodAt "setIndex" …` BEFORE this check runs; before that only the
 -- elaborate driver marked, and a bare-`EVar` node reached here under `check` —
 -- reproduced: `medaka check` on
@@ -1484,7 +1484,7 @@ unifySpineResult env f ft0 xs0 = go ft0 xs0
 -- `paramVarianceGuard` (the D-2 variance gate) fires only when BOTH rows at a
 -- non-covariant slot are closed, and abstains while either is still a
 -- metavariable.  That is the whole lever here.  Inferring an application
--- ARGUMENT-FIRST (`Ref noop`: `noop`'s closed `<>` row is pinned into `Ref ?a`
+-- ARGUMENT-FIRST (a `Ref` of a no-op closure: the closure's closed `<>` row is pinned into `Ref ?a`
 -- before the result ever meets the declaration) presents two closed rows and
 -- the safe write-side narrowing is rejected; inferring it RESULT-FIRST
 -- (`Ref ?a` meets `Ref (String -> <Stdout> Unit)` while `?a` is fresh) lets
@@ -1737,7 +1737,7 @@ inferShadowApp env mname arityRefs tagRefs f x =
       -- The S2 impl question, off the GRAPH-GLOBAL substrate — see
       -- `ieImplExistsForHead`.  The answer must not depend on where in the module order
       -- the receiver's impl sits, so it never reads the cumulative topological prefix
-      -- (`shadowKeyTableRef`).
+      -- (the shadow-key table).
       Some head =>
         if ieImplExistsForHead
           env.teDyn.dcModule
@@ -1969,7 +1969,7 @@ inferDefinerShadowAppAt env name arityRef tagRef implRef innerRef hd nodes f x =
   -- RECEIVER.  A receiver with a VISIBLE impl of the shadowed interface DISPATCHES: type
   -- the head against the METHOD scheme; else it is the STANDALONE.  The impl universe is
   -- graph-global (`bodyImplEnvRef` via `ieImplExistsForHead`); `SHADOW-SEMANTICS.md`
-  -- retires "local U imported U prelude" as a synonym for it, and `shadowKeyTableRef`
+  -- retires "local U imported U prelude" as a synonym for it, and the shadow-key table
   -- (the topological prefix) is narrower still.  The mangled emit path (sym /= "") must
   -- not always type against the standalone scheme (`Int -> Int`): a definer shadow whose
   -- impl is IMPORTED (`size (Box 3)`, d8) has to dispatch to that impl, not reject
@@ -2232,7 +2232,7 @@ inferDefinerStandaloneVarAppAt env name hd pre f x xt dloc =
       -- #1815: consume the WHOLE applied prefix, not just the receiver.  Unifying the
       -- standalone's declared type against `TFun xt … r` when the receiver is argument 1
       -- is what equated `Int -> Int -> Int` (the standalone) with `b -> r` (the annotated
-      -- `wrap`'s second parameter) and monomorphised the user's written signature.
+      -- wrap's second parameter) and monomorphised the user's written signature.
       unifySpineResult
         (envAtIfSome dloc env)
         f
@@ -2693,7 +2693,7 @@ registerLocalScheme mctx x sch oblN0 callN0 _dictN0 =
   -- The dict-slot's forwarded obligation is ALREADY in callOblsDelta as the
   -- mirroring PCallSlot obligation recorded at inferDictAtFound (recordCallObligations,
   -- beside pushDictApp), reaching schemeOblsForMember via forwardedVecObls; the old
-  -- `allDictObls` re-derivation was a redundant second source (deduped away). Retired.
+  -- dict-obligation re-derivation was a redundant second source (deduped away). Retired.
   registerSchemeObligations mctx omEmpty [] callOblsDelta addedObls [(x, sch)]
 
 -- A generalized local's quantified variables are its uses' to choose, as a
@@ -3190,7 +3190,7 @@ armIsUnguarded (_ :: _) = False
 -- VERBATIM (so `Triangle _` reads as `Triangle _`, not `Triangle`) and return it
 -- as the `Some` help so `--json`'s `help` field carries it too.  #159: returns
 -- `(message, Option help)` so the caller can stash both in the warning's TcDiag —
--- no more message-keyed `matchWarningHelp` side channel.
+-- no more message-keyed help side channel.
 nonExhaustiveMsg : ModuleCtx ->
   Oracle ->
   Mono ->
@@ -3364,7 +3364,7 @@ processLetGroup env binds =
   -- where/let var defer into the enclosing scheme rather than trip an ambiguity
   -- reject, closing the orphaned-local-constraint S0 (#827).  See registerLocalScheme.
   -- Dict-slot forwarding rides callOblsDelta's PCallSlot obligations (see
-  -- registerLocalScheme); the redundant `allDictObls` re-derivation is retired.
+  -- registerLocalScheme); the redundant dict-obligation re-derivation is retired.
   registerSchemeObligations
     env.teDyn.dcModule
     omEmpty

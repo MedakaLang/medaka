@@ -311,7 +311,7 @@ import map as IdMap
 -- recorded (it always was, and `ceRowParamKinds` keeps doing so), and an all-`KType`
 -- row falls into the same `_ => ()` arm an outright miss does.  Runs on BOTH whole-program
 -- paths: its one call site is in checkBodyImpl, shared by Flat and Module,
--- immediately after `dataEnv` has populated the head-constructor kind table.
+-- immediately after the data env has populated the head-constructor kind table.
 --
 -- It iterates `prog`, not `IE.ieRows`: the impl heads come from the decl list, and
 -- only the interface's declared slot kinds come from stage K's `CE`.  Re-pointing this
@@ -603,7 +603,7 @@ checkImplHeadIndices _mctx _ = ()
 --     wrong table for another module's head).
 --   * the owner module id is `instRefMid` of the row's `InstRef`.
 --   * the blame span is `firstTyLocList` of that same head.
--- `ieLoc` is not owed for this.  `ImplRow`'s "no location field" note argues from
+-- A location field on the row is not owed for this.  `ImplRow`'s "no location field" note argues from
 -- `Decl` carrying no `Loc`, which is true and beside the point: the row carries the
 -- head's `List Ty`, and the parser stamps every `TyCon` leaf with its span, so the span
 -- coherence uses today is recoverable with no new field and no `DImpl` change.
@@ -781,7 +781,7 @@ cohScanInner sweep (e1@(CohImpl if1 xs mid1 _)) l0 acc0 = go l0 acc0
 -- breaks `stdlib/core.mdk`, which stops typechecking with "the goal `Num Int`
 -- matches `impl Num Int` and `impl Num Int`" — checking core as a user program
 -- registers the same instance twice, and deduping needs INSTANCE IDENTITY this tree
--- does not have (`bucketKeyEntriesFrom` restarts its numbering at 0 per module, so
+-- does not have (the bucket numbering restarts at 0 per module, so
 -- two distinct impls in different modules share an index).  That is L2 / A-3 / B-2
 -- work.  Until it exists, the declaration site is the only place this class is
 -- caught at all.
@@ -1637,7 +1637,7 @@ inferUserImplBodies env allProg ce cur decls =
   -- `impl Foo (List a)` whose body calls `debug Bar` records a fully-ground
   -- `Debug Bar`; nothing about it is abstract, the gate would reject it on the spot,
   -- and a blanket rollback would delete it — so `check` would exit 0 while `build`
-  -- PANICKED (`no impl of method 'debug' for type 'Bar'`), a `run_check_agreement`
+  -- PANICKED (`no impl of method 'debug' for type 'Bar'`), a run_check_agreement
   -- break.
   --
   -- The policy is now written down: DICT-SEMANTICS §4.2 **D1** (a predicate the gate can
@@ -2732,7 +2732,7 @@ narrowedImplHead iface site =
 
 -- The constraint axis of W3-inst: every predicate this body leaves on head variables
 -- must be given by the impl.  Each goal mentioning a head variable is reduced through
--- the instances (§3 `inst`), a goal the impl gives ending the reduction (§3 `assum`
+-- the instances (§3 `inst`), a goal the impl gives ending the reduction (§3 given rule
 -- before `inst`), and a residual over head variables alone that no given answers is
 -- reported at the goal's site.  The givens are the impl's own head, its `requires`
 -- with their superinterfaces, and the method signature's own `=>` context.

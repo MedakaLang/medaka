@@ -343,7 +343,7 @@ recDictAppEntry o = match o.oPayload
   GPRecDictApp r => [r]
   _ => []
 
--- a bracket's mark: the channel's length now (what `wMark` was for `dictApps`)
+-- a bracket's mark: the channel's length now (what `wMark` was for the dict-app channel)
 export
 goalsMark : GraphCtx -> Unit -> Int
 goalsMark gctx _ = gctx.graphRun.goalsN.value
@@ -487,7 +487,7 @@ methodReturnWanted mctx request = match methodReturnInstantiation mctx request
 --     occurrence-layer reconciliation and not a table widening.  Owned by #1507, and
 --     it is the LAST condition on deleting the bare compatibility leg;
 --   * `ifaceForInferredId`'s third fallback, which recovers a slot's interface from
---     `pendingDictApps` — a SPELLING-keyed routing channel (see `resolveDictApps` /
+--     the pending dict-apps — a SPELLING-keyed routing channel (see `resolveDictApps` /
 --     `dispHeadTab`) whose iface component must stay a route word, so the recovery is
 --     bare by construction rather than by omission.
 export
@@ -763,13 +763,13 @@ localSlotLead mctx subst slot = match slot.psArgs
 -- #1539 / DICT §8 I7 qualification 4: THE GATE.  True iff the declaration list this
 -- pass treats as the PRELUDE declares this built-in class (with ≥1 method — see
 -- `builtinClassesGo`).  This is the question I7 qualification 4 requires before a
--- synthetic operator/literal predicate may be synthesized at all; `ifaceRegistered`,
+-- synthetic operator/literal predicate may be synthesized at all; the registration test,
 -- which the three gate sites asked until #1539, answers the *different* question "is
 -- SOME interface spelled `Num` registered anywhere in this program", over a table any
 -- user declaration writes to.
 --
 -- It is a record projection, so it is strictly CHEAPER than the `omHasKey` it
--- replaces — `ifaceRegistered`'s own doc-comment records that it is on the
+-- replaces — that test's own doc-comment records that it is on the
 -- per-operator / per-numeric-literal hot path (#147), and this change moves it from
 -- O(log n) to O(1) rather than the other way.
 export

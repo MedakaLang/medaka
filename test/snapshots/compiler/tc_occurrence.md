@@ -261,7 +261,7 @@ pushRecDictAppGoal gctx (r@(RecDictApp routesRef _ encl _ scope ev)) = pushGoal
 -- `UObligation` record the call channel does, with a real `Provenance` and an
 -- `OpMethodOcc` projection carrying the (typarams, declared method type, occurrence
 -- mono) triple the check-time `dispatchMonosOf` needs (see `OblProjection`).  The
--- pre-#838 5-tuple, and the `implOblToU` bridge that converted it, are gone.
+-- pre-#838 5-tuple, and the bridge that converted it, are gone.
 pushPendingObl : ModuleCtx ->
   IfaceRef ->
   List String ->
@@ -1215,7 +1215,7 @@ qualConstraintFor mctx name =
 -- the callee's registered dict-slot ids, unpaired and untruncated.
 --
 -- Why this exists, and why it is not the parallel-list hazard `CSlot` removed.
--- `pairSlots` truncates to the SHORTER of (ids, ifaces), which is correct everywhere the
+-- Pairing ids with ifaces truncates to the SHORTER of (ids, ifaces), which is correct everywhere the
 -- result decides dict SLOTS — that is exactly what the zips it replaced did.  But two
 -- guards in `inferDictAtFound` and one in `shadowStandaloneDictSlotsAt` do not ask about
 -- slots; they ask *"is this callee registered as constrained at all"* and *"did the
@@ -1439,7 +1439,7 @@ recordCallObligations mctx (s :: ss) (mono :: ms) (args :: rest)
     -- records the predicate.  This site is still 1-ary and still deliberately so —
     -- the fix landed upstream precisely so that emitted dict arity did not move.
     -- Regression: test/dict_fixtures/s3-sig-constraint-unsatisfiable-rejects.mdk.
-    -- P1 (#1446) / U1b (#1482): `funConstraintIfacesRef`'s payload is `List IfaceRef`,
+    -- P1 (#1446) / U1b (#1482): the constraint-interfaces table's payload is `List IfaceRef`,
     -- so this site records the interface OCCURRENCE's identity instead of
     -- `OriginUnresolved`.  It was one of the two `ifaceRefBare` producers.
     let goalArgs = if isEmptyL args then [mono] else args
@@ -1643,7 +1643,7 @@ recordNegatedLitRange mctx t x0 = go x0
 -- That is the capture I7 qualification 4 forbids, reached through the gate rather than
 -- through the payload, and it is the same reason the payload half already refuses to
 -- read that table (see the `§8 I7` section below, and `ModuleCtx.registeredIfacesRef`'s
--- retirement note — #1569 removed the table itself once `ifaceRegistered` had no
+-- retirement note — #1569 removed the table itself once the registration gate had no
 -- callers left).
 export
 recordIfaceObligation : ModuleCtx -> BuiltinClass -> Mono -> Unit
@@ -1733,7 +1733,7 @@ inferNumLitVar env n fref dref
 --   • `recordRLocalSite` — gated on `standaloneValuesRef` membership / `standaloneValuePinned`,
 --     both empty for an unshadowed `fromInt`.  Under a shadow it stamped the literal's route
 --     RLocal at the user's binding.
---   • `maybeStandaloneValueMono` / `maybeStandaloneValueMonoEmit` — the value-position pins,
+--   • `maybeStandaloneValueMono` and its emit-path twin — the value-position pins,
 --     keyed on `definerShadowNamesRef` / the route sym; both `None` unshadowed.  These are
 --     what re-typed the literal to the user binding's own scheme on the emit path.
 --   • `argDispatchOf` — `fromInt` is return-position (no dispatch argument), so this answered
@@ -1776,7 +1776,7 @@ inferNumLitMethod mctx anchor tagRef =
 -- PLAN.md #11 (locked §0.2): a numeric literal is ALWAYS a `fromInt n` occurrence,
 -- so it carries a `Num` obligation on its var unconditionally — exactly the OCaml
 -- oracle, whose ENumLit infer arm `infer env (EVar "fromInt")` records the Num
--- usage even no-prelude (`initial_env` seeds `fromInt`/`Num`).  Recording it here
+-- usage even no-prelude (the initial env seeds `fromInt`/`Num`).  Recording it here
 -- (vs. the prelude-gated `recordIfaceObligation`) lets value-level defaulting ground
 -- an AMBIGUOUS literal var to Int (`nums = [1,2,3] : List Int`) so the no-prelude
 -- `typecheck_main` matches the prelude-aware oracle golden.  The matching reject is

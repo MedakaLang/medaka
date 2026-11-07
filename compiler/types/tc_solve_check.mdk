@@ -1,7 +1,7 @@
 -- tc_solve_check: the solver boundary judgments and the write side of a binder's dictionary
 -- parameters: obligation checks at call and survivor sites, ambiguity registration and reports,
 -- numeric defaulting, the residual walk at binders (`residualPredsOf`, `residualBoundPreds`,
--- `residualInferredPreds`, `unroutedResidual`: DICT section 3 `inst` for a residual), the call-slot
+-- `residualInferredPreds`, `unroutedResidual`: DICT section 3 inst for a residual), the call-slot
 -- obligations of dispatch monos at generalization (`registerDispatchMonos`), the promotion of
 -- inferred constraints to the binding's scheme (`registerInferredConstraints`,
 -- `maybeInferConstraint`); and the registration of what the sites read back: predicate slots, dict
@@ -445,7 +445,7 @@ predicateSlotFromExpanded idx pair = match omLookup (cslotVecKey pair) idx
 -- is the case this must still collapse — genuinely the SAME predicate written twice — and
 -- it does, because its two vectors key identically.
 -- The two id-free expansion entry points stay in step BECAUSE the widening is a SUFFIX:
--- `expandSupersIfaceEntry` carries no vectors at all (`expandSupersPairs`), so every one of
+-- the interface-keyed one carries no vectors at all, so every one of
 -- its keys gains the same constant empty suffix and its slot SEQUENCE is byte-unchanged.
 export
 dedupSlotVecs : List (CSlot, List Mono) -> List (CSlot, List Mono)
@@ -478,7 +478,7 @@ cslotKey s =
 -- prefix (a `lenKey` netstring followed by decimal digits), so the encoding is injective
 -- over the two components.
 -- An EMPTY vector contributes a constant empty suffix, so a caller that carries no
--- vectors at all (`expandSupersPairs`, and hence `expandSupersIfaceEntry`'s synthetic-id
+-- vectors at all (the pairs expansion, and hence the interface-keyed synthetic-id
 -- expansion) keys order-equivalently to the pre-widening `cslotKey` — which is what keeps
 -- that path's slot sequence byte-identical.  It is also why widening on a PARTIAL vector
 -- supply degrades to today's collapse rather than to a wrong slot count.
@@ -1417,7 +1417,7 @@ checkOneCallObligation mctx deferNonGround univ iface occs loc scope =
     -- buckets, so they are answered from ONE pair of lookups (`oblCallVerdict`) rather
     -- than one pair per question.  Each `mregLookupK` is a full tree walk over the
     -- bucket map, and the doubled lookups cost ~70 MB of extra garbage at N=400 modules and ~22% of the whole
-    -- `typecheck` stage on `diff_compiler_perf_scaling.sh`'s `modules` shape — enough to
+    -- `typecheck` stage on `diff_compiler_perf_scaling.sh`'s modules shape — enough to
     -- push its TIME arm over the gate's 3.0x-per-doubling ceiling (measured 1.63 s -> 1.28 s
     -- at N=400 with the gate stubbed out).  The VERDICTS are byte-identical: same buckets,
     -- same concrete-then-headless order, same two tests, truncation still asked FIRST and
@@ -1942,7 +1942,7 @@ checkNestedReqs sx univ walk iface args loc scope =
 -- specific super instance adds a goal.  A super goal is entered beside the goal, on the
 -- walk that reached it, as the route walk enters it (`superRoutesAt`), a cycle or
 -- spent fuel reported at [loc].  A super goal [answered] gives, itself or through its
--- supers, is not entered: the construction's ladder tries `assum` before `inst`.  Any
+-- supers, is not entered: the construction's ladder tries givens before instances.  Any
 -- other super goal is a selection, whatever its arguments are (constructed, arrows or
 -- variables alone), and is entered when an instance matches it.  One no instance
 -- matches is the impl declaration's error (`checkImplSuperContexts`): the
@@ -2546,7 +2546,7 @@ registerConstraintRegs mctx (reg :: rest) =
 -- re-derives and keeps in step by hand.
 --
 -- A slot's `psArgs` is `PSArgsUnknown` for a writer that records no vector for it:
--- `registerInferredFor` when it recovered NO vector for any slot (`inferredArgsOpt`).
+-- `registerInferredFor` when it recovered NO vector for any slot (the inferred-args option).
 -- The vectors are legitimately a PREFIX of the slots (`declaredPredicateSlots` stops
 -- when its vector list runs out), and truncating the slot list to the vectors would
 -- change the dict ARITY, while inventing a vector would be wrong; so absence is
@@ -2568,9 +2568,9 @@ setFunConstraintEntry mctx m slots =
   -- the unsafe direction, silently.
   -- It must be the SAME dedup the expansion runs, and that
   -- is `dedupSlotVecs` over the slots paired with their vectors.  A vector-free dedup
-  -- (`dedupSlots`; see `cslotKey`) would under-count `(Ix a Char, Ix a Bool) => …` (one
+  -- (the vector-free slot dedup; see `cslotKey`) would under-count `(Ix a Char, Ix a Bool) => …` (one
   -- where the expansion yields two) and re-introduce the same off-by-one in the other
-  -- direction.  The slots' vectors are the very prefix `expandSupersEntry` reads back out of
+  -- direction.  The slots' vectors are the very prefix the definition-side expansion reads back out of
   -- `funPredicateSlotsRef`, so the two dedups see identical input; an unknown vector
   -- yields `[]` for its slot, the scalar count.
   mctx.mcCells.funConstraintDeclaredRef :=
@@ -2801,7 +2801,7 @@ keepBoundResidualPred mctx boundIds (iface, args) =
 -- Dropping a residual that is not ALL bare bound tyvars is
 -- #1549's exact defect one shape over: `useIx x = ix x 'z'` leaves the residual
 -- `Ix t Char`, `boundTyvarIds` answered `None` on the `Char`, and the predicate reached
--- neither `useIx`'s scheme nor its callers' obligation lists — `check` printed
+-- neither useIx's scheme nor its callers' obligation lists — `check` printed
 -- `useIx : a -> Int`, and `main = println (useIx 'q')` was accepted on all four verbs,
 -- printing `222` out of `impl Ix Int Char`.  §4.2 OD2 says a non-ground predicate defers
 -- to the binder that quantifies its variables and is discharged at each USE SITE, and
@@ -2849,7 +2849,7 @@ residualMixedPred mctx boundIds iface args =
   else
     [(iface, ids, args)]
 
--- §3 `inst`, run for its residual rather than for a verdict (§4.2 OD2).  A goal with no
+-- §3 inst, run for its residual rather than for a verdict (§4.2 OD2).  A goal with no
 -- concrete-headed argument is its own residual and is not entered.  Any other goal,
 -- including one that mixes a concrete head with a free variable (`Conv (Wrap t) u`), is
 -- matched against the instances (`findMatchingImplReqsU`), whose matcher binds an
@@ -3311,7 +3311,7 @@ prependPredicateSlots (slot :: rest) acc =
 --       the literal/method site (`app2 f = f 2 3`).
 --   (2) a constraint FORWARDED from a constrained callee (`useApp g = app2 g`) never
 --       lands in pendingImplObligations/schemeObligations — its iface lives in the
---       `pendingDictApps` entry the callee's inferDictAtFound recorded (slot-parallel
+--       pending dict-app entry the callee's inferDictAtFound recorded (slot-parallel
 --       monos/ifaces).  Scan it for the var at a slot whose iface is now known.
 -- Both run AFTER the callee's own constraints are registered (topological SCC order),
 -- so the forwarded callee's ifaces are populated.

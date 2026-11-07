@@ -196,7 +196,7 @@ declaredEffectsAt gctx inst declared =
     })
     declared
 
--- WS-2/D2 + B-2.2-f (#1113): the slots-only projection `declaredConstraintSlots` is
+-- WS-2/D2 + B-2.2-f (#1113): the slots-only projection is
 -- RETIRED.  It had exactly two readers — `inferDictAtFound` and the shadow route — and
 -- FIX-shadow-arity-skew is what a slots-only projection costs: slice 3 widened what
 -- `cdSlots` is keyed by (whole predicate, vector included), the call sides that had a
@@ -204,16 +204,16 @@ declaredEffectsAt gctx inst declared =
 -- bare-slots projection expanded against a constant `[]` and collapsed two slots into
 -- one.  Take `declaredConstraintFor` and project BOTH halves off the one entry decision,
 -- or you are re-opening this bug by construction.  (The same argument that removed
--- `declaredConstraintK`: two readers re-deriving which entry a name resolves to is the
+-- the earlier projection: two readers re-deriving which entry a name resolves to is the
 -- drift `qualConstraintKey` was factored out to remove.)
 --
 -- B-2.2-f (#1113): the ONE resolution — a constrained callee's declared dict slots AND
 -- how many of them its own `=>` context declared (the rest being super slots
--- `expandSupersPairs` appends downstream).  Arms mirror the retired `declaredConstraintSlots`'
+-- the super expansion appends downstream).  Arms mirror the retired slots-only projection's
 -- former body exactly, keyed once through `qualConstraintKey`.
 --
 -- The prefix is CLAMPED against the slots actually returned (`clampPrefix`).
--- `pairSlots` truncates to the shorter of (ids, ifaces), a mismatch this seam can
+-- Pairing truncates to the shorter of (ids, ifaces), a mismatch this seam can
 -- manufacture by construction (see `CSlot`), and an unclamped `index < k` past the end
 -- of a truncated list marks APPENDED slots declared — the unsafe direction.  UNWITNESSED
 -- (instrumented over a full compiler build and a two-module probe; it never fired), so
@@ -1134,10 +1134,10 @@ shadowDeclaredFor mctx name key
 --
 -- FIX-shadow-arity-skew: "EXACTLY as inferDictAtFound does" is a claim about the
 -- (slot, VECTOR) pairs fed to the fixpoint, NOT about the slot list alone, and this is
--- where that distinction was paid for.  This expanded via `expandSupersPairs`, which
+-- where that distinction was paid for.  This expanded via the vector-free super expansion, which
 -- pairs every slot with a constant `[]`; once S-slot-key-vector (#1866) re-keyed
 -- `dedupSlotVecs` on the WHOLE PREDICATE, `(Ix a Char, Ix a Bool) => …` opened TWO slots
--- on the definition side (`expandSupersEntry`, which `dictArityOf` sizes from) and this
+-- on the definition side (the super expansion, which `dictArityOf` sizes from) and this
 -- call side still collapsed them to ONE — 1 dict passed to a 2-dict definition.  Measured
 -- on the packet's reproducer at `e19298f5`: `check` exit 0, `run` E-PANIC
 -- "intToString: not an Int", `build` exit 0 printing a DIFFERENT heap pointer every
@@ -1356,7 +1356,7 @@ resolveRLocalSite sx name tagRef am encl scope sym monos ifaces argVecs =
     --   * DEFINER shadow (the name is this module's own top-level fn) → the standalone,
     --     UNCONDITIONALLY.  The impl universe is not consulted; a grounded head with a live
     --     impl no longer steals the call.  (The APP path already forces this via the
-    --     RLocalSite `forceLocal` flag; this arm is what carries the other recorders —
+    --     RLocalSite force-local flag; this arm is what carries the other recorders —
     --     notably the VALUE-position sites pushed by the generic recordRLocalSite, which is
     --     gated on standaloneValuesRef and that set holds definer AND importer shadows.)
     --   * IMPORTER shadow (Fork 1) → the OLD per-receiver rule, unchanged: a live impl at the
@@ -1517,7 +1517,7 @@ nameableIfaceShadows gctx prog names
 --
 -- THE USE-path filter is the whole point, and its absence was this fix's first defect.
 -- Taking a dependency's WHOLE row on any import makes `import smod.{sf}` — one unrelated
--- function — enough to make `smod`'s interface "nameable", which it demonstrably is not:
+-- function — enough to make smod's interface "nameable", which it demonstrably is not:
 -- `impl Sizeable Blob` in that module is rejected `Unknown interface: Sizeable`.  That left
 -- #1353 narrowed rather than fixed (its own repro with the bridge hop removed still printed
 -- the impl's value).  `selectIfaceRows` is shared with the re-export side so the import and
@@ -1532,9 +1532,9 @@ nameableIfaceShadows gctx prog names
 -- THIS IS S1's right operand under S1-NS (RULED 2026-08-08), and it is the ONLY predicate
 -- in the compiler that answers it — `checkBodyImpl`'s shadow-hood and EVERY filter in the
 -- mark pass read THIS set.  Named rather than counted, because a count rots silently and
--- this sentence already did (it said "all three" for a week after `rpNames` became the
--- fourth): `moduleMarkCtx` filters `rpNames`, `shadowNames` (through
--- `shadowBareName`), `argNames` and `shadowMap` — its own `otherwise` arm enumerates them
+-- this sentence already did (it said "all three" for a week after the return-position set became the
+-- fourth): `moduleMarkCtx` filters the return-position names, the shadow names (through
+-- `shadowBareName`), `argNames` and the shadow map — its own `otherwise` arm enumerates them
 -- against what `rewriteArgScoped` can turn into an `EMethodAt`.  S1-NS (b) requires
 -- shadow-hood to be a superset of dispatch
 -- eligibility and rules two different predicates at the two sites non-conformant; one set

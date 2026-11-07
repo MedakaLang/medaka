@@ -366,7 +366,7 @@ recordParamPolarities mctx o name pols =
     entry :: mctx.mcCells.dataParamPolarityRef.value
 
 -- Per-parameter variance, inferred from constructor field occurrences.  Mirrors
--- `inferParamKinds`' shape: one pass over `payloadAstTypes`, positional result.
+-- the kind pass's shape: one pass over `payloadAstTypes`, positional result.
 --
 -- ORDER-sensitive by construction, and it under-TIGHTENS ON A MISS.  A
 -- `TyApp` spine composes the occurrence's own polarity with the HEAD type's
@@ -416,7 +416,7 @@ variantPayload (Variant _ payload) = payload
 
 -- Every occurrence of parameter [p] inside [t], each reported at the polarity
 -- [pol] the surrounding context gives it.  `TyFun`'s DOMAIN flips (mirroring
--- `argPerformableOccs`' `perf`-flip convention); `TyEffect`/`TyConstrained`/
+-- `argPerformableOccs`' flip convention); `TyEffect`/`TyConstrained`/
 -- `TyTuple` pass the context through; `TyRow` contributes nothing (a written
 -- row in an index slot is #1094's invariance, already enforced by
 -- `unifyIndexRow`, and is not this table's business).

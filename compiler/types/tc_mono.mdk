@@ -517,7 +517,7 @@ isUnboundTvar m = match normalize m
   TVar _ => True
   _ => False
 
--- #837 incr2 (Axis A): the value-restricted arm of the old `isBodyLocalScheme`,
+-- #837 incr2 (Axis A): the value-restricted arm of the old body-local scheme test,
 -- kept as a pure STRUCTURAL test.  A monomorphic scheme (`Forall [] []`) is never
 -- a genuine interface-method occurrence — every real method quantifies at least
 -- its interface parameter — so a mono scheme reaching a `recordImplObligation`
@@ -1457,13 +1457,13 @@ cohPpEach ctx cnt ms = map (ppGo ctx cnt 0) ms
 -- Matching one worklist of pairs through matchOneSided is exactly σ: the shared
 -- core binds each general-side TyVar once and re-checks (tyStructEq) every later
 -- occurrence, so a non-linear pattern is only subsumed by a consistent instance.
--- Direction, as in the superseded scalar `tySubsumes`: is [specifics] an instance of
+-- Direction, as in the superseded scalar subsumption: is [specifics] an instance of
 -- [generals]?  Only the GENERAL side's TyVars act as wildcards; the SPECIFIC side's
 -- are rigid and match only the same name.
 --
 -- n=1 reduction is ALGEBRAIC, not a fixture claim: a KeyEntry's `itys` for a
 -- single-param impl is exactly `[hty]` (keyEntryOfRow destructures `tys` as `headTy::_`
--- and stores the SAME `tys` as itys — `keyEntryOf`'s deleted predecessor did the same),
+-- and stores the SAME `tys` as itys — its deleted predecessor did the same),
 -- and `zipL [g] [s] == [(g, s)]`, so
 --     tySubsumesV [g] [s] == matchOneSided tyStep eqStr tyStructEq [(g, s)] []
 -- which is the REMOVED `tySubsumes g s` body term for term.  Every single-param
@@ -1479,13 +1479,13 @@ tySubsumesV generals specifics
 
 -- the two head VECTORS are the SAME pattern up to var renaming (mutual subsumption)
 -- — no ordering needed, the candidate trivially covers it.  Supersedes the scalar
--- `tyHeadEq`, which compared arg-0 patterns only.
+-- head-equality test, which compared arg-0 patterns only.
 export
 tyHeadEqV : List Ty -> List Ty -> Bool
 tyHeadEqV a b = tySubsumesV a b && tySubsumesV b a
 
 -- [a] ⊑ [b] strictly: [b]'s vector subsumes [a]'s but not vice versa.  Supersedes
--- the scalar `tyStrictlyMoreSpecific`.
+-- the scalar strictly-more-specific test.
 export
 tyStrictlyMoreSpecificV : List Ty -> List Ty -> Bool
 tyStrictlyMoreSpecificV a b = tySubsumesV b a && not (tySubsumesV a b)
@@ -1572,7 +1572,7 @@ tyStructEqList _ _ = False
 -- then looked `__none__` up, found nothing, and died with `no impl of method 'sz'
 -- for type '__none__'` on a program `check` and `run` both accept.  Peeling here
 -- makes the two sides name the same tag.  The peel belongs on the NODE walk, not
--- on one classifier, so `headTyconTy` and `headTyconNameTy` cannot disagree about
+-- on one classifier, so `headTyconTy` and its name-only sibling cannot disagree about
 -- WHICH node they are classifying (they are only allowed to disagree about how).
 --
 -- It also peels `TyConstrained`.  Peeling a constraint yields a headless
@@ -1588,7 +1588,7 @@ tyStructEqList _ _ = False
 -- `_ => None`, and `impl Sz (Eq a => a)` remains a fully-general headless impl.
 -- The peel does not decide headedness — it only stops the WRAPPER from hiding a
 -- head that is there.  That is why the arm is on this NODE walk rather than in
--- one classifier: `headTyconTy` and `headTyconNameTy` must not disagree about
+-- one classifier: `headTyconTy` and its name-only sibling must not disagree about
 -- WHICH node they are classifying.
 --
 -- It is the dispatch walk: the `TyEffect` peel and `headTyconTy`'s `TyFun` arm make
@@ -1641,7 +1641,7 @@ headTySpineNode t = t
 -- fix is a peel on `headTyNode`, and every arm below classifies the peeled node
 -- unchanged.  If you are tempted to add a `TyConstrained` arm here, the shape
 -- you want is already handled; adding one would only let this projection and
--- `headTyconNameTy` disagree about which node they classify.
+-- its name-only sibling disagree about which node they classify.
 export
 headTyconTy : Ty -> Option HeadKey
 headTyconTy t = match headTyNode t
@@ -1680,7 +1680,7 @@ preferConcrete a b = match headTyconMono a
 -- shared matchOneSided core (specific side = Mono, so the consistency equality is
 -- matchEqMono).  A var bound twice must agree: a non-linear impl head
 -- (`Get (Box a) a`) must not "match" `Get (Box Int) Bool` (binding a↦Int AND a↦Bool)
--- since NO substitution exists — §3 `inst`'s "φ a most-general MATCHER" premise, and a
+-- since NO substitution exists — §3 inst's "φ a most-general MATCHER" premise, and a
 -- caller that selects an impl by this match would take the wrong impl's requires.  So
 -- a↦Int, a↦Bool fails matchEqMono ⇒ None (no false match); a CONSISTENT non-linear
 -- head (`Get (Box Int) Int`, a↦Int twice) still matches (the live canary in
@@ -1828,16 +1828,16 @@ peelQual t = match normalize t
 -- all") rather than absorbing "a head with no identity yet".
 --
 -- it is not the only `Mono` HEAD PROJECTION — but it IS now the only `Mono`
--- one on a dispatch path.  A-2.2 left a third, `monoHeadCon`, `Option String`
+-- one on a dispatch path.  A-2.2 left a third, an `Option String` projection
 -- and carrying its own copy of the same I6.1 forgery; A-2.2b DELETED it,
 -- pointed `goalHeadCon` (hence `KeyBuckets`' goal side) and the three
--- `implExistsForHead` receiver sites at this function, and moved its name-only
+-- impl-existence receiver sites at this function, and moved its name-only
 -- consumers to `headTyconNameMono` below.
 --
 -- "the surviving pair" is ambiguous and this comment means one of them.  The
 -- pair meant HERE is the SOURCE-TYPE pair — this and `headTyconNameMono`, the
 -- two `Mono` projections, which owe each other the invariant that they classify
--- the same head nodes.  `monoHeadCon`'s obituary above names the other, the
+-- the same head nodes.  The deleted projection's note above names the other, the
 -- SIDE pair (`headTyconTy` impl / `headTyconMono` goal).  Neither is "the" pair
 -- and neither is a count of the projections in this file: that is four, and the
 -- derivation that can actually discover a fifth is in the obituary.
@@ -1887,11 +1887,11 @@ headTyconMono t = match headMonoNode t
 --     | grep -vE '^[0-9]+:[[:space:]]*--' \
 --     | grep -vE '^[0-9]+:headTyconNameMono'
 --
--- Both filters are load-bearing, for the reason `headTyconNameTy` above
+-- Both filters are load-bearing, for the reason the name-only sibling above
 -- gives: the unfiltered command also prints the comments and the definition.
 --
 -- Deliberately NOT `map headKeyName (headTyconMono t)` — see the same note on
--- `headTyconNameTy` above for why the three duplicated arms are the cheaper of
+-- the name-only sibling above for why the three duplicated arms are the cheaper of
 -- the two prices.  The invariant they owe: these arms and `headTyconMono`'s must
 -- classify the same NOMINAL head nodes (`TCon`, `TRigid`), so a new nominal `Mono`
 -- head constructor is owed an arm in both (both fall through `_ => None`, the wildcard

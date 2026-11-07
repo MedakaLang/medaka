@@ -313,7 +313,7 @@ buildDeclEnvs gctx acc coreRow modRows =
     deMethods = a.daMethods,
     deKindsBefore = a.daSeeds.dsKinds,
     -- #2158: `deKindsBefore`'s BARE-NAME twin, out of the SAME fold and the same
-    -- `kacc` rows -- see `declEnvSeedChain`.
+    -- kind-accumulator rows -- see `declEnvSeedChain`.
     deNameIndexBefore = a.daSeeds.dsNames,
     -- The VARIANCE seed.  A SEPARATE chain rather than a fourth
     -- accumulator inside `declEnvSeedChain` because it is the only one of the
@@ -573,7 +573,7 @@ declEnvVariantOwnerModules mid (_ :: rest) acc =
 --   * KINDS — fail-SILENT.  A missing param-kind entry makes `fromAstTypeApp` fall
 --     to `appFallback` instead of `foldAppKinds`, so a written row in a `KRow` slot
 --     elaborates as an ordinary TYPE and the effect is erased at exit 0.  That is
---     #1069, the silent face of #804/#1028, and `opaque_export_row_kind_import`'s
+--     #1069, the silent face of #804/#1028, and the opaque-export row-kind import fixture's
 --     own header calls it out.
 --
 -- The silent direction is new here, and saying so is the point of this note.
@@ -605,7 +605,7 @@ declEnvSeedDataUniverse mctx mid envs =
   -- — and that was an O(M² log M) term, since the list it folded is
   -- `deKindsBefore[mid]`, whose length grows with the module ordinal.  Do not
   -- restore it: a rebuild off a per-module prefix list is quadratic by
-  -- construction, and `stage_ir_scaling`'s `modules:typecheck` row is what
+  -- construction, and the IR scaling gate's `modules:typecheck` row is what
   -- catches it (2.219 → 2.500 against a 2.45 ceiling when it last landed).
   -- A MISS is fail-SILENT and STRICTLY BENIGN, unlike the kind half's: an empty
   -- index makes `noImplHintFor` withhold the "add deriving / write an impl"
@@ -780,7 +780,7 @@ addFieldOwnerIdents ident cn xs0 env0 = go xs0 env0
 -- module in reverse declaration order.  That is byte-for-byte the order the
 -- retired `CrossRun.universeAliasTable` had: `loadDataUniverse` seeded module
 -- k's working table from the universe and `registerAllData` consed module k's
--- own public aliases onto its FRONT before `storeDataUniverse` wrote it back,
+-- own public aliases onto its FRONT before the universe was written back,
 -- so the accumulator was `[k rev] ++ [k-1 rev] ++ … ++ [0 rev]` too.
 -- Order is observable twice over: `lookupTab` is FIRST-match, and
 -- `rejectCyclicAliases` builds its graph from this list in list order and
@@ -1315,7 +1315,7 @@ builtinClassesOf decls = builtinClassesGo decls emptyBuiltinClasses
 
 -- The presence bit is set only by a declaration with at least one method, so a
 -- methodless `interface Num a` leaves its class absent and the three gates (#1539)
--- OFF.  A bare `declsNonEmpty`-shaped test (`≥1 declaration` rather than `≥1 method`)
+-- OFF.  A bare non-empty-declarations test (`≥1 declaration` rather than `≥1 method`)
 -- would turn them ON for that declaration.  The ORIGIN is still set unconditionally:
 -- the origin half's population is #1446's.
 export
@@ -1399,7 +1399,7 @@ registerData env (DNewtype { newtypeName = name, newtypeParams = params, newtype
   registerVariants o env name params anns [Variant con (ConPos [fty])] [binders]
 -- THE `DInterface` arm is gone, and its absence is the point.
 -- #822 registered each interface type-parameter's slot kinds here, into
--- `ifaceParamKindsRef`, *"because every consumer must see the table BEFORE the first
+-- a ref table, *"because every consumer must see the table BEFORE the first
 -- signature is elaborated, which is exactly registerAllData's slot"*.  That timing
 -- constraint dissolved with the table: neither surviving consumer reads a ref at all
 -- — `declGradedScope` computes the kinds from the very declaration it is elaborating,
@@ -1470,7 +1470,7 @@ addFieldOwners key (fn :: rest) m =
 -- `DNewtype.newtypeOrigin`, threaded from `registerData`'s record pattern.
 --
 -- It must come from the decl, not from ambient state.  `registerAllData` runs
--- over `importedCtorTypeDecls` — OTHER modules' decls — so a "current module"
+-- over the imported ctor type decls — OTHER modules' decls — so a "current module"
 -- id would attribute every imported type to the importer.  That is the same
 -- class of wrongness #1219 eliminated on the flat path, and it is why this unit
 -- was blocked until the decl-layer carriers landed (#1225).
@@ -1490,7 +1490,7 @@ registerVariants o env name params anns variants binders =
   -- which declaration a key names.  It runs AFTER `recordParamKinds` only
   -- because reading order is irrelevant here; it must run BEFORE
   -- `addVariants` so a later declaration in the same list can compose with it.
-  -- #2112: the seed (`seedParamPolarityFixpoint`) has already run the
+  -- #2112: the seed of this declaration's group has already run the
   -- TRANSITIVE fixpoint for this key over every declaration it may compose
   -- with — including PRIVATE ones an export filter later drops — so a row it
   -- wrote is at least as tight as anything recomputed here from the table AS
@@ -1553,7 +1553,7 @@ registerVariants o env name params anns variants binders =
 -- registration shadows an earlier one
 -- under `lookupAssoc`'s first-match — the module's own decls are registered as a FRONT
 -- overlay over the data universe and therefore win, which is the ordering every reader
--- assumes (see the `dataEnv` binding in checkBodyImpl).
+-- assumes (see the data-env binding in checkBodyImpl).
 -- (`o` is the DECLARATION's identity; see `tyTabKey`.)
 recordCtors : GraphCtx ->
   TyConOrigin ->
@@ -1612,7 +1612,7 @@ recordParamRowAtoms mctx o name atomss =
     entry :: mctx.mcCells.dataParamRowAtomsRef.value
 
 -- Per parameter, the atoms GUARANTEED at every one of its occurrences in the
--- declaration's fields.  Mirrors `inferParamKinds`/`inferParamPolarities`'
+-- declaration's fields.  Mirrors the kind pass and `inferParamPolarities`'
 -- shape: one pass over `payloadAstTypes`, positional result.
 --
 -- Intersection, not union, and every occurrence counts — including the ones
@@ -2319,7 +2319,7 @@ constraintNameMonos (n :: rest) tvMap = match lookupAssoc n tvMap
 --   * CROSS-RUN: `universeCtorPop` and `universeRecordPop`, one `SpellingPop` per table.
 --     Their payload is ELABORATED (`Scheme`, `RecordInfo`), which stage K, being
 --     syntactic, cannot hold.  Each population's floor is what a module starts from: the
---     ctor floor is the base env of the Module arm's `dataEnv` (`withCtors`), the record
+--     ctor floor is the base env of the Module arm's data env (`withCtors`), the record
 --     floor is loaded into `recordByNameRef` below.  Nothing copies a per-run table back:
 --     `appendDataUniverse` inserts into the populations directly.
 --   * STAGE K: a PROJECTION at the reader's own ordinal, with nothing to write back.

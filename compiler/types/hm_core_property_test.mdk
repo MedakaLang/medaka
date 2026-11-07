@@ -612,7 +612,7 @@ insideExpected : GTy -> GTy -> Verdict
 insideExpected a b = if closeG a == closeG b then Accepted else Rejected
 
 {- §5 binding groups. A group's members are typed together with each other
-   as monotypes in the environment (the rule for `letrec`), so a member used
+   as monotypes in the environment (the letrec rule), so a member used
    at two different ground types inside the group forces one type equal to
    both; generalization happens at the group's exit, so after it every
    member is usable at two types. -}

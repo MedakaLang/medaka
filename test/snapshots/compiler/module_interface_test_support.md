@@ -16,7 +16,7 @@ import types.typecheck.{
   defaultDriveInputs, checkModulesChainReportForGraph, chainArgs
 }
 
--- The drive's `valueMain` argument for a graph whose entry is no value `main`.
+-- The drive's value-main argument for a graph whose entry is no value `main`.
 export
 noValueMain : Bool
 noValueMain = False

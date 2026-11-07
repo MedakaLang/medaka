@@ -126,7 +126,7 @@ binderNode row = SList [
 ]
 
 -- A binder's return type is a list of at most one element, not `optionSExp`'s
--- `none`/`some` pair: `decBinder` reads it back with the list reader.
+-- none/some pair: `decBinder` reads it back with the list reader.
 optionList : Option SExp -> SExp
 optionList None = SList []
 optionList (Some x) = SList [x]

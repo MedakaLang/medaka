@@ -1,7 +1,7 @@
 -- The SHARED ROUTE-WORD MINT (ARCH B-2, #1113) — the only mint of an impl route
 -- word in the tree, imported by `types/typecheck.mdk`, `eval/eval.mdk` and
 -- `ir/core_ir_lower.mdk`; the two mirrors it replaced (`eval.implKeyOf`'s private
--- `ppTyK` printer family, `typecheck.implKeyTc`'s hand-spelled body) are deleted.
+-- printer family, `typecheck.implKeyTc`'s hand-spelled body) are deleted.
 --
 -- The design doc's two-component `RKey` carrier (identity + word) was refused:
 -- `Route` crosses into `ir/`, `backend/` and `eval/`, where the only namespaces
@@ -587,7 +587,7 @@ typeTagName tag = match stringLastIndexOf "." tag
 
 -- ── the ONE prec-2 `Ty` printer ──────────────────────────────────────────
 -- Mirrors `types/typecheck.mdk`'s `ppTy` family byte-for-byte (which in turn
--- mirrors the retired OCaml `pp_ty_prec`): `rkTy` is prec 0, `rkTyFunArg`
+-- mirrors the retired OCaml precedence printer): `rkTy` is prec 0, `rkTyFunArg`
 -- prec 1 (wraps arrows), `rkTyAtom` prec 2 (wraps arrows AND applications).
 --
 -- A type constructor renders through `typeTagOf`, so two modules' same-spelled
@@ -632,7 +632,7 @@ rkRowBody effs tails =
 --
 -- 🚨 `a` LEFT THIS DIRECTIVE MARKED "TRANSITIONAL, `B-2.2-e` OWNS DELETING IT".
 -- `e` LANDED AND REFUSED TO DELETE IT, because the premise was wrong: `e` deletes
--- `eval.mdk`'s copy (`ppEffAtomK`, which only `implKeyOf` reached), but
+-- `eval.mdk`'s copy (its effect-atom printer, which only the impl-key mint reached), but
 -- `types/typecheck.mdk`'s `ppEffAtomTy` and `tools/doc.mdk`'s `ppEffAtomDoc` are
 -- reached by the DIAGNOSTIC printers, which `e` does not touch — so this copy
 -- does NOT become the only one; it becomes one of THREE.  MEASURED, not reasoned:
@@ -719,7 +719,7 @@ rkTyList =
 -- False
 
 -- `implRouteKeyWord`, origin ABSENT: byte-identical to what `implKeyTc` and
--- `implKeyOf` produce today. These are the compatibility pins — if one of them
+-- eval's printer produce today. These are the compatibility pins — if one of them
 -- moves, the mint is no longer a drop-in for the two originals.
 -- > implRouteKeyWord OriginUnresolved "Show" [rkTyInt] None
 -- "Show|Int|"
@@ -789,7 +789,7 @@ rkTyList =
 -- "(Int, Bool)"
 
 -- The three arms where this printer is the COMPLETE one and `eval`'s
--- `ppTyAtomK` is not (see the header). These assertions are the record of what
+-- printer is not (see the header). These assertions are the record of what
 -- a later bite's caller collapse would change on the eval side.
 -- > rkTy (TyEffect [effAtomBare "Stdout"] [] rkTyInt)
 -- "<Stdout> Int"

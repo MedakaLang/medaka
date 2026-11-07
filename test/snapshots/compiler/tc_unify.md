@@ -210,7 +210,7 @@ import map as IdMap
 ioLabel : EffLabel
 ioLabel = builtinLabel "IO"
 
--- `IO` is the join of the labels the drive's profile grants (`ioJoin`), so it
+-- `IO` is the join of the labels the drive's profile grants (the profile's IO join), so it
 -- widens on either side of an escape check.  On the bound side a NARROW inferred
 -- row is subsumed by an `<IO>` bound (narrow ⊑ IO); `IO` stays in the expansion
 -- (atomsNorm keeps it) so an inferred IO matches a bound IO.
@@ -630,7 +630,7 @@ unifyRowPlain dyn (EffRow l1 None) (EffRow l2 (Some v2)) =
 -- a plain generic reaches this arm with no downstream consumer of the direction
 -- (`launderEscapeFromLog` is consulted only by the impl/default-method seam), so
 -- `coerce : a -> a -> a` applied to two callbacks whose PARAMETER rows differ (`<IO>`
--- vs `<>`) would equate them, `reopenRowN` reopens only covariant rows, and the result
+-- vs `<>`) would equate them, row reopening reopens only covariant rows, and the result
 -- would carry one closure's declared type with the other's body.  The
 -- purer-than-declared case (an impl `<>` against a declared `<Stdout>`) is real, but it
 -- is a DIRECTED flow (a value into a declared slot), and every such seam takes
@@ -650,7 +650,7 @@ unifyRowPlain dyn (EffRow l1 None) (EffRow l2 None) = closedRowEqCheck dyn l1 l2
 --     compiler does not have, and a CONTRAVARIANT index is writable today
 --     (`data Sink e = MkSink ((Unit -> <e> Unit) -> Int)`), so widening in EITHER
 --     direction launders an effect.  Only equality is sound.
--- `substMonoP` already encodes this distinction (it wraps an arrow row in `reopenRow`
+-- Mono substitution already encodes this distinction (it wraps an arrow row in a reopened row
 -- and passes a `TEff` row through UNCHANGED); routing both through one unifier threw
 -- that decision away.  This restores the agreement.
 --
@@ -1456,7 +1456,7 @@ solvedUpper _mctx _ = False
 -- descending directionally.  An open tail still has a metavariable to solve,
 -- and solving one against a written row is instantiation rather than
 -- interchange — the same caveat `unifyIndexRowN` documents
--- (`graded_closed_row_grade_ok`) — so nothing changes for it.
+-- (its graded closed-row case) — so nothing changes for it.
 --
 -- This does narrow acceptance in the sound direction too.  A contravariant
 -- NARROWING (`Taker (Unit -> <IO> Unit)` assigned where `Taker (Unit -> <>
@@ -2166,7 +2166,7 @@ qualConstraintKey mctx name =
 -- first-match lookup in a `(definer module, exported name)`-keyed qual table.
 --
 -- B-2.2-f (#1113): ONE polymorphic function where there were two byte-identical
--- monomorphic copies (`lookupQualArity` / `lookupQualIfaces`).  The declared-prefix
+-- monomorphic copies (the arity and interfaces lookups).  The declared-prefix
 -- sidecar's payload is a SCALAR, so a third copy could not have shared their `List X`
 -- shape anyway — and three identical bodies is where `rule-duplicate-body` starts
 -- collecting disables.
@@ -2248,7 +2248,7 @@ instantiateValueTracked mctx name scheme =
   inst
 
 -- pair each declared slot with the argument vector its signature recorded.  The vector
--- list is a PREFIX (`keptConstraintArgs`; and `registerInferredFor` records `[]` for a
+-- list is a PREFIX (the kept constraint args; and `registerInferredFor` records `[]` for a
 -- slot whose predicate it could not recover — S-inferred-vector-supply, #1869), so a slot
 -- past its end, or with an empty vector at its position, gets `[]`, which every consumer
 -- reads as "no vector recoverable".
@@ -2386,7 +2386,7 @@ declaredCrossModuleObls : ModuleCtx -> String -> Option (List VecObl)
 declaredCrossModuleObls mctx x = match qualConstraintDecl mctx x
   -- S-xmod-vector-supply (#1868/#1867): lookup (1) reads the WHOLE qual entry, not just
   -- its slots.  Reading the slots alone is what made this lookup the truncation point:
-  -- `vecOblsOfSlots` lifted each slot to a ONE-argument obligation, so an imported
+  -- the slot lifter lifted each slot to a ONE-argument obligation, so an imported
   -- `Ix a Bool =>` was re-checked as the unary goal `Ix Int` — which matched `impl Ix
   -- Int Char` and ACCEPTED an unsatisfiable program (#1868), and matched two impls and
   -- REJECTED a legal one (#1867).  The same-module branch one level up
@@ -2422,11 +2422,11 @@ qualSchemeOblsFor mctx name =
 -- lift each already-paired dict slot, WITH its recorded predicate argument vector, to a
 -- vector obligation, skipping slots with no interface.
 --
--- The pairing of interfaces with ids happens once, in `pairSlots`, so this function
+-- The pairing of interfaces with ids happens once, in the slot pairing, so this function
 -- cannot be handed a mispaired input.
 --
 -- The vector is the point (#1868/#1867): emitting `voArgs = []` unconditionally — the
--- "shattered per-tyvar dict slots" reading of `funConstraintsRef` — would make
+-- "shattered per-tyvar dict slots" reading of the function-constraints table — would make
 -- `substVecOblArgs` instantiate through `substMonos o.voIds`, i.e. ONE argument per
 -- slot.  For a binary predicate that is not a weaker obligation, it is a DIFFERENT one:
 -- `Ix a Bool` re-checked as `Ix Int`.  An empty vector still means exactly what it meant

@@ -52,7 +52,7 @@ public export data Mono =
   -- this unit.  The first was already FALSE on `main` when it was written
   -- (`headTyconMono` read the field from A-2.2 onward), and a reviewer traced a
   -- shipped S0 to someone believing it — the retained `hd == Some hk` guard in
-  -- `implExistsForHeadGo`, which compared an origin-carrying impl head against a
+  -- the impl-existence head walk, which compared an origin-carrying impl head against a
   -- frequently-origin-less goal head inside a bucket keyed by spelling, and so
   -- answered `False` wherever they differed.  The lesson survives both
   -- corrections and is worth more than either: a "nothing reads this" / "no
@@ -117,7 +117,7 @@ public export data Mono =
   -- reader has to pick which is meant.  Do not re-describe this population with a
   -- rule of thumb — `_`-shaped or numeric.
   --
-  -- AND NOTHING REBUILDS ONE FROM ITS NAME.  `substMono`/`substMonoP` (reached
+  -- AND NOTHING REBUILDS ONE FROM ITS NAME.  `substMono` (reached
   -- from `instantiate`, i.e. every use of every imported binding) return the
   -- MATCHED NODE, never a rebuilt `TCon n => TCon n`, so preservation is
   -- structural rather than a per-site promise — and one allocation per head per
@@ -260,7 +260,7 @@ public export data IfaceRef = IfaceRef {
 -- of `schemeObligationsRef` and of its three cross-module mirrors.
 --
 -- The point of the record is not ergonomics.  Before it, this payload was
--- `(String, List Int)` — the SAME shape as `funConstraintsRef`'s `(fn name, slot ids)`
+-- `(String, List Int)` — the SAME shape as the function-constraints table's `(fn name, slot ids)`
 -- entries, 58 lines of the file apart, with nothing but a convention keeping the two
 -- meanings from being passed to each other's readers.  Widening the interface half to
 -- `IfaceRef` removes M1 from that shape, which leaves the fn-name meaning as its only
@@ -272,11 +272,11 @@ public export data IfaceRef = IfaceRef {
 -- vector as monos, at the recording site's instantiation — the `Predicate.args`
 -- shape, carried here so a predicate with a GROUND argument (`Ix a Bool =>`)
 -- survives the channel at all.  `[]` means "no vector was recoverable", exactly
--- the convention `zipSlotArgs`/`enclPreds` already use for the slot channel, and
+-- the convention `enclPreds` and its slot-argument zip already use for the slot channel, and
 -- it reproduces the pre-widening ids-only behaviour byte for byte.
 --
 -- [voIds] IS NOT REDUNDANT WITH IT, AND MUST NOT BE DERIVED FROM IT.  Two
--- producers have only an id (`vecOblsOfSlots` lifts a `CSlot`, whose payload is
+-- producers have only an id (one lifts a `CSlot`, whose payload is
 -- `csId : Int`; `censusSuperCloseVec` maps typaram names positionally onto ids), and a
 -- `Mono` is a `Ref Tyvar` that cannot be minted from an id.  [voIds] also remains
 -- the currency of the dict-slot cardinality (`leadInferredPred`) and of the coverage

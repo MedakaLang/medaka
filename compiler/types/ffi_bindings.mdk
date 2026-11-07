@@ -38,7 +38,7 @@ public export data FfiDiag = FfiDiag DiagCode (Option Loc) String
 ffiHosts : List String
 ffiHosts = ["c", "js"]
 
--- Every rule over one user extern.  `catalog` says the name is a
+-- Every rule over one user extern.  The catalog flag says the name is a
 -- `stdlib/runtime.mdk` catalog name, which always runs the built-in: its
 -- signature is held to the catalog's by the shadow and catalog-row rules
 -- instead, so of these rules it meets only the one refusing a `bind` clause.

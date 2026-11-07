@@ -7,7 +7,7 @@ stages=DESUGAR,MARK
 -- Extracted into its own lean module (imports only ast + util) so the eval
 -- drivers can consume it without pulling all of resolve.mdk into their load
 -- closure.  Rewrites every variable REFERENCE `EVar n` → `EVarAt n addr`, where
--- `addr` is the (frame, slot) position the slot-indexing eval reads.  The pass
+-- the address is the (frame, slot) position the slot-indexing eval reads.  The pass
 -- is pure AST→AST and runs right before eval (after marker + typecheck
 -- elaboration), so it sees `EMethodRef`/`EMethodAt`/`EDictApp`/`EDictAt` already
 -- in place and leaves them untouched (passthrough).
@@ -30,7 +30,7 @@ stages=DESUGAR,MARK
 -- `EVar` (eval short-circuits it to `VUnit`, it is not a variable lookup).
 --
 -- NOTE for the consumer: this pass does the PLAIN lexical resolution only.  The
--- Phase-112 `lookup_method` shadow-bypass is a CONSUMER concern — for the
+-- The method shadow-bypass is a CONSUMER concern — for the
 -- self-hosted eval that reduces to: AGlobal stays a by-name scan (`lookupEnv`),
 -- which already reaches a global method's VMulti past any local frame.
 

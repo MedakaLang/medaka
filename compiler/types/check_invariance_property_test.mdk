@@ -131,7 +131,7 @@ blocksSource blocks perm = join "" (permute perm (blockTexts blocks))
 -- SHADOW-SEMANTICS decides. The interface and the standalone in one module are
 -- not a topology here: that is a duplicate definition (L3, F-R4), a resolve
 -- error that this harness never runs, pinned by the shadow gate rows `d1` and
--- `d11` and the `reject_` run_check_agreement rows.
+-- `d11` and the reject-named run_check_agreement rows.
 public export data Topology =
   | DefinerImported
   | Importer

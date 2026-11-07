@@ -732,7 +732,7 @@ headL (x :: _) = x
 -- the RECEIVER's own span (the field access names its receiver's span) —
 -- verified empirically:
 -- `p.aeg` reports receiver span (sc, sc+1) for `p`, `somebody.aeg` reports
--- (sc, sc+8) for `somebody`.  The field name immediately follows the
+-- (sc, sc+8) for somebody.  The field name immediately follows the
 -- receiver's end column + the `.`, so its span is computable from the
 -- receiver's end column.  Valid for the common single-level `recv.field`
 -- access; a chained `a.b.cty` receiver is itself a field access with no own

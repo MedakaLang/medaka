@@ -64,7 +64,7 @@ checkRunResidue m = CheckRunSeed {
 -- #415 item 1: the seeding PREAMBLE every runtime-seeded entry point runs before its
 -- typecheck pass — the head half of the sandwich whose tail is `runFinalChecks`.
 -- [oracleDecls] is the decl set the ctor oracle is built from: the ONE axis the callers
--- legitimately differ on (the flat paths pass `prog`; checkModuleFullDiags passes
+-- legitimately differ on (the flat paths pass the program; checkModuleFullDiags passes
 -- `prog ++ accData` own-module-FIRST — see the P0-9 note there, that order is load-bearing).
 -- The module's mint (`checkBodyImpl`) installs the seed: this oracle and an empty
 -- warnings list.
@@ -149,7 +149,7 @@ enterStampCtx saved ctx =
 --   * headless-receiver impls (TyVar / function / empty receiver): keyed by
 --     iface, match ANY receiver. Almost always empty (`impl Foo a` -- the
 --     overlapping-impls / parse fixtures are the only corpus sources), but
---     MUST be kept: dropping them would change `implMatches` from True to
+--     MUST be kept: dropping them would change the impl match from True to
 --     False on such a program.
 --   * iface name -> SET of its impls' concrete head tags (headless, arrow-
 --     and effect-headed impls excluded — this is the acceptance census, not
@@ -209,7 +209,7 @@ enterStampCtx saved ctx =
 -- typed as the standalone — check says one thing, the binary does another.  True pins
 -- the route to RLocal.  recordRLocalSite (value position / importer shadows) pushes
 -- False and keeps the old per-receiver re-derivation.
--- S-1: `dictMonos`/`dictIfaces` are the SHADOWING STANDALONE's own `=>`-constraint
+-- S-1: The dict monos and ifaces are the SHADOWING STANDALONE's own `=>`-constraint
 -- slots (slot-parallel, expanded-supers, from shadowStandaloneDicts), carried here so
 -- the stamp can turn them into dict Routes.  They are read INSIDE resolveRLocalSites
 -- via routesOfMonosTop — a PURE function of the union-find-solved monos — rather than
@@ -556,7 +556,7 @@ emptyShadowDicts = ShadowDicts { sdMonos = [], sdIfaces = [], sdArgVecs = [] }
 
 -- E6 (module emit path only): funPredicateSlotsRef is wiped by `freshModuleCtx` at the start
 -- of EACH module's typecheck, but a cross-module `=>`-constrained CALL site (entry
--- calling an imported `clampU`) must still find the callee's generalized constraint
+-- calling an imported function) must still find the callee's generalized constraint
 -- slots so inferDictAt records a real pendingDictApp (→ the call gets its dict ARG).
 -- The cross-run carrier accumulates every module's predicates across the graph;
 -- checkModuleFullImpl re-seeds the per-run carrier after reset.  The defining
@@ -571,7 +571,7 @@ emptyShadowDicts = ShadowDicts { sdMonos = [], sdIfaces = [], sdArgVecs = [] }
 -- dictArityOf's first-match returns the WRONG module's arity → a call site in A's
 -- importer is sized to B's 2 dict params (over-application) → run-path crash while
 -- the emit path's arg-stamp recovers (the §1 D2 repro).  Populated per-module in
--- checkModuleFullImpl (each fn DEFINED in this module's `prog` is attributed to mid);
+-- checkModuleFullImpl (each fn DEFINED in this module's program is attributed to mid);
 -- consumed by scopePredicateSlots.  The bare cross-run carrier is kept — the
 -- per-module reseed at checkModuleFullImpl:7546 needs the bare form for the current
 -- module's E6 cross-module call-site discovery.
@@ -585,12 +585,12 @@ emptyShadowDicts = ShadowDicts { sdMonos = [], sdIfaces = [], sdArgVecs = [] }
 -- DIRECT import).  Lets inferDictAtFound resolve a cross-module constrained callee's
 -- dict arity by MODULE IDENTITY (the (definer,name)-keyed qual tables) instead of the
 -- bare-name first-match over the jointly-seeded funConstraintsRef — which picks the
--- MOST-RECENTLY-PREPENDED same-named entry, i.e. a FOREIGN module's `wrap` when the
--- importer merely imports a different `wrap`.  That bare-name collision is an
+-- MOST-RECENTLY-PREPENDED same-named entry, i.e. a FOREIGN module's same-named function when the
+-- importer merely imports a different one.  That bare-name collision is an
 -- observable run-crash today (`applied non-function`) on `medaka run` of a direct
 -- cross-module import of two same-named, different-`=>`-arity constrained fns, while
 -- `check` accepts and `build` is saved by universal mangling.  Set per-module in
--- checkModuleFullImpl from `prog`'s DUse decls; only EXPLICIT imports
+-- checkModuleFullImpl from the program's DUse decls; only EXPLICIT imports
 -- (UseName/UseGroup/UseAlias) are mapped — a wildcard `import mod.*` can't enumerate
 -- names here, and a re-exported fn's import source ≠ its definer, so both fall back to
 -- the bare table (correct, byte-identical; the qual path is the fix for the common
@@ -600,7 +600,7 @@ emptyShadowDicts = ShadowDicts { sdMonos = [], sdIfaces = [], sdArgVecs = [] }
 -- so resolveDictApps can resolve an UNDETERMINED top-level constraint (a constraint
 -- tyvar pinned by neither arg nor result) by counting that interface's impls: sole
 -- impl → a concrete RKey to it; ≥2 → an AmbiguousImpl error.  Recorded from the same
--- `expanded` (iface, id) pairing inferDictAtFound already builds for recordCallObligations.
+-- expanded (iface, id) pairing inferDictAtFound already builds for recordCallObligations.
 
 -- #1161 (F-3a-ii): the FOURTH field is the slot-parallel GOAL VECTOR list — for each
 -- slot, the whole predicate's instantiated argument vector (`Ix a Char` at `a = Int`
@@ -613,7 +613,7 @@ emptyShadowDicts = ShadowDicts { sdMonos = [], sdIfaces = [], sdArgVecs = [] }
 
 -- PERF: this channel's length in O(1) — same O(N²)-per-group length scan the call
 -- channel had before it was ported onto `Windowed` (see `wMark` above).
--- `pendingDictApps` rides `Windowed` too (see `dictApps` below); mutated ONLY
+-- The pending dict-app channel rides `Windowed` too (see the dict-app field below); mutated ONLY
 -- by `freshModuleCtx` and `pushDictApp`.
 
 -- Construct every field-Ref fresh (each reproduces its former top-level ref's initial);

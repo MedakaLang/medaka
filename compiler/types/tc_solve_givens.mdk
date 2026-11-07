@@ -106,7 +106,7 @@ assumAnswerKind (LegacyProjected _ _) = ATLegacyPredicate
 
 -- The dict parameter that carries given-rooted evidence.  A superclass projection of a
 -- given reads its parent's parameter: the super is a field of that dictionary
--- (`givenEvidenceRoute`), never selected again.
+-- (its evidence route), never selected again.
 givenEvidenceBinder : SolverEvidence -> EvidenceBinderId
 givenEvidenceBinder (GivenEvidence binder) = binder
 givenEvidenceBinder (SuperclassEvidence parent _) = parent
@@ -350,7 +350,7 @@ firstDictForEncl gctx id useScope xs0 = go xs0
 -- var, return [encl]'s in-scope dict param (the slot it sits at) rather than the
 -- GLOBAL activeDictVars entry.  In a mutually-recursive group the constraint vars of
 -- the siblings unify to one id; activeDictVars (global, uncleared) maps that id to
--- whichever sibling registered it LAST — so an arg-stamp inside `evenCat` would
+-- whichever sibling registered it LAST — so an arg-stamp inside evenCat would
 -- forward `$dict_oddCat_0` (out of scope in evenCat's body).  Preferring encl's own
 -- slot keeps the forwarded dict the one actually bound in the body.  A miss is None;
 -- evidence owned by a different impl is not in scope here.
@@ -398,7 +398,7 @@ activeDictVarOfEncl mctx (Some request) m encl useScope =
 -- `activeDictVarOfEncl`; only an explicit no-predicate route may consult scalar state.
 --
 -- #2547 unit 3: the scan is `firstPredForEnclAt` — the id-gated given lookup — not a
--- private `implReqPick`.  The two were term-for-term the same test over the same pair in
+-- private pick.  The two were term-for-term the same test over the same pair in
 -- opposite tuple orders; one given environment leaves one of them.
 export
 implReqDictVarOf : GraphCtx ->
@@ -681,7 +681,7 @@ registerImplMethodDictOne gctx scope slot vname tvMap =
 -- by TYVAR ID, which cannot express a STRUCTURED given: `requires S (List a)` registers
 -- only `a`'s id (monoTyvarIds descends to the leaves), and the goal `S (List a)` looks up
 -- through `activeDictVarOf`, which recurses to the SPINE HEAD (`TCon "List"`) and finds no
--- tyvar — so `assum` was unreachable by construction and `entail` fell through to
+-- tyvar — so the given rule was unreachable by construction and `entail` fell through to
 -- `entailInst`, statically committing the body to the GENERAL instance and discarding the
 -- most-specific dict the construction site had correctly built and passed.  DICT-SEMANTICS
 -- §3 (assum before inst) + :155-166 (sub-evidence is never pre-baked at the declaration).
@@ -727,7 +727,7 @@ registerImplMethodDictOne gctx scope slot vname tvMap =
 -- match (all positions must agree, so a stale-id coincidence at a bare position can only
 -- matter for a goal that already agrees structurally elsewhere at the same interface),
 -- which is why this is a widening of an existing hazard rather than a new one.  Removing
--- it is the same scoped-projection question `activeDictVarOf`'s `inImpl` gate answers,
+-- it is the same scoped-projection question `activeDictVarOf`'s in-impl gate answers,
 -- and belongs with the key-side work (#1904), not here.
 export
 registerPredGiven : GraphCtx ->
@@ -934,7 +934,7 @@ registerEachActive gctx xs0 dname = go xs0
 -- that no selector call may be reachable from `entailAssum`.  This restores an EARLIER
 -- rung's ability to answer; it does not re-select.
 --
--- [slot] counts dict params the way `registerMemberSlots`' `kept` does, so the nth kept
+-- [slot] counts dict params the way member-slot registration's `kept` does, so the nth kept
 -- slot gets `dictParamName m n`.  The vector list is legitimately a PREFIX of the slots
 -- (`declaredPredicateSlots` stops when its vectors run out — see `setFunConstraintEntry`), so
 -- the second clause stops early rather than inventing a subject for a vectorless slot.

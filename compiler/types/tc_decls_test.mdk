@@ -1091,7 +1091,7 @@ deFieldOwnerFixtureB = DData {
 }
 
 -- Same DECLARED NAME as fixture A ("Pt"), different module.  This is the case
--- the bare-name table (`universeFieldOwners`) genuinely cannot discriminate:
+-- the bare-name table (the field-owner table) genuinely cannot discriminate:
 -- `addFieldOwners` is already a multimap, so it does NOT collapse fixture A/B
 -- above (different ctor NAMES "Pt"/"Vec" — the bare table already shows two
 -- rows for those).  What the bare table collapses is A vs C: both would

@@ -1,7 +1,7 @@
 -- Tests of `types.tc_scope`'s own API: the method-scope ladder (own, imported-by-method,
 -- imported-by-interface, prelude, alias) read through the `ModuleCtx` readers, the admission
 -- predicate (`resolveMemberRows`, `importFormRows`, and `usePathAdmitsDecl` through the two
--- rungs that differ in its `wide` flag), the alias-qualified supply and its ambiguity, and
+-- rungs that differ in its wide flag), the alias-qualified supply and its ambiguity, and
 -- the ctor scope override.  Each ladder test mints a small graph of modules from source: the
 -- LAST module of the list is the reader, the others are what it may import.  The graphs are
 -- built with the envelope's own builders, so each test needs a minted `ModuleCtx` and none

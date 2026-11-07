@@ -2204,7 +2204,7 @@ reqTyToMono mctx sub ty0 = go ty0
 
 -- Make an alias-NAMED arrow structurally visible, at the `Ty` (pre-`Mono`) level.
 --
--- `type CFn = Int -> <> Int; extern cCall : CFn` declares `cCall`'s `Ty` as a
+-- `type CFn = Int -> <> Int; extern cCall : CFn` declares the extern's `Ty` as a
 -- bare `TyCon "CFn"`, so the SYNTACTIC walk over the extern's declared `Ty`
 -- (`ffiDeclaredRow` today, a stamping walk when this was first written) fell
 -- straight through its catch-all: the extern typed as a pure `Int -> Int` with no

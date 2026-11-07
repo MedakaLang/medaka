@@ -287,7 +287,7 @@ export
 beginMethodReturnTrace : Unit -> TraceSink
 beginMethodReturnTrace _ = { offTraceSink () | tsMethodReturnEnabled = True }
 
--- Trace-gated, zero cost when off, the same discipline as `methodReturnTrace`. It covers
+-- Trace-gated, zero cost when off, the same discipline as the method-return trace. It covers
 -- every `Obligation` `recordEvidence` publishes (a method occurrence and a dictionary
 -- application alike, whatever family produced the goal), read back from the very cells the
 -- stampers wrote and never re-derived, so it cannot disagree with the published `EvTable`.

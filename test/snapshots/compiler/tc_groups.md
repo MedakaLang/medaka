@@ -254,7 +254,7 @@ isNonexpansive _env (ELit _) = True
 isNonexpansive _env (EVar _) = True
 isNonexpansive _env (EVarId _ _) = True
 -- `run`/`build` rewrite a method reference into a dictionary-marked node before
--- typechecking (`prePassDict`); the marked node is still a variable, so the value
+-- typechecking (the dictionary pre-pass); the marked node is still a variable, so the value
 -- predicate must answer as it does for the `EVar` that `check` sees — otherwise
 -- `callMin = min` is a value under one verb and expansive under another
 -- (check green, build panics on an unbound dictionary witness).
@@ -359,10 +359,10 @@ genBindingRestricted dyn declared residual isValue force t
 -- Expected-type propagation for an application whose argument is a lambda.
 -- Inferring `andThen e (stream => Ok [JArray stream])` naively infers the lambda
 -- BODY first with `stream : freshVar`, so a downstream conflicting use inside the
--- body (`JArray stream` wants `Array Json`) pins `stream` to the WRONG type before
+-- body (`JArray stream` wants `Array Json`) pins that variable to the WRONG type before
 -- the function's declared param type (`List Json`) is ever reconciled — the later
 -- reconciliation then fails at the application with no good site, and the hover
--- side-channel records the wrong `stream` type.  Fix (bidirectional "checking"
+-- side-channel records the wrong parameter type.  Fix (bidirectional "checking"
 -- mode, the do-bind/higher-order case): infer `f` first, peel its parameter type,
 -- and unify it onto the lambda's parameter BEFORE inferring the body.  Then the
 -- body sees `stream : List Json` and the type error localizes to the `JArray`
@@ -1302,14 +1302,14 @@ sccProtectedSignatureIds sigTvMaps =
 -- or not — carries no dict slot and contributes nothing.
 --
 -- This list IS the dict-param cardinality of a `=>`-constrained top-level fn: it feeds
--- `registerMemberSlots` → `funConstraintsRef`, which `dictArityOf` (define side) and
+-- member-slot registration → the function-constraints table, which `dictArityOf` (define side) and
 -- `inferDictAtFound` (call side) both size from.  It emits one entry per PREDICATE,
 -- not per bare tyvar ARGUMENT: `Ix a b =>` is ONE dict param, matching the
 -- METHOD-level channel (`methodLevelConstraintVarNames`/`constraintSlotDispatchVar`,
 -- one slot per constraint) and the impl-`requires` channel (`registerReqSlots`, one
 -- slot per ENTRY).  All three channels agree: one dict per predicate.  The names are kept
 -- as a LIST, not collapsed to the first one here, because WHICH of them is still an abstract tyvar after body inference is not knowable
--- until `registerMemberSlots` normalizes the instantiated monos — and every abstract one
+-- until member-slot registration normalizes the instantiated monos — and every abstract one
 -- must still reach `activeDictVars`, or a body use dispatching on the predicate's SECOND
 -- variable loses its route.
 export
@@ -1917,7 +1917,7 @@ residualVecObls mctx generalizing boundIds iface ds loc =
 -- have always seen from the declared channel.  Every residual that reached a `VecObl`
 -- before this change is all-bare by construction (it came through `boundTyvarIds`), so
 -- its entry is byte-identical; the mixed entries are the ones #1905 adds.
--- The argument vector the DICT channel consumes (`funConstraintArgsRef`) is the third
+-- The argument vector the DICT channel consumes (the constraint-args table) is the third
 -- component of the triple and is unaffected by this projection.
 keepBoundResidual : (IfaceRef, List Int, List Mono) -> VecObl
 keepBoundResidual (iface, ids, args) =
