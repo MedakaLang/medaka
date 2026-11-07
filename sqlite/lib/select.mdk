@@ -1225,7 +1225,7 @@ boolTri : Bool -> Tri
 boolTri True = TTrue
 boolTri False = TFalse
 
--- | Compile `expr` against a column-name→index resolver into a row predicate.
+-- | Compile expr against a column-name→index resolver into a row predicate.
 --   The row is kept iff the predicate evaluates to `TTrue` — SQL's rule.  `Err`
 --   on an unknown column name.
 export
@@ -3141,9 +3141,9 @@ compileWhere lookup (Some e) = compilePred lookup e
 -- combined row.  `width` is derived from the schema's column count (NOT
 -- `length (head rows)`), so it's correct even when the table has zero rows —
 -- needed to null-pad a LEFT JOIN's unmatched right side.
--- Each input is `(realName, effName)`: the table is SCANNED by `realName`
+-- Each input is `(realName, effName)`: the table is SCANNED by realName
 -- (`findTable`/`scanTableRowsIpk`/`columnNames`) but its info tuple stores
--- `effName` in the name slot, so `mkJoinLookup` matches qualified references
+-- effName in the name slot, so `mkJoinLookup` matches qualified references
 -- against the alias (when present) rather than the real name.
 gatherJoinInfos : Db ->
   List (String, String) ->

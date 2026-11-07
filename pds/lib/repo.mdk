@@ -545,7 +545,7 @@ repoDelete path rev (Repo did secret publicKey tree store prior footprint) = do
 {- | One batch element against the intermediate tree and blocks.
 
    The delete arm FORGIVES an absent record, which the single-record
-   `repoDelete` above does not: `pds/lib/handlers.mdk`'s `deleteRecord` guards
+   `repoDelete` above does not: `pds/lib/handlers.mdk`'s deleteRecord guards
    its own call with a lookup so that a caller retrying a delete whose
    response it never saw is not told the second attempt failed, and every
    argument for that applies at least as strongly to a whole batch a client
@@ -601,7 +601,7 @@ applyWriteList (write :: rest) tree store = do
    there is no partially applied state to observe or to roll back.
 
    A batch that leaves the tree UNCHANGED is a genuine no-op, matching
-   `deleteRecord`'s absent-record arm in `pds/lib/handlers.mdk`: the
+   deleteRecord's absent-record arm in `pds/lib/handlers.mdk`: the
    repository is returned unchanged with its CURRENT commit. That covers the
    empty batch and, since the delete arm forgives absence, a batch whose only
    operations delete records that are not there. Signing a commit over an

@@ -121,7 +121,7 @@ readHandlersRow = nativeRow "pds/test/read_handlers_main.mdk" (Ledgered
 ]
 
 -- N operations, ONE signed commit: the corpus is four MST edits followed by
--- one `signCommit`, so a batch replayed as four commits fails it.
+-- one signCommit, so a batch replayed as four commits fails it.
 batchRow : Row
 batchRow = nativeRow "pds/test/batch_handlers_main.mdk" (Ledgered
   "P1-E-BATCH") [
@@ -135,7 +135,7 @@ batchRow = nativeRow "pds/test/batch_handlers_main.mdk" (Ledgered
 ]
 
 -- The CIDs and `blob` ref JSON the official `@atproto/lex-data` produced,
--- so `uploadBlob` is graded against something outside this tree.
+-- so uploadBlob is graded against something outside this tree.
 blobRow : Row
 blobRow = nativeRow "pds/test/blob_handlers_main.mdk" (Ledgered "S-blob-core") [
   "external: 3/3 official-atproto blob checks",

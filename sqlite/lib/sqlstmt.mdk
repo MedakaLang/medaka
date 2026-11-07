@@ -515,7 +515,7 @@ isNonAliasKeyword w = elem (toUpper w) [
   "WITH",
 ]
 
--- A table reference: a table name with an optional alias (`users`, `users u`,
+-- A table reference: a table name with an optional alias (users, `users u`,
 -- `users AS u`).
 tableRef : Parser (String, Option String)
 tableRef = defer
@@ -998,7 +998,7 @@ runSelect db sel rt =
 --     (values map BY NAME, omitted columns get NULL).  `rows` is the `VALUES`
 --     list; each row is a list of value EXPRESSIONS (a constant expression like
 --     `2 * 3` is folded by the executor; a column reference is an error there).
---   * `SUpdate tbl assigns where_` — `assigns` is the `SET` list in source order.
+--   * `SUpdate tbl assigns where_` — "assigns" is the `SET` list in source order.
 --   * `SDelete tbl where_`.
 --   * `SCreate ct` — `lib.schemadef`'s parsed `CREATE TABLE`.
 --

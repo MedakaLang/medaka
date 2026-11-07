@@ -12,7 +12,7 @@
    The stored payload is the frame `lib.sync_event` produced, as hex. Hex
    rather than raw bytes because the only text-free write primitive this tree
    has writes a whole file (`stdlib/runtime.mdk` declares `appendFile` over
-   `String` and no `appendFileBytes`), so an entry has to survive a round trip
+   `String` and no appendFileBytes), so an entry has to survive a round trip
    through text. Doubling the stored size costs retention nothing: the bound
    is a time window, not an entry count or a byte ceiling.
 

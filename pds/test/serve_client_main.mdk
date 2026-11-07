@@ -307,7 +307,7 @@ chunkedPostRequest token path bodyJson =
 -- # Fixture JSON
 
 {- | A write body with `validate: false`: the gate's record keys
-   (`e2egatefixture`, `s-sessions-live-1` and the rate-limit
+   (e2egatefixture, `s-sessions-live-1` and the rate-limit
    keys) are not TIDs, which `app.bsky.feed.post` requires, and what these
    cases grade is the server around the write, not the lexicon. -}
 createRecordJson : String -> String -> String -> String -> String

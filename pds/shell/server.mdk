@@ -312,7 +312,7 @@ maxConcurrentConnections = 256
 
    The charge is global rather than per-caller because no peer identity
    exists before headers: `accept` yields a `Connection` and the runtime has
-   no `getpeername`, and `X-Forwarded-For` needs a parsed request.
+   no getpeername, and `X-Forwarded-For` needs a parsed request.
 
    This gap is accepted, dated, and conditioned on the shipped proxy shape —
    `docs/design/ATPROTO-PDS-DESIGN.md`'s `maxUnframedConnections` passage. -}
@@ -551,7 +551,7 @@ persistFailureBytes =
    between. The request has already succeeded by then, so an emit failure is
    logged and the answer still goes out.
 
-   A request whose answer owes the per-DID `updateHandle` charge is charged
+   A request whose answer owes the per-DID updateHandle charge is charged
    here too, before the persist, in the same sequence, so the count and the
    answer cannot be separated by another request. A refused charge answers
    the 429 in place of the handler's answer: the store is not advanced and
@@ -595,7 +595,7 @@ applyRequest server dir storeRef limiterRef login bytes =
             announceIdentity dir nowSeconds did (accountHandle account)
         response
 
-{- | Charge the per-DID `updateHandle` limit a handler's answer owes, if it
+{- | Charge the per-DID updateHandle limit a handler's answer owes, if it
    owes one. `None` keeps the handler's answer; `Some` is the 429 to send in
    its place. -}
 chargeHandleUpdate : Ref RateLimitState ->
@@ -669,8 +669,8 @@ persistTransition dir did nowSeconds before after = do
   persistSessionsHalf dir before after
 
 {- | Persist the open session set when the transition moved it, which the
-   three session routes do: `createSession` opens a family, `refreshSession`
-   rotates within one or revokes one, `deleteSession` closes a whole family,
+   three session routes do: createSession opens a family, refreshSession
+   rotates within one or revokes one, deleteSession closes a whole family,
    and each of those also drops whichever records had expired. Every other route leaves the set alone and
    writes nothing.
 
@@ -692,7 +692,7 @@ persistSessionsHalf dir before after =
     persistSessions dir (storeSessionRows after)
 
 {- | Persist the preference half when the transition moved it, which
-   `putPreferences` does (a wholesale replace) and every other route does
+   putPreferences does (a wholesale replace) and every other route does
    not. Comparing the two lists is exactly `persistCredentialHalf`'s shape,
    one level simpler: there is no re-derivation case to distinguish, only
    "moved" or "did not". -}
@@ -1074,7 +1074,7 @@ persistRepo dir prior repo = do
 -- kept-alive connection is "opened" once, not once per pipelined request),
 -- `RequestsClass` always, and `WritesClass`/`PreferencesClass`/
 -- `CreateSessionClass`/`RepoExportClass` when the routed NSID is one of the
--- write procedures, `putPreferences`, `createSession`, or a
+-- write procedures, putPreferences, createSession, or a
 -- whole-repository export. A refusal at an earlier
 -- class in the list short-circuits: a request already being refused should
 -- not also spend a later class's budget it never reached.
@@ -1114,7 +1114,7 @@ admissionClasses firstRequest parsed =
   baseClasses firstRequest ++ nsidClasses parsed
 
 {- | An unparseable request carries no headers this module may trust, so it is
-   charged to the shared `direct` bucket rather than to a reconstructed
+   charged to the shared "direct" bucket rather than to a reconstructed
    identity. Garbage is not the shape a legitimate client sends, so a shared
    ceiling on it costs a well-behaved client nothing.
 
@@ -1670,7 +1670,7 @@ admitEgressBytes census bytes =
    from the census, which cannot tell whose bytes it holds. -}
 public export data EgressCharge = EgressUncharged | EgressHeld | EgressRefused
 
-{- | The `mayHold` a proxied call is made with (`pds/shell/egress.mdk`'s
+{- | The mayHold a proxied call is made with (`pds/shell/egress.mdk`'s
    `collectUpstream`): whether it may hold `total` bytes of answer.
 
    It charges only when `egressChargeDue` says so, and then waits for the
@@ -1749,7 +1749,7 @@ retireConnection active slot census buf =
    doubling itself is `bytebuilder.emitBytes`'s: this module does no
    capacity arithmetic of its own.
 
-   The live count is exactly what `scanRequestBoundaryWithin` calls `avail`:
+   The live count is exactly what `scanRequestBoundaryWithin` calls "avail":
    the backing store's own length is spare capacity, never received bytes,
    so nothing may read past it.
 
@@ -2658,7 +2658,7 @@ data RequestTrace = RequestTrace String String String Float
 {- | The trace for a request that reached the framer.
 
    A buffer that did not parse still gets one, with empty strings for the
-   method and target it never supplied (`logToken` renders those as `-`): a
+   method and target it never supplied (logToken renders those as `-`): a
    buffer this server answers 400 is a request, and leaving it out of the log
    is the silence this instrumentation exists to remove. -}
 traceFor : Result HttpParseFailure Request -> String -> Float -> RequestTrace
@@ -2770,7 +2770,7 @@ respondAt server dir storeRef limiterRef census serving conn slot buf boundary f
   let identified = admissionIdentity (servingTrustedProxy serving) parsed
   -- Built once, here, and carried down every branch below: the log's identity
   -- is the one the request was CHARGED under, so a refused `X-Forwarded-For`
-  -- is logged as the shared `direct` bucket it actually counted against
+  -- is logged as the shared "direct" bucket it actually counted against
   -- rather than as the value it claimed.
   let trace =
     traceFor parsed (identityLabel (chargedIdentity identified)) startedAt
@@ -3613,7 +3613,7 @@ continueAfterSend server dir storeRef limiterRef census serving conn slot rest k
 -- classifies it 400 or 413 exactly as it classifies a whole buffer handed to it
 -- by any other caller. The connection then closes.
 --
--- It is charged first, against the shared `direct` identity: a buffer no framer
+-- It is charged first, against the shared "direct" identity: a buffer no framer
 -- can complete carries nothing this module may trust as an identity, and
 -- answering it is still work. `baseClasses` and not `admissionClasses` because
 -- there is no routed procedure to add a class for.
@@ -3658,7 +3658,7 @@ rejectBufferAt server dir storeRef limiterRef conn buf firstRequest nowSeconds s
       nowSeconds
   -- Built directly rather than through `traceFor`, because there is no
   -- request to derive it from: a buffer no framer can complete has neither a
-  -- method nor a target, and the identity is the shared `direct` bucket it
+  -- method nor a target, and the identity is the shared "direct" bucket it
   -- was charged under above. The line is still written — an unframeable flood
   -- is precisely the traffic an operator needs to see.
   let trace = RequestTrace "" "" (identityLabel directIdentity) startedAt

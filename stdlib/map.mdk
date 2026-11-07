@@ -16,7 +16,7 @@
 -- and the two invariants
 --
 --   • search:   keys in the left subtree < node key < keys in the right
---   • balance:  neither subtree is more than `delta` times the size of the
+--   • balance:  neither subtree is more than delta times the size of the
 --               other (`delta = 3`)
 --
 -- are maintained by a single smart constructor, `balance`, that rotates when
@@ -63,7 +63,7 @@ bin : k -> v -> Map k v -> Map k v -> Map k v
 bin k v l r = Bin (size l + size r + 1) k v l r
 
 {- `balance` is `bin` plus a rebalancing check.  When one subtree grows past
-   `delta` (= 3) times the other, a single or double rotation restores the
+   delta (= 3) times the other, a single or double rotation restores the
    weight invariant.  `ratio` (= 2) decides single vs. double: a double
    rotation is needed when the heavy subtree's *inner* grandchild is the bulk. -}
 balance : k -> v -> Map k v -> Map k v -> Map k v
@@ -600,11 +600,11 @@ mapWithKey f (Bin s k v l r) = Bin s k (f k v) (mapWithKey f l) (mapWithKey f r)
    primitives that cope with subtrees of wildly different weights:
 
      • `link k v l r`  — rebuild `l < k < r` into one balanced map, for any
-                         weights of `l` and `r`.  Adams' `concat3`.
+                         weights of `l` and `r`.  Adams' concat3.
      • `link2 l r`     — the same without a dividing key, for when that key is
                          being dropped (`difference`, `filterWithKey`).
 
-   Both descend the heavier side until the two weights are within `delta`, then
+   Both descend the heavier side until the two weights are within delta, then
    hand back to `balance` on the way out — so each is O(|log |l| - log |r||).
    With `splitAt`, every combining operation below becomes a divide-and-conquer
    over the *structure* instead of a re-insert of every element, which is what
@@ -627,7 +627,7 @@ insertMax k v m0 = go m0
     go (Bin _ k2 v2 l r) = balanceR k2 v2 l (go r)
 
 {- `link` joins `l < k,v < r` for arbitrarily unbalanced `l`/`r`.  When one side
-   outweighs the other by more than `delta` we cannot just `bin` them: we
+   outweighs the other by more than delta we cannot just `bin` them: we
    recurse into the heavy side's inner subtree, which brings the weights into
    range, and rebalance on the way back out. -}
 link : k -> v -> Map k v -> Map k v -> Map k v
@@ -957,7 +957,7 @@ allKeys _p Tip = True
 allKeys p (Bin _ k _ l r) = p k && allKeys p l && allKeys p r
 
 -- The weight-balance bound between two siblings: tiny pairs are exempt,
--- otherwise neither may exceed `delta` (= 3) times the other.
+-- otherwise neither may exceed delta (= 3) times the other.
 balancedAt : Map k v -> Map k v -> Bool
 balancedAt l r =
   let sl = size l

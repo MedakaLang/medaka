@@ -5,7 +5,7 @@
 -- both READ the file, mutate, and WRITE it back).  Because the lib is bytes-first and
 -- target-agnostic, this emits + runs IDENTICALLY under the native LLVM backend and
 -- the WasmGC backend (`medaka build --target wasm`) — the wasm side does a real
--- Node `fs.writeFileSync`/`readFileSync` via the run.js host seam.
+-- Node `fs.writeFileSync`/readFileSync via the run.js host seam.
 --
 -- The output (printed rows + counts) is path-independent, so the tandem oracle
 -- (`test/wasm/diff_sqlite.sh`) can give native and wasm DISTINCT temp paths (no

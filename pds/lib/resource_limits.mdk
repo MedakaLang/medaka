@@ -186,7 +186,7 @@ maxWritesPerWindow = 60
    call, but it signs no repo commit and touches no MST — folding it into
    `isWriteNsid` would spend `WritesClass`'s own allowance on it, letting a
    preferences burst starve `createRecord` out of the same budget (or a
-   write burst starve `putPreferences`). Leaving it inside the shared
+   write burst starve putPreferences). Leaving it inside the shared
    `RequestsClass` is too coarse the other way: that allowance is sized for
    read volume, not for a route that writes a document on every call, so a
    preferences burst there is bounded no differently than a burst of plain

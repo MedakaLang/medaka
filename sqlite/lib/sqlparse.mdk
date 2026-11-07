@@ -256,7 +256,7 @@ column = defer
   paren <- optional (char '(')
   notCall name paren
 
--- parsec has no `notFollowedBy`, and it does not need one HERE: seeing the `(` at
+-- parsec has no notFollowedBy, and it does not need one HERE: seeing the `(` at
 -- all means this arm is doomed, so CONSUMING it costs nothing — the parser fails
 -- either way, and failing one character deeper is exactly what makes this message
 -- outrank the sibling `choice` branches' shallower ones.
@@ -312,7 +312,7 @@ literal =
     "expected a literal"
     (choice [nullLit, boolLit, blobLit, numLit, textLit])
 
--- NULL.  `keyword` gives word-granularity, so a column `nullable` is safe.
+-- NULL.  `keyword` gives word-granularity, so a column "nullable" is safe.
 nullLit : Parser Literal
 nullLit = defer
   _ <- keyword "NULL"

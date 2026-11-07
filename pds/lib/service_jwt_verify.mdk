@@ -11,7 +11,7 @@
      is also the module that defines the signers.
 
      The checks run in the order the official verifier (`@atproto/xrpc-server`
-     `verifyJwt`) runs them: the header's `typ`, the payload's shape, `exp`,
+     verifyJwt) runs them: the header's `typ`, the payload's shape, `exp`,
      `aud`, `lxm`, `iss`, and the signature last, with the `alg` check beside
      it. The algorithm is pinned here and only ever compared: a token's `alg`
      selects nothing.

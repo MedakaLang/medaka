@@ -13,7 +13,7 @@
    backend: the interpreter does not bind the `net` primitives, and the
    WebAssembly backend rejects a program that imports this module. -}
 
--- Medaka has no RAII / `finally` / catchable panics: a bracket acquires,
+-- Medaka has no RAII / "finally" / catchable panics: a bracket acquires,
 -- runs the body, and closes unconditionally, then returns the body's
 -- result.  Because a `Result`-returning body has no non-local exit (a panic
 -- ends the process outright, reclaiming the fd for free), "run the body then

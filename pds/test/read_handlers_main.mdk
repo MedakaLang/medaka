@@ -23,7 +23,7 @@
    Compiled engines only, for the reason `pds/test/repo_vectors_test.mdk`'s
    header gives: the writes have to sign, and one `repoInit` under the
    tree-walking interpreter does not complete in 600s. The repository-free
-   half of this slice's surface — `resolveHandle`, every read's
+   half of this slice's surface — resolveHandle, every read's
    unconfigured-store refusal, and the well-knowns a `did:key` account answers
    with — is graded on all three engines by
    `pds/test/read_routes_all_engines_test.mdk` instead.
@@ -334,9 +334,9 @@ wellKnownDidJsonBytes server store =
    configurations that decide it.
 
    The first cell is `@atproto/identity`'s two extractors spelled out as
-   properties: `ensureAtprotoKey` (which `verifySignature` calls) looks the
+   properties: ensureAtprotoKey (which verifySignature calls) looks the
    `#atproto` verification method up by that fragment and reads its
-   `publicKeyMultibase`, and `ensureAtpDocument` additionally requires an
+   `publicKeyMultibase`, and ensureAtpDocument additionally requires an
    `alsoKnownAs` entry naming the handle. A document answering this URL
    without both resolves that DID to something no relay can verify a commit
    for and no appview can confirm a handle from (#3087).

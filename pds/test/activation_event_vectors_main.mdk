@@ -271,7 +271,7 @@ genesisRepo did rev =
    genesis. There is no prior repository at all there, so an empty tree
    standing in for one cancels the only node the post-write tree has, and the
    CAR goes out holding the commit alone — which the reference's own
-   `verifyRepo` refuses, because the data root the commit names has no block.
+   verifyRepo refuses, because the data root the commit names has no block.
 
    The block lists are compared SORTED. The reference CARs its blocks in the
    order it built them and `sortBlocks` (`lib.sync_event`) emits them in CID

@@ -54,9 +54,9 @@
    recovery short of deleting the file by hand.
 
    **An entry nobody wrote.** The layout above has exactly two shapes: a shard
-   DIRECTORY named by the two lowercase hex digits `blobShardDir` produces,
+   DIRECTORY named by the two lowercase hex digits blobShardDir produces,
    and, inside one, a bytes or sidecar FILE named by the CID hex
-   `blobFilePath` produces. Every listing here — `blobFileRead`'s and
+   blobFilePath produces. Every listing here — `blobFileRead`'s and
    `blobFileCount`'s alike — grades an entry on those two axes in that order,
    which is `pds/shell/blockfile.mdk`'s rule and for its reasons; both
    predicates that decide it are imported from there rather than restated,
@@ -367,7 +367,7 @@ blobFileSweepStaging (DataDir root) =
    counts as zero, the same convention `blobFileRead` uses — and, like
    `blobFileRead`, a bytes file whose sidecar is missing is not counted and an
    entry no write path here could have produced is skipped, so this agrees
-   with what `getBlob`/`listBlobs` can actually serve. It stats each entry it
+   with what getBlob/listBlobs can actually serve. It stats each entry it
    passes over, which is what that agreement costs; it still opens nothing.
 
    Agreement is about WHICH BLOBS and not about refusing: this never parses a

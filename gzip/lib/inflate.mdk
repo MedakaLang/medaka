@@ -561,7 +561,7 @@ gunzipMember bytes = do
 -- picks BTYPE=1 (fixed Huffman) for input this small; now that Phase 2 is
 -- real, this round-trips to "hello" (the independent oracle:
 -- `python3 -c "import zlib; print(zlib.decompress(open('h.gz','rb').read(), 16+zlib.MAX_WBITS))"`
--- on these exact bytes prints `b'hello'`).
+-- on these exact bytes prints b'hello').
 helloGz : Bytes
 helloGz =
   B.fromArrayAssumeByteDomain

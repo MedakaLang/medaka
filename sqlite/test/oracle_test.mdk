@@ -18,9 +18,9 @@
    either golden is currently a by-hand act — run the assertion once, write
    its output at the golden path, and eyeball the diff before committing it.
 
-   The rows retired here are the READ group: `oracle`, `multipage_oracle`,
-   `select_oracle`, `groupby_oracle`, `aggregate_oracle`, `projection_oracle`,
-   `join_oracle`, `left_join_oracle`, `distinct_oracle`, `typed_oracle`. The
+   The rows retired here are the READ group: `oracle`, multipage_oracle,
+   select_oracle, groupby_oracle, aggregate_oracle, projection_oracle,
+   join_oracle, left_join_oracle, distinct_oracle, typed_oracle. The
    demos they drive (`sqlite/*_demo.mdk`, `sqlite/main.mdk`) are INPUTS and are
    untouched.
 
@@ -563,7 +563,7 @@ wideRealRow = OracleRow {
 }
 
 -- `sqlite/test/typed_oracle.sh`: the typed-result (RowType) layer. Its
--- expected lines are sqlite3's own rows put through the script's `typed_line`
+-- expected lines are sqlite3's own rows put through the script's typed_line
 -- renderer, kept as `typedUserLine` — derived from the ENGINE's answer, not
 -- re-derived from the demo's Medaka source.
 typedRow : OracleRow

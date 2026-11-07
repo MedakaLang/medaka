@@ -29,7 +29,7 @@
    everything could not read as success.
 
    Why the scan is Medaka and the cells are spawns: Part A's two `awk` state
-   machines (`extract_test_exports`, `parse_imports`) are folds over lines
+   machines (extract_test_exports, parse_imports) are folds over lines
    carrying a pending-export flag and a brace depth; they port to ordinary
    functions, and once they are functions the four mutation controls need no
    directory copy — each grades the scan over the real source with one

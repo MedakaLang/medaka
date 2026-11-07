@@ -4,13 +4,13 @@
    No routes, no disk, no randomness, no clock — every export here declares
    no effect row (`pds/test/lib_boundary_test.mdk`). This is the ONE place
    blob size-cap enforcement happens: `admitBlob` is the single admission
-   function slice 3's `uploadBlob` handler calls, and the persistence shell
+   function slice 3's uploadBlob handler calls, and the persistence shell
    (slice 4) does not re-decide admission — it only fails closed if handed
    something this module would not have admitted.
 
    `blob` ref shape (rendered and parsed here, graded against
-   `@atproto/lex-data`'s `isTypedBlobRef`/`@atproto/lex-json`'s
-   `parseTypedBlobRef`, never our own encoder):
+   `@atproto/lex-data`'s isTypedBlobRef/`@atproto/lex-json`'s
+   parseTypedBlobRef, never our own encoder):
 
        {"$type": "blob", "ref": {"$link": "<cid>"}, "mimeType": "…", "size": N} -}
 
@@ -192,8 +192,8 @@ blobRefFromJson body = do
 
 {- | Every `blob` ref `record` names, at any depth, in document order.
 
-   A ref is recognised exactly as the reference PDS's `prepareWrite`
-   recognises one (`enumBlobRefs` in `@atproto/lex-data`, non-strict): a map
+   A ref is recognised exactly as the reference PDS's prepareWrite
+   recognises one (enumBlobRefs in `@atproto/lex-data`, non-strict): a map
    with exactly the keys `$type`, `ref`, `mimeType` and `size`, where `$type`
    is `"blob"`, `ref` is a link, `mimeType` contains a `/`, and `size` is a
    non-negative safe integer or `-1`. A map that falls short of that is not a
@@ -227,7 +227,7 @@ typedBlobRef [a, b, c, d] = blobRefFields [a, b, c, d]
 typedBlobRef _ = None
 
 -- The `contains "/"` MIME test is looser than `mimeShapeRe` on purpose: it
--- is the test the reference's `enumBlobRefs` applies to a ref.
+-- is the test the reference's enumBlobRefs applies to a ref.
 blobRefFields : List (String, DagCbor) -> Option BlobRef
 blobRefFields pairs = match (
   lookup "$type" pairs,

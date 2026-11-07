@@ -317,7 +317,7 @@ sessionOpen _ now fingerprint store = storeAccessActive now fingerprint store
    secret, or of the other class, does not verify here.
 
    A verified signature is NOT on its own a credential: the token's session
-   must still be open. That is what makes `deleteSession` a revocation rather
+   must still be open. That is what makes deleteSession a revocation rather
    than an announcement — the access token it revokes is still inside its own
    validity window and still carries a good MAC, and is refused anyway.
    Sessions outlive the process (`shell.persist` writes the set, `pds/serve.mdk`
@@ -511,7 +511,7 @@ announceIdentityName = "medaka-announce"
 chargeHandleUpdateName : String
 chargeHandleUpdateName = "medaka-charge-handle-update"
 
-{- | `response`, marked as owing a charge to `did`'s per-DID `updateHandle`
+{- | `response`, marked as owing a charge to `did`'s per-DID updateHandle
    limit. The shell charges it after the handler has answered and refuses the
    call instead when the limit is spent. -}
 export
@@ -995,8 +995,8 @@ proxyCredentialRefusal account context store request =
 {- | A forwardable method, and the audience the header named — or the
    configured default, for the `None` clause, where the client named none.
 
-   The named-none clause is what `parseProxyInfo`'s fall-through to
-   `defaultService` does in the official implementation: an app that sends no
+   The named-none clause is what parseProxyInfo's fall-through to
+   defaultService does in the official implementation: an app that sends no
    header still gets its reads answered, by the FIRST service this operator
    configured (`lib.proxy`'s `defaultAppviewRoute`).
 

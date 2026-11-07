@@ -253,7 +253,7 @@ allowList (Err _) = ""
 
 {- | The exit status of `medaka check-policy pds/serve.mdk --fn <entry>`
    under `policy`, and the first word of its verdict line, graded from the
-   spawn `spawned`.
+   spawn "spawned".
 
    The verdict word, not only the status, is graded: a run that could not
    read the policy also exits nonzero. -}

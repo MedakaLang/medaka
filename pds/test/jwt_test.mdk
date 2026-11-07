@@ -325,7 +325,7 @@ test "verification reads no clock: the same token verifies at any instant in its
 --
 -- These grade the WIRE SHAPE against
 -- pds/test/vectors/pds_service_auth_shape_corpus.txt, decoded from the
--- official implementation's own `createServiceJwt` output: the header bytes,
+-- official implementation's own createServiceJwt output: the header bytes,
 -- the claim order, the sixty-second lifetime and the omitted `lxm` are its
 -- figures, not this implementation's.
 --

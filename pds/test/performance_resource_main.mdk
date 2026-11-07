@@ -561,8 +561,8 @@ repeatInbound server store request n0 acc0 = go n0 acc0
         let (_, responseBytes) = handleBytes server inboundContext store request
         go (n - 1) (acc + B.length responseBytes)
 
-{- | `retainedBytes` is not printed: this tree has no GC-forcing extern to
-   read a steady-state figure cheaply (checked: no `gc`/`collect` entry in
+{- | retainedBytes is not printed: this tree has no GC-forcing extern to
+   read a steady-state figure cheaply (checked: no `gc`/collect entry in
    `stdlib/runtime.mdk`), so only the `allocBytes()` delta over `n` requests
    is reported. -}
 runInboundAlloc : Int ->

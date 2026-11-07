@@ -346,7 +346,7 @@ parseKvValue arr n i key
   | arrayGetUnsafe i arr == '[' = parseKvArr arr i key
   | otherwise = parseKvScalar (restOfLine arr n i) key
 
--- After a value parser hands back `nextIndex`, the rest of the line must be
+-- After a value parser hands back nextIndex, the rest of the line must be
 -- empty (once trimmed); comments are already stripped upstream
 -- (`stripComment`, called in `parseLinesAcc` before `parseKv` ever runs).
 -- Anything left over is trailing garbage: `name = "abc" this is garbage`, a
@@ -878,7 +878,7 @@ export impl Debug Toml where
   debug (Toml kvs) = stringConcat ["Toml [", debugKvList kvs, "]"]
 
 -- `Display` is not a TOML renderer.  Emitting a document `parse` could read
--- back is deferred behind #2240 (the `toml`-onto-`parsec` consolidation);
+-- back is deferred behind #2240 (the `toml`-onto-"parsec" consolidation);
 -- shipping one here under the `Display` name would be that deferred work
 -- wearing a disguise.  What `Display` owes is a stable, legible rendering of
 -- the value, in the same `T { … }` shape `Display (Map k v)` and

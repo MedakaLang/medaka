@@ -23,7 +23,7 @@
    `Serve` also names the two secret-spending labels the serving loop
    performs itself: `Kdf`, for the login derivations it pays for a slice at
    a time, and `Sign "service-auth"`, for the credentials the egress proxy
-   and `getServiceAuth` mint. What the request handler performs is not
+   and getServiceAuth mint. What the request handler performs is not
    here; it is the server's own row, which a caller passes as `e`. -}
 
 import async.{Async, Wait}

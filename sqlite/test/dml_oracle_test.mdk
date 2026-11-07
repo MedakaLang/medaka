@@ -27,7 +27,7 @@
        both engines, diff the databases) and are combined into ONE test;
        sections 4-6 test a materially different property each (CLI rendering,
        clean-refusal-with-no-write, and the parser alone) and stay separate.
-       That is four `dml_oracle` tests below, not six — a deliberate MERGE of
+       That is four dml_oracle tests below, not six — a deliberate MERGE of
        the first three sections, not a smaller property count.
 
    `python3` is gone: the two multi-KB OVERFLOW values are built with
@@ -38,7 +38,7 @@
 -- `spawnRaw`/`spawnOut`/`seedDb`/`spawnEnv`/`emitterBin` moved to
 -- `test.oracle_support` under #3239/#3240: `medaka gate verify`'s
 -- native-grading clause now follows a gate's project-local imports one hop
--- (`gateReaches`/`relaysFor`), so a spawn routed through that shared module
+-- (gateReaches/relaysFor), so a spawn routed through that shared module
 -- is graded via the importing gate rather than invisible to it.
 -- `rowScratch` and the batched build (`buildBatch`) are `test.oracle_support`'s
 -- shared helpers too.
@@ -63,7 +63,7 @@ import test_process.{underRoot}
 -- # Spawning
 --
 -- `spawnOut`/`spawnRaw` here are `test.oracle_support`'s shared primitives.
--- This file needs the TOLERANT form (`spawnRaw`) too, for the `dml_oracle`
+-- This file needs the TOLERANT form (`spawnRaw`) too, for the dml_oracle
 -- sections, which legitimately expect either engine to REFUSE a statement —
 -- a non-zero exit there is data, not a spawn failure.
 queryTimeoutSeconds : Int

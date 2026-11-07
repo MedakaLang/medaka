@@ -18,7 +18,7 @@
 -- emits into the same LSB-first bit *stream* (each individual bit still goes
 -- out via the LSB-first `putBits`), but it walks the CODE's own bits from
 -- most-significant to least-significant, one at a time. There is no
--- `getCodeMSB` counterpart in this module's public API: a Huffman decoder
+-- getCodeMSB counterpart in this module's public API: a Huffman decoder
 -- reads one stream bit at a time via `getBits 1` and accumulates the code
 -- value itself (shift-left + or), which naturally builds the code
 -- MSB-first without any special reader primitive.

@@ -155,7 +155,7 @@ persistPreferences (datadir@(DataDir root)) prefs =
 
 {- | Read back the persisted preference set, or the empty list when none has
    ever been written — a fresh account, or one that has never called
-   `putPreferences`. -}
+   putPreferences. -}
 export
 persistLoadPreferences : DataDir d -> <FileRead d> Result String (List Json)
 persistLoadPreferences datadir =

@@ -337,7 +337,7 @@ rkeyOf path = match split "/" path
    CONTAIN is the one that is claimed. A block the reference names and this
    server leaves out is an unsound proof — the reader cannot walk to the key —
    whereas a block the reference does not name is sibling context the
-   reference's own `verifyProofs`/`verifyRecords` ignore. BOUNDED is claimed
+   reference's own verifyProofs/verifyRecords ignore. BOUNDED is claimed
    alongside it: containment alone never caps the answer from above, so an
    unbounded covering proof (up to and including the whole block store) would
    still satisfy CONTAIN silently (#3007 round-2 hardening) — BOUNDED is what

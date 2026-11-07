@@ -37,7 +37,7 @@
 --
 --   - `maxChainLength = 128` — how many links of a hash chain to walk before
 --     accepting the best match found so far. 128 is zlib's own default
---     (level 6) `max_chain` value; picked here for the same reason zlib
+--     (level 6) max_chain value; picked here for the same reason zlib
 --     picked it there — a reasonable middle ground between match quality and
 --     scan time, not tuned against this codebase's own corpus.
 --   - `minMatch = 3`, `maxMatch = 258` — RFC 1951's own bounds (the shortest

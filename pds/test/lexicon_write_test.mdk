@@ -517,7 +517,7 @@ nestedProtoPost = jObject [
   ("embed", jObject [("inner", jArray [jObject [("__proto__", JInt 1)]])]),
 ]
 
-{- | The reference refuses these in `prepareWrite`, before it looks at
+{- | The reference refuses these in prepareWrite, before it looks at
    `validate`, so `false` refuses them as absent does. -}
 test "a $type naming another collection is refused under validate false" =
   let prefix =

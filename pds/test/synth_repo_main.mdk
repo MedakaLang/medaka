@@ -1,6 +1,6 @@
 {- | Bulk repository-corpus synthesizer.
 
-   Builds a data directory a real `pdsd` can serve, holding thousands of
+   Builds a data directory a real pdsd can serve, holding thousands of
    records across several collections plus hundreds of blobs — a corpus for
    later slices in this sprint and the soak (#2957) to read, well past the
    660-record ceiling every existing fixture repository stays under.
@@ -40,7 +40,7 @@ import shell.persist.{persistSave}
 -- ── fixed account identity ──────────────────────────────────────────────────
 
 -- A synthetic account is enough here: this corpus is read back through
--- `repoFromBlocks`/`pdsd`, never through a client that cares which key signed
+-- `repoFromBlocks`/pdsd, never through a client that cares which key signed
 -- it, so one fixed key and DID serve every shape and seed.
 secretHex : String
 secretHex = "c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721"

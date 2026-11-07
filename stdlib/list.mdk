@@ -785,7 +785,7 @@ split sep xs = go xs
 -- # Sublist predicates
 
 -- `startsWith`/`endsWith` mirror `string.startsWith`/`endsWith` (same
--- needle-first argument order) rather than Haskell's `isPrefixOf` family.
+-- needle-first argument order) rather than Haskell's isPrefixOf family.
 -- The third member is `containsSub`, not `contains`: a reader who meets
 -- `contains : List a -> List a -> Bool` expects membership, and the type
 -- cannot warn them otherwise.
@@ -1006,7 +1006,7 @@ delete x xs = deleteBy (==) x xs
 -- > delete 9 [1, 2]
 -- [1, 2]
 
--- Set-like operations (`union` / `intersect` / `difference`) are deliberately
+-- Set-like operations (`union` / intersect / `difference`) are deliberately
 -- absent: an `Eq`-based list version is `O(n*m)`, and `set.Set` already does
 -- each in `O(n log m)` with the same semantics.  Reach for `set`, or
 -- `hash_set` when the element is `Hashable`.

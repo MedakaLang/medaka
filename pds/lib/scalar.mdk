@@ -3,7 +3,7 @@
      n = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141
 
    on **8 limbs in base 2^32** (8 * 32 = 256, non-redundant, every limb the
-   same width), least-significant limb first: libsecp256k1's `scalar_8x32`
+   same width), least-significant limb first: libsecp256k1's scalar_8x32
    layout. `n` is the published curve parameter from SEC 2 v2 §2.4.1; it is
    not justified here, and it is pinned EXECUTABLY by the reference corpus's
    `red n -> 0` and `red (n+1) -> 1` rows (an inline `.mdk` literal is
@@ -710,11 +710,11 @@ scSelect bit a b =
 --   The normalization itself (negate-if-high) is not in this module.
 --   Whether to replace `s` by `n - s`, and how the result is encoded, is a
 --   signature-encoding decision that needs `r`, `s` and the wire format; the
---   signing slice owns it. Do not add a `scNormalizeLow`/`scCondNegate` here.
+--   signing slice owns it. Do not add a scNormalizeLow/scCondNegate here.
 --
 --   STRICTLY greater, matching `secp256k1_scalar_is_high`: `scIsHigh
 --   floor(n/2)` is `False` and `scIsHigh (floor(n/2) + 1)` is `True`. The
---   corpus's `high` rows are the graded answer key for that boundary.
+--   corpus's "high" rows are the graded answer key for that boundary.
 --
 -- > scIsHigh (scInverse (scAdd scOne scOne))
 -- True

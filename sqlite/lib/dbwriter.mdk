@@ -175,11 +175,11 @@ sqliteVersionNumber = 3046000
 --
 --   (rowid, cellBytes, spilledBytes)
 --
--- `cellBytes` is the FINAL leaf cell — including, when the payload spills, a
+-- cellBytes is the FINAL leaf cell — including, when the payload spills, a
 -- 4-byte trailer that is ZERO until page assignment patches in the real first
 -- overflow page number.  Its LENGTH is already final either way, which is what
 -- lets `packLeaves` partition rows into leaves before any page number is known.
--- `spilledBytes` is empty for a row that fits locally.
+-- spilledBytes is empty for a row that fits locally.
 
 -- The rowid of a pending row.
 prowRowid : (Int, Array Int, Array Int) -> Int
@@ -803,7 +803,7 @@ assembleImage plans = assembleImageWithIndexes plans []
 --   `btreeTotal + 1`.  Every existing write gate therefore stays byte-for-byte
 --   green.
 --
---   Each `indexPlan` is `(name, tblName, sql, cells)` — its sqlite_master
+--   Each indexPlan is `(name, tblName, sql, cells)` — its sqlite_master
 --   metadata plus the already-sorted, already-encoded index-leaf cells (built by
 --   `planIndexes`).
 assembleImageWithIndexes : List (String, String, List (List (Int, Array Int, Array Int))) ->
@@ -1143,7 +1143,7 @@ buildIndexMasterRows ((name, tbl, sql, _) :: rest) page rid acc = do
 --
 --   The caller is responsible for supplying entries whose `rowid` matches the
 --   rowid the table writer assigns each row (the IPK column value for an IPK
---   table, else the 1..N auto-rowid) and whose `keyCell` is the indexed column's
+--   table, else the 1..N auto-rowid) and whose keyCell is the indexed column's
 --   value — `lib.writer.buildTableWithIndexes` derives both from the schema.
 --
 --   With an empty `indexSpecs` this is byte-identical to `buildDatabaseMulti`.

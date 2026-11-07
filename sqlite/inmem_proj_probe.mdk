@@ -1,5 +1,5 @@
 -- | In-memory computed-SELECT-column probe — the stage-C WasmGC tandem oracle
--- for the projection path (`lib.select.withColumns` → `projectCells` over the raw
+-- for the projection path (`lib.select.withColumns` → projectCells over the raw
 -- row, before decode).
 --
 -- Builds a `nums` table entirely in memory (`Array Int` image, no file I/O) and

@@ -1055,7 +1055,7 @@ afterLineEnd a n i
   | isLineBreak (arrayGetUnsafe i a) = i + 1
   | otherwise = afterLineEnd a n (i + 1)
 
--- A character that ends a line other than `\r`: Python's `splitlines` set.
+-- A character that ends a line other than `\r`: Python's splitlines set.
 isLineBreak : Char -> Bool
 isLineBreak c =
   let k = charCode c

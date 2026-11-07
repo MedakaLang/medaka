@@ -3,10 +3,10 @@
 
    The schemas are data (`lib.lexicon_schemas`, generated from
    `pds/test/vectors/lexicon_schemas.json`): the twenty collections in the
-   reference's `knownSchemas` (`repo/prepare.js`, `@atproto/pds@0.5.27`) and
+   reference's knownSchemas (`repo/prepare.js`, `@atproto/pds@0.5.27`) and
    the definitions they reach. The semantics are `@atproto/lex-schema`'s
-   `validate` mode, which is strict and applies no defaults, run after
-   `@atproto/lex-json`'s `jsonToLex`. `pds/test/lexicon_corpus_test.mdk`
+   "validate" mode, which is strict and applies no defaults, run after
+   `@atproto/lex-json`'s jsonToLex. `pds/test/lexicon_corpus_test.mdk`
    holds this module to the reference's own verdict on every row of
    `pds/test/vectors/lexicon_record_corpus.jsonl`.
 
@@ -24,10 +24,10 @@
      - `LexNoSchema`: the collection is not one of the twenty.
 
    `recordValidationStatus` is the only place a verdict becomes the
-   `validationStatus` a write reports, and the only place `"valid"` is
+   validationStatus a write reports, and the only place `"valid"` is
    produced.
 
-   A record is judged as JSON. The reference judges it after `jsonToLex`,
+   A record is judged as JSON. The reference judges it after jsonToLex,
    which turns a lone `{"$link": <cid>}` into a CID and a lone
    `{"$bytes": <base64>}` into bytes, and refuses a `__proto__` key anywhere
    in the record; `special` and `hasProtoKey` are those two rules here.
@@ -161,7 +161,7 @@ public export data LexVerdict =
   | LexNoSchema
   deriving (Eq, Debug)
 
-{- | The `validationStatus` a write reports for a verdict, or the refusal an
+{- | The validationStatus a write reports for a verdict, or the refusal an
    invalid record gets. A record with no schema and one with an undecided
    bound are both `"unknown"`: neither was checked in full. -}
 export
@@ -199,8 +199,8 @@ validateRecord lex collection rkey record =
    validation: a `__proto__` key anywhere, then a `$type` naming another
    collection.
 
-   The `$type` rule is the reference's `prepareWrite`. The `__proto__` rule is
-   its request-body decoding (`jsonToLex`), which refuses the key anywhere in
+   The `$type` rule is the reference's prepareWrite. The `__proto__` rule is
+   its request-body decoding (jsonToLex), which refuses the key anywhere in
    a request body before any write is prepared; `lib.xrpc` applies that to
    every JSON body here. It is kept on the record too because `validateRecord`
    also grades records that never passed through `lib.xrpc`, as
@@ -561,7 +561,7 @@ wildcardAccepts pattern mimeType =
 
 data Special = SpecialLink Int Int | SpecialBytes | NotSpecial
 
-{- | What `jsonToLex` makes of an object: a CID when its one key is `$link`
+{- | What jsonToLex makes of an object: a CID when its one key is `$link`
    naming a CID, bytes when its one key is `$bytes` holding base64, and
    otherwise an ordinary object. An object with a `$link` key is never read
    as bytes. -}
@@ -585,7 +585,7 @@ isPlainObject (JObject pairs) = match special pairs
 isPlainObject _ = False
 
 -- | Whether an object anywhere in `value`, at any depth, has a key spelled
--- `__proto__`: the key `jsonToLex` refuses.
+-- `__proto__`: the key jsonToLex refuses.
 export
 hasProtoKey : Json -> Bool
 hasProtoKey (JObject pairs) = anyProtoPair pairs 0

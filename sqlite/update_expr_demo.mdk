@@ -1,4 +1,4 @@
--- UPDATE-SET-expression probe for the `update_expr` block of
+-- UPDATE-SET-expression probe for the update_expr block of
 -- sqlite/test/dml_oracle_test.mdk.
 --
 -- Usage: medaka build sqlite/update_expr_demo.mdk

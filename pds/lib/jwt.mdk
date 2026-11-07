@@ -27,7 +27,7 @@
    other. That wire shape is
    P16/§4.5 of the same document, and
    `pds/test/vectors/pds_service_auth_shape_corpus.txt` records it byte-exact
-   as the official implementation's own `createServiceJwt` emits it.
+   as the official implementation's own createServiceJwt emits it.
 
    Service auth is minted here and not verified here. The inbound verifier,
    which checks a service token this server's own account signed and a peer

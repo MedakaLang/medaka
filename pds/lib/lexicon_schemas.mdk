@@ -1,5 +1,5 @@
 {- | The Lexicon definitions this server validates record writes against:
-   the twenty record collections of the reference PDS's `knownSchemas` and
+   the twenty record collections of the reference PDS's knownSchemas and
    every definition they reach, keyed `nsid#name`.
 
    Generated from `pds/test/vectors/lexicon_schemas.json` by

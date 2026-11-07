@@ -1,6 +1,6 @@
 {- | A single-writer lock over a PDS data directory.
 
-   Two `pdsd` processes started in one working directory share its `data/`
+   Two pdsd processes started in one working directory share its `data/`
    directory, and destroy each other's work. Each one's startup sweep
    deletes every file under `.staging` (`shell.blockfile`, `shell.blobfile`,
    `shell.eventlog`), and those sweeps are correct only while nothing else is

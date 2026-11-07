@@ -380,7 +380,7 @@ wellKnownPath WellKnownAtprotoDid = atprotoDidPath
 {- | The XRPC method NSID a request targets, if it targets one at all — for a
    caller that must classify a request BEFORE registry lookup or auth, such
    as `pds/shell/server.mdk`'s per-class rate limiting, which has to decide
-   the write/`createSession` allowance without doing a second, divergent
+   the write/createSession allowance without doing a second, divergent
    routing pass. This is the same `xrpcPath` classification `routeRequest`
    itself matches on, not a new one: it duplicates no admission or auth
    logic, since NSID syntax and endpoint existence are unrelated to which
@@ -399,7 +399,7 @@ requestNsid request = match parseTargetQuery request
    `Content-Length: 0` does not declare one: RFC 9110 §8.6 makes a zero length
    exactly the statement that there is no body, and it is what a bodiless POST
    carries from nearly every HTTP client. Refusing it puts the two `NoInput`
-   procedures, `com.atproto.server.refreshSession` and `deleteSession`, out of
+   procedures, `com.atproto.server.refreshSession` and deleteSession, out of
    reach of such a client before the seam can read the token. A `Content-Type`
    beside a zero length describes a body that is not there, and is likewise not
    a declaration of one.
@@ -509,7 +509,7 @@ mediaMatches RawInput _ = True
 mediaMatches NoInput _ = False
 
 -- A JSON body with a `__proto__` key at any depth is refused before any
--- handler sees it, as the reference's request-body decoding (`jsonToLex`)
+-- handler sees it, as the reference's request-body decoding (jsonToLex)
 -- refuses it for every JSON procedure.
 decodeProcedure : String ->
   InputPolicy ->

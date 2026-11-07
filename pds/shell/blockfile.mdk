@@ -39,7 +39,7 @@
    claims a row is valid, and never decodes one.
 
    **An entry nobody wrote.** Two shapes exist beneath `dir` and no others: a
-   shard DIRECTORY named by the two lowercase hex digits `blockShardDir`
+   shard DIRECTORY named by the two lowercase hex digits blockShardDir
    produces, and, inside one, a block FILE named by the CID hex
    `blockFilePath` produces. Every listing here grades an entry on those two
    axes in that order.
@@ -178,7 +178,7 @@ cidForName path name = match decode name
       Err "blockfile: \{path}: block file name is not a CID: \{message}"
     Ok cid => Ok cid
 
-{- | Whether a name is one `blockShardDir` can produce: the first byte of a
+{- | Whether a name is one blockShardDir can produce: the first byte of a
    multihash digest in lowercase hex, so exactly two lowercase hex digits. The
    round trip through `encode` is what rules out an odd case or extra length
    that `decode` alone would accept.

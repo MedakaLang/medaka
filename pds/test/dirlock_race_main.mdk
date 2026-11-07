@@ -7,7 +7,7 @@
    a single process, so this driver is one contender and `pds/test/
    serve_e2e.sh` counts the lines a round of them prints.
 
-   A whole `pdsd` would do as a contender, but it would also read a repository
+   A whole pdsd would do as a contender, but it would also read a repository
    and bind a socket, so a round of eight would grade the lock through several
    seconds of unrelated startup. This reaches the lock and nothing else.
 

@@ -201,7 +201,7 @@ test "INT (i) is the block index as 4 big-endian bytes, up to 2^32 - 1" = expect
 
 {- | The Wycheproof PBKDF2-HMAC-SHA256 corpus (S-pbkdf2, #3362
    S-more-answer-keys round 2), ledgered in `pds/test/VECTOR-PROVENANCE.txt` —
-   never a self-captured golden (G5). 60 rows, all published `valid`; two of
+   never a self-captured golden (G5). 60 rows, all published "valid"; two of
    them (tcId 1/2) reproduce the RFC 7914 vectors above byte-for-byte under a
    different, independently-published source — see that corpus's own
    provenance note. -}

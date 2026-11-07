@@ -4,9 +4,9 @@
    (pds/test/vectors/base58_draft_msporny_02.txt). That document is an
    EXPIRED Internet-Draft (Expires: May 4, 2021) — it is used anyway because
    the multiformats authority normatively cites it BY NAME as the definition
-   of `base58btc` (multiformats/multibase README.md, pinned commit
+   of base58btc (multiformats/multibase README.md, pinned commit
    d7406cdea189b82a0b3937f5737b440f5fa92f92, line 104:
-   "`base58btc` https://datatracker.ietf.org/doc/html/draft-msporny-base58-02")
+   "base58btc https://datatracker.ietf.org/doc/html/draft-msporny-base58-02")
    and no successor document exists. See pds/test/VECTOR-PROVENANCE.txt's
    row for pds/test/vectors/base58_draft_msporny_02.txt for the full citation.
 

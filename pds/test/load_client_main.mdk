@@ -1,5 +1,5 @@
 {- | The load-harness client `pds/nightly/load_harness.sh` drives: the
-   processes that put a running `pdsd` under load, and the one process that
+   processes that put a running pdsd under load, and the one process that
    measures it.
 
    Two modes in one binary and never in one process. `stdlib/async.mdk` is a
@@ -75,7 +75,7 @@ corpusSeed : Int
 corpusSeed = 1
 
 -- `synth_repo_main`'s blob payload, byte for byte, so a blob's CID is
--- re-derived rather than discovered. A `listBlobs` round trip before each
+-- re-derived rather than discovered. A listBlobs round trip before each
 -- burst would put that route's cost inside the window this measures.
 blobBytesFor : Int -> Bytes
 blobBytesFor j =
@@ -145,7 +145,7 @@ isExportRoute _ = False
 
    `pds/lib/resource_limits.mdk` allows 3000 requests per identity per
    60-second window; without `--trusted-proxy` on the server every client
-   here would share the one `direct` bucket and be refused within seconds.
+   here would share the one "direct" bucket and be refused within seconds.
    The refusals would not merely cost requests — a 429 is answered without
    touching the repository, so a rate-limited run measures the limiter
    instead of the read path. Rotating keeps every identity's charge under

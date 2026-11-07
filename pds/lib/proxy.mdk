@@ -39,7 +39,7 @@
 
    A request with NO header reaches this module too, and that is the change
    R1 brought: the official implementation forwards a header-absent call to its
-   DEFAULT service (`parseProxyInfo`, `pipethrough.js:173-181`), so an app that
+   DEFAULT service (parseProxyInfo, `pipethrough.js:173-181`), so an app that
    sends no header still gets its reads answered. What the absence changes is
    the audience — the configured default rather than a named one — never the
    method disposition, which is this module's business alone. -}
@@ -133,7 +133,7 @@ appviewRoutePort (AppviewRoute _ port) = port
 
    Nonempty by construction, and the FIRST row is the DEFAULT: a request that
    names no audience is forwarded there, which is the fall-through the official
-   implementation takes when `parseProxyInfo` finds no header. A server that
+   implementation takes when parseProxyInfo finds no header. A server that
    proxies at all therefore always has somewhere to send a header-absent call,
    and a server that proxies nothing carries no table at all rather than an
    empty one.
@@ -227,7 +227,7 @@ proxyHeaderGo (header :: rest) count value =
   else
     proxyHeaderGo rest count value
 
-{- | `did:web:appview.example#bsky_appview` names the `bsky_appview` service OF
+{- | `did:web:appview.example#bsky_appview` names the bsky_appview service OF
    a DID; the DID is everything before the fragment. This is the same split
    `lib.jwt` performs when it mints, so the value compared against the
    configured appview here is the value that would be signed. -}
@@ -367,7 +367,7 @@ isProtectedMethod lxm =
 {- | The inbound fields a forwarded call carries with it, and the only ones.
 
    Derived, not chosen: these are exactly the request fields the official
-   implementation's `pipethrough` relays (`pipethrough.js:81-87`, `:130-132`).
+   implementation's pipethrough relays (`pipethrough.js:81-87`, `:130-132`).
    They are content NEGOTIATION — which language, which labelers, which topics
    — so a forward that dropped them would get a correct answer to a different
    question than the client asked, and one that relayed more would let a client
@@ -506,7 +506,7 @@ proxyUpstreamFailureResponse =
 
    Everything else the appview sent is dropped rather than copied, which is the
    whole point of reducing it to this shape: a response from an off-box service
-   is untrusted input, and a relayed `set-cookie`, `connection` or
+   is untrusted input, and a relayed `set-cookie`, "connection" or
    `www-authenticate` field would be that service speaking to our client in our
    own voice. The body is relayed whole — it is the answer — and is already
    bounded by `lib.httpclient`'s own response ceilings. -}

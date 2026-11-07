@@ -27,10 +27,10 @@
    Multicodec codes: multiformats/multicodec table.csv, pinned commit
    38e3bf3e38f613679d76ef2041d73a8060f8622a (pds/test/vectors/multicodec_table.csv).
    `secp256k1-pub` (0xe7) and `p256-pub` (0x1200) carry table `status: draft`;
-   `sha2-256` (0x12), `raw` (0x55) and `dag-cbor` (0x71) are `permanent`.
+   `sha2-256` (0x12), `raw` (0x55) and `dag-cbor` (0x71) are "permanent".
 
    The multibase `z` prefix for base58btc is fixed by the multiformats
-   authority with status `final` (multiformats/multibase README.md, pinned
+   authority with status "final" (multiformats/multibase README.md, pinned
    commit d7406cdea189b82a0b3937f5737b440f5fa92f92, table row: "U+007a, z,
    base58btc, Base58 Bitcoin, final"). -}
 
@@ -198,27 +198,27 @@ uvarintDecodeAll bytes = do
 
 -- ── multicodec constants (multicodec_table.csv, pinned commit above) ─────
 
--- | `sha2-256`, tag `multihash`, `permanent`.
+-- | `sha2-256`, tag multihash, "permanent".
 export
 multicodecSha2_256 : Int
 multicodecSha2_256 = 0x12
 
--- | `raw`, tag `ipld`, `permanent`.
+-- | `raw`, tag ipld, "permanent".
 export
 multicodecRaw : Int
 multicodecRaw = 0x55
 
--- | `dag-cbor`, tag `ipld`, `permanent`.
+-- | `dag-cbor`, tag ipld, "permanent".
 export
 multicodecDagCbor : Int
 multicodecDagCbor = 0x71
 
--- | `secp256k1-pub`, tag `key`, table status `draft`.
+-- | `secp256k1-pub`, tag `key`, table status "draft".
 export
 multicodecSecp256k1Pub : Int
 multicodecSecp256k1Pub = 0xe7
 
--- | `p256-pub`, tag `key`, table status `draft`.
+-- | `p256-pub`, tag `key`, table status "draft".
 export
 multicodecP256Pub : Int
 multicodecP256Pub = 0x1200

@@ -1,7 +1,7 @@
 {- | Wall-clock cost probe for the repository-size-sensitive routes.
 
    Reads a corpus directory `pds/test/synth_repo_main.mdk` built, back through
-   the same seam a real `pdsd` serves it through — `persistLoad` /
+   the same seam a real pdsd serves it through — `persistLoad` /
    `repoFromBlocks` / `blobFileRead` for the state, `lib.server_core`'s
    `handleBytes` for every request — and reports microseconds and bytes
    allocated per request for one page of `listRecords`, one `describeRepo`,

@@ -21,7 +21,7 @@
    A last pair grades what a batch owes the write that comes AFTER it: a batch
    that mints its own record keys must commit past all of them, so the next
    rkey-less `createRecord` does not propose one again; and a batch deleting a
-   record that is not there is the same idempotent no-op `deleteRecord` is. -}
+   record that is not there is the same idempotent no-op deleteRecord is. -}
 
 import bytes as B
 import bytes.{Bytes, decodeUtf8, encodeUtf8}
@@ -490,7 +490,7 @@ autoRkeyCell did server store record =
     "batch=\{batchError} create=\{createError} uri=\{fieldText "uri" createValue}"
 
 {- | A batch deleting a record that is not there is the idempotent no-op
-   `deleteRecord` already promises for the single-record route: the repository
+   deleteRecord already promises for the single-record route: the repository
    is unchanged, no commit is signed, and the response carries the CURRENT
    commit. -}
 absentDeleteCell : String ->

@@ -46,7 +46,7 @@ import lib.tid.{Tid, tidToString}
 {- | One `ops` entry: the mutation of a single record.
 
    The three arms are three different CBOR SHAPES, not one shape with two
-   nullable fields (`com.atproto.sync.subscribeRepos`, def `repoOp`). `cid` is
+   nullable fields (`com.atproto.sync.subscribeRepos`, def repoOp). `cid` is
    required and is null only on a delete; `prev` is ABSENT ENTIRELY on a
    create and present on an update or a delete. Giving each arm exactly the
    CIDs its shape admits is what stops an absent field from being encoded as a
@@ -97,7 +97,7 @@ dedupe ((cid, bytes) :: rest) seen acc =
 
    The lexicon and the sync specification say nothing about the order blocks
    appear in inside the `blocks` CAR — only that the commit block's CID is the
-   first entry of the CAR header's `roots` list — and a relay reads them into
+   first entry of the CAR header's "roots" list — and a relay reads them into
    a map. So the order is ours to pick, and picking a total one keeps the
    emitted bytes a function of the block SET rather than of the order a
    traversal happened to visit them in. -}
@@ -319,7 +319,7 @@ syncIdentityFrame seq time did handle =
 
    `active` true is the only value this server can reach. The lexicon pairs a
    false `active` with a `status` naming which kind of unavailability it is
-   (`takendown`, `suspended`, `deactivated`, `deleted`), and this server has
+   ("takendown", "suspended", "deactivated", "deleted"), and this server has
    no moderation state, no deactivation route and no delete route to reach any
    of them from — so the inactive shape is not built. A route that could
    suspend an account would have to add both halves at once: a false `active`

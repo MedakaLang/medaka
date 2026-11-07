@@ -60,7 +60,7 @@ expectControlCase caseName wantLine =
 -- The cells, from RUN-PDS0-036 / #1727 and #3210: case name paired
 -- with its grading shape and the exact text that must appear. `Err` is a
 -- PANIC cell (the guard's own message); `Ok` is a CONTROL cell (its "OK …"
--- line) — the two directions the retired script's `expect_panic`/`expect_ok`
+-- line) — the two directions the retired script's expect_panic/expect_ok
 -- graded, not a `Result` this module computes.
 cells : List (String, Result String String)
 cells = [

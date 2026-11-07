@@ -346,7 +346,7 @@ isBlankChar c = c == ' ' || c == '\t'
 {- | The identifiers that name a secret, matched as WHOLE WORDS.
 
    Whole words are what make the check usable rather than noisy:
-   `secretPath`, `tokenSecretHex` and `saltBytes` name a path, a file and a
+   secretPath, tokenSecretHex and `saltBytes` name a path, a file and a
    length, and none of them is a secret. `secret`, `password`, `digest` and
    `salt` on their own are. -}
 secretNames : List String
@@ -436,7 +436,7 @@ accessLogSites = [
    written on EVERY request rather than on a failure. The substring rule is
    stricter than check 4's whole-word one and deliberately so: the
    identifiers actually holding these values in this tree are camelCase
-   (`sessionSecret`, `credentialDigest`, `tokenSecret`), and a whole-word
+   (`sessionSecret`, `credentialDigest`, tokenSecret), and a whole-word
    lowercase scan sees none of them. The width costs nothing here, because
    the allow-list of six `AccessEvent` fields is narrow enough that no
    legitimate argument to any site above is named after a secret — a hit is

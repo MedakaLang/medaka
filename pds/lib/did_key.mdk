@@ -21,7 +21,7 @@ secp256k1Prefix = multicodecPrefix multicodecSecp256k1Pub
 {- | The multibase half of a secp256k1 `did:key` identifier, without the
    method prefix.
 
-   It is also what a DID document's `publicKeyMultibase` holds for a
+   It is also what a DID document's publicKeyMultibase holds for a
    `Multikey` verification method, which is why this is exported separately
    rather than being reached by stripping `didKeyFromPublicKey`'s prefix
    back off. -}

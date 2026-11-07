@@ -309,10 +309,10 @@ statsIntervalOf parsed = match flagValue "--stats-interval-ms" parsed
    `wellKnownDidJson` (`lib.handlers`) decides which document `/.well-known/
    did.json` serves by comparing the configured DID against `did:web:
    \{hostname}` EXACTLY, because a DID is case-sensitive and the reference
-   resolver's own `validateDidDoc` compares `doc.id` the same way. A `--did`
+   resolver's own validateDidDoc compares `doc.id` the same way. A `--did`
    that spells the hostname in different case takes that comparison's
    fallback arm and keeps serving the SERVER document forever — no signing
-   key, no `alsoKnownAs` — which no relay or appview can use to verify this
+   key, no alsoKnownAs — which no relay or appview can use to verify this
    account, and which the Bluesky relay's own `NormalizeDID` (lowercasing
    `did:web:`) would resolve to a DIFFERENT identity than this exact-match
    server sees. This refuses that configuration at startup instead of

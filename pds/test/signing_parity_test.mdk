@@ -1,5 +1,5 @@
 {- | ECDSA signing values agree across eval, native and WasmGC (#1700
-   step 3). Native timing is audited by `constant_time_signing`; this gate
+   step 3). Native timing is audited by constant_time_signing; this gate
    makes no timing claim.
 
    Two tests, each split on the engine (#1962). The merge half is cheap:
@@ -97,7 +97,7 @@ corpusArm = Arm {
   exactStdout = None,
 }
 
--- `other` must print exactly what native printed.
+-- "other" must print exactly what native printed.
 sameAs : String -> String -> (String, List String) -> List String
 sameAs _ _ (_, fs@(_ :: _)) = fs
 sameAs label native (out, [])

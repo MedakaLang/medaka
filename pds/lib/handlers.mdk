@@ -32,12 +32,12 @@
    reason, not because it is a repository write.
 
    Every registration carries its own `AuthPolicy`: the four record writes,
-   `updateHandle`, `getSession`, `getServiceAuth`, and both preference routes
+   `updateHandle`, `getSession`, getServiceAuth, and both preference routes
    are `AuthenticatedRoute`, `uploadBlob` is `AccessOrServiceRoute` (an
    access token, or a service credential for that route), the reads are
    `PublicRoute`,
    `refreshSession`/`deleteSession` are `RefreshRoute`,
-   `createSession` is `PublicRoute` (it is the login that issues the tokens the
+   createSession is `PublicRoute` (it is the login that issues the tokens the
    other session routes require), and the two well-knowns are public by
    construction (`lib.xrpc` routes them by path, with no registry entry to
    classify).
@@ -475,7 +475,7 @@ admitValidateFlag body = match get "validate" body
 {- | The `validationStatus` a write reports, or the refusal its record gets:
    `lib.lexicon`'s verdict on the record written to `collection` under
    `rkey`, or `"unknown"` when grading was skipped. Skipping grading does not
-   skip `prepareRefusal`: the reference's `prepareWrite` refuses a `$type`
+   skip `prepareRefusal`: the reference's prepareWrite refuses a `$type`
    naming another collection on every write, and a `__proto__` key never
    reaches it, because the reference's request-body decoding refuses one
    first, as `lib.xrpc` does here. -}
@@ -705,7 +705,7 @@ admitBlobRef : Result String BlobRef -> Result Response BlobRef
 admitBlobRef (Err message) = Err (invalidRequest "Blob rejected: \{message}")
 admitBlobRef (Ok ref) = Ok ref
 
-{- | The reference's commit-time blob check (`processWriteBlobs`): every blob
+{- | The reference's commit-time blob check (processWriteBlobs): every blob
    ref `record` names must be a blob this server holds, refused
    `BlobNotFound` otherwise, and the ref's size must be the held blob's,
    refused `InvalidSize` otherwise. The first ref that fails decides the
@@ -1396,7 +1396,7 @@ applyGetRecord account store params = do
 -- ── com.atproto.repo.listRecords ────────────────────────────────────────────
 
 {- | atproto's `reverse` is `false` (descending record key, newest first) by
-   default and `true` for ascending. `collectionEntries` yields ascending, so
+   default and `true` for ascending. collectionEntries yields ascending, so
    the default direction is the reversed one. -}
 requireReverse : List QueryParam -> Result Response Bool
 requireReverse params = do
@@ -1784,7 +1784,7 @@ applyGetRepoStatus account store params = do
    different order, while never omitting one the reference does — omission is
    the direction that would make the proof unsound, and the gate
    (`pds/test/repo_vectors_test.mdk`) asserts against it on every probe. The
-   reference's own `verifyProofs`/`verifyRecords` accept both answers
+   reference's own verifyProofs/verifyRecords accept both answers
    identically, which is what makes the difference admissible (#3007). Order is
    not part of the claim.
 
@@ -1885,7 +1885,7 @@ partitionBlocks cids repo =
   let (blocks, missing) = partitionGo cids repo ([], [])
   (reverseOnto blocks [], reverseOnto missing [])
 
-{- | Exactly the blocks the caller named, in a CAR whose `roots` list is
+{- | Exactly the blocks the caller named, in a CAR whose "roots" list is
    EMPTY: the requested CIDs are unrelated to each other, so no one of them
    is the graph's root and naming one would assert a relationship the request
    never claimed.
@@ -2273,7 +2273,7 @@ mintSessionTokens account secret context =
       (issued + refreshTokenSeconds),
   )
 
--- The lexicon output shape `createSession` and `refreshSession` share.
+-- The lexicon output shape createSession and `refreshSession` share.
 sessionOutput : Account -> String -> String -> Json
 sessionOutput account access refresh = jObject [
   ("did", JString (accountDid account)),
@@ -2443,7 +2443,7 @@ finishSession _ (Ok (next, output)) = (next, jsonOkResponse output)
 
 {- | The five session routes, or `None` for a call this half does not own.
 
-   `refreshSession`, `deleteSession`, `getSession` and `getServiceAuth` are
+   `refreshSession`, `deleteSession`, `getSession` and getServiceAuth are
    reachable only with an `Authenticated` outcome (they are
    `RefreshRoute`/`AuthenticatedRoute`, which the seam refuses
    unauthenticated and refuses a service credential), so their
@@ -2452,7 +2452,7 @@ finishSession _ (Ok (next, output)) = (next, jsonOkResponse output)
    identity, because a direct caller of this function is not the seam and must
    not be told a different story than a request would be.
 
-   `getServiceAuth`'s AUTHENTICATED arm is unreachable through a socket for a
+   getServiceAuth's AUTHENTICATED arm is unreachable through a socket for a
    different reason, and answers 501 for it: its answer is a signature under
    the account's repo key, which lives in the shell, so the socket path decides
    it before dispatch (`lib.server_core`'s `classifyServiceAuth`) and this arm
@@ -2515,7 +2515,7 @@ serviceAuthTokenResponse token =
 
 {- | The five session routes, one per policy class it takes.
 
-   `createSession` is PUBLIC: it is how a client that holds no token at all
+   createSession is PUBLIC: it is how a client that holds no token at all
    gets one, so gating it would make every session unreachable. `getSession`
    is `AuthenticatedRoute`: it reports who the ACCESS token belongs to.
    `refreshSession` and `deleteSession` are `RefreshRoute`, which is atproto's
@@ -2523,7 +2523,7 @@ serviceAuthTokenResponse token =
    so a client whose access token has already expired can still refresh it and
    can still log out.
 
-   `getServiceAuth` is `AuthenticatedRoute` for the reason a proxied forward
+   getServiceAuth is `AuthenticatedRoute` for the reason a proxied forward
    is: what it hands back bears the ACCOUNT's identity, so an anonymous caller
    asking for one is asking this server to lend that identity to whoever holds
    the answer. Registering it here is also what makes it locally served rather

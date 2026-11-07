@@ -129,7 +129,7 @@ test "a response that declares its length ends where it said it would" =
   expectEqual (Some (B.length bytes)) (responseBoundary bytes)
 
 test "a declared body one byte short of its length has not ended" =
-  -- The missing byte is PRESENT in the buffer and outside `avail`, which is
+  -- The missing byte is PRESENT in the buffer and outside "avail", which is
   -- what a still-filling buffer looks like: a scan that read it would
   -- report a response its caller has not received.
   let bytes = encodeUtf8 (declaredResponse "hello")

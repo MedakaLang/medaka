@@ -20,7 +20,7 @@
    and token, never a skip — a silently skipped row is a false green.
 
    ⚠️ `ovf` is graded as *"`scFromBytes` on these 32 bytes returns `Err`"*.
-   That is equivalent to the reference's `set_b32` overflow flag ONLY because
+   That is equivalent to the reference's set_b32 overflow flag ONLY because
    every corpus row carries exactly 32 well-formed bytes: `scFromBytes` also
    rejects a wrong length and an out-of-range element, and neither shape can
    occur here (the row is 64 hex chars, which `hex.decode` turns into 32

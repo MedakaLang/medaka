@@ -211,7 +211,7 @@ rowsVerified blocks = match blockStoreFromBlocks blocks
    caller's order.
 
    The atproto profile this module otherwise enforces — at least one root,
-   whose block is present — is a property of the repository CARs: `getRepo`'s
+   whose block is present — is a property of the repository CARs: getRepo's
    export, a `#commit` event's `blocks`, a `#sync` event's. It is not a
    property of the format, and one official route contradicts it:
    `com.atproto.sync.getBlocks` answers a bare bag of blocks, whose header

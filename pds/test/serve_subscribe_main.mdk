@@ -332,7 +332,7 @@ armRead conn budget = ignoreResult (setTimeout conn budget)
 -- produces the `#commit` event every live case waits for. It is spelled out
 -- here rather than shelled out to the other driver because the write has to
 -- happen WHILE a subscription this process holds is open. It says
--- `validate: false` because its record keys (`sublive1`, …) are not TIDs.
+-- `validate: false` because its record keys (sublive1, …) are not TIDs.
 writeRecord : Int -> String -> String -> String -> String -> <IO, Net> Unit
 writeRecord port token did collection rkey =
   let bodyJson =
@@ -497,7 +497,7 @@ gradeGenesis events =
    the commit says its data root is, the CAR has to contain it. A genesis CAR
    of the commit alone — what a `created = after − before` rule emits when
    both trees are the empty one — names a data root the reader was never sent,
-   and the reference's own `verifyRepo` refuses it.
+   and the reference's own verifyRepo refuses it.
 
    Block ORDER is not asserted; the lexicon fixes none. The two CIDs are
    checked for presence and the count for exactness, which together say the

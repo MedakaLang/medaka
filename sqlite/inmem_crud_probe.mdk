@@ -14,8 +14,8 @@
 --     `floatToBytes64`/`bytesToFloat64` and the eta-array-extern parse path).
 --
 -- (The lib's `delete`/`update` go through `readFileBytes`/`writeFileBytes`; their
--- in-memory core `buildImage`/`buildUpdateImage` is module-private, so the probe
--- replays the same filter/map-then-rebuild that `buildImage` does internally, via
+-- in-memory core buildImage/buildUpdateImage is module-private, so the probe
+-- replays the same filter/map-then-rebuild that buildImage does internally, via
 -- the exported `buildDatabase` — no lib change.)
 
 -- Demos are intentionally self-contained; row-type/helper bodies duplicate by design.
