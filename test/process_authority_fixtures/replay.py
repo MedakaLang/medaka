@@ -155,4 +155,6 @@ with tempfile.TemporaryDirectory(prefix='.authority-mutation-', dir=root) as tmp
         if name == 'nonexecution':
             require((out / 'mutant-nonexecution/refused-target.marker').read_bytes() == b'executed\n', 'nonexecution mutation had no effect')
         print(name + ' mutation rejected')
+from lease_replay import verify_lease
+verify_lease(root, out)
 print('authority replay controls passed')
