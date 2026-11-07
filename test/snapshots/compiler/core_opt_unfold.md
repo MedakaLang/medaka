@@ -282,6 +282,7 @@ keepResolved key resolved acc = match omLookup key resolved
   Some u => omInsert key u acc
   None => acc
 # DESUGAR
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "Route" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omKeys" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("support" "util") ((mem "lenKey" false))))
@@ -290,8 +291,8 @@ keepResolved key resolved acc = match omLookup key resolved
 (DData Private "Unfolding" () ((variant "Literal" (ConPos (TyCon "CExpr"))) (variant "Identity" (ConPos)) (variant "Forward" (ConPos (TyCon "Int") (TyCon "CExpr")))) ())
 (DData Private "Target" () ((variant "TopLevel" (ConPos (TyCon "String"))) (variant "ImplEntry" (ConPos (TyCon "String") (TyCon "String")))) ())
 (DTypeSig false "targetKey" (TyFun (TyCon "Target") (TyCon "String")))
-(DFunDef false "targetKey" ((PCon "TopLevel" (PVar "name"))) (EBinOp "++" (EBinOp "++" (ELit (LString "g")) (EApp (EVar "display") (EVar "name"))) (ELit (LString ""))))
-(DFunDef false "targetKey" ((PCon "ImplEntry" (PVar "method") (PVar "word"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "e")) (EApp (EVar "display") (EApp (EVar "lenKey") (EVar "method")))) (ELit (LString ""))) (EApp (EVar "display") (EVar "word"))) (ELit (LString ""))))
+(DFunDef false "targetKey" ((PCon "TopLevel" (PVar "name"))) (EBinOp "++" (EBinOp "++" (ELit (LString "g")) (EApp (EVar "$core.display") (EVar "name"))) (ELit (LString ""))))
+(DFunDef false "targetKey" ((PCon "ImplEntry" (PVar "method") (PVar "word"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "e")) (EApp (EVar "$core.display") (EApp (EVar "lenKey") (EVar "method")))) (ELit (LString ""))) (EApp (EVar "$core.display") (EVar "word"))) (ELit (LString ""))))
 (DTypeSig true "inlineTrivialCalls" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CProgram") (TyCon "CProgram"))))
 (DFunDef false "inlineTrivialCalls" ((PVar "noInline") (PVar "prog")) (EApp (EApp (EVar "rewriteProgramScoped") (EApp (EVar "unfoldSite") (EApp (EApp (EVar "unfoldingTable") (EVar "noInline")) (EVar "prog")))) (EVar "prog")))
 (DTypeSig true "propagateLiteralGlobals" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CProgram") (TyCon "CProgram"))))
@@ -381,6 +382,7 @@ keepResolved key resolved acc = match omLookup key resolved
 (DTypeSig false "keepResolved" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unfolding")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unfolding")) (TyApp (TyCon "OrdMap") (TyCon "Unfolding"))))))
 (DFunDef false "keepResolved" ((PVar "key") (PVar "resolved") (PVar "acc")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "key")) (EVar "resolved")) (arm (PCon "Some" (PCon "Forward" PWild (PVar "head"))) ((GBool (EBinOp "==" (EApp (EApp (EVar "map") (EVar "targetKey")) (EApp (EVar "headTarget") (EVar "head"))) (EApp (EVar "Some") (EVar "key"))))) (EVar "acc")) (arm (PCon "Some" (PVar "u")) () (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (EVar "u")) (EVar "acc"))) (arm (PCon "None") () (EVar "acc"))))
 # MARK
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "Route" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omKeys" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("support" "util") ((mem "lenKey" false))))
@@ -389,8 +391,8 @@ keepResolved key resolved acc = match omLookup key resolved
 (DData Private "Unfolding" () ((variant "Literal" (ConPos (TyCon "CExpr"))) (variant "Identity" (ConPos)) (variant "Forward" (ConPos (TyCon "Int") (TyCon "CExpr")))) ())
 (DData Private "Target" () ((variant "TopLevel" (ConPos (TyCon "String"))) (variant "ImplEntry" (ConPos (TyCon "String") (TyCon "String")))) ())
 (DTypeSig false "targetKey" (TyFun (TyCon "Target") (TyCon "String")))
-(DFunDef false "targetKey" ((PCon "TopLevel" (PVar "name"))) (EBinOp "++" (EBinOp "++" (ELit (LString "g")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString ""))))
-(DFunDef false "targetKey" ((PCon "ImplEntry" (PVar "method") (PVar "word"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "e")) (EApp (EMethodRef "display") (EApp (EVar "lenKey") (EVar "method")))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "word"))) (ELit (LString ""))))
+(DFunDef false "targetKey" ((PCon "TopLevel" (PVar "name"))) (EBinOp "++" (EBinOp "++" (ELit (LString "g")) (EApp (EVar "$core.display") (EVar "name"))) (ELit (LString ""))))
+(DFunDef false "targetKey" ((PCon "ImplEntry" (PVar "method") (PVar "word"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "e")) (EApp (EVar "$core.display") (EApp (EVar "lenKey") (EVar "method")))) (ELit (LString ""))) (EApp (EVar "$core.display") (EVar "word"))) (ELit (LString ""))))
 (DTypeSig true "inlineTrivialCalls" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CProgram") (TyCon "CProgram"))))
 (DFunDef false "inlineTrivialCalls" ((PVar "noInline") (PVar "prog")) (EApp (EApp (EVar "rewriteProgramScoped") (EApp (EVar "unfoldSite") (EApp (EApp (EVar "unfoldingTable") (EVar "noInline")) (EVar "prog")))) (EVar "prog")))
 (DTypeSig true "propagateLiteralGlobals" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CProgram") (TyCon "CProgram"))))
