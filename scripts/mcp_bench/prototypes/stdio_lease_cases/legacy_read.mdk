@@ -1,0 +1,5 @@
+main =
+  let first = readExactly 2
+  let second = readExactly 1
+  match (first, second)
+    _ => ()
