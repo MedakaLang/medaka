@@ -44,6 +44,7 @@ import types.tc_env.{lookupBinding}
 import types.tc_diag.{pushTypeErrorOncePerSite}
 import types.tc_unify.{captureScope}
 import types.tc_solve.{isLocalAbsName}
+import types.expr_loc.{isNoLoc}
 import types.effect_authority.{
   Authority(..),
   Authvar(..),
@@ -439,17 +440,25 @@ fileBoundKey (Loc file line col endLine endCol) =
 
 -- Some application and block roots carry locations only on their children.
 -- Key the body by its first source node, and guard the whole body at its
--- binding/lambda seam, rather than guarding that child alone.
+-- binding/lambda seam, rather than guarding that child alone.  A tree parsed
+-- without locations gives every node the same placeholder span, which would
+-- key every body of the module alike and hand one body's bound to all of them,
+-- so a placeholder identifies no body.
 export
 fileBodyLoc : Expr -> Option Loc
-fileBodyLoc (ELoc l _) = Some l
-fileBodyLoc e =
+fileBodyLoc e = match firstSpan e
+  Some l if not (isNoLoc l) => Some l
+  _ => None
+
+firstSpan : Expr -> Option Loc
+firstSpan (ELoc l _) = Some l
+firstSpan e =
   let found = Ref None
   let _ =
     mapChildren
       (child =>
         match found.value
-          None => found := fileBodyLoc child
+          None => found := firstSpan child
           Some _ => ()
         child)
       e

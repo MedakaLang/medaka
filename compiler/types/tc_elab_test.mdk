@@ -12,7 +12,7 @@
 -- committed arm of `resolveAdmittedSite` (it needs two admitted declarations of one spelling).
 -- What a whole check elaborates is observed through `types.typecheck` in `typecheck_test`.
 
-import test.{expectAll, expectEqual, fail}
+import test.{Expectation, expectAll, expectEqual, fail}
 import test_process.{underRoot}
 import frontend.parser.{parse, parseLocated}
 import frontend.desugar.{desugar, desugarIn, mapProg}
@@ -1186,3 +1186,84 @@ test "core's dict-passed evidence is minted under core whatever program is enter
       expectEqual ["beta"] ub,
     ]
     _ => fail "could not elaborate"
+
+-- ── file-read bounds ──────────────────────────────────────────────────────
+
+-- The top-level names in [decls] whose elaborated body opens a file-read bound.
+fileBoundOwners : List Decl -> List String
+fileBoundOwners decls =
+  flatMap
+    (d => match d
+      DFunDef _ n _ _ _ _ => if opensReadBound [d] then [n] else []
+      DLetGroup pub binds =>
+        flatMap
+          (b => match b
+            LetBind n _ _ _ =>
+              if opensReadBound [DLetGroup pub [b]] then [n] else [])
+          binds
+      _ => [])
+    decls
+
+opensReadBound : List Decl -> Bool
+opensReadBound decls =
+  let seen = Ref False
+  let visit =
+    e =>
+      match e
+        EVar "$withFileReadBound" => seen := True
+        _ => ()
+      e
+  let _ = mapProg visit decls
+  seen.value
+
+-- The bound owners of every module of [sources] (dependency first), each parsed
+-- with [parser] and elaborated together over the prelude.
+boundOwnersOf : (String -> List Decl) ->
+  List (String, String) ->
+  <IO, FileRead> Result String (List String)
+boundOwnersOf parser sources = do
+  rsrc <- readFile (underRoot "stdlib/runtime.mdk")
+  csrc <- readFile (underRoot "stdlib/core.mdk")
+  let modules = map ((mid, src) => (mid, desugarIn mid (parser src))) sources
+  let elab =
+    elaborateModules
+      defaultDriveInputs
+      (desugar (parse rsrc))
+      (desugar (parse csrc))
+      modules
+  Ok (flatMap (m => fileBoundOwners (snd m)) elab.erModules)
+
+pathReader : String -> List String
+pathReader name = [
+  "export",
+  "\{name} : (path : String) -> String -> <FileRead path> String",
+  "\{name} path s = match readFile path",
+  "  Err e => e",
+  "  Ok x => x ++ s",
+]
+
+-- A located parse bounds the declaring body alone; the unlocated parse gives every
+-- body one placeholder span, and no other body may take the bound through it.
+expectOwnBodyOnly : String ->
+  List (String, String) ->
+  <IO, FileRead> Expectation
+expectOwnBodyOnly owner sources = match (
+  boundOwnersOf parseLocated sources,
+  boundOwnersOf parse sources,
+)
+  (Ok located, Ok unlocated) => expectAll [
+    expectEqual [owner] located,
+    expectEqual [] (filter (/= owner) unlocated),
+  ]
+  _ => fail "could not elaborate"
+
+test "a file-read bound wraps only its own declaration's body, not a value of the same module another module imports" = expectOwnBodyOnly
+  "g"
+  [
+    ("lib", joinNl (pathReader "g" ++ ["export", "v : Int", "v = 1"])),
+    ("main", joinNl ["import lib.{v}", "main = println v"]),
+  ]
+
+test "a file-read bound wraps only its own declaration's body, not main" = expectOwnBodyOnly
+  "f"
+  [("main", joinNl (pathReader "f" ++ ["main = println 1"]))]

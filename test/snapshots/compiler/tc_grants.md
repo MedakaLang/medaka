@@ -1,5 +1,5 @@
 # META
-source_lines=647
+source_lines=656
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_grants: capability grant recording: which grants a binding records (the top, recursive,
@@ -48,6 +48,7 @@ import types.tc_env.{lookupBinding}
 import types.tc_diag.{pushTypeErrorOncePerSite}
 import types.tc_unify.{captureScope}
 import types.tc_solve.{isLocalAbsName}
+import types.expr_loc.{isNoLoc}
 import types.effect_authority.{
   Authority(..),
   Authvar(..),
@@ -443,17 +444,25 @@ fileBoundKey (Loc file line col endLine endCol) =
 
 -- Some application and block roots carry locations only on their children.
 -- Key the body by its first source node, and guard the whole body at its
--- binding/lambda seam, rather than guarding that child alone.
+-- binding/lambda seam, rather than guarding that child alone.  A tree parsed
+-- without locations gives every node the same placeholder span, which would
+-- key every body of the module alike and hand one body's bound to all of them,
+-- so a placeholder identifies no body.
 export
 fileBodyLoc : Expr -> Option Loc
-fileBodyLoc (ELoc l _) = Some l
-fileBodyLoc e =
+fileBodyLoc e = match firstSpan e
+  Some l if not (isNoLoc l) => Some l
+  _ => None
+
+firstSpan : Expr -> Option Loc
+firstSpan (ELoc l _) = Some l
+firstSpan e =
   let found = Ref None
   let _ =
     mapChildren
       (child =>
         match found.value
-          None => found := fileBodyLoc child
+          None => found := firstSpan child
           Some _ => ()
         child)
       e
@@ -659,6 +668,7 @@ clausesOf n m = reverse (clausesAt n m)
 (DUse false (UseGroup ("types" "tc_diag") ((mem "pushTypeErrorOncePerSite" false))))
 (DUse false (UseGroup ("types" "tc_unify") ((mem "captureScope" false))))
 (DUse false (UseGroup ("types" "tc_solve") ((mem "isLocalAbsName" false))))
+(DUse false (UseGroup ("types" "expr_loc") ((mem "isNoLoc" false))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "Authvar" true) (mem "authHasVars" false) (mem "authIsTop" false) (mem "authSub" false) (mem "authvarName" false))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "Atom" true) (mem "EffLabel" true) (mem "EffRow" true) (mem "Effvar" true) (mem "atomAuth" false) (mem "atomKey" false) (mem "atomLabelOf" false) (mem "rowFlat" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "AuthResidual" true) (mem "Mono" true) (mem "Scheme" true) (mem "lookupAssocI" false) (mem "normalize" false) (mem "ppMonosShared" false) (mem "IfaceRef" true))))
@@ -742,8 +752,10 @@ clausesOf n m = reverse (clausesAt n m)
 (DTypeSig false "fileBoundKey" (TyFun (TyCon "Loc") (TyCon "String")))
 (DFunDef false "fileBoundKey" ((PCon "Loc" (PVar "file") (PVar "line") (PVar "col") (PVar "endLine") (PVar "endCol"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "file"))) (ELit (LString ":"))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EVar "line")))) (ELit (LString ":"))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EVar "col")))) (ELit (LString ":"))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EVar "endLine")))) (ELit (LString ":"))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EVar "endCol")))) (ELit (LString ""))))
 (DTypeSig true "fileBodyLoc" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc"))))
-(DFunDef false "fileBodyLoc" ((PCon "ELoc" (PVar "l") PWild)) (EApp (EVar "Some") (EVar "l")))
-(DFunDef false "fileBodyLoc" ((PVar "e")) (EBlock (DoLet false false (PVar "found") (EApp (EVar "Ref") (EVar "None"))) (DoLet false false PWild (EApp (EApp (EVar "mapChildren") (ELam ((PVar "child")) (EBlock (DoExpr (EMatch (EFieldAccess (EVar "found") "value") (arm (PCon "None") () (EApp (EApp (EVar "setRef") (EVar "found")) (EApp (EVar "fileBodyLoc") (EVar "child")))) (arm (PCon "Some" PWild) () (ELit LUnit)))) (DoExpr (EVar "child"))))) (EVar "e"))) (DoExpr (EFieldAccess (EVar "found") "value"))))
+(DFunDef false "fileBodyLoc" ((PVar "e")) (EMatch (EApp (EVar "firstSpan") (EVar "e")) (arm (PCon "Some" (PVar "l")) ((GBool (EApp (EVar "not") (EApp (EVar "isNoLoc") (EVar "l"))))) (EApp (EVar "Some") (EVar "l"))) (arm PWild () (EVar "None"))))
+(DTypeSig false "firstSpan" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc"))))
+(DFunDef false "firstSpan" ((PCon "ELoc" (PVar "l") PWild)) (EApp (EVar "Some") (EVar "l")))
+(DFunDef false "firstSpan" ((PVar "e")) (EBlock (DoLet false false (PVar "found") (EApp (EVar "Ref") (EVar "None"))) (DoLet false false PWild (EApp (EApp (EVar "mapChildren") (ELam ((PVar "child")) (EBlock (DoExpr (EMatch (EFieldAccess (EVar "found") "value") (arm (PCon "None") () (EApp (EApp (EVar "setRef") (EVar "found")) (EApp (EVar "firstSpan") (EVar "child")))) (arm (PCon "Some" PWild) () (ELit LUnit)))) (DoExpr (EVar "child"))))) (EVar "e"))) (DoExpr (EFieldAccess (EVar "found") "value"))))
 (DTypeSig true "fileBoundSite" (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyCon "String"))))
 (DFunDef false "fileBoundSite" ((PVar "mid") (PVar "loc")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EApp (EVar "stringLength") (EVar "mid"))))) (ELit (LString ":"))) (EApp (EVar "$core.display") (EVar "mid"))) (ELit (LString ":"))) (EApp (EVar "$core.display") (EApp (EVar "fileBoundKey") (EVar "loc")))) (ELit (LString ""))))
 (DTypeSig false "scopeFileBoundModule" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Unit") (TyCon "String"))))
@@ -793,6 +805,7 @@ clausesOf n m = reverse (clausesAt n m)
 (DUse false (UseGroup ("types" "tc_diag") ((mem "pushTypeErrorOncePerSite" false))))
 (DUse false (UseGroup ("types" "tc_unify") ((mem "captureScope" false))))
 (DUse false (UseGroup ("types" "tc_solve") ((mem "isLocalAbsName" false))))
+(DUse false (UseGroup ("types" "expr_loc") ((mem "isNoLoc" false))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "Authvar" true) (mem "authHasVars" false) (mem "authIsTop" false) (mem "authSub" false) (mem "authvarName" false))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "Atom" true) (mem "EffLabel" true) (mem "EffRow" true) (mem "Effvar" true) (mem "atomAuth" false) (mem "atomKey" false) (mem "atomLabelOf" false) (mem "rowFlat" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "AuthResidual" true) (mem "Mono" true) (mem "Scheme" true) (mem "lookupAssocI" false) (mem "normalize" false) (mem "ppMonosShared" false) (mem "IfaceRef" true))))
@@ -876,8 +889,10 @@ clausesOf n m = reverse (clausesAt n m)
 (DTypeSig false "fileBoundKey" (TyFun (TyCon "Loc") (TyCon "String")))
 (DFunDef false "fileBoundKey" ((PCon "Loc" (PVar "file") (PVar "line") (PVar "col") (PVar "endLine") (PVar "endCol"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "file"))) (ELit (LString ":"))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EVar "line")))) (ELit (LString ":"))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EVar "col")))) (ELit (LString ":"))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EVar "endLine")))) (ELit (LString ":"))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EVar "endCol")))) (ELit (LString ""))))
 (DTypeSig true "fileBodyLoc" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc"))))
-(DFunDef false "fileBodyLoc" ((PCon "ELoc" (PVar "l") PWild)) (EApp (EVar "Some") (EVar "l")))
-(DFunDef false "fileBodyLoc" ((PVar "e")) (EBlock (DoLet false false (PVar "found") (EApp (EVar "Ref") (EVar "None"))) (DoLet false false PWild (EApp (EApp (EVar "mapChildren") (ELam ((PVar "child")) (EBlock (DoExpr (EMatch (EFieldAccess (EVar "found") "value") (arm (PCon "None") () (EApp (EApp (EVar "setRef") (EVar "found")) (EApp (EVar "fileBodyLoc") (EVar "child")))) (arm (PCon "Some" PWild) () (ELit LUnit)))) (DoExpr (EVar "child"))))) (EVar "e"))) (DoExpr (EFieldAccess (EVar "found") "value"))))
+(DFunDef false "fileBodyLoc" ((PVar "e")) (EMatch (EApp (EVar "firstSpan") (EVar "e")) (arm (PCon "Some" (PVar "l")) ((GBool (EApp (EVar "not") (EApp (EVar "isNoLoc") (EVar "l"))))) (EApp (EVar "Some") (EVar "l"))) (arm PWild () (EVar "None"))))
+(DTypeSig false "firstSpan" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc"))))
+(DFunDef false "firstSpan" ((PCon "ELoc" (PVar "l") PWild)) (EApp (EVar "Some") (EVar "l")))
+(DFunDef false "firstSpan" ((PVar "e")) (EBlock (DoLet false false (PVar "found") (EApp (EVar "Ref") (EVar "None"))) (DoLet false false PWild (EApp (EApp (EVar "mapChildren") (ELam ((PVar "child")) (EBlock (DoExpr (EMatch (EFieldAccess (EVar "found") "value") (arm (PCon "None") () (EApp (EApp (EVar "setRef") (EVar "found")) (EApp (EVar "firstSpan") (EVar "child")))) (arm (PCon "Some" PWild) () (ELit LUnit)))) (DoExpr (EVar "child"))))) (EVar "e"))) (DoExpr (EFieldAccess (EVar "found") "value"))))
 (DTypeSig true "fileBoundSite" (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyCon "String"))))
 (DFunDef false "fileBoundSite" ((PVar "mid") (PVar "loc")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EApp (EVar "stringLength") (EVar "mid"))))) (ELit (LString ":"))) (EApp (EVar "$core.display") (EVar "mid"))) (ELit (LString ":"))) (EApp (EVar "$core.display") (EApp (EVar "fileBoundKey") (EVar "loc")))) (ELit (LString ""))))
 (DTypeSig false "scopeFileBoundModule" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "Unit") (TyCon "String"))))
