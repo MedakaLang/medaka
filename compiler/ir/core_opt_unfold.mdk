@@ -25,7 +25,9 @@ import ir.core_walk.{rewriteProgramScoped}
 --   dictionary, and whose body is its one parameter (`fromInt x = x`) or applies a
 --   head to all its parameters in order (`fromInt x = intToFloat x`).  The head
 --   must read no parameter and no given dictionary, so it means the same at every
---   call site that does not rebind its name.
+--   call site that does not rebind its name.  The head is a function, an extern,
+--   a constructor or a method: a head naming a zero-parameter top-level binding
+--   is left out, since unfolding would force that value before the arguments.
 --
 -- `propagateLiteralGlobals` then replaces each read of such a value by the
 -- literal.
@@ -128,7 +130,21 @@ unfoldingTable noInline (CProgram binds _ _ impls _ _) =
       (memo key => snd (resolveKey raw omEmpty key memo))
       omEmpty
       (omKeys raw)
-  fold (acc key => keepResolved key resolved acc) omEmpty (omKeys resolved)
+  let values = valueBinds binds
+  fold
+    (acc key => keepResolved values key resolved acc)
+    omEmpty
+    (omKeys resolved)
+
+-- The zero-parameter top-level bindings: their bodies run once, on first read.
+valueBinds : List CBind -> OrdMap Unit
+valueBinds binds =
+  fold
+    (acc b => match b
+      CBind name [CClause [] _] _ _ => omInsert name () acc
+      _ => acc)
+    omEmpty
+    binds
 
 bindRow : OrdMap Unit -> CBind -> OrdMap Unfolding -> OrdMap Unfolding
 bindRow excluded (CBind name [CClause pats body] _ _) acc
@@ -194,6 +210,7 @@ forwarding params (CApp head args _) =
     None
 forwarding _ _ = None
 
+export
 varNames : List Pat -> Option (List String)
 varNames [] = Some []
 varNames ((PVar x _ _) :: rest) = map (x :: _) (varNames rest)
@@ -268,12 +285,15 @@ followLink raw path (u@(Forward n head)) memo = match headTarget head
 followLink _ _ u memo = (u, memo)
 
 -- A resolved unfolding whose head names its own definition is a call of
--- itself, so it is dropped.
-keepResolved : String ->
+-- itself, and one whose head is a [values] binding would force it early; both
+-- are dropped.
+keepResolved : OrdMap Unit ->
+  String ->
   OrdMap Unfolding ->
   OrdMap Unfolding ->
   OrdMap Unfolding
-keepResolved key resolved acc = match omLookup key resolved
+keepResolved values key resolved acc = match omLookup key resolved
+  Some (Forward _ (CVar name _)) if omHasKey name values => acc
   Some (Forward _ head) if map targetKey (headTarget head) == Some key => acc
   Some u => omInsert key u acc
   None => acc
