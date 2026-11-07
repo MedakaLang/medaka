@@ -1,5 +1,5 @@
 # META
-source_lines=15196
+source_lines=15291
 stages=DESUGAR,MARK
 # SOURCE
 import backend.package_identity.{IdentityPlan(..), IdentityDefect, packSite}
@@ -1472,26 +1472,18 @@ narrowImplsByArity _ _ impls siteArity =
 -- internal error — the typechecker only stamps words it selected an instance for).
 implForSite : Emit -> String -> String -> String -> Int -> Option CImplEntry
 implForSite e method iface tag siteArity =
-  findByTagArity
-    e
-    method
-    tag
-    siteArity
-    (narrowImplsByIface iface (implsOf e method))
+  findByTagArity tag siteArity (narrowImplsByIface iface (implsOf e method))
 
-findByTagArity : Emit ->
-  String ->
-  String ->
-  Int ->
-  List CImplEntry ->
-  Option CImplEntry
-findByTagArity _ _ _ _ [] = None
-findByTagArity e method tag siteArity (entry :: rest) =
-  if implEntryAnswers tag entry
-    && implEntryDeclaredArity entry == siteArity then
-    Some entry
-  else
-    findByTagArity e method tag siteArity rest
+findByTagArity : String -> Int -> List CImplEntry -> Option CImplEntry
+findByTagArity tag siteArity xs0 = go xs0
+  where
+    go [] = None
+    go (entry :: rest) =
+      if implEntryAnswers tag entry
+        && implEntryDeclaredArity entry == siteArity then
+        Some entry
+      else
+        go rest
 
 -- does [entry] answer to the route word [word]?  A word names exactly one instance.
 implEntryAnswers : String -> CImplEntry -> Bool
@@ -1599,9 +1591,9 @@ implEntrySymTag (CImplEntry _ _ _ (CImplDefault _ _ _ (ImplSym tag _ _) _ _ _)) 
 
 -- does the prelude object define the impl of [method] at canonical key [key]?
 preludeImplSym : Emit -> String -> String -> Option String
-preludeImplSym e method key = match omLookup method e.input.preludeImplIndex
-  Some byKey => omLookup key byKey
-  None => None
+preludeImplSym e method key = do
+  byKey <- omLookup method e.input.preludeImplIndex
+  omLookup key byKey
 
 -- the method names of the program's tagged impls.  A bare CVar naming one of these,
 -- applied to args, is an arg-position dispatch site (return-position methods are
@@ -3386,25 +3378,27 @@ emitBitExtern : Emit ->
   String ->
   List CExpr ->
   (String, LTy)
-emitBitExtern e env "bitAnd" args = emitBitBin e env "mdk_bit_and" args
-emitBitExtern e env "bitOr" args = emitBitBin e env "mdk_bit_or" args
-emitBitExtern e env "bitXor" args = emitBitBin e env "mdk_bit_xor" args
-emitBitExtern e env "shiftLeft" args = emitBitBin e env "mdk_shift_left" args
-emitBitExtern e env "shiftRight" args = emitBitBin e env "mdk_shift_right" args
-emitBitExtern e env "intBitAnd" args = emitBitExtern e env "bitAnd" args
-emitBitExtern e env "intBitOr" args = emitBitExtern e env "bitOr" args
-emitBitExtern e env "intBitXor" args = emitBitExtern e env "bitXor" args
-emitBitExtern e env "intShiftLeft" args = emitBitExtern e env "shiftLeft" args
-emitBitExtern e env "intShiftRight" args = emitBitExtern e env "shiftRight" args
-emitBitExtern e env "intBitNot" args = emitBitExtern e env "bitNot" args
-emitBitExtern e env "bitNot" args = match emitArgs e env args
-  [a] =>
-    let x = untagInt e a
-    let r = freshReg e
-    emit e (rtLine e r "i64" "mdk_bit_not" (i64Ops [x]))
-    (tagInt e r, LTInt)
-  _ => panic "llvm: bitNot takes one argument"
-emitBitExtern e _ name _ = gapE e ("unsupported bit extern " ++ name)
+emitBitExtern e env name0 args = go name0
+  where
+    go "bitAnd" = emitBitBin e env "mdk_bit_and" args
+    go "bitOr" = emitBitBin e env "mdk_bit_or" args
+    go "bitXor" = emitBitBin e env "mdk_bit_xor" args
+    go "shiftLeft" = emitBitBin e env "mdk_shift_left" args
+    go "shiftRight" = emitBitBin e env "mdk_shift_right" args
+    go "intBitAnd" = go "bitAnd"
+    go "intBitOr" = go "bitOr"
+    go "intBitXor" = go "bitXor"
+    go "intShiftLeft" = go "shiftLeft"
+    go "intShiftRight" = go "shiftRight"
+    go "intBitNot" = go "bitNot"
+    go "bitNot" = match emitArgs e env args
+      [a] =>
+        let x = untagInt e a
+        let r = freshReg e
+        emit e (rtLine e r "i64" "mdk_bit_not" (i64Ops [x]))
+        (tagInt e r, LTInt)
+      _ => panic "llvm: bitNot takes one argument"
+    go name = gapE e ("unsupported bit extern " ++ name)
 
 -- Fixed-width integer conversions (PURE).  A `U8`/`U16`/`U32` is Int's tagged
 -- word, so `uNToInt` is the identity on it, and `uNTruncate` keeps the low `n`
@@ -3598,13 +3592,12 @@ rawWorkerRet (RawWorker _ _ r) = r
 rawWorkerCall : Emit -> String -> Int -> Option (String, RawWorker)
 rawWorkerCall e f n =
   let name = canonFnName e f
-  match omLookup name !e.rawWorkers
-    Some (RawWorker ar ks r) =>
-      if ar == n then
-        Some (LN.llvmName (LN.LRawWorker name), RawWorker ar ks r)
-      else
-        None
-    None => None
+  do
+    (RawWorker ar ks r) <- omLookup name !e.rawWorkers
+    if ar == n then
+      Some (LN.llvmName (LN.LRawWorker name), RawWorker ar ks r)
+    else
+      None
 
 -- the worker of `f`, when its result is raw of kind `k`.
 rawWorkerReturning : Emit ->
@@ -3612,10 +3605,9 @@ rawWorkerReturning : Emit ->
   Int ->
   RawKind ->
   Option (String, RawWorker)
-rawWorkerReturning e f n k = match rawWorkerCall e f n
-  Some (sym, w) =>
-    if sameRawKind (rawWorkerRet w) k then Some (sym, w) else None
-  None => None
+rawWorkerReturning e f n k = do
+  (sym, w) <- rawWorkerCall e f n
+  if sameRawKind (rawWorkerRet w) k then Some (sym, w) else None
 
 -- A call of a raw worker: each argument as its position's kind (a payload, an
 -- `i32` or a word), evaluated left to right.  Returns the result register, of
@@ -3638,6 +3630,8 @@ emitRawArgs : Emit ->
   List RawKind ->
   List CExpr ->
   List (String, String)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 emitRawArgs e env (k :: ks) (a :: rest) =
   let op = emitRawAs e env k a
   (rawKindTy k, op) :: emitRawArgs e env ks rest
@@ -3645,9 +3639,9 @@ emitRawArgs _ _ _ _ = []
 
 -- the worker of `f` whose result is an `i32` (a U32 or an I32).
 rawWorkerReturning32 : Emit -> String -> Int -> Option (String, RawWorker)
-rawWorkerReturning32 e f n = match rawWorkerCall e f n
-  Some (sym, w) => if isRaw32 (rawWorkerRet w) then Some (sym, w) else None
-  None => None
+rawWorkerReturning32 e f n = do
+  (sym, w) <- rawWorkerCall e f n
+  if isRaw32 (rawWorkerRet w) then Some (sym, w) else None
 
 -- A U64- or U32-valued `if` or block on raw values: each arm stores its raw
 -- value in the slot, so neither boxes or retags (emitIf's slot holds words).
@@ -3685,11 +3679,13 @@ emitRawIf e env k c t f =
   r
 
 emitRawBlock : Emit -> OrdMap (String, LTy) -> RawKind -> List CStmt -> String
-emitRawBlock e env k [CSExpr ex] = emitRawAs e env k ex
-emitRawBlock e env k (s :: rest) = match rest
-  [] => rawOfWord e k (fst (emitBlockLast e env s))
-  _ => emitRawBlock e (emitBlockLead e env s rest) k rest
-emitRawBlock e _ k [] = rawOfWord e k (fst (gapE e "empty block"))
+emitRawBlock e env0 k xs0 = go env0 xs0
+  where
+    go env [CSExpr ex] = emitRawAs e env k ex
+    go env (s :: rest) = match rest
+      [] => rawOfWord e k (fst (emitBlockLast e env s))
+      _ => go (emitBlockLead e env s rest) rest
+    go _ [] = rawOfWord e k (fst (gapE e "empty block"))
 
 -- a word as a value of kind `k`: a U64 cell's payload, a U32 word's `i32`.
 rawOfWord : Emit -> RawKind -> String -> String
@@ -3728,23 +3724,25 @@ emitRawWorkerCallW e env sym w args resTy =
 -- U64, and a saturated call of a worker with a raw result.  A false negative only
 -- keeps the boxed path.
 staticIsU64 : Emit -> OrdMap (String, LTy) -> CExpr -> Bool
-staticIsU64 _ _ (CLit (LU64 _ _)) = True
-staticIsU64 _ env (CVar x _) = match omLookup x env
-  Some (_, LTU64U) => True
-  Some (_, LTU64) => True
-  _ => False
-staticIsU64 _ _ (CBinPrim op _ _ tag _) = isU64Head tag && isArithOp op
-staticIsU64 e env (CIf _ t f) = staticIsU64 e env t && staticIsU64 e env f
-staticIsU64 e env ex = match flattenApp ex []
-  (CVar f _, args) =>
-    if isLocal env f then
-      False
-    else if isU64RawKernel (runtimeName e f) (lengthS args) then
-      True
-    else match u64KernelAlias e f args
-      Some k => isU64RawKernel k (lengthS args)
-      None => isSome (rawWorkerReturning e f (lengthS args) RawU64)
-  _ => False
+staticIsU64 e env ex0 = go ex0
+  where
+    go (CLit (LU64 _ _)) = True
+    go (CVar x _) = match omLookup x env
+      Some (_, LTU64U) => True
+      Some (_, LTU64) => True
+      _ => False
+    go (CBinPrim op _ _ tag _) = isU64Head tag && isArithOp op
+    go (CIf _ t f) = go t && go f
+    go ex = match flattenApp ex []
+      (CVar f _, args) =>
+        if isLocal env f then
+          False
+        else if isU64RawKernel (runtimeName e f) (lengthS args) then
+          True
+        else match u64KernelAlias e f args
+          Some k => isU64RawKernel k (lengthS args)
+          None => isSome (rawWorkerReturning e f (lengthS args) RawU64)
+      _ => False
 
 -- ── U32 as native i32 (N5) ──────────────────────────────────────────────────
 -- A `U32` is Int's tagged word at every boundary (argument, result, array
@@ -3949,35 +3947,37 @@ u32TruncateRaw e env x =
 -- which have no overflow and no domain check.  Anything else is emitted as usual
 -- and untagged.
 intRaw : Emit -> OrdMap (String, LTy) -> CExpr -> String
-intRaw e env x = match flattenApp x []
-  (CVar f _, args) =>
-    if isLocal env f then
-      untagInt e (fst (emitExpr e env x))
-    else match (intRawBitOp (runtimeName e f), args)
-      (Some instr, [a, b]) =>
-        let p = intRaw e env a
-        let q = intRaw e env b
-        let r = freshReg e
-        emit e "  \{r} = \{instr} i64 \{p}, \{q}"
-        r
-      _ => match (runtimeName e f, args)
-        ("u32ToInt", [a]) =>
-          let v = emitU32Raw e env a
-          let z = freshReg e
-          emit e "  \{z} = zext i32 \{v} to i64"
-          z
-        ("i32ToInt", [a]) =>
-          let v = emitU32Raw e env a
-          let z = freshReg e
-          emit e "  \{z} = sext i32 \{v} to i64"
-          z
-        ("intBitNot", [a]) =>
-          let p = intRaw e env a
-          let r = freshReg e
-          emit e "  \{r} = xor i64 \{p}, -1"
-          r
-        _ => untagInt e (fst (emitExpr e env x))
-  _ => untagInt e (fst (emitExpr e env x))
+intRaw e env x0 = go x0
+  where
+    go x = match flattenApp x []
+      (CVar f _, args) =>
+        if isLocal env f then
+          untagInt e (fst (emitExpr e env x))
+        else match (intRawBitOp (runtimeName e f), args)
+          (Some instr, [a, b]) =>
+            let p = go a
+            let q = go b
+            let r = freshReg e
+            emit e "  \{r} = \{instr} i64 \{p}, \{q}"
+            r
+          _ => match (runtimeName e f, args)
+            ("u32ToInt", [a]) =>
+              let v = emitU32Raw e env a
+              let z = freshReg e
+              emit e "  \{z} = zext i32 \{v} to i64"
+              z
+            ("i32ToInt", [a]) =>
+              let v = emitU32Raw e env a
+              let z = freshReg e
+              emit e "  \{z} = sext i32 \{v} to i64"
+              z
+            ("intBitNot", [a]) =>
+              let p = go a
+              let r = freshReg e
+              emit e "  \{r} = xor i64 \{p}, -1"
+              r
+            _ => untagInt e (fst (emitExpr e env x))
+      _ => untagInt e (fst (emitExpr e env x))
 
 intRawBitOp : String -> Option String
 intRawBitOp "intBitAnd" = Some "and"
@@ -3990,30 +3990,32 @@ intRawBitOp _ = None
 -- whose arms agree, `u32Truncate`/`i32Truncate`, a call `u32Inline` inlines, and
 -- a call of a worker with an `i32` result.  RawWord when it is neither.
 static32Kind : Emit -> OrdMap (String, LTy) -> CExpr -> RawKind
-static32Kind _ env (CVar x _) = match omLookup x env
-  Some (_, LTU32U) => RawU32
-  Some (_, LTI32U) => RawI32
-  _ => RawWord
-static32Kind _ _ (CBinPrim op _ _ tag _) =
-  if isArithOp op then rawKindOfHead32 tag else RawWord
-static32Kind e env (CIf _ t f) =
-  let k = static32Kind e env t
-  if sameRawKind k (static32Kind e env f) then k else RawWord
-static32Kind e env ex = match flattenApp ex []
-  (CVar f _, args) =>
-    if isLocal env f then
-      RawWord
-    else if isTruncate32 (runtimeName e f) then
-      if lengthS args == 1 then
-        if runtimeName e f == "i32Truncate" then RawI32 else RawU32
-      else
-        RawWord
-    else match u32Inline e env f args
-      Some (k, _, _) => k
-      None => match rawWorkerReturning32 e f (lengthS args)
-        Some (_, w) => rawWorkerRet w
-        None => RawWord
-  _ => RawWord
+static32Kind e env ex0 = go ex0
+  where
+    go (CVar x _) = match omLookup x env
+      Some (_, LTU32U) => RawU32
+      Some (_, LTI32U) => RawI32
+      _ => RawWord
+    go (CBinPrim op _ _ tag _) =
+      if isArithOp op then rawKindOfHead32 tag else RawWord
+    go (CIf _ t f) =
+      let k = go t
+      if sameRawKind k (go f) then k else RawWord
+    go ex = match flattenApp ex []
+      (CVar f _, args) =>
+        if isLocal env f then
+          RawWord
+        else if isTruncate32 (runtimeName e f) then
+          if lengthS args == 1 then
+            if runtimeName e f == "i32Truncate" then RawI32 else RawU32
+          else
+            RawWord
+        else match u32Inline e env f args
+          Some (k, _, _) => k
+          None => match rawWorkerReturning32 e f (lengthS args)
+            Some (_, w) => rawWorkerRet w
+            None => RawWord
+      _ => RawWord
 
 -- the `i32` kind of a head: RawWord unless it is `U32` or `I32`.
 rawKindOfHead32 : String -> RawKind
@@ -4116,9 +4118,11 @@ bindInlineArgs : Emit ->
   List CExpr ->
   OrdMap (String, LTy) ->
   OrdMap (String, LTy)
-bindInlineArgs e env ((PVar x _ _) :: ps) (a :: rest) acc =
-  bindInlineArgs e env ps rest (omInsert x (emitRawOrWord e env a) acc)
-bindInlineArgs _ _ _ _ acc = acc
+bindInlineArgs e env xs0 xs1 acc0 = go xs0 xs1 acc0
+  where
+    go ((PVar x _ _) :: ps) (a :: rest) acc =
+      go ps rest (omInsert x (emitRawOrWord e env a) acc)
+    go _ _ acc = acc
 
 -- `a`'s value in the register its static type allows: a U64 payload, a U32 or
 -- I32 `i32`, a Float `double`, or the word.
@@ -4178,51 +4182,51 @@ stmtExprs ((CSAssign _ x) :: rest) = x :: stmtExprs rest
 -- only keeps a value boxed.  A worker parameter is held raw only at zero
 -- (`rawWorkerOf`), a `let` at one or fewer (`bindLetRaw`).
 u64Escapes : Emit -> String -> Bool -> CExpr -> Int
-u64Escapes _ x raw (CVar y _) = if y == x && not raw then 1 else 0
-u64Escapes _ _ _ (CLit _) = 0
-u64Escapes e x _ (CBinPrim op l r tag _) =
-  let inner = isBoxed64Head tag && (isArithOp op || isCmpOp op)
-  u64Escapes e x inner l + u64Escapes e x inner r
-u64Escapes e x raw (CIf c t f) =
-  u64Escapes e x False c + u64Escapes e x raw t + u64Escapes e x raw f
-u64Escapes e x raw (CLet False (PVar y a bid) e1 e2) = match e1
-  CLam _ _ => occurrencesOf x (CLet False (PVar y a bid) e1 e2)
-  _ =>
-    u64Escapes e x (u64Shaped e e1) e1
-      + (if y == x then 0 else u64Escapes e x raw e2)
-u64Escapes e x raw (CLet False pat e1 e2) =
-  u64EscapesBound e x pat e1
-    + (if contains x (patBinders pat) then 0 else u64Escapes e x raw e2)
-u64Escapes e x raw (CBlock stmts) = u64EscapesBlock e x raw stmts
--- a container literal or an access binds nothing, so its parts are read as
--- words (`U64.toIntTruncating x` inside one reads `x` as a payload).
-u64Escapes e x _ (CArray es) = u64EscapesWords e x es
-u64Escapes e x _ (CTuple es) = u64EscapesWords e x es
-u64Escapes e x _ (CList es) = u64EscapesWords e x es
-u64Escapes e x _ (CUnOp _ a) = u64Escapes e x False a
-u64Escapes e x _raw ex = match flattenApp ex []
-  (CVar f _, args) =>
-    if f == x then
-      occurrencesOf x ex
-    else
-      u64EscapesArgs e x (u64ArgRaw e f args) args
-  _ => occurrencesOf x ex
+u64Escapes e x raw0 ex0 = go raw0 ex0
+  where
+    go raw (CVar y _) = if y == x && not raw then 1 else 0
+    go _ (CLit _) = 0
+    go _ (CBinPrim op l r tag _) =
+      let inner = isBoxed64Head tag && (isArithOp op || isCmpOp op)
+      go inner l + go inner r
+    go raw (CIf c t f) = go False c + go raw t + go raw f
+    go raw (CLet False (PVar y a bid) e1 e2) = match e1
+      CLam _ _ => occurrencesOf x (CLet False (PVar y a bid) e1 e2)
+      _ => go (u64Shaped e e1) e1 + (if y == x then 0 else go raw e2)
+    go raw (CLet False pat e1 e2) =
+      u64EscapesBound e x pat e1
+        + (if contains x (patBinders pat) then 0 else go raw e2)
+    go raw (CBlock stmts) = u64EscapesBlock e x raw stmts
+    -- a container literal or an access binds nothing, so its parts are read as
+    -- words (`U64.toIntTruncating x` inside one reads `x` as a payload).
+    go _ (CArray es) = u64EscapesWords e x es
+    go _ (CTuple es) = u64EscapesWords e x es
+    go _ (CList es) = u64EscapesWords e x es
+    go _ (CUnOp _ a) = go False a
+    go _raw ex = match flattenApp ex []
+      (CVar f _, args) =>
+        if f == x then
+          occurrencesOf x ex
+        else
+          u64EscapesArgs e x (u64ArgRaw e f args) args
+      _ => occurrencesOf x ex
 
 u64EscapesBlock : Emit -> String -> Bool -> List CStmt -> Int
-u64EscapesBlock e x raw [CSExpr ex] = u64Escapes e x raw ex
-u64EscapesBlock e x _ ((CSExpr ex) :: rest) =
-  u64Escapes e x False ex + u64EscapesBlock e x False rest
-u64EscapesBlock e x raw ((CSLet _ (PVar y a bid) ex) :: rest) = match ex
-  CLam _ _ => occurrencesOf x (CBlock (CSLet False (PVar y a bid) ex :: rest))
-  _ =>
-    u64Escapes e x (u64Shaped e ex) ex
-      + (if y == x then 0 else u64EscapesBlock e x raw rest)
-u64EscapesBlock e x raw ((CSLet _ pat ex) :: rest) =
-  u64EscapesBound e x pat ex
-    + (if contains x (patBinders pat) then 0 else u64EscapesBlock e x raw rest)
-u64EscapesBlock e x raw ((CSAssign y ex) :: rest) =
-  u64Escapes e x False ex + (if y == x then 0 else u64EscapesBlock e x raw rest)
-u64EscapesBlock _ _ _ [] = 0
+u64EscapesBlock e x raw0 xs0 = go raw0 xs0
+  where
+    go raw [CSExpr ex] = u64Escapes e x raw ex
+    go _ ((CSExpr ex) :: rest) = u64Escapes e x False ex + go False rest
+    go raw ((CSLet _ (PVar y a bid) ex) :: rest) = match ex
+      CLam _ _ =>
+        occurrencesOf x (CBlock (CSLet False (PVar y a bid) ex :: rest))
+      _ =>
+        u64Escapes e x (u64Shaped e ex) ex + (if y == x then 0 else go raw rest)
+    go raw ((CSLet _ pat ex) :: rest) =
+      u64EscapesBound e x pat ex
+        + (if contains x (patBinders pat) then 0 else go raw rest)
+    go raw ((CSAssign y ex) :: rest) =
+      u64Escapes e x False ex + (if y == x then 0 else go raw rest)
+    go _ [] = 0
 
 -- the right side of a destructuring `let`: a call `bindTupleInline` inlines
 -- binds each argument in its raw register, anything else is read as a word.
@@ -4240,11 +4244,11 @@ u64EscapesWords : Emit -> String -> List CExpr -> Int
 u64EscapesWords e x es = u64EscapesArgs e x [] es
 
 u64EscapesArgs : Emit -> String -> List Bool -> List CExpr -> Int
-u64EscapesArgs e x (r :: rs) (a :: as_) =
-  u64Escapes e x r a + u64EscapesArgs e x rs as_
-u64EscapesArgs e x [] (a :: as_) =
-  u64Escapes e x False a + u64EscapesArgs e x [] as_
-u64EscapesArgs _ _ _ [] = 0
+u64EscapesArgs e x xs0 xs1 = go xs0 xs1
+  where
+    go (r :: rs) (a :: as_) = u64Escapes e x r a + go rs as_
+    go [] (a :: as_) = u64Escapes e x False a + go [] as_
+    go _ [] = 0
 
 -- which arguments of a call of `f` are read as payloads: a kernel's U64
 -- operands (directly or through its `u64` wrapper), and a raw worker's U64
@@ -4309,13 +4313,12 @@ bindTupleInline e env ps ex =
     (CVar f _, args) =>
       if isLocal env f then
         None
-      else match tupleInline e f args (lengthS ps)
-        Some (pats, lead, comps) =>
-          let penv = bindInlineArgs e env pats args omEmpty
-          let vals = withInlineScope e (_ =>
-            emitRawOrWords e (emitBlockLeads e penv lead) comps)
-          Some (bindTupleVals env ps vals)
-        None => None
+      else do
+        (pats, lead, comps) <- tupleInline e f args (lengthS ps)
+        let penv = bindInlineArgs e env pats args omEmpty
+        let vals = withInlineScope e (_ =>
+          emitRawOrWords e (emitBlockLeads e penv lead) comps)
+        Some (bindTupleVals env ps vals)
     _ => None
 
 allVarOrWild : List Pat -> Bool
@@ -4328,6 +4331,8 @@ emitRawOrWords : Emit ->
   OrdMap (String, LTy) ->
   List CExpr ->
   List (String, LTy)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 emitRawOrWords _ _ [] = []
 emitRawOrWords e env (c :: rest) =
   let v = emitRawOrWord e env c
@@ -4393,10 +4398,9 @@ tupleBody _ _ = None
 -- non-negative literal amount, where that refusal cannot fire.
 u64KernelAlias : Emit -> String -> List CExpr -> Option String
 u64KernelAlias e f args = match omLookup (canonFnName e f) !e.gDispBindMap
-  Some (CBind _ [CClause pats body] _ _) => match varNames pats
-    Some ps =>
-      if lengthS ps == lengthS args then u64AliasBody e ps body args else None
-    None => None
+  Some (CBind _ [CClause pats body] _ _) => do
+    ps <- varNames pats
+    if lengthS ps == lengthS args then u64AliasBody e ps body args else None
   _ => None
 
 -- Live where the inliner skips a call because a local binder spells the head,
@@ -4409,14 +4413,13 @@ u64AliasBody e ps (CIf (CBinPrim "<" (CVar k _) zero _ _) _ body) args = match (
   args,
   intLitOf zero,
 )
-  (Some kern, [_, amount], [_, lit], Some 0) => match intLitOf lit
-    Some n =>
-      if isU64ShiftKernel kern && amount == k && n >= 0 then Some kern else None
-    None => None
+  (Some kern, [_, amount], [_, lit], Some 0) => do
+    n <- intLitOf lit
+    if isU64ShiftKernel kern && amount == k && n >= 0 then Some kern else None
   _ => None
-u64AliasBody e ps body _ = match u64KernelApplied e ps body
-  Some kern => if isU64ShiftKernel kern then None else Some kern
-  None => None
+u64AliasBody e ps body _ = do
+  kern <- u64KernelApplied e ps body
+  if isU64ShiftKernel kern then None else Some kern
 
 -- The value of a bare Int literal as the emitter receives it.
 intLitOf : CExpr -> Option Int
@@ -5245,20 +5248,22 @@ concatFoldEmit : Emit ->
   LTy ->
   List CExpr ->
   (String, LTy)
-concatFoldEmit _ _ v t [] = (v, t)
-concatFoldEmit e env v t (x :: xs) =
-  let (rv, _) = emitExpr e env x
-  let r2 = freshReg e
-  match t
-    LTStr =>
-      emit e (rtLine e r2 "i64" "mdk_string_append" (i64Ops [v, rv]))
-      concatFoldEmit e env r2 LTStr xs
-    LTCon =>
-      emit e (rtLine e r2 "i64" "mdk_list_append" (i64Ops [v, rv]))
-      concatFoldEmit e env r2 LTCon xs
-    _ =>
-      emit e (rtLine e r2 "i64" "mdk_append" (i64Ops [v, rv]))
-      concatFoldEmit e env r2 LTUnknown xs
+concatFoldEmit e env reg0 ty0 xs0 = go reg0 ty0 xs0
+  where
+    go v t [] = (v, t)
+    go v t (x :: xs) =
+      let (rv, _) = emitExpr e env x
+      let r2 = freshReg e
+      match t
+        LTStr =>
+          emit e (rtLine e r2 "i64" "mdk_string_append" (i64Ops [v, rv]))
+          go r2 LTStr xs
+        LTCon =>
+          emit e (rtLine e r2 "i64" "mdk_list_append" (i64Ops [v, rv]))
+          go r2 LTCon xs
+        _ =>
+          emit e (rtLine e r2 "i64" "mdk_append" (i64Ops [v, rv]))
+          go r2 LTUnknown xs
 
 -- the N-ary String chain: operands emitted in order (the head already is `v0`),
 -- their words stored in an argv alloca, then one runtime call.  Same shape as
@@ -5285,6 +5290,8 @@ emitStrConcatN e env v0 rest =
 
 -- emit each expression strictly left to right, returning the operand words.
 emitOperandWords : Emit -> OrdMap (String, LTy) -> List CExpr -> List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 emitOperandWords _ _ [] = []
 emitOperandWords e env (x :: xs) =
   let (v, _) = emitExpr e env x
@@ -5386,7 +5393,8 @@ constFoldFloat (CBinPrim op l r _ _) = match (
 )
   (Some a, Some b) => hostFloatOp op a b
   _ => None
-constFoldFloat _ = None
+constFoldFloat (CLit _ | CVar _ _ | CApp _ _ _ | CLam _ _ | CLet _ _ _ _ | CLetGroup _ _ | CMatch _ _ | CDecision _ _ _ | CIf _ _ _ | CUnOp _ _ | CTuple _ | CList _ | CRecord _ _ | CFieldAccess _ _ _ _ | CRecordUpdate _ _ _ | CVariantUpdate _ _ _ | CArray _ | CRangeList _ _ _ | CRangeArray _ _ _ | CBlock _ | CMethod _ _ | CDict _ _) =
+  None
 
 -- Host float op for the const-fold — each computed with the SAME operation the
 -- runtime routes this operator to, so the host fold is bit-identical to what the
@@ -5413,9 +5421,9 @@ hostFloatOp _ _ _ = None
 constNanFold : String -> CExpr -> CExpr -> Option String
 constNanFold op l r =
   if isArithOp op then match (constFoldFloat l, constFoldFloat r)
-    (Some a, Some b) => match hostFloatOp op a b
-      Some v => if v /= v then Some (floatBitsHex v) else None
-      None => None
+    (Some a, Some b) => do
+      v <- hostFloatOp op a b
+      if v /= v then Some (floatBitsHex v) else None
     _ => None
   else
     None
@@ -5470,22 +5478,24 @@ bytesHexBE arr i =
 -- (matching emitArith's existing LTFloat branch, which already unboxes operands on
 -- the strength of the left's type).  Only called in statically-Float context.
 emitFloatD : Emit -> OrdMap (String, LTy) -> CExpr -> String
-emitFloatD _ _env (CLit (LFloat f)) = ensureFloatDot (floatToString f)
-emitFloatD e env (ex@(CBinPrim op l r _ _)) =
-  if isArithOp op then match constNanFold op l r
-    -- #672: a compile-time-constant NaN → the host's exact NaN bits (a valid
-    -- `double` operand), so clang keeps −NaN instead of re-folding to +NaN.
-    Some hexC => hexC
-    None =>
-      let ld = emitFloatD e env l
-      let rd = emitFloatD e env r
-      let ldf = fenceFloatOperand e l r ld
-      let res = freshReg e
-      emit e "  \{res} = \{floatOp op} double \{ldf}, \{rd}"
-      res
-  else
-    emitFloatLeaf e env ex
-emitFloatD e env ex = emitFloatLeaf e env ex
+emitFloatD e env ex0 = go ex0
+  where
+    go (CLit (LFloat f)) = ensureFloatDot (floatToString f)
+    go (ex@(CBinPrim op l r _ _)) =
+      if isArithOp op then match constNanFold op l r
+        -- #672: a compile-time-constant NaN → the host's exact NaN bits (a valid
+        -- `double` operand), so clang keeps −NaN instead of re-folding to +NaN.
+        Some hexC => hexC
+        None =>
+          let ld = go l
+          let rd = go r
+          let ldf = fenceFloatOperand e l r ld
+          let res = freshReg e
+          emit e "  \{res} = \{floatOp op} double \{ldf}, \{rd}"
+          res
+      else
+        emitFloatLeaf e env ex
+    go ex = emitFloatLeaf e env ex
 
 emitFloatLeaf : Emit -> OrdMap (String, LTy) -> CExpr -> String
 emitFloatLeaf e env ex = match floatFromIntArg e env ex
@@ -6434,21 +6444,24 @@ bindLetGroup : Emit ->
   List CBind ->
   CExpr ->
   Option (OrdMap (String, LTy))
-bindLetGroup _ env [] _ = Some env
-bindLetGroup e env ((CBind name [CClause [] rhs] _ bid) :: rest) body =
-  let vt = stampWord e bid (emitExpr e env rhs)
-  bindLetGroup e (omInsert name vt env) rest body
-bindLetGroup e env ((CBind name clauses site bid) :: rest) body
-  | refsLater name clauses (bindNames rest) =
-    emitKnotRun e env (CBind name clauses site bid :: rest) body
-  | otherwise =
-    -- The region this binding is in scope over is exactly the rest of the group
-    -- plus the body, i.e. `CLetGroup rest body`.  When every occurrence of `name`
-    -- there is the head of an application of exactly its arity, its call sites
-    -- may skip the closure's code_ptr load (`e.directFn`).
-    let direct = satOnlyUses name (clauseArityC clauses) (CLetGroup rest body)
-    let (w, ty) = emitGroupBind e env (CBind name clauses site bid) direct
-    bindLetGroup e (omInsert name (w, ty) env) rest body
+bindLetGroup e env0 xs0 body = go env0 xs0
+  where
+    go env [] = Some env
+    go env ((CBind name [CClause [] rhs] _ bid) :: rest) =
+      let vt = stampWord e bid (emitExpr e env rhs)
+      go (omInsert name vt env) rest
+    go env ((CBind name clauses site bid) :: rest)
+      | refsLater name clauses (bindNames rest) =
+        emitKnotRun e env (CBind name clauses site bid :: rest) body
+      | otherwise =
+        -- The region this binding is in scope over is exactly the rest of the group
+        -- plus the body, i.e. `CLetGroup rest body`.  When every occurrence of `name`
+        -- there is the head of an application of exactly its arity, its call sites
+        -- may skip the closure's code_ptr load (`e.directFn`).
+        let direct =
+          satOnlyUses name (clauseArityC clauses) (CLetGroup rest body)
+        let (w, ty) = emitGroupBind e env (CBind name clauses site bid) direct
+        go (omInsert name (w, ty) env) rest
 
 letGroupGap : Emit -> (String, LTy)
 letGroupGap e =
@@ -6468,7 +6481,7 @@ emitKnotRun e env binds body =
   let run = takeFnRun binds
   let after = dropS (lengthS run) binds
   let runNames = bindNames run
-  if anyRefsOutsideRun run runNames (bindNames after) then
+  if anyRefsOutsideRun run (bindNames after) then
     None
   else
     let env2 = emitLetGroupKnot e env run runNames
@@ -6487,13 +6500,12 @@ dropS n (x :: xs) = if n <= 0 then x :: xs else dropS (n - 1) xs
 
 -- True if any binding in the run references a name bound LATER but OUTSIDE the run
 -- (i.e. a later value binding) — the case knot-tying cannot tie.
-anyRefsOutsideRun : List CBind -> List String -> List String -> Bool
-anyRefsOutsideRun [] _ _ = False
-anyRefsOutsideRun ((CBind name clauses _ _) :: rest) runNames laterOutside
+anyRefsOutsideRun : List CBind -> List String -> Bool
+anyRefsOutsideRun [] _ = False
+anyRefsOutsideRun ((CBind name clauses _ _) :: rest) laterOutside
   | anyInList (dedupS (clausesFreeVars name clauses)) laterOutside = True
-  | otherwise = anyRefsOutsideRun rest runNames laterOutside
-anyRefsOutsideRun (_ :: rest) runNames laterOutside =
-  anyRefsOutsideRun rest runNames laterOutside
+  | otherwise = anyRefsOutsideRun rest laterOutside
+anyRefsOutsideRun (_ :: rest) laterOutside = anyRefsOutsideRun rest laterOutside
 
 -- True when any clause of a local-function binding references a sibling bound
 -- LATER in the same group (a forward or mutually-recursive reference whose
@@ -6561,113 +6573,109 @@ emitGroupBind e env (CBind name clauses site _) direct =
 -- optimization inside it rather than silently claiming the name does not escape
 -- there.
 satOnlyUses : String -> Int -> CExpr -> Bool
-satOnlyUses _ _ (CLit _) = True
-satOnlyUses name _ (CVar x _) = x /= name
-satOnlyUses name arity (app@(CApp _ _ _)) =
-  let (hd, args) = flattenApp app []
-  match hd
-    CVar n _ =>
-      if n == name && lengthS args /= arity then
-        False
-      else
-        satOnlyList name arity args
-    _ => satOnlyUses name arity hd && satOnlyList name arity args
-satOnlyUses name arity (CLam ps b) =
-  contains name (flatMap patBinders ps) || satOnlyUses name arity b
-satOnlyUses name arity (CLet recF pat e1 e2) =
-  let shadow = contains name (patBinders pat)
-  let ok1 =
-    if recF then
-      shadow || satOnlyUses name arity e1
-    else
-      satOnlyUses name arity e1
-  ok1 && (shadow || satOnlyUses name arity e2)
-satOnlyUses name arity (CLetGroup binds b) =
-  contains name (bindNames binds)
-    || satOnlyBinds name arity binds && satOnlyUses name arity b
-satOnlyUses name arity (CMatch scrut arms) =
-  satOnlyUses name arity scrut && satOnlyArms name arity arms
-satOnlyUses name arity (CDecision scrut arms _) =
-  satOnlyUses name arity scrut && satOnlyArms name arity arms
-satOnlyUses name arity (CIf c t f) =
-  satOnlyUses name arity c
-    && satOnlyUses name arity t
-    && satOnlyUses name arity f
-satOnlyUses name arity (CBinPrim _ l r _ _) =
-  satOnlyUses name arity l && satOnlyUses name arity r
-satOnlyUses name arity (CUnOp _ x) = satOnlyUses name arity x
-satOnlyUses name arity (CTuple es) = satOnlyList name arity es
-satOnlyUses name arity (CList es) = satOnlyList name arity es
-satOnlyUses name arity (CArray es) = satOnlyList name arity es
-satOnlyUses name arity (CRangeList lo hi _) =
-  satOnlyUses name arity lo && satOnlyUses name arity hi
-satOnlyUses name arity (CRangeArray lo hi _) =
-  satOnlyUses name arity lo && satOnlyUses name arity hi
-satOnlyUses name arity (CRecord _ fields) = satOnlyFields name arity fields
-satOnlyUses name arity (CFieldAccess ex _ _ _) = satOnlyUses name arity ex
-satOnlyUses name arity (CRecordUpdate _ base updates) =
-  satOnlyUses name arity base && satOnlyFields name arity updates
-satOnlyUses name arity (CVariantUpdate _ base updates) =
-  satOnlyUses name arity base && satOnlyFields name arity updates
-satOnlyUses name arity (CBlock stmts) = satOnlyStmts name arity stmts
--- a dict/method occurrence names its captured dict PARAMS, never a local
--- function binding — but read them anyway rather than assume it.
-satOnlyUses name _ (CMethod _ (MethodEvidence _ _ route implRoutes methRoutes)) =
-  not (contains name (flatMap givenNames (route :: implRoutes ++ methRoutes)))
-satOnlyUses name _ (CDict _ routes) =
-  not (contains name (flatMap givenNames routes))
-satOnlyUses _ _ _ = False
+satOnlyUses name arity app0 = go app0
+  where
+    go (CLit _) = True
+    go (CVar x _) = x /= name
+    go (app@(CApp _ _ _)) =
+      let (hd, args) = flattenApp app []
+      match hd
+        CVar n _ =>
+          if n == name && lengthS args /= arity then
+            False
+          else
+            satOnlyList name arity args
+        _ => go hd && satOnlyList name arity args
+    go (CLam ps b) = contains name (flatMap patBinders ps) || go b
+    go (CLet recF pat e1 e2) =
+      let shadow = contains name (patBinders pat)
+      let ok1 = if recF then shadow || go e1 else go e1
+      ok1 && (shadow || go e2)
+    go (CLetGroup binds b) =
+      contains name (bindNames binds) || satOnlyBinds name arity binds && go b
+    go (CMatch scrut arms) = go scrut && satOnlyArms name arity arms
+    go (CDecision scrut arms _) = go scrut && satOnlyArms name arity arms
+    go (CIf c t f) = go c && go t && go f
+    go (CBinPrim _ l r _ _) = go l && go r
+    go (CUnOp _ x) = go x
+    go (CTuple es) = satOnlyList name arity es
+    go (CList es) = satOnlyList name arity es
+    go (CArray es) = satOnlyList name arity es
+    go (CRangeList lo hi _) = go lo && go hi
+    go (CRangeArray lo hi _) = go lo && go hi
+    go (CRecord _ fields) = satOnlyFields name arity fields
+    go (CFieldAccess ex _ _ _) = go ex
+    go (CRecordUpdate _ base updates) =
+      go base && satOnlyFields name arity updates
+    go (CVariantUpdate _ base updates) =
+      go base && satOnlyFields name arity updates
+    go (CBlock stmts) = satOnlyStmts name arity stmts
+    -- a dict/method occurrence names its captured dict PARAMS, never a local
+    -- function binding — but read them anyway rather than assume it.
+    go (CMethod _ (MethodEvidence _ _ route implRoutes methRoutes)) =
+      not
+        (contains name (flatMap givenNames (route :: implRoutes ++ methRoutes)))
+    go (CDict _ routes) = not (contains name (flatMap givenNames routes))
+    go _ = False
 
 satOnlyList : String -> Int -> List CExpr -> Bool
-satOnlyList _ _ [] = True
-satOnlyList name arity (x :: rest) =
-  satOnlyUses name arity x && satOnlyList name arity rest
+satOnlyList name arity xs0 = go xs0
+  where
+    go [] = True
+    go (x :: rest) = satOnlyUses name arity x && go rest
 
 satOnlyFields : String -> Int -> List CField -> Bool
-satOnlyFields _ _ [] = True
-satOnlyFields name arity ((CField _ _ ex) :: rest) =
-  satOnlyUses name arity ex && satOnlyFields name arity rest
+satOnlyFields name arity xs0 = go xs0
+  where
+    go [] = True
+    go ((CField _ _ ex) :: rest) = satOnlyUses name arity ex && go rest
 
 satOnlyArms : String -> Int -> List CArm -> Bool
-satOnlyArms _ _ [] = True
-satOnlyArms name arity ((CArm pat guards b) :: rest) =
-  let shadow = contains name (patBinders pat)
-  satOnlyGuards name arity guards
-    && (shadow || satOnlyUses name arity b)
-    && satOnlyArms name arity rest
-satOnlyArms name arity ((CArmAlt _ guards _) :: rest) =
-  satOnlyGuards name arity guards && satOnlyArms name arity rest
+satOnlyArms name arity xs0 = go xs0
+  where
+    go [] = True
+    go ((CArm pat guards b) :: rest) =
+      let shadow = contains name (patBinders pat)
+      satOnlyGuards name arity guards
+        && (shadow || satOnlyUses name arity b)
+        && go rest
+    go ((CArmAlt _ guards _) :: rest) =
+      satOnlyGuards name arity guards && go rest
 
 satOnlyGuards : String -> Int -> List CGuard -> Bool
-satOnlyGuards _ _ [] = True
-satOnlyGuards name arity ((CGBool ex) :: rest) =
-  satOnlyUses name arity ex && satOnlyGuards name arity rest
-satOnlyGuards name arity ((CGBind _ ex) :: rest) =
-  satOnlyUses name arity ex && satOnlyGuards name arity rest
+satOnlyGuards name arity xs0 = go xs0
+  where
+    go [] = True
+    go ((CGBool ex) :: rest) = satOnlyUses name arity ex && go rest
+    go ((CGBind _ ex) :: rest) = satOnlyUses name arity ex && go rest
 
 satOnlyStmts : String -> Int -> List CStmt -> Bool
-satOnlyStmts _ _ [] = True
-satOnlyStmts name arity ((CSExpr ex) :: rest) =
-  satOnlyUses name arity ex && satOnlyStmts name arity rest
-satOnlyStmts name arity ((CSLet _ pat ex) :: rest) =
-  satOnlyUses name arity ex
-    && (contains name (patBinders pat) || satOnlyStmts name arity rest)
--- an assignment TO the name would replace the value its call sites resolve to.
-satOnlyStmts name arity ((CSAssign target ex) :: rest) =
-  target /= name && satOnlyUses name arity ex && satOnlyStmts name arity rest
+satOnlyStmts name arity xs0 = go xs0
+  where
+    go [] = True
+    go ((CSExpr ex) :: rest) = satOnlyUses name arity ex && go rest
+    go ((CSLet _ pat ex) :: rest) =
+      satOnlyUses name arity ex && (contains name (patBinders pat) || go rest)
+    -- an assignment TO the name would replace the value its call sites resolve to.
+    go ((CSAssign target ex) :: rest) =
+      target /= name && satOnlyUses name arity ex && go rest
 
 -- every clause body of a nested group's bindings, with that clause's parameter
 -- patterns treated as shadowing binders.
 satOnlyBinds : String -> Int -> List CBind -> Bool
-satOnlyBinds _ _ [] = True
-satOnlyBinds name arity ((CBind _ clauses _ _) :: rest) =
-  satOnlyClauses name arity clauses && satOnlyBinds name arity rest
+satOnlyBinds name arity xs0 = go xs0
+  where
+    go [] = True
+    go ((CBind _ clauses _ _) :: rest) =
+      satOnlyClauses name arity clauses && go rest
 
 satOnlyClauses : String -> Int -> List CClause -> Bool
-satOnlyClauses _ _ [] = True
-satOnlyClauses name arity ((CClause pats b) :: rest) =
-  (contains name (flatMap patBinders pats) || satOnlyUses name arity b)
-    && satOnlyClauses name arity rest
+satOnlyClauses name arity xs0 = go xs0
+  where
+    go [] = True
+    go ((CClause pats b) :: rest) =
+      (contains name (flatMap patBinders pats) || satOnlyUses name arity b)
+        && go rest
 
 -- emit the lifted multi-clause `define` for a let-group local function into the
 -- SIDE buffer (same swap discipline as emitPatLamDefine).  Captures load from
@@ -6768,28 +6776,33 @@ knotAlloc : Emit ->
   OrdMap (String, LTy) ->
   List CBind ->
   (List KnotCell, OrdMap (String, LTy))
-knotAlloc _ env _ [] = ([], env)
-knotAlloc e env cellEnv ((CBind name clauses site _) :: rest) =
-  let lamName = generatedName e LN.GenLambda ""
-  let arity = clauseArity (clauseList clauses)
-  let captured =
-    keepInEnv cellEnv (removeStr name (dedupS (clausesFreeVars name clauses)))
-  emitGroupBindDefine e cellEnv lamName name arity clauses captured site
-  let (cellPtr, cellWord) =
-    emitClosureAllocPatch e lamName arity (lengthS captured)
-  let (cells, env2) =
-    knotAlloc e (omInsert name (cellWord, LTClosure) env) cellEnv rest
-  (KnotCell name cellPtr captured :: cells, env2)
-knotAlloc e env cellEnv (_ :: rest) = knotAlloc e env cellEnv rest
+knotAlloc e env0 cellEnv xs0 = go env0 xs0
+  where
+    go env [] = ([], env)
+    go env ((CBind name clauses site _) :: rest) =
+      let lamName = generatedName e LN.GenLambda ""
+      let arity = clauseArity (clauseList clauses)
+      let captured =
+        keepInEnv
+          cellEnv
+          (removeStr name (dedupS (clausesFreeVars name clauses)))
+      emitGroupBindDefine e cellEnv lamName name arity clauses captured site
+      let (cellPtr, cellWord) =
+        emitClosureAllocPatch e lamName arity (lengthS captured)
+      let (cells, env2) = go (omInsert name (cellWord, LTClosure) env) rest
+      (KnotCell name cellPtr captured :: cells, env2)
+    go env (_ :: rest) = go env rest
 
 -- pass 2: store each cell's real capture words (from the fully-bound env) into its
 -- capture fields (offset 8*(i+1), field 0 holds the code pointer).
 knotPatch : Emit -> OrdMap (String, LTy) -> List KnotCell -> Unit
-knotPatch _ _ [] = ()
-knotPatch e env ((KnotCell _ cellPtr captureNames) :: rest) =
-  let words = capWords e env captureNames
-  storeFields e cellPtr words (closureCaptureStart - 1)
-  knotPatch e env rest
+knotPatch e env xs0 = go xs0
+  where
+    go [] = ()
+    go ((KnotCell _ cellPtr captureNames) :: rest) =
+      let words = capWords e env captureNames
+      storeFields e cellPtr words (closureCaptureStart - 1)
+      go rest
 
 -- allocate a closure cell with the code pointer in field 0 and `nCap` PLACEHOLDER
 -- zero capture words, returning BOTH the raw cell pointer (for later stores) and
@@ -7144,9 +7157,9 @@ emitIndirect e env hd args mode =
 -- surplus or shortfall is deliberately NOT a hit — over- and under-application
 -- must keep flowing through `emitIndirectMode`'s split/PAP paths unchanged.
 directLamOf : Emit -> String -> Int -> Option String
-directLamOf e cw nargs = match lookupAssoc cw !e.directFn
-  Some (lam, arity) => if arity == nargs then Some lam else None
-  None => None
+directLamOf e cw nargs = do
+  (lam, arity) <- lookupAssoc cw !e.directFn
+  if arity == nargs then Some lam else None
 
 -- An indirect call through closure word `cw` in the application's mode.  An exact,
 -- partial or over application names a closure of known parameter count (a
@@ -7203,6 +7216,8 @@ hasArgs _ = True
 
 -- emit each argument expression (left-to-right); collect the i64 operand words.
 emitArgs : Emit -> OrdMap (String, LTy) -> List CExpr -> List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 emitArgs _ _ [] = []
 emitArgs e env (a :: rest) =
   let (v, _) = emitExpr e env a
@@ -7823,6 +7838,8 @@ emitApplyRuntime e cw argOps =
 
 -- store each arg word into the argv alloca at index `i` (getelementptr i64 stride).
 storeArgv : Emit -> String -> List String -> Int -> Unit
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
 storeArgv _ _ [] _ = ()
 storeArgv e arr (a :: rest) i =
   let p = freshReg e
@@ -7879,6 +7896,8 @@ emitPapDefine e papName fname supplied remaining =
 
 -- load the `k` captured argument words from %clos fields 1..k (code_ptr is 0).
 loadPapCaptures : Emit -> Int -> Int -> List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 loadPapCaptures e k i
   | i >= k = []
   | otherwise =
@@ -8407,6 +8426,8 @@ slotWordsGo : Emit ->
   List (List SlotCallee) ->
   Int ->
   List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 slotWordsGo e key iface (slot :: slots) (fill :: fills) i =
   slotClosureWord e key iface slot fill i
     :: slotWordsGo e key iface slots fills (i + 1)
@@ -8492,6 +8513,8 @@ slotParamDecls dicts values =
     ("%dict" :: wordNames "%mw" dicts 0 ++ wordNames "%arg" values 0)
 
 wordNames : String -> Int -> Int -> List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 wordNames pre n i
   | i >= n = []
   | otherwise = pre ++ intToString i :: wordNames pre n (i + 1)
@@ -8608,6 +8631,8 @@ takeRoutes _ _ = []
 -- cell header (offset 0); field i is loaded by `loadField i` (offset 8*(i+1)), stored
 -- by emitDictCell via storeFields at the same field indices.
 loadReqDicts : Emit -> String -> Int -> Int -> List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 loadReqDicts e dictPtr n i
   | i >= n = []
   | otherwise = loadField e dictPtr i :: loadReqDicts e dictPtr n (i + 1)
@@ -8748,59 +8773,63 @@ emitArgDispatchChain : Emit ->
   Unit
 -- the arms are exhausted: #1958's loud trap, never a bare `unreachable`, which is UB
 -- that `clang -O1+` may fold the preceding tests away against.
-emitArgDispatchChain e _ [] _ _ _ _ =
-  emit e (rtLine e "" "void" "mdk_dispatch_no_impl" [])
-  emit e "  unreachable"
--- An inherited default at a head that owns no runtime constructors (a primitive)
--- cannot be tag-tested, so it gets no arm and a receiver of that head reaches the
--- trap (#1075).
-emitArgDispatchChain e tagReg (g :: rest) argOps colliding slot endL
-  | groupInherits g && isEmptyL (ctorsOfType e (groupTag g)) =
-    emitArgDispatchChain e tagReg rest argOps colliding slot endL
-emitArgDispatchChain e tagReg (g :: rest) argOps colliding slot endL =
-  let tag = groupTag g
-  let cond = emitTagMatch e tagReg (ctorsOfType e tag)
-  let n = intToString (freshLocal e)
-  let yes = "argyes" ++ n
-  let next = "argnext" ++ n
-  emit e "  br i1 \{cond}, label %\{yes}, label %\{next}"
-  emit e (yes ++ ":")
-  -- #2445: the tag TEST is still emitted — it is what scopes the trap to the receivers
-  -- that actually reach this head — but the arm body becomes the loud trap, because two
-  -- or more declared impls answer to this one constant and the call this arm would make
-  -- is a coin-flip between them.  Every sibling arm at a non-colliding head is
-  -- untouched.  The trap is `noreturn`, so this block terminates and no `store`/`br` to
-  -- the join label follows.
-  let _ =
-    if argTagArmAmbiguous colliding tag then
-      emitAmbiguousArm e
-    else
-      -- F10: saturate against this group's own declared arity, the same answer the
-      -- single-group site above already takes (see `emitArityCall`).
-      let (rv, _) = emitArityCall e (groupFnName g) argOps (groupArity g) LTInt
-      emit e "  store i64 \{rv}, ptr \{slot}"
-      emit e ("  br label %" ++ endL)
-  emit e (next ++ ":")
-  emitArgDispatchChain e tagReg rest argOps colliding slot endL
+emitArgDispatchChain e tagReg xs0 argOps colliding slot endL = go xs0
+  where
+    go [] =
+      emit e (rtLine e "" "void" "mdk_dispatch_no_impl" [])
+      emit e "  unreachable"
+    -- An inherited default at a head that owns no runtime constructors (a primitive)
+    -- cannot be tag-tested, so it gets no arm and a receiver of that head reaches the
+    -- trap (#1075).
+    go (g :: rest)
+      | groupInherits g && isEmptyL (ctorsOfType e (groupTag g)) = go rest
+    go (g :: rest) =
+      let tag = groupTag g
+      let cond = emitTagMatch e tagReg (ctorsOfType e tag)
+      let n = intToString (freshLocal e)
+      let yes = "argyes" ++ n
+      let next = "argnext" ++ n
+      emit e "  br i1 \{cond}, label %\{yes}, label %\{next}"
+      emit e (yes ++ ":")
+      -- #2445: the tag TEST is still emitted — it is what scopes the trap to the receivers
+      -- that actually reach this head — but the arm body becomes the loud trap, because two
+      -- or more declared impls answer to this one constant and the call this arm would make
+      -- is a coin-flip between them.  Every sibling arm at a non-colliding head is
+      -- untouched.  The trap is `noreturn`, so this block terminates and no `store`/`br` to
+      -- the join label follows.
+      let _ =
+        if argTagArmAmbiguous colliding tag then
+          emitAmbiguousArm e
+        else
+          -- F10: saturate against this group's own declared arity, the same answer the
+          -- single-group site above already takes (see `emitArityCall`).
+          let (rv, _) =
+            emitArityCall e (groupFnName g) argOps (groupArity g) LTInt
+          emit e "  store i64 \{rv}, ptr \{slot}"
+          emit e ("  br label %" ++ endL)
+      emit e (next ++ ":")
+      go rest
 
 -- an i1 that is true when the loaded ctor tag equals ANY of a type's constructor
 -- tags (OR-chain of icmp eq against each hashName).
 emitTagMatch : Emit -> String -> List String -> String
-emitTagMatch e _ [] =
-  gapStr
-    e
-    "arg-tag dispatch on impl type that owns no constructors (primitive receiver carries no cell tag)"
-emitTagMatch e tagReg [c] =
-  let r = freshReg e
-  emit e "  \{r} = icmp eq i64 \{tagReg}, \{intToString (cellTag e c)}"
-  r
-emitTagMatch e tagReg (c :: rest) =
-  let r = freshReg e
-  emit e "  \{r} = icmp eq i64 \{tagReg}, \{intToString (cellTag e c)}"
-  let rrest = emitTagMatch e tagReg rest
-  let o = freshReg e
-  emit e "  \{o} = or i1 \{r}, \{rrest}"
-  o
+emitTagMatch e tagReg xs0 = go xs0
+  where
+    go [] =
+      gapStr
+        e
+        "arg-tag dispatch on impl type that owns no constructors (primitive receiver carries no cell tag)"
+    go [c] =
+      let r = freshReg e
+      emit e "  \{r} = icmp eq i64 \{tagReg}, \{intToString (cellTag e c)}"
+      r
+    go (c :: rest) =
+      let r = freshReg e
+      emit e "  \{r} = icmp eq i64 \{tagReg}, \{intToString (cellTag e c)}"
+      let rrest = go rest
+      let o = freshReg e
+      emit e "  \{o} = or i1 \{r}, \{rrest}"
+      o
 
 -- the impl groups of one method, in program order.
 implGroupsForMethod : Emit -> String -> List ImplGroup
@@ -8816,6 +8845,8 @@ filterGroupsForEntries : Emit ->
   List CImplEntry ->
   List ImplGroup ->
   List ImplGroup
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 filterGroupsForEntries _ _ _ [] = []
 filterGroupsForEntries e method entries (g :: rest) =
   if anyList
@@ -8959,23 +8990,24 @@ dictWordsOf e env rs = map (dictWordOfRoute e env) rs
 -- the cell's supers and slots.  RDict/RDictFwd forward the enclosing dict parameter's word
 -- (already a boxed-cell pointer); RNone is the 0 dict (no cell).
 dictWordOfRoute : Emit -> OrdMap (String, LTy) -> Route -> String
-dictWordOfRoute e env (RKey key reqs sups) =
-  let supWords = dictWordsOf e env sups
-  let slots = slotWords e key
-  let fieldWords = supWords ++ slots ++ dictWordsOf e env reqs
-  if allConstWords fieldWords then
-    emitConstDictCell e (hashName key) fieldWords
-  else
-    emitDictCell e (hashName key) fieldWords
-dictWordOfRoute e env (RDict d) = dictOperand e env d
-dictWordOfRoute e env (RDictFwd d) = dictOperand e env d
-dictWordOfRoute e env (RProj r path) =
-  loadSuperPath e (dictWordOfRoute e env r) (receiverPath e r path)
-dictWordOfRoute _ _ RNone = "0"
--- S-1: RLocal's own dicts are the call's leading dict ARGS (emitted by emitMethod's
--- RLocal arm via emitDictApp), not a dict WITNESS for this route — so as a witness it
--- stays the no-op 0 dict, mirroring eval's `dictOfRoute (RLocal _ _) = VDict "" []`.
-dictWordOfRoute _ _ (RLocal _ _) = "0"
+dictWordOfRoute e env x0 = go x0
+  where
+    go (RKey key reqs sups) =
+      let supWords = dictWordsOf e env sups
+      let slots = slotWords e key
+      let fieldWords = supWords ++ slots ++ dictWordsOf e env reqs
+      if allConstWords fieldWords then
+        emitConstDictCell e (hashName key) fieldWords
+      else
+        emitDictCell e (hashName key) fieldWords
+    go (RDict d) = dictOperand e env d
+    go (RDictFwd d) = dictOperand e env d
+    go (RProj r path) = loadSuperPath e (go r) (receiverPath e r path)
+    go RNone = "0"
+    -- S-1: RLocal's own dicts are the call's leading dict ARGS (emitted by emitMethod's
+    -- RLocal arm via emitDictApp), not a dict WITNESS for this route — so as a witness it
+    -- stays the no-op 0 dict, mirroring eval's `dictOfRoute (RLocal _ _) = VDict "" []`.
+    go (RLocal _ _) = "0"
 
 -- A projection's path.  Its first index reads a `requires` dictionary when it is
 -- past the supers of an inherited default's receiver (`core_ir_lower.
@@ -9301,14 +9333,13 @@ tagToLTy t = if isTaggedFixedHead t then LTInt else LTCon
 -- LTCon → mdk_list_append, and in impl Semigroup String emit them as LTStr →
 -- mdk_string_append — without touching emitBin.
 implParamEnvByPos : String -> List Int -> Int -> Int -> OrdMap (String, LTy)
-implParamEnvByPos _ _ n i
-  | i >= n = omEmpty
-implParamEnvByPos tag positions n i =
-  let ty = if listContains positions i then tagToLTy tag else LTInt
-  omInsert
-    ("a" ++ intToString i)
-    ("%arg" ++ intToString i, ty)
-    (implParamEnvByPos tag positions n (i + 1))
+implParamEnvByPos tag positions n i0 = go i0
+  where
+    go i
+      | i >= n = omEmpty
+    go i =
+      let ty = if listContains positions i then tagToLTy tag else LTInt
+      omInsert ("a" ++ intToString i) ("%arg" ++ intToString i, ty) (go (i + 1))
 
 listContains : List Int -> Int -> Bool
 listContains [] _ = False
@@ -9365,6 +9396,8 @@ emitGroupBody e fname tag positions arity clauses =
 -- build a LTy list of length n, typed as tagToLTy tag at positions ∈ positions,
 -- LTInt elsewhere.
 patPosTys : String -> List Int -> Int -> Int -> List LTy
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 patPosTys _ _ n i
   | i >= n = []
 patPosTys tag positions n i =
@@ -9450,29 +9483,31 @@ emitClauseChain : Emit ->
   String ->
   Loc ->
   Unit
-emitClauseChain _ _ _ [] _ _ _ _ _ _ = ()
-emitClauseChain e env arity (c :: rest) roots slot endL rty outer site =
-  let nextL = chainNextLabel e rest outer
-  -- Stamp this clause's next-clause label INTO its `__fallthrough__` sentinels
-  -- (emit_support's labelFallthrough) before building the arms, so the sentinel
-  -- lowers to `br %nextL` from the var name alone.  Leaving the sentinel
-  -- bare and having emitFallthrough read a module-level fallthrough Ref — which
-  -- emitDecision NULLED, so a refutable pattern-guard clause (whose guard chain
-  -- desugars to a body-level CDecision) fell through to `@mdk_oob` instead of the
-  -- next clause.  (That Ref is gone as of issue #354; the label is now threaded.)
-  let c2 = ftClause (if nextL == "" then siteFtLabel e site else nextL) c
-  let arms = [clauseArm arity c2]
-  let tree = compileTree (NoArm site) [False] (implRows [c2] 0)
-  -- This tree is SINGLE-ROW (one clause), so its CTFail means "this clause's pattern
-  -- missed" → resume at nextL.  Handed to emitTree as an argument (issue #354); it is
-  -- the only emitTree entry point with a live fallthrough — the other three (a
-  -- self-contained expression match, and the two tail-match descents) pass "".
-  emitTreeShared e env roots arms roots slot endL nextL rty tree
-  if isEmptyL rest then
-    ()
-  else
-    emit e (nextL ++ ":")
-    emitClauseChain e env arity rest roots slot endL rty outer site
+emitClauseChain e env arity xs0 roots slot endL rty outer site = go xs0
+  where
+    go [] = ()
+    go (c :: rest) =
+      let nextL = chainNextLabel e rest outer
+      -- Stamp this clause's next-clause label INTO its `__fallthrough__` sentinels
+      -- (emit_support's labelFallthrough) before building the arms, so the sentinel
+      -- lowers to `br %nextL` from the var name alone.  Leaving the sentinel
+      -- bare and having emitFallthrough read a module-level fallthrough Ref — which
+      -- emitDecision NULLED, so a refutable pattern-guard clause (whose guard chain
+      -- desugars to a body-level CDecision) fell through to `@mdk_oob` instead of the
+      -- next clause.  (That Ref is gone as of issue #354; the label is now threaded.)
+      let c2 = ftClause (if nextL == "" then siteFtLabel e site else nextL) c
+      let arms = [clauseArm arity c2]
+      let tree = compileTree (NoArm site) [False] (implRows [c2] 0)
+      -- This tree is SINGLE-ROW (one clause), so its CTFail means "this clause's pattern
+      -- missed" → resume at nextL.  Handed to emitTree as an argument (issue #354); it is
+      -- the only emitTree entry point with a live fallthrough — the other three (a
+      -- self-contained expression match, and the two tail-match descents) pass "".
+      emitTreeShared e env roots arms roots slot endL nextL rty tree
+      if isEmptyL rest then
+        ()
+      else
+        emit e (nextL ++ ":")
+        go rest
 
 -- label a clause's fall-through sentinels with the block to resume at.  An EMPTY
 -- label means "no next clause" and no site to report (an impl method's last
@@ -10179,10 +10214,12 @@ loadCaptures : Emit ->
   List String ->
   Int ->
   OrdMap (String, LTy)
-loadCaptures _ _ [] _ = omEmpty
-loadCaptures e env (c :: rest) i =
-  let r = loadField e "%clos" (i + closureCaptureStart - 1)
-  omInsert c (r, capTypeOf env c) (loadCaptures e env rest (i + 1))
+loadCaptures e env xs0 i0 = go xs0 i0
+  where
+    go [] _ = omEmpty
+    go (c :: rest) i =
+      let r = loadField e "%clos" (i + closureCaptureStart - 1)
+      omInsert c (r, capTypeOf env c) (go rest (i + 1))
 
 -- a captured FLOAT is stored BOXED in the closure cell (capWords/lookupVarG boxes
 -- an unboxed LTFloatU on escape), so bind it LTFloat inside the lifted body —
@@ -10208,6 +10245,8 @@ capTypeOf env c = match omLookup c env
 -- i64 word before being stored into a closure capture slot (escape coercion) —
 -- the closure ABI is uniform i64, and loadCaptures reads captures back as words.
 capWords : Emit -> OrdMap (String, LTy) -> List String -> List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 capWords _ _ [] = []
 capWords e env (c :: rest) =
   let (op, _) = lookupVarG e env c
@@ -10234,10 +10273,12 @@ envMergeLKeys : List String ->
   OrdMap (String, LTy) ->
   OrdMap (String, LTy) ->
   OrdMap (String, LTy)
-envMergeLKeys [] _ right = right
-envMergeLKeys (k :: rest) left right = match omLookup k left
-  Some v => omInsert k v (envMergeLKeys rest left right)
-  None => envMergeLKeys rest left right
+envMergeLKeys xs0 left right = go xs0
+  where
+    go [] = right
+    go (k :: rest) = match omLookup k left
+      Some v => omInsert k v (go rest)
+      None => go rest
 
 -- #242/#623: order-preserving dedup keeping the LAST occurrence of each name —
 -- NOT the same function as `support.util.dedup`, which keeps the FIRST (#623's
@@ -10323,17 +10364,16 @@ dedupS xs = reverseL (dedup (reverseL xs))
 -- MDK_BYTEBLOCK_TAG and pins it to `MDK_TAG(4, 0)` with a _Static_assert.
 
 reservedTag : String -> Option Int
-reservedTag name = match namedRuntimeCtor name
-  Some id =>
-    let fact = runtimeCtorFact id
-    let slot = match fact.owner
-      RuntimeList => Some 0
-      RuntimeOption => Some 1
-      RuntimeResult => Some 2
-      RuntimeOrdering => Some 3
-      _ => None
-    map (n => (reservedTypeBase + n) * ctorTagShift + fact.ordinal) slot
-  None => None
+reservedTag name = do
+  id <- namedRuntimeCtor name
+  let fact = runtimeCtorFact id
+  let slot = match fact.owner
+    RuntimeList => Some 0
+    RuntimeOption => Some 1
+    RuntimeResult => Some 2
+    RuntimeOrdering => Some 3
+    _ => None
+  map (n => (reservedTypeBase + n) * ctorTagShift + fact.ordinal) slot
 
 -- the cell-header tag a NAME stamps / is tested against.  Sentinel headers
 -- ("$tuple"/"$ref"/"$closure") keep their hash; the runtime ADTs route through
@@ -10393,6 +10433,8 @@ emitCtorAlloc e name fields =
 
 -- store each field at offset 8*(i+1) (field 0 follows the one-word header).
 storeFields : Emit -> String -> List String -> Int -> Unit
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
 storeFields _ _ [] _ = ()
 storeFields e p (f :: rest) i =
   let fp = freshReg e
@@ -10503,6 +10545,8 @@ loadField e ptrWord idx =
 
 -- load the first `a` fields of a cell as a list of operand words.
 loadFields : Emit -> String -> Int -> Int -> List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 loadFields e foc a i
   | i >= a = []
   | otherwise =
@@ -10592,51 +10636,51 @@ emitTree : Emit ->
 -- miscompile, fixed 2026-07-13 by moving THAT label into the node).  Threading it makes
 -- the answer local and the hazard structurally impossible: an entry point that means
 -- "a miss here is a genuine abort" passes "" and cannot forget to restore.
-emitTree e _ _ _ _ _ _ "" _ (CTFail site) = emitFailTrap e site
-emitTree e _ _ _ _ _ _ lbl _ (CTFail _) = emit e ("  br label %" ++ lbl)
-emitTree e env roots arms _ slot endL _ rty (CTLeaf i) =
-  emitLeaf e env roots arms i slot endL rty
--- CTGuard i fail: arm i matched but is GUARDED.  Re-bind its pattern (like a
--- leaf), evaluate its guards; all pass → eval the body (emitLeaf-style); any
--- guard fails → branch to the `fail` subtree, which resumes the ordered match at
--- the same column context `occs` (mirrors core_ir_eval's `cevalGuardedBody`).
--- This CLOSES the historical CTGuard emitter gap — `compiler/` code on the native
--- self-compile path no longer needs the guard-free convention for `CGBool`
--- guards.  A refutable `p <- e` pattern guard stays a contained gap (not produced
--- by current source); a bad arm index likewise.
-emitTree e env roots arms occs slot endL ftL rty (CTGuard i fail) =
-  match leafArm e arms i
-    Some (pat, guards, body, share) =>
-      if allGuardsEmittable guards then
-        emitGuardedArm
-          e
-          env
-          roots
-          arms
-          occs
-          pat
-          guards
-          body
-          share
-          fail
-          slot
-          endL
-          ftL
-          rty
-      else
-        gapU
-          e
-          "refutable pattern guard (`p <- e`) in a match arm (CTGuard) — not yet lowered"
+emitTree e env roots arms occs0 slot endL ftL rty tr0 = go occs0 tr0
+  where
+    go _ (CTFail site) = match ftL
+      "" => emitFailTrap e site
+      lbl => emit e ("  br label %" ++ lbl)
+    go _ (CTLeaf i) = emitLeaf e env roots arms i slot endL rty
+    -- CTGuard i fail: arm i matched but is GUARDED.  Re-bind its pattern (like a
+    -- leaf), evaluate its guards; all pass → eval the body (emitLeaf-style); any
+    -- guard fails → branch to the `fail` subtree, which resumes the ordered match at
+    -- the same column context `occs` (mirrors core_ir_eval's `cevalGuardedBody`).
+    -- This CLOSES the historical CTGuard emitter gap — `compiler/` code on the native
+    -- self-compile path no longer needs the guard-free convention for `CGBool`
+    -- guards.  A refutable `p <- e` pattern guard stays a contained gap (not produced
+    -- by current source); a bad arm index likewise.
+    go occs (CTGuard i fail) = match leafArm e arms i
+      Some (pat, guards, body, share) =>
+        if allGuardsEmittable guards then
+          emitGuardedArm
+            e
+            env
+            roots
+            arms
+            occs
+            pat
+            guards
+            body
+            share
+            fail
+            slot
+            endL
+            ftL
+            rty
+        else
+          gapU
+            e
+            "refutable pattern guard (`p <- e`) in a match arm (CTGuard) — not yet lowered"
+          emit e ("  store i64 0, ptr " ++ slot)
+          emit e ("  br label %" ++ endL)
+      None =>
+        gapU e "guarded arm index out of range (CTGuard)"
         emit e ("  store i64 0, ptr " ++ slot)
         emit e ("  br label %" ++ endL)
-    None =>
-      gapU e "guarded arm index out of range (CTGuard)"
-      emit e ("  store i64 0, ptr " ++ slot)
-      emit e ("  br label %" ++ endL)
-emitTree e env roots arms occs slot endL ftL rty (CTDrop sub) =
-  emitTree e env roots arms (tailS occs) slot endL ftL rty sub
-emitTree e env roots arms occs slot endL ftL rty (CTSwitch branches dft) =
-  emitSwitch e env roots arms occs branches dft slot endL ftL rty
+    go occs (CTDrop sub) = go (tailS occs) sub
+    go occs (CTSwitch branches dft) =
+      emitSwitch e env roots arms occs branches dft slot endL ftL rty
 
 -- a terminal leaf: re-match the selected arm's ORIGINAL pattern against the leaf's
 -- root word(s) — `roots` (the tree path guarantees it matches) to bind its
@@ -10760,9 +10804,9 @@ leafArm e arms i = match nthArm arms i
   None => None
 
 sharedOwner : Emit -> Int -> Option Int
-sharedOwner e i = match !e.orScope
-  Some sc => if omHasKey (intToString i) sc.osOwners then Some i else None
-  None => None
+sharedOwner e i = do
+  sc <- !e.orScope
+  if omHasKey (intToString i) sc.osOwners then Some i else None
 
 -- [arms]' tree, under a scope of its own: a tree nested in one of its bodies
 -- must not read the outer tree's shared arms.
@@ -10845,24 +10889,26 @@ addOrEdge : Emit ->
   CExpr ->
   (String, List String) ->
   (List OrJoin, String)
-addOrEdge e [] owner names bound env body edge =
-  let label = "orjoin" ++ intToString (freshLocal e)
-  let j = OrJoin {
-    ojOwner = owner,
-    ojLabel = label,
-    ojNames = names,
-    ojTys = map snd bound,
-    ojEnv = env,
-    ojBody = body,
-    ojEdges = [edge],
-  }
-  ([j], label)
-addOrEdge e (j :: rest) owner names bound env body edge
-  | j.ojOwner == owner =
-    ({ j | ojEdges = edge :: j.ojEdges } :: rest, j.ojLabel)
-  | otherwise =
-    let (rest2, label) = addOrEdge e rest owner names bound env body edge
-    (j :: rest2, label)
+addOrEdge e js0 owner names bound env body edge = go js0
+  where
+    go [] =
+      let label = "orjoin" ++ intToString (freshLocal e)
+      let j = OrJoin {
+        ojOwner = owner,
+        ojLabel = label,
+        ojNames = names,
+        ojTys = map snd bound,
+        ojEnv = env,
+        ojBody = body,
+        ojEdges = [edge],
+      }
+      ([j], label)
+    go (j :: rest)
+      | j.ojOwner == owner =
+        ({ j | ojEdges = edge :: j.ojEdges } :: rest, j.ojLabel)
+      | otherwise =
+        let (rest2, label) = go rest
+        (j :: rest2, label)
 
 -- A join block: one `phi` per variable over the block's edges, then the body.
 emitOrJoin : Emit -> String -> String -> Ref LTy -> OrJoin -> Unit
@@ -10878,15 +10924,17 @@ orPhis : Emit ->
   List (String, LTy) ->
   OrdMap (String, LTy) ->
   OrdMap (String, LTy)
-orPhis _ _ _ [] env = env
-orPhis e edges k ((name, ty) :: rest) env =
-  let r = freshReg e
-  let incoming =
-    joinWith
-      ", "
-      (map (ed => "[ \{orOperand e k (snd ed)}, %\{fst ed} ]") edges)
-  emit e "  \{r} = phi i64 \{incoming}"
-  orPhis e edges (k + 1) rest (omInsert name (r, ty) env)
+orPhis e edges k0 xs0 env0 = go k0 xs0 env0
+  where
+    go _ [] env = env
+    go k ((name, ty) :: rest) env =
+      let r = freshReg e
+      let incoming =
+        joinWith
+          ", "
+          (map (ed => "[ \{orOperand e k (snd ed)}, %\{fst ed} ]") edges)
+      emit e "  \{r} = phi i64 \{incoming}"
+      go (k + 1) rest (omInsert name (r, ty) env)
 
 -- Edge operands are built one per owner variable, so k is always in range; an
 -- out-of-range k reports a gap rather than emitting a bogus phi operand.
@@ -10946,31 +10994,30 @@ emitSelfTailArm : Emit ->
   String ->
   Ref LTy ->
   Unit
-emitSelfTailArm e env self (CIf c t f) slot endL rty =
-  let (thenL, elseL) = emitTailIfHead e env c
-  emit e (thenL ++ ":")
-  emitSelfTailArm e env self t slot endL rty
-  emit e (elseL ++ ":")
-  emitSelfTailArm e env self f slot endL rty
-emitSelfTailArm e env _ (CDecision scrut arms tree) slot endL rty =
-  let (sv, _) = emitExpr e env scrut
-  emitTreeShared e env [sv] arms [sv] slot endL "" rty tree
-emitSelfTailArm e env self (CLet recF pat e1 e2) slot endL rty =
-  if letBinds recF pat e1 then
-    emitSelfTailArm e (bindLet e env recF pat e1 e2) self e2 slot endL rty
-  else
-    emitArmValue e env (CLet recF pat e1 e2) slot endL rty
-emitSelfTailArm e env self (CLetGroup binds body) slot endL rty =
-  match bindLetGroup e env binds body
-    Some env2 => emitSelfTailArm e env2 self body slot endL rty
-    None => emitArmWord e (letGroupGap e) slot endL rty
-emitSelfTailArm e env self (CBlock stmts) slot endL rty =
-  match lastStmtExpr stmts
-    Some last =>
-      emitSelfTailArm e (emitBlockInit e env stmts) self last slot endL rty
-    None => emitArmValue e env (CBlock stmts) slot endL rty
-emitSelfTailArm e env self body slot endL rty =
-  emitTailLeaf e env self body (_ => emitArmValue e env body slot endL rty)
+emitSelfTailArm e env0 self body0 slot endL rty = go env0 body0
+  where
+    go env (CIf c t f) =
+      let (thenL, elseL) = emitTailIfHead e env c
+      emit e (thenL ++ ":")
+      go env t
+      emit e (elseL ++ ":")
+      go env f
+    go env (CDecision scrut arms tree) =
+      let (sv, _) = emitExpr e env scrut
+      emitTreeShared e env [sv] arms [sv] slot endL "" rty tree
+    go env (CLet recF pat e1 e2) =
+      if letBinds recF pat e1 then
+        go (bindLet e env recF pat e1 e2) e2
+      else
+        emitArmValue e env (CLet recF pat e1 e2) slot endL rty
+    go env (CLetGroup binds body) = match bindLetGroup e env binds body
+      Some env2 => go env2 body
+      None => emitArmWord e (letGroupGap e) slot endL rty
+    go env (CBlock stmts) = match lastStmtExpr stmts
+      Some last => go (emitBlockInit e env stmts) last
+      None => emitArmValue e env (CBlock stmts) slot endL rty
+    go env body =
+      emitTailLeaf e env self body (_ => emitArmValue e env body slot endL rty)
 
 -- emit the guard tests left-to-right: a `CGBool` tests a Bool (`True` = the word
 -- 3) and branches to `failL` on failure, falling through on success; a
@@ -10985,19 +11032,21 @@ emitGuardChain : Emit ->
   CExpr ->
   String ->
   OrdMap (String, LTy)
-emitGuardChain _ env [] _ _ = env
-emitGuardChain e env ((CGBool g) :: rest) body failL =
-  let (bw, _) = emitExpr e env g
-  let cmp = freshReg e
-  emit e "  \{cmp} = icmp eq i64 \{bw}, 3"
-  let pass = "guardok" ++ intToString (freshLocal e)
-  emit e "  br i1 \{cmp}, label %\{pass}, label %\{failL}"
-  emit e (pass ++ ":")
-  emitGuardChain e env rest body failL
-emitGuardChain e env ((CGBind p ex) :: rest) body failL =
-  let (v, _) = emitExpr e env ex
-  let env2 = emitRefutMatch e env p v body failL
-  emitGuardChain e env2 rest body failL
+emitGuardChain e env0 xs0 body failL = go env0 xs0
+  where
+    go env [] = env
+    go env ((CGBool g) :: rest) =
+      let (bw, _) = emitExpr e env g
+      let cmp = freshReg e
+      emit e "  \{cmp} = icmp eq i64 \{bw}, 3"
+      let pass = "guardok" ++ intToString (freshLocal e)
+      emit e "  br i1 \{cmp}, label %\{pass}, label %\{failL}"
+      emit e (pass ++ ":")
+      go env rest
+    go env ((CGBind p ex) :: rest) =
+      let (v, _) = emitExpr e env ex
+      let env2 = emitRefutMatch e env p v body failL
+      go env2 rest
 
 -- a clause's guards are now ALL emittable: `CGBool` guards always were; a
 -- `CGBind p <- e` is lowered via `emitRefutMatch` whether `p` is irrefutable
@@ -11035,10 +11084,12 @@ bindEach : Emit ->
   List String ->
   CExpr ->
   OrdMap (String, LTy)
-bindEach e env (p :: ps) (v :: vs) body =
-  let env2 = bindPattern e env p v body
-  bindEach e env2 ps vs body
-bindEach _ env _ _ _ = env
+bindEach e env0 xs0 xs1 body = go env0 xs0 xs1
+  where
+    go env (p :: ps) (v :: vs) =
+      let env2 = bindPattern e env p v body
+      go env2 ps vs
+    go env _ _ = env
 
 -- the refutable counterpart of `bindArm` (guarded / range-pattern clause): test +
 -- bind each param pattern against its own word, branching to `failL` on a miss.
@@ -11063,10 +11114,12 @@ emitRefutEach : Emit ->
   CExpr ->
   String ->
   OrdMap (String, LTy)
-emitRefutEach e env (p :: ps) (v :: vs) body failL =
-  let env2 = emitRefutMatch e env p v body failL
-  emitRefutEach e env2 ps vs body failL
-emitRefutEach _ env _ _ _ _ = env
+emitRefutEach e env0 xs0 xs1 body failL = go env0 xs0 xs1
+  where
+    go env (p :: ps) (v :: vs) =
+      let env2 = emitRefutMatch e env p v body failL
+      go env2 ps vs
+    go env _ _ = env
 
 -- bind a pattern's variables against a value word, emitting field loads for the
 -- constructor sub-patterns.  Mirrors the binding half of eval.mdk's matchPat, but
@@ -11078,32 +11131,33 @@ bindPattern : Emit ->
   String ->
   CExpr ->
   OrdMap (String, LTy)
-bindPattern _ env PWild _ _ = env
-bindPattern _ env (PLit _) _ _ = env
-bindPattern e env (PVar x _ bid) v _ = bindVarTy e env x bid v
-bindPattern e env (PCon _ args) v body = bindFields e env args v body 0
-bindPattern e env (PTuple ps) v body = bindFields e env ps v body 0
--- built-in list patterns: a cons cell is a 2-field "Cons" constructor
--- (head = field 0, tail = field 1); the empty-list pattern (a "Nil" cell) binds
--- nothing.  The decision tree already proved the shape (HCons/HNil switch), so
--- this only EXTRACTS — same as the PCon binding path, with [head, tail] fields.
-bindPattern e env (PCons h t) v body = bindFields e env [h, t] v body 0
-bindPattern _ env (PList []) _ _ = env
--- as-pattern `x@p`: bind `x` to the WHOLE value v (at its stamp, like PVar),
--- then descend into `p` so its inner vars also bind.
-bindPattern e env (PAs x _ bid p) v body =
-  let env2 = bindVarTy e env x bid v
-  bindPattern e env2 p v body
--- non-empty list-literal pattern `[p::ps]`: v is a Cons cell (the switch proved
--- it); bind the head element (field 0) to `p` and the tail (field 1) to `PList ps`.
-bindPattern e env (PList (p :: ps)) v body =
-  bindFields e env [p, PList ps] v body 0
-bindPattern e env p _ _ =
-  gapEnv
-    e
-    ("unsupported pattern in match arm (variable / wildcard / constructor / tuple / cons / nil / int-literal only): "
-      ++ ptag p)
-    env
+bindPattern e env0 p0 v body = go env0 p0
+  where
+    go env PWild = env
+    go env (PLit _) = env
+    go env (PVar x _ bid) = bindVarTy e env x bid v
+    go env (PCon _ args) = bindFields e env args v body 0
+    go env (PTuple ps) = bindFields e env ps v body 0
+    -- built-in list patterns: a cons cell is a 2-field "Cons" constructor
+    -- (head = field 0, tail = field 1); the empty-list pattern (a "Nil" cell) binds
+    -- nothing.  The decision tree already proved the shape (HCons/HNil switch), so
+    -- this only EXTRACTS — same as the PCon binding path, with [head, tail] fields.
+    go env (PCons h t) = bindFields e env [h, t] v body 0
+    go env (PList []) = env
+    -- as-pattern `x@p`: bind `x` to the WHOLE value v (at its stamp, like PVar),
+    -- then descend into `p` so its inner vars also bind.
+    go env (PAs x _ bid p) =
+      let env2 = bindVarTy e env x bid v
+      go env2 p
+    -- non-empty list-literal pattern `[p::ps]`: v is a Cons cell (the switch proved
+    -- it); bind the head element (field 0) to `p` and the tail (field 1) to `PList ps`.
+    go env (PList (p :: ps)) = bindFields e env [p, PList ps] v body 0
+    go env p =
+      gapEnv
+        e
+        ("unsupported pattern in match arm (variable / wildcard / constructor / tuple / cons / nil / int-literal only): "
+          ++ ptag p)
+        env
 
 -- bind variable `x`, binder [bid], to word `v` at the binder's stamped type.
 bindVarTy : Emit ->
@@ -11121,11 +11175,13 @@ bindFields : Emit ->
   CExpr ->
   Int ->
   OrdMap (String, LTy)
-bindFields _ env [] _ _ _ = env
-bindFields e env (p :: rest) v body i =
-  let f = loadField e v i
-  let env2 = bindPattern e env p f body
-  bindFields e env2 rest v body (i + 1)
+bindFields e env0 xs0 v body i0 = go env0 xs0 i0
+  where
+    go env [] _ = env
+    go env (p :: rest) i =
+      let f = loadField e v i
+      let env2 = bindPattern e env p f body
+      go env2 rest (i + 1)
 
 -- ── refutable pattern match (G5 refutable pattern-guards / G6 range patterns) ──
 -- Test pattern `p` against value word `v`, branching to `failL` on a MISMATCH;
@@ -11149,74 +11205,72 @@ emitRefutMatch : Emit ->
   String ->
   OrdMap (String, LTy)
 -- irrefutable: no test, just bind (delegates to bindPattern's extraction).
-emitRefutMatch e env PWild v body _ = bindPattern e env PWild v body
-emitRefutMatch e env (PVar x l bid) v body _ =
-  bindPattern e env (PVar x l bid) v body
-emitRefutMatch e env (PAs x _ bid p) v body failL =
-  let env2 = bindVarTy e env x bid v
-  emitRefutMatch e env2 p v body failL
--- a tuple is irrefutable in SHAPE (the type fixes the arity), but its element
--- patterns can be refutable — recurse element-wise on the loaded fields.
-emitRefutMatch e env (PTuple ps) v body failL =
-  emitRefutFields e env ps v body failL 0
--- integer / char literal: compare the tagged immediate word directly (both are
--- `n*2+1`); String literal via @mdk_string_eq (tagged Bool result); Bool literal
--- compares the immediate (3/1).
-emitRefutMatch e env (PLit (LInt k)) v _ failL =
-  -- full-width tag via emitLit (see emitLitChain / #759): a `k*2+1` head wraps for
-  -- |k| >= 2^61 and bakes the wrong comparison constant.
-  let (kw, _) = emitLit e (LInt k)
-  emitWordEqTest e v kw failL
-  env
-emitRefutMatch e env (PLit (LChar c)) v _ failL =
-  let cp = charCode (arrayGetUnsafe 0 (stringToChars c))
-  emitWordEqTest e v (intToString (cp * 2 + 1)) failL
-  env
-emitRefutMatch e env (PLit (LBool b)) v _ failL =
-  emitWordEqTest e v (if b then "3" else "1") failL
-  env
-emitRefutMatch e env (PLit (LString s)) v _ failL =
-  let (lit, _) = emitLit e (LString s)
-  let r = freshReg e
-  emit e (rtLine e r "i64" "mdk_string_eq" (i64Ops [v, lit]))
-  emitWordEqTest e r "3" failL
-  env
--- range pattern (G6): `lo <= v && v <= hi` (`..=`) or `lo <= v && v < hi` (`..`),
--- on the tagged immediate words (the `n*2+1` transform is strictly monotonic for
--- both Int and Char, so the tagged comparison matches the untagged one).  Mirrors
--- eval.mdk's inIntRange/inCharRange: incl ⇒ `<= hi`, else `<= hi-1` ≡ `< hi`.
-emitRefutMatch e env (PRng lo hi incl) v _ failL =
-  emitRangeTest e v (rngBound lo) (rngBound hi) incl failL
-  env
--- constructor: test the discriminant against the ctor's composite tag; on
--- mismatch branch to failL, on match load fields and recurse element-wise.
-emitRefutMatch e env (PCon "True" []) v body failL =
-  emitRefutMatch e env (PLit (LBool True)) v body failL
-emitRefutMatch e env (PCon "False" []) v body failL =
-  emitRefutMatch e env (PLit (LBool False)) v body failL
-emitRefutMatch e env (PCon c args) v body failL =
-  let rep = discRepOfHead e c (lengthS args) [c]
-  emitWordEqTest e (discReg e rep v) (discExpected e rep c) failL
-  emitRefutFields e env args v body failL 0
--- list cons cell: test the discriminant is "Cons", then recurse on head/tail.
-emitRefutMatch e env (PCons h t) v body failL =
-  let rep = discRepOfHead e "Cons" 2 ["Cons"]
-  emitWordEqTest e (discReg e rep v) (discExpected e rep "Cons") failL
-  emitRefutFields e env [h, t] v body failL 0
-emitRefutMatch e env (PList []) v _ failL =
-  let rep = discRepOfHead e "Nil" 0 ["Nil"]
-  emitWordEqTest e (discReg e rep v) (discExpected e rep "Nil") failL
-  env
-emitRefutMatch e env (PList (p :: ps)) v body failL =
-  let rep = discRepOfHead e "Cons" 2 ["Cons"]
-  emitWordEqTest e (discReg e rep v) (discExpected e rep "Cons") failL
-  emitRefutFields e env [p, PList ps] v body failL 0
-emitRefutMatch e env p _ _ _ =
-  gapEnv
-    e
-    ("refutable pattern in guard/range arm not lowered (variable / wildcard / as / tuple / literal / range / constructor / cons / list only): "
-      ++ ptag p)
-    env
+emitRefutMatch e env0 p0 v body failL = go env0 p0
+  where
+    go env PWild = bindPattern e env PWild v body
+    go env (PVar x l bid) = bindPattern e env (PVar x l bid) v body
+    go env (PAs x _ bid p) =
+      let env2 = bindVarTy e env x bid v
+      go env2 p
+    -- a tuple is irrefutable in SHAPE (the type fixes the arity), but its element
+    -- patterns can be refutable — recurse element-wise on the loaded fields.
+    go env (PTuple ps) = emitRefutFields e env ps v body failL 0
+    -- integer / char literal: compare the tagged immediate word directly (both are
+    -- `n*2+1`); String literal via @mdk_string_eq (tagged Bool result); Bool literal
+    -- compares the immediate (3/1).
+    go env (PLit (LInt k)) =
+      -- full-width tag via emitLit (see emitLitChain / #759): a `k*2+1` head wraps for
+      -- |k| >= 2^61 and bakes the wrong comparison constant.
+      let (kw, _) = emitLit e (LInt k)
+      emitWordEqTest e v kw failL
+      env
+    go env (PLit (LChar c)) =
+      let cp = charCode (arrayGetUnsafe 0 (stringToChars c))
+      emitWordEqTest e v (intToString (cp * 2 + 1)) failL
+      env
+    go env (PLit (LBool b)) =
+      emitWordEqTest e v (if b then "3" else "1") failL
+      env
+    go env (PLit (LString s)) =
+      let (lit, _) = emitLit e (LString s)
+      let r = freshReg e
+      emit e (rtLine e r "i64" "mdk_string_eq" (i64Ops [v, lit]))
+      emitWordEqTest e r "3" failL
+      env
+    -- range pattern (G6): `lo <= v && v <= hi` (`..=`) or `lo <= v && v < hi` (`..`),
+    -- on the tagged immediate words (the `n*2+1` transform is strictly monotonic for
+    -- both Int and Char, so the tagged comparison matches the untagged one).  Mirrors
+    -- eval.mdk's inIntRange/inCharRange: incl ⇒ `<= hi`, else `<= hi-1` ≡ `< hi`.
+    go env (PRng lo hi incl) =
+      emitRangeTest e v (rngBound lo) (rngBound hi) incl failL
+      env
+    -- constructor: test the discriminant against the ctor's composite tag; on
+    -- mismatch branch to failL, on match load fields and recurse element-wise.
+    go env (PCon "True" []) = go env (PLit (LBool True))
+    go env (PCon "False" []) = go env (PLit (LBool False))
+    go env (PCon c args) =
+      let rep = discRepOfHead e c (lengthS args) [c]
+      emitWordEqTest e (discReg e rep v) (discExpected e rep c) failL
+      emitRefutFields e env args v body failL 0
+    -- list cons cell: test the discriminant is "Cons", then recurse on head/tail.
+    go env (PCons h t) =
+      let rep = discRepOfHead e "Cons" 2 ["Cons"]
+      emitWordEqTest e (discReg e rep v) (discExpected e rep "Cons") failL
+      emitRefutFields e env [h, t] v body failL 0
+    go env (PList []) =
+      let rep = discRepOfHead e "Nil" 0 ["Nil"]
+      emitWordEqTest e (discReg e rep v) (discExpected e rep "Nil") failL
+      env
+    go env (PList (p :: ps)) =
+      let rep = discRepOfHead e "Cons" 2 ["Cons"]
+      emitWordEqTest e (discReg e rep v) (discExpected e rep "Cons") failL
+      emitRefutFields e env [p, PList ps] v body failL 0
+    go env p =
+      gapEnv
+        e
+        ("refutable pattern in guard/range arm not lowered (variable / wildcard / as / tuple / literal / range / constructor / cons / list only): "
+          ++ ptag p)
+        env
 
 -- recurse a refutable test over a cell's leading fields (loadField per index).
 emitRefutFields : Emit ->
@@ -11227,11 +11281,13 @@ emitRefutFields : Emit ->
   String ->
   Int ->
   OrdMap (String, LTy)
-emitRefutFields _ env [] _ _ _ _ = env
-emitRefutFields e env (p :: rest) v body failL i =
-  let f = loadField e v i
-  let env2 = emitRefutMatch e env p f body failL
-  emitRefutFields e env2 rest v body failL (i + 1)
+emitRefutFields e env0 xs0 v body failL i0 = go env0 xs0 i0
+  where
+    go env [] _ = env
+    go env (p :: rest) i =
+      let f = loadField e v i
+      let env2 = emitRefutMatch e env p f body failL
+      go env2 rest (i + 1)
 
 -- emit `icmp eq word, k`; on inequality branch to failL, else fall through.
 emitWordEqTest : Emit -> String -> String -> String -> Unit
@@ -11357,11 +11413,11 @@ conHeadInfo _ = None
 -- constructor names since a covered-constructor set only ever carries names
 -- (`conHeadInfo`), never a type.
 reservedRosterOf : String -> Option (List String)
-reservedRosterOf name = match namedRuntimeCtor name
-  Some id => match (runtimeCtorFact id).owner
+reservedRosterOf name = do
+  id <- namedRuntimeCtor name
+  match (runtimeCtorFact id).owner
     RuntimeBool => None
     owner => Some (filterMap runtimeCtorName (runtimeRoster owner))
-  None => None
 
 -- #2848 (S-dead-tails): true when `covered` (the constructor names a
 -- CTSwitch's own branches test) already accounts for every constructor of
@@ -11416,11 +11472,11 @@ data DiscRep = RepAllImm | RepAllBox | RepTwoSplit String | RepMixed
 -- indistinguishable from a genuinely nullary ctor and would classify `Cons` as an
 -- immediate.  So membership is asked FIRST and this table answers second.
 reservedCtorArity : String -> Option Int
-reservedCtorArity name = match namedRuntimeCtor name
-  Some id => match (runtimeCtorFact id).owner
+reservedCtorArity name = do
+  id <- namedRuntimeCtor name
+  match (runtimeCtorFact id).owner
     RuntimeBool => None
     _ => Some (runtimeCtorFact id).arity
-  None => None
 
 -- the field count of a constructor when it can be established, `None` when it
 -- cannot.  A name BOTH tables claim (a user type declaring one of the exempt
@@ -11501,15 +11557,14 @@ rosterOwnedBy e ty roster =
 -- claim must have them agree.
 unambiguousRoster : Emit -> String -> Option (List String)
 unambiguousRoster e name =
-  if isCtor e name then match ctorTypeOf e name
-    None => None
-    Some ty =>
-      let t = ctorsOfType e ty
-      if isNonEmptyL t && rosterOwnedBy e ty t then match reservedRosterOf name
-        None => Some t
-        Some r => if sameRoster r t then Some t else None
-      else
-        None
+  if isCtor e name then do
+    ty <- ctorTypeOf e name
+    let t = ctorsOfType e ty
+    if isNonEmptyL t && rosterOwnedBy e ty t then match reservedRosterOf name
+      None => Some t
+      Some r => if sameRoster r t then Some t else None
+    else
+      None
   else
     reservedRosterOf name
 
@@ -11630,6 +11685,8 @@ emitConChain : Emit ->
   Ref LTy ->
   Bool ->
   Unit
+-- Bound: the formatter lays this where-go head out as a line the parser rejects (#4896); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 emitConChain e env roots arms _ rest _ _ [] dft slot endL ftL rty exh
   | exh && ftL == "" = match dft
     CTFail site => emitFailTrap e site
@@ -11687,56 +11744,56 @@ emitLitChain : Emit ->
   String ->
   Ref LTy ->
   Unit
-emitLitChain e env roots arms _ rest [] dft slot endL ftL rty =
-  emitTree e env roots arms rest slot endL ftL rty dft
-emitLitChain e env roots arms foc rest ((CTBranch (HLit (LInt k)) sub) :: more) dft slot endL ftL rty =
-  -- Tag the pattern head with the SAME full-width lowering the value-construction
-  -- path uses (emitLit): for |k| >= 2^61 the `k*2+1` tag overflows the emitter's own
-  -- 63-bit Medaka Int and bakes a WRONG comparison constant (#759, an S0 wrong-arm
-  -- miscompile). emitLit shifts at full i64 width via LLVM so the head can't wrap.
-  let (kw, _) = emitLit e (LInt k)
-  let cmp = freshReg e
-  emit e "  \{cmp} = icmp eq i64 \{foc}, \{kw}"
-  let n = intToString (freshLocal e)
-  let yes = "lityes" ++ n
-  let next = "litnext" ++ n
-  emit e "  br i1 \{cmp}, label %\{yes}, label %\{next}"
-  emit e (yes ++ ":")
-  emitTree e env roots arms rest slot endL ftL rty sub
-  emit e (next ++ ":")
-  emitLitChain e env roots arms foc rest more dft slot endL ftL rty
--- Char = immediate codepoint word (cp << 1) | 1 — same comparison shape as Int.
-emitLitChain e env roots arms foc rest ((CTBranch (HLit (LChar c)) sub) :: more) dft slot endL ftL rty =
-  let cp = charCode (arrayGetUnsafe 0 (stringToChars c))
-  let cmp = freshReg e
-  emit e "  \{cmp} = icmp eq i64 \{foc}, \{intToString (cp * 2 + 1)}"
-  let n = intToString (freshLocal e)
-  let yes = "lityes" ++ n
-  let next = "litnext" ++ n
-  emit e "  br i1 \{cmp}, label %\{yes}, label %\{next}"
-  emit e (yes ++ ":")
-  emitTree e env roots arms rest slot endL ftL rty sub
-  emit e (next ++ ":")
-  emitLitChain e env roots arms foc rest more dft slot endL ftL rty
--- String = boxed cell; equality via the @mdk_string_eq runtime helper, which
--- returns a TAGGED Bool word (3 = True), so branch on `icmp eq i64 r, 3`.
--- Materialize the literal operand the same way emitLit (LString _) does.
-emitLitChain e env roots arms foc rest ((CTBranch (HLit (LString s)) sub) :: more) dft slot endL ftL rty =
-  let (lit, _) = emitLit e (LString s)
-  let r = freshReg e
-  emit e (rtLine e r "i64" "mdk_string_eq" (i64Ops [foc, lit]))
-  let cmp = freshReg e
-  emit e "  \{cmp} = icmp eq i64 \{r}, 3"
-  let n = intToString (freshLocal e)
-  let yes = "lityes" ++ n
-  let next = "litnext" ++ n
-  emit e "  br i1 \{cmp}, label %\{yes}, label %\{next}"
-  emit e (yes ++ ":")
-  emitTree e env roots arms rest slot endL ftL rty sub
-  emit e (next ++ ":")
-  emitLitChain e env roots arms foc rest more dft slot endL ftL rty
-emitLitChain e _ _ _ _ _ _ _ _ _ _ _ =
-  gapU e "non-Int literal switch (no Float / Bool literal heads)"
+emitLitChain e env roots arms foc rest xs0 dft slot endL ftL rty = go xs0
+  where
+    go [] = emitTree e env roots arms rest slot endL ftL rty dft
+    go ((CTBranch (HLit (LInt k)) sub) :: more) =
+      -- Tag the pattern head with the SAME full-width lowering the value-construction
+      -- path uses (emitLit): for |k| >= 2^61 the `k*2+1` tag overflows the emitter's own
+      -- 63-bit Medaka Int and bakes a WRONG comparison constant (#759, an S0 wrong-arm
+      -- miscompile). emitLit shifts at full i64 width via LLVM so the head can't wrap.
+      let (kw, _) = emitLit e (LInt k)
+      let cmp = freshReg e
+      emit e "  \{cmp} = icmp eq i64 \{foc}, \{kw}"
+      let n = intToString (freshLocal e)
+      let yes = "lityes" ++ n
+      let next = "litnext" ++ n
+      emit e "  br i1 \{cmp}, label %\{yes}, label %\{next}"
+      emit e (yes ++ ":")
+      emitTree e env roots arms rest slot endL ftL rty sub
+      emit e (next ++ ":")
+      go more
+    -- Char = immediate codepoint word (cp << 1) | 1 — same comparison shape as Int.
+    go ((CTBranch (HLit (LChar c)) sub) :: more) =
+      let cp = charCode (arrayGetUnsafe 0 (stringToChars c))
+      let cmp = freshReg e
+      emit e "  \{cmp} = icmp eq i64 \{foc}, \{intToString (cp * 2 + 1)}"
+      let n = intToString (freshLocal e)
+      let yes = "lityes" ++ n
+      let next = "litnext" ++ n
+      emit e "  br i1 \{cmp}, label %\{yes}, label %\{next}"
+      emit e (yes ++ ":")
+      emitTree e env roots arms rest slot endL ftL rty sub
+      emit e (next ++ ":")
+      go more
+    -- String = boxed cell; equality via the @mdk_string_eq runtime helper, which
+    -- returns a TAGGED Bool word (3 = True), so branch on `icmp eq i64 r, 3`.
+    -- Materialize the literal operand the same way emitLit (LString _) does.
+    go ((CTBranch (HLit (LString s)) sub) :: more) =
+      let (lit, _) = emitLit e (LString s)
+      let r = freshReg e
+      emit e (rtLine e r "i64" "mdk_string_eq" (i64Ops [foc, lit]))
+      let cmp = freshReg e
+      emit e "  \{cmp} = icmp eq i64 \{r}, 3"
+      let n = intToString (freshLocal e)
+      let yes = "lityes" ++ n
+      let next = "litnext" ++ n
+      emit e "  br i1 \{cmp}, label %\{yes}, label %\{next}"
+      emit e (yes ++ ":")
+      emitTree e env roots arms rest slot endL ftL rty sub
+      emit e (next ++ ":")
+      go more
+    go _ = gapU e "non-Int literal switch (no Float / Bool literal heads)"
 
 -- ── small list helpers ────────────────────────────────────────────
 takeS : Int -> List a -> List a
@@ -11918,14 +11975,16 @@ tmcMarker e sym mode =
   emit e "; tmc: \{name} \{mode}"
 
 tmcGroupMarkers : Emit -> String -> List String -> Unit
-tmcGroupMarkers _ _ [] = ()
-tmcGroupMarkers e root (m :: rest) =
-  let _ =
-    if m == root then
-      tmcMarker e m "group-root"
-    else
-      tmcMarker e m ("group:" ++ root)
-  tmcGroupMarkers e root rest
+tmcGroupMarkers e root xs0 = go xs0
+  where
+    go [] = ()
+    go (m :: rest) =
+      let _ =
+        if m == root then
+          tmcMarker e m "group-root"
+        else
+          tmcMarker e m ("group:" ++ root)
+      go rest
 
 emitTrmcFn : Emit ->
   String ->
@@ -12025,6 +12084,8 @@ emitTrmcLoopBody e self arity slotTys clauses single singlePats singleBody site 
 -- one mutable `alloca i64` param slot per arg, seeded from %argK; returns the slot
 -- registers in order.
 trmcEmitParamSlots : Emit -> Int -> Int -> List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 trmcEmitParamSlots e arity i
   | i >= arity = []
   | otherwise =
@@ -12341,7 +12402,6 @@ emitGDispGroup : Emit -> DispGroup -> Unit
 emitGDispGroup e grp =
   let root = dispRootOf grp
   let members = dispMembersOf grp
-  let binds = !e.gDispBinds
   let rootArity = gDispFnArity e root
   let u = gDispMaxArity e members 0
   tmcGroupMarkers e root members
@@ -12360,7 +12420,7 @@ emitGDispGroup e grp =
   emit e ("  br label %" ++ gDispLabel root)
   let saved = !e.gDispCtx
   e.gDispCtx := GDispOn root members uslots destSlot exitL
-  emitGDispMembers e binds members
+  emitGDispMembers e members
   e.gDispCtx := saved
   emit e (exitL ++ ":")
   let r = freshReg e
@@ -12372,6 +12432,8 @@ emitGDispGroup e grp =
 -- one shared `alloca i64` slot per uniform param position, seeded from the
 -- root's %argK (< rootArity) or 0.
 gDispEmitSlots : Emit -> Int -> Int -> Int -> List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 gDispEmitSlots e u rootArity i
   | i >= u = []
   | otherwise =
@@ -12387,13 +12449,13 @@ gDispMaxArity e (m :: rest) acc =
   let a = gDispFnArity e m
   gDispMaxArity e rest (maxInt a acc)
 
-emitGDispMembers : Emit -> List CBind -> List String -> Unit
-emitGDispMembers _ _ [] = ()
-emitGDispMembers e binds (m :: rest) =
+emitGDispMembers : Emit -> List String -> Unit
+emitGDispMembers _ [] = ()
+emitGDispMembers e (m :: rest) =
   let _ = match omLookup m !e.gDispBindMap
     Some b => emitGDispMember e b
     None => gapU e ("(b') group member without a bind: " ++ m)
-  emitGDispMembers e binds rest
+  emitGDispMembers e rest
 
 -- a member's entry block: reload its arity-many slots (typed from its inferred
 -- sig, LTInt-padded — the same trmcReloadParams the Stage-1 loop head uses,
@@ -12545,22 +12607,24 @@ gDispSpine e members ex =
 -- zeroed (GC_malloc) until the next cell/base fills it — the Stage-1 GC-safety
 -- argument verbatim.
 emitGDispCells : Emit -> OrdMap (String, LTy) -> List CExpr -> String -> Unit
-emitGDispCells _ _ [] _ = ()
-emitGDispCells e env (h :: rest) destSlot =
-  let hv = emitArgs e env [h]
-  let cell = freshReg e
-  emit e (rtLine e cell "ptr" "mdk_alloc" (i64Ops ["24"]))
-  emit e "  store i64 \{intToString (cellTag e "Cons")}, ptr \{cell}"
-  storeFields e cell hv 0
-  let cellw = freshReg e
-  emit e "  \{cellw} = ptrtoint ptr \{cell} to i64"
-  let d = freshReg e
-  emit e "  \{d} = load ptr, ptr \{destSlot}"
-  emit e "  store i64 \{cellw}, ptr \{d}"
-  let newdest = freshReg e
-  emit e "  \{newdest} = getelementptr i8, ptr \{cell}, i64 16"
-  emit e "  store ptr \{newdest}, ptr \{destSlot}"
-  emitGDispCells e env rest destSlot
+emitGDispCells e env xs0 destSlot = go xs0
+  where
+    go [] = ()
+    go (h :: rest) =
+      let hv = emitArgs e env [h]
+      let cell = freshReg e
+      emit e (rtLine e cell "ptr" "mdk_alloc" (i64Ops ["24"]))
+      emit e "  store i64 \{intToString (cellTag e "Cons")}, ptr \{cell}"
+      storeFields e cell hv 0
+      let cellw = freshReg e
+      emit e "  \{cellw} = ptrtoint ptr \{cell} to i64"
+      let d = freshReg e
+      emit e "  \{d} = load ptr, ptr \{destSlot}"
+      emit e "  store i64 \{cellw}, ptr \{d}"
+      let newdest = freshReg e
+      emit e "  \{newdest} = getelementptr i8, ptr \{cell}, i64 16"
+      emit e "  store ptr \{newdest}, ptr \{destSlot}"
+      go rest
 
 -- a sanctioned tail edge: recompute the callee's args into fresh regs FIRST (an
 -- arg may read the current member's params), store them into the shared slots
@@ -12652,27 +12716,28 @@ selfFreeW self ex = not (contains self (freeVars [] ex))
 -- descends CIf and a desugarable 2-arm match. Any self outside a tail self-call ⇒
 -- ineligible.
 floatWorkerOk : String -> Int -> CExpr -> Bool
-floatWorkerOk self arity (CIf c t f) =
-  selfFreeW self c && floatWorkerOk self arity t && floatWorkerOk self arity f
-floatWorkerOk self arity (CDecision scrut arms tree) =
-  match decisionToIf scrut arms
-    Some cif => floatWorkerOk self arity cif
-    None => selfFreeW self (CDecision scrut arms tree)
-floatWorkerOk self arity (CBlock stmts) = floatWorkerBlockOk self arity stmts
-floatWorkerOk self arity ex = match flattenApp ex []
-  (CVar f _, args) =>
-    if f == self then lengthS args == arity else selfFreeW self ex
-  _ => selfFreeW self ex
+floatWorkerOk self arity ex0 = go ex0
+  where
+    go (CIf c t f) = selfFreeW self c && go t && go f
+    go (CDecision scrut arms tree) = match decisionToIf scrut arms
+      Some cif => go cif
+      None => selfFreeW self (CDecision scrut arms tree)
+    go (CBlock stmts) = floatWorkerBlockOk self arity stmts
+    go ex = match flattenApp ex []
+      (CVar f _, args) =>
+        if f == self then lengthS args == arity else selfFreeW self ex
+      _ => selfFreeW self ex
 
 -- a let-block body is worker-eligible if every leading CSLet binds a plain var with a
 -- self-free RHS (the lets are evaluated before the tail) and the final stmt is a
 -- CSExpr that is itself worker-eligible (the tail). Any other stmt shape (assign,
 -- let-else, non-PVar pattern, non-CSExpr final) disqualifies → fall back.
 floatWorkerBlockOk : String -> Int -> List CStmt -> Bool
-floatWorkerBlockOk self arity ((CSExpr ex) :: []) = floatWorkerOk self arity ex
-floatWorkerBlockOk self arity ((CSLet _ (PVar _ _ _) rhs) :: rest) =
-  selfFreeW self rhs && floatWorkerBlockOk self arity rest
-floatWorkerBlockOk _ _ _ = False
+floatWorkerBlockOk self arity xs0 = go xs0
+  where
+    go ((CSExpr ex) :: []) = floatWorkerOk self arity ex
+    go ((CSLet _ (PVar _ _ _) rhs) :: rest) = selfFreeW self rhs && go rest
+    go _ = False
 
 floatWorkerEligible : Emit -> String -> List Pat -> List LTy -> CExpr -> Bool
 floatWorkerEligible e name pats ptys body =
@@ -12783,6 +12848,8 @@ emitWorkerArgs : Emit ->
   Int ->
   List CExpr ->
   List (String, String)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 emitWorkerArgs _ _ _ _ [] = []
 emitWorkerArgs e env fp i (a :: rest) =
   let op = match elemInt i fp
@@ -12802,29 +12869,29 @@ emitFnBodyD : Emit ->
   Int ->
   CExpr ->
   Unit
-emitFnBodyD e env self worker fp arity (CIf c t f) =
-  let (cv, _) = emitExpr e env c
-  let ci = untagInt e cv
-  let cb = freshReg e
-  emit e "  \{cb} = icmp ne i64 \{ci}, 0"
-  let n = intToString (freshLocal e)
-  let thenL = "then" ++ n
-  let elseL = "else" ++ n
-  emit e "  br i1 \{cb}, label %\{thenL}, label %\{elseL}"
-  emit e (thenL ++ ":")
-  emitFnBodyD e env self worker fp arity t
-  emit e (elseL ++ ":")
-  emitFnBodyD e env self worker fp arity f
-emitFnBodyD e env self worker fp arity (CDecision scrut arms tree) =
-  match decisionToIf scrut arms
-    Some cif => emitFnBodyD e env self worker fp arity cif
-    None =>
-      let d = emitFloatD e env (CDecision scrut arms tree)
-      emit e ("  ret double " ++ d)
-emitFnBodyD e env self worker fp arity (CBlock stmts) =
-  emitFnBodyDBlock e env self worker fp arity stmts
-emitFnBodyD e env self worker fp arity other =
-  emitTailLeafD e env self worker fp arity other (flattenApp other [])
+emitFnBodyD e env self worker fp arity other0 = go other0
+  where
+    go (CIf c t f) =
+      let (cv, _) = emitExpr e env c
+      let ci = untagInt e cv
+      let cb = freshReg e
+      emit e "  \{cb} = icmp ne i64 \{ci}, 0"
+      let n = intToString (freshLocal e)
+      let thenL = "then" ++ n
+      let elseL = "else" ++ n
+      emit e "  br i1 \{cb}, label %\{thenL}, label %\{elseL}"
+      emit e (thenL ++ ":")
+      go t
+      emit e (elseL ++ ":")
+      go f
+    go (CDecision scrut arms tree) = match decisionToIf scrut arms
+      Some cif => go cif
+      None =>
+        let d = emitFloatD e env (CDecision scrut arms tree)
+        emit e ("  ret double " ++ d)
+    go (CBlock stmts) = emitFnBodyDBlock e env self worker fp arity stmts
+    go other =
+      emitTailLeafD e env self worker fp arity other (flattenApp other [])
 
 -- emit a worker-mode let-block: bind each leading CSLet (float RHS → unboxed double
 -- LTFloatU, same as emitBlock; else normal), then emit the final CSExpr in tail
@@ -12837,19 +12904,20 @@ emitFnBodyDBlock : Emit ->
   Int ->
   List CStmt ->
   Unit
-emitFnBodyDBlock e env self worker fp arity ((CSExpr ex) :: []) =
-  emitFnBodyD e env self worker fp arity ex
-emitFnBodyDBlock e env self worker fp arity ((CSLet _ (PVar x _ _) rhs) :: rest) =
-  if computesAsDouble env rhs then
-    let d = emitFloatD e env rhs
-    emitFnBodyDBlock e (omInsert x (d, LTFloatU) env) self worker fp arity rest
-  else
-    let (v, ty) = emitExpr e env rhs
-    emitFnBodyDBlock e (omInsert x (v, ty) env) self worker fp arity rest
-emitFnBodyDBlock e _env _ _ _ _ _ =
-  gapU
-    e
-    "float-worker block: unexpected statement shape (should be gated by floatWorkerBlockOk)"
+emitFnBodyDBlock e env0 self worker fp arity xs0 = go env0 xs0
+  where
+    go env ((CSExpr ex) :: []) = emitFnBodyD e env self worker fp arity ex
+    go env ((CSLet _ (PVar x _ _) rhs) :: rest) =
+      if computesAsDouble env rhs then
+        let d = emitFloatD e env rhs
+        go (omInsert x (d, LTFloatU) env) rest
+      else
+        let (v, ty) = emitExpr e env rhs
+        go (omInsert x (v, ty) env) rest
+    go _env _ =
+      gapU
+        e
+        "float-worker block: unexpected statement shape (should be gated by floatWorkerBlockOk)"
 
 emitTailLeafD : Emit ->
   OrdMap (String, LTy) ->
@@ -12873,6 +12941,8 @@ emitTailLeafD e env _ _ _ _ other _ =
 
 -- the wrapper's call args: `double <unbox %argN>` at float positions, `i64 %argN` else.
 wrapperCallArgs : Emit -> List Int -> Int -> List Pat -> List (String, String)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 wrapperCallArgs _ _ _ [] = []
 wrapperCallArgs e fp i (_ :: rest) =
   let op = match elemInt i fp
@@ -12979,6 +13049,8 @@ collectRawWorkers e binds =
   refineRawWorkers e binds (rawWorkerKey first) 20
 
 refineRawWorkers : Emit -> List CBind -> String -> Int -> OrdMap RawWorker
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
 refineRawWorkers e binds prevKey fuel =
   let next = collectRawWorkersPass e True binds
   let key = rawWorkerKey next
@@ -13012,26 +13084,28 @@ rawKindKey RawI32 = "s"
 -- (a `match` arm, a mutual recursion through an ordinary function) would grow
 -- the stack where the uniform define loops.  Such a function returns a word.
 rawRetOk : Emit -> String -> Int -> RawKind -> CExpr -> Bool
-rawRetOk e self n k (CIf _ t f) = rawRetOk e self n k t && rawRetOk e self n k f
-rawRetOk e self n k (CDecision scrut arms tree) = match decisionToIf scrut arms
-  Some cif => rawRetOk e self n k cif
-  None => not (tailCalls e (CDecision scrut arms tree))
-rawRetOk e self n k (CBlock stmts) = match reverseL stmts
-  (CSExpr ex) :: _ => rawRetOk e self n k ex
-  _ => True
-rawRetOk e self n k (CLet False (PVar x a bid) e1 e2) = match e1
-  CLam _ _ => not (tailCalls e (CLet False (PVar x a bid) e1 e2))
-  _ => rawRetOk e self n k e2
-rawRetOk e self n k ex = match flattenApp ex []
-  (CVar f _, args) =>
-    let name = canonFnName e f
-    if name == self then
-      lengthS args == n
-    else if isKnownFn e name then
-      isSome (rawWorkerReturning e f (lengthS args) k)
-    else
-      True
-  _ => not (tailCalls e ex)
+rawRetOk e self n k ex0 = go ex0
+  where
+    go (CIf _ t f) = go t && go f
+    go (CDecision scrut arms tree) = match decisionToIf scrut arms
+      Some cif => go cif
+      None => not (tailCalls e (CDecision scrut arms tree))
+    go (CBlock stmts) = match reverseL stmts
+      (CSExpr ex) :: _ => go ex
+      _ => True
+    go (CLet False (PVar x a bid) e1 e2) = match e1
+      CLam _ _ => not (tailCalls e (CLet False (PVar x a bid) e1 e2))
+      _ => go e2
+    go ex = match flattenApp ex []
+      (CVar f _, args) =>
+        let name = canonFnName e f
+        if name == self then
+          lengthS args == n
+        else if isKnownFn e name then
+          isSome (rawWorkerReturning e f (lengthS args) k)
+        else
+          True
+      _ => not (tailCalls e ex)
 
 -- does a call of a top-level function sit in a tail position of `ex`?
 tailCalls : Emit -> CExpr -> Bool
@@ -13052,10 +13126,12 @@ armsTailCall e ((CArm _ _ body) :: rest) =
 armsTailCall e ((CArmAlt _ _ _) :: rest) = armsTailCall e rest
 
 collectRawWorkersPass : Emit -> Bool -> List CBind -> OrdMap RawWorker
-collectRawWorkersPass _ _ [] = omEmpty
-collectRawWorkersPass e refine (b :: rest) = match rawWorkerOf e refine b
-  Some w => omInsert (bindName b) w (collectRawWorkersPass e refine rest)
-  None => collectRawWorkersPass e refine rest
+collectRawWorkersPass e refine xs0 = go xs0
+  where
+    go [] = omEmpty
+    go (b :: rest) = match rawWorkerOf e refine b
+      Some w => omInsert (bindName b) w (go rest)
+      None => go rest
 
 -- each declared `U64` parameter that some occurrence would box becomes a word.
 refineU64Params : Emit ->
@@ -13064,6 +13140,8 @@ refineU64Params : Emit ->
   List Pat ->
   List RawKind ->
   List RawKind
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 refineU64Params e retRaw body ((PVar x _ _) :: ps) (RawU64 :: ks) =
   let k = if u64Escapes e x retRaw body == 0 then RawU64 else RawWord
   k :: refineU64Params e retRaw body ps ks
@@ -13158,54 +13236,58 @@ data RawTail = RawTail String String RawWorker
 -- worker on raw values (the loop); any other value is returned in the worker's
 -- result kind.
 emitFnBodyRaw : Emit -> OrdMap (String, LTy) -> RawTail -> CExpr -> Unit
-emitFnBodyRaw e env t (CIf c th el) =
-  let (cv, _) = emitExpr e env c
-  let ci = untagInt e cv
-  let cb = freshReg e
-  emit e "  \{cb} = icmp ne i64 \{ci}, 0"
-  let n = intToString (freshLocal e)
-  let thenL = "then" ++ n
-  let elseL = "else" ++ n
-  emit e "  br i1 \{cb}, label %\{thenL}, label %\{elseL}"
-  emit e (thenL ++ ":")
-  emitFnBodyRaw e env t th
-  emit e (elseL ++ ":")
-  emitFnBodyRaw e env t el
-emitFnBodyRaw e env t (CDecision scrut arms tree) =
-  match decisionToIf scrut arms
-    Some cif => emitFnBodyRaw e env t cif
-    None => emitRawValueRet e env t (CDecision scrut arms tree)
-emitFnBodyRaw e env t (CBlock stmts) = emitFnBodyRawBlock e env t stmts
-emitFnBodyRaw e env t (CLet False (PVar x a bid) e1 e2) = match e1
-  CLam _ _ => emitRawValueRet e env t (CLet False (PVar x a bid) e1 e2)
-  _ => emitFnBodyRaw e (bindLetRaw e env x bid e1 e2) t e2
-emitFnBodyRaw e env (RawTail self worker w) other = match flattenApp other []
-  (CVar f _, args) =>
-    if not (isLocal env f)
-      && canonFnName e f == self
-      && lengthS args == rawWorkerArity w then
-      let ops = emitRawArgs e env (rawWorkerKinds w) args
-      let rty = rawKindTy (rawWorkerRet w)
-      let r = freshReg e
-      let call = directCallWith e MustTailCall (Generated worker) rty ops
-      emit e "  \{r} = \{call}"
-      emit e "  ret \{rty} \{r}"
-    else
-      emitRawValueRet e env (RawTail self worker w) other
-  _ => emitRawValueRet e env (RawTail self worker w) other
+emitFnBodyRaw e env0 t ex0 = go env0 ex0
+  where
+    go env (CIf c th el) =
+      let (cv, _) = emitExpr e env c
+      let ci = untagInt e cv
+      let cb = freshReg e
+      emit e "  \{cb} = icmp ne i64 \{ci}, 0"
+      let n = intToString (freshLocal e)
+      let thenL = "then" ++ n
+      let elseL = "else" ++ n
+      emit e "  br i1 \{cb}, label %\{thenL}, label %\{elseL}"
+      emit e (thenL ++ ":")
+      go env th
+      emit e (elseL ++ ":")
+      go env el
+    go env (CDecision scrut arms tree) = match decisionToIf scrut arms
+      Some cif => go env cif
+      None => emitRawValueRet e env t (CDecision scrut arms tree)
+    go env (CBlock stmts) = emitFnBodyRawBlock e env t stmts
+    go env (CLet False (PVar x a bid) e1 e2) = match e1
+      CLam _ _ => emitRawValueRet e env t (CLet False (PVar x a bid) e1 e2)
+      _ => go (bindLetRaw e env x bid e1 e2) e2
+    go env other = match t
+      RawTail self worker w => match flattenApp other []
+        (CVar f _, args) =>
+          if not (isLocal env f)
+            && canonFnName e f == self
+            && lengthS args == rawWorkerArity w then
+            let ops = emitRawArgs e env (rawWorkerKinds w) args
+            let rty = rawKindTy (rawWorkerRet w)
+            let r = freshReg e
+            let call = directCallWith e MustTailCall (Generated worker) rty ops
+            emit e "  \{r} = \{call}"
+            emit e "  ret \{rty} \{r}"
+          else
+            emitRawValueRet e env t other
+        _ => emitRawValueRet e env t other
 
 emitFnBodyRawBlock : Emit ->
   OrdMap (String, LTy) ->
   RawTail ->
   List CStmt ->
   Unit
-emitFnBodyRawBlock e env t [CSExpr ex] = emitFnBodyRaw e env t ex
-emitFnBodyRawBlock e env (RawTail _ _ w) [s] =
-  let (v, _) = emitBlockLast e env s
-  emitRawWordRet e (rawWorkerRet w) v
-emitFnBodyRawBlock e env t (s :: rest) =
-  emitFnBodyRawBlock e (emitBlockLead e env s rest) t rest
-emitFnBodyRawBlock e _ _ [] = gapU e "empty block"
+emitFnBodyRawBlock e env0 t ss0 = go env0 ss0
+  where
+    go env [CSExpr ex] = emitFnBodyRaw e env t ex
+    go env [s] = match t
+      RawTail _ _ w =>
+        let (v, _) = emitBlockLast e env s
+        emitRawWordRet e (rawWorkerRet w) v
+    go env (s :: rest) = go (emitBlockLead e env s rest) rest
+    go _ [] = gapU e "empty block"
 
 -- return a worker body's value in the worker's result kind.
 emitRawValueRet : Emit -> OrdMap (String, LTy) -> RawTail -> CExpr -> Unit
@@ -13312,30 +13394,30 @@ paramEnv _ _ _ = panic "llvm: function parameters must be plain variables"
 -- caller's frame: every closure a let or group binds is an `@mdk_alloc` cell or
 -- a constant global, never an `alloca`, so this is sound.
 emitFnBody : Emit -> OrdMap (String, LTy) -> TailDefine -> CExpr -> Unit
-emitFnBody e env self (CIf c t f) =
-  let (thenL, elseL) = emitTailIfHead e env c
-  emit e (thenL ++ ":")
-  emitFnBody e env self t
-  emit e (elseL ++ ":")
-  emitFnBody e env self f
-emitFnBody e env self (CDecision scrut arms tree) =
-  emitTailDecision e env self scrut arms tree
-emitFnBody e env self (CLet recF pat e1 e2) =
-  if letBinds recF pat e1 then
-    emitFnBody e (bindLet e env recF pat e1 e2) self e2
-  else
-    emitValueRet e env (CLet recF pat e1 e2)
-emitFnBody e env self (CLetGroup binds body) =
-  match bindLetGroup e env binds body
-    Some env2 => emitFnBody e env2 self body
-    None =>
-      let (v, _) = letGroupGap e
-      emit e ("  ret i64 " ++ v)
-emitFnBody e env self (CBlock stmts) = match lastStmtExpr stmts
-  Some last => emitFnBody e (emitBlockInit e env stmts) self last
-  None => emitValueRet e env (CBlock stmts)
-emitFnBody e env self other =
-  emitTailLeaf e env self other (_ => emitValueRet e env other)
+emitFnBody e env0 self other0 = go env0 other0
+  where
+    go env (CIf c t f) =
+      let (thenL, elseL) = emitTailIfHead e env c
+      emit e (thenL ++ ":")
+      go env t
+      emit e (elseL ++ ":")
+      go env f
+    go env (CDecision scrut arms tree) =
+      emitTailDecision e env self scrut arms tree
+    go env (CLet recF pat e1 e2) =
+      if letBinds recF pat e1 then
+        go (bindLet e env recF pat e1 e2) e2
+      else
+        emitValueRet e env (CLet recF pat e1 e2)
+    go env (CLetGroup binds body) = match bindLetGroup e env binds body
+      Some env2 => go env2 body
+      None =>
+        let (v, _) = letGroupGap e
+        emit e ("  ret i64 " ++ v)
+    go env (CBlock stmts) = match lastStmtExpr stmts
+      Some last => go (emitBlockInit e env stmts) last
+      None => emitValueRet e env (CBlock stmts)
+    go env other = emitTailLeaf e env self other (_ => emitValueRet e env other)
 
 -- emit every statement of a block but the last, exactly as `emitBlock` does
 -- (each one's scope is the rest of the block, the last statement included), and
@@ -13467,18 +13549,17 @@ directCallOperands e env ex =
       else
         None
     CMethod name (MethodEvidence iface siteArity (route@(RKey tag _ _)) implRoutes methRoutes) =>
-      if hasArgs args then match implForSite e name iface tag siteArity
-        Some ent =>
-          let argOps = emitArgs e env args
-          let dictRoutes =
-            staticEntryDictRoutes
-              e
-              name
-              ent
-              (MethodEvidence iface siteArity route implRoutes methRoutes)
-          let dictWords = dictWordsOf e env dictRoutes
-          Some (implEntryFnName e name ent, dictWords ++ argOps)
-        None => None
+      if hasArgs args then do
+        ent <- implForSite e name iface tag siteArity
+        let argOps = emitArgs e env args
+        let dictRoutes =
+          staticEntryDictRoutes
+            e
+            name
+            ent
+            (MethodEvidence iface siteArity route implRoutes methRoutes)
+        let dictWords = dictWordsOf e env dictRoutes
+        Some (implEntryFnName e name ent, dictWords ++ argOps)
       else
         None
     _ => None
@@ -13758,6 +13839,8 @@ bindSig e (CBind _ clauses _ bid) =
   FnSig (clauseParamTys e clauses 0 (clauseArityC clauses)) (returnLTy e bid)
 
 clauseParamTys : Emit -> List CClause -> Int -> Int -> List LTy
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 clauseParamTys e clauses i n
   | i >= n = []
   | otherwise = clausesParamTy e clauses i :: clauseParamTys e clauses (i + 1) n
@@ -13770,10 +13853,12 @@ clausesParamTy e clauses i = match firstPatAt isBinderPat clauses i
     None => runtimeLTy RTValue
 
 firstPatAt : (Pat -> Bool) -> List CClause -> Int -> Option Pat
-firstPatAt _ [] _ = None
-firstPatAt keep ((CClause pats _) :: rest) i = match nthPat pats i
-  Some p => if keep p then Some p else firstPatAt keep rest i
-  None => firstPatAt keep rest i
+firstPatAt keep xs0 i = go xs0
+  where
+    go [] = None
+    go ((CClause pats _) :: rest) = match nthPat pats i
+      Some p => if keep p then Some p else go rest
+      None => go rest
 
 isBinderPat : Pat -> Bool
 isBinderPat (PVar _ _ _) = True
@@ -13812,7 +13897,7 @@ bindPatStamps e env (PList ps) = bindPatsStamps e env ps
 bindPatStamps e env (PCons h t) = bindPatsStamps e env [h, t]
 bindPatStamps e env (PRec _ fields _) =
   fold (acc f => bindFieldStamps e acc f) env fields
-bindPatStamps _ env _ = env
+bindPatStamps _ env (PWild | PLit _ | POr _ | PRng _ _ _ | PAnn _ _) = env
 
 bindPatsStamps : Emit ->
   OrdMap (String, LTy) ->
@@ -14061,6 +14146,8 @@ emitSetRef e env [r, x] =
 emitSetRef e _env _ = gapE e "setRef expects exactly 2 arguments"
 
 emitFieldExprs : Emit -> OrdMap (String, LTy) -> List CField -> List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 emitFieldExprs _ _ [] = []
 emitFieldExprs e env ((CField _ _ ex) :: rest) =
   let (w, _) = emitExpr e env ex
@@ -14072,6 +14159,8 @@ emitUpdatePairs : Emit ->
   OrdMap (String, LTy) ->
   List CField ->
   List (Int, String)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 emitUpdatePairs _ _ [] = []
 emitUpdatePairs e env ((CField _ ord ex) :: rest) =
   let (w, _) = emitExpr e env ex
@@ -14084,6 +14173,8 @@ buildUpdateWords : Emit ->
   List (Int, String) ->
   Int ->
   List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 buildUpdateWords e bw n updates i =
   if i >= n then
     []
@@ -14332,6 +14423,8 @@ emitList e env xs =
 -- emit every element to its operand word, head-to-tail (same order as the original
 -- recursive emitList's element emission).
 emitListWords : Emit -> OrdMap (String, LTy) -> List CExpr -> List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 emitListWords _ _ [] = []
 emitListWords e env (x :: xs) =
   let (w, _) = emitExpr e env x
@@ -14357,10 +14450,12 @@ emitConstList e words =
   (head, LTCon)
 
 emitConstListGo : Emit -> Int -> List String -> String -> String
-emitConstListGo _ _ [] tl = tl
-emitConstListGo e consTag (w :: rest) tl =
-  let cell = emitConstDictCell e consTag [w, tl]
-  emitConstListGo e consTag rest cell
+emitConstListGo e consTag xs0 tl0 = go xs0 tl0
+  where
+    go [] tl = tl
+    go (w :: rest) tl =
+      let cell = emitConstDictCell e consTag [w, tl]
+      go rest cell
 
 -- CRangeList lo hi incl: build an ascending list [lo…hi] (or [lo…<hi]) via a
 -- back-to-front alloca-counter loop.  An alloca i64 `acc` holds the current
@@ -15426,10 +15521,9 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "narrowImplsByArity" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "CImplEntry")))))))
 (DFunDef false "narrowImplsByArity" (PWild PWild (PVar "impls") (PVar "siteArity")) (EApp (EApp (EVar "filterList") (ELam ((PVar "ent")) (EBinOp "==" (EApp (EVar "implEntryDeclaredArity") (EVar "ent")) (EVar "siteArity")))) (EVar "impls")))
 (DTypeSig false "implForSite" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "CImplEntry"))))))))
-(DFunDef false "implForSite" ((PVar "e") (PVar "method") (PVar "iface") (PVar "tag") (PVar "siteArity")) (EApp (EApp (EApp (EApp (EApp (EVar "findByTagArity") (EVar "e")) (EVar "method")) (EVar "tag")) (EVar "siteArity")) (EApp (EApp (EVar "narrowImplsByIface") (EVar "iface")) (EApp (EApp (EVar "implsOf") (EVar "e")) (EVar "method")))))
-(DTypeSig false "findByTagArity" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyApp (TyCon "Option") (TyCon "CImplEntry"))))))))
-(DFunDef false "findByTagArity" (PWild PWild PWild PWild (PList)) (EVar "None"))
-(DFunDef false "findByTagArity" ((PVar "e") (PVar "method") (PVar "tag") (PVar "siteArity") (PCons (PVar "entry") (PVar "rest"))) (EIf (EBinOp "&&" (EApp (EApp (EVar "implEntryAnswers") (EVar "tag")) (EVar "entry")) (EBinOp "==" (EApp (EVar "implEntryDeclaredArity") (EVar "entry")) (EVar "siteArity"))) (EApp (EVar "Some") (EVar "entry")) (EApp (EApp (EApp (EApp (EApp (EVar "findByTagArity") (EVar "e")) (EVar "method")) (EVar "tag")) (EVar "siteArity")) (EVar "rest"))))
+(DFunDef false "implForSite" ((PVar "e") (PVar "method") (PVar "iface") (PVar "tag") (PVar "siteArity")) (EApp (EApp (EApp (EVar "findByTagArity") (EVar "tag")) (EVar "siteArity")) (EApp (EApp (EVar "narrowImplsByIface") (EVar "iface")) (EApp (EApp (EVar "implsOf") (EVar "e")) (EVar "method")))))
+(DTypeSig false "findByTagArity" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyApp (TyCon "Option") (TyCon "CImplEntry"))))))
+(DFunDef false "findByTagArity" ((PVar "tag") (PVar "siteArity") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EVar "None")) (clause ((PCons (PVar "entry") (PVar "rest"))) (EIf (EBinOp "&&" (EApp (EApp (EVar "implEntryAnswers") (EVar "tag")) (EVar "entry")) (EBinOp "==" (EApp (EVar "implEntryDeclaredArity") (EVar "entry")) (EVar "siteArity"))) (EApp (EVar "Some") (EVar "entry")) (EApp (EVar "go") (EVar "rest")))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "implEntryAnswers" (TyFun (TyCon "String") (TyFun (TyCon "CImplEntry") (TyCon "Bool"))))
 (DFunDef false "implEntryAnswers" ((PVar "word") (PVar "entry")) (EBinOp "==" (EApp (EVar "implEntryKey") (EVar "entry")) (EVar "word")))
 (DTypeSig false "implDefaultFnName" (TyFun (TyCon "ImplSym") (TyFun (TyCon "String") (TyCon "String"))))
@@ -15457,7 +15551,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DFunDef false "implEntrySymTag" ((PCon "CImplEntry" PWild PWild PWild (PCon "CImplTagged" PWild PWild PWild (PCon "ImplSym" (PVar "tag") PWild PWild) PWild PWild PWild))) (EVar "tag"))
 (DFunDef false "implEntrySymTag" ((PCon "CImplEntry" PWild PWild PWild (PCon "CImplDefault" PWild PWild PWild (PCon "ImplSym" (PVar "tag") PWild PWild) PWild PWild PWild))) (EVar "tag"))
 (DTypeSig false "preludeImplSym" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))))
-(DFunDef false "preludeImplSym" ((PVar "e") (PVar "method") (PVar "key")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "method")) (EFieldAccess (EFieldAccess (EVar "e") "input") "preludeImplIndex")) (arm (PCon "Some" (PVar "byKey")) () (EApp (EApp (EVar "omLookup") (EVar "key")) (EVar "byKey"))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "preludeImplSym" ((PVar "e") (PVar "method") (PVar "key")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "omLookup") (EVar "method")) (EFieldAccess (EFieldAccess (EVar "e") "input") "preludeImplIndex"))) (ELam ((PVar "byKey")) (EApp (EApp (EVar "omLookup") (EVar "key")) (EVar "byKey")))))
 (DTypeSig false "taggedMethodNames" (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "taggedMethodNames" ((PVar "entries")) (EApp (EApp (EVar "map") (EVar "implEntryMethodOf")) (EVar "entries")))
 (DTypeSig false "installImplMethodSet" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyCon "Unit"))))
@@ -15779,19 +15873,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "emitBitBin" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyTuple (TyCon "String") (TyCon "LTy")))))))
 (DFunDef false "emitBitBin" ((PVar "e") (PVar "env") (PVar "sym") (PVar "args")) (EMatch (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args")) (arm (PList (PVar "a") (PVar "b")) () (EBlock (DoLet false false (PVar "x") (EApp (EApp (EVar "untagInt") (EVar "e")) (EVar "a"))) (DoLet false false (PVar "y") (EApp (EApp (EVar "untagInt") (EVar "e")) (EVar "b"))) (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (EVar "r")) (ELit (LString "i64"))) (EVar "sym")) (EApp (EVar "i64Ops") (EListLit (EVar "x") (EVar "y")))))) (DoExpr (ETuple (EApp (EApp (EVar "tagInt") (EVar "e")) (EVar "r")) (EVar "LTInt"))))) (arm PWild () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "llvm: ")) (EVar "sym")) (ELit (LString " takes two arguments")))))))
 (DTypeSig false "emitBitExtern" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyTuple (TyCon "String") (TyCon "LTy")))))))
-(DFunDef false "emitBitExtern" ((PVar "e") (PVar "env") (PLit (LString "bitAnd")) (PVar "args")) (EApp (EApp (EApp (EApp (EVar "emitBitBin") (EVar "e")) (EVar "env")) (ELit (LString "mdk_bit_and"))) (EVar "args")))
-(DFunDef false "emitBitExtern" ((PVar "e") (PVar "env") (PLit (LString "bitOr")) (PVar "args")) (EApp (EApp (EApp (EApp (EVar "emitBitBin") (EVar "e")) (EVar "env")) (ELit (LString "mdk_bit_or"))) (EVar "args")))
-(DFunDef false "emitBitExtern" ((PVar "e") (PVar "env") (PLit (LString "bitXor")) (PVar "args")) (EApp (EApp (EApp (EApp (EVar "emitBitBin") (EVar "e")) (EVar "env")) (ELit (LString "mdk_bit_xor"))) (EVar "args")))
-(DFunDef false "emitBitExtern" ((PVar "e") (PVar "env") (PLit (LString "shiftLeft")) (PVar "args")) (EApp (EApp (EApp (EApp (EVar "emitBitBin") (EVar "e")) (EVar "env")) (ELit (LString "mdk_shift_left"))) (EVar "args")))
-(DFunDef false "emitBitExtern" ((PVar "e") (PVar "env") (PLit (LString "shiftRight")) (PVar "args")) (EApp (EApp (EApp (EApp (EVar "emitBitBin") (EVar "e")) (EVar "env")) (ELit (LString "mdk_shift_right"))) (EVar "args")))
-(DFunDef false "emitBitExtern" ((PVar "e") (PVar "env") (PLit (LString "intBitAnd")) (PVar "args")) (EApp (EApp (EApp (EApp (EVar "emitBitExtern") (EVar "e")) (EVar "env")) (ELit (LString "bitAnd"))) (EVar "args")))
-(DFunDef false "emitBitExtern" ((PVar "e") (PVar "env") (PLit (LString "intBitOr")) (PVar "args")) (EApp (EApp (EApp (EApp (EVar "emitBitExtern") (EVar "e")) (EVar "env")) (ELit (LString "bitOr"))) (EVar "args")))
-(DFunDef false "emitBitExtern" ((PVar "e") (PVar "env") (PLit (LString "intBitXor")) (PVar "args")) (EApp (EApp (EApp (EApp (EVar "emitBitExtern") (EVar "e")) (EVar "env")) (ELit (LString "bitXor"))) (EVar "args")))
-(DFunDef false "emitBitExtern" ((PVar "e") (PVar "env") (PLit (LString "intShiftLeft")) (PVar "args")) (EApp (EApp (EApp (EApp (EVar "emitBitExtern") (EVar "e")) (EVar "env")) (ELit (LString "shiftLeft"))) (EVar "args")))
-(DFunDef false "emitBitExtern" ((PVar "e") (PVar "env") (PLit (LString "intShiftRight")) (PVar "args")) (EApp (EApp (EApp (EApp (EVar "emitBitExtern") (EVar "e")) (EVar "env")) (ELit (LString "shiftRight"))) (EVar "args")))
-(DFunDef false "emitBitExtern" ((PVar "e") (PVar "env") (PLit (LString "intBitNot")) (PVar "args")) (EApp (EApp (EApp (EApp (EVar "emitBitExtern") (EVar "e")) (EVar "env")) (ELit (LString "bitNot"))) (EVar "args")))
-(DFunDef false "emitBitExtern" ((PVar "e") (PVar "env") (PLit (LString "bitNot")) (PVar "args")) (EMatch (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args")) (arm (PList (PVar "a")) () (EBlock (DoLet false false (PVar "x") (EApp (EApp (EVar "untagInt") (EVar "e")) (EVar "a"))) (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (EVar "r")) (ELit (LString "i64"))) (ELit (LString "mdk_bit_not"))) (EApp (EVar "i64Ops") (EListLit (EVar "x")))))) (DoExpr (ETuple (EApp (EApp (EVar "tagInt") (EVar "e")) (EVar "r")) (EVar "LTInt"))))) (arm PWild () (EApp (EVar "panic") (ELit (LString "llvm: bitNot takes one argument"))))))
-(DFunDef false "emitBitExtern" ((PVar "e") PWild (PVar "name") PWild) (EApp (EApp (EVar "gapE") (EVar "e")) (EBinOp "++" (ELit (LString "unsupported bit extern ")) (EVar "name"))))
+(DFunDef false "emitBitExtern" ((PVar "e") (PVar "env") (PVar "name0") (PVar "args")) (ELetGroup ((lgb "go" (clause ((PLit (LString "bitAnd"))) (EApp (EApp (EApp (EApp (EVar "emitBitBin") (EVar "e")) (EVar "env")) (ELit (LString "mdk_bit_and"))) (EVar "args"))) (clause ((PLit (LString "bitOr"))) (EApp (EApp (EApp (EApp (EVar "emitBitBin") (EVar "e")) (EVar "env")) (ELit (LString "mdk_bit_or"))) (EVar "args"))) (clause ((PLit (LString "bitXor"))) (EApp (EApp (EApp (EApp (EVar "emitBitBin") (EVar "e")) (EVar "env")) (ELit (LString "mdk_bit_xor"))) (EVar "args"))) (clause ((PLit (LString "shiftLeft"))) (EApp (EApp (EApp (EApp (EVar "emitBitBin") (EVar "e")) (EVar "env")) (ELit (LString "mdk_shift_left"))) (EVar "args"))) (clause ((PLit (LString "shiftRight"))) (EApp (EApp (EApp (EApp (EVar "emitBitBin") (EVar "e")) (EVar "env")) (ELit (LString "mdk_shift_right"))) (EVar "args"))) (clause ((PLit (LString "intBitAnd"))) (EApp (EVar "go") (ELit (LString "bitAnd")))) (clause ((PLit (LString "intBitOr"))) (EApp (EVar "go") (ELit (LString "bitOr")))) (clause ((PLit (LString "intBitXor"))) (EApp (EVar "go") (ELit (LString "bitXor")))) (clause ((PLit (LString "intShiftLeft"))) (EApp (EVar "go") (ELit (LString "shiftLeft")))) (clause ((PLit (LString "intShiftRight"))) (EApp (EVar "go") (ELit (LString "shiftRight")))) (clause ((PLit (LString "intBitNot"))) (EApp (EVar "go") (ELit (LString "bitNot")))) (clause ((PLit (LString "bitNot"))) (EMatch (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args")) (arm (PList (PVar "a")) () (EBlock (DoLet false false (PVar "x") (EApp (EApp (EVar "untagInt") (EVar "e")) (EVar "a"))) (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (EVar "r")) (ELit (LString "i64"))) (ELit (LString "mdk_bit_not"))) (EApp (EVar "i64Ops") (EListLit (EVar "x")))))) (DoExpr (ETuple (EApp (EApp (EVar "tagInt") (EVar "e")) (EVar "r")) (EVar "LTInt"))))) (arm PWild () (EApp (EVar "panic") (ELit (LString "llvm: bitNot takes one argument")))))) (clause ((PVar "name")) (EApp (EApp (EVar "gapE") (EVar "e")) (EBinOp "++" (ELit (LString "unsupported bit extern ")) (EVar "name")))))) (EApp (EVar "go") (EVar "name0"))))
 (DTypeSig false "emitFixedWidthTruncate" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyTuple (TyCon "String") (TyCon "LTy")))))))
 (DFunDef false "emitFixedWidthTruncate" ((PVar "e") (PVar "env") (PVar "mask") (PVar "args")) (EMatch (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args")) (arm (PList (PVar "a")) () (EBlock (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false (PVar "taggedMask") (EApp (EVar "intToString") (EBinOp "+" (EBinOp "*" (EVar "mask") (ELit (LInt 2))) (ELit (LInt 1))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString " = and i64 "))) (EApp (EVar "$core.display") (EVar "a"))) (ELit (LString ", "))) (EApp (EVar "$core.display") (EVar "taggedMask"))) (ELit (LString ""))))) (DoExpr (ETuple (EVar "r") (EVar "LTInt"))))) (arm PWild () (EApp (EVar "panic") (ELit (LString "llvm: a fixed-width truncation takes one argument"))))))
 (DTypeSig false "emitFixedWidthExtern" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyTuple (TyCon "String") (TyCon "LTy")))))))
@@ -15864,22 +15946,20 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "rawWorkerRet" (TyFun (TyCon "RawWorker") (TyCon "RawKind")))
 (DFunDef false "rawWorkerRet" ((PCon "RawWorker" PWild PWild (PVar "r"))) (EVar "r"))
 (DTypeSig false "rawWorkerCall" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RawWorker")))))))
-(DFunDef false "rawWorkerCall" ((PVar "e") (PVar "f") (PVar "n")) (EBlock (DoLet false false (PVar "name") (EApp (EApp (EVar "canonFnName") (EVar "e")) (EVar "f"))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EUnOp "!" (EFieldAccess (EVar "e") "rawWorkers"))) (arm (PCon "Some" (PCon "RawWorker" (PVar "ar") (PVar "ks") (PVar "r"))) () (EIf (EBinOp "==" (EVar "ar") (EVar "n")) (EApp (EVar "Some") (ETuple (EApp (EVar "LN.llvmName") (EApp (EVar "LN.LRawWorker") (EVar "name"))) (EApp (EApp (EApp (EVar "RawWorker") (EVar "ar")) (EVar "ks")) (EVar "r")))) (EVar "None"))) (arm (PCon "None") () (EVar "None"))))))
+(DFunDef false "rawWorkerCall" ((PVar "e") (PVar "f") (PVar "n")) (EBlock (DoLet false false (PVar "name") (EApp (EApp (EVar "canonFnName") (EVar "e")) (EVar "f"))) (DoExpr (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "omLookup") (EVar "name")) (EUnOp "!" (EFieldAccess (EVar "e") "rawWorkers")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PCon "RawWorker" (PVar "ar") (PVar "ks") (PVar "r")) () (EIf (EBinOp "==" (EVar "ar") (EVar "n")) (EApp (EVar "Some") (ETuple (EApp (EVar "LN.llvmName") (EApp (EVar "LN.LRawWorker") (EVar "name"))) (EApp (EApp (EApp (EVar "RawWorker") (EVar "ar")) (EVar "ks")) (EVar "r")))) (EVar "None")))))))))
 (DTypeSig false "rawWorkerReturning" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "RawKind") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RawWorker"))))))))
-(DFunDef false "rawWorkerReturning" ((PVar "e") (PVar "f") (PVar "n") (PVar "k")) (EMatch (EApp (EApp (EApp (EVar "rawWorkerCall") (EVar "e")) (EVar "f")) (EVar "n")) (arm (PCon "Some" (PTuple (PVar "sym") (PVar "w"))) () (EIf (EApp (EApp (EVar "sameRawKind") (EApp (EVar "rawWorkerRet") (EVar "w"))) (EVar "k")) (EApp (EVar "Some") (ETuple (EVar "sym") (EVar "w"))) (EVar "None"))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "rawWorkerReturning" ((PVar "e") (PVar "f") (PVar "n") (PVar "k")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EVar "rawWorkerCall") (EVar "e")) (EVar "f")) (EVar "n"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "sym") (PVar "w")) () (EIf (EApp (EApp (EVar "sameRawKind") (EApp (EVar "rawWorkerRet") (EVar "w"))) (EVar "k")) (EApp (EVar "Some") (ETuple (EVar "sym") (EVar "w"))) (EVar "None")))))))
 (DTypeSig false "emitRawWorkerCall" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "String") (TyFun (TyCon "RawWorker") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyCon "String")))))))
 (DFunDef false "emitRawWorkerCall" ((PVar "e") (PVar "env") (PVar "sym") (PCon "RawWorker" PWild (PVar "ks") (PVar "r")) (PVar "args")) (EBlock (DoLet false false (PVar "ops") (EApp (EApp (EApp (EApp (EVar "emitRawArgs") (EVar "e")) (EVar "env")) (EVar "ks")) (EVar "args"))) (DoLet false false (PVar "res") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false (PVar "call") (EApp (EApp (EApp (EApp (EVar "directCall") (EVar "e")) (EApp (EVar "Generated") (EVar "sym"))) (EApp (EVar "rawKindTy") (EVar "r"))) (EVar "ops"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "res"))) (ELit (LString " = "))) (EApp (EVar "$core.display") (EVar "call"))) (ELit (LString ""))))) (DoExpr (EVar "res"))))
 (DTypeSig false "emitRawArgs" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "List") (TyCon "RawKind")) (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))))
 (DFunDef false "emitRawArgs" ((PVar "e") (PVar "env") (PCons (PVar "k") (PVar "ks")) (PCons (PVar "a") (PVar "rest"))) (EBlock (DoLet false false (PVar "op") (EApp (EApp (EApp (EApp (EVar "emitRawAs") (EVar "e")) (EVar "env")) (EVar "k")) (EVar "a"))) (DoExpr (EBinOp "::" (ETuple (EApp (EVar "rawKindTy") (EVar "k")) (EVar "op")) (EApp (EApp (EApp (EApp (EVar "emitRawArgs") (EVar "e")) (EVar "env")) (EVar "ks")) (EVar "rest"))))))
 (DFunDef false "emitRawArgs" (PWild PWild PWild PWild) (EListLit))
 (DTypeSig false "rawWorkerReturning32" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RawWorker")))))))
-(DFunDef false "rawWorkerReturning32" ((PVar "e") (PVar "f") (PVar "n")) (EMatch (EApp (EApp (EApp (EVar "rawWorkerCall") (EVar "e")) (EVar "f")) (EVar "n")) (arm (PCon "Some" (PTuple (PVar "sym") (PVar "w"))) () (EIf (EApp (EVar "isRaw32") (EApp (EVar "rawWorkerRet") (EVar "w"))) (EApp (EVar "Some") (ETuple (EVar "sym") (EVar "w"))) (EVar "None"))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "rawWorkerReturning32" ((PVar "e") (PVar "f") (PVar "n")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EVar "rawWorkerCall") (EVar "e")) (EVar "f")) (EVar "n"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "sym") (PVar "w")) () (EIf (EApp (EVar "isRaw32") (EApp (EVar "rawWorkerRet") (EVar "w"))) (EApp (EVar "Some") (ETuple (EVar "sym") (EVar "w"))) (EVar "None")))))))
 (DTypeSig false "emitRawIf" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "RawKind") (TyFun (TyCon "CExpr") (TyFun (TyCon "CExpr") (TyFun (TyCon "CExpr") (TyCon "String"))))))))
 (DFunDef false "emitRawIf" ((PVar "e") (PVar "env") (PVar "k") (PVar "c") (PVar "t") (PVar "f")) (EBlock (DoLet false false (PVar "ty") (EApp (EVar "rawKindTy") (EVar "k"))) (DoLet false false (PTuple (PVar "cv") PWild) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "c"))) (DoLet false false (PVar "ci") (EApp (EApp (EVar "untagInt") (EVar "e")) (EVar "cv"))) (DoLet false false (PVar "cb") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "cb"))) (ELit (LString " = icmp ne i64 "))) (EApp (EVar "$core.display") (EVar "ci"))) (ELit (LString ", 0"))))) (DoLet false false (PVar "n") (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e")))) (DoLet false false (PVar "thenL") (EBinOp "++" (ELit (LString "then")) (EVar "n"))) (DoLet false false (PVar "elseL") (EBinOp "++" (ELit (LString "else")) (EVar "n"))) (DoLet false false (PVar "endL") (EBinOp "++" (ELit (LString "end")) (EVar "n"))) (DoLet false false (PVar "slot") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "slot"))) (ELit (LString " = alloca "))) (EApp (EVar "$core.display") (EVar "ty"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  br i1 ")) (EApp (EVar "$core.display") (EVar "cb"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "thenL"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "elseL"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "thenL") (ELit (LString ":"))))) (DoLet false false (PVar "tv") (EApp (EApp (EApp (EApp (EVar "emitRawAs") (EVar "e")) (EVar "env")) (EVar "k")) (EVar "t"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  store ")) (EApp (EVar "$core.display") (EVar "ty"))) (ELit (LString " "))) (EApp (EVar "$core.display") (EVar "tv"))) (ELit (LString ", ptr "))) (EApp (EVar "$core.display") (EVar "slot"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  br label %")) (EVar "endL")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "elseL") (ELit (LString ":"))))) (DoLet false false (PVar "fv") (EApp (EApp (EApp (EApp (EVar "emitRawAs") (EVar "e")) (EVar "env")) (EVar "k")) (EVar "f"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  store ")) (EApp (EVar "$core.display") (EVar "ty"))) (ELit (LString " "))) (EApp (EVar "$core.display") (EVar "fv"))) (ELit (LString ", ptr "))) (EApp (EVar "$core.display") (EVar "slot"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  br label %")) (EVar "endL")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "endL") (ELit (LString ":"))))) (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString " = load "))) (EApp (EVar "$core.display") (EVar "ty"))) (ELit (LString ", ptr "))) (EApp (EVar "$core.display") (EVar "slot"))) (ELit (LString ""))))) (DoExpr (EVar "r"))))
 (DTypeSig false "emitRawBlock" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "RawKind") (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyCon "String"))))))
-(DFunDef false "emitRawBlock" ((PVar "e") (PVar "env") (PVar "k") (PList (PCon "CSExpr" (PVar "ex")))) (EApp (EApp (EApp (EApp (EVar "emitRawAs") (EVar "e")) (EVar "env")) (EVar "k")) (EVar "ex")))
-(DFunDef false "emitRawBlock" ((PVar "e") (PVar "env") (PVar "k") (PCons (PVar "s") (PVar "rest"))) (EMatch (EVar "rest") (arm (PList) () (EApp (EApp (EApp (EVar "rawOfWord") (EVar "e")) (EVar "k")) (EApp (EVar "fst") (EApp (EApp (EApp (EVar "emitBlockLast") (EVar "e")) (EVar "env")) (EVar "s"))))) (arm PWild () (EApp (EApp (EApp (EApp (EVar "emitRawBlock") (EVar "e")) (EApp (EApp (EApp (EApp (EVar "emitBlockLead") (EVar "e")) (EVar "env")) (EVar "s")) (EVar "rest"))) (EVar "k")) (EVar "rest")))))
-(DFunDef false "emitRawBlock" ((PVar "e") PWild (PVar "k") (PList)) (EApp (EApp (EApp (EVar "rawOfWord") (EVar "e")) (EVar "k")) (EApp (EVar "fst") (EApp (EApp (EVar "gapE") (EVar "e")) (ELit (LString "empty block"))))))
+(DFunDef false "emitRawBlock" ((PVar "e") (PVar "env0") (PVar "k") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PVar "env") (PList (PCon "CSExpr" (PVar "ex")))) (EApp (EApp (EApp (EApp (EVar "emitRawAs") (EVar "e")) (EVar "env")) (EVar "k")) (EVar "ex"))) (clause ((PVar "env") (PCons (PVar "s") (PVar "rest"))) (EMatch (EVar "rest") (arm (PList) () (EApp (EApp (EApp (EVar "rawOfWord") (EVar "e")) (EVar "k")) (EApp (EVar "fst") (EApp (EApp (EApp (EVar "emitBlockLast") (EVar "e")) (EVar "env")) (EVar "s"))))) (arm PWild () (EApp (EApp (EVar "go") (EApp (EApp (EApp (EApp (EVar "emitBlockLead") (EVar "e")) (EVar "env")) (EVar "s")) (EVar "rest"))) (EVar "rest"))))) (clause (PWild (PList)) (EApp (EApp (EApp (EVar "rawOfWord") (EVar "e")) (EVar "k")) (EApp (EVar "fst") (EApp (EApp (EVar "gapE") (EVar "e")) (ELit (LString "empty block")))))))) (EApp (EApp (EVar "go") (EVar "env0")) (EVar "xs0"))))
 (DTypeSig false "rawOfWord" (TyFun (TyCon "Emit") (TyFun (TyCon "RawKind") (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "rawOfWord" ((PVar "e") (PCon "RawU64") (PVar "w")) (EApp (EApp (EVar "unboxU64") (EVar "e")) (EVar "w")))
 (DFunDef false "rawOfWord" ((PVar "e") (PCon "RawU32") (PVar "w")) (EApp (EApp (EVar "untagU32") (EVar "e")) (EVar "w")))
@@ -15893,11 +15973,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "emitRawWorkerCallW" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "String") (TyFun (TyCon "RawWorker") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyFun (TyCon "LTy") (TyTuple (TyCon "String") (TyCon "LTy")))))))))
 (DFunDef false "emitRawWorkerCallW" ((PVar "e") (PVar "env") (PVar "sym") (PVar "w") (PVar "args") (PVar "resTy")) (EBlock (DoLet false false (PVar "r") (EApp (EApp (EApp (EApp (EApp (EVar "emitRawWorkerCall") (EVar "e")) (EVar "env")) (EVar "sym")) (EVar "w")) (EVar "args"))) (DoExpr (EMatch (EApp (EVar "rawWorkerRet") (EVar "w")) (arm (PCon "RawU64") () (ETuple (EApp (EApp (EVar "boxU64") (EVar "e")) (EVar "r")) (EVar "LTU64"))) (arm (PCon "RawU32") () (ETuple (EApp (EApp (EVar "tagU32") (EVar "e")) (EVar "r")) (EVar "LTInt"))) (arm (PCon "RawI32") () (ETuple (EApp (EApp (EVar "tagI32") (EVar "e")) (EVar "r")) (EVar "LTInt"))) (arm (PCon "RawWord") () (ETuple (EVar "r") (EVar "resTy")))))))
 (DTypeSig false "staticIsU64" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "CExpr") (TyCon "Bool")))))
-(DFunDef false "staticIsU64" (PWild PWild (PCon "CLit" (PCon "LU64" PWild PWild))) (EVar "True"))
-(DFunDef false "staticIsU64" (PWild (PVar "env") (PCon "CVar" (PVar "x") PWild)) (EMatch (EApp (EApp (EVar "omLookup") (EVar "x")) (EVar "env")) (arm (PCon "Some" (PTuple PWild (PCon "LTU64U"))) () (EVar "True")) (arm (PCon "Some" (PTuple PWild (PCon "LTU64"))) () (EVar "True")) (arm PWild () (EVar "False"))))
-(DFunDef false "staticIsU64" (PWild PWild (PCon "CBinPrim" (PVar "op") PWild PWild (PVar "tag") PWild)) (EBinOp "&&" (EApp (EVar "isU64Head") (EVar "tag")) (EApp (EVar "isArithOp") (EVar "op"))))
-(DFunDef false "staticIsU64" ((PVar "e") (PVar "env") (PCon "CIf" PWild (PVar "t") (PVar "f"))) (EBinOp "&&" (EApp (EApp (EApp (EVar "staticIsU64") (EVar "e")) (EVar "env")) (EVar "t")) (EApp (EApp (EApp (EVar "staticIsU64") (EVar "e")) (EVar "env")) (EVar "f"))))
-(DFunDef false "staticIsU64" ((PVar "e") (PVar "env") (PVar "ex")) (EMatch (EApp (EApp (EVar "flattenApp") (EVar "ex")) (EListLit)) (arm (PTuple (PCon "CVar" (PVar "f") PWild) (PVar "args")) () (EIf (EApp (EApp (EVar "isLocal") (EVar "env")) (EVar "f")) (EVar "False") (EIf (EApp (EApp (EVar "isU64RawKernel") (EApp (EApp (EVar "runtimeName") (EVar "e")) (EVar "f"))) (EApp (EVar "lengthS") (EVar "args"))) (EVar "True") (EMatch (EApp (EApp (EApp (EVar "u64KernelAlias") (EVar "e")) (EVar "f")) (EVar "args")) (arm (PCon "Some" (PVar "k")) () (EApp (EApp (EVar "isU64RawKernel") (EVar "k")) (EApp (EVar "lengthS") (EVar "args")))) (arm (PCon "None") () (EApp (EVar "isSome") (EApp (EApp (EApp (EApp (EVar "rawWorkerReturning") (EVar "e")) (EVar "f")) (EApp (EVar "lengthS") (EVar "args"))) (EVar "RawU64")))))))) (arm PWild () (EVar "False"))))
+(DFunDef false "staticIsU64" ((PVar "e") (PVar "env") (PVar "ex0")) (ELetGroup ((lgb "go" (clause ((PCon "CLit" (PCon "LU64" PWild PWild))) (EVar "True")) (clause ((PCon "CVar" (PVar "x") PWild)) (EMatch (EApp (EApp (EVar "omLookup") (EVar "x")) (EVar "env")) (arm (PCon "Some" (PTuple PWild (PCon "LTU64U"))) () (EVar "True")) (arm (PCon "Some" (PTuple PWild (PCon "LTU64"))) () (EVar "True")) (arm PWild () (EVar "False")))) (clause ((PCon "CBinPrim" (PVar "op") PWild PWild (PVar "tag") PWild)) (EBinOp "&&" (EApp (EVar "isU64Head") (EVar "tag")) (EApp (EVar "isArithOp") (EVar "op")))) (clause ((PCon "CIf" PWild (PVar "t") (PVar "f"))) (EBinOp "&&" (EApp (EVar "go") (EVar "t")) (EApp (EVar "go") (EVar "f")))) (clause ((PVar "ex")) (EMatch (EApp (EApp (EVar "flattenApp") (EVar "ex")) (EListLit)) (arm (PTuple (PCon "CVar" (PVar "f") PWild) (PVar "args")) () (EIf (EApp (EApp (EVar "isLocal") (EVar "env")) (EVar "f")) (EVar "False") (EIf (EApp (EApp (EVar "isU64RawKernel") (EApp (EApp (EVar "runtimeName") (EVar "e")) (EVar "f"))) (EApp (EVar "lengthS") (EVar "args"))) (EVar "True") (EMatch (EApp (EApp (EApp (EVar "u64KernelAlias") (EVar "e")) (EVar "f")) (EVar "args")) (arm (PCon "Some" (PVar "k")) () (EApp (EApp (EVar "isU64RawKernel") (EVar "k")) (EApp (EVar "lengthS") (EVar "args")))) (arm (PCon "None") () (EApp (EVar "isSome") (EApp (EApp (EApp (EApp (EVar "rawWorkerReturning") (EVar "e")) (EVar "f")) (EApp (EVar "lengthS") (EVar "args"))) (EVar "RawU64")))))))) (arm PWild () (EVar "False")))))) (EApp (EVar "go") (EVar "ex0"))))
 (DTypeSig false "tagU32" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "tagU32" ((PVar "e") (PVar "r")) (EBlock (DoLet false false (PVar "z") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "z"))) (ELit (LString " = zext i32 "))) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString " to i64"))))) (DoExpr (EApp (EApp (EVar "tagInt") (EVar "e")) (EVar "z")))))
 (DTypeSig false "tagI32" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyCon "String"))))
@@ -15933,17 +16009,14 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "u32TruncateRaw" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "CExpr") (TyCon "String")))))
 (DFunDef false "u32TruncateRaw" ((PVar "e") (PVar "env") (PVar "x")) (EBlock (DoLet false false (PVar "i") (EApp (EApp (EApp (EVar "intRaw") (EVar "e")) (EVar "env")) (EVar "x"))) (DoLet false false (PVar "t") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "t"))) (ELit (LString " = trunc i64 "))) (EApp (EVar "$core.display") (EVar "i"))) (ELit (LString " to i32"))))) (DoExpr (EVar "t"))))
 (DTypeSig false "intRaw" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "CExpr") (TyCon "String")))))
-(DFunDef false "intRaw" ((PVar "e") (PVar "env") (PVar "x")) (EMatch (EApp (EApp (EVar "flattenApp") (EVar "x")) (EListLit)) (arm (PTuple (PCon "CVar" (PVar "f") PWild) (PVar "args")) () (EIf (EApp (EApp (EVar "isLocal") (EVar "env")) (EVar "f")) (EApp (EApp (EVar "untagInt") (EVar "e")) (EApp (EVar "fst") (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "x")))) (EMatch (ETuple (EApp (EVar "intRawBitOp") (EApp (EApp (EVar "runtimeName") (EVar "e")) (EVar "f"))) (EVar "args")) (arm (PTuple (PCon "Some" (PVar "instr")) (PList (PVar "a") (PVar "b"))) () (EBlock (DoLet false false (PVar "p") (EApp (EApp (EApp (EVar "intRaw") (EVar "e")) (EVar "env")) (EVar "a"))) (DoLet false false (PVar "q") (EApp (EApp (EApp (EVar "intRaw") (EVar "e")) (EVar "env")) (EVar "b"))) (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString " = "))) (EApp (EVar "$core.display") (EVar "instr"))) (ELit (LString " i64 "))) (EApp (EVar "$core.display") (EVar "p"))) (ELit (LString ", "))) (EApp (EVar "$core.display") (EVar "q"))) (ELit (LString ""))))) (DoExpr (EVar "r")))) (arm PWild () (EMatch (ETuple (EApp (EApp (EVar "runtimeName") (EVar "e")) (EVar "f")) (EVar "args")) (arm (PTuple (PLit (LString "u32ToInt")) (PList (PVar "a"))) () (EBlock (DoLet false false (PVar "v") (EApp (EApp (EApp (EVar "emitU32Raw") (EVar "e")) (EVar "env")) (EVar "a"))) (DoLet false false (PVar "z") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "z"))) (ELit (LString " = zext i32 "))) (EApp (EVar "$core.display") (EVar "v"))) (ELit (LString " to i64"))))) (DoExpr (EVar "z")))) (arm (PTuple (PLit (LString "i32ToInt")) (PList (PVar "a"))) () (EBlock (DoLet false false (PVar "v") (EApp (EApp (EApp (EVar "emitU32Raw") (EVar "e")) (EVar "env")) (EVar "a"))) (DoLet false false (PVar "z") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "z"))) (ELit (LString " = sext i32 "))) (EApp (EVar "$core.display") (EVar "v"))) (ELit (LString " to i64"))))) (DoExpr (EVar "z")))) (arm (PTuple (PLit (LString "intBitNot")) (PList (PVar "a"))) () (EBlock (DoLet false false (PVar "p") (EApp (EApp (EApp (EVar "intRaw") (EVar "e")) (EVar "env")) (EVar "a"))) (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString " = xor i64 "))) (EApp (EVar "$core.display") (EVar "p"))) (ELit (LString ", -1"))))) (DoExpr (EVar "r")))) (arm PWild () (EApp (EApp (EVar "untagInt") (EVar "e")) (EApp (EVar "fst") (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "x")))))))))) (arm PWild () (EApp (EApp (EVar "untagInt") (EVar "e")) (EApp (EVar "fst") (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "x")))))))
+(DFunDef false "intRaw" ((PVar "e") (PVar "env") (PVar "x0")) (ELetGroup ((lgb "go" (clause ((PVar "x")) (EMatch (EApp (EApp (EVar "flattenApp") (EVar "x")) (EListLit)) (arm (PTuple (PCon "CVar" (PVar "f") PWild) (PVar "args")) () (EIf (EApp (EApp (EVar "isLocal") (EVar "env")) (EVar "f")) (EApp (EApp (EVar "untagInt") (EVar "e")) (EApp (EVar "fst") (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "x")))) (EMatch (ETuple (EApp (EVar "intRawBitOp") (EApp (EApp (EVar "runtimeName") (EVar "e")) (EVar "f"))) (EVar "args")) (arm (PTuple (PCon "Some" (PVar "instr")) (PList (PVar "a") (PVar "b"))) () (EBlock (DoLet false false (PVar "p") (EApp (EVar "go") (EVar "a"))) (DoLet false false (PVar "q") (EApp (EVar "go") (EVar "b"))) (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString " = "))) (EApp (EVar "$core.display") (EVar "instr"))) (ELit (LString " i64 "))) (EApp (EVar "$core.display") (EVar "p"))) (ELit (LString ", "))) (EApp (EVar "$core.display") (EVar "q"))) (ELit (LString ""))))) (DoExpr (EVar "r")))) (arm PWild () (EMatch (ETuple (EApp (EApp (EVar "runtimeName") (EVar "e")) (EVar "f")) (EVar "args")) (arm (PTuple (PLit (LString "u32ToInt")) (PList (PVar "a"))) () (EBlock (DoLet false false (PVar "v") (EApp (EApp (EApp (EVar "emitU32Raw") (EVar "e")) (EVar "env")) (EVar "a"))) (DoLet false false (PVar "z") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "z"))) (ELit (LString " = zext i32 "))) (EApp (EVar "$core.display") (EVar "v"))) (ELit (LString " to i64"))))) (DoExpr (EVar "z")))) (arm (PTuple (PLit (LString "i32ToInt")) (PList (PVar "a"))) () (EBlock (DoLet false false (PVar "v") (EApp (EApp (EApp (EVar "emitU32Raw") (EVar "e")) (EVar "env")) (EVar "a"))) (DoLet false false (PVar "z") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "z"))) (ELit (LString " = sext i32 "))) (EApp (EVar "$core.display") (EVar "v"))) (ELit (LString " to i64"))))) (DoExpr (EVar "z")))) (arm (PTuple (PLit (LString "intBitNot")) (PList (PVar "a"))) () (EBlock (DoLet false false (PVar "p") (EApp (EVar "go") (EVar "a"))) (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString " = xor i64 "))) (EApp (EVar "$core.display") (EVar "p"))) (ELit (LString ", -1"))))) (DoExpr (EVar "r")))) (arm PWild () (EApp (EApp (EVar "untagInt") (EVar "e")) (EApp (EVar "fst") (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "x")))))))))) (arm PWild () (EApp (EApp (EVar "untagInt") (EVar "e")) (EApp (EVar "fst") (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "x"))))))))) (EApp (EVar "go") (EVar "x0"))))
 (DTypeSig false "intRawBitOp" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "intRawBitOp" ((PLit (LString "intBitAnd"))) (EApp (EVar "Some") (ELit (LString "and"))))
 (DFunDef false "intRawBitOp" ((PLit (LString "intBitOr"))) (EApp (EVar "Some") (ELit (LString "or"))))
 (DFunDef false "intRawBitOp" ((PLit (LString "intBitXor"))) (EApp (EVar "Some") (ELit (LString "xor"))))
 (DFunDef false "intRawBitOp" (PWild) (EVar "None"))
 (DTypeSig false "static32Kind" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "CExpr") (TyCon "RawKind")))))
-(DFunDef false "static32Kind" (PWild (PVar "env") (PCon "CVar" (PVar "x") PWild)) (EMatch (EApp (EApp (EVar "omLookup") (EVar "x")) (EVar "env")) (arm (PCon "Some" (PTuple PWild (PCon "LTU32U"))) () (EVar "RawU32")) (arm (PCon "Some" (PTuple PWild (PCon "LTI32U"))) () (EVar "RawI32")) (arm PWild () (EVar "RawWord"))))
-(DFunDef false "static32Kind" (PWild PWild (PCon "CBinPrim" (PVar "op") PWild PWild (PVar "tag") PWild)) (EIf (EApp (EVar "isArithOp") (EVar "op")) (EApp (EVar "rawKindOfHead32") (EVar "tag")) (EVar "RawWord")))
-(DFunDef false "static32Kind" ((PVar "e") (PVar "env") (PCon "CIf" PWild (PVar "t") (PVar "f"))) (EBlock (DoLet false false (PVar "k") (EApp (EApp (EApp (EVar "static32Kind") (EVar "e")) (EVar "env")) (EVar "t"))) (DoExpr (EIf (EApp (EApp (EVar "sameRawKind") (EVar "k")) (EApp (EApp (EApp (EVar "static32Kind") (EVar "e")) (EVar "env")) (EVar "f"))) (EVar "k") (EVar "RawWord")))))
-(DFunDef false "static32Kind" ((PVar "e") (PVar "env") (PVar "ex")) (EMatch (EApp (EApp (EVar "flattenApp") (EVar "ex")) (EListLit)) (arm (PTuple (PCon "CVar" (PVar "f") PWild) (PVar "args")) () (EIf (EApp (EApp (EVar "isLocal") (EVar "env")) (EVar "f")) (EVar "RawWord") (EIf (EApp (EVar "isTruncate32") (EApp (EApp (EVar "runtimeName") (EVar "e")) (EVar "f"))) (EIf (EBinOp "==" (EApp (EVar "lengthS") (EVar "args")) (ELit (LInt 1))) (EIf (EBinOp "==" (EApp (EApp (EVar "runtimeName") (EVar "e")) (EVar "f")) (ELit (LString "i32Truncate"))) (EVar "RawI32") (EVar "RawU32")) (EVar "RawWord")) (EMatch (EApp (EApp (EApp (EApp (EVar "u32Inline") (EVar "e")) (EVar "env")) (EVar "f")) (EVar "args")) (arm (PCon "Some" (PTuple (PVar "k") PWild PWild)) () (EVar "k")) (arm (PCon "None") () (EMatch (EApp (EApp (EApp (EVar "rawWorkerReturning32") (EVar "e")) (EVar "f")) (EApp (EVar "lengthS") (EVar "args"))) (arm (PCon "Some" (PTuple PWild (PVar "w"))) () (EApp (EVar "rawWorkerRet") (EVar "w"))) (arm (PCon "None") () (EVar "RawWord")))))))) (arm PWild () (EVar "RawWord"))))
+(DFunDef false "static32Kind" ((PVar "e") (PVar "env") (PVar "ex0")) (ELetGroup ((lgb "go" (clause ((PCon "CVar" (PVar "x") PWild)) (EMatch (EApp (EApp (EVar "omLookup") (EVar "x")) (EVar "env")) (arm (PCon "Some" (PTuple PWild (PCon "LTU32U"))) () (EVar "RawU32")) (arm (PCon "Some" (PTuple PWild (PCon "LTI32U"))) () (EVar "RawI32")) (arm PWild () (EVar "RawWord")))) (clause ((PCon "CBinPrim" (PVar "op") PWild PWild (PVar "tag") PWild)) (EIf (EApp (EVar "isArithOp") (EVar "op")) (EApp (EVar "rawKindOfHead32") (EVar "tag")) (EVar "RawWord"))) (clause ((PCon "CIf" PWild (PVar "t") (PVar "f"))) (EBlock (DoLet false false (PVar "k") (EApp (EVar "go") (EVar "t"))) (DoExpr (EIf (EApp (EApp (EVar "sameRawKind") (EVar "k")) (EApp (EVar "go") (EVar "f"))) (EVar "k") (EVar "RawWord"))))) (clause ((PVar "ex")) (EMatch (EApp (EApp (EVar "flattenApp") (EVar "ex")) (EListLit)) (arm (PTuple (PCon "CVar" (PVar "f") PWild) (PVar "args")) () (EIf (EApp (EApp (EVar "isLocal") (EVar "env")) (EVar "f")) (EVar "RawWord") (EIf (EApp (EVar "isTruncate32") (EApp (EApp (EVar "runtimeName") (EVar "e")) (EVar "f"))) (EIf (EBinOp "==" (EApp (EVar "lengthS") (EVar "args")) (ELit (LInt 1))) (EIf (EBinOp "==" (EApp (EApp (EVar "runtimeName") (EVar "e")) (EVar "f")) (ELit (LString "i32Truncate"))) (EVar "RawI32") (EVar "RawU32")) (EVar "RawWord")) (EMatch (EApp (EApp (EApp (EApp (EVar "u32Inline") (EVar "e")) (EVar "env")) (EVar "f")) (EVar "args")) (arm (PCon "Some" (PTuple (PVar "k") PWild PWild)) () (EVar "k")) (arm (PCon "None") () (EMatch (EApp (EApp (EApp (EVar "rawWorkerReturning32") (EVar "e")) (EVar "f")) (EApp (EVar "lengthS") (EVar "args"))) (arm (PCon "Some" (PTuple PWild (PVar "w"))) () (EApp (EVar "rawWorkerRet") (EVar "w"))) (arm (PCon "None") () (EVar "RawWord")))))))) (arm PWild () (EVar "RawWord")))))) (EApp (EVar "go") (EVar "ex0"))))
 (DTypeSig false "rawKindOfHead32" (TyFun (TyCon "String") (TyCon "RawKind")))
 (DFunDef false "rawKindOfHead32" ((PVar "tag")) (EIf (EApp (EVar "isW32Head") (EVar "tag")) (EApp (EVar "rawKindOfHead") (EVar "tag")) (EVar "RawWord")))
 (DTypeSig false "u32Inline" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyApp (TyCon "Option") (TyTuple (TyCon "RawKind") (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr"))))))))
@@ -15961,8 +16034,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "inlineSiteBudget" (TyCon "Int"))
 (DFunDef false "inlineSiteBudget" () (ELit (LInt 64)))
 (DTypeSig false "bindInlineArgs" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy")))))))))
-(DFunDef false "bindInlineArgs" ((PVar "e") (PVar "env") (PCons (PCon "PVar" (PVar "x") PWild PWild) (PVar "ps")) (PCons (PVar "a") (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EApp (EApp (EVar "bindInlineArgs") (EVar "e")) (EVar "env")) (EVar "ps")) (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "x")) (EApp (EApp (EApp (EVar "emitRawOrWord") (EVar "e")) (EVar "env")) (EVar "a"))) (EVar "acc"))))
-(DFunDef false "bindInlineArgs" (PWild PWild PWild PWild (PVar "acc")) (EVar "acc"))
+(DFunDef false "bindInlineArgs" ((PVar "e") (PVar "env") (PVar "xs0") (PVar "xs1") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PCons (PCon "PVar" (PVar "x") PWild PWild) (PVar "ps")) (PCons (PVar "a") (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "go") (EVar "ps")) (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "x")) (EApp (EApp (EApp (EVar "emitRawOrWord") (EVar "e")) (EVar "env")) (EVar "a"))) (EVar "acc")))) (clause (PWild PWild (PVar "acc")) (EVar "acc")))) (EApp (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "xs1")) (EVar "acc0"))))
 (DTypeSig false "emitRawOrWord" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "CExpr") (TyTuple (TyCon "String") (TyCon "LTy"))))))
 (DFunDef false "emitRawOrWord" ((PVar "e") (PVar "env") (PVar "a")) (EIf (EApp (EApp (EApp (EVar "staticIsU64") (EVar "e")) (EVar "env")) (EVar "a")) (ETuple (EApp (EApp (EApp (EVar "emitU64Raw") (EVar "e")) (EVar "env")) (EVar "a")) (EVar "LTU64U")) (EBlock (DoLet false false (PVar "k") (EApp (EApp (EApp (EVar "static32Kind") (EVar "e")) (EVar "env")) (EVar "a"))) (DoExpr (EIf (EApp (EVar "isRaw32") (EVar "k")) (ETuple (EApp (EApp (EApp (EVar "emitU32Raw") (EVar "e")) (EVar "env")) (EVar "a")) (EApp (EVar "w32LocalLTy") (EVar "k"))) (EIf (EApp (EApp (EVar "computesAsDouble") (EVar "env")) (EVar "a")) (ETuple (EApp (EApp (EApp (EVar "emitFloatD") (EVar "e")) (EVar "env")) (EVar "a")) (EVar "LTFloatU")) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "a"))))))))
 (DTypeSig false "coreSize" (TyFun (TyCon "CExpr") (TyCon "Int")))
@@ -15989,34 +16061,16 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DFunDef false "stmtExprs" ((PCons (PCon "CSLet" PWild PWild (PVar "x")) (PVar "rest"))) (EBinOp "::" (EVar "x") (EApp (EVar "stmtExprs") (EVar "rest"))))
 (DFunDef false "stmtExprs" ((PCons (PCon "CSAssign" PWild (PVar "x")) (PVar "rest"))) (EBinOp "::" (EVar "x") (EApp (EVar "stmtExprs") (EVar "rest"))))
 (DTypeSig false "u64Escapes" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyCon "CExpr") (TyCon "Int"))))))
-(DFunDef false "u64Escapes" (PWild (PVar "x") (PVar "raw") (PCon "CVar" (PVar "y") PWild)) (EIf (EBinOp "&&" (EBinOp "==" (EVar "y") (EVar "x")) (EApp (EVar "not") (EVar "raw"))) (ELit (LInt 1)) (ELit (LInt 0))))
-(DFunDef false "u64Escapes" (PWild PWild PWild (PCon "CLit" PWild)) (ELit (LInt 0)))
-(DFunDef false "u64Escapes" ((PVar "e") (PVar "x") PWild (PCon "CBinPrim" (PVar "op") (PVar "l") (PVar "r") (PVar "tag") PWild)) (EBlock (DoLet false false (PVar "inner") (EBinOp "&&" (EApp (EVar "isBoxed64Head") (EVar "tag")) (EBinOp "||" (EApp (EVar "isArithOp") (EVar "op")) (EApp (EVar "isCmpOp") (EVar "op"))))) (DoExpr (EBinOp "+" (EApp (EApp (EApp (EApp (EVar "u64Escapes") (EVar "e")) (EVar "x")) (EVar "inner")) (EVar "l")) (EApp (EApp (EApp (EApp (EVar "u64Escapes") (EVar "e")) (EVar "x")) (EVar "inner")) (EVar "r"))))))
-(DFunDef false "u64Escapes" ((PVar "e") (PVar "x") (PVar "raw") (PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EBinOp "+" (EBinOp "+" (EApp (EApp (EApp (EApp (EVar "u64Escapes") (EVar "e")) (EVar "x")) (EVar "False")) (EVar "c")) (EApp (EApp (EApp (EApp (EVar "u64Escapes") (EVar "e")) (EVar "x")) (EVar "raw")) (EVar "t"))) (EApp (EApp (EApp (EApp (EVar "u64Escapes") (EVar "e")) (EVar "x")) (EVar "raw")) (EVar "f"))))
-(DFunDef false "u64Escapes" ((PVar "e") (PVar "x") (PVar "raw") (PCon "CLet" (PCon "False") (PCon "PVar" (PVar "y") (PVar "a") (PVar "bid")) (PVar "e1") (PVar "e2"))) (EMatch (EVar "e1") (arm (PCon "CLam" PWild PWild) () (EApp (EApp (EVar "occurrencesOf") (EVar "x")) (EApp (EApp (EApp (EApp (EVar "CLet") (EVar "False")) (EApp (EApp (EApp (EVar "PVar") (EVar "y")) (EVar "a")) (EVar "bid"))) (EVar "e1")) (EVar "e2")))) (arm PWild () (EBinOp "+" (EApp (EApp (EApp (EApp (EVar "u64Escapes") (EVar "e")) (EVar "x")) (EApp (EApp (EVar "u64Shaped") (EVar "e")) (EVar "e1"))) (EVar "e1")) (EIf (EBinOp "==" (EVar "y") (EVar "x")) (ELit (LInt 0)) (EApp (EApp (EApp (EApp (EVar "u64Escapes") (EVar "e")) (EVar "x")) (EVar "raw")) (EVar "e2")))))))
-(DFunDef false "u64Escapes" ((PVar "e") (PVar "x") (PVar "raw") (PCon "CLet" (PCon "False") (PVar "pat") (PVar "e1") (PVar "e2"))) (EBinOp "+" (EApp (EApp (EApp (EApp (EVar "u64EscapesBound") (EVar "e")) (EVar "x")) (EVar "pat")) (EVar "e1")) (EIf (EApp (EApp (EVar "contains") (EVar "x")) (EApp (EVar "patBinders") (EVar "pat"))) (ELit (LInt 0)) (EApp (EApp (EApp (EApp (EVar "u64Escapes") (EVar "e")) (EVar "x")) (EVar "raw")) (EVar "e2")))))
-(DFunDef false "u64Escapes" ((PVar "e") (PVar "x") (PVar "raw") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EApp (EApp (EVar "u64EscapesBlock") (EVar "e")) (EVar "x")) (EVar "raw")) (EVar "stmts")))
-(DFunDef false "u64Escapes" ((PVar "e") (PVar "x") PWild (PCon "CArray" (PVar "es"))) (EApp (EApp (EApp (EVar "u64EscapesWords") (EVar "e")) (EVar "x")) (EVar "es")))
-(DFunDef false "u64Escapes" ((PVar "e") (PVar "x") PWild (PCon "CTuple" (PVar "es"))) (EApp (EApp (EApp (EVar "u64EscapesWords") (EVar "e")) (EVar "x")) (EVar "es")))
-(DFunDef false "u64Escapes" ((PVar "e") (PVar "x") PWild (PCon "CList" (PVar "es"))) (EApp (EApp (EApp (EVar "u64EscapesWords") (EVar "e")) (EVar "x")) (EVar "es")))
-(DFunDef false "u64Escapes" ((PVar "e") (PVar "x") PWild (PCon "CUnOp" PWild (PVar "a"))) (EApp (EApp (EApp (EApp (EVar "u64Escapes") (EVar "e")) (EVar "x")) (EVar "False")) (EVar "a")))
-(DFunDef false "u64Escapes" ((PVar "e") (PVar "x") (PVar "_raw") (PVar "ex")) (EMatch (EApp (EApp (EVar "flattenApp") (EVar "ex")) (EListLit)) (arm (PTuple (PCon "CVar" (PVar "f") PWild) (PVar "args")) () (EIf (EBinOp "==" (EVar "f") (EVar "x")) (EApp (EApp (EVar "occurrencesOf") (EVar "x")) (EVar "ex")) (EApp (EApp (EApp (EApp (EVar "u64EscapesArgs") (EVar "e")) (EVar "x")) (EApp (EApp (EApp (EVar "u64ArgRaw") (EVar "e")) (EVar "f")) (EVar "args"))) (EVar "args")))) (arm PWild () (EApp (EApp (EVar "occurrencesOf") (EVar "x")) (EVar "ex")))))
+(DFunDef false "u64Escapes" ((PVar "e") (PVar "x") (PVar "raw0") (PVar "ex0")) (ELetGroup ((lgb "go" (clause ((PVar "raw") (PCon "CVar" (PVar "y") PWild)) (EIf (EBinOp "&&" (EBinOp "==" (EVar "y") (EVar "x")) (EApp (EVar "not") (EVar "raw"))) (ELit (LInt 1)) (ELit (LInt 0)))) (clause (PWild (PCon "CLit" PWild)) (ELit (LInt 0))) (clause (PWild (PCon "CBinPrim" (PVar "op") (PVar "l") (PVar "r") (PVar "tag") PWild)) (EBlock (DoLet false false (PVar "inner") (EBinOp "&&" (EApp (EVar "isBoxed64Head") (EVar "tag")) (EBinOp "||" (EApp (EVar "isArithOp") (EVar "op")) (EApp (EVar "isCmpOp") (EVar "op"))))) (DoExpr (EBinOp "+" (EApp (EApp (EVar "go") (EVar "inner")) (EVar "l")) (EApp (EApp (EVar "go") (EVar "inner")) (EVar "r")))))) (clause ((PVar "raw") (PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EBinOp "+" (EBinOp "+" (EApp (EApp (EVar "go") (EVar "False")) (EVar "c")) (EApp (EApp (EVar "go") (EVar "raw")) (EVar "t"))) (EApp (EApp (EVar "go") (EVar "raw")) (EVar "f")))) (clause ((PVar "raw") (PCon "CLet" (PCon "False") (PCon "PVar" (PVar "y") (PVar "a") (PVar "bid")) (PVar "e1") (PVar "e2"))) (EMatch (EVar "e1") (arm (PCon "CLam" PWild PWild) () (EApp (EApp (EVar "occurrencesOf") (EVar "x")) (EApp (EApp (EApp (EApp (EVar "CLet") (EVar "False")) (EApp (EApp (EApp (EVar "PVar") (EVar "y")) (EVar "a")) (EVar "bid"))) (EVar "e1")) (EVar "e2")))) (arm PWild () (EBinOp "+" (EApp (EApp (EVar "go") (EApp (EApp (EVar "u64Shaped") (EVar "e")) (EVar "e1"))) (EVar "e1")) (EIf (EBinOp "==" (EVar "y") (EVar "x")) (ELit (LInt 0)) (EApp (EApp (EVar "go") (EVar "raw")) (EVar "e2"))))))) (clause ((PVar "raw") (PCon "CLet" (PCon "False") (PVar "pat") (PVar "e1") (PVar "e2"))) (EBinOp "+" (EApp (EApp (EApp (EApp (EVar "u64EscapesBound") (EVar "e")) (EVar "x")) (EVar "pat")) (EVar "e1")) (EIf (EApp (EApp (EVar "contains") (EVar "x")) (EApp (EVar "patBinders") (EVar "pat"))) (ELit (LInt 0)) (EApp (EApp (EVar "go") (EVar "raw")) (EVar "e2"))))) (clause ((PVar "raw") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EApp (EApp (EVar "u64EscapesBlock") (EVar "e")) (EVar "x")) (EVar "raw")) (EVar "stmts"))) (clause (PWild (PCon "CArray" (PVar "es"))) (EApp (EApp (EApp (EVar "u64EscapesWords") (EVar "e")) (EVar "x")) (EVar "es"))) (clause (PWild (PCon "CTuple" (PVar "es"))) (EApp (EApp (EApp (EVar "u64EscapesWords") (EVar "e")) (EVar "x")) (EVar "es"))) (clause (PWild (PCon "CList" (PVar "es"))) (EApp (EApp (EApp (EVar "u64EscapesWords") (EVar "e")) (EVar "x")) (EVar "es"))) (clause (PWild (PCon "CUnOp" PWild (PVar "a"))) (EApp (EApp (EVar "go") (EVar "False")) (EVar "a"))) (clause ((PVar "_raw") (PVar "ex")) (EMatch (EApp (EApp (EVar "flattenApp") (EVar "ex")) (EListLit)) (arm (PTuple (PCon "CVar" (PVar "f") PWild) (PVar "args")) () (EIf (EBinOp "==" (EVar "f") (EVar "x")) (EApp (EApp (EVar "occurrencesOf") (EVar "x")) (EVar "ex")) (EApp (EApp (EApp (EApp (EVar "u64EscapesArgs") (EVar "e")) (EVar "x")) (EApp (EApp (EApp (EVar "u64ArgRaw") (EVar "e")) (EVar "f")) (EVar "args"))) (EVar "args")))) (arm PWild () (EApp (EApp (EVar "occurrencesOf") (EVar "x")) (EVar "ex"))))))) (EApp (EApp (EVar "go") (EVar "raw0")) (EVar "ex0"))))
 (DTypeSig false "u64EscapesBlock" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyCon "Int"))))))
-(DFunDef false "u64EscapesBlock" ((PVar "e") (PVar "x") (PVar "raw") (PList (PCon "CSExpr" (PVar "ex")))) (EApp (EApp (EApp (EApp (EVar "u64Escapes") (EVar "e")) (EVar "x")) (EVar "raw")) (EVar "ex")))
-(DFunDef false "u64EscapesBlock" ((PVar "e") (PVar "x") PWild (PCons (PCon "CSExpr" (PVar "ex")) (PVar "rest"))) (EBinOp "+" (EApp (EApp (EApp (EApp (EVar "u64Escapes") (EVar "e")) (EVar "x")) (EVar "False")) (EVar "ex")) (EApp (EApp (EApp (EApp (EVar "u64EscapesBlock") (EVar "e")) (EVar "x")) (EVar "False")) (EVar "rest"))))
-(DFunDef false "u64EscapesBlock" ((PVar "e") (PVar "x") (PVar "raw") (PCons (PCon "CSLet" PWild (PCon "PVar" (PVar "y") (PVar "a") (PVar "bid")) (PVar "ex")) (PVar "rest"))) (EMatch (EVar "ex") (arm (PCon "CLam" PWild PWild) () (EApp (EApp (EVar "occurrencesOf") (EVar "x")) (EApp (EVar "CBlock") (EBinOp "::" (EApp (EApp (EApp (EVar "CSLet") (EVar "False")) (EApp (EApp (EApp (EVar "PVar") (EVar "y")) (EVar "a")) (EVar "bid"))) (EVar "ex")) (EVar "rest"))))) (arm PWild () (EBinOp "+" (EApp (EApp (EApp (EApp (EVar "u64Escapes") (EVar "e")) (EVar "x")) (EApp (EApp (EVar "u64Shaped") (EVar "e")) (EVar "ex"))) (EVar "ex")) (EIf (EBinOp "==" (EVar "y") (EVar "x")) (ELit (LInt 0)) (EApp (EApp (EApp (EApp (EVar "u64EscapesBlock") (EVar "e")) (EVar "x")) (EVar "raw")) (EVar "rest")))))))
-(DFunDef false "u64EscapesBlock" ((PVar "e") (PVar "x") (PVar "raw") (PCons (PCon "CSLet" PWild (PVar "pat") (PVar "ex")) (PVar "rest"))) (EBinOp "+" (EApp (EApp (EApp (EApp (EVar "u64EscapesBound") (EVar "e")) (EVar "x")) (EVar "pat")) (EVar "ex")) (EIf (EApp (EApp (EVar "contains") (EVar "x")) (EApp (EVar "patBinders") (EVar "pat"))) (ELit (LInt 0)) (EApp (EApp (EApp (EApp (EVar "u64EscapesBlock") (EVar "e")) (EVar "x")) (EVar "raw")) (EVar "rest")))))
-(DFunDef false "u64EscapesBlock" ((PVar "e") (PVar "x") (PVar "raw") (PCons (PCon "CSAssign" (PVar "y") (PVar "ex")) (PVar "rest"))) (EBinOp "+" (EApp (EApp (EApp (EApp (EVar "u64Escapes") (EVar "e")) (EVar "x")) (EVar "False")) (EVar "ex")) (EIf (EBinOp "==" (EVar "y") (EVar "x")) (ELit (LInt 0)) (EApp (EApp (EApp (EApp (EVar "u64EscapesBlock") (EVar "e")) (EVar "x")) (EVar "raw")) (EVar "rest")))))
-(DFunDef false "u64EscapesBlock" (PWild PWild PWild (PList)) (ELit (LInt 0)))
+(DFunDef false "u64EscapesBlock" ((PVar "e") (PVar "x") (PVar "raw0") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PVar "raw") (PList (PCon "CSExpr" (PVar "ex")))) (EApp (EApp (EApp (EApp (EVar "u64Escapes") (EVar "e")) (EVar "x")) (EVar "raw")) (EVar "ex"))) (clause (PWild (PCons (PCon "CSExpr" (PVar "ex")) (PVar "rest"))) (EBinOp "+" (EApp (EApp (EApp (EApp (EVar "u64Escapes") (EVar "e")) (EVar "x")) (EVar "False")) (EVar "ex")) (EApp (EApp (EVar "go") (EVar "False")) (EVar "rest")))) (clause ((PVar "raw") (PCons (PCon "CSLet" PWild (PCon "PVar" (PVar "y") (PVar "a") (PVar "bid")) (PVar "ex")) (PVar "rest"))) (EMatch (EVar "ex") (arm (PCon "CLam" PWild PWild) () (EApp (EApp (EVar "occurrencesOf") (EVar "x")) (EApp (EVar "CBlock") (EBinOp "::" (EApp (EApp (EApp (EVar "CSLet") (EVar "False")) (EApp (EApp (EApp (EVar "PVar") (EVar "y")) (EVar "a")) (EVar "bid"))) (EVar "ex")) (EVar "rest"))))) (arm PWild () (EBinOp "+" (EApp (EApp (EApp (EApp (EVar "u64Escapes") (EVar "e")) (EVar "x")) (EApp (EApp (EVar "u64Shaped") (EVar "e")) (EVar "ex"))) (EVar "ex")) (EIf (EBinOp "==" (EVar "y") (EVar "x")) (ELit (LInt 0)) (EApp (EApp (EVar "go") (EVar "raw")) (EVar "rest"))))))) (clause ((PVar "raw") (PCons (PCon "CSLet" PWild (PVar "pat") (PVar "ex")) (PVar "rest"))) (EBinOp "+" (EApp (EApp (EApp (EApp (EVar "u64EscapesBound") (EVar "e")) (EVar "x")) (EVar "pat")) (EVar "ex")) (EIf (EApp (EApp (EVar "contains") (EVar "x")) (EApp (EVar "patBinders") (EVar "pat"))) (ELit (LInt 0)) (EApp (EApp (EVar "go") (EVar "raw")) (EVar "rest"))))) (clause ((PVar "raw") (PCons (PCon "CSAssign" (PVar "y") (PVar "ex")) (PVar "rest"))) (EBinOp "+" (EApp (EApp (EApp (EApp (EVar "u64Escapes") (EVar "e")) (EVar "x")) (EVar "False")) (EVar "ex")) (EIf (EBinOp "==" (EVar "y") (EVar "x")) (ELit (LInt 0)) (EApp (EApp (EVar "go") (EVar "raw")) (EVar "rest"))))) (clause (PWild (PList)) (ELit (LInt 0))))) (EApp (EApp (EVar "go") (EVar "raw0")) (EVar "xs0"))))
 (DTypeSig false "u64EscapesBound" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "Pat") (TyFun (TyCon "CExpr") (TyCon "Int"))))))
 (DFunDef false "u64EscapesBound" ((PVar "e") (PVar "x") (PCon "PTuple" (PVar "ps")) (PVar "ex")) (EMatch (EApp (EApp (EVar "flattenApp") (EVar "ex")) (EListLit)) (arm (PTuple (PCon "CVar" (PVar "f") PWild) (PVar "args")) () (EIf (EBinOp "&&" (EApp (EVar "allVarOrWild") (EVar "ps")) (EApp (EVar "isSome") (EApp (EApp (EApp (EApp (EVar "tupleInline") (EVar "e")) (EVar "f")) (EVar "args")) (EApp (EVar "lengthS") (EVar "ps"))))) (EApp (EApp (EApp (EApp (EVar "u64EscapesArgs") (EVar "e")) (EVar "x")) (EApp (EApp (EVar "map") (ELam (PWild) (EVar "True"))) (EVar "args"))) (EVar "args")) (EApp (EApp (EApp (EApp (EVar "u64Escapes") (EVar "e")) (EVar "x")) (EVar "False")) (EVar "ex")))) (arm PWild () (EApp (EApp (EApp (EApp (EVar "u64Escapes") (EVar "e")) (EVar "x")) (EVar "False")) (EVar "ex")))))
 (DFunDef false "u64EscapesBound" ((PVar "e") (PVar "x") PWild (PVar "ex")) (EApp (EApp (EApp (EApp (EVar "u64Escapes") (EVar "e")) (EVar "x")) (EVar "False")) (EVar "ex")))
 (DTypeSig false "u64EscapesWords" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyCon "Int")))))
 (DFunDef false "u64EscapesWords" ((PVar "e") (PVar "x") (PVar "es")) (EApp (EApp (EApp (EApp (EVar "u64EscapesArgs") (EVar "e")) (EVar "x")) (EListLit)) (EVar "es")))
 (DTypeSig false "u64EscapesArgs" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyCon "Int"))))))
-(DFunDef false "u64EscapesArgs" ((PVar "e") (PVar "x") (PCons (PVar "r") (PVar "rs")) (PCons (PVar "a") (PVar "as_"))) (EBinOp "+" (EApp (EApp (EApp (EApp (EVar "u64Escapes") (EVar "e")) (EVar "x")) (EVar "r")) (EVar "a")) (EApp (EApp (EApp (EApp (EVar "u64EscapesArgs") (EVar "e")) (EVar "x")) (EVar "rs")) (EVar "as_"))))
-(DFunDef false "u64EscapesArgs" ((PVar "e") (PVar "x") (PList) (PCons (PVar "a") (PVar "as_"))) (EBinOp "+" (EApp (EApp (EApp (EApp (EVar "u64Escapes") (EVar "e")) (EVar "x")) (EVar "False")) (EVar "a")) (EApp (EApp (EApp (EApp (EVar "u64EscapesArgs") (EVar "e")) (EVar "x")) (EListLit)) (EVar "as_"))))
-(DFunDef false "u64EscapesArgs" (PWild PWild PWild (PList)) (ELit (LInt 0)))
+(DFunDef false "u64EscapesArgs" ((PVar "e") (PVar "x") (PVar "xs0") (PVar "xs1")) (ELetGroup ((lgb "go" (clause ((PCons (PVar "r") (PVar "rs")) (PCons (PVar "a") (PVar "as_"))) (EBinOp "+" (EApp (EApp (EApp (EApp (EVar "u64Escapes") (EVar "e")) (EVar "x")) (EVar "r")) (EVar "a")) (EApp (EApp (EVar "go") (EVar "rs")) (EVar "as_")))) (clause ((PList) (PCons (PVar "a") (PVar "as_"))) (EBinOp "+" (EApp (EApp (EApp (EApp (EVar "u64Escapes") (EVar "e")) (EVar "x")) (EVar "False")) (EVar "a")) (EApp (EApp (EVar "go") (EListLit)) (EVar "as_")))) (clause (PWild (PList)) (ELit (LInt 0))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "xs1"))))
 (DTypeSig false "u64ArgRaw" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyApp (TyCon "List") (TyCon "Bool"))))))
 (DFunDef false "u64ArgRaw" ((PVar "e") (PVar "f") (PVar "args")) (EBlock (DoLet false false (PVar "key") (EApp (EApp (EVar "runtimeName") (EVar "e")) (EVar "f"))) (DoLet false false (PVar "n") (EApp (EVar "lengthS") (EVar "args"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "==" (EVar "key") (ELit (LString "u64TruncateToInt"))) (EBinOp "==" (EVar "n") (ELit (LInt 1)))) (EListLit (EVar "True")) (EIf (EApp (EApp (EVar "isW64RawKernel") (EVar "key")) (EVar "n")) (EApp (EVar "u64KernelArgRaw") (EVar "key")) (EMatch (EApp (EApp (EApp (EVar "u64KernelAlias") (EVar "e")) (EVar "f")) (EVar "args")) (arm (PCon "Some" (PVar "k")) () (EIf (EBinOp "==" (EVar "k") (ELit (LString "u64TruncateToInt"))) (EListLit (EVar "True")) (EApp (EVar "u64KernelArgRaw") (EVar "k")))) (arm (PCon "None") () (EMatch (EApp (EApp (EApp (EVar "rawWorkerCall") (EVar "e")) (EVar "f")) (EVar "n")) (arm (PCon "Some" (PTuple PWild (PCon "RawWorker" PWild (PVar "ks") PWild))) () (EApp (EApp (EVar "map") (ELam ((PVar "k")) (EApp (EApp (EVar "sameRawKind") (EVar "k")) (EVar "RawU64")))) (EVar "ks"))) (arm (PCon "None") () (EListLit))))))))))
 (DTypeSig false "u64KernelArgRaw" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Bool"))))
@@ -16035,7 +16089,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "occurrencesOf" (TyFun (TyCon "String") (TyFun (TyCon "CExpr") (TyCon "Int"))))
 (DFunDef false "occurrencesOf" ((PVar "x") (PVar "ex")) (EApp (EVar "lengthS") (EApp (EApp (EVar "filterList") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "x")))) (EApp (EApp (EVar "freeVars") (EListLit)) (EVar "ex")))))
 (DTypeSig false "bindTupleInline" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "CExpr") (TyApp (TyCon "Option") (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy")))))))))
-(DFunDef false "bindTupleInline" ((PVar "e") (PVar "env") (PVar "ps") (PVar "ex")) (EIf (EApp (EVar "not") (EApp (EVar "allVarOrWild") (EVar "ps"))) (EVar "None") (EMatch (EApp (EApp (EVar "flattenApp") (EVar "ex")) (EListLit)) (arm (PTuple (PCon "CVar" (PVar "f") PWild) (PVar "args")) () (EIf (EApp (EApp (EVar "isLocal") (EVar "env")) (EVar "f")) (EVar "None") (EMatch (EApp (EApp (EApp (EApp (EVar "tupleInline") (EVar "e")) (EVar "f")) (EVar "args")) (EApp (EVar "lengthS") (EVar "ps"))) (arm (PCon "Some" (PTuple (PVar "pats") (PVar "lead") (PVar "comps"))) () (EBlock (DoLet false false (PVar "penv") (EApp (EApp (EApp (EApp (EApp (EVar "bindInlineArgs") (EVar "e")) (EVar "env")) (EVar "pats")) (EVar "args")) (EVar "omEmpty"))) (DoLet false false (PVar "vals") (EApp (EApp (EVar "withInlineScope") (EVar "e")) (ELam (PWild) (EApp (EApp (EApp (EVar "emitRawOrWords") (EVar "e")) (EApp (EApp (EApp (EVar "emitBlockLeads") (EVar "e")) (EVar "penv")) (EVar "lead"))) (EVar "comps"))))) (DoExpr (EApp (EVar "Some") (EApp (EApp (EApp (EVar "bindTupleVals") (EVar "env")) (EVar "ps")) (EVar "vals")))))) (arm (PCon "None") () (EVar "None"))))) (arm PWild () (EVar "None")))))
+(DFunDef false "bindTupleInline" ((PVar "e") (PVar "env") (PVar "ps") (PVar "ex")) (EIf (EApp (EVar "not") (EApp (EVar "allVarOrWild") (EVar "ps"))) (EVar "None") (EMatch (EApp (EApp (EVar "flattenApp") (EVar "ex")) (EListLit)) (arm (PTuple (PCon "CVar" (PVar "f") PWild) (PVar "args")) () (EIf (EApp (EApp (EVar "isLocal") (EVar "env")) (EVar "f")) (EVar "None") (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EApp (EVar "tupleInline") (EVar "e")) (EVar "f")) (EVar "args")) (EApp (EVar "lengthS") (EVar "ps")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "pats") (PVar "lead") (PVar "comps")) () (ELet false (PVar "penv") (EApp (EApp (EApp (EApp (EApp (EVar "bindInlineArgs") (EVar "e")) (EVar "env")) (EVar "pats")) (EVar "args")) (EVar "omEmpty")) (ELet false (PVar "vals") (EApp (EApp (EVar "withInlineScope") (EVar "e")) (ELam (PWild) (EApp (EApp (EApp (EVar "emitRawOrWords") (EVar "e")) (EApp (EApp (EApp (EVar "emitBlockLeads") (EVar "e")) (EVar "penv")) (EVar "lead"))) (EVar "comps")))) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "bindTupleVals") (EVar "env")) (EVar "ps")) (EVar "vals"))))))))))) (arm PWild () (EVar "None")))))
 (DTypeSig false "allVarOrWild" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Bool")))
 (DFunDef false "allVarOrWild" ((PList)) (EVar "True"))
 (DFunDef false "allVarOrWild" ((PCons (PCon "PVar" PWild PWild PWild) (PVar "rest"))) (EApp (EVar "allVarOrWild") (EVar "rest")))
@@ -16058,10 +16112,10 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DFunDef false "tupleBody" ((PCon "CBlock" (PVar "stmts")) (PVar "n")) (EMatch (EApp (EVar "reverseL") (EVar "stmts")) (arm (PCons (PCon "CSExpr" (PCon "CTuple" (PVar "es"))) (PVar "lead")) () (EIf (EBinOp "==" (EApp (EVar "lengthS") (EVar "es")) (EVar "n")) (EApp (EVar "Some") (ETuple (EApp (EVar "reverseL") (EVar "lead")) (EVar "es"))) (EVar "None"))) (arm PWild () (EVar "None"))))
 (DFunDef false "tupleBody" (PWild PWild) (EVar "None"))
 (DTypeSig false "u64KernelAlias" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyApp (TyCon "Option") (TyCon "String"))))))
-(DFunDef false "u64KernelAlias" ((PVar "e") (PVar "f") (PVar "args")) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EApp (EVar "canonFnName") (EVar "e")) (EVar "f"))) (EUnOp "!" (EFieldAccess (EVar "e") "gDispBindMap"))) (arm (PCon "Some" (PCon "CBind" PWild (PList (PCon "CClause" (PVar "pats") (PVar "body"))) PWild PWild)) () (EMatch (EApp (EVar "varNames") (EVar "pats")) (arm (PCon "Some" (PVar "ps")) () (EIf (EBinOp "==" (EApp (EVar "lengthS") (EVar "ps")) (EApp (EVar "lengthS") (EVar "args"))) (EApp (EApp (EApp (EApp (EVar "u64AliasBody") (EVar "e")) (EVar "ps")) (EVar "body")) (EVar "args")) (EVar "None"))) (arm (PCon "None") () (EVar "None")))) (arm PWild () (EVar "None"))))
+(DFunDef false "u64KernelAlias" ((PVar "e") (PVar "f") (PVar "args")) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EApp (EVar "canonFnName") (EVar "e")) (EVar "f"))) (EUnOp "!" (EFieldAccess (EVar "e") "gDispBindMap"))) (arm (PCon "Some" (PCon "CBind" PWild (PList (PCon "CClause" (PVar "pats") (PVar "body"))) PWild PWild)) () (EApp (EApp (EVar "$core.andThen") (EApp (EVar "varNames") (EVar "pats"))) (ELam ((PVar "ps")) (EIf (EBinOp "==" (EApp (EVar "lengthS") (EVar "ps")) (EApp (EVar "lengthS") (EVar "args"))) (EApp (EApp (EApp (EApp (EVar "u64AliasBody") (EVar "e")) (EVar "ps")) (EVar "body")) (EVar "args")) (EVar "None"))))) (arm PWild () (EVar "None"))))
 (DTypeSig false "u64AliasBody" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CExpr") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyApp (TyCon "Option") (TyCon "String")))))))
-(DFunDef false "u64AliasBody" ((PVar "e") (PVar "ps") (PCon "CIf" (PCon "CBinPrim" (PLit (LString "<")) (PCon "CVar" (PVar "k") PWild) (PVar "zero") PWild PWild) PWild (PVar "body")) (PVar "args")) (EMatch (ETuple (EApp (EApp (EApp (EVar "u64KernelApplied") (EVar "e")) (EVar "ps")) (EApp (EVar "skipOtherwise") (EVar "body"))) (EVar "ps") (EVar "args") (EApp (EVar "intLitOf") (EVar "zero"))) (arm (PTuple (PCon "Some" (PVar "kern")) (PList PWild (PVar "amount")) (PList PWild (PVar "lit")) (PCon "Some" (PLit (LInt 0)))) () (EMatch (EApp (EVar "intLitOf") (EVar "lit")) (arm (PCon "Some" (PVar "n")) () (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EVar "isU64ShiftKernel") (EVar "kern")) (EBinOp "==" (EVar "amount") (EVar "k"))) (EBinOp ">=" (EVar "n") (ELit (LInt 0)))) (EApp (EVar "Some") (EVar "kern")) (EVar "None"))) (arm (PCon "None") () (EVar "None")))) (arm PWild () (EVar "None"))))
-(DFunDef false "u64AliasBody" ((PVar "e") (PVar "ps") (PVar "body") PWild) (EMatch (EApp (EApp (EApp (EVar "u64KernelApplied") (EVar "e")) (EVar "ps")) (EVar "body")) (arm (PCon "Some" (PVar "kern")) () (EIf (EApp (EVar "isU64ShiftKernel") (EVar "kern")) (EVar "None") (EApp (EVar "Some") (EVar "kern")))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "u64AliasBody" ((PVar "e") (PVar "ps") (PCon "CIf" (PCon "CBinPrim" (PLit (LString "<")) (PCon "CVar" (PVar "k") PWild) (PVar "zero") PWild PWild) PWild (PVar "body")) (PVar "args")) (EMatch (ETuple (EApp (EApp (EApp (EVar "u64KernelApplied") (EVar "e")) (EVar "ps")) (EApp (EVar "skipOtherwise") (EVar "body"))) (EVar "ps") (EVar "args") (EApp (EVar "intLitOf") (EVar "zero"))) (arm (PTuple (PCon "Some" (PVar "kern")) (PList PWild (PVar "amount")) (PList PWild (PVar "lit")) (PCon "Some" (PLit (LInt 0)))) () (EApp (EApp (EVar "$core.andThen") (EApp (EVar "intLitOf") (EVar "lit"))) (ELam ((PVar "n")) (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EVar "isU64ShiftKernel") (EVar "kern")) (EBinOp "==" (EVar "amount") (EVar "k"))) (EBinOp ">=" (EVar "n") (ELit (LInt 0)))) (EApp (EVar "Some") (EVar "kern")) (EVar "None"))))) (arm PWild () (EVar "None"))))
+(DFunDef false "u64AliasBody" ((PVar "e") (PVar "ps") (PVar "body") PWild) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EVar "u64KernelApplied") (EVar "e")) (EVar "ps")) (EVar "body"))) (ELam ((PVar "kern")) (EIf (EApp (EVar "isU64ShiftKernel") (EVar "kern")) (EVar "None") (EApp (EVar "Some") (EVar "kern"))))))
 (DTypeSig false "intLitOf" (TyFun (TyCon "CExpr") (TyApp (TyCon "Option") (TyCon "Int"))))
 (DFunDef false "intLitOf" ((PCon "CLit" (PCon "LInt" (PVar "n")))) (EApp (EVar "Some") (EVar "n")))
 (DFunDef false "intLitOf" (PWild) (EVar "None"))
@@ -16239,8 +16293,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DFunDef false "emitConcatChain" ((PVar "e") (PVar "env") (PCons (PVar "first") (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "v0") (PVar "t0")) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "first"))) (DoExpr (EMatch (EVar "t0") (arm (PCon "LTStr") () (EIf (EBinOp ">=" (EApp (EVar "lengthS") (EVar "rest")) (ELit (LInt 2))) (EApp (EApp (EApp (EApp (EVar "emitStrConcatN") (EVar "e")) (EVar "env")) (EVar "v0")) (EVar "rest")) (EApp (EApp (EApp (EApp (EApp (EVar "concatFoldEmit") (EVar "e")) (EVar "env")) (EVar "v0")) (EVar "LTStr")) (EVar "rest")))) (arm PWild () (EApp (EApp (EApp (EApp (EApp (EVar "concatFoldEmit") (EVar "e")) (EVar "env")) (EVar "v0")) (EVar "t0")) (EVar "rest")))))))
 (DFunDef false "emitConcatChain" ((PVar "e") PWild (PList)) (EApp (EApp (EVar "gapE") (EVar "e")) (ELit (LString "empty '++' operand chain"))))
 (DTypeSig false "concatFoldEmit" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "String") (TyFun (TyCon "LTy") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyTuple (TyCon "String") (TyCon "LTy"))))))))
-(DFunDef false "concatFoldEmit" (PWild PWild (PVar "v") (PVar "t") (PList)) (ETuple (EVar "v") (EVar "t")))
-(DFunDef false "concatFoldEmit" ((PVar "e") (PVar "env") (PVar "v") (PVar "t") (PCons (PVar "x") (PVar "xs"))) (EBlock (DoLet false false (PTuple (PVar "rv") PWild) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "x"))) (DoLet false false (PVar "r2") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EMatch (EVar "t") (arm (PCon "LTStr") () (EBlock (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (EVar "r2")) (ELit (LString "i64"))) (ELit (LString "mdk_string_append"))) (EApp (EVar "i64Ops") (EListLit (EVar "v") (EVar "rv")))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "concatFoldEmit") (EVar "e")) (EVar "env")) (EVar "r2")) (EVar "LTStr")) (EVar "xs"))))) (arm (PCon "LTCon") () (EBlock (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (EVar "r2")) (ELit (LString "i64"))) (ELit (LString "mdk_list_append"))) (EApp (EVar "i64Ops") (EListLit (EVar "v") (EVar "rv")))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "concatFoldEmit") (EVar "e")) (EVar "env")) (EVar "r2")) (EVar "LTCon")) (EVar "xs"))))) (arm PWild () (EBlock (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (EVar "r2")) (ELit (LString "i64"))) (ELit (LString "mdk_append"))) (EApp (EVar "i64Ops") (EListLit (EVar "v") (EVar "rv")))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "concatFoldEmit") (EVar "e")) (EVar "env")) (EVar "r2")) (EVar "LTUnknown")) (EVar "xs")))))))))
+(DFunDef false "concatFoldEmit" ((PVar "e") (PVar "env") (PVar "reg0") (PVar "ty0") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PVar "v") (PVar "t") (PList)) (ETuple (EVar "v") (EVar "t"))) (clause ((PVar "v") (PVar "t") (PCons (PVar "x") (PVar "xs"))) (EBlock (DoLet false false (PTuple (PVar "rv") PWild) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "x"))) (DoLet false false (PVar "r2") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EMatch (EVar "t") (arm (PCon "LTStr") () (EBlock (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (EVar "r2")) (ELit (LString "i64"))) (ELit (LString "mdk_string_append"))) (EApp (EVar "i64Ops") (EListLit (EVar "v") (EVar "rv")))))) (DoExpr (EApp (EApp (EApp (EVar "go") (EVar "r2")) (EVar "LTStr")) (EVar "xs"))))) (arm (PCon "LTCon") () (EBlock (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (EVar "r2")) (ELit (LString "i64"))) (ELit (LString "mdk_list_append"))) (EApp (EVar "i64Ops") (EListLit (EVar "v") (EVar "rv")))))) (DoExpr (EApp (EApp (EApp (EVar "go") (EVar "r2")) (EVar "LTCon")) (EVar "xs"))))) (arm PWild () (EBlock (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (EVar "r2")) (ELit (LString "i64"))) (ELit (LString "mdk_append"))) (EApp (EVar "i64Ops") (EListLit (EVar "v") (EVar "rv")))))) (DoExpr (EApp (EApp (EApp (EVar "go") (EVar "r2")) (EVar "LTUnknown")) (EVar "xs"))))))))))) (EApp (EApp (EApp (EVar "go") (EVar "reg0")) (EVar "ty0")) (EVar "xs0"))))
 (DTypeSig false "emitStrConcatN" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyTuple (TyCon "String") (TyCon "LTy")))))))
 (DFunDef false "emitStrConcatN" ((PVar "e") (PVar "env") (PVar "v0") (PVar "rest")) (EBlock (DoLet false false (PVar "ops") (EBinOp "::" (EVar "v0") (EApp (EApp (EApp (EVar "emitOperandWords") (EVar "e")) (EVar "env")) (EVar "rest")))) (DoLet false false (PVar "n") (EApp (EVar "lengthS") (EVar "ops"))) (DoLet false false (PVar "arr") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "arr"))) (ELit (LString " = alloca i64, i64 "))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "storeArgv") (EVar "e")) (EVar "arr")) (EVar "ops")) (ELit (LInt 0)))) (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (EVar "r")) (ELit (LString "i64"))) (ELit (LString "mdk_string_append_n"))) (EListLit (ETuple (ELit (LString "i64")) (EApp (EVar "intToString") (EVar "n"))) (ETuple (ELit (LString "ptr")) (EVar "arr")))))) (DoExpr (ETuple (EVar "r") (EVar "LTStr")))))
 (DTypeSig false "emitOperandWords" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyApp (TyCon "List") (TyCon "String"))))))
@@ -16260,7 +16313,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "constFoldFloat" (TyFun (TyCon "CExpr") (TyApp (TyCon "Option") (TyCon "Float"))))
 (DFunDef false "constFoldFloat" ((PCon "CLit" (PCon "LFloat" (PVar "f")))) (EApp (EVar "Some") (EVar "f")))
 (DFunDef false "constFoldFloat" ((PCon "CBinPrim" (PVar "op") (PVar "l") (PVar "r") PWild PWild)) (EMatch (ETuple (EApp (EVar "constFoldFloat") (EVar "l")) (EApp (EVar "constFoldFloat") (EVar "r"))) (arm (PTuple (PCon "Some" (PVar "a")) (PCon "Some" (PVar "b"))) () (EApp (EApp (EApp (EVar "hostFloatOp") (EVar "op")) (EVar "a")) (EVar "b"))) (arm PWild () (EVar "None"))))
-(DFunDef false "constFoldFloat" (PWild) (EVar "None"))
+(DFunDef false "constFoldFloat" ((POr (PCon "CLit" PWild) (PCon "CVar" PWild PWild) (PCon "CApp" PWild PWild PWild) (PCon "CLam" PWild PWild) (PCon "CLet" PWild PWild PWild PWild) (PCon "CLetGroup" PWild PWild) (PCon "CMatch" PWild PWild) (PCon "CDecision" PWild PWild PWild) (PCon "CIf" PWild PWild PWild) (PCon "CUnOp" PWild PWild) (PCon "CTuple" PWild) (PCon "CList" PWild) (PCon "CRecord" PWild PWild) (PCon "CFieldAccess" PWild PWild PWild PWild) (PCon "CRecordUpdate" PWild PWild PWild) (PCon "CVariantUpdate" PWild PWild PWild) (PCon "CArray" PWild) (PCon "CRangeList" PWild PWild PWild) (PCon "CRangeArray" PWild PWild PWild) (PCon "CBlock" PWild) (PCon "CMethod" PWild PWild) (PCon "CDict" PWild PWild))) (EVar "None"))
 (DTypeSig false "hostFloatOp" (TyFun (TyCon "String") (TyFun (TyCon "Float") (TyFun (TyCon "Float") (TyApp (TyCon "Option") (TyCon "Float"))))))
 (DFunDef false "hostFloatOp" ((PLit (LString "+")) (PVar "a") (PVar "b")) (EApp (EVar "Some") (EBinOp "+" (EVar "a") (EVar "b"))))
 (DFunDef false "hostFloatOp" ((PLit (LString "-")) (PVar "a") (PVar "b")) (EApp (EVar "Some") (EBinOp "-" (EVar "a") (EVar "b"))))
@@ -16269,7 +16322,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DFunDef false "hostFloatOp" ((PLit (LString "%")) (PVar "a") (PVar "b")) (EApp (EVar "Some") (EApp (EApp (EVar "floatRem") (EVar "a")) (EVar "b"))))
 (DFunDef false "hostFloatOp" (PWild PWild PWild) (EVar "None"))
 (DTypeSig false "constNanFold" (TyFun (TyCon "String") (TyFun (TyCon "CExpr") (TyFun (TyCon "CExpr") (TyApp (TyCon "Option") (TyCon "String"))))))
-(DFunDef false "constNanFold" ((PVar "op") (PVar "l") (PVar "r")) (EIf (EApp (EVar "isArithOp") (EVar "op")) (EMatch (ETuple (EApp (EVar "constFoldFloat") (EVar "l")) (EApp (EVar "constFoldFloat") (EVar "r"))) (arm (PTuple (PCon "Some" (PVar "a")) (PCon "Some" (PVar "b"))) () (EMatch (EApp (EApp (EApp (EVar "hostFloatOp") (EVar "op")) (EVar "a")) (EVar "b")) (arm (PCon "Some" (PVar "v")) () (EIf (EBinOp "/=" (EVar "v") (EVar "v")) (EApp (EVar "Some") (EApp (EVar "floatBitsHex") (EVar "v"))) (EVar "None"))) (arm (PCon "None") () (EVar "None")))) (arm PWild () (EVar "None"))) (EVar "None")))
+(DFunDef false "constNanFold" ((PVar "op") (PVar "l") (PVar "r")) (EIf (EApp (EVar "isArithOp") (EVar "op")) (EMatch (ETuple (EApp (EVar "constFoldFloat") (EVar "l")) (EApp (EVar "constFoldFloat") (EVar "r"))) (arm (PTuple (PCon "Some" (PVar "a")) (PCon "Some" (PVar "b"))) () (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EVar "hostFloatOp") (EVar "op")) (EVar "a")) (EVar "b"))) (ELam ((PVar "v")) (EIf (EBinOp "/=" (EVar "v") (EVar "v")) (EApp (EVar "Some") (EApp (EVar "floatBitsHex") (EVar "v"))) (EVar "None"))))) (arm PWild () (EVar "None"))) (EVar "None")))
 (DTypeSig false "fenceFloatOperand" (TyFun (TyCon "Emit") (TyFun (TyCon "CExpr") (TyFun (TyCon "CExpr") (TyFun (TyCon "String") (TyCon "String"))))))
 (DFunDef false "fenceFloatOperand" ((PVar "e") (PVar "l") (PVar "r") (PVar "ld")) (EMatch (ETuple (EApp (EVar "constFoldFloat") (EVar "l")) (EApp (EVar "constFoldFloat") (EVar "r"))) (arm (PTuple (PCon "Some" PWild) (PCon "Some" PWild)) () (EVar "ld")) (arm PWild () (EBlock (DoLet false false (PVar "fr") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (EVar "fr")) (ELit (LString "double"))) (ELit (LString "llvm.arithmetic.fence.f64"))) (EListLit (ETuple (ELit (LString "double")) (EVar "ld")))))) (DoExpr (EVar "fr"))))))
 (DTypeSig false "floatBitsHex" (TyFun (TyCon "Float") (TyCon "String")))
@@ -16277,9 +16330,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "bytesHexBE" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyCon "String"))))
 (DFunDef false "bytesHexBE" ((PVar "arr") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (ELit (LString "")) (EBinOp "++" (EApp (EVar "hex2") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))) (EApp (EApp (EVar "bytesHexBE") (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))))
 (DTypeSig false "emitFloatD" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "CExpr") (TyCon "String")))))
-(DFunDef false "emitFloatD" (PWild (PVar "_env") (PCon "CLit" (PCon "LFloat" (PVar "f")))) (EApp (EVar "ensureFloatDot") (EApp (EVar "floatToString") (EVar "f"))))
-(DFunDef false "emitFloatD" ((PVar "e") (PVar "env") (PAs "ex" (PCon "CBinPrim" (PVar "op") (PVar "l") (PVar "r") PWild PWild))) (EIf (EApp (EVar "isArithOp") (EVar "op")) (EMatch (EApp (EApp (EApp (EVar "constNanFold") (EVar "op")) (EVar "l")) (EVar "r")) (arm (PCon "Some" (PVar "hexC")) () (EVar "hexC")) (arm (PCon "None") () (EBlock (DoLet false false (PVar "ld") (EApp (EApp (EApp (EVar "emitFloatD") (EVar "e")) (EVar "env")) (EVar "l"))) (DoLet false false (PVar "rd") (EApp (EApp (EApp (EVar "emitFloatD") (EVar "e")) (EVar "env")) (EVar "r"))) (DoLet false false (PVar "ldf") (EApp (EApp (EApp (EApp (EVar "fenceFloatOperand") (EVar "e")) (EVar "l")) (EVar "r")) (EVar "ld"))) (DoLet false false (PVar "res") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "res"))) (ELit (LString " = "))) (EApp (EVar "$core.display") (EApp (EVar "floatOp") (EVar "op")))) (ELit (LString " double "))) (EApp (EVar "$core.display") (EVar "ldf"))) (ELit (LString ", "))) (EApp (EVar "$core.display") (EVar "rd"))) (ELit (LString ""))))) (DoExpr (EVar "res"))))) (EApp (EApp (EApp (EVar "emitFloatLeaf") (EVar "e")) (EVar "env")) (EVar "ex"))))
-(DFunDef false "emitFloatD" ((PVar "e") (PVar "env") (PVar "ex")) (EApp (EApp (EApp (EVar "emitFloatLeaf") (EVar "e")) (EVar "env")) (EVar "ex")))
+(DFunDef false "emitFloatD" ((PVar "e") (PVar "env") (PVar "ex0")) (ELetGroup ((lgb "go" (clause ((PCon "CLit" (PCon "LFloat" (PVar "f")))) (EApp (EVar "ensureFloatDot") (EApp (EVar "floatToString") (EVar "f")))) (clause ((PAs "ex" (PCon "CBinPrim" (PVar "op") (PVar "l") (PVar "r") PWild PWild))) (EIf (EApp (EVar "isArithOp") (EVar "op")) (EMatch (EApp (EApp (EApp (EVar "constNanFold") (EVar "op")) (EVar "l")) (EVar "r")) (arm (PCon "Some" (PVar "hexC")) () (EVar "hexC")) (arm (PCon "None") () (EBlock (DoLet false false (PVar "ld") (EApp (EVar "go") (EVar "l"))) (DoLet false false (PVar "rd") (EApp (EVar "go") (EVar "r"))) (DoLet false false (PVar "ldf") (EApp (EApp (EApp (EApp (EVar "fenceFloatOperand") (EVar "e")) (EVar "l")) (EVar "r")) (EVar "ld"))) (DoLet false false (PVar "res") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "res"))) (ELit (LString " = "))) (EApp (EVar "$core.display") (EApp (EVar "floatOp") (EVar "op")))) (ELit (LString " double "))) (EApp (EVar "$core.display") (EVar "ldf"))) (ELit (LString ", "))) (EApp (EVar "$core.display") (EVar "rd"))) (ELit (LString ""))))) (DoExpr (EVar "res"))))) (EApp (EApp (EApp (EVar "emitFloatLeaf") (EVar "e")) (EVar "env")) (EVar "ex")))) (clause ((PVar "ex")) (EApp (EApp (EApp (EVar "emitFloatLeaf") (EVar "e")) (EVar "env")) (EVar "ex"))))) (EApp (EVar "go") (EVar "ex0"))))
 (DTypeSig false "emitFloatLeaf" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "CExpr") (TyCon "String")))))
 (DFunDef false "emitFloatLeaf" ((PVar "e") (PVar "env") (PVar "ex")) (EMatch (EApp (EApp (EApp (EVar "floatFromIntArg") (EVar "e")) (EVar "env")) (EVar "ex")) (arm (PCon "Some" (PVar "a")) () (EBlock (DoLet false false (PTuple (PVar "aw") PWild) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "a"))) (DoLet false false (PVar "i") (EApp (EApp (EVar "untagInt") (EVar "e")) (EVar "aw"))) (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString " = sitofp i64 "))) (EApp (EVar "$core.display") (EVar "i"))) (ELit (LString " to double"))))) (DoExpr (EVar "r")))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "emitFloatLeafN") (EVar "e")) (EVar "env")) (EVar "ex")))))
 (DTypeSig false "emitFloatLeafN" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "CExpr") (TyCon "String")))))
@@ -16435,13 +16486,11 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "emitLetGroup" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyCon "CExpr") (TyTuple (TyCon "String") (TyCon "LTy")))))))
 (DFunDef false "emitLetGroup" ((PVar "e") (PVar "env") (PVar "binds") (PVar "body")) (EMatch (EApp (EApp (EApp (EApp (EVar "bindLetGroup") (EVar "e")) (EVar "env")) (EVar "binds")) (EVar "body")) (arm (PCon "Some" (PVar "env2")) () (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env2")) (EVar "body"))) (arm (PCon "None") () (EApp (EVar "letGroupGap") (EVar "e")))))
 (DTypeSig false "bindLetGroup" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyCon "CExpr") (TyApp (TyCon "Option") (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy")))))))))
-(DFunDef false "bindLetGroup" (PWild (PVar "env") (PList) PWild) (EApp (EVar "Some") (EVar "env")))
-(DFunDef false "bindLetGroup" ((PVar "e") (PVar "env") (PCons (PCon "CBind" (PVar "name") (PList (PCon "CClause" (PList) (PVar "rhs"))) PWild (PVar "bid")) (PVar "rest")) (PVar "body")) (EBlock (DoLet false false (PVar "vt") (EApp (EApp (EApp (EVar "stampWord") (EVar "e")) (EVar "bid")) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "rhs")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "bindLetGroup") (EVar "e")) (EApp (EApp (EApp (EVar "omInsert") (EVar "name")) (EVar "vt")) (EVar "env"))) (EVar "rest")) (EVar "body")))))
-(DFunDef false "bindLetGroup" ((PVar "e") (PVar "env") (PCons (PCon "CBind" (PVar "name") (PVar "clauses") (PVar "site") (PVar "bid")) (PVar "rest")) (PVar "body")) (EIf (EApp (EApp (EApp (EVar "refsLater") (EVar "name")) (EVar "clauses")) (EApp (EVar "bindNames") (EVar "rest"))) (EApp (EApp (EApp (EApp (EVar "emitKnotRun") (EVar "e")) (EVar "env")) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "CBind") (EVar "name")) (EVar "clauses")) (EVar "site")) (EVar "bid")) (EVar "rest"))) (EVar "body")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "direct") (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EApp (EVar "clauseArityC") (EVar "clauses"))) (EApp (EApp (EVar "CLetGroup") (EVar "rest")) (EVar "body")))) (DoLet false false (PTuple (PVar "w") (PVar "ty")) (EApp (EApp (EApp (EApp (EVar "emitGroupBind") (EVar "e")) (EVar "env")) (EApp (EApp (EApp (EApp (EVar "CBind") (EVar "name")) (EVar "clauses")) (EVar "site")) (EVar "bid"))) (EVar "direct"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "bindLetGroup") (EVar "e")) (EApp (EApp (EApp (EVar "omInsert") (EVar "name")) (ETuple (EVar "w") (EVar "ty"))) (EVar "env"))) (EVar "rest")) (EVar "body")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "bindLetGroup" ((PVar "e") (PVar "env0") (PVar "xs0") (PVar "body")) (ELetGroup ((lgb "go" (clause ((PVar "env") (PList)) (EApp (EVar "Some") (EVar "env"))) (clause ((PVar "env") (PCons (PCon "CBind" (PVar "name") (PList (PCon "CClause" (PList) (PVar "rhs"))) PWild (PVar "bid")) (PVar "rest"))) (EBlock (DoLet false false (PVar "vt") (EApp (EApp (EApp (EVar "stampWord") (EVar "e")) (EVar "bid")) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "rhs")))) (DoExpr (EApp (EApp (EVar "go") (EApp (EApp (EApp (EVar "omInsert") (EVar "name")) (EVar "vt")) (EVar "env"))) (EVar "rest"))))) (clause ((PVar "env") (PCons (PCon "CBind" (PVar "name") (PVar "clauses") (PVar "site") (PVar "bid")) (PVar "rest"))) (EIf (EApp (EApp (EApp (EVar "refsLater") (EVar "name")) (EVar "clauses")) (EApp (EVar "bindNames") (EVar "rest"))) (EApp (EApp (EApp (EApp (EVar "emitKnotRun") (EVar "e")) (EVar "env")) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "CBind") (EVar "name")) (EVar "clauses")) (EVar "site")) (EVar "bid")) (EVar "rest"))) (EVar "body")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "direct") (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EApp (EVar "clauseArityC") (EVar "clauses"))) (EApp (EApp (EVar "CLetGroup") (EVar "rest")) (EVar "body")))) (DoLet false false (PTuple (PVar "w") (PVar "ty")) (EApp (EApp (EApp (EApp (EVar "emitGroupBind") (EVar "e")) (EVar "env")) (EApp (EApp (EApp (EApp (EVar "CBind") (EVar "name")) (EVar "clauses")) (EVar "site")) (EVar "bid"))) (EVar "direct"))) (DoExpr (EApp (EApp (EVar "go") (EApp (EApp (EApp (EVar "omInsert") (EVar "name")) (ETuple (EVar "w") (EVar "ty"))) (EVar "env"))) (EVar "rest")))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EApp (EVar "go") (EVar "env0")) (EVar "xs0"))))
 (DTypeSig false "letGroupGap" (TyFun (TyCon "Emit") (TyTuple (TyCon "String") (TyCon "LTy"))))
 (DFunDef false "letGroupGap" ((PVar "e")) (EApp (EApp (EVar "gapE") (EVar "e")) (ELit (LString "unsupported let-group: a binding forward/mutually references a later value binding (knot-tying covers only mutual function bindings)"))))
 (DTypeSig false "emitKnotRun" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyCon "CExpr") (TyApp (TyCon "Option") (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy")))))))))
-(DFunDef false "emitKnotRun" ((PVar "e") (PVar "env") (PVar "binds") (PVar "body")) (EBlock (DoLet false false (PVar "run") (EApp (EVar "takeFnRun") (EVar "binds"))) (DoLet false false (PVar "after") (EApp (EApp (EVar "dropS") (EApp (EVar "lengthS") (EVar "run"))) (EVar "binds"))) (DoLet false false (PVar "runNames") (EApp (EVar "bindNames") (EVar "run"))) (DoExpr (EIf (EApp (EApp (EApp (EVar "anyRefsOutsideRun") (EVar "run")) (EVar "runNames")) (EApp (EVar "bindNames") (EVar "after"))) (EVar "None") (EBlock (DoLet false false (PVar "env2") (EApp (EApp (EApp (EApp (EVar "emitLetGroupKnot") (EVar "e")) (EVar "env")) (EVar "run")) (EVar "runNames"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "bindLetGroup") (EVar "e")) (EVar "env2")) (EVar "after")) (EVar "body"))))))))
+(DFunDef false "emitKnotRun" ((PVar "e") (PVar "env") (PVar "binds") (PVar "body")) (EBlock (DoLet false false (PVar "run") (EApp (EVar "takeFnRun") (EVar "binds"))) (DoLet false false (PVar "after") (EApp (EApp (EVar "dropS") (EApp (EVar "lengthS") (EVar "run"))) (EVar "binds"))) (DoLet false false (PVar "runNames") (EApp (EVar "bindNames") (EVar "run"))) (DoExpr (EIf (EApp (EApp (EVar "anyRefsOutsideRun") (EVar "run")) (EApp (EVar "bindNames") (EVar "after"))) (EVar "None") (EBlock (DoLet false false (PVar "env2") (EApp (EApp (EApp (EApp (EVar "emitLetGroupKnot") (EVar "e")) (EVar "env")) (EVar "run")) (EVar "runNames"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "bindLetGroup") (EVar "e")) (EVar "env2")) (EVar "after")) (EVar "body"))))))))
 (DTypeSig false "takeFnRun" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyCon "CBind"))))
 (DFunDef false "takeFnRun" ((PList)) (EListLit))
 (DFunDef false "takeFnRun" ((PCons (PCon "CBind" PWild (PList (PCon "CClause" (PList) PWild)) PWild PWild) PWild)) (EListLit))
@@ -16449,10 +16498,10 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "dropS" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))
 (DFunDef false "dropS" (PWild (PList)) (EListLit))
 (DFunDef false "dropS" ((PVar "n") (PCons (PVar "x") (PVar "xs"))) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (EBinOp "::" (EVar "x") (EVar "xs")) (EApp (EApp (EVar "dropS") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "xs"))))
-(DTypeSig false "anyRefsOutsideRun" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool")))))
-(DFunDef false "anyRefsOutsideRun" ((PList) PWild PWild) (EVar "False"))
-(DFunDef false "anyRefsOutsideRun" ((PCons (PCon "CBind" (PVar "name") (PVar "clauses") PWild PWild) (PVar "rest")) (PVar "runNames") (PVar "laterOutside")) (EIf (EApp (EApp (EVar "anyInList") (EApp (EVar "dedupS") (EApp (EApp (EVar "clausesFreeVars") (EVar "name")) (EVar "clauses")))) (EVar "laterOutside")) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "anyRefsOutsideRun") (EVar "rest")) (EVar "runNames")) (EVar "laterOutside")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DFunDef false "anyRefsOutsideRun" ((PCons PWild (PVar "rest")) (PVar "runNames") (PVar "laterOutside")) (EApp (EApp (EApp (EVar "anyRefsOutsideRun") (EVar "rest")) (EVar "runNames")) (EVar "laterOutside")))
+(DTypeSig false "anyRefsOutsideRun" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
+(DFunDef false "anyRefsOutsideRun" ((PList) PWild) (EVar "False"))
+(DFunDef false "anyRefsOutsideRun" ((PCons (PCon "CBind" (PVar "name") (PVar "clauses") PWild PWild) (PVar "rest")) (PVar "laterOutside")) (EIf (EApp (EApp (EVar "anyInList") (EApp (EVar "dedupS") (EApp (EApp (EVar "clausesFreeVars") (EVar "name")) (EVar "clauses")))) (EVar "laterOutside")) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EVar "anyRefsOutsideRun") (EVar "rest")) (EVar "laterOutside")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "anyRefsOutsideRun" ((PCons PWild (PVar "rest")) (PVar "laterOutside")) (EApp (EApp (EVar "anyRefsOutsideRun") (EVar "rest")) (EVar "laterOutside")))
 (DTypeSig false "refsLater" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool")))))
 (DFunDef false "refsLater" ((PVar "name") (PVar "clauses") (PVar "laterNames")) (EApp (EApp (EVar "anyInList") (EApp (EVar "dedupS") (EApp (EApp (EVar "clausesFreeVars") (EVar "name")) (EVar "clauses")))) (EVar "laterNames")))
 (DTypeSig false "clausesFreeVars" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyApp (TyCon "List") (TyCon "String")))))
@@ -16464,55 +16513,21 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "emitGroupBind" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "CBind") (TyFun (TyCon "Bool") (TyTuple (TyCon "String") (TyCon "LTy")))))))
 (DFunDef false "emitGroupBind" ((PVar "e") (PVar "env") (PCon "CBind" (PVar "name") (PVar "clauses") (PVar "site") PWild) (PVar "direct")) (EBlock (DoLet false false (PVar "lamName") (EApp (EApp (EApp (EVar "generatedName") (EVar "e")) (EVar "LN.GenLambda")) (ELit (LString "")))) (DoLet false false (PVar "arity") (EApp (EVar "clauseArity") (EApp (EVar "clauseList") (EVar "clauses")))) (DoLet false false (PVar "captured") (EApp (EApp (EVar "keepInEnv") (EVar "env")) (EApp (EApp (EVar "removeStr") (EVar "name")) (EApp (EVar "dedupS") (EApp (EApp (EVar "clausesFreeVars") (EVar "name")) (EVar "clauses")))))) (DoLet false false (PVar "captureWords") (EApp (EApp (EApp (EVar "capWords") (EVar "e")) (EVar "env")) (EVar "captured"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitGroupBindDefine") (EVar "e")) (EVar "env")) (EVar "lamName")) (EVar "name")) (EVar "arity")) (EVar "clauses")) (EVar "captured")) (EVar "site"))) (DoLet false false (PTuple (PVar "w") (PVar "ty")) (EMatch (EVar "captureWords") (arm (PList) () (EApp (EApp (EApp (EVar "emitConstClosure") (EVar "e")) (EVar "lamName")) (EVar "arity"))) (arm PWild () (EApp (EApp (EApp (EApp (EVar "emitClosureAlloc") (EVar "e")) (EVar "lamName")) (EVar "arity")) (EVar "captureWords"))))) (DoLet false false PWild (EIf (EVar "direct") (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "directFn")) (EBinOp "::" (ETuple (EVar "w") (ETuple (EVar "lamName") (EVar "arity"))) (EUnOp "!" (EFieldAccess (EVar "e") "directFn")))) (ELit LUnit))) (DoExpr (ETuple (EVar "w") (EVar "ty")))))
 (DTypeSig false "satOnlyUses" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "CExpr") (TyCon "Bool")))))
-(DFunDef false "satOnlyUses" (PWild PWild (PCon "CLit" PWild)) (EVar "True"))
-(DFunDef false "satOnlyUses" ((PVar "name") PWild (PCon "CVar" (PVar "x") PWild)) (EBinOp "/=" (EVar "x") (EVar "name")))
-(DFunDef false "satOnlyUses" ((PVar "name") (PVar "arity") (PAs "app" (PCon "CApp" PWild PWild PWild))) (EBlock (DoLet false false (PTuple (PVar "hd") (PVar "args")) (EApp (EApp (EVar "flattenApp") (EVar "app")) (EListLit))) (DoExpr (EMatch (EVar "hd") (arm (PCon "CVar" (PVar "n") PWild) () (EIf (EBinOp "&&" (EBinOp "==" (EVar "n") (EVar "name")) (EBinOp "/=" (EApp (EVar "lengthS") (EVar "args")) (EVar "arity"))) (EVar "False") (EApp (EApp (EApp (EVar "satOnlyList") (EVar "name")) (EVar "arity")) (EVar "args")))) (arm PWild () (EBinOp "&&" (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "hd")) (EApp (EApp (EApp (EVar "satOnlyList") (EVar "name")) (EVar "arity")) (EVar "args"))))))))
-(DFunDef false "satOnlyUses" ((PVar "name") (PVar "arity") (PCon "CLam" (PVar "ps") (PVar "b"))) (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "name")) (EApp (EApp (EVar "flatMap") (EVar "patBinders")) (EVar "ps"))) (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "b"))))
-(DFunDef false "satOnlyUses" ((PVar "name") (PVar "arity") (PCon "CLet" (PVar "recF") (PVar "pat") (PVar "e1") (PVar "e2"))) (EBlock (DoLet false false (PVar "shadow") (EApp (EApp (EVar "contains") (EVar "name")) (EApp (EVar "patBinders") (EVar "pat")))) (DoLet false false (PVar "ok1") (EIf (EVar "recF") (EBinOp "||" (EVar "shadow") (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "e1"))) (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "e1")))) (DoExpr (EBinOp "&&" (EVar "ok1") (EBinOp "||" (EVar "shadow") (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "e2")))))))
-(DFunDef false "satOnlyUses" ((PVar "name") (PVar "arity") (PCon "CLetGroup" (PVar "binds") (PVar "b"))) (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "name")) (EApp (EVar "bindNames") (EVar "binds"))) (EBinOp "&&" (EApp (EApp (EApp (EVar "satOnlyBinds") (EVar "name")) (EVar "arity")) (EVar "binds")) (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "b")))))
-(DFunDef false "satOnlyUses" ((PVar "name") (PVar "arity") (PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EBinOp "&&" (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "scrut")) (EApp (EApp (EApp (EVar "satOnlyArms") (EVar "name")) (EVar "arity")) (EVar "arms"))))
-(DFunDef false "satOnlyUses" ((PVar "name") (PVar "arity") (PCon "CDecision" (PVar "scrut") (PVar "arms") PWild)) (EBinOp "&&" (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "scrut")) (EApp (EApp (EApp (EVar "satOnlyArms") (EVar "name")) (EVar "arity")) (EVar "arms"))))
-(DFunDef false "satOnlyUses" ((PVar "name") (PVar "arity") (PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "c")) (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "t"))) (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "f"))))
-(DFunDef false "satOnlyUses" ((PVar "name") (PVar "arity") (PCon "CBinPrim" PWild (PVar "l") (PVar "r") PWild PWild)) (EBinOp "&&" (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "l")) (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "r"))))
-(DFunDef false "satOnlyUses" ((PVar "name") (PVar "arity") (PCon "CUnOp" PWild (PVar "x"))) (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "x")))
-(DFunDef false "satOnlyUses" ((PVar "name") (PVar "arity") (PCon "CTuple" (PVar "es"))) (EApp (EApp (EApp (EVar "satOnlyList") (EVar "name")) (EVar "arity")) (EVar "es")))
-(DFunDef false "satOnlyUses" ((PVar "name") (PVar "arity") (PCon "CList" (PVar "es"))) (EApp (EApp (EApp (EVar "satOnlyList") (EVar "name")) (EVar "arity")) (EVar "es")))
-(DFunDef false "satOnlyUses" ((PVar "name") (PVar "arity") (PCon "CArray" (PVar "es"))) (EApp (EApp (EApp (EVar "satOnlyList") (EVar "name")) (EVar "arity")) (EVar "es")))
-(DFunDef false "satOnlyUses" ((PVar "name") (PVar "arity") (PCon "CRangeList" (PVar "lo") (PVar "hi") PWild)) (EBinOp "&&" (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "lo")) (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "hi"))))
-(DFunDef false "satOnlyUses" ((PVar "name") (PVar "arity") (PCon "CRangeArray" (PVar "lo") (PVar "hi") PWild)) (EBinOp "&&" (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "lo")) (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "hi"))))
-(DFunDef false "satOnlyUses" ((PVar "name") (PVar "arity") (PCon "CRecord" PWild (PVar "fields"))) (EApp (EApp (EApp (EVar "satOnlyFields") (EVar "name")) (EVar "arity")) (EVar "fields")))
-(DFunDef false "satOnlyUses" ((PVar "name") (PVar "arity") (PCon "CFieldAccess" (PVar "ex") PWild PWild PWild)) (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "ex")))
-(DFunDef false "satOnlyUses" ((PVar "name") (PVar "arity") (PCon "CRecordUpdate" PWild (PVar "base") (PVar "updates"))) (EBinOp "&&" (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "base")) (EApp (EApp (EApp (EVar "satOnlyFields") (EVar "name")) (EVar "arity")) (EVar "updates"))))
-(DFunDef false "satOnlyUses" ((PVar "name") (PVar "arity") (PCon "CVariantUpdate" PWild (PVar "base") (PVar "updates"))) (EBinOp "&&" (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "base")) (EApp (EApp (EApp (EVar "satOnlyFields") (EVar "name")) (EVar "arity")) (EVar "updates"))))
-(DFunDef false "satOnlyUses" ((PVar "name") (PVar "arity") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EApp (EVar "satOnlyStmts") (EVar "name")) (EVar "arity")) (EVar "stmts")))
-(DFunDef false "satOnlyUses" ((PVar "name") PWild (PCon "CMethod" PWild (PCon "MethodEvidence" PWild PWild (PVar "route") (PVar "implRoutes") (PVar "methRoutes")))) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "name")) (EApp (EApp (EVar "flatMap") (EVar "givenNames")) (EBinOp "::" (EVar "route") (EBinOp "++" (EVar "implRoutes") (EVar "methRoutes")))))))
-(DFunDef false "satOnlyUses" ((PVar "name") PWild (PCon "CDict" PWild (PVar "routes"))) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "name")) (EApp (EApp (EVar "flatMap") (EVar "givenNames")) (EVar "routes")))))
-(DFunDef false "satOnlyUses" (PWild PWild PWild) (EVar "False"))
+(DFunDef false "satOnlyUses" ((PVar "name") (PVar "arity") (PVar "app0")) (ELetGroup ((lgb "go" (clause ((PCon "CLit" PWild)) (EVar "True")) (clause ((PCon "CVar" (PVar "x") PWild)) (EBinOp "/=" (EVar "x") (EVar "name"))) (clause ((PAs "app" (PCon "CApp" PWild PWild PWild))) (EBlock (DoLet false false (PTuple (PVar "hd") (PVar "args")) (EApp (EApp (EVar "flattenApp") (EVar "app")) (EListLit))) (DoExpr (EMatch (EVar "hd") (arm (PCon "CVar" (PVar "n") PWild) () (EIf (EBinOp "&&" (EBinOp "==" (EVar "n") (EVar "name")) (EBinOp "/=" (EApp (EVar "lengthS") (EVar "args")) (EVar "arity"))) (EVar "False") (EApp (EApp (EApp (EVar "satOnlyList") (EVar "name")) (EVar "arity")) (EVar "args")))) (arm PWild () (EBinOp "&&" (EApp (EVar "go") (EVar "hd")) (EApp (EApp (EApp (EVar "satOnlyList") (EVar "name")) (EVar "arity")) (EVar "args")))))))) (clause ((PCon "CLam" (PVar "ps") (PVar "b"))) (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "name")) (EApp (EApp (EVar "flatMap") (EVar "patBinders")) (EVar "ps"))) (EApp (EVar "go") (EVar "b")))) (clause ((PCon "CLet" (PVar "recF") (PVar "pat") (PVar "e1") (PVar "e2"))) (EBlock (DoLet false false (PVar "shadow") (EApp (EApp (EVar "contains") (EVar "name")) (EApp (EVar "patBinders") (EVar "pat")))) (DoLet false false (PVar "ok1") (EIf (EVar "recF") (EBinOp "||" (EVar "shadow") (EApp (EVar "go") (EVar "e1"))) (EApp (EVar "go") (EVar "e1")))) (DoExpr (EBinOp "&&" (EVar "ok1") (EBinOp "||" (EVar "shadow") (EApp (EVar "go") (EVar "e2"))))))) (clause ((PCon "CLetGroup" (PVar "binds") (PVar "b"))) (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "name")) (EApp (EVar "bindNames") (EVar "binds"))) (EBinOp "&&" (EApp (EApp (EApp (EVar "satOnlyBinds") (EVar "name")) (EVar "arity")) (EVar "binds")) (EApp (EVar "go") (EVar "b"))))) (clause ((PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EBinOp "&&" (EApp (EVar "go") (EVar "scrut")) (EApp (EApp (EApp (EVar "satOnlyArms") (EVar "name")) (EVar "arity")) (EVar "arms")))) (clause ((PCon "CDecision" (PVar "scrut") (PVar "arms") PWild)) (EBinOp "&&" (EApp (EVar "go") (EVar "scrut")) (EApp (EApp (EApp (EVar "satOnlyArms") (EVar "name")) (EVar "arity")) (EVar "arms")))) (clause ((PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EBinOp "&&" (EBinOp "&&" (EApp (EVar "go") (EVar "c")) (EApp (EVar "go") (EVar "t"))) (EApp (EVar "go") (EVar "f")))) (clause ((PCon "CBinPrim" PWild (PVar "l") (PVar "r") PWild PWild)) (EBinOp "&&" (EApp (EVar "go") (EVar "l")) (EApp (EVar "go") (EVar "r")))) (clause ((PCon "CUnOp" PWild (PVar "x"))) (EApp (EVar "go") (EVar "x"))) (clause ((PCon "CTuple" (PVar "es"))) (EApp (EApp (EApp (EVar "satOnlyList") (EVar "name")) (EVar "arity")) (EVar "es"))) (clause ((PCon "CList" (PVar "es"))) (EApp (EApp (EApp (EVar "satOnlyList") (EVar "name")) (EVar "arity")) (EVar "es"))) (clause ((PCon "CArray" (PVar "es"))) (EApp (EApp (EApp (EVar "satOnlyList") (EVar "name")) (EVar "arity")) (EVar "es"))) (clause ((PCon "CRangeList" (PVar "lo") (PVar "hi") PWild)) (EBinOp "&&" (EApp (EVar "go") (EVar "lo")) (EApp (EVar "go") (EVar "hi")))) (clause ((PCon "CRangeArray" (PVar "lo") (PVar "hi") PWild)) (EBinOp "&&" (EApp (EVar "go") (EVar "lo")) (EApp (EVar "go") (EVar "hi")))) (clause ((PCon "CRecord" PWild (PVar "fields"))) (EApp (EApp (EApp (EVar "satOnlyFields") (EVar "name")) (EVar "arity")) (EVar "fields"))) (clause ((PCon "CFieldAccess" (PVar "ex") PWild PWild PWild)) (EApp (EVar "go") (EVar "ex"))) (clause ((PCon "CRecordUpdate" PWild (PVar "base") (PVar "updates"))) (EBinOp "&&" (EApp (EVar "go") (EVar "base")) (EApp (EApp (EApp (EVar "satOnlyFields") (EVar "name")) (EVar "arity")) (EVar "updates")))) (clause ((PCon "CVariantUpdate" PWild (PVar "base") (PVar "updates"))) (EBinOp "&&" (EApp (EVar "go") (EVar "base")) (EApp (EApp (EApp (EVar "satOnlyFields") (EVar "name")) (EVar "arity")) (EVar "updates")))) (clause ((PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EApp (EVar "satOnlyStmts") (EVar "name")) (EVar "arity")) (EVar "stmts"))) (clause ((PCon "CMethod" PWild (PCon "MethodEvidence" PWild PWild (PVar "route") (PVar "implRoutes") (PVar "methRoutes")))) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "name")) (EApp (EApp (EVar "flatMap") (EVar "givenNames")) (EBinOp "::" (EVar "route") (EBinOp "++" (EVar "implRoutes") (EVar "methRoutes"))))))) (clause ((PCon "CDict" PWild (PVar "routes"))) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "name")) (EApp (EApp (EVar "flatMap") (EVar "givenNames")) (EVar "routes"))))) (clause (PWild) (EVar "False")))) (EApp (EVar "go") (EVar "app0"))))
 (DTypeSig false "satOnlyList" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyCon "Bool")))))
-(DFunDef false "satOnlyList" (PWild PWild (PList)) (EVar "True"))
-(DFunDef false "satOnlyList" ((PVar "name") (PVar "arity") (PCons (PVar "x") (PVar "rest"))) (EBinOp "&&" (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "x")) (EApp (EApp (EApp (EVar "satOnlyList") (EVar "name")) (EVar "arity")) (EVar "rest"))))
+(DFunDef false "satOnlyList" ((PVar "name") (PVar "arity") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EVar "True")) (clause ((PCons (PVar "x") (PVar "rest"))) (EBinOp "&&" (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "x")) (EApp (EVar "go") (EVar "rest")))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "satOnlyFields" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyCon "Bool")))))
-(DFunDef false "satOnlyFields" (PWild PWild (PList)) (EVar "True"))
-(DFunDef false "satOnlyFields" ((PVar "name") (PVar "arity") (PCons (PCon "CField" PWild PWild (PVar "ex")) (PVar "rest"))) (EBinOp "&&" (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "ex")) (EApp (EApp (EApp (EVar "satOnlyFields") (EVar "name")) (EVar "arity")) (EVar "rest"))))
+(DFunDef false "satOnlyFields" ((PVar "name") (PVar "arity") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EVar "True")) (clause ((PCons (PCon "CField" PWild PWild (PVar "ex")) (PVar "rest"))) (EBinOp "&&" (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "ex")) (EApp (EVar "go") (EVar "rest")))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "satOnlyArms" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyCon "Bool")))))
-(DFunDef false "satOnlyArms" (PWild PWild (PList)) (EVar "True"))
-(DFunDef false "satOnlyArms" ((PVar "name") (PVar "arity") (PCons (PCon "CArm" (PVar "pat") (PVar "guards") (PVar "b")) (PVar "rest"))) (EBlock (DoLet false false (PVar "shadow") (EApp (EApp (EVar "contains") (EVar "name")) (EApp (EVar "patBinders") (EVar "pat")))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EApp (EVar "satOnlyGuards") (EVar "name")) (EVar "arity")) (EVar "guards")) (EBinOp "||" (EVar "shadow") (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "b")))) (EApp (EApp (EApp (EVar "satOnlyArms") (EVar "name")) (EVar "arity")) (EVar "rest"))))))
-(DFunDef false "satOnlyArms" ((PVar "name") (PVar "arity") (PCons (PCon "CArmAlt" PWild (PVar "guards") PWild) (PVar "rest"))) (EBinOp "&&" (EApp (EApp (EApp (EVar "satOnlyGuards") (EVar "name")) (EVar "arity")) (EVar "guards")) (EApp (EApp (EApp (EVar "satOnlyArms") (EVar "name")) (EVar "arity")) (EVar "rest"))))
+(DFunDef false "satOnlyArms" ((PVar "name") (PVar "arity") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EVar "True")) (clause ((PCons (PCon "CArm" (PVar "pat") (PVar "guards") (PVar "b")) (PVar "rest"))) (EBlock (DoLet false false (PVar "shadow") (EApp (EApp (EVar "contains") (EVar "name")) (EApp (EVar "patBinders") (EVar "pat")))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EApp (EVar "satOnlyGuards") (EVar "name")) (EVar "arity")) (EVar "guards")) (EBinOp "||" (EVar "shadow") (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "b")))) (EApp (EVar "go") (EVar "rest")))))) (clause ((PCons (PCon "CArmAlt" PWild (PVar "guards") PWild) (PVar "rest"))) (EBinOp "&&" (EApp (EApp (EApp (EVar "satOnlyGuards") (EVar "name")) (EVar "arity")) (EVar "guards")) (EApp (EVar "go") (EVar "rest")))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "satOnlyGuards" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CGuard")) (TyCon "Bool")))))
-(DFunDef false "satOnlyGuards" (PWild PWild (PList)) (EVar "True"))
-(DFunDef false "satOnlyGuards" ((PVar "name") (PVar "arity") (PCons (PCon "CGBool" (PVar "ex")) (PVar "rest"))) (EBinOp "&&" (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "ex")) (EApp (EApp (EApp (EVar "satOnlyGuards") (EVar "name")) (EVar "arity")) (EVar "rest"))))
-(DFunDef false "satOnlyGuards" ((PVar "name") (PVar "arity") (PCons (PCon "CGBind" PWild (PVar "ex")) (PVar "rest"))) (EBinOp "&&" (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "ex")) (EApp (EApp (EApp (EVar "satOnlyGuards") (EVar "name")) (EVar "arity")) (EVar "rest"))))
+(DFunDef false "satOnlyGuards" ((PVar "name") (PVar "arity") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EVar "True")) (clause ((PCons (PCon "CGBool" (PVar "ex")) (PVar "rest"))) (EBinOp "&&" (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "ex")) (EApp (EVar "go") (EVar "rest")))) (clause ((PCons (PCon "CGBind" PWild (PVar "ex")) (PVar "rest"))) (EBinOp "&&" (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "ex")) (EApp (EVar "go") (EVar "rest")))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "satOnlyStmts" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyCon "Bool")))))
-(DFunDef false "satOnlyStmts" (PWild PWild (PList)) (EVar "True"))
-(DFunDef false "satOnlyStmts" ((PVar "name") (PVar "arity") (PCons (PCon "CSExpr" (PVar "ex")) (PVar "rest"))) (EBinOp "&&" (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "ex")) (EApp (EApp (EApp (EVar "satOnlyStmts") (EVar "name")) (EVar "arity")) (EVar "rest"))))
-(DFunDef false "satOnlyStmts" ((PVar "name") (PVar "arity") (PCons (PCon "CSLet" PWild (PVar "pat") (PVar "ex")) (PVar "rest"))) (EBinOp "&&" (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "ex")) (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "name")) (EApp (EVar "patBinders") (EVar "pat"))) (EApp (EApp (EApp (EVar "satOnlyStmts") (EVar "name")) (EVar "arity")) (EVar "rest")))))
-(DFunDef false "satOnlyStmts" ((PVar "name") (PVar "arity") (PCons (PCon "CSAssign" (PVar "target") (PVar "ex")) (PVar "rest"))) (EBinOp "&&" (EBinOp "&&" (EBinOp "/=" (EVar "target") (EVar "name")) (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "ex"))) (EApp (EApp (EApp (EVar "satOnlyStmts") (EVar "name")) (EVar "arity")) (EVar "rest"))))
+(DFunDef false "satOnlyStmts" ((PVar "name") (PVar "arity") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EVar "True")) (clause ((PCons (PCon "CSExpr" (PVar "ex")) (PVar "rest"))) (EBinOp "&&" (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "ex")) (EApp (EVar "go") (EVar "rest")))) (clause ((PCons (PCon "CSLet" PWild (PVar "pat") (PVar "ex")) (PVar "rest"))) (EBinOp "&&" (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "ex")) (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "name")) (EApp (EVar "patBinders") (EVar "pat"))) (EApp (EVar "go") (EVar "rest"))))) (clause ((PCons (PCon "CSAssign" (PVar "target") (PVar "ex")) (PVar "rest"))) (EBinOp "&&" (EBinOp "&&" (EBinOp "/=" (EVar "target") (EVar "name")) (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "ex"))) (EApp (EVar "go") (EVar "rest")))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "satOnlyBinds" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyCon "Bool")))))
-(DFunDef false "satOnlyBinds" (PWild PWild (PList)) (EVar "True"))
-(DFunDef false "satOnlyBinds" ((PVar "name") (PVar "arity") (PCons (PCon "CBind" PWild (PVar "clauses") PWild PWild) (PVar "rest"))) (EBinOp "&&" (EApp (EApp (EApp (EVar "satOnlyClauses") (EVar "name")) (EVar "arity")) (EVar "clauses")) (EApp (EApp (EApp (EVar "satOnlyBinds") (EVar "name")) (EVar "arity")) (EVar "rest"))))
+(DFunDef false "satOnlyBinds" ((PVar "name") (PVar "arity") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EVar "True")) (clause ((PCons (PCon "CBind" PWild (PVar "clauses") PWild PWild) (PVar "rest"))) (EBinOp "&&" (EApp (EApp (EApp (EVar "satOnlyClauses") (EVar "name")) (EVar "arity")) (EVar "clauses")) (EApp (EVar "go") (EVar "rest")))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "satOnlyClauses" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyCon "Bool")))))
-(DFunDef false "satOnlyClauses" (PWild PWild (PList)) (EVar "True"))
-(DFunDef false "satOnlyClauses" ((PVar "name") (PVar "arity") (PCons (PCon "CClause" (PVar "pats") (PVar "b")) (PVar "rest"))) (EBinOp "&&" (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "name")) (EApp (EApp (EVar "flatMap") (EVar "patBinders")) (EVar "pats"))) (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "b"))) (EApp (EApp (EApp (EVar "satOnlyClauses") (EVar "name")) (EVar "arity")) (EVar "rest"))))
+(DFunDef false "satOnlyClauses" ((PVar "name") (PVar "arity") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EVar "True")) (clause ((PCons (PCon "CClause" (PVar "pats") (PVar "b")) (PVar "rest"))) (EBinOp "&&" (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "name")) (EApp (EApp (EVar "flatMap") (EVar "patBinders")) (EVar "pats"))) (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "b"))) (EApp (EVar "go") (EVar "rest")))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "emitGroupBindDefine" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Loc") (TyCon "Unit"))))))))))
 (DFunDef false "emitGroupBindDefine" ((PVar "e") (PVar "env") (PVar "lamName") (PVar "name") (PVar "arity") (PVar "clauses") (PVar "captured") (PVar "site")) (EBlock (DoLet false false (PVar "saved") (EFieldAccess (EApp (EVar "bufRef") (EVar "e")) "value")) (DoExpr (EApp (EApp (EVar "setRef") (EApp (EVar "bufRef") (EVar "e"))) (EListLit))) (DoLet false false (PVar "scope") (EApp (EVar "beginDefine") (EVar "e"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "defineHeader") (EVar "e")) (EVar "LiftedDefine")) (EVar "lamName")) (EApp (EVar "wordProto") (EBinOp "::" (EVar "closParam") (EApp (EApp (EVar "implParamDecls") (EVar "arity")) (ELit (LInt 0))))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "entry:")))) (DoLet false false (PVar "cenv") (EApp (EApp (EApp (EApp (EVar "loadCaptures") (EVar "e")) (EVar "env")) (EVar "captured")) (ELit (LInt 0)))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTailClauseTree") (EVar "e")) (EApp (EApp (EVar "envMergeL") (EApp (EApp (EApp (EVar "omInsert") (EVar "name")) (ETuple (ELit (LString "%clos")) (EVar "LTClosure"))) (EVar "cenv"))) (EApp (EApp (EVar "implParamEnv") (EVar "arity")) (ELit (LInt 0))))) (EApp (EApp (EApp (EVar "TailDefine") (EVar "lamName")) (EVar "arity")) (EVar "True"))) (EVar "arity")) (EApp (EVar "clauseList") (EVar "clauses"))) (EVar "site"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "}")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "")))) (DoLet false false (PVar "lamLines") (EFieldAccess (EApp (EVar "bufRef") (EVar "e")) "value")) (DoExpr (EApp (EApp (EVar "setRef") (EApp (EVar "lamsRef") (EVar "e"))) (EBinOp "++" (EVar "lamLines") (EFieldAccess (EApp (EVar "lamsRef") (EVar "e")) "value")))) (DoExpr (EApp (EApp (EVar "endDefine") (EVar "e")) (EVar "scope"))) (DoExpr (EApp (EApp (EVar "setRef") (EApp (EVar "bufRef") (EVar "e"))) (EVar "saved")))))
 (DTypeSig false "clauseList" (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr")))))
@@ -16525,12 +16540,9 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DFunDef false "sibPlaceholderEnv" ((PCons (PVar "n") (PVar "rest")) (PVar "env")) (EApp (EApp (EVar "sibPlaceholderEnv") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (ETuple (ELit (LString "0")) (EVar "LTClosure"))) (EVar "env"))))
 (DData Private "KnotCell" () ((variant "KnotCell" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) ())
 (DTypeSig false "knotAlloc" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyTuple (TyApp (TyCon "List") (TyCon "KnotCell")) (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy")))))))))
-(DFunDef false "knotAlloc" (PWild (PVar "env") PWild (PList)) (ETuple (EListLit) (EVar "env")))
-(DFunDef false "knotAlloc" ((PVar "e") (PVar "env") (PVar "cellEnv") (PCons (PCon "CBind" (PVar "name") (PVar "clauses") (PVar "site") PWild) (PVar "rest"))) (EBlock (DoLet false false (PVar "lamName") (EApp (EApp (EApp (EVar "generatedName") (EVar "e")) (EVar "LN.GenLambda")) (ELit (LString "")))) (DoLet false false (PVar "arity") (EApp (EVar "clauseArity") (EApp (EVar "clauseList") (EVar "clauses")))) (DoLet false false (PVar "captured") (EApp (EApp (EVar "keepInEnv") (EVar "cellEnv")) (EApp (EApp (EVar "removeStr") (EVar "name")) (EApp (EVar "dedupS") (EApp (EApp (EVar "clausesFreeVars") (EVar "name")) (EVar "clauses")))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitGroupBindDefine") (EVar "e")) (EVar "cellEnv")) (EVar "lamName")) (EVar "name")) (EVar "arity")) (EVar "clauses")) (EVar "captured")) (EVar "site"))) (DoLet false false (PTuple (PVar "cellPtr") (PVar "cellWord")) (EApp (EApp (EApp (EApp (EVar "emitClosureAllocPatch") (EVar "e")) (EVar "lamName")) (EVar "arity")) (EApp (EVar "lengthS") (EVar "captured")))) (DoLet false false (PTuple (PVar "cells") (PVar "env2")) (EApp (EApp (EApp (EApp (EVar "knotAlloc") (EVar "e")) (EApp (EApp (EApp (EVar "omInsert") (EVar "name")) (ETuple (EVar "cellWord") (EVar "LTClosure"))) (EVar "env"))) (EVar "cellEnv")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EApp (EVar "KnotCell") (EVar "name")) (EVar "cellPtr")) (EVar "captured")) (EVar "cells")) (EVar "env2")))))
-(DFunDef false "knotAlloc" ((PVar "e") (PVar "env") (PVar "cellEnv") (PCons PWild (PVar "rest"))) (EApp (EApp (EApp (EApp (EVar "knotAlloc") (EVar "e")) (EVar "env")) (EVar "cellEnv")) (EVar "rest")))
+(DFunDef false "knotAlloc" ((PVar "e") (PVar "env0") (PVar "cellEnv") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PVar "env") (PList)) (ETuple (EListLit) (EVar "env"))) (clause ((PVar "env") (PCons (PCon "CBind" (PVar "name") (PVar "clauses") (PVar "site") PWild) (PVar "rest"))) (EBlock (DoLet false false (PVar "lamName") (EApp (EApp (EApp (EVar "generatedName") (EVar "e")) (EVar "LN.GenLambda")) (ELit (LString "")))) (DoLet false false (PVar "arity") (EApp (EVar "clauseArity") (EApp (EVar "clauseList") (EVar "clauses")))) (DoLet false false (PVar "captured") (EApp (EApp (EVar "keepInEnv") (EVar "cellEnv")) (EApp (EApp (EVar "removeStr") (EVar "name")) (EApp (EVar "dedupS") (EApp (EApp (EVar "clausesFreeVars") (EVar "name")) (EVar "clauses")))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitGroupBindDefine") (EVar "e")) (EVar "cellEnv")) (EVar "lamName")) (EVar "name")) (EVar "arity")) (EVar "clauses")) (EVar "captured")) (EVar "site"))) (DoLet false false (PTuple (PVar "cellPtr") (PVar "cellWord")) (EApp (EApp (EApp (EApp (EVar "emitClosureAllocPatch") (EVar "e")) (EVar "lamName")) (EVar "arity")) (EApp (EVar "lengthS") (EVar "captured")))) (DoLet false false (PTuple (PVar "cells") (PVar "env2")) (EApp (EApp (EVar "go") (EApp (EApp (EApp (EVar "omInsert") (EVar "name")) (ETuple (EVar "cellWord") (EVar "LTClosure"))) (EVar "env"))) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EApp (EVar "KnotCell") (EVar "name")) (EVar "cellPtr")) (EVar "captured")) (EVar "cells")) (EVar "env2"))))) (clause ((PVar "env") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "go") (EVar "env")) (EVar "rest"))))) (EApp (EApp (EVar "go") (EVar "env0")) (EVar "xs0"))))
 (DTypeSig false "knotPatch" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "List") (TyCon "KnotCell")) (TyCon "Unit")))))
-(DFunDef false "knotPatch" (PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "knotPatch" ((PVar "e") (PVar "env") (PCons (PCon "KnotCell" PWild (PVar "cellPtr") (PVar "captureNames")) (PVar "rest"))) (EBlock (DoLet false false (PVar "words") (EApp (EApp (EApp (EVar "capWords") (EVar "e")) (EVar "env")) (EVar "captureNames"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "storeFields") (EVar "e")) (EVar "cellPtr")) (EVar "words")) (EBinOp "-" (EVar "closureCaptureStart") (ELit (LInt 1))))) (DoExpr (EApp (EApp (EApp (EVar "knotPatch") (EVar "e")) (EVar "env")) (EVar "rest")))))
+(DFunDef false "knotPatch" ((PVar "e") (PVar "env") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PCon "KnotCell" PWild (PVar "cellPtr") (PVar "captureNames")) (PVar "rest"))) (EBlock (DoLet false false (PVar "words") (EApp (EApp (EApp (EVar "capWords") (EVar "e")) (EVar "env")) (EVar "captureNames"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "storeFields") (EVar "e")) (EVar "cellPtr")) (EVar "words")) (EBinOp "-" (EVar "closureCaptureStart") (ELit (LInt 1))))) (DoExpr (EApp (EVar "go") (EVar "rest"))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "emitClosureAllocPatch" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyTuple (TyCon "String") (TyCon "String")))))))
 (DFunDef false "emitClosureAllocPatch" ((PVar "e") (PVar "lamName") (PVar "callArity") (PVar "nCap")) (EBlock (DoLet false false (PVar "codePtr") (EBinOp "++" (EBinOp "++" (ELit (LString "ptrtoint (ptr @")) (EApp (EApp (EVar "symRef") (EVar "e")) (EVar "lamName"))) (ELit (LString " to i64)")))) (DoLet false false (PVar "fields") (EBinOp "::" (EVar "codePtr") (EApp (EVar "zeroWords") (EVar "nCap")))) (DoLet false false (PVar "nFields") (EApp (EVar "lengthS") (EVar "fields"))) (DoLet false false (PVar "p") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (EVar "p")) (ELit (LString "ptr"))) (ELit (LString "mdk_alloc"))) (EApp (EVar "i64Ops") (EListLit (EApp (EVar "intToString") (EBinOp "*" (ELit (LInt 8)) (EBinOp "+" (EVar "nFields") (ELit (LInt 1)))))))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  store i64 ")) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EVar "callArity")))) (ELit (LString ", ptr "))) (EApp (EVar "$core.display") (EVar "p"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "storeFields") (EVar "e")) (EVar "p")) (EVar "fields")) (ELit (LInt 0)))) (DoLet false false (PVar "w") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "w"))) (ELit (LString " = ptrtoint ptr "))) (EApp (EVar "$core.display") (EVar "p"))) (ELit (LString " to i64"))))) (DoExpr (ETuple (EVar "p") (EVar "w")))))
 (DTypeSig false "zeroWords" (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))
@@ -16579,7 +16591,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "emitIndirect" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "CExpr") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyFun (TyCon "CallMode") (TyTuple (TyCon "String") (TyCon "LTy"))))))))
 (DFunDef false "emitIndirect" ((PVar "e") (PVar "env") (PVar "hd") (PVar "args") (PVar "mode")) (EBlock (DoLet false false (PTuple (PVar "cw") PWild) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "hd"))) (DoLet false false (PVar "argOps") (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "directLamOf") (EVar "e")) (EVar "cw")) (EApp (EVar "lengthS") (EVar "argOps"))) (arm (PCon "Some" (PVar "lam")) () (EBlock (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false (PVar "call") (EApp (EApp (EApp (EVar "wordCall") (EVar "e")) (EVar "lam")) (EBinOp "::" (EVar "cw") (EVar "argOps")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString " = "))) (EApp (EVar "$core.display") (EVar "call"))) (ELit (LString ""))))) (DoExpr (ETuple (EVar "r") (EApp (EApp (EApp (EVar "indirectRetTy") (EVar "e")) (EVar "cw")) (EVar "hd")))))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EVar "emitIndirectMode") (EVar "e")) (EVar "cw")) (EVar "argOps")) (EVar "hd")) (EVar "mode")))))))
 (DTypeSig false "directLamOf" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "String"))))))
-(DFunDef false "directLamOf" ((PVar "e") (PVar "cw") (PVar "nargs")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "cw")) (EUnOp "!" (EFieldAccess (EVar "e") "directFn"))) (arm (PCon "Some" (PTuple (PVar "lam") (PVar "arity"))) () (EIf (EBinOp "==" (EVar "arity") (EVar "nargs")) (EApp (EVar "Some") (EVar "lam")) (EVar "None"))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "directLamOf" ((PVar "e") (PVar "cw") (PVar "nargs")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "lookupAssoc") (EVar "cw")) (EUnOp "!" (EFieldAccess (EVar "e") "directFn")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "lam") (PVar "arity")) () (EIf (EBinOp "==" (EVar "arity") (EVar "nargs")) (EApp (EVar "Some") (EVar "lam")) (EVar "None")))))))
 (DTypeSig false "emitIndirectMode" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CExpr") (TyFun (TyCon "CallMode") (TyTuple (TyCon "String") (TyCon "LTy"))))))))
 (DFunDef false "emitIndirectMode" ((PVar "e") (PVar "cw") (PVar "argOps") (PVar "hd") (PCon "CallExact")) (ETuple (EApp (EApp (EApp (EVar "emitIndirectCallWords") (EVar "e")) (EVar "cw")) (EVar "argOps")) (EApp (EApp (EApp (EVar "indirectRetTy") (EVar "e")) (EVar "cw")) (EVar "hd"))))
 (DFunDef false "emitIndirectMode" ((PVar "e") (PVar "cw") (PVar "argOps") PWild (PCon "CallPartial" (PVar "missing"))) (EApp (EApp (EApp (EApp (EVar "emitPapClosureIndirect") (EVar "e")) (EVar "cw")) (EVar "argOps")) (EBinOp "+" (EApp (EVar "lengthS") (EVar "argOps")) (EVar "missing"))))
@@ -16796,13 +16808,9 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "emitArgTagDispatchGo" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyTuple (TyCon "String") (TyCon "LTy"))))))))
 (DFunDef false "emitArgTagDispatchGo" ((PVar "e") (PVar "groups") (PVar "argOps") (PVar "colliding") (PVar "discrimPos")) (EBlock (DoLet false false (PVar "discrimWord") (EApp (EApp (EVar "nthStr") (EVar "argOps")) (EVar "discrimPos"))) (DoLet false false (PVar "tagReg") (EApp (EApp (EVar "loadDiscriminant") (EVar "e")) (EVar "discrimWord"))) (DoLet false false (PVar "slot") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EVar "slot")) (ELit (LString " = alloca i64"))))) (DoLet false false (PVar "endL") (EBinOp "++" (ELit (LString "argdispend")) (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArgDispatchChain") (EVar "e")) (EVar "tagReg")) (EVar "groups")) (EVar "argOps")) (EVar "colliding")) (EVar "slot")) (EVar "endL"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "endL") (ELit (LString ":"))))) (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString " = load i64, ptr "))) (EApp (EVar "$core.display") (EVar "slot"))) (ELit (LString ""))))) (DoExpr (ETuple (EVar "r") (EVar "LTInt")))))
 (DTypeSig false "emitArgDispatchChain" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Unit")))))))))
-(DFunDef false "emitArgDispatchChain" ((PVar "e") PWild (PList) PWild PWild PWild PWild) (EBlock (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (ELit (LString ""))) (ELit (LString "void"))) (ELit (LString "mdk_dispatch_no_impl"))) (EListLit)))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "  unreachable"))))))
-(DFunDef false "emitArgDispatchChain" ((PVar "e") (PVar "tagReg") (PCons (PVar "g") (PVar "rest")) (PVar "argOps") (PVar "colliding") (PVar "slot") (PVar "endL")) (EIf (EBinOp "&&" (EApp (EVar "groupInherits") (EVar "g")) (EApp (EVar "isEmptyL") (EApp (EApp (EVar "ctorsOfType") (EVar "e")) (EApp (EVar "groupTag") (EVar "g"))))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArgDispatchChain") (EVar "e")) (EVar "tagReg")) (EVar "rest")) (EVar "argOps")) (EVar "colliding")) (EVar "slot")) (EVar "endL")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
-(DFunDef false "emitArgDispatchChain" ((PVar "e") (PVar "tagReg") (PCons (PVar "g") (PVar "rest")) (PVar "argOps") (PVar "colliding") (PVar "slot") (PVar "endL")) (EBlock (DoLet false false (PVar "tag") (EApp (EVar "groupTag") (EVar "g"))) (DoLet false false (PVar "cond") (EApp (EApp (EApp (EVar "emitTagMatch") (EVar "e")) (EVar "tagReg")) (EApp (EApp (EVar "ctorsOfType") (EVar "e")) (EVar "tag")))) (DoLet false false (PVar "n") (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e")))) (DoLet false false (PVar "yes") (EBinOp "++" (ELit (LString "argyes")) (EVar "n"))) (DoLet false false (PVar "next") (EBinOp "++" (ELit (LString "argnext")) (EVar "n"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  br i1 ")) (EApp (EVar "$core.display") (EVar "cond"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "yes"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "next"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "yes") (ELit (LString ":"))))) (DoLet false false PWild (EIf (EApp (EApp (EVar "argTagArmAmbiguous") (EVar "colliding")) (EVar "tag")) (EApp (EVar "emitAmbiguousArm") (EVar "e")) (EBlock (DoLet false false (PTuple (PVar "rv") PWild) (EApp (EApp (EApp (EApp (EApp (EVar "emitArityCall") (EVar "e")) (EApp (EVar "groupFnName") (EVar "g"))) (EVar "argOps")) (EApp (EVar "groupArity") (EVar "g"))) (EVar "LTInt"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  store i64 ")) (EApp (EVar "$core.display") (EVar "rv"))) (ELit (LString ", ptr "))) (EApp (EVar "$core.display") (EVar "slot"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  br label %")) (EVar "endL"))))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "next") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArgDispatchChain") (EVar "e")) (EVar "tagReg")) (EVar "rest")) (EVar "argOps")) (EVar "colliding")) (EVar "slot")) (EVar "endL")))))
+(DFunDef false "emitArgDispatchChain" ((PVar "e") (PVar "tagReg") (PVar "xs0") (PVar "argOps") (PVar "colliding") (PVar "slot") (PVar "endL")) (ELetGroup ((lgb "go" (clause ((PList)) (EBlock (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (ELit (LString ""))) (ELit (LString "void"))) (ELit (LString "mdk_dispatch_no_impl"))) (EListLit)))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "  unreachable")))))) (clause ((PCons (PVar "g") (PVar "rest"))) (EIf (EBinOp "&&" (EApp (EVar "groupInherits") (EVar "g")) (EApp (EVar "isEmptyL") (EApp (EApp (EVar "ctorsOfType") (EVar "e")) (EApp (EVar "groupTag") (EVar "g"))))) (EApp (EVar "go") (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))) (clause ((PCons (PVar "g") (PVar "rest"))) (EBlock (DoLet false false (PVar "tag") (EApp (EVar "groupTag") (EVar "g"))) (DoLet false false (PVar "cond") (EApp (EApp (EApp (EVar "emitTagMatch") (EVar "e")) (EVar "tagReg")) (EApp (EApp (EVar "ctorsOfType") (EVar "e")) (EVar "tag")))) (DoLet false false (PVar "n") (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e")))) (DoLet false false (PVar "yes") (EBinOp "++" (ELit (LString "argyes")) (EVar "n"))) (DoLet false false (PVar "next") (EBinOp "++" (ELit (LString "argnext")) (EVar "n"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  br i1 ")) (EApp (EVar "$core.display") (EVar "cond"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "yes"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "next"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "yes") (ELit (LString ":"))))) (DoLet false false PWild (EIf (EApp (EApp (EVar "argTagArmAmbiguous") (EVar "colliding")) (EVar "tag")) (EApp (EVar "emitAmbiguousArm") (EVar "e")) (EBlock (DoLet false false (PTuple (PVar "rv") PWild) (EApp (EApp (EApp (EApp (EApp (EVar "emitArityCall") (EVar "e")) (EApp (EVar "groupFnName") (EVar "g"))) (EVar "argOps")) (EApp (EVar "groupArity") (EVar "g"))) (EVar "LTInt"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  store i64 ")) (EApp (EVar "$core.display") (EVar "rv"))) (ELit (LString ", ptr "))) (EApp (EVar "$core.display") (EVar "slot"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  br label %")) (EVar "endL"))))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "next") (ELit (LString ":"))))) (DoExpr (EApp (EVar "go") (EVar "rest"))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "emitTagMatch" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))))
-(DFunDef false "emitTagMatch" ((PVar "e") PWild (PList)) (EApp (EApp (EVar "gapStr") (EVar "e")) (ELit (LString "arg-tag dispatch on impl type that owns no constructors (primitive receiver carries no cell tag)"))))
-(DFunDef false "emitTagMatch" ((PVar "e") (PVar "tagReg") (PList (PVar "c"))) (EBlock (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString " = icmp eq i64 "))) (EApp (EVar "$core.display") (EVar "tagReg"))) (ELit (LString ", "))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EApp (EApp (EVar "cellTag") (EVar "e")) (EVar "c"))))) (ELit (LString ""))))) (DoExpr (EVar "r"))))
-(DFunDef false "emitTagMatch" ((PVar "e") (PVar "tagReg") (PCons (PVar "c") (PVar "rest"))) (EBlock (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString " = icmp eq i64 "))) (EApp (EVar "$core.display") (EVar "tagReg"))) (ELit (LString ", "))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EApp (EApp (EVar "cellTag") (EVar "e")) (EVar "c"))))) (ELit (LString ""))))) (DoLet false false (PVar "rrest") (EApp (EApp (EApp (EVar "emitTagMatch") (EVar "e")) (EVar "tagReg")) (EVar "rest"))) (DoLet false false (PVar "o") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "o"))) (ELit (LString " = or i1 "))) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString ", "))) (EApp (EVar "$core.display") (EVar "rrest"))) (ELit (LString ""))))) (DoExpr (EVar "o"))))
+(DFunDef false "emitTagMatch" ((PVar "e") (PVar "tagReg") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EApp (EApp (EVar "gapStr") (EVar "e")) (ELit (LString "arg-tag dispatch on impl type that owns no constructors (primitive receiver carries no cell tag)")))) (clause ((PList (PVar "c"))) (EBlock (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString " = icmp eq i64 "))) (EApp (EVar "$core.display") (EVar "tagReg"))) (ELit (LString ", "))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EApp (EApp (EVar "cellTag") (EVar "e")) (EVar "c"))))) (ELit (LString ""))))) (DoExpr (EVar "r")))) (clause ((PCons (PVar "c") (PVar "rest"))) (EBlock (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString " = icmp eq i64 "))) (EApp (EVar "$core.display") (EVar "tagReg"))) (ELit (LString ", "))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EApp (EApp (EVar "cellTag") (EVar "e")) (EVar "c"))))) (ELit (LString ""))))) (DoLet false false (PVar "rrest") (EApp (EVar "go") (EVar "rest"))) (DoLet false false (PVar "o") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "o"))) (ELit (LString " = or i1 "))) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString ", "))) (EApp (EVar "$core.display") (EVar "rrest"))) (ELit (LString ""))))) (DoExpr (EVar "o")))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "implGroupsForMethod" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "ImplGroup")))))
 (DFunDef false "implGroupsForMethod" ((PVar "e") (PVar "method")) (EApp (EApp (EVar "filterGroupsByMethod") (EVar "method")) (EUnOp "!" (EFieldAccess (EVar "e") "implGroups"))))
 (DTypeSig false "implGroupsForMethodArity" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "ImplGroup")))))))
@@ -16850,12 +16858,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "dictWordsOf" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "dictWordsOf" ((PVar "e") (PVar "env") (PVar "rs")) (EApp (EApp (EVar "map") (EApp (EApp (EVar "dictWordOfRoute") (EVar "e")) (EVar "env"))) (EVar "rs")))
 (DTypeSig false "dictWordOfRoute" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "Route") (TyCon "String")))))
-(DFunDef false "dictWordOfRoute" ((PVar "e") (PVar "env") (PCon "RKey" (PVar "key") (PVar "reqs") (PVar "sups"))) (EBlock (DoLet false false (PVar "supWords") (EApp (EApp (EApp (EVar "dictWordsOf") (EVar "e")) (EVar "env")) (EVar "sups"))) (DoLet false false (PVar "slots") (EApp (EApp (EVar "slotWords") (EVar "e")) (EVar "key"))) (DoLet false false (PVar "fieldWords") (EBinOp "++" (EBinOp "++" (EVar "supWords") (EVar "slots")) (EApp (EApp (EApp (EVar "dictWordsOf") (EVar "e")) (EVar "env")) (EVar "reqs")))) (DoExpr (EIf (EApp (EVar "allConstWords") (EVar "fieldWords")) (EApp (EApp (EApp (EVar "emitConstDictCell") (EVar "e")) (EApp (EVar "hashName") (EVar "key"))) (EVar "fieldWords")) (EApp (EApp (EApp (EVar "emitDictCell") (EVar "e")) (EApp (EVar "hashName") (EVar "key"))) (EVar "fieldWords"))))))
-(DFunDef false "dictWordOfRoute" ((PVar "e") (PVar "env") (PCon "RDict" (PVar "d"))) (EApp (EApp (EApp (EVar "dictOperand") (EVar "e")) (EVar "env")) (EVar "d")))
-(DFunDef false "dictWordOfRoute" ((PVar "e") (PVar "env") (PCon "RDictFwd" (PVar "d"))) (EApp (EApp (EApp (EVar "dictOperand") (EVar "e")) (EVar "env")) (EVar "d")))
-(DFunDef false "dictWordOfRoute" ((PVar "e") (PVar "env") (PCon "RProj" (PVar "r") (PVar "path"))) (EApp (EApp (EApp (EVar "loadSuperPath") (EVar "e")) (EApp (EApp (EApp (EVar "dictWordOfRoute") (EVar "e")) (EVar "env")) (EVar "r"))) (EApp (EApp (EApp (EVar "receiverPath") (EVar "e")) (EVar "r")) (EVar "path"))))
-(DFunDef false "dictWordOfRoute" (PWild PWild (PCon "RNone")) (ELit (LString "0")))
-(DFunDef false "dictWordOfRoute" (PWild PWild (PCon "RLocal" PWild PWild)) (ELit (LString "0")))
+(DFunDef false "dictWordOfRoute" ((PVar "e") (PVar "env") (PVar "x0")) (ELetGroup ((lgb "go" (clause ((PCon "RKey" (PVar "key") (PVar "reqs") (PVar "sups"))) (EBlock (DoLet false false (PVar "supWords") (EApp (EApp (EApp (EVar "dictWordsOf") (EVar "e")) (EVar "env")) (EVar "sups"))) (DoLet false false (PVar "slots") (EApp (EApp (EVar "slotWords") (EVar "e")) (EVar "key"))) (DoLet false false (PVar "fieldWords") (EBinOp "++" (EBinOp "++" (EVar "supWords") (EVar "slots")) (EApp (EApp (EApp (EVar "dictWordsOf") (EVar "e")) (EVar "env")) (EVar "reqs")))) (DoExpr (EIf (EApp (EVar "allConstWords") (EVar "fieldWords")) (EApp (EApp (EApp (EVar "emitConstDictCell") (EVar "e")) (EApp (EVar "hashName") (EVar "key"))) (EVar "fieldWords")) (EApp (EApp (EApp (EVar "emitDictCell") (EVar "e")) (EApp (EVar "hashName") (EVar "key"))) (EVar "fieldWords")))))) (clause ((PCon "RDict" (PVar "d"))) (EApp (EApp (EApp (EVar "dictOperand") (EVar "e")) (EVar "env")) (EVar "d"))) (clause ((PCon "RDictFwd" (PVar "d"))) (EApp (EApp (EApp (EVar "dictOperand") (EVar "e")) (EVar "env")) (EVar "d"))) (clause ((PCon "RProj" (PVar "r") (PVar "path"))) (EApp (EApp (EApp (EVar "loadSuperPath") (EVar "e")) (EApp (EVar "go") (EVar "r"))) (EApp (EApp (EApp (EVar "receiverPath") (EVar "e")) (EVar "r")) (EVar "path")))) (clause ((PCon "RNone")) (ELit (LString "0"))) (clause ((PCon "RLocal" PWild PWild)) (ELit (LString "0"))))) (EApp (EVar "go") (EVar "x0"))))
 (DTypeSig false "receiverPath" (TyFun (TyCon "Emit") (TyFun (TyCon "Route") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Int"))))))
 (DFunDef false "receiverPath" ((PVar "e") (PCon "RDict" (PVar "d")) (PCons (PVar "i") (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EVar "receiverIndex") (EVar "e")) (EVar "d")) (EVar "i")) (EVar "rest")))
 (DFunDef false "receiverPath" ((PVar "e") (PCon "RDictFwd" (PVar "d")) (PCons (PVar "i") (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EVar "receiverIndex") (EVar "e")) (EVar "d")) (EVar "i")) (EVar "rest")))
@@ -16926,8 +16929,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DFunDef false "tagToLTy" ((PLit (LString "I64"))) (EVar "LTI64"))
 (DFunDef false "tagToLTy" ((PVar "t")) (EIf (EApp (EVar "isTaggedFixedHead") (EVar "t")) (EVar "LTInt") (EVar "LTCon")))
 (DTypeSig false "implParamEnvByPos" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))))))))
-(DFunDef false "implParamEnvByPos" (PWild PWild (PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "omEmpty") (EApp (EVar "__fallthrough__") (ELit LUnit))))
-(DFunDef false "implParamEnvByPos" ((PVar "tag") (PVar "positions") (PVar "n") (PVar "i")) (EBlock (DoLet false false (PVar "ty") (EIf (EApp (EApp (EVar "listContains") (EVar "positions")) (EVar "i")) (EApp (EVar "tagToLTy") (EVar "tag")) (EVar "LTInt"))) (DoExpr (EApp (EApp (EApp (EVar "omInsert") (EBinOp "++" (ELit (LString "a")) (EApp (EVar "intToString") (EVar "i")))) (ETuple (EBinOp "++" (ELit (LString "%arg")) (EApp (EVar "intToString") (EVar "i"))) (EVar "ty"))) (EApp (EApp (EApp (EApp (EVar "implParamEnvByPos") (EVar "tag")) (EVar "positions")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))))
+(DFunDef false "implParamEnvByPos" ((PVar "tag") (PVar "positions") (PVar "n") (PVar "i0")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "omEmpty") (EApp (EVar "__fallthrough__") (ELit LUnit)))) (clause ((PVar "i")) (EBlock (DoLet false false (PVar "ty") (EIf (EApp (EApp (EVar "listContains") (EVar "positions")) (EVar "i")) (EApp (EVar "tagToLTy") (EVar "tag")) (EVar "LTInt"))) (DoExpr (EApp (EApp (EApp (EVar "omInsert") (EBinOp "++" (ELit (LString "a")) (EApp (EVar "intToString") (EVar "i")))) (ETuple (EBinOp "++" (ELit (LString "%arg")) (EApp (EVar "intToString") (EVar "i"))) (EVar "ty"))) (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))))))))) (EApp (EVar "go") (EVar "i0"))))
 (DTypeSig false "listContains" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Int") (TyCon "Bool"))))
 (DFunDef false "listContains" ((PList) PWild) (EVar "False"))
 (DFunDef false "listContains" ((PCons (PVar "x") (PVar "rest")) (PVar "v")) (EIf (EBinOp "==" (EVar "x") (EVar "v")) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EVar "listContains") (EVar "rest")) (EVar "v")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -16947,8 +16949,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "emitClauseTree" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr"))) (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyCon "Unit"))))))))
 (DFunDef false "emitClauseTree" ((PVar "e") (PVar "env") (PVar "arity") (PVar "clauses") (PVar "outer") (PVar "site")) (EBlock (DoLet false false (PVar "roots") (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EApp (EApp (EVar "implScrutVars") (EVar "arity")) (ELit (LInt 0))))) (DoLet false false (PVar "slot") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EVar "slot")) (ELit (LString " = alloca i64"))))) (DoLet false false (PVar "endL") (EBinOp "++" (ELit (LString "decend")) (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e"))))) (DoLet false false (PVar "rty") (EApp (EVar "Ref") (EVar "LTInt"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitClauseChain") (EVar "e")) (EVar "env")) (EVar "arity")) (EVar "clauses")) (EVar "roots")) (EVar "slot")) (EVar "endL")) (EVar "rty")) (EVar "outer")) (EVar "site"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "endL") (ELit (LString ":"))))) (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString " = load i64, ptr "))) (EApp (EVar "$core.display") (EVar "slot"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  ret i64 ")) (EVar "r"))))))
 (DTypeSig false "emitClauseChain" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "LTy")) (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyCon "Unit"))))))))))))
-(DFunDef false "emitClauseChain" (PWild PWild PWild (PList) PWild PWild PWild PWild PWild PWild) (ELit LUnit))
-(DFunDef false "emitClauseChain" ((PVar "e") (PVar "env") (PVar "arity") (PCons (PVar "c") (PVar "rest")) (PVar "roots") (PVar "slot") (PVar "endL") (PVar "rty") (PVar "outer") (PVar "site")) (EBlock (DoLet false false (PVar "nextL") (EApp (EApp (EApp (EVar "chainNextLabel") (EVar "e")) (EVar "rest")) (EVar "outer"))) (DoLet false false (PVar "c2") (EApp (EApp (EVar "ftClause") (EIf (EBinOp "==" (EVar "nextL") (ELit (LString ""))) (EApp (EApp (EVar "siteFtLabel") (EVar "e")) (EVar "site")) (EVar "nextL"))) (EVar "c"))) (DoLet false false (PVar "arms") (EListLit (EApp (EApp (EVar "clauseArm") (EVar "arity")) (EVar "c2")))) (DoLet false false (PVar "tree") (EApp (EApp (EApp (EVar "compileTree") (EApp (EVar "NoArm") (EVar "site"))) (EListLit (EVar "False"))) (EApp (EApp (EVar "implRows") (EListLit (EVar "c2"))) (ELit (LInt 0))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeShared") (EVar "e")) (EVar "env")) (EVar "roots")) (EVar "arms")) (EVar "roots")) (EVar "slot")) (EVar "endL")) (EVar "nextL")) (EVar "rty")) (EVar "tree"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "rest")) (ELit LUnit) (EBlock (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "nextL") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitClauseChain") (EVar "e")) (EVar "env")) (EVar "arity")) (EVar "rest")) (EVar "roots")) (EVar "slot")) (EVar "endL")) (EVar "rty")) (EVar "outer")) (EVar "site"))))))))
+(DFunDef false "emitClauseChain" ((PVar "e") (PVar "env") (PVar "arity") (PVar "xs0") (PVar "roots") (PVar "slot") (PVar "endL") (PVar "rty") (PVar "outer") (PVar "site")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PVar "c") (PVar "rest"))) (EBlock (DoLet false false (PVar "nextL") (EApp (EApp (EApp (EVar "chainNextLabel") (EVar "e")) (EVar "rest")) (EVar "outer"))) (DoLet false false (PVar "c2") (EApp (EApp (EVar "ftClause") (EIf (EBinOp "==" (EVar "nextL") (ELit (LString ""))) (EApp (EApp (EVar "siteFtLabel") (EVar "e")) (EVar "site")) (EVar "nextL"))) (EVar "c"))) (DoLet false false (PVar "arms") (EListLit (EApp (EApp (EVar "clauseArm") (EVar "arity")) (EVar "c2")))) (DoLet false false (PVar "tree") (EApp (EApp (EApp (EVar "compileTree") (EApp (EVar "NoArm") (EVar "site"))) (EListLit (EVar "False"))) (EApp (EApp (EVar "implRows") (EListLit (EVar "c2"))) (ELit (LInt 0))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeShared") (EVar "e")) (EVar "env")) (EVar "roots")) (EVar "arms")) (EVar "roots")) (EVar "slot")) (EVar "endL")) (EVar "nextL")) (EVar "rty")) (EVar "tree"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "rest")) (ELit LUnit) (EBlock (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "nextL") (ELit (LString ":"))))) (DoExpr (EApp (EVar "go") (EVar "rest")))))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "ftClause" (TyFun (TyCon "String") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr")) (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr")))))
 (DFunDef false "ftClause" ((PLit (LString "")) (PVar "c")) (EVar "c"))
 (DFunDef false "ftClause" ((PVar "lbl") (PTuple (PVar "pats") (PVar "body"))) (ETuple (EVar "pats") (EApp (EApp (EVar "labelFallthrough") (EVar "body")) (EVar "lbl"))))
@@ -17052,8 +17053,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "argNames" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "argNames" ((PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EListLit) (EBinOp "::" (EBinOp "++" (ELit (LString "%arg")) (EApp (EVar "intToString") (EVar "i"))) (EApp (EApp (EVar "argNames") (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))))
 (DTypeSig false "loadCaptures" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))))))))
-(DFunDef false "loadCaptures" (PWild PWild (PList) PWild) (EVar "omEmpty"))
-(DFunDef false "loadCaptures" ((PVar "e") (PVar "env") (PCons (PVar "c") (PVar "rest")) (PVar "i")) (EBlock (DoLet false false (PVar "r") (EApp (EApp (EApp (EVar "loadField") (EVar "e")) (ELit (LString "%clos"))) (EBinOp "-" (EBinOp "+" (EVar "i") (EVar "closureCaptureStart")) (ELit (LInt 1))))) (DoExpr (EApp (EApp (EApp (EVar "omInsert") (EVar "c")) (ETuple (EVar "r") (EApp (EApp (EVar "capTypeOf") (EVar "env")) (EVar "c")))) (EApp (EApp (EApp (EApp (EVar "loadCaptures") (EVar "e")) (EVar "env")) (EVar "rest")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))))
+(DFunDef false "loadCaptures" ((PVar "e") (PVar "env") (PVar "xs0") (PVar "i0")) (ELetGroup ((lgb "go" (clause ((PList) PWild) (EVar "omEmpty")) (clause ((PCons (PVar "c") (PVar "rest")) (PVar "i")) (EBlock (DoLet false false (PVar "r") (EApp (EApp (EApp (EVar "loadField") (EVar "e")) (ELit (LString "%clos"))) (EBinOp "-" (EBinOp "+" (EVar "i") (EVar "closureCaptureStart")) (ELit (LInt 1))))) (DoExpr (EApp (EApp (EApp (EVar "omInsert") (EVar "c")) (ETuple (EVar "r") (EApp (EApp (EVar "capTypeOf") (EVar "env")) (EVar "c")))) (EApp (EApp (EVar "go") (EVar "rest")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "i0"))))
 (DTypeSig false "capTypeOf" (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "String") (TyCon "LTy"))))
 (DFunDef false "capTypeOf" ((PVar "env") (PVar "c")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "c")) (EVar "env")) (arm (PCon "Some" (PTuple PWild (PCon "LTFloat"))) () (EVar "LTFloat")) (arm (PCon "Some" (PTuple PWild (PCon "LTFloatU"))) () (EVar "LTFloat")) (arm (PCon "Some" (PTuple PWild (PCon "LTU64"))) () (EVar "LTU64")) (arm (PCon "Some" (PTuple PWild (PCon "LTU64U"))) () (EVar "LTU64")) (arm (PCon "Some" (PTuple PWild (PCon "LTI64"))) () (EVar "LTI64")) (arm PWild () (EVar "LTInt"))))
 (DTypeSig false "capWords" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
@@ -17067,12 +17067,11 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "envMergeL" (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))))))
 (DFunDef false "envMergeL" ((PVar "left") (PVar "right")) (EApp (EApp (EApp (EVar "envMergeLKeys") (EApp (EVar "omKeys") (EVar "left"))) (EVar "left")) (EVar "right")))
 (DTypeSig false "envMergeLKeys" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy")))))))
-(DFunDef false "envMergeLKeys" ((PList) PWild (PVar "right")) (EVar "right"))
-(DFunDef false "envMergeLKeys" ((PCons (PVar "k") (PVar "rest")) (PVar "left") (PVar "right")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "k")) (EVar "left")) (arm (PCon "Some" (PVar "v")) () (EApp (EApp (EApp (EVar "omInsert") (EVar "k")) (EVar "v")) (EApp (EApp (EApp (EVar "envMergeLKeys") (EVar "rest")) (EVar "left")) (EVar "right")))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "envMergeLKeys") (EVar "rest")) (EVar "left")) (EVar "right")))))
+(DFunDef false "envMergeLKeys" ((PVar "xs0") (PVar "left") (PVar "right")) (ELetGroup ((lgb "go" (clause ((PList)) (EVar "right")) (clause ((PCons (PVar "k") (PVar "rest"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "k")) (EVar "left")) (arm (PCon "Some" (PVar "v")) () (EApp (EApp (EApp (EVar "omInsert") (EVar "k")) (EVar "v")) (EApp (EVar "go") (EVar "rest")))) (arm (PCon "None") () (EApp (EVar "go") (EVar "rest"))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "dedupS" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "dedupS" ((PVar "xs")) (EApp (EVar "reverseL") (EApp (EVar "dedup") (EApp (EVar "reverseL") (EVar "xs")))))
 (DTypeSig false "reservedTag" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int"))))
-(DFunDef false "reservedTag" ((PVar "name")) (EMatch (EApp (EVar "namedRuntimeCtor") (EVar "name")) (arm (PCon "Some" (PVar "id")) () (EBlock (DoLet false false (PVar "fact") (EApp (EVar "runtimeCtorFact") (EVar "id"))) (DoLet false false (PVar "slot") (EMatch (EFieldAccess (EVar "fact") "owner") (arm (PCon "RuntimeList") () (EApp (EVar "Some") (ELit (LInt 0)))) (arm (PCon "RuntimeOption") () (EApp (EVar "Some") (ELit (LInt 1)))) (arm (PCon "RuntimeResult") () (EApp (EVar "Some") (ELit (LInt 2)))) (arm (PCon "RuntimeOrdering") () (EApp (EVar "Some") (ELit (LInt 3)))) (arm PWild () (EVar "None")))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "n")) (EBinOp "+" (EBinOp "*" (EBinOp "+" (EVar "reservedTypeBase") (EVar "n")) (EVar "ctorTagShift")) (EFieldAccess (EVar "fact") "ordinal")))) (EVar "slot"))))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "reservedTag" ((PVar "name")) (EApp (EApp (EVar "$core.andThen") (EApp (EVar "namedRuntimeCtor") (EVar "name"))) (ELam ((PVar "id")) (ELet false (PVar "fact") (EApp (EVar "runtimeCtorFact") (EVar "id")) (ELet false (PVar "slot") (EMatch (EFieldAccess (EVar "fact") "owner") (arm (PCon "RuntimeList") () (EApp (EVar "Some") (ELit (LInt 0)))) (arm (PCon "RuntimeOption") () (EApp (EVar "Some") (ELit (LInt 1)))) (arm (PCon "RuntimeResult") () (EApp (EVar "Some") (ELit (LInt 2)))) (arm (PCon "RuntimeOrdering") () (EApp (EVar "Some") (ELit (LInt 3)))) (arm PWild () (EVar "None"))) (EApp (EApp (EVar "map") (ELam ((PVar "n")) (EBinOp "+" (EBinOp "*" (EBinOp "+" (EVar "reservedTypeBase") (EVar "n")) (EVar "ctorTagShift")) (EFieldAccess (EVar "fact") "ordinal")))) (EVar "slot")))))))
 (DTypeSig false "cellTag" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyCon "Int"))))
 (DFunDef false "cellTag" ((PVar "e") (PVar "name")) (EIf (EBinOp "==" (EVar "name") (ELit (LString "True"))) (ELit (LInt 1)) (EIf (EBinOp "==" (EVar "name") (ELit (LString "False"))) (ELit (LInt 0)) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "$tuple")) (ELit (LString "$ref")) (ELit (LString "$closure")))) (EApp (EVar "hashName") (EVar "name")) (EMatch (EApp (EVar "reservedTag") (EVar "name")) (arm (PCon "Some" (PVar "t")) () (EVar "t")) (arm (PCon "None") () (EBinOp "+" (EBinOp "*" (EApp (EApp (EVar "ctorTypeId") (EVar "e")) (EVar "name")) (EVar "ctorTagShift")) (EApp (EApp (EVar "ctorOrdinal") (EVar "e")) (EVar "name")))))))))
 (DTypeSig false "ctorOrdinal" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyCon "Int"))))
@@ -17102,12 +17101,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "emitDecision" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "CExpr") (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "CTree") (TyTuple (TyCon "String") (TyCon "LTy"))))))))
 (DFunDef false "emitDecision" ((PVar "e") (PVar "env") (PVar "scrut") (PVar "arms") (PVar "tree")) (EBlock (DoLet false false (PTuple (PVar "sv") PWild) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "scrut"))) (DoLet false false (PVar "slot") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EVar "slot")) (ELit (LString " = alloca i64"))))) (DoLet false false (PVar "endL") (EBinOp "++" (ELit (LString "decend")) (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e"))))) (DoLet false false (PVar "rty") (EApp (EVar "Ref") (EVar "LTInt"))) (DoLet false false (PVar "savedTrmc") (EUnOp "!" (EFieldAccess (EVar "e") "trmcCtx"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "trmcCtx")) (EVar "TrmcOff"))) (DoLet false false (PVar "savedGDisp") (EUnOp "!" (EFieldAccess (EVar "e") "gDispCtx"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "gDispCtx")) (EVar "GDispOff"))) (DoLet false false (PVar "savedSelfTail") (EUnOp "!" (EFieldAccess (EVar "e") "selfTailCtx"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "selfTailCtx")) (EVar "None"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeShared") (EVar "e")) (EVar "env")) (EListLit (EVar "sv"))) (EVar "arms")) (EListLit (EVar "sv"))) (EVar "slot")) (EVar "endL")) (ELit (LString ""))) (EVar "rty")) (EVar "tree"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "trmcCtx")) (EVar "savedTrmc"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "gDispCtx")) (EVar "savedGDisp"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "selfTailCtx")) (EVar "savedSelfTail"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "endL") (ELit (LString ":"))))) (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString " = load i64, ptr "))) (EApp (EVar "$core.display") (EVar "slot"))) (ELit (LString ""))))) (DoExpr (ETuple (EVar "r") (EUnOp "!" (EVar "rty"))))))
 (DTypeSig false "emitTree" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "LTy")) (TyFun (TyCon "CTree") (TyCon "Unit"))))))))))))
-(DFunDef false "emitTree" ((PVar "e") PWild PWild PWild PWild PWild PWild (PLit (LString "")) PWild (PCon "CTFail" (PVar "site"))) (EApp (EApp (EVar "emitFailTrap") (EVar "e")) (EVar "site")))
-(DFunDef false "emitTree" ((PVar "e") PWild PWild PWild PWild PWild PWild (PVar "lbl") PWild (PCon "CTFail" PWild)) (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  br label %")) (EVar "lbl"))))
-(DFunDef false "emitTree" ((PVar "e") (PVar "env") (PVar "roots") (PVar "arms") PWild (PVar "slot") (PVar "endL") PWild (PVar "rty") (PCon "CTLeaf" (PVar "i"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitLeaf") (EVar "e")) (EVar "env")) (EVar "roots")) (EVar "arms")) (EVar "i")) (EVar "slot")) (EVar "endL")) (EVar "rty")))
-(DFunDef false "emitTree" ((PVar "e") (PVar "env") (PVar "roots") (PVar "arms") (PVar "occs") (PVar "slot") (PVar "endL") (PVar "ftL") (PVar "rty") (PCon "CTGuard" (PVar "i") (PVar "fail"))) (EMatch (EApp (EApp (EApp (EVar "leafArm") (EVar "e")) (EVar "arms")) (EVar "i")) (arm (PCon "Some" (PTuple (PVar "pat") (PVar "guards") (PVar "body") (PVar "share"))) () (EIf (EApp (EVar "allGuardsEmittable") (EVar "guards")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitGuardedArm") (EVar "e")) (EVar "env")) (EVar "roots")) (EVar "arms")) (EVar "occs")) (EVar "pat")) (EVar "guards")) (EVar "body")) (EVar "share")) (EVar "fail")) (EVar "slot")) (EVar "endL")) (EVar "ftL")) (EVar "rty")) (EBlock (DoExpr (EApp (EApp (EVar "gapU") (EVar "e")) (ELit (LString "refutable pattern guard (`p <- e`) in a match arm (CTGuard) — not yet lowered")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  store i64 0, ptr ")) (EVar "slot")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  br label %")) (EVar "endL"))))))) (arm (PCon "None") () (EBlock (DoExpr (EApp (EApp (EVar "gapU") (EVar "e")) (ELit (LString "guarded arm index out of range (CTGuard)")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  store i64 0, ptr ")) (EVar "slot")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  br label %")) (EVar "endL"))))))))
-(DFunDef false "emitTree" ((PVar "e") (PVar "env") (PVar "roots") (PVar "arms") (PVar "occs") (PVar "slot") (PVar "endL") (PVar "ftL") (PVar "rty") (PCon "CTDrop" (PVar "sub"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTree") (EVar "e")) (EVar "env")) (EVar "roots")) (EVar "arms")) (EApp (EVar "tailS") (EVar "occs"))) (EVar "slot")) (EVar "endL")) (EVar "ftL")) (EVar "rty")) (EVar "sub")))
-(DFunDef false "emitTree" ((PVar "e") (PVar "env") (PVar "roots") (PVar "arms") (PVar "occs") (PVar "slot") (PVar "endL") (PVar "ftL") (PVar "rty") (PCon "CTSwitch" (PVar "branches") (PVar "dft"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitSwitch") (EVar "e")) (EVar "env")) (EVar "roots")) (EVar "arms")) (EVar "occs")) (EVar "branches")) (EVar "dft")) (EVar "slot")) (EVar "endL")) (EVar "ftL")) (EVar "rty")))
+(DFunDef false "emitTree" ((PVar "e") (PVar "env") (PVar "roots") (PVar "arms") (PVar "occs0") (PVar "slot") (PVar "endL") (PVar "ftL") (PVar "rty") (PVar "tr0")) (ELetGroup ((lgb "go" (clause (PWild (PCon "CTFail" (PVar "site"))) (EMatch (EVar "ftL") (arm (PLit (LString "")) () (EApp (EApp (EVar "emitFailTrap") (EVar "e")) (EVar "site"))) (arm (PVar "lbl") () (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  br label %")) (EVar "lbl")))))) (clause (PWild (PCon "CTLeaf" (PVar "i"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitLeaf") (EVar "e")) (EVar "env")) (EVar "roots")) (EVar "arms")) (EVar "i")) (EVar "slot")) (EVar "endL")) (EVar "rty"))) (clause ((PVar "occs") (PCon "CTGuard" (PVar "i") (PVar "fail"))) (EMatch (EApp (EApp (EApp (EVar "leafArm") (EVar "e")) (EVar "arms")) (EVar "i")) (arm (PCon "Some" (PTuple (PVar "pat") (PVar "guards") (PVar "body") (PVar "share"))) () (EIf (EApp (EVar "allGuardsEmittable") (EVar "guards")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitGuardedArm") (EVar "e")) (EVar "env")) (EVar "roots")) (EVar "arms")) (EVar "occs")) (EVar "pat")) (EVar "guards")) (EVar "body")) (EVar "share")) (EVar "fail")) (EVar "slot")) (EVar "endL")) (EVar "ftL")) (EVar "rty")) (EBlock (DoExpr (EApp (EApp (EVar "gapU") (EVar "e")) (ELit (LString "refutable pattern guard (`p <- e`) in a match arm (CTGuard) — not yet lowered")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  store i64 0, ptr ")) (EVar "slot")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  br label %")) (EVar "endL"))))))) (arm (PCon "None") () (EBlock (DoExpr (EApp (EApp (EVar "gapU") (EVar "e")) (ELit (LString "guarded arm index out of range (CTGuard)")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  store i64 0, ptr ")) (EVar "slot")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  br label %")) (EVar "endL")))))))) (clause ((PVar "occs") (PCon "CTDrop" (PVar "sub"))) (EApp (EApp (EVar "go") (EApp (EVar "tailS") (EVar "occs"))) (EVar "sub"))) (clause ((PVar "occs") (PCon "CTSwitch" (PVar "branches") (PVar "dft"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitSwitch") (EVar "e")) (EVar "env")) (EVar "roots")) (EVar "arms")) (EVar "occs")) (EVar "branches")) (EVar "dft")) (EVar "slot")) (EVar "endL")) (EVar "ftL")) (EVar "rty"))))) (EApp (EApp (EVar "go") (EVar "occs0")) (EVar "tr0"))))
 (DTypeSig false "emitLeaf" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "LTy")) (TyCon "Unit"))))))))))
 (DFunDef false "emitLeaf" ((PVar "e") (PVar "env") (PVar "roots") (PVar "arms") (PVar "i") (PVar "slot") (PVar "endL") (PVar "rty")) (EMatch (EApp (EApp (EApp (EVar "leafArm") (EVar "e")) (EVar "arms")) (EVar "i")) (arm (PCon "Some" (PTuple (PVar "pat") (PVar "guards") (PVar "body") (PVar "share"))) () (EBlock (DoLet false false (PVar "env2") (EApp (EApp (EApp (EApp (EApp (EVar "bindArm") (EVar "e")) (EVar "env")) (EVar "pat")) (EVar "roots")) (EVar "body"))) (DoExpr (EMatch (EVar "share") (arm (PCon "Some" (PVar "owner")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "orJoinEdge") (EVar "e")) (EVar "env")) (EVar "env2")) (EVar "arms")) (EVar "owner")) (EVar "body"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitLeafBody") (EVar "e")) (EVar "env2")) (EVar "body")) (EVar "slot")) (EVar "endL")) (EVar "rty"))))))) (arm (PCon "None") () (EApp (EApp (EVar "gapU") (EVar "e")) (ELit (LString "decision arm index out of range"))))))
 (DTypeSig false "emitLeafBody" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "CExpr") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "LTy")) (TyCon "Unit"))))))))
@@ -17119,7 +17113,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "leafArm" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyTuple (TyCon "Pat") (TyApp (TyCon "List") (TyCon "CGuard")) (TyCon "CExpr") (TyApp (TyCon "Option") (TyCon "Int"))))))))
 (DFunDef false "leafArm" ((PVar "e") (PVar "arms") (PVar "i")) (EMatch (EApp (EApp (EVar "nthArm") (EVar "arms")) (EVar "i")) (arm (PCon "Some" (PCon "CArm" (PVar "pat") (PVar "guards") (PVar "body"))) () (EApp (EVar "Some") (ETuple (EVar "pat") (EVar "guards") (EVar "body") (EApp (EApp (EVar "sharedOwner") (EVar "e")) (EVar "i"))))) (arm (PCon "Some" (PCon "CArmAlt" (PVar "pat") (PVar "guards") (PVar "owner"))) () (EMatch (EApp (EApp (EVar "nthArm") (EVar "arms")) (EVar "owner")) (arm (PCon "Some" (PCon "CArm" PWild PWild (PVar "body"))) () (EApp (EVar "Some") (ETuple (EVar "pat") (EVar "guards") (EVar "body") (EApp (EVar "Some") (EVar "owner"))))) (arm PWild () (EVar "None")))) (arm (PCon "None") () (EVar "None"))))
 (DTypeSig false "sharedOwner" (TyFun (TyCon "Emit") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int")))))
-(DFunDef false "sharedOwner" ((PVar "e") (PVar "i")) (EMatch (EUnOp "!" (EFieldAccess (EVar "e") "orScope")) (arm (PCon "Some" (PVar "sc")) () (EIf (EApp (EApp (EVar "omHasKey") (EApp (EVar "intToString") (EVar "i"))) (EFieldAccess (EVar "sc") "osOwners")) (EApp (EVar "Some") (EVar "i")) (EVar "None"))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "sharedOwner" ((PVar "e") (PVar "i")) (EApp (EApp (EVar "$core.andThen") (EUnOp "!" (EFieldAccess (EVar "e") "orScope"))) (ELam ((PVar "sc")) (EIf (EApp (EApp (EVar "omHasKey") (EApp (EVar "intToString") (EVar "i"))) (EFieldAccess (EVar "sc") "osOwners")) (EApp (EVar "Some") (EVar "i")) (EVar "None")))))
 (DTypeSig false "emitTreeShared" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "LTy")) (TyFun (TyCon "CTree") (TyCon "Unit"))))))))))))
 (DFunDef false "emitTreeShared" ((PVar "e") (PVar "env") (PVar "roots") (PVar "arms") (PVar "occs") (PVar "slot") (PVar "endL") (PVar "ftL") (PVar "rty") (PVar "tree")) (EBlock (DoLet false false (PVar "saved") (EUnOp "!" (EFieldAccess (EVar "e") "orScope"))) (DoLet false false (PVar "owners") (EApp (EApp (EVar "altOwners") (EVar "arms")) (EVar "omEmpty"))) (DoLet false false (PVar "scope") (ERecordCreate "OrScope" ((fa "osOwners" (EVar "owners")) (fa "osJoins" (EListLit))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "orScope")) (EIf (EBinOp "==" (EApp (EVar "omSize") (EVar "owners")) (ELit (LInt 0))) (EVar "None") (EApp (EVar "Some") (EVar "scope"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTree") (EVar "e")) (EVar "env")) (EVar "roots")) (EVar "arms")) (EVar "occs")) (EVar "slot")) (EVar "endL")) (EVar "ftL")) (EVar "rty")) (EVar "tree"))) (DoLet false false (PVar "joins") (EMatch (EUnOp "!" (EFieldAccess (EVar "e") "orScope")) (arm (PCon "Some" (PVar "sc")) () (EFieldAccess (EVar "sc") "osJoins")) (arm (PCon "None") () (EListLit)))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "orScope")) (EVar "saved"))) (DoExpr (EApp (EApp (EVar "each") (EApp (EApp (EApp (EApp (EVar "emitOrJoin") (EVar "e")) (EVar "slot")) (EVar "endL")) (EVar "rty"))) (EVar "joins")))))
 (DTypeSig false "altOwners" (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
@@ -17133,13 +17127,11 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "orOwnerVars" (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "orOwnerVars" ((PVar "arms") (PVar "owner")) (EMatch (EApp (EApp (EVar "nthArm") (EVar "arms")) (EVar "owner")) (arm (PCon "Some" (PCon "CArm" (PVar "pat") (PVar "guards") PWild)) () (EBinOp "++" (EApp (EVar "patBinders") (EVar "pat")) (EApp (EApp (EVar "flatMap") (EVar "guardVars")) (EVar "guards")))) (arm PWild () (EListLit))))
 (DTypeSig false "addOrEdge" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyCon "OrJoin")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "CExpr") (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))) (TyTuple (TyApp (TyCon "List") (TyCon "OrJoin")) (TyCon "String")))))))))))
-(DFunDef false "addOrEdge" ((PVar "e") (PList) (PVar "owner") (PVar "names") (PVar "bound") (PVar "env") (PVar "body") (PVar "edge")) (EBlock (DoLet false false (PVar "label") (EBinOp "++" (ELit (LString "orjoin")) (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e"))))) (DoLet false false (PVar "j") (ERecordCreate "OrJoin" ((fa "ojOwner" (EVar "owner")) (fa "ojLabel" (EVar "label")) (fa "ojNames" (EVar "names")) (fa "ojTys" (EApp (EApp (EVar "map") (EVar "snd")) (EVar "bound"))) (fa "ojEnv" (EVar "env")) (fa "ojBody" (EVar "body")) (fa "ojEdges" (EListLit (EVar "edge")))))) (DoExpr (ETuple (EListLit (EVar "j")) (EVar "label")))))
-(DFunDef false "addOrEdge" ((PVar "e") (PCons (PVar "j") (PVar "rest")) (PVar "owner") (PVar "names") (PVar "bound") (PVar "env") (PVar "body") (PVar "edge")) (EIf (EBinOp "==" (EFieldAccess (EVar "j") "ojOwner") (EVar "owner")) (ETuple (EBinOp "::" (ERecordUpdate (EVar "j") ((fa "ojEdges" (EBinOp "::" (EVar "edge") (EFieldAccess (EVar "j") "ojEdges"))))) (EVar "rest")) (EFieldAccess (EVar "j") "ojLabel")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PTuple (PVar "rest2") (PVar "label")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "addOrEdge") (EVar "e")) (EVar "rest")) (EVar "owner")) (EVar "names")) (EVar "bound")) (EVar "env")) (EVar "body")) (EVar "edge"))) (DoExpr (ETuple (EBinOp "::" (EVar "j") (EVar "rest2")) (EVar "label")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "addOrEdge" ((PVar "e") (PVar "js0") (PVar "owner") (PVar "names") (PVar "bound") (PVar "env") (PVar "body") (PVar "edge")) (ELetGroup ((lgb "go" (clause ((PList)) (EBlock (DoLet false false (PVar "label") (EBinOp "++" (ELit (LString "orjoin")) (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e"))))) (DoLet false false (PVar "j") (ERecordCreate "OrJoin" ((fa "ojOwner" (EVar "owner")) (fa "ojLabel" (EVar "label")) (fa "ojNames" (EVar "names")) (fa "ojTys" (EApp (EApp (EVar "map") (EVar "snd")) (EVar "bound"))) (fa "ojEnv" (EVar "env")) (fa "ojBody" (EVar "body")) (fa "ojEdges" (EListLit (EVar "edge")))))) (DoExpr (ETuple (EListLit (EVar "j")) (EVar "label"))))) (clause ((PCons (PVar "j") (PVar "rest"))) (EIf (EBinOp "==" (EFieldAccess (EVar "j") "ojOwner") (EVar "owner")) (ETuple (EBinOp "::" (ERecordUpdate (EVar "j") ((fa "ojEdges" (EBinOp "::" (EVar "edge") (EFieldAccess (EVar "j") "ojEdges"))))) (EVar "rest")) (EFieldAccess (EVar "j") "ojLabel")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PTuple (PVar "rest2") (PVar "label")) (EApp (EVar "go") (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EVar "j") (EVar "rest2")) (EVar "label")))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EVar "go") (EVar "js0"))))
 (DTypeSig false "emitOrJoin" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "LTy")) (TyFun (TyCon "OrJoin") (TyCon "Unit")))))))
 (DFunDef false "emitOrJoin" ((PVar "e") (PVar "slot") (PVar "endL") (PVar "rty") (PVar "j")) (EBlock (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EFieldAccess (EVar "j") "ojLabel") (ELit (LString ":"))))) (DoLet false false (PVar "edges") (EApp (EVar "reverseL") (EFieldAccess (EVar "j") "ojEdges"))) (DoLet false false (PVar "env") (EApp (EApp (EApp (EApp (EApp (EVar "orPhis") (EVar "e")) (EVar "edges")) (ELit (LInt 0))) (EApp (EApp (EVar "zip") (EFieldAccess (EVar "j") "ojNames")) (EFieldAccess (EVar "j") "ojTys"))) (EFieldAccess (EVar "j") "ojEnv"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitLeafBody") (EVar "e")) (EVar "env")) (EFieldAccess (EVar "j") "ojBody")) (EVar "slot")) (EVar "endL")) (EVar "rty")))))
 (DTypeSig false "orPhis" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy")))))))))
-(DFunDef false "orPhis" (PWild PWild PWild (PList) (PVar "env")) (EVar "env"))
-(DFunDef false "orPhis" ((PVar "e") (PVar "edges") (PVar "k") (PCons (PTuple (PVar "name") (PVar "ty")) (PVar "rest")) (PVar "env")) (EBlock (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false (PVar "incoming") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (ELam ((PVar "ed")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "[ ")) (EApp (EVar "$core.display") (EApp (EApp (EApp (EVar "orOperand") (EVar "e")) (EVar "k")) (EApp (EVar "snd") (EVar "ed"))))) (ELit (LString ", %"))) (EApp (EVar "$core.display") (EApp (EVar "fst") (EVar "ed")))) (ELit (LString " ]"))))) (EVar "edges")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString " = phi i64 "))) (EApp (EVar "$core.display") (EVar "incoming"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "orPhis") (EVar "e")) (EVar "edges")) (EBinOp "+" (EVar "k") (ELit (LInt 1)))) (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "name")) (ETuple (EVar "r") (EVar "ty"))) (EVar "env"))))))
+(DFunDef false "orPhis" ((PVar "e") (PVar "edges") (PVar "k0") (PVar "xs0") (PVar "env0")) (ELetGroup ((lgb "go" (clause (PWild (PList) (PVar "env")) (EVar "env")) (clause ((PVar "k") (PCons (PTuple (PVar "name") (PVar "ty")) (PVar "rest")) (PVar "env")) (EBlock (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false (PVar "incoming") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (ELam ((PVar "ed")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "[ ")) (EApp (EVar "$core.display") (EApp (EApp (EApp (EVar "orOperand") (EVar "e")) (EVar "k")) (EApp (EVar "snd") (EVar "ed"))))) (ELit (LString ", %"))) (EApp (EVar "$core.display") (EApp (EVar "fst") (EVar "ed")))) (ELit (LString " ]"))))) (EVar "edges")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString " = phi i64 "))) (EApp (EVar "$core.display") (EVar "incoming"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EApp (EVar "go") (EBinOp "+" (EVar "k") (ELit (LInt 1)))) (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "name")) (ETuple (EVar "r") (EVar "ty"))) (EVar "env")))))))) (EApp (EApp (EApp (EVar "go") (EVar "k0")) (EVar "xs0")) (EVar "env0"))))
 (DTypeSig false "orOperand" (TyFun (TyCon "Emit") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))))
 (DFunDef false "orOperand" (PWild (PLit (LInt 0)) (PCons (PVar "w") PWild)) (EVar "w"))
 (DFunDef false "orOperand" ((PVar "e") (PVar "k") (PCons PWild (PVar "ws"))) (EApp (EApp (EApp (EVar "orOperand") (EVar "e")) (EBinOp "-" (EVar "k") (ELit (LInt 1)))) (EVar "ws")))
@@ -17151,16 +17143,9 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "emitArmWord" (TyFun (TyCon "Emit") (TyFun (TyTuple (TyCon "String") (TyCon "LTy")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "LTy")) (TyCon "Unit")))))))
 (DFunDef false "emitArmWord" ((PVar "e") (PTuple (PVar "bv") (PVar "bty")) (PVar "slot") (PVar "endL") (PVar "rty")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "rty")) (EVar "bty"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  store i64 ")) (EApp (EVar "$core.display") (EVar "bv"))) (ELit (LString ", ptr "))) (EApp (EVar "$core.display") (EVar "slot"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  br label %")) (EVar "endL"))))))
 (DTypeSig false "emitSelfTailArm" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "TailDefine") (TyFun (TyCon "CExpr") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "LTy")) (TyCon "Unit")))))))))
-(DFunDef false "emitSelfTailArm" ((PVar "e") (PVar "env") (PVar "self") (PCon "CIf" (PVar "c") (PVar "t") (PVar "f")) (PVar "slot") (PVar "endL") (PVar "rty")) (EBlock (DoLet false false (PTuple (PVar "thenL") (PVar "elseL")) (EApp (EApp (EApp (EVar "emitTailIfHead") (EVar "e")) (EVar "env")) (EVar "c"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "thenL") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitSelfTailArm") (EVar "e")) (EVar "env")) (EVar "self")) (EVar "t")) (EVar "slot")) (EVar "endL")) (EVar "rty"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "elseL") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitSelfTailArm") (EVar "e")) (EVar "env")) (EVar "self")) (EVar "f")) (EVar "slot")) (EVar "endL")) (EVar "rty")))))
-(DFunDef false "emitSelfTailArm" ((PVar "e") (PVar "env") PWild (PCon "CDecision" (PVar "scrut") (PVar "arms") (PVar "tree")) (PVar "slot") (PVar "endL") (PVar "rty")) (EBlock (DoLet false false (PTuple (PVar "sv") PWild) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "scrut"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeShared") (EVar "e")) (EVar "env")) (EListLit (EVar "sv"))) (EVar "arms")) (EListLit (EVar "sv"))) (EVar "slot")) (EVar "endL")) (ELit (LString ""))) (EVar "rty")) (EVar "tree")))))
-(DFunDef false "emitSelfTailArm" ((PVar "e") (PVar "env") (PVar "self") (PCon "CLet" (PVar "recF") (PVar "pat") (PVar "e1") (PVar "e2")) (PVar "slot") (PVar "endL") (PVar "rty")) (EIf (EApp (EApp (EApp (EVar "letBinds") (EVar "recF")) (EVar "pat")) (EVar "e1")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitSelfTailArm") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "bindLet") (EVar "e")) (EVar "env")) (EVar "recF")) (EVar "pat")) (EVar "e1")) (EVar "e2"))) (EVar "self")) (EVar "e2")) (EVar "slot")) (EVar "endL")) (EVar "rty")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArmValue") (EVar "e")) (EVar "env")) (EApp (EApp (EApp (EApp (EVar "CLet") (EVar "recF")) (EVar "pat")) (EVar "e1")) (EVar "e2"))) (EVar "slot")) (EVar "endL")) (EVar "rty"))))
-(DFunDef false "emitSelfTailArm" ((PVar "e") (PVar "env") (PVar "self") (PCon "CLetGroup" (PVar "binds") (PVar "body")) (PVar "slot") (PVar "endL") (PVar "rty")) (EMatch (EApp (EApp (EApp (EApp (EVar "bindLetGroup") (EVar "e")) (EVar "env")) (EVar "binds")) (EVar "body")) (arm (PCon "Some" (PVar "env2")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitSelfTailArm") (EVar "e")) (EVar "env2")) (EVar "self")) (EVar "body")) (EVar "slot")) (EVar "endL")) (EVar "rty"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EVar "emitArmWord") (EVar "e")) (EApp (EVar "letGroupGap") (EVar "e"))) (EVar "slot")) (EVar "endL")) (EVar "rty")))))
-(DFunDef false "emitSelfTailArm" ((PVar "e") (PVar "env") (PVar "self") (PCon "CBlock" (PVar "stmts")) (PVar "slot") (PVar "endL") (PVar "rty")) (EMatch (EApp (EVar "lastStmtExpr") (EVar "stmts")) (arm (PCon "Some" (PVar "last")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitSelfTailArm") (EVar "e")) (EApp (EApp (EApp (EVar "emitBlockInit") (EVar "e")) (EVar "env")) (EVar "stmts"))) (EVar "self")) (EVar "last")) (EVar "slot")) (EVar "endL")) (EVar "rty"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArmValue") (EVar "e")) (EVar "env")) (EApp (EVar "CBlock") (EVar "stmts"))) (EVar "slot")) (EVar "endL")) (EVar "rty")))))
-(DFunDef false "emitSelfTailArm" ((PVar "e") (PVar "env") (PVar "self") (PVar "body") (PVar "slot") (PVar "endL") (PVar "rty")) (EApp (EApp (EApp (EApp (EApp (EVar "emitTailLeaf") (EVar "e")) (EVar "env")) (EVar "self")) (EVar "body")) (ELam (PWild) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArmValue") (EVar "e")) (EVar "env")) (EVar "body")) (EVar "slot")) (EVar "endL")) (EVar "rty")))))
+(DFunDef false "emitSelfTailArm" ((PVar "e") (PVar "env0") (PVar "self") (PVar "body0") (PVar "slot") (PVar "endL") (PVar "rty")) (ELetGroup ((lgb "go" (clause ((PVar "env") (PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EBlock (DoLet false false (PTuple (PVar "thenL") (PVar "elseL")) (EApp (EApp (EApp (EVar "emitTailIfHead") (EVar "e")) (EVar "env")) (EVar "c"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "thenL") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EVar "go") (EVar "env")) (EVar "t"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "elseL") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EVar "go") (EVar "env")) (EVar "f"))))) (clause ((PVar "env") (PCon "CDecision" (PVar "scrut") (PVar "arms") (PVar "tree"))) (EBlock (DoLet false false (PTuple (PVar "sv") PWild) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "scrut"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeShared") (EVar "e")) (EVar "env")) (EListLit (EVar "sv"))) (EVar "arms")) (EListLit (EVar "sv"))) (EVar "slot")) (EVar "endL")) (ELit (LString ""))) (EVar "rty")) (EVar "tree"))))) (clause ((PVar "env") (PCon "CLet" (PVar "recF") (PVar "pat") (PVar "e1") (PVar "e2"))) (EIf (EApp (EApp (EApp (EVar "letBinds") (EVar "recF")) (EVar "pat")) (EVar "e1")) (EApp (EApp (EVar "go") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "bindLet") (EVar "e")) (EVar "env")) (EVar "recF")) (EVar "pat")) (EVar "e1")) (EVar "e2"))) (EVar "e2")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArmValue") (EVar "e")) (EVar "env")) (EApp (EApp (EApp (EApp (EVar "CLet") (EVar "recF")) (EVar "pat")) (EVar "e1")) (EVar "e2"))) (EVar "slot")) (EVar "endL")) (EVar "rty")))) (clause ((PVar "env") (PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EMatch (EApp (EApp (EApp (EApp (EVar "bindLetGroup") (EVar "e")) (EVar "env")) (EVar "binds")) (EVar "body")) (arm (PCon "Some" (PVar "env2")) () (EApp (EApp (EVar "go") (EVar "env2")) (EVar "body"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EVar "emitArmWord") (EVar "e")) (EApp (EVar "letGroupGap") (EVar "e"))) (EVar "slot")) (EVar "endL")) (EVar "rty"))))) (clause ((PVar "env") (PCon "CBlock" (PVar "stmts"))) (EMatch (EApp (EVar "lastStmtExpr") (EVar "stmts")) (arm (PCon "Some" (PVar "last")) () (EApp (EApp (EVar "go") (EApp (EApp (EApp (EVar "emitBlockInit") (EVar "e")) (EVar "env")) (EVar "stmts"))) (EVar "last"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArmValue") (EVar "e")) (EVar "env")) (EApp (EVar "CBlock") (EVar "stmts"))) (EVar "slot")) (EVar "endL")) (EVar "rty"))))) (clause ((PVar "env") (PVar "body")) (EApp (EApp (EApp (EApp (EApp (EVar "emitTailLeaf") (EVar "e")) (EVar "env")) (EVar "self")) (EVar "body")) (ELam (PWild) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArmValue") (EVar "e")) (EVar "env")) (EVar "body")) (EVar "slot")) (EVar "endL")) (EVar "rty"))))))) (EApp (EApp (EVar "go") (EVar "env0")) (EVar "body0"))))
 (DTypeSig false "emitGuardChain" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "List") (TyCon "CGuard")) (TyFun (TyCon "CExpr") (TyFun (TyCon "String") (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy")))))))))
-(DFunDef false "emitGuardChain" (PWild (PVar "env") (PList) PWild PWild) (EVar "env"))
-(DFunDef false "emitGuardChain" ((PVar "e") (PVar "env") (PCons (PCon "CGBool" (PVar "g")) (PVar "rest")) (PVar "body") (PVar "failL")) (EBlock (DoLet false false (PTuple (PVar "bw") PWild) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "g"))) (DoLet false false (PVar "cmp") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "cmp"))) (ELit (LString " = icmp eq i64 "))) (EApp (EVar "$core.display") (EVar "bw"))) (ELit (LString ", 3"))))) (DoLet false false (PVar "pass") (EBinOp "++" (ELit (LString "guardok")) (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e"))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  br i1 ")) (EApp (EVar "$core.display") (EVar "cmp"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "pass"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "failL"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "pass") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "emitGuardChain") (EVar "e")) (EVar "env")) (EVar "rest")) (EVar "body")) (EVar "failL")))))
-(DFunDef false "emitGuardChain" ((PVar "e") (PVar "env") (PCons (PCon "CGBind" (PVar "p") (PVar "ex")) (PVar "rest")) (PVar "body") (PVar "failL")) (EBlock (DoLet false false (PTuple (PVar "v") PWild) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "ex"))) (DoLet false false (PVar "env2") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRefutMatch") (EVar "e")) (EVar "env")) (EVar "p")) (EVar "v")) (EVar "body")) (EVar "failL"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "emitGuardChain") (EVar "e")) (EVar "env2")) (EVar "rest")) (EVar "body")) (EVar "failL")))))
+(DFunDef false "emitGuardChain" ((PVar "e") (PVar "env0") (PVar "xs0") (PVar "body") (PVar "failL")) (ELetGroup ((lgb "go" (clause ((PVar "env") (PList)) (EVar "env")) (clause ((PVar "env") (PCons (PCon "CGBool" (PVar "g")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "bw") PWild) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "g"))) (DoLet false false (PVar "cmp") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "cmp"))) (ELit (LString " = icmp eq i64 "))) (EApp (EVar "$core.display") (EVar "bw"))) (ELit (LString ", 3"))))) (DoLet false false (PVar "pass") (EBinOp "++" (ELit (LString "guardok")) (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e"))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  br i1 ")) (EApp (EVar "$core.display") (EVar "cmp"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "pass"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "failL"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "pass") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EVar "go") (EVar "env")) (EVar "rest"))))) (clause ((PVar "env") (PCons (PCon "CGBind" (PVar "p") (PVar "ex")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "v") PWild) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "ex"))) (DoLet false false (PVar "env2") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRefutMatch") (EVar "e")) (EVar "env")) (EVar "p")) (EVar "v")) (EVar "body")) (EVar "failL"))) (DoExpr (EApp (EApp (EVar "go") (EVar "env2")) (EVar "rest"))))))) (EApp (EApp (EVar "go") (EVar "env0")) (EVar "xs0"))))
 (DTypeSig false "allGuardsEmittable" (TyFun (TyApp (TyCon "List") (TyCon "CGuard")) (TyCon "Bool")))
 (DFunDef false "allGuardsEmittable" ((PList)) (EVar "True"))
 (DFunDef false "allGuardsEmittable" ((PCons (PCon "CGBool" PWild) (PVar "rest"))) (EApp (EVar "allGuardsEmittable") (EVar "rest")))
@@ -17171,52 +17156,24 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DFunDef false "bindArm" ((PVar "e") (PVar "env") (PVar "pat") (PCons (PVar "v") PWild) (PVar "body")) (EApp (EApp (EApp (EApp (EApp (EVar "bindPattern") (EVar "e")) (EVar "env")) (EVar "pat")) (EVar "v")) (EVar "body")))
 (DFunDef false "bindArm" (PWild (PVar "env") PWild (PList) PWild) (EVar "env"))
 (DTypeSig false "bindEach" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CExpr") (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy")))))))))
-(DFunDef false "bindEach" ((PVar "e") (PVar "env") (PCons (PVar "p") (PVar "ps")) (PCons (PVar "v") (PVar "vs")) (PVar "body")) (EBlock (DoLet false false (PVar "env2") (EApp (EApp (EApp (EApp (EApp (EVar "bindPattern") (EVar "e")) (EVar "env")) (EVar "p")) (EVar "v")) (EVar "body"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "bindEach") (EVar "e")) (EVar "env2")) (EVar "ps")) (EVar "vs")) (EVar "body")))))
-(DFunDef false "bindEach" (PWild (PVar "env") PWild PWild PWild) (EVar "env"))
+(DFunDef false "bindEach" ((PVar "e") (PVar "env0") (PVar "xs0") (PVar "xs1") (PVar "body")) (ELetGroup ((lgb "go" (clause ((PVar "env") (PCons (PVar "p") (PVar "ps")) (PCons (PVar "v") (PVar "vs"))) (EBlock (DoLet false false (PVar "env2") (EApp (EApp (EApp (EApp (EApp (EVar "bindPattern") (EVar "e")) (EVar "env")) (EVar "p")) (EVar "v")) (EVar "body"))) (DoExpr (EApp (EApp (EApp (EVar "go") (EVar "env2")) (EVar "ps")) (EVar "vs"))))) (clause ((PVar "env") PWild PWild) (EVar "env")))) (EApp (EApp (EApp (EVar "go") (EVar "env0")) (EVar "xs0")) (EVar "xs1"))))
 (DTypeSig false "emitRefutArm" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "Pat") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CExpr") (TyFun (TyCon "String") (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))))))))))
 (DFunDef false "emitRefutArm" ((PVar "e") (PVar "env") (PVar "pat") (PList (PVar "v")) (PVar "body") (PVar "failL")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRefutMatch") (EVar "e")) (EVar "env")) (EVar "pat")) (EVar "v")) (EVar "body")) (EVar "failL")))
 (DFunDef false "emitRefutArm" ((PVar "e") (PVar "env") (PCon "PTuple" (PVar "ps")) (PVar "roots") (PVar "body") (PVar "failL")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRefutEach") (EVar "e")) (EVar "env")) (EVar "ps")) (EVar "roots")) (EVar "body")) (EVar "failL")))
 (DFunDef false "emitRefutArm" ((PVar "e") (PVar "env") (PVar "pat") (PCons (PVar "v") PWild) (PVar "body") (PVar "failL")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRefutMatch") (EVar "e")) (EVar "env")) (EVar "pat")) (EVar "v")) (EVar "body")) (EVar "failL")))
 (DFunDef false "emitRefutArm" (PWild (PVar "env") PWild (PList) PWild PWild) (EVar "env"))
 (DTypeSig false "emitRefutEach" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CExpr") (TyFun (TyCon "String") (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))))))))))
-(DFunDef false "emitRefutEach" ((PVar "e") (PVar "env") (PCons (PVar "p") (PVar "ps")) (PCons (PVar "v") (PVar "vs")) (PVar "body") (PVar "failL")) (EBlock (DoLet false false (PVar "env2") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRefutMatch") (EVar "e")) (EVar "env")) (EVar "p")) (EVar "v")) (EVar "body")) (EVar "failL"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRefutEach") (EVar "e")) (EVar "env2")) (EVar "ps")) (EVar "vs")) (EVar "body")) (EVar "failL")))))
-(DFunDef false "emitRefutEach" (PWild (PVar "env") PWild PWild PWild PWild) (EVar "env"))
+(DFunDef false "emitRefutEach" ((PVar "e") (PVar "env0") (PVar "xs0") (PVar "xs1") (PVar "body") (PVar "failL")) (ELetGroup ((lgb "go" (clause ((PVar "env") (PCons (PVar "p") (PVar "ps")) (PCons (PVar "v") (PVar "vs"))) (EBlock (DoLet false false (PVar "env2") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRefutMatch") (EVar "e")) (EVar "env")) (EVar "p")) (EVar "v")) (EVar "body")) (EVar "failL"))) (DoExpr (EApp (EApp (EApp (EVar "go") (EVar "env2")) (EVar "ps")) (EVar "vs"))))) (clause ((PVar "env") PWild PWild) (EVar "env")))) (EApp (EApp (EApp (EVar "go") (EVar "env0")) (EVar "xs0")) (EVar "xs1"))))
 (DTypeSig false "bindPattern" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "Pat") (TyFun (TyCon "String") (TyFun (TyCon "CExpr") (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy")))))))))
-(DFunDef false "bindPattern" (PWild (PVar "env") (PCon "PWild") PWild PWild) (EVar "env"))
-(DFunDef false "bindPattern" (PWild (PVar "env") (PCon "PLit" PWild) PWild PWild) (EVar "env"))
-(DFunDef false "bindPattern" ((PVar "e") (PVar "env") (PCon "PVar" (PVar "x") PWild (PVar "bid")) (PVar "v") PWild) (EApp (EApp (EApp (EApp (EApp (EVar "bindVarTy") (EVar "e")) (EVar "env")) (EVar "x")) (EVar "bid")) (EVar "v")))
-(DFunDef false "bindPattern" ((PVar "e") (PVar "env") (PCon "PCon" PWild (PVar "args")) (PVar "v") (PVar "body")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "bindFields") (EVar "e")) (EVar "env")) (EVar "args")) (EVar "v")) (EVar "body")) (ELit (LInt 0))))
-(DFunDef false "bindPattern" ((PVar "e") (PVar "env") (PCon "PTuple" (PVar "ps")) (PVar "v") (PVar "body")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "bindFields") (EVar "e")) (EVar "env")) (EVar "ps")) (EVar "v")) (EVar "body")) (ELit (LInt 0))))
-(DFunDef false "bindPattern" ((PVar "e") (PVar "env") (PCon "PCons" (PVar "h") (PVar "t")) (PVar "v") (PVar "body")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "bindFields") (EVar "e")) (EVar "env")) (EListLit (EVar "h") (EVar "t"))) (EVar "v")) (EVar "body")) (ELit (LInt 0))))
-(DFunDef false "bindPattern" (PWild (PVar "env") (PCon "PList" (PList)) PWild PWild) (EVar "env"))
-(DFunDef false "bindPattern" ((PVar "e") (PVar "env") (PCon "PAs" (PVar "x") PWild (PVar "bid") (PVar "p")) (PVar "v") (PVar "body")) (EBlock (DoLet false false (PVar "env2") (EApp (EApp (EApp (EApp (EApp (EVar "bindVarTy") (EVar "e")) (EVar "env")) (EVar "x")) (EVar "bid")) (EVar "v"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "bindPattern") (EVar "e")) (EVar "env2")) (EVar "p")) (EVar "v")) (EVar "body")))))
-(DFunDef false "bindPattern" ((PVar "e") (PVar "env") (PCon "PList" (PCons (PVar "p") (PVar "ps"))) (PVar "v") (PVar "body")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "bindFields") (EVar "e")) (EVar "env")) (EListLit (EVar "p") (EApp (EVar "PList") (EVar "ps")))) (EVar "v")) (EVar "body")) (ELit (LInt 0))))
-(DFunDef false "bindPattern" ((PVar "e") (PVar "env") (PVar "p") PWild PWild) (EApp (EApp (EApp (EVar "gapEnv") (EVar "e")) (EBinOp "++" (ELit (LString "unsupported pattern in match arm (variable / wildcard / constructor / tuple / cons / nil / int-literal only): ")) (EApp (EVar "ptag") (EVar "p")))) (EVar "env")))
+(DFunDef false "bindPattern" ((PVar "e") (PVar "env0") (PVar "p0") (PVar "v") (PVar "body")) (ELetGroup ((lgb "go" (clause ((PVar "env") (PCon "PWild")) (EVar "env")) (clause ((PVar "env") (PCon "PLit" PWild)) (EVar "env")) (clause ((PVar "env") (PCon "PVar" (PVar "x") PWild (PVar "bid"))) (EApp (EApp (EApp (EApp (EApp (EVar "bindVarTy") (EVar "e")) (EVar "env")) (EVar "x")) (EVar "bid")) (EVar "v"))) (clause ((PVar "env") (PCon "PCon" PWild (PVar "args"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "bindFields") (EVar "e")) (EVar "env")) (EVar "args")) (EVar "v")) (EVar "body")) (ELit (LInt 0)))) (clause ((PVar "env") (PCon "PTuple" (PVar "ps"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "bindFields") (EVar "e")) (EVar "env")) (EVar "ps")) (EVar "v")) (EVar "body")) (ELit (LInt 0)))) (clause ((PVar "env") (PCon "PCons" (PVar "h") (PVar "t"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "bindFields") (EVar "e")) (EVar "env")) (EListLit (EVar "h") (EVar "t"))) (EVar "v")) (EVar "body")) (ELit (LInt 0)))) (clause ((PVar "env") (PCon "PList" (PList))) (EVar "env")) (clause ((PVar "env") (PCon "PAs" (PVar "x") PWild (PVar "bid") (PVar "p"))) (EBlock (DoLet false false (PVar "env2") (EApp (EApp (EApp (EApp (EApp (EVar "bindVarTy") (EVar "e")) (EVar "env")) (EVar "x")) (EVar "bid")) (EVar "v"))) (DoExpr (EApp (EApp (EVar "go") (EVar "env2")) (EVar "p"))))) (clause ((PVar "env") (PCon "PList" (PCons (PVar "p") (PVar "ps")))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "bindFields") (EVar "e")) (EVar "env")) (EListLit (EVar "p") (EApp (EVar "PList") (EVar "ps")))) (EVar "v")) (EVar "body")) (ELit (LInt 0)))) (clause ((PVar "env") (PVar "p")) (EApp (EApp (EApp (EVar "gapEnv") (EVar "e")) (EBinOp "++" (ELit (LString "unsupported pattern in match arm (variable / wildcard / constructor / tuple / cons / nil / int-literal only): ")) (EApp (EVar "ptag") (EVar "p")))) (EVar "env"))))) (EApp (EApp (EVar "go") (EVar "env0")) (EVar "p0"))))
 (DTypeSig false "bindVarTy" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "String") (TyFun (TyCon "BinderId") (TyFun (TyCon "String") (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy")))))))))
 (DFunDef false "bindVarTy" ((PVar "e") (PVar "env") (PVar "x") (PVar "bid") (PVar "v")) (EApp (EApp (EApp (EVar "omInsert") (EVar "x")) (ETuple (EVar "v") (EApp (EApp (EVar "binderLTy") (EVar "e")) (EVar "bid")))) (EVar "env")))
 (DTypeSig false "bindFields" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "String") (TyFun (TyCon "CExpr") (TyFun (TyCon "Int") (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))))))))))
-(DFunDef false "bindFields" (PWild (PVar "env") (PList) PWild PWild PWild) (EVar "env"))
-(DFunDef false "bindFields" ((PVar "e") (PVar "env") (PCons (PVar "p") (PVar "rest")) (PVar "v") (PVar "body") (PVar "i")) (EBlock (DoLet false false (PVar "f") (EApp (EApp (EApp (EVar "loadField") (EVar "e")) (EVar "v")) (EVar "i"))) (DoLet false false (PVar "env2") (EApp (EApp (EApp (EApp (EApp (EVar "bindPattern") (EVar "e")) (EVar "env")) (EVar "p")) (EVar "f")) (EVar "body"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "bindFields") (EVar "e")) (EVar "env2")) (EVar "rest")) (EVar "v")) (EVar "body")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))))
+(DFunDef false "bindFields" ((PVar "e") (PVar "env0") (PVar "xs0") (PVar "v") (PVar "body") (PVar "i0")) (ELetGroup ((lgb "go" (clause ((PVar "env") (PList) PWild) (EVar "env")) (clause ((PVar "env") (PCons (PVar "p") (PVar "rest")) (PVar "i")) (EBlock (DoLet false false (PVar "f") (EApp (EApp (EApp (EVar "loadField") (EVar "e")) (EVar "v")) (EVar "i"))) (DoLet false false (PVar "env2") (EApp (EApp (EApp (EApp (EApp (EVar "bindPattern") (EVar "e")) (EVar "env")) (EVar "p")) (EVar "f")) (EVar "body"))) (DoExpr (EApp (EApp (EApp (EVar "go") (EVar "env2")) (EVar "rest")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))))) (EApp (EApp (EApp (EVar "go") (EVar "env0")) (EVar "xs0")) (EVar "i0"))))
 (DTypeSig false "emitRefutMatch" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "Pat") (TyFun (TyCon "String") (TyFun (TyCon "CExpr") (TyFun (TyCon "String") (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))))))))))
-(DFunDef false "emitRefutMatch" ((PVar "e") (PVar "env") (PCon "PWild") (PVar "v") (PVar "body") PWild) (EApp (EApp (EApp (EApp (EApp (EVar "bindPattern") (EVar "e")) (EVar "env")) (EVar "PWild")) (EVar "v")) (EVar "body")))
-(DFunDef false "emitRefutMatch" ((PVar "e") (PVar "env") (PCon "PVar" (PVar "x") (PVar "l") (PVar "bid")) (PVar "v") (PVar "body") PWild) (EApp (EApp (EApp (EApp (EApp (EVar "bindPattern") (EVar "e")) (EVar "env")) (EApp (EApp (EApp (EVar "PVar") (EVar "x")) (EVar "l")) (EVar "bid"))) (EVar "v")) (EVar "body")))
-(DFunDef false "emitRefutMatch" ((PVar "e") (PVar "env") (PCon "PAs" (PVar "x") PWild (PVar "bid") (PVar "p")) (PVar "v") (PVar "body") (PVar "failL")) (EBlock (DoLet false false (PVar "env2") (EApp (EApp (EApp (EApp (EApp (EVar "bindVarTy") (EVar "e")) (EVar "env")) (EVar "x")) (EVar "bid")) (EVar "v"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRefutMatch") (EVar "e")) (EVar "env2")) (EVar "p")) (EVar "v")) (EVar "body")) (EVar "failL")))))
-(DFunDef false "emitRefutMatch" ((PVar "e") (PVar "env") (PCon "PTuple" (PVar "ps")) (PVar "v") (PVar "body") (PVar "failL")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRefutFields") (EVar "e")) (EVar "env")) (EVar "ps")) (EVar "v")) (EVar "body")) (EVar "failL")) (ELit (LInt 0))))
-(DFunDef false "emitRefutMatch" ((PVar "e") (PVar "env") (PCon "PLit" (PCon "LInt" (PVar "k"))) (PVar "v") PWild (PVar "failL")) (EBlock (DoLet false false (PTuple (PVar "kw") PWild) (EApp (EApp (EVar "emitLit") (EVar "e")) (EApp (EVar "LInt") (EVar "k")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "emitWordEqTest") (EVar "e")) (EVar "v")) (EVar "kw")) (EVar "failL"))) (DoExpr (EVar "env"))))
-(DFunDef false "emitRefutMatch" ((PVar "e") (PVar "env") (PCon "PLit" (PCon "LChar" (PVar "c"))) (PVar "v") PWild (PVar "failL")) (EBlock (DoLet false false (PVar "cp") (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EApp (EVar "stringToChars") (EVar "c"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "emitWordEqTest") (EVar "e")) (EVar "v")) (EApp (EVar "intToString") (EBinOp "+" (EBinOp "*" (EVar "cp") (ELit (LInt 2))) (ELit (LInt 1))))) (EVar "failL"))) (DoExpr (EVar "env"))))
-(DFunDef false "emitRefutMatch" ((PVar "e") (PVar "env") (PCon "PLit" (PCon "LBool" (PVar "b"))) (PVar "v") PWild (PVar "failL")) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EVar "emitWordEqTest") (EVar "e")) (EVar "v")) (EIf (EVar "b") (ELit (LString "3")) (ELit (LString "1")))) (EVar "failL"))) (DoExpr (EVar "env"))))
-(DFunDef false "emitRefutMatch" ((PVar "e") (PVar "env") (PCon "PLit" (PCon "LString" (PVar "s"))) (PVar "v") PWild (PVar "failL")) (EBlock (DoLet false false (PTuple (PVar "lit") PWild) (EApp (EApp (EVar "emitLit") (EVar "e")) (EApp (EVar "LString") (EVar "s")))) (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (EVar "r")) (ELit (LString "i64"))) (ELit (LString "mdk_string_eq"))) (EApp (EVar "i64Ops") (EListLit (EVar "v") (EVar "lit")))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "emitWordEqTest") (EVar "e")) (EVar "r")) (ELit (LString "3"))) (EVar "failL"))) (DoExpr (EVar "env"))))
-(DFunDef false "emitRefutMatch" ((PVar "e") (PVar "env") (PCon "PRng" (PVar "lo") (PVar "hi") (PVar "incl")) (PVar "v") PWild (PVar "failL")) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRangeTest") (EVar "e")) (EVar "v")) (EApp (EVar "rngBound") (EVar "lo"))) (EApp (EVar "rngBound") (EVar "hi"))) (EVar "incl")) (EVar "failL"))) (DoExpr (EVar "env"))))
-(DFunDef false "emitRefutMatch" ((PVar "e") (PVar "env") (PCon "PCon" (PLit (LString "True")) (PList)) (PVar "v") (PVar "body") (PVar "failL")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRefutMatch") (EVar "e")) (EVar "env")) (EApp (EVar "PLit") (EApp (EVar "LBool") (EVar "True")))) (EVar "v")) (EVar "body")) (EVar "failL")))
-(DFunDef false "emitRefutMatch" ((PVar "e") (PVar "env") (PCon "PCon" (PLit (LString "False")) (PList)) (PVar "v") (PVar "body") (PVar "failL")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRefutMatch") (EVar "e")) (EVar "env")) (EApp (EVar "PLit") (EApp (EVar "LBool") (EVar "False")))) (EVar "v")) (EVar "body")) (EVar "failL")))
-(DFunDef false "emitRefutMatch" ((PVar "e") (PVar "env") (PCon "PCon" (PVar "c") (PVar "args")) (PVar "v") (PVar "body") (PVar "failL")) (EBlock (DoLet false false (PVar "rep") (EApp (EApp (EApp (EApp (EVar "discRepOfHead") (EVar "e")) (EVar "c")) (EApp (EVar "lengthS") (EVar "args"))) (EListLit (EVar "c")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "emitWordEqTest") (EVar "e")) (EApp (EApp (EApp (EVar "discReg") (EVar "e")) (EVar "rep")) (EVar "v"))) (EApp (EApp (EApp (EVar "discExpected") (EVar "e")) (EVar "rep")) (EVar "c"))) (EVar "failL"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRefutFields") (EVar "e")) (EVar "env")) (EVar "args")) (EVar "v")) (EVar "body")) (EVar "failL")) (ELit (LInt 0))))))
-(DFunDef false "emitRefutMatch" ((PVar "e") (PVar "env") (PCon "PCons" (PVar "h") (PVar "t")) (PVar "v") (PVar "body") (PVar "failL")) (EBlock (DoLet false false (PVar "rep") (EApp (EApp (EApp (EApp (EVar "discRepOfHead") (EVar "e")) (ELit (LString "Cons"))) (ELit (LInt 2))) (EListLit (ELit (LString "Cons"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "emitWordEqTest") (EVar "e")) (EApp (EApp (EApp (EVar "discReg") (EVar "e")) (EVar "rep")) (EVar "v"))) (EApp (EApp (EApp (EVar "discExpected") (EVar "e")) (EVar "rep")) (ELit (LString "Cons")))) (EVar "failL"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRefutFields") (EVar "e")) (EVar "env")) (EListLit (EVar "h") (EVar "t"))) (EVar "v")) (EVar "body")) (EVar "failL")) (ELit (LInt 0))))))
-(DFunDef false "emitRefutMatch" ((PVar "e") (PVar "env") (PCon "PList" (PList)) (PVar "v") PWild (PVar "failL")) (EBlock (DoLet false false (PVar "rep") (EApp (EApp (EApp (EApp (EVar "discRepOfHead") (EVar "e")) (ELit (LString "Nil"))) (ELit (LInt 0))) (EListLit (ELit (LString "Nil"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "emitWordEqTest") (EVar "e")) (EApp (EApp (EApp (EVar "discReg") (EVar "e")) (EVar "rep")) (EVar "v"))) (EApp (EApp (EApp (EVar "discExpected") (EVar "e")) (EVar "rep")) (ELit (LString "Nil")))) (EVar "failL"))) (DoExpr (EVar "env"))))
-(DFunDef false "emitRefutMatch" ((PVar "e") (PVar "env") (PCon "PList" (PCons (PVar "p") (PVar "ps"))) (PVar "v") (PVar "body") (PVar "failL")) (EBlock (DoLet false false (PVar "rep") (EApp (EApp (EApp (EApp (EVar "discRepOfHead") (EVar "e")) (ELit (LString "Cons"))) (ELit (LInt 2))) (EListLit (ELit (LString "Cons"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "emitWordEqTest") (EVar "e")) (EApp (EApp (EApp (EVar "discReg") (EVar "e")) (EVar "rep")) (EVar "v"))) (EApp (EApp (EApp (EVar "discExpected") (EVar "e")) (EVar "rep")) (ELit (LString "Cons")))) (EVar "failL"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRefutFields") (EVar "e")) (EVar "env")) (EListLit (EVar "p") (EApp (EVar "PList") (EVar "ps")))) (EVar "v")) (EVar "body")) (EVar "failL")) (ELit (LInt 0))))))
-(DFunDef false "emitRefutMatch" ((PVar "e") (PVar "env") (PVar "p") PWild PWild PWild) (EApp (EApp (EApp (EVar "gapEnv") (EVar "e")) (EBinOp "++" (ELit (LString "refutable pattern in guard/range arm not lowered (variable / wildcard / as / tuple / literal / range / constructor / cons / list only): ")) (EApp (EVar "ptag") (EVar "p")))) (EVar "env")))
+(DFunDef false "emitRefutMatch" ((PVar "e") (PVar "env0") (PVar "p0") (PVar "v") (PVar "body") (PVar "failL")) (ELetGroup ((lgb "go" (clause ((PVar "env") (PCon "PWild")) (EApp (EApp (EApp (EApp (EApp (EVar "bindPattern") (EVar "e")) (EVar "env")) (EVar "PWild")) (EVar "v")) (EVar "body"))) (clause ((PVar "env") (PCon "PVar" (PVar "x") (PVar "l") (PVar "bid"))) (EApp (EApp (EApp (EApp (EApp (EVar "bindPattern") (EVar "e")) (EVar "env")) (EApp (EApp (EApp (EVar "PVar") (EVar "x")) (EVar "l")) (EVar "bid"))) (EVar "v")) (EVar "body"))) (clause ((PVar "env") (PCon "PAs" (PVar "x") PWild (PVar "bid") (PVar "p"))) (EBlock (DoLet false false (PVar "env2") (EApp (EApp (EApp (EApp (EApp (EVar "bindVarTy") (EVar "e")) (EVar "env")) (EVar "x")) (EVar "bid")) (EVar "v"))) (DoExpr (EApp (EApp (EVar "go") (EVar "env2")) (EVar "p"))))) (clause ((PVar "env") (PCon "PTuple" (PVar "ps"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRefutFields") (EVar "e")) (EVar "env")) (EVar "ps")) (EVar "v")) (EVar "body")) (EVar "failL")) (ELit (LInt 0)))) (clause ((PVar "env") (PCon "PLit" (PCon "LInt" (PVar "k")))) (EBlock (DoLet false false (PTuple (PVar "kw") PWild) (EApp (EApp (EVar "emitLit") (EVar "e")) (EApp (EVar "LInt") (EVar "k")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "emitWordEqTest") (EVar "e")) (EVar "v")) (EVar "kw")) (EVar "failL"))) (DoExpr (EVar "env")))) (clause ((PVar "env") (PCon "PLit" (PCon "LChar" (PVar "c")))) (EBlock (DoLet false false (PVar "cp") (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EApp (EVar "stringToChars") (EVar "c"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "emitWordEqTest") (EVar "e")) (EVar "v")) (EApp (EVar "intToString") (EBinOp "+" (EBinOp "*" (EVar "cp") (ELit (LInt 2))) (ELit (LInt 1))))) (EVar "failL"))) (DoExpr (EVar "env")))) (clause ((PVar "env") (PCon "PLit" (PCon "LBool" (PVar "b")))) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EVar "emitWordEqTest") (EVar "e")) (EVar "v")) (EIf (EVar "b") (ELit (LString "3")) (ELit (LString "1")))) (EVar "failL"))) (DoExpr (EVar "env")))) (clause ((PVar "env") (PCon "PLit" (PCon "LString" (PVar "s")))) (EBlock (DoLet false false (PTuple (PVar "lit") PWild) (EApp (EApp (EVar "emitLit") (EVar "e")) (EApp (EVar "LString") (EVar "s")))) (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (EVar "r")) (ELit (LString "i64"))) (ELit (LString "mdk_string_eq"))) (EApp (EVar "i64Ops") (EListLit (EVar "v") (EVar "lit")))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "emitWordEqTest") (EVar "e")) (EVar "r")) (ELit (LString "3"))) (EVar "failL"))) (DoExpr (EVar "env")))) (clause ((PVar "env") (PCon "PRng" (PVar "lo") (PVar "hi") (PVar "incl"))) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRangeTest") (EVar "e")) (EVar "v")) (EApp (EVar "rngBound") (EVar "lo"))) (EApp (EVar "rngBound") (EVar "hi"))) (EVar "incl")) (EVar "failL"))) (DoExpr (EVar "env")))) (clause ((PVar "env") (PCon "PCon" (PLit (LString "True")) (PList))) (EApp (EApp (EVar "go") (EVar "env")) (EApp (EVar "PLit") (EApp (EVar "LBool") (EVar "True"))))) (clause ((PVar "env") (PCon "PCon" (PLit (LString "False")) (PList))) (EApp (EApp (EVar "go") (EVar "env")) (EApp (EVar "PLit") (EApp (EVar "LBool") (EVar "False"))))) (clause ((PVar "env") (PCon "PCon" (PVar "c") (PVar "args"))) (EBlock (DoLet false false (PVar "rep") (EApp (EApp (EApp (EApp (EVar "discRepOfHead") (EVar "e")) (EVar "c")) (EApp (EVar "lengthS") (EVar "args"))) (EListLit (EVar "c")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "emitWordEqTest") (EVar "e")) (EApp (EApp (EApp (EVar "discReg") (EVar "e")) (EVar "rep")) (EVar "v"))) (EApp (EApp (EApp (EVar "discExpected") (EVar "e")) (EVar "rep")) (EVar "c"))) (EVar "failL"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRefutFields") (EVar "e")) (EVar "env")) (EVar "args")) (EVar "v")) (EVar "body")) (EVar "failL")) (ELit (LInt 0)))))) (clause ((PVar "env") (PCon "PCons" (PVar "h") (PVar "t"))) (EBlock (DoLet false false (PVar "rep") (EApp (EApp (EApp (EApp (EVar "discRepOfHead") (EVar "e")) (ELit (LString "Cons"))) (ELit (LInt 2))) (EListLit (ELit (LString "Cons"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "emitWordEqTest") (EVar "e")) (EApp (EApp (EApp (EVar "discReg") (EVar "e")) (EVar "rep")) (EVar "v"))) (EApp (EApp (EApp (EVar "discExpected") (EVar "e")) (EVar "rep")) (ELit (LString "Cons")))) (EVar "failL"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRefutFields") (EVar "e")) (EVar "env")) (EListLit (EVar "h") (EVar "t"))) (EVar "v")) (EVar "body")) (EVar "failL")) (ELit (LInt 0)))))) (clause ((PVar "env") (PCon "PList" (PList))) (EBlock (DoLet false false (PVar "rep") (EApp (EApp (EApp (EApp (EVar "discRepOfHead") (EVar "e")) (ELit (LString "Nil"))) (ELit (LInt 0))) (EListLit (ELit (LString "Nil"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "emitWordEqTest") (EVar "e")) (EApp (EApp (EApp (EVar "discReg") (EVar "e")) (EVar "rep")) (EVar "v"))) (EApp (EApp (EApp (EVar "discExpected") (EVar "e")) (EVar "rep")) (ELit (LString "Nil")))) (EVar "failL"))) (DoExpr (EVar "env")))) (clause ((PVar "env") (PCon "PList" (PCons (PVar "p") (PVar "ps")))) (EBlock (DoLet false false (PVar "rep") (EApp (EApp (EApp (EApp (EVar "discRepOfHead") (EVar "e")) (ELit (LString "Cons"))) (ELit (LInt 2))) (EListLit (ELit (LString "Cons"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "emitWordEqTest") (EVar "e")) (EApp (EApp (EApp (EVar "discReg") (EVar "e")) (EVar "rep")) (EVar "v"))) (EApp (EApp (EApp (EVar "discExpected") (EVar "e")) (EVar "rep")) (ELit (LString "Cons")))) (EVar "failL"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRefutFields") (EVar "e")) (EVar "env")) (EListLit (EVar "p") (EApp (EVar "PList") (EVar "ps")))) (EVar "v")) (EVar "body")) (EVar "failL")) (ELit (LInt 0)))))) (clause ((PVar "env") (PVar "p")) (EApp (EApp (EApp (EVar "gapEnv") (EVar "e")) (EBinOp "++" (ELit (LString "refutable pattern in guard/range arm not lowered (variable / wildcard / as / tuple / literal / range / constructor / cons / list only): ")) (EApp (EVar "ptag") (EVar "p")))) (EVar "env"))))) (EApp (EApp (EVar "go") (EVar "env0")) (EVar "p0"))))
 (DTypeSig false "emitRefutFields" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "String") (TyFun (TyCon "CExpr") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy")))))))))))
-(DFunDef false "emitRefutFields" (PWild (PVar "env") (PList) PWild PWild PWild PWild) (EVar "env"))
-(DFunDef false "emitRefutFields" ((PVar "e") (PVar "env") (PCons (PVar "p") (PVar "rest")) (PVar "v") (PVar "body") (PVar "failL") (PVar "i")) (EBlock (DoLet false false (PVar "f") (EApp (EApp (EApp (EVar "loadField") (EVar "e")) (EVar "v")) (EVar "i"))) (DoLet false false (PVar "env2") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRefutMatch") (EVar "e")) (EVar "env")) (EVar "p")) (EVar "f")) (EVar "body")) (EVar "failL"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRefutFields") (EVar "e")) (EVar "env2")) (EVar "rest")) (EVar "v")) (EVar "body")) (EVar "failL")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))))
+(DFunDef false "emitRefutFields" ((PVar "e") (PVar "env0") (PVar "xs0") (PVar "v") (PVar "body") (PVar "failL") (PVar "i0")) (ELetGroup ((lgb "go" (clause ((PVar "env") (PList) PWild) (EVar "env")) (clause ((PVar "env") (PCons (PVar "p") (PVar "rest")) (PVar "i")) (EBlock (DoLet false false (PVar "f") (EApp (EApp (EApp (EVar "loadField") (EVar "e")) (EVar "v")) (EVar "i"))) (DoLet false false (PVar "env2") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRefutMatch") (EVar "e")) (EVar "env")) (EVar "p")) (EVar "f")) (EVar "body")) (EVar "failL"))) (DoExpr (EApp (EApp (EApp (EVar "go") (EVar "env2")) (EVar "rest")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))))) (EApp (EApp (EApp (EVar "go") (EVar "env0")) (EVar "xs0")) (EVar "i0"))))
 (DTypeSig false "emitWordEqTest" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Unit"))))))
 (DFunDef false "emitWordEqTest" ((PVar "e") (PVar "word") (PVar "k") (PVar "failL")) (EBlock (DoLet false false (PVar "cmp") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "cmp"))) (ELit (LString " = icmp eq i64 "))) (EApp (EVar "$core.display") (EVar "word"))) (ELit (LString ", "))) (EApp (EVar "$core.display") (EVar "k"))) (ELit (LString ""))))) (DoLet false false (PVar "ok") (EBinOp "++" (ELit (LString "refok")) (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e"))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  br i1 ")) (EApp (EVar "$core.display") (EVar "cmp"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "ok"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "failL"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "ok") (ELit (LString ":")))))))
 (DTypeSig false "emitRangeTest" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyCon "Unit"))))))))
@@ -17236,7 +17193,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DFunDef false "conHeadInfo" ((PCon "HTuple" (PVar "n"))) (EApp (EVar "Some") (ETuple (ELit (LString "$tuple")) (EVar "n"))))
 (DFunDef false "conHeadInfo" (PWild) (EVar "None"))
 (DTypeSig false "reservedRosterOf" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "reservedRosterOf" ((PVar "name")) (EMatch (EApp (EVar "namedRuntimeCtor") (EVar "name")) (arm (PCon "Some" (PVar "id")) () (EMatch (EFieldAccess (EApp (EVar "runtimeCtorFact") (EVar "id")) "owner") (arm (PCon "RuntimeBool") () (EVar "None")) (arm (PVar "owner") () (EApp (EVar "Some") (EApp (EApp (EVar "filterMap") (EVar "runtimeCtorName")) (EApp (EVar "runtimeRoster") (EVar "owner"))))))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "reservedRosterOf" ((PVar "name")) (EApp (EApp (EVar "$core.andThen") (EApp (EVar "namedRuntimeCtor") (EVar "name"))) (ELam ((PVar "id")) (EMatch (EFieldAccess (EApp (EVar "runtimeCtorFact") (EVar "id")) "owner") (arm (PCon "RuntimeBool") () (EVar "None")) (arm (PVar "owner") () (EApp (EVar "Some") (EApp (EApp (EVar "filterMap") (EVar "runtimeCtorName")) (EApp (EVar "runtimeRoster") (EVar "owner")))))))))
 (DTypeSig false "switchIsExhaustive" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
 (DFunDef false "switchIsExhaustive" (PWild (PList)) (EVar "False"))
 (DFunDef false "switchIsExhaustive" ((PVar "e") (PVar "covered")) (EMatch (EApp (EApp (EVar "resolveRoster") (EVar "e")) (EVar "covered")) (arm (PCon "Some" (PVar "roster")) () (EBinOp "&&" (EApp (EVar "isNonEmptyL") (EVar "roster")) (EApp (EApp (EVar "coveredByRoster") (EVar "covered")) (EVar "roster")))) (arm (PCon "None") () (EVar "False"))))
@@ -17245,7 +17202,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DFunDef false "coveredCtorNames" ((PCons (PCon "CTBranch" (PVar "h") PWild) (PVar "rest"))) (EMatch (EApp (EVar "conHeadInfo") (EVar "h")) (arm (PCon "Some" (PTuple (PVar "c") PWild)) () (EBinOp "::" (EVar "c") (EApp (EVar "coveredCtorNames") (EVar "rest")))) (arm (PCon "None") () (EApp (EVar "coveredCtorNames") (EVar "rest")))))
 (DData Private "DiscRep" () ((variant "RepAllImm" (ConPos)) (variant "RepAllBox" (ConPos)) (variant "RepTwoSplit" (ConPos (TyCon "String"))) (variant "RepMixed" (ConPos))) ())
 (DTypeSig false "reservedCtorArity" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int"))))
-(DFunDef false "reservedCtorArity" ((PVar "name")) (EMatch (EApp (EVar "namedRuntimeCtor") (EVar "name")) (arm (PCon "Some" (PVar "id")) () (EMatch (EFieldAccess (EApp (EVar "runtimeCtorFact") (EVar "id")) "owner") (arm (PCon "RuntimeBool") () (EVar "None")) (arm PWild () (EApp (EVar "Some") (EFieldAccess (EApp (EVar "runtimeCtorFact") (EVar "id")) "arity"))))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "reservedCtorArity" ((PVar "name")) (EApp (EApp (EVar "$core.andThen") (EApp (EVar "namedRuntimeCtor") (EVar "name"))) (ELam ((PVar "id")) (EMatch (EFieldAccess (EApp (EVar "runtimeCtorFact") (EVar "id")) "owner") (arm (PCon "RuntimeBool") () (EVar "None")) (arm PWild () (EApp (EVar "Some") (EFieldAccess (EApp (EVar "runtimeCtorFact") (EVar "id")) "arity")))))))
 (DTypeSig false "ctorArityOf" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int")))))
 (DFunDef false "ctorArityOf" ((PVar "e") (PVar "name")) (EMatch (EApp (EVar "reservedCtorArity") (EVar "name")) (arm (PCon "Some" (PVar "r")) () (EIf (EApp (EApp (EVar "isCtor") (EVar "e")) (EVar "name")) (EIf (EBinOp "==" (EApp (EApp (EVar "ctorArity") (EVar "e")) (EVar "name")) (EVar "r")) (EApp (EVar "Some") (EVar "r")) (EVar "None")) (EApp (EVar "Some") (EVar "r")))) (arm (PCon "None") () (EIf (EApp (EApp (EVar "isCtor") (EVar "e")) (EVar "name")) (EApp (EVar "Some") (EApp (EApp (EVar "ctorArity") (EVar "e")) (EVar "name"))) (EVar "None")))))
 (DTypeSig false "ctorIsImmediate" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyCon "Bool"))))
@@ -17261,7 +17218,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "rosterOwnedBy" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool")))))
 (DFunDef false "rosterOwnedBy" ((PVar "e") (PVar "ty") (PVar "roster")) (EApp (EVar "not") (EApp (EApp (EVar "anyList") (ELam ((PVar "r")) (EMatch (EApp (EApp (EVar "ctorTypeOf") (EVar "e")) (EVar "r")) (arm (PCon "Some" (PVar "t")) () (EBinOp "/=" (EVar "t") (EVar "ty"))) (arm (PCon "None") () (EVar "True"))))) (EVar "roster"))))
 (DTypeSig false "unambiguousRoster" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "unambiguousRoster" ((PVar "e") (PVar "name")) (EIf (EApp (EApp (EVar "isCtor") (EVar "e")) (EVar "name")) (EMatch (EApp (EApp (EVar "ctorTypeOf") (EVar "e")) (EVar "name")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "ty")) () (EBlock (DoLet false false (PVar "t") (EApp (EApp (EVar "ctorsOfType") (EVar "e")) (EVar "ty"))) (DoExpr (EIf (EBinOp "&&" (EApp (EVar "isNonEmptyL") (EVar "t")) (EApp (EApp (EApp (EVar "rosterOwnedBy") (EVar "e")) (EVar "ty")) (EVar "t"))) (EMatch (EApp (EVar "reservedRosterOf") (EVar "name")) (arm (PCon "None") () (EApp (EVar "Some") (EVar "t"))) (arm (PCon "Some" (PVar "r")) () (EIf (EApp (EApp (EVar "sameRoster") (EVar "r")) (EVar "t")) (EApp (EVar "Some") (EVar "t")) (EVar "None")))) (EVar "None")))))) (EApp (EVar "reservedRosterOf") (EVar "name"))))
+(DFunDef false "unambiguousRoster" ((PVar "e") (PVar "name")) (EIf (EApp (EApp (EVar "isCtor") (EVar "e")) (EVar "name")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "ctorTypeOf") (EVar "e")) (EVar "name"))) (ELam ((PVar "ty")) (ELet false (PVar "t") (EApp (EApp (EVar "ctorsOfType") (EVar "e")) (EVar "ty")) (EIf (EBinOp "&&" (EApp (EVar "isNonEmptyL") (EVar "t")) (EApp (EApp (EApp (EVar "rosterOwnedBy") (EVar "e")) (EVar "ty")) (EVar "t"))) (EMatch (EApp (EVar "reservedRosterOf") (EVar "name")) (arm (PCon "None") () (EApp (EVar "Some") (EVar "t"))) (arm (PCon "Some" (PVar "r")) () (EIf (EApp (EApp (EVar "sameRoster") (EVar "r")) (EVar "t")) (EApp (EVar "Some") (EVar "t")) (EVar "None")))) (EVar "None"))))) (EApp (EVar "reservedRosterOf") (EVar "name"))))
 (DTypeSig false "resolveRoster" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "resolveRoster" (PWild (PList)) (EVar "None"))
 (DFunDef false "resolveRoster" ((PVar "e") (PCons (PVar "c") (PVar "rest"))) (EMatch (EApp (EApp (EVar "unambiguousRoster") (EVar "e")) (EVar "c")) (arm (PCon "Some" (PVar "r")) () (EApp (EVar "Some") (EVar "r"))) (arm (PCon "None") () (EApp (EApp (EVar "resolveRoster") (EVar "e")) (EVar "rest")))))
@@ -17284,11 +17241,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DFunDef false "emitConChain" ((PVar "e") (PVar "env") (PVar "roots") (PVar "arms") PWild (PVar "rest") PWild PWild (PList) (PVar "dft") (PVar "slot") (PVar "endL") (PVar "ftL") (PVar "rty") (PVar "exh")) (EIf (EBinOp "&&" (EVar "exh") (EBinOp "==" (EVar "ftL") (ELit (LString "")))) (EMatch (EVar "dft") (arm (PCon "CTFail" (PVar "site")) () (EApp (EApp (EVar "emitFailTrap") (EVar "e")) (EVar "site"))) (arm PWild () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTree") (EVar "e")) (EVar "env")) (EVar "roots")) (EVar "arms")) (EVar "rest")) (EVar "slot")) (EVar "endL")) (EVar "ftL")) (EVar "rty")) (EVar "dft")))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTree") (EVar "e")) (EVar "env")) (EVar "roots")) (EVar "arms")) (EVar "rest")) (EVar "slot")) (EVar "endL")) (EVar "ftL")) (EVar "rty")) (EVar "dft")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "emitConChain" ((PVar "e") (PVar "env") (PVar "roots") (PVar "arms") (PVar "foc") (PVar "rest") (PVar "tagReg") (PVar "rep") (PCons (PCon "CTBranch" (PVar "h") (PVar "sub")) (PVar "more")) (PVar "dft") (PVar "slot") (PVar "endL") (PVar "ftL") (PVar "rty") (PVar "exh")) (EMatch (EApp (EVar "conHeadInfo") (EVar "h")) (arm (PCon "Some" (PTuple (PVar "c") (PVar "a"))) () (EBlock (DoLet false false (PVar "cmp") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "cmp"))) (ELit (LString " = icmp eq i64 "))) (EApp (EVar "$core.display") (EVar "tagReg"))) (ELit (LString ", "))) (EApp (EVar "$core.display") (EApp (EApp (EApp (EVar "discExpected") (EVar "e")) (EVar "rep")) (EVar "c")))) (ELit (LString ""))))) (DoLet false false (PVar "n") (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e")))) (DoLet false false (PVar "yes") (EBinOp "++" (ELit (LString "conyes")) (EVar "n"))) (DoLet false false (PVar "next") (EBinOp "++" (ELit (LString "connext")) (EVar "n"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  br i1 ")) (EApp (EVar "$core.display") (EVar "cmp"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "yes"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "next"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "yes") (ELit (LString ":"))))) (DoLet false false (PVar "fields") (EApp (EApp (EApp (EApp (EVar "loadFields") (EVar "e")) (EVar "foc")) (EVar "a")) (ELit (LInt 0)))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTree") (EVar "e")) (EVar "env")) (EVar "roots")) (EVar "arms")) (EBinOp "++" (EVar "fields") (EVar "rest"))) (EVar "slot")) (EVar "endL")) (EVar "ftL")) (EVar "rty")) (EVar "sub"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "next") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitConChain") (EVar "e")) (EVar "env")) (EVar "roots")) (EVar "arms")) (EVar "foc")) (EVar "rest")) (EVar "tagReg")) (EVar "rep")) (EVar "more")) (EVar "dft")) (EVar "slot")) (EVar "endL")) (EVar "ftL")) (EVar "rty")) (EVar "exh"))))) (arm (PCon "None") () (EBlock (DoExpr (EApp (EApp (EVar "gapU") (EVar "e")) (ELit (LString "heterogeneous constructor switch (a column is all-constructor or all-literal)")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  store i64 0, ptr ")) (EVar "slot")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  br label %")) (EVar "endL"))))))))
 (DTypeSig false "emitLitChain" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CTBranch")) (TyFun (TyCon "CTree") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "LTy")) (TyCon "Unit"))))))))))))))
-(DFunDef false "emitLitChain" ((PVar "e") (PVar "env") (PVar "roots") (PVar "arms") PWild (PVar "rest") (PList) (PVar "dft") (PVar "slot") (PVar "endL") (PVar "ftL") (PVar "rty")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTree") (EVar "e")) (EVar "env")) (EVar "roots")) (EVar "arms")) (EVar "rest")) (EVar "slot")) (EVar "endL")) (EVar "ftL")) (EVar "rty")) (EVar "dft")))
-(DFunDef false "emitLitChain" ((PVar "e") (PVar "env") (PVar "roots") (PVar "arms") (PVar "foc") (PVar "rest") (PCons (PCon "CTBranch" (PCon "HLit" (PCon "LInt" (PVar "k"))) (PVar "sub")) (PVar "more")) (PVar "dft") (PVar "slot") (PVar "endL") (PVar "ftL") (PVar "rty")) (EBlock (DoLet false false (PTuple (PVar "kw") PWild) (EApp (EApp (EVar "emitLit") (EVar "e")) (EApp (EVar "LInt") (EVar "k")))) (DoLet false false (PVar "cmp") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "cmp"))) (ELit (LString " = icmp eq i64 "))) (EApp (EVar "$core.display") (EVar "foc"))) (ELit (LString ", "))) (EApp (EVar "$core.display") (EVar "kw"))) (ELit (LString ""))))) (DoLet false false (PVar "n") (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e")))) (DoLet false false (PVar "yes") (EBinOp "++" (ELit (LString "lityes")) (EVar "n"))) (DoLet false false (PVar "next") (EBinOp "++" (ELit (LString "litnext")) (EVar "n"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  br i1 ")) (EApp (EVar "$core.display") (EVar "cmp"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "yes"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "next"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "yes") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTree") (EVar "e")) (EVar "env")) (EVar "roots")) (EVar "arms")) (EVar "rest")) (EVar "slot")) (EVar "endL")) (EVar "ftL")) (EVar "rty")) (EVar "sub"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "next") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitLitChain") (EVar "e")) (EVar "env")) (EVar "roots")) (EVar "arms")) (EVar "foc")) (EVar "rest")) (EVar "more")) (EVar "dft")) (EVar "slot")) (EVar "endL")) (EVar "ftL")) (EVar "rty")))))
-(DFunDef false "emitLitChain" ((PVar "e") (PVar "env") (PVar "roots") (PVar "arms") (PVar "foc") (PVar "rest") (PCons (PCon "CTBranch" (PCon "HLit" (PCon "LChar" (PVar "c"))) (PVar "sub")) (PVar "more")) (PVar "dft") (PVar "slot") (PVar "endL") (PVar "ftL") (PVar "rty")) (EBlock (DoLet false false (PVar "cp") (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EApp (EVar "stringToChars") (EVar "c"))))) (DoLet false false (PVar "cmp") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "cmp"))) (ELit (LString " = icmp eq i64 "))) (EApp (EVar "$core.display") (EVar "foc"))) (ELit (LString ", "))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EBinOp "+" (EBinOp "*" (EVar "cp") (ELit (LInt 2))) (ELit (LInt 1)))))) (ELit (LString ""))))) (DoLet false false (PVar "n") (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e")))) (DoLet false false (PVar "yes") (EBinOp "++" (ELit (LString "lityes")) (EVar "n"))) (DoLet false false (PVar "next") (EBinOp "++" (ELit (LString "litnext")) (EVar "n"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  br i1 ")) (EApp (EVar "$core.display") (EVar "cmp"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "yes"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "next"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "yes") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTree") (EVar "e")) (EVar "env")) (EVar "roots")) (EVar "arms")) (EVar "rest")) (EVar "slot")) (EVar "endL")) (EVar "ftL")) (EVar "rty")) (EVar "sub"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "next") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitLitChain") (EVar "e")) (EVar "env")) (EVar "roots")) (EVar "arms")) (EVar "foc")) (EVar "rest")) (EVar "more")) (EVar "dft")) (EVar "slot")) (EVar "endL")) (EVar "ftL")) (EVar "rty")))))
-(DFunDef false "emitLitChain" ((PVar "e") (PVar "env") (PVar "roots") (PVar "arms") (PVar "foc") (PVar "rest") (PCons (PCon "CTBranch" (PCon "HLit" (PCon "LString" (PVar "s"))) (PVar "sub")) (PVar "more")) (PVar "dft") (PVar "slot") (PVar "endL") (PVar "ftL") (PVar "rty")) (EBlock (DoLet false false (PTuple (PVar "lit") PWild) (EApp (EApp (EVar "emitLit") (EVar "e")) (EApp (EVar "LString") (EVar "s")))) (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (EVar "r")) (ELit (LString "i64"))) (ELit (LString "mdk_string_eq"))) (EApp (EVar "i64Ops") (EListLit (EVar "foc") (EVar "lit")))))) (DoLet false false (PVar "cmp") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "cmp"))) (ELit (LString " = icmp eq i64 "))) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString ", 3"))))) (DoLet false false (PVar "n") (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e")))) (DoLet false false (PVar "yes") (EBinOp "++" (ELit (LString "lityes")) (EVar "n"))) (DoLet false false (PVar "next") (EBinOp "++" (ELit (LString "litnext")) (EVar "n"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  br i1 ")) (EApp (EVar "$core.display") (EVar "cmp"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "yes"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "next"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "yes") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTree") (EVar "e")) (EVar "env")) (EVar "roots")) (EVar "arms")) (EVar "rest")) (EVar "slot")) (EVar "endL")) (EVar "ftL")) (EVar "rty")) (EVar "sub"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "next") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitLitChain") (EVar "e")) (EVar "env")) (EVar "roots")) (EVar "arms")) (EVar "foc")) (EVar "rest")) (EVar "more")) (EVar "dft")) (EVar "slot")) (EVar "endL")) (EVar "ftL")) (EVar "rty")))))
-(DFunDef false "emitLitChain" ((PVar "e") PWild PWild PWild PWild PWild PWild PWild PWild PWild PWild PWild) (EApp (EApp (EVar "gapU") (EVar "e")) (ELit (LString "non-Int literal switch (no Float / Bool literal heads)"))))
+(DFunDef false "emitLitChain" ((PVar "e") (PVar "env") (PVar "roots") (PVar "arms") (PVar "foc") (PVar "rest") (PVar "xs0") (PVar "dft") (PVar "slot") (PVar "endL") (PVar "ftL") (PVar "rty")) (ELetGroup ((lgb "go" (clause ((PList)) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTree") (EVar "e")) (EVar "env")) (EVar "roots")) (EVar "arms")) (EVar "rest")) (EVar "slot")) (EVar "endL")) (EVar "ftL")) (EVar "rty")) (EVar "dft"))) (clause ((PCons (PCon "CTBranch" (PCon "HLit" (PCon "LInt" (PVar "k"))) (PVar "sub")) (PVar "more"))) (EBlock (DoLet false false (PTuple (PVar "kw") PWild) (EApp (EApp (EVar "emitLit") (EVar "e")) (EApp (EVar "LInt") (EVar "k")))) (DoLet false false (PVar "cmp") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "cmp"))) (ELit (LString " = icmp eq i64 "))) (EApp (EVar "$core.display") (EVar "foc"))) (ELit (LString ", "))) (EApp (EVar "$core.display") (EVar "kw"))) (ELit (LString ""))))) (DoLet false false (PVar "n") (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e")))) (DoLet false false (PVar "yes") (EBinOp "++" (ELit (LString "lityes")) (EVar "n"))) (DoLet false false (PVar "next") (EBinOp "++" (ELit (LString "litnext")) (EVar "n"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  br i1 ")) (EApp (EVar "$core.display") (EVar "cmp"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "yes"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "next"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "yes") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTree") (EVar "e")) (EVar "env")) (EVar "roots")) (EVar "arms")) (EVar "rest")) (EVar "slot")) (EVar "endL")) (EVar "ftL")) (EVar "rty")) (EVar "sub"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "next") (ELit (LString ":"))))) (DoExpr (EApp (EVar "go") (EVar "more"))))) (clause ((PCons (PCon "CTBranch" (PCon "HLit" (PCon "LChar" (PVar "c"))) (PVar "sub")) (PVar "more"))) (EBlock (DoLet false false (PVar "cp") (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EApp (EVar "stringToChars") (EVar "c"))))) (DoLet false false (PVar "cmp") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "cmp"))) (ELit (LString " = icmp eq i64 "))) (EApp (EVar "$core.display") (EVar "foc"))) (ELit (LString ", "))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EBinOp "+" (EBinOp "*" (EVar "cp") (ELit (LInt 2))) (ELit (LInt 1)))))) (ELit (LString ""))))) (DoLet false false (PVar "n") (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e")))) (DoLet false false (PVar "yes") (EBinOp "++" (ELit (LString "lityes")) (EVar "n"))) (DoLet false false (PVar "next") (EBinOp "++" (ELit (LString "litnext")) (EVar "n"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  br i1 ")) (EApp (EVar "$core.display") (EVar "cmp"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "yes"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "next"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "yes") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTree") (EVar "e")) (EVar "env")) (EVar "roots")) (EVar "arms")) (EVar "rest")) (EVar "slot")) (EVar "endL")) (EVar "ftL")) (EVar "rty")) (EVar "sub"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "next") (ELit (LString ":"))))) (DoExpr (EApp (EVar "go") (EVar "more"))))) (clause ((PCons (PCon "CTBranch" (PCon "HLit" (PCon "LString" (PVar "s"))) (PVar "sub")) (PVar "more"))) (EBlock (DoLet false false (PTuple (PVar "lit") PWild) (EApp (EApp (EVar "emitLit") (EVar "e")) (EApp (EVar "LString") (EVar "s")))) (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (EVar "r")) (ELit (LString "i64"))) (ELit (LString "mdk_string_eq"))) (EApp (EVar "i64Ops") (EListLit (EVar "foc") (EVar "lit")))))) (DoLet false false (PVar "cmp") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "cmp"))) (ELit (LString " = icmp eq i64 "))) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString ", 3"))))) (DoLet false false (PVar "n") (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e")))) (DoLet false false (PVar "yes") (EBinOp "++" (ELit (LString "lityes")) (EVar "n"))) (DoLet false false (PVar "next") (EBinOp "++" (ELit (LString "litnext")) (EVar "n"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  br i1 ")) (EApp (EVar "$core.display") (EVar "cmp"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "yes"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "next"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "yes") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTree") (EVar "e")) (EVar "env")) (EVar "roots")) (EVar "arms")) (EVar "rest")) (EVar "slot")) (EVar "endL")) (EVar "ftL")) (EVar "rty")) (EVar "sub"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "next") (ELit (LString ":"))))) (DoExpr (EApp (EVar "go") (EVar "more"))))) (clause (PWild) (EApp (EApp (EVar "gapU") (EVar "e")) (ELit (LString "non-Int literal switch (no Float / Bool literal heads)")))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "takeS" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))
 (DFunDef false "takeS" ((PVar "n") (PVar "xs")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (EListLit) (EIf (EVar "otherwise") (EMatch (EVar "xs") (arm (PList) () (EListLit)) (arm (PCons (PVar "y") (PVar "ys")) () (EBinOp "::" (EVar "y") (EApp (EApp (EVar "takeS") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "ys"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "tailS" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))))
@@ -17324,8 +17277,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "tmcMarker" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Unit")))))
 (DFunDef false "tmcMarker" ((PVar "e") (PVar "sym") (PVar "mode")) (EBlock (DoLet false false (PVar "name") (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "mdk.impl."))) (EVar "sym")) (EBinOp "++" (ELit (LString "impl.")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 9))) (EApp (EVar "stringLength") (EVar "sym"))) (EVar "sym"))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "mdk.default."))) (EVar "sym")) (EBinOp "++" (ELit (LString "default.")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 12))) (EApp (EVar "stringLength") (EVar "sym"))) (EVar "sym"))) (EVar "sym")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "; tmc: ")) (EApp (EVar "$core.display") (EVar "name"))) (ELit (LString " "))) (EApp (EVar "$core.display") (EVar "mode"))) (ELit (LString "")))))))
 (DTypeSig false "tmcGroupMarkers" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit")))))
-(DFunDef false "tmcGroupMarkers" (PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "tmcGroupMarkers" ((PVar "e") (PVar "root") (PCons (PVar "m") (PVar "rest"))) (EBlock (DoLet false false PWild (EIf (EBinOp "==" (EVar "m") (EVar "root")) (EApp (EApp (EApp (EVar "tmcMarker") (EVar "e")) (EVar "m")) (ELit (LString "group-root"))) (EApp (EApp (EApp (EVar "tmcMarker") (EVar "e")) (EVar "m")) (EBinOp "++" (ELit (LString "group:")) (EVar "root"))))) (DoExpr (EApp (EApp (EApp (EVar "tmcGroupMarkers") (EVar "e")) (EVar "root")) (EVar "rest")))))
+(DFunDef false "tmcGroupMarkers" ((PVar "e") (PVar "root") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PVar "m") (PVar "rest"))) (EBlock (DoLet false false PWild (EIf (EBinOp "==" (EVar "m") (EVar "root")) (EApp (EApp (EApp (EVar "tmcMarker") (EVar "e")) (EVar "m")) (ELit (LString "group-root"))) (EApp (EApp (EApp (EVar "tmcMarker") (EVar "e")) (EVar "m")) (EBinOp "++" (ELit (LString "group:")) (EVar "root"))))) (DoExpr (EApp (EVar "go") (EVar "rest"))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "emitTrmcFn" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "LTy")) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr"))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "CExpr") (TyFun (TyCon "Loc") (TyCon "Unit")))))))))))
 (DFunDef false "emitTrmcFn" ((PVar "e") (PVar "name") (PVar "arity") (PVar "ptys") (PVar "clauses") (PVar "single") (PVar "singlePats") (PVar "singleBody") (PVar "site")) (EBlock (DoExpr (EApp (EApp (EApp (EVar "tmcMarker") (EVar "e")) (EVar "name")) (ELit (LString "trmc")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "emitTrmcHeader") (EVar "e")) (EApp (EVar "LN.llvmName") (EApp (EVar "LN.LUserFunction") (EVar "name")))) (EVar "arity")) (EApp (EApp (EVar "fnAttrs") (EVar "e")) (EVar "name")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTrmcLoopBody") (EVar "e")) (EApp (EVar "SelfByVar") (EVar "name"))) (EVar "arity")) (EVar "ptys")) (EVar "clauses")) (EVar "single")) (EVar "singlePats")) (EVar "singleBody")) (EVar "site"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "}")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString ""))))))
 (DTypeSig false "emitTrmcHeader" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "Unit"))))))
@@ -17376,15 +17328,15 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "gDispLabel" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "gDispLabel" ((PVar "m")) (EBinOp "++" (ELit (LString "gdisp_")) (EVar "m")))
 (DTypeSig false "emitGDispGroup" (TyFun (TyCon "Emit") (TyFun (TyCon "DispGroup") (TyCon "Unit"))))
-(DFunDef false "emitGDispGroup" ((PVar "e") (PVar "grp")) (EBlock (DoLet false false (PVar "root") (EApp (EVar "dispRootOf") (EVar "grp"))) (DoLet false false (PVar "members") (EApp (EVar "dispMembersOf") (EVar "grp"))) (DoLet false false (PVar "binds") (EUnOp "!" (EFieldAccess (EVar "e") "gDispBinds"))) (DoLet false false (PVar "rootArity") (EApp (EApp (EVar "gDispFnArity") (EVar "e")) (EVar "root"))) (DoLet false false (PVar "u") (EApp (EApp (EApp (EVar "gDispMaxArity") (EVar "e")) (EVar "members")) (ELit (LInt 0)))) (DoExpr (EApp (EApp (EApp (EVar "tmcGroupMarkers") (EVar "e")) (EVar "root")) (EVar "members"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "emitTrmcHeader") (EVar "e")) (EApp (EVar "LN.llvmName") (EApp (EVar "LN.LUserFunction") (EVar "root")))) (EVar "rootArity")) (EApp (EApp (EVar "fnAttrs") (EVar "e")) (EVar "root")))) (DoLet false false (PVar "uslots") (EApp (EApp (EApp (EApp (EVar "gDispEmitSlots") (EVar "e")) (EVar "u")) (EVar "rootArity")) (ELit (LInt 0)))) (DoLet false false (PVar "hole") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EVar "hole")) (ELit (LString " = alloca i64"))))) (DoLet false false (PVar "destSlot") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EVar "destSlot")) (ELit (LString " = alloca ptr"))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  store ptr ")) (EApp (EVar "$core.display") (EVar "hole"))) (ELit (LString ", ptr "))) (EApp (EVar "$core.display") (EVar "destSlot"))) (ELit (LString ""))))) (DoLet false false (PVar "exitL") (EBinOp "++" (ELit (LString "gdispexit")) (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e"))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  br label %")) (EApp (EVar "gDispLabel") (EVar "root"))))) (DoLet false false (PVar "saved") (EUnOp "!" (EFieldAccess (EVar "e") "gDispCtx"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "gDispCtx")) (EApp (EApp (EApp (EApp (EApp (EVar "GDispOn") (EVar "root")) (EVar "members")) (EVar "uslots")) (EVar "destSlot")) (EVar "exitL")))) (DoExpr (EApp (EApp (EApp (EVar "emitGDispMembers") (EVar "e")) (EVar "binds")) (EVar "members"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "gDispCtx")) (EVar "saved"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "exitL") (ELit (LString ":"))))) (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString " = load i64, ptr "))) (EApp (EVar "$core.display") (EVar "hole"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  ret i64 ")) (EVar "r")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "}")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString ""))))))
+(DFunDef false "emitGDispGroup" ((PVar "e") (PVar "grp")) (EBlock (DoLet false false (PVar "root") (EApp (EVar "dispRootOf") (EVar "grp"))) (DoLet false false (PVar "members") (EApp (EVar "dispMembersOf") (EVar "grp"))) (DoLet false false (PVar "rootArity") (EApp (EApp (EVar "gDispFnArity") (EVar "e")) (EVar "root"))) (DoLet false false (PVar "u") (EApp (EApp (EApp (EVar "gDispMaxArity") (EVar "e")) (EVar "members")) (ELit (LInt 0)))) (DoExpr (EApp (EApp (EApp (EVar "tmcGroupMarkers") (EVar "e")) (EVar "root")) (EVar "members"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "emitTrmcHeader") (EVar "e")) (EApp (EVar "LN.llvmName") (EApp (EVar "LN.LUserFunction") (EVar "root")))) (EVar "rootArity")) (EApp (EApp (EVar "fnAttrs") (EVar "e")) (EVar "root")))) (DoLet false false (PVar "uslots") (EApp (EApp (EApp (EApp (EVar "gDispEmitSlots") (EVar "e")) (EVar "u")) (EVar "rootArity")) (ELit (LInt 0)))) (DoLet false false (PVar "hole") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EVar "hole")) (ELit (LString " = alloca i64"))))) (DoLet false false (PVar "destSlot") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EVar "destSlot")) (ELit (LString " = alloca ptr"))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  store ptr ")) (EApp (EVar "$core.display") (EVar "hole"))) (ELit (LString ", ptr "))) (EApp (EVar "$core.display") (EVar "destSlot"))) (ELit (LString ""))))) (DoLet false false (PVar "exitL") (EBinOp "++" (ELit (LString "gdispexit")) (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e"))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  br label %")) (EApp (EVar "gDispLabel") (EVar "root"))))) (DoLet false false (PVar "saved") (EUnOp "!" (EFieldAccess (EVar "e") "gDispCtx"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "gDispCtx")) (EApp (EApp (EApp (EApp (EApp (EVar "GDispOn") (EVar "root")) (EVar "members")) (EVar "uslots")) (EVar "destSlot")) (EVar "exitL")))) (DoExpr (EApp (EApp (EVar "emitGDispMembers") (EVar "e")) (EVar "members"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "gDispCtx")) (EVar "saved"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "exitL") (ELit (LString ":"))))) (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString " = load i64, ptr "))) (EApp (EVar "$core.display") (EVar "hole"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  ret i64 ")) (EVar "r")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "}")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString ""))))))
 (DTypeSig false "gDispEmitSlots" (TyFun (TyCon "Emit") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "gDispEmitSlots" ((PVar "e") (PVar "u") (PVar "rootArity") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "u")) (EListLit) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "slot") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EVar "slot")) (ELit (LString " = alloca i64"))))) (DoLet false false (PVar "seed") (EIf (EBinOp "<" (EVar "i") (EVar "rootArity")) (EBinOp "++" (ELit (LString "%arg")) (EApp (EVar "intToString") (EVar "i"))) (ELit (LString "0")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  store i64 ")) (EApp (EVar "$core.display") (EVar "seed"))) (ELit (LString ", ptr "))) (EApp (EVar "$core.display") (EVar "slot"))) (ELit (LString ""))))) (DoExpr (EBinOp "::" (EVar "slot") (EApp (EApp (EApp (EApp (EVar "gDispEmitSlots") (EVar "e")) (EVar "u")) (EVar "rootArity")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "gDispMaxArity" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyCon "Int")))))
 (DFunDef false "gDispMaxArity" (PWild (PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "gDispMaxArity" ((PVar "e") (PCons (PVar "m") (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "a") (EApp (EApp (EVar "gDispFnArity") (EVar "e")) (EVar "m"))) (DoExpr (EApp (EApp (EApp (EVar "gDispMaxArity") (EVar "e")) (EVar "rest")) (EApp (EApp (EVar "maxInt") (EVar "a")) (EVar "acc"))))))
-(DTypeSig false "emitGDispMembers" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit")))))
-(DFunDef false "emitGDispMembers" (PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "emitGDispMembers" ((PVar "e") (PVar "binds") (PCons (PVar "m") (PVar "rest"))) (EBlock (DoLet false false PWild (EMatch (EApp (EApp (EVar "omLookup") (EVar "m")) (EUnOp "!" (EFieldAccess (EVar "e") "gDispBindMap"))) (arm (PCon "Some" (PVar "b")) () (EApp (EApp (EVar "emitGDispMember") (EVar "e")) (EVar "b"))) (arm (PCon "None") () (EApp (EApp (EVar "gapU") (EVar "e")) (EBinOp "++" (ELit (LString "(b') group member without a bind: ")) (EVar "m")))))) (DoExpr (EApp (EApp (EApp (EVar "emitGDispMembers") (EVar "e")) (EVar "binds")) (EVar "rest")))))
+(DTypeSig false "emitGDispMembers" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit"))))
+(DFunDef false "emitGDispMembers" (PWild (PList)) (ELit LUnit))
+(DFunDef false "emitGDispMembers" ((PVar "e") (PCons (PVar "m") (PVar "rest"))) (EBlock (DoLet false false PWild (EMatch (EApp (EApp (EVar "omLookup") (EVar "m")) (EUnOp "!" (EFieldAccess (EVar "e") "gDispBindMap"))) (arm (PCon "Some" (PVar "b")) () (EApp (EApp (EVar "emitGDispMember") (EVar "e")) (EVar "b"))) (arm (PCon "None") () (EApp (EApp (EVar "gapU") (EVar "e")) (EBinOp "++" (ELit (LString "(b') group member without a bind: ")) (EVar "m")))))) (DoExpr (EApp (EApp (EVar "emitGDispMembers") (EVar "e")) (EVar "rest")))))
 (DTypeSig false "emitGDispMember" (TyFun (TyCon "Emit") (TyFun (TyCon "CBind") (TyCon "Unit"))))
 (DFunDef false "emitGDispMember" ((PVar "e") (PCon "CBind" (PVar "name") (PVar "clauses") (PVar "site") PWild)) (EMatch (EUnOp "!" (EFieldAccess (EVar "e") "gDispCtx")) (arm (PCon "GDispOff") () (EApp (EApp (EVar "gapU") (EVar "e")) (ELit (LString "(b') member emit with no active group context")))) (arm (PCon "GDispOn" PWild PWild (PVar "uslots") PWild PWild) () (EBlock (DoLet false false (PVar "arity") (EApp (EVar "clauseArityOf") (EVar "clauses"))) (DoLet false false (PVar "ptys") (EMatch (EApp (EApp (EVar "sigLookup") (EVar "e")) (EVar "name")) (arm (PCon "Some" (PCon "FnSig" (PVar "ts") PWild)) () (EVar "ts")) (arm (PCon "None") () (EListLit)))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EApp (EVar "gDispLabel") (EVar "name")) (ELit (LString ":"))))) (DoLet false false (PVar "reloaded") (EApp (EApp (EApp (EApp (EVar "trmcReloadParams") (EVar "e")) (EApp (EApp (EVar "gDispTake") (EVar "arity")) (EVar "uslots"))) (EVar "ptys")) (ELit (LInt 0)))) (DoLet false false (PVar "pairs") (EApp (EVar "clausePairs") (EVar "clauses"))) (DoExpr (EMatch (EVar "pairs") (arm (PList (PTuple (PVar "pats") (PVar "body"))) () (EIf (EApp (EVar "allPVar") (EVar "pats")) (EApp (EApp (EApp (EVar "emitGDispBody") (EVar "e")) (EApp (EApp (EVar "trmcRenameEnv") (EVar "pats")) (EVar "reloaded"))) (EApp (EApp (EApp (EVar "siteFtBody") (EVar "e")) (EVar "site")) (EVar "body"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitClauseTree") (EVar "e")) (EApp (EApp (EVar "omFromPairs") (EVar "reloaded")) (EVar "omEmpty"))) (EVar "arity")) (EVar "pairs")) (ELit (LString ""))) (EVar "site")))) (arm PWild () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitClauseTree") (EVar "e")) (EApp (EApp (EVar "omFromPairs") (EVar "reloaded")) (EVar "omEmpty"))) (EVar "arity")) (EVar "pairs")) (ELit (LString ""))) (EVar "site")))))))))
 (DTypeSig false "gDispTake" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))
@@ -17411,8 +17363,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "gDispSpine" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CExpr") (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "CExpr")) (TyCon "String") (TyApp (TyCon "List") (TyCon "CExpr"))))))))
 (DFunDef false "gDispSpine" ((PVar "e") (PVar "members") (PVar "ex")) (EApp (EApp (EApp (EApp (EApp (EVar "dispSpineParts") (ELam ((PVar "n")) (EApp (EApp (EVar "canonFnName") (EVar "e")) (EVar "n")))) (ELam ((PVar "n")) (EApp (EApp (EVar "gDispIsFn") (EVar "e")) (EVar "n")))) (ELam ((PVar "n")) (EApp (EApp (EVar "gDispFnArity") (EVar "e")) (EVar "n")))) (ELam ((PVar "f")) (EApp (EApp (EVar "contains") (EVar "f")) (EVar "members")))) (EVar "ex")))
 (DTypeSig false "emitGDispCells" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyFun (TyCon "String") (TyCon "Unit"))))))
-(DFunDef false "emitGDispCells" (PWild PWild (PList) PWild) (ELit LUnit))
-(DFunDef false "emitGDispCells" ((PVar "e") (PVar "env") (PCons (PVar "h") (PVar "rest")) (PVar "destSlot")) (EBlock (DoLet false false (PVar "hv") (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EListLit (EVar "h")))) (DoLet false false (PVar "cell") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (EVar "cell")) (ELit (LString "ptr"))) (ELit (LString "mdk_alloc"))) (EApp (EVar "i64Ops") (EListLit (ELit (LString "24"))))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  store i64 ")) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EApp (EApp (EVar "cellTag") (EVar "e")) (ELit (LString "Cons")))))) (ELit (LString ", ptr "))) (EApp (EVar "$core.display") (EVar "cell"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "storeFields") (EVar "e")) (EVar "cell")) (EVar "hv")) (ELit (LInt 0)))) (DoLet false false (PVar "cellw") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "cellw"))) (ELit (LString " = ptrtoint ptr "))) (EApp (EVar "$core.display") (EVar "cell"))) (ELit (LString " to i64"))))) (DoLet false false (PVar "d") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "d"))) (ELit (LString " = load ptr, ptr "))) (EApp (EVar "$core.display") (EVar "destSlot"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  store i64 ")) (EApp (EVar "$core.display") (EVar "cellw"))) (ELit (LString ", ptr "))) (EApp (EVar "$core.display") (EVar "d"))) (ELit (LString ""))))) (DoLet false false (PVar "newdest") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "newdest"))) (ELit (LString " = getelementptr i8, ptr "))) (EApp (EVar "$core.display") (EVar "cell"))) (ELit (LString ", i64 16"))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  store ptr ")) (EApp (EVar "$core.display") (EVar "newdest"))) (ELit (LString ", ptr "))) (EApp (EVar "$core.display") (EVar "destSlot"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "emitGDispCells") (EVar "e")) (EVar "env")) (EVar "rest")) (EVar "destSlot")))))
+(DFunDef false "emitGDispCells" ((PVar "e") (PVar "env") (PVar "xs0") (PVar "destSlot")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PVar "h") (PVar "rest"))) (EBlock (DoLet false false (PVar "hv") (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EListLit (EVar "h")))) (DoLet false false (PVar "cell") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (EVar "cell")) (ELit (LString "ptr"))) (ELit (LString "mdk_alloc"))) (EApp (EVar "i64Ops") (EListLit (ELit (LString "24"))))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  store i64 ")) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EApp (EApp (EVar "cellTag") (EVar "e")) (ELit (LString "Cons")))))) (ELit (LString ", ptr "))) (EApp (EVar "$core.display") (EVar "cell"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "storeFields") (EVar "e")) (EVar "cell")) (EVar "hv")) (ELit (LInt 0)))) (DoLet false false (PVar "cellw") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "cellw"))) (ELit (LString " = ptrtoint ptr "))) (EApp (EVar "$core.display") (EVar "cell"))) (ELit (LString " to i64"))))) (DoLet false false (PVar "d") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "d"))) (ELit (LString " = load ptr, ptr "))) (EApp (EVar "$core.display") (EVar "destSlot"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  store i64 ")) (EApp (EVar "$core.display") (EVar "cellw"))) (ELit (LString ", ptr "))) (EApp (EVar "$core.display") (EVar "d"))) (ELit (LString ""))))) (DoLet false false (PVar "newdest") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "newdest"))) (ELit (LString " = getelementptr i8, ptr "))) (EApp (EVar "$core.display") (EVar "cell"))) (ELit (LString ", i64 16"))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  store ptr ")) (EApp (EVar "$core.display") (EVar "newdest"))) (ELit (LString ", ptr "))) (EApp (EVar "$core.display") (EVar "destSlot"))) (ELit (LString ""))))) (DoExpr (EApp (EVar "go") (EVar "rest"))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "emitGDispEdge" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit")))))))
 (DFunDef false "emitGDispEdge" ((PVar "e") (PVar "env") (PVar "f") (PVar "args") (PVar "uslots")) (EBlock (DoLet false false (PVar "argOps") (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args"))) (DoExpr (EApp (EApp (EApp (EVar "trmcStoreParamSlots") (EVar "e")) (EVar "uslots")) (EVar "argOps"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  br label %")) (EApp (EVar "gDispLabel") (EVar "f")))))))
 (DTypeSig false "gDispDropMembers" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int"))))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int"))))))))
@@ -17439,14 +17390,9 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "selfFreeW" (TyFun (TyCon "String") (TyFun (TyCon "CExpr") (TyCon "Bool"))))
 (DFunDef false "selfFreeW" ((PVar "self") (PVar "ex")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "self")) (EApp (EApp (EVar "freeVars") (EListLit)) (EVar "ex")))))
 (DTypeSig false "floatWorkerOk" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "CExpr") (TyCon "Bool")))))
-(DFunDef false "floatWorkerOk" ((PVar "self") (PVar "arity") (PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "selfFreeW") (EVar "self")) (EVar "c")) (EApp (EApp (EApp (EVar "floatWorkerOk") (EVar "self")) (EVar "arity")) (EVar "t"))) (EApp (EApp (EApp (EVar "floatWorkerOk") (EVar "self")) (EVar "arity")) (EVar "f"))))
-(DFunDef false "floatWorkerOk" ((PVar "self") (PVar "arity") (PCon "CDecision" (PVar "scrut") (PVar "arms") (PVar "tree"))) (EMatch (EApp (EApp (EVar "decisionToIf") (EVar "scrut")) (EVar "arms")) (arm (PCon "Some" (PVar "cif")) () (EApp (EApp (EApp (EVar "floatWorkerOk") (EVar "self")) (EVar "arity")) (EVar "cif"))) (arm (PCon "None") () (EApp (EApp (EVar "selfFreeW") (EVar "self")) (EApp (EApp (EApp (EVar "CDecision") (EVar "scrut")) (EVar "arms")) (EVar "tree"))))))
-(DFunDef false "floatWorkerOk" ((PVar "self") (PVar "arity") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EApp (EVar "floatWorkerBlockOk") (EVar "self")) (EVar "arity")) (EVar "stmts")))
-(DFunDef false "floatWorkerOk" ((PVar "self") (PVar "arity") (PVar "ex")) (EMatch (EApp (EApp (EVar "flattenApp") (EVar "ex")) (EListLit)) (arm (PTuple (PCon "CVar" (PVar "f") PWild) (PVar "args")) () (EIf (EBinOp "==" (EVar "f") (EVar "self")) (EBinOp "==" (EApp (EVar "lengthS") (EVar "args")) (EVar "arity")) (EApp (EApp (EVar "selfFreeW") (EVar "self")) (EVar "ex")))) (arm PWild () (EApp (EApp (EVar "selfFreeW") (EVar "self")) (EVar "ex")))))
+(DFunDef false "floatWorkerOk" ((PVar "self") (PVar "arity") (PVar "ex0")) (ELetGroup ((lgb "go" (clause ((PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "selfFreeW") (EVar "self")) (EVar "c")) (EApp (EVar "go") (EVar "t"))) (EApp (EVar "go") (EVar "f")))) (clause ((PCon "CDecision" (PVar "scrut") (PVar "arms") (PVar "tree"))) (EMatch (EApp (EApp (EVar "decisionToIf") (EVar "scrut")) (EVar "arms")) (arm (PCon "Some" (PVar "cif")) () (EApp (EVar "go") (EVar "cif"))) (arm (PCon "None") () (EApp (EApp (EVar "selfFreeW") (EVar "self")) (EApp (EApp (EApp (EVar "CDecision") (EVar "scrut")) (EVar "arms")) (EVar "tree")))))) (clause ((PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EApp (EVar "floatWorkerBlockOk") (EVar "self")) (EVar "arity")) (EVar "stmts"))) (clause ((PVar "ex")) (EMatch (EApp (EApp (EVar "flattenApp") (EVar "ex")) (EListLit)) (arm (PTuple (PCon "CVar" (PVar "f") PWild) (PVar "args")) () (EIf (EBinOp "==" (EVar "f") (EVar "self")) (EBinOp "==" (EApp (EVar "lengthS") (EVar "args")) (EVar "arity")) (EApp (EApp (EVar "selfFreeW") (EVar "self")) (EVar "ex")))) (arm PWild () (EApp (EApp (EVar "selfFreeW") (EVar "self")) (EVar "ex"))))))) (EApp (EVar "go") (EVar "ex0"))))
 (DTypeSig false "floatWorkerBlockOk" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyCon "Bool")))))
-(DFunDef false "floatWorkerBlockOk" ((PVar "self") (PVar "arity") (PCons (PCon "CSExpr" (PVar "ex")) (PList))) (EApp (EApp (EApp (EVar "floatWorkerOk") (EVar "self")) (EVar "arity")) (EVar "ex")))
-(DFunDef false "floatWorkerBlockOk" ((PVar "self") (PVar "arity") (PCons (PCon "CSLet" PWild (PCon "PVar" PWild PWild PWild) (PVar "rhs")) (PVar "rest"))) (EBinOp "&&" (EApp (EApp (EVar "selfFreeW") (EVar "self")) (EVar "rhs")) (EApp (EApp (EApp (EVar "floatWorkerBlockOk") (EVar "self")) (EVar "arity")) (EVar "rest"))))
-(DFunDef false "floatWorkerBlockOk" (PWild PWild PWild) (EVar "False"))
+(DFunDef false "floatWorkerBlockOk" ((PVar "self") (PVar "arity") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PCons (PCon "CSExpr" (PVar "ex")) (PList))) (EApp (EApp (EApp (EVar "floatWorkerOk") (EVar "self")) (EVar "arity")) (EVar "ex"))) (clause ((PCons (PCon "CSLet" PWild (PCon "PVar" PWild PWild PWild) (PVar "rhs")) (PVar "rest"))) (EBinOp "&&" (EApp (EApp (EVar "selfFreeW") (EVar "self")) (EVar "rhs")) (EApp (EVar "go") (EVar "rest")))) (clause (PWild) (EVar "False")))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "floatWorkerEligible" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "List") (TyCon "LTy")) (TyFun (TyCon "CExpr") (TyCon "Bool")))))))
 (DFunDef false "floatWorkerEligible" ((PVar "e") (PVar "name") (PVar "pats") (PVar "ptys") (PVar "body")) (EBlock (DoLet false false (PVar "rty") (EMatch (EApp (EApp (EVar "sigLookup") (EVar "e")) (EVar "name")) (arm (PCon "Some" (PCon "FnSig" PWild (PVar "r"))) () (EVar "r")) (arm (PCon "None") () (EVar "LTInt")))) (DoLet false false (PVar "isFloatRet") (EMatch (EVar "rty") (arm (PCon "LTFloat") () (EVar "True")) (arm PWild () (EVar "False")))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EVar "allPVar") (EVar "pats")) (EBinOp "==" (EApp (EVar "leadingDictParams") (EVar "pats")) (ELit (LInt 0)))) (EApp (EVar "hasFloatPty") (EVar "ptys"))) (EVar "isFloatRet")) (EApp (EApp (EVar "contains") (EVar "name")) (EApp (EApp (EVar "freeVars") (EListLit)) (EVar "body")))) (EApp (EApp (EApp (EVar "floatWorkerOk") (EVar "name")) (EApp (EVar "lengthS") (EVar "pats"))) (EVar "body"))))))
 (DTypeSig false "floatFwEligible" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "List") (TyCon "LTy")) (TyFun (TyCon "CExpr") (TyCon "Bool")))))))
@@ -17477,14 +17423,9 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DFunDef false "emitWorkerArgs" (PWild PWild PWild PWild (PList)) (EListLit))
 (DFunDef false "emitWorkerArgs" ((PVar "e") (PVar "env") (PVar "fp") (PVar "i") (PCons (PVar "a") (PVar "rest"))) (EBlock (DoLet false false (PVar "op") (EMatch (EApp (EApp (EVar "elemInt") (EVar "i")) (EVar "fp")) (arm (PCon "True") () (ETuple (ELit (LString "double")) (EApp (EApp (EApp (EVar "emitFloatD") (EVar "e")) (EVar "env")) (EVar "a")))) (arm (PCon "False") () (EBlock (DoLet false false (PTuple (PVar "w") PWild) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "a"))) (DoExpr (ETuple (ELit (LString "i64")) (EVar "w"))))))) (DoExpr (EBinOp "::" (EVar "op") (EApp (EApp (EApp (EApp (EApp (EVar "emitWorkerArgs") (EVar "e")) (EVar "env")) (EVar "fp")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))))
 (DTypeSig false "emitFnBodyD" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "CExpr") (TyCon "Unit")))))))))
-(DFunDef false "emitFnBodyD" ((PVar "e") (PVar "env") (PVar "self") (PVar "worker") (PVar "fp") (PVar "arity") (PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EBlock (DoLet false false (PTuple (PVar "cv") PWild) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "c"))) (DoLet false false (PVar "ci") (EApp (EApp (EVar "untagInt") (EVar "e")) (EVar "cv"))) (DoLet false false (PVar "cb") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "cb"))) (ELit (LString " = icmp ne i64 "))) (EApp (EVar "$core.display") (EVar "ci"))) (ELit (LString ", 0"))))) (DoLet false false (PVar "n") (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e")))) (DoLet false false (PVar "thenL") (EBinOp "++" (ELit (LString "then")) (EVar "n"))) (DoLet false false (PVar "elseL") (EBinOp "++" (ELit (LString "else")) (EVar "n"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  br i1 ")) (EApp (EVar "$core.display") (EVar "cb"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "thenL"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "elseL"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "thenL") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitFnBodyD") (EVar "e")) (EVar "env")) (EVar "self")) (EVar "worker")) (EVar "fp")) (EVar "arity")) (EVar "t"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "elseL") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitFnBodyD") (EVar "e")) (EVar "env")) (EVar "self")) (EVar "worker")) (EVar "fp")) (EVar "arity")) (EVar "f")))))
-(DFunDef false "emitFnBodyD" ((PVar "e") (PVar "env") (PVar "self") (PVar "worker") (PVar "fp") (PVar "arity") (PCon "CDecision" (PVar "scrut") (PVar "arms") (PVar "tree"))) (EMatch (EApp (EApp (EVar "decisionToIf") (EVar "scrut")) (EVar "arms")) (arm (PCon "Some" (PVar "cif")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitFnBodyD") (EVar "e")) (EVar "env")) (EVar "self")) (EVar "worker")) (EVar "fp")) (EVar "arity")) (EVar "cif"))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "d") (EApp (EApp (EApp (EVar "emitFloatD") (EVar "e")) (EVar "env")) (EApp (EApp (EApp (EVar "CDecision") (EVar "scrut")) (EVar "arms")) (EVar "tree")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  ret double ")) (EVar "d"))))))))
-(DFunDef false "emitFnBodyD" ((PVar "e") (PVar "env") (PVar "self") (PVar "worker") (PVar "fp") (PVar "arity") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitFnBodyDBlock") (EVar "e")) (EVar "env")) (EVar "self")) (EVar "worker")) (EVar "fp")) (EVar "arity")) (EVar "stmts")))
-(DFunDef false "emitFnBodyD" ((PVar "e") (PVar "env") (PVar "self") (PVar "worker") (PVar "fp") (PVar "arity") (PVar "other")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTailLeafD") (EVar "e")) (EVar "env")) (EVar "self")) (EVar "worker")) (EVar "fp")) (EVar "arity")) (EVar "other")) (EApp (EApp (EVar "flattenApp") (EVar "other")) (EListLit))))
+(DFunDef false "emitFnBodyD" ((PVar "e") (PVar "env") (PVar "self") (PVar "worker") (PVar "fp") (PVar "arity") (PVar "other0")) (ELetGroup ((lgb "go" (clause ((PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EBlock (DoLet false false (PTuple (PVar "cv") PWild) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "c"))) (DoLet false false (PVar "ci") (EApp (EApp (EVar "untagInt") (EVar "e")) (EVar "cv"))) (DoLet false false (PVar "cb") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "cb"))) (ELit (LString " = icmp ne i64 "))) (EApp (EVar "$core.display") (EVar "ci"))) (ELit (LString ", 0"))))) (DoLet false false (PVar "n") (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e")))) (DoLet false false (PVar "thenL") (EBinOp "++" (ELit (LString "then")) (EVar "n"))) (DoLet false false (PVar "elseL") (EBinOp "++" (ELit (LString "else")) (EVar "n"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  br i1 ")) (EApp (EVar "$core.display") (EVar "cb"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "thenL"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "elseL"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "thenL") (ELit (LString ":"))))) (DoExpr (EApp (EVar "go") (EVar "t"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "elseL") (ELit (LString ":"))))) (DoExpr (EApp (EVar "go") (EVar "f"))))) (clause ((PCon "CDecision" (PVar "scrut") (PVar "arms") (PVar "tree"))) (EMatch (EApp (EApp (EVar "decisionToIf") (EVar "scrut")) (EVar "arms")) (arm (PCon "Some" (PVar "cif")) () (EApp (EVar "go") (EVar "cif"))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "d") (EApp (EApp (EApp (EVar "emitFloatD") (EVar "e")) (EVar "env")) (EApp (EApp (EApp (EVar "CDecision") (EVar "scrut")) (EVar "arms")) (EVar "tree")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  ret double ")) (EVar "d")))))))) (clause ((PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitFnBodyDBlock") (EVar "e")) (EVar "env")) (EVar "self")) (EVar "worker")) (EVar "fp")) (EVar "arity")) (EVar "stmts"))) (clause ((PVar "other")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTailLeafD") (EVar "e")) (EVar "env")) (EVar "self")) (EVar "worker")) (EVar "fp")) (EVar "arity")) (EVar "other")) (EApp (EApp (EVar "flattenApp") (EVar "other")) (EListLit)))))) (EApp (EVar "go") (EVar "other0"))))
 (DTypeSig false "emitFnBodyDBlock" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyCon "Unit")))))))))
-(DFunDef false "emitFnBodyDBlock" ((PVar "e") (PVar "env") (PVar "self") (PVar "worker") (PVar "fp") (PVar "arity") (PCons (PCon "CSExpr" (PVar "ex")) (PList))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitFnBodyD") (EVar "e")) (EVar "env")) (EVar "self")) (EVar "worker")) (EVar "fp")) (EVar "arity")) (EVar "ex")))
-(DFunDef false "emitFnBodyDBlock" ((PVar "e") (PVar "env") (PVar "self") (PVar "worker") (PVar "fp") (PVar "arity") (PCons (PCon "CSLet" PWild (PCon "PVar" (PVar "x") PWild PWild) (PVar "rhs")) (PVar "rest"))) (EIf (EApp (EApp (EVar "computesAsDouble") (EVar "env")) (EVar "rhs")) (EBlock (DoLet false false (PVar "d") (EApp (EApp (EApp (EVar "emitFloatD") (EVar "e")) (EVar "env")) (EVar "rhs"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitFnBodyDBlock") (EVar "e")) (EApp (EApp (EApp (EVar "omInsert") (EVar "x")) (ETuple (EVar "d") (EVar "LTFloatU"))) (EVar "env"))) (EVar "self")) (EVar "worker")) (EVar "fp")) (EVar "arity")) (EVar "rest")))) (EBlock (DoLet false false (PTuple (PVar "v") (PVar "ty")) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "rhs"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitFnBodyDBlock") (EVar "e")) (EApp (EApp (EApp (EVar "omInsert") (EVar "x")) (ETuple (EVar "v") (EVar "ty"))) (EVar "env"))) (EVar "self")) (EVar "worker")) (EVar "fp")) (EVar "arity")) (EVar "rest"))))))
-(DFunDef false "emitFnBodyDBlock" ((PVar "e") (PVar "_env") PWild PWild PWild PWild PWild) (EApp (EApp (EVar "gapU") (EVar "e")) (ELit (LString "float-worker block: unexpected statement shape (should be gated by floatWorkerBlockOk)"))))
+(DFunDef false "emitFnBodyDBlock" ((PVar "e") (PVar "env0") (PVar "self") (PVar "worker") (PVar "fp") (PVar "arity") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PVar "env") (PCons (PCon "CSExpr" (PVar "ex")) (PList))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitFnBodyD") (EVar "e")) (EVar "env")) (EVar "self")) (EVar "worker")) (EVar "fp")) (EVar "arity")) (EVar "ex"))) (clause ((PVar "env") (PCons (PCon "CSLet" PWild (PCon "PVar" (PVar "x") PWild PWild) (PVar "rhs")) (PVar "rest"))) (EIf (EApp (EApp (EVar "computesAsDouble") (EVar "env")) (EVar "rhs")) (EBlock (DoLet false false (PVar "d") (EApp (EApp (EApp (EVar "emitFloatD") (EVar "e")) (EVar "env")) (EVar "rhs"))) (DoExpr (EApp (EApp (EVar "go") (EApp (EApp (EApp (EVar "omInsert") (EVar "x")) (ETuple (EVar "d") (EVar "LTFloatU"))) (EVar "env"))) (EVar "rest")))) (EBlock (DoLet false false (PTuple (PVar "v") (PVar "ty")) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "rhs"))) (DoExpr (EApp (EApp (EVar "go") (EApp (EApp (EApp (EVar "omInsert") (EVar "x")) (ETuple (EVar "v") (EVar "ty"))) (EVar "env"))) (EVar "rest")))))) (clause ((PVar "_env") PWild) (EApp (EApp (EVar "gapU") (EVar "e")) (ELit (LString "float-worker block: unexpected statement shape (should be gated by floatWorkerBlockOk)")))))) (EApp (EApp (EVar "go") (EVar "env0")) (EVar "xs0"))))
 (DTypeSig false "emitTailLeafD" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "CExpr") (TyFun (TyTuple (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CExpr"))) (TyCon "Unit"))))))))))
 (DFunDef false "emitTailLeafD" ((PVar "e") (PVar "env") (PVar "self") (PVar "worker") (PVar "fp") (PVar "arity") PWild (PTuple (PCon "CVar" (PVar "f0") PWild) (PVar "args"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "f0") (EVar "self")) (EBinOp "==" (EApp (EVar "lengthS") (EVar "args")) (EVar "arity"))) (EBlock (DoLet false false (PVar "ops") (EApp (EApp (EApp (EApp (EApp (EVar "emitWorkerArgs") (EVar "e")) (EVar "env")) (EVar "fp")) (ELit (LInt 0))) (EVar "args"))) (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false (PVar "call") (EApp (EApp (EApp (EApp (EApp (EVar "directCallWith") (EVar "e")) (EVar "MustTailCall")) (EApp (EVar "Generated") (EVar "worker"))) (ELit (LString "double"))) (EVar "ops"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString " = "))) (EApp (EVar "$core.display") (EVar "call"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  ret double ")) (EVar "r"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "emitTailLeafD" ((PVar "e") (PVar "env") PWild PWild PWild PWild (PVar "other") PWild) (EBlock (DoLet false false (PVar "d") (EApp (EApp (EApp (EVar "emitFloatD") (EVar "e")) (EVar "env")) (EVar "other"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  ret double ")) (EVar "d"))))))
@@ -17513,11 +17454,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DFunDef false "rawKindKey" ((PCon "RawU32")) (ELit (LString "i")))
 (DFunDef false "rawKindKey" ((PCon "RawI32")) (ELit (LString "s")))
 (DTypeSig false "rawRetOk" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "RawKind") (TyFun (TyCon "CExpr") (TyCon "Bool")))))))
-(DFunDef false "rawRetOk" ((PVar "e") (PVar "self") (PVar "n") (PVar "k") (PCon "CIf" PWild (PVar "t") (PVar "f"))) (EBinOp "&&" (EApp (EApp (EApp (EApp (EApp (EVar "rawRetOk") (EVar "e")) (EVar "self")) (EVar "n")) (EVar "k")) (EVar "t")) (EApp (EApp (EApp (EApp (EApp (EVar "rawRetOk") (EVar "e")) (EVar "self")) (EVar "n")) (EVar "k")) (EVar "f"))))
-(DFunDef false "rawRetOk" ((PVar "e") (PVar "self") (PVar "n") (PVar "k") (PCon "CDecision" (PVar "scrut") (PVar "arms") (PVar "tree"))) (EMatch (EApp (EApp (EVar "decisionToIf") (EVar "scrut")) (EVar "arms")) (arm (PCon "Some" (PVar "cif")) () (EApp (EApp (EApp (EApp (EApp (EVar "rawRetOk") (EVar "e")) (EVar "self")) (EVar "n")) (EVar "k")) (EVar "cif"))) (arm (PCon "None") () (EApp (EVar "not") (EApp (EApp (EVar "tailCalls") (EVar "e")) (EApp (EApp (EApp (EVar "CDecision") (EVar "scrut")) (EVar "arms")) (EVar "tree")))))))
-(DFunDef false "rawRetOk" ((PVar "e") (PVar "self") (PVar "n") (PVar "k") (PCon "CBlock" (PVar "stmts"))) (EMatch (EApp (EVar "reverseL") (EVar "stmts")) (arm (PCons (PCon "CSExpr" (PVar "ex")) PWild) () (EApp (EApp (EApp (EApp (EApp (EVar "rawRetOk") (EVar "e")) (EVar "self")) (EVar "n")) (EVar "k")) (EVar "ex"))) (arm PWild () (EVar "True"))))
-(DFunDef false "rawRetOk" ((PVar "e") (PVar "self") (PVar "n") (PVar "k") (PCon "CLet" (PCon "False") (PCon "PVar" (PVar "x") (PVar "a") (PVar "bid")) (PVar "e1") (PVar "e2"))) (EMatch (EVar "e1") (arm (PCon "CLam" PWild PWild) () (EApp (EVar "not") (EApp (EApp (EVar "tailCalls") (EVar "e")) (EApp (EApp (EApp (EApp (EVar "CLet") (EVar "False")) (EApp (EApp (EApp (EVar "PVar") (EVar "x")) (EVar "a")) (EVar "bid"))) (EVar "e1")) (EVar "e2"))))) (arm PWild () (EApp (EApp (EApp (EApp (EApp (EVar "rawRetOk") (EVar "e")) (EVar "self")) (EVar "n")) (EVar "k")) (EVar "e2")))))
-(DFunDef false "rawRetOk" ((PVar "e") (PVar "self") (PVar "n") (PVar "k") (PVar "ex")) (EMatch (EApp (EApp (EVar "flattenApp") (EVar "ex")) (EListLit)) (arm (PTuple (PCon "CVar" (PVar "f") PWild) (PVar "args")) () (EBlock (DoLet false false (PVar "name") (EApp (EApp (EVar "canonFnName") (EVar "e")) (EVar "f"))) (DoExpr (EIf (EBinOp "==" (EVar "name") (EVar "self")) (EBinOp "==" (EApp (EVar "lengthS") (EVar "args")) (EVar "n")) (EIf (EApp (EApp (EVar "isKnownFn") (EVar "e")) (EVar "name")) (EApp (EVar "isSome") (EApp (EApp (EApp (EApp (EVar "rawWorkerReturning") (EVar "e")) (EVar "f")) (EApp (EVar "lengthS") (EVar "args"))) (EVar "k"))) (EVar "True")))))) (arm PWild () (EApp (EVar "not") (EApp (EApp (EVar "tailCalls") (EVar "e")) (EVar "ex"))))))
+(DFunDef false "rawRetOk" ((PVar "e") (PVar "self") (PVar "n") (PVar "k") (PVar "ex0")) (ELetGroup ((lgb "go" (clause ((PCon "CIf" PWild (PVar "t") (PVar "f"))) (EBinOp "&&" (EApp (EVar "go") (EVar "t")) (EApp (EVar "go") (EVar "f")))) (clause ((PCon "CDecision" (PVar "scrut") (PVar "arms") (PVar "tree"))) (EMatch (EApp (EApp (EVar "decisionToIf") (EVar "scrut")) (EVar "arms")) (arm (PCon "Some" (PVar "cif")) () (EApp (EVar "go") (EVar "cif"))) (arm (PCon "None") () (EApp (EVar "not") (EApp (EApp (EVar "tailCalls") (EVar "e")) (EApp (EApp (EApp (EVar "CDecision") (EVar "scrut")) (EVar "arms")) (EVar "tree"))))))) (clause ((PCon "CBlock" (PVar "stmts"))) (EMatch (EApp (EVar "reverseL") (EVar "stmts")) (arm (PCons (PCon "CSExpr" (PVar "ex")) PWild) () (EApp (EVar "go") (EVar "ex"))) (arm PWild () (EVar "True")))) (clause ((PCon "CLet" (PCon "False") (PCon "PVar" (PVar "x") (PVar "a") (PVar "bid")) (PVar "e1") (PVar "e2"))) (EMatch (EVar "e1") (arm (PCon "CLam" PWild PWild) () (EApp (EVar "not") (EApp (EApp (EVar "tailCalls") (EVar "e")) (EApp (EApp (EApp (EApp (EVar "CLet") (EVar "False")) (EApp (EApp (EApp (EVar "PVar") (EVar "x")) (EVar "a")) (EVar "bid"))) (EVar "e1")) (EVar "e2"))))) (arm PWild () (EApp (EVar "go") (EVar "e2"))))) (clause ((PVar "ex")) (EMatch (EApp (EApp (EVar "flattenApp") (EVar "ex")) (EListLit)) (arm (PTuple (PCon "CVar" (PVar "f") PWild) (PVar "args")) () (EBlock (DoLet false false (PVar "name") (EApp (EApp (EVar "canonFnName") (EVar "e")) (EVar "f"))) (DoExpr (EIf (EBinOp "==" (EVar "name") (EVar "self")) (EBinOp "==" (EApp (EVar "lengthS") (EVar "args")) (EVar "n")) (EIf (EApp (EApp (EVar "isKnownFn") (EVar "e")) (EVar "name")) (EApp (EVar "isSome") (EApp (EApp (EApp (EApp (EVar "rawWorkerReturning") (EVar "e")) (EVar "f")) (EApp (EVar "lengthS") (EVar "args"))) (EVar "k"))) (EVar "True")))))) (arm PWild () (EApp (EVar "not") (EApp (EApp (EVar "tailCalls") (EVar "e")) (EVar "ex")))))))) (EApp (EVar "go") (EVar "ex0"))))
 (DTypeSig false "tailCalls" (TyFun (TyCon "Emit") (TyFun (TyCon "CExpr") (TyCon "Bool"))))
 (DFunDef false "tailCalls" ((PVar "e") (PCon "CIf" PWild (PVar "t") (PVar "f"))) (EBinOp "||" (EApp (EApp (EVar "tailCalls") (EVar "e")) (EVar "t")) (EApp (EApp (EVar "tailCalls") (EVar "e")) (EVar "f"))))
 (DFunDef false "tailCalls" ((PVar "e") (PCon "CDecision" PWild (PVar "arms") PWild)) (EApp (EApp (EVar "armsTailCall") (EVar "e")) (EVar "arms")))
@@ -17529,8 +17466,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DFunDef false "armsTailCall" ((PVar "e") (PCons (PCon "CArm" PWild PWild (PVar "body")) (PVar "rest"))) (EBinOp "||" (EApp (EApp (EVar "tailCalls") (EVar "e")) (EVar "body")) (EApp (EApp (EVar "armsTailCall") (EVar "e")) (EVar "rest"))))
 (DFunDef false "armsTailCall" ((PVar "e") (PCons (PCon "CArmAlt" PWild PWild PWild) (PVar "rest"))) (EApp (EApp (EVar "armsTailCall") (EVar "e")) (EVar "rest")))
 (DTypeSig false "collectRawWorkersPass" (TyFun (TyCon "Emit") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "OrdMap") (TyCon "RawWorker"))))))
-(DFunDef false "collectRawWorkersPass" (PWild PWild (PList)) (EVar "omEmpty"))
-(DFunDef false "collectRawWorkersPass" ((PVar "e") (PVar "refine") (PCons (PVar "b") (PVar "rest"))) (EMatch (EApp (EApp (EApp (EVar "rawWorkerOf") (EVar "e")) (EVar "refine")) (EVar "b")) (arm (PCon "Some" (PVar "w")) () (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "bindName") (EVar "b"))) (EVar "w")) (EApp (EApp (EApp (EVar "collectRawWorkersPass") (EVar "e")) (EVar "refine")) (EVar "rest")))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "collectRawWorkersPass") (EVar "e")) (EVar "refine")) (EVar "rest")))))
+(DFunDef false "collectRawWorkersPass" ((PVar "e") (PVar "refine") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EVar "omEmpty")) (clause ((PCons (PVar "b") (PVar "rest"))) (EMatch (EApp (EApp (EApp (EVar "rawWorkerOf") (EVar "e")) (EVar "refine")) (EVar "b")) (arm (PCon "Some" (PVar "w")) () (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "bindName") (EVar "b"))) (EVar "w")) (EApp (EVar "go") (EVar "rest")))) (arm (PCon "None") () (EApp (EVar "go") (EVar "rest"))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "refineU64Params" (TyFun (TyCon "Emit") (TyFun (TyCon "Bool") (TyFun (TyCon "CExpr") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "List") (TyCon "RawKind")) (TyApp (TyCon "List") (TyCon "RawKind"))))))))
 (DFunDef false "refineU64Params" ((PVar "e") (PVar "retRaw") (PVar "body") (PCons (PCon "PVar" (PVar "x") PWild PWild) (PVar "ps")) (PCons (PCon "RawU64") (PVar "ks"))) (EBlock (DoLet false false (PVar "k") (EIf (EBinOp "==" (EApp (EApp (EApp (EApp (EVar "u64Escapes") (EVar "e")) (EVar "x")) (EVar "retRaw")) (EVar "body")) (ELit (LInt 0))) (EVar "RawU64") (EVar "RawWord"))) (DoExpr (EBinOp "::" (EVar "k") (EApp (EApp (EApp (EApp (EApp (EVar "refineU64Params") (EVar "e")) (EVar "retRaw")) (EVar "body")) (EVar "ps")) (EVar "ks"))))))
 (DFunDef false "refineU64Params" ((PVar "e") (PVar "retRaw") (PVar "body") (PCons PWild (PVar "ps")) (PCons (PVar "k") (PVar "ks"))) (EBinOp "::" (EVar "k") (EApp (EApp (EApp (EApp (EApp (EVar "refineU64Params") (EVar "e")) (EVar "retRaw")) (EVar "body")) (EVar "ps")) (EVar "ks"))))
@@ -17549,16 +17485,9 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DFunDef false "paramEnvRaw" (PWild PWild PWild PWild) (EApp (EVar "panic") (ELit (LString "llvm: raw-worker params must be plain variables"))))
 (DData Private "RawTail" () ((variant "RawTail" (ConPos (TyCon "String") (TyCon "String") (TyCon "RawWorker")))) ())
 (DTypeSig false "emitFnBodyRaw" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "RawTail") (TyFun (TyCon "CExpr") (TyCon "Unit"))))))
-(DFunDef false "emitFnBodyRaw" ((PVar "e") (PVar "env") (PVar "t") (PCon "CIf" (PVar "c") (PVar "th") (PVar "el"))) (EBlock (DoLet false false (PTuple (PVar "cv") PWild) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "c"))) (DoLet false false (PVar "ci") (EApp (EApp (EVar "untagInt") (EVar "e")) (EVar "cv"))) (DoLet false false (PVar "cb") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "cb"))) (ELit (LString " = icmp ne i64 "))) (EApp (EVar "$core.display") (EVar "ci"))) (ELit (LString ", 0"))))) (DoLet false false (PVar "n") (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e")))) (DoLet false false (PVar "thenL") (EBinOp "++" (ELit (LString "then")) (EVar "n"))) (DoLet false false (PVar "elseL") (EBinOp "++" (ELit (LString "else")) (EVar "n"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  br i1 ")) (EApp (EVar "$core.display") (EVar "cb"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "thenL"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "elseL"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "thenL") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "emitFnBodyRaw") (EVar "e")) (EVar "env")) (EVar "t")) (EVar "th"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "elseL") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "emitFnBodyRaw") (EVar "e")) (EVar "env")) (EVar "t")) (EVar "el")))))
-(DFunDef false "emitFnBodyRaw" ((PVar "e") (PVar "env") (PVar "t") (PCon "CDecision" (PVar "scrut") (PVar "arms") (PVar "tree"))) (EMatch (EApp (EApp (EVar "decisionToIf") (EVar "scrut")) (EVar "arms")) (arm (PCon "Some" (PVar "cif")) () (EApp (EApp (EApp (EApp (EVar "emitFnBodyRaw") (EVar "e")) (EVar "env")) (EVar "t")) (EVar "cif"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "emitRawValueRet") (EVar "e")) (EVar "env")) (EVar "t")) (EApp (EApp (EApp (EVar "CDecision") (EVar "scrut")) (EVar "arms")) (EVar "tree"))))))
-(DFunDef false "emitFnBodyRaw" ((PVar "e") (PVar "env") (PVar "t") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EApp (EApp (EVar "emitFnBodyRawBlock") (EVar "e")) (EVar "env")) (EVar "t")) (EVar "stmts")))
-(DFunDef false "emitFnBodyRaw" ((PVar "e") (PVar "env") (PVar "t") (PCon "CLet" (PCon "False") (PCon "PVar" (PVar "x") (PVar "a") (PVar "bid")) (PVar "e1") (PVar "e2"))) (EMatch (EVar "e1") (arm (PCon "CLam" PWild PWild) () (EApp (EApp (EApp (EApp (EVar "emitRawValueRet") (EVar "e")) (EVar "env")) (EVar "t")) (EApp (EApp (EApp (EApp (EVar "CLet") (EVar "False")) (EApp (EApp (EApp (EVar "PVar") (EVar "x")) (EVar "a")) (EVar "bid"))) (EVar "e1")) (EVar "e2")))) (arm PWild () (EApp (EApp (EApp (EApp (EVar "emitFnBodyRaw") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "bindLetRaw") (EVar "e")) (EVar "env")) (EVar "x")) (EVar "bid")) (EVar "e1")) (EVar "e2"))) (EVar "t")) (EVar "e2")))))
-(DFunDef false "emitFnBodyRaw" ((PVar "e") (PVar "env") (PCon "RawTail" (PVar "self") (PVar "worker") (PVar "w")) (PVar "other")) (EMatch (EApp (EApp (EVar "flattenApp") (EVar "other")) (EListLit)) (arm (PTuple (PCon "CVar" (PVar "f") PWild) (PVar "args")) () (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EVar "not") (EApp (EApp (EVar "isLocal") (EVar "env")) (EVar "f"))) (EBinOp "==" (EApp (EApp (EVar "canonFnName") (EVar "e")) (EVar "f")) (EVar "self"))) (EBinOp "==" (EApp (EVar "lengthS") (EVar "args")) (EApp (EVar "rawWorkerArity") (EVar "w")))) (EBlock (DoLet false false (PVar "ops") (EApp (EApp (EApp (EApp (EVar "emitRawArgs") (EVar "e")) (EVar "env")) (EApp (EVar "rawWorkerKinds") (EVar "w"))) (EVar "args"))) (DoLet false false (PVar "rty") (EApp (EVar "rawKindTy") (EApp (EVar "rawWorkerRet") (EVar "w")))) (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false (PVar "call") (EApp (EApp (EApp (EApp (EApp (EVar "directCallWith") (EVar "e")) (EVar "MustTailCall")) (EApp (EVar "Generated") (EVar "worker"))) (EVar "rty")) (EVar "ops"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString " = "))) (EApp (EVar "$core.display") (EVar "call"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ret ")) (EApp (EVar "$core.display") (EVar "rty"))) (ELit (LString " "))) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString "")))))) (EApp (EApp (EApp (EApp (EVar "emitRawValueRet") (EVar "e")) (EVar "env")) (EApp (EApp (EApp (EVar "RawTail") (EVar "self")) (EVar "worker")) (EVar "w"))) (EVar "other")))) (arm PWild () (EApp (EApp (EApp (EApp (EVar "emitRawValueRet") (EVar "e")) (EVar "env")) (EApp (EApp (EApp (EVar "RawTail") (EVar "self")) (EVar "worker")) (EVar "w"))) (EVar "other")))))
+(DFunDef false "emitFnBodyRaw" ((PVar "e") (PVar "env0") (PVar "t") (PVar "ex0")) (ELetGroup ((lgb "go" (clause ((PVar "env") (PCon "CIf" (PVar "c") (PVar "th") (PVar "el"))) (EBlock (DoLet false false (PTuple (PVar "cv") PWild) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "c"))) (DoLet false false (PVar "ci") (EApp (EApp (EVar "untagInt") (EVar "e")) (EVar "cv"))) (DoLet false false (PVar "cb") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "cb"))) (ELit (LString " = icmp ne i64 "))) (EApp (EVar "$core.display") (EVar "ci"))) (ELit (LString ", 0"))))) (DoLet false false (PVar "n") (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e")))) (DoLet false false (PVar "thenL") (EBinOp "++" (ELit (LString "then")) (EVar "n"))) (DoLet false false (PVar "elseL") (EBinOp "++" (ELit (LString "else")) (EVar "n"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  br i1 ")) (EApp (EVar "$core.display") (EVar "cb"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "thenL"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "elseL"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "thenL") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EVar "go") (EVar "env")) (EVar "th"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "elseL") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EVar "go") (EVar "env")) (EVar "el"))))) (clause ((PVar "env") (PCon "CDecision" (PVar "scrut") (PVar "arms") (PVar "tree"))) (EMatch (EApp (EApp (EVar "decisionToIf") (EVar "scrut")) (EVar "arms")) (arm (PCon "Some" (PVar "cif")) () (EApp (EApp (EVar "go") (EVar "env")) (EVar "cif"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "emitRawValueRet") (EVar "e")) (EVar "env")) (EVar "t")) (EApp (EApp (EApp (EVar "CDecision") (EVar "scrut")) (EVar "arms")) (EVar "tree")))))) (clause ((PVar "env") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EApp (EApp (EVar "emitFnBodyRawBlock") (EVar "e")) (EVar "env")) (EVar "t")) (EVar "stmts"))) (clause ((PVar "env") (PCon "CLet" (PCon "False") (PCon "PVar" (PVar "x") (PVar "a") (PVar "bid")) (PVar "e1") (PVar "e2"))) (EMatch (EVar "e1") (arm (PCon "CLam" PWild PWild) () (EApp (EApp (EApp (EApp (EVar "emitRawValueRet") (EVar "e")) (EVar "env")) (EVar "t")) (EApp (EApp (EApp (EApp (EVar "CLet") (EVar "False")) (EApp (EApp (EApp (EVar "PVar") (EVar "x")) (EVar "a")) (EVar "bid"))) (EVar "e1")) (EVar "e2")))) (arm PWild () (EApp (EApp (EVar "go") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "bindLetRaw") (EVar "e")) (EVar "env")) (EVar "x")) (EVar "bid")) (EVar "e1")) (EVar "e2"))) (EVar "e2"))))) (clause ((PVar "env") (PVar "other")) (EMatch (EVar "t") (arm (PCon "RawTail" (PVar "self") (PVar "worker") (PVar "w")) () (EMatch (EApp (EApp (EVar "flattenApp") (EVar "other")) (EListLit)) (arm (PTuple (PCon "CVar" (PVar "f") PWild) (PVar "args")) () (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EVar "not") (EApp (EApp (EVar "isLocal") (EVar "env")) (EVar "f"))) (EBinOp "==" (EApp (EApp (EVar "canonFnName") (EVar "e")) (EVar "f")) (EVar "self"))) (EBinOp "==" (EApp (EVar "lengthS") (EVar "args")) (EApp (EVar "rawWorkerArity") (EVar "w")))) (EBlock (DoLet false false (PVar "ops") (EApp (EApp (EApp (EApp (EVar "emitRawArgs") (EVar "e")) (EVar "env")) (EApp (EVar "rawWorkerKinds") (EVar "w"))) (EVar "args"))) (DoLet false false (PVar "rty") (EApp (EVar "rawKindTy") (EApp (EVar "rawWorkerRet") (EVar "w")))) (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false (PVar "call") (EApp (EApp (EApp (EApp (EApp (EVar "directCallWith") (EVar "e")) (EVar "MustTailCall")) (EApp (EVar "Generated") (EVar "worker"))) (EVar "rty")) (EVar "ops"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString " = "))) (EApp (EVar "$core.display") (EVar "call"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ret ")) (EApp (EVar "$core.display") (EVar "rty"))) (ELit (LString " "))) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString "")))))) (EApp (EApp (EApp (EApp (EVar "emitRawValueRet") (EVar "e")) (EVar "env")) (EVar "t")) (EVar "other")))) (arm PWild () (EApp (EApp (EApp (EApp (EVar "emitRawValueRet") (EVar "e")) (EVar "env")) (EVar "t")) (EVar "other"))))))))) (EApp (EApp (EVar "go") (EVar "env0")) (EVar "ex0"))))
 (DTypeSig false "emitFnBodyRawBlock" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "RawTail") (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyCon "Unit"))))))
-(DFunDef false "emitFnBodyRawBlock" ((PVar "e") (PVar "env") (PVar "t") (PList (PCon "CSExpr" (PVar "ex")))) (EApp (EApp (EApp (EApp (EVar "emitFnBodyRaw") (EVar "e")) (EVar "env")) (EVar "t")) (EVar "ex")))
-(DFunDef false "emitFnBodyRawBlock" ((PVar "e") (PVar "env") (PCon "RawTail" PWild PWild (PVar "w")) (PList (PVar "s"))) (EBlock (DoLet false false (PTuple (PVar "v") PWild) (EApp (EApp (EApp (EVar "emitBlockLast") (EVar "e")) (EVar "env")) (EVar "s"))) (DoExpr (EApp (EApp (EApp (EVar "emitRawWordRet") (EVar "e")) (EApp (EVar "rawWorkerRet") (EVar "w"))) (EVar "v")))))
-(DFunDef false "emitFnBodyRawBlock" ((PVar "e") (PVar "env") (PVar "t") (PCons (PVar "s") (PVar "rest"))) (EApp (EApp (EApp (EApp (EVar "emitFnBodyRawBlock") (EVar "e")) (EApp (EApp (EApp (EApp (EVar "emitBlockLead") (EVar "e")) (EVar "env")) (EVar "s")) (EVar "rest"))) (EVar "t")) (EVar "rest")))
-(DFunDef false "emitFnBodyRawBlock" ((PVar "e") PWild PWild (PList)) (EApp (EApp (EVar "gapU") (EVar "e")) (ELit (LString "empty block"))))
+(DFunDef false "emitFnBodyRawBlock" ((PVar "e") (PVar "env0") (PVar "t") (PVar "ss0")) (ELetGroup ((lgb "go" (clause ((PVar "env") (PList (PCon "CSExpr" (PVar "ex")))) (EApp (EApp (EApp (EApp (EVar "emitFnBodyRaw") (EVar "e")) (EVar "env")) (EVar "t")) (EVar "ex"))) (clause ((PVar "env") (PList (PVar "s"))) (EMatch (EVar "t") (arm (PCon "RawTail" PWild PWild (PVar "w")) () (EBlock (DoLet false false (PTuple (PVar "v") PWild) (EApp (EApp (EApp (EVar "emitBlockLast") (EVar "e")) (EVar "env")) (EVar "s"))) (DoExpr (EApp (EApp (EApp (EVar "emitRawWordRet") (EVar "e")) (EApp (EVar "rawWorkerRet") (EVar "w"))) (EVar "v"))))))) (clause ((PVar "env") (PCons (PVar "s") (PVar "rest"))) (EApp (EApp (EVar "go") (EApp (EApp (EApp (EApp (EVar "emitBlockLead") (EVar "e")) (EVar "env")) (EVar "s")) (EVar "rest"))) (EVar "rest"))) (clause (PWild (PList)) (EApp (EApp (EVar "gapU") (EVar "e")) (ELit (LString "empty block")))))) (EApp (EApp (EVar "go") (EVar "env0")) (EVar "ss0"))))
 (DTypeSig false "emitRawValueRet" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "RawTail") (TyFun (TyCon "CExpr") (TyCon "Unit"))))))
 (DFunDef false "emitRawValueRet" ((PVar "e") (PVar "env") (PCon "RawTail" PWild PWild (PVar "w")) (PVar "ex")) (EMatch (EApp (EVar "rawWorkerRet") (EVar "w")) (arm (PCon "RawU64") () (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "  ret i64 ")) (EApp (EVar "$core.display") (EApp (EApp (EApp (EVar "emitU64Raw") (EVar "e")) (EVar "env")) (EVar "ex")))) (ELit (LString ""))))) (arm (PCon "RawU32") () (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "  ret i32 ")) (EApp (EVar "$core.display") (EApp (EApp (EApp (EVar "emitU32Raw") (EVar "e")) (EVar "env")) (EVar "ex")))) (ELit (LString ""))))) (arm (PCon "RawI32") () (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "  ret i32 ")) (EApp (EVar "$core.display") (EApp (EApp (EApp (EVar "emitU32Raw") (EVar "e")) (EVar "env")) (EVar "ex")))) (ELit (LString ""))))) (arm (PCon "RawWord") () (EApp (EApp (EApp (EVar "emitValueRet") (EVar "e")) (EVar "env")) (EVar "ex")))))
 (DTypeSig false "emitRawWordRet" (TyFun (TyCon "Emit") (TyFun (TyCon "RawKind") (TyFun (TyCon "String") (TyCon "Unit")))))
@@ -17593,12 +17522,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DFunDef false "paramEnv" ((PCons (PCon "PWild") (PVar "rest")) (PList) (PVar "i")) (EApp (EApp (EApp (EVar "paramEnv") (EVar "rest")) (EListLit)) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))
 (DFunDef false "paramEnv" (PWild PWild PWild) (EApp (EVar "panic") (ELit (LString "llvm: function parameters must be plain variables"))))
 (DTypeSig false "emitFnBody" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "TailDefine") (TyFun (TyCon "CExpr") (TyCon "Unit"))))))
-(DFunDef false "emitFnBody" ((PVar "e") (PVar "env") (PVar "self") (PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EBlock (DoLet false false (PTuple (PVar "thenL") (PVar "elseL")) (EApp (EApp (EApp (EVar "emitTailIfHead") (EVar "e")) (EVar "env")) (EVar "c"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "thenL") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "emitFnBody") (EVar "e")) (EVar "env")) (EVar "self")) (EVar "t"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "elseL") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "emitFnBody") (EVar "e")) (EVar "env")) (EVar "self")) (EVar "f")))))
-(DFunDef false "emitFnBody" ((PVar "e") (PVar "env") (PVar "self") (PCon "CDecision" (PVar "scrut") (PVar "arms") (PVar "tree"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTailDecision") (EVar "e")) (EVar "env")) (EVar "self")) (EVar "scrut")) (EVar "arms")) (EVar "tree")))
-(DFunDef false "emitFnBody" ((PVar "e") (PVar "env") (PVar "self") (PCon "CLet" (PVar "recF") (PVar "pat") (PVar "e1") (PVar "e2"))) (EIf (EApp (EApp (EApp (EVar "letBinds") (EVar "recF")) (EVar "pat")) (EVar "e1")) (EApp (EApp (EApp (EApp (EVar "emitFnBody") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "bindLet") (EVar "e")) (EVar "env")) (EVar "recF")) (EVar "pat")) (EVar "e1")) (EVar "e2"))) (EVar "self")) (EVar "e2")) (EApp (EApp (EApp (EVar "emitValueRet") (EVar "e")) (EVar "env")) (EApp (EApp (EApp (EApp (EVar "CLet") (EVar "recF")) (EVar "pat")) (EVar "e1")) (EVar "e2")))))
-(DFunDef false "emitFnBody" ((PVar "e") (PVar "env") (PVar "self") (PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EMatch (EApp (EApp (EApp (EApp (EVar "bindLetGroup") (EVar "e")) (EVar "env")) (EVar "binds")) (EVar "body")) (arm (PCon "Some" (PVar "env2")) () (EApp (EApp (EApp (EApp (EVar "emitFnBody") (EVar "e")) (EVar "env2")) (EVar "self")) (EVar "body"))) (arm (PCon "None") () (EBlock (DoLet false false (PTuple (PVar "v") PWild) (EApp (EVar "letGroupGap") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  ret i64 ")) (EVar "v"))))))))
-(DFunDef false "emitFnBody" ((PVar "e") (PVar "env") (PVar "self") (PCon "CBlock" (PVar "stmts"))) (EMatch (EApp (EVar "lastStmtExpr") (EVar "stmts")) (arm (PCon "Some" (PVar "last")) () (EApp (EApp (EApp (EApp (EVar "emitFnBody") (EVar "e")) (EApp (EApp (EApp (EVar "emitBlockInit") (EVar "e")) (EVar "env")) (EVar "stmts"))) (EVar "self")) (EVar "last"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "emitValueRet") (EVar "e")) (EVar "env")) (EApp (EVar "CBlock") (EVar "stmts"))))))
-(DFunDef false "emitFnBody" ((PVar "e") (PVar "env") (PVar "self") (PVar "other")) (EApp (EApp (EApp (EApp (EApp (EVar "emitTailLeaf") (EVar "e")) (EVar "env")) (EVar "self")) (EVar "other")) (ELam (PWild) (EApp (EApp (EApp (EVar "emitValueRet") (EVar "e")) (EVar "env")) (EVar "other")))))
+(DFunDef false "emitFnBody" ((PVar "e") (PVar "env0") (PVar "self") (PVar "other0")) (ELetGroup ((lgb "go" (clause ((PVar "env") (PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EBlock (DoLet false false (PTuple (PVar "thenL") (PVar "elseL")) (EApp (EApp (EApp (EVar "emitTailIfHead") (EVar "e")) (EVar "env")) (EVar "c"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "thenL") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EVar "go") (EVar "env")) (EVar "t"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "elseL") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EVar "go") (EVar "env")) (EVar "f"))))) (clause ((PVar "env") (PCon "CDecision" (PVar "scrut") (PVar "arms") (PVar "tree"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTailDecision") (EVar "e")) (EVar "env")) (EVar "self")) (EVar "scrut")) (EVar "arms")) (EVar "tree"))) (clause ((PVar "env") (PCon "CLet" (PVar "recF") (PVar "pat") (PVar "e1") (PVar "e2"))) (EIf (EApp (EApp (EApp (EVar "letBinds") (EVar "recF")) (EVar "pat")) (EVar "e1")) (EApp (EApp (EVar "go") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "bindLet") (EVar "e")) (EVar "env")) (EVar "recF")) (EVar "pat")) (EVar "e1")) (EVar "e2"))) (EVar "e2")) (EApp (EApp (EApp (EVar "emitValueRet") (EVar "e")) (EVar "env")) (EApp (EApp (EApp (EApp (EVar "CLet") (EVar "recF")) (EVar "pat")) (EVar "e1")) (EVar "e2"))))) (clause ((PVar "env") (PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EMatch (EApp (EApp (EApp (EApp (EVar "bindLetGroup") (EVar "e")) (EVar "env")) (EVar "binds")) (EVar "body")) (arm (PCon "Some" (PVar "env2")) () (EApp (EApp (EVar "go") (EVar "env2")) (EVar "body"))) (arm (PCon "None") () (EBlock (DoLet false false (PTuple (PVar "v") PWild) (EApp (EVar "letGroupGap") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  ret i64 ")) (EVar "v")))))))) (clause ((PVar "env") (PCon "CBlock" (PVar "stmts"))) (EMatch (EApp (EVar "lastStmtExpr") (EVar "stmts")) (arm (PCon "Some" (PVar "last")) () (EApp (EApp (EVar "go") (EApp (EApp (EApp (EVar "emitBlockInit") (EVar "e")) (EVar "env")) (EVar "stmts"))) (EVar "last"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "emitValueRet") (EVar "e")) (EVar "env")) (EApp (EVar "CBlock") (EVar "stmts")))))) (clause ((PVar "env") (PVar "other")) (EApp (EApp (EApp (EApp (EApp (EVar "emitTailLeaf") (EVar "e")) (EVar "env")) (EVar "self")) (EVar "other")) (ELam (PWild) (EApp (EApp (EApp (EVar "emitValueRet") (EVar "e")) (EVar "env")) (EVar "other"))))))) (EApp (EApp (EVar "go") (EVar "env0")) (EVar "other0"))))
 (DTypeSig false "emitBlockInit" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy")))))))
 (DFunDef false "emitBlockInit" (PWild (PVar "env") (PList)) (EVar "env"))
 (DFunDef false "emitBlockInit" (PWild (PVar "env") (PList PWild)) (EVar "env"))
@@ -17612,7 +17536,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "emitTailLeaf" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "TailDefine") (TyFun (TyCon "CExpr") (TyFun (TyFun (TyCon "Unit") (TyCon "Unit")) (TyCon "Unit")))))))
 (DFunDef false "emitTailLeaf" ((PVar "e") (PVar "env") (PVar "self") (PVar "ex") (PVar "orValue")) (EIf (EApp (EVar "isTailCall") (EVar "ex")) (EMatch (EApp (EApp (EApp (EVar "directCallOperands") (EVar "e")) (EVar "env")) (EVar "ex")) (arm (PCon "Some" (PTuple (PVar "sym") (PVar "ops"))) () (EApp (EApp (EApp (EApp (EVar "emitDirectTailCall") (EVar "e")) (EVar "self")) (EVar "sym")) (EVar "ops"))) (arm (PCon "None") () (EMatch (EApp (EApp (EApp (EApp (EVar "ownClosureOperands") (EVar "e")) (EVar "env")) (EVar "self")) (EVar "ex")) (arm (PCon "Some" (PVar "ops")) () (EApp (EApp (EApp (EApp (EVar "emitDirectTailCall") (EVar "e")) (EVar "self")) (EApp (EVar "tailDefineSym") (EVar "self"))) (EBinOp "::" (ELit (LString "%clos")) (EVar "ops")))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "slotApplication") (EVar "e")) (EVar "ex")) (arm (PCon "Some" (PTuple (PVar "name") (PVar "evidence") (PVar "args") (PVar "i") (PVar "slot"))) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitSlotTailCall") (EVar "e")) (EVar "env")) (EVar "name")) (EVar "evidence")) (EVar "args")) (EVar "i")) (EVar "slot"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "emitValueRet") (EVar "e")) (EVar "env")) (EVar "ex")))))))) (EApp (EVar "orValue") (ELit LUnit))))
 (DTypeSig false "directCallOperands" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "CExpr") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "directCallOperands" ((PVar "e") (PVar "env") (PVar "ex")) (EBlock (DoLet false false (PTuple (PVar "hd") (PVar "args") (PVar "mode")) (EApp (EVar "appParts") (EVar "ex"))) (DoExpr (EIf (EApp (EVar "not") (EApp (EVar "isExactCall") (EVar "mode"))) (EVar "None") (EMatch (EVar "hd") (arm (PCon "CVar" (PVar "fname0") PWild) () (EBlock (DoLet false false (PVar "fname") (EApp (EApp (EVar "canonFnName") (EVar "e")) (EVar "fname0"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "isKnownFn") (EVar "e")) (EVar "fname")) (EApp (EVar "hasArgs") (EVar "args"))) (EApp (EVar "isNone") (EApp (EApp (EApp (EVar "u64KernelAlias") (EVar "e")) (EVar "fname0")) (EVar "args")))) (EApp (EVar "isNone") (EApp (EApp (EApp (EVar "rawWorkerCall") (EVar "e")) (EVar "fname")) (EApp (EVar "lengthS") (EVar "args"))))) (EApp (EVar "Some") (ETuple (EApp (EVar "LN.llvmName") (EApp (EVar "LN.LUserFunction") (EVar "fname"))) (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args")))) (EVar "None"))))) (arm (PCon "CDict" (PVar "fname") (PVar "routes")) () (EIf (EBinOp "&&" (EApp (EApp (EVar "isKnownFn") (EVar "e")) (EVar "fname")) (EBinOp ">" (EBinOp "+" (EApp (EVar "listLen") (EVar "routes")) (EApp (EVar "lengthS") (EVar "args"))) (ELit (LInt 0)))) (EBlock (DoLet false false (PVar "dictWords") (EApp (EApp (EApp (EVar "dictWordsOf") (EVar "e")) (EVar "env")) (EVar "routes"))) (DoExpr (EApp (EVar "Some") (ETuple (EApp (EVar "LN.llvmName") (EApp (EVar "LN.LUserFunction") (EVar "fname"))) (EBinOp "++" (EVar "dictWords") (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args"))))))) (EVar "None"))) (arm (PCon "CMethod" (PVar "name") (PCon "MethodEvidence" (PVar "iface") (PVar "siteArity") (PAs "route" (PCon "RKey" (PVar "tag") PWild PWild)) (PVar "implRoutes") (PVar "methRoutes"))) () (EIf (EApp (EVar "hasArgs") (EVar "args")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "implForSite") (EVar "e")) (EVar "name")) (EVar "iface")) (EVar "tag")) (EVar "siteArity")) (arm (PCon "Some" (PVar "ent")) () (EBlock (DoLet false false (PVar "argOps") (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args"))) (DoLet false false (PVar "dictRoutes") (EApp (EApp (EApp (EApp (EVar "staticEntryDictRoutes") (EVar "e")) (EVar "name")) (EVar "ent")) (EApp (EApp (EApp (EApp (EApp (EVar "MethodEvidence") (EVar "iface")) (EVar "siteArity")) (EVar "route")) (EVar "implRoutes")) (EVar "methRoutes")))) (DoLet false false (PVar "dictWords") (EApp (EApp (EApp (EVar "dictWordsOf") (EVar "e")) (EVar "env")) (EVar "dictRoutes"))) (DoExpr (EApp (EVar "Some") (ETuple (EApp (EApp (EApp (EVar "implEntryFnName") (EVar "e")) (EVar "name")) (EVar "ent")) (EBinOp "++" (EVar "dictWords") (EVar "argOps"))))))) (arm (PCon "None") () (EVar "None"))) (EVar "None"))) (arm PWild () (EVar "None")))))))
+(DFunDef false "directCallOperands" ((PVar "e") (PVar "env") (PVar "ex")) (EBlock (DoLet false false (PTuple (PVar "hd") (PVar "args") (PVar "mode")) (EApp (EVar "appParts") (EVar "ex"))) (DoExpr (EIf (EApp (EVar "not") (EApp (EVar "isExactCall") (EVar "mode"))) (EVar "None") (EMatch (EVar "hd") (arm (PCon "CVar" (PVar "fname0") PWild) () (EBlock (DoLet false false (PVar "fname") (EApp (EApp (EVar "canonFnName") (EVar "e")) (EVar "fname0"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "isKnownFn") (EVar "e")) (EVar "fname")) (EApp (EVar "hasArgs") (EVar "args"))) (EApp (EVar "isNone") (EApp (EApp (EApp (EVar "u64KernelAlias") (EVar "e")) (EVar "fname0")) (EVar "args")))) (EApp (EVar "isNone") (EApp (EApp (EApp (EVar "rawWorkerCall") (EVar "e")) (EVar "fname")) (EApp (EVar "lengthS") (EVar "args"))))) (EApp (EVar "Some") (ETuple (EApp (EVar "LN.llvmName") (EApp (EVar "LN.LUserFunction") (EVar "fname"))) (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args")))) (EVar "None"))))) (arm (PCon "CDict" (PVar "fname") (PVar "routes")) () (EIf (EBinOp "&&" (EApp (EApp (EVar "isKnownFn") (EVar "e")) (EVar "fname")) (EBinOp ">" (EBinOp "+" (EApp (EVar "listLen") (EVar "routes")) (EApp (EVar "lengthS") (EVar "args"))) (ELit (LInt 0)))) (EBlock (DoLet false false (PVar "dictWords") (EApp (EApp (EApp (EVar "dictWordsOf") (EVar "e")) (EVar "env")) (EVar "routes"))) (DoExpr (EApp (EVar "Some") (ETuple (EApp (EVar "LN.llvmName") (EApp (EVar "LN.LUserFunction") (EVar "fname"))) (EBinOp "++" (EVar "dictWords") (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args"))))))) (EVar "None"))) (arm (PCon "CMethod" (PVar "name") (PCon "MethodEvidence" (PVar "iface") (PVar "siteArity") (PAs "route" (PCon "RKey" (PVar "tag") PWild PWild)) (PVar "implRoutes") (PVar "methRoutes"))) () (EIf (EApp (EVar "hasArgs") (EVar "args")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EApp (EApp (EVar "implForSite") (EVar "e")) (EVar "name")) (EVar "iface")) (EVar "tag")) (EVar "siteArity"))) (ELam ((PVar "ent")) (ELet false (PVar "argOps") (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args")) (ELet false (PVar "dictRoutes") (EApp (EApp (EApp (EApp (EVar "staticEntryDictRoutes") (EVar "e")) (EVar "name")) (EVar "ent")) (EApp (EApp (EApp (EApp (EApp (EVar "MethodEvidence") (EVar "iface")) (EVar "siteArity")) (EVar "route")) (EVar "implRoutes")) (EVar "methRoutes"))) (ELet false (PVar "dictWords") (EApp (EApp (EApp (EVar "dictWordsOf") (EVar "e")) (EVar "env")) (EVar "dictRoutes")) (EApp (EVar "Some") (ETuple (EApp (EApp (EApp (EVar "implEntryFnName") (EVar "e")) (EVar "name")) (EVar "ent")) (EBinOp "++" (EVar "dictWords") (EVar "argOps"))))))))) (EVar "None"))) (arm PWild () (EVar "None")))))))
 (DTypeSig false "ownClosureOperands" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "TailDefine") (TyFun (TyCon "CExpr") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "ownClosureOperands" ((PVar "e") (PVar "env") (PCon "TailDefine" PWild PWild (PCon "True")) (PVar "ex")) (EBlock (DoLet false false (PTuple (PVar "hd") (PVar "args") (PVar "mode")) (EApp (EVar "appParts") (EVar "ex"))) (DoExpr (EIf (EApp (EVar "not") (EApp (EVar "isExactCall") (EVar "mode"))) (EVar "None") (EMatch (EVar "hd") (arm (PCon "CVar" (PVar "f") PWild) () (EIf (EApp (EApp (EVar "isOwnClosure") (EVar "env")) (EVar "f")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args"))) (EVar "None"))) (arm (PCon "CDict" (PVar "f") (PVar "routes")) () (EIf (EApp (EApp (EVar "isOwnClosure") (EVar "env")) (EVar "f")) (EBlock (DoLet false false (PVar "argOps") (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args"))) (DoExpr (EApp (EVar "Some") (EBinOp "++" (EApp (EApp (EApp (EVar "dictWordsOf") (EVar "e")) (EVar "env")) (EVar "routes")) (EVar "argOps"))))) (EVar "None"))) (arm PWild () (EVar "None")))))))
 (DFunDef false "ownClosureOperands" (PWild PWild PWild PWild) (EVar "None"))
@@ -17706,8 +17630,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "clausesParamTy" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyFun (TyCon "Int") (TyCon "LTy")))))
 (DFunDef false "clausesParamTy" ((PVar "e") (PVar "clauses") (PVar "i")) (EMatch (EApp (EApp (EApp (EVar "firstPatAt") (EVar "isBinderPat")) (EVar "clauses")) (EVar "i")) (arm (PCon "Some" (PVar "p")) () (EApp (EApp (EVar "patLTy") (EVar "e")) (EVar "p"))) (arm (PCon "None") () (EMatch (EApp (EApp (EApp (EVar "firstPatAt") (ELam ((PVar "p")) (EApp (EVar "not") (EApp (EVar "isWildPat") (EVar "p"))))) (EVar "clauses")) (EVar "i")) (arm (PCon "Some" (PVar "p")) () (EApp (EApp (EVar "patLTy") (EVar "e")) (EVar "p"))) (arm (PCon "None") () (EApp (EVar "runtimeLTy") (EVar "RTValue")))))))
 (DTypeSig false "firstPatAt" (TyFun (TyFun (TyCon "Pat") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Pat"))))))
-(DFunDef false "firstPatAt" (PWild (PList) PWild) (EVar "None"))
-(DFunDef false "firstPatAt" ((PVar "keep") (PCons (PCon "CClause" (PVar "pats") PWild) (PVar "rest")) (PVar "i")) (EMatch (EApp (EApp (EVar "nthPat") (EVar "pats")) (EVar "i")) (arm (PCon "Some" (PVar "p")) () (EIf (EApp (EVar "keep") (EVar "p")) (EApp (EVar "Some") (EVar "p")) (EApp (EApp (EApp (EVar "firstPatAt") (EVar "keep")) (EVar "rest")) (EVar "i")))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "firstPatAt") (EVar "keep")) (EVar "rest")) (EVar "i")))))
+(DFunDef false "firstPatAt" ((PVar "keep") (PVar "xs0") (PVar "i")) (ELetGroup ((lgb "go" (clause ((PList)) (EVar "None")) (clause ((PCons (PCon "CClause" (PVar "pats") PWild) (PVar "rest"))) (EMatch (EApp (EApp (EVar "nthPat") (EVar "pats")) (EVar "i")) (arm (PCon "Some" (PVar "p")) () (EIf (EApp (EVar "keep") (EVar "p")) (EApp (EVar "Some") (EVar "p")) (EApp (EVar "go") (EVar "rest")))) (arm (PCon "None") () (EApp (EVar "go") (EVar "rest"))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "isBinderPat" (TyFun (TyCon "Pat") (TyCon "Bool")))
 (DFunDef false "isBinderPat" ((PCon "PVar" PWild PWild PWild)) (EVar "True"))
 (DFunDef false "isBinderPat" ((PCon "PAs" PWild PWild PWild PWild)) (EVar "True"))
@@ -17729,7 +17652,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DFunDef false "bindPatStamps" ((PVar "e") (PVar "env") (PCon "PList" (PVar "ps"))) (EApp (EApp (EApp (EVar "bindPatsStamps") (EVar "e")) (EVar "env")) (EVar "ps")))
 (DFunDef false "bindPatStamps" ((PVar "e") (PVar "env") (PCon "PCons" (PVar "h") (PVar "t"))) (EApp (EApp (EApp (EVar "bindPatsStamps") (EVar "e")) (EVar "env")) (EListLit (EVar "h") (EVar "t"))))
 (DFunDef false "bindPatStamps" ((PVar "e") (PVar "env") (PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "f")) (EApp (EApp (EApp (EVar "bindFieldStamps") (EVar "e")) (EVar "acc")) (EVar "f")))) (EVar "env")) (EVar "fields")))
-(DFunDef false "bindPatStamps" (PWild (PVar "env") PWild) (EVar "env"))
+(DFunDef false "bindPatStamps" (PWild (PVar "env") (POr (PCon "PWild") (PCon "PLit" PWild) (PCon "POr" PWild) (PCon "PRng" PWild PWild PWild) (PCon "PAnn" PWild PWild))) (EVar "env"))
 (DTypeSig false "bindPatsStamps" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy")))))))
 (DFunDef false "bindPatsStamps" ((PVar "e") (PVar "env") (PVar "pats")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "p")) (EApp (EApp (EApp (EVar "bindPatStamps") (EVar "e")) (EVar "acc")) (EVar "p")))) (EVar "env")) (EVar "pats")))
 (DTypeSig false "bindFieldStamps" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "RecPatField") (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy")))))))
@@ -17862,8 +17785,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "emitConstList" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "LTy")))))
 (DFunDef false "emitConstList" ((PVar "e") (PVar "words")) (EBlock (DoLet false false (PVar "nilImm") (EApp (EVar "intToString") (EBinOp "+" (EBinOp "*" (EApp (EApp (EVar "cellTag") (EVar "e")) (ELit (LString "Nil"))) (ELit (LInt 2))) (ELit (LInt 1))))) (DoLet false false (PVar "head") (EApp (EApp (EApp (EApp (EVar "emitConstListGo") (EVar "e")) (EApp (EApp (EVar "cellTag") (EVar "e")) (ELit (LString "Cons")))) (EApp (EVar "reverseL") (EVar "words"))) (EVar "nilImm"))) (DoExpr (ETuple (EVar "head") (EVar "LTCon")))))
 (DTypeSig false "emitConstListGo" (TyFun (TyCon "Emit") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyCon "String"))))))
-(DFunDef false "emitConstListGo" (PWild PWild (PList) (PVar "tl")) (EVar "tl"))
-(DFunDef false "emitConstListGo" ((PVar "e") (PVar "consTag") (PCons (PVar "w") (PVar "rest")) (PVar "tl")) (EBlock (DoLet false false (PVar "cell") (EApp (EApp (EApp (EVar "emitConstDictCell") (EVar "e")) (EVar "consTag")) (EListLit (EVar "w") (EVar "tl")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "emitConstListGo") (EVar "e")) (EVar "consTag")) (EVar "rest")) (EVar "cell")))))
+(DFunDef false "emitConstListGo" ((PVar "e") (PVar "consTag") (PVar "xs0") (PVar "tl0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "tl")) (EVar "tl")) (clause ((PCons (PVar "w") (PVar "rest")) (PVar "tl")) (EBlock (DoLet false false (PVar "cell") (EApp (EApp (EApp (EVar "emitConstDictCell") (EVar "e")) (EVar "consTag")) (EListLit (EVar "w") (EVar "tl")))) (DoExpr (EApp (EApp (EVar "go") (EVar "rest")) (EVar "cell"))))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "tl0"))))
 (DTypeSig false "emitRangeList" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "CExpr") (TyFun (TyCon "CExpr") (TyFun (TyCon "Bool") (TyTuple (TyCon "String") (TyCon "LTy"))))))))
 (DFunDef false "emitRangeList" ((PVar "e") (PVar "env") (PVar "lo") (PVar "hi") (PVar "incl")) (EBlock (DoLet false false (PTuple (PVar "lo_w") PWild) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "lo"))) (DoLet false false (PTuple (PVar "hi_w") PWild) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "hi"))) (DoLet false false (PVar "lo_raw") (EApp (EApp (EVar "untagInt") (EVar "e")) (EVar "lo_w"))) (DoLet false false (PVar "hi_raw") (EApp (EApp (EVar "untagInt") (EVar "e")) (EVar "hi_w"))) (DoLet false false (PVar "hi_adj") (EIf (EVar "incl") (EBlock (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString " = add i64 "))) (EApp (EVar "$core.display") (EVar "hi_raw"))) (ELit (LString ", 1"))))) (DoExpr (EVar "r"))) (EVar "hi_raw"))) (DoLet false false (PVar "count") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "count"))) (ELit (LString " = sub i64 "))) (EApp (EVar "$core.display") (EVar "hi_adj"))) (ELit (LString ", "))) (EApp (EVar "$core.display") (EVar "lo_raw"))) (ELit (LString ""))))) (DoLet false false (PTuple (PVar "nil_w") PWild) (EApp (EApp (EApp (EVar "emitCtorAlloc") (EVar "e")) (ELit (LString "Nil"))) (EListLit))) (DoLet false false (PVar "acc") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EVar "acc")) (ELit (LString " = alloca i64"))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  store i64 ")) (EApp (EVar "$core.display") (EVar "nil_w"))) (ELit (LString ", ptr "))) (EApp (EVar "$core.display") (EVar "acc"))) (ELit (LString ""))))) (DoLet false false (PVar "ic") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EVar "ic")) (ELit (LString " = alloca i64"))))) (DoLet false false (PVar "im1") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "im1"))) (ELit (LString " = sub i64 "))) (EApp (EVar "$core.display") (EVar "count"))) (ELit (LString ", 1"))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  store i64 ")) (EApp (EVar "$core.display") (EVar "im1"))) (ELit (LString ", ptr "))) (EApp (EVar "$core.display") (EVar "ic"))) (ELit (LString ""))))) (DoLet false false (PVar "n") (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e")))) (DoLet false false (PVar "condL") (EBinOp "++" (ELit (LString "rl_cond")) (EVar "n"))) (DoLet false false (PVar "bodyL") (EBinOp "++" (ELit (LString "rl_body")) (EVar "n"))) (DoLet false false (PVar "doneL") (EBinOp "++" (ELit (LString "rl_done")) (EVar "n"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  br label %")) (EVar "condL")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "condL") (ELit (LString ":"))))) (DoLet false false (PVar "iv") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "iv"))) (ELit (LString " = load i64, ptr "))) (EApp (EVar "$core.display") (EVar "ic"))) (ELit (LString ""))))) (DoLet false false (PVar "cmp") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "cmp"))) (ELit (LString " = icmp slt i64 "))) (EApp (EVar "$core.display") (EVar "iv"))) (ELit (LString ", 0"))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  br i1 ")) (EApp (EVar "$core.display") (EVar "cmp"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "doneL"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "bodyL"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "bodyL") (ELit (LString ":"))))) (DoLet false false (PVar "elem_raw") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "elem_raw"))) (ELit (LString " = add i64 "))) (EApp (EVar "$core.display") (EVar "lo_raw"))) (ELit (LString ", "))) (EApp (EVar "$core.display") (EVar "iv"))) (ELit (LString ""))))) (DoLet false false (PVar "elem_w") (EApp (EApp (EVar "tagInt") (EVar "e")) (EVar "elem_raw"))) (DoLet false false (PVar "tail_w") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "tail_w"))) (ELit (LString " = load i64, ptr "))) (EApp (EVar "$core.display") (EVar "acc"))) (ELit (LString ""))))) (DoLet false false (PTuple (PVar "cons_w") PWild) (EApp (EApp (EApp (EVar "emitCtorAlloc") (EVar "e")) (ELit (LString "Cons"))) (EListLit (EVar "elem_w") (EVar "tail_w")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  store i64 ")) (EApp (EVar "$core.display") (EVar "cons_w"))) (ELit (LString ", ptr "))) (EApp (EVar "$core.display") (EVar "acc"))) (ELit (LString ""))))) (DoLet false false (PVar "iv2") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "iv2"))) (ELit (LString " = sub i64 "))) (EApp (EVar "$core.display") (EVar "iv"))) (ELit (LString ", 1"))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  store i64 ")) (EApp (EVar "$core.display") (EVar "iv2"))) (ELit (LString ", ptr "))) (EApp (EVar "$core.display") (EVar "ic"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  br label %")) (EVar "condL")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "doneL") (ELit (LString ":"))))) (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString " = load i64, ptr "))) (EApp (EVar "$core.display") (EVar "acc"))) (ELit (LString ""))))) (DoExpr (ETuple (EVar "r") (EVar "LTCon")))))
 (DTypeSig false "optOmSize" (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "OrdMap") (TyVar "a"))) (TyCon "Int")))
@@ -18209,10 +18131,9 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "narrowImplsByArity" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "CImplEntry")))))))
 (DFunDef false "narrowImplsByArity" (PWild PWild (PVar "impls") (PVar "siteArity")) (EApp (EApp (EVar "filterList") (ELam ((PVar "ent")) (EBinOp "==" (EApp (EVar "implEntryDeclaredArity") (EVar "ent")) (EVar "siteArity")))) (EVar "impls")))
 (DTypeSig false "implForSite" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "CImplEntry"))))))))
-(DFunDef false "implForSite" ((PVar "e") (PVar "method") (PVar "iface") (PVar "tag") (PVar "siteArity")) (EApp (EApp (EApp (EApp (EApp (EVar "findByTagArity") (EVar "e")) (EVar "method")) (EVar "tag")) (EVar "siteArity")) (EApp (EApp (EVar "narrowImplsByIface") (EVar "iface")) (EApp (EApp (EVar "implsOf") (EVar "e")) (EVar "method")))))
-(DTypeSig false "findByTagArity" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyApp (TyCon "Option") (TyCon "CImplEntry"))))))))
-(DFunDef false "findByTagArity" (PWild PWild PWild PWild (PList)) (EVar "None"))
-(DFunDef false "findByTagArity" ((PVar "e") (PVar "method") (PVar "tag") (PVar "siteArity") (PCons (PVar "entry") (PVar "rest"))) (EIf (EBinOp "&&" (EApp (EApp (EVar "implEntryAnswers") (EVar "tag")) (EVar "entry")) (EBinOp "==" (EApp (EVar "implEntryDeclaredArity") (EVar "entry")) (EVar "siteArity"))) (EApp (EVar "Some") (EVar "entry")) (EApp (EApp (EApp (EApp (EApp (EVar "findByTagArity") (EVar "e")) (EVar "method")) (EVar "tag")) (EVar "siteArity")) (EVar "rest"))))
+(DFunDef false "implForSite" ((PVar "e") (PVar "method") (PVar "iface") (PVar "tag") (PVar "siteArity")) (EApp (EApp (EApp (EVar "findByTagArity") (EVar "tag")) (EVar "siteArity")) (EApp (EApp (EVar "narrowImplsByIface") (EVar "iface")) (EApp (EApp (EVar "implsOf") (EVar "e")) (EVar "method")))))
+(DTypeSig false "findByTagArity" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyApp (TyCon "Option") (TyCon "CImplEntry"))))))
+(DFunDef false "findByTagArity" ((PVar "tag") (PVar "siteArity") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EVar "None")) (clause ((PCons (PVar "entry") (PVar "rest"))) (EIf (EBinOp "&&" (EApp (EApp (EVar "implEntryAnswers") (EVar "tag")) (EVar "entry")) (EBinOp "==" (EApp (EVar "implEntryDeclaredArity") (EVar "entry")) (EVar "siteArity"))) (EApp (EVar "Some") (EVar "entry")) (EApp (EVar "go") (EVar "rest")))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "implEntryAnswers" (TyFun (TyCon "String") (TyFun (TyCon "CImplEntry") (TyCon "Bool"))))
 (DFunDef false "implEntryAnswers" ((PVar "word") (PVar "entry")) (EBinOp "==" (EApp (EVar "implEntryKey") (EVar "entry")) (EVar "word")))
 (DTypeSig false "implDefaultFnName" (TyFun (TyCon "ImplSym") (TyFun (TyCon "String") (TyCon "String"))))
@@ -18240,7 +18161,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DFunDef false "implEntrySymTag" ((PCon "CImplEntry" PWild PWild PWild (PCon "CImplTagged" PWild PWild PWild (PCon "ImplSym" (PVar "tag") PWild PWild) PWild PWild PWild))) (EVar "tag"))
 (DFunDef false "implEntrySymTag" ((PCon "CImplEntry" PWild PWild PWild (PCon "CImplDefault" PWild PWild PWild (PCon "ImplSym" (PVar "tag") PWild PWild) PWild PWild PWild))) (EVar "tag"))
 (DTypeSig false "preludeImplSym" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))))
-(DFunDef false "preludeImplSym" ((PVar "e") (PVar "method") (PVar "key")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "method")) (EFieldAccess (EFieldAccess (EVar "e") "input") "preludeImplIndex")) (arm (PCon "Some" (PVar "byKey")) () (EApp (EApp (EVar "omLookup") (EVar "key")) (EVar "byKey"))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "preludeImplSym" ((PVar "e") (PVar "method") (PVar "key")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "omLookup") (EVar "method")) (EFieldAccess (EFieldAccess (EVar "e") "input") "preludeImplIndex"))) (ELam ((PVar "byKey")) (EApp (EApp (EVar "omLookup") (EVar "key")) (EVar "byKey")))))
 (DTypeSig false "taggedMethodNames" (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "taggedMethodNames" ((PVar "entries")) (EApp (EApp (EMethodRef "map") (EVar "implEntryMethodOf")) (EVar "entries")))
 (DTypeSig false "installImplMethodSet" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyCon "Unit"))))
@@ -18562,19 +18483,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "emitBitBin" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyTuple (TyCon "String") (TyCon "LTy")))))))
 (DFunDef false "emitBitBin" ((PVar "e") (PVar "env") (PVar "sym") (PVar "args")) (EMatch (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args")) (arm (PList (PVar "a") (PVar "b")) () (EBlock (DoLet false false (PVar "x") (EApp (EApp (EVar "untagInt") (EVar "e")) (EVar "a"))) (DoLet false false (PVar "y") (EApp (EApp (EVar "untagInt") (EVar "e")) (EVar "b"))) (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (EVar "r")) (ELit (LString "i64"))) (EVar "sym")) (EApp (EVar "i64Ops") (EListLit (EVar "x") (EVar "y")))))) (DoExpr (ETuple (EApp (EApp (EVar "tagInt") (EVar "e")) (EVar "r")) (EVar "LTInt"))))) (arm PWild () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "llvm: ")) (EVar "sym")) (ELit (LString " takes two arguments")))))))
 (DTypeSig false "emitBitExtern" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyTuple (TyCon "String") (TyCon "LTy")))))))
-(DFunDef false "emitBitExtern" ((PVar "e") (PVar "env") (PLit (LString "bitAnd")) (PVar "args")) (EApp (EApp (EApp (EApp (EVar "emitBitBin") (EVar "e")) (EVar "env")) (ELit (LString "mdk_bit_and"))) (EVar "args")))
-(DFunDef false "emitBitExtern" ((PVar "e") (PVar "env") (PLit (LString "bitOr")) (PVar "args")) (EApp (EApp (EApp (EApp (EVar "emitBitBin") (EVar "e")) (EVar "env")) (ELit (LString "mdk_bit_or"))) (EVar "args")))
-(DFunDef false "emitBitExtern" ((PVar "e") (PVar "env") (PLit (LString "bitXor")) (PVar "args")) (EApp (EApp (EApp (EApp (EVar "emitBitBin") (EVar "e")) (EVar "env")) (ELit (LString "mdk_bit_xor"))) (EVar "args")))
-(DFunDef false "emitBitExtern" ((PVar "e") (PVar "env") (PLit (LString "shiftLeft")) (PVar "args")) (EApp (EApp (EApp (EApp (EVar "emitBitBin") (EVar "e")) (EVar "env")) (ELit (LString "mdk_shift_left"))) (EVar "args")))
-(DFunDef false "emitBitExtern" ((PVar "e") (PVar "env") (PLit (LString "shiftRight")) (PVar "args")) (EApp (EApp (EApp (EApp (EVar "emitBitBin") (EVar "e")) (EVar "env")) (ELit (LString "mdk_shift_right"))) (EVar "args")))
-(DFunDef false "emitBitExtern" ((PVar "e") (PVar "env") (PLit (LString "intBitAnd")) (PVar "args")) (EApp (EApp (EApp (EApp (EVar "emitBitExtern") (EVar "e")) (EVar "env")) (ELit (LString "bitAnd"))) (EVar "args")))
-(DFunDef false "emitBitExtern" ((PVar "e") (PVar "env") (PLit (LString "intBitOr")) (PVar "args")) (EApp (EApp (EApp (EApp (EVar "emitBitExtern") (EVar "e")) (EVar "env")) (ELit (LString "bitOr"))) (EVar "args")))
-(DFunDef false "emitBitExtern" ((PVar "e") (PVar "env") (PLit (LString "intBitXor")) (PVar "args")) (EApp (EApp (EApp (EApp (EVar "emitBitExtern") (EVar "e")) (EVar "env")) (ELit (LString "bitXor"))) (EVar "args")))
-(DFunDef false "emitBitExtern" ((PVar "e") (PVar "env") (PLit (LString "intShiftLeft")) (PVar "args")) (EApp (EApp (EApp (EApp (EVar "emitBitExtern") (EVar "e")) (EVar "env")) (ELit (LString "shiftLeft"))) (EVar "args")))
-(DFunDef false "emitBitExtern" ((PVar "e") (PVar "env") (PLit (LString "intShiftRight")) (PVar "args")) (EApp (EApp (EApp (EApp (EVar "emitBitExtern") (EVar "e")) (EVar "env")) (ELit (LString "shiftRight"))) (EVar "args")))
-(DFunDef false "emitBitExtern" ((PVar "e") (PVar "env") (PLit (LString "intBitNot")) (PVar "args")) (EApp (EApp (EApp (EApp (EVar "emitBitExtern") (EVar "e")) (EVar "env")) (ELit (LString "bitNot"))) (EVar "args")))
-(DFunDef false "emitBitExtern" ((PVar "e") (PVar "env") (PLit (LString "bitNot")) (PVar "args")) (EMatch (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args")) (arm (PList (PVar "a")) () (EBlock (DoLet false false (PVar "x") (EApp (EApp (EVar "untagInt") (EVar "e")) (EVar "a"))) (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (EVar "r")) (ELit (LString "i64"))) (ELit (LString "mdk_bit_not"))) (EApp (EVar "i64Ops") (EListLit (EVar "x")))))) (DoExpr (ETuple (EApp (EApp (EVar "tagInt") (EVar "e")) (EVar "r")) (EVar "LTInt"))))) (arm PWild () (EApp (EVar "panic") (ELit (LString "llvm: bitNot takes one argument"))))))
-(DFunDef false "emitBitExtern" ((PVar "e") PWild (PVar "name") PWild) (EApp (EApp (EVar "gapE") (EVar "e")) (EBinOp "++" (ELit (LString "unsupported bit extern ")) (EVar "name"))))
+(DFunDef false "emitBitExtern" ((PVar "e") (PVar "env") (PVar "name0") (PVar "args")) (ELetGroup ((lgb "go" (clause ((PLit (LString "bitAnd"))) (EApp (EApp (EApp (EApp (EVar "emitBitBin") (EVar "e")) (EVar "env")) (ELit (LString "mdk_bit_and"))) (EVar "args"))) (clause ((PLit (LString "bitOr"))) (EApp (EApp (EApp (EApp (EVar "emitBitBin") (EVar "e")) (EVar "env")) (ELit (LString "mdk_bit_or"))) (EVar "args"))) (clause ((PLit (LString "bitXor"))) (EApp (EApp (EApp (EApp (EVar "emitBitBin") (EVar "e")) (EVar "env")) (ELit (LString "mdk_bit_xor"))) (EVar "args"))) (clause ((PLit (LString "shiftLeft"))) (EApp (EApp (EApp (EApp (EVar "emitBitBin") (EVar "e")) (EVar "env")) (ELit (LString "mdk_shift_left"))) (EVar "args"))) (clause ((PLit (LString "shiftRight"))) (EApp (EApp (EApp (EApp (EVar "emitBitBin") (EVar "e")) (EVar "env")) (ELit (LString "mdk_shift_right"))) (EVar "args"))) (clause ((PLit (LString "intBitAnd"))) (EApp (EVar "go") (ELit (LString "bitAnd")))) (clause ((PLit (LString "intBitOr"))) (EApp (EVar "go") (ELit (LString "bitOr")))) (clause ((PLit (LString "intBitXor"))) (EApp (EVar "go") (ELit (LString "bitXor")))) (clause ((PLit (LString "intShiftLeft"))) (EApp (EVar "go") (ELit (LString "shiftLeft")))) (clause ((PLit (LString "intShiftRight"))) (EApp (EVar "go") (ELit (LString "shiftRight")))) (clause ((PLit (LString "intBitNot"))) (EApp (EVar "go") (ELit (LString "bitNot")))) (clause ((PLit (LString "bitNot"))) (EMatch (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args")) (arm (PList (PVar "a")) () (EBlock (DoLet false false (PVar "x") (EApp (EApp (EVar "untagInt") (EVar "e")) (EVar "a"))) (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (EVar "r")) (ELit (LString "i64"))) (ELit (LString "mdk_bit_not"))) (EApp (EVar "i64Ops") (EListLit (EVar "x")))))) (DoExpr (ETuple (EApp (EApp (EVar "tagInt") (EVar "e")) (EVar "r")) (EVar "LTInt"))))) (arm PWild () (EApp (EVar "panic") (ELit (LString "llvm: bitNot takes one argument")))))) (clause ((PVar "name")) (EApp (EApp (EVar "gapE") (EVar "e")) (EBinOp "++" (ELit (LString "unsupported bit extern ")) (EVar "name")))))) (EApp (EVar "go") (EVar "name0"))))
 (DTypeSig false "emitFixedWidthTruncate" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyTuple (TyCon "String") (TyCon "LTy")))))))
 (DFunDef false "emitFixedWidthTruncate" ((PVar "e") (PVar "env") (PVar "mask") (PVar "args")) (EMatch (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args")) (arm (PList (PVar "a")) () (EBlock (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false (PVar "taggedMask") (EApp (EVar "intToString") (EBinOp "+" (EBinOp "*" (EVar "mask") (ELit (LInt 2))) (ELit (LInt 1))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString " = and i64 "))) (EApp (EVar "$core.display") (EVar "a"))) (ELit (LString ", "))) (EApp (EVar "$core.display") (EVar "taggedMask"))) (ELit (LString ""))))) (DoExpr (ETuple (EVar "r") (EVar "LTInt"))))) (arm PWild () (EApp (EVar "panic") (ELit (LString "llvm: a fixed-width truncation takes one argument"))))))
 (DTypeSig false "emitFixedWidthExtern" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyTuple (TyCon "String") (TyCon "LTy")))))))
@@ -18647,22 +18556,20 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "rawWorkerRet" (TyFun (TyCon "RawWorker") (TyCon "RawKind")))
 (DFunDef false "rawWorkerRet" ((PCon "RawWorker" PWild PWild (PVar "r"))) (EVar "r"))
 (DTypeSig false "rawWorkerCall" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RawWorker")))))))
-(DFunDef false "rawWorkerCall" ((PVar "e") (PVar "f") (PVar "n")) (EBlock (DoLet false false (PVar "name") (EApp (EApp (EVar "canonFnName") (EVar "e")) (EVar "f"))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EUnOp "!" (EFieldAccess (EVar "e") "rawWorkers"))) (arm (PCon "Some" (PCon "RawWorker" (PVar "ar") (PVar "ks") (PVar "r"))) () (EIf (EBinOp "==" (EVar "ar") (EVar "n")) (EApp (EVar "Some") (ETuple (EApp (EVar "LN.llvmName") (EApp (EVar "LN.LRawWorker") (EVar "name"))) (EApp (EApp (EApp (EVar "RawWorker") (EVar "ar")) (EVar "ks")) (EVar "r")))) (EVar "None"))) (arm (PCon "None") () (EVar "None"))))))
+(DFunDef false "rawWorkerCall" ((PVar "e") (PVar "f") (PVar "n")) (EBlock (DoLet false false (PVar "name") (EApp (EApp (EVar "canonFnName") (EVar "e")) (EVar "f"))) (DoExpr (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "omLookup") (EVar "name")) (EUnOp "!" (EFieldAccess (EVar "e") "rawWorkers")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PCon "RawWorker" (PVar "ar") (PVar "ks") (PVar "r")) () (EIf (EBinOp "==" (EVar "ar") (EVar "n")) (EApp (EVar "Some") (ETuple (EApp (EVar "LN.llvmName") (EApp (EVar "LN.LRawWorker") (EVar "name"))) (EApp (EApp (EApp (EVar "RawWorker") (EVar "ar")) (EVar "ks")) (EVar "r")))) (EVar "None")))))))))
 (DTypeSig false "rawWorkerReturning" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "RawKind") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RawWorker"))))))))
-(DFunDef false "rawWorkerReturning" ((PVar "e") (PVar "f") (PVar "n") (PVar "k")) (EMatch (EApp (EApp (EApp (EVar "rawWorkerCall") (EVar "e")) (EVar "f")) (EVar "n")) (arm (PCon "Some" (PTuple (PVar "sym") (PVar "w"))) () (EIf (EApp (EApp (EVar "sameRawKind") (EApp (EVar "rawWorkerRet") (EVar "w"))) (EVar "k")) (EApp (EVar "Some") (ETuple (EVar "sym") (EVar "w"))) (EVar "None"))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "rawWorkerReturning" ((PVar "e") (PVar "f") (PVar "n") (PVar "k")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EVar "rawWorkerCall") (EVar "e")) (EVar "f")) (EVar "n"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "sym") (PVar "w")) () (EIf (EApp (EApp (EVar "sameRawKind") (EApp (EVar "rawWorkerRet") (EVar "w"))) (EVar "k")) (EApp (EVar "Some") (ETuple (EVar "sym") (EVar "w"))) (EVar "None")))))))
 (DTypeSig false "emitRawWorkerCall" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "String") (TyFun (TyCon "RawWorker") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyCon "String")))))))
 (DFunDef false "emitRawWorkerCall" ((PVar "e") (PVar "env") (PVar "sym") (PCon "RawWorker" PWild (PVar "ks") (PVar "r")) (PVar "args")) (EBlock (DoLet false false (PVar "ops") (EApp (EApp (EApp (EApp (EVar "emitRawArgs") (EVar "e")) (EVar "env")) (EVar "ks")) (EVar "args"))) (DoLet false false (PVar "res") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false (PVar "call") (EApp (EApp (EApp (EApp (EVar "directCall") (EVar "e")) (EApp (EVar "Generated") (EVar "sym"))) (EApp (EVar "rawKindTy") (EVar "r"))) (EVar "ops"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "res"))) (ELit (LString " = "))) (EApp (EVar "$core.display") (EVar "call"))) (ELit (LString ""))))) (DoExpr (EVar "res"))))
 (DTypeSig false "emitRawArgs" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "List") (TyCon "RawKind")) (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))))
 (DFunDef false "emitRawArgs" ((PVar "e") (PVar "env") (PCons (PVar "k") (PVar "ks")) (PCons (PVar "a") (PVar "rest"))) (EBlock (DoLet false false (PVar "op") (EApp (EApp (EApp (EApp (EVar "emitRawAs") (EVar "e")) (EVar "env")) (EVar "k")) (EVar "a"))) (DoExpr (EBinOp "::" (ETuple (EApp (EVar "rawKindTy") (EVar "k")) (EVar "op")) (EApp (EApp (EApp (EApp (EVar "emitRawArgs") (EVar "e")) (EVar "env")) (EVar "ks")) (EVar "rest"))))))
 (DFunDef false "emitRawArgs" (PWild PWild PWild PWild) (EListLit))
 (DTypeSig false "rawWorkerReturning32" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "RawWorker")))))))
-(DFunDef false "rawWorkerReturning32" ((PVar "e") (PVar "f") (PVar "n")) (EMatch (EApp (EApp (EApp (EVar "rawWorkerCall") (EVar "e")) (EVar "f")) (EVar "n")) (arm (PCon "Some" (PTuple (PVar "sym") (PVar "w"))) () (EIf (EApp (EVar "isRaw32") (EApp (EVar "rawWorkerRet") (EVar "w"))) (EApp (EVar "Some") (ETuple (EVar "sym") (EVar "w"))) (EVar "None"))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "rawWorkerReturning32" ((PVar "e") (PVar "f") (PVar "n")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EVar "rawWorkerCall") (EVar "e")) (EVar "f")) (EVar "n"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "sym") (PVar "w")) () (EIf (EApp (EVar "isRaw32") (EApp (EVar "rawWorkerRet") (EVar "w"))) (EApp (EVar "Some") (ETuple (EVar "sym") (EVar "w"))) (EVar "None")))))))
 (DTypeSig false "emitRawIf" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "RawKind") (TyFun (TyCon "CExpr") (TyFun (TyCon "CExpr") (TyFun (TyCon "CExpr") (TyCon "String"))))))))
 (DFunDef false "emitRawIf" ((PVar "e") (PVar "env") (PVar "k") (PVar "c") (PVar "t") (PVar "f")) (EBlock (DoLet false false (PVar "ty") (EApp (EVar "rawKindTy") (EVar "k"))) (DoLet false false (PTuple (PVar "cv") PWild) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "c"))) (DoLet false false (PVar "ci") (EApp (EApp (EVar "untagInt") (EVar "e")) (EVar "cv"))) (DoLet false false (PVar "cb") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "cb"))) (ELit (LString " = icmp ne i64 "))) (EApp (EVar "$core.display") (EVar "ci"))) (ELit (LString ", 0"))))) (DoLet false false (PVar "n") (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e")))) (DoLet false false (PVar "thenL") (EBinOp "++" (ELit (LString "then")) (EVar "n"))) (DoLet false false (PVar "elseL") (EBinOp "++" (ELit (LString "else")) (EVar "n"))) (DoLet false false (PVar "endL") (EBinOp "++" (ELit (LString "end")) (EVar "n"))) (DoLet false false (PVar "slot") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "slot"))) (ELit (LString " = alloca "))) (EApp (EVar "$core.display") (EVar "ty"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  br i1 ")) (EApp (EVar "$core.display") (EVar "cb"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "thenL"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "elseL"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "thenL") (ELit (LString ":"))))) (DoLet false false (PVar "tv") (EApp (EApp (EApp (EApp (EVar "emitRawAs") (EVar "e")) (EVar "env")) (EVar "k")) (EVar "t"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  store ")) (EApp (EVar "$core.display") (EVar "ty"))) (ELit (LString " "))) (EApp (EVar "$core.display") (EVar "tv"))) (ELit (LString ", ptr "))) (EApp (EVar "$core.display") (EVar "slot"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  br label %")) (EVar "endL")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "elseL") (ELit (LString ":"))))) (DoLet false false (PVar "fv") (EApp (EApp (EApp (EApp (EVar "emitRawAs") (EVar "e")) (EVar "env")) (EVar "k")) (EVar "f"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  store ")) (EApp (EVar "$core.display") (EVar "ty"))) (ELit (LString " "))) (EApp (EVar "$core.display") (EVar "fv"))) (ELit (LString ", ptr "))) (EApp (EVar "$core.display") (EVar "slot"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  br label %")) (EVar "endL")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "endL") (ELit (LString ":"))))) (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString " = load "))) (EApp (EVar "$core.display") (EVar "ty"))) (ELit (LString ", ptr "))) (EApp (EVar "$core.display") (EVar "slot"))) (ELit (LString ""))))) (DoExpr (EVar "r"))))
 (DTypeSig false "emitRawBlock" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "RawKind") (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyCon "String"))))))
-(DFunDef false "emitRawBlock" ((PVar "e") (PVar "env") (PVar "k") (PList (PCon "CSExpr" (PVar "ex")))) (EApp (EApp (EApp (EApp (EVar "emitRawAs") (EVar "e")) (EVar "env")) (EVar "k")) (EVar "ex")))
-(DFunDef false "emitRawBlock" ((PVar "e") (PVar "env") (PVar "k") (PCons (PVar "s") (PVar "rest"))) (EMatch (EVar "rest") (arm (PList) () (EApp (EApp (EApp (EVar "rawOfWord") (EVar "e")) (EVar "k")) (EApp (EVar "fst") (EApp (EApp (EApp (EVar "emitBlockLast") (EVar "e")) (EVar "env")) (EVar "s"))))) (arm PWild () (EApp (EApp (EApp (EApp (EVar "emitRawBlock") (EVar "e")) (EApp (EApp (EApp (EApp (EVar "emitBlockLead") (EVar "e")) (EVar "env")) (EVar "s")) (EVar "rest"))) (EVar "k")) (EVar "rest")))))
-(DFunDef false "emitRawBlock" ((PVar "e") PWild (PVar "k") (PList)) (EApp (EApp (EApp (EVar "rawOfWord") (EVar "e")) (EVar "k")) (EApp (EVar "fst") (EApp (EApp (EVar "gapE") (EVar "e")) (ELit (LString "empty block"))))))
+(DFunDef false "emitRawBlock" ((PVar "e") (PVar "env0") (PVar "k") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PVar "env") (PList (PCon "CSExpr" (PVar "ex")))) (EApp (EApp (EApp (EApp (EVar "emitRawAs") (EVar "e")) (EVar "env")) (EVar "k")) (EVar "ex"))) (clause ((PVar "env") (PCons (PVar "s") (PVar "rest"))) (EMatch (EVar "rest") (arm (PList) () (EApp (EApp (EApp (EVar "rawOfWord") (EVar "e")) (EVar "k")) (EApp (EVar "fst") (EApp (EApp (EApp (EVar "emitBlockLast") (EVar "e")) (EVar "env")) (EVar "s"))))) (arm PWild () (EApp (EApp (EVar "go") (EApp (EApp (EApp (EApp (EVar "emitBlockLead") (EVar "e")) (EVar "env")) (EVar "s")) (EVar "rest"))) (EVar "rest"))))) (clause (PWild (PList)) (EApp (EApp (EApp (EVar "rawOfWord") (EVar "e")) (EVar "k")) (EApp (EVar "fst") (EApp (EApp (EVar "gapE") (EVar "e")) (ELit (LString "empty block")))))))) (EApp (EApp (EVar "go") (EVar "env0")) (EVar "xs0"))))
 (DTypeSig false "rawOfWord" (TyFun (TyCon "Emit") (TyFun (TyCon "RawKind") (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "rawOfWord" ((PVar "e") (PCon "RawU64") (PVar "w")) (EApp (EApp (EVar "unboxU64") (EVar "e")) (EVar "w")))
 (DFunDef false "rawOfWord" ((PVar "e") (PCon "RawU32") (PVar "w")) (EApp (EApp (EVar "untagU32") (EVar "e")) (EVar "w")))
@@ -18676,11 +18583,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "emitRawWorkerCallW" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "String") (TyFun (TyCon "RawWorker") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyFun (TyCon "LTy") (TyTuple (TyCon "String") (TyCon "LTy")))))))))
 (DFunDef false "emitRawWorkerCallW" ((PVar "e") (PVar "env") (PVar "sym") (PVar "w") (PVar "args") (PVar "resTy")) (EBlock (DoLet false false (PVar "r") (EApp (EApp (EApp (EApp (EApp (EVar "emitRawWorkerCall") (EVar "e")) (EVar "env")) (EVar "sym")) (EVar "w")) (EVar "args"))) (DoExpr (EMatch (EApp (EVar "rawWorkerRet") (EVar "w")) (arm (PCon "RawU64") () (ETuple (EApp (EApp (EVar "boxU64") (EVar "e")) (EVar "r")) (EVar "LTU64"))) (arm (PCon "RawU32") () (ETuple (EApp (EApp (EVar "tagU32") (EVar "e")) (EVar "r")) (EVar "LTInt"))) (arm (PCon "RawI32") () (ETuple (EApp (EApp (EVar "tagI32") (EVar "e")) (EVar "r")) (EVar "LTInt"))) (arm (PCon "RawWord") () (ETuple (EVar "r") (EVar "resTy")))))))
 (DTypeSig false "staticIsU64" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "CExpr") (TyCon "Bool")))))
-(DFunDef false "staticIsU64" (PWild PWild (PCon "CLit" (PCon "LU64" PWild PWild))) (EVar "True"))
-(DFunDef false "staticIsU64" (PWild (PVar "env") (PCon "CVar" (PVar "x") PWild)) (EMatch (EApp (EApp (EVar "omLookup") (EVar "x")) (EVar "env")) (arm (PCon "Some" (PTuple PWild (PCon "LTU64U"))) () (EVar "True")) (arm (PCon "Some" (PTuple PWild (PCon "LTU64"))) () (EVar "True")) (arm PWild () (EVar "False"))))
-(DFunDef false "staticIsU64" (PWild PWild (PCon "CBinPrim" (PVar "op") PWild PWild (PVar "tag") PWild)) (EBinOp "&&" (EApp (EVar "isU64Head") (EVar "tag")) (EApp (EVar "isArithOp") (EVar "op"))))
-(DFunDef false "staticIsU64" ((PVar "e") (PVar "env") (PCon "CIf" PWild (PVar "t") (PVar "f"))) (EBinOp "&&" (EApp (EApp (EApp (EVar "staticIsU64") (EVar "e")) (EVar "env")) (EVar "t")) (EApp (EApp (EApp (EVar "staticIsU64") (EVar "e")) (EVar "env")) (EVar "f"))))
-(DFunDef false "staticIsU64" ((PVar "e") (PVar "env") (PVar "ex")) (EMatch (EApp (EApp (EVar "flattenApp") (EVar "ex")) (EListLit)) (arm (PTuple (PCon "CVar" (PVar "f") PWild) (PVar "args")) () (EIf (EApp (EApp (EVar "isLocal") (EVar "env")) (EVar "f")) (EVar "False") (EIf (EApp (EApp (EVar "isU64RawKernel") (EApp (EApp (EVar "runtimeName") (EVar "e")) (EVar "f"))) (EApp (EVar "lengthS") (EVar "args"))) (EVar "True") (EMatch (EApp (EApp (EApp (EVar "u64KernelAlias") (EVar "e")) (EVar "f")) (EVar "args")) (arm (PCon "Some" (PVar "k")) () (EApp (EApp (EVar "isU64RawKernel") (EVar "k")) (EApp (EVar "lengthS") (EVar "args")))) (arm (PCon "None") () (EApp (EVar "isSome") (EApp (EApp (EApp (EApp (EVar "rawWorkerReturning") (EVar "e")) (EVar "f")) (EApp (EVar "lengthS") (EVar "args"))) (EVar "RawU64")))))))) (arm PWild () (EVar "False"))))
+(DFunDef false "staticIsU64" ((PVar "e") (PVar "env") (PVar "ex0")) (ELetGroup ((lgb "go" (clause ((PCon "CLit" (PCon "LU64" PWild PWild))) (EVar "True")) (clause ((PCon "CVar" (PVar "x") PWild)) (EMatch (EApp (EApp (EVar "omLookup") (EVar "x")) (EVar "env")) (arm (PCon "Some" (PTuple PWild (PCon "LTU64U"))) () (EVar "True")) (arm (PCon "Some" (PTuple PWild (PCon "LTU64"))) () (EVar "True")) (arm PWild () (EVar "False")))) (clause ((PCon "CBinPrim" (PVar "op") PWild PWild (PVar "tag") PWild)) (EBinOp "&&" (EApp (EVar "isU64Head") (EVar "tag")) (EApp (EVar "isArithOp") (EVar "op")))) (clause ((PCon "CIf" PWild (PVar "t") (PVar "f"))) (EBinOp "&&" (EApp (EVar "go") (EVar "t")) (EApp (EVar "go") (EVar "f")))) (clause ((PVar "ex")) (EMatch (EApp (EApp (EVar "flattenApp") (EVar "ex")) (EListLit)) (arm (PTuple (PCon "CVar" (PVar "f") PWild) (PVar "args")) () (EIf (EApp (EApp (EVar "isLocal") (EVar "env")) (EVar "f")) (EVar "False") (EIf (EApp (EApp (EVar "isU64RawKernel") (EApp (EApp (EVar "runtimeName") (EVar "e")) (EVar "f"))) (EApp (EVar "lengthS") (EVar "args"))) (EVar "True") (EMatch (EApp (EApp (EApp (EVar "u64KernelAlias") (EVar "e")) (EVar "f")) (EVar "args")) (arm (PCon "Some" (PVar "k")) () (EApp (EApp (EVar "isU64RawKernel") (EVar "k")) (EApp (EVar "lengthS") (EVar "args")))) (arm (PCon "None") () (EApp (EVar "isSome") (EApp (EApp (EApp (EApp (EVar "rawWorkerReturning") (EVar "e")) (EVar "f")) (EApp (EVar "lengthS") (EVar "args"))) (EVar "RawU64")))))))) (arm PWild () (EVar "False")))))) (EApp (EVar "go") (EVar "ex0"))))
 (DTypeSig false "tagU32" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "tagU32" ((PVar "e") (PVar "r")) (EBlock (DoLet false false (PVar "z") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "z"))) (ELit (LString " = zext i32 "))) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString " to i64"))))) (DoExpr (EApp (EApp (EVar "tagInt") (EVar "e")) (EVar "z")))))
 (DTypeSig false "tagI32" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyCon "String"))))
@@ -18716,17 +18619,14 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "u32TruncateRaw" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "CExpr") (TyCon "String")))))
 (DFunDef false "u32TruncateRaw" ((PVar "e") (PVar "env") (PVar "x")) (EBlock (DoLet false false (PVar "i") (EApp (EApp (EApp (EVar "intRaw") (EVar "e")) (EVar "env")) (EVar "x"))) (DoLet false false (PVar "t") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "t"))) (ELit (LString " = trunc i64 "))) (EApp (EVar "$core.display") (EVar "i"))) (ELit (LString " to i32"))))) (DoExpr (EVar "t"))))
 (DTypeSig false "intRaw" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "CExpr") (TyCon "String")))))
-(DFunDef false "intRaw" ((PVar "e") (PVar "env") (PVar "x")) (EMatch (EApp (EApp (EVar "flattenApp") (EVar "x")) (EListLit)) (arm (PTuple (PCon "CVar" (PVar "f") PWild) (PVar "args")) () (EIf (EApp (EApp (EVar "isLocal") (EVar "env")) (EVar "f")) (EApp (EApp (EVar "untagInt") (EVar "e")) (EApp (EVar "fst") (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "x")))) (EMatch (ETuple (EApp (EVar "intRawBitOp") (EApp (EApp (EVar "runtimeName") (EVar "e")) (EVar "f"))) (EVar "args")) (arm (PTuple (PCon "Some" (PVar "instr")) (PList (PVar "a") (PVar "b"))) () (EBlock (DoLet false false (PVar "p") (EApp (EApp (EApp (EVar "intRaw") (EVar "e")) (EVar "env")) (EVar "a"))) (DoLet false false (PVar "q") (EApp (EApp (EApp (EVar "intRaw") (EVar "e")) (EVar "env")) (EVar "b"))) (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString " = "))) (EApp (EVar "$core.display") (EVar "instr"))) (ELit (LString " i64 "))) (EApp (EVar "$core.display") (EVar "p"))) (ELit (LString ", "))) (EApp (EVar "$core.display") (EVar "q"))) (ELit (LString ""))))) (DoExpr (EVar "r")))) (arm PWild () (EMatch (ETuple (EApp (EApp (EVar "runtimeName") (EVar "e")) (EVar "f")) (EVar "args")) (arm (PTuple (PLit (LString "u32ToInt")) (PList (PVar "a"))) () (EBlock (DoLet false false (PVar "v") (EApp (EApp (EApp (EVar "emitU32Raw") (EVar "e")) (EVar "env")) (EVar "a"))) (DoLet false false (PVar "z") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "z"))) (ELit (LString " = zext i32 "))) (EApp (EVar "$core.display") (EVar "v"))) (ELit (LString " to i64"))))) (DoExpr (EVar "z")))) (arm (PTuple (PLit (LString "i32ToInt")) (PList (PVar "a"))) () (EBlock (DoLet false false (PVar "v") (EApp (EApp (EApp (EVar "emitU32Raw") (EVar "e")) (EVar "env")) (EVar "a"))) (DoLet false false (PVar "z") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "z"))) (ELit (LString " = sext i32 "))) (EApp (EVar "$core.display") (EVar "v"))) (ELit (LString " to i64"))))) (DoExpr (EVar "z")))) (arm (PTuple (PLit (LString "intBitNot")) (PList (PVar "a"))) () (EBlock (DoLet false false (PVar "p") (EApp (EApp (EApp (EVar "intRaw") (EVar "e")) (EVar "env")) (EVar "a"))) (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString " = xor i64 "))) (EApp (EVar "$core.display") (EVar "p"))) (ELit (LString ", -1"))))) (DoExpr (EVar "r")))) (arm PWild () (EApp (EApp (EVar "untagInt") (EVar "e")) (EApp (EVar "fst") (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "x")))))))))) (arm PWild () (EApp (EApp (EVar "untagInt") (EVar "e")) (EApp (EVar "fst") (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "x")))))))
+(DFunDef false "intRaw" ((PVar "e") (PVar "env") (PVar "x0")) (ELetGroup ((lgb "go" (clause ((PVar "x")) (EMatch (EApp (EApp (EVar "flattenApp") (EVar "x")) (EListLit)) (arm (PTuple (PCon "CVar" (PVar "f") PWild) (PVar "args")) () (EIf (EApp (EApp (EVar "isLocal") (EVar "env")) (EVar "f")) (EApp (EApp (EVar "untagInt") (EVar "e")) (EApp (EVar "fst") (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "x")))) (EMatch (ETuple (EApp (EVar "intRawBitOp") (EApp (EApp (EVar "runtimeName") (EVar "e")) (EVar "f"))) (EVar "args")) (arm (PTuple (PCon "Some" (PVar "instr")) (PList (PVar "a") (PVar "b"))) () (EBlock (DoLet false false (PVar "p") (EApp (EVar "go") (EVar "a"))) (DoLet false false (PVar "q") (EApp (EVar "go") (EVar "b"))) (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString " = "))) (EApp (EVar "$core.display") (EVar "instr"))) (ELit (LString " i64 "))) (EApp (EVar "$core.display") (EVar "p"))) (ELit (LString ", "))) (EApp (EVar "$core.display") (EVar "q"))) (ELit (LString ""))))) (DoExpr (EVar "r")))) (arm PWild () (EMatch (ETuple (EApp (EApp (EVar "runtimeName") (EVar "e")) (EVar "f")) (EVar "args")) (arm (PTuple (PLit (LString "u32ToInt")) (PList (PVar "a"))) () (EBlock (DoLet false false (PVar "v") (EApp (EApp (EApp (EVar "emitU32Raw") (EVar "e")) (EVar "env")) (EVar "a"))) (DoLet false false (PVar "z") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "z"))) (ELit (LString " = zext i32 "))) (EApp (EVar "$core.display") (EVar "v"))) (ELit (LString " to i64"))))) (DoExpr (EVar "z")))) (arm (PTuple (PLit (LString "i32ToInt")) (PList (PVar "a"))) () (EBlock (DoLet false false (PVar "v") (EApp (EApp (EApp (EVar "emitU32Raw") (EVar "e")) (EVar "env")) (EVar "a"))) (DoLet false false (PVar "z") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "z"))) (ELit (LString " = sext i32 "))) (EApp (EVar "$core.display") (EVar "v"))) (ELit (LString " to i64"))))) (DoExpr (EVar "z")))) (arm (PTuple (PLit (LString "intBitNot")) (PList (PVar "a"))) () (EBlock (DoLet false false (PVar "p") (EApp (EVar "go") (EVar "a"))) (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString " = xor i64 "))) (EApp (EVar "$core.display") (EVar "p"))) (ELit (LString ", -1"))))) (DoExpr (EVar "r")))) (arm PWild () (EApp (EApp (EVar "untagInt") (EVar "e")) (EApp (EVar "fst") (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "x")))))))))) (arm PWild () (EApp (EApp (EVar "untagInt") (EVar "e")) (EApp (EVar "fst") (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "x"))))))))) (EApp (EVar "go") (EVar "x0"))))
 (DTypeSig false "intRawBitOp" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "intRawBitOp" ((PLit (LString "intBitAnd"))) (EApp (EVar "Some") (ELit (LString "and"))))
 (DFunDef false "intRawBitOp" ((PLit (LString "intBitOr"))) (EApp (EVar "Some") (ELit (LString "or"))))
 (DFunDef false "intRawBitOp" ((PLit (LString "intBitXor"))) (EApp (EVar "Some") (ELit (LString "xor"))))
 (DFunDef false "intRawBitOp" (PWild) (EVar "None"))
 (DTypeSig false "static32Kind" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "CExpr") (TyCon "RawKind")))))
-(DFunDef false "static32Kind" (PWild (PVar "env") (PCon "CVar" (PVar "x") PWild)) (EMatch (EApp (EApp (EVar "omLookup") (EVar "x")) (EVar "env")) (arm (PCon "Some" (PTuple PWild (PCon "LTU32U"))) () (EVar "RawU32")) (arm (PCon "Some" (PTuple PWild (PCon "LTI32U"))) () (EVar "RawI32")) (arm PWild () (EVar "RawWord"))))
-(DFunDef false "static32Kind" (PWild PWild (PCon "CBinPrim" (PVar "op") PWild PWild (PVar "tag") PWild)) (EIf (EApp (EVar "isArithOp") (EVar "op")) (EApp (EVar "rawKindOfHead32") (EVar "tag")) (EVar "RawWord")))
-(DFunDef false "static32Kind" ((PVar "e") (PVar "env") (PCon "CIf" PWild (PVar "t") (PVar "f"))) (EBlock (DoLet false false (PVar "k") (EApp (EApp (EApp (EVar "static32Kind") (EVar "e")) (EVar "env")) (EVar "t"))) (DoExpr (EIf (EApp (EApp (EVar "sameRawKind") (EVar "k")) (EApp (EApp (EApp (EVar "static32Kind") (EVar "e")) (EVar "env")) (EVar "f"))) (EVar "k") (EVar "RawWord")))))
-(DFunDef false "static32Kind" ((PVar "e") (PVar "env") (PVar "ex")) (EMatch (EApp (EApp (EVar "flattenApp") (EVar "ex")) (EListLit)) (arm (PTuple (PCon "CVar" (PVar "f") PWild) (PVar "args")) () (EIf (EApp (EApp (EVar "isLocal") (EVar "env")) (EVar "f")) (EVar "RawWord") (EIf (EApp (EVar "isTruncate32") (EApp (EApp (EVar "runtimeName") (EVar "e")) (EVar "f"))) (EIf (EBinOp "==" (EApp (EVar "lengthS") (EVar "args")) (ELit (LInt 1))) (EIf (EBinOp "==" (EApp (EApp (EVar "runtimeName") (EVar "e")) (EVar "f")) (ELit (LString "i32Truncate"))) (EVar "RawI32") (EVar "RawU32")) (EVar "RawWord")) (EMatch (EApp (EApp (EApp (EApp (EVar "u32Inline") (EVar "e")) (EVar "env")) (EVar "f")) (EVar "args")) (arm (PCon "Some" (PTuple (PVar "k") PWild PWild)) () (EVar "k")) (arm (PCon "None") () (EMatch (EApp (EApp (EApp (EVar "rawWorkerReturning32") (EVar "e")) (EVar "f")) (EApp (EVar "lengthS") (EVar "args"))) (arm (PCon "Some" (PTuple PWild (PVar "w"))) () (EApp (EVar "rawWorkerRet") (EVar "w"))) (arm (PCon "None") () (EVar "RawWord")))))))) (arm PWild () (EVar "RawWord"))))
+(DFunDef false "static32Kind" ((PVar "e") (PVar "env") (PVar "ex0")) (ELetGroup ((lgb "go" (clause ((PCon "CVar" (PVar "x") PWild)) (EMatch (EApp (EApp (EVar "omLookup") (EVar "x")) (EVar "env")) (arm (PCon "Some" (PTuple PWild (PCon "LTU32U"))) () (EVar "RawU32")) (arm (PCon "Some" (PTuple PWild (PCon "LTI32U"))) () (EVar "RawI32")) (arm PWild () (EVar "RawWord")))) (clause ((PCon "CBinPrim" (PVar "op") PWild PWild (PVar "tag") PWild)) (EIf (EApp (EVar "isArithOp") (EVar "op")) (EApp (EVar "rawKindOfHead32") (EVar "tag")) (EVar "RawWord"))) (clause ((PCon "CIf" PWild (PVar "t") (PVar "f"))) (EBlock (DoLet false false (PVar "k") (EApp (EVar "go") (EVar "t"))) (DoExpr (EIf (EApp (EApp (EVar "sameRawKind") (EVar "k")) (EApp (EVar "go") (EVar "f"))) (EVar "k") (EVar "RawWord"))))) (clause ((PVar "ex")) (EMatch (EApp (EApp (EVar "flattenApp") (EVar "ex")) (EListLit)) (arm (PTuple (PCon "CVar" (PVar "f") PWild) (PVar "args")) () (EIf (EApp (EApp (EVar "isLocal") (EVar "env")) (EVar "f")) (EVar "RawWord") (EIf (EApp (EVar "isTruncate32") (EApp (EApp (EVar "runtimeName") (EVar "e")) (EVar "f"))) (EIf (EBinOp "==" (EApp (EVar "lengthS") (EVar "args")) (ELit (LInt 1))) (EIf (EBinOp "==" (EApp (EApp (EVar "runtimeName") (EVar "e")) (EVar "f")) (ELit (LString "i32Truncate"))) (EVar "RawI32") (EVar "RawU32")) (EVar "RawWord")) (EMatch (EApp (EApp (EApp (EApp (EVar "u32Inline") (EVar "e")) (EVar "env")) (EVar "f")) (EVar "args")) (arm (PCon "Some" (PTuple (PVar "k") PWild PWild)) () (EVar "k")) (arm (PCon "None") () (EMatch (EApp (EApp (EApp (EVar "rawWorkerReturning32") (EVar "e")) (EVar "f")) (EApp (EVar "lengthS") (EVar "args"))) (arm (PCon "Some" (PTuple PWild (PVar "w"))) () (EApp (EVar "rawWorkerRet") (EVar "w"))) (arm (PCon "None") () (EVar "RawWord")))))))) (arm PWild () (EVar "RawWord")))))) (EApp (EVar "go") (EVar "ex0"))))
 (DTypeSig false "rawKindOfHead32" (TyFun (TyCon "String") (TyCon "RawKind")))
 (DFunDef false "rawKindOfHead32" ((PVar "tag")) (EIf (EApp (EVar "isW32Head") (EVar "tag")) (EApp (EVar "rawKindOfHead") (EVar "tag")) (EVar "RawWord")))
 (DTypeSig false "u32Inline" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyApp (TyCon "Option") (TyTuple (TyCon "RawKind") (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr"))))))))
@@ -18744,8 +18644,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "inlineSiteBudget" (TyCon "Int"))
 (DFunDef false "inlineSiteBudget" () (ELit (LInt 64)))
 (DTypeSig false "bindInlineArgs" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy")))))))))
-(DFunDef false "bindInlineArgs" ((PVar "e") (PVar "env") (PCons (PCon "PVar" (PVar "x") PWild PWild) (PVar "ps")) (PCons (PVar "a") (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EApp (EApp (EVar "bindInlineArgs") (EVar "e")) (EVar "env")) (EVar "ps")) (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "x")) (EApp (EApp (EApp (EVar "emitRawOrWord") (EVar "e")) (EVar "env")) (EVar "a"))) (EVar "acc"))))
-(DFunDef false "bindInlineArgs" (PWild PWild PWild PWild (PVar "acc")) (EVar "acc"))
+(DFunDef false "bindInlineArgs" ((PVar "e") (PVar "env") (PVar "xs0") (PVar "xs1") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PCons (PCon "PVar" (PVar "x") PWild PWild) (PVar "ps")) (PCons (PVar "a") (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "go") (EVar "ps")) (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "x")) (EApp (EApp (EApp (EVar "emitRawOrWord") (EVar "e")) (EVar "env")) (EVar "a"))) (EVar "acc")))) (clause (PWild PWild (PVar "acc")) (EVar "acc")))) (EApp (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "xs1")) (EVar "acc0"))))
 (DTypeSig false "emitRawOrWord" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "CExpr") (TyTuple (TyCon "String") (TyCon "LTy"))))))
 (DFunDef false "emitRawOrWord" ((PVar "e") (PVar "env") (PVar "a")) (EIf (EApp (EApp (EApp (EVar "staticIsU64") (EVar "e")) (EVar "env")) (EVar "a")) (ETuple (EApp (EApp (EApp (EVar "emitU64Raw") (EVar "e")) (EVar "env")) (EVar "a")) (EVar "LTU64U")) (EBlock (DoLet false false (PVar "k") (EApp (EApp (EApp (EVar "static32Kind") (EVar "e")) (EVar "env")) (EVar "a"))) (DoExpr (EIf (EApp (EVar "isRaw32") (EVar "k")) (ETuple (EApp (EApp (EApp (EVar "emitU32Raw") (EVar "e")) (EVar "env")) (EVar "a")) (EApp (EVar "w32LocalLTy") (EVar "k"))) (EIf (EApp (EApp (EVar "computesAsDouble") (EVar "env")) (EVar "a")) (ETuple (EApp (EApp (EApp (EVar "emitFloatD") (EVar "e")) (EVar "env")) (EVar "a")) (EVar "LTFloatU")) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "a"))))))))
 (DTypeSig false "coreSize" (TyFun (TyCon "CExpr") (TyCon "Int")))
@@ -18772,34 +18671,16 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DFunDef false "stmtExprs" ((PCons (PCon "CSLet" PWild PWild (PVar "x")) (PVar "rest"))) (EBinOp "::" (EVar "x") (EApp (EVar "stmtExprs") (EVar "rest"))))
 (DFunDef false "stmtExprs" ((PCons (PCon "CSAssign" PWild (PVar "x")) (PVar "rest"))) (EBinOp "::" (EVar "x") (EApp (EVar "stmtExprs") (EVar "rest"))))
 (DTypeSig false "u64Escapes" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyCon "CExpr") (TyCon "Int"))))))
-(DFunDef false "u64Escapes" (PWild (PVar "x") (PVar "raw") (PCon "CVar" (PVar "y") PWild)) (EIf (EBinOp "&&" (EBinOp "==" (EVar "y") (EVar "x")) (EApp (EVar "not") (EVar "raw"))) (ELit (LInt 1)) (ELit (LInt 0))))
-(DFunDef false "u64Escapes" (PWild PWild PWild (PCon "CLit" PWild)) (ELit (LInt 0)))
-(DFunDef false "u64Escapes" ((PVar "e") (PVar "x") PWild (PCon "CBinPrim" (PVar "op") (PVar "l") (PVar "r") (PVar "tag") PWild)) (EBlock (DoLet false false (PVar "inner") (EBinOp "&&" (EApp (EVar "isBoxed64Head") (EVar "tag")) (EBinOp "||" (EApp (EVar "isArithOp") (EVar "op")) (EApp (EVar "isCmpOp") (EVar "op"))))) (DoExpr (EBinOp "+" (EApp (EApp (EApp (EApp (EVar "u64Escapes") (EVar "e")) (EVar "x")) (EVar "inner")) (EVar "l")) (EApp (EApp (EApp (EApp (EVar "u64Escapes") (EVar "e")) (EVar "x")) (EVar "inner")) (EVar "r"))))))
-(DFunDef false "u64Escapes" ((PVar "e") (PVar "x") (PVar "raw") (PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EBinOp "+" (EBinOp "+" (EApp (EApp (EApp (EApp (EVar "u64Escapes") (EVar "e")) (EVar "x")) (EVar "False")) (EVar "c")) (EApp (EApp (EApp (EApp (EVar "u64Escapes") (EVar "e")) (EVar "x")) (EVar "raw")) (EVar "t"))) (EApp (EApp (EApp (EApp (EVar "u64Escapes") (EVar "e")) (EVar "x")) (EVar "raw")) (EVar "f"))))
-(DFunDef false "u64Escapes" ((PVar "e") (PVar "x") (PVar "raw") (PCon "CLet" (PCon "False") (PCon "PVar" (PVar "y") (PVar "a") (PVar "bid")) (PVar "e1") (PVar "e2"))) (EMatch (EVar "e1") (arm (PCon "CLam" PWild PWild) () (EApp (EApp (EVar "occurrencesOf") (EVar "x")) (EApp (EApp (EApp (EApp (EVar "CLet") (EVar "False")) (EApp (EApp (EApp (EVar "PVar") (EVar "y")) (EVar "a")) (EVar "bid"))) (EVar "e1")) (EVar "e2")))) (arm PWild () (EBinOp "+" (EApp (EApp (EApp (EApp (EVar "u64Escapes") (EVar "e")) (EVar "x")) (EApp (EApp (EVar "u64Shaped") (EVar "e")) (EVar "e1"))) (EVar "e1")) (EIf (EBinOp "==" (EVar "y") (EVar "x")) (ELit (LInt 0)) (EApp (EApp (EApp (EApp (EVar "u64Escapes") (EVar "e")) (EVar "x")) (EVar "raw")) (EVar "e2")))))))
-(DFunDef false "u64Escapes" ((PVar "e") (PVar "x") (PVar "raw") (PCon "CLet" (PCon "False") (PVar "pat") (PVar "e1") (PVar "e2"))) (EBinOp "+" (EApp (EApp (EApp (EApp (EVar "u64EscapesBound") (EVar "e")) (EVar "x")) (EVar "pat")) (EVar "e1")) (EIf (EApp (EApp (EVar "contains") (EVar "x")) (EApp (EVar "patBinders") (EVar "pat"))) (ELit (LInt 0)) (EApp (EApp (EApp (EApp (EVar "u64Escapes") (EVar "e")) (EVar "x")) (EVar "raw")) (EVar "e2")))))
-(DFunDef false "u64Escapes" ((PVar "e") (PVar "x") (PVar "raw") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EApp (EApp (EVar "u64EscapesBlock") (EVar "e")) (EVar "x")) (EVar "raw")) (EVar "stmts")))
-(DFunDef false "u64Escapes" ((PVar "e") (PVar "x") PWild (PCon "CArray" (PVar "es"))) (EApp (EApp (EApp (EVar "u64EscapesWords") (EVar "e")) (EVar "x")) (EVar "es")))
-(DFunDef false "u64Escapes" ((PVar "e") (PVar "x") PWild (PCon "CTuple" (PVar "es"))) (EApp (EApp (EApp (EVar "u64EscapesWords") (EVar "e")) (EVar "x")) (EVar "es")))
-(DFunDef false "u64Escapes" ((PVar "e") (PVar "x") PWild (PCon "CList" (PVar "es"))) (EApp (EApp (EApp (EVar "u64EscapesWords") (EVar "e")) (EVar "x")) (EVar "es")))
-(DFunDef false "u64Escapes" ((PVar "e") (PVar "x") PWild (PCon "CUnOp" PWild (PVar "a"))) (EApp (EApp (EApp (EApp (EVar "u64Escapes") (EVar "e")) (EVar "x")) (EVar "False")) (EVar "a")))
-(DFunDef false "u64Escapes" ((PVar "e") (PVar "x") (PVar "_raw") (PVar "ex")) (EMatch (EApp (EApp (EVar "flattenApp") (EVar "ex")) (EListLit)) (arm (PTuple (PCon "CVar" (PVar "f") PWild) (PVar "args")) () (EIf (EBinOp "==" (EVar "f") (EVar "x")) (EApp (EApp (EVar "occurrencesOf") (EVar "x")) (EVar "ex")) (EApp (EApp (EApp (EApp (EVar "u64EscapesArgs") (EVar "e")) (EVar "x")) (EApp (EApp (EApp (EVar "u64ArgRaw") (EVar "e")) (EVar "f")) (EVar "args"))) (EVar "args")))) (arm PWild () (EApp (EApp (EVar "occurrencesOf") (EVar "x")) (EVar "ex")))))
+(DFunDef false "u64Escapes" ((PVar "e") (PVar "x") (PVar "raw0") (PVar "ex0")) (ELetGroup ((lgb "go" (clause ((PVar "raw") (PCon "CVar" (PVar "y") PWild)) (EIf (EBinOp "&&" (EBinOp "==" (EVar "y") (EVar "x")) (EApp (EVar "not") (EVar "raw"))) (ELit (LInt 1)) (ELit (LInt 0)))) (clause (PWild (PCon "CLit" PWild)) (ELit (LInt 0))) (clause (PWild (PCon "CBinPrim" (PVar "op") (PVar "l") (PVar "r") (PVar "tag") PWild)) (EBlock (DoLet false false (PVar "inner") (EBinOp "&&" (EApp (EVar "isBoxed64Head") (EVar "tag")) (EBinOp "||" (EApp (EVar "isArithOp") (EVar "op")) (EApp (EVar "isCmpOp") (EVar "op"))))) (DoExpr (EBinOp "+" (EApp (EApp (EVar "go") (EVar "inner")) (EVar "l")) (EApp (EApp (EVar "go") (EVar "inner")) (EVar "r")))))) (clause ((PVar "raw") (PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EBinOp "+" (EBinOp "+" (EApp (EApp (EVar "go") (EVar "False")) (EVar "c")) (EApp (EApp (EVar "go") (EVar "raw")) (EVar "t"))) (EApp (EApp (EVar "go") (EVar "raw")) (EVar "f")))) (clause ((PVar "raw") (PCon "CLet" (PCon "False") (PCon "PVar" (PVar "y") (PVar "a") (PVar "bid")) (PVar "e1") (PVar "e2"))) (EMatch (EVar "e1") (arm (PCon "CLam" PWild PWild) () (EApp (EApp (EVar "occurrencesOf") (EVar "x")) (EApp (EApp (EApp (EApp (EVar "CLet") (EVar "False")) (EApp (EApp (EApp (EVar "PVar") (EVar "y")) (EVar "a")) (EVar "bid"))) (EVar "e1")) (EVar "e2")))) (arm PWild () (EBinOp "+" (EApp (EApp (EVar "go") (EApp (EApp (EVar "u64Shaped") (EVar "e")) (EVar "e1"))) (EVar "e1")) (EIf (EBinOp "==" (EVar "y") (EVar "x")) (ELit (LInt 0)) (EApp (EApp (EVar "go") (EVar "raw")) (EVar "e2"))))))) (clause ((PVar "raw") (PCon "CLet" (PCon "False") (PVar "pat") (PVar "e1") (PVar "e2"))) (EBinOp "+" (EApp (EApp (EApp (EApp (EVar "u64EscapesBound") (EVar "e")) (EVar "x")) (EVar "pat")) (EVar "e1")) (EIf (EApp (EApp (EVar "contains") (EVar "x")) (EApp (EVar "patBinders") (EVar "pat"))) (ELit (LInt 0)) (EApp (EApp (EVar "go") (EVar "raw")) (EVar "e2"))))) (clause ((PVar "raw") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EApp (EApp (EVar "u64EscapesBlock") (EVar "e")) (EVar "x")) (EVar "raw")) (EVar "stmts"))) (clause (PWild (PCon "CArray" (PVar "es"))) (EApp (EApp (EApp (EVar "u64EscapesWords") (EVar "e")) (EVar "x")) (EVar "es"))) (clause (PWild (PCon "CTuple" (PVar "es"))) (EApp (EApp (EApp (EVar "u64EscapesWords") (EVar "e")) (EVar "x")) (EVar "es"))) (clause (PWild (PCon "CList" (PVar "es"))) (EApp (EApp (EApp (EVar "u64EscapesWords") (EVar "e")) (EVar "x")) (EVar "es"))) (clause (PWild (PCon "CUnOp" PWild (PVar "a"))) (EApp (EApp (EVar "go") (EVar "False")) (EVar "a"))) (clause ((PVar "_raw") (PVar "ex")) (EMatch (EApp (EApp (EVar "flattenApp") (EVar "ex")) (EListLit)) (arm (PTuple (PCon "CVar" (PVar "f") PWild) (PVar "args")) () (EIf (EBinOp "==" (EVar "f") (EVar "x")) (EApp (EApp (EVar "occurrencesOf") (EVar "x")) (EVar "ex")) (EApp (EApp (EApp (EApp (EVar "u64EscapesArgs") (EVar "e")) (EVar "x")) (EApp (EApp (EApp (EVar "u64ArgRaw") (EVar "e")) (EVar "f")) (EVar "args"))) (EVar "args")))) (arm PWild () (EApp (EApp (EVar "occurrencesOf") (EVar "x")) (EVar "ex"))))))) (EApp (EApp (EVar "go") (EVar "raw0")) (EVar "ex0"))))
 (DTypeSig false "u64EscapesBlock" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyCon "Int"))))))
-(DFunDef false "u64EscapesBlock" ((PVar "e") (PVar "x") (PVar "raw") (PList (PCon "CSExpr" (PVar "ex")))) (EApp (EApp (EApp (EApp (EVar "u64Escapes") (EVar "e")) (EVar "x")) (EVar "raw")) (EVar "ex")))
-(DFunDef false "u64EscapesBlock" ((PVar "e") (PVar "x") PWild (PCons (PCon "CSExpr" (PVar "ex")) (PVar "rest"))) (EBinOp "+" (EApp (EApp (EApp (EApp (EVar "u64Escapes") (EVar "e")) (EVar "x")) (EVar "False")) (EVar "ex")) (EApp (EApp (EApp (EApp (EVar "u64EscapesBlock") (EVar "e")) (EVar "x")) (EVar "False")) (EVar "rest"))))
-(DFunDef false "u64EscapesBlock" ((PVar "e") (PVar "x") (PVar "raw") (PCons (PCon "CSLet" PWild (PCon "PVar" (PVar "y") (PVar "a") (PVar "bid")) (PVar "ex")) (PVar "rest"))) (EMatch (EVar "ex") (arm (PCon "CLam" PWild PWild) () (EApp (EApp (EVar "occurrencesOf") (EVar "x")) (EApp (EVar "CBlock") (EBinOp "::" (EApp (EApp (EApp (EVar "CSLet") (EVar "False")) (EApp (EApp (EApp (EVar "PVar") (EVar "y")) (EVar "a")) (EVar "bid"))) (EVar "ex")) (EVar "rest"))))) (arm PWild () (EBinOp "+" (EApp (EApp (EApp (EApp (EVar "u64Escapes") (EVar "e")) (EVar "x")) (EApp (EApp (EVar "u64Shaped") (EVar "e")) (EVar "ex"))) (EVar "ex")) (EIf (EBinOp "==" (EVar "y") (EVar "x")) (ELit (LInt 0)) (EApp (EApp (EApp (EApp (EVar "u64EscapesBlock") (EVar "e")) (EVar "x")) (EVar "raw")) (EVar "rest")))))))
-(DFunDef false "u64EscapesBlock" ((PVar "e") (PVar "x") (PVar "raw") (PCons (PCon "CSLet" PWild (PVar "pat") (PVar "ex")) (PVar "rest"))) (EBinOp "+" (EApp (EApp (EApp (EApp (EVar "u64EscapesBound") (EVar "e")) (EVar "x")) (EVar "pat")) (EVar "ex")) (EIf (EApp (EApp (EVar "contains") (EVar "x")) (EApp (EVar "patBinders") (EVar "pat"))) (ELit (LInt 0)) (EApp (EApp (EApp (EApp (EVar "u64EscapesBlock") (EVar "e")) (EVar "x")) (EVar "raw")) (EVar "rest")))))
-(DFunDef false "u64EscapesBlock" ((PVar "e") (PVar "x") (PVar "raw") (PCons (PCon "CSAssign" (PVar "y") (PVar "ex")) (PVar "rest"))) (EBinOp "+" (EApp (EApp (EApp (EApp (EVar "u64Escapes") (EVar "e")) (EVar "x")) (EVar "False")) (EVar "ex")) (EIf (EBinOp "==" (EVar "y") (EVar "x")) (ELit (LInt 0)) (EApp (EApp (EApp (EApp (EVar "u64EscapesBlock") (EVar "e")) (EVar "x")) (EVar "raw")) (EVar "rest")))))
-(DFunDef false "u64EscapesBlock" (PWild PWild PWild (PList)) (ELit (LInt 0)))
+(DFunDef false "u64EscapesBlock" ((PVar "e") (PVar "x") (PVar "raw0") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PVar "raw") (PList (PCon "CSExpr" (PVar "ex")))) (EApp (EApp (EApp (EApp (EVar "u64Escapes") (EVar "e")) (EVar "x")) (EVar "raw")) (EVar "ex"))) (clause (PWild (PCons (PCon "CSExpr" (PVar "ex")) (PVar "rest"))) (EBinOp "+" (EApp (EApp (EApp (EApp (EVar "u64Escapes") (EVar "e")) (EVar "x")) (EVar "False")) (EVar "ex")) (EApp (EApp (EVar "go") (EVar "False")) (EVar "rest")))) (clause ((PVar "raw") (PCons (PCon "CSLet" PWild (PCon "PVar" (PVar "y") (PVar "a") (PVar "bid")) (PVar "ex")) (PVar "rest"))) (EMatch (EVar "ex") (arm (PCon "CLam" PWild PWild) () (EApp (EApp (EVar "occurrencesOf") (EVar "x")) (EApp (EVar "CBlock") (EBinOp "::" (EApp (EApp (EApp (EVar "CSLet") (EVar "False")) (EApp (EApp (EApp (EVar "PVar") (EVar "y")) (EVar "a")) (EVar "bid"))) (EVar "ex")) (EVar "rest"))))) (arm PWild () (EBinOp "+" (EApp (EApp (EApp (EApp (EVar "u64Escapes") (EVar "e")) (EVar "x")) (EApp (EApp (EVar "u64Shaped") (EVar "e")) (EVar "ex"))) (EVar "ex")) (EIf (EBinOp "==" (EVar "y") (EVar "x")) (ELit (LInt 0)) (EApp (EApp (EVar "go") (EVar "raw")) (EVar "rest"))))))) (clause ((PVar "raw") (PCons (PCon "CSLet" PWild (PVar "pat") (PVar "ex")) (PVar "rest"))) (EBinOp "+" (EApp (EApp (EApp (EApp (EVar "u64EscapesBound") (EVar "e")) (EVar "x")) (EVar "pat")) (EVar "ex")) (EIf (EApp (EApp (EVar "contains") (EVar "x")) (EApp (EVar "patBinders") (EVar "pat"))) (ELit (LInt 0)) (EApp (EApp (EVar "go") (EVar "raw")) (EVar "rest"))))) (clause ((PVar "raw") (PCons (PCon "CSAssign" (PVar "y") (PVar "ex")) (PVar "rest"))) (EBinOp "+" (EApp (EApp (EApp (EApp (EVar "u64Escapes") (EVar "e")) (EVar "x")) (EVar "False")) (EVar "ex")) (EIf (EBinOp "==" (EVar "y") (EVar "x")) (ELit (LInt 0)) (EApp (EApp (EVar "go") (EVar "raw")) (EVar "rest"))))) (clause (PWild (PList)) (ELit (LInt 0))))) (EApp (EApp (EVar "go") (EVar "raw0")) (EVar "xs0"))))
 (DTypeSig false "u64EscapesBound" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "Pat") (TyFun (TyCon "CExpr") (TyCon "Int"))))))
 (DFunDef false "u64EscapesBound" ((PVar "e") (PVar "x") (PCon "PTuple" (PVar "ps")) (PVar "ex")) (EMatch (EApp (EApp (EVar "flattenApp") (EVar "ex")) (EListLit)) (arm (PTuple (PCon "CVar" (PVar "f") PWild) (PVar "args")) () (EIf (EBinOp "&&" (EApp (EVar "allVarOrWild") (EVar "ps")) (EApp (EVar "isSome") (EApp (EApp (EApp (EApp (EVar "tupleInline") (EVar "e")) (EVar "f")) (EVar "args")) (EApp (EVar "lengthS") (EVar "ps"))))) (EApp (EApp (EApp (EApp (EVar "u64EscapesArgs") (EVar "e")) (EVar "x")) (EApp (EApp (EMethodRef "map") (ELam (PWild) (EVar "True"))) (EVar "args"))) (EVar "args")) (EApp (EApp (EApp (EApp (EVar "u64Escapes") (EVar "e")) (EVar "x")) (EVar "False")) (EVar "ex")))) (arm PWild () (EApp (EApp (EApp (EApp (EVar "u64Escapes") (EVar "e")) (EVar "x")) (EVar "False")) (EVar "ex")))))
 (DFunDef false "u64EscapesBound" ((PVar "e") (PVar "x") PWild (PVar "ex")) (EApp (EApp (EApp (EApp (EVar "u64Escapes") (EVar "e")) (EVar "x")) (EVar "False")) (EVar "ex")))
 (DTypeSig false "u64EscapesWords" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyCon "Int")))))
 (DFunDef false "u64EscapesWords" ((PVar "e") (PVar "x") (PVar "es")) (EApp (EApp (EApp (EApp (EVar "u64EscapesArgs") (EVar "e")) (EVar "x")) (EListLit)) (EVar "es")))
 (DTypeSig false "u64EscapesArgs" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyCon "Int"))))))
-(DFunDef false "u64EscapesArgs" ((PVar "e") (PVar "x") (PCons (PVar "r") (PVar "rs")) (PCons (PVar "a") (PVar "as_"))) (EBinOp "+" (EApp (EApp (EApp (EApp (EVar "u64Escapes") (EVar "e")) (EVar "x")) (EVar "r")) (EVar "a")) (EApp (EApp (EApp (EApp (EVar "u64EscapesArgs") (EVar "e")) (EVar "x")) (EVar "rs")) (EVar "as_"))))
-(DFunDef false "u64EscapesArgs" ((PVar "e") (PVar "x") (PList) (PCons (PVar "a") (PVar "as_"))) (EBinOp "+" (EApp (EApp (EApp (EApp (EVar "u64Escapes") (EVar "e")) (EVar "x")) (EVar "False")) (EVar "a")) (EApp (EApp (EApp (EApp (EVar "u64EscapesArgs") (EVar "e")) (EVar "x")) (EListLit)) (EVar "as_"))))
-(DFunDef false "u64EscapesArgs" (PWild PWild PWild (PList)) (ELit (LInt 0)))
+(DFunDef false "u64EscapesArgs" ((PVar "e") (PVar "x") (PVar "xs0") (PVar "xs1")) (ELetGroup ((lgb "go" (clause ((PCons (PVar "r") (PVar "rs")) (PCons (PVar "a") (PVar "as_"))) (EBinOp "+" (EApp (EApp (EApp (EApp (EVar "u64Escapes") (EVar "e")) (EVar "x")) (EVar "r")) (EVar "a")) (EApp (EApp (EVar "go") (EVar "rs")) (EVar "as_")))) (clause ((PList) (PCons (PVar "a") (PVar "as_"))) (EBinOp "+" (EApp (EApp (EApp (EApp (EVar "u64Escapes") (EVar "e")) (EVar "x")) (EVar "False")) (EVar "a")) (EApp (EApp (EVar "go") (EListLit)) (EVar "as_")))) (clause (PWild (PList)) (ELit (LInt 0))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "xs1"))))
 (DTypeSig false "u64ArgRaw" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyApp (TyCon "List") (TyCon "Bool"))))))
 (DFunDef false "u64ArgRaw" ((PVar "e") (PVar "f") (PVar "args")) (EBlock (DoLet false false (PVar "key") (EApp (EApp (EVar "runtimeName") (EVar "e")) (EVar "f"))) (DoLet false false (PVar "n") (EApp (EVar "lengthS") (EVar "args"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "==" (EVar "key") (ELit (LString "u64TruncateToInt"))) (EBinOp "==" (EVar "n") (ELit (LInt 1)))) (EListLit (EVar "True")) (EIf (EApp (EApp (EVar "isW64RawKernel") (EVar "key")) (EVar "n")) (EApp (EVar "u64KernelArgRaw") (EVar "key")) (EMatch (EApp (EApp (EApp (EVar "u64KernelAlias") (EVar "e")) (EVar "f")) (EVar "args")) (arm (PCon "Some" (PVar "k")) () (EIf (EBinOp "==" (EVar "k") (ELit (LString "u64TruncateToInt"))) (EListLit (EVar "True")) (EApp (EVar "u64KernelArgRaw") (EVar "k")))) (arm (PCon "None") () (EMatch (EApp (EApp (EApp (EVar "rawWorkerCall") (EVar "e")) (EVar "f")) (EVar "n")) (arm (PCon "Some" (PTuple PWild (PCon "RawWorker" PWild (PVar "ks") PWild))) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "k")) (EApp (EApp (EVar "sameRawKind") (EVar "k")) (EVar "RawU64")))) (EVar "ks"))) (arm (PCon "None") () (EListLit))))))))))
 (DTypeSig false "u64KernelArgRaw" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Bool"))))
@@ -18818,7 +18699,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "occurrencesOf" (TyFun (TyCon "String") (TyFun (TyCon "CExpr") (TyCon "Int"))))
 (DFunDef false "occurrencesOf" ((PVar "x") (PVar "ex")) (EApp (EVar "lengthS") (EApp (EApp (EVar "filterList") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "x")))) (EApp (EApp (EVar "freeVars") (EListLit)) (EVar "ex")))))
 (DTypeSig false "bindTupleInline" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "CExpr") (TyApp (TyCon "Option") (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy")))))))))
-(DFunDef false "bindTupleInline" ((PVar "e") (PVar "env") (PVar "ps") (PVar "ex")) (EIf (EApp (EVar "not") (EApp (EVar "allVarOrWild") (EVar "ps"))) (EVar "None") (EMatch (EApp (EApp (EVar "flattenApp") (EVar "ex")) (EListLit)) (arm (PTuple (PCon "CVar" (PVar "f") PWild) (PVar "args")) () (EIf (EApp (EApp (EVar "isLocal") (EVar "env")) (EVar "f")) (EVar "None") (EMatch (EApp (EApp (EApp (EApp (EVar "tupleInline") (EVar "e")) (EVar "f")) (EVar "args")) (EApp (EVar "lengthS") (EVar "ps"))) (arm (PCon "Some" (PTuple (PVar "pats") (PVar "lead") (PVar "comps"))) () (EBlock (DoLet false false (PVar "penv") (EApp (EApp (EApp (EApp (EApp (EVar "bindInlineArgs") (EVar "e")) (EVar "env")) (EVar "pats")) (EVar "args")) (EVar "omEmpty"))) (DoLet false false (PVar "vals") (EApp (EApp (EVar "withInlineScope") (EVar "e")) (ELam (PWild) (EApp (EApp (EApp (EVar "emitRawOrWords") (EVar "e")) (EApp (EApp (EApp (EVar "emitBlockLeads") (EVar "e")) (EVar "penv")) (EVar "lead"))) (EVar "comps"))))) (DoExpr (EApp (EVar "Some") (EApp (EApp (EApp (EVar "bindTupleVals") (EVar "env")) (EVar "ps")) (EVar "vals")))))) (arm (PCon "None") () (EVar "None"))))) (arm PWild () (EVar "None")))))
+(DFunDef false "bindTupleInline" ((PVar "e") (PVar "env") (PVar "ps") (PVar "ex")) (EIf (EApp (EVar "not") (EApp (EVar "allVarOrWild") (EVar "ps"))) (EVar "None") (EMatch (EApp (EApp (EVar "flattenApp") (EVar "ex")) (EListLit)) (arm (PTuple (PCon "CVar" (PVar "f") PWild) (PVar "args")) () (EIf (EApp (EApp (EVar "isLocal") (EVar "env")) (EVar "f")) (EVar "None") (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EApp (EVar "tupleInline") (EVar "e")) (EVar "f")) (EVar "args")) (EApp (EVar "lengthS") (EVar "ps")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "pats") (PVar "lead") (PVar "comps")) () (ELet false (PVar "penv") (EApp (EApp (EApp (EApp (EApp (EVar "bindInlineArgs") (EVar "e")) (EVar "env")) (EVar "pats")) (EVar "args")) (EVar "omEmpty")) (ELet false (PVar "vals") (EApp (EApp (EVar "withInlineScope") (EVar "e")) (ELam (PWild) (EApp (EApp (EApp (EVar "emitRawOrWords") (EVar "e")) (EApp (EApp (EApp (EVar "emitBlockLeads") (EVar "e")) (EVar "penv")) (EVar "lead"))) (EVar "comps")))) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "bindTupleVals") (EVar "env")) (EVar "ps")) (EVar "vals"))))))))))) (arm PWild () (EVar "None")))))
 (DTypeSig false "allVarOrWild" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Bool")))
 (DFunDef false "allVarOrWild" ((PList)) (EVar "True"))
 (DFunDef false "allVarOrWild" ((PCons (PCon "PVar" PWild PWild PWild) (PVar "rest"))) (EApp (EVar "allVarOrWild") (EVar "rest")))
@@ -18841,10 +18722,10 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DFunDef false "tupleBody" ((PCon "CBlock" (PVar "stmts")) (PVar "n")) (EMatch (EApp (EVar "reverseL") (EVar "stmts")) (arm (PCons (PCon "CSExpr" (PCon "CTuple" (PVar "es"))) (PVar "lead")) () (EIf (EBinOp "==" (EApp (EVar "lengthS") (EVar "es")) (EVar "n")) (EApp (EVar "Some") (ETuple (EApp (EVar "reverseL") (EVar "lead")) (EVar "es"))) (EVar "None"))) (arm PWild () (EVar "None"))))
 (DFunDef false "tupleBody" (PWild PWild) (EVar "None"))
 (DTypeSig false "u64KernelAlias" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyApp (TyCon "Option") (TyCon "String"))))))
-(DFunDef false "u64KernelAlias" ((PVar "e") (PVar "f") (PVar "args")) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EApp (EVar "canonFnName") (EVar "e")) (EVar "f"))) (EUnOp "!" (EFieldAccess (EVar "e") "gDispBindMap"))) (arm (PCon "Some" (PCon "CBind" PWild (PList (PCon "CClause" (PVar "pats") (PVar "body"))) PWild PWild)) () (EMatch (EApp (EVar "varNames") (EVar "pats")) (arm (PCon "Some" (PVar "ps")) () (EIf (EBinOp "==" (EApp (EVar "lengthS") (EVar "ps")) (EApp (EVar "lengthS") (EVar "args"))) (EApp (EApp (EApp (EApp (EVar "u64AliasBody") (EVar "e")) (EVar "ps")) (EVar "body")) (EVar "args")) (EVar "None"))) (arm (PCon "None") () (EVar "None")))) (arm PWild () (EVar "None"))))
+(DFunDef false "u64KernelAlias" ((PVar "e") (PVar "f") (PVar "args")) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EApp (EVar "canonFnName") (EVar "e")) (EVar "f"))) (EUnOp "!" (EFieldAccess (EVar "e") "gDispBindMap"))) (arm (PCon "Some" (PCon "CBind" PWild (PList (PCon "CClause" (PVar "pats") (PVar "body"))) PWild PWild)) () (EApp (EApp (EVar "$core.andThen") (EApp (EVar "varNames") (EVar "pats"))) (ELam ((PVar "ps")) (EIf (EBinOp "==" (EApp (EVar "lengthS") (EVar "ps")) (EApp (EVar "lengthS") (EVar "args"))) (EApp (EApp (EApp (EApp (EVar "u64AliasBody") (EVar "e")) (EVar "ps")) (EVar "body")) (EVar "args")) (EVar "None"))))) (arm PWild () (EVar "None"))))
 (DTypeSig false "u64AliasBody" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CExpr") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyApp (TyCon "Option") (TyCon "String")))))))
-(DFunDef false "u64AliasBody" ((PVar "e") (PVar "ps") (PCon "CIf" (PCon "CBinPrim" (PLit (LString "<")) (PCon "CVar" (PVar "k") PWild) (PVar "zero") PWild PWild) PWild (PVar "body")) (PVar "args")) (EMatch (ETuple (EApp (EApp (EApp (EVar "u64KernelApplied") (EVar "e")) (EVar "ps")) (EApp (EVar "skipOtherwise") (EVar "body"))) (EVar "ps") (EVar "args") (EApp (EVar "intLitOf") (EVar "zero"))) (arm (PTuple (PCon "Some" (PVar "kern")) (PList PWild (PVar "amount")) (PList PWild (PVar "lit")) (PCon "Some" (PLit (LInt 0)))) () (EMatch (EApp (EVar "intLitOf") (EVar "lit")) (arm (PCon "Some" (PVar "n")) () (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EVar "isU64ShiftKernel") (EVar "kern")) (EBinOp "==" (EVar "amount") (EVar "k"))) (EBinOp ">=" (EVar "n") (ELit (LInt 0)))) (EApp (EVar "Some") (EVar "kern")) (EVar "None"))) (arm (PCon "None") () (EVar "None")))) (arm PWild () (EVar "None"))))
-(DFunDef false "u64AliasBody" ((PVar "e") (PVar "ps") (PVar "body") PWild) (EMatch (EApp (EApp (EApp (EVar "u64KernelApplied") (EVar "e")) (EVar "ps")) (EVar "body")) (arm (PCon "Some" (PVar "kern")) () (EIf (EApp (EVar "isU64ShiftKernel") (EVar "kern")) (EVar "None") (EApp (EVar "Some") (EVar "kern")))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "u64AliasBody" ((PVar "e") (PVar "ps") (PCon "CIf" (PCon "CBinPrim" (PLit (LString "<")) (PCon "CVar" (PVar "k") PWild) (PVar "zero") PWild PWild) PWild (PVar "body")) (PVar "args")) (EMatch (ETuple (EApp (EApp (EApp (EVar "u64KernelApplied") (EVar "e")) (EVar "ps")) (EApp (EVar "skipOtherwise") (EVar "body"))) (EVar "ps") (EVar "args") (EApp (EVar "intLitOf") (EVar "zero"))) (arm (PTuple (PCon "Some" (PVar "kern")) (PList PWild (PVar "amount")) (PList PWild (PVar "lit")) (PCon "Some" (PLit (LInt 0)))) () (EApp (EApp (EVar "$core.andThen") (EApp (EVar "intLitOf") (EVar "lit"))) (ELam ((PVar "n")) (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EVar "isU64ShiftKernel") (EVar "kern")) (EBinOp "==" (EVar "amount") (EVar "k"))) (EBinOp ">=" (EVar "n") (ELit (LInt 0)))) (EApp (EVar "Some") (EVar "kern")) (EVar "None"))))) (arm PWild () (EVar "None"))))
+(DFunDef false "u64AliasBody" ((PVar "e") (PVar "ps") (PVar "body") PWild) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EVar "u64KernelApplied") (EVar "e")) (EVar "ps")) (EVar "body"))) (ELam ((PVar "kern")) (EIf (EApp (EVar "isU64ShiftKernel") (EVar "kern")) (EVar "None") (EApp (EVar "Some") (EVar "kern"))))))
 (DTypeSig false "intLitOf" (TyFun (TyCon "CExpr") (TyApp (TyCon "Option") (TyCon "Int"))))
 (DFunDef false "intLitOf" ((PCon "CLit" (PCon "LInt" (PVar "n")))) (EApp (EVar "Some") (EVar "n")))
 (DFunDef false "intLitOf" (PWild) (EVar "None"))
@@ -19022,8 +18903,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DFunDef false "emitConcatChain" ((PVar "e") (PVar "env") (PCons (PVar "first") (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "v0") (PVar "t0")) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "first"))) (DoExpr (EMatch (EVar "t0") (arm (PCon "LTStr") () (EIf (EBinOp ">=" (EApp (EVar "lengthS") (EVar "rest")) (ELit (LInt 2))) (EApp (EApp (EApp (EApp (EVar "emitStrConcatN") (EVar "e")) (EVar "env")) (EVar "v0")) (EVar "rest")) (EApp (EApp (EApp (EApp (EApp (EVar "concatFoldEmit") (EVar "e")) (EVar "env")) (EVar "v0")) (EVar "LTStr")) (EVar "rest")))) (arm PWild () (EApp (EApp (EApp (EApp (EApp (EVar "concatFoldEmit") (EVar "e")) (EVar "env")) (EVar "v0")) (EVar "t0")) (EVar "rest")))))))
 (DFunDef false "emitConcatChain" ((PVar "e") PWild (PList)) (EApp (EApp (EVar "gapE") (EVar "e")) (ELit (LString "empty '++' operand chain"))))
 (DTypeSig false "concatFoldEmit" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "String") (TyFun (TyCon "LTy") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyTuple (TyCon "String") (TyCon "LTy"))))))))
-(DFunDef false "concatFoldEmit" (PWild PWild (PVar "v") (PVar "t") (PList)) (ETuple (EVar "v") (EVar "t")))
-(DFunDef false "concatFoldEmit" ((PVar "e") (PVar "env") (PVar "v") (PVar "t") (PCons (PVar "x") (PVar "xs"))) (EBlock (DoLet false false (PTuple (PVar "rv") PWild) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "x"))) (DoLet false false (PVar "r2") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EMatch (EVar "t") (arm (PCon "LTStr") () (EBlock (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (EVar "r2")) (ELit (LString "i64"))) (ELit (LString "mdk_string_append"))) (EApp (EVar "i64Ops") (EListLit (EVar "v") (EVar "rv")))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "concatFoldEmit") (EVar "e")) (EVar "env")) (EVar "r2")) (EVar "LTStr")) (EVar "xs"))))) (arm (PCon "LTCon") () (EBlock (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (EVar "r2")) (ELit (LString "i64"))) (ELit (LString "mdk_list_append"))) (EApp (EVar "i64Ops") (EListLit (EVar "v") (EVar "rv")))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "concatFoldEmit") (EVar "e")) (EVar "env")) (EVar "r2")) (EVar "LTCon")) (EVar "xs"))))) (arm PWild () (EBlock (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (EVar "r2")) (ELit (LString "i64"))) (ELit (LString "mdk_append"))) (EApp (EVar "i64Ops") (EListLit (EVar "v") (EVar "rv")))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "concatFoldEmit") (EVar "e")) (EVar "env")) (EVar "r2")) (EVar "LTUnknown")) (EVar "xs")))))))))
+(DFunDef false "concatFoldEmit" ((PVar "e") (PVar "env") (PVar "reg0") (PVar "ty0") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PVar "v") (PVar "t") (PList)) (ETuple (EVar "v") (EVar "t"))) (clause ((PVar "v") (PVar "t") (PCons (PVar "x") (PVar "xs"))) (EBlock (DoLet false false (PTuple (PVar "rv") PWild) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "x"))) (DoLet false false (PVar "r2") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EMatch (EVar "t") (arm (PCon "LTStr") () (EBlock (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (EVar "r2")) (ELit (LString "i64"))) (ELit (LString "mdk_string_append"))) (EApp (EVar "i64Ops") (EListLit (EVar "v") (EVar "rv")))))) (DoExpr (EApp (EApp (EApp (EVar "go") (EVar "r2")) (EVar "LTStr")) (EVar "xs"))))) (arm (PCon "LTCon") () (EBlock (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (EVar "r2")) (ELit (LString "i64"))) (ELit (LString "mdk_list_append"))) (EApp (EVar "i64Ops") (EListLit (EVar "v") (EVar "rv")))))) (DoExpr (EApp (EApp (EApp (EVar "go") (EVar "r2")) (EVar "LTCon")) (EVar "xs"))))) (arm PWild () (EBlock (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (EVar "r2")) (ELit (LString "i64"))) (ELit (LString "mdk_append"))) (EApp (EVar "i64Ops") (EListLit (EVar "v") (EVar "rv")))))) (DoExpr (EApp (EApp (EApp (EVar "go") (EVar "r2")) (EVar "LTUnknown")) (EVar "xs"))))))))))) (EApp (EApp (EApp (EVar "go") (EVar "reg0")) (EVar "ty0")) (EVar "xs0"))))
 (DTypeSig false "emitStrConcatN" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyTuple (TyCon "String") (TyCon "LTy")))))))
 (DFunDef false "emitStrConcatN" ((PVar "e") (PVar "env") (PVar "v0") (PVar "rest")) (EBlock (DoLet false false (PVar "ops") (EBinOp "::" (EVar "v0") (EApp (EApp (EApp (EVar "emitOperandWords") (EVar "e")) (EVar "env")) (EVar "rest")))) (DoLet false false (PVar "n") (EApp (EVar "lengthS") (EVar "ops"))) (DoLet false false (PVar "arr") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "arr"))) (ELit (LString " = alloca i64, i64 "))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "storeArgv") (EVar "e")) (EVar "arr")) (EVar "ops")) (ELit (LInt 0)))) (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (EVar "r")) (ELit (LString "i64"))) (ELit (LString "mdk_string_append_n"))) (EListLit (ETuple (ELit (LString "i64")) (EApp (EVar "intToString") (EVar "n"))) (ETuple (ELit (LString "ptr")) (EVar "arr")))))) (DoExpr (ETuple (EVar "r") (EVar "LTStr")))))
 (DTypeSig false "emitOperandWords" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyApp (TyCon "List") (TyCon "String"))))))
@@ -19043,7 +18923,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "constFoldFloat" (TyFun (TyCon "CExpr") (TyApp (TyCon "Option") (TyCon "Float"))))
 (DFunDef false "constFoldFloat" ((PCon "CLit" (PCon "LFloat" (PVar "f")))) (EApp (EVar "Some") (EVar "f")))
 (DFunDef false "constFoldFloat" ((PCon "CBinPrim" (PVar "op") (PVar "l") (PVar "r") PWild PWild)) (EMatch (ETuple (EApp (EVar "constFoldFloat") (EVar "l")) (EApp (EVar "constFoldFloat") (EVar "r"))) (arm (PTuple (PCon "Some" (PVar "a")) (PCon "Some" (PVar "b"))) () (EApp (EApp (EApp (EVar "hostFloatOp") (EVar "op")) (EVar "a")) (EVar "b"))) (arm PWild () (EVar "None"))))
-(DFunDef false "constFoldFloat" (PWild) (EVar "None"))
+(DFunDef false "constFoldFloat" ((POr (PCon "CLit" PWild) (PCon "CVar" PWild PWild) (PCon "CApp" PWild PWild PWild) (PCon "CLam" PWild PWild) (PCon "CLet" PWild PWild PWild PWild) (PCon "CLetGroup" PWild PWild) (PCon "CMatch" PWild PWild) (PCon "CDecision" PWild PWild PWild) (PCon "CIf" PWild PWild PWild) (PCon "CUnOp" PWild PWild) (PCon "CTuple" PWild) (PCon "CList" PWild) (PCon "CRecord" PWild PWild) (PCon "CFieldAccess" PWild PWild PWild PWild) (PCon "CRecordUpdate" PWild PWild PWild) (PCon "CVariantUpdate" PWild PWild PWild) (PCon "CArray" PWild) (PCon "CRangeList" PWild PWild PWild) (PCon "CRangeArray" PWild PWild PWild) (PCon "CBlock" PWild) (PCon "CMethod" PWild PWild) (PCon "CDict" PWild PWild))) (EVar "None"))
 (DTypeSig false "hostFloatOp" (TyFun (TyCon "String") (TyFun (TyCon "Float") (TyFun (TyCon "Float") (TyApp (TyCon "Option") (TyCon "Float"))))))
 (DFunDef false "hostFloatOp" ((PLit (LString "+")) (PVar "a") (PVar "b")) (EApp (EVar "Some") (EBinOp "+" (EVar "a") (EVar "b"))))
 (DFunDef false "hostFloatOp" ((PLit (LString "-")) (PVar "a") (PVar "b")) (EApp (EVar "Some") (EBinOp "-" (EVar "a") (EVar "b"))))
@@ -19052,7 +18932,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DFunDef false "hostFloatOp" ((PLit (LString "%")) (PVar "a") (PVar "b")) (EApp (EVar "Some") (EApp (EApp (EVar "floatRem") (EVar "a")) (EVar "b"))))
 (DFunDef false "hostFloatOp" (PWild PWild PWild) (EVar "None"))
 (DTypeSig false "constNanFold" (TyFun (TyCon "String") (TyFun (TyCon "CExpr") (TyFun (TyCon "CExpr") (TyApp (TyCon "Option") (TyCon "String"))))))
-(DFunDef false "constNanFold" ((PVar "op") (PVar "l") (PVar "r")) (EIf (EApp (EVar "isArithOp") (EVar "op")) (EMatch (ETuple (EApp (EVar "constFoldFloat") (EVar "l")) (EApp (EVar "constFoldFloat") (EVar "r"))) (arm (PTuple (PCon "Some" (PVar "a")) (PCon "Some" (PVar "b"))) () (EMatch (EApp (EApp (EApp (EVar "hostFloatOp") (EVar "op")) (EVar "a")) (EVar "b")) (arm (PCon "Some" (PVar "v")) () (EIf (EBinOp "/=" (EVar "v") (EVar "v")) (EApp (EVar "Some") (EApp (EVar "floatBitsHex") (EVar "v"))) (EVar "None"))) (arm (PCon "None") () (EVar "None")))) (arm PWild () (EVar "None"))) (EVar "None")))
+(DFunDef false "constNanFold" ((PVar "op") (PVar "l") (PVar "r")) (EIf (EApp (EVar "isArithOp") (EVar "op")) (EMatch (ETuple (EApp (EVar "constFoldFloat") (EVar "l")) (EApp (EVar "constFoldFloat") (EVar "r"))) (arm (PTuple (PCon "Some" (PVar "a")) (PCon "Some" (PVar "b"))) () (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EVar "hostFloatOp") (EVar "op")) (EVar "a")) (EVar "b"))) (ELam ((PVar "v")) (EIf (EBinOp "/=" (EVar "v") (EVar "v")) (EApp (EVar "Some") (EApp (EVar "floatBitsHex") (EVar "v"))) (EVar "None"))))) (arm PWild () (EVar "None"))) (EVar "None")))
 (DTypeSig false "fenceFloatOperand" (TyFun (TyCon "Emit") (TyFun (TyCon "CExpr") (TyFun (TyCon "CExpr") (TyFun (TyCon "String") (TyCon "String"))))))
 (DFunDef false "fenceFloatOperand" ((PVar "e") (PVar "l") (PVar "r") (PVar "ld")) (EMatch (ETuple (EApp (EVar "constFoldFloat") (EVar "l")) (EApp (EVar "constFoldFloat") (EVar "r"))) (arm (PTuple (PCon "Some" PWild) (PCon "Some" PWild)) () (EVar "ld")) (arm PWild () (EBlock (DoLet false false (PVar "fr") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (EVar "fr")) (ELit (LString "double"))) (ELit (LString "llvm.arithmetic.fence.f64"))) (EListLit (ETuple (ELit (LString "double")) (EVar "ld")))))) (DoExpr (EVar "fr"))))))
 (DTypeSig false "floatBitsHex" (TyFun (TyCon "Float") (TyCon "String")))
@@ -19060,9 +18940,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "bytesHexBE" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyCon "String"))))
 (DFunDef false "bytesHexBE" ((PVar "arr") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (ELit (LString "")) (EBinOp "++" (EApp (EVar "hex2") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))) (EApp (EApp (EVar "bytesHexBE") (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))))
 (DTypeSig false "emitFloatD" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "CExpr") (TyCon "String")))))
-(DFunDef false "emitFloatD" (PWild (PVar "_env") (PCon "CLit" (PCon "LFloat" (PVar "f")))) (EApp (EVar "ensureFloatDot") (EApp (EVar "floatToString") (EVar "f"))))
-(DFunDef false "emitFloatD" ((PVar "e") (PVar "env") (PAs "ex" (PCon "CBinPrim" (PVar "op") (PVar "l") (PVar "r") PWild PWild))) (EIf (EApp (EVar "isArithOp") (EVar "op")) (EMatch (EApp (EApp (EApp (EVar "constNanFold") (EVar "op")) (EVar "l")) (EVar "r")) (arm (PCon "Some" (PVar "hexC")) () (EVar "hexC")) (arm (PCon "None") () (EBlock (DoLet false false (PVar "ld") (EApp (EApp (EApp (EVar "emitFloatD") (EVar "e")) (EVar "env")) (EVar "l"))) (DoLet false false (PVar "rd") (EApp (EApp (EApp (EVar "emitFloatD") (EVar "e")) (EVar "env")) (EVar "r"))) (DoLet false false (PVar "ldf") (EApp (EApp (EApp (EApp (EVar "fenceFloatOperand") (EVar "e")) (EVar "l")) (EVar "r")) (EVar "ld"))) (DoLet false false (PVar "res") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "res"))) (ELit (LString " = "))) (EApp (EVar "$core.display") (EApp (EVar "floatOp") (EVar "op")))) (ELit (LString " double "))) (EApp (EVar "$core.display") (EVar "ldf"))) (ELit (LString ", "))) (EApp (EVar "$core.display") (EVar "rd"))) (ELit (LString ""))))) (DoExpr (EVar "res"))))) (EApp (EApp (EApp (EVar "emitFloatLeaf") (EVar "e")) (EVar "env")) (EVar "ex"))))
-(DFunDef false "emitFloatD" ((PVar "e") (PVar "env") (PVar "ex")) (EApp (EApp (EApp (EVar "emitFloatLeaf") (EVar "e")) (EVar "env")) (EVar "ex")))
+(DFunDef false "emitFloatD" ((PVar "e") (PVar "env") (PVar "ex0")) (ELetGroup ((lgb "go" (clause ((PCon "CLit" (PCon "LFloat" (PVar "f")))) (EApp (EVar "ensureFloatDot") (EApp (EVar "floatToString") (EVar "f")))) (clause ((PAs "ex" (PCon "CBinPrim" (PVar "op") (PVar "l") (PVar "r") PWild PWild))) (EIf (EApp (EVar "isArithOp") (EVar "op")) (EMatch (EApp (EApp (EApp (EVar "constNanFold") (EVar "op")) (EVar "l")) (EVar "r")) (arm (PCon "Some" (PVar "hexC")) () (EVar "hexC")) (arm (PCon "None") () (EBlock (DoLet false false (PVar "ld") (EApp (EVar "go") (EVar "l"))) (DoLet false false (PVar "rd") (EApp (EVar "go") (EVar "r"))) (DoLet false false (PVar "ldf") (EApp (EApp (EApp (EApp (EVar "fenceFloatOperand") (EVar "e")) (EVar "l")) (EVar "r")) (EVar "ld"))) (DoLet false false (PVar "res") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "res"))) (ELit (LString " = "))) (EApp (EVar "$core.display") (EApp (EVar "floatOp") (EVar "op")))) (ELit (LString " double "))) (EApp (EVar "$core.display") (EVar "ldf"))) (ELit (LString ", "))) (EApp (EVar "$core.display") (EVar "rd"))) (ELit (LString ""))))) (DoExpr (EVar "res"))))) (EApp (EApp (EApp (EVar "emitFloatLeaf") (EVar "e")) (EVar "env")) (EVar "ex")))) (clause ((PVar "ex")) (EApp (EApp (EApp (EVar "emitFloatLeaf") (EVar "e")) (EVar "env")) (EVar "ex"))))) (EApp (EVar "go") (EVar "ex0"))))
 (DTypeSig false "emitFloatLeaf" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "CExpr") (TyCon "String")))))
 (DFunDef false "emitFloatLeaf" ((PVar "e") (PVar "env") (PVar "ex")) (EMatch (EApp (EApp (EApp (EVar "floatFromIntArg") (EVar "e")) (EVar "env")) (EVar "ex")) (arm (PCon "Some" (PVar "a")) () (EBlock (DoLet false false (PTuple (PVar "aw") PWild) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "a"))) (DoLet false false (PVar "i") (EApp (EApp (EVar "untagInt") (EVar "e")) (EVar "aw"))) (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString " = sitofp i64 "))) (EApp (EVar "$core.display") (EVar "i"))) (ELit (LString " to double"))))) (DoExpr (EVar "r")))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "emitFloatLeafN") (EVar "e")) (EVar "env")) (EVar "ex")))))
 (DTypeSig false "emitFloatLeafN" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "CExpr") (TyCon "String")))))
@@ -19218,13 +19096,11 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "emitLetGroup" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyCon "CExpr") (TyTuple (TyCon "String") (TyCon "LTy")))))))
 (DFunDef false "emitLetGroup" ((PVar "e") (PVar "env") (PVar "binds") (PVar "body")) (EMatch (EApp (EApp (EApp (EApp (EVar "bindLetGroup") (EVar "e")) (EVar "env")) (EVar "binds")) (EVar "body")) (arm (PCon "Some" (PVar "env2")) () (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env2")) (EVar "body"))) (arm (PCon "None") () (EApp (EVar "letGroupGap") (EVar "e")))))
 (DTypeSig false "bindLetGroup" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyCon "CExpr") (TyApp (TyCon "Option") (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy")))))))))
-(DFunDef false "bindLetGroup" (PWild (PVar "env") (PList) PWild) (EApp (EVar "Some") (EVar "env")))
-(DFunDef false "bindLetGroup" ((PVar "e") (PVar "env") (PCons (PCon "CBind" (PVar "name") (PList (PCon "CClause" (PList) (PVar "rhs"))) PWild (PVar "bid")) (PVar "rest")) (PVar "body")) (EBlock (DoLet false false (PVar "vt") (EApp (EApp (EApp (EVar "stampWord") (EVar "e")) (EVar "bid")) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "rhs")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "bindLetGroup") (EVar "e")) (EApp (EApp (EApp (EVar "omInsert") (EVar "name")) (EVar "vt")) (EVar "env"))) (EVar "rest")) (EVar "body")))))
-(DFunDef false "bindLetGroup" ((PVar "e") (PVar "env") (PCons (PCon "CBind" (PVar "name") (PVar "clauses") (PVar "site") (PVar "bid")) (PVar "rest")) (PVar "body")) (EIf (EApp (EApp (EApp (EVar "refsLater") (EVar "name")) (EVar "clauses")) (EApp (EVar "bindNames") (EVar "rest"))) (EApp (EApp (EApp (EApp (EVar "emitKnotRun") (EVar "e")) (EVar "env")) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "CBind") (EVar "name")) (EVar "clauses")) (EVar "site")) (EVar "bid")) (EVar "rest"))) (EVar "body")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "direct") (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EApp (EVar "clauseArityC") (EVar "clauses"))) (EApp (EApp (EVar "CLetGroup") (EVar "rest")) (EVar "body")))) (DoLet false false (PTuple (PVar "w") (PVar "ty")) (EApp (EApp (EApp (EApp (EVar "emitGroupBind") (EVar "e")) (EVar "env")) (EApp (EApp (EApp (EApp (EVar "CBind") (EVar "name")) (EVar "clauses")) (EVar "site")) (EVar "bid"))) (EVar "direct"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "bindLetGroup") (EVar "e")) (EApp (EApp (EApp (EVar "omInsert") (EVar "name")) (ETuple (EVar "w") (EVar "ty"))) (EVar "env"))) (EVar "rest")) (EVar "body")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "bindLetGroup" ((PVar "e") (PVar "env0") (PVar "xs0") (PVar "body")) (ELetGroup ((lgb "go" (clause ((PVar "env") (PList)) (EApp (EVar "Some") (EVar "env"))) (clause ((PVar "env") (PCons (PCon "CBind" (PVar "name") (PList (PCon "CClause" (PList) (PVar "rhs"))) PWild (PVar "bid")) (PVar "rest"))) (EBlock (DoLet false false (PVar "vt") (EApp (EApp (EApp (EVar "stampWord") (EVar "e")) (EVar "bid")) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "rhs")))) (DoExpr (EApp (EApp (EVar "go") (EApp (EApp (EApp (EVar "omInsert") (EVar "name")) (EVar "vt")) (EVar "env"))) (EVar "rest"))))) (clause ((PVar "env") (PCons (PCon "CBind" (PVar "name") (PVar "clauses") (PVar "site") (PVar "bid")) (PVar "rest"))) (EIf (EApp (EApp (EApp (EVar "refsLater") (EVar "name")) (EVar "clauses")) (EApp (EVar "bindNames") (EVar "rest"))) (EApp (EApp (EApp (EApp (EVar "emitKnotRun") (EVar "e")) (EVar "env")) (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "CBind") (EVar "name")) (EVar "clauses")) (EVar "site")) (EVar "bid")) (EVar "rest"))) (EVar "body")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "direct") (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EApp (EVar "clauseArityC") (EVar "clauses"))) (EApp (EApp (EVar "CLetGroup") (EVar "rest")) (EVar "body")))) (DoLet false false (PTuple (PVar "w") (PVar "ty")) (EApp (EApp (EApp (EApp (EVar "emitGroupBind") (EVar "e")) (EVar "env")) (EApp (EApp (EApp (EApp (EVar "CBind") (EVar "name")) (EVar "clauses")) (EVar "site")) (EVar "bid"))) (EVar "direct"))) (DoExpr (EApp (EApp (EVar "go") (EApp (EApp (EApp (EVar "omInsert") (EVar "name")) (ETuple (EVar "w") (EVar "ty"))) (EVar "env"))) (EVar "rest")))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EApp (EVar "go") (EVar "env0")) (EVar "xs0"))))
 (DTypeSig false "letGroupGap" (TyFun (TyCon "Emit") (TyTuple (TyCon "String") (TyCon "LTy"))))
 (DFunDef false "letGroupGap" ((PVar "e")) (EApp (EApp (EVar "gapE") (EVar "e")) (ELit (LString "unsupported let-group: a binding forward/mutually references a later value binding (knot-tying covers only mutual function bindings)"))))
 (DTypeSig false "emitKnotRun" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyCon "CExpr") (TyApp (TyCon "Option") (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy")))))))))
-(DFunDef false "emitKnotRun" ((PVar "e") (PVar "env") (PVar "binds") (PVar "body")) (EBlock (DoLet false false (PVar "run") (EApp (EVar "takeFnRun") (EVar "binds"))) (DoLet false false (PVar "after") (EApp (EApp (EVar "dropS") (EApp (EVar "lengthS") (EVar "run"))) (EVar "binds"))) (DoLet false false (PVar "runNames") (EApp (EVar "bindNames") (EVar "run"))) (DoExpr (EIf (EApp (EApp (EApp (EVar "anyRefsOutsideRun") (EVar "run")) (EVar "runNames")) (EApp (EVar "bindNames") (EVar "after"))) (EVar "None") (EBlock (DoLet false false (PVar "env2") (EApp (EApp (EApp (EApp (EVar "emitLetGroupKnot") (EVar "e")) (EVar "env")) (EVar "run")) (EVar "runNames"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "bindLetGroup") (EVar "e")) (EVar "env2")) (EVar "after")) (EVar "body"))))))))
+(DFunDef false "emitKnotRun" ((PVar "e") (PVar "env") (PVar "binds") (PVar "body")) (EBlock (DoLet false false (PVar "run") (EApp (EVar "takeFnRun") (EVar "binds"))) (DoLet false false (PVar "after") (EApp (EApp (EVar "dropS") (EApp (EVar "lengthS") (EVar "run"))) (EVar "binds"))) (DoLet false false (PVar "runNames") (EApp (EVar "bindNames") (EVar "run"))) (DoExpr (EIf (EApp (EApp (EVar "anyRefsOutsideRun") (EVar "run")) (EApp (EVar "bindNames") (EVar "after"))) (EVar "None") (EBlock (DoLet false false (PVar "env2") (EApp (EApp (EApp (EApp (EVar "emitLetGroupKnot") (EVar "e")) (EVar "env")) (EVar "run")) (EVar "runNames"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "bindLetGroup") (EVar "e")) (EVar "env2")) (EVar "after")) (EVar "body"))))))))
 (DTypeSig false "takeFnRun" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyCon "CBind"))))
 (DFunDef false "takeFnRun" ((PList)) (EListLit))
 (DFunDef false "takeFnRun" ((PCons (PCon "CBind" PWild (PList (PCon "CClause" (PList) PWild)) PWild PWild) PWild)) (EListLit))
@@ -19232,10 +19108,10 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "dropS" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))
 (DFunDef false "dropS" (PWild (PList)) (EListLit))
 (DFunDef false "dropS" ((PVar "n") (PCons (PVar "x") (PVar "xs"))) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (EBinOp "::" (EVar "x") (EVar "xs")) (EApp (EApp (EVar "dropS") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "xs"))))
-(DTypeSig false "anyRefsOutsideRun" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool")))))
-(DFunDef false "anyRefsOutsideRun" ((PList) PWild PWild) (EVar "False"))
-(DFunDef false "anyRefsOutsideRun" ((PCons (PCon "CBind" (PVar "name") (PVar "clauses") PWild PWild) (PVar "rest")) (PVar "runNames") (PVar "laterOutside")) (EIf (EApp (EApp (EVar "anyInList") (EApp (EVar "dedupS") (EApp (EApp (EVar "clausesFreeVars") (EVar "name")) (EVar "clauses")))) (EVar "laterOutside")) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "anyRefsOutsideRun") (EVar "rest")) (EVar "runNames")) (EVar "laterOutside")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DFunDef false "anyRefsOutsideRun" ((PCons PWild (PVar "rest")) (PVar "runNames") (PVar "laterOutside")) (EApp (EApp (EApp (EVar "anyRefsOutsideRun") (EVar "rest")) (EVar "runNames")) (EVar "laterOutside")))
+(DTypeSig false "anyRefsOutsideRun" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
+(DFunDef false "anyRefsOutsideRun" ((PList) PWild) (EVar "False"))
+(DFunDef false "anyRefsOutsideRun" ((PCons (PCon "CBind" (PVar "name") (PVar "clauses") PWild PWild) (PVar "rest")) (PVar "laterOutside")) (EIf (EApp (EApp (EVar "anyInList") (EApp (EVar "dedupS") (EApp (EApp (EVar "clausesFreeVars") (EVar "name")) (EVar "clauses")))) (EVar "laterOutside")) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EVar "anyRefsOutsideRun") (EVar "rest")) (EVar "laterOutside")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "anyRefsOutsideRun" ((PCons PWild (PVar "rest")) (PVar "laterOutside")) (EApp (EApp (EVar "anyRefsOutsideRun") (EVar "rest")) (EVar "laterOutside")))
 (DTypeSig false "refsLater" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool")))))
 (DFunDef false "refsLater" ((PVar "name") (PVar "clauses") (PVar "laterNames")) (EApp (EApp (EVar "anyInList") (EApp (EVar "dedupS") (EApp (EApp (EVar "clausesFreeVars") (EVar "name")) (EVar "clauses")))) (EVar "laterNames")))
 (DTypeSig false "clausesFreeVars" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyApp (TyCon "List") (TyCon "String")))))
@@ -19247,55 +19123,21 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "emitGroupBind" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "CBind") (TyFun (TyCon "Bool") (TyTuple (TyCon "String") (TyCon "LTy")))))))
 (DFunDef false "emitGroupBind" ((PVar "e") (PVar "env") (PCon "CBind" (PVar "name") (PVar "clauses") (PVar "site") PWild) (PVar "direct")) (EBlock (DoLet false false (PVar "lamName") (EApp (EApp (EApp (EVar "generatedName") (EVar "e")) (EVar "LN.GenLambda")) (ELit (LString "")))) (DoLet false false (PVar "arity") (EApp (EVar "clauseArity") (EApp (EVar "clauseList") (EVar "clauses")))) (DoLet false false (PVar "captured") (EApp (EApp (EVar "keepInEnv") (EVar "env")) (EApp (EApp (EVar "removeStr") (EVar "name")) (EApp (EVar "dedupS") (EApp (EApp (EVar "clausesFreeVars") (EVar "name")) (EVar "clauses")))))) (DoLet false false (PVar "captureWords") (EApp (EApp (EApp (EVar "capWords") (EVar "e")) (EVar "env")) (EVar "captured"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitGroupBindDefine") (EVar "e")) (EVar "env")) (EVar "lamName")) (EVar "name")) (EVar "arity")) (EVar "clauses")) (EVar "captured")) (EVar "site"))) (DoLet false false (PTuple (PVar "w") (PVar "ty")) (EMatch (EVar "captureWords") (arm (PList) () (EApp (EApp (EApp (EVar "emitConstClosure") (EVar "e")) (EVar "lamName")) (EVar "arity"))) (arm PWild () (EApp (EApp (EApp (EApp (EVar "emitClosureAlloc") (EVar "e")) (EVar "lamName")) (EVar "arity")) (EVar "captureWords"))))) (DoLet false false PWild (EIf (EVar "direct") (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "directFn")) (EBinOp "::" (ETuple (EVar "w") (ETuple (EVar "lamName") (EVar "arity"))) (EUnOp "!" (EFieldAccess (EVar "e") "directFn")))) (ELit LUnit))) (DoExpr (ETuple (EVar "w") (EVar "ty")))))
 (DTypeSig false "satOnlyUses" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "CExpr") (TyCon "Bool")))))
-(DFunDef false "satOnlyUses" (PWild PWild (PCon "CLit" PWild)) (EVar "True"))
-(DFunDef false "satOnlyUses" ((PVar "name") PWild (PCon "CVar" (PVar "x") PWild)) (EBinOp "/=" (EVar "x") (EVar "name")))
-(DFunDef false "satOnlyUses" ((PVar "name") (PVar "arity") (PAs "app" (PCon "CApp" PWild PWild PWild))) (EBlock (DoLet false false (PTuple (PVar "hd") (PVar "args")) (EApp (EApp (EVar "flattenApp") (EVar "app")) (EListLit))) (DoExpr (EMatch (EVar "hd") (arm (PCon "CVar" (PVar "n") PWild) () (EIf (EBinOp "&&" (EBinOp "==" (EVar "n") (EVar "name")) (EBinOp "/=" (EApp (EVar "lengthS") (EVar "args")) (EVar "arity"))) (EVar "False") (EApp (EApp (EApp (EVar "satOnlyList") (EVar "name")) (EVar "arity")) (EVar "args")))) (arm PWild () (EBinOp "&&" (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "hd")) (EApp (EApp (EApp (EVar "satOnlyList") (EVar "name")) (EVar "arity")) (EVar "args"))))))))
-(DFunDef false "satOnlyUses" ((PVar "name") (PVar "arity") (PCon "CLam" (PVar "ps") (PVar "b"))) (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "name")) (EApp (EApp (EDictApp "flatMap") (EVar "patBinders")) (EVar "ps"))) (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "b"))))
-(DFunDef false "satOnlyUses" ((PVar "name") (PVar "arity") (PCon "CLet" (PVar "recF") (PVar "pat") (PVar "e1") (PVar "e2"))) (EBlock (DoLet false false (PVar "shadow") (EApp (EApp (EVar "contains") (EVar "name")) (EApp (EVar "patBinders") (EVar "pat")))) (DoLet false false (PVar "ok1") (EIf (EVar "recF") (EBinOp "||" (EVar "shadow") (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "e1"))) (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "e1")))) (DoExpr (EBinOp "&&" (EVar "ok1") (EBinOp "||" (EVar "shadow") (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "e2")))))))
-(DFunDef false "satOnlyUses" ((PVar "name") (PVar "arity") (PCon "CLetGroup" (PVar "binds") (PVar "b"))) (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "name")) (EApp (EVar "bindNames") (EVar "binds"))) (EBinOp "&&" (EApp (EApp (EApp (EVar "satOnlyBinds") (EVar "name")) (EVar "arity")) (EVar "binds")) (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "b")))))
-(DFunDef false "satOnlyUses" ((PVar "name") (PVar "arity") (PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EBinOp "&&" (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "scrut")) (EApp (EApp (EApp (EVar "satOnlyArms") (EVar "name")) (EVar "arity")) (EVar "arms"))))
-(DFunDef false "satOnlyUses" ((PVar "name") (PVar "arity") (PCon "CDecision" (PVar "scrut") (PVar "arms") PWild)) (EBinOp "&&" (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "scrut")) (EApp (EApp (EApp (EVar "satOnlyArms") (EVar "name")) (EVar "arity")) (EVar "arms"))))
-(DFunDef false "satOnlyUses" ((PVar "name") (PVar "arity") (PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "c")) (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "t"))) (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "f"))))
-(DFunDef false "satOnlyUses" ((PVar "name") (PVar "arity") (PCon "CBinPrim" PWild (PVar "l") (PVar "r") PWild PWild)) (EBinOp "&&" (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "l")) (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "r"))))
-(DFunDef false "satOnlyUses" ((PVar "name") (PVar "arity") (PCon "CUnOp" PWild (PVar "x"))) (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "x")))
-(DFunDef false "satOnlyUses" ((PVar "name") (PVar "arity") (PCon "CTuple" (PVar "es"))) (EApp (EApp (EApp (EVar "satOnlyList") (EVar "name")) (EVar "arity")) (EVar "es")))
-(DFunDef false "satOnlyUses" ((PVar "name") (PVar "arity") (PCon "CList" (PVar "es"))) (EApp (EApp (EApp (EVar "satOnlyList") (EVar "name")) (EVar "arity")) (EVar "es")))
-(DFunDef false "satOnlyUses" ((PVar "name") (PVar "arity") (PCon "CArray" (PVar "es"))) (EApp (EApp (EApp (EVar "satOnlyList") (EVar "name")) (EVar "arity")) (EVar "es")))
-(DFunDef false "satOnlyUses" ((PVar "name") (PVar "arity") (PCon "CRangeList" (PVar "lo") (PVar "hi") PWild)) (EBinOp "&&" (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "lo")) (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "hi"))))
-(DFunDef false "satOnlyUses" ((PVar "name") (PVar "arity") (PCon "CRangeArray" (PVar "lo") (PVar "hi") PWild)) (EBinOp "&&" (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "lo")) (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "hi"))))
-(DFunDef false "satOnlyUses" ((PVar "name") (PVar "arity") (PCon "CRecord" PWild (PVar "fields"))) (EApp (EApp (EApp (EVar "satOnlyFields") (EVar "name")) (EVar "arity")) (EVar "fields")))
-(DFunDef false "satOnlyUses" ((PVar "name") (PVar "arity") (PCon "CFieldAccess" (PVar "ex") PWild PWild PWild)) (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "ex")))
-(DFunDef false "satOnlyUses" ((PVar "name") (PVar "arity") (PCon "CRecordUpdate" PWild (PVar "base") (PVar "updates"))) (EBinOp "&&" (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "base")) (EApp (EApp (EApp (EVar "satOnlyFields") (EVar "name")) (EVar "arity")) (EVar "updates"))))
-(DFunDef false "satOnlyUses" ((PVar "name") (PVar "arity") (PCon "CVariantUpdate" PWild (PVar "base") (PVar "updates"))) (EBinOp "&&" (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "base")) (EApp (EApp (EApp (EVar "satOnlyFields") (EVar "name")) (EVar "arity")) (EVar "updates"))))
-(DFunDef false "satOnlyUses" ((PVar "name") (PVar "arity") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EApp (EVar "satOnlyStmts") (EVar "name")) (EVar "arity")) (EVar "stmts")))
-(DFunDef false "satOnlyUses" ((PVar "name") PWild (PCon "CMethod" PWild (PCon "MethodEvidence" PWild PWild (PVar "route") (PVar "implRoutes") (PVar "methRoutes")))) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "name")) (EApp (EApp (EDictApp "flatMap") (EVar "givenNames")) (EBinOp "::" (EVar "route") (EBinOp "++" (EVar "implRoutes") (EVar "methRoutes")))))))
-(DFunDef false "satOnlyUses" ((PVar "name") PWild (PCon "CDict" PWild (PVar "routes"))) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "name")) (EApp (EApp (EDictApp "flatMap") (EVar "givenNames")) (EVar "routes")))))
-(DFunDef false "satOnlyUses" (PWild PWild PWild) (EVar "False"))
+(DFunDef false "satOnlyUses" ((PVar "name") (PVar "arity") (PVar "app0")) (ELetGroup ((lgb "go" (clause ((PCon "CLit" PWild)) (EVar "True")) (clause ((PCon "CVar" (PVar "x") PWild)) (EBinOp "/=" (EVar "x") (EVar "name"))) (clause ((PAs "app" (PCon "CApp" PWild PWild PWild))) (EBlock (DoLet false false (PTuple (PVar "hd") (PVar "args")) (EApp (EApp (EVar "flattenApp") (EVar "app")) (EListLit))) (DoExpr (EMatch (EVar "hd") (arm (PCon "CVar" (PVar "n") PWild) () (EIf (EBinOp "&&" (EBinOp "==" (EVar "n") (EVar "name")) (EBinOp "/=" (EApp (EVar "lengthS") (EVar "args")) (EVar "arity"))) (EVar "False") (EApp (EApp (EApp (EVar "satOnlyList") (EVar "name")) (EVar "arity")) (EVar "args")))) (arm PWild () (EBinOp "&&" (EApp (EVar "go") (EVar "hd")) (EApp (EApp (EApp (EVar "satOnlyList") (EVar "name")) (EVar "arity")) (EVar "args")))))))) (clause ((PCon "CLam" (PVar "ps") (PVar "b"))) (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "name")) (EApp (EApp (EDictApp "flatMap") (EVar "patBinders")) (EVar "ps"))) (EApp (EVar "go") (EVar "b")))) (clause ((PCon "CLet" (PVar "recF") (PVar "pat") (PVar "e1") (PVar "e2"))) (EBlock (DoLet false false (PVar "shadow") (EApp (EApp (EVar "contains") (EVar "name")) (EApp (EVar "patBinders") (EVar "pat")))) (DoLet false false (PVar "ok1") (EIf (EVar "recF") (EBinOp "||" (EVar "shadow") (EApp (EVar "go") (EVar "e1"))) (EApp (EVar "go") (EVar "e1")))) (DoExpr (EBinOp "&&" (EVar "ok1") (EBinOp "||" (EVar "shadow") (EApp (EVar "go") (EVar "e2"))))))) (clause ((PCon "CLetGroup" (PVar "binds") (PVar "b"))) (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "name")) (EApp (EVar "bindNames") (EVar "binds"))) (EBinOp "&&" (EApp (EApp (EApp (EVar "satOnlyBinds") (EVar "name")) (EVar "arity")) (EVar "binds")) (EApp (EVar "go") (EVar "b"))))) (clause ((PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EBinOp "&&" (EApp (EVar "go") (EVar "scrut")) (EApp (EApp (EApp (EVar "satOnlyArms") (EVar "name")) (EVar "arity")) (EVar "arms")))) (clause ((PCon "CDecision" (PVar "scrut") (PVar "arms") PWild)) (EBinOp "&&" (EApp (EVar "go") (EVar "scrut")) (EApp (EApp (EApp (EVar "satOnlyArms") (EVar "name")) (EVar "arity")) (EVar "arms")))) (clause ((PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EBinOp "&&" (EBinOp "&&" (EApp (EVar "go") (EVar "c")) (EApp (EVar "go") (EVar "t"))) (EApp (EVar "go") (EVar "f")))) (clause ((PCon "CBinPrim" PWild (PVar "l") (PVar "r") PWild PWild)) (EBinOp "&&" (EApp (EVar "go") (EVar "l")) (EApp (EVar "go") (EVar "r")))) (clause ((PCon "CUnOp" PWild (PVar "x"))) (EApp (EVar "go") (EVar "x"))) (clause ((PCon "CTuple" (PVar "es"))) (EApp (EApp (EApp (EVar "satOnlyList") (EVar "name")) (EVar "arity")) (EVar "es"))) (clause ((PCon "CList" (PVar "es"))) (EApp (EApp (EApp (EVar "satOnlyList") (EVar "name")) (EVar "arity")) (EVar "es"))) (clause ((PCon "CArray" (PVar "es"))) (EApp (EApp (EApp (EVar "satOnlyList") (EVar "name")) (EVar "arity")) (EVar "es"))) (clause ((PCon "CRangeList" (PVar "lo") (PVar "hi") PWild)) (EBinOp "&&" (EApp (EVar "go") (EVar "lo")) (EApp (EVar "go") (EVar "hi")))) (clause ((PCon "CRangeArray" (PVar "lo") (PVar "hi") PWild)) (EBinOp "&&" (EApp (EVar "go") (EVar "lo")) (EApp (EVar "go") (EVar "hi")))) (clause ((PCon "CRecord" PWild (PVar "fields"))) (EApp (EApp (EApp (EVar "satOnlyFields") (EVar "name")) (EVar "arity")) (EVar "fields"))) (clause ((PCon "CFieldAccess" (PVar "ex") PWild PWild PWild)) (EApp (EVar "go") (EVar "ex"))) (clause ((PCon "CRecordUpdate" PWild (PVar "base") (PVar "updates"))) (EBinOp "&&" (EApp (EVar "go") (EVar "base")) (EApp (EApp (EApp (EVar "satOnlyFields") (EVar "name")) (EVar "arity")) (EVar "updates")))) (clause ((PCon "CVariantUpdate" PWild (PVar "base") (PVar "updates"))) (EBinOp "&&" (EApp (EVar "go") (EVar "base")) (EApp (EApp (EApp (EVar "satOnlyFields") (EVar "name")) (EVar "arity")) (EVar "updates")))) (clause ((PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EApp (EVar "satOnlyStmts") (EVar "name")) (EVar "arity")) (EVar "stmts"))) (clause ((PCon "CMethod" PWild (PCon "MethodEvidence" PWild PWild (PVar "route") (PVar "implRoutes") (PVar "methRoutes")))) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "name")) (EApp (EApp (EDictApp "flatMap") (EVar "givenNames")) (EBinOp "::" (EVar "route") (EBinOp "++" (EVar "implRoutes") (EVar "methRoutes"))))))) (clause ((PCon "CDict" PWild (PVar "routes"))) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "name")) (EApp (EApp (EDictApp "flatMap") (EVar "givenNames")) (EVar "routes"))))) (clause (PWild) (EVar "False")))) (EApp (EVar "go") (EVar "app0"))))
 (DTypeSig false "satOnlyList" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyCon "Bool")))))
-(DFunDef false "satOnlyList" (PWild PWild (PList)) (EVar "True"))
-(DFunDef false "satOnlyList" ((PVar "name") (PVar "arity") (PCons (PVar "x") (PVar "rest"))) (EBinOp "&&" (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "x")) (EApp (EApp (EApp (EVar "satOnlyList") (EVar "name")) (EVar "arity")) (EVar "rest"))))
+(DFunDef false "satOnlyList" ((PVar "name") (PVar "arity") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EVar "True")) (clause ((PCons (PVar "x") (PVar "rest"))) (EBinOp "&&" (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "x")) (EApp (EVar "go") (EVar "rest")))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "satOnlyFields" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyCon "Bool")))))
-(DFunDef false "satOnlyFields" (PWild PWild (PList)) (EVar "True"))
-(DFunDef false "satOnlyFields" ((PVar "name") (PVar "arity") (PCons (PCon "CField" PWild PWild (PVar "ex")) (PVar "rest"))) (EBinOp "&&" (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "ex")) (EApp (EApp (EApp (EVar "satOnlyFields") (EVar "name")) (EVar "arity")) (EVar "rest"))))
+(DFunDef false "satOnlyFields" ((PVar "name") (PVar "arity") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EVar "True")) (clause ((PCons (PCon "CField" PWild PWild (PVar "ex")) (PVar "rest"))) (EBinOp "&&" (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "ex")) (EApp (EVar "go") (EVar "rest")))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "satOnlyArms" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyCon "Bool")))))
-(DFunDef false "satOnlyArms" (PWild PWild (PList)) (EVar "True"))
-(DFunDef false "satOnlyArms" ((PVar "name") (PVar "arity") (PCons (PCon "CArm" (PVar "pat") (PVar "guards") (PVar "b")) (PVar "rest"))) (EBlock (DoLet false false (PVar "shadow") (EApp (EApp (EVar "contains") (EVar "name")) (EApp (EVar "patBinders") (EVar "pat")))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EApp (EVar "satOnlyGuards") (EVar "name")) (EVar "arity")) (EVar "guards")) (EBinOp "||" (EVar "shadow") (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "b")))) (EApp (EApp (EApp (EVar "satOnlyArms") (EVar "name")) (EVar "arity")) (EVar "rest"))))))
-(DFunDef false "satOnlyArms" ((PVar "name") (PVar "arity") (PCons (PCon "CArmAlt" PWild (PVar "guards") PWild) (PVar "rest"))) (EBinOp "&&" (EApp (EApp (EApp (EVar "satOnlyGuards") (EVar "name")) (EVar "arity")) (EVar "guards")) (EApp (EApp (EApp (EVar "satOnlyArms") (EVar "name")) (EVar "arity")) (EVar "rest"))))
+(DFunDef false "satOnlyArms" ((PVar "name") (PVar "arity") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EVar "True")) (clause ((PCons (PCon "CArm" (PVar "pat") (PVar "guards") (PVar "b")) (PVar "rest"))) (EBlock (DoLet false false (PVar "shadow") (EApp (EApp (EVar "contains") (EVar "name")) (EApp (EVar "patBinders") (EVar "pat")))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EApp (EVar "satOnlyGuards") (EVar "name")) (EVar "arity")) (EVar "guards")) (EBinOp "||" (EVar "shadow") (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "b")))) (EApp (EVar "go") (EVar "rest")))))) (clause ((PCons (PCon "CArmAlt" PWild (PVar "guards") PWild) (PVar "rest"))) (EBinOp "&&" (EApp (EApp (EApp (EVar "satOnlyGuards") (EVar "name")) (EVar "arity")) (EVar "guards")) (EApp (EVar "go") (EVar "rest")))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "satOnlyGuards" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CGuard")) (TyCon "Bool")))))
-(DFunDef false "satOnlyGuards" (PWild PWild (PList)) (EVar "True"))
-(DFunDef false "satOnlyGuards" ((PVar "name") (PVar "arity") (PCons (PCon "CGBool" (PVar "ex")) (PVar "rest"))) (EBinOp "&&" (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "ex")) (EApp (EApp (EApp (EVar "satOnlyGuards") (EVar "name")) (EVar "arity")) (EVar "rest"))))
-(DFunDef false "satOnlyGuards" ((PVar "name") (PVar "arity") (PCons (PCon "CGBind" PWild (PVar "ex")) (PVar "rest"))) (EBinOp "&&" (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "ex")) (EApp (EApp (EApp (EVar "satOnlyGuards") (EVar "name")) (EVar "arity")) (EVar "rest"))))
+(DFunDef false "satOnlyGuards" ((PVar "name") (PVar "arity") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EVar "True")) (clause ((PCons (PCon "CGBool" (PVar "ex")) (PVar "rest"))) (EBinOp "&&" (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "ex")) (EApp (EVar "go") (EVar "rest")))) (clause ((PCons (PCon "CGBind" PWild (PVar "ex")) (PVar "rest"))) (EBinOp "&&" (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "ex")) (EApp (EVar "go") (EVar "rest")))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "satOnlyStmts" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyCon "Bool")))))
-(DFunDef false "satOnlyStmts" (PWild PWild (PList)) (EVar "True"))
-(DFunDef false "satOnlyStmts" ((PVar "name") (PVar "arity") (PCons (PCon "CSExpr" (PVar "ex")) (PVar "rest"))) (EBinOp "&&" (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "ex")) (EApp (EApp (EApp (EVar "satOnlyStmts") (EVar "name")) (EVar "arity")) (EVar "rest"))))
-(DFunDef false "satOnlyStmts" ((PVar "name") (PVar "arity") (PCons (PCon "CSLet" PWild (PVar "pat") (PVar "ex")) (PVar "rest"))) (EBinOp "&&" (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "ex")) (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "name")) (EApp (EVar "patBinders") (EVar "pat"))) (EApp (EApp (EApp (EVar "satOnlyStmts") (EVar "name")) (EVar "arity")) (EVar "rest")))))
-(DFunDef false "satOnlyStmts" ((PVar "name") (PVar "arity") (PCons (PCon "CSAssign" (PVar "target") (PVar "ex")) (PVar "rest"))) (EBinOp "&&" (EBinOp "&&" (EBinOp "/=" (EVar "target") (EVar "name")) (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "ex"))) (EApp (EApp (EApp (EVar "satOnlyStmts") (EVar "name")) (EVar "arity")) (EVar "rest"))))
+(DFunDef false "satOnlyStmts" ((PVar "name") (PVar "arity") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EVar "True")) (clause ((PCons (PCon "CSExpr" (PVar "ex")) (PVar "rest"))) (EBinOp "&&" (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "ex")) (EApp (EVar "go") (EVar "rest")))) (clause ((PCons (PCon "CSLet" PWild (PVar "pat") (PVar "ex")) (PVar "rest"))) (EBinOp "&&" (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "ex")) (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "name")) (EApp (EVar "patBinders") (EVar "pat"))) (EApp (EVar "go") (EVar "rest"))))) (clause ((PCons (PCon "CSAssign" (PVar "target") (PVar "ex")) (PVar "rest"))) (EBinOp "&&" (EBinOp "&&" (EBinOp "/=" (EVar "target") (EVar "name")) (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "ex"))) (EApp (EVar "go") (EVar "rest")))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "satOnlyBinds" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyCon "Bool")))))
-(DFunDef false "satOnlyBinds" (PWild PWild (PList)) (EVar "True"))
-(DFunDef false "satOnlyBinds" ((PVar "name") (PVar "arity") (PCons (PCon "CBind" PWild (PVar "clauses") PWild PWild) (PVar "rest"))) (EBinOp "&&" (EApp (EApp (EApp (EVar "satOnlyClauses") (EVar "name")) (EVar "arity")) (EVar "clauses")) (EApp (EApp (EApp (EVar "satOnlyBinds") (EVar "name")) (EVar "arity")) (EVar "rest"))))
+(DFunDef false "satOnlyBinds" ((PVar "name") (PVar "arity") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EVar "True")) (clause ((PCons (PCon "CBind" PWild (PVar "clauses") PWild PWild) (PVar "rest"))) (EBinOp "&&" (EApp (EApp (EApp (EVar "satOnlyClauses") (EVar "name")) (EVar "arity")) (EVar "clauses")) (EApp (EVar "go") (EVar "rest")))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "satOnlyClauses" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyCon "Bool")))))
-(DFunDef false "satOnlyClauses" (PWild PWild (PList)) (EVar "True"))
-(DFunDef false "satOnlyClauses" ((PVar "name") (PVar "arity") (PCons (PCon "CClause" (PVar "pats") (PVar "b")) (PVar "rest"))) (EBinOp "&&" (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "name")) (EApp (EApp (EDictApp "flatMap") (EVar "patBinders")) (EVar "pats"))) (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "b"))) (EApp (EApp (EApp (EVar "satOnlyClauses") (EVar "name")) (EVar "arity")) (EVar "rest"))))
+(DFunDef false "satOnlyClauses" ((PVar "name") (PVar "arity") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EVar "True")) (clause ((PCons (PCon "CClause" (PVar "pats") (PVar "b")) (PVar "rest"))) (EBinOp "&&" (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "name")) (EApp (EApp (EDictApp "flatMap") (EVar "patBinders")) (EVar "pats"))) (EApp (EApp (EApp (EVar "satOnlyUses") (EVar "name")) (EVar "arity")) (EVar "b"))) (EApp (EVar "go") (EVar "rest")))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "emitGroupBindDefine" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Loc") (TyCon "Unit"))))))))))
 (DFunDef false "emitGroupBindDefine" ((PVar "e") (PVar "env") (PVar "lamName") (PVar "name") (PVar "arity") (PVar "clauses") (PVar "captured") (PVar "site")) (EBlock (DoLet false false (PVar "saved") (EFieldAccess (EApp (EVar "bufRef") (EVar "e")) "value")) (DoExpr (EApp (EApp (EVar "setRef") (EApp (EVar "bufRef") (EVar "e"))) (EListLit))) (DoLet false false (PVar "scope") (EApp (EVar "beginDefine") (EVar "e"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "defineHeader") (EVar "e")) (EVar "LiftedDefine")) (EVar "lamName")) (EApp (EVar "wordProto") (EBinOp "::" (EVar "closParam") (EApp (EApp (EVar "implParamDecls") (EVar "arity")) (ELit (LInt 0))))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "entry:")))) (DoLet false false (PVar "cenv") (EApp (EApp (EApp (EApp (EVar "loadCaptures") (EVar "e")) (EVar "env")) (EVar "captured")) (ELit (LInt 0)))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTailClauseTree") (EVar "e")) (EApp (EApp (EVar "envMergeL") (EApp (EApp (EApp (EVar "omInsert") (EVar "name")) (ETuple (ELit (LString "%clos")) (EVar "LTClosure"))) (EVar "cenv"))) (EApp (EApp (EVar "implParamEnv") (EVar "arity")) (ELit (LInt 0))))) (EApp (EApp (EApp (EVar "TailDefine") (EVar "lamName")) (EVar "arity")) (EVar "True"))) (EVar "arity")) (EApp (EVar "clauseList") (EVar "clauses"))) (EVar "site"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "}")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "")))) (DoLet false false (PVar "lamLines") (EFieldAccess (EApp (EVar "bufRef") (EVar "e")) "value")) (DoExpr (EApp (EApp (EVar "setRef") (EApp (EVar "lamsRef") (EVar "e"))) (EBinOp "++" (EVar "lamLines") (EFieldAccess (EApp (EVar "lamsRef") (EVar "e")) "value")))) (DoExpr (EApp (EApp (EVar "endDefine") (EVar "e")) (EVar "scope"))) (DoExpr (EApp (EApp (EVar "setRef") (EApp (EVar "bufRef") (EVar "e"))) (EVar "saved")))))
 (DTypeSig false "clauseList" (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr")))))
@@ -19308,12 +19150,9 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DFunDef false "sibPlaceholderEnv" ((PCons (PVar "n") (PVar "rest")) (PVar "env")) (EApp (EApp (EVar "sibPlaceholderEnv") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (ETuple (ELit (LString "0")) (EVar "LTClosure"))) (EVar "env"))))
 (DData Private "KnotCell" () ((variant "KnotCell" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) ())
 (DTypeSig false "knotAlloc" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyTuple (TyApp (TyCon "List") (TyCon "KnotCell")) (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy")))))))))
-(DFunDef false "knotAlloc" (PWild (PVar "env") PWild (PList)) (ETuple (EListLit) (EVar "env")))
-(DFunDef false "knotAlloc" ((PVar "e") (PVar "env") (PVar "cellEnv") (PCons (PCon "CBind" (PVar "name") (PVar "clauses") (PVar "site") PWild) (PVar "rest"))) (EBlock (DoLet false false (PVar "lamName") (EApp (EApp (EApp (EVar "generatedName") (EVar "e")) (EVar "LN.GenLambda")) (ELit (LString "")))) (DoLet false false (PVar "arity") (EApp (EVar "clauseArity") (EApp (EVar "clauseList") (EVar "clauses")))) (DoLet false false (PVar "captured") (EApp (EApp (EVar "keepInEnv") (EVar "cellEnv")) (EApp (EApp (EVar "removeStr") (EVar "name")) (EApp (EVar "dedupS") (EApp (EApp (EVar "clausesFreeVars") (EVar "name")) (EVar "clauses")))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitGroupBindDefine") (EVar "e")) (EVar "cellEnv")) (EVar "lamName")) (EVar "name")) (EVar "arity")) (EVar "clauses")) (EVar "captured")) (EVar "site"))) (DoLet false false (PTuple (PVar "cellPtr") (PVar "cellWord")) (EApp (EApp (EApp (EApp (EVar "emitClosureAllocPatch") (EVar "e")) (EVar "lamName")) (EVar "arity")) (EApp (EVar "lengthS") (EVar "captured")))) (DoLet false false (PTuple (PVar "cells") (PVar "env2")) (EApp (EApp (EApp (EApp (EVar "knotAlloc") (EVar "e")) (EApp (EApp (EApp (EVar "omInsert") (EVar "name")) (ETuple (EVar "cellWord") (EVar "LTClosure"))) (EVar "env"))) (EVar "cellEnv")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EApp (EVar "KnotCell") (EVar "name")) (EVar "cellPtr")) (EVar "captured")) (EVar "cells")) (EVar "env2")))))
-(DFunDef false "knotAlloc" ((PVar "e") (PVar "env") (PVar "cellEnv") (PCons PWild (PVar "rest"))) (EApp (EApp (EApp (EApp (EVar "knotAlloc") (EVar "e")) (EVar "env")) (EVar "cellEnv")) (EVar "rest")))
+(DFunDef false "knotAlloc" ((PVar "e") (PVar "env0") (PVar "cellEnv") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PVar "env") (PList)) (ETuple (EListLit) (EVar "env"))) (clause ((PVar "env") (PCons (PCon "CBind" (PVar "name") (PVar "clauses") (PVar "site") PWild) (PVar "rest"))) (EBlock (DoLet false false (PVar "lamName") (EApp (EApp (EApp (EVar "generatedName") (EVar "e")) (EVar "LN.GenLambda")) (ELit (LString "")))) (DoLet false false (PVar "arity") (EApp (EVar "clauseArity") (EApp (EVar "clauseList") (EVar "clauses")))) (DoLet false false (PVar "captured") (EApp (EApp (EVar "keepInEnv") (EVar "cellEnv")) (EApp (EApp (EVar "removeStr") (EVar "name")) (EApp (EVar "dedupS") (EApp (EApp (EVar "clausesFreeVars") (EVar "name")) (EVar "clauses")))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitGroupBindDefine") (EVar "e")) (EVar "cellEnv")) (EVar "lamName")) (EVar "name")) (EVar "arity")) (EVar "clauses")) (EVar "captured")) (EVar "site"))) (DoLet false false (PTuple (PVar "cellPtr") (PVar "cellWord")) (EApp (EApp (EApp (EApp (EVar "emitClosureAllocPatch") (EVar "e")) (EVar "lamName")) (EVar "arity")) (EApp (EVar "lengthS") (EVar "captured")))) (DoLet false false (PTuple (PVar "cells") (PVar "env2")) (EApp (EApp (EVar "go") (EApp (EApp (EApp (EVar "omInsert") (EVar "name")) (ETuple (EVar "cellWord") (EVar "LTClosure"))) (EVar "env"))) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EApp (EVar "KnotCell") (EVar "name")) (EVar "cellPtr")) (EVar "captured")) (EVar "cells")) (EVar "env2"))))) (clause ((PVar "env") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "go") (EVar "env")) (EVar "rest"))))) (EApp (EApp (EVar "go") (EVar "env0")) (EVar "xs0"))))
 (DTypeSig false "knotPatch" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "List") (TyCon "KnotCell")) (TyCon "Unit")))))
-(DFunDef false "knotPatch" (PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "knotPatch" ((PVar "e") (PVar "env") (PCons (PCon "KnotCell" PWild (PVar "cellPtr") (PVar "captureNames")) (PVar "rest"))) (EBlock (DoLet false false (PVar "words") (EApp (EApp (EApp (EVar "capWords") (EVar "e")) (EVar "env")) (EVar "captureNames"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "storeFields") (EVar "e")) (EVar "cellPtr")) (EVar "words")) (EBinOp "-" (EVar "closureCaptureStart") (ELit (LInt 1))))) (DoExpr (EApp (EApp (EApp (EVar "knotPatch") (EVar "e")) (EVar "env")) (EVar "rest")))))
+(DFunDef false "knotPatch" ((PVar "e") (PVar "env") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PCon "KnotCell" PWild (PVar "cellPtr") (PVar "captureNames")) (PVar "rest"))) (EBlock (DoLet false false (PVar "words") (EApp (EApp (EApp (EVar "capWords") (EVar "e")) (EVar "env")) (EVar "captureNames"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "storeFields") (EVar "e")) (EVar "cellPtr")) (EVar "words")) (EBinOp "-" (EVar "closureCaptureStart") (ELit (LInt 1))))) (DoExpr (EApp (EVar "go") (EVar "rest"))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "emitClosureAllocPatch" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyTuple (TyCon "String") (TyCon "String")))))))
 (DFunDef false "emitClosureAllocPatch" ((PVar "e") (PVar "lamName") (PVar "callArity") (PVar "nCap")) (EBlock (DoLet false false (PVar "codePtr") (EBinOp "++" (EBinOp "++" (ELit (LString "ptrtoint (ptr @")) (EApp (EApp (EVar "symRef") (EVar "e")) (EVar "lamName"))) (ELit (LString " to i64)")))) (DoLet false false (PVar "fields") (EBinOp "::" (EVar "codePtr") (EApp (EVar "zeroWords") (EVar "nCap")))) (DoLet false false (PVar "nFields") (EApp (EVar "lengthS") (EVar "fields"))) (DoLet false false (PVar "p") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (EVar "p")) (ELit (LString "ptr"))) (ELit (LString "mdk_alloc"))) (EApp (EVar "i64Ops") (EListLit (EApp (EVar "intToString") (EBinOp "*" (ELit (LInt 8)) (EBinOp "+" (EVar "nFields") (ELit (LInt 1)))))))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  store i64 ")) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EVar "callArity")))) (ELit (LString ", ptr "))) (EApp (EVar "$core.display") (EVar "p"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "storeFields") (EVar "e")) (EVar "p")) (EVar "fields")) (ELit (LInt 0)))) (DoLet false false (PVar "w") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "w"))) (ELit (LString " = ptrtoint ptr "))) (EApp (EVar "$core.display") (EVar "p"))) (ELit (LString " to i64"))))) (DoExpr (ETuple (EVar "p") (EVar "w")))))
 (DTypeSig false "zeroWords" (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))
@@ -19362,7 +19201,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "emitIndirect" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "CExpr") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyFun (TyCon "CallMode") (TyTuple (TyCon "String") (TyCon "LTy"))))))))
 (DFunDef false "emitIndirect" ((PVar "e") (PVar "env") (PVar "hd") (PVar "args") (PVar "mode")) (EBlock (DoLet false false (PTuple (PVar "cw") PWild) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "hd"))) (DoLet false false (PVar "argOps") (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "directLamOf") (EVar "e")) (EVar "cw")) (EApp (EVar "lengthS") (EVar "argOps"))) (arm (PCon "Some" (PVar "lam")) () (EBlock (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false (PVar "call") (EApp (EApp (EApp (EVar "wordCall") (EVar "e")) (EVar "lam")) (EBinOp "::" (EVar "cw") (EVar "argOps")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString " = "))) (EApp (EVar "$core.display") (EVar "call"))) (ELit (LString ""))))) (DoExpr (ETuple (EVar "r") (EApp (EApp (EApp (EVar "indirectRetTy") (EVar "e")) (EVar "cw")) (EVar "hd")))))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EVar "emitIndirectMode") (EVar "e")) (EVar "cw")) (EVar "argOps")) (EVar "hd")) (EVar "mode")))))))
 (DTypeSig false "directLamOf" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "String"))))))
-(DFunDef false "directLamOf" ((PVar "e") (PVar "cw") (PVar "nargs")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "cw")) (EUnOp "!" (EFieldAccess (EVar "e") "directFn"))) (arm (PCon "Some" (PTuple (PVar "lam") (PVar "arity"))) () (EIf (EBinOp "==" (EVar "arity") (EVar "nargs")) (EApp (EVar "Some") (EVar "lam")) (EVar "None"))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "directLamOf" ((PVar "e") (PVar "cw") (PVar "nargs")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "lookupAssoc") (EVar "cw")) (EUnOp "!" (EFieldAccess (EVar "e") "directFn")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "lam") (PVar "arity")) () (EIf (EBinOp "==" (EVar "arity") (EVar "nargs")) (EApp (EVar "Some") (EVar "lam")) (EVar "None")))))))
 (DTypeSig false "emitIndirectMode" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CExpr") (TyFun (TyCon "CallMode") (TyTuple (TyCon "String") (TyCon "LTy"))))))))
 (DFunDef false "emitIndirectMode" ((PVar "e") (PVar "cw") (PVar "argOps") (PVar "hd") (PCon "CallExact")) (ETuple (EApp (EApp (EApp (EVar "emitIndirectCallWords") (EVar "e")) (EVar "cw")) (EVar "argOps")) (EApp (EApp (EApp (EVar "indirectRetTy") (EVar "e")) (EVar "cw")) (EVar "hd"))))
 (DFunDef false "emitIndirectMode" ((PVar "e") (PVar "cw") (PVar "argOps") PWild (PCon "CallPartial" (PVar "missing"))) (EApp (EApp (EApp (EApp (EVar "emitPapClosureIndirect") (EVar "e")) (EVar "cw")) (EVar "argOps")) (EBinOp "+" (EApp (EVar "lengthS") (EVar "argOps")) (EVar "missing"))))
@@ -19579,13 +19418,9 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "emitArgTagDispatchGo" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyTuple (TyCon "String") (TyCon "LTy"))))))))
 (DFunDef false "emitArgTagDispatchGo" ((PVar "e") (PVar "groups") (PVar "argOps") (PVar "colliding") (PVar "discrimPos")) (EBlock (DoLet false false (PVar "discrimWord") (EApp (EApp (EVar "nthStr") (EVar "argOps")) (EVar "discrimPos"))) (DoLet false false (PVar "tagReg") (EApp (EApp (EVar "loadDiscriminant") (EVar "e")) (EVar "discrimWord"))) (DoLet false false (PVar "slot") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EVar "slot")) (ELit (LString " = alloca i64"))))) (DoLet false false (PVar "endL") (EBinOp "++" (ELit (LString "argdispend")) (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArgDispatchChain") (EVar "e")) (EVar "tagReg")) (EVar "groups")) (EVar "argOps")) (EVar "colliding")) (EVar "slot")) (EVar "endL"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "endL") (ELit (LString ":"))))) (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString " = load i64, ptr "))) (EApp (EVar "$core.display") (EVar "slot"))) (ELit (LString ""))))) (DoExpr (ETuple (EVar "r") (EVar "LTInt")))))
 (DTypeSig false "emitArgDispatchChain" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "ImplGroup")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Unit")))))))))
-(DFunDef false "emitArgDispatchChain" ((PVar "e") PWild (PList) PWild PWild PWild PWild) (EBlock (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (ELit (LString ""))) (ELit (LString "void"))) (ELit (LString "mdk_dispatch_no_impl"))) (EListLit)))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "  unreachable"))))))
-(DFunDef false "emitArgDispatchChain" ((PVar "e") (PVar "tagReg") (PCons (PVar "g") (PVar "rest")) (PVar "argOps") (PVar "colliding") (PVar "slot") (PVar "endL")) (EIf (EBinOp "&&" (EApp (EVar "groupInherits") (EVar "g")) (EApp (EVar "isEmptyL") (EApp (EApp (EVar "ctorsOfType") (EVar "e")) (EApp (EVar "groupTag") (EVar "g"))))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArgDispatchChain") (EVar "e")) (EVar "tagReg")) (EVar "rest")) (EVar "argOps")) (EVar "colliding")) (EVar "slot")) (EVar "endL")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
-(DFunDef false "emitArgDispatchChain" ((PVar "e") (PVar "tagReg") (PCons (PVar "g") (PVar "rest")) (PVar "argOps") (PVar "colliding") (PVar "slot") (PVar "endL")) (EBlock (DoLet false false (PVar "tag") (EApp (EVar "groupTag") (EVar "g"))) (DoLet false false (PVar "cond") (EApp (EApp (EApp (EVar "emitTagMatch") (EVar "e")) (EVar "tagReg")) (EApp (EApp (EVar "ctorsOfType") (EVar "e")) (EVar "tag")))) (DoLet false false (PVar "n") (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e")))) (DoLet false false (PVar "yes") (EBinOp "++" (ELit (LString "argyes")) (EVar "n"))) (DoLet false false (PVar "next") (EBinOp "++" (ELit (LString "argnext")) (EVar "n"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  br i1 ")) (EApp (EVar "$core.display") (EVar "cond"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "yes"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "next"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "yes") (ELit (LString ":"))))) (DoLet false false PWild (EIf (EApp (EApp (EVar "argTagArmAmbiguous") (EVar "colliding")) (EVar "tag")) (EApp (EVar "emitAmbiguousArm") (EVar "e")) (EBlock (DoLet false false (PTuple (PVar "rv") PWild) (EApp (EApp (EApp (EApp (EApp (EVar "emitArityCall") (EVar "e")) (EApp (EVar "groupFnName") (EVar "g"))) (EVar "argOps")) (EApp (EVar "groupArity") (EVar "g"))) (EVar "LTInt"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  store i64 ")) (EApp (EVar "$core.display") (EVar "rv"))) (ELit (LString ", ptr "))) (EApp (EVar "$core.display") (EVar "slot"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  br label %")) (EVar "endL"))))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "next") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArgDispatchChain") (EVar "e")) (EVar "tagReg")) (EVar "rest")) (EVar "argOps")) (EVar "colliding")) (EVar "slot")) (EVar "endL")))))
+(DFunDef false "emitArgDispatchChain" ((PVar "e") (PVar "tagReg") (PVar "xs0") (PVar "argOps") (PVar "colliding") (PVar "slot") (PVar "endL")) (ELetGroup ((lgb "go" (clause ((PList)) (EBlock (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (ELit (LString ""))) (ELit (LString "void"))) (ELit (LString "mdk_dispatch_no_impl"))) (EListLit)))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "  unreachable")))))) (clause ((PCons (PVar "g") (PVar "rest"))) (EIf (EBinOp "&&" (EApp (EVar "groupInherits") (EVar "g")) (EApp (EVar "isEmptyL") (EApp (EApp (EVar "ctorsOfType") (EVar "e")) (EApp (EVar "groupTag") (EVar "g"))))) (EApp (EVar "go") (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))) (clause ((PCons (PVar "g") (PVar "rest"))) (EBlock (DoLet false false (PVar "tag") (EApp (EVar "groupTag") (EVar "g"))) (DoLet false false (PVar "cond") (EApp (EApp (EApp (EVar "emitTagMatch") (EVar "e")) (EVar "tagReg")) (EApp (EApp (EVar "ctorsOfType") (EVar "e")) (EVar "tag")))) (DoLet false false (PVar "n") (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e")))) (DoLet false false (PVar "yes") (EBinOp "++" (ELit (LString "argyes")) (EVar "n"))) (DoLet false false (PVar "next") (EBinOp "++" (ELit (LString "argnext")) (EVar "n"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  br i1 ")) (EApp (EVar "$core.display") (EVar "cond"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "yes"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "next"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "yes") (ELit (LString ":"))))) (DoLet false false PWild (EIf (EApp (EApp (EVar "argTagArmAmbiguous") (EVar "colliding")) (EVar "tag")) (EApp (EVar "emitAmbiguousArm") (EVar "e")) (EBlock (DoLet false false (PTuple (PVar "rv") PWild) (EApp (EApp (EApp (EApp (EApp (EVar "emitArityCall") (EVar "e")) (EApp (EVar "groupFnName") (EVar "g"))) (EVar "argOps")) (EApp (EVar "groupArity") (EVar "g"))) (EVar "LTInt"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  store i64 ")) (EApp (EVar "$core.display") (EVar "rv"))) (ELit (LString ", ptr "))) (EApp (EVar "$core.display") (EVar "slot"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  br label %")) (EVar "endL"))))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "next") (ELit (LString ":"))))) (DoExpr (EApp (EVar "go") (EVar "rest"))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "emitTagMatch" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))))
-(DFunDef false "emitTagMatch" ((PVar "e") PWild (PList)) (EApp (EApp (EVar "gapStr") (EVar "e")) (ELit (LString "arg-tag dispatch on impl type that owns no constructors (primitive receiver carries no cell tag)"))))
-(DFunDef false "emitTagMatch" ((PVar "e") (PVar "tagReg") (PList (PVar "c"))) (EBlock (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString " = icmp eq i64 "))) (EApp (EVar "$core.display") (EVar "tagReg"))) (ELit (LString ", "))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EApp (EApp (EVar "cellTag") (EVar "e")) (EVar "c"))))) (ELit (LString ""))))) (DoExpr (EVar "r"))))
-(DFunDef false "emitTagMatch" ((PVar "e") (PVar "tagReg") (PCons (PVar "c") (PVar "rest"))) (EBlock (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString " = icmp eq i64 "))) (EApp (EVar "$core.display") (EVar "tagReg"))) (ELit (LString ", "))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EApp (EApp (EVar "cellTag") (EVar "e")) (EVar "c"))))) (ELit (LString ""))))) (DoLet false false (PVar "rrest") (EApp (EApp (EApp (EVar "emitTagMatch") (EVar "e")) (EVar "tagReg")) (EVar "rest"))) (DoLet false false (PVar "o") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "o"))) (ELit (LString " = or i1 "))) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString ", "))) (EApp (EVar "$core.display") (EVar "rrest"))) (ELit (LString ""))))) (DoExpr (EVar "o"))))
+(DFunDef false "emitTagMatch" ((PVar "e") (PVar "tagReg") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EApp (EApp (EVar "gapStr") (EVar "e")) (ELit (LString "arg-tag dispatch on impl type that owns no constructors (primitive receiver carries no cell tag)")))) (clause ((PList (PVar "c"))) (EBlock (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString " = icmp eq i64 "))) (EApp (EVar "$core.display") (EVar "tagReg"))) (ELit (LString ", "))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EApp (EApp (EVar "cellTag") (EVar "e")) (EVar "c"))))) (ELit (LString ""))))) (DoExpr (EVar "r")))) (clause ((PCons (PVar "c") (PVar "rest"))) (EBlock (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString " = icmp eq i64 "))) (EApp (EVar "$core.display") (EVar "tagReg"))) (ELit (LString ", "))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EApp (EApp (EVar "cellTag") (EVar "e")) (EVar "c"))))) (ELit (LString ""))))) (DoLet false false (PVar "rrest") (EApp (EVar "go") (EVar "rest"))) (DoLet false false (PVar "o") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "o"))) (ELit (LString " = or i1 "))) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString ", "))) (EApp (EVar "$core.display") (EVar "rrest"))) (ELit (LString ""))))) (DoExpr (EVar "o")))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "implGroupsForMethod" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "ImplGroup")))))
 (DFunDef false "implGroupsForMethod" ((PVar "e") (PVar "method")) (EApp (EApp (EVar "filterGroupsByMethod") (EVar "method")) (EUnOp "!" (EFieldAccess (EVar "e") "implGroups"))))
 (DTypeSig false "implGroupsForMethodArity" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "ImplGroup")))))))
@@ -19633,12 +19468,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "dictWordsOf" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "dictWordsOf" ((PVar "e") (PVar "env") (PVar "rs")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "dictWordOfRoute") (EVar "e")) (EVar "env"))) (EVar "rs")))
 (DTypeSig false "dictWordOfRoute" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "Route") (TyCon "String")))))
-(DFunDef false "dictWordOfRoute" ((PVar "e") (PVar "env") (PCon "RKey" (PVar "key") (PVar "reqs") (PVar "sups"))) (EBlock (DoLet false false (PVar "supWords") (EApp (EApp (EApp (EVar "dictWordsOf") (EVar "e")) (EVar "env")) (EVar "sups"))) (DoLet false false (PVar "slots") (EApp (EApp (EVar "slotWords") (EVar "e")) (EVar "key"))) (DoLet false false (PVar "fieldWords") (EBinOp "++" (EBinOp "++" (EVar "supWords") (EVar "slots")) (EApp (EApp (EApp (EVar "dictWordsOf") (EVar "e")) (EVar "env")) (EVar "reqs")))) (DoExpr (EIf (EApp (EVar "allConstWords") (EVar "fieldWords")) (EApp (EApp (EApp (EVar "emitConstDictCell") (EVar "e")) (EApp (EVar "hashName") (EVar "key"))) (EVar "fieldWords")) (EApp (EApp (EApp (EVar "emitDictCell") (EVar "e")) (EApp (EVar "hashName") (EVar "key"))) (EVar "fieldWords"))))))
-(DFunDef false "dictWordOfRoute" ((PVar "e") (PVar "env") (PCon "RDict" (PVar "d"))) (EApp (EApp (EApp (EVar "dictOperand") (EVar "e")) (EVar "env")) (EVar "d")))
-(DFunDef false "dictWordOfRoute" ((PVar "e") (PVar "env") (PCon "RDictFwd" (PVar "d"))) (EApp (EApp (EApp (EVar "dictOperand") (EVar "e")) (EVar "env")) (EVar "d")))
-(DFunDef false "dictWordOfRoute" ((PVar "e") (PVar "env") (PCon "RProj" (PVar "r") (PVar "path"))) (EApp (EApp (EApp (EVar "loadSuperPath") (EVar "e")) (EApp (EApp (EApp (EVar "dictWordOfRoute") (EVar "e")) (EVar "env")) (EVar "r"))) (EApp (EApp (EApp (EVar "receiverPath") (EVar "e")) (EVar "r")) (EVar "path"))))
-(DFunDef false "dictWordOfRoute" (PWild PWild (PCon "RNone")) (ELit (LString "0")))
-(DFunDef false "dictWordOfRoute" (PWild PWild (PCon "RLocal" PWild PWild)) (ELit (LString "0")))
+(DFunDef false "dictWordOfRoute" ((PVar "e") (PVar "env") (PVar "x0")) (ELetGroup ((lgb "go" (clause ((PCon "RKey" (PVar "key") (PVar "reqs") (PVar "sups"))) (EBlock (DoLet false false (PVar "supWords") (EApp (EApp (EApp (EVar "dictWordsOf") (EVar "e")) (EVar "env")) (EVar "sups"))) (DoLet false false (PVar "slots") (EApp (EApp (EVar "slotWords") (EVar "e")) (EVar "key"))) (DoLet false false (PVar "fieldWords") (EBinOp "++" (EBinOp "++" (EVar "supWords") (EVar "slots")) (EApp (EApp (EApp (EVar "dictWordsOf") (EVar "e")) (EVar "env")) (EVar "reqs")))) (DoExpr (EIf (EApp (EVar "allConstWords") (EVar "fieldWords")) (EApp (EApp (EApp (EVar "emitConstDictCell") (EVar "e")) (EApp (EVar "hashName") (EVar "key"))) (EVar "fieldWords")) (EApp (EApp (EApp (EVar "emitDictCell") (EVar "e")) (EApp (EVar "hashName") (EVar "key"))) (EVar "fieldWords")))))) (clause ((PCon "RDict" (PVar "d"))) (EApp (EApp (EApp (EVar "dictOperand") (EVar "e")) (EVar "env")) (EVar "d"))) (clause ((PCon "RDictFwd" (PVar "d"))) (EApp (EApp (EApp (EVar "dictOperand") (EVar "e")) (EVar "env")) (EVar "d"))) (clause ((PCon "RProj" (PVar "r") (PVar "path"))) (EApp (EApp (EApp (EVar "loadSuperPath") (EVar "e")) (EApp (EVar "go") (EVar "r"))) (EApp (EApp (EApp (EVar "receiverPath") (EVar "e")) (EVar "r")) (EVar "path")))) (clause ((PCon "RNone")) (ELit (LString "0"))) (clause ((PCon "RLocal" PWild PWild)) (ELit (LString "0"))))) (EApp (EVar "go") (EVar "x0"))))
 (DTypeSig false "receiverPath" (TyFun (TyCon "Emit") (TyFun (TyCon "Route") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Int"))))))
 (DFunDef false "receiverPath" ((PVar "e") (PCon "RDict" (PVar "d")) (PCons (PVar "i") (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EVar "receiverIndex") (EVar "e")) (EVar "d")) (EVar "i")) (EVar "rest")))
 (DFunDef false "receiverPath" ((PVar "e") (PCon "RDictFwd" (PVar "d")) (PCons (PVar "i") (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EVar "receiverIndex") (EVar "e")) (EVar "d")) (EVar "i")) (EVar "rest")))
@@ -19709,8 +19539,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DFunDef false "tagToLTy" ((PLit (LString "I64"))) (EVar "LTI64"))
 (DFunDef false "tagToLTy" ((PVar "t")) (EIf (EApp (EVar "isTaggedFixedHead") (EVar "t")) (EVar "LTInt") (EVar "LTCon")))
 (DTypeSig false "implParamEnvByPos" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))))))))
-(DFunDef false "implParamEnvByPos" (PWild PWild (PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "omEmpty") (EApp (EVar "__fallthrough__") (ELit LUnit))))
-(DFunDef false "implParamEnvByPos" ((PVar "tag") (PVar "positions") (PVar "n") (PVar "i")) (EBlock (DoLet false false (PVar "ty") (EIf (EApp (EApp (EVar "listContains") (EVar "positions")) (EVar "i")) (EApp (EVar "tagToLTy") (EVar "tag")) (EVar "LTInt"))) (DoExpr (EApp (EApp (EApp (EVar "omInsert") (EBinOp "++" (ELit (LString "a")) (EApp (EVar "intToString") (EVar "i")))) (ETuple (EBinOp "++" (ELit (LString "%arg")) (EApp (EVar "intToString") (EVar "i"))) (EVar "ty"))) (EApp (EApp (EApp (EApp (EVar "implParamEnvByPos") (EVar "tag")) (EVar "positions")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))))
+(DFunDef false "implParamEnvByPos" ((PVar "tag") (PVar "positions") (PVar "n") (PVar "i0")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "omEmpty") (EApp (EVar "__fallthrough__") (ELit LUnit)))) (clause ((PVar "i")) (EBlock (DoLet false false (PVar "ty") (EIf (EApp (EApp (EVar "listContains") (EVar "positions")) (EVar "i")) (EApp (EVar "tagToLTy") (EVar "tag")) (EVar "LTInt"))) (DoExpr (EApp (EApp (EApp (EVar "omInsert") (EBinOp "++" (ELit (LString "a")) (EApp (EVar "intToString") (EVar "i")))) (ETuple (EBinOp "++" (ELit (LString "%arg")) (EApp (EVar "intToString") (EVar "i"))) (EVar "ty"))) (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))))))))) (EApp (EVar "go") (EVar "i0"))))
 (DTypeSig false "listContains" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Int") (TyCon "Bool"))))
 (DFunDef false "listContains" ((PList) PWild) (EVar "False"))
 (DFunDef false "listContains" ((PCons (PVar "x") (PVar "rest")) (PVar "v")) (EIf (EBinOp "==" (EVar "x") (EVar "v")) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EVar "listContains") (EVar "rest")) (EVar "v")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -19730,8 +19559,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "emitClauseTree" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr"))) (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyCon "Unit"))))))))
 (DFunDef false "emitClauseTree" ((PVar "e") (PVar "env") (PVar "arity") (PVar "clauses") (PVar "outer") (PVar "site")) (EBlock (DoLet false false (PVar "roots") (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EApp (EApp (EVar "implScrutVars") (EVar "arity")) (ELit (LInt 0))))) (DoLet false false (PVar "slot") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EVar "slot")) (ELit (LString " = alloca i64"))))) (DoLet false false (PVar "endL") (EBinOp "++" (ELit (LString "decend")) (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e"))))) (DoLet false false (PVar "rty") (EApp (EVar "Ref") (EVar "LTInt"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitClauseChain") (EVar "e")) (EVar "env")) (EVar "arity")) (EVar "clauses")) (EVar "roots")) (EVar "slot")) (EVar "endL")) (EVar "rty")) (EVar "outer")) (EVar "site"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "endL") (ELit (LString ":"))))) (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString " = load i64, ptr "))) (EApp (EVar "$core.display") (EVar "slot"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  ret i64 ")) (EVar "r"))))))
 (DTypeSig false "emitClauseChain" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "LTy")) (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyCon "Unit"))))))))))))
-(DFunDef false "emitClauseChain" (PWild PWild PWild (PList) PWild PWild PWild PWild PWild PWild) (ELit LUnit))
-(DFunDef false "emitClauseChain" ((PVar "e") (PVar "env") (PVar "arity") (PCons (PVar "c") (PVar "rest")) (PVar "roots") (PVar "slot") (PVar "endL") (PVar "rty") (PVar "outer") (PVar "site")) (EBlock (DoLet false false (PVar "nextL") (EApp (EApp (EApp (EVar "chainNextLabel") (EVar "e")) (EVar "rest")) (EVar "outer"))) (DoLet false false (PVar "c2") (EApp (EApp (EVar "ftClause") (EIf (EBinOp "==" (EVar "nextL") (ELit (LString ""))) (EApp (EApp (EVar "siteFtLabel") (EVar "e")) (EVar "site")) (EVar "nextL"))) (EVar "c"))) (DoLet false false (PVar "arms") (EListLit (EApp (EApp (EVar "clauseArm") (EVar "arity")) (EVar "c2")))) (DoLet false false (PVar "tree") (EApp (EApp (EApp (EVar "compileTree") (EApp (EVar "NoArm") (EVar "site"))) (EListLit (EVar "False"))) (EApp (EApp (EVar "implRows") (EListLit (EVar "c2"))) (ELit (LInt 0))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeShared") (EVar "e")) (EVar "env")) (EVar "roots")) (EVar "arms")) (EVar "roots")) (EVar "slot")) (EVar "endL")) (EVar "nextL")) (EVar "rty")) (EVar "tree"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "rest")) (ELit LUnit) (EBlock (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "nextL") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitClauseChain") (EVar "e")) (EVar "env")) (EVar "arity")) (EVar "rest")) (EVar "roots")) (EVar "slot")) (EVar "endL")) (EVar "rty")) (EVar "outer")) (EVar "site"))))))))
+(DFunDef false "emitClauseChain" ((PVar "e") (PVar "env") (PVar "arity") (PVar "xs0") (PVar "roots") (PVar "slot") (PVar "endL") (PVar "rty") (PVar "outer") (PVar "site")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PVar "c") (PVar "rest"))) (EBlock (DoLet false false (PVar "nextL") (EApp (EApp (EApp (EVar "chainNextLabel") (EVar "e")) (EVar "rest")) (EVar "outer"))) (DoLet false false (PVar "c2") (EApp (EApp (EVar "ftClause") (EIf (EBinOp "==" (EVar "nextL") (ELit (LString ""))) (EApp (EApp (EVar "siteFtLabel") (EVar "e")) (EVar "site")) (EVar "nextL"))) (EVar "c"))) (DoLet false false (PVar "arms") (EListLit (EApp (EApp (EVar "clauseArm") (EVar "arity")) (EVar "c2")))) (DoLet false false (PVar "tree") (EApp (EApp (EApp (EVar "compileTree") (EApp (EVar "NoArm") (EVar "site"))) (EListLit (EVar "False"))) (EApp (EApp (EVar "implRows") (EListLit (EVar "c2"))) (ELit (LInt 0))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeShared") (EVar "e")) (EVar "env")) (EVar "roots")) (EVar "arms")) (EVar "roots")) (EVar "slot")) (EVar "endL")) (EVar "nextL")) (EVar "rty")) (EVar "tree"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "rest")) (ELit LUnit) (EBlock (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "nextL") (ELit (LString ":"))))) (DoExpr (EApp (EVar "go") (EVar "rest")))))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "ftClause" (TyFun (TyCon "String") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr")) (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr")))))
 (DFunDef false "ftClause" ((PLit (LString "")) (PVar "c")) (EVar "c"))
 (DFunDef false "ftClause" ((PVar "lbl") (PTuple (PVar "pats") (PVar "body"))) (ETuple (EVar "pats") (EApp (EApp (EVar "labelFallthrough") (EVar "body")) (EVar "lbl"))))
@@ -19835,8 +19663,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "argNames" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "argNames" ((PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EListLit) (EBinOp "::" (EBinOp "++" (ELit (LString "%arg")) (EApp (EVar "intToString") (EVar "i"))) (EApp (EApp (EVar "argNames") (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))))
 (DTypeSig false "loadCaptures" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))))))))
-(DFunDef false "loadCaptures" (PWild PWild (PList) PWild) (EVar "omEmpty"))
-(DFunDef false "loadCaptures" ((PVar "e") (PVar "env") (PCons (PVar "c") (PVar "rest")) (PVar "i")) (EBlock (DoLet false false (PVar "r") (EApp (EApp (EApp (EVar "loadField") (EVar "e")) (ELit (LString "%clos"))) (EBinOp "-" (EBinOp "+" (EVar "i") (EVar "closureCaptureStart")) (ELit (LInt 1))))) (DoExpr (EApp (EApp (EApp (EVar "omInsert") (EVar "c")) (ETuple (EVar "r") (EApp (EApp (EVar "capTypeOf") (EVar "env")) (EVar "c")))) (EApp (EApp (EApp (EApp (EVar "loadCaptures") (EVar "e")) (EVar "env")) (EVar "rest")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))))
+(DFunDef false "loadCaptures" ((PVar "e") (PVar "env") (PVar "xs0") (PVar "i0")) (ELetGroup ((lgb "go" (clause ((PList) PWild) (EVar "omEmpty")) (clause ((PCons (PVar "c") (PVar "rest")) (PVar "i")) (EBlock (DoLet false false (PVar "r") (EApp (EApp (EApp (EVar "loadField") (EVar "e")) (ELit (LString "%clos"))) (EBinOp "-" (EBinOp "+" (EVar "i") (EVar "closureCaptureStart")) (ELit (LInt 1))))) (DoExpr (EApp (EApp (EApp (EVar "omInsert") (EVar "c")) (ETuple (EVar "r") (EApp (EApp (EVar "capTypeOf") (EVar "env")) (EVar "c")))) (EApp (EApp (EVar "go") (EVar "rest")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "i0"))))
 (DTypeSig false "capTypeOf" (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "String") (TyCon "LTy"))))
 (DFunDef false "capTypeOf" ((PVar "env") (PVar "c")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "c")) (EVar "env")) (arm (PCon "Some" (PTuple PWild (PCon "LTFloat"))) () (EVar "LTFloat")) (arm (PCon "Some" (PTuple PWild (PCon "LTFloatU"))) () (EVar "LTFloat")) (arm (PCon "Some" (PTuple PWild (PCon "LTU64"))) () (EVar "LTU64")) (arm (PCon "Some" (PTuple PWild (PCon "LTU64U"))) () (EVar "LTU64")) (arm (PCon "Some" (PTuple PWild (PCon "LTI64"))) () (EVar "LTI64")) (arm PWild () (EVar "LTInt"))))
 (DTypeSig false "capWords" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
@@ -19850,12 +19677,11 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "envMergeL" (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))))))
 (DFunDef false "envMergeL" ((PVar "left") (PVar "right")) (EApp (EApp (EApp (EVar "envMergeLKeys") (EApp (EVar "omKeys") (EVar "left"))) (EVar "left")) (EVar "right")))
 (DTypeSig false "envMergeLKeys" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy")))))))
-(DFunDef false "envMergeLKeys" ((PList) PWild (PVar "right")) (EVar "right"))
-(DFunDef false "envMergeLKeys" ((PCons (PVar "k") (PVar "rest")) (PVar "left") (PVar "right")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "k")) (EVar "left")) (arm (PCon "Some" (PVar "v")) () (EApp (EApp (EApp (EVar "omInsert") (EVar "k")) (EVar "v")) (EApp (EApp (EApp (EVar "envMergeLKeys") (EVar "rest")) (EVar "left")) (EVar "right")))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "envMergeLKeys") (EVar "rest")) (EVar "left")) (EVar "right")))))
+(DFunDef false "envMergeLKeys" ((PVar "xs0") (PVar "left") (PVar "right")) (ELetGroup ((lgb "go" (clause ((PList)) (EVar "right")) (clause ((PCons (PVar "k") (PVar "rest"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "k")) (EVar "left")) (arm (PCon "Some" (PVar "v")) () (EApp (EApp (EApp (EVar "omInsert") (EVar "k")) (EVar "v")) (EApp (EVar "go") (EVar "rest")))) (arm (PCon "None") () (EApp (EVar "go") (EVar "rest"))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "dedupS" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "dedupS" ((PVar "xs")) (EApp (EVar "reverseL") (EApp (EVar "dedup") (EApp (EVar "reverseL") (EVar "xs")))))
 (DTypeSig false "reservedTag" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int"))))
-(DFunDef false "reservedTag" ((PVar "name")) (EMatch (EApp (EVar "namedRuntimeCtor") (EVar "name")) (arm (PCon "Some" (PVar "id")) () (EBlock (DoLet false false (PVar "fact") (EApp (EVar "runtimeCtorFact") (EVar "id"))) (DoLet false false (PVar "slot") (EMatch (EFieldAccess (EVar "fact") "owner") (arm (PCon "RuntimeList") () (EApp (EVar "Some") (ELit (LInt 0)))) (arm (PCon "RuntimeOption") () (EApp (EVar "Some") (ELit (LInt 1)))) (arm (PCon "RuntimeResult") () (EApp (EVar "Some") (ELit (LInt 2)))) (arm (PCon "RuntimeOrdering") () (EApp (EVar "Some") (ELit (LInt 3)))) (arm PWild () (EVar "None")))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "n")) (EBinOp "+" (EBinOp "*" (EBinOp "+" (EVar "reservedTypeBase") (EVar "n")) (EVar "ctorTagShift")) (EFieldAccess (EVar "fact") "ordinal")))) (EVar "slot"))))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "reservedTag" ((PVar "name")) (EApp (EApp (EVar "$core.andThen") (EApp (EVar "namedRuntimeCtor") (EVar "name"))) (ELam ((PVar "id")) (ELet false (PVar "fact") (EApp (EVar "runtimeCtorFact") (EVar "id")) (ELet false (PVar "slot") (EMatch (EFieldAccess (EVar "fact") "owner") (arm (PCon "RuntimeList") () (EApp (EVar "Some") (ELit (LInt 0)))) (arm (PCon "RuntimeOption") () (EApp (EVar "Some") (ELit (LInt 1)))) (arm (PCon "RuntimeResult") () (EApp (EVar "Some") (ELit (LInt 2)))) (arm (PCon "RuntimeOrdering") () (EApp (EVar "Some") (ELit (LInt 3)))) (arm PWild () (EVar "None"))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "n")) (EBinOp "+" (EBinOp "*" (EBinOp "+" (EVar "reservedTypeBase") (EVar "n")) (EVar "ctorTagShift")) (EFieldAccess (EVar "fact") "ordinal")))) (EVar "slot")))))))
 (DTypeSig false "cellTag" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyCon "Int"))))
 (DFunDef false "cellTag" ((PVar "e") (PVar "name")) (EIf (EBinOp "==" (EVar "name") (ELit (LString "True"))) (ELit (LInt 1)) (EIf (EBinOp "==" (EVar "name") (ELit (LString "False"))) (ELit (LInt 0)) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "$tuple")) (ELit (LString "$ref")) (ELit (LString "$closure")))) (EApp (EVar "hashName") (EVar "name")) (EMatch (EApp (EVar "reservedTag") (EVar "name")) (arm (PCon "Some" (PVar "t")) () (EVar "t")) (arm (PCon "None") () (EBinOp "+" (EBinOp "*" (EApp (EApp (EVar "ctorTypeId") (EVar "e")) (EVar "name")) (EVar "ctorTagShift")) (EApp (EApp (EVar "ctorOrdinal") (EVar "e")) (EVar "name")))))))))
 (DTypeSig false "ctorOrdinal" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyCon "Int"))))
@@ -19885,12 +19711,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "emitDecision" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "CExpr") (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "CTree") (TyTuple (TyCon "String") (TyCon "LTy"))))))))
 (DFunDef false "emitDecision" ((PVar "e") (PVar "env") (PVar "scrut") (PVar "arms") (PVar "tree")) (EBlock (DoLet false false (PTuple (PVar "sv") PWild) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "scrut"))) (DoLet false false (PVar "slot") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EVar "slot")) (ELit (LString " = alloca i64"))))) (DoLet false false (PVar "endL") (EBinOp "++" (ELit (LString "decend")) (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e"))))) (DoLet false false (PVar "rty") (EApp (EVar "Ref") (EVar "LTInt"))) (DoLet false false (PVar "savedTrmc") (EUnOp "!" (EFieldAccess (EVar "e") "trmcCtx"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "trmcCtx")) (EVar "TrmcOff"))) (DoLet false false (PVar "savedGDisp") (EUnOp "!" (EFieldAccess (EVar "e") "gDispCtx"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "gDispCtx")) (EVar "GDispOff"))) (DoLet false false (PVar "savedSelfTail") (EUnOp "!" (EFieldAccess (EVar "e") "selfTailCtx"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "selfTailCtx")) (EVar "None"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeShared") (EVar "e")) (EVar "env")) (EListLit (EVar "sv"))) (EVar "arms")) (EListLit (EVar "sv"))) (EVar "slot")) (EVar "endL")) (ELit (LString ""))) (EVar "rty")) (EVar "tree"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "trmcCtx")) (EVar "savedTrmc"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "gDispCtx")) (EVar "savedGDisp"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "selfTailCtx")) (EVar "savedSelfTail"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "endL") (ELit (LString ":"))))) (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString " = load i64, ptr "))) (EApp (EVar "$core.display") (EVar "slot"))) (ELit (LString ""))))) (DoExpr (ETuple (EVar "r") (EUnOp "!" (EVar "rty"))))))
 (DTypeSig false "emitTree" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "LTy")) (TyFun (TyCon "CTree") (TyCon "Unit"))))))))))))
-(DFunDef false "emitTree" ((PVar "e") PWild PWild PWild PWild PWild PWild (PLit (LString "")) PWild (PCon "CTFail" (PVar "site"))) (EApp (EApp (EVar "emitFailTrap") (EVar "e")) (EVar "site")))
-(DFunDef false "emitTree" ((PVar "e") PWild PWild PWild PWild PWild PWild (PVar "lbl") PWild (PCon "CTFail" PWild)) (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  br label %")) (EVar "lbl"))))
-(DFunDef false "emitTree" ((PVar "e") (PVar "env") (PVar "roots") (PVar "arms") PWild (PVar "slot") (PVar "endL") PWild (PVar "rty") (PCon "CTLeaf" (PVar "i"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitLeaf") (EVar "e")) (EVar "env")) (EVar "roots")) (EVar "arms")) (EVar "i")) (EVar "slot")) (EVar "endL")) (EVar "rty")))
-(DFunDef false "emitTree" ((PVar "e") (PVar "env") (PVar "roots") (PVar "arms") (PVar "occs") (PVar "slot") (PVar "endL") (PVar "ftL") (PVar "rty") (PCon "CTGuard" (PVar "i") (PVar "fail"))) (EMatch (EApp (EApp (EApp (EVar "leafArm") (EVar "e")) (EVar "arms")) (EVar "i")) (arm (PCon "Some" (PTuple (PVar "pat") (PVar "guards") (PVar "body") (PVar "share"))) () (EIf (EApp (EVar "allGuardsEmittable") (EVar "guards")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitGuardedArm") (EVar "e")) (EVar "env")) (EVar "roots")) (EVar "arms")) (EVar "occs")) (EVar "pat")) (EVar "guards")) (EVar "body")) (EVar "share")) (EVar "fail")) (EVar "slot")) (EVar "endL")) (EVar "ftL")) (EVar "rty")) (EBlock (DoExpr (EApp (EApp (EVar "gapU") (EVar "e")) (ELit (LString "refutable pattern guard (`p <- e`) in a match arm (CTGuard) — not yet lowered")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  store i64 0, ptr ")) (EVar "slot")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  br label %")) (EVar "endL"))))))) (arm (PCon "None") () (EBlock (DoExpr (EApp (EApp (EVar "gapU") (EVar "e")) (ELit (LString "guarded arm index out of range (CTGuard)")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  store i64 0, ptr ")) (EVar "slot")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  br label %")) (EVar "endL"))))))))
-(DFunDef false "emitTree" ((PVar "e") (PVar "env") (PVar "roots") (PVar "arms") (PVar "occs") (PVar "slot") (PVar "endL") (PVar "ftL") (PVar "rty") (PCon "CTDrop" (PVar "sub"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTree") (EVar "e")) (EVar "env")) (EVar "roots")) (EVar "arms")) (EApp (EVar "tailS") (EVar "occs"))) (EVar "slot")) (EVar "endL")) (EVar "ftL")) (EVar "rty")) (EMethodRef "sub")))
-(DFunDef false "emitTree" ((PVar "e") (PVar "env") (PVar "roots") (PVar "arms") (PVar "occs") (PVar "slot") (PVar "endL") (PVar "ftL") (PVar "rty") (PCon "CTSwitch" (PVar "branches") (PVar "dft"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitSwitch") (EVar "e")) (EVar "env")) (EVar "roots")) (EVar "arms")) (EVar "occs")) (EVar "branches")) (EVar "dft")) (EVar "slot")) (EVar "endL")) (EVar "ftL")) (EVar "rty")))
+(DFunDef false "emitTree" ((PVar "e") (PVar "env") (PVar "roots") (PVar "arms") (PVar "occs0") (PVar "slot") (PVar "endL") (PVar "ftL") (PVar "rty") (PVar "tr0")) (ELetGroup ((lgb "go" (clause (PWild (PCon "CTFail" (PVar "site"))) (EMatch (EVar "ftL") (arm (PLit (LString "")) () (EApp (EApp (EVar "emitFailTrap") (EVar "e")) (EVar "site"))) (arm (PVar "lbl") () (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  br label %")) (EVar "lbl")))))) (clause (PWild (PCon "CTLeaf" (PVar "i"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitLeaf") (EVar "e")) (EVar "env")) (EVar "roots")) (EVar "arms")) (EVar "i")) (EVar "slot")) (EVar "endL")) (EVar "rty"))) (clause ((PVar "occs") (PCon "CTGuard" (PVar "i") (PVar "fail"))) (EMatch (EApp (EApp (EApp (EVar "leafArm") (EVar "e")) (EVar "arms")) (EVar "i")) (arm (PCon "Some" (PTuple (PVar "pat") (PVar "guards") (PVar "body") (PVar "share"))) () (EIf (EApp (EVar "allGuardsEmittable") (EVar "guards")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitGuardedArm") (EVar "e")) (EVar "env")) (EVar "roots")) (EVar "arms")) (EVar "occs")) (EVar "pat")) (EVar "guards")) (EVar "body")) (EVar "share")) (EVar "fail")) (EVar "slot")) (EVar "endL")) (EVar "ftL")) (EVar "rty")) (EBlock (DoExpr (EApp (EApp (EVar "gapU") (EVar "e")) (ELit (LString "refutable pattern guard (`p <- e`) in a match arm (CTGuard) — not yet lowered")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  store i64 0, ptr ")) (EVar "slot")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  br label %")) (EVar "endL"))))))) (arm (PCon "None") () (EBlock (DoExpr (EApp (EApp (EVar "gapU") (EVar "e")) (ELit (LString "guarded arm index out of range (CTGuard)")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  store i64 0, ptr ")) (EVar "slot")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  br label %")) (EVar "endL")))))))) (clause ((PVar "occs") (PCon "CTDrop" (PVar "sub"))) (EApp (EApp (EVar "go") (EApp (EVar "tailS") (EVar "occs"))) (EMethodRef "sub"))) (clause ((PVar "occs") (PCon "CTSwitch" (PVar "branches") (PVar "dft"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitSwitch") (EVar "e")) (EVar "env")) (EVar "roots")) (EVar "arms")) (EVar "occs")) (EVar "branches")) (EVar "dft")) (EVar "slot")) (EVar "endL")) (EVar "ftL")) (EVar "rty"))))) (EApp (EApp (EVar "go") (EVar "occs0")) (EVar "tr0"))))
 (DTypeSig false "emitLeaf" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "LTy")) (TyCon "Unit"))))))))))
 (DFunDef false "emitLeaf" ((PVar "e") (PVar "env") (PVar "roots") (PVar "arms") (PVar "i") (PVar "slot") (PVar "endL") (PVar "rty")) (EMatch (EApp (EApp (EApp (EVar "leafArm") (EVar "e")) (EVar "arms")) (EVar "i")) (arm (PCon "Some" (PTuple (PVar "pat") (PVar "guards") (PVar "body") (PVar "share"))) () (EBlock (DoLet false false (PVar "env2") (EApp (EApp (EApp (EApp (EApp (EVar "bindArm") (EVar "e")) (EVar "env")) (EVar "pat")) (EVar "roots")) (EVar "body"))) (DoExpr (EMatch (EVar "share") (arm (PCon "Some" (PVar "owner")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "orJoinEdge") (EVar "e")) (EVar "env")) (EVar "env2")) (EVar "arms")) (EVar "owner")) (EVar "body"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitLeafBody") (EVar "e")) (EVar "env2")) (EVar "body")) (EVar "slot")) (EVar "endL")) (EVar "rty"))))))) (arm (PCon "None") () (EApp (EApp (EVar "gapU") (EVar "e")) (ELit (LString "decision arm index out of range"))))))
 (DTypeSig false "emitLeafBody" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "CExpr") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "LTy")) (TyCon "Unit"))))))))
@@ -19902,7 +19723,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "leafArm" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyTuple (TyCon "Pat") (TyApp (TyCon "List") (TyCon "CGuard")) (TyCon "CExpr") (TyApp (TyCon "Option") (TyCon "Int"))))))))
 (DFunDef false "leafArm" ((PVar "e") (PVar "arms") (PVar "i")) (EMatch (EApp (EApp (EVar "nthArm") (EVar "arms")) (EVar "i")) (arm (PCon "Some" (PCon "CArm" (PVar "pat") (PVar "guards") (PVar "body"))) () (EApp (EVar "Some") (ETuple (EVar "pat") (EVar "guards") (EVar "body") (EApp (EApp (EVar "sharedOwner") (EVar "e")) (EVar "i"))))) (arm (PCon "Some" (PCon "CArmAlt" (PVar "pat") (PVar "guards") (PVar "owner"))) () (EMatch (EApp (EApp (EVar "nthArm") (EVar "arms")) (EVar "owner")) (arm (PCon "Some" (PCon "CArm" PWild PWild (PVar "body"))) () (EApp (EVar "Some") (ETuple (EVar "pat") (EVar "guards") (EVar "body") (EApp (EVar "Some") (EVar "owner"))))) (arm PWild () (EVar "None")))) (arm (PCon "None") () (EVar "None"))))
 (DTypeSig false "sharedOwner" (TyFun (TyCon "Emit") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int")))))
-(DFunDef false "sharedOwner" ((PVar "e") (PVar "i")) (EMatch (EUnOp "!" (EFieldAccess (EVar "e") "orScope")) (arm (PCon "Some" (PVar "sc")) () (EIf (EApp (EApp (EVar "omHasKey") (EApp (EVar "intToString") (EVar "i"))) (EFieldAccess (EVar "sc") "osOwners")) (EApp (EVar "Some") (EVar "i")) (EVar "None"))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "sharedOwner" ((PVar "e") (PVar "i")) (EApp (EApp (EVar "$core.andThen") (EUnOp "!" (EFieldAccess (EVar "e") "orScope"))) (ELam ((PVar "sc")) (EIf (EApp (EApp (EVar "omHasKey") (EApp (EVar "intToString") (EVar "i"))) (EFieldAccess (EVar "sc") "osOwners")) (EApp (EVar "Some") (EVar "i")) (EVar "None")))))
 (DTypeSig false "emitTreeShared" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "LTy")) (TyFun (TyCon "CTree") (TyCon "Unit"))))))))))))
 (DFunDef false "emitTreeShared" ((PVar "e") (PVar "env") (PVar "roots") (PVar "arms") (PVar "occs") (PVar "slot") (PVar "endL") (PVar "ftL") (PVar "rty") (PVar "tree")) (EBlock (DoLet false false (PVar "saved") (EUnOp "!" (EFieldAccess (EVar "e") "orScope"))) (DoLet false false (PVar "owners") (EApp (EApp (EVar "altOwners") (EVar "arms")) (EVar "omEmpty"))) (DoLet false false (PVar "scope") (ERecordCreate "OrScope" ((fa "osOwners" (EVar "owners")) (fa "osJoins" (EListLit))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "orScope")) (EIf (EBinOp "==" (EApp (EVar "omSize") (EVar "owners")) (ELit (LInt 0))) (EVar "None") (EApp (EVar "Some") (EVar "scope"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTree") (EVar "e")) (EVar "env")) (EVar "roots")) (EVar "arms")) (EVar "occs")) (EVar "slot")) (EVar "endL")) (EVar "ftL")) (EVar "rty")) (EVar "tree"))) (DoLet false false (PVar "joins") (EMatch (EUnOp "!" (EFieldAccess (EVar "e") "orScope")) (arm (PCon "Some" (PVar "sc")) () (EFieldAccess (EVar "sc") "osJoins")) (arm (PCon "None") () (EListLit)))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "orScope")) (EVar "saved"))) (DoExpr (EApp (EApp (EVar "each") (EApp (EApp (EApp (EApp (EVar "emitOrJoin") (EVar "e")) (EVar "slot")) (EVar "endL")) (EVar "rty"))) (EVar "joins")))))
 (DTypeSig false "altOwners" (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
@@ -19916,13 +19737,11 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "orOwnerVars" (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "orOwnerVars" ((PVar "arms") (PVar "owner")) (EMatch (EApp (EApp (EVar "nthArm") (EVar "arms")) (EVar "owner")) (arm (PCon "Some" (PCon "CArm" (PVar "pat") (PVar "guards") PWild)) () (EBinOp "++" (EApp (EVar "patBinders") (EVar "pat")) (EApp (EApp (EDictApp "flatMap") (EVar "guardVars")) (EVar "guards")))) (arm PWild () (EListLit))))
 (DTypeSig false "addOrEdge" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyCon "OrJoin")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "CExpr") (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))) (TyTuple (TyApp (TyCon "List") (TyCon "OrJoin")) (TyCon "String")))))))))))
-(DFunDef false "addOrEdge" ((PVar "e") (PList) (PVar "owner") (PVar "names") (PVar "bound") (PVar "env") (PVar "body") (PVar "edge")) (EBlock (DoLet false false (PVar "label") (EBinOp "++" (ELit (LString "orjoin")) (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e"))))) (DoLet false false (PVar "j") (ERecordCreate "OrJoin" ((fa "ojOwner" (EVar "owner")) (fa "ojLabel" (EVar "label")) (fa "ojNames" (EVar "names")) (fa "ojTys" (EApp (EApp (EMethodRef "map") (EVar "snd")) (EVar "bound"))) (fa "ojEnv" (EVar "env")) (fa "ojBody" (EVar "body")) (fa "ojEdges" (EListLit (EVar "edge")))))) (DoExpr (ETuple (EListLit (EVar "j")) (EVar "label")))))
-(DFunDef false "addOrEdge" ((PVar "e") (PCons (PVar "j") (PVar "rest")) (PVar "owner") (PVar "names") (PVar "bound") (PVar "env") (PVar "body") (PVar "edge")) (EIf (EBinOp "==" (EFieldAccess (EVar "j") "ojOwner") (EVar "owner")) (ETuple (EBinOp "::" (ERecordUpdate (EVar "j") ((fa "ojEdges" (EBinOp "::" (EVar "edge") (EFieldAccess (EVar "j") "ojEdges"))))) (EVar "rest")) (EFieldAccess (EVar "j") "ojLabel")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PTuple (PVar "rest2") (PVar "label")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "addOrEdge") (EVar "e")) (EVar "rest")) (EVar "owner")) (EVar "names")) (EVar "bound")) (EVar "env")) (EVar "body")) (EVar "edge"))) (DoExpr (ETuple (EBinOp "::" (EVar "j") (EVar "rest2")) (EVar "label")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "addOrEdge" ((PVar "e") (PVar "js0") (PVar "owner") (PVar "names") (PVar "bound") (PVar "env") (PVar "body") (PVar "edge")) (ELetGroup ((lgb "go" (clause ((PList)) (EBlock (DoLet false false (PVar "label") (EBinOp "++" (ELit (LString "orjoin")) (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e"))))) (DoLet false false (PVar "j") (ERecordCreate "OrJoin" ((fa "ojOwner" (EVar "owner")) (fa "ojLabel" (EVar "label")) (fa "ojNames" (EVar "names")) (fa "ojTys" (EApp (EApp (EMethodRef "map") (EVar "snd")) (EVar "bound"))) (fa "ojEnv" (EVar "env")) (fa "ojBody" (EVar "body")) (fa "ojEdges" (EListLit (EVar "edge")))))) (DoExpr (ETuple (EListLit (EVar "j")) (EVar "label"))))) (clause ((PCons (PVar "j") (PVar "rest"))) (EIf (EBinOp "==" (EFieldAccess (EVar "j") "ojOwner") (EVar "owner")) (ETuple (EBinOp "::" (ERecordUpdate (EVar "j") ((fa "ojEdges" (EBinOp "::" (EVar "edge") (EFieldAccess (EVar "j") "ojEdges"))))) (EVar "rest")) (EFieldAccess (EVar "j") "ojLabel")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PTuple (PVar "rest2") (PVar "label")) (EApp (EVar "go") (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EVar "j") (EVar "rest2")) (EVar "label")))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EVar "go") (EVar "js0"))))
 (DTypeSig false "emitOrJoin" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "LTy")) (TyFun (TyCon "OrJoin") (TyCon "Unit")))))))
 (DFunDef false "emitOrJoin" ((PVar "e") (PVar "slot") (PVar "endL") (PVar "rty") (PVar "j")) (EBlock (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EFieldAccess (EVar "j") "ojLabel") (ELit (LString ":"))))) (DoLet false false (PVar "edges") (EApp (EVar "reverseL") (EFieldAccess (EVar "j") "ojEdges"))) (DoLet false false (PVar "env") (EApp (EApp (EApp (EApp (EApp (EVar "orPhis") (EVar "e")) (EVar "edges")) (ELit (LInt 0))) (EApp (EApp (EVar "zip") (EFieldAccess (EVar "j") "ojNames")) (EFieldAccess (EVar "j") "ojTys"))) (EFieldAccess (EVar "j") "ojEnv"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitLeafBody") (EVar "e")) (EVar "env")) (EFieldAccess (EVar "j") "ojBody")) (EVar "slot")) (EVar "endL")) (EVar "rty")))))
 (DTypeSig false "orPhis" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy")))))))))
-(DFunDef false "orPhis" (PWild PWild PWild (PList) (PVar "env")) (EVar "env"))
-(DFunDef false "orPhis" ((PVar "e") (PVar "edges") (PVar "k") (PCons (PTuple (PVar "name") (PVar "ty")) (PVar "rest")) (PVar "env")) (EBlock (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false (PVar "incoming") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "ed")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "[ ")) (EApp (EVar "$core.display") (EApp (EApp (EApp (EVar "orOperand") (EVar "e")) (EVar "k")) (EApp (EVar "snd") (EVar "ed"))))) (ELit (LString ", %"))) (EApp (EVar "$core.display") (EApp (EVar "fst") (EVar "ed")))) (ELit (LString " ]"))))) (EVar "edges")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString " = phi i64 "))) (EApp (EVar "$core.display") (EVar "incoming"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "orPhis") (EVar "e")) (EVar "edges")) (EBinOp "+" (EVar "k") (ELit (LInt 1)))) (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "name")) (ETuple (EVar "r") (EVar "ty"))) (EVar "env"))))))
+(DFunDef false "orPhis" ((PVar "e") (PVar "edges") (PVar "k0") (PVar "xs0") (PVar "env0")) (ELetGroup ((lgb "go" (clause (PWild (PList) (PVar "env")) (EVar "env")) (clause ((PVar "k") (PCons (PTuple (PVar "name") (PVar "ty")) (PVar "rest")) (PVar "env")) (EBlock (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false (PVar "incoming") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "ed")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "[ ")) (EApp (EVar "$core.display") (EApp (EApp (EApp (EVar "orOperand") (EVar "e")) (EVar "k")) (EApp (EVar "snd") (EVar "ed"))))) (ELit (LString ", %"))) (EApp (EVar "$core.display") (EApp (EVar "fst") (EVar "ed")))) (ELit (LString " ]"))))) (EVar "edges")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString " = phi i64 "))) (EApp (EVar "$core.display") (EVar "incoming"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EApp (EVar "go") (EBinOp "+" (EVar "k") (ELit (LInt 1)))) (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "name")) (ETuple (EVar "r") (EVar "ty"))) (EVar "env")))))))) (EApp (EApp (EApp (EVar "go") (EVar "k0")) (EVar "xs0")) (EVar "env0"))))
 (DTypeSig false "orOperand" (TyFun (TyCon "Emit") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))))
 (DFunDef false "orOperand" (PWild (PLit (LInt 0)) (PCons (PVar "w") PWild)) (EVar "w"))
 (DFunDef false "orOperand" ((PVar "e") (PVar "k") (PCons PWild (PVar "ws"))) (EApp (EApp (EApp (EVar "orOperand") (EVar "e")) (EBinOp "-" (EVar "k") (ELit (LInt 1)))) (EVar "ws")))
@@ -19934,16 +19753,9 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "emitArmWord" (TyFun (TyCon "Emit") (TyFun (TyTuple (TyCon "String") (TyCon "LTy")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "LTy")) (TyCon "Unit")))))))
 (DFunDef false "emitArmWord" ((PVar "e") (PTuple (PVar "bv") (PVar "bty")) (PVar "slot") (PVar "endL") (PVar "rty")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "rty")) (EVar "bty"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  store i64 ")) (EApp (EVar "$core.display") (EVar "bv"))) (ELit (LString ", ptr "))) (EApp (EVar "$core.display") (EVar "slot"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  br label %")) (EVar "endL"))))))
 (DTypeSig false "emitSelfTailArm" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "TailDefine") (TyFun (TyCon "CExpr") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "LTy")) (TyCon "Unit")))))))))
-(DFunDef false "emitSelfTailArm" ((PVar "e") (PVar "env") (PVar "self") (PCon "CIf" (PVar "c") (PVar "t") (PVar "f")) (PVar "slot") (PVar "endL") (PVar "rty")) (EBlock (DoLet false false (PTuple (PVar "thenL") (PVar "elseL")) (EApp (EApp (EApp (EVar "emitTailIfHead") (EVar "e")) (EVar "env")) (EVar "c"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "thenL") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitSelfTailArm") (EVar "e")) (EVar "env")) (EVar "self")) (EVar "t")) (EVar "slot")) (EVar "endL")) (EVar "rty"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "elseL") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitSelfTailArm") (EVar "e")) (EVar "env")) (EVar "self")) (EVar "f")) (EVar "slot")) (EVar "endL")) (EVar "rty")))))
-(DFunDef false "emitSelfTailArm" ((PVar "e") (PVar "env") PWild (PCon "CDecision" (PVar "scrut") (PVar "arms") (PVar "tree")) (PVar "slot") (PVar "endL") (PVar "rty")) (EBlock (DoLet false false (PTuple (PVar "sv") PWild) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "scrut"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeShared") (EVar "e")) (EVar "env")) (EListLit (EVar "sv"))) (EVar "arms")) (EListLit (EVar "sv"))) (EVar "slot")) (EVar "endL")) (ELit (LString ""))) (EVar "rty")) (EVar "tree")))))
-(DFunDef false "emitSelfTailArm" ((PVar "e") (PVar "env") (PVar "self") (PCon "CLet" (PVar "recF") (PVar "pat") (PVar "e1") (PVar "e2")) (PVar "slot") (PVar "endL") (PVar "rty")) (EIf (EApp (EApp (EApp (EVar "letBinds") (EVar "recF")) (EVar "pat")) (EVar "e1")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitSelfTailArm") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "bindLet") (EVar "e")) (EVar "env")) (EVar "recF")) (EVar "pat")) (EVar "e1")) (EVar "e2"))) (EVar "self")) (EVar "e2")) (EVar "slot")) (EVar "endL")) (EVar "rty")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArmValue") (EVar "e")) (EVar "env")) (EApp (EApp (EApp (EApp (EVar "CLet") (EVar "recF")) (EVar "pat")) (EVar "e1")) (EVar "e2"))) (EVar "slot")) (EVar "endL")) (EVar "rty"))))
-(DFunDef false "emitSelfTailArm" ((PVar "e") (PVar "env") (PVar "self") (PCon "CLetGroup" (PVar "binds") (PVar "body")) (PVar "slot") (PVar "endL") (PVar "rty")) (EMatch (EApp (EApp (EApp (EApp (EVar "bindLetGroup") (EVar "e")) (EVar "env")) (EVar "binds")) (EVar "body")) (arm (PCon "Some" (PVar "env2")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitSelfTailArm") (EVar "e")) (EVar "env2")) (EVar "self")) (EVar "body")) (EVar "slot")) (EVar "endL")) (EVar "rty"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EVar "emitArmWord") (EVar "e")) (EApp (EVar "letGroupGap") (EVar "e"))) (EVar "slot")) (EVar "endL")) (EVar "rty")))))
-(DFunDef false "emitSelfTailArm" ((PVar "e") (PVar "env") (PVar "self") (PCon "CBlock" (PVar "stmts")) (PVar "slot") (PVar "endL") (PVar "rty")) (EMatch (EApp (EVar "lastStmtExpr") (EVar "stmts")) (arm (PCon "Some" (PVar "last")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitSelfTailArm") (EVar "e")) (EApp (EApp (EApp (EVar "emitBlockInit") (EVar "e")) (EVar "env")) (EVar "stmts"))) (EVar "self")) (EVar "last")) (EVar "slot")) (EVar "endL")) (EVar "rty"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArmValue") (EVar "e")) (EVar "env")) (EApp (EVar "CBlock") (EVar "stmts"))) (EVar "slot")) (EVar "endL")) (EVar "rty")))))
-(DFunDef false "emitSelfTailArm" ((PVar "e") (PVar "env") (PVar "self") (PVar "body") (PVar "slot") (PVar "endL") (PVar "rty")) (EApp (EApp (EApp (EApp (EApp (EVar "emitTailLeaf") (EVar "e")) (EVar "env")) (EVar "self")) (EVar "body")) (ELam (PWild) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArmValue") (EVar "e")) (EVar "env")) (EVar "body")) (EVar "slot")) (EVar "endL")) (EVar "rty")))))
+(DFunDef false "emitSelfTailArm" ((PVar "e") (PVar "env0") (PVar "self") (PVar "body0") (PVar "slot") (PVar "endL") (PVar "rty")) (ELetGroup ((lgb "go" (clause ((PVar "env") (PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EBlock (DoLet false false (PTuple (PVar "thenL") (PVar "elseL")) (EApp (EApp (EApp (EVar "emitTailIfHead") (EVar "e")) (EVar "env")) (EVar "c"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "thenL") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EVar "go") (EVar "env")) (EVar "t"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "elseL") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EVar "go") (EVar "env")) (EVar "f"))))) (clause ((PVar "env") (PCon "CDecision" (PVar "scrut") (PVar "arms") (PVar "tree"))) (EBlock (DoLet false false (PTuple (PVar "sv") PWild) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "scrut"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeShared") (EVar "e")) (EVar "env")) (EListLit (EVar "sv"))) (EVar "arms")) (EListLit (EVar "sv"))) (EVar "slot")) (EVar "endL")) (ELit (LString ""))) (EVar "rty")) (EVar "tree"))))) (clause ((PVar "env") (PCon "CLet" (PVar "recF") (PVar "pat") (PVar "e1") (PVar "e2"))) (EIf (EApp (EApp (EApp (EVar "letBinds") (EVar "recF")) (EVar "pat")) (EVar "e1")) (EApp (EApp (EVar "go") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "bindLet") (EVar "e")) (EVar "env")) (EVar "recF")) (EVar "pat")) (EVar "e1")) (EVar "e2"))) (EVar "e2")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArmValue") (EVar "e")) (EVar "env")) (EApp (EApp (EApp (EApp (EVar "CLet") (EVar "recF")) (EVar "pat")) (EVar "e1")) (EVar "e2"))) (EVar "slot")) (EVar "endL")) (EVar "rty")))) (clause ((PVar "env") (PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EMatch (EApp (EApp (EApp (EApp (EVar "bindLetGroup") (EVar "e")) (EVar "env")) (EVar "binds")) (EVar "body")) (arm (PCon "Some" (PVar "env2")) () (EApp (EApp (EVar "go") (EVar "env2")) (EVar "body"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EVar "emitArmWord") (EVar "e")) (EApp (EVar "letGroupGap") (EVar "e"))) (EVar "slot")) (EVar "endL")) (EVar "rty"))))) (clause ((PVar "env") (PCon "CBlock" (PVar "stmts"))) (EMatch (EApp (EVar "lastStmtExpr") (EVar "stmts")) (arm (PCon "Some" (PVar "last")) () (EApp (EApp (EVar "go") (EApp (EApp (EApp (EVar "emitBlockInit") (EVar "e")) (EVar "env")) (EVar "stmts"))) (EVar "last"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArmValue") (EVar "e")) (EVar "env")) (EApp (EVar "CBlock") (EVar "stmts"))) (EVar "slot")) (EVar "endL")) (EVar "rty"))))) (clause ((PVar "env") (PVar "body")) (EApp (EApp (EApp (EApp (EApp (EVar "emitTailLeaf") (EVar "e")) (EVar "env")) (EVar "self")) (EVar "body")) (ELam (PWild) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArmValue") (EVar "e")) (EVar "env")) (EVar "body")) (EVar "slot")) (EVar "endL")) (EVar "rty"))))))) (EApp (EApp (EVar "go") (EVar "env0")) (EVar "body0"))))
 (DTypeSig false "emitGuardChain" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "List") (TyCon "CGuard")) (TyFun (TyCon "CExpr") (TyFun (TyCon "String") (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy")))))))))
-(DFunDef false "emitGuardChain" (PWild (PVar "env") (PList) PWild PWild) (EVar "env"))
-(DFunDef false "emitGuardChain" ((PVar "e") (PVar "env") (PCons (PCon "CGBool" (PVar "g")) (PVar "rest")) (PVar "body") (PVar "failL")) (EBlock (DoLet false false (PTuple (PVar "bw") PWild) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "g"))) (DoLet false false (PVar "cmp") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "cmp"))) (ELit (LString " = icmp eq i64 "))) (EApp (EVar "$core.display") (EVar "bw"))) (ELit (LString ", 3"))))) (DoLet false false (PVar "pass") (EBinOp "++" (ELit (LString "guardok")) (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e"))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  br i1 ")) (EApp (EVar "$core.display") (EVar "cmp"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "pass"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "failL"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "pass") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "emitGuardChain") (EVar "e")) (EVar "env")) (EVar "rest")) (EVar "body")) (EVar "failL")))))
-(DFunDef false "emitGuardChain" ((PVar "e") (PVar "env") (PCons (PCon "CGBind" (PVar "p") (PVar "ex")) (PVar "rest")) (PVar "body") (PVar "failL")) (EBlock (DoLet false false (PTuple (PVar "v") PWild) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "ex"))) (DoLet false false (PVar "env2") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRefutMatch") (EVar "e")) (EVar "env")) (EVar "p")) (EVar "v")) (EVar "body")) (EVar "failL"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "emitGuardChain") (EVar "e")) (EVar "env2")) (EVar "rest")) (EVar "body")) (EVar "failL")))))
+(DFunDef false "emitGuardChain" ((PVar "e") (PVar "env0") (PVar "xs0") (PVar "body") (PVar "failL")) (ELetGroup ((lgb "go" (clause ((PVar "env") (PList)) (EVar "env")) (clause ((PVar "env") (PCons (PCon "CGBool" (PVar "g")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "bw") PWild) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "g"))) (DoLet false false (PVar "cmp") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "cmp"))) (ELit (LString " = icmp eq i64 "))) (EApp (EVar "$core.display") (EVar "bw"))) (ELit (LString ", 3"))))) (DoLet false false (PVar "pass") (EBinOp "++" (ELit (LString "guardok")) (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e"))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  br i1 ")) (EApp (EVar "$core.display") (EVar "cmp"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "pass"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "failL"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "pass") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EVar "go") (EVar "env")) (EVar "rest"))))) (clause ((PVar "env") (PCons (PCon "CGBind" (PVar "p") (PVar "ex")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "v") PWild) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "ex"))) (DoLet false false (PVar "env2") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRefutMatch") (EVar "e")) (EVar "env")) (EVar "p")) (EVar "v")) (EVar "body")) (EVar "failL"))) (DoExpr (EApp (EApp (EVar "go") (EVar "env2")) (EVar "rest"))))))) (EApp (EApp (EVar "go") (EVar "env0")) (EVar "xs0"))))
 (DTypeSig false "allGuardsEmittable" (TyFun (TyApp (TyCon "List") (TyCon "CGuard")) (TyCon "Bool")))
 (DFunDef false "allGuardsEmittable" ((PList)) (EVar "True"))
 (DFunDef false "allGuardsEmittable" ((PCons (PCon "CGBool" PWild) (PVar "rest"))) (EApp (EVar "allGuardsEmittable") (EVar "rest")))
@@ -19954,52 +19766,24 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DFunDef false "bindArm" ((PVar "e") (PVar "env") (PVar "pat") (PCons (PVar "v") PWild) (PVar "body")) (EApp (EApp (EApp (EApp (EApp (EVar "bindPattern") (EVar "e")) (EVar "env")) (EVar "pat")) (EVar "v")) (EVar "body")))
 (DFunDef false "bindArm" (PWild (PVar "env") PWild (PList) PWild) (EVar "env"))
 (DTypeSig false "bindEach" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CExpr") (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy")))))))))
-(DFunDef false "bindEach" ((PVar "e") (PVar "env") (PCons (PVar "p") (PVar "ps")) (PCons (PVar "v") (PVar "vs")) (PVar "body")) (EBlock (DoLet false false (PVar "env2") (EApp (EApp (EApp (EApp (EApp (EVar "bindPattern") (EVar "e")) (EVar "env")) (EVar "p")) (EVar "v")) (EVar "body"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "bindEach") (EVar "e")) (EVar "env2")) (EVar "ps")) (EVar "vs")) (EVar "body")))))
-(DFunDef false "bindEach" (PWild (PVar "env") PWild PWild PWild) (EVar "env"))
+(DFunDef false "bindEach" ((PVar "e") (PVar "env0") (PVar "xs0") (PVar "xs1") (PVar "body")) (ELetGroup ((lgb "go" (clause ((PVar "env") (PCons (PVar "p") (PVar "ps")) (PCons (PVar "v") (PVar "vs"))) (EBlock (DoLet false false (PVar "env2") (EApp (EApp (EApp (EApp (EApp (EVar "bindPattern") (EVar "e")) (EVar "env")) (EVar "p")) (EVar "v")) (EVar "body"))) (DoExpr (EApp (EApp (EApp (EVar "go") (EVar "env2")) (EVar "ps")) (EVar "vs"))))) (clause ((PVar "env") PWild PWild) (EVar "env")))) (EApp (EApp (EApp (EVar "go") (EVar "env0")) (EVar "xs0")) (EVar "xs1"))))
 (DTypeSig false "emitRefutArm" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "Pat") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CExpr") (TyFun (TyCon "String") (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))))))))))
 (DFunDef false "emitRefutArm" ((PVar "e") (PVar "env") (PVar "pat") (PList (PVar "v")) (PVar "body") (PVar "failL")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRefutMatch") (EVar "e")) (EVar "env")) (EVar "pat")) (EVar "v")) (EVar "body")) (EVar "failL")))
 (DFunDef false "emitRefutArm" ((PVar "e") (PVar "env") (PCon "PTuple" (PVar "ps")) (PVar "roots") (PVar "body") (PVar "failL")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRefutEach") (EVar "e")) (EVar "env")) (EVar "ps")) (EVar "roots")) (EVar "body")) (EVar "failL")))
 (DFunDef false "emitRefutArm" ((PVar "e") (PVar "env") (PVar "pat") (PCons (PVar "v") PWild) (PVar "body") (PVar "failL")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRefutMatch") (EVar "e")) (EVar "env")) (EVar "pat")) (EVar "v")) (EVar "body")) (EVar "failL")))
 (DFunDef false "emitRefutArm" (PWild (PVar "env") PWild (PList) PWild PWild) (EVar "env"))
 (DTypeSig false "emitRefutEach" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CExpr") (TyFun (TyCon "String") (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))))))))))
-(DFunDef false "emitRefutEach" ((PVar "e") (PVar "env") (PCons (PVar "p") (PVar "ps")) (PCons (PVar "v") (PVar "vs")) (PVar "body") (PVar "failL")) (EBlock (DoLet false false (PVar "env2") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRefutMatch") (EVar "e")) (EVar "env")) (EVar "p")) (EVar "v")) (EVar "body")) (EVar "failL"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRefutEach") (EVar "e")) (EVar "env2")) (EVar "ps")) (EVar "vs")) (EVar "body")) (EVar "failL")))))
-(DFunDef false "emitRefutEach" (PWild (PVar "env") PWild PWild PWild PWild) (EVar "env"))
+(DFunDef false "emitRefutEach" ((PVar "e") (PVar "env0") (PVar "xs0") (PVar "xs1") (PVar "body") (PVar "failL")) (ELetGroup ((lgb "go" (clause ((PVar "env") (PCons (PVar "p") (PVar "ps")) (PCons (PVar "v") (PVar "vs"))) (EBlock (DoLet false false (PVar "env2") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRefutMatch") (EVar "e")) (EVar "env")) (EVar "p")) (EVar "v")) (EVar "body")) (EVar "failL"))) (DoExpr (EApp (EApp (EApp (EVar "go") (EVar "env2")) (EVar "ps")) (EVar "vs"))))) (clause ((PVar "env") PWild PWild) (EVar "env")))) (EApp (EApp (EApp (EVar "go") (EVar "env0")) (EVar "xs0")) (EVar "xs1"))))
 (DTypeSig false "bindPattern" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "Pat") (TyFun (TyCon "String") (TyFun (TyCon "CExpr") (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy")))))))))
-(DFunDef false "bindPattern" (PWild (PVar "env") (PCon "PWild") PWild PWild) (EVar "env"))
-(DFunDef false "bindPattern" (PWild (PVar "env") (PCon "PLit" PWild) PWild PWild) (EVar "env"))
-(DFunDef false "bindPattern" ((PVar "e") (PVar "env") (PCon "PVar" (PVar "x") PWild (PVar "bid")) (PVar "v") PWild) (EApp (EApp (EApp (EApp (EApp (EVar "bindVarTy") (EVar "e")) (EVar "env")) (EVar "x")) (EVar "bid")) (EVar "v")))
-(DFunDef false "bindPattern" ((PVar "e") (PVar "env") (PCon "PCon" PWild (PVar "args")) (PVar "v") (PVar "body")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "bindFields") (EVar "e")) (EVar "env")) (EVar "args")) (EVar "v")) (EVar "body")) (ELit (LInt 0))))
-(DFunDef false "bindPattern" ((PVar "e") (PVar "env") (PCon "PTuple" (PVar "ps")) (PVar "v") (PVar "body")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "bindFields") (EVar "e")) (EVar "env")) (EVar "ps")) (EVar "v")) (EVar "body")) (ELit (LInt 0))))
-(DFunDef false "bindPattern" ((PVar "e") (PVar "env") (PCon "PCons" (PVar "h") (PVar "t")) (PVar "v") (PVar "body")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "bindFields") (EVar "e")) (EVar "env")) (EListLit (EVar "h") (EVar "t"))) (EVar "v")) (EVar "body")) (ELit (LInt 0))))
-(DFunDef false "bindPattern" (PWild (PVar "env") (PCon "PList" (PList)) PWild PWild) (EVar "env"))
-(DFunDef false "bindPattern" ((PVar "e") (PVar "env") (PCon "PAs" (PVar "x") PWild (PVar "bid") (PVar "p")) (PVar "v") (PVar "body")) (EBlock (DoLet false false (PVar "env2") (EApp (EApp (EApp (EApp (EApp (EVar "bindVarTy") (EVar "e")) (EVar "env")) (EVar "x")) (EVar "bid")) (EVar "v"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "bindPattern") (EVar "e")) (EVar "env2")) (EVar "p")) (EVar "v")) (EVar "body")))))
-(DFunDef false "bindPattern" ((PVar "e") (PVar "env") (PCon "PList" (PCons (PVar "p") (PVar "ps"))) (PVar "v") (PVar "body")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "bindFields") (EVar "e")) (EVar "env")) (EListLit (EVar "p") (EApp (EVar "PList") (EVar "ps")))) (EVar "v")) (EVar "body")) (ELit (LInt 0))))
-(DFunDef false "bindPattern" ((PVar "e") (PVar "env") (PVar "p") PWild PWild) (EApp (EApp (EApp (EVar "gapEnv") (EVar "e")) (EBinOp "++" (ELit (LString "unsupported pattern in match arm (variable / wildcard / constructor / tuple / cons / nil / int-literal only): ")) (EApp (EVar "ptag") (EVar "p")))) (EVar "env")))
+(DFunDef false "bindPattern" ((PVar "e") (PVar "env0") (PVar "p0") (PVar "v") (PVar "body")) (ELetGroup ((lgb "go" (clause ((PVar "env") (PCon "PWild")) (EVar "env")) (clause ((PVar "env") (PCon "PLit" PWild)) (EVar "env")) (clause ((PVar "env") (PCon "PVar" (PVar "x") PWild (PVar "bid"))) (EApp (EApp (EApp (EApp (EApp (EVar "bindVarTy") (EVar "e")) (EVar "env")) (EVar "x")) (EVar "bid")) (EVar "v"))) (clause ((PVar "env") (PCon "PCon" PWild (PVar "args"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "bindFields") (EVar "e")) (EVar "env")) (EVar "args")) (EVar "v")) (EVar "body")) (ELit (LInt 0)))) (clause ((PVar "env") (PCon "PTuple" (PVar "ps"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "bindFields") (EVar "e")) (EVar "env")) (EVar "ps")) (EVar "v")) (EVar "body")) (ELit (LInt 0)))) (clause ((PVar "env") (PCon "PCons" (PVar "h") (PVar "t"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "bindFields") (EVar "e")) (EVar "env")) (EListLit (EVar "h") (EVar "t"))) (EVar "v")) (EVar "body")) (ELit (LInt 0)))) (clause ((PVar "env") (PCon "PList" (PList))) (EVar "env")) (clause ((PVar "env") (PCon "PAs" (PVar "x") PWild (PVar "bid") (PVar "p"))) (EBlock (DoLet false false (PVar "env2") (EApp (EApp (EApp (EApp (EApp (EVar "bindVarTy") (EVar "e")) (EVar "env")) (EVar "x")) (EVar "bid")) (EVar "v"))) (DoExpr (EApp (EApp (EVar "go") (EVar "env2")) (EVar "p"))))) (clause ((PVar "env") (PCon "PList" (PCons (PVar "p") (PVar "ps")))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "bindFields") (EVar "e")) (EVar "env")) (EListLit (EVar "p") (EApp (EVar "PList") (EVar "ps")))) (EVar "v")) (EVar "body")) (ELit (LInt 0)))) (clause ((PVar "env") (PVar "p")) (EApp (EApp (EApp (EVar "gapEnv") (EVar "e")) (EBinOp "++" (ELit (LString "unsupported pattern in match arm (variable / wildcard / constructor / tuple / cons / nil / int-literal only): ")) (EApp (EVar "ptag") (EVar "p")))) (EVar "env"))))) (EApp (EApp (EVar "go") (EVar "env0")) (EVar "p0"))))
 (DTypeSig false "bindVarTy" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "String") (TyFun (TyCon "BinderId") (TyFun (TyCon "String") (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy")))))))))
 (DFunDef false "bindVarTy" ((PVar "e") (PVar "env") (PVar "x") (PVar "bid") (PVar "v")) (EApp (EApp (EApp (EVar "omInsert") (EVar "x")) (ETuple (EVar "v") (EApp (EApp (EVar "binderLTy") (EVar "e")) (EVar "bid")))) (EVar "env")))
 (DTypeSig false "bindFields" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "String") (TyFun (TyCon "CExpr") (TyFun (TyCon "Int") (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))))))))))
-(DFunDef false "bindFields" (PWild (PVar "env") (PList) PWild PWild PWild) (EVar "env"))
-(DFunDef false "bindFields" ((PVar "e") (PVar "env") (PCons (PVar "p") (PVar "rest")) (PVar "v") (PVar "body") (PVar "i")) (EBlock (DoLet false false (PVar "f") (EApp (EApp (EApp (EVar "loadField") (EVar "e")) (EVar "v")) (EVar "i"))) (DoLet false false (PVar "env2") (EApp (EApp (EApp (EApp (EApp (EVar "bindPattern") (EVar "e")) (EVar "env")) (EVar "p")) (EVar "f")) (EVar "body"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "bindFields") (EVar "e")) (EVar "env2")) (EVar "rest")) (EVar "v")) (EVar "body")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))))
+(DFunDef false "bindFields" ((PVar "e") (PVar "env0") (PVar "xs0") (PVar "v") (PVar "body") (PVar "i0")) (ELetGroup ((lgb "go" (clause ((PVar "env") (PList) PWild) (EVar "env")) (clause ((PVar "env") (PCons (PVar "p") (PVar "rest")) (PVar "i")) (EBlock (DoLet false false (PVar "f") (EApp (EApp (EApp (EVar "loadField") (EVar "e")) (EVar "v")) (EVar "i"))) (DoLet false false (PVar "env2") (EApp (EApp (EApp (EApp (EApp (EVar "bindPattern") (EVar "e")) (EVar "env")) (EVar "p")) (EVar "f")) (EVar "body"))) (DoExpr (EApp (EApp (EApp (EVar "go") (EVar "env2")) (EVar "rest")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))))) (EApp (EApp (EApp (EVar "go") (EVar "env0")) (EVar "xs0")) (EVar "i0"))))
 (DTypeSig false "emitRefutMatch" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "Pat") (TyFun (TyCon "String") (TyFun (TyCon "CExpr") (TyFun (TyCon "String") (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))))))))))
-(DFunDef false "emitRefutMatch" ((PVar "e") (PVar "env") (PCon "PWild") (PVar "v") (PVar "body") PWild) (EApp (EApp (EApp (EApp (EApp (EVar "bindPattern") (EVar "e")) (EVar "env")) (EVar "PWild")) (EVar "v")) (EVar "body")))
-(DFunDef false "emitRefutMatch" ((PVar "e") (PVar "env") (PCon "PVar" (PVar "x") (PVar "l") (PVar "bid")) (PVar "v") (PVar "body") PWild) (EApp (EApp (EApp (EApp (EApp (EVar "bindPattern") (EVar "e")) (EVar "env")) (EApp (EApp (EApp (EVar "PVar") (EVar "x")) (EVar "l")) (EVar "bid"))) (EVar "v")) (EVar "body")))
-(DFunDef false "emitRefutMatch" ((PVar "e") (PVar "env") (PCon "PAs" (PVar "x") PWild (PVar "bid") (PVar "p")) (PVar "v") (PVar "body") (PVar "failL")) (EBlock (DoLet false false (PVar "env2") (EApp (EApp (EApp (EApp (EApp (EVar "bindVarTy") (EVar "e")) (EVar "env")) (EVar "x")) (EVar "bid")) (EVar "v"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRefutMatch") (EVar "e")) (EVar "env2")) (EVar "p")) (EVar "v")) (EVar "body")) (EVar "failL")))))
-(DFunDef false "emitRefutMatch" ((PVar "e") (PVar "env") (PCon "PTuple" (PVar "ps")) (PVar "v") (PVar "body") (PVar "failL")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRefutFields") (EVar "e")) (EVar "env")) (EVar "ps")) (EVar "v")) (EVar "body")) (EVar "failL")) (ELit (LInt 0))))
-(DFunDef false "emitRefutMatch" ((PVar "e") (PVar "env") (PCon "PLit" (PCon "LInt" (PVar "k"))) (PVar "v") PWild (PVar "failL")) (EBlock (DoLet false false (PTuple (PVar "kw") PWild) (EApp (EApp (EVar "emitLit") (EVar "e")) (EApp (EVar "LInt") (EVar "k")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "emitWordEqTest") (EVar "e")) (EVar "v")) (EVar "kw")) (EVar "failL"))) (DoExpr (EVar "env"))))
-(DFunDef false "emitRefutMatch" ((PVar "e") (PVar "env") (PCon "PLit" (PCon "LChar" (PVar "c"))) (PVar "v") PWild (PVar "failL")) (EBlock (DoLet false false (PVar "cp") (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EApp (EVar "stringToChars") (EVar "c"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "emitWordEqTest") (EVar "e")) (EVar "v")) (EApp (EVar "intToString") (EBinOp "+" (EBinOp "*" (EVar "cp") (ELit (LInt 2))) (ELit (LInt 1))))) (EVar "failL"))) (DoExpr (EVar "env"))))
-(DFunDef false "emitRefutMatch" ((PVar "e") (PVar "env") (PCon "PLit" (PCon "LBool" (PVar "b"))) (PVar "v") PWild (PVar "failL")) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EVar "emitWordEqTest") (EVar "e")) (EVar "v")) (EIf (EVar "b") (ELit (LString "3")) (ELit (LString "1")))) (EVar "failL"))) (DoExpr (EVar "env"))))
-(DFunDef false "emitRefutMatch" ((PVar "e") (PVar "env") (PCon "PLit" (PCon "LString" (PVar "s"))) (PVar "v") PWild (PVar "failL")) (EBlock (DoLet false false (PTuple (PVar "lit") PWild) (EApp (EApp (EVar "emitLit") (EVar "e")) (EApp (EVar "LString") (EVar "s")))) (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (EVar "r")) (ELit (LString "i64"))) (ELit (LString "mdk_string_eq"))) (EApp (EVar "i64Ops") (EListLit (EVar "v") (EVar "lit")))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "emitWordEqTest") (EVar "e")) (EVar "r")) (ELit (LString "3"))) (EVar "failL"))) (DoExpr (EVar "env"))))
-(DFunDef false "emitRefutMatch" ((PVar "e") (PVar "env") (PCon "PRng" (PVar "lo") (PVar "hi") (PVar "incl")) (PVar "v") PWild (PVar "failL")) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRangeTest") (EVar "e")) (EVar "v")) (EApp (EVar "rngBound") (EVar "lo"))) (EApp (EVar "rngBound") (EVar "hi"))) (EVar "incl")) (EVar "failL"))) (DoExpr (EVar "env"))))
-(DFunDef false "emitRefutMatch" ((PVar "e") (PVar "env") (PCon "PCon" (PLit (LString "True")) (PList)) (PVar "v") (PVar "body") (PVar "failL")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRefutMatch") (EVar "e")) (EVar "env")) (EApp (EVar "PLit") (EApp (EVar "LBool") (EVar "True")))) (EVar "v")) (EVar "body")) (EVar "failL")))
-(DFunDef false "emitRefutMatch" ((PVar "e") (PVar "env") (PCon "PCon" (PLit (LString "False")) (PList)) (PVar "v") (PVar "body") (PVar "failL")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRefutMatch") (EVar "e")) (EVar "env")) (EApp (EVar "PLit") (EApp (EVar "LBool") (EVar "False")))) (EVar "v")) (EVar "body")) (EVar "failL")))
-(DFunDef false "emitRefutMatch" ((PVar "e") (PVar "env") (PCon "PCon" (PVar "c") (PVar "args")) (PVar "v") (PVar "body") (PVar "failL")) (EBlock (DoLet false false (PVar "rep") (EApp (EApp (EApp (EApp (EVar "discRepOfHead") (EVar "e")) (EVar "c")) (EApp (EVar "lengthS") (EVar "args"))) (EListLit (EVar "c")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "emitWordEqTest") (EVar "e")) (EApp (EApp (EApp (EVar "discReg") (EVar "e")) (EVar "rep")) (EVar "v"))) (EApp (EApp (EApp (EVar "discExpected") (EVar "e")) (EVar "rep")) (EVar "c"))) (EVar "failL"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRefutFields") (EVar "e")) (EVar "env")) (EVar "args")) (EVar "v")) (EVar "body")) (EVar "failL")) (ELit (LInt 0))))))
-(DFunDef false "emitRefutMatch" ((PVar "e") (PVar "env") (PCon "PCons" (PVar "h") (PVar "t")) (PVar "v") (PVar "body") (PVar "failL")) (EBlock (DoLet false false (PVar "rep") (EApp (EApp (EApp (EApp (EVar "discRepOfHead") (EVar "e")) (ELit (LString "Cons"))) (ELit (LInt 2))) (EListLit (ELit (LString "Cons"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "emitWordEqTest") (EVar "e")) (EApp (EApp (EApp (EVar "discReg") (EVar "e")) (EVar "rep")) (EVar "v"))) (EApp (EApp (EApp (EVar "discExpected") (EVar "e")) (EVar "rep")) (ELit (LString "Cons")))) (EVar "failL"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRefutFields") (EVar "e")) (EVar "env")) (EListLit (EVar "h") (EVar "t"))) (EVar "v")) (EVar "body")) (EVar "failL")) (ELit (LInt 0))))))
-(DFunDef false "emitRefutMatch" ((PVar "e") (PVar "env") (PCon "PList" (PList)) (PVar "v") PWild (PVar "failL")) (EBlock (DoLet false false (PVar "rep") (EApp (EApp (EApp (EApp (EVar "discRepOfHead") (EVar "e")) (ELit (LString "Nil"))) (ELit (LInt 0))) (EListLit (ELit (LString "Nil"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "emitWordEqTest") (EVar "e")) (EApp (EApp (EApp (EVar "discReg") (EVar "e")) (EVar "rep")) (EVar "v"))) (EApp (EApp (EApp (EVar "discExpected") (EVar "e")) (EVar "rep")) (ELit (LString "Nil")))) (EVar "failL"))) (DoExpr (EVar "env"))))
-(DFunDef false "emitRefutMatch" ((PVar "e") (PVar "env") (PCon "PList" (PCons (PVar "p") (PVar "ps"))) (PVar "v") (PVar "body") (PVar "failL")) (EBlock (DoLet false false (PVar "rep") (EApp (EApp (EApp (EApp (EVar "discRepOfHead") (EVar "e")) (ELit (LString "Cons"))) (ELit (LInt 2))) (EListLit (ELit (LString "Cons"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "emitWordEqTest") (EVar "e")) (EApp (EApp (EApp (EVar "discReg") (EVar "e")) (EVar "rep")) (EVar "v"))) (EApp (EApp (EApp (EVar "discExpected") (EVar "e")) (EVar "rep")) (ELit (LString "Cons")))) (EVar "failL"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRefutFields") (EVar "e")) (EVar "env")) (EListLit (EVar "p") (EApp (EVar "PList") (EVar "ps")))) (EVar "v")) (EVar "body")) (EVar "failL")) (ELit (LInt 0))))))
-(DFunDef false "emitRefutMatch" ((PVar "e") (PVar "env") (PVar "p") PWild PWild PWild) (EApp (EApp (EApp (EVar "gapEnv") (EVar "e")) (EBinOp "++" (ELit (LString "refutable pattern in guard/range arm not lowered (variable / wildcard / as / tuple / literal / range / constructor / cons / list only): ")) (EApp (EVar "ptag") (EVar "p")))) (EVar "env")))
+(DFunDef false "emitRefutMatch" ((PVar "e") (PVar "env0") (PVar "p0") (PVar "v") (PVar "body") (PVar "failL")) (ELetGroup ((lgb "go" (clause ((PVar "env") (PCon "PWild")) (EApp (EApp (EApp (EApp (EApp (EVar "bindPattern") (EVar "e")) (EVar "env")) (EVar "PWild")) (EVar "v")) (EVar "body"))) (clause ((PVar "env") (PCon "PVar" (PVar "x") (PVar "l") (PVar "bid"))) (EApp (EApp (EApp (EApp (EApp (EVar "bindPattern") (EVar "e")) (EVar "env")) (EApp (EApp (EApp (EVar "PVar") (EVar "x")) (EVar "l")) (EVar "bid"))) (EVar "v")) (EVar "body"))) (clause ((PVar "env") (PCon "PAs" (PVar "x") PWild (PVar "bid") (PVar "p"))) (EBlock (DoLet false false (PVar "env2") (EApp (EApp (EApp (EApp (EApp (EVar "bindVarTy") (EVar "e")) (EVar "env")) (EVar "x")) (EVar "bid")) (EVar "v"))) (DoExpr (EApp (EApp (EVar "go") (EVar "env2")) (EVar "p"))))) (clause ((PVar "env") (PCon "PTuple" (PVar "ps"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRefutFields") (EVar "e")) (EVar "env")) (EVar "ps")) (EVar "v")) (EVar "body")) (EVar "failL")) (ELit (LInt 0)))) (clause ((PVar "env") (PCon "PLit" (PCon "LInt" (PVar "k")))) (EBlock (DoLet false false (PTuple (PVar "kw") PWild) (EApp (EApp (EVar "emitLit") (EVar "e")) (EApp (EVar "LInt") (EVar "k")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "emitWordEqTest") (EVar "e")) (EVar "v")) (EVar "kw")) (EVar "failL"))) (DoExpr (EVar "env")))) (clause ((PVar "env") (PCon "PLit" (PCon "LChar" (PVar "c")))) (EBlock (DoLet false false (PVar "cp") (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EApp (EVar "stringToChars") (EVar "c"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "emitWordEqTest") (EVar "e")) (EVar "v")) (EApp (EVar "intToString") (EBinOp "+" (EBinOp "*" (EVar "cp") (ELit (LInt 2))) (ELit (LInt 1))))) (EVar "failL"))) (DoExpr (EVar "env")))) (clause ((PVar "env") (PCon "PLit" (PCon "LBool" (PVar "b")))) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EVar "emitWordEqTest") (EVar "e")) (EVar "v")) (EIf (EVar "b") (ELit (LString "3")) (ELit (LString "1")))) (EVar "failL"))) (DoExpr (EVar "env")))) (clause ((PVar "env") (PCon "PLit" (PCon "LString" (PVar "s")))) (EBlock (DoLet false false (PTuple (PVar "lit") PWild) (EApp (EApp (EVar "emitLit") (EVar "e")) (EApp (EVar "LString") (EVar "s")))) (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (EVar "r")) (ELit (LString "i64"))) (ELit (LString "mdk_string_eq"))) (EApp (EVar "i64Ops") (EListLit (EVar "v") (EVar "lit")))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "emitWordEqTest") (EVar "e")) (EVar "r")) (ELit (LString "3"))) (EVar "failL"))) (DoExpr (EVar "env")))) (clause ((PVar "env") (PCon "PRng" (PVar "lo") (PVar "hi") (PVar "incl"))) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRangeTest") (EVar "e")) (EVar "v")) (EApp (EVar "rngBound") (EVar "lo"))) (EApp (EVar "rngBound") (EVar "hi"))) (EVar "incl")) (EVar "failL"))) (DoExpr (EVar "env")))) (clause ((PVar "env") (PCon "PCon" (PLit (LString "True")) (PList))) (EApp (EApp (EVar "go") (EVar "env")) (EApp (EVar "PLit") (EApp (EVar "LBool") (EVar "True"))))) (clause ((PVar "env") (PCon "PCon" (PLit (LString "False")) (PList))) (EApp (EApp (EVar "go") (EVar "env")) (EApp (EVar "PLit") (EApp (EVar "LBool") (EVar "False"))))) (clause ((PVar "env") (PCon "PCon" (PVar "c") (PVar "args"))) (EBlock (DoLet false false (PVar "rep") (EApp (EApp (EApp (EApp (EVar "discRepOfHead") (EVar "e")) (EVar "c")) (EApp (EVar "lengthS") (EVar "args"))) (EListLit (EVar "c")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "emitWordEqTest") (EVar "e")) (EApp (EApp (EApp (EVar "discReg") (EVar "e")) (EVar "rep")) (EVar "v"))) (EApp (EApp (EApp (EVar "discExpected") (EVar "e")) (EVar "rep")) (EVar "c"))) (EVar "failL"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRefutFields") (EVar "e")) (EVar "env")) (EVar "args")) (EVar "v")) (EVar "body")) (EVar "failL")) (ELit (LInt 0)))))) (clause ((PVar "env") (PCon "PCons" (PVar "h") (PVar "t"))) (EBlock (DoLet false false (PVar "rep") (EApp (EApp (EApp (EApp (EVar "discRepOfHead") (EVar "e")) (ELit (LString "Cons"))) (ELit (LInt 2))) (EListLit (ELit (LString "Cons"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "emitWordEqTest") (EVar "e")) (EApp (EApp (EApp (EVar "discReg") (EVar "e")) (EVar "rep")) (EVar "v"))) (EApp (EApp (EApp (EVar "discExpected") (EVar "e")) (EVar "rep")) (ELit (LString "Cons")))) (EVar "failL"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRefutFields") (EVar "e")) (EVar "env")) (EListLit (EVar "h") (EVar "t"))) (EVar "v")) (EVar "body")) (EVar "failL")) (ELit (LInt 0)))))) (clause ((PVar "env") (PCon "PList" (PList))) (EBlock (DoLet false false (PVar "rep") (EApp (EApp (EApp (EApp (EVar "discRepOfHead") (EVar "e")) (ELit (LString "Nil"))) (ELit (LInt 0))) (EListLit (ELit (LString "Nil"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "emitWordEqTest") (EVar "e")) (EApp (EApp (EApp (EVar "discReg") (EVar "e")) (EVar "rep")) (EVar "v"))) (EApp (EApp (EApp (EVar "discExpected") (EVar "e")) (EVar "rep")) (ELit (LString "Nil")))) (EVar "failL"))) (DoExpr (EVar "env")))) (clause ((PVar "env") (PCon "PList" (PCons (PVar "p") (PVar "ps")))) (EBlock (DoLet false false (PVar "rep") (EApp (EApp (EApp (EApp (EVar "discRepOfHead") (EVar "e")) (ELit (LString "Cons"))) (ELit (LInt 2))) (EListLit (ELit (LString "Cons"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "emitWordEqTest") (EVar "e")) (EApp (EApp (EApp (EVar "discReg") (EVar "e")) (EVar "rep")) (EVar "v"))) (EApp (EApp (EApp (EVar "discExpected") (EVar "e")) (EVar "rep")) (ELit (LString "Cons")))) (EVar "failL"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRefutFields") (EVar "e")) (EVar "env")) (EListLit (EVar "p") (EApp (EVar "PList") (EVar "ps")))) (EVar "v")) (EVar "body")) (EVar "failL")) (ELit (LInt 0)))))) (clause ((PVar "env") (PVar "p")) (EApp (EApp (EApp (EVar "gapEnv") (EVar "e")) (EBinOp "++" (ELit (LString "refutable pattern in guard/range arm not lowered (variable / wildcard / as / tuple / literal / range / constructor / cons / list only): ")) (EApp (EVar "ptag") (EVar "p")))) (EVar "env"))))) (EApp (EApp (EVar "go") (EVar "env0")) (EVar "p0"))))
 (DTypeSig false "emitRefutFields" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "String") (TyFun (TyCon "CExpr") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy")))))))))))
-(DFunDef false "emitRefutFields" (PWild (PVar "env") (PList) PWild PWild PWild PWild) (EVar "env"))
-(DFunDef false "emitRefutFields" ((PVar "e") (PVar "env") (PCons (PVar "p") (PVar "rest")) (PVar "v") (PVar "body") (PVar "failL") (PVar "i")) (EBlock (DoLet false false (PVar "f") (EApp (EApp (EApp (EVar "loadField") (EVar "e")) (EVar "v")) (EVar "i"))) (DoLet false false (PVar "env2") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRefutMatch") (EVar "e")) (EVar "env")) (EVar "p")) (EVar "f")) (EVar "body")) (EVar "failL"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRefutFields") (EVar "e")) (EVar "env2")) (EVar "rest")) (EVar "v")) (EVar "body")) (EVar "failL")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))))
+(DFunDef false "emitRefutFields" ((PVar "e") (PVar "env0") (PVar "xs0") (PVar "v") (PVar "body") (PVar "failL") (PVar "i0")) (ELetGroup ((lgb "go" (clause ((PVar "env") (PList) PWild) (EVar "env")) (clause ((PVar "env") (PCons (PVar "p") (PVar "rest")) (PVar "i")) (EBlock (DoLet false false (PVar "f") (EApp (EApp (EApp (EVar "loadField") (EVar "e")) (EVar "v")) (EVar "i"))) (DoLet false false (PVar "env2") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRefutMatch") (EVar "e")) (EVar "env")) (EVar "p")) (EVar "f")) (EVar "body")) (EVar "failL"))) (DoExpr (EApp (EApp (EApp (EVar "go") (EVar "env2")) (EVar "rest")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))))) (EApp (EApp (EApp (EVar "go") (EVar "env0")) (EVar "xs0")) (EVar "i0"))))
 (DTypeSig false "emitWordEqTest" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Unit"))))))
 (DFunDef false "emitWordEqTest" ((PVar "e") (PVar "word") (PVar "k") (PVar "failL")) (EBlock (DoLet false false (PVar "cmp") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "cmp"))) (ELit (LString " = icmp eq i64 "))) (EApp (EVar "$core.display") (EVar "word"))) (ELit (LString ", "))) (EApp (EVar "$core.display") (EVar "k"))) (ELit (LString ""))))) (DoLet false false (PVar "ok") (EBinOp "++" (ELit (LString "refok")) (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e"))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  br i1 ")) (EApp (EVar "$core.display") (EVar "cmp"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "ok"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "failL"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "ok") (ELit (LString ":")))))))
 (DTypeSig false "emitRangeTest" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyCon "Unit"))))))))
@@ -20019,7 +19803,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DFunDef false "conHeadInfo" ((PCon "HTuple" (PVar "n"))) (EApp (EVar "Some") (ETuple (ELit (LString "$tuple")) (EVar "n"))))
 (DFunDef false "conHeadInfo" (PWild) (EVar "None"))
 (DTypeSig false "reservedRosterOf" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "reservedRosterOf" ((PVar "name")) (EMatch (EApp (EVar "namedRuntimeCtor") (EVar "name")) (arm (PCon "Some" (PVar "id")) () (EMatch (EFieldAccess (EApp (EVar "runtimeCtorFact") (EVar "id")) "owner") (arm (PCon "RuntimeBool") () (EVar "None")) (arm (PVar "owner") () (EApp (EVar "Some") (EApp (EApp (EMethodRef "filterMap") (EVar "runtimeCtorName")) (EApp (EVar "runtimeRoster") (EVar "owner"))))))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "reservedRosterOf" ((PVar "name")) (EApp (EApp (EVar "$core.andThen") (EApp (EVar "namedRuntimeCtor") (EVar "name"))) (ELam ((PVar "id")) (EMatch (EFieldAccess (EApp (EVar "runtimeCtorFact") (EVar "id")) "owner") (arm (PCon "RuntimeBool") () (EVar "None")) (arm (PVar "owner") () (EApp (EVar "Some") (EApp (EApp (EMethodRef "filterMap") (EVar "runtimeCtorName")) (EApp (EVar "runtimeRoster") (EVar "owner")))))))))
 (DTypeSig false "switchIsExhaustive" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
 (DFunDef false "switchIsExhaustive" (PWild (PList)) (EVar "False"))
 (DFunDef false "switchIsExhaustive" ((PVar "e") (PVar "covered")) (EMatch (EApp (EApp (EVar "resolveRoster") (EVar "e")) (EVar "covered")) (arm (PCon "Some" (PVar "roster")) () (EBinOp "&&" (EApp (EVar "isNonEmptyL") (EVar "roster")) (EApp (EApp (EVar "coveredByRoster") (EVar "covered")) (EVar "roster")))) (arm (PCon "None") () (EVar "False"))))
@@ -20028,7 +19812,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DFunDef false "coveredCtorNames" ((PCons (PCon "CTBranch" (PVar "h") PWild) (PVar "rest"))) (EMatch (EApp (EVar "conHeadInfo") (EVar "h")) (arm (PCon "Some" (PTuple (PVar "c") PWild)) () (EBinOp "::" (EVar "c") (EApp (EVar "coveredCtorNames") (EVar "rest")))) (arm (PCon "None") () (EApp (EVar "coveredCtorNames") (EVar "rest")))))
 (DData Private "DiscRep" () ((variant "RepAllImm" (ConPos)) (variant "RepAllBox" (ConPos)) (variant "RepTwoSplit" (ConPos (TyCon "String"))) (variant "RepMixed" (ConPos))) ())
 (DTypeSig false "reservedCtorArity" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int"))))
-(DFunDef false "reservedCtorArity" ((PVar "name")) (EMatch (EApp (EVar "namedRuntimeCtor") (EVar "name")) (arm (PCon "Some" (PVar "id")) () (EMatch (EFieldAccess (EApp (EVar "runtimeCtorFact") (EVar "id")) "owner") (arm (PCon "RuntimeBool") () (EVar "None")) (arm PWild () (EApp (EVar "Some") (EFieldAccess (EApp (EVar "runtimeCtorFact") (EVar "id")) "arity"))))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "reservedCtorArity" ((PVar "name")) (EApp (EApp (EVar "$core.andThen") (EApp (EVar "namedRuntimeCtor") (EVar "name"))) (ELam ((PVar "id")) (EMatch (EFieldAccess (EApp (EVar "runtimeCtorFact") (EVar "id")) "owner") (arm (PCon "RuntimeBool") () (EVar "None")) (arm PWild () (EApp (EVar "Some") (EFieldAccess (EApp (EVar "runtimeCtorFact") (EVar "id")) "arity")))))))
 (DTypeSig false "ctorArityOf" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int")))))
 (DFunDef false "ctorArityOf" ((PVar "e") (PVar "name")) (EMatch (EApp (EVar "reservedCtorArity") (EVar "name")) (arm (PCon "Some" (PVar "r")) () (EIf (EApp (EApp (EVar "isCtor") (EVar "e")) (EVar "name")) (EIf (EBinOp "==" (EApp (EApp (EVar "ctorArity") (EVar "e")) (EVar "name")) (EVar "r")) (EApp (EVar "Some") (EVar "r")) (EVar "None")) (EApp (EVar "Some") (EVar "r")))) (arm (PCon "None") () (EIf (EApp (EApp (EVar "isCtor") (EVar "e")) (EVar "name")) (EApp (EVar "Some") (EApp (EApp (EVar "ctorArity") (EVar "e")) (EVar "name"))) (EVar "None")))))
 (DTypeSig false "ctorIsImmediate" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyCon "Bool"))))
@@ -20044,7 +19828,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "rosterOwnedBy" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool")))))
 (DFunDef false "rosterOwnedBy" ((PVar "e") (PVar "ty") (PVar "roster")) (EApp (EVar "not") (EApp (EApp (EVar "anyList") (ELam ((PVar "r")) (EMatch (EApp (EApp (EVar "ctorTypeOf") (EVar "e")) (EVar "r")) (arm (PCon "Some" (PVar "t")) () (EBinOp "/=" (EVar "t") (EVar "ty"))) (arm (PCon "None") () (EVar "True"))))) (EVar "roster"))))
 (DTypeSig false "unambiguousRoster" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "unambiguousRoster" ((PVar "e") (PVar "name")) (EIf (EApp (EApp (EVar "isCtor") (EVar "e")) (EVar "name")) (EMatch (EApp (EApp (EVar "ctorTypeOf") (EVar "e")) (EVar "name")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "ty")) () (EBlock (DoLet false false (PVar "t") (EApp (EApp (EVar "ctorsOfType") (EVar "e")) (EVar "ty"))) (DoExpr (EIf (EBinOp "&&" (EApp (EVar "isNonEmptyL") (EVar "t")) (EApp (EApp (EApp (EVar "rosterOwnedBy") (EVar "e")) (EVar "ty")) (EVar "t"))) (EMatch (EApp (EVar "reservedRosterOf") (EVar "name")) (arm (PCon "None") () (EApp (EVar "Some") (EVar "t"))) (arm (PCon "Some" (PVar "r")) () (EIf (EApp (EApp (EVar "sameRoster") (EVar "r")) (EVar "t")) (EApp (EVar "Some") (EVar "t")) (EVar "None")))) (EVar "None")))))) (EApp (EVar "reservedRosterOf") (EVar "name"))))
+(DFunDef false "unambiguousRoster" ((PVar "e") (PVar "name")) (EIf (EApp (EApp (EVar "isCtor") (EVar "e")) (EVar "name")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "ctorTypeOf") (EVar "e")) (EVar "name"))) (ELam ((PVar "ty")) (ELet false (PVar "t") (EApp (EApp (EVar "ctorsOfType") (EVar "e")) (EVar "ty")) (EIf (EBinOp "&&" (EApp (EVar "isNonEmptyL") (EVar "t")) (EApp (EApp (EApp (EVar "rosterOwnedBy") (EVar "e")) (EVar "ty")) (EVar "t"))) (EMatch (EApp (EVar "reservedRosterOf") (EVar "name")) (arm (PCon "None") () (EApp (EVar "Some") (EVar "t"))) (arm (PCon "Some" (PVar "r")) () (EIf (EApp (EApp (EVar "sameRoster") (EVar "r")) (EVar "t")) (EApp (EVar "Some") (EVar "t")) (EVar "None")))) (EVar "None"))))) (EApp (EVar "reservedRosterOf") (EVar "name"))))
 (DTypeSig false "resolveRoster" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "resolveRoster" (PWild (PList)) (EVar "None"))
 (DFunDef false "resolveRoster" ((PVar "e") (PCons (PVar "c") (PVar "rest"))) (EMatch (EApp (EApp (EVar "unambiguousRoster") (EVar "e")) (EVar "c")) (arm (PCon "Some" (PVar "r")) () (EApp (EVar "Some") (EVar "r"))) (arm (PCon "None") () (EApp (EApp (EVar "resolveRoster") (EVar "e")) (EVar "rest")))))
@@ -20067,11 +19851,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DFunDef false "emitConChain" ((PVar "e") (PVar "env") (PVar "roots") (PVar "arms") PWild (PVar "rest") PWild PWild (PList) (PVar "dft") (PVar "slot") (PVar "endL") (PVar "ftL") (PVar "rty") (PVar "exh")) (EIf (EBinOp "&&" (EVar "exh") (EBinOp "==" (EVar "ftL") (ELit (LString "")))) (EMatch (EVar "dft") (arm (PCon "CTFail" (PVar "site")) () (EApp (EApp (EVar "emitFailTrap") (EVar "e")) (EVar "site"))) (arm PWild () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTree") (EVar "e")) (EVar "env")) (EVar "roots")) (EVar "arms")) (EVar "rest")) (EVar "slot")) (EVar "endL")) (EVar "ftL")) (EVar "rty")) (EVar "dft")))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTree") (EVar "e")) (EVar "env")) (EVar "roots")) (EVar "arms")) (EVar "rest")) (EVar "slot")) (EVar "endL")) (EVar "ftL")) (EVar "rty")) (EVar "dft")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "emitConChain" ((PVar "e") (PVar "env") (PVar "roots") (PVar "arms") (PVar "foc") (PVar "rest") (PVar "tagReg") (PVar "rep") (PCons (PCon "CTBranch" (PVar "h") (PVar "sub")) (PVar "more")) (PVar "dft") (PVar "slot") (PVar "endL") (PVar "ftL") (PVar "rty") (PVar "exh")) (EMatch (EApp (EVar "conHeadInfo") (EVar "h")) (arm (PCon "Some" (PTuple (PVar "c") (PVar "a"))) () (EBlock (DoLet false false (PVar "cmp") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "cmp"))) (ELit (LString " = icmp eq i64 "))) (EApp (EVar "$core.display") (EVar "tagReg"))) (ELit (LString ", "))) (EApp (EVar "$core.display") (EApp (EApp (EApp (EVar "discExpected") (EVar "e")) (EVar "rep")) (EVar "c")))) (ELit (LString ""))))) (DoLet false false (PVar "n") (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e")))) (DoLet false false (PVar "yes") (EBinOp "++" (ELit (LString "conyes")) (EVar "n"))) (DoLet false false (PVar "next") (EBinOp "++" (ELit (LString "connext")) (EVar "n"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  br i1 ")) (EApp (EVar "$core.display") (EVar "cmp"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "yes"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "next"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "yes") (ELit (LString ":"))))) (DoLet false false (PVar "fields") (EApp (EApp (EApp (EApp (EVar "loadFields") (EVar "e")) (EVar "foc")) (EVar "a")) (ELit (LInt 0)))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTree") (EVar "e")) (EVar "env")) (EVar "roots")) (EVar "arms")) (EBinOp "++" (EVar "fields") (EVar "rest"))) (EVar "slot")) (EVar "endL")) (EVar "ftL")) (EVar "rty")) (EMethodRef "sub"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "next") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitConChain") (EVar "e")) (EVar "env")) (EVar "roots")) (EVar "arms")) (EVar "foc")) (EVar "rest")) (EVar "tagReg")) (EVar "rep")) (EVar "more")) (EVar "dft")) (EVar "slot")) (EVar "endL")) (EVar "ftL")) (EVar "rty")) (EVar "exh"))))) (arm (PCon "None") () (EBlock (DoExpr (EApp (EApp (EVar "gapU") (EVar "e")) (ELit (LString "heterogeneous constructor switch (a column is all-constructor or all-literal)")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  store i64 0, ptr ")) (EVar "slot")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  br label %")) (EVar "endL"))))))))
 (DTypeSig false "emitLitChain" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CTBranch")) (TyFun (TyCon "CTree") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "LTy")) (TyCon "Unit"))))))))))))))
-(DFunDef false "emitLitChain" ((PVar "e") (PVar "env") (PVar "roots") (PVar "arms") PWild (PVar "rest") (PList) (PVar "dft") (PVar "slot") (PVar "endL") (PVar "ftL") (PVar "rty")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTree") (EVar "e")) (EVar "env")) (EVar "roots")) (EVar "arms")) (EVar "rest")) (EVar "slot")) (EVar "endL")) (EVar "ftL")) (EVar "rty")) (EVar "dft")))
-(DFunDef false "emitLitChain" ((PVar "e") (PVar "env") (PVar "roots") (PVar "arms") (PVar "foc") (PVar "rest") (PCons (PCon "CTBranch" (PCon "HLit" (PCon "LInt" (PVar "k"))) (PVar "sub")) (PVar "more")) (PVar "dft") (PVar "slot") (PVar "endL") (PVar "ftL") (PVar "rty")) (EBlock (DoLet false false (PTuple (PVar "kw") PWild) (EApp (EApp (EVar "emitLit") (EVar "e")) (EApp (EVar "LInt") (EVar "k")))) (DoLet false false (PVar "cmp") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "cmp"))) (ELit (LString " = icmp eq i64 "))) (EApp (EVar "$core.display") (EVar "foc"))) (ELit (LString ", "))) (EApp (EVar "$core.display") (EVar "kw"))) (ELit (LString ""))))) (DoLet false false (PVar "n") (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e")))) (DoLet false false (PVar "yes") (EBinOp "++" (ELit (LString "lityes")) (EVar "n"))) (DoLet false false (PVar "next") (EBinOp "++" (ELit (LString "litnext")) (EVar "n"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  br i1 ")) (EApp (EVar "$core.display") (EVar "cmp"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "yes"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "next"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "yes") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTree") (EVar "e")) (EVar "env")) (EVar "roots")) (EVar "arms")) (EVar "rest")) (EVar "slot")) (EVar "endL")) (EVar "ftL")) (EVar "rty")) (EMethodRef "sub"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "next") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitLitChain") (EVar "e")) (EVar "env")) (EVar "roots")) (EVar "arms")) (EVar "foc")) (EVar "rest")) (EVar "more")) (EVar "dft")) (EVar "slot")) (EVar "endL")) (EVar "ftL")) (EVar "rty")))))
-(DFunDef false "emitLitChain" ((PVar "e") (PVar "env") (PVar "roots") (PVar "arms") (PVar "foc") (PVar "rest") (PCons (PCon "CTBranch" (PCon "HLit" (PCon "LChar" (PVar "c"))) (PVar "sub")) (PVar "more")) (PVar "dft") (PVar "slot") (PVar "endL") (PVar "ftL") (PVar "rty")) (EBlock (DoLet false false (PVar "cp") (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EApp (EVar "stringToChars") (EVar "c"))))) (DoLet false false (PVar "cmp") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "cmp"))) (ELit (LString " = icmp eq i64 "))) (EApp (EVar "$core.display") (EVar "foc"))) (ELit (LString ", "))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EBinOp "+" (EBinOp "*" (EVar "cp") (ELit (LInt 2))) (ELit (LInt 1)))))) (ELit (LString ""))))) (DoLet false false (PVar "n") (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e")))) (DoLet false false (PVar "yes") (EBinOp "++" (ELit (LString "lityes")) (EVar "n"))) (DoLet false false (PVar "next") (EBinOp "++" (ELit (LString "litnext")) (EVar "n"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  br i1 ")) (EApp (EVar "$core.display") (EVar "cmp"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "yes"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "next"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "yes") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTree") (EVar "e")) (EVar "env")) (EVar "roots")) (EVar "arms")) (EVar "rest")) (EVar "slot")) (EVar "endL")) (EVar "ftL")) (EVar "rty")) (EMethodRef "sub"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "next") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitLitChain") (EVar "e")) (EVar "env")) (EVar "roots")) (EVar "arms")) (EVar "foc")) (EVar "rest")) (EVar "more")) (EVar "dft")) (EVar "slot")) (EVar "endL")) (EVar "ftL")) (EVar "rty")))))
-(DFunDef false "emitLitChain" ((PVar "e") (PVar "env") (PVar "roots") (PVar "arms") (PVar "foc") (PVar "rest") (PCons (PCon "CTBranch" (PCon "HLit" (PCon "LString" (PVar "s"))) (PVar "sub")) (PVar "more")) (PVar "dft") (PVar "slot") (PVar "endL") (PVar "ftL") (PVar "rty")) (EBlock (DoLet false false (PTuple (PVar "lit") PWild) (EApp (EApp (EVar "emitLit") (EVar "e")) (EApp (EVar "LString") (EVar "s")))) (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (EVar "r")) (ELit (LString "i64"))) (ELit (LString "mdk_string_eq"))) (EApp (EVar "i64Ops") (EListLit (EVar "foc") (EVar "lit")))))) (DoLet false false (PVar "cmp") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "cmp"))) (ELit (LString " = icmp eq i64 "))) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString ", 3"))))) (DoLet false false (PVar "n") (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e")))) (DoLet false false (PVar "yes") (EBinOp "++" (ELit (LString "lityes")) (EVar "n"))) (DoLet false false (PVar "next") (EBinOp "++" (ELit (LString "litnext")) (EVar "n"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  br i1 ")) (EApp (EVar "$core.display") (EVar "cmp"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "yes"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "next"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "yes") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTree") (EVar "e")) (EVar "env")) (EVar "roots")) (EVar "arms")) (EVar "rest")) (EVar "slot")) (EVar "endL")) (EVar "ftL")) (EVar "rty")) (EMethodRef "sub"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "next") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitLitChain") (EVar "e")) (EVar "env")) (EVar "roots")) (EVar "arms")) (EVar "foc")) (EVar "rest")) (EVar "more")) (EVar "dft")) (EVar "slot")) (EVar "endL")) (EVar "ftL")) (EVar "rty")))))
-(DFunDef false "emitLitChain" ((PVar "e") PWild PWild PWild PWild PWild PWild PWild PWild PWild PWild PWild) (EApp (EApp (EVar "gapU") (EVar "e")) (ELit (LString "non-Int literal switch (no Float / Bool literal heads)"))))
+(DFunDef false "emitLitChain" ((PVar "e") (PVar "env") (PVar "roots") (PVar "arms") (PVar "foc") (PVar "rest") (PVar "xs0") (PVar "dft") (PVar "slot") (PVar "endL") (PVar "ftL") (PVar "rty")) (ELetGroup ((lgb "go" (clause ((PList)) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTree") (EVar "e")) (EVar "env")) (EVar "roots")) (EVar "arms")) (EVar "rest")) (EVar "slot")) (EVar "endL")) (EVar "ftL")) (EVar "rty")) (EVar "dft"))) (clause ((PCons (PCon "CTBranch" (PCon "HLit" (PCon "LInt" (PVar "k"))) (PVar "sub")) (PVar "more"))) (EBlock (DoLet false false (PTuple (PVar "kw") PWild) (EApp (EApp (EVar "emitLit") (EVar "e")) (EApp (EVar "LInt") (EVar "k")))) (DoLet false false (PVar "cmp") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "cmp"))) (ELit (LString " = icmp eq i64 "))) (EApp (EVar "$core.display") (EVar "foc"))) (ELit (LString ", "))) (EApp (EVar "$core.display") (EVar "kw"))) (ELit (LString ""))))) (DoLet false false (PVar "n") (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e")))) (DoLet false false (PVar "yes") (EBinOp "++" (ELit (LString "lityes")) (EVar "n"))) (DoLet false false (PVar "next") (EBinOp "++" (ELit (LString "litnext")) (EVar "n"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  br i1 ")) (EApp (EVar "$core.display") (EVar "cmp"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "yes"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "next"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "yes") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTree") (EVar "e")) (EVar "env")) (EVar "roots")) (EVar "arms")) (EVar "rest")) (EVar "slot")) (EVar "endL")) (EVar "ftL")) (EVar "rty")) (EMethodRef "sub"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "next") (ELit (LString ":"))))) (DoExpr (EApp (EVar "go") (EVar "more"))))) (clause ((PCons (PCon "CTBranch" (PCon "HLit" (PCon "LChar" (PVar "c"))) (PVar "sub")) (PVar "more"))) (EBlock (DoLet false false (PVar "cp") (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EApp (EVar "stringToChars") (EVar "c"))))) (DoLet false false (PVar "cmp") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "cmp"))) (ELit (LString " = icmp eq i64 "))) (EApp (EVar "$core.display") (EVar "foc"))) (ELit (LString ", "))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EBinOp "+" (EBinOp "*" (EVar "cp") (ELit (LInt 2))) (ELit (LInt 1)))))) (ELit (LString ""))))) (DoLet false false (PVar "n") (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e")))) (DoLet false false (PVar "yes") (EBinOp "++" (ELit (LString "lityes")) (EVar "n"))) (DoLet false false (PVar "next") (EBinOp "++" (ELit (LString "litnext")) (EVar "n"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  br i1 ")) (EApp (EVar "$core.display") (EVar "cmp"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "yes"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "next"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "yes") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTree") (EVar "e")) (EVar "env")) (EVar "roots")) (EVar "arms")) (EVar "rest")) (EVar "slot")) (EVar "endL")) (EVar "ftL")) (EVar "rty")) (EMethodRef "sub"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "next") (ELit (LString ":"))))) (DoExpr (EApp (EVar "go") (EVar "more"))))) (clause ((PCons (PCon "CTBranch" (PCon "HLit" (PCon "LString" (PVar "s"))) (PVar "sub")) (PVar "more"))) (EBlock (DoLet false false (PTuple (PVar "lit") PWild) (EApp (EApp (EVar "emitLit") (EVar "e")) (EApp (EVar "LString") (EVar "s")))) (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (EVar "r")) (ELit (LString "i64"))) (ELit (LString "mdk_string_eq"))) (EApp (EVar "i64Ops") (EListLit (EVar "foc") (EVar "lit")))))) (DoLet false false (PVar "cmp") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "cmp"))) (ELit (LString " = icmp eq i64 "))) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString ", 3"))))) (DoLet false false (PVar "n") (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e")))) (DoLet false false (PVar "yes") (EBinOp "++" (ELit (LString "lityes")) (EVar "n"))) (DoLet false false (PVar "next") (EBinOp "++" (ELit (LString "litnext")) (EVar "n"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  br i1 ")) (EApp (EVar "$core.display") (EVar "cmp"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "yes"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "next"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "yes") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTree") (EVar "e")) (EVar "env")) (EVar "roots")) (EVar "arms")) (EVar "rest")) (EVar "slot")) (EVar "endL")) (EVar "ftL")) (EVar "rty")) (EMethodRef "sub"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "next") (ELit (LString ":"))))) (DoExpr (EApp (EVar "go") (EVar "more"))))) (clause (PWild) (EApp (EApp (EVar "gapU") (EVar "e")) (ELit (LString "non-Int literal switch (no Float / Bool literal heads)")))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "takeS" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))
 (DFunDef false "takeS" ((PVar "n") (PVar "xs")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (EListLit) (EIf (EVar "otherwise") (EMatch (EVar "xs") (arm (PList) () (EListLit)) (arm (PCons (PVar "y") (PVar "ys")) () (EBinOp "::" (EVar "y") (EApp (EApp (EVar "takeS") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "ys"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "tailS" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))))
@@ -20107,8 +19887,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "tmcMarker" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Unit")))))
 (DFunDef false "tmcMarker" ((PVar "e") (PVar "sym") (PVar "mode")) (EBlock (DoLet false false (PVar "name") (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "mdk.impl."))) (EVar "sym")) (EBinOp "++" (ELit (LString "impl.")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 9))) (EApp (EVar "stringLength") (EVar "sym"))) (EVar "sym"))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "mdk.default."))) (EVar "sym")) (EBinOp "++" (ELit (LString "default.")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 12))) (EApp (EVar "stringLength") (EVar "sym"))) (EVar "sym"))) (EVar "sym")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "; tmc: ")) (EApp (EVar "$core.display") (EVar "name"))) (ELit (LString " "))) (EApp (EVar "$core.display") (EVar "mode"))) (ELit (LString "")))))))
 (DTypeSig false "tmcGroupMarkers" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit")))))
-(DFunDef false "tmcGroupMarkers" (PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "tmcGroupMarkers" ((PVar "e") (PVar "root") (PCons (PVar "m") (PVar "rest"))) (EBlock (DoLet false false PWild (EIf (EBinOp "==" (EVar "m") (EVar "root")) (EApp (EApp (EApp (EVar "tmcMarker") (EVar "e")) (EVar "m")) (ELit (LString "group-root"))) (EApp (EApp (EApp (EVar "tmcMarker") (EVar "e")) (EVar "m")) (EBinOp "++" (ELit (LString "group:")) (EVar "root"))))) (DoExpr (EApp (EApp (EApp (EVar "tmcGroupMarkers") (EVar "e")) (EVar "root")) (EVar "rest")))))
+(DFunDef false "tmcGroupMarkers" ((PVar "e") (PVar "root") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PVar "m") (PVar "rest"))) (EBlock (DoLet false false PWild (EIf (EBinOp "==" (EVar "m") (EVar "root")) (EApp (EApp (EApp (EVar "tmcMarker") (EVar "e")) (EVar "m")) (ELit (LString "group-root"))) (EApp (EApp (EApp (EVar "tmcMarker") (EVar "e")) (EVar "m")) (EBinOp "++" (ELit (LString "group:")) (EVar "root"))))) (DoExpr (EApp (EVar "go") (EVar "rest"))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "emitTrmcFn" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "LTy")) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr"))) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "CExpr") (TyFun (TyCon "Loc") (TyCon "Unit")))))))))))
 (DFunDef false "emitTrmcFn" ((PVar "e") (PVar "name") (PVar "arity") (PVar "ptys") (PVar "clauses") (PVar "single") (PVar "singlePats") (PVar "singleBody") (PVar "site")) (EBlock (DoExpr (EApp (EApp (EApp (EVar "tmcMarker") (EVar "e")) (EVar "name")) (ELit (LString "trmc")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "emitTrmcHeader") (EVar "e")) (EApp (EVar "LN.llvmName") (EApp (EVar "LN.LUserFunction") (EVar "name")))) (EVar "arity")) (EApp (EApp (EVar "fnAttrs") (EVar "e")) (EVar "name")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTrmcLoopBody") (EVar "e")) (EApp (EVar "SelfByVar") (EVar "name"))) (EVar "arity")) (EVar "ptys")) (EVar "clauses")) (EVar "single")) (EVar "singlePats")) (EVar "singleBody")) (EVar "site"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "}")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString ""))))))
 (DTypeSig false "emitTrmcHeader" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "Unit"))))))
@@ -20159,15 +19938,15 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "gDispLabel" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "gDispLabel" ((PVar "m")) (EBinOp "++" (ELit (LString "gdisp_")) (EVar "m")))
 (DTypeSig false "emitGDispGroup" (TyFun (TyCon "Emit") (TyFun (TyCon "DispGroup") (TyCon "Unit"))))
-(DFunDef false "emitGDispGroup" ((PVar "e") (PVar "grp")) (EBlock (DoLet false false (PVar "root") (EApp (EVar "dispRootOf") (EVar "grp"))) (DoLet false false (PVar "members") (EApp (EVar "dispMembersOf") (EVar "grp"))) (DoLet false false (PVar "binds") (EUnOp "!" (EFieldAccess (EVar "e") "gDispBinds"))) (DoLet false false (PVar "rootArity") (EApp (EApp (EVar "gDispFnArity") (EVar "e")) (EVar "root"))) (DoLet false false (PVar "u") (EApp (EApp (EApp (EVar "gDispMaxArity") (EVar "e")) (EVar "members")) (ELit (LInt 0)))) (DoExpr (EApp (EApp (EApp (EVar "tmcGroupMarkers") (EVar "e")) (EVar "root")) (EVar "members"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "emitTrmcHeader") (EVar "e")) (EApp (EVar "LN.llvmName") (EApp (EVar "LN.LUserFunction") (EVar "root")))) (EVar "rootArity")) (EApp (EApp (EVar "fnAttrs") (EVar "e")) (EVar "root")))) (DoLet false false (PVar "uslots") (EApp (EApp (EApp (EApp (EVar "gDispEmitSlots") (EVar "e")) (EVar "u")) (EVar "rootArity")) (ELit (LInt 0)))) (DoLet false false (PVar "hole") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EVar "hole")) (ELit (LString " = alloca i64"))))) (DoLet false false (PVar "destSlot") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EVar "destSlot")) (ELit (LString " = alloca ptr"))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  store ptr ")) (EApp (EVar "$core.display") (EVar "hole"))) (ELit (LString ", ptr "))) (EApp (EVar "$core.display") (EVar "destSlot"))) (ELit (LString ""))))) (DoLet false false (PVar "exitL") (EBinOp "++" (ELit (LString "gdispexit")) (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e"))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  br label %")) (EApp (EVar "gDispLabel") (EVar "root"))))) (DoLet false false (PVar "saved") (EUnOp "!" (EFieldAccess (EVar "e") "gDispCtx"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "gDispCtx")) (EApp (EApp (EApp (EApp (EApp (EVar "GDispOn") (EVar "root")) (EVar "members")) (EVar "uslots")) (EVar "destSlot")) (EVar "exitL")))) (DoExpr (EApp (EApp (EApp (EVar "emitGDispMembers") (EVar "e")) (EVar "binds")) (EVar "members"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "gDispCtx")) (EVar "saved"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "exitL") (ELit (LString ":"))))) (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString " = load i64, ptr "))) (EApp (EVar "$core.display") (EVar "hole"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  ret i64 ")) (EVar "r")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "}")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString ""))))))
+(DFunDef false "emitGDispGroup" ((PVar "e") (PVar "grp")) (EBlock (DoLet false false (PVar "root") (EApp (EVar "dispRootOf") (EVar "grp"))) (DoLet false false (PVar "members") (EApp (EVar "dispMembersOf") (EVar "grp"))) (DoLet false false (PVar "rootArity") (EApp (EApp (EVar "gDispFnArity") (EVar "e")) (EVar "root"))) (DoLet false false (PVar "u") (EApp (EApp (EApp (EVar "gDispMaxArity") (EVar "e")) (EVar "members")) (ELit (LInt 0)))) (DoExpr (EApp (EApp (EApp (EVar "tmcGroupMarkers") (EVar "e")) (EVar "root")) (EVar "members"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "emitTrmcHeader") (EVar "e")) (EApp (EVar "LN.llvmName") (EApp (EVar "LN.LUserFunction") (EVar "root")))) (EVar "rootArity")) (EApp (EApp (EVar "fnAttrs") (EVar "e")) (EVar "root")))) (DoLet false false (PVar "uslots") (EApp (EApp (EApp (EApp (EVar "gDispEmitSlots") (EVar "e")) (EVar "u")) (EVar "rootArity")) (ELit (LInt 0)))) (DoLet false false (PVar "hole") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EVar "hole")) (ELit (LString " = alloca i64"))))) (DoLet false false (PVar "destSlot") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EVar "destSlot")) (ELit (LString " = alloca ptr"))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  store ptr ")) (EApp (EVar "$core.display") (EVar "hole"))) (ELit (LString ", ptr "))) (EApp (EVar "$core.display") (EVar "destSlot"))) (ELit (LString ""))))) (DoLet false false (PVar "exitL") (EBinOp "++" (ELit (LString "gdispexit")) (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e"))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  br label %")) (EApp (EVar "gDispLabel") (EVar "root"))))) (DoLet false false (PVar "saved") (EUnOp "!" (EFieldAccess (EVar "e") "gDispCtx"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "gDispCtx")) (EApp (EApp (EApp (EApp (EApp (EVar "GDispOn") (EVar "root")) (EVar "members")) (EVar "uslots")) (EVar "destSlot")) (EVar "exitL")))) (DoExpr (EApp (EApp (EVar "emitGDispMembers") (EVar "e")) (EVar "members"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "gDispCtx")) (EVar "saved"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "exitL") (ELit (LString ":"))))) (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString " = load i64, ptr "))) (EApp (EVar "$core.display") (EVar "hole"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  ret i64 ")) (EVar "r")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "}")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString ""))))))
 (DTypeSig false "gDispEmitSlots" (TyFun (TyCon "Emit") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "gDispEmitSlots" ((PVar "e") (PVar "u") (PVar "rootArity") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "u")) (EListLit) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "slot") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EVar "slot")) (ELit (LString " = alloca i64"))))) (DoLet false false (PVar "seed") (EIf (EBinOp "<" (EVar "i") (EVar "rootArity")) (EBinOp "++" (ELit (LString "%arg")) (EApp (EVar "intToString") (EVar "i"))) (ELit (LString "0")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  store i64 ")) (EApp (EVar "$core.display") (EVar "seed"))) (ELit (LString ", ptr "))) (EApp (EVar "$core.display") (EVar "slot"))) (ELit (LString ""))))) (DoExpr (EBinOp "::" (EVar "slot") (EApp (EApp (EApp (EApp (EVar "gDispEmitSlots") (EVar "e")) (EVar "u")) (EVar "rootArity")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "gDispMaxArity" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyCon "Int")))))
 (DFunDef false "gDispMaxArity" (PWild (PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "gDispMaxArity" ((PVar "e") (PCons (PVar "m") (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "a") (EApp (EApp (EVar "gDispFnArity") (EVar "e")) (EVar "m"))) (DoExpr (EApp (EApp (EApp (EVar "gDispMaxArity") (EVar "e")) (EVar "rest")) (EApp (EApp (EVar "maxInt") (EVar "a")) (EVar "acc"))))))
-(DTypeSig false "emitGDispMembers" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit")))))
-(DFunDef false "emitGDispMembers" (PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "emitGDispMembers" ((PVar "e") (PVar "binds") (PCons (PVar "m") (PVar "rest"))) (EBlock (DoLet false false PWild (EMatch (EApp (EApp (EVar "omLookup") (EVar "m")) (EUnOp "!" (EFieldAccess (EVar "e") "gDispBindMap"))) (arm (PCon "Some" (PVar "b")) () (EApp (EApp (EVar "emitGDispMember") (EVar "e")) (EVar "b"))) (arm (PCon "None") () (EApp (EApp (EVar "gapU") (EVar "e")) (EBinOp "++" (ELit (LString "(b') group member without a bind: ")) (EVar "m")))))) (DoExpr (EApp (EApp (EApp (EVar "emitGDispMembers") (EVar "e")) (EVar "binds")) (EVar "rest")))))
+(DTypeSig false "emitGDispMembers" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit"))))
+(DFunDef false "emitGDispMembers" (PWild (PList)) (ELit LUnit))
+(DFunDef false "emitGDispMembers" ((PVar "e") (PCons (PVar "m") (PVar "rest"))) (EBlock (DoLet false false PWild (EMatch (EApp (EApp (EVar "omLookup") (EVar "m")) (EUnOp "!" (EFieldAccess (EVar "e") "gDispBindMap"))) (arm (PCon "Some" (PVar "b")) () (EApp (EApp (EVar "emitGDispMember") (EVar "e")) (EVar "b"))) (arm (PCon "None") () (EApp (EApp (EVar "gapU") (EVar "e")) (EBinOp "++" (ELit (LString "(b') group member without a bind: ")) (EVar "m")))))) (DoExpr (EApp (EApp (EVar "emitGDispMembers") (EVar "e")) (EVar "rest")))))
 (DTypeSig false "emitGDispMember" (TyFun (TyCon "Emit") (TyFun (TyCon "CBind") (TyCon "Unit"))))
 (DFunDef false "emitGDispMember" ((PVar "e") (PCon "CBind" (PVar "name") (PVar "clauses") (PVar "site") PWild)) (EMatch (EUnOp "!" (EFieldAccess (EVar "e") "gDispCtx")) (arm (PCon "GDispOff") () (EApp (EApp (EVar "gapU") (EVar "e")) (ELit (LString "(b') member emit with no active group context")))) (arm (PCon "GDispOn" PWild PWild (PVar "uslots") PWild PWild) () (EBlock (DoLet false false (PVar "arity") (EApp (EVar "clauseArityOf") (EVar "clauses"))) (DoLet false false (PVar "ptys") (EMatch (EApp (EApp (EVar "sigLookup") (EVar "e")) (EVar "name")) (arm (PCon "Some" (PCon "FnSig" (PVar "ts") PWild)) () (EVar "ts")) (arm (PCon "None") () (EListLit)))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EApp (EVar "gDispLabel") (EVar "name")) (ELit (LString ":"))))) (DoLet false false (PVar "reloaded") (EApp (EApp (EApp (EApp (EVar "trmcReloadParams") (EVar "e")) (EApp (EApp (EVar "gDispTake") (EVar "arity")) (EVar "uslots"))) (EVar "ptys")) (ELit (LInt 0)))) (DoLet false false (PVar "pairs") (EApp (EVar "clausePairs") (EVar "clauses"))) (DoExpr (EMatch (EVar "pairs") (arm (PList (PTuple (PVar "pats") (PVar "body"))) () (EIf (EApp (EVar "allPVar") (EVar "pats")) (EApp (EApp (EApp (EVar "emitGDispBody") (EVar "e")) (EApp (EApp (EVar "trmcRenameEnv") (EVar "pats")) (EVar "reloaded"))) (EApp (EApp (EApp (EVar "siteFtBody") (EVar "e")) (EVar "site")) (EVar "body"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitClauseTree") (EVar "e")) (EApp (EApp (EVar "omFromPairs") (EVar "reloaded")) (EVar "omEmpty"))) (EVar "arity")) (EVar "pairs")) (ELit (LString ""))) (EVar "site")))) (arm PWild () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitClauseTree") (EVar "e")) (EApp (EApp (EVar "omFromPairs") (EVar "reloaded")) (EVar "omEmpty"))) (EVar "arity")) (EVar "pairs")) (ELit (LString ""))) (EVar "site")))))))))
 (DTypeSig false "gDispTake" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))
@@ -20194,8 +19973,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "gDispSpine" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CExpr") (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "CExpr")) (TyCon "String") (TyApp (TyCon "List") (TyCon "CExpr"))))))))
 (DFunDef false "gDispSpine" ((PVar "e") (PVar "members") (PVar "ex")) (EApp (EApp (EApp (EApp (EApp (EVar "dispSpineParts") (ELam ((PVar "n")) (EApp (EApp (EVar "canonFnName") (EVar "e")) (EVar "n")))) (ELam ((PVar "n")) (EApp (EApp (EVar "gDispIsFn") (EVar "e")) (EVar "n")))) (ELam ((PVar "n")) (EApp (EApp (EVar "gDispFnArity") (EVar "e")) (EVar "n")))) (ELam ((PVar "f")) (EApp (EApp (EVar "contains") (EVar "f")) (EVar "members")))) (EVar "ex")))
 (DTypeSig false "emitGDispCells" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyFun (TyCon "String") (TyCon "Unit"))))))
-(DFunDef false "emitGDispCells" (PWild PWild (PList) PWild) (ELit LUnit))
-(DFunDef false "emitGDispCells" ((PVar "e") (PVar "env") (PCons (PVar "h") (PVar "rest")) (PVar "destSlot")) (EBlock (DoLet false false (PVar "hv") (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EListLit (EVar "h")))) (DoLet false false (PVar "cell") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (EVar "cell")) (ELit (LString "ptr"))) (ELit (LString "mdk_alloc"))) (EApp (EVar "i64Ops") (EListLit (ELit (LString "24"))))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  store i64 ")) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EApp (EApp (EVar "cellTag") (EVar "e")) (ELit (LString "Cons")))))) (ELit (LString ", ptr "))) (EApp (EVar "$core.display") (EVar "cell"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "storeFields") (EVar "e")) (EVar "cell")) (EVar "hv")) (ELit (LInt 0)))) (DoLet false false (PVar "cellw") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "cellw"))) (ELit (LString " = ptrtoint ptr "))) (EApp (EVar "$core.display") (EVar "cell"))) (ELit (LString " to i64"))))) (DoLet false false (PVar "d") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "d"))) (ELit (LString " = load ptr, ptr "))) (EApp (EVar "$core.display") (EVar "destSlot"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  store i64 ")) (EApp (EVar "$core.display") (EVar "cellw"))) (ELit (LString ", ptr "))) (EApp (EVar "$core.display") (EVar "d"))) (ELit (LString ""))))) (DoLet false false (PVar "newdest") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "newdest"))) (ELit (LString " = getelementptr i8, ptr "))) (EApp (EVar "$core.display") (EVar "cell"))) (ELit (LString ", i64 16"))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  store ptr ")) (EApp (EVar "$core.display") (EVar "newdest"))) (ELit (LString ", ptr "))) (EApp (EVar "$core.display") (EVar "destSlot"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "emitGDispCells") (EVar "e")) (EVar "env")) (EVar "rest")) (EVar "destSlot")))))
+(DFunDef false "emitGDispCells" ((PVar "e") (PVar "env") (PVar "xs0") (PVar "destSlot")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PVar "h") (PVar "rest"))) (EBlock (DoLet false false (PVar "hv") (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EListLit (EVar "h")))) (DoLet false false (PVar "cell") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "rtLine") (EVar "e")) (EVar "cell")) (ELit (LString "ptr"))) (ELit (LString "mdk_alloc"))) (EApp (EVar "i64Ops") (EListLit (ELit (LString "24"))))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  store i64 ")) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EApp (EApp (EVar "cellTag") (EVar "e")) (ELit (LString "Cons")))))) (ELit (LString ", ptr "))) (EApp (EVar "$core.display") (EVar "cell"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "storeFields") (EVar "e")) (EVar "cell")) (EVar "hv")) (ELit (LInt 0)))) (DoLet false false (PVar "cellw") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "cellw"))) (ELit (LString " = ptrtoint ptr "))) (EApp (EVar "$core.display") (EVar "cell"))) (ELit (LString " to i64"))))) (DoLet false false (PVar "d") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "d"))) (ELit (LString " = load ptr, ptr "))) (EApp (EVar "$core.display") (EVar "destSlot"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  store i64 ")) (EApp (EVar "$core.display") (EVar "cellw"))) (ELit (LString ", ptr "))) (EApp (EVar "$core.display") (EVar "d"))) (ELit (LString ""))))) (DoLet false false (PVar "newdest") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "newdest"))) (ELit (LString " = getelementptr i8, ptr "))) (EApp (EVar "$core.display") (EVar "cell"))) (ELit (LString ", i64 16"))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  store ptr ")) (EApp (EVar "$core.display") (EVar "newdest"))) (ELit (LString ", ptr "))) (EApp (EVar "$core.display") (EVar "destSlot"))) (ELit (LString ""))))) (DoExpr (EApp (EVar "go") (EVar "rest"))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "emitGDispEdge" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit")))))))
 (DFunDef false "emitGDispEdge" ((PVar "e") (PVar "env") (PVar "f") (PVar "args") (PVar "uslots")) (EBlock (DoLet false false (PVar "argOps") (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args"))) (DoExpr (EApp (EApp (EApp (EVar "trmcStoreParamSlots") (EVar "e")) (EVar "uslots")) (EVar "argOps"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  br label %")) (EApp (EVar "gDispLabel") (EVar "f")))))))
 (DTypeSig false "gDispDropMembers" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int"))))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int"))))))))
@@ -20222,14 +20000,9 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "selfFreeW" (TyFun (TyCon "String") (TyFun (TyCon "CExpr") (TyCon "Bool"))))
 (DFunDef false "selfFreeW" ((PVar "self") (PVar "ex")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "self")) (EApp (EApp (EVar "freeVars") (EListLit)) (EVar "ex")))))
 (DTypeSig false "floatWorkerOk" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "CExpr") (TyCon "Bool")))))
-(DFunDef false "floatWorkerOk" ((PVar "self") (PVar "arity") (PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "selfFreeW") (EVar "self")) (EVar "c")) (EApp (EApp (EApp (EVar "floatWorkerOk") (EVar "self")) (EVar "arity")) (EVar "t"))) (EApp (EApp (EApp (EVar "floatWorkerOk") (EVar "self")) (EVar "arity")) (EVar "f"))))
-(DFunDef false "floatWorkerOk" ((PVar "self") (PVar "arity") (PCon "CDecision" (PVar "scrut") (PVar "arms") (PVar "tree"))) (EMatch (EApp (EApp (EVar "decisionToIf") (EVar "scrut")) (EVar "arms")) (arm (PCon "Some" (PVar "cif")) () (EApp (EApp (EApp (EVar "floatWorkerOk") (EVar "self")) (EVar "arity")) (EVar "cif"))) (arm (PCon "None") () (EApp (EApp (EVar "selfFreeW") (EVar "self")) (EApp (EApp (EApp (EVar "CDecision") (EVar "scrut")) (EVar "arms")) (EVar "tree"))))))
-(DFunDef false "floatWorkerOk" ((PVar "self") (PVar "arity") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EApp (EVar "floatWorkerBlockOk") (EVar "self")) (EVar "arity")) (EVar "stmts")))
-(DFunDef false "floatWorkerOk" ((PVar "self") (PVar "arity") (PVar "ex")) (EMatch (EApp (EApp (EVar "flattenApp") (EVar "ex")) (EListLit)) (arm (PTuple (PCon "CVar" (PVar "f") PWild) (PVar "args")) () (EIf (EBinOp "==" (EVar "f") (EVar "self")) (EBinOp "==" (EApp (EVar "lengthS") (EVar "args")) (EVar "arity")) (EApp (EApp (EVar "selfFreeW") (EVar "self")) (EVar "ex")))) (arm PWild () (EApp (EApp (EVar "selfFreeW") (EVar "self")) (EVar "ex")))))
+(DFunDef false "floatWorkerOk" ((PVar "self") (PVar "arity") (PVar "ex0")) (ELetGroup ((lgb "go" (clause ((PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "selfFreeW") (EVar "self")) (EVar "c")) (EApp (EVar "go") (EVar "t"))) (EApp (EVar "go") (EVar "f")))) (clause ((PCon "CDecision" (PVar "scrut") (PVar "arms") (PVar "tree"))) (EMatch (EApp (EApp (EVar "decisionToIf") (EVar "scrut")) (EVar "arms")) (arm (PCon "Some" (PVar "cif")) () (EApp (EVar "go") (EVar "cif"))) (arm (PCon "None") () (EApp (EApp (EVar "selfFreeW") (EVar "self")) (EApp (EApp (EApp (EVar "CDecision") (EVar "scrut")) (EVar "arms")) (EVar "tree")))))) (clause ((PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EApp (EVar "floatWorkerBlockOk") (EVar "self")) (EVar "arity")) (EVar "stmts"))) (clause ((PVar "ex")) (EMatch (EApp (EApp (EVar "flattenApp") (EVar "ex")) (EListLit)) (arm (PTuple (PCon "CVar" (PVar "f") PWild) (PVar "args")) () (EIf (EBinOp "==" (EVar "f") (EVar "self")) (EBinOp "==" (EApp (EVar "lengthS") (EVar "args")) (EVar "arity")) (EApp (EApp (EVar "selfFreeW") (EVar "self")) (EVar "ex")))) (arm PWild () (EApp (EApp (EVar "selfFreeW") (EVar "self")) (EVar "ex"))))))) (EApp (EVar "go") (EVar "ex0"))))
 (DTypeSig false "floatWorkerBlockOk" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyCon "Bool")))))
-(DFunDef false "floatWorkerBlockOk" ((PVar "self") (PVar "arity") (PCons (PCon "CSExpr" (PVar "ex")) (PList))) (EApp (EApp (EApp (EVar "floatWorkerOk") (EVar "self")) (EVar "arity")) (EVar "ex")))
-(DFunDef false "floatWorkerBlockOk" ((PVar "self") (PVar "arity") (PCons (PCon "CSLet" PWild (PCon "PVar" PWild PWild PWild) (PVar "rhs")) (PVar "rest"))) (EBinOp "&&" (EApp (EApp (EVar "selfFreeW") (EVar "self")) (EVar "rhs")) (EApp (EApp (EApp (EVar "floatWorkerBlockOk") (EVar "self")) (EVar "arity")) (EVar "rest"))))
-(DFunDef false "floatWorkerBlockOk" (PWild PWild PWild) (EVar "False"))
+(DFunDef false "floatWorkerBlockOk" ((PVar "self") (PVar "arity") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PCons (PCon "CSExpr" (PVar "ex")) (PList))) (EApp (EApp (EApp (EVar "floatWorkerOk") (EVar "self")) (EVar "arity")) (EVar "ex"))) (clause ((PCons (PCon "CSLet" PWild (PCon "PVar" PWild PWild PWild) (PVar "rhs")) (PVar "rest"))) (EBinOp "&&" (EApp (EApp (EVar "selfFreeW") (EVar "self")) (EVar "rhs")) (EApp (EVar "go") (EVar "rest")))) (clause (PWild) (EVar "False")))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "floatWorkerEligible" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "List") (TyCon "LTy")) (TyFun (TyCon "CExpr") (TyCon "Bool")))))))
 (DFunDef false "floatWorkerEligible" ((PVar "e") (PVar "name") (PVar "pats") (PVar "ptys") (PVar "body")) (EBlock (DoLet false false (PVar "rty") (EMatch (EApp (EApp (EVar "sigLookup") (EVar "e")) (EVar "name")) (arm (PCon "Some" (PCon "FnSig" PWild (PVar "r"))) () (EVar "r")) (arm (PCon "None") () (EVar "LTInt")))) (DoLet false false (PVar "isFloatRet") (EMatch (EVar "rty") (arm (PCon "LTFloat") () (EVar "True")) (arm PWild () (EVar "False")))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EVar "allPVar") (EVar "pats")) (EBinOp "==" (EApp (EVar "leadingDictParams") (EVar "pats")) (ELit (LInt 0)))) (EApp (EVar "hasFloatPty") (EVar "ptys"))) (EVar "isFloatRet")) (EApp (EApp (EVar "contains") (EVar "name")) (EApp (EApp (EVar "freeVars") (EListLit)) (EVar "body")))) (EApp (EApp (EApp (EVar "floatWorkerOk") (EVar "name")) (EApp (EVar "lengthS") (EVar "pats"))) (EVar "body"))))))
 (DTypeSig false "floatFwEligible" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "List") (TyCon "LTy")) (TyFun (TyCon "CExpr") (TyCon "Bool")))))))
@@ -20260,14 +20033,9 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DFunDef false "emitWorkerArgs" (PWild PWild PWild PWild (PList)) (EListLit))
 (DFunDef false "emitWorkerArgs" ((PVar "e") (PVar "env") (PVar "fp") (PVar "i") (PCons (PVar "a") (PVar "rest"))) (EBlock (DoLet false false (PVar "op") (EMatch (EApp (EApp (EVar "elemInt") (EVar "i")) (EVar "fp")) (arm (PCon "True") () (ETuple (ELit (LString "double")) (EApp (EApp (EApp (EVar "emitFloatD") (EVar "e")) (EVar "env")) (EVar "a")))) (arm (PCon "False") () (EBlock (DoLet false false (PTuple (PVar "w") PWild) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "a"))) (DoExpr (ETuple (ELit (LString "i64")) (EVar "w"))))))) (DoExpr (EBinOp "::" (EVar "op") (EApp (EApp (EApp (EApp (EApp (EVar "emitWorkerArgs") (EVar "e")) (EVar "env")) (EVar "fp")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))))
 (DTypeSig false "emitFnBodyD" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "CExpr") (TyCon "Unit")))))))))
-(DFunDef false "emitFnBodyD" ((PVar "e") (PVar "env") (PVar "self") (PVar "worker") (PVar "fp") (PVar "arity") (PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EBlock (DoLet false false (PTuple (PVar "cv") PWild) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "c"))) (DoLet false false (PVar "ci") (EApp (EApp (EVar "untagInt") (EVar "e")) (EVar "cv"))) (DoLet false false (PVar "cb") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "cb"))) (ELit (LString " = icmp ne i64 "))) (EApp (EVar "$core.display") (EVar "ci"))) (ELit (LString ", 0"))))) (DoLet false false (PVar "n") (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e")))) (DoLet false false (PVar "thenL") (EBinOp "++" (ELit (LString "then")) (EVar "n"))) (DoLet false false (PVar "elseL") (EBinOp "++" (ELit (LString "else")) (EVar "n"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  br i1 ")) (EApp (EVar "$core.display") (EVar "cb"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "thenL"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "elseL"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "thenL") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitFnBodyD") (EVar "e")) (EVar "env")) (EVar "self")) (EVar "worker")) (EVar "fp")) (EVar "arity")) (EVar "t"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "elseL") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitFnBodyD") (EVar "e")) (EVar "env")) (EVar "self")) (EVar "worker")) (EVar "fp")) (EVar "arity")) (EVar "f")))))
-(DFunDef false "emitFnBodyD" ((PVar "e") (PVar "env") (PVar "self") (PVar "worker") (PVar "fp") (PVar "arity") (PCon "CDecision" (PVar "scrut") (PVar "arms") (PVar "tree"))) (EMatch (EApp (EApp (EVar "decisionToIf") (EVar "scrut")) (EVar "arms")) (arm (PCon "Some" (PVar "cif")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitFnBodyD") (EVar "e")) (EVar "env")) (EVar "self")) (EVar "worker")) (EVar "fp")) (EVar "arity")) (EVar "cif"))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "d") (EApp (EApp (EApp (EVar "emitFloatD") (EVar "e")) (EVar "env")) (EApp (EApp (EApp (EVar "CDecision") (EVar "scrut")) (EVar "arms")) (EVar "tree")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  ret double ")) (EVar "d"))))))))
-(DFunDef false "emitFnBodyD" ((PVar "e") (PVar "env") (PVar "self") (PVar "worker") (PVar "fp") (PVar "arity") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitFnBodyDBlock") (EVar "e")) (EVar "env")) (EVar "self")) (EVar "worker")) (EVar "fp")) (EVar "arity")) (EVar "stmts")))
-(DFunDef false "emitFnBodyD" ((PVar "e") (PVar "env") (PVar "self") (PVar "worker") (PVar "fp") (PVar "arity") (PVar "other")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTailLeafD") (EVar "e")) (EVar "env")) (EVar "self")) (EVar "worker")) (EVar "fp")) (EVar "arity")) (EVar "other")) (EApp (EApp (EVar "flattenApp") (EVar "other")) (EListLit))))
+(DFunDef false "emitFnBodyD" ((PVar "e") (PVar "env") (PVar "self") (PVar "worker") (PVar "fp") (PVar "arity") (PVar "other0")) (ELetGroup ((lgb "go" (clause ((PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EBlock (DoLet false false (PTuple (PVar "cv") PWild) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "c"))) (DoLet false false (PVar "ci") (EApp (EApp (EVar "untagInt") (EVar "e")) (EVar "cv"))) (DoLet false false (PVar "cb") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "cb"))) (ELit (LString " = icmp ne i64 "))) (EApp (EVar "$core.display") (EVar "ci"))) (ELit (LString ", 0"))))) (DoLet false false (PVar "n") (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e")))) (DoLet false false (PVar "thenL") (EBinOp "++" (ELit (LString "then")) (EVar "n"))) (DoLet false false (PVar "elseL") (EBinOp "++" (ELit (LString "else")) (EVar "n"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  br i1 ")) (EApp (EVar "$core.display") (EVar "cb"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "thenL"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "elseL"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "thenL") (ELit (LString ":"))))) (DoExpr (EApp (EVar "go") (EVar "t"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "elseL") (ELit (LString ":"))))) (DoExpr (EApp (EVar "go") (EVar "f"))))) (clause ((PCon "CDecision" (PVar "scrut") (PVar "arms") (PVar "tree"))) (EMatch (EApp (EApp (EVar "decisionToIf") (EVar "scrut")) (EVar "arms")) (arm (PCon "Some" (PVar "cif")) () (EApp (EVar "go") (EVar "cif"))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "d") (EApp (EApp (EApp (EVar "emitFloatD") (EVar "e")) (EVar "env")) (EApp (EApp (EApp (EVar "CDecision") (EVar "scrut")) (EVar "arms")) (EVar "tree")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  ret double ")) (EVar "d")))))))) (clause ((PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitFnBodyDBlock") (EVar "e")) (EVar "env")) (EVar "self")) (EVar "worker")) (EVar "fp")) (EVar "arity")) (EVar "stmts"))) (clause ((PVar "other")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTailLeafD") (EVar "e")) (EVar "env")) (EVar "self")) (EVar "worker")) (EVar "fp")) (EVar "arity")) (EVar "other")) (EApp (EApp (EVar "flattenApp") (EVar "other")) (EListLit)))))) (EApp (EVar "go") (EVar "other0"))))
 (DTypeSig false "emitFnBodyDBlock" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyCon "Unit")))))))))
-(DFunDef false "emitFnBodyDBlock" ((PVar "e") (PVar "env") (PVar "self") (PVar "worker") (PVar "fp") (PVar "arity") (PCons (PCon "CSExpr" (PVar "ex")) (PList))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitFnBodyD") (EVar "e")) (EVar "env")) (EVar "self")) (EVar "worker")) (EVar "fp")) (EVar "arity")) (EVar "ex")))
-(DFunDef false "emitFnBodyDBlock" ((PVar "e") (PVar "env") (PVar "self") (PVar "worker") (PVar "fp") (PVar "arity") (PCons (PCon "CSLet" PWild (PCon "PVar" (PVar "x") PWild PWild) (PVar "rhs")) (PVar "rest"))) (EIf (EApp (EApp (EVar "computesAsDouble") (EVar "env")) (EVar "rhs")) (EBlock (DoLet false false (PVar "d") (EApp (EApp (EApp (EVar "emitFloatD") (EVar "e")) (EVar "env")) (EVar "rhs"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitFnBodyDBlock") (EVar "e")) (EApp (EApp (EApp (EVar "omInsert") (EVar "x")) (ETuple (EVar "d") (EVar "LTFloatU"))) (EVar "env"))) (EVar "self")) (EVar "worker")) (EVar "fp")) (EVar "arity")) (EVar "rest")))) (EBlock (DoLet false false (PTuple (PVar "v") (PVar "ty")) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "rhs"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitFnBodyDBlock") (EVar "e")) (EApp (EApp (EApp (EVar "omInsert") (EVar "x")) (ETuple (EVar "v") (EVar "ty"))) (EVar "env"))) (EVar "self")) (EVar "worker")) (EVar "fp")) (EVar "arity")) (EVar "rest"))))))
-(DFunDef false "emitFnBodyDBlock" ((PVar "e") (PVar "_env") PWild PWild PWild PWild PWild) (EApp (EApp (EVar "gapU") (EVar "e")) (ELit (LString "float-worker block: unexpected statement shape (should be gated by floatWorkerBlockOk)"))))
+(DFunDef false "emitFnBodyDBlock" ((PVar "e") (PVar "env0") (PVar "self") (PVar "worker") (PVar "fp") (PVar "arity") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PVar "env") (PCons (PCon "CSExpr" (PVar "ex")) (PList))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitFnBodyD") (EVar "e")) (EVar "env")) (EVar "self")) (EVar "worker")) (EVar "fp")) (EVar "arity")) (EVar "ex"))) (clause ((PVar "env") (PCons (PCon "CSLet" PWild (PCon "PVar" (PVar "x") PWild PWild) (PVar "rhs")) (PVar "rest"))) (EIf (EApp (EApp (EVar "computesAsDouble") (EVar "env")) (EVar "rhs")) (EBlock (DoLet false false (PVar "d") (EApp (EApp (EApp (EVar "emitFloatD") (EVar "e")) (EVar "env")) (EVar "rhs"))) (DoExpr (EApp (EApp (EVar "go") (EApp (EApp (EApp (EVar "omInsert") (EVar "x")) (ETuple (EVar "d") (EVar "LTFloatU"))) (EVar "env"))) (EVar "rest")))) (EBlock (DoLet false false (PTuple (PVar "v") (PVar "ty")) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "rhs"))) (DoExpr (EApp (EApp (EVar "go") (EApp (EApp (EApp (EVar "omInsert") (EVar "x")) (ETuple (EVar "v") (EVar "ty"))) (EVar "env"))) (EVar "rest")))))) (clause ((PVar "_env") PWild) (EApp (EApp (EVar "gapU") (EVar "e")) (ELit (LString "float-worker block: unexpected statement shape (should be gated by floatWorkerBlockOk)")))))) (EApp (EApp (EVar "go") (EVar "env0")) (EVar "xs0"))))
 (DTypeSig false "emitTailLeafD" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "CExpr") (TyFun (TyTuple (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CExpr"))) (TyCon "Unit"))))))))))
 (DFunDef false "emitTailLeafD" ((PVar "e") (PVar "env") (PVar "self") (PVar "worker") (PVar "fp") (PVar "arity") PWild (PTuple (PCon "CVar" (PVar "f0") PWild) (PVar "args"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "f0") (EVar "self")) (EBinOp "==" (EApp (EVar "lengthS") (EVar "args")) (EVar "arity"))) (EBlock (DoLet false false (PVar "ops") (EApp (EApp (EApp (EApp (EApp (EVar "emitWorkerArgs") (EVar "e")) (EVar "env")) (EVar "fp")) (ELit (LInt 0))) (EVar "args"))) (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false (PVar "call") (EApp (EApp (EApp (EApp (EApp (EVar "directCallWith") (EVar "e")) (EVar "MustTailCall")) (EApp (EVar "Generated") (EVar "worker"))) (ELit (LString "double"))) (EVar "ops"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString " = "))) (EApp (EVar "$core.display") (EVar "call"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  ret double ")) (EVar "r"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "emitTailLeafD" ((PVar "e") (PVar "env") PWild PWild PWild PWild (PVar "other") PWild) (EBlock (DoLet false false (PVar "d") (EApp (EApp (EApp (EVar "emitFloatD") (EVar "e")) (EVar "env")) (EVar "other"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  ret double ")) (EVar "d"))))))
@@ -20296,11 +20064,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DFunDef false "rawKindKey" ((PCon "RawU32")) (ELit (LString "i")))
 (DFunDef false "rawKindKey" ((PCon "RawI32")) (ELit (LString "s")))
 (DTypeSig false "rawRetOk" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "RawKind") (TyFun (TyCon "CExpr") (TyCon "Bool")))))))
-(DFunDef false "rawRetOk" ((PVar "e") (PVar "self") (PVar "n") (PVar "k") (PCon "CIf" PWild (PVar "t") (PVar "f"))) (EBinOp "&&" (EApp (EApp (EApp (EApp (EApp (EVar "rawRetOk") (EVar "e")) (EVar "self")) (EVar "n")) (EVar "k")) (EVar "t")) (EApp (EApp (EApp (EApp (EApp (EVar "rawRetOk") (EVar "e")) (EVar "self")) (EVar "n")) (EVar "k")) (EVar "f"))))
-(DFunDef false "rawRetOk" ((PVar "e") (PVar "self") (PVar "n") (PVar "k") (PCon "CDecision" (PVar "scrut") (PVar "arms") (PVar "tree"))) (EMatch (EApp (EApp (EVar "decisionToIf") (EVar "scrut")) (EVar "arms")) (arm (PCon "Some" (PVar "cif")) () (EApp (EApp (EApp (EApp (EApp (EVar "rawRetOk") (EVar "e")) (EVar "self")) (EVar "n")) (EVar "k")) (EVar "cif"))) (arm (PCon "None") () (EApp (EVar "not") (EApp (EApp (EVar "tailCalls") (EVar "e")) (EApp (EApp (EApp (EVar "CDecision") (EVar "scrut")) (EVar "arms")) (EVar "tree")))))))
-(DFunDef false "rawRetOk" ((PVar "e") (PVar "self") (PVar "n") (PVar "k") (PCon "CBlock" (PVar "stmts"))) (EMatch (EApp (EVar "reverseL") (EVar "stmts")) (arm (PCons (PCon "CSExpr" (PVar "ex")) PWild) () (EApp (EApp (EApp (EApp (EApp (EVar "rawRetOk") (EVar "e")) (EVar "self")) (EVar "n")) (EVar "k")) (EVar "ex"))) (arm PWild () (EVar "True"))))
-(DFunDef false "rawRetOk" ((PVar "e") (PVar "self") (PVar "n") (PVar "k") (PCon "CLet" (PCon "False") (PCon "PVar" (PVar "x") (PVar "a") (PVar "bid")) (PVar "e1") (PVar "e2"))) (EMatch (EVar "e1") (arm (PCon "CLam" PWild PWild) () (EApp (EVar "not") (EApp (EApp (EVar "tailCalls") (EVar "e")) (EApp (EApp (EApp (EApp (EVar "CLet") (EVar "False")) (EApp (EApp (EApp (EVar "PVar") (EVar "x")) (EVar "a")) (EVar "bid"))) (EVar "e1")) (EVar "e2"))))) (arm PWild () (EApp (EApp (EApp (EApp (EApp (EVar "rawRetOk") (EVar "e")) (EVar "self")) (EVar "n")) (EVar "k")) (EVar "e2")))))
-(DFunDef false "rawRetOk" ((PVar "e") (PVar "self") (PVar "n") (PVar "k") (PVar "ex")) (EMatch (EApp (EApp (EVar "flattenApp") (EVar "ex")) (EListLit)) (arm (PTuple (PCon "CVar" (PVar "f") PWild) (PVar "args")) () (EBlock (DoLet false false (PVar "name") (EApp (EApp (EVar "canonFnName") (EVar "e")) (EVar "f"))) (DoExpr (EIf (EBinOp "==" (EVar "name") (EVar "self")) (EBinOp "==" (EApp (EVar "lengthS") (EVar "args")) (EVar "n")) (EIf (EApp (EApp (EVar "isKnownFn") (EVar "e")) (EVar "name")) (EApp (EVar "isSome") (EApp (EApp (EApp (EApp (EVar "rawWorkerReturning") (EVar "e")) (EVar "f")) (EApp (EVar "lengthS") (EVar "args"))) (EVar "k"))) (EVar "True")))))) (arm PWild () (EApp (EVar "not") (EApp (EApp (EVar "tailCalls") (EVar "e")) (EVar "ex"))))))
+(DFunDef false "rawRetOk" ((PVar "e") (PVar "self") (PVar "n") (PVar "k") (PVar "ex0")) (ELetGroup ((lgb "go" (clause ((PCon "CIf" PWild (PVar "t") (PVar "f"))) (EBinOp "&&" (EApp (EVar "go") (EVar "t")) (EApp (EVar "go") (EVar "f")))) (clause ((PCon "CDecision" (PVar "scrut") (PVar "arms") (PVar "tree"))) (EMatch (EApp (EApp (EVar "decisionToIf") (EVar "scrut")) (EVar "arms")) (arm (PCon "Some" (PVar "cif")) () (EApp (EVar "go") (EVar "cif"))) (arm (PCon "None") () (EApp (EVar "not") (EApp (EApp (EVar "tailCalls") (EVar "e")) (EApp (EApp (EApp (EVar "CDecision") (EVar "scrut")) (EVar "arms")) (EVar "tree"))))))) (clause ((PCon "CBlock" (PVar "stmts"))) (EMatch (EApp (EVar "reverseL") (EVar "stmts")) (arm (PCons (PCon "CSExpr" (PVar "ex")) PWild) () (EApp (EVar "go") (EVar "ex"))) (arm PWild () (EVar "True")))) (clause ((PCon "CLet" (PCon "False") (PCon "PVar" (PVar "x") (PVar "a") (PVar "bid")) (PVar "e1") (PVar "e2"))) (EMatch (EVar "e1") (arm (PCon "CLam" PWild PWild) () (EApp (EVar "not") (EApp (EApp (EVar "tailCalls") (EVar "e")) (EApp (EApp (EApp (EApp (EVar "CLet") (EVar "False")) (EApp (EApp (EApp (EVar "PVar") (EVar "x")) (EVar "a")) (EVar "bid"))) (EVar "e1")) (EVar "e2"))))) (arm PWild () (EApp (EVar "go") (EVar "e2"))))) (clause ((PVar "ex")) (EMatch (EApp (EApp (EVar "flattenApp") (EVar "ex")) (EListLit)) (arm (PTuple (PCon "CVar" (PVar "f") PWild) (PVar "args")) () (EBlock (DoLet false false (PVar "name") (EApp (EApp (EVar "canonFnName") (EVar "e")) (EVar "f"))) (DoExpr (EIf (EBinOp "==" (EVar "name") (EVar "self")) (EBinOp "==" (EApp (EVar "lengthS") (EVar "args")) (EVar "n")) (EIf (EApp (EApp (EVar "isKnownFn") (EVar "e")) (EVar "name")) (EApp (EVar "isSome") (EApp (EApp (EApp (EApp (EVar "rawWorkerReturning") (EVar "e")) (EVar "f")) (EApp (EVar "lengthS") (EVar "args"))) (EVar "k"))) (EVar "True")))))) (arm PWild () (EApp (EVar "not") (EApp (EApp (EVar "tailCalls") (EVar "e")) (EVar "ex")))))))) (EApp (EVar "go") (EVar "ex0"))))
 (DTypeSig false "tailCalls" (TyFun (TyCon "Emit") (TyFun (TyCon "CExpr") (TyCon "Bool"))))
 (DFunDef false "tailCalls" ((PVar "e") (PCon "CIf" PWild (PVar "t") (PVar "f"))) (EBinOp "||" (EApp (EApp (EVar "tailCalls") (EVar "e")) (EVar "t")) (EApp (EApp (EVar "tailCalls") (EVar "e")) (EVar "f"))))
 (DFunDef false "tailCalls" ((PVar "e") (PCon "CDecision" PWild (PVar "arms") PWild)) (EApp (EApp (EVar "armsTailCall") (EVar "e")) (EVar "arms")))
@@ -20312,8 +20076,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DFunDef false "armsTailCall" ((PVar "e") (PCons (PCon "CArm" PWild PWild (PVar "body")) (PVar "rest"))) (EBinOp "||" (EApp (EApp (EVar "tailCalls") (EVar "e")) (EVar "body")) (EApp (EApp (EVar "armsTailCall") (EVar "e")) (EVar "rest"))))
 (DFunDef false "armsTailCall" ((PVar "e") (PCons (PCon "CArmAlt" PWild PWild PWild) (PVar "rest"))) (EApp (EApp (EVar "armsTailCall") (EVar "e")) (EVar "rest")))
 (DTypeSig false "collectRawWorkersPass" (TyFun (TyCon "Emit") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "OrdMap") (TyCon "RawWorker"))))))
-(DFunDef false "collectRawWorkersPass" (PWild PWild (PList)) (EVar "omEmpty"))
-(DFunDef false "collectRawWorkersPass" ((PVar "e") (PVar "refine") (PCons (PVar "b") (PVar "rest"))) (EMatch (EApp (EApp (EApp (EVar "rawWorkerOf") (EVar "e")) (EVar "refine")) (EVar "b")) (arm (PCon "Some" (PVar "w")) () (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "bindName") (EVar "b"))) (EVar "w")) (EApp (EApp (EApp (EVar "collectRawWorkersPass") (EVar "e")) (EVar "refine")) (EVar "rest")))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "collectRawWorkersPass") (EVar "e")) (EVar "refine")) (EVar "rest")))))
+(DFunDef false "collectRawWorkersPass" ((PVar "e") (PVar "refine") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EVar "omEmpty")) (clause ((PCons (PVar "b") (PVar "rest"))) (EMatch (EApp (EApp (EApp (EVar "rawWorkerOf") (EVar "e")) (EVar "refine")) (EVar "b")) (arm (PCon "Some" (PVar "w")) () (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "bindName") (EVar "b"))) (EVar "w")) (EApp (EVar "go") (EVar "rest")))) (arm (PCon "None") () (EApp (EVar "go") (EVar "rest"))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "refineU64Params" (TyFun (TyCon "Emit") (TyFun (TyCon "Bool") (TyFun (TyCon "CExpr") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "List") (TyCon "RawKind")) (TyApp (TyCon "List") (TyCon "RawKind"))))))))
 (DFunDef false "refineU64Params" ((PVar "e") (PVar "retRaw") (PVar "body") (PCons (PCon "PVar" (PVar "x") PWild PWild) (PVar "ps")) (PCons (PCon "RawU64") (PVar "ks"))) (EBlock (DoLet false false (PVar "k") (EIf (EBinOp "==" (EApp (EApp (EApp (EApp (EVar "u64Escapes") (EVar "e")) (EVar "x")) (EVar "retRaw")) (EVar "body")) (ELit (LInt 0))) (EVar "RawU64") (EVar "RawWord"))) (DoExpr (EBinOp "::" (EVar "k") (EApp (EApp (EApp (EApp (EApp (EVar "refineU64Params") (EVar "e")) (EVar "retRaw")) (EVar "body")) (EVar "ps")) (EVar "ks"))))))
 (DFunDef false "refineU64Params" ((PVar "e") (PVar "retRaw") (PVar "body") (PCons PWild (PVar "ps")) (PCons (PVar "k") (PVar "ks"))) (EBinOp "::" (EVar "k") (EApp (EApp (EApp (EApp (EApp (EVar "refineU64Params") (EVar "e")) (EVar "retRaw")) (EVar "body")) (EVar "ps")) (EVar "ks"))))
@@ -20332,16 +20095,9 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DFunDef false "paramEnvRaw" (PWild PWild PWild PWild) (EApp (EVar "panic") (ELit (LString "llvm: raw-worker params must be plain variables"))))
 (DData Private "RawTail" () ((variant "RawTail" (ConPos (TyCon "String") (TyCon "String") (TyCon "RawWorker")))) ())
 (DTypeSig false "emitFnBodyRaw" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "RawTail") (TyFun (TyCon "CExpr") (TyCon "Unit"))))))
-(DFunDef false "emitFnBodyRaw" ((PVar "e") (PVar "env") (PVar "t") (PCon "CIf" (PVar "c") (PVar "th") (PVar "el"))) (EBlock (DoLet false false (PTuple (PVar "cv") PWild) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "c"))) (DoLet false false (PVar "ci") (EApp (EApp (EVar "untagInt") (EVar "e")) (EVar "cv"))) (DoLet false false (PVar "cb") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "cb"))) (ELit (LString " = icmp ne i64 "))) (EApp (EVar "$core.display") (EVar "ci"))) (ELit (LString ", 0"))))) (DoLet false false (PVar "n") (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e")))) (DoLet false false (PVar "thenL") (EBinOp "++" (ELit (LString "then")) (EVar "n"))) (DoLet false false (PVar "elseL") (EBinOp "++" (ELit (LString "else")) (EVar "n"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  br i1 ")) (EApp (EVar "$core.display") (EVar "cb"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "thenL"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "elseL"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "thenL") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "emitFnBodyRaw") (EVar "e")) (EVar "env")) (EVar "t")) (EVar "th"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "elseL") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "emitFnBodyRaw") (EVar "e")) (EVar "env")) (EVar "t")) (EVar "el")))))
-(DFunDef false "emitFnBodyRaw" ((PVar "e") (PVar "env") (PVar "t") (PCon "CDecision" (PVar "scrut") (PVar "arms") (PVar "tree"))) (EMatch (EApp (EApp (EVar "decisionToIf") (EVar "scrut")) (EVar "arms")) (arm (PCon "Some" (PVar "cif")) () (EApp (EApp (EApp (EApp (EVar "emitFnBodyRaw") (EVar "e")) (EVar "env")) (EVar "t")) (EVar "cif"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "emitRawValueRet") (EVar "e")) (EVar "env")) (EVar "t")) (EApp (EApp (EApp (EVar "CDecision") (EVar "scrut")) (EVar "arms")) (EVar "tree"))))))
-(DFunDef false "emitFnBodyRaw" ((PVar "e") (PVar "env") (PVar "t") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EApp (EApp (EVar "emitFnBodyRawBlock") (EVar "e")) (EVar "env")) (EVar "t")) (EVar "stmts")))
-(DFunDef false "emitFnBodyRaw" ((PVar "e") (PVar "env") (PVar "t") (PCon "CLet" (PCon "False") (PCon "PVar" (PVar "x") (PVar "a") (PVar "bid")) (PVar "e1") (PVar "e2"))) (EMatch (EVar "e1") (arm (PCon "CLam" PWild PWild) () (EApp (EApp (EApp (EApp (EVar "emitRawValueRet") (EVar "e")) (EVar "env")) (EVar "t")) (EApp (EApp (EApp (EApp (EVar "CLet") (EVar "False")) (EApp (EApp (EApp (EVar "PVar") (EVar "x")) (EVar "a")) (EVar "bid"))) (EVar "e1")) (EVar "e2")))) (arm PWild () (EApp (EApp (EApp (EApp (EVar "emitFnBodyRaw") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "bindLetRaw") (EVar "e")) (EVar "env")) (EVar "x")) (EVar "bid")) (EVar "e1")) (EVar "e2"))) (EVar "t")) (EVar "e2")))))
-(DFunDef false "emitFnBodyRaw" ((PVar "e") (PVar "env") (PCon "RawTail" (PVar "self") (PVar "worker") (PVar "w")) (PVar "other")) (EMatch (EApp (EApp (EVar "flattenApp") (EVar "other")) (EListLit)) (arm (PTuple (PCon "CVar" (PVar "f") PWild) (PVar "args")) () (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EVar "not") (EApp (EApp (EVar "isLocal") (EVar "env")) (EVar "f"))) (EBinOp "==" (EApp (EApp (EVar "canonFnName") (EVar "e")) (EVar "f")) (EVar "self"))) (EBinOp "==" (EApp (EVar "lengthS") (EVar "args")) (EApp (EVar "rawWorkerArity") (EVar "w")))) (EBlock (DoLet false false (PVar "ops") (EApp (EApp (EApp (EApp (EVar "emitRawArgs") (EVar "e")) (EVar "env")) (EApp (EVar "rawWorkerKinds") (EVar "w"))) (EVar "args"))) (DoLet false false (PVar "rty") (EApp (EVar "rawKindTy") (EApp (EVar "rawWorkerRet") (EVar "w")))) (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false (PVar "call") (EApp (EApp (EApp (EApp (EApp (EVar "directCallWith") (EVar "e")) (EVar "MustTailCall")) (EApp (EVar "Generated") (EVar "worker"))) (EVar "rty")) (EVar "ops"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString " = "))) (EApp (EVar "$core.display") (EVar "call"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ret ")) (EApp (EVar "$core.display") (EVar "rty"))) (ELit (LString " "))) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString "")))))) (EApp (EApp (EApp (EApp (EVar "emitRawValueRet") (EVar "e")) (EVar "env")) (EApp (EApp (EApp (EVar "RawTail") (EVar "self")) (EVar "worker")) (EVar "w"))) (EVar "other")))) (arm PWild () (EApp (EApp (EApp (EApp (EVar "emitRawValueRet") (EVar "e")) (EVar "env")) (EApp (EApp (EApp (EVar "RawTail") (EVar "self")) (EVar "worker")) (EVar "w"))) (EVar "other")))))
+(DFunDef false "emitFnBodyRaw" ((PVar "e") (PVar "env0") (PVar "t") (PVar "ex0")) (ELetGroup ((lgb "go" (clause ((PVar "env") (PCon "CIf" (PVar "c") (PVar "th") (PVar "el"))) (EBlock (DoLet false false (PTuple (PVar "cv") PWild) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "c"))) (DoLet false false (PVar "ci") (EApp (EApp (EVar "untagInt") (EVar "e")) (EVar "cv"))) (DoLet false false (PVar "cb") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "cb"))) (ELit (LString " = icmp ne i64 "))) (EApp (EVar "$core.display") (EVar "ci"))) (ELit (LString ", 0"))))) (DoLet false false (PVar "n") (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e")))) (DoLet false false (PVar "thenL") (EBinOp "++" (ELit (LString "then")) (EVar "n"))) (DoLet false false (PVar "elseL") (EBinOp "++" (ELit (LString "else")) (EVar "n"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  br i1 ")) (EApp (EVar "$core.display") (EVar "cb"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "thenL"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "elseL"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "thenL") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EVar "go") (EVar "env")) (EVar "th"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "elseL") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EVar "go") (EVar "env")) (EVar "el"))))) (clause ((PVar "env") (PCon "CDecision" (PVar "scrut") (PVar "arms") (PVar "tree"))) (EMatch (EApp (EApp (EVar "decisionToIf") (EVar "scrut")) (EVar "arms")) (arm (PCon "Some" (PVar "cif")) () (EApp (EApp (EVar "go") (EVar "env")) (EVar "cif"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "emitRawValueRet") (EVar "e")) (EVar "env")) (EVar "t")) (EApp (EApp (EApp (EVar "CDecision") (EVar "scrut")) (EVar "arms")) (EVar "tree")))))) (clause ((PVar "env") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EApp (EApp (EVar "emitFnBodyRawBlock") (EVar "e")) (EVar "env")) (EVar "t")) (EVar "stmts"))) (clause ((PVar "env") (PCon "CLet" (PCon "False") (PCon "PVar" (PVar "x") (PVar "a") (PVar "bid")) (PVar "e1") (PVar "e2"))) (EMatch (EVar "e1") (arm (PCon "CLam" PWild PWild) () (EApp (EApp (EApp (EApp (EVar "emitRawValueRet") (EVar "e")) (EVar "env")) (EVar "t")) (EApp (EApp (EApp (EApp (EVar "CLet") (EVar "False")) (EApp (EApp (EApp (EVar "PVar") (EVar "x")) (EVar "a")) (EVar "bid"))) (EVar "e1")) (EVar "e2")))) (arm PWild () (EApp (EApp (EVar "go") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "bindLetRaw") (EVar "e")) (EVar "env")) (EVar "x")) (EVar "bid")) (EVar "e1")) (EVar "e2"))) (EVar "e2"))))) (clause ((PVar "env") (PVar "other")) (EMatch (EVar "t") (arm (PCon "RawTail" (PVar "self") (PVar "worker") (PVar "w")) () (EMatch (EApp (EApp (EVar "flattenApp") (EVar "other")) (EListLit)) (arm (PTuple (PCon "CVar" (PVar "f") PWild) (PVar "args")) () (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EVar "not") (EApp (EApp (EVar "isLocal") (EVar "env")) (EVar "f"))) (EBinOp "==" (EApp (EApp (EVar "canonFnName") (EVar "e")) (EVar "f")) (EVar "self"))) (EBinOp "==" (EApp (EVar "lengthS") (EVar "args")) (EApp (EVar "rawWorkerArity") (EVar "w")))) (EBlock (DoLet false false (PVar "ops") (EApp (EApp (EApp (EApp (EVar "emitRawArgs") (EVar "e")) (EVar "env")) (EApp (EVar "rawWorkerKinds") (EVar "w"))) (EVar "args"))) (DoLet false false (PVar "rty") (EApp (EVar "rawKindTy") (EApp (EVar "rawWorkerRet") (EVar "w")))) (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false (PVar "call") (EApp (EApp (EApp (EApp (EApp (EVar "directCallWith") (EVar "e")) (EVar "MustTailCall")) (EApp (EVar "Generated") (EVar "worker"))) (EVar "rty")) (EVar "ops"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString " = "))) (EApp (EVar "$core.display") (EVar "call"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ret ")) (EApp (EVar "$core.display") (EVar "rty"))) (ELit (LString " "))) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString "")))))) (EApp (EApp (EApp (EApp (EVar "emitRawValueRet") (EVar "e")) (EVar "env")) (EVar "t")) (EVar "other")))) (arm PWild () (EApp (EApp (EApp (EApp (EVar "emitRawValueRet") (EVar "e")) (EVar "env")) (EVar "t")) (EVar "other"))))))))) (EApp (EApp (EVar "go") (EVar "env0")) (EVar "ex0"))))
 (DTypeSig false "emitFnBodyRawBlock" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "RawTail") (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyCon "Unit"))))))
-(DFunDef false "emitFnBodyRawBlock" ((PVar "e") (PVar "env") (PVar "t") (PList (PCon "CSExpr" (PVar "ex")))) (EApp (EApp (EApp (EApp (EVar "emitFnBodyRaw") (EVar "e")) (EVar "env")) (EVar "t")) (EVar "ex")))
-(DFunDef false "emitFnBodyRawBlock" ((PVar "e") (PVar "env") (PCon "RawTail" PWild PWild (PVar "w")) (PList (PVar "s"))) (EBlock (DoLet false false (PTuple (PVar "v") PWild) (EApp (EApp (EApp (EVar "emitBlockLast") (EVar "e")) (EVar "env")) (EVar "s"))) (DoExpr (EApp (EApp (EApp (EVar "emitRawWordRet") (EVar "e")) (EApp (EVar "rawWorkerRet") (EVar "w"))) (EVar "v")))))
-(DFunDef false "emitFnBodyRawBlock" ((PVar "e") (PVar "env") (PVar "t") (PCons (PVar "s") (PVar "rest"))) (EApp (EApp (EApp (EApp (EVar "emitFnBodyRawBlock") (EVar "e")) (EApp (EApp (EApp (EApp (EVar "emitBlockLead") (EVar "e")) (EVar "env")) (EVar "s")) (EVar "rest"))) (EVar "t")) (EVar "rest")))
-(DFunDef false "emitFnBodyRawBlock" ((PVar "e") PWild PWild (PList)) (EApp (EApp (EVar "gapU") (EVar "e")) (ELit (LString "empty block"))))
+(DFunDef false "emitFnBodyRawBlock" ((PVar "e") (PVar "env0") (PVar "t") (PVar "ss0")) (ELetGroup ((lgb "go" (clause ((PVar "env") (PList (PCon "CSExpr" (PVar "ex")))) (EApp (EApp (EApp (EApp (EVar "emitFnBodyRaw") (EVar "e")) (EVar "env")) (EVar "t")) (EVar "ex"))) (clause ((PVar "env") (PList (PVar "s"))) (EMatch (EVar "t") (arm (PCon "RawTail" PWild PWild (PVar "w")) () (EBlock (DoLet false false (PTuple (PVar "v") PWild) (EApp (EApp (EApp (EVar "emitBlockLast") (EVar "e")) (EVar "env")) (EVar "s"))) (DoExpr (EApp (EApp (EApp (EVar "emitRawWordRet") (EVar "e")) (EApp (EVar "rawWorkerRet") (EVar "w"))) (EVar "v"))))))) (clause ((PVar "env") (PCons (PVar "s") (PVar "rest"))) (EApp (EApp (EVar "go") (EApp (EApp (EApp (EApp (EVar "emitBlockLead") (EVar "e")) (EVar "env")) (EVar "s")) (EVar "rest"))) (EVar "rest"))) (clause (PWild (PList)) (EApp (EApp (EVar "gapU") (EVar "e")) (ELit (LString "empty block")))))) (EApp (EApp (EVar "go") (EVar "env0")) (EVar "ss0"))))
 (DTypeSig false "emitRawValueRet" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "RawTail") (TyFun (TyCon "CExpr") (TyCon "Unit"))))))
 (DFunDef false "emitRawValueRet" ((PVar "e") (PVar "env") (PCon "RawTail" PWild PWild (PVar "w")) (PVar "ex")) (EMatch (EApp (EVar "rawWorkerRet") (EVar "w")) (arm (PCon "RawU64") () (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "  ret i64 ")) (EApp (EVar "$core.display") (EApp (EApp (EApp (EVar "emitU64Raw") (EVar "e")) (EVar "env")) (EVar "ex")))) (ELit (LString ""))))) (arm (PCon "RawU32") () (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "  ret i32 ")) (EApp (EVar "$core.display") (EApp (EApp (EApp (EVar "emitU32Raw") (EVar "e")) (EVar "env")) (EVar "ex")))) (ELit (LString ""))))) (arm (PCon "RawI32") () (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "  ret i32 ")) (EApp (EVar "$core.display") (EApp (EApp (EApp (EVar "emitU32Raw") (EVar "e")) (EVar "env")) (EVar "ex")))) (ELit (LString ""))))) (arm (PCon "RawWord") () (EApp (EApp (EApp (EVar "emitValueRet") (EVar "e")) (EVar "env")) (EVar "ex")))))
 (DTypeSig false "emitRawWordRet" (TyFun (TyCon "Emit") (TyFun (TyCon "RawKind") (TyFun (TyCon "String") (TyCon "Unit")))))
@@ -20376,12 +20132,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DFunDef false "paramEnv" ((PCons (PCon "PWild") (PVar "rest")) (PList) (PVar "i")) (EApp (EApp (EApp (EVar "paramEnv") (EVar "rest")) (EListLit)) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))
 (DFunDef false "paramEnv" (PWild PWild PWild) (EApp (EVar "panic") (ELit (LString "llvm: function parameters must be plain variables"))))
 (DTypeSig false "emitFnBody" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "TailDefine") (TyFun (TyCon "CExpr") (TyCon "Unit"))))))
-(DFunDef false "emitFnBody" ((PVar "e") (PVar "env") (PVar "self") (PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EBlock (DoLet false false (PTuple (PVar "thenL") (PVar "elseL")) (EApp (EApp (EApp (EVar "emitTailIfHead") (EVar "e")) (EVar "env")) (EVar "c"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "thenL") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "emitFnBody") (EVar "e")) (EVar "env")) (EVar "self")) (EVar "t"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "elseL") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "emitFnBody") (EVar "e")) (EVar "env")) (EVar "self")) (EVar "f")))))
-(DFunDef false "emitFnBody" ((PVar "e") (PVar "env") (PVar "self") (PCon "CDecision" (PVar "scrut") (PVar "arms") (PVar "tree"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTailDecision") (EVar "e")) (EVar "env")) (EVar "self")) (EVar "scrut")) (EVar "arms")) (EVar "tree")))
-(DFunDef false "emitFnBody" ((PVar "e") (PVar "env") (PVar "self") (PCon "CLet" (PVar "recF") (PVar "pat") (PVar "e1") (PVar "e2"))) (EIf (EApp (EApp (EApp (EVar "letBinds") (EVar "recF")) (EVar "pat")) (EVar "e1")) (EApp (EApp (EApp (EApp (EVar "emitFnBody") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "bindLet") (EVar "e")) (EVar "env")) (EVar "recF")) (EVar "pat")) (EVar "e1")) (EVar "e2"))) (EVar "self")) (EVar "e2")) (EApp (EApp (EApp (EVar "emitValueRet") (EVar "e")) (EVar "env")) (EApp (EApp (EApp (EApp (EVar "CLet") (EVar "recF")) (EVar "pat")) (EVar "e1")) (EVar "e2")))))
-(DFunDef false "emitFnBody" ((PVar "e") (PVar "env") (PVar "self") (PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EMatch (EApp (EApp (EApp (EApp (EVar "bindLetGroup") (EVar "e")) (EVar "env")) (EVar "binds")) (EVar "body")) (arm (PCon "Some" (PVar "env2")) () (EApp (EApp (EApp (EApp (EVar "emitFnBody") (EVar "e")) (EVar "env2")) (EVar "self")) (EVar "body"))) (arm (PCon "None") () (EBlock (DoLet false false (PTuple (PVar "v") PWild) (EApp (EVar "letGroupGap") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  ret i64 ")) (EVar "v"))))))))
-(DFunDef false "emitFnBody" ((PVar "e") (PVar "env") (PVar "self") (PCon "CBlock" (PVar "stmts"))) (EMatch (EApp (EVar "lastStmtExpr") (EVar "stmts")) (arm (PCon "Some" (PVar "last")) () (EApp (EApp (EApp (EApp (EVar "emitFnBody") (EVar "e")) (EApp (EApp (EApp (EVar "emitBlockInit") (EVar "e")) (EVar "env")) (EVar "stmts"))) (EVar "self")) (EVar "last"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "emitValueRet") (EVar "e")) (EVar "env")) (EApp (EVar "CBlock") (EVar "stmts"))))))
-(DFunDef false "emitFnBody" ((PVar "e") (PVar "env") (PVar "self") (PVar "other")) (EApp (EApp (EApp (EApp (EApp (EVar "emitTailLeaf") (EVar "e")) (EVar "env")) (EVar "self")) (EVar "other")) (ELam (PWild) (EApp (EApp (EApp (EVar "emitValueRet") (EVar "e")) (EVar "env")) (EVar "other")))))
+(DFunDef false "emitFnBody" ((PVar "e") (PVar "env0") (PVar "self") (PVar "other0")) (ELetGroup ((lgb "go" (clause ((PVar "env") (PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EBlock (DoLet false false (PTuple (PVar "thenL") (PVar "elseL")) (EApp (EApp (EApp (EVar "emitTailIfHead") (EVar "e")) (EVar "env")) (EVar "c"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "thenL") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EVar "go") (EVar "env")) (EVar "t"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "elseL") (ELit (LString ":"))))) (DoExpr (EApp (EApp (EVar "go") (EVar "env")) (EVar "f"))))) (clause ((PVar "env") (PCon "CDecision" (PVar "scrut") (PVar "arms") (PVar "tree"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTailDecision") (EVar "e")) (EVar "env")) (EVar "self")) (EVar "scrut")) (EVar "arms")) (EVar "tree"))) (clause ((PVar "env") (PCon "CLet" (PVar "recF") (PVar "pat") (PVar "e1") (PVar "e2"))) (EIf (EApp (EApp (EApp (EVar "letBinds") (EVar "recF")) (EVar "pat")) (EVar "e1")) (EApp (EApp (EVar "go") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "bindLet") (EVar "e")) (EVar "env")) (EVar "recF")) (EVar "pat")) (EVar "e1")) (EVar "e2"))) (EVar "e2")) (EApp (EApp (EApp (EVar "emitValueRet") (EVar "e")) (EVar "env")) (EApp (EApp (EApp (EApp (EVar "CLet") (EVar "recF")) (EVar "pat")) (EVar "e1")) (EVar "e2"))))) (clause ((PVar "env") (PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EMatch (EApp (EApp (EApp (EApp (EVar "bindLetGroup") (EVar "e")) (EVar "env")) (EVar "binds")) (EVar "body")) (arm (PCon "Some" (PVar "env2")) () (EApp (EApp (EVar "go") (EVar "env2")) (EVar "body"))) (arm (PCon "None") () (EBlock (DoLet false false (PTuple (PVar "v") PWild) (EApp (EVar "letGroupGap") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  ret i64 ")) (EVar "v")))))))) (clause ((PVar "env") (PCon "CBlock" (PVar "stmts"))) (EMatch (EApp (EVar "lastStmtExpr") (EVar "stmts")) (arm (PCon "Some" (PVar "last")) () (EApp (EApp (EVar "go") (EApp (EApp (EApp (EVar "emitBlockInit") (EVar "e")) (EVar "env")) (EVar "stmts"))) (EVar "last"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "emitValueRet") (EVar "e")) (EVar "env")) (EApp (EVar "CBlock") (EVar "stmts")))))) (clause ((PVar "env") (PVar "other")) (EApp (EApp (EApp (EApp (EApp (EVar "emitTailLeaf") (EVar "e")) (EVar "env")) (EVar "self")) (EVar "other")) (ELam (PWild) (EApp (EApp (EApp (EVar "emitValueRet") (EVar "e")) (EVar "env")) (EVar "other"))))))) (EApp (EApp (EVar "go") (EVar "env0")) (EVar "other0"))))
 (DTypeSig false "emitBlockInit" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy")))))))
 (DFunDef false "emitBlockInit" (PWild (PVar "env") (PList)) (EVar "env"))
 (DFunDef false "emitBlockInit" (PWild (PVar "env") (PList PWild)) (EVar "env"))
@@ -20395,7 +20146,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "emitTailLeaf" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "TailDefine") (TyFun (TyCon "CExpr") (TyFun (TyFun (TyCon "Unit") (TyCon "Unit")) (TyCon "Unit")))))))
 (DFunDef false "emitTailLeaf" ((PVar "e") (PVar "env") (PVar "self") (PVar "ex") (PVar "orValue")) (EIf (EApp (EVar "isTailCall") (EVar "ex")) (EMatch (EApp (EApp (EApp (EVar "directCallOperands") (EVar "e")) (EVar "env")) (EVar "ex")) (arm (PCon "Some" (PTuple (PVar "sym") (PVar "ops"))) () (EApp (EApp (EApp (EApp (EVar "emitDirectTailCall") (EVar "e")) (EVar "self")) (EVar "sym")) (EVar "ops"))) (arm (PCon "None") () (EMatch (EApp (EApp (EApp (EApp (EVar "ownClosureOperands") (EVar "e")) (EVar "env")) (EVar "self")) (EVar "ex")) (arm (PCon "Some" (PVar "ops")) () (EApp (EApp (EApp (EApp (EVar "emitDirectTailCall") (EVar "e")) (EVar "self")) (EApp (EVar "tailDefineSym") (EVar "self"))) (EBinOp "::" (ELit (LString "%clos")) (EVar "ops")))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "slotApplication") (EVar "e")) (EVar "ex")) (arm (PCon "Some" (PTuple (PVar "name") (PVar "evidence") (PVar "args") (PVar "i") (PVar "slot"))) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitSlotTailCall") (EVar "e")) (EVar "env")) (EVar "name")) (EVar "evidence")) (EVar "args")) (EVar "i")) (EVar "slot"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "emitValueRet") (EVar "e")) (EVar "env")) (EVar "ex")))))))) (EApp (EVar "orValue") (ELit LUnit))))
 (DTypeSig false "directCallOperands" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "CExpr") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "directCallOperands" ((PVar "e") (PVar "env") (PVar "ex")) (EBlock (DoLet false false (PTuple (PVar "hd") (PVar "args") (PVar "mode")) (EApp (EVar "appParts") (EVar "ex"))) (DoExpr (EIf (EApp (EVar "not") (EApp (EVar "isExactCall") (EVar "mode"))) (EVar "None") (EMatch (EVar "hd") (arm (PCon "CVar" (PVar "fname0") PWild) () (EBlock (DoLet false false (PVar "fname") (EApp (EApp (EVar "canonFnName") (EVar "e")) (EVar "fname0"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "isKnownFn") (EVar "e")) (EVar "fname")) (EApp (EVar "hasArgs") (EVar "args"))) (EApp (EVar "isNone") (EApp (EApp (EApp (EVar "u64KernelAlias") (EVar "e")) (EVar "fname0")) (EVar "args")))) (EApp (EVar "isNone") (EApp (EApp (EApp (EVar "rawWorkerCall") (EVar "e")) (EVar "fname")) (EApp (EVar "lengthS") (EVar "args"))))) (EApp (EVar "Some") (ETuple (EApp (EVar "LN.llvmName") (EApp (EVar "LN.LUserFunction") (EVar "fname"))) (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args")))) (EVar "None"))))) (arm (PCon "CDict" (PVar "fname") (PVar "routes")) () (EIf (EBinOp "&&" (EApp (EApp (EVar "isKnownFn") (EVar "e")) (EVar "fname")) (EBinOp ">" (EBinOp "+" (EApp (EVar "listLen") (EVar "routes")) (EApp (EVar "lengthS") (EVar "args"))) (ELit (LInt 0)))) (EBlock (DoLet false false (PVar "dictWords") (EApp (EApp (EApp (EVar "dictWordsOf") (EVar "e")) (EVar "env")) (EVar "routes"))) (DoExpr (EApp (EVar "Some") (ETuple (EApp (EVar "LN.llvmName") (EApp (EVar "LN.LUserFunction") (EVar "fname"))) (EBinOp "++" (EVar "dictWords") (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args"))))))) (EVar "None"))) (arm (PCon "CMethod" (PVar "name") (PCon "MethodEvidence" (PVar "iface") (PVar "siteArity") (PAs "route" (PCon "RKey" (PVar "tag") PWild PWild)) (PVar "implRoutes") (PVar "methRoutes"))) () (EIf (EApp (EVar "hasArgs") (EVar "args")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "implForSite") (EVar "e")) (EVar "name")) (EVar "iface")) (EVar "tag")) (EVar "siteArity")) (arm (PCon "Some" (PVar "ent")) () (EBlock (DoLet false false (PVar "argOps") (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args"))) (DoLet false false (PVar "dictRoutes") (EApp (EApp (EApp (EApp (EVar "staticEntryDictRoutes") (EVar "e")) (EVar "name")) (EVar "ent")) (EApp (EApp (EApp (EApp (EApp (EVar "MethodEvidence") (EVar "iface")) (EVar "siteArity")) (EVar "route")) (EVar "implRoutes")) (EVar "methRoutes")))) (DoLet false false (PVar "dictWords") (EApp (EApp (EApp (EVar "dictWordsOf") (EVar "e")) (EVar "env")) (EVar "dictRoutes"))) (DoExpr (EApp (EVar "Some") (ETuple (EApp (EApp (EApp (EVar "implEntryFnName") (EVar "e")) (EVar "name")) (EVar "ent")) (EBinOp "++" (EVar "dictWords") (EVar "argOps"))))))) (arm (PCon "None") () (EVar "None"))) (EVar "None"))) (arm PWild () (EVar "None")))))))
+(DFunDef false "directCallOperands" ((PVar "e") (PVar "env") (PVar "ex")) (EBlock (DoLet false false (PTuple (PVar "hd") (PVar "args") (PVar "mode")) (EApp (EVar "appParts") (EVar "ex"))) (DoExpr (EIf (EApp (EVar "not") (EApp (EVar "isExactCall") (EVar "mode"))) (EVar "None") (EMatch (EVar "hd") (arm (PCon "CVar" (PVar "fname0") PWild) () (EBlock (DoLet false false (PVar "fname") (EApp (EApp (EVar "canonFnName") (EVar "e")) (EVar "fname0"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "isKnownFn") (EVar "e")) (EVar "fname")) (EApp (EVar "hasArgs") (EVar "args"))) (EApp (EVar "isNone") (EApp (EApp (EApp (EVar "u64KernelAlias") (EVar "e")) (EVar "fname0")) (EVar "args")))) (EApp (EVar "isNone") (EApp (EApp (EApp (EVar "rawWorkerCall") (EVar "e")) (EVar "fname")) (EApp (EVar "lengthS") (EVar "args"))))) (EApp (EVar "Some") (ETuple (EApp (EVar "LN.llvmName") (EApp (EVar "LN.LUserFunction") (EVar "fname"))) (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args")))) (EVar "None"))))) (arm (PCon "CDict" (PVar "fname") (PVar "routes")) () (EIf (EBinOp "&&" (EApp (EApp (EVar "isKnownFn") (EVar "e")) (EVar "fname")) (EBinOp ">" (EBinOp "+" (EApp (EVar "listLen") (EVar "routes")) (EApp (EVar "lengthS") (EVar "args"))) (ELit (LInt 0)))) (EBlock (DoLet false false (PVar "dictWords") (EApp (EApp (EApp (EVar "dictWordsOf") (EVar "e")) (EVar "env")) (EVar "routes"))) (DoExpr (EApp (EVar "Some") (ETuple (EApp (EVar "LN.llvmName") (EApp (EVar "LN.LUserFunction") (EVar "fname"))) (EBinOp "++" (EVar "dictWords") (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args"))))))) (EVar "None"))) (arm (PCon "CMethod" (PVar "name") (PCon "MethodEvidence" (PVar "iface") (PVar "siteArity") (PAs "route" (PCon "RKey" (PVar "tag") PWild PWild)) (PVar "implRoutes") (PVar "methRoutes"))) () (EIf (EApp (EVar "hasArgs") (EVar "args")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EApp (EApp (EVar "implForSite") (EVar "e")) (EVar "name")) (EVar "iface")) (EVar "tag")) (EVar "siteArity"))) (ELam ((PVar "ent")) (ELet false (PVar "argOps") (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args")) (ELet false (PVar "dictRoutes") (EApp (EApp (EApp (EApp (EVar "staticEntryDictRoutes") (EVar "e")) (EVar "name")) (EVar "ent")) (EApp (EApp (EApp (EApp (EApp (EVar "MethodEvidence") (EVar "iface")) (EVar "siteArity")) (EVar "route")) (EVar "implRoutes")) (EVar "methRoutes"))) (ELet false (PVar "dictWords") (EApp (EApp (EApp (EVar "dictWordsOf") (EVar "e")) (EVar "env")) (EVar "dictRoutes")) (EApp (EVar "Some") (ETuple (EApp (EApp (EApp (EVar "implEntryFnName") (EVar "e")) (EVar "name")) (EVar "ent")) (EBinOp "++" (EVar "dictWords") (EVar "argOps"))))))))) (EVar "None"))) (arm PWild () (EVar "None")))))))
 (DTypeSig false "ownClosureOperands" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "TailDefine") (TyFun (TyCon "CExpr") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "ownClosureOperands" ((PVar "e") (PVar "env") (PCon "TailDefine" PWild PWild (PCon "True")) (PVar "ex")) (EBlock (DoLet false false (PTuple (PVar "hd") (PVar "args") (PVar "mode")) (EApp (EVar "appParts") (EVar "ex"))) (DoExpr (EIf (EApp (EVar "not") (EApp (EVar "isExactCall") (EVar "mode"))) (EVar "None") (EMatch (EVar "hd") (arm (PCon "CVar" (PVar "f") PWild) () (EIf (EApp (EApp (EVar "isOwnClosure") (EVar "env")) (EVar "f")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args"))) (EVar "None"))) (arm (PCon "CDict" (PVar "f") (PVar "routes")) () (EIf (EApp (EApp (EVar "isOwnClosure") (EVar "env")) (EVar "f")) (EBlock (DoLet false false (PVar "argOps") (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args"))) (DoExpr (EApp (EVar "Some") (EBinOp "++" (EApp (EApp (EApp (EVar "dictWordsOf") (EVar "e")) (EVar "env")) (EVar "routes")) (EVar "argOps"))))) (EVar "None"))) (arm PWild () (EVar "None")))))))
 (DFunDef false "ownClosureOperands" (PWild PWild PWild PWild) (EVar "None"))
@@ -20489,8 +20240,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "clausesParamTy" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyFun (TyCon "Int") (TyCon "LTy")))))
 (DFunDef false "clausesParamTy" ((PVar "e") (PVar "clauses") (PVar "i")) (EMatch (EApp (EApp (EApp (EVar "firstPatAt") (EVar "isBinderPat")) (EVar "clauses")) (EVar "i")) (arm (PCon "Some" (PVar "p")) () (EApp (EApp (EVar "patLTy") (EVar "e")) (EVar "p"))) (arm (PCon "None") () (EMatch (EApp (EApp (EApp (EVar "firstPatAt") (ELam ((PVar "p")) (EApp (EVar "not") (EApp (EVar "isWildPat") (EVar "p"))))) (EVar "clauses")) (EVar "i")) (arm (PCon "Some" (PVar "p")) () (EApp (EApp (EVar "patLTy") (EVar "e")) (EVar "p"))) (arm (PCon "None") () (EApp (EVar "runtimeLTy") (EVar "RTValue")))))))
 (DTypeSig false "firstPatAt" (TyFun (TyFun (TyCon "Pat") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Pat"))))))
-(DFunDef false "firstPatAt" (PWild (PList) PWild) (EVar "None"))
-(DFunDef false "firstPatAt" ((PVar "keep") (PCons (PCon "CClause" (PVar "pats") PWild) (PVar "rest")) (PVar "i")) (EMatch (EApp (EApp (EVar "nthPat") (EVar "pats")) (EVar "i")) (arm (PCon "Some" (PVar "p")) () (EIf (EApp (EVar "keep") (EVar "p")) (EApp (EVar "Some") (EVar "p")) (EApp (EApp (EApp (EVar "firstPatAt") (EVar "keep")) (EVar "rest")) (EVar "i")))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "firstPatAt") (EVar "keep")) (EVar "rest")) (EVar "i")))))
+(DFunDef false "firstPatAt" ((PVar "keep") (PVar "xs0") (PVar "i")) (ELetGroup ((lgb "go" (clause ((PList)) (EVar "None")) (clause ((PCons (PCon "CClause" (PVar "pats") PWild) (PVar "rest"))) (EMatch (EApp (EApp (EVar "nthPat") (EVar "pats")) (EVar "i")) (arm (PCon "Some" (PVar "p")) () (EIf (EApp (EVar "keep") (EVar "p")) (EApp (EVar "Some") (EVar "p")) (EApp (EVar "go") (EVar "rest")))) (arm (PCon "None") () (EApp (EVar "go") (EVar "rest"))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "isBinderPat" (TyFun (TyCon "Pat") (TyCon "Bool")))
 (DFunDef false "isBinderPat" ((PCon "PVar" PWild PWild PWild)) (EVar "True"))
 (DFunDef false "isBinderPat" ((PCon "PAs" PWild PWild PWild PWild)) (EVar "True"))
@@ -20512,7 +20262,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DFunDef false "bindPatStamps" ((PVar "e") (PVar "env") (PCon "PList" (PVar "ps"))) (EApp (EApp (EApp (EVar "bindPatsStamps") (EVar "e")) (EVar "env")) (EVar "ps")))
 (DFunDef false "bindPatStamps" ((PVar "e") (PVar "env") (PCon "PCons" (PVar "h") (PVar "t"))) (EApp (EApp (EApp (EVar "bindPatsStamps") (EVar "e")) (EVar "env")) (EListLit (EVar "h") (EVar "t"))))
 (DFunDef false "bindPatStamps" ((PVar "e") (PVar "env") (PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "f")) (EApp (EApp (EApp (EVar "bindFieldStamps") (EVar "e")) (EVar "acc")) (EVar "f")))) (EVar "env")) (EVar "fields")))
-(DFunDef false "bindPatStamps" (PWild (PVar "env") PWild) (EVar "env"))
+(DFunDef false "bindPatStamps" (PWild (PVar "env") (POr (PCon "PWild") (PCon "PLit" PWild) (PCon "POr" PWild) (PCon "PRng" PWild PWild PWild) (PCon "PAnn" PWild PWild))) (EVar "env"))
 (DTypeSig false "bindPatsStamps" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy")))))))
 (DFunDef false "bindPatsStamps" ((PVar "e") (PVar "env") (PVar "pats")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "p")) (EApp (EApp (EApp (EVar "bindPatStamps") (EVar "e")) (EVar "acc")) (EVar "p")))) (EVar "env")) (EVar "pats")))
 (DTypeSig false "bindFieldStamps" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "RecPatField") (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy")))))))
@@ -20645,8 +20395,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "emitConstList" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "LTy")))))
 (DFunDef false "emitConstList" ((PVar "e") (PVar "words")) (EBlock (DoLet false false (PVar "nilImm") (EApp (EVar "intToString") (EBinOp "+" (EBinOp "*" (EApp (EApp (EVar "cellTag") (EVar "e")) (ELit (LString "Nil"))) (ELit (LInt 2))) (ELit (LInt 1))))) (DoLet false false (PVar "head") (EApp (EApp (EApp (EApp (EVar "emitConstListGo") (EVar "e")) (EApp (EApp (EVar "cellTag") (EVar "e")) (ELit (LString "Cons")))) (EApp (EVar "reverseL") (EVar "words"))) (EVar "nilImm"))) (DoExpr (ETuple (EVar "head") (EVar "LTCon")))))
 (DTypeSig false "emitConstListGo" (TyFun (TyCon "Emit") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyCon "String"))))))
-(DFunDef false "emitConstListGo" (PWild PWild (PList) (PVar "tl")) (EVar "tl"))
-(DFunDef false "emitConstListGo" ((PVar "e") (PVar "consTag") (PCons (PVar "w") (PVar "rest")) (PVar "tl")) (EBlock (DoLet false false (PVar "cell") (EApp (EApp (EApp (EVar "emitConstDictCell") (EVar "e")) (EVar "consTag")) (EListLit (EVar "w") (EVar "tl")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "emitConstListGo") (EVar "e")) (EVar "consTag")) (EVar "rest")) (EVar "cell")))))
+(DFunDef false "emitConstListGo" ((PVar "e") (PVar "consTag") (PVar "xs0") (PVar "tl0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "tl")) (EVar "tl")) (clause ((PCons (PVar "w") (PVar "rest")) (PVar "tl")) (EBlock (DoLet false false (PVar "cell") (EApp (EApp (EApp (EVar "emitConstDictCell") (EVar "e")) (EVar "consTag")) (EListLit (EVar "w") (EVar "tl")))) (DoExpr (EApp (EApp (EVar "go") (EVar "rest")) (EVar "cell"))))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "tl0"))))
 (DTypeSig false "emitRangeList" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "CExpr") (TyFun (TyCon "CExpr") (TyFun (TyCon "Bool") (TyTuple (TyCon "String") (TyCon "LTy"))))))))
 (DFunDef false "emitRangeList" ((PVar "e") (PVar "env") (PVar "lo") (PVar "hi") (PVar "incl")) (EBlock (DoLet false false (PTuple (PVar "lo_w") PWild) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "lo"))) (DoLet false false (PTuple (PVar "hi_w") PWild) (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EVar "hi"))) (DoLet false false (PVar "lo_raw") (EApp (EApp (EVar "untagInt") (EVar "e")) (EVar "lo_w"))) (DoLet false false (PVar "hi_raw") (EApp (EApp (EVar "untagInt") (EVar "e")) (EVar "hi_w"))) (DoLet false false (PVar "hi_adj") (EIf (EVar "incl") (EBlock (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString " = add i64 "))) (EApp (EVar "$core.display") (EVar "hi_raw"))) (ELit (LString ", 1"))))) (DoExpr (EVar "r"))) (EVar "hi_raw"))) (DoLet false false (PVar "count") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EDictApp "count"))) (ELit (LString " = sub i64 "))) (EApp (EVar "$core.display") (EVar "hi_adj"))) (ELit (LString ", "))) (EApp (EVar "$core.display") (EVar "lo_raw"))) (ELit (LString ""))))) (DoLet false false (PTuple (PVar "nil_w") PWild) (EApp (EApp (EApp (EVar "emitCtorAlloc") (EVar "e")) (ELit (LString "Nil"))) (EListLit))) (DoLet false false (PVar "acc") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EVar "acc")) (ELit (LString " = alloca i64"))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  store i64 ")) (EApp (EVar "$core.display") (EVar "nil_w"))) (ELit (LString ", ptr "))) (EApp (EVar "$core.display") (EVar "acc"))) (ELit (LString ""))))) (DoLet false false (PVar "ic") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EVar "ic")) (ELit (LString " = alloca i64"))))) (DoLet false false (PVar "im1") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "im1"))) (ELit (LString " = sub i64 "))) (EApp (EVar "$core.display") (EDictApp "count"))) (ELit (LString ", 1"))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  store i64 ")) (EApp (EVar "$core.display") (EVar "im1"))) (ELit (LString ", ptr "))) (EApp (EVar "$core.display") (EVar "ic"))) (ELit (LString ""))))) (DoLet false false (PVar "n") (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e")))) (DoLet false false (PVar "condL") (EBinOp "++" (ELit (LString "rl_cond")) (EVar "n"))) (DoLet false false (PVar "bodyL") (EBinOp "++" (ELit (LString "rl_body")) (EVar "n"))) (DoLet false false (PVar "doneL") (EBinOp "++" (ELit (LString "rl_done")) (EVar "n"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  br label %")) (EVar "condL")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "condL") (ELit (LString ":"))))) (DoLet false false (PVar "iv") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "iv"))) (ELit (LString " = load i64, ptr "))) (EApp (EVar "$core.display") (EVar "ic"))) (ELit (LString ""))))) (DoLet false false (PVar "cmp") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "cmp"))) (ELit (LString " = icmp slt i64 "))) (EApp (EVar "$core.display") (EVar "iv"))) (ELit (LString ", 0"))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  br i1 ")) (EApp (EVar "$core.display") (EVar "cmp"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "doneL"))) (ELit (LString ", label %"))) (EApp (EVar "$core.display") (EVar "bodyL"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "bodyL") (ELit (LString ":"))))) (DoLet false false (PVar "elem_raw") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "elem_raw"))) (ELit (LString " = add i64 "))) (EApp (EVar "$core.display") (EVar "lo_raw"))) (ELit (LString ", "))) (EApp (EVar "$core.display") (EVar "iv"))) (ELit (LString ""))))) (DoLet false false (PVar "elem_w") (EApp (EApp (EVar "tagInt") (EVar "e")) (EVar "elem_raw"))) (DoLet false false (PVar "tail_w") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "tail_w"))) (ELit (LString " = load i64, ptr "))) (EApp (EVar "$core.display") (EVar "acc"))) (ELit (LString ""))))) (DoLet false false (PTuple (PVar "cons_w") PWild) (EApp (EApp (EApp (EVar "emitCtorAlloc") (EVar "e")) (ELit (LString "Cons"))) (EListLit (EVar "elem_w") (EVar "tail_w")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  store i64 ")) (EApp (EVar "$core.display") (EVar "cons_w"))) (ELit (LString ", ptr "))) (EApp (EVar "$core.display") (EVar "acc"))) (ELit (LString ""))))) (DoLet false false (PVar "iv2") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "iv2"))) (ELit (LString " = sub i64 "))) (EApp (EVar "$core.display") (EVar "iv"))) (ELit (LString ", 1"))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  store i64 ")) (EApp (EVar "$core.display") (EVar "iv2"))) (ELit (LString ", ptr "))) (EApp (EVar "$core.display") (EVar "ic"))) (ELit (LString ""))))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  br label %")) (EVar "condL")))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EVar "doneL") (ELit (LString ":"))))) (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoExpr (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "$core.display") (EVar "r"))) (ELit (LString " = load i64, ptr "))) (EApp (EVar "$core.display") (EVar "acc"))) (ELit (LString ""))))) (DoExpr (ETuple (EVar "r") (EVar "LTCon")))))
 (DTypeSig false "optOmSize" (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "OrdMap") (TyVar "a"))) (TyCon "Int")))
