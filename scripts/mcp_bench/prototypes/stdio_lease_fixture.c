@@ -25,6 +25,7 @@ static const char *self_exe;
 static _Atomic int ambient, owner_calls, shutdown_owner;
 static sem_t owner_ready, owner_resume;
 static pthread_t owner_thread;
+static int control_fd = -1, read_calls;
 static int first_owner_fd = -1;
 static int disabled(const char *name) { return !strcmp(mutation, name); }
 static int same(const struct stat *a, const struct stat *b) {
@@ -121,6 +122,31 @@ static int owner_null(int stream) {
 
 static long long field(long long w, int n) { return ((long long *)w)[n]; }
 static int ok(long long w) { return field(w, 0) == MDK_TAG_OK; }
+
+/* The control descriptor is observer equipment, never a transport door for main. */
+long long mdk_read_exactly(long long n) {
+  int call = ++read_calls;
+  event("read_ready", call, 0);
+  char token;
+  assert(read(control_fd, &token, 1) == 1 && token == 'R');
+  long long result;
+  if (claimed && !disabled("legacy-read")) {
+    event("legacy_read_denied", call, EPERM);
+    result = mdk_none();
+  } else {
+    result = original_read_exactly(n);
+  }
+  int some = !(result & 1);
+  dprintf(report_fd, "{\"name\":\"read_result\",\"call\":%d,\"some\":%d,\"hex\":\"", call, some);
+  if (some) {
+    long long s = field(result, 1), size = field(s, 1);
+    const unsigned char *bytes = (const unsigned char *)s + 24;
+    for (long long i = 0; i < size; ++i) dprintf(report_fd, "%02x", bytes[i]);
+  }
+  dprintf(report_fd, "\"}\n");
+  event("read_returned", call, 0);
+  return result;
+}
 static const char *operations[] = {"read", "hash", "read-bytes", "write", "append",
   "telemetry", "write-bytes", "write-mode", "fsync"};
 static long long content(const char *op, const char *path) {
@@ -229,6 +255,22 @@ int main(int argc, char **argv) {
   assert(!sem_init(&owner_ready, 0, 0) && !sem_init(&owner_resume, 0, 0));
   int result = claim(); event("claim", result, errno);
   if (result) { result = 1; goto cleanup; }
+#ifdef LEASE_COMPILED
+  assert(!strcmp(scenario, "compiled"));
+  control_fd = atoi(getenv("LEASE_CONTROL_FD"));
+  event("fds_before_compiled", fd_count(), 0);
+  result = embedded_runtime_main(argc, argv);
+  event("compiled_main_returned", result, 0);
+  assert(mdk_process_test_roots() == 0);
+  for (int i = 0; i < 8; ++i) assert(atomic_load(&submissions[i].phase) == SUBMISSION_FREE);
+  atomic_store(&shutdown_owner, 1);
+  assert(!sem_post(&submission_jobs));
+  assert(!GC_pthread_join(owner_thread, NULL));
+  assert(!sem_destroy(&submission_jobs));
+  event("owner_thread_joined", 1, 0);
+  event("fds_after_compiled", fd_count(), 0);
+  goto cleanup;
+#endif
   if (!strcmp(scenario, "worker") || !strcmp(scenario, "overlap") || !strcmp(scenario, "rollback")) {
     mdk_process_submission_init();
     assert(submission_available);

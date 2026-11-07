@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Independently observe experimental owner provenance; no production lease claim."""
+"""Observe fixed-site provenance and the compiled lease transport prerequisite."""
 
 import argparse
 import difflib
@@ -9,10 +9,12 @@ import os
 from pathlib import Path
 import platform
 import re
+import select
 import shlex
 import shutil
 import subprocess
 import sys
+import time
 
 
 OPERATIONS = ('read', 'hash', 'read-bytes', 'write', 'append', 'telemetry',
@@ -29,7 +31,27 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def expected_cases():
+COMPILED_CASES = {'compiled_legacy_guard', 'compiled_partial_read_control',
+                  'compiled_lossy_read_control'}
+UNEXECUTED = [
+    'endpoint directions/types/flags/shared identities/distinct stderr rejection matrix',
+    'pathname swaps, fd replacement/reuse, same-checked-fd use and open/stat failure controls',
+    'no destructive open before validation under injected failures',
+    'prior/in-flight buffered output and resolver admission/history synchronization',
+    'release/reacquisition and error-retained ownership',
+    'resolver/NSS pre-libc exclusion, HOSTALIASES error paths and disabling controls',
+    'legacy/raw/buffered/automatic/abort/stash/flush output including #4865 actual primitive',
+    'legacy launch interlocks and disabling controls',
+    'fresh-stdio child parent-fd reopen with identity/dumpability controls',
+    'compiled lease byte transport with acknowledged staggered producer/consumer overlap',
+    'scheduler-safe backpressure with status/control progress',
+    'Deadline/CancelToken termination and committed write prefixes without replay',
+    'directory-fsync compatibility policy (owner-only disposition remains rejection)',
+    'supervisor toolchain selection under a complete enforced lease',
+]
+
+
+def expected_cases(scope='lease'):
     names = {'required_read_source', 'required_read_config', 'required_write',
              'required_append', 'required_telemetry', 'required_write-bytes',
              'required_write-mode', 'required_scratch_create',
@@ -42,6 +64,8 @@ def expected_cases():
                  for fd in (0, 1) for alias in range(len(ALIASES)) for op in OPERATIONS)
     names.update('caller_null_' + op for op in OPERATIONS)
     names.update('pathname_control_' + op for op in OPERATIONS)
+    if scope == 'lease':
+        names.update(COMPILED_CASES)
     return names
 
 
@@ -49,6 +73,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--root', type=Path, required=True)
     parser.add_argument('--out', type=Path, required=True)
+    parser.add_argument('--scope', choices=('owner', 'lease'), default='lease')
     args = parser.parse_args()
     root, out = args.root.resolve(), args.out.resolve()
     if not args.root.is_absolute() or not args.out.is_absolute() or out == root or root in out.parents or out.exists():
@@ -69,10 +94,11 @@ def main():
             raise RuntimeError(name)
 
     pins = list(SOURCE_HASHES) + ['runtime/medaka_runtime.h', 'runtime/medaka_process.h', 'runtime/medaka_abi.h'] + [PREFIX + name for name in (
-        'stdio_lease_fixture.c', 'stdio_lease_probe.py', 'stdio_descriptor_census.py')]
+        'stdio_lease_fixture.c', 'stdio_lease_probe.py', 'stdio_descriptor_census.py',
+        'stdio_lease_cases/legacy_read.mdk')]
     save('source_pins', 'OBSERVED', sha256={p: digest(root / p) for p in pins},
          head=subprocess.check_output(['git', '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip())
-    save('expected_cases', 'OBSERVED', identities=sorted(expected_cases()))
+    save('expected_cases', 'OBSERVED', identities=sorted(expected_cases(args.scope)), scope=args.scope)
     if sys.platform != 'linux':
         save('qualification', 'UNAVAILABLE', exit_code=77, qualified=False,
              unmet_prerequisites=['Linux anonymous nonblocking pipes and native owner facilities'],
@@ -84,7 +110,7 @@ def main():
                          if line.startswith(('CapEff:', 'NoNewPrivs:', 'Uid:', 'Gid:'))],
          assumptions=['No claim against hostile native code calling private C functions.',
                       'No parent-fd, dumpability, privileged tracer or external descriptor-holder protection.',
-                      'Acquisition, resolver/output exclusion and compiled entry remain for the dependent slice.'])
+                      'Only startup descriptor claim and one legacy-reader guard are exercised on the compiled entry; no complete lease admission or transport.'])
     require('transform_source_pins', all(digest(root / p) == expected for p, expected in SOURCE_HASHES.items()))
 
     def replace_once(source, old, new):
@@ -101,7 +127,11 @@ def main():
             transformed, fopens = re.subn(r'\bfopen\(', 'content_fopen(', transformed)
             if (opens, fopens) != (5, 7):
                 raise RuntimeError('unmapped content-open sites')
-            details = dict(open_replacements=opens, fopen_replacements=fopens)
+            transformed = replace_once(transformed,
+                'long long mdk_read_exactly(long long n_tagged) {',
+                'static long long original_read_exactly(long long n_tagged) {')
+            details = dict(open_replacements=opens, fopen_replacements=fopens,
+                           legacy_reader_definition_replacements=1)
         else:
             transformed = replace_once(original,
                 'open("/dev/null", (i ? O_WRONLY : O_RDONLY) | O_CLOEXEC)', 'owner_null(i)')
@@ -123,7 +153,7 @@ def main():
         transformations.append(dict(source=relative, transformed=name, **details,
                                     sha256=digest(path), patch_sha256=digest(patch)))
     save('experimental_transformation', 'OBSERVED', files=transformations,
-         scope='External scratch only. One fixed owner operand site; caller hooks have no owner authority. Shutdown/join instrumentation only after empty owner roots and submission slots.')
+         scope='External scratch only. One fixed owner operand site; caller hooks have no owner authority. readExactly definition is renamed for one compiled legacy-reader guard/control. Shutdown/join instrumentation only after empty owner roots and submission slots.')
 
     argv = shlex.split(os.environ.get('CC', 'clang')) + [
         '-O1', '-std=c11', '-DMDK_PROCESS_TESTING', '-ffunction-sections', '-fdata-sections',
@@ -320,14 +350,171 @@ def main():
     require('rollback_cleanup_disabling_detected', row['rc'] == 77 and not marker.exists() and intact(row)
             and value(row, 'owner_roots_after_failure') == 0 and value(row, 'mutation_leak_reclaimed') == 1)
 
-    require('exact_case_matrix', len(cases) == len(expected_cases()) and set(cases) == expected_cases(),
-            actual=sorted(cases), expected=sorted(expected_cases()))
+    require('exact_owner_case_matrix', len(cases) == len(expected_cases('owner'))
+            and set(cases) == expected_cases('owner'),
+            actual=sorted(cases), expected=sorted(expected_cases('owner')))
+
+    if args.scope == 'lease':
+        target = root / (PREFIX + 'stdio_lease_cases/legacy_read.mdk')
+        reference = out / 'legacy-read-reference'
+        command = [str(root / 'medaka'), 'build', '--keep-ir', str(target), '-o', str(reference)]
+        built = subprocess.run(command, cwd=root, capture_output=True, timeout=120,
+                               env=dict(os.environ, MEDAKA_STRICT='1'))
+        require('compiled_target_build', built.returncode == 0, argv=command, rc=built.returncode,
+                stdout_hex=built.stdout.hex(), stderr_hex=built.stderr.hex())
+        ir = Path(str(reference) + '.ll')
+        save('compiled_target_pins', 'OBSERVED', source_sha256=digest(target),
+             compiler_sha256=digest(root / 'medaka'), reference_sha256=digest(reference), ir_sha256=digest(ir),
+             scope='Unmodified generated IR linked to scratch runtime; target exposes only main and public readExactly.')
+        compiled = out / 'compiled-lease-entry'
+        command = argv[:-2] + ['-DLEASE_COMPILED', str(ir), '-o', str(compiled)]
+        built = subprocess.run(command, cwd=out, capture_output=True, timeout=120)
+        require('compiled_instrumented_link', built.returncode == 0, argv=command, rc=built.returncode,
+                stdout_hex=built.stdout.hex(), stderr_hex=built.stderr.hex())
+        save('compiled_binary_pin', 'OBSERVED', path=str(compiled), sha256=digest(compiled))
+
+        def compiled_case(name, mutation, first):
+            if name in cases:
+                raise RuntimeError('duplicate case: ' + name)
+            cases.append(name)
+            inp, writer = os.pipe()
+            reader, output = os.pipe()
+            reports, report_write = os.pipe()
+            control, control_write = os.pipe()
+            fds = [inp, writer, reader, output, reports, report_write, control, control_write]
+            process, events, pending = None, [], b''
+            phases = []
+            path = out / (name + '.jsonl')
+            started = time.monotonic_ns()
+            try:
+                os.set_blocking(inp, False)
+                os.set_blocking(output, False)
+                process = subprocess.Popen([str(compiled), str(report_write), 'compiled', 'unused', 'unused', mutation],
+                    cwd=out, stdin=inp, stdout=output, stderr=subprocess.PIPE,
+                    pass_fds=(report_write, control),
+                    env=dict(os.environ, LEASE_CONTROL_FD=str(control)))
+                for fd in (output, report_write, control):
+                    os.close(fd)
+                    fds.remove(fd)
+
+                def await_event(kind, call):
+                    nonlocal pending
+                    deadline = time.monotonic() + 15
+                    while True:
+                        while b'\n' in pending:
+                            line, pending = pending.split(b'\n', 1)
+                            event = json.loads(line)
+                            events.append(event)
+                            with path.open('ab') as log:
+                                log.write(line + b'\n')
+                            if event['name'] == kind and event.get('value') == call:
+                                phases.append(dict(event=kind, call=call, elapsed_ns=time.monotonic_ns() - started))
+                                return
+                        left = deadline - time.monotonic()
+                        if left <= 0 or not select.select([reports], [], [], left)[0]:
+                            raise RuntimeError(name + ': barrier timeout')
+                        data = os.read(reports, 65536)
+                        if not data:
+                            raise RuntimeError(name + ': report EOF before ' + kind)
+                        pending += data
+
+                def remaining():
+                    try:
+                        return os.read(inp, 65536)
+                    except BlockingIOError:
+                        return b''
+
+                await_event('read_ready', 1)
+                require(name + '_starts_empty', remaining() == b'')
+                os.write(writer, first)
+                phases.append(dict(event='producer_first', hex=first.hex(), elapsed_ns=time.monotonic_ns() - started))
+                os.write(control_write, b'R')
+                await_event('read_returned', 1)
+                first_remaining = remaining()
+                await_event('read_ready', 2)
+                os.write(writer, b'\xff')
+                phases.append(dict(event='producer_second', hex='ff', elapsed_ns=time.monotonic_ns() - started))
+                os.write(control_write, b'R')
+                await_event('read_returned', 2)
+                second_remaining = remaining()
+                os.close(writer)
+                fds.remove(writer)
+                _, stderr = process.communicate(timeout=15)
+                tail = pending
+                while True:
+                    data = os.read(reports, 65536)
+                    if not data:
+                        break
+                    tail += data
+                if tail:
+                    with path.open('ab') as log:
+                        log.write(tail)
+                    events.extend(json.loads(line) for line in tail.splitlines())
+                endpoint = os.read(reader, 65536)
+                row = save(name, 'OBSERVED', case=True, mutation=mutation, rc=process.returncode,
+                    reports=events, stderr_hex=stderr.hex(), endpoint_hex=endpoint.hex(),
+                    first_sent_hex=first.hex(), first_remaining_hex=first_remaining.hex(),
+                    second_sent_hex='ff', second_remaining_hex=second_remaining.hex(),
+                    phases=phases, fixture_reaped=True, worker_pids=[], worker_pids_absent=True,
+                    raw_receipt=str(path))
+                require(name + '_lifecycle', process.returncode == 0 and stderr == b'' and endpoint == b''
+                        and value(row, 'claim') == 0 and value(row, 'compiled_main_returned') == 0
+                        and value(row, 'owner_thread_joined') == 1
+                        and value(row, 'fds_before_compiled') == value(row, 'fds_after_compiled')
+                        and [r['call'] for r in events if r['name'] == 'read_result'] == [1, 2])
+                return row
+            finally:
+                if process is not None and process.poll() is None:
+                    process.kill()
+                    process.wait()
+                    save(name + '_cleanup', 'FAIL', cleanup_incomplete=True,
+                         reason='Fixture killed and reaped; internal owner-thread cleanup unproved.')
+                if process is not None and process.stderr is not None:
+                    process.stderr.close()
+                for fd in fds:
+                    os.close(fd)
+
+        row = compiled_case('compiled_legacy_guard', 'none', b'\x80')
+        require('compiled_legacy_reader_excluded', row['first_remaining_hex'] == '80'
+                and row['second_remaining_hex'] == 'ff'
+                and [r['value'] for r in row['reports'] if r['name'] == 'legacy_read_denied'] == [1, 2]
+                and all(not r['some'] and r['hex'] == '' for r in row['reports'] if r['name'] == 'read_result'))
+        row = compiled_case('compiled_partial_read_control', 'legacy-read', b'\x80')
+        results = [r for r in row['reports'] if r['name'] == 'read_result']
+        require('compiled_partial_loss_observed', row['first_remaining_hex'] == ''
+                and row['second_remaining_hex'] == ''
+                and results == [dict(name='read_result', call=1, some=0, hex=''),
+                                dict(name='read_result', call=2, some=1, hex='efbfbd')])
+        row = compiled_case('compiled_lossy_read_control', 'legacy-read', b'\x80\xff')
+        results = [r for r in row['reports'] if r['name'] == 'read_result']
+        require('compiled_utf8_loss_observed', row['first_remaining_hex'] == ''
+                and row['second_remaining_hex'] == ''
+                and results == [dict(name='read_result', call=1, some=1, hex='efbfbdefbfbd'),
+                                dict(name='read_result', call=2, some=1, hex='efbfbd')])
+        save('transport_prerequisite', 'BLOCKED',
+             reason='Excluding legacy stdin leaves this public-only compiled target without a lease byte-read door. Disabling that exclusion consumes a short nonblocking prefix then returns None; complete non-UTF-8 input is replaced, not preserved.',
+             next_action='Recut with an explicitly authorized private scratch lease-transport ABI and a compiled target allowed to invoke it; retain legacy readExactly exclusion. No public API or production implementation is proposed.',
+             limitation='A witnessed incompatibility of this public legacy reader, not an impossibility claim about a private experimental transport or Medaka.')
+        save('unexecuted_requirements', 'UNQUALIFIED', identities=UNEXECUTED,
+             reason='Stop at the compiled-entry transport prerequisite; these rows were not implemented or executed and none is qualified.')
+
+    require('exact_case_matrix', len(cases) == len(expected_cases(args.scope))
+            and set(cases) == expected_cases(args.scope),
+            actual=sorted(cases), expected=sorted(expected_cases(args.scope)))
     scratch.unlink()
     telemetry.unlink()
     joined = sum(event['name'] == 'owner_thread_joined' and event['value'] == 1
                  for row in rows if row.get('case') for event in row['reports'])
     save('cleanup', 'OBSERVED', fixtures_waited=len(cases), owner_threads_joined=joined,
          scope='All fixture processes waited; initialized owner threads joined after roots/slots empty. Child PIDs independently absent, fds conserved except cleanup mutation whose one leaked fd is observed and explicitly reclaimed. Raw external artifacts retained.')
+    if args.scope == 'lease':
+        save('qualification', 'BLOCKED', exit_code=77, qualified=False,
+             production_boundary_qualified=False, compiled_entry_qualified=False,
+             scope='Owner-provenance regression plus compiled public legacy-reader exclusion and disabling controls only.',
+             blocker='No authorized byte-preserving lease transport door for the public-only compiled target; readExactly loses partial and non-UTF-8 input.',
+             next_action='Explicitly authorize a private scratch lease-transport ABI and its compiled target invocation before resuming the remaining coupled proof.',
+             unexecuted_requirements=UNEXECUTED)
+        return 77
     save('qualification', 'QUALIFIED_OWNER_PROVENANCE_ONLY', exit_code=0, qualified=True,
          production_boundary_qualified=False, compiled_entry_qualified=False,
          scope='Fixed literal owner Null setup is separated from content hooks, including measured nested/overlapping content and rollback. Linux anonymous nonblocking pipe endpoints only.',
