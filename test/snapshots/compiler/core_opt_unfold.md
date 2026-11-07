@@ -1,5 +1,5 @@
 # META
-source_lines=302
+source_lines=305
 stages=DESUGAR,MARK
 # SOURCE
 import frontend.ast.{Lit(..), Pat(..), Route(..)}
@@ -246,7 +246,10 @@ staticRoute : Route -> Bool
 staticRoute (RKey _ reqs sups) = all staticRoute (reqs ++ sups)
 staticRoute (RScalar _) = True
 staticRoute RNone = True
-staticRoute _ = False
+staticRoute (RDict _) = False
+staticRoute (RDictFwd _) = False
+staticRoute (RLocal _ _) = False
+staticRoute (RProj _ _) = False
 
 -- The name a plain head reads from its scope.
 headNames : CExpr -> List String
@@ -392,7 +395,10 @@ keepResolved values key resolved acc = match omLookup key resolved
 (DFunDef false "staticRoute" ((PCon "RKey" PWild (PVar "reqs") (PVar "sups"))) (EApp (EApp (EVar "all") (EVar "staticRoute")) (EBinOp "++" (EVar "reqs") (EVar "sups"))))
 (DFunDef false "staticRoute" ((PCon "RScalar" PWild)) (EVar "True"))
 (DFunDef false "staticRoute" ((PCon "RNone")) (EVar "True"))
-(DFunDef false "staticRoute" (PWild) (EVar "False"))
+(DFunDef false "staticRoute" ((PCon "RDict" PWild)) (EVar "False"))
+(DFunDef false "staticRoute" ((PCon "RDictFwd" PWild)) (EVar "False"))
+(DFunDef false "staticRoute" ((PCon "RLocal" PWild PWild)) (EVar "False"))
+(DFunDef false "staticRoute" ((PCon "RProj" PWild PWild)) (EVar "False"))
 (DTypeSig false "headNames" (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "headNames" ((PCon "CVar" (PVar "name") PWild)) (EListLit (EVar "name")))
 (DFunDef false "headNames" ((PCon "CMethod" (PVar "name") PWild)) (EListLit (EVar "name")))
@@ -495,7 +501,10 @@ keepResolved values key resolved acc = match omLookup key resolved
 (DFunDef false "staticRoute" ((PCon "RKey" PWild (PVar "reqs") (PVar "sups"))) (EApp (EApp (EDictApp "all") (EVar "staticRoute")) (EBinOp "++" (EVar "reqs") (EVar "sups"))))
 (DFunDef false "staticRoute" ((PCon "RScalar" PWild)) (EVar "True"))
 (DFunDef false "staticRoute" ((PCon "RNone")) (EVar "True"))
-(DFunDef false "staticRoute" (PWild) (EVar "False"))
+(DFunDef false "staticRoute" ((PCon "RDict" PWild)) (EVar "False"))
+(DFunDef false "staticRoute" ((PCon "RDictFwd" PWild)) (EVar "False"))
+(DFunDef false "staticRoute" ((PCon "RLocal" PWild PWild)) (EVar "False"))
+(DFunDef false "staticRoute" ((PCon "RProj" PWild PWild)) (EVar "False"))
 (DTypeSig false "headNames" (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "headNames" ((PCon "CVar" (PVar "name") PWild)) (EListLit (EVar "name")))
 (DFunDef false "headNames" ((PCon "CMethod" (PVar "name") PWild)) (EListLit (EVar "name")))

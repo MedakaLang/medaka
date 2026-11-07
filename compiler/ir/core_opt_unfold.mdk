@@ -242,7 +242,10 @@ staticRoute : Route -> Bool
 staticRoute (RKey _ reqs sups) = all staticRoute (reqs ++ sups)
 staticRoute (RScalar _) = True
 staticRoute RNone = True
-staticRoute _ = False
+staticRoute (RDict _) = False
+staticRoute (RDictFwd _) = False
+staticRoute (RLocal _ _) = False
+staticRoute (RProj _ _) = False
 
 -- The name a plain head reads from its scope.
 headNames : CExpr -> List String
