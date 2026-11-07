@@ -1,5 +1,5 @@
 # META
-source_lines=299
+source_lines=302
 stages=DESUGAR,MARK
 # SOURCE
 import frontend.ast.{Lit(..), Pat(..), Route(..)}
@@ -70,7 +70,9 @@ inlineTrivialCalls noInline prog =
 -- simplifier does for a binding whose unfolding is a literal.  A read is a
 -- variable no enclosing binder rebinds.  The binding stays: another half or
 -- module may still name it.  A string is not replaced, since each read would
--- carry its own copy of the bytes.
+-- carry its own copy of the bytes, and a Float is not replaced, since a Float
+-- read in a boxed position would allocate a cell on every read where the global
+-- is loaded.  Integer and U64/I64 literals are replaced.
 export
 propagateLiteralGlobals : List String -> CProgram -> CProgram
 propagateLiteralGlobals noInline prog =
@@ -87,6 +89,7 @@ readSite _ _ e = e
 
 scalarLit : Lit -> Bool
 scalarLit (LString _) = False
+scalarLit (LFloat _) = False
 scalarLit _ = True
 
 unfoldSite : OrdMap Unfolding -> OrdMap Unit -> CExpr -> CExpr
@@ -322,6 +325,7 @@ keepResolved values key resolved acc = match omLookup key resolved
 (DFunDef false "readSite" (PWild PWild (PVar "e")) (EVar "e"))
 (DTypeSig false "scalarLit" (TyFun (TyCon "Lit") (TyCon "Bool")))
 (DFunDef false "scalarLit" ((PCon "LString" PWild)) (EVar "False"))
+(DFunDef false "scalarLit" ((PCon "LFloat" PWild)) (EVar "False"))
 (DFunDef false "scalarLit" (PWild) (EVar "True"))
 (DTypeSig false "unfoldSite" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unfolding")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CExpr") (TyCon "CExpr")))))
 (DFunDef false "unfoldSite" ((PVar "table") (PVar "scope") (PAs "e" (PCon "CApp" (PVar "head") (PVar "args") (PVar "site")))) (EMatch (EApp (EApp (EVar "siteTarget") (EVar "scope")) (EVar "head")) (arm (PCon "Some" (PVar "target")) () (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "targetKey") (EVar "target"))) (EVar "table")) (arm (PCon "Some" (PVar "u")) ((GBool (EApp (EVar "not") (EApp (EApp (EVar "captured") (EVar "scope")) (EVar "u"))))) (EApp (EApp (EVar "optionOr") (EVar "e")) (EApp (EApp (EApp (EVar "unfoldAt") (EVar "u")) (EVar "args")) (EVar "site")))) (arm PWild () (EVar "e")))) (arm (PCon "None") () (EVar "e"))))
@@ -424,6 +428,7 @@ keepResolved values key resolved acc = match omLookup key resolved
 (DFunDef false "readSite" (PWild PWild (PVar "e")) (EVar "e"))
 (DTypeSig false "scalarLit" (TyFun (TyCon "Lit") (TyCon "Bool")))
 (DFunDef false "scalarLit" ((PCon "LString" PWild)) (EVar "False"))
+(DFunDef false "scalarLit" ((PCon "LFloat" PWild)) (EVar "False"))
 (DFunDef false "scalarLit" (PWild) (EVar "True"))
 (DTypeSig false "unfoldSite" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unfolding")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CExpr") (TyCon "CExpr")))))
 (DFunDef false "unfoldSite" ((PVar "table") (PVar "scope") (PAs "e" (PCon "CApp" (PVar "head") (PVar "args") (PVar "site")))) (EMatch (EApp (EApp (EVar "siteTarget") (EVar "scope")) (EVar "head")) (arm (PCon "Some" (PVar "target")) () (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "targetKey") (EVar "target"))) (EVar "table")) (arm (PCon "Some" (PVar "u")) ((GBool (EApp (EVar "not") (EApp (EApp (EVar "captured") (EVar "scope")) (EVar "u"))))) (EApp (EApp (EVar "optionOr") (EVar "e")) (EApp (EApp (EApp (EVar "unfoldAt") (EVar "u")) (EVar "args")) (EVar "site")))) (arm PWild () (EVar "e")))) (arm (PCon "None") () (EVar "e"))))

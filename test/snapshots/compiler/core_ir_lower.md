@@ -1,5 +1,5 @@
 # META
-source_lines=4132
+source_lines=4141
 stages=DESUGAR,MARK
 # SOURCE
 import support.symbol_encoding.{encodePair}
@@ -1526,13 +1526,22 @@ emitPasses =
       namedPass "hoist-nullary-memo" (_ p => hoistNullaryMemo p),
       -- optimization slot: passes here run before the stamps below, so eta, call
       -- modes, tail marks and binder stamps all see their output
+      -- typed lowering only: the untyped lowering takes a value's representation
+      -- from the declared signature of a call head (the binder rows
+      -- `stampDeclaredSignatures` writes), so a rewrite that deletes a call head
+      -- deletes that evidence.  The rewrite preserves meaning only when
+      -- elaboration typed every node.
       namedPass "inline-trivial-calls" (c p =>
-        inlineTrivialCalls c.pcNoInline p),
+        typedOnly c.pcLowering (inlineTrivialCalls c.pcNoInline) p),
       namedPass "propagate-literal-globals" (c p =>
-        propagateLiteralGlobals c.pcNoInline p),
+        typedOnly c.pcLowering (propagateLiteralGlobals c.pcNoInline) p),
     ]
     ++ finishPasses
     ++ [namedPass "lower-externs" (c p => lowerExterns c.pcFacts c.pcDecls p)]
+
+typedOnly : Lowering -> (CProgram -> CProgram) -> CProgram -> CProgram
+typedOnly TypedLowering f p = f p
+typedOnly UntypedLowering _ p = p
 
 -- The names of `emitPasses`, in order: what a dump request may name.
 export
@@ -4603,7 +4612,10 @@ nodeTag _ = "?"
 (DTypeSig false "interpPasses" (TyApp (TyCon "List") (TyApp (TyCon "CorePass") (TyCon "PassCtx"))))
 (DFunDef false "interpPasses" () (EBinOp "::" (EApp (EApp (EVar "namedPass") (ELit (LString "refold-lets"))) (ELam (PWild (PVar "p")) (EApp (EApp (EVar "refoldProgram") (EVar "noLetCheck")) (EVar "p")))) (EVar "finishPasses")))
 (DTypeSig false "emitPasses" (TyApp (TyCon "List") (TyApp (TyCon "CorePass") (TyCon "PassCtx"))))
-(DFunDef false "emitPasses" () (EBinOp "++" (EBinOp "++" (EListLit (EApp (EApp (EVar "namedPass") (ELit (LString "decl-facts"))) (ELam ((PVar "c") (PVar "p")) (EApp (EApp (EVar "withDeclFacts") (EApp (EApp (EApp (EVar "emitDeclFacts") (EFieldAccess (EVar "c") "pcFacts")) (EFieldAccess (EVar "c") "pcSited")) (EApp (EVar "cprogramSymbolOrigins") (EVar "p")))) (EVar "p")))) (EApp (EApp (EVar "namedPass") (ELit (LString "record-patterns"))) (ELam ((PVar "c") (PVar "p")) (EApp (EApp (EVar "rewriteProgramRecPats") (EFieldAccess (EVar "c") "pcFieldOrders")) (EVar "p")))) (EApp (EApp (EVar "namedPass") (ELit (LString "refold-lets"))) (ELam (PWild (PVar "p")) (EApp (EApp (EVar "refoldProgram") (EApp (EVar "patCanMiss") (EApp (EVar "siblingTable") (EApp (EVar "cprogramCtorTypes") (EVar "p"))))) (EVar "p")))) (EApp (EApp (EVar "namedPass") (ELit (LString "hoist-nullary-memo"))) (ELam (PWild (PVar "p")) (EApp (EVar "hoistNullaryMemo") (EVar "p")))) (EApp (EApp (EVar "namedPass") (ELit (LString "inline-trivial-calls"))) (ELam ((PVar "c") (PVar "p")) (EApp (EApp (EVar "inlineTrivialCalls") (EFieldAccess (EVar "c") "pcNoInline")) (EVar "p")))) (EApp (EApp (EVar "namedPass") (ELit (LString "propagate-literal-globals"))) (ELam ((PVar "c") (PVar "p")) (EApp (EApp (EVar "propagateLiteralGlobals") (EFieldAccess (EVar "c") "pcNoInline")) (EVar "p"))))) (EVar "finishPasses")) (EListLit (EApp (EApp (EVar "namedPass") (ELit (LString "lower-externs"))) (ELam ((PVar "c") (PVar "p")) (EApp (EApp (EApp (EVar "lowerExterns") (EFieldAccess (EVar "c") "pcFacts")) (EFieldAccess (EVar "c") "pcDecls")) (EVar "p")))))))
+(DFunDef false "emitPasses" () (EBinOp "++" (EBinOp "++" (EListLit (EApp (EApp (EVar "namedPass") (ELit (LString "decl-facts"))) (ELam ((PVar "c") (PVar "p")) (EApp (EApp (EVar "withDeclFacts") (EApp (EApp (EApp (EVar "emitDeclFacts") (EFieldAccess (EVar "c") "pcFacts")) (EFieldAccess (EVar "c") "pcSited")) (EApp (EVar "cprogramSymbolOrigins") (EVar "p")))) (EVar "p")))) (EApp (EApp (EVar "namedPass") (ELit (LString "record-patterns"))) (ELam ((PVar "c") (PVar "p")) (EApp (EApp (EVar "rewriteProgramRecPats") (EFieldAccess (EVar "c") "pcFieldOrders")) (EVar "p")))) (EApp (EApp (EVar "namedPass") (ELit (LString "refold-lets"))) (ELam (PWild (PVar "p")) (EApp (EApp (EVar "refoldProgram") (EApp (EVar "patCanMiss") (EApp (EVar "siblingTable") (EApp (EVar "cprogramCtorTypes") (EVar "p"))))) (EVar "p")))) (EApp (EApp (EVar "namedPass") (ELit (LString "hoist-nullary-memo"))) (ELam (PWild (PVar "p")) (EApp (EVar "hoistNullaryMemo") (EVar "p")))) (EApp (EApp (EVar "namedPass") (ELit (LString "inline-trivial-calls"))) (ELam ((PVar "c") (PVar "p")) (EApp (EApp (EApp (EVar "typedOnly") (EFieldAccess (EVar "c") "pcLowering")) (EApp (EVar "inlineTrivialCalls") (EFieldAccess (EVar "c") "pcNoInline"))) (EVar "p")))) (EApp (EApp (EVar "namedPass") (ELit (LString "propagate-literal-globals"))) (ELam ((PVar "c") (PVar "p")) (EApp (EApp (EApp (EVar "typedOnly") (EFieldAccess (EVar "c") "pcLowering")) (EApp (EVar "propagateLiteralGlobals") (EFieldAccess (EVar "c") "pcNoInline"))) (EVar "p"))))) (EVar "finishPasses")) (EListLit (EApp (EApp (EVar "namedPass") (ELit (LString "lower-externs"))) (ELam ((PVar "c") (PVar "p")) (EApp (EApp (EApp (EVar "lowerExterns") (EFieldAccess (EVar "c") "pcFacts")) (EFieldAccess (EVar "c") "pcDecls")) (EVar "p")))))))
+(DTypeSig false "typedOnly" (TyFun (TyCon "Lowering") (TyFun (TyFun (TyCon "CProgram") (TyCon "CProgram")) (TyFun (TyCon "CProgram") (TyCon "CProgram")))))
+(DFunDef false "typedOnly" ((PCon "TypedLowering") (PVar "f") (PVar "p")) (EApp (EVar "f") (EVar "p")))
+(DFunDef false "typedOnly" ((PCon "UntypedLowering") PWild (PVar "p")) (EVar "p"))
 (DTypeSig true "emitPassNames" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "emitPassNames" () (EApp (EApp (EVar "map") (ELam ((PVar "p")) (EFieldAccess (EVar "p") "passName"))) (EVar "emitPasses")))
 (DTypeSig false "finishPasses" (TyApp (TyCon "List") (TyApp (TyCon "CorePass") (TyCon "PassCtx"))))
@@ -5944,7 +5956,10 @@ nodeTag _ = "?"
 (DTypeSig false "interpPasses" (TyApp (TyCon "List") (TyApp (TyCon "CorePass") (TyCon "PassCtx"))))
 (DFunDef false "interpPasses" () (EBinOp "::" (EApp (EApp (EVar "namedPass") (ELit (LString "refold-lets"))) (ELam (PWild (PVar "p")) (EApp (EApp (EVar "refoldProgram") (EVar "noLetCheck")) (EVar "p")))) (EVar "finishPasses")))
 (DTypeSig false "emitPasses" (TyApp (TyCon "List") (TyApp (TyCon "CorePass") (TyCon "PassCtx"))))
-(DFunDef false "emitPasses" () (EBinOp "++" (EBinOp "++" (EListLit (EApp (EApp (EVar "namedPass") (ELit (LString "decl-facts"))) (ELam ((PVar "c") (PVar "p")) (EApp (EApp (EVar "withDeclFacts") (EApp (EApp (EApp (EVar "emitDeclFacts") (EFieldAccess (EVar "c") "pcFacts")) (EFieldAccess (EVar "c") "pcSited")) (EApp (EVar "cprogramSymbolOrigins") (EVar "p")))) (EVar "p")))) (EApp (EApp (EVar "namedPass") (ELit (LString "record-patterns"))) (ELam ((PVar "c") (PVar "p")) (EApp (EApp (EVar "rewriteProgramRecPats") (EFieldAccess (EVar "c") "pcFieldOrders")) (EVar "p")))) (EApp (EApp (EVar "namedPass") (ELit (LString "refold-lets"))) (ELam (PWild (PVar "p")) (EApp (EApp (EVar "refoldProgram") (EApp (EVar "patCanMiss") (EApp (EVar "siblingTable") (EApp (EVar "cprogramCtorTypes") (EVar "p"))))) (EVar "p")))) (EApp (EApp (EVar "namedPass") (ELit (LString "hoist-nullary-memo"))) (ELam (PWild (PVar "p")) (EApp (EVar "hoistNullaryMemo") (EVar "p")))) (EApp (EApp (EVar "namedPass") (ELit (LString "inline-trivial-calls"))) (ELam ((PVar "c") (PVar "p")) (EApp (EApp (EVar "inlineTrivialCalls") (EFieldAccess (EVar "c") "pcNoInline")) (EVar "p")))) (EApp (EApp (EVar "namedPass") (ELit (LString "propagate-literal-globals"))) (ELam ((PVar "c") (PVar "p")) (EApp (EApp (EVar "propagateLiteralGlobals") (EFieldAccess (EVar "c") "pcNoInline")) (EVar "p"))))) (EVar "finishPasses")) (EListLit (EApp (EApp (EVar "namedPass") (ELit (LString "lower-externs"))) (ELam ((PVar "c") (PVar "p")) (EApp (EApp (EApp (EVar "lowerExterns") (EFieldAccess (EVar "c") "pcFacts")) (EFieldAccess (EVar "c") "pcDecls")) (EVar "p")))))))
+(DFunDef false "emitPasses" () (EBinOp "++" (EBinOp "++" (EListLit (EApp (EApp (EVar "namedPass") (ELit (LString "decl-facts"))) (ELam ((PVar "c") (PVar "p")) (EApp (EApp (EVar "withDeclFacts") (EApp (EApp (EApp (EVar "emitDeclFacts") (EFieldAccess (EVar "c") "pcFacts")) (EFieldAccess (EVar "c") "pcSited")) (EApp (EVar "cprogramSymbolOrigins") (EVar "p")))) (EVar "p")))) (EApp (EApp (EVar "namedPass") (ELit (LString "record-patterns"))) (ELam ((PVar "c") (PVar "p")) (EApp (EApp (EVar "rewriteProgramRecPats") (EFieldAccess (EVar "c") "pcFieldOrders")) (EVar "p")))) (EApp (EApp (EVar "namedPass") (ELit (LString "refold-lets"))) (ELam (PWild (PVar "p")) (EApp (EApp (EVar "refoldProgram") (EApp (EVar "patCanMiss") (EApp (EVar "siblingTable") (EApp (EVar "cprogramCtorTypes") (EVar "p"))))) (EVar "p")))) (EApp (EApp (EVar "namedPass") (ELit (LString "hoist-nullary-memo"))) (ELam (PWild (PVar "p")) (EApp (EVar "hoistNullaryMemo") (EVar "p")))) (EApp (EApp (EVar "namedPass") (ELit (LString "inline-trivial-calls"))) (ELam ((PVar "c") (PVar "p")) (EApp (EApp (EApp (EVar "typedOnly") (EFieldAccess (EVar "c") "pcLowering")) (EApp (EVar "inlineTrivialCalls") (EFieldAccess (EVar "c") "pcNoInline"))) (EVar "p")))) (EApp (EApp (EVar "namedPass") (ELit (LString "propagate-literal-globals"))) (ELam ((PVar "c") (PVar "p")) (EApp (EApp (EApp (EVar "typedOnly") (EFieldAccess (EVar "c") "pcLowering")) (EApp (EVar "propagateLiteralGlobals") (EFieldAccess (EVar "c") "pcNoInline"))) (EVar "p"))))) (EVar "finishPasses")) (EListLit (EApp (EApp (EVar "namedPass") (ELit (LString "lower-externs"))) (ELam ((PVar "c") (PVar "p")) (EApp (EApp (EApp (EVar "lowerExterns") (EFieldAccess (EVar "c") "pcFacts")) (EFieldAccess (EVar "c") "pcDecls")) (EVar "p")))))))
+(DTypeSig false "typedOnly" (TyFun (TyCon "Lowering") (TyFun (TyFun (TyCon "CProgram") (TyCon "CProgram")) (TyFun (TyCon "CProgram") (TyCon "CProgram")))))
+(DFunDef false "typedOnly" ((PCon "TypedLowering") (PVar "f") (PVar "p")) (EApp (EVar "f") (EVar "p")))
+(DFunDef false "typedOnly" ((PCon "UntypedLowering") PWild (PVar "p")) (EVar "p"))
 (DTypeSig true "emitPassNames" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "emitPassNames" () (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (EFieldAccess (EVar "p") "passName"))) (EVar "emitPasses")))
 (DTypeSig false "finishPasses" (TyApp (TyCon "List") (TyApp (TyCon "CorePass") (TyCon "PassCtx"))))

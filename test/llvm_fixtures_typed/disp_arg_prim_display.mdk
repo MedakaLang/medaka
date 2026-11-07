@@ -13,7 +13,7 @@ interface Display a where
 data Box = Box String
 
 impl Display String where
-  display s = s
+  display s = s ++ ""
 
 impl Display Box where
   display (Box s) = display s

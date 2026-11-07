@@ -1522,13 +1522,22 @@ emitPasses =
       namedPass "hoist-nullary-memo" (_ p => hoistNullaryMemo p),
       -- optimization slot: passes here run before the stamps below, so eta, call
       -- modes, tail marks and binder stamps all see their output
+      -- typed lowering only: the untyped lowering takes a value's representation
+      -- from the declared signature of a call head (the binder rows
+      -- `stampDeclaredSignatures` writes), so a rewrite that deletes a call head
+      -- deletes that evidence.  The rewrite preserves meaning only when
+      -- elaboration typed every node.
       namedPass "inline-trivial-calls" (c p =>
-        inlineTrivialCalls c.pcNoInline p),
+        typedOnly c.pcLowering (inlineTrivialCalls c.pcNoInline) p),
       namedPass "propagate-literal-globals" (c p =>
-        propagateLiteralGlobals c.pcNoInline p),
+        typedOnly c.pcLowering (propagateLiteralGlobals c.pcNoInline) p),
     ]
     ++ finishPasses
     ++ [namedPass "lower-externs" (c p => lowerExterns c.pcFacts c.pcDecls p)]
+
+typedOnly : Lowering -> (CProgram -> CProgram) -> CProgram -> CProgram
+typedOnly TypedLowering f p = f p
+typedOnly UntypedLowering _ p = p
 
 -- The names of `emitPasses`, in order: what a dump request may name.
 export

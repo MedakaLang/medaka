@@ -30,6 +30,7 @@ impl Mk Bool where
 
 cell = mk True
 
+@noinline
 base = 42
 
 main = cell

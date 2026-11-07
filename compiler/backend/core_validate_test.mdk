@@ -678,7 +678,7 @@ i2078Prelude =
 
 i2078Src : String
 i2078Src =
-  "mk : Int -> Int -> Int\nmk n = add n\napply1 : (Int -> Int) -> Int -> Int\napply1 f x = f x\nmain = apply1 (mk 1) 2"
+  "mk : Int -> Int -> Int\n@noinline\nmk n = add n\napply1 : (Int -> Int) -> Int -> Int\napply1 f x = f x\nmain = apply1 (mk 1) 2"
 
 typedLowered : String -> String -> CProgram
 typedLowered preludeSrc src =
@@ -1288,7 +1288,7 @@ test "(u) a method's dictionaries match its declared context" = expectEach [
 -- `size` declares no context, so the method-context table has no row for it.
 contextFreeSrc : String
 contextFreeSrc =
-  "interface Size a where\n  size : a -> Int\nimpl Size Int where\n  size n = n\nmain = size (3 : Int)"
+  "interface Size a where\n  size : a -> Int\nimpl Size Int where\n  size n = 0\nmain = size (3 : Int)"
 
 -- [prog] with one more method route on every top-level application of method
 -- [name], as an elaboration that read another declaration's context would leave it.
@@ -2195,9 +2195,13 @@ emissionVictim victim =
       main = x
       """
   else if contains "global-" victim then
-    let cp = typedLowered "" """
+    let cp =
+      typedLowered
+        ""
+        """
       a = f 1
       b = 5
+      @noinline
       c = 40
       f n = c + n
       main = a
