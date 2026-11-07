@@ -93,7 +93,7 @@ def main():
         if not condition:
             raise RuntimeError(name)
 
-    pins = list(SOURCE_HASHES) + ['runtime/medaka_runtime.h', 'runtime/medaka_process.h', 'runtime/medaka_abi.h'] + [PREFIX + name for name in (
+    pins = list(SOURCE_HASHES) + ['stdlib/core.mdk', 'compiler/medaka.toml', 'runtime/medaka_runtime.h', 'runtime/medaka_process.h', 'runtime/medaka_abi.h'] + [PREFIX + name for name in (
         'stdio_lease_fixture.c', 'stdio_lease_probe.py', 'stdio_descriptor_census.py',
         'stdio_lease_cases/legacy_read.mdk')]
     save('source_pins', 'OBSERVED', sha256={p: digest(root / p) for p in pins},
@@ -245,13 +245,22 @@ def main():
         ('write-mode', scratch, b'OLD', b'BYTES\n')]:
         path.write_bytes(initial)
         row = case('required_' + op, op, path)
+        effect = out / ('effect-' + op)
+        effect.write_bytes(path.read_bytes())
+        effect.chmod(path.stat().st_mode & 0o777)
         require('exact_file_' + op, row['rc'] == 0 and value(row, 'content_ok') == 1 and intact(row)
                 and path.read_bytes() == expected and (op != 'write-mode' or path.stat().st_mode & 0o777 == 0o600))
     scratch.unlink()
     row = case('required_scratch_create', 'write', scratch)
+    effect = out / 'effect-scratch-create'
+    effect.write_bytes(scratch.read_bytes())
+    effect.chmod(scratch.stat().st_mode & 0o777)
     require('scratch_created', row['rc'] == 0 and value(row, 'content_ok') == 1
             and intact(row) and scratch.read_bytes() == b'BYTES\n')
     row = case('required_regular_fsync', 'fsync', scratch)
+    effect = out / 'effect-regular-fsync'
+    effect.write_bytes(scratch.read_bytes())
+    effect.chmod(scratch.stat().st_mode & 0o777)
     require('regular_fsync_succeeds', row['rc'] == 0 and value(row, 'content_ok') == 1
             and intact(row) and scratch.read_bytes() == b'BYTES\n')
 
