@@ -1,5 +1,5 @@
 # META
-source_lines=482
+source_lines=484
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/native_doctest.mdk — the NATIVE doctest execution engine
@@ -464,6 +464,8 @@ renderAll : List Chunk ->
   List Example ->
   List (Result String (List Decl)) ->
   List (Result String String)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 renderAll _ _ _ [] _ = []
 renderAll _ _ _ (_ :: _) [] = []
 renderAll chunks note i (_ :: rest) (sr :: srRest) =

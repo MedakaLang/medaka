@@ -75,8 +75,8 @@ compactSegments token = match split "." token
      Err "jwt: segment length is not a valid unpadded base64url length" -}
 export
 decodeSegmentJson : String -> Result String Json
-decodeSegmentJson segment = match b64uDecode segment
-  Err e => Err e
-  Ok bytes => match decodeUtf8 bytes
+decodeSegmentJson segment = do
+  bytes <- b64uDecode segment
+  match decodeUtf8 bytes
     None => Err "jwt: segment is not UTF-8"
     Some text => parse text

@@ -16,6 +16,7 @@ import tools.lint_core.{
   Scope(..),
   StdlibIndex,
   mkRule,
+  noFix,
 }
 import tools.lint_shared.{
   appSpineOf,
@@ -66,22 +67,23 @@ ruleTestBoolHelper _ path _ _ decls
   | otherwise = []
 
 helperFinding : List String -> List Expr -> Decl -> List Finding
-helperFinding graded propBodies (DTypeSig _ name ty loc)
-  | endsInBool ty
-    && elem name graded
-    && not (anyList (mentionsVar name) propBodies) = [
-    Finding {
-      rule = ruleNameTestBoolHelper,
-      message =
-        "`\{name}` returns `Bool` and is graded with `expectTrue`/`expectFalse`, which reports no expectation on failure. Return an `Expect` (for example `expectErrContains`, `expectEqual`) and drop the wrapper at its call sites",
-      severity = SevWarning,
-      loc = Some loc,
-      fix = None,
-    },
-  ]
-helperFinding graded propBodies (DAttrib _ d) =
-  helperFinding graded propBodies d
-helperFinding _ _ _ = []
+helperFinding graded propBodies x0 = go x0
+  where
+    go (DTypeSig _ name ty loc)
+      | endsInBool ty
+        && elem name graded
+        && not (anyList (mentionsVar name) propBodies) = [
+        Finding {
+          rule = ruleNameTestBoolHelper,
+          message =
+            "`\{name}` returns `Bool` and is graded with `expectTrue`/`expectFalse`, which reports no expectation on failure. Return an `Expect` (for example `expectErrContains`, `expectEqual`) and drop the wrapper at its call sites",
+          severity = SevWarning,
+          loc = Some loc,
+          fix = noFix,
+        },
+      ]
+    go (DAttrib _ d) = go d
+    go _ = []
 
 endsInBool : Ty -> Bool
 endsInBool (TyFun _ r) = endsInBool r

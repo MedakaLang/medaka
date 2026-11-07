@@ -1,5 +1,5 @@
 # META
-source_lines=138
+source_lines=140
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-self-shadow-extern: a top-level binding unconditionally forwards to itself (`f s = f s`, `x = x`), an infinite self-recursion.
@@ -19,8 +19,10 @@ import tools.lint_core.{
   Scope(..),
   StdlibIndex,
   mkRule,
+  noFix,
+  factDeclLocs,
 }
-import tools.lint_shared.{declLocList, ruleNameSelfShadowExtern, unwrapLoc}
+import tools.lint_shared.{ruleNameSelfShadowExtern, unwrapLoc}
 
 export
 rule : Rule
@@ -74,8 +76,8 @@ ruleSelfShadowExtern : StdlibIndex ->
   Positions ->
   List Decl ->
   List Finding
-ruleSelfShadowExtern _ _ _ pos prog =
-  selfShadowFindings (flatMap selfShadowClauseL (declLocList pos prog))
+ruleSelfShadowExtern _ _ facts _ _ =
+  selfShadowFindings (flatMap selfShadowClauseL (factDeclLocs facts))
 
 selfShadowFindings : List (String, List Pat, Expr, Option Loc) -> List Finding
 selfShadowFindings clauses =
@@ -138,7 +140,7 @@ selfShadowFinding (name, loc) = Finding {
     "top-level '\{name}' unconditionally calls itself with no base case — an infinite self-recursion, not a forward to a same-named extern/definition. Rename the binding (give it a distinct name) or add a terminating `match`/`if`/guard",
   severity = SevWarning,
   loc = loc,
-  fix = None,
+  fix = noFix,
 }
 # DESUGAR
 (DUse false (UseAlias ("core") "$core"))
@@ -146,12 +148,12 @@ selfShadowFinding (name, loc) = Finding {
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "filterList" false) (mem "dedupBy" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "mkRule" false))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "declLocList" false) (mem "ruleNameSelfShadowExtern" false) (mem "unwrapLoc" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "mkRule" false) (mem "noFix" false) (mem "factDeclLocs" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "ruleNameSelfShadowExtern" false) (mem "unwrapLoc" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameSelfShadowExtern")) (fa "summary" (ELit (LString "top-level binding unconditionally forwards to itself (`f s = f s`, `x = x`) — an infinite self-recursion, not a forward to a same-named extern (#266)"))) (fa "doc" (ELit (LString "A top-level binding that unconditionally forwards to itself (`f s = f s`, `x = x`) is an infinite recursion, usually an extern wrapper that forgot it shadows the extern it meant to call (#266).\n\nBefore:\n  strLen s = strLen s\nAfter:\n  call the extern under its real name"))) (fa "category" (EVar "Correctness")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "NotFixable")) (fa "needs" (EListLit))))) (EVar "ruleSelfShadowExtern")) (EVar "None")))
 (DTypeSig false "ruleSelfShadowExtern" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "ruleSelfShadowExtern" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EVar "selfShadowFindings") (EApp (EApp (EVar "flatMap") (EVar "selfShadowClauseL")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog")))))
+(DFunDef false "ruleSelfShadowExtern" (PWild PWild (PVar "facts") PWild PWild) (EApp (EVar "selfShadowFindings") (EApp (EApp (EVar "flatMap") (EVar "selfShadowClauseL")) (EApp (EVar "factDeclLocs") (EVar "facts")))))
 (DTypeSig false "selfShadowFindings" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc")))) (TyApp (TyCon "List") (TyCon "Finding"))))
 (DFunDef false "selfShadowFindings" ((PVar "clauses")) (EApp (EApp (EVar "map") (EVar "selfShadowFinding")) (EApp (EApp (EVar "filterList") (EApp (EVar "allClausesSelfCall") (EVar "clauses"))) (EApp (EApp (EVar "dedupBy") (EVar "fst")) (EApp (EApp (EVar "map") (EVar "clauseNameLoc")) (EVar "clauses"))))))
 (DTypeSig false "selfShadowClauseL" (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc"))))))
@@ -178,19 +180,19 @@ selfShadowFinding (name, loc) = Finding {
 (DTypeSig false "appHead" (TyFun (TyCon "Expr") (TyCon "Expr")))
 (DFunDef false "appHead" ((PVar "e")) (EMatch (EApp (EVar "stripWrap") (EVar "e")) (arm (PCon "EApp" (PVar "f") PWild) () (EApp (EVar "appHead") (EVar "f"))) (arm (PVar "x") () (EVar "x"))))
 (DTypeSig false "selfShadowFinding" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyCon "Finding")))
-(DFunDef false "selfShadowFinding" ((PTuple (PVar "name") (PVar "loc"))) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameSelfShadowExtern")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "top-level '")) (EApp (EVar "$core.display") (EVar "name"))) (ELit (LString "' unconditionally calls itself with no base case — an infinite self-recursion, not a forward to a same-named extern/definition. Rename the binding (give it a distinct name) or add a terminating `match`/`if`/guard")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None")))))
+(DFunDef false "selfShadowFinding" ((PTuple (PVar "name") (PVar "loc"))) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameSelfShadowExtern")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "top-level '")) (EApp (EVar "$core.display") (EVar "name"))) (ELit (LString "' unconditionally calls itself with no base case — an infinite self-recursion, not a forward to a same-named extern/definition. Rename the binding (give it a distinct name) or add a terminating `match`/`if`/guard")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "noFix")))))
 # MARK
 (DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Pat" true) (mem "Expr" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("support" "util") ((mem "allList" false) (mem "filterList" false) (mem "dedupBy" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "mkRule" false))))
-(DUse false (UseGroup ("tools" "lint_shared") ((mem "declLocList" false) (mem "ruleNameSelfShadowExtern" false) (mem "unwrapLoc" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "mkRule" false) (mem "noFix" false) (mem "factDeclLocs" false))))
+(DUse false (UseGroup ("tools" "lint_shared") ((mem "ruleNameSelfShadowExtern" false) (mem "unwrapLoc" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameSelfShadowExtern")) (fa "summary" (ELit (LString "top-level binding unconditionally forwards to itself (`f s = f s`, `x = x`) — an infinite self-recursion, not a forward to a same-named extern (#266)"))) (fa "doc" (ELit (LString "A top-level binding that unconditionally forwards to itself (`f s = f s`, `x = x`) is an infinite recursion, usually an extern wrapper that forgot it shadows the extern it meant to call (#266).\n\nBefore:\n  strLen s = strLen s\nAfter:\n  call the extern under its real name"))) (fa "category" (EVar "Correctness")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "NotFixable")) (fa "needs" (EListLit))))) (EVar "ruleSelfShadowExtern")) (EVar "None")))
 (DTypeSig false "ruleSelfShadowExtern" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
-(DFunDef false "ruleSelfShadowExtern" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EVar "selfShadowFindings") (EApp (EApp (EDictApp "flatMap") (EVar "selfShadowClauseL")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog")))))
+(DFunDef false "ruleSelfShadowExtern" (PWild PWild (PVar "facts") PWild PWild) (EApp (EVar "selfShadowFindings") (EApp (EApp (EDictApp "flatMap") (EVar "selfShadowClauseL")) (EApp (EVar "factDeclLocs") (EVar "facts")))))
 (DTypeSig false "selfShadowFindings" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc")))) (TyApp (TyCon "List") (TyCon "Finding"))))
 (DFunDef false "selfShadowFindings" ((PVar "clauses")) (EApp (EApp (EMethodRef "map") (EVar "selfShadowFinding")) (EApp (EApp (EVar "filterList") (EApp (EVar "allClausesSelfCall") (EVar "clauses"))) (EApp (EApp (EVar "dedupBy") (EVar "fst")) (EApp (EApp (EMethodRef "map") (EVar "clauseNameLoc")) (EVar "clauses"))))))
 (DTypeSig false "selfShadowClauseL" (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Loc"))))))
@@ -217,4 +219,4 @@ selfShadowFinding (name, loc) = Finding {
 (DTypeSig false "appHead" (TyFun (TyCon "Expr") (TyCon "Expr")))
 (DFunDef false "appHead" ((PVar "e")) (EMatch (EApp (EVar "stripWrap") (EVar "e")) (arm (PCon "EApp" (PVar "f") PWild) () (EApp (EVar "appHead") (EVar "f"))) (arm (PVar "x") () (EVar "x"))))
 (DTypeSig false "selfShadowFinding" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyCon "Finding")))
-(DFunDef false "selfShadowFinding" ((PTuple (PVar "name") (PVar "loc"))) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameSelfShadowExtern")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "top-level '")) (EApp (EVar "$core.display") (EVar "name"))) (ELit (LString "' unconditionally calls itself with no base case — an infinite self-recursion, not a forward to a same-named extern/definition. Rename the binding (give it a distinct name) or add a terminating `match`/`if`/guard")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None")))))
+(DFunDef false "selfShadowFinding" ((PTuple (PVar "name") (PVar "loc"))) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameSelfShadowExtern")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "top-level '")) (EApp (EVar "$core.display") (EVar "name"))) (ELit (LString "' unconditionally calls itself with no base case — an infinite self-recursion, not a forward to a same-named extern/definition. Rename the binding (give it a distinct name) or add a terminating `match`/`if`/guard")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "noFix")))))

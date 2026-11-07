@@ -1,5 +1,5 @@
 # META
-source_lines=544
+source_lines=550
 stages=DESUGAR,MARK
 # SOURCE
 import support.symbol_encoding.{encodePair}
@@ -133,19 +133,20 @@ externChain : HashMap String String ->
   HashMap String (String, String) ->
   (String, (Decl, Decl)) ->
   Option ((String, String), List (String, String))
-externChain reach declared (mid, (DAttrib _ d, DAttrib _ s)) =
-  externChain reach declared (mid, (d, s))
-externChain reach declared (mid, (DExtern ed, DExtern scoped)) =
-  if has scoped.edName reach then
-    Some (
-      (mid, ed.edName),
-      map
-        (n => findWithDefault ("", n) n declared)
-        (chainTo reach scoped.edName []),
-    )
-  else
-    None
-externChain _ _ _ = None
+externChain reach declared item0 = go item0
+  where
+    go (mid, (DAttrib _ d, DAttrib _ s)) = go (mid, (d, s))
+    go (mid, (DExtern ed, DExtern scoped)) =
+      if has scoped.edName reach then
+        Some (
+          (mid, ed.edName),
+          map
+            (n => findWithDefault ("", n) n declared)
+            (chainTo reach scoped.edName []),
+        )
+      else
+        None
+    go _ = None
 
 -- The names from the root to `n`, following each name to the one it was
 -- first reached from.
@@ -241,19 +242,20 @@ funGraphInto : HashMap String Unit ->
   List Decl ->
   HashMap String (List String) ->
   Unit
-funGraphInto _ [] _ = ()
--- #1037: see definedFnNamesInto — an attributed definition must still contribute
--- its call-graph edges.
-funGraphInto defined ((DAttrib _ d) :: rest) g =
-  funGraphInto defined (d :: rest) g
-funGraphInto defined ((DFunDef _ n ps body site bid) :: rest) g =
-  setInPlace
-    n
-    (map (canonRef defined) (declRefs (DFunDef False n ps body site bid))
-      ++ findWithDefault [] n g)
-    g
-  funGraphInto defined rest g
-funGraphInto defined (_ :: rest) g = funGraphInto defined rest g
+funGraphInto defined xs0 g = go xs0
+  where
+    go [] = ()
+    -- #1037: see definedFnNamesInto — an attributed definition must still contribute
+    -- its call-graph edges.
+    go ((DAttrib _ d) :: rest) = go (d :: rest)
+    go ((DFunDef _ n ps body site bid) :: rest) =
+      setInPlace
+        n
+        (map (canonRef defined) (declRefs (DFunDef False n ps body site bid))
+          ++ findWithDefault [] n g)
+        g
+      go rest
+    go (_ :: rest) = go rest
 
 -- roots from emitting non-DFunDef decls: impl-method + interface-default bodies.
 -- (declRefs walks an impl's method bodies / an interface's default bodies; it is
@@ -356,21 +358,22 @@ dispatchOf : HashMap String (List String) ->
   (List String -> List String) ->
   Decl ->
   Option DispatchEntry
-dispatchOf ifaces methods declared spell (DAttrib _ d) =
-  dispatchOf ifaces methods declared spell d
-dispatchOf ifaces methods declared spell (d@(DInterface { name, ... })) =
-  Some (dispatchOn ifaces methods declared spell name [] (declRefs d))
-dispatchOf ifaces methods declared spell (d@(DImpl { iface, methods = own, ... })) =
-  Some
-    (dispatchOn
-      ifaces
-      methods
-      declared
-      spell
-      (bareIfaceName iface)
-      (map implMethodName own)
-      (declRefs d))
-dispatchOf _ _ _ _ _ = None
+dispatchOf ifaces methods declared spell d0 = go d0
+  where
+    go (DAttrib _ d) = go d
+    go (d@(DInterface { name, ... })) =
+      Some (dispatchOn ifaces methods declared spell name [] (declRefs d))
+    go (d@(DImpl { iface, methods = own, ... })) =
+      Some
+        (dispatchOn
+          ifaces
+          methods
+          declared
+          spell
+          (bareIfaceName iface)
+          (map implMethodName own)
+          (declRefs d))
+    go _ = None
 
 -- `ifaces` and `methods` are the prelude's interfaces and method names,
 -- `declared` the modules' interfaces.
@@ -409,22 +412,20 @@ dispatchUntilStable : HashMap String Unit ->
   List String ->
   List (List String, List String) ->
   Unit
-dispatchUntilStable defined graph seen modules named pending =
-  let names = nameSet (flatMap (reachedRefs seen) modules ++ named)
-  match filterMap (firedBy names) pending
-    [] => ()
-    fired =>
-      closure
-        graph
-        seen
-        (map ((n, refs) => (n, map (canonRef defined) refs)) fired)
-      dispatchUntilStable
-        defined
-        graph
-        seen
-        modules
-        (flatMap snd fired ++ named)
-        (filter (p => isNone (firedBy names p)) pending)
+dispatchUntilStable defined graph seen modules named0 queue0 = go named0 queue0
+  where
+    go named pending =
+      let names = nameSet (flatMap (reachedRefs seen) modules ++ named)
+      match filterMap (firedBy names) pending
+        [] => ()
+        fired =>
+          closure
+            graph
+            seen
+            (map ((n, refs) => (n, map (canonRef defined) refs)) fired)
+          go
+            (flatMap snd fired ++ named)
+            (filter (p => isNone (firedBy names p)) pending)
 
 firedBy : HashMap String Unit ->
   (List String, List String) ->
@@ -504,28 +505,31 @@ letGroupGraphInto : HashMap String Unit ->
   List Decl ->
   HashMap String (List String) ->
   Unit
-letGroupGraphInto _ [] _ = ()
-letGroupGraphInto defined ((DAttrib _ d) :: rest) g =
-  letGroupGraphInto defined (d :: rest) g
-letGroupGraphInto defined ((DLetGroup pub binds) :: rest) g =
-  letBindsInto defined pub binds g
-  letGroupGraphInto defined rest g
-letGroupGraphInto defined (_ :: rest) g = letGroupGraphInto defined rest g
+letGroupGraphInto defined xs0 g = go xs0
+  where
+    go [] = ()
+    go ((DAttrib _ d) :: rest) = go (d :: rest)
+    go ((DLetGroup pub binds) :: rest) =
+      letBindsInto defined pub binds g
+      go rest
+    go (_ :: rest) = go rest
 
 letBindsInto : HashMap String Unit ->
   Bool ->
   List LetBind ->
   HashMap String (List String) ->
   Unit
-letBindsInto _ _ [] _ = ()
-letBindsInto defined pub (b :: rest) g =
-  let n = letBindName b
-  setInPlace
-    n
-    (map (canonRef defined) (declRefs (DLetGroup pub [b]))
-      ++ findWithDefault [] n g)
-    g
-  letBindsInto defined pub rest g
+letBindsInto defined pub xs0 g = go xs0
+  where
+    go [] = ()
+    go (b :: rest) =
+      let n = letBindName b
+      setInPlace
+        n
+        (map (canonRef defined) (declRefs (DLetGroup pub [b]))
+          ++ findWithDefault [] n g)
+        g
+      go rest
 
 -- ── worklist closure ───────────────────────────────────────────────────────
 -- Depth-first over the call graph.  The stack holds, per name being expanded,
@@ -536,13 +540,15 @@ closure : HashMap String (List String) ->
   HashMap String String ->
   List (String, List String) ->
   Unit
-closure _ _ [] = ()
-closure graph seen ((_, []) :: stack) = closure graph seen stack
-closure graph seen ((from, w :: ws) :: stack)
-  | has w seen = closure graph seen ((from, ws) :: stack)
-  | otherwise =
-    setInPlace w from seen
-    closure graph seen ((w, refsOf graph w) :: (from, ws) :: stack)
+closure graph seen xs0 = go xs0
+  where
+    go [] = ()
+    go ((_, []) :: stack) = go stack
+    go ((from, w :: ws) :: stack)
+      | has w seen = go ((from, ws) :: stack)
+      | otherwise =
+        setInPlace w from seen
+        go ((w, refsOf graph w) :: (from, ws) :: stack)
 
 refsOf : HashMap String (List String) -> String -> List String
 refsOf graph n = findWithDefault [] n graph
@@ -569,9 +575,7 @@ refsOf graph n = findWithDefault [] n graph
 (DFunDef false "scopedNames" ((PCon "DLetGroup" PWild (PVar "bs")) (PCon "DLetGroup" PWild (PVar "scoped"))) (EApp (EApp (EVar "zip") (EApp (EApp (EVar "map") (EVar "letBindName")) (EVar "scoped"))) (EApp (EApp (EVar "map") (EVar "letBindName")) (EVar "bs"))))
 (DFunDef false "scopedNames" (PWild PWild) (EListLit))
 (DTypeSig false "externChain" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "String")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyTuple (TyCon "String") (TyTuple (TyCon "Decl") (TyCon "Decl"))) (TyApp (TyCon "Option") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))))))
-(DFunDef false "externChain" ((PVar "reach") (PVar "declared") (PTuple (PVar "mid") (PTuple (PCon "DAttrib" PWild (PVar "d")) (PCon "DAttrib" PWild (PVar "s"))))) (EApp (EApp (EApp (EVar "externChain") (EVar "reach")) (EVar "declared")) (ETuple (EVar "mid") (ETuple (EVar "d") (EVar "s")))))
-(DFunDef false "externChain" ((PVar "reach") (PVar "declared") (PTuple (PVar "mid") (PTuple (PCon "DExtern" (PVar "ed")) (PCon "DExtern" (PVar "scoped"))))) (EIf (EApp (EApp (EVar "has") (EFieldAccess (EVar "scoped") "edName")) (EVar "reach")) (EApp (EVar "Some") (ETuple (ETuple (EVar "mid") (EFieldAccess (EVar "ed") "edName")) (EApp (EApp (EVar "map") (ELam ((PVar "n")) (EApp (EApp (EApp (EVar "findWithDefault") (ETuple (ELit (LString "")) (EVar "n"))) (EVar "n")) (EVar "declared")))) (EApp (EApp (EApp (EVar "chainTo") (EVar "reach")) (EFieldAccess (EVar "scoped") "edName")) (EListLit))))) (EVar "None")))
-(DFunDef false "externChain" (PWild PWild PWild) (EVar "None"))
+(DFunDef false "externChain" ((PVar "reach") (PVar "declared") (PVar "item0")) (ELetGroup ((lgb "go" (clause ((PTuple (PVar "mid") (PTuple (PCon "DAttrib" PWild (PVar "d")) (PCon "DAttrib" PWild (PVar "s"))))) (EApp (EVar "go") (ETuple (EVar "mid") (ETuple (EVar "d") (EVar "s"))))) (clause ((PTuple (PVar "mid") (PTuple (PCon "DExtern" (PVar "ed")) (PCon "DExtern" (PVar "scoped"))))) (EIf (EApp (EApp (EVar "has") (EFieldAccess (EVar "scoped") "edName")) (EVar "reach")) (EApp (EVar "Some") (ETuple (ETuple (EVar "mid") (EFieldAccess (EVar "ed") "edName")) (EApp (EApp (EVar "map") (ELam ((PVar "n")) (EApp (EApp (EApp (EVar "findWithDefault") (ETuple (ELit (LString "")) (EVar "n"))) (EVar "n")) (EVar "declared")))) (EApp (EApp (EApp (EVar "chainTo") (EVar "reach")) (EFieldAccess (EVar "scoped") "edName")) (EListLit))))) (EVar "None"))) (clause (PWild) (EVar "None")))) (EApp (EVar "go") (EVar "item0"))))
 (DTypeSig false "chainTo" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "chainTo" ((PVar "reach") (PVar "n") (PVar "acc")) (EMatch (EApp (EApp (EVar "get") (EVar "n")) (EVar "reach")) (arm (PCon "Some" (PLit (LString ""))) () (EBinOp "::" (EVar "n") (EVar "acc"))) (arm (PCon "Some" (PVar "from")) () (EApp (EApp (EApp (EVar "chainTo") (EVar "reach")) (EVar "from")) (EBinOp "::" (EVar "n") (EVar "acc")))) (arm (PCon "None") () (EBinOp "::" (EVar "n") (EVar "acc")))))
 (DTypeSig false "filterReachable" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
@@ -592,10 +596,7 @@ refsOf graph n = findWithDefault [] n graph
 (DTypeSig false "funGraph" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "funGraph" ((PVar "defined") (PVar "decls")) (EBlock (DoLet false false (PVar "g") (EApp (EVar "new") (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EVar "funGraphInto") (EVar "defined")) (EVar "decls")) (EVar "g"))) (DoExpr (EVar "g"))))
 (DTypeSig false "funGraphInto" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyCon "Unit")))))
-(DFunDef false "funGraphInto" (PWild (PList) PWild) (ELit LUnit))
-(DFunDef false "funGraphInto" ((PVar "defined") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "g")) (EApp (EApp (EApp (EVar "funGraphInto") (EVar "defined")) (EBinOp "::" (EVar "d") (EVar "rest"))) (EVar "g")))
-(DFunDef false "funGraphInto" ((PVar "defined") (PCons (PCon "DFunDef" PWild (PVar "n") (PVar "ps") (PVar "body") (PVar "site") (PVar "bid")) (PVar "rest")) (PVar "g")) (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EVar "n")) (EBinOp "++" (EApp (EApp (EVar "map") (EApp (EVar "canonRef") (EVar "defined"))) (EApp (EVar "declRefs") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "False")) (EVar "n")) (EVar "ps")) (EVar "body")) (EVar "site")) (EVar "bid")))) (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "n")) (EVar "g")))) (EVar "g"))) (DoExpr (EApp (EApp (EApp (EVar "funGraphInto") (EVar "defined")) (EVar "rest")) (EVar "g")))))
-(DFunDef false "funGraphInto" ((PVar "defined") (PCons PWild (PVar "rest")) (PVar "g")) (EApp (EApp (EApp (EVar "funGraphInto") (EVar "defined")) (EVar "rest")) (EVar "g")))
+(DFunDef false "funGraphInto" ((PVar "defined") (PVar "xs0") (PVar "g")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "go") (EBinOp "::" (EVar "d") (EVar "rest")))) (clause ((PCons (PCon "DFunDef" PWild (PVar "n") (PVar "ps") (PVar "body") (PVar "site") (PVar "bid")) (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EVar "n")) (EBinOp "++" (EApp (EApp (EVar "map") (EApp (EVar "canonRef") (EVar "defined"))) (EApp (EVar "declRefs") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "False")) (EVar "n")) (EVar "ps")) (EVar "body")) (EVar "site")) (EVar "bid")))) (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "n")) (EVar "g")))) (EVar "g"))) (DoExpr (EApp (EVar "go") (EVar "rest"))))) (clause ((PCons PWild (PVar "rest"))) (EApp (EVar "go") (EVar "rest"))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "emittingRoots" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "emittingRoots" ((PList)) (EListLit))
 (DFunDef false "emittingRoots" ((PCons (PVar "d") (PVar "rest"))) (EIf (EApp (EVar "isEmittingDecl") (EVar "d")) (EBinOp "++" (EApp (EVar "declRefs") (EVar "d")) (EApp (EVar "emittingRoots") (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EVar "emittingRoots") (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -618,16 +619,13 @@ refsOf graph n = findWithDefault [] n graph
 (DFunDef false "onceNamed" ((PCon "DispatchRoot" PWild)) (EVar "None"))
 (DFunDef false "onceNamed" ((PCon "DispatchOnce" (PVar "names") (PVar "refs"))) (EApp (EVar "Some") (ETuple (EVar "names") (EVar "refs"))))
 (DTypeSig false "dispatchOf" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "DispatchEntry"))))))))
-(DFunDef false "dispatchOf" ((PVar "ifaces") (PVar "methods") (PVar "declared") (PVar "spell") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EApp (EApp (EApp (EVar "dispatchOf") (EVar "ifaces")) (EVar "methods")) (EVar "declared")) (EVar "spell")) (EVar "d")))
-(DFunDef false "dispatchOf" ((PVar "ifaces") (PVar "methods") (PVar "declared") (PVar "spell") (PAs "d" (PRec "DInterface" ((rf "name" None)) true))) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "dispatchOn") (EVar "ifaces")) (EVar "methods")) (EVar "declared")) (EVar "spell")) (EVar "name")) (EListLit)) (EApp (EVar "declRefs") (EVar "d")))))
-(DFunDef false "dispatchOf" ((PVar "ifaces") (PVar "methods") (PVar "declared") (PVar "spell") (PAs "d" (PRec "DImpl" ((rf "iface" None) (rf "methods" (PVar "own"))) true))) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "dispatchOn") (EVar "ifaces")) (EVar "methods")) (EVar "declared")) (EVar "spell")) (EApp (EVar "bareIfaceName") (EVar "iface"))) (EApp (EApp (EVar "map") (EVar "implMethodName")) (EVar "own"))) (EApp (EVar "declRefs") (EVar "d")))))
-(DFunDef false "dispatchOf" (PWild PWild PWild PWild PWild) (EVar "None"))
+(DFunDef false "dispatchOf" ((PVar "ifaces") (PVar "methods") (PVar "declared") (PVar "spell") (PVar "d0")) (ELetGroup ((lgb "go" (clause ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "go") (EVar "d"))) (clause ((PAs "d" (PRec "DInterface" ((rf "name" None)) true))) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "dispatchOn") (EVar "ifaces")) (EVar "methods")) (EVar "declared")) (EVar "spell")) (EVar "name")) (EListLit)) (EApp (EVar "declRefs") (EVar "d"))))) (clause ((PAs "d" (PRec "DImpl" ((rf "iface" None) (rf "methods" (PVar "own"))) true))) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "dispatchOn") (EVar "ifaces")) (EVar "methods")) (EVar "declared")) (EVar "spell")) (EApp (EVar "bareIfaceName") (EVar "iface"))) (EApp (EApp (EVar "map") (EVar "implMethodName")) (EVar "own"))) (EApp (EVar "declRefs") (EVar "d"))))) (clause (PWild) (EVar "None")))) (EApp (EVar "go") (EVar "d0"))))
 (DTypeSig false "dispatchOn" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "DispatchEntry")))))))))
 (DFunDef false "dispatchOn" ((PVar "ifaces") (PVar "methods") (PVar "declared") (PVar "spell") (PVar "iface") (PVar "own") (PVar "refs")) (EIf (EApp (EApp (EVar "has") (EVar "iface")) (EVar "ifaces")) (EApp (EVar "DispatchRoot") (EVar "refs")) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "get") (EVar "iface")) (EVar "declared")) (arm (PCon "Some" (PVar "names")) () (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "m")) (EApp (EApp (EVar "has") (EVar "m")) (EVar "methods")))) (EBinOp "++" (EVar "names") (EVar "own"))) (EApp (EVar "DispatchRoot") (EVar "refs")) (EApp (EApp (EVar "DispatchOnce") (EApp (EVar "spell") (EBinOp "++" (EVar "names") (EVar "own")))) (EVar "refs")))) (arm (PCon "None") () (EApp (EVar "DispatchRoot") (EVar "refs")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "bareIfaceName" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "bareIfaceName" ((PVar "iface")) (EMatch (EApp (EApp (EVar "stringLastIndexOf") (ELit (LString "."))) (EVar "iface")) (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "iface"))) (EVar "iface"))) (arm (PCon "None") () (EVar "iface"))))
 (DTypeSig false "dispatchUntilStable" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))) (TyCon "Unit"))))))))
-(DFunDef false "dispatchUntilStable" ((PVar "defined") (PVar "graph") (PVar "seen") (PVar "modules") (PVar "named") (PVar "pending")) (EBlock (DoLet false false (PVar "names") (EApp (EVar "nameSet") (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EVar "reachedRefs") (EVar "seen"))) (EVar "modules")) (EVar "named")))) (DoExpr (EMatch (EApp (EApp (EVar "filterMap") (EApp (EVar "firedBy") (EVar "names"))) (EVar "pending")) (arm (PList) () (ELit LUnit)) (arm (PVar "fired") () (EBlock (DoExpr (EApp (EApp (EApp (EVar "closure") (EVar "graph")) (EVar "seen")) (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "n") (PVar "refs"))) (ETuple (EVar "n") (EApp (EApp (EVar "map") (EApp (EVar "canonRef") (EVar "defined"))) (EVar "refs"))))) (EVar "fired")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "dispatchUntilStable") (EVar "defined")) (EVar "graph")) (EVar "seen")) (EVar "modules")) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EVar "snd")) (EVar "fired")) (EVar "named"))) (EApp (EApp (EVar "filter") (ELam ((PVar "p")) (EApp (EVar "isNone") (EApp (EApp (EVar "firedBy") (EVar "names")) (EVar "p"))))) (EVar "pending"))))))))))
+(DFunDef false "dispatchUntilStable" ((PVar "defined") (PVar "graph") (PVar "seen") (PVar "modules") (PVar "named0") (PVar "queue0")) (ELetGroup ((lgb "go" (clause ((PVar "named") (PVar "pending")) (EBlock (DoLet false false (PVar "names") (EApp (EVar "nameSet") (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EVar "reachedRefs") (EVar "seen"))) (EVar "modules")) (EVar "named")))) (DoExpr (EMatch (EApp (EApp (EVar "filterMap") (EApp (EVar "firedBy") (EVar "names"))) (EVar "pending")) (arm (PList) () (ELit LUnit)) (arm (PVar "fired") () (EBlock (DoExpr (EApp (EApp (EApp (EVar "closure") (EVar "graph")) (EVar "seen")) (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "n") (PVar "refs"))) (ETuple (EVar "n") (EApp (EApp (EVar "map") (EApp (EVar "canonRef") (EVar "defined"))) (EVar "refs"))))) (EVar "fired")))) (DoExpr (EApp (EApp (EVar "go") (EBinOp "++" (EApp (EApp (EVar "flatMap") (EVar "snd")) (EVar "fired")) (EVar "named"))) (EApp (EApp (EVar "filter") (ELam ((PVar "p")) (EApp (EVar "isNone") (EApp (EApp (EVar "firedBy") (EVar "names")) (EVar "p"))))) (EVar "pending")))))))))))) (EApp (EApp (EVar "go") (EVar "named0")) (EVar "queue0"))))
 (DTypeSig false "firedBy" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "firedBy" ((PVar "names") (PTuple (PVar "spellings") (PVar "refs"))) (EMatch (EApp (EApp (EVar "filter") (ELam ((PVar "n")) (EApp (EApp (EVar "has") (EVar "n")) (EVar "names")))) (EVar "spellings")) (arm (PCons (PVar "n") PWild) () (EApp (EVar "Some") (ETuple (EVar "n") (EVar "refs")))) (arm (PList) () (EVar "None"))))
 (DTypeSig false "reachedRefs" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "String")) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String")))))
@@ -663,17 +661,11 @@ refsOf graph n = findWithDefault [] n graph
 (DFunDef false "memberAliasesOf" ((PCon "DUse" PWild (PCon "UseGroup" PWild (PVar "members")) PWild)) (EApp (EApp (EVar "filterMap") (ELam ((PVar "m")) (EApp (EApp (EVar "map") (ELam ((PVar "local")) (ETuple (EVar "local") (EApp (EVar "useMemberOrigin") (EVar "m"))))) (EApp (EVar "useMemberAlias") (EVar "m"))))) (EVar "members")))
 (DFunDef false "memberAliasesOf" (PWild) (EListLit))
 (DTypeSig false "letGroupGraphInto" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyCon "Unit")))))
-(DFunDef false "letGroupGraphInto" (PWild (PList) PWild) (ELit LUnit))
-(DFunDef false "letGroupGraphInto" ((PVar "defined") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "g")) (EApp (EApp (EApp (EVar "letGroupGraphInto") (EVar "defined")) (EBinOp "::" (EVar "d") (EVar "rest"))) (EVar "g")))
-(DFunDef false "letGroupGraphInto" ((PVar "defined") (PCons (PCon "DLetGroup" (PVar "pub") (PVar "binds")) (PVar "rest")) (PVar "g")) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EVar "letBindsInto") (EVar "defined")) (EVar "pub")) (EVar "binds")) (EVar "g"))) (DoExpr (EApp (EApp (EApp (EVar "letGroupGraphInto") (EVar "defined")) (EVar "rest")) (EVar "g")))))
-(DFunDef false "letGroupGraphInto" ((PVar "defined") (PCons PWild (PVar "rest")) (PVar "g")) (EApp (EApp (EApp (EVar "letGroupGraphInto") (EVar "defined")) (EVar "rest")) (EVar "g")))
+(DFunDef false "letGroupGraphInto" ((PVar "defined") (PVar "xs0") (PVar "g")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "go") (EBinOp "::" (EVar "d") (EVar "rest")))) (clause ((PCons (PCon "DLetGroup" (PVar "pub") (PVar "binds")) (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EVar "letBindsInto") (EVar "defined")) (EVar "pub")) (EVar "binds")) (EVar "g"))) (DoExpr (EApp (EVar "go") (EVar "rest"))))) (clause ((PCons PWild (PVar "rest"))) (EApp (EVar "go") (EVar "rest"))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "letBindsInto" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyCon "Unit"))))))
-(DFunDef false "letBindsInto" (PWild PWild (PList) PWild) (ELit LUnit))
-(DFunDef false "letBindsInto" ((PVar "defined") (PVar "pub") (PCons (PVar "b") (PVar "rest")) (PVar "g")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "letBindName") (EVar "b"))) (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EVar "n")) (EBinOp "++" (EApp (EApp (EVar "map") (EApp (EVar "canonRef") (EVar "defined"))) (EApp (EVar "declRefs") (EApp (EApp (EVar "DLetGroup") (EVar "pub")) (EListLit (EVar "b"))))) (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "n")) (EVar "g")))) (EVar "g"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "letBindsInto") (EVar "defined")) (EVar "pub")) (EVar "rest")) (EVar "g")))))
+(DFunDef false "letBindsInto" ((PVar "defined") (PVar "pub") (PVar "xs0") (PVar "g")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PVar "b") (PVar "rest"))) (EBlock (DoLet false false (PVar "n") (EApp (EVar "letBindName") (EVar "b"))) (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EVar "n")) (EBinOp "++" (EApp (EApp (EVar "map") (EApp (EVar "canonRef") (EVar "defined"))) (EApp (EVar "declRefs") (EApp (EApp (EVar "DLetGroup") (EVar "pub")) (EListLit (EVar "b"))))) (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "n")) (EVar "g")))) (EVar "g"))) (DoExpr (EApp (EVar "go") (EVar "rest"))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "closure" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyCon "Unit")))))
-(DFunDef false "closure" (PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "closure" ((PVar "graph") (PVar "seen") (PCons (PTuple PWild (PList)) (PVar "stack"))) (EApp (EApp (EApp (EVar "closure") (EVar "graph")) (EVar "seen")) (EVar "stack")))
-(DFunDef false "closure" ((PVar "graph") (PVar "seen") (PCons (PTuple (PVar "from") (PCons (PVar "w") (PVar "ws"))) (PVar "stack"))) (EIf (EApp (EApp (EVar "has") (EVar "w")) (EVar "seen")) (EApp (EApp (EApp (EVar "closure") (EVar "graph")) (EVar "seen")) (EBinOp "::" (ETuple (EVar "from") (EVar "ws")) (EVar "stack"))) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EVar "w")) (EVar "from")) (EVar "seen"))) (DoExpr (EApp (EApp (EApp (EVar "closure") (EVar "graph")) (EVar "seen")) (EBinOp "::" (ETuple (EVar "w") (EApp (EApp (EVar "refsOf") (EVar "graph")) (EVar "w"))) (EBinOp "::" (ETuple (EVar "from") (EVar "ws")) (EVar "stack")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "closure" ((PVar "graph") (PVar "seen") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PTuple PWild (PList)) (PVar "stack"))) (EApp (EVar "go") (EVar "stack"))) (clause ((PCons (PTuple (PVar "from") (PCons (PVar "w") (PVar "ws"))) (PVar "stack"))) (EIf (EApp (EApp (EVar "has") (EVar "w")) (EVar "seen")) (EApp (EVar "go") (EBinOp "::" (ETuple (EVar "from") (EVar "ws")) (EVar "stack"))) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EVar "w")) (EVar "from")) (EVar "seen"))) (DoExpr (EApp (EVar "go") (EBinOp "::" (ETuple (EVar "w") (EApp (EApp (EVar "refsOf") (EVar "graph")) (EVar "w"))) (EBinOp "::" (ETuple (EVar "from") (EVar "ws")) (EVar "stack")))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "refsOf" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "refsOf" ((PVar "graph") (PVar "n")) (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "n")) (EVar "graph")))
 # MARK
@@ -699,9 +691,7 @@ refsOf graph n = findWithDefault [] n graph
 (DFunDef false "scopedNames" ((PCon "DLetGroup" PWild (PVar "bs")) (PCon "DLetGroup" PWild (PVar "scoped"))) (EApp (EApp (EVar "zip") (EApp (EApp (EMethodRef "map") (EVar "letBindName")) (EVar "scoped"))) (EApp (EApp (EMethodRef "map") (EVar "letBindName")) (EVar "bs"))))
 (DFunDef false "scopedNames" (PWild PWild) (EListLit))
 (DTypeSig false "externChain" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "String")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyTuple (TyCon "String") (TyTuple (TyCon "Decl") (TyCon "Decl"))) (TyApp (TyCon "Option") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))))))
-(DFunDef false "externChain" ((PVar "reach") (PVar "declared") (PTuple (PVar "mid") (PTuple (PCon "DAttrib" PWild (PVar "d")) (PCon "DAttrib" PWild (PVar "s"))))) (EApp (EApp (EApp (EVar "externChain") (EVar "reach")) (EVar "declared")) (ETuple (EVar "mid") (ETuple (EVar "d") (EVar "s")))))
-(DFunDef false "externChain" ((PVar "reach") (PVar "declared") (PTuple (PVar "mid") (PTuple (PCon "DExtern" (PVar "ed")) (PCon "DExtern" (PVar "scoped"))))) (EIf (EApp (EApp (EVar "has") (EFieldAccess (EVar "scoped") "edName")) (EVar "reach")) (EApp (EVar "Some") (ETuple (ETuple (EVar "mid") (EFieldAccess (EVar "ed") "edName")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "n")) (EApp (EApp (EApp (EVar "findWithDefault") (ETuple (ELit (LString "")) (EVar "n"))) (EVar "n")) (EVar "declared")))) (EApp (EApp (EApp (EVar "chainTo") (EVar "reach")) (EFieldAccess (EVar "scoped") "edName")) (EListLit))))) (EVar "None")))
-(DFunDef false "externChain" (PWild PWild PWild) (EVar "None"))
+(DFunDef false "externChain" ((PVar "reach") (PVar "declared") (PVar "item0")) (ELetGroup ((lgb "go" (clause ((PTuple (PVar "mid") (PTuple (PCon "DAttrib" PWild (PVar "d")) (PCon "DAttrib" PWild (PVar "s"))))) (EApp (EVar "go") (ETuple (EVar "mid") (ETuple (EVar "d") (EVar "s"))))) (clause ((PTuple (PVar "mid") (PTuple (PCon "DExtern" (PVar "ed")) (PCon "DExtern" (PVar "scoped"))))) (EIf (EApp (EApp (EVar "has") (EFieldAccess (EVar "scoped") "edName")) (EVar "reach")) (EApp (EVar "Some") (ETuple (ETuple (EVar "mid") (EFieldAccess (EVar "ed") "edName")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "n")) (EApp (EApp (EApp (EVar "findWithDefault") (ETuple (ELit (LString "")) (EVar "n"))) (EVar "n")) (EVar "declared")))) (EApp (EApp (EApp (EVar "chainTo") (EVar "reach")) (EFieldAccess (EVar "scoped") "edName")) (EListLit))))) (EVar "None"))) (clause (PWild) (EVar "None")))) (EApp (EVar "go") (EVar "item0"))))
 (DTypeSig false "chainTo" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "chainTo" ((PVar "reach") (PVar "n") (PVar "acc")) (EMatch (EApp (EApp (EVar "get") (EVar "n")) (EVar "reach")) (arm (PCon "Some" (PLit (LString ""))) () (EBinOp "::" (EVar "n") (EVar "acc"))) (arm (PCon "Some" (PVar "from")) () (EApp (EApp (EApp (EVar "chainTo") (EVar "reach")) (EVar "from")) (EBinOp "::" (EVar "n") (EVar "acc")))) (arm (PCon "None") () (EBinOp "::" (EVar "n") (EVar "acc")))))
 (DTypeSig false "filterReachable" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
@@ -722,10 +712,7 @@ refsOf graph n = findWithDefault [] n graph
 (DTypeSig false "funGraph" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "funGraph" ((PVar "defined") (PVar "decls")) (EBlock (DoLet false false (PVar "g") (EApp (EVar "new") (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EVar "funGraphInto") (EVar "defined")) (EVar "decls")) (EVar "g"))) (DoExpr (EVar "g"))))
 (DTypeSig false "funGraphInto" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyCon "Unit")))))
-(DFunDef false "funGraphInto" (PWild (PList) PWild) (ELit LUnit))
-(DFunDef false "funGraphInto" ((PVar "defined") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "g")) (EApp (EApp (EApp (EVar "funGraphInto") (EVar "defined")) (EBinOp "::" (EVar "d") (EVar "rest"))) (EVar "g")))
-(DFunDef false "funGraphInto" ((PVar "defined") (PCons (PCon "DFunDef" PWild (PVar "n") (PVar "ps") (PVar "body") (PVar "site") (PVar "bid")) (PVar "rest")) (PVar "g")) (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EVar "n")) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EApp (EVar "canonRef") (EVar "defined"))) (EApp (EVar "declRefs") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "False")) (EVar "n")) (EVar "ps")) (EVar "body")) (EVar "site")) (EVar "bid")))) (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "n")) (EVar "g")))) (EVar "g"))) (DoExpr (EApp (EApp (EApp (EVar "funGraphInto") (EVar "defined")) (EVar "rest")) (EVar "g")))))
-(DFunDef false "funGraphInto" ((PVar "defined") (PCons PWild (PVar "rest")) (PVar "g")) (EApp (EApp (EApp (EVar "funGraphInto") (EVar "defined")) (EVar "rest")) (EVar "g")))
+(DFunDef false "funGraphInto" ((PVar "defined") (PVar "xs0") (PVar "g")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "go") (EBinOp "::" (EVar "d") (EVar "rest")))) (clause ((PCons (PCon "DFunDef" PWild (PVar "n") (PVar "ps") (PVar "body") (PVar "site") (PVar "bid")) (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EVar "n")) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EApp (EVar "canonRef") (EVar "defined"))) (EApp (EVar "declRefs") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "False")) (EVar "n")) (EVar "ps")) (EVar "body")) (EVar "site")) (EVar "bid")))) (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "n")) (EVar "g")))) (EVar "g"))) (DoExpr (EApp (EVar "go") (EVar "rest"))))) (clause ((PCons PWild (PVar "rest"))) (EApp (EVar "go") (EVar "rest"))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "emittingRoots" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "emittingRoots" ((PList)) (EListLit))
 (DFunDef false "emittingRoots" ((PCons (PVar "d") (PVar "rest"))) (EIf (EApp (EVar "isEmittingDecl") (EVar "d")) (EBinOp "++" (EApp (EVar "declRefs") (EVar "d")) (EApp (EVar "emittingRoots") (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EVar "emittingRoots") (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -748,16 +735,13 @@ refsOf graph n = findWithDefault [] n graph
 (DFunDef false "onceNamed" ((PCon "DispatchRoot" PWild)) (EVar "None"))
 (DFunDef false "onceNamed" ((PCon "DispatchOnce" (PVar "names") (PVar "refs"))) (EApp (EVar "Some") (ETuple (EVar "names") (EVar "refs"))))
 (DTypeSig false "dispatchOf" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "DispatchEntry"))))))))
-(DFunDef false "dispatchOf" ((PVar "ifaces") (PVar "methods") (PVar "declared") (PVar "spell") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EApp (EApp (EApp (EVar "dispatchOf") (EVar "ifaces")) (EVar "methods")) (EVar "declared")) (EVar "spell")) (EVar "d")))
-(DFunDef false "dispatchOf" ((PVar "ifaces") (PVar "methods") (PVar "declared") (PVar "spell") (PAs "d" (PRec "DInterface" ((rf "name" None)) true))) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "dispatchOn") (EVar "ifaces")) (EVar "methods")) (EVar "declared")) (EVar "spell")) (EVar "name")) (EListLit)) (EApp (EVar "declRefs") (EVar "d")))))
-(DFunDef false "dispatchOf" ((PVar "ifaces") (PVar "methods") (PVar "declared") (PVar "spell") (PAs "d" (PRec "DImpl" ((rf "iface" None) (rf "methods" (PVar "own"))) true))) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "dispatchOn") (EVar "ifaces")) (EVar "methods")) (EVar "declared")) (EVar "spell")) (EApp (EVar "bareIfaceName") (EVar "iface"))) (EApp (EApp (EMethodRef "map") (EVar "implMethodName")) (EVar "own"))) (EApp (EVar "declRefs") (EVar "d")))))
-(DFunDef false "dispatchOf" (PWild PWild PWild PWild PWild) (EVar "None"))
+(DFunDef false "dispatchOf" ((PVar "ifaces") (PVar "methods") (PVar "declared") (PVar "spell") (PVar "d0")) (ELetGroup ((lgb "go" (clause ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "go") (EVar "d"))) (clause ((PAs "d" (PRec "DInterface" ((rf "name" None)) true))) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "dispatchOn") (EVar "ifaces")) (EVar "methods")) (EVar "declared")) (EVar "spell")) (EVar "name")) (EListLit)) (EApp (EVar "declRefs") (EVar "d"))))) (clause ((PAs "d" (PRec "DImpl" ((rf "iface" None) (rf "methods" (PVar "own"))) true))) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "dispatchOn") (EVar "ifaces")) (EVar "methods")) (EVar "declared")) (EVar "spell")) (EApp (EVar "bareIfaceName") (EVar "iface"))) (EApp (EApp (EMethodRef "map") (EVar "implMethodName")) (EVar "own"))) (EApp (EVar "declRefs") (EVar "d"))))) (clause (PWild) (EVar "None")))) (EApp (EVar "go") (EVar "d0"))))
 (DTypeSig false "dispatchOn" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "DispatchEntry")))))))))
 (DFunDef false "dispatchOn" ((PVar "ifaces") (PVar "methods") (PVar "declared") (PVar "spell") (PVar "iface") (PVar "own") (PVar "refs")) (EIf (EApp (EApp (EVar "has") (EVar "iface")) (EVar "ifaces")) (EApp (EVar "DispatchRoot") (EVar "refs")) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "get") (EVar "iface")) (EVar "declared")) (arm (PCon "Some" (PVar "names")) () (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "m")) (EApp (EApp (EVar "has") (EVar "m")) (EVar "methods")))) (EBinOp "++" (EVar "names") (EVar "own"))) (EApp (EVar "DispatchRoot") (EVar "refs")) (EApp (EApp (EVar "DispatchOnce") (EApp (EVar "spell") (EBinOp "++" (EVar "names") (EVar "own")))) (EVar "refs")))) (arm (PCon "None") () (EApp (EVar "DispatchRoot") (EVar "refs")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "bareIfaceName" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "bareIfaceName" ((PVar "iface")) (EMatch (EApp (EApp (EVar "stringLastIndexOf") (ELit (LString "."))) (EVar "iface")) (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "iface"))) (EVar "iface"))) (arm (PCon "None") () (EVar "iface"))))
 (DTypeSig false "dispatchUntilStable" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))) (TyCon "Unit"))))))))
-(DFunDef false "dispatchUntilStable" ((PVar "defined") (PVar "graph") (PVar "seen") (PVar "modules") (PVar "named") (PVar "pending")) (EBlock (DoLet false false (PVar "names") (EApp (EVar "nameSet") (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EVar "reachedRefs") (EVar "seen"))) (EVar "modules")) (EVar "named")))) (DoExpr (EMatch (EApp (EApp (EMethodRef "filterMap") (EApp (EVar "firedBy") (EVar "names"))) (EVar "pending")) (arm (PList) () (ELit LUnit)) (arm (PVar "fired") () (EBlock (DoExpr (EApp (EApp (EApp (EVar "closure") (EVar "graph")) (EVar "seen")) (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "n") (PVar "refs"))) (ETuple (EVar "n") (EApp (EApp (EMethodRef "map") (EApp (EVar "canonRef") (EVar "defined"))) (EVar "refs"))))) (EVar "fired")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "dispatchUntilStable") (EVar "defined")) (EVar "graph")) (EVar "seen")) (EVar "modules")) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EVar "fired")) (EVar "named"))) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "p")) (EApp (EVar "isNone") (EApp (EApp (EVar "firedBy") (EVar "names")) (EVar "p"))))) (EVar "pending"))))))))))
+(DFunDef false "dispatchUntilStable" ((PVar "defined") (PVar "graph") (PVar "seen") (PVar "modules") (PVar "named0") (PVar "queue0")) (ELetGroup ((lgb "go" (clause ((PVar "named") (PVar "pending")) (EBlock (DoLet false false (PVar "names") (EApp (EVar "nameSet") (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EVar "reachedRefs") (EVar "seen"))) (EVar "modules")) (EVar "named")))) (DoExpr (EMatch (EApp (EApp (EMethodRef "filterMap") (EApp (EVar "firedBy") (EVar "names"))) (EVar "pending")) (arm (PList) () (ELit LUnit)) (arm (PVar "fired") () (EBlock (DoExpr (EApp (EApp (EApp (EVar "closure") (EVar "graph")) (EVar "seen")) (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "n") (PVar "refs"))) (ETuple (EVar "n") (EApp (EApp (EMethodRef "map") (EApp (EVar "canonRef") (EVar "defined"))) (EVar "refs"))))) (EVar "fired")))) (DoExpr (EApp (EApp (EVar "go") (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EVar "fired")) (EVar "named"))) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "p")) (EApp (EVar "isNone") (EApp (EApp (EVar "firedBy") (EVar "names")) (EVar "p"))))) (EVar "pending")))))))))))) (EApp (EApp (EVar "go") (EVar "named0")) (EVar "queue0"))))
 (DTypeSig false "firedBy" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "firedBy" ((PVar "names") (PTuple (PVar "spellings") (PVar "refs"))) (EMatch (EApp (EApp (EMethodRef "filter") (ELam ((PVar "n")) (EApp (EApp (EVar "has") (EVar "n")) (EVar "names")))) (EVar "spellings")) (arm (PCons (PVar "n") PWild) () (EApp (EVar "Some") (ETuple (EVar "n") (EVar "refs")))) (arm (PList) () (EVar "None"))))
 (DTypeSig false "reachedRefs" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "String")) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String")))))
@@ -793,16 +777,10 @@ refsOf graph n = findWithDefault [] n graph
 (DFunDef false "memberAliasesOf" ((PCon "DUse" PWild (PCon "UseGroup" PWild (PVar "members")) PWild)) (EApp (EApp (EMethodRef "filterMap") (ELam ((PVar "m")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "local")) (ETuple (EVar "local") (EApp (EVar "useMemberOrigin") (EVar "m"))))) (EApp (EVar "useMemberAlias") (EVar "m"))))) (EVar "members")))
 (DFunDef false "memberAliasesOf" (PWild) (EListLit))
 (DTypeSig false "letGroupGraphInto" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyCon "Unit")))))
-(DFunDef false "letGroupGraphInto" (PWild (PList) PWild) (ELit LUnit))
-(DFunDef false "letGroupGraphInto" ((PVar "defined") (PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest")) (PVar "g")) (EApp (EApp (EApp (EVar "letGroupGraphInto") (EVar "defined")) (EBinOp "::" (EVar "d") (EVar "rest"))) (EVar "g")))
-(DFunDef false "letGroupGraphInto" ((PVar "defined") (PCons (PCon "DLetGroup" (PVar "pub") (PVar "binds")) (PVar "rest")) (PVar "g")) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EVar "letBindsInto") (EVar "defined")) (EVar "pub")) (EVar "binds")) (EVar "g"))) (DoExpr (EApp (EApp (EApp (EVar "letGroupGraphInto") (EVar "defined")) (EVar "rest")) (EVar "g")))))
-(DFunDef false "letGroupGraphInto" ((PVar "defined") (PCons PWild (PVar "rest")) (PVar "g")) (EApp (EApp (EApp (EVar "letGroupGraphInto") (EVar "defined")) (EVar "rest")) (EVar "g")))
+(DFunDef false "letGroupGraphInto" ((PVar "defined") (PVar "xs0") (PVar "g")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "go") (EBinOp "::" (EVar "d") (EVar "rest")))) (clause ((PCons (PCon "DLetGroup" (PVar "pub") (PVar "binds")) (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EVar "letBindsInto") (EVar "defined")) (EVar "pub")) (EVar "binds")) (EVar "g"))) (DoExpr (EApp (EVar "go") (EVar "rest"))))) (clause ((PCons PWild (PVar "rest"))) (EApp (EVar "go") (EVar "rest"))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "letBindsInto" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyCon "Unit"))))))
-(DFunDef false "letBindsInto" (PWild PWild (PList) PWild) (ELit LUnit))
-(DFunDef false "letBindsInto" ((PVar "defined") (PVar "pub") (PCons (PVar "b") (PVar "rest")) (PVar "g")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "letBindName") (EVar "b"))) (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EVar "n")) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EApp (EVar "canonRef") (EVar "defined"))) (EApp (EVar "declRefs") (EApp (EApp (EVar "DLetGroup") (EVar "pub")) (EListLit (EVar "b"))))) (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "n")) (EVar "g")))) (EVar "g"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "letBindsInto") (EVar "defined")) (EVar "pub")) (EVar "rest")) (EVar "g")))))
+(DFunDef false "letBindsInto" ((PVar "defined") (PVar "pub") (PVar "xs0") (PVar "g")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PVar "b") (PVar "rest"))) (EBlock (DoLet false false (PVar "n") (EApp (EVar "letBindName") (EVar "b"))) (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EVar "n")) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EApp (EVar "canonRef") (EVar "defined"))) (EApp (EVar "declRefs") (EApp (EApp (EVar "DLetGroup") (EVar "pub")) (EListLit (EVar "b"))))) (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "n")) (EVar "g")))) (EVar "g"))) (DoExpr (EApp (EVar "go") (EVar "rest"))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "closure" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyCon "Unit")))))
-(DFunDef false "closure" (PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "closure" ((PVar "graph") (PVar "seen") (PCons (PTuple PWild (PList)) (PVar "stack"))) (EApp (EApp (EApp (EVar "closure") (EVar "graph")) (EVar "seen")) (EVar "stack")))
-(DFunDef false "closure" ((PVar "graph") (PVar "seen") (PCons (PTuple (PVar "from") (PCons (PVar "w") (PVar "ws"))) (PVar "stack"))) (EIf (EApp (EApp (EVar "has") (EVar "w")) (EVar "seen")) (EApp (EApp (EApp (EVar "closure") (EVar "graph")) (EVar "seen")) (EBinOp "::" (ETuple (EVar "from") (EVar "ws")) (EVar "stack"))) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EVar "w")) (EVar "from")) (EVar "seen"))) (DoExpr (EApp (EApp (EApp (EVar "closure") (EVar "graph")) (EVar "seen")) (EBinOp "::" (ETuple (EVar "w") (EApp (EApp (EVar "refsOf") (EVar "graph")) (EVar "w"))) (EBinOp "::" (ETuple (EVar "from") (EVar "ws")) (EVar "stack")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "closure" ((PVar "graph") (PVar "seen") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PTuple PWild (PList)) (PVar "stack"))) (EApp (EVar "go") (EVar "stack"))) (clause ((PCons (PTuple (PVar "from") (PCons (PVar "w") (PVar "ws"))) (PVar "stack"))) (EIf (EApp (EApp (EVar "has") (EVar "w")) (EVar "seen")) (EApp (EVar "go") (EBinOp "::" (ETuple (EVar "from") (EVar "ws")) (EVar "stack"))) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EVar "w")) (EVar "from")) (EVar "seen"))) (DoExpr (EApp (EVar "go") (EBinOp "::" (ETuple (EVar "w") (EApp (EApp (EVar "refsOf") (EVar "graph")) (EVar "w"))) (EBinOp "::" (ETuple (EVar "from") (EVar "ws")) (EVar "stack")))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "refsOf" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "refsOf" ((PVar "graph") (PVar "n")) (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "n")) (EVar "graph")))

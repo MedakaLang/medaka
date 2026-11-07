@@ -87,11 +87,9 @@ commonPrefix left right =
   commonPrefixAt left right 0 (min (B.length left) (B.length right))
 
 commonPrefixAt : Bytes -> Bytes -> Int -> Int -> Int
-commonPrefixAt left right i n =
-  if i >= n || left[i] /= right[i] then
-    i
-  else
-    commonPrefixAt left right (i + 1) n
+commonPrefixAt left right i0 n = go i0
+  where
+    go i = if i >= n || left[i] /= right[i] then i else go (i + 1)
 
 leadingZeroByte : Int -> Int
 leadingZeroByte byte =
@@ -137,13 +135,12 @@ entryCompare : MstEntry -> MstEntry -> Ordering
 entryCompare (MstEntry left _ _) (MstEntry right _ _) = bytesCompare left right
 
 prepareEntries : List (Bytes, Cid) -> Result String (List MstEntry)
-prepareEntries entries = match prepareEntriesGo entries []
-  Err message => Err message
-  Ok prepared =>
-    let sorted = sortBy entryCompare prepared
-    match duplicateKey sorted None
-      Some _ => Err "mst: duplicate key is not allowed"
-      None => Ok sorted
+prepareEntries entries = do
+  prepared <- prepareEntriesGo entries []
+  let sorted = sortBy entryCompare prepared
+  match duplicateKey sorted None
+    Some _ => Err "mst: duplicate key is not allowed"
+    None => Ok sorted
 
 prepareEntriesGo : List (Bytes, Cid) ->
   List MstEntry ->
@@ -231,14 +228,16 @@ reuseSlotAfter : Bytes ->
   List MstEntry ->
   Int ->
   Option MstNode
-reuseSlotAfter _ [] _ _ entries layer = childFor FreshBuild entries layer
-reuseSlotAfter key ((OldLeaf leafKey child) :: rest) lower upper entries layer =
-  if bytesCompare leafKey lower /= Eq then
-    reuseSlotAfter key rest lower upper entries layer
-  else if boundEqual upper (leadKey rest) then
-    takeSlot key child (Some lower) upper entries layer
-  else
-    childFor FreshBuild entries layer
+reuseSlotAfter key olds0 lower upper entries layer = go olds0
+  where
+    go [] = childFor FreshBuild entries layer
+    go ((OldLeaf leafKey child) :: rest) =
+      if bytesCompare leafKey lower /= Eq then
+        go rest
+      else if boundEqual upper (leadKey rest) then
+        takeSlot key child (Some lower) upper entries layer
+      else
+        childFor FreshBuild entries layer
 
 {- | Build the child of one slot, bounded by the leaf keys `lower` and `upper`.
    An old slot carrying the same two bounds holds the same entries unless the
@@ -300,24 +299,25 @@ buildWireEntries : Reuse ->
   Int ->
   Option Bytes ->
   BuiltEntries
-buildWireEntries _ None _ _ = BuiltEntries [] []
-buildWireEntries reuse (Some (MstEntry key value _, rest)) layer previous =
-  let (LayerSplit between next) = splitLayer rest layer
-  let right = childSlot reuse (Some key) (firstKey next) between (layer - 1)
-  let prefix = match previous
-    None => 0
-    Some prior => commonPrefix prior key
-  let wire = DcMap [
-    ("p", DcInt prefix),
-    ("k", DcBytes (B.drop prefix key)),
-    ("v", DcLink value),
-    ("t", childValue right),
-  ]
-  let (BuiltEntries later laterEntries) =
-    buildWireEntries reuse next layer (Some key)
-  BuiltEntries
-    (wire :: later)
-    (NodeLeaf key value :: childEntries right ++ laterEntries)
+buildWireEntries reuse x0 layer previous0 = go x0 previous0
+  where
+    go None _ = BuiltEntries [] []
+    go (Some (MstEntry key value _, rest)) previous =
+      let (LayerSplit between next) = splitLayer rest layer
+      let right = childSlot reuse (Some key) (firstKey next) between (layer - 1)
+      let prefix = match previous
+        None => 0
+        Some prior => commonPrefix prior key
+      let wire = DcMap [
+        ("p", DcInt prefix),
+        ("k", DcBytes (B.drop prefix key)),
+        ("v", DcLink value),
+        ("t", childValue right),
+      ]
+      let (BuiltEntries later laterEntries) = go next (Some key)
+      BuiltEntries
+        (wire :: later)
+        (NodeLeaf key value :: childEntries right ++ laterEntries)
 
 buildAt : Reuse -> List MstEntry -> Int -> Mst
 buildAt reuse entries layer =
@@ -505,15 +505,17 @@ scanNode : Option Bytes ->
   List NodeEntry ->
   RangeScan ->
   RangeScan
-scanNode _ _ _ _ (scan@(RangeScan _ _ True)) = scan
-scanNode _ _ _ [] scan = scan
-scanNode lo hi prefix ((NodeLeaf key value) :: rest) scan =
-  scanNode lo hi prefix rest (scanKey lo hi prefix key value scan)
-scanNode lo hi prefix ((NodeSubtree (MstNode _ _ children)) :: rest) scan =
-  if spanBelowBound (nextLeafKey rest) lo then
-    scanNode lo hi prefix rest scan
-  else
-    scanNode lo hi prefix rest (scanNode lo hi prefix children scan)
+scanNode lo hi prefix entries0 scan0 = go entries0 scan0
+  where
+    go _ (scan@(RangeScan _ _ True)) = scan
+    go [] scan = scan
+    go ((NodeLeaf key value) :: rest) scan =
+      go rest (scanKey lo hi prefix key value scan)
+    go ((NodeSubtree (MstNode _ _ children)) :: rest) scan =
+      if spanBelowBound (nextLeafKey rest) lo then
+        go rest scan
+      else
+        go rest (go children scan)
 
 {- | The same walk in descending key order: each child is folded in only after
    everything to its right, so the scan meets the keys in the order it answers
@@ -527,21 +529,17 @@ scanNodeDesc : Option Bytes ->
   List NodeEntry ->
   RangeScan ->
   RangeScan
-scanNodeDesc _ _ _ _ [] scan = scan
-scanNodeDesc lo hi prefix _ ((NodeLeaf key value) :: rest) scan =
-  scanKeyDesc
-    lo
-    hi
-    prefix
-    key
-    value
-    (scanNodeDesc lo hi prefix (Some key) rest scan)
-scanNodeDesc lo hi prefix lower ((NodeSubtree (MstNode _ _ children)) :: rest) scan =
-  let above = scanNodeDesc lo hi prefix lower rest scan
-  if scanDone above || spanAboveRange lower hi prefix then
-    above
-  else
-    scanNodeDesc lo hi prefix lower children above
+scanNodeDesc lo hi prefix lower0 xs0 scan0 = go lower0 xs0 scan0
+  where
+    go _ [] scan = scan
+    go _ ((NodeLeaf key value) :: rest) scan =
+      scanKeyDesc lo hi prefix key value (go (Some key) rest scan)
+    go lower ((NodeSubtree (MstNode _ _ children)) :: rest) scan =
+      let above = go lower rest scan
+      if scanDone above || spanAboveRange lower hi prefix then
+        above
+      else
+        go lower children above
 
 rangeBounds : MstRangeQuery -> (Option Bytes, Option Bytes)
 rangeBounds query =
@@ -583,9 +581,9 @@ insertSorted (entry@(MstEntry key _ _)) ((candidate@(MstEntry other _ _)) :: res
 -- | Insert a previously absent key.
 export
 mstInsert : Bytes -> Cid -> Mst -> Result String Mst
-mstInsert key value tree = match mstKeyDepth key
-  Err message => Err message
-  Ok depth => match mstLookup key tree
+mstInsert key value tree = do
+  depth <- mstKeyDepth key
+  match mstLookup key tree
     Some _ => Err "mst: duplicate key is not allowed"
     None =>
       let (Mst entries _ _ _) = tree
@@ -593,6 +591,8 @@ mstInsert key value tree = match mstKeyDepth key
       Ok (rebuildAround key tree (insertSorted fresh entries))
 
 replaceEntry : Bytes -> Cid -> List MstEntry -> List MstEntry
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 replaceEntry _ _ [] = []
 replaceEntry key value ((entry@(MstEntry candidate _ depth)) :: rest) =
   if bytesCompare key candidate == Eq then
@@ -603,9 +603,9 @@ replaceEntry key value ((entry@(MstEntry candidate _ depth)) :: rest) =
 -- | Replace the value at an existing key.
 export
 mstReplace : Bytes -> Cid -> Mst -> Result String Mst
-mstReplace key value tree = match mstKeyDepth key
-  Err message => Err message
-  Ok _ => match mstLookup key tree
+mstReplace key value tree = do
+  _ <- mstKeyDepth key
+  match mstLookup key tree
     None => Err "mst: replace key was not found"
     Some _ =>
       let (Mst entries _ _ _) = tree
@@ -622,9 +622,9 @@ deleteEntry key ((entry@(MstEntry candidate _ _)) :: rest) =
 -- | Delete an existing key, pruning the root back to the canonical empty node.
 export
 mstDelete : Bytes -> Mst -> Result String Mst
-mstDelete key tree = match mstKeyDepth key
-  Err message => Err message
-  Ok _ => match mstLookup key tree
+mstDelete key tree = do
+  _ <- mstKeyDepth key
+  match mstLookup key tree
     None => Err "mst: delete key was not found"
     Some _ =>
       let (Mst entries _ _ _) = tree
@@ -698,11 +698,9 @@ decodeNode : Bytes -> Result String DecodedNode
 decodeNode bytes = match dagCborDecode bytes
   Err message => Err "mst: \{message}"
   Ok value => match value
-    DcMap [("e", DcArray entries), ("l", left)] =>
-      match decodeOptionalLink "left subtree" left
-        Err message => Err message
-        Ok leftLink =>
-          map (DecodedNode leftLink) (decodeEntries entries None [])
+    DcMap [("e", DcArray entries), ("l", left)] => do
+      leftLink <- decodeOptionalLink "left subtree" left
+      map (DecodedNode leftLink) (decodeEntries entries None [])
     _ => Err "mst: invalid node form; expected exactly fields e and l"
 
 entryKey : DecodedEntry -> Bytes
@@ -805,11 +803,11 @@ keyBelowUpper _ None = True
 keyBelowUpper key (Some upper) = bytesCompare key upper == Lt
 
 entriesWithinBounds : List DecodedEntry -> Option Bytes -> Option Bytes -> Bool
-entriesWithinBounds [] _ _ = True
-entriesWithinBounds ((DecodedEntry key _ _) :: rest) lower upper =
-  keyAboveLower key lower
-    && keyBelowUpper key upper
-    && entriesWithinBounds rest lower upper
+entriesWithinBounds xs0 lower upper = go xs0
+  where
+    go [] = True
+    go ((DecodedEntry key _ _) :: rest) =
+      keyAboveLower key lower && keyBelowUpper key upper && go rest
 
 walkOptionalChild : Option Cid ->
   Int ->
@@ -844,6 +842,8 @@ walkEntryChildren : List DecodedEntry ->
   Int ->
   Int ->
   Result String (Set String)
+-- Bound: the head line of the where-go form cannot fit 80 columns and the parser rejects the two-line layout (#4896); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 walkEntryChildren [] _ _ _ _ visited _ _ = Ok visited
 walkEntryChildren (entry :: rest) expected upper blocks active visited traversal limit =
   let childUpper = match rest
@@ -885,27 +885,26 @@ walkNodeChildren (DecodedNode left entries) expected lower upper blocks active v
   let leftUpper = match entries
     [] => upper
     entry :: _ => Some (entryKey entry)
-  match (walkOptionalChild
-    left
-    expected
-    lower
-    leftUpper
-    blocks
-    active
-    visited
-    traversal
-    limit)
-    Err message => Err message
-    Ok nextVisited =>
-      walkEntryChildren
-        entries
-        expected
-        upper
-        blocks
-        active
-        nextVisited
-        traversal
-        limit
+  do
+    nextVisited <- walkOptionalChild
+      left
+      expected
+      lower
+      leftUpper
+      blocks
+      active
+      visited
+      traversal
+      limit
+    walkEntryChildren
+      entries
+      expected
+      upper
+      blocks
+      active
+      nextVisited
+      traversal
+      limit
 
 walkKnownBlock : Bytes ->
   Option Int ->
@@ -965,29 +964,28 @@ walkBlock : Cid ->
   Int ->
   Result String (Set String)
 walkBlock cid expected isRoot lower upper blocks active visited traversal limit =
-  match checkTraversalDepth limit traversal
-    Err message => Err message
-    Ok () =>
-      let key = cidKey cid
-      if Set.has key active then
-        Err "mst: invalid node form; subtree link cycle"
-      else if Set.has key visited then
-        Err "mst: invalid node form; subtree block is referenced more than once"
-      else match get key blocks
-        None => Err "mst: missing reachable node block"
-        Some bytes =>
-          walkKnownBlock
-            bytes
-            expected
-            isRoot
-            lower
-            upper
-            blocks
-            active
-            visited
-            key
-            traversal
-            limit
+  do
+    _ <- checkTraversalDepth limit traversal
+    let key = cidKey cid
+    if Set.has key active then
+      Err "mst: invalid node form; subtree link cycle"
+    else if Set.has key visited then
+      Err "mst: invalid node form; subtree block is referenced more than once"
+    else match get key blocks
+      None => Err "mst: missing reachable node block"
+      Some bytes =>
+        walkKnownBlock
+          bytes
+          expected
+          isRoot
+          lower
+          upper
+          blocks
+          active
+          visited
+          key
+          traversal
+          limit
 
 validateBlocksWithTraversalLimit : Int ->
   Cid ->
@@ -1214,6 +1212,8 @@ nodeItems : Int -> MstNode -> List DiffItem -> List DiffItem
 nodeItems layer (MstNode _ _ entries) rest = entryItems layer entries rest
 
 entryItems : Int -> List NodeEntry -> List DiffItem -> List DiffItem
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 entryItems _ [] rest = rest
 entryItems layer ((NodeLeaf key value) :: entries) rest =
   DiffLeaf key value :: entryItems layer entries rest

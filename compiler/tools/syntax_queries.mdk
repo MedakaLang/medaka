@@ -104,6 +104,8 @@ zipKids : SourceIndex ->
   List (Option Loc) ->
   List String ->
   List Json
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 zipKids _ _ _ _ [] = []
 zipKids index fb kind [] (nm :: nms) =
   jChildLoc index nm kind fb None :: zipKids index fb kind [] nms
@@ -259,9 +261,9 @@ strictDocumentSymbols src = match parseWithPositionsOpt src
 barrierLines : SourceIndex -> List InvalidRegion -> Option (List Int)
 barrierLines _ [] = Some []
 barrierLines index (region :: rest) = match invalidExtent region
-  SourceExtent start _ => match offsetToUtf16Position index start
-    None => None
-    Some (line, _) => map (line :: _) (barrierLines index rest)
+  SourceExtent start _ => do
+    (line, _) <- offsetToUtf16Position index start
+    map (line :: _) (barrierLines index rest)
 
 collapseRecovered : List Int -> List SymRow -> List SymRow
 collapseRecovered barriers rows = go barriers rows []

@@ -43,6 +43,7 @@ import tools.lint_core.{
   Visitor(..),
   mkVisitorRule,
   factOracle,
+  noFix,
 }
 import tools.lint_shared.{
   ctorIsSingle,
@@ -162,7 +163,7 @@ bindDestructureFinding loc v = Finding {
       ++ "' then immediately destructures it in a final `match`. Inline the pattern into the bind",
   severity = SevWarning,
   loc = loc,
-  fix = None,
+  fix = noFix,
 }
 
 -- ── autofix ──────────────────────────────────────────────────────────────────

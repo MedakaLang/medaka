@@ -1,0 +1,9 @@
+-- The argument-side coverage rule reads a named binder's slot: `Slot` supplies
+-- <Stdout> at every instantiation, so handing the field back as `<e>` is refused.
+data Slot (e : Effect) = Slot (Unit -> <Stdout | e> Unit)
+
+unslot : (s : Slot e) -> (Unit -> <e> Unit)
+unslot s = match s
+  Slot f => f
+
+main = println 1

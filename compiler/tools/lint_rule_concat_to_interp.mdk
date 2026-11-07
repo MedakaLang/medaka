@@ -37,6 +37,7 @@ import tools.lint_core.{
   Finding(..),
   Fix,
   Fixability(..),
+  Memo,
   Need(..),
   Ratchet(..),
   Rule,
@@ -44,6 +45,7 @@ import tools.lint_core.{
   Scope(..),
   StdlibIndex,
   Visitor(..),
+  fixLater,
   mkVisitorRule,
 }
 import tools.lint_shared.{
@@ -100,10 +102,12 @@ hasBackslashBrace s =
   backslashBraceGo cs (arrayLength cs) 0
 
 backslashBraceGo : Array Char -> Int -> Int -> Bool
-backslashBraceGo cs n i
-  | i + 1 >= n = False
-  | arrayGetUnsafe i cs == '\\' && arrayGetUnsafe (i + 1) cs == '{' = True
-  | otherwise = backslashBraceGo cs n (i + 1)
+backslashBraceGo cs n i0 = go i0
+  where
+    go i
+      | i + 1 >= n = False
+      | arrayGetUnsafe i cs == '\\' && arrayGetUnsafe (i + 1) cs == '{' = True
+      | otherwise = go (i + 1)
 
 -- the chain qualifies: ≥1 literal, ≥2 non-literals, no literal already holds `\{`.
 concatChainQualifies : List Expr -> Bool
@@ -185,9 +189,9 @@ concatToInterpHit idx facts ctx (rewritten, span) =
   concatToInterpFinding
     ctx.ctxSpan
     rewritten
-    (concatToInterpFix idx facts ctx span rewritten)
+    (fixLater (_ => concatToInterpFix idx facts ctx span rewritten))
 
-concatToInterpFinding : Option Loc -> Expr -> Option Fix -> Finding
+concatToInterpFinding : Option Loc -> Expr -> Memo (Option Fix) -> Finding
 concatToInterpFinding loc rewritten fix = Finding {
   rule = ruleNameConcatToInterp,
   message =

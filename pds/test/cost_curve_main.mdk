@@ -165,12 +165,14 @@ createRequest () =
 {- | Answer the same request `n` times against the same store, summing each
    answer's length so no repetition can be discarded unevaluated. -}
 repeatRequest : Server e -> Store -> Bytes -> Int -> Int -> <e> Int
-repeatRequest server store request n acc =
-  if n <= 0 then
-    acc
-  else
-    let (_, responseBytes) = handleBytes server benchContext store request
-    repeatRequest server store request (n - 1) (acc + B.length responseBytes)
+repeatRequest server store request n0 acc0 = go n0 acc0
+  where
+    go n acc =
+      if n <= 0 then
+        acc
+      else
+        let (_, responseBytes) = handleBytes server benchContext store request
+        go (n - 1) (acc + B.length responseBytes)
 
 micros : Float -> Int -> Int
 micros elapsed reps = floatToInt (elapsed * 1000000.0 / intToFloat reps)
@@ -233,17 +235,19 @@ mustInt text =
    sides, so every half compares equal and nothing reaches disk — the loop
    times the decision alone, `blobsMoved` included. -}
 repeatPersist : String -> Store -> Int -> <FileRead, FileWrite> Unit
-repeatPersist dir store n =
-  if n <= 0 then
-    ()
-  else match (persistTransition
-    (dataDirAt dir)
-    corpusDid
-    benchInstant
-    store
-    store)
-    Ok () => repeatPersist dir store (n - 1)
-    Err message => panic "cost_curve: persistTransition failed: \{message}"
+repeatPersist dir store n0 = go n0
+  where
+    go n =
+      if n <= 0 then
+        ()
+      else match (persistTransition
+        (dataDirAt dir)
+        corpusDid
+        benchInstant
+        store
+        store)
+        Ok () => go (n - 1)
+        Err message => panic "cost_curve: persistTransition failed: \{message}"
 
 measurePersist : String -> Store -> Int -> <IO, Clock, FileRead, FileWrite> Unit
 measurePersist dir store reps =
@@ -263,17 +267,19 @@ runPersist dir reps = measurePersist dir (loadStore dir) reps
 -- ── the `#commit` event one write stages ─────────────────────────────────────
 
 repeatCommitEvent : Option Repo -> Repo -> Int -> Int -> Int
-repeatCommitEvent before after n acc =
-  if n <= 0 then
-    acc
-  else match (syncCommitEventFor
-    n
-    "2026-09-14T00:00:00.000Z"
-    corpusDid
-    before
-    after)
-    Ok event => repeatCommitEvent before after (n - 1) (acc + length event.ops)
-    Err message => panic "cost_curve: commit event failed: \{message}"
+repeatCommitEvent before after n0 acc0 = go n0 acc0
+  where
+    go n acc =
+      if n <= 0 then
+        acc
+      else match (syncCommitEventFor
+        n
+        "2026-09-14T00:00:00.000Z"
+        corpusDid
+        before
+        after)
+        Ok event => go (n - 1) (acc + length event.ops)
+        Err message => panic "cost_curve: commit event failed: \{message}"
 
 runCommitEvent : String ->
   Int ->

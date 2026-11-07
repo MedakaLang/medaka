@@ -681,30 +681,32 @@ walkResiduals name authIds rs w =
     w
 
 walkMono : String -> List Int -> List Int -> List Int -> Mono -> Walk -> Walk
-walkMono name ids _effIds _authIds (TVar cell) w = match !cell
-  Link _ => push (LinkCell name TyVarK None) w
-  Unbound id _ => if hasId id ids then w else push (FreeMeta name TyVarK id) w
-walkMono name ids effIds authIds (TApp a b) w =
-  walkMono name ids effIds authIds b (walkMono name ids effIds authIds a w)
-walkMono name ids effIds authIds (TFun a row b) w =
-  let w1 = walkMono name ids effIds authIds a w
-  let w2 = walkRow name effIds authIds row w1
-  walkMono name ids effIds authIds b w2
-walkMono name _ effIds authIds (TEff row) w = walkRow name effIds authIds row w
-walkMono name ids effIds authIds (TQual inner auth) w =
-  walkAuth name authIds auth (walkMono name ids effIds authIds inner w)
-walkMono name _ _ authIds (TAuth auth) w = walkAuth name authIds auth w
-walkMono _ _ _ _ _ w = w
+walkMono name ids effIds authIds mono0 walk0 = go mono0 walk0
+  where
+    go (TVar cell) w = match !cell
+      Link _ => push (LinkCell name TyVarK None) w
+      Unbound id _ =>
+        if hasId id ids then w else push (FreeMeta name TyVarK id) w
+    go (TApp a b) w = go b (go a w)
+    go (TFun a row b) w =
+      let w1 = go a w
+      let w2 = walkRow name effIds authIds row w1
+      go b w2
+    go (TEff row) w = walkRow name effIds authIds row w
+    go (TQual inner auth) w = walkAuth name authIds auth (go inner w)
+    go (TAuth auth) w = walkAuth name authIds auth w
+    go (TCon _ _ | TRigid _) w = w
 
 walkAuth : String -> List Int -> Authority -> Walk -> Walk
-walkAuth name authIds (AVar cell) w = match !cell
-  ALink id _ _ => push (LinkCell name AuthVarK (Some id)) w
-  AUnbound id _ _ _ _ =>
-    if hasId id authIds then w else push (FreeMeta name AuthVarK id) w
-walkAuth name authIds (AJoin ms) w = foldWalk (walkAuth name authIds) ms w
-walkAuth name authIds (AProduct axes) w =
-  foldWalk (axis acc => walkAuth name authIds (snd axis) acc) axes w
-walkAuth _ _ _ w = w
+walkAuth name authIds auth0 walk0 = go auth0 walk0
+  where
+    go (AVar cell) w = match !cell
+      ALink id _ _ => push (LinkCell name AuthVarK (Some id)) w
+      AUnbound id _ _ _ _ =>
+        if hasId id authIds then w else push (FreeMeta name AuthVarK id) w
+    go (AJoin ms) w = foldWalk (walkAuth name authIds) ms w
+    go (AProduct axes) w = foldWalk (axis acc => go (snd axis) acc) axes w
+    go (AConst _) w = w
 
 walkRow : String -> List Int -> List Int -> EffRow -> Walk -> Walk
 walkRow name effIds authIds (EffRow atoms tail) w =

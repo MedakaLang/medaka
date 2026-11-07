@@ -110,11 +110,13 @@ isLineBreakAt src p =
 -- Walk forward from char `p` (1-based `line`) to `target`, counting newlines.
 -- Offsets arrive in non-decreasing order so each call resumes from the last.
 advanceLine : Array Char -> Int -> Int -> Int -> (Int, Int)
-advanceLine src target p line
-  | p >= target = (line, p)
-  | p >= arrayLength src = (line, p)
-  | isLineBreakAt src p = advanceLine src target (p + 1) (line + 1)
-  | otherwise = advanceLine src target (p + 1) line
+advanceLine src target p0 line0 = go p0 line0
+  where
+    go p line
+      | p >= target = (line, p)
+      | p >= arrayLength src = (line, p)
+      | isLineBreakAt src p = go (p + 1) (line + 1)
+      | otherwise = go (p + 1) line
 
 -- ── Comment side channel ─────────────────────────────────────────────────
 -- Each captured
@@ -143,6 +145,8 @@ commentText (Comment _ _ t) = t
 -- first char; `line` its 1-based number.  O(pos) per call, but only invoked
 -- once per comment in a single left-to-right walk (see `posToLineCol`).
 posLineColFrom : Array Char -> Int -> Int -> Int -> Int -> (Int, Int)
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds); inlined hot path (hot-list).
+-- lint-disable-next-line rule-threaded-invariant
 posLineColFrom src target p line lineStart
   | p >= target = (line, target - lineStart)
   | isLineBreakAt src p = posLineColFrom src target (p + 1) (line + 1) (p + 1)

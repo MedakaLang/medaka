@@ -1,5 +1,5 @@
 # META
-source_lines=104
+source_lines=105
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-test-bool-literal-equal: `expectEqual` against a `True`/`False` literal. Prefer `expectTrue` / `expectFalse`.
@@ -26,6 +26,7 @@ import tools.lint_core.{
   StdlibIndex,
   Visitor,
   mkVisitorRule,
+  noFix,
 }
 import tools.lint_shared.{
   detApply,
@@ -100,7 +101,7 @@ testBoolLitEqFinding loc rewritten = Finding {
     "`expectEqual` against a boolean literal. Rewrite as '\{exprToString rewritten}'",
   severity = SevWarning,
   loc = loc,
-  fix = None,
+  fix = noFix,
 }
 
 testBoolLiteralEqualFix : Oracle -> Decl -> Option (List Decl)
@@ -113,7 +114,7 @@ testBoolLiteralEqualFix _ d =
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("tools" "printer") ((mem "exprToString" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" false) (mem "mkVisitorRule" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" false) (mem "mkVisitorRule" false) (mem "noFix" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "detApply" false) (mem "exprRuleVisitors" false) (mem "exprRuleFixTestDecls" false) (mem "isBoolLit" false) (mem "isEVarNamed" false) (mem "isFalseLit" false) (mem "isTrueLit" false) (mem "noExcl" false) (mem "ruleNameTestBoolLiteralEqual" false) (mem "unwrapLoc" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameTestBoolLiteralEqual")) (fa "summary" (ELit (LString "`expectEqual` against a `True`/`False` literal (either side). Prefer `expectTrue e` / `expectFalse e`"))) (fa "doc" (ELit (LString "`expectEqual` against a `True`/`False` literal loses the operand in the failure message; use `expectTrue`/`expectFalse`. `--fix` rewrites it only where every verb involved is `test`'s own import: a verb that resolves to a local or top-level binding, or to another module's import, is left alone.\n\nBefore:\n  expectEqual True (a == 1)\nAfter:\n  expectTrue (a == 1)"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Internal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "Fixable")) (fa "needs" (EListLit (EVar "NeedsScopes")))))) (EVar "ruleTestBoolLiteralEqual")) (EApp (EVar "Some") (EVar "testBoolLiteralEqualFix"))))
@@ -125,7 +126,7 @@ testBoolLiteralEqualFix _ d =
 (DTypeSig false "ruleTestBoolLiteralEqual" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor"))))))))
 (DFunDef false "ruleTestBoolLiteralEqual" (PWild PWild PWild PWild PWild) (EApp (EApp (EApp (EVar "exprRuleVisitors") (EVar "noExcl")) (EVar "testBoolLitEqOf")) (EVar "testBoolLitEqFinding")))
 (DTypeSig false "testBoolLitEqFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))))
-(DFunDef false "testBoolLitEqFinding" ((PVar "loc") (PVar "rewritten")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameTestBoolLiteralEqual")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "`expectEqual` against a boolean literal. Rewrite as '")) (EApp (EVar "$core.display") (EApp (EVar "exprToString") (EVar "rewritten")))) (ELit (LString "'")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None")))))
+(DFunDef false "testBoolLitEqFinding" ((PVar "loc") (PVar "rewritten")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameTestBoolLiteralEqual")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "`expectEqual` against a boolean literal. Rewrite as '")) (EApp (EVar "$core.display") (EApp (EVar "exprToString") (EVar "rewritten")))) (ELit (LString "'")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "noFix")))))
 (DTypeSig false "testBoolLiteralEqualFix" (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "testBoolLiteralEqualFix" (PWild (PVar "d")) (EApp (EApp (EApp (EVar "exprRuleFixTestDecls") (EVar "noExcl")) (EApp (EVar "detApply") (EVar "testBoolLitEqOf"))) (EVar "d")))
 # MARK
@@ -135,7 +136,7 @@ testBoolLiteralEqualFix _ d =
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Severity" true))))
 (DUse false (UseGroup ("tools" "printer") ((mem "exprToString" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" false) (mem "mkVisitorRule" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" false) (mem "mkVisitorRule" false) (mem "noFix" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "detApply" false) (mem "exprRuleVisitors" false) (mem "exprRuleFixTestDecls" false) (mem "isBoolLit" false) (mem "isEVarNamed" false) (mem "isFalseLit" false) (mem "isTrueLit" false) (mem "noExcl" false) (mem "ruleNameTestBoolLiteralEqual" false) (mem "unwrapLoc" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameTestBoolLiteralEqual")) (fa "summary" (ELit (LString "`expectEqual` against a `True`/`False` literal (either side). Prefer `expectTrue e` / `expectFalse e`"))) (fa "doc" (ELit (LString "`expectEqual` against a `True`/`False` literal loses the operand in the failure message; use `expectTrue`/`expectFalse`. `--fix` rewrites it only where every verb involved is `test`'s own import: a verb that resolves to a local or top-level binding, or to another module's import, is left alone.\n\nBefore:\n  expectEqual True (a == 1)\nAfter:\n  expectTrue (a == 1)"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Internal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "Fixable")) (fa "needs" (EListLit (EVar "NeedsScopes")))))) (EVar "ruleTestBoolLiteralEqual")) (EApp (EVar "Some") (EVar "testBoolLiteralEqualFix"))))
@@ -147,6 +148,6 @@ testBoolLiteralEqualFix _ d =
 (DTypeSig false "ruleTestBoolLiteralEqual" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor"))))))))
 (DFunDef false "ruleTestBoolLiteralEqual" (PWild PWild PWild PWild PWild) (EApp (EApp (EApp (EVar "exprRuleVisitors") (EVar "noExcl")) (EVar "testBoolLitEqOf")) (EVar "testBoolLitEqFinding")))
 (DTypeSig false "testBoolLitEqFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))))
-(DFunDef false "testBoolLitEqFinding" ((PVar "loc") (PVar "rewritten")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameTestBoolLiteralEqual")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "`expectEqual` against a boolean literal. Rewrite as '")) (EApp (EVar "$core.display") (EApp (EVar "exprToString") (EVar "rewritten")))) (ELit (LString "'")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None")))))
+(DFunDef false "testBoolLitEqFinding" ((PVar "loc") (PVar "rewritten")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameTestBoolLiteralEqual")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "`expectEqual` against a boolean literal. Rewrite as '")) (EApp (EVar "$core.display") (EApp (EVar "exprToString") (EVar "rewritten")))) (ELit (LString "'")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "noFix")))))
 (DTypeSig false "testBoolLiteralEqualFix" (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "testBoolLiteralEqualFix" (PWild (PVar "d")) (EApp (EApp (EApp (EVar "exprRuleFixTestDecls") (EVar "noExcl")) (EApp (EVar "detApply") (EVar "testBoolLitEqOf"))) (EVar "d")))

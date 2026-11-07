@@ -1,5 +1,5 @@
 # META
-source_lines=296
+source_lines=297
 stages=DESUGAR,MARK
 # SOURCE
 -- annotate.mdk — Lexical-addressing EMISSION pass (STAGE2-DESIGN §2.0).
@@ -278,7 +278,8 @@ annotateDecl (d@(DInterface { ifaceOrigin = _, methods })) =
 annotateDecl (d@(DImpl { implOrigin = _, methods })) =
   DImpl { d | methods = map annotateImplMethod methods }
 annotateDecl (DAttrib attrs inner) = DAttrib attrs (annotateDecl inner)
-annotateDecl d = d
+annotateDecl (d@(DTypeSig _ _ _ _ | DExtern _ | DData {  } | DUse _ _ _ | DEffect _ _ _ _ _ _ | DTypeAlias {  } | DNewtype {  })) =
+  d
 
 annotateIfaceMethod : IfaceMethod -> IfaceMethod
 annotateIfaceMethod (IfaceMethod nm ty None mloc) = IfaceMethod nm ty None mloc
@@ -397,7 +398,7 @@ annotateProgram prog = map annotateDecl prog
 (DFunDef false "annotateDecl" ((PAs "d" (PRec "DInterface" ((rf "ifaceOrigin" PWild) (rf "methods" None)) false))) (EVariantUpdate "DInterface" (EVar "d") ((fa "methods" (EApp (EApp (EVar "map") (EVar "annotateIfaceMethod")) (EVar "methods"))))))
 (DFunDef false "annotateDecl" ((PAs "d" (PRec "DImpl" ((rf "implOrigin" PWild) (rf "methods" None)) false))) (EVariantUpdate "DImpl" (EVar "d") ((fa "methods" (EApp (EApp (EVar "map") (EVar "annotateImplMethod")) (EVar "methods"))))))
 (DFunDef false "annotateDecl" ((PCon "DAttrib" (PVar "attrs") (PVar "inner"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EVar "annotateDecl") (EVar "inner"))))
-(DFunDef false "annotateDecl" ((PVar "d")) (EVar "d"))
+(DFunDef false "annotateDecl" ((PAs "d" (POr (PCon "DTypeSig" PWild PWild PWild PWild) (PCon "DExtern" PWild) (PRec "DData" () false) (PCon "DUse" PWild PWild PWild) (PCon "DEffect" PWild PWild PWild PWild PWild PWild) (PRec "DTypeAlias" () false) (PRec "DNewtype" () false)))) (EVar "d"))
 (DTypeSig false "annotateIfaceMethod" (TyFun (TyCon "IfaceMethod") (TyCon "IfaceMethod")))
 (DFunDef false "annotateIfaceMethod" ((PCon "IfaceMethod" (PVar "nm") (PVar "ty") (PCon "None") (PVar "mloc"))) (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "nm")) (EVar "ty")) (EVar "None")) (EVar "mloc")))
 (DFunDef false "annotateIfaceMethod" ((PCon "IfaceMethod" (PVar "nm") (PVar "ty") (PCon "Some" (PCon "MethodDefault" (PVar "pats") (PVar "body"))) (PVar "mloc"))) (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "nm")) (EVar "ty")) (EApp (EVar "Some") (EApp (EApp (EVar "MethodDefault") (EVar "pats")) (EApp (EApp (EVar "annotateExpr") (EApp (EVar "paramFrames") (EVar "pats"))) (EVar "body"))))) (EVar "mloc")))
@@ -504,7 +505,7 @@ annotateProgram prog = map annotateDecl prog
 (DFunDef false "annotateDecl" ((PAs "d" (PRec "DInterface" ((rf "ifaceOrigin" PWild) (rf "methods" None)) false))) (EVariantUpdate "DInterface" (EVar "d") ((fa "methods" (EApp (EApp (EMethodRef "map") (EVar "annotateIfaceMethod")) (EVar "methods"))))))
 (DFunDef false "annotateDecl" ((PAs "d" (PRec "DImpl" ((rf "implOrigin" PWild) (rf "methods" None)) false))) (EVariantUpdate "DImpl" (EVar "d") ((fa "methods" (EApp (EApp (EMethodRef "map") (EVar "annotateImplMethod")) (EVar "methods"))))))
 (DFunDef false "annotateDecl" ((PCon "DAttrib" (PVar "attrs") (PVar "inner"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EVar "annotateDecl") (EVar "inner"))))
-(DFunDef false "annotateDecl" ((PVar "d")) (EVar "d"))
+(DFunDef false "annotateDecl" ((PAs "d" (POr (PCon "DTypeSig" PWild PWild PWild PWild) (PCon "DExtern" PWild) (PRec "DData" () false) (PCon "DUse" PWild PWild PWild) (PCon "DEffect" PWild PWild PWild PWild PWild PWild) (PRec "DTypeAlias" () false) (PRec "DNewtype" () false)))) (EVar "d"))
 (DTypeSig false "annotateIfaceMethod" (TyFun (TyCon "IfaceMethod") (TyCon "IfaceMethod")))
 (DFunDef false "annotateIfaceMethod" ((PCon "IfaceMethod" (PVar "nm") (PVar "ty") (PCon "None") (PVar "mloc"))) (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "nm")) (EVar "ty")) (EVar "None")) (EVar "mloc")))
 (DFunDef false "annotateIfaceMethod" ((PCon "IfaceMethod" (PVar "nm") (PVar "ty") (PCon "Some" (PCon "MethodDefault" (PVar "pats") (PVar "body"))) (PVar "mloc"))) (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (EVar "nm")) (EVar "ty")) (EApp (EVar "Some") (EApp (EApp (EVar "MethodDefault") (EVar "pats")) (EApp (EApp (EVar "annotateExpr") (EApp (EVar "paramFrames") (EVar "pats"))) (EVar "body"))))) (EVar "mloc")))

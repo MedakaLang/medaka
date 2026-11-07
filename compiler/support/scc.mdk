@@ -66,10 +66,12 @@ strongconnect v adj =
   if tjLowOf v == idx then tjPop v []
 
 scEdges : String -> List String -> OrdMap (List String) -> Unit
-scEdges _v [] _adj = ()
-scEdges v (w :: ws) adj =
-  scEdge v w adj
-  scEdges v ws adj
+scEdges v xs0 adj = go xs0
+  where
+    go [] = ()
+    go (w :: ws) =
+      scEdge v w adj
+      go ws
 
 scEdge : String -> String -> OrdMap (List String) -> Unit
 scEdge v w adj = match omLookup w !tjIndex

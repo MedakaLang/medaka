@@ -1,0 +1,6 @@
+-- An effect parameter written under a qualifier is domain-checked like one
+-- written anywhere else: the empty pattern in `<Net "">` is refused.
+g : (p : String) -> (Array (Unit -> <Net ""> Unit)) @p -> Unit
+g _ _ = ()
+
+main = println 1

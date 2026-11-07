@@ -102,6 +102,8 @@ countNl : String -> Int
 countNl s = countNlChars (stringToChars s) 0 (arrayLength (stringToChars s)) 0
 
 countNlChars : Array Char -> Int -> Int -> Int -> Int
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
 countNlChars src i n acc
   | i >= n = acc
   | charAt src i == '\n' = countNlChars src (i + 1) n (acc + 1)
@@ -372,6 +374,8 @@ classifyIdxs : Int ->
   Int ->
   List Comment ->
   List (Comment, Int, CKind)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 classifyIdxs _ _ _ [] = []
 classifyIdxs startLine srcLines eaten (c :: cs) =
   let k = classifyKind srcLines c
@@ -444,10 +448,12 @@ leadingSpaceCount : String -> Int
 leadingSpaceCount s = leadingSpaceCountGo (stringToChars s) 0 (stringLength s)
 
 leadingSpaceCountGo : Array Char -> Int -> Int -> Int
-leadingSpaceCountGo src i n
-  | i >= n = i
-  | charAt src i == ' ' = leadingSpaceCountGo src (i + 1) n
-  | otherwise = i
+leadingSpaceCountGo src i0 n = go i0
+  where
+    go i
+      | i >= n = i
+      | charAt src i == ' ' = go (i + 1)
+      | otherwise = i
 
 -- The leading run is spaces by definition, so it is a prefix slice of `s`.
 leadingSpaces : String -> String
@@ -480,10 +486,11 @@ spanLines srcLines startLine endLine =
   spanGo srcLines (min (arrayLength srcLines) endLine) (max 1 startLine) []
 
 spanGo : Array String -> Int -> Int -> List String -> List String
-spanGo srcLines idx lo acc
-  | idx < lo = acc
-  | otherwise =
-    spanGo srcLines (idx - 1) lo (arrayGetUnsafe (idx - 1) srcLines :: acc)
+spanGo srcLines idx0 lo acc0 = go idx0 acc0
+  where
+    go idx acc
+      | idx < lo = acc
+      | otherwise = go (idx - 1) (arrayGetUnsafe (idx - 1) srcLines :: acc)
 
 -- ── Main walk ─────────────────────────────────────
 
@@ -514,9 +521,10 @@ toPComment srcLines c =
 -- A trailing comma the parser recorded on one of the decl's lines (an import
 -- member list's pin).
 anyCommaWithin : Int -> Int -> List (Int, Int) -> Bool
-anyCommaWithin _ _ [] = False
-anyCommaWithin lo hi ((l, _) :: rest) =
-  l >= lo && l <= hi || anyCommaWithin lo hi rest
+anyCommaWithin lo hi xs0 = go xs0
+  where
+    go [] = False
+    go ((l, _) :: rest) = l >= lo && l <= hi || go rest
 
 -- Process one (decl, declPos) pair.  Narrows the pending comment stream to
 -- this decl's span before dispatching; the after-span remainder is
@@ -655,10 +663,11 @@ walkDecls : FmtState ->
   List Decl ->
   List DeclPos ->
   FmtState
-walkDecls st _ _ [] _ = st
-walkDecls st _ _ _ [] = st
-walkDecls st srcLines commas (d :: ds) (p :: ps) =
-  walkDecls (stepDecl st srcLines commas d p) srcLines commas ds ps
+walkDecls st0 srcLines commas xs0 xs1 = go st0 xs0 xs1
+  where
+    go st [] _ = st
+    go st _ [] = st
+    go st (d :: ds) (p :: ps) = go (stepDecl st srcLines commas d p) ds ps
 
 -- ── Public entry ──────────────────────────────────
 
@@ -812,18 +821,16 @@ interpLitBody src _ ((TString _) :: ts) ((s, e) :: ps) =
   map
     ((end, inner, ts2, ps2) => (end, (s, e) :: inner, ts2, ps2))
     (interpLitBody src e ts ps)
-interpLitBody src prevEnd ((TInterpOpen _) :: ts) (_ :: ps) =
-  match interpLitBody src prevEnd ts ps
-    None => None
-    Some (nend, nested, ts2, ps2) =>
-      map
-        ((end, inner, ts3, ps3) => (
-          end,
-          (openingQuoteAfter src prevEnd, nend) :: nested ++ inner,
-          ts3,
-          ps3,
-        ))
-        (interpLitBody src nend ts2 ps2)
+interpLitBody src prevEnd ((TInterpOpen _) :: ts) (_ :: ps) = do
+  (nend, nested, ts2, ps2) <- interpLitBody src prevEnd ts ps
+  map
+    ((end, inner, ts3, ps3) => (
+      end,
+      (openingQuoteAfter src prevEnd, nend) :: nested ++ inner,
+      ts3,
+      ps3,
+    ))
+    (interpLitBody src nend ts2 ps2)
 interpLitBody src _ (_ :: ts) ((_, e) :: ps) = interpLitBody src e ts ps
 
 -- Only whitespace and comments sit between two tokens, so the next literal's

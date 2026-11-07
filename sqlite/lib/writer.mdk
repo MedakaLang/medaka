@@ -330,10 +330,12 @@ collectIndexSpecs : String ->
   List (String, String) ->
   List (String, String, String, List (Cell, Int)) ->
   Result String (List (String, String, String, List (Cell, Int)))
-collectIndexSpecs _ _ _ _ [] acc = Ok (reverse acc)
-collectIndexSpecs tbl cols ipk rows ((idxName, col) :: rest) acc = do
-  spec <- oneIndexSpec tbl cols ipk rows idxName col
-  collectIndexSpecs tbl cols ipk rows rest (spec :: acc)
+collectIndexSpecs tbl cols ipk rows xs0 acc0 = go xs0 acc0
+  where
+    go [] acc = Ok (reverse acc)
+    go ((idxName, col) :: rest) acc = do
+      spec <- oneIndexSpec tbl cols ipk rows idxName col
+      go rest (spec :: acc)
 
 oneIndexSpec : String ->
   List Column ->
@@ -382,11 +384,13 @@ indexEntries : Option Int ->
   List (List Cell) ->
   List (Cell, Int) ->
   Result String (List (Cell, Int))
-indexEntries _ _ _ [] acc = Ok (reverse acc)
-indexEntries ipk colIdx auto (row :: rest) acc = do
-  rid <- rowidOfRow ipk auto row
-  let key = keyOf colIdx row
-  indexEntries ipk colIdx (auto + 1) rest ((key, rid) :: acc)
+indexEntries ipk colIdx auto0 xs0 acc0 = go auto0 xs0 acc0
+  where
+    go _ [] acc = Ok (reverse acc)
+    go auto (row :: rest) acc = do
+      rid <- rowidOfRow ipk auto row
+      let key = keyOf colIdx row
+      go (auto + 1) rest ((key, rid) :: acc)
 
 rowidOfRow : Option Int -> Int -> List Cell -> Result String Int
 rowidOfRow None auto _ = Ok auto

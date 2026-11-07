@@ -414,15 +414,17 @@ answers gs (i, t) =
 
 -- Pushes [gs] in order, so the head of the list is the oldest given.
 pushAll : GraphCtx -> ScopeId -> Int -> List (Int, MTy) -> Unit
-pushAll _ _ _ [] = ()
-pushAll gctx scope ordinal ((i, t) :: rest) =
-  givenIn
-    gctx
-    scope
-    ordinal
-    GMPredicate
-    (slotOf (ifaceName i) [closedMono t] [])
-  pushAll gctx scope (ordinal + 1) rest
+pushAll gctx scope ordinal0 xs0 = go ordinal0 xs0
+  where
+    go _ [] = ()
+    go ordinal ((i, t) :: rest) =
+      givenIn
+        gctx
+        scope
+        ordinal
+        GMPredicate
+        (slotOf (ifaceName i) [closedMono t] [])
+      go (ordinal + 1) rest
 
 ifaceName : Int -> String
 ifaceName i = "I\{intToString i}"

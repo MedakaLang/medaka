@@ -10,11 +10,10 @@ import test_process.{scratchDir}
 import tools.test_pins_io.{PinContext, loadPinContext}
 
 fixtureRoot : String -> <Exec, FileWrite> Result String String
-fixtureRoot tag = match scratchDir ()
-  Err err => Err err
-  Ok base =>
-    let root = joinPath base ("test_pins_" ++ tag)
-    map (() => root) (mkdirAll root)
+fixtureRoot tag = do
+  base <- scratchDir ()
+  let root = joinPath base ("test_pins_" ++ tag)
+  map (() => root) (mkdirAll root)
 
 writeTree : String -> List (String, String) -> <FileWrite> Result String Unit
 writeTree _ [] = Ok ()

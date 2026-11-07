@@ -163,9 +163,9 @@ keygenWrite : String ->
   (path : String) ->
   Bytes ->
   <FileRead path, FileWrite path> Result String Unit
-keygenWrite label path bytes = match keygenRefusePath label path
-  Err message => Err message
-  Ok () => match writeFilePrivate path "\{encode bytes}\n"
+keygenWrite label path bytes = do
+  _ <- keygenRefusePath label path
+  match writeFilePrivate path "\{encode bytes}\n"
     Err message => Err "unwritable \{label} \{path}: \{message}"
     Ok () => Ok ()
 

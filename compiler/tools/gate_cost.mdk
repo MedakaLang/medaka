@@ -216,16 +216,18 @@ costSampleInts : String ->
   Int ->
   List Int ->
   Result String (List Int)
-costSampleInts sect i n arr k len acc
-  | k >= len = Ok (reverseInts acc [])
-  | otherwise = match asInt (arrayGetUnsafe k arr)
-    None =>
-      Err
-        "gate cost baseline: \{sect}[\{intToString i}] '\{n}': ms[\{intToString k}] is not an integer"
-    Some v if v < 0 =>
-      Err
-        "gate cost baseline: \{sect}[\{intToString i}] '\{n}': ms[\{intToString k}] is negative (\{intToString v})"
-    Some v => costSampleInts sect i n arr (k + 1) len (v :: acc)
+costSampleInts sect i n arr k0 len acc0 = go k0 acc0
+  where
+    go k acc
+      | k >= len = Ok (reverseInts acc [])
+      | otherwise = match asInt (arrayGetUnsafe k arr)
+        None =>
+          Err
+            "gate cost baseline: \{sect}[\{intToString i}] '\{n}': ms[\{intToString k}] is not an integer"
+        Some v if v < 0 =>
+          Err
+            "gate cost baseline: \{sect}[\{intToString i}] '\{n}': ms[\{intToString k}] is negative (\{intToString v})"
+        Some v => go (k + 1) (v :: acc)
 
 -- The per-sample run attribution of one `gates[]` entry — OPTIONAL, unlike
 -- `ms`, and the asymmetry is deliberate.  `ms` has been written by every
@@ -266,13 +268,15 @@ costSampleRunStrs : String ->
   Int ->
   List String ->
   Result String (List String)
-costSampleRunStrs sect i n arr k len acc
-  | k >= len = Ok (reverseStrs acc [])
-  | otherwise = match asString (arrayGetUnsafe k arr)
-    None =>
-      Err
-        "gate cost baseline: \{sect}[\{intToString i}] '\{n}': sampleRuns[\{intToString k}] is not a string"
-    Some v => costSampleRunStrs sect i n arr (k + 1) len (v :: acc)
+costSampleRunStrs sect i n arr k0 len acc0 = go k0 acc0
+  where
+    go k acc
+      | k >= len = Ok (reverseStrs acc [])
+      | otherwise = match asString (arrayGetUnsafe k arr)
+        None =>
+          Err
+            "gate cost baseline: \{sect}[\{intToString i}] '\{n}': sampleRuns[\{intToString k}] is not a string"
+        Some v => go (k + 1) (v :: acc)
 
 -- `n` unattributed slots — the empty string is the sentinel, and it can never
 -- collide with a real runId (Actions' `github.run_id` is a nonempty decimal).
@@ -298,11 +302,13 @@ costEntries : Array Json ->
   Int ->
   List GateCost ->
   Result String (List GateCost)
-costEntries arr i n acc
-  | i >= n = Ok (reverseCosts acc [])
-  | otherwise = match costEntry "gates" i (arrayGetUnsafe i arr)
-    Err m => Err m
-    Ok c => costEntries arr (i + 1) n (c :: acc)
+costEntries arr i0 n acc0 = go i0 acc0
+  where
+    go i acc
+      | i >= n = Ok (reverseCosts acc [])
+      | otherwise = match costEntry "gates" i (arrayGetUnsafe i arr)
+        Err m => Err m
+        Ok c => go (i + 1) (c :: acc)
 
 reverseCosts : List GateCost -> List GateCost -> List GateCost
 reverseCosts [] acc = acc
@@ -338,9 +344,9 @@ parseCostBaseline src = match parse src
 public export data OracleCost = OracleCost { row : GateCost, jobs : List Int }
 
 oracleEntry : Int -> Json -> Result String OracleCost
-oracleEntry i e = match costEntry "oracles" i e
-  Err m => Err m
-  Ok c => match get "jobs" e
+oracleEntry i e = do
+  c <- costEntry "oracles" i e
+  match get "jobs" e
     None => Ok OracleCost { row = c, jobs = [] }
     Some JNull => Ok OracleCost { row = c, jobs = [] }
     Some j => match asArray j
@@ -360,11 +366,13 @@ oracleEntries : Array Json ->
   Int ->
   List OracleCost ->
   Result String (List OracleCost)
-oracleEntries arr i n acc
-  | i >= n = Ok (reverseOracles acc [])
-  | otherwise = match oracleEntry i (arrayGetUnsafe i arr)
-    Err m => Err m
-    Ok c => oracleEntries arr (i + 1) n (c :: acc)
+oracleEntries arr i0 n acc0 = go i0 acc0
+  where
+    go i acc
+      | i >= n = Ok (reverseOracles acc [])
+      | otherwise = match oracleEntry i (arrayGetUnsafe i arr)
+        Err m => Err m
+        Ok c => go (i + 1) (c :: acc)
 
 reverseOracles : List OracleCost -> List OracleCost -> List OracleCost
 reverseOracles [] acc = acc
@@ -516,14 +524,12 @@ gateNameHash s =
   gateNameHashGo a 0 (arrayLength a) 7
 
 gateNameHashGo : Array Char -> Int -> Int -> Int -> Int
-gateNameHashGo a i n h
-  | i >= n = h
-  | otherwise =
-    gateNameHashGo
-      a
-      (i + 1)
-      n
-      ((h * 131 + charCode (arrayGetUnsafe i a)) % costHashMod)
+gateNameHashGo a i0 n hash0 = go i0 hash0
+  where
+    go i h
+      | i >= n = h
+      | otherwise =
+        go (i + 1) ((h * 131 + charCode (arrayGetUnsafe i a)) % costHashMod)
 
 costHashMod : Int
 costHashMod = 2147483647
@@ -600,11 +606,13 @@ runEntries : Array Json ->
   Int ->
   List RunRecord ->
   Result String (List RunRecord)
-runEntries arr i n acc
-  | i >= n = Ok (reverseRuns acc [])
-  | otherwise = match runEntry i (arrayGetUnsafe i arr)
-    Err m => Err m
-    Ok r => runEntries arr (i + 1) n (r :: acc)
+runEntries arr i0 n acc0 = go i0 acc0
+  where
+    go i acc
+      | i >= n = Ok (reverseRuns acc [])
+      | otherwise = match runEntry i (arrayGetUnsafe i arr)
+        Err m => Err m
+        Ok r => go (i + 1) (r :: acc)
 
 reverseRuns : List RunRecord -> List RunRecord -> List RunRecord
 reverseRuns [] acc = acc

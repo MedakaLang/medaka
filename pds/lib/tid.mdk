@@ -19,12 +19,14 @@ charValue : Char -> Option Int
 charValue c = indexOf (fromChar c) tidAlphabet
 
 decodeDigits : Array Char -> Int -> Int -> Int -> Result String Int
-decodeDigits chars pos end acc =
-  if pos >= end then
-    Ok acc
-  else match charValue chars[pos]
-    None => Err "tid: character is outside the sortable alphabet"
-    Some value => decodeDigits chars (pos + 1) end (acc * 32 + value)
+decodeDigits chars pos0 end acc0 = go pos0 acc0
+  where
+    go pos acc =
+      if pos >= end then
+        Ok acc
+      else match charValue chars[pos]
+        None => Err "tid: character is outside the sortable alphabet"
+        Some value => go (pos + 1) (acc * 32 + value)
 
 encodeDigit : Int -> Char
 encodeDigit value = (toChars tidAlphabet)[value]
@@ -63,13 +65,12 @@ tidParse text =
     Some first =>
       if first >= 16 then
         Err "tid: high bit must be zero"
-      else match decodeDigits chars 0 11 0
-        Err message => Err message
-        Ok micros =>
-          if micros > tidTimestampMax then
-            Err "tid: timestamp is outside the representable 53-bit range"
-          else
-            map (Tid text micros) (decodeDigits chars 11 13 0)
+      else do
+        micros <- decodeDigits chars 0 11 0
+        if micros > tidTimestampMax then
+          Err "tid: timestamp is outside the representable 53-bit range"
+        else
+          map (Tid text micros) (decodeDigits chars 11 13 0)
 
 -- | Canonical thirteen-character spelling.
 export

@@ -1,5 +1,5 @@
 # META
-source_lines=5313
+source_lines=5345
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/test_cmd.mdk — `medaka test` logic (doctests + property tests),
@@ -427,12 +427,10 @@ pinIndexForTarget target userDecls = do
       context.contextFile
       (propNamesOf userDecls)
       (testNamesOf userDecls)
-  match names
-    Err err => Err err
-    Ok () =>
-      map
-        (index => (context.contextFile, index))
-        (buildPinIndex context.contextPins)
+  _ <- names
+  map
+    (index => (context.contextFile, index))
+    (buildPinIndex context.contextPins)
 
 -- ── typecheck gate (issues #260, #1229) ──────────────────────────────────────
 -- `medaka test` must not GREEN-LIGHT a module whose DOCTESTS `medaka check`
@@ -1919,6 +1917,8 @@ runEnginesTagged : List Engine ->
   List Example ->
   List (Result String (List Decl)) ->
   <IO> Bool
+-- Bound: the where-go head line would exceed 80 columns and fmt lays it out as a head the parser rejects (#4896); convert when that is fixed.
+-- lint-disable-next-line rule-threaded-invariant
 runEnginesTagged [] _ _ _ _ _ _ _ = True
 runEnginesTagged (e :: rest) trees native target tsrc userDecls examples synthResults =
   putStrLn ""
@@ -2043,6 +2043,8 @@ renderExamplesGo : List (String, Value e) ->
   Int ->
   List Example ->
   <e> List (Result String String)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 renderExamplesGo _ _ _ _ [] = []
 renderExamplesGo env diags (sr :: srRest) i (ex :: rest) =
   renderOneExample env diags sr i ex
@@ -2393,14 +2395,18 @@ printGradedTestEngineGroups : List Engine ->
   String ->
   List GradedTest ->
   <IO> Bool
-printGradedTestEngineGroups [] _ _ = True
-printGradedTestEngineGroups (engine :: rest) target rows =
-  putStrLn ""
-  putStrLn "-- \{engineName engine} --"
-  let passed =
-    printGradedTestGroup target (gradedTestsForEngine (engineName engine) rows)
-  let restPassed = printGradedTestEngineGroups rest target rows
-  passed && restPassed
+printGradedTestEngineGroups xs0 target rows = go xs0
+  where
+    go [] = True
+    go (engine :: rest) =
+      putStrLn ""
+      putStrLn "-- \{engineName engine} --"
+      let passed =
+        printGradedTestGroup
+          target
+          (gradedTestsForEngine (engineName engine) rows)
+      let restPassed = go rest
+      passed && restPassed
 
 gradedTestsForEngine : String -> List GradedTest -> List GradedTest
 gradedTestsForEngine _ [] = []
@@ -3105,6 +3111,8 @@ doctestReportGo : List Engine ->
   List Example ->
   List (Result String (List Decl)) ->
   <IO> List (Engine, RunResult)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 doctestReportGo [] _ _ _ _ _ _ _ = []
 doctestReportGo (e :: rest) trees native target tsrc userDecls examples synthResults =
   (e, runChosenOn e trees native target tsrc userDecls examples synthResults)
@@ -3264,6 +3272,8 @@ propsReportEngines : List Engine ->
   String ->
   PinIndex ->
   <IO> List PropResult
+-- Bound: the where-go head line would exceed 80 columns and fmt lays it out as a head the parser rejects (#4896); convert when that is fixed.
+-- lint-disable-next-line rule-threaded-invariant
 propsReportEngines [] _ _ _ _ _ _ _ _ _ _ _ _ _ _ = []
 propsReportEngines (EngInterp :: rest) stdlibDir runtimeM rawCoreM coreM rawM modsM factsM target tsrc userDecls cases filterOpt file index =
   superviseEvalProps
@@ -3639,6 +3649,8 @@ propsReportEnginesPlain : NativePropLeaf ->
   String ->
   PinIndex ->
   <IO> List PropResult
+-- Bound: the where-go head line would exceed 80 columns and fmt lays it out as a head the parser rejects (#4896); convert when that is fixed.
+-- lint-disable-next-line rule-threaded-invariant
 propsReportEnginesPlain _ [] _ _ _ _ _ _ _ _ _ _ _ _ = []
 propsReportEnginesPlain leaf (EngInterp :: rest) rawCoreM coreM rawM modsM factsM target tsrc userDecls cases filterOpt file index =
   withRootEvalEnv factsM coreM modsM (evalEnv =>
@@ -3728,6 +3740,8 @@ validateHelperPlansGo : PlanEnv ->
   OrdMap Unit ->
   OrdMap String ->
   HelperValidation
+-- Bound: the where-go head line would exceed 80 columns and fmt lays it out as a head the parser rejects (#4896); convert when that is fixed.
+-- lint-disable-next-line rule-threaded-invariant
 validateHelperPlansGo planEnv runtimeM rawCoreM rawM plans baseline rejected =
   let (PropHelpers helpers decls) = propHelpersForPlans planEnv plans
   match helpers
@@ -3969,6 +3983,8 @@ runProtocolHelperEnginesGo : NativePropLeaf ->
   String ->
   PinIndex ->
   <IO> List PropResult
+-- Bound: the where-go head line would exceed 80 columns and fmt lays it out as a head the parser rejects (#4896); convert when that is fixed.
+-- lint-disable-next-line rule-threaded-invariant
 runProtocolHelperEnginesGo _ [] _ _ _ _ _ _ _ _ _ _ _ _ _ = []
 runProtocolHelperEnginesGo leaf (engine :: rest) message rawCoreM coreM rawM modsM factsM target tsrc userDecls cases filterOpt file index =
   let engineText = engineName engine
@@ -4030,6 +4046,8 @@ runValidatedPropEnginesGo : NativePropLeaf ->
   String ->
   PinIndex ->
   <IO> List PropResult
+-- Bound: the where-go head line would exceed 80 columns and fmt lays it out as a head the parser rejects (#4896); convert when that is fixed.
+-- lint-disable-next-line rule-threaded-invariant
 runValidatedPropEnginesGo _ [] _helpers _rejected _rawCoreM _coreM _rawM _modsM _factsM _target _tsrc _userDecls _cases _filterOpt _file _index =
   []
 runValidatedPropEnginesGo leaf (engine :: rest) helpers rejected rawCoreM coreM rawM modsM factsM target tsrc userDecls cases filterOpt file index =
@@ -4144,30 +4162,34 @@ rejectPreparedHelpers : PlanEnv ->
   OrdMap String ->
   List PreparedPropRequest ->
   List PreparedPropRequest
-rejectPreparedHelpers _ _ _ [] = []
-rejectPreparedHelpers env engine rejected ((row@(PreparedResult _)) :: rest) =
-  row :: rejectPreparedHelpers env engine rejected rest
-rejectPreparedHelpers env engine rejected ((row@(PreparedRun request _ plans)) :: rest) =
-  let next = rejectPreparedHelpers env engine rejected rest
-  if plansHaveNoRejectedCarrier env rejected plans then
-    row :: next
-  else
-    PreparedResult (helperCapabilityResult env engine request rejected plans)
-      :: next
+rejectPreparedHelpers env engine rejected requests = go requests
+  where
+    go [] = []
+    go ((row@(PreparedResult _)) :: rest) = row :: go rest
+    go ((row@(PreparedRun request _ plans)) :: rest) =
+      let next = go rest
+      if plansHaveNoRejectedCarrier env rejected plans then
+        row :: next
+      else
+        PreparedResult
+            (helperCapabilityResult env engine request rejected plans)
+          :: next
 
 rejectPreparedProtocolCustom : PlanEnv ->
   String ->
   String ->
   List PreparedPropRequest ->
   List PreparedPropRequest
-rejectPreparedProtocolCustom _ _ _ [] = []
-rejectPreparedProtocolCustom env engine message ((row@(PreparedResult _)) :: rest) =
-  row :: rejectPreparedProtocolCustom env engine message rest
-rejectPreparedProtocolCustom env engine message ((row@(PreparedRun request _ plans)) :: rest) =
-  let next = rejectPreparedProtocolCustom env engine message rest
-  match customPlansReachable env plans
-    [] => row :: next
-    _ => PreparedResult (helperProtocolResult engine message request) :: next
+rejectPreparedProtocolCustom env engine message requests = go requests
+  where
+    go [] = []
+    go ((row@(PreparedResult _)) :: rest) = row :: go rest
+    go ((row@(PreparedRun request _ plans)) :: rest) =
+      let next = go rest
+      match customPlansReachable env plans
+        [] => row :: next
+        _ =>
+          PreparedResult (helperProtocolResult engine message request) :: next
 
 helperProtocolResult : String -> String -> PropRequest -> PropResult
 helperProtocolResult engine message (PropRequest name seed cases) =
@@ -4249,16 +4271,20 @@ protocolPropResults : List Engine ->
   Int ->
   Option String ->
   List PropResult
-protocolPropResults [] _ _ _ _ = []
-protocolPropResults (engine :: rest) message userDecls cases filterOpt =
-  protocolPropsForEngine
-      (engineName engine)
-      message
-      (filterPropsByName filterOpt (filterProps userDecls))
-      cases
-    ++ protocolPropResults rest message userDecls cases filterOpt
+protocolPropResults xs0 message userDecls cases filterOpt = go xs0
+  where
+    go [] = []
+    go (engine :: rest) =
+      protocolPropsForEngine
+          (engineName engine)
+          message
+          (filterPropsByName filterOpt (filterProps userDecls))
+          cases
+        ++ go rest
 
 protocolPropsForEngine : String -> String -> List Decl -> Int -> List PropResult
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 protocolPropsForEngine _ _ [] _ = []
 protocolPropsForEngine engine message ((DProp _ name _ _) :: rest) cases =
   PropResult
@@ -4322,6 +4348,8 @@ propRequestsForGo : PinIndex ->
   Int ->
   List Decl ->
   List PropRequest
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 propRequestsForGo _ _ _ _ _ [] = []
 propRequestsForGo index file engine seed cases ((DProp _ name _ _) :: rest) =
   let request = match pinFromIndex index file PropPin name engine
@@ -4389,6 +4417,8 @@ testDeclsReportEngines : List Engine ->
   String ->
   PinIndex ->
   <IO> List (Engine, String, Int, ExResult)
+-- Bound: the where-go head line would exceed 80 columns and fmt lays it out as a head the parser rejects (#4896); convert when that is fixed.
+-- lint-disable-next-line rule-threaded-invariant
 testDeclsReportEngines [] _ _ _ _ _ _ _ _ _ = []
 testDeclsReportEngines (e :: rest) pair native runtimeDecls target tsrc userDecls filterOpt file index =
   map
@@ -4488,6 +4518,8 @@ nativeTestsWithPinnedErrors : PinIndex ->
   List ExResult ->
   List (List ExResult) ->
   List (String, Int, ExResult)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 nativeTestsWithPinnedErrors _ _ [] _ _ = []
 nativeTestsWithPinnedErrors index file ((name, line, _) :: rest) ordinary pinned =
   if isExpectedNativeError index file name then match pinned
@@ -5379,7 +5411,7 @@ testFilesReport _ _ acc = acc
 (DTypeSig false "testDriveInputs" (TyFun (TyApp (TyCon "List") (TyCon "SiblingPair")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "DriveInputs"))))
 (DFunDef false "testDriveInputs" ((PVar "sibling") (PVar "coreDecls")) (EBlock (DoLet false false (PVar "held") (EApp (EApp (EVar "withHeldPrelude") (EVar "coreDecls")) (EApp (EApp (EApp (EVar "driveInputsFor") (EUnOp "!" (EVar "selectedProfile"))) (EVar "False")) (EListLit)))) (DoExpr (ERecordUpdate (EVar "held") ((fa "diSibling" (EVar "sibling")))))))
 (DTypeSig false "pinIndexForTarget" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "PinIndex")))))))
-(DFunDef false "pinIndexForTarget" ((PVar "target") (PVar "userDecls")) (EApp (EApp (EVar "$core.andThen") (EApp (EVar "loadPinContext") (EVar "target"))) (ELam ((PVar "context")) (ELet false (PVar "names") (EApp (EApp (EApp (EApp (EVar "validatePinNames") (EFieldAccess (EVar "context") "contextPins")) (EFieldAccess (EVar "context") "contextFile")) (EApp (EVar "propNamesOf") (EVar "userDecls"))) (EApp (EVar "testNamesOf") (EVar "userDecls"))) (EMatch (EVar "names") (arm (PCon "Err" (PVar "err")) () (EApp (EVar "Err") (EVar "err"))) (arm (PCon "Ok" (PLit LUnit)) () (EApp (EApp (EVar "map") (ELam ((PVar "index")) (ETuple (EFieldAccess (EVar "context") "contextFile") (EVar "index")))) (EApp (EVar "buildPinIndex") (EFieldAccess (EVar "context") "contextPins")))))))))
+(DFunDef false "pinIndexForTarget" ((PVar "target") (PVar "userDecls")) (EApp (EApp (EVar "$core.andThen") (EApp (EVar "loadPinContext") (EVar "target"))) (ELam ((PVar "context")) (ELet false (PVar "names") (EApp (EApp (EApp (EApp (EVar "validatePinNames") (EFieldAccess (EVar "context") "contextPins")) (EFieldAccess (EVar "context") "contextFile")) (EApp (EVar "propNamesOf") (EVar "userDecls"))) (EApp (EVar "testNamesOf") (EVar "userDecls"))) (EApp (EApp (EVar "$core.andThen") (EVar "names")) (ELam (PWild) (EApp (EApp (EVar "map") (ELam ((PVar "index")) (ETuple (EFieldAccess (EVar "context") "contextFile") (EVar "index")))) (EApp (EVar "buildPinIndex") (EFieldAccess (EVar "context") "contextPins")))))))))
 (DTypeSig false "typecheckExempt" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Bool"))))))
 (DFunDef false "typecheckExempt" ((PVar "target") (PVar "userDecls") (PVar "tsrc")) (EIf (EApp (EVar "isNonEmptyL") (EApp (EVar "targetExamples") (EVar "tsrc"))) (EVar "False") (EIf (EApp (EVar "isNewVehiclePath") (EVar "target")) (EVar "False") (EIf (EVar "otherwise") (EBinOp "||" (EApp (EVar "hasProps") (EVar "userDecls")) (EApp (EVar "hasTests") (EVar "userDecls"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "isNewVehiclePath" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Bool"))))
@@ -5594,8 +5626,7 @@ testFilesReport _ _ acc = acc
 (DFunDef false "printGradedTestRows" ((PList (PVar "engine")) (PVar "target") (PVar "rows")) (EApp (EApp (EVar "printGradedTestGroup") (EVar "target")) (EApp (EApp (EVar "gradedTestsForEngine") (EApp (EVar "engineName") (EVar "engine"))) (EVar "rows"))))
 (DFunDef false "printGradedTestRows" ((PVar "engines") (PVar "target") (PVar "rows")) (EApp (EApp (EApp (EVar "printGradedTestEngineGroups") (EVar "engines")) (EVar "target")) (EVar "rows")))
 (DTypeSig false "printGradedTestEngineGroups" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "GradedTest")) (TyEffect ("IO") None (TyCon "Bool"))))))
-(DFunDef false "printGradedTestEngineGroups" ((PList) PWild PWild) (EVar "True"))
-(DFunDef false "printGradedTestEngineGroups" ((PCons (PVar "engine") (PVar "rest")) (PVar "target") (PVar "rows")) (EBlock (DoExpr (EApp (EVar "putStrLn") (ELit (LString "")))) (DoExpr (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "-- ")) (EApp (EVar "$core.display") (EApp (EVar "engineName") (EVar "engine")))) (ELit (LString " --"))))) (DoLet false false (PVar "passed") (EApp (EApp (EVar "printGradedTestGroup") (EVar "target")) (EApp (EApp (EVar "gradedTestsForEngine") (EApp (EVar "engineName") (EVar "engine"))) (EVar "rows")))) (DoLet false false (PVar "restPassed") (EApp (EApp (EApp (EVar "printGradedTestEngineGroups") (EVar "rest")) (EVar "target")) (EVar "rows"))) (DoExpr (EBinOp "&&" (EVar "passed") (EVar "restPassed")))))
+(DFunDef false "printGradedTestEngineGroups" ((PVar "xs0") (PVar "target") (PVar "rows")) (ELetGroup ((lgb "go" (clause ((PList)) (EVar "True")) (clause ((PCons (PVar "engine") (PVar "rest"))) (EBlock (DoExpr (EApp (EVar "putStrLn") (ELit (LString "")))) (DoExpr (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "-- ")) (EApp (EVar "$core.display") (EApp (EVar "engineName") (EVar "engine")))) (ELit (LString " --"))))) (DoLet false false (PVar "passed") (EApp (EApp (EVar "printGradedTestGroup") (EVar "target")) (EApp (EApp (EVar "gradedTestsForEngine") (EApp (EVar "engineName") (EVar "engine"))) (EVar "rows")))) (DoLet false false (PVar "restPassed") (EApp (EVar "go") (EVar "rest"))) (DoExpr (EBinOp "&&" (EVar "passed") (EVar "restPassed"))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "gradedTestsForEngine" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "GradedTest")) (TyApp (TyCon "List") (TyCon "GradedTest")))))
 (DFunDef false "gradedTestsForEngine" (PWild (PList)) (EListLit))
 (DFunDef false "gradedTestsForEngine" ((PVar "engine") (PCons (PVar "row") (PVar "rest"))) (EBlock (DoLet false false (PVar "next") (EApp (EApp (EVar "gradedTestsForEngine") (EVar "engine")) (EVar "rest"))) (DoLet false false (PTuple (PVar "rowEngine") PWild PWild PWild) (EApp (EVar "gradedTestRaw") (EVar "row"))) (DoExpr (EIf (EBinOp "==" (EVar "rowEngine") (EVar "engine")) (EBinOp "::" (EVar "row") (EVar "next")) (EVar "next")))))
@@ -5809,13 +5840,9 @@ testFilesReport _ _ acc = acc
 (DTypeSig false "preparedPlanError" (TyFun (TyCon "String") (TyFun (TyCon "PlanError") (TyFun (TyCon "PropRequest") (TyCon "PreparedPropRequest")))))
 (DFunDef false "preparedPlanError" ((PVar "engine") (PVar "err") (PCon "PropRequest" (PVar "name") (PVar "seed") (PVar "cases"))) (EApp (EVar "PreparedResult") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "PropResult") (EVar "engine")) (EVar "name")) (EVar "PropErroredResult")) (EApp (EVar "Some") (EVar "PropCapabilityError"))) (EApp (EVar "planErrorText") (EVar "err"))) (EVar "seed")) (EVar "cases"))))
 (DTypeSig false "rejectPreparedHelpers" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "PreparedPropRequest")) (TyApp (TyCon "List") (TyCon "PreparedPropRequest")))))))
-(DFunDef false "rejectPreparedHelpers" (PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "rejectPreparedHelpers" ((PVar "env") (PVar "engine") (PVar "rejected") (PCons (PAs "row" (PCon "PreparedResult" PWild)) (PVar "rest"))) (EBinOp "::" (EVar "row") (EApp (EApp (EApp (EApp (EVar "rejectPreparedHelpers") (EVar "env")) (EVar "engine")) (EVar "rejected")) (EVar "rest"))))
-(DFunDef false "rejectPreparedHelpers" ((PVar "env") (PVar "engine") (PVar "rejected") (PCons (PAs "row" (PCon "PreparedRun" (PVar "request") PWild (PVar "plans"))) (PVar "rest"))) (EBlock (DoLet false false (PVar "next") (EApp (EApp (EApp (EApp (EVar "rejectPreparedHelpers") (EVar "env")) (EVar "engine")) (EVar "rejected")) (EVar "rest"))) (DoExpr (EIf (EApp (EApp (EApp (EVar "plansHaveNoRejectedCarrier") (EVar "env")) (EVar "rejected")) (EVar "plans")) (EBinOp "::" (EVar "row") (EVar "next")) (EBinOp "::" (EApp (EVar "PreparedResult") (EApp (EApp (EApp (EApp (EApp (EVar "helperCapabilityResult") (EVar "env")) (EVar "engine")) (EVar "request")) (EVar "rejected")) (EVar "plans"))) (EVar "next"))))))
+(DFunDef false "rejectPreparedHelpers" ((PVar "env") (PVar "engine") (PVar "rejected") (PVar "requests")) (ELetGroup ((lgb "go" (clause ((PList)) (EListLit)) (clause ((PCons (PAs "row" (PCon "PreparedResult" PWild)) (PVar "rest"))) (EBinOp "::" (EVar "row") (EApp (EVar "go") (EVar "rest")))) (clause ((PCons (PAs "row" (PCon "PreparedRun" (PVar "request") PWild (PVar "plans"))) (PVar "rest"))) (EBlock (DoLet false false (PVar "next") (EApp (EVar "go") (EVar "rest"))) (DoExpr (EIf (EApp (EApp (EApp (EVar "plansHaveNoRejectedCarrier") (EVar "env")) (EVar "rejected")) (EVar "plans")) (EBinOp "::" (EVar "row") (EVar "next")) (EBinOp "::" (EApp (EVar "PreparedResult") (EApp (EApp (EApp (EApp (EApp (EVar "helperCapabilityResult") (EVar "env")) (EVar "engine")) (EVar "request")) (EVar "rejected")) (EVar "plans"))) (EVar "next")))))))) (EApp (EVar "go") (EVar "requests"))))
 (DTypeSig false "rejectPreparedProtocolCustom" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "PreparedPropRequest")) (TyApp (TyCon "List") (TyCon "PreparedPropRequest")))))))
-(DFunDef false "rejectPreparedProtocolCustom" (PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "rejectPreparedProtocolCustom" ((PVar "env") (PVar "engine") (PVar "message") (PCons (PAs "row" (PCon "PreparedResult" PWild)) (PVar "rest"))) (EBinOp "::" (EVar "row") (EApp (EApp (EApp (EApp (EVar "rejectPreparedProtocolCustom") (EVar "env")) (EVar "engine")) (EVar "message")) (EVar "rest"))))
-(DFunDef false "rejectPreparedProtocolCustom" ((PVar "env") (PVar "engine") (PVar "message") (PCons (PAs "row" (PCon "PreparedRun" (PVar "request") PWild (PVar "plans"))) (PVar "rest"))) (EBlock (DoLet false false (PVar "next") (EApp (EApp (EApp (EApp (EVar "rejectPreparedProtocolCustom") (EVar "env")) (EVar "engine")) (EVar "message")) (EVar "rest"))) (DoExpr (EMatch (EApp (EApp (EVar "customPlansReachable") (EVar "env")) (EVar "plans")) (arm (PList) () (EBinOp "::" (EVar "row") (EVar "next"))) (arm PWild () (EBinOp "::" (EApp (EVar "PreparedResult") (EApp (EApp (EApp (EVar "helperProtocolResult") (EVar "engine")) (EVar "message")) (EVar "request"))) (EVar "next")))))))
+(DFunDef false "rejectPreparedProtocolCustom" ((PVar "env") (PVar "engine") (PVar "message") (PVar "requests")) (ELetGroup ((lgb "go" (clause ((PList)) (EListLit)) (clause ((PCons (PAs "row" (PCon "PreparedResult" PWild)) (PVar "rest"))) (EBinOp "::" (EVar "row") (EApp (EVar "go") (EVar "rest")))) (clause ((PCons (PAs "row" (PCon "PreparedRun" (PVar "request") PWild (PVar "plans"))) (PVar "rest"))) (EBlock (DoLet false false (PVar "next") (EApp (EVar "go") (EVar "rest"))) (DoExpr (EMatch (EApp (EApp (EVar "customPlansReachable") (EVar "env")) (EVar "plans")) (arm (PList) () (EBinOp "::" (EVar "row") (EVar "next"))) (arm PWild () (EBinOp "::" (EApp (EVar "PreparedResult") (EApp (EApp (EApp (EVar "helperProtocolResult") (EVar "engine")) (EVar "message")) (EVar "request"))) (EVar "next"))))))))) (EApp (EVar "go") (EVar "requests"))))
 (DTypeSig false "helperProtocolResult" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "PropRequest") (TyCon "PropResult")))))
 (DFunDef false "helperProtocolResult" ((PVar "engine") (PVar "message") (PCon "PropRequest" (PVar "name") (PVar "seed") (PVar "cases"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "PropResult") (EVar "engine")) (EVar "name")) (EVar "PropErroredResult")) (EApp (EVar "Some") (EVar "PropProtocolError"))) (EVar "message")) (EVar "seed")) (EVar "cases")))
 (DTypeSig false "helperCapabilityResult" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "String") (TyFun (TyCon "PropRequest") (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "GenPlan")) (TyCon "PropResult")))))))
@@ -5830,8 +5857,7 @@ testFilesReport _ _ acc = acc
 (DTypeSig false "propResultForEngine" (TyFun (TyCon "String") (TyFun (TyCon "PropResult") (TyCon "PropResult"))))
 (DFunDef false "propResultForEngine" ((PVar "engine") (PCon "PropResult" PWild (PVar "name") (PVar "status") (PVar "kind") (PVar "detail") (PVar "seed") (PVar "cases"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "PropResult") (EVar "engine")) (EVar "name")) (EVar "status")) (EVar "kind")) (EVar "detail")) (EVar "seed")) (EVar "cases")))
 (DTypeSig false "protocolPropResults" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "List") (TyCon "PropResult"))))))))
-(DFunDef false "protocolPropResults" ((PList) PWild PWild PWild PWild) (EListLit))
-(DFunDef false "protocolPropResults" ((PCons (PVar "engine") (PVar "rest")) (PVar "message") (PVar "userDecls") (PVar "cases") (PVar "filterOpt")) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "protocolPropsForEngine") (EApp (EVar "engineName") (EVar "engine"))) (EVar "message")) (EApp (EApp (EVar "filterPropsByName") (EVar "filterOpt")) (EApp (EVar "filterProps") (EVar "userDecls")))) (EVar "cases")) (EApp (EApp (EApp (EApp (EApp (EVar "protocolPropResults") (EVar "rest")) (EVar "message")) (EVar "userDecls")) (EVar "cases")) (EVar "filterOpt"))))
+(DFunDef false "protocolPropResults" ((PVar "xs0") (PVar "message") (PVar "userDecls") (PVar "cases") (PVar "filterOpt")) (ELetGroup ((lgb "go" (clause ((PList)) (EListLit)) (clause ((PCons (PVar "engine") (PVar "rest"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "protocolPropsForEngine") (EApp (EVar "engineName") (EVar "engine"))) (EVar "message")) (EApp (EApp (EVar "filterPropsByName") (EVar "filterOpt")) (EApp (EVar "filterProps") (EVar "userDecls")))) (EVar "cases")) (EApp (EVar "go") (EVar "rest")))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "protocolPropsForEngine" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "PropResult")))))))
 (DFunDef false "protocolPropsForEngine" (PWild PWild (PList) PWild) (EListLit))
 (DFunDef false "protocolPropsForEngine" ((PVar "engine") (PVar "message") (PCons (PCon "DProp" PWild (PVar "name") PWild PWild) (PVar "rest")) (PVar "cases")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "PropResult") (EVar "engine")) (EVar "name")) (EVar "PropErroredResult")) (EApp (EVar "Some") (EVar "PropProtocolError"))) (EVar "message")) (EApp (EVar "propSeedValue") (ELit LUnit))) (EVar "cases")) (EApp (EApp (EApp (EApp (EVar "protocolPropsForEngine") (EVar "engine")) (EVar "message")) (EVar "rest")) (EVar "cases"))))
@@ -6099,7 +6125,7 @@ testFilesReport _ _ acc = acc
 (DTypeSig false "testDriveInputs" (TyFun (TyApp (TyCon "List") (TyCon "SiblingPair")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "DriveInputs"))))
 (DFunDef false "testDriveInputs" ((PVar "sibling") (PVar "coreDecls")) (EBlock (DoLet false false (PVar "held") (EApp (EApp (EVar "withHeldPrelude") (EVar "coreDecls")) (EApp (EApp (EApp (EVar "driveInputsFor") (EUnOp "!" (EVar "selectedProfile"))) (EVar "False")) (EListLit)))) (DoExpr (ERecordUpdate (EVar "held") ((fa "diSibling" (EVar "sibling")))))))
 (DTypeSig false "pinIndexForTarget" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyCon "PinIndex")))))))
-(DFunDef false "pinIndexForTarget" ((PVar "target") (PVar "userDecls")) (EApp (EApp (EVar "$core.andThen") (EApp (EVar "loadPinContext") (EVar "target"))) (ELam ((PVar "context")) (ELet false (PVar "names") (EApp (EApp (EApp (EApp (EVar "validatePinNames") (EFieldAccess (EVar "context") "contextPins")) (EFieldAccess (EVar "context") "contextFile")) (EApp (EVar "propNamesOf") (EVar "userDecls"))) (EApp (EVar "testNamesOf") (EVar "userDecls"))) (EMatch (EVar "names") (arm (PCon "Err" (PVar "err")) () (EApp (EVar "Err") (EVar "err"))) (arm (PCon "Ok" (PLit LUnit)) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "index")) (ETuple (EFieldAccess (EVar "context") "contextFile") (EMethodRef "index")))) (EApp (EVar "buildPinIndex") (EFieldAccess (EVar "context") "contextPins")))))))))
+(DFunDef false "pinIndexForTarget" ((PVar "target") (PVar "userDecls")) (EApp (EApp (EVar "$core.andThen") (EApp (EVar "loadPinContext") (EVar "target"))) (ELam ((PVar "context")) (ELet false (PVar "names") (EApp (EApp (EApp (EApp (EVar "validatePinNames") (EFieldAccess (EVar "context") "contextPins")) (EFieldAccess (EVar "context") "contextFile")) (EApp (EVar "propNamesOf") (EVar "userDecls"))) (EApp (EVar "testNamesOf") (EVar "userDecls"))) (EApp (EApp (EVar "$core.andThen") (EVar "names")) (ELam (PWild) (EApp (EApp (EMethodRef "map") (ELam ((PVar "index")) (ETuple (EFieldAccess (EVar "context") "contextFile") (EMethodRef "index")))) (EApp (EVar "buildPinIndex") (EFieldAccess (EVar "context") "contextPins")))))))))
 (DTypeSig false "typecheckExempt" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Bool"))))))
 (DFunDef false "typecheckExempt" ((PVar "target") (PVar "userDecls") (PVar "tsrc")) (EIf (EApp (EVar "isNonEmptyL") (EApp (EVar "targetExamples") (EVar "tsrc"))) (EVar "False") (EIf (EApp (EVar "isNewVehiclePath") (EVar "target")) (EVar "False") (EIf (EVar "otherwise") (EBinOp "||" (EApp (EVar "hasProps") (EVar "userDecls")) (EApp (EVar "hasTests") (EVar "userDecls"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "isNewVehiclePath" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Bool"))))
@@ -6314,8 +6340,7 @@ testFilesReport _ _ acc = acc
 (DFunDef false "printGradedTestRows" ((PList (PVar "engine")) (PVar "target") (PVar "rows")) (EApp (EApp (EVar "printGradedTestGroup") (EVar "target")) (EApp (EApp (EVar "gradedTestsForEngine") (EApp (EVar "engineName") (EVar "engine"))) (EVar "rows"))))
 (DFunDef false "printGradedTestRows" ((PVar "engines") (PVar "target") (PVar "rows")) (EApp (EApp (EApp (EVar "printGradedTestEngineGroups") (EVar "engines")) (EVar "target")) (EVar "rows")))
 (DTypeSig false "printGradedTestEngineGroups" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "GradedTest")) (TyEffect ("IO") None (TyCon "Bool"))))))
-(DFunDef false "printGradedTestEngineGroups" ((PList) PWild PWild) (EVar "True"))
-(DFunDef false "printGradedTestEngineGroups" ((PCons (PVar "engine") (PVar "rest")) (PVar "target") (PVar "rows")) (EBlock (DoExpr (EApp (EVar "putStrLn") (ELit (LString "")))) (DoExpr (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "-- ")) (EApp (EVar "$core.display") (EApp (EVar "engineName") (EVar "engine")))) (ELit (LString " --"))))) (DoLet false false (PVar "passed") (EApp (EApp (EVar "printGradedTestGroup") (EVar "target")) (EApp (EApp (EVar "gradedTestsForEngine") (EApp (EVar "engineName") (EVar "engine"))) (EVar "rows")))) (DoLet false false (PVar "restPassed") (EApp (EApp (EApp (EVar "printGradedTestEngineGroups") (EVar "rest")) (EVar "target")) (EVar "rows"))) (DoExpr (EBinOp "&&" (EVar "passed") (EVar "restPassed")))))
+(DFunDef false "printGradedTestEngineGroups" ((PVar "xs0") (PVar "target") (PVar "rows")) (ELetGroup ((lgb "go" (clause ((PList)) (EVar "True")) (clause ((PCons (PVar "engine") (PVar "rest"))) (EBlock (DoExpr (EApp (EVar "putStrLn") (ELit (LString "")))) (DoExpr (EApp (EVar "putStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "-- ")) (EApp (EVar "$core.display") (EApp (EVar "engineName") (EVar "engine")))) (ELit (LString " --"))))) (DoLet false false (PVar "passed") (EApp (EApp (EVar "printGradedTestGroup") (EVar "target")) (EApp (EApp (EVar "gradedTestsForEngine") (EApp (EVar "engineName") (EVar "engine"))) (EVar "rows")))) (DoLet false false (PVar "restPassed") (EApp (EVar "go") (EVar "rest"))) (DoExpr (EBinOp "&&" (EVar "passed") (EVar "restPassed"))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "gradedTestsForEngine" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "GradedTest")) (TyApp (TyCon "List") (TyCon "GradedTest")))))
 (DFunDef false "gradedTestsForEngine" (PWild (PList)) (EListLit))
 (DFunDef false "gradedTestsForEngine" ((PVar "engine") (PCons (PVar "row") (PVar "rest"))) (EBlock (DoLet false false (PVar "next") (EApp (EApp (EVar "gradedTestsForEngine") (EVar "engine")) (EVar "rest"))) (DoLet false false (PTuple (PVar "rowEngine") PWild PWild PWild) (EApp (EVar "gradedTestRaw") (EVar "row"))) (DoExpr (EIf (EBinOp "==" (EVar "rowEngine") (EVar "engine")) (EBinOp "::" (EVar "row") (EVar "next")) (EVar "next")))))
@@ -6529,13 +6554,9 @@ testFilesReport _ _ acc = acc
 (DTypeSig false "preparedPlanError" (TyFun (TyCon "String") (TyFun (TyCon "PlanError") (TyFun (TyCon "PropRequest") (TyCon "PreparedPropRequest")))))
 (DFunDef false "preparedPlanError" ((PVar "engine") (PVar "err") (PCon "PropRequest" (PVar "name") (PVar "seed") (PVar "cases"))) (EApp (EVar "PreparedResult") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "PropResult") (EVar "engine")) (EVar "name")) (EVar "PropErroredResult")) (EApp (EVar "Some") (EVar "PropCapabilityError"))) (EApp (EVar "planErrorText") (EVar "err"))) (EVar "seed")) (EVar "cases"))))
 (DTypeSig false "rejectPreparedHelpers" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "PreparedPropRequest")) (TyApp (TyCon "List") (TyCon "PreparedPropRequest")))))))
-(DFunDef false "rejectPreparedHelpers" (PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "rejectPreparedHelpers" ((PVar "env") (PVar "engine") (PVar "rejected") (PCons (PAs "row" (PCon "PreparedResult" PWild)) (PVar "rest"))) (EBinOp "::" (EVar "row") (EApp (EApp (EApp (EApp (EVar "rejectPreparedHelpers") (EVar "env")) (EVar "engine")) (EVar "rejected")) (EVar "rest"))))
-(DFunDef false "rejectPreparedHelpers" ((PVar "env") (PVar "engine") (PVar "rejected") (PCons (PAs "row" (PCon "PreparedRun" (PVar "request") PWild (PVar "plans"))) (PVar "rest"))) (EBlock (DoLet false false (PVar "next") (EApp (EApp (EApp (EApp (EVar "rejectPreparedHelpers") (EVar "env")) (EVar "engine")) (EVar "rejected")) (EVar "rest"))) (DoExpr (EIf (EApp (EApp (EApp (EVar "plansHaveNoRejectedCarrier") (EVar "env")) (EVar "rejected")) (EVar "plans")) (EBinOp "::" (EVar "row") (EVar "next")) (EBinOp "::" (EApp (EVar "PreparedResult") (EApp (EApp (EApp (EApp (EApp (EVar "helperCapabilityResult") (EVar "env")) (EVar "engine")) (EVar "request")) (EVar "rejected")) (EVar "plans"))) (EVar "next"))))))
+(DFunDef false "rejectPreparedHelpers" ((PVar "env") (PVar "engine") (PVar "rejected") (PVar "requests")) (ELetGroup ((lgb "go" (clause ((PList)) (EListLit)) (clause ((PCons (PAs "row" (PCon "PreparedResult" PWild)) (PVar "rest"))) (EBinOp "::" (EVar "row") (EApp (EVar "go") (EVar "rest")))) (clause ((PCons (PAs "row" (PCon "PreparedRun" (PVar "request") PWild (PVar "plans"))) (PVar "rest"))) (EBlock (DoLet false false (PVar "next") (EApp (EVar "go") (EVar "rest"))) (DoExpr (EIf (EApp (EApp (EApp (EVar "plansHaveNoRejectedCarrier") (EVar "env")) (EVar "rejected")) (EVar "plans")) (EBinOp "::" (EVar "row") (EVar "next")) (EBinOp "::" (EApp (EVar "PreparedResult") (EApp (EApp (EApp (EApp (EApp (EVar "helperCapabilityResult") (EVar "env")) (EVar "engine")) (EVar "request")) (EVar "rejected")) (EVar "plans"))) (EVar "next")))))))) (EApp (EVar "go") (EVar "requests"))))
 (DTypeSig false "rejectPreparedProtocolCustom" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "PreparedPropRequest")) (TyApp (TyCon "List") (TyCon "PreparedPropRequest")))))))
-(DFunDef false "rejectPreparedProtocolCustom" (PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "rejectPreparedProtocolCustom" ((PVar "env") (PVar "engine") (PVar "message") (PCons (PAs "row" (PCon "PreparedResult" PWild)) (PVar "rest"))) (EBinOp "::" (EVar "row") (EApp (EApp (EApp (EApp (EVar "rejectPreparedProtocolCustom") (EVar "env")) (EVar "engine")) (EVar "message")) (EVar "rest"))))
-(DFunDef false "rejectPreparedProtocolCustom" ((PVar "env") (PVar "engine") (PVar "message") (PCons (PAs "row" (PCon "PreparedRun" (PVar "request") PWild (PVar "plans"))) (PVar "rest"))) (EBlock (DoLet false false (PVar "next") (EApp (EApp (EApp (EApp (EVar "rejectPreparedProtocolCustom") (EVar "env")) (EVar "engine")) (EVar "message")) (EVar "rest"))) (DoExpr (EMatch (EApp (EApp (EVar "customPlansReachable") (EVar "env")) (EVar "plans")) (arm (PList) () (EBinOp "::" (EVar "row") (EVar "next"))) (arm PWild () (EBinOp "::" (EApp (EVar "PreparedResult") (EApp (EApp (EApp (EVar "helperProtocolResult") (EVar "engine")) (EVar "message")) (EVar "request"))) (EVar "next")))))))
+(DFunDef false "rejectPreparedProtocolCustom" ((PVar "env") (PVar "engine") (PVar "message") (PVar "requests")) (ELetGroup ((lgb "go" (clause ((PList)) (EListLit)) (clause ((PCons (PAs "row" (PCon "PreparedResult" PWild)) (PVar "rest"))) (EBinOp "::" (EVar "row") (EApp (EVar "go") (EVar "rest")))) (clause ((PCons (PAs "row" (PCon "PreparedRun" (PVar "request") PWild (PVar "plans"))) (PVar "rest"))) (EBlock (DoLet false false (PVar "next") (EApp (EVar "go") (EVar "rest"))) (DoExpr (EMatch (EApp (EApp (EVar "customPlansReachable") (EVar "env")) (EVar "plans")) (arm (PList) () (EBinOp "::" (EVar "row") (EVar "next"))) (arm PWild () (EBinOp "::" (EApp (EVar "PreparedResult") (EApp (EApp (EApp (EVar "helperProtocolResult") (EVar "engine")) (EVar "message")) (EVar "request"))) (EVar "next"))))))))) (EApp (EVar "go") (EVar "requests"))))
 (DTypeSig false "helperProtocolResult" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "PropRequest") (TyCon "PropResult")))))
 (DFunDef false "helperProtocolResult" ((PVar "engine") (PVar "message") (PCon "PropRequest" (PVar "name") (PVar "seed") (PVar "cases"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "PropResult") (EVar "engine")) (EVar "name")) (EVar "PropErroredResult")) (EApp (EVar "Some") (EVar "PropProtocolError"))) (EVar "message")) (EVar "seed")) (EVar "cases")))
 (DTypeSig false "helperCapabilityResult" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "String") (TyFun (TyCon "PropRequest") (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "GenPlan")) (TyCon "PropResult")))))))
@@ -6550,8 +6571,7 @@ testFilesReport _ _ acc = acc
 (DTypeSig false "propResultForEngine" (TyFun (TyCon "String") (TyFun (TyCon "PropResult") (TyCon "PropResult"))))
 (DFunDef false "propResultForEngine" ((PVar "engine") (PCon "PropResult" PWild (PVar "name") (PVar "status") (PVar "kind") (PVar "detail") (PVar "seed") (PVar "cases"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "PropResult") (EVar "engine")) (EVar "name")) (EVar "status")) (EVar "kind")) (EVar "detail")) (EVar "seed")) (EVar "cases")))
 (DTypeSig false "protocolPropResults" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "List") (TyCon "PropResult"))))))))
-(DFunDef false "protocolPropResults" ((PList) PWild PWild PWild PWild) (EListLit))
-(DFunDef false "protocolPropResults" ((PCons (PVar "engine") (PVar "rest")) (PVar "message") (PVar "userDecls") (PVar "cases") (PVar "filterOpt")) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "protocolPropsForEngine") (EApp (EVar "engineName") (EVar "engine"))) (EVar "message")) (EApp (EApp (EVar "filterPropsByName") (EVar "filterOpt")) (EApp (EVar "filterProps") (EVar "userDecls")))) (EVar "cases")) (EApp (EApp (EApp (EApp (EApp (EVar "protocolPropResults") (EVar "rest")) (EVar "message")) (EVar "userDecls")) (EVar "cases")) (EVar "filterOpt"))))
+(DFunDef false "protocolPropResults" ((PVar "xs0") (PVar "message") (PVar "userDecls") (PVar "cases") (PVar "filterOpt")) (ELetGroup ((lgb "go" (clause ((PList)) (EListLit)) (clause ((PCons (PVar "engine") (PVar "rest"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "protocolPropsForEngine") (EApp (EVar "engineName") (EVar "engine"))) (EVar "message")) (EApp (EApp (EVar "filterPropsByName") (EVar "filterOpt")) (EApp (EVar "filterProps") (EVar "userDecls")))) (EVar "cases")) (EApp (EVar "go") (EVar "rest")))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "protocolPropsForEngine" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "PropResult")))))))
 (DFunDef false "protocolPropsForEngine" (PWild PWild (PList) PWild) (EListLit))
 (DFunDef false "protocolPropsForEngine" ((PVar "engine") (PVar "message") (PCons (PCon "DProp" PWild (PVar "name") PWild PWild) (PVar "rest")) (PVar "cases")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "PropResult") (EVar "engine")) (EVar "name")) (EVar "PropErroredResult")) (EApp (EVar "Some") (EVar "PropProtocolError"))) (EVar "message")) (EApp (EVar "propSeedValue") (ELit LUnit))) (EVar "cases")) (EApp (EApp (EApp (EApp (EVar "protocolPropsForEngine") (EVar "engine")) (EVar "message")) (EVar "rest")) (EVar "cases"))))

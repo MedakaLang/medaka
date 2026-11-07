@@ -214,20 +214,22 @@ countMonteMismatches _path _i _ _ =
 
 -- checked, failed, skipped — (-1) `maxBytes` means unlimited.
 checkRecords : String -> Int -> List Record -> <IO> (Int, Int, Int)
-checkRecords _path _maxBytes [] = (0, 0, 0)
-checkRecords path maxBytes (r :: rest) =
-  if maxBytes >= 0 && fullByteLength r > maxBytes then
-    let (c, f, s) = checkRecords path maxBytes rest
-    (c, f, s + 1)
-  else
-    let actual = encode (sha256 (expandMsg r.lenBits r.msgHex r.repeatN))
-    let (c, f, s) = checkRecords path maxBytes rest
-    if actual == r.mdHex then
-      (c + 1, f, s)
-    else
-      println
-        "MISMATCH \{path} Len=\{r.lenBits} Repeat=\{r.repeatN} expected=\{r.mdHex} actual=\{actual}"
-      (c + 1, f + 1, s)
+checkRecords path maxBytes records0 = go records0
+  where
+    go [] = (0, 0, 0)
+    go (r :: rest) =
+      if maxBytes >= 0 && fullByteLength r > maxBytes then
+        let (c, f, s) = go rest
+        (c, f, s + 1)
+      else
+        let actual = encode (sha256 (expandMsg r.lenBits r.msgHex r.repeatN))
+        let (c, f, s) = go rest
+        if actual == r.mdHex then
+          (c + 1, f, s)
+        else
+          println
+            "MISMATCH \{path} Len=\{r.lenBits} Repeat=\{r.repeatN} expected=\{r.mdHex} actual=\{actual}"
+          (c + 1, f + 1, s)
 
 runFile : String -> Int -> <IO, FileRead> Result String (Int, Int, Int)
 runFile path maxBytes =

@@ -79,22 +79,24 @@ b64Val c urlSafe =
 -- quad to the accumulator instead would be linear in the characters already
 -- emitted, making the whole encode quadratic in the input's length.
 encodeGo : Bytes -> Int -> Int -> Bool -> List Char -> List Char
-encodeGo bs i n urlSafe acc
-  | i >= n = reverse acc
-  | otherwise =
-    let remain = n - i
-    let b0 = byteAt i bs
-    let b1 = if remain > 1 then byteAt (i + 1) bs else 0
-    let b2 = if remain > 2 then byteAt (i + 2) bs else 0
-    let c0 = shiftRight b0 2
-    let c1 = bitOr (shiftLeft (bitAnd b0 3) 4) (shiftRight b1 4)
-    let c2 = bitOr (shiftLeft (bitAnd b1 15) 2) (shiftRight b2 6)
-    let c3 = bitAnd b2 63
-    let ch0 = b64Char c0 urlSafe
-    let ch1 = b64Char c1 urlSafe
-    let ch2 = if remain > 1 then b64Char c2 urlSafe else '='
-    let ch3 = if remain > 2 then b64Char c3 urlSafe else '='
-    encodeGo bs (i + 3) n urlSafe (ch3 :: ch2 :: ch1 :: ch0 :: acc)
+encodeGo bs i0 n urlSafe acc0 = go i0 acc0
+  where
+    go i acc
+      | i >= n = reverse acc
+      | otherwise =
+        let remain = n - i
+        let b0 = byteAt i bs
+        let b1 = if remain > 1 then byteAt (i + 1) bs else 0
+        let b2 = if remain > 2 then byteAt (i + 2) bs else 0
+        let c0 = shiftRight b0 2
+        let c1 = bitOr (shiftLeft (bitAnd b0 3) 4) (shiftRight b1 4)
+        let c2 = bitOr (shiftLeft (bitAnd b1 15) 2) (shiftRight b2 6)
+        let c3 = bitAnd b2 63
+        let ch0 = b64Char c0 urlSafe
+        let ch1 = b64Char c1 urlSafe
+        let ch2 = if remain > 1 then b64Char c2 urlSafe else '='
+        let ch3 = if remain > 2 then b64Char c3 urlSafe else '='
+        go (i + 3) (ch3 :: ch2 :: ch1 :: ch0 :: acc)
 
 {- | The bytes as standard base64, padded with `=`.
 
@@ -198,19 +200,21 @@ decodeGo : Array Char ->
   Bool ->
   List Int ->
   Result String (List Int)
-decodeGo chars i n urlSafe acc
-  | i >= n = Ok (reverse acc)
-  | otherwise =
-    let isLast = i + 4 == n
-    match (decodeQuad
-      (charAt i chars)
-      (charAt (i + 1) chars)
-      (charAt (i + 2) chars)
-      (charAt (i + 3) chars)
-      urlSafe
-      isLast)
-      Err e => Err e
-      Ok bytes => decodeGo chars (i + 4) n urlSafe (reverse bytes ++ acc)
+decodeGo chars i0 n urlSafe acc0 = go i0 acc0
+  where
+    go i acc
+      | i >= n = Ok (reverse acc)
+      | otherwise =
+        let isLast = i + 4 == n
+        match (decodeQuad
+          (charAt i chars)
+          (charAt (i + 1) chars)
+          (charAt (i + 2) chars)
+          (charAt (i + 3) chars)
+          urlSafe
+          isLast)
+          Err e => Err e
+          Ok bytes => go (i + 4) (reverse bytes ++ acc)
 
 decodeWith : String -> Bool -> Result String Bytes
 decodeWith s urlSafe =

@@ -1,5 +1,5 @@
 # META
-source_lines=5274
+source_lines=5281
 stages=DESUGAR,MARK
 # SOURCE
 import frontend.parse_locate.{locateOffset, locateTokenDiagnostic}
@@ -333,7 +333,8 @@ exprToPat (EAsPat x sub) = PAs x (Loc "" 0 0 0 0) noBinderId (exprToPat sub)
 exprToPat (EOrPat es) = orPatOf (map exprToPat es)
 exprToPat (EApp f x) = appToPat (EApp f x)
 exprToPat (EAnnot e t) = PAnn (exprToPat e) t
-exprToPat _ = PWild
+exprToPat (ELam _ _ | ELet _ _ _ _ _ | EMatch _ _ | EIf _ _ _ | EBinOp _ _ _ _ | EUnOp _ _ _ | EInfix _ _ _ | EFieldAccess _ _ _ | EArrayLit _ | ERangeList _ _ _ | ERangeArray _ _ _ | ESlice _ _ _ _ | ELetGroup _ _ | ESection _ | EIndex _ _ | EHeadAnnot _ _ | EBlock _ | EDo _ _ | EStringInterp _ | EGuards _ | ERecordCreate _ _ | ERecordUpdate _ _ _ | EVariantUpdate _ _ _ | EMapLit _ _ | ESetLit _ _ | EMethodRef _ | EDictApp _ | EVarAt _ _ | EVarId _ _ | EMethodAt _ _ _ | EDictAt _ _ | EDoOrigin _ _) =
+  PWild
 
 -- Alternatives joined into one pattern; nested or-patterns are flattened so a
 -- POr never sits directly inside a POr.
@@ -481,6 +482,8 @@ parseOr = ParserE (binLevel orLevel)
 -- up as the very `PR` its level returned, so a descent through all nine levels
 -- allocates nothing of its own.
 binLevel : Int -> ParseContext -> Int -> PR Expr
+-- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 binLevel lvl ctx pos
   | lvl > mulLevel = runPWith ctx parseUnary pos
   | otherwise = binLevelRest lvl ctx (binLevel (lvl + 1) ctx pos)
@@ -2177,7 +2180,8 @@ tyAppSpine t = tyAppSpineAcc t []
 tyAppSpineAcc : Ty -> List Ty -> Option (String, List Ty)
 tyAppSpineAcc (TyCon { tyConName = iface }) acc = Some (iface, acc)
 tyAppSpineAcc (TyApp f a) acc = tyAppSpineAcc f (a :: acc)
-tyAppSpineAcc _ _ = None
+tyAppSpineAcc (TyVar _ | TyFun _ _ | TyTuple _ | TyEffect _ _ _ | TyConstrained _ _ | TyNamed _ _ _ | TyQual _ _ _ | TyRow _ _ _ | TyAuth _ _) _ =
+  None
 
 concatMapC : List Ty -> List Constraint
 concatMapC [] = []
@@ -4767,7 +4771,8 @@ flattenFieldPath (ELoc _ e) = flattenFieldPath e
 flattenFieldPath (EVar x) = Some (x, [])
 flattenFieldPath (EFieldAccess inner f _) =
   fieldPathExtend (flattenFieldPath inner) f
-flattenFieldPath _ = None
+flattenFieldPath (ELit _ | EApp _ _ | ELam _ _ | ELet _ _ _ _ _ | EMatch _ _ | EIf _ _ _ | EBinOp _ _ _ _ | EUnOp _ _ _ | EInfix _ _ _ | ETuple _ | EListLit _ | EArrayLit _ | ERangeList _ _ _ | ERangeArray _ _ _ | ESlice _ _ _ _ | ELetGroup _ _ | ESection _ | EIndex _ _ | EAnnot _ _ | EHeadAnnot _ _ | EBlock _ | EDo _ _ | EStringInterp _ | EGuards _ | ERecordCreate _ _ | ERecordUpdate _ _ _ | EVariantUpdate _ _ _ | EMapLit _ _ | ESetLit _ _ | EAsPat _ _ | EOrPat _ | EMethodRef _ | EDictApp _ | EVarAt _ _ | EVarId _ _ | EMethodAt _ _ _ | EDictAt _ _ | EDoOrigin _ _ | ENumLit _ _ _ | EWideLit _ _ _ _) =
+  None
 
 fieldPathExtend : Option (String, List String) ->
   String ->
@@ -5124,12 +5129,14 @@ leadingIndentLineStart chars i
   | otherwise = leadingIndentLineStart chars (i - 1)
 
 leadingIndentAllBlank : Array Char -> Int -> Int -> Bool
-leadingIndentAllBlank chars i limit
-  | i >= limit = True
-  | otherwise = match arrayGetUnsafe i chars
-    ' ' => leadingIndentAllBlank chars (i + 1) limit
-    '\t' => leadingIndentAllBlank chars (i + 1) limit
-    _ => False
+leadingIndentAllBlank chars i0 limit = go i0
+  where
+    go i
+      | i >= limit = True
+      | otherwise = match arrayGetUnsafe i chars
+        ' ' => go (i + 1)
+        '\t' => go (i + 1)
+        _ => False
 
 -- Build the leftover-token "unexpected `X`" message, appending an
 -- indentation-aware hint when the token is the sole content that dedented
@@ -5372,7 +5379,7 @@ parseResultWith mode src tokList offList =
 (DFunDef false "exprToPat" ((PCon "EOrPat" (PVar "es"))) (EApp (EVar "orPatOf") (EApp (EApp (EVar "map") (EVar "exprToPat")) (EVar "es"))))
 (DFunDef false "exprToPat" ((PCon "EApp" (PVar "f") (PVar "x"))) (EApp (EVar "appToPat") (EApp (EApp (EVar "EApp") (EVar "f")) (EVar "x"))))
 (DFunDef false "exprToPat" ((PCon "EAnnot" (PVar "e") (PVar "t"))) (EApp (EApp (EVar "PAnn") (EApp (EVar "exprToPat") (EVar "e"))) (EVar "t")))
-(DFunDef false "exprToPat" (PWild) (EVar "PWild"))
+(DFunDef false "exprToPat" ((POr (PCon "ELam" PWild PWild) (PCon "ELet" PWild PWild PWild PWild PWild) (PCon "EMatch" PWild PWild) (PCon "EIf" PWild PWild PWild) (PCon "EBinOp" PWild PWild PWild PWild) (PCon "EUnOp" PWild PWild PWild) (PCon "EInfix" PWild PWild PWild) (PCon "EFieldAccess" PWild PWild PWild) (PCon "EArrayLit" PWild) (PCon "ERangeList" PWild PWild PWild) (PCon "ERangeArray" PWild PWild PWild) (PCon "ESlice" PWild PWild PWild PWild) (PCon "ELetGroup" PWild PWild) (PCon "ESection" PWild) (PCon "EIndex" PWild PWild) (PCon "EHeadAnnot" PWild PWild) (PCon "EBlock" PWild) (PCon "EDo" PWild PWild) (PCon "EStringInterp" PWild) (PCon "EGuards" PWild) (PCon "ERecordCreate" PWild PWild) (PCon "ERecordUpdate" PWild PWild PWild) (PCon "EVariantUpdate" PWild PWild PWild) (PCon "EMapLit" PWild PWild) (PCon "ESetLit" PWild PWild) (PCon "EMethodRef" PWild) (PCon "EDictApp" PWild) (PCon "EVarAt" PWild PWild) (PCon "EVarId" PWild PWild) (PCon "EMethodAt" PWild PWild PWild) (PCon "EDictAt" PWild PWild) (PCon "EDoOrigin" PWild PWild))) (EVar "PWild"))
 (DTypeSig false "orPatOf" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Pat")))
 (DFunDef false "orPatOf" ((PList (PVar "p"))) (EVar "p"))
 (DFunDef false "orPatOf" ((PVar "ps")) (EApp (EVar "POr") (EApp (EApp (EVar "flatMap") (EVar "orAlts")) (EVar "ps"))))
@@ -5993,7 +6000,7 @@ parseResultWith mode src tokList offList =
 (DTypeSig false "tyAppSpineAcc" (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Ty")))))))
 (DFunDef false "tyAppSpineAcc" ((PRec "TyCon" ((rf "tyConName" (PVar "iface"))) false) (PVar "acc")) (EApp (EVar "Some") (ETuple (EVar "iface") (EVar "acc"))))
 (DFunDef false "tyAppSpineAcc" ((PCon "TyApp" (PVar "f") (PVar "a")) (PVar "acc")) (EApp (EApp (EVar "tyAppSpineAcc") (EVar "f")) (EBinOp "::" (EVar "a") (EVar "acc"))))
-(DFunDef false "tyAppSpineAcc" (PWild PWild) (EVar "None"))
+(DFunDef false "tyAppSpineAcc" ((POr (PCon "TyVar" PWild) (PCon "TyFun" PWild PWild) (PCon "TyTuple" PWild) (PCon "TyEffect" PWild PWild PWild) (PCon "TyConstrained" PWild PWild) (PCon "TyNamed" PWild PWild PWild) (PCon "TyQual" PWild PWild PWild) (PCon "TyRow" PWild PWild PWild) (PCon "TyAuth" PWild PWild)) PWild) (EVar "None"))
 (DTypeSig false "concatMapC" (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyCon "Constraint"))))
 (DFunDef false "concatMapC" ((PList)) (EListLit))
 (DFunDef false "concatMapC" ((PCons (PVar "t") (PVar "rest"))) (EBinOp "++" (EApp (EVar "extractConstraints") (EVar "t")) (EApp (EVar "concatMapC") (EVar "rest"))))
@@ -6690,7 +6697,7 @@ parseResultWith mode src tokList offList =
 (DFunDef false "flattenFieldPath" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "flattenFieldPath") (EVar "e")))
 (DFunDef false "flattenFieldPath" ((PCon "EVar" (PVar "x"))) (EApp (EVar "Some") (ETuple (EVar "x") (EListLit))))
 (DFunDef false "flattenFieldPath" ((PCon "EFieldAccess" (PVar "inner") (PVar "f") PWild)) (EApp (EApp (EVar "fieldPathExtend") (EApp (EVar "flattenFieldPath") (EVar "inner"))) (EVar "f")))
-(DFunDef false "flattenFieldPath" (PWild) (EVar "None"))
+(DFunDef false "flattenFieldPath" ((POr (PCon "ELit" PWild) (PCon "EApp" PWild PWild) (PCon "ELam" PWild PWild) (PCon "ELet" PWild PWild PWild PWild PWild) (PCon "EMatch" PWild PWild) (PCon "EIf" PWild PWild PWild) (PCon "EBinOp" PWild PWild PWild PWild) (PCon "EUnOp" PWild PWild PWild) (PCon "EInfix" PWild PWild PWild) (PCon "ETuple" PWild) (PCon "EListLit" PWild) (PCon "EArrayLit" PWild) (PCon "ERangeList" PWild PWild PWild) (PCon "ERangeArray" PWild PWild PWild) (PCon "ESlice" PWild PWild PWild PWild) (PCon "ELetGroup" PWild PWild) (PCon "ESection" PWild) (PCon "EIndex" PWild PWild) (PCon "EAnnot" PWild PWild) (PCon "EHeadAnnot" PWild PWild) (PCon "EBlock" PWild) (PCon "EDo" PWild PWild) (PCon "EStringInterp" PWild) (PCon "EGuards" PWild) (PCon "ERecordCreate" PWild PWild) (PCon "ERecordUpdate" PWild PWild PWild) (PCon "EVariantUpdate" PWild PWild PWild) (PCon "EMapLit" PWild PWild) (PCon "ESetLit" PWild PWild) (PCon "EAsPat" PWild PWild) (PCon "EOrPat" PWild) (PCon "EMethodRef" PWild) (PCon "EDictApp" PWild) (PCon "EVarAt" PWild PWild) (PCon "EVarId" PWild PWild) (PCon "EMethodAt" PWild PWild PWild) (PCon "EDictAt" PWild PWild) (PCon "EDoOrigin" PWild PWild) (PCon "ENumLit" PWild PWild PWild) (PCon "EWideLit" PWild PWild PWild PWild))) (EVar "None"))
 (DTypeSig false "fieldPathExtend" (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "fieldPathExtend" ((PCon "Some" (PTuple (PVar "x") (PVar "fs"))) (PVar "f")) (EApp (EVar "Some") (ETuple (EVar "x") (EBinOp "++" (EVar "fs") (EListLit (EVar "f"))))))
 (DFunDef false "fieldPathExtend" ((PCon "None") PWild) (EVar "None"))
@@ -6754,7 +6761,7 @@ parseResultWith mode src tokList offList =
 (DTypeSig false "leadingIndentLineStart" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "leadingIndentLineStart" ((PVar "chars") (PVar "i")) (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (ELit (LInt 0)) (EIf (EBinOp "||" (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "chars")) (ELit (LChar "\n"))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "chars")) (ELit (LChar "\r")))) (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EIf (EVar "otherwise") (EApp (EApp (EVar "leadingIndentLineStart") (EVar "chars")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "leadingIndentAllBlank" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
-(DFunDef false "leadingIndentAllBlank" ((PVar "chars") (PVar "i") (PVar "limit")) (EIf (EBinOp ">=" (EVar "i") (EVar "limit")) (EVar "True") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "chars")) (arm (PLit (LChar " ")) () (EApp (EApp (EApp (EVar "leadingIndentAllBlank") (EVar "chars")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "limit"))) (arm (PLit (LChar "\t")) () (EApp (EApp (EApp (EVar "leadingIndentAllBlank") (EVar "chars")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "limit"))) (arm PWild () (EVar "False"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "leadingIndentAllBlank" ((PVar "chars") (PVar "i0") (PVar "limit")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "limit")) (EVar "True") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "chars")) (arm (PLit (LChar " ")) () (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (arm (PLit (LChar "\t")) () (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (arm PWild () (EVar "False"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EVar "go") (EVar "i0"))))
 (DTypeSig false "unexpectedLeftoverMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))))
 (DFunDef false "unexpectedLeftoverMsg" ((PVar "src") (PVar "toks") (PVar "offs") (PVar "srcLen") (PVar "pos")) (EBlock (DoLet false false (PVar "base") (EApp (EVar "unexpectedTokenMsg") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "pos")))) (DoLet false false (PVar "offset") (EApp (EApp (EApp (EApp (EVar "locateOffset") (EVar "toks")) (EVar "offs")) (EVar "srcLen")) (EVar "pos"))) (DoExpr (EMatch (EApp (EApp (EVar "leadingIndentAt") (EVar "src")) (EVar "offset")) (arm (PCon "Some" (PVar "col")) ((GBool (EBinOp ">" (EVar "col") (ELit (LInt 0))))) (EApp (EApp (EApp (EVar "leadingIndentMsg") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "pos"))) (EVar "base")) (EVar "col"))) (arm PWild () (EApp (EApp (EVar "trailingArrowLeftoverMsg") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "pos"))) (EVar "base")))))))
 (DTypeSig false "trailingArrowLeftoverMsg" (TyFun (TyCon "Token") (TyFun (TyCon "String") (TyCon "String"))))
@@ -6875,7 +6882,7 @@ parseResultWith mode src tokList offList =
 (DFunDef false "exprToPat" ((PCon "EOrPat" (PVar "es"))) (EApp (EVar "orPatOf") (EApp (EApp (EMethodRef "map") (EVar "exprToPat")) (EVar "es"))))
 (DFunDef false "exprToPat" ((PCon "EApp" (PVar "f") (PVar "x"))) (EApp (EVar "appToPat") (EApp (EApp (EVar "EApp") (EVar "f")) (EVar "x"))))
 (DFunDef false "exprToPat" ((PCon "EAnnot" (PVar "e") (PVar "t"))) (EApp (EApp (EVar "PAnn") (EApp (EVar "exprToPat") (EVar "e"))) (EVar "t")))
-(DFunDef false "exprToPat" (PWild) (EVar "PWild"))
+(DFunDef false "exprToPat" ((POr (PCon "ELam" PWild PWild) (PCon "ELet" PWild PWild PWild PWild PWild) (PCon "EMatch" PWild PWild) (PCon "EIf" PWild PWild PWild) (PCon "EBinOp" PWild PWild PWild PWild) (PCon "EUnOp" PWild PWild PWild) (PCon "EInfix" PWild PWild PWild) (PCon "EFieldAccess" PWild PWild PWild) (PCon "EArrayLit" PWild) (PCon "ERangeList" PWild PWild PWild) (PCon "ERangeArray" PWild PWild PWild) (PCon "ESlice" PWild PWild PWild PWild) (PCon "ELetGroup" PWild PWild) (PCon "ESection" PWild) (PCon "EIndex" PWild PWild) (PCon "EHeadAnnot" PWild PWild) (PCon "EBlock" PWild) (PCon "EDo" PWild PWild) (PCon "EStringInterp" PWild) (PCon "EGuards" PWild) (PCon "ERecordCreate" PWild PWild) (PCon "ERecordUpdate" PWild PWild PWild) (PCon "EVariantUpdate" PWild PWild PWild) (PCon "EMapLit" PWild PWild) (PCon "ESetLit" PWild PWild) (PCon "EMethodRef" PWild) (PCon "EDictApp" PWild) (PCon "EVarAt" PWild PWild) (PCon "EVarId" PWild PWild) (PCon "EMethodAt" PWild PWild PWild) (PCon "EDictAt" PWild PWild) (PCon "EDoOrigin" PWild PWild))) (EVar "PWild"))
 (DTypeSig false "orPatOf" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Pat")))
 (DFunDef false "orPatOf" ((PList (PVar "p"))) (EVar "p"))
 (DFunDef false "orPatOf" ((PVar "ps")) (EApp (EVar "POr") (EApp (EApp (EDictApp "flatMap") (EVar "orAlts")) (EVar "ps"))))
@@ -7496,7 +7503,7 @@ parseResultWith mode src tokList offList =
 (DTypeSig false "tyAppSpineAcc" (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Ty")))))))
 (DFunDef false "tyAppSpineAcc" ((PRec "TyCon" ((rf "tyConName" (PVar "iface"))) false) (PVar "acc")) (EApp (EVar "Some") (ETuple (EVar "iface") (EVar "acc"))))
 (DFunDef false "tyAppSpineAcc" ((PCon "TyApp" (PVar "f") (PVar "a")) (PVar "acc")) (EApp (EApp (EVar "tyAppSpineAcc") (EVar "f")) (EBinOp "::" (EVar "a") (EVar "acc"))))
-(DFunDef false "tyAppSpineAcc" (PWild PWild) (EVar "None"))
+(DFunDef false "tyAppSpineAcc" ((POr (PCon "TyVar" PWild) (PCon "TyFun" PWild PWild) (PCon "TyTuple" PWild) (PCon "TyEffect" PWild PWild PWild) (PCon "TyConstrained" PWild PWild) (PCon "TyNamed" PWild PWild PWild) (PCon "TyQual" PWild PWild PWild) (PCon "TyRow" PWild PWild PWild) (PCon "TyAuth" PWild PWild)) PWild) (EVar "None"))
 (DTypeSig false "concatMapC" (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyCon "Constraint"))))
 (DFunDef false "concatMapC" ((PList)) (EListLit))
 (DFunDef false "concatMapC" ((PCons (PVar "t") (PVar "rest"))) (EBinOp "++" (EApp (EVar "extractConstraints") (EVar "t")) (EApp (EVar "concatMapC") (EVar "rest"))))
@@ -8193,7 +8200,7 @@ parseResultWith mode src tokList offList =
 (DFunDef false "flattenFieldPath" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "flattenFieldPath") (EVar "e")))
 (DFunDef false "flattenFieldPath" ((PCon "EVar" (PVar "x"))) (EApp (EVar "Some") (ETuple (EVar "x") (EListLit))))
 (DFunDef false "flattenFieldPath" ((PCon "EFieldAccess" (PVar "inner") (PVar "f") PWild)) (EApp (EApp (EVar "fieldPathExtend") (EApp (EVar "flattenFieldPath") (EVar "inner"))) (EVar "f")))
-(DFunDef false "flattenFieldPath" (PWild) (EVar "None"))
+(DFunDef false "flattenFieldPath" ((POr (PCon "ELit" PWild) (PCon "EApp" PWild PWild) (PCon "ELam" PWild PWild) (PCon "ELet" PWild PWild PWild PWild PWild) (PCon "EMatch" PWild PWild) (PCon "EIf" PWild PWild PWild) (PCon "EBinOp" PWild PWild PWild PWild) (PCon "EUnOp" PWild PWild PWild) (PCon "EInfix" PWild PWild PWild) (PCon "ETuple" PWild) (PCon "EListLit" PWild) (PCon "EArrayLit" PWild) (PCon "ERangeList" PWild PWild PWild) (PCon "ERangeArray" PWild PWild PWild) (PCon "ESlice" PWild PWild PWild PWild) (PCon "ELetGroup" PWild PWild) (PCon "ESection" PWild) (PCon "EIndex" PWild PWild) (PCon "EAnnot" PWild PWild) (PCon "EHeadAnnot" PWild PWild) (PCon "EBlock" PWild) (PCon "EDo" PWild PWild) (PCon "EStringInterp" PWild) (PCon "EGuards" PWild) (PCon "ERecordCreate" PWild PWild) (PCon "ERecordUpdate" PWild PWild PWild) (PCon "EVariantUpdate" PWild PWild PWild) (PCon "EMapLit" PWild PWild) (PCon "ESetLit" PWild PWild) (PCon "EAsPat" PWild PWild) (PCon "EOrPat" PWild) (PCon "EMethodRef" PWild) (PCon "EDictApp" PWild) (PCon "EVarAt" PWild PWild) (PCon "EVarId" PWild PWild) (PCon "EMethodAt" PWild PWild PWild) (PCon "EDictAt" PWild PWild) (PCon "EDoOrigin" PWild PWild) (PCon "ENumLit" PWild PWild PWild) (PCon "EWideLit" PWild PWild PWild PWild))) (EVar "None"))
 (DTypeSig false "fieldPathExtend" (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "fieldPathExtend" ((PCon "Some" (PTuple (PVar "x") (PVar "fs"))) (PVar "f")) (EApp (EVar "Some") (ETuple (EVar "x") (EBinOp "++" (EVar "fs") (EListLit (EVar "f"))))))
 (DFunDef false "fieldPathExtend" ((PCon "None") PWild) (EVar "None"))
@@ -8257,7 +8264,7 @@ parseResultWith mode src tokList offList =
 (DTypeSig false "leadingIndentLineStart" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "leadingIndentLineStart" ((PVar "chars") (PVar "i")) (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (ELit (LInt 0)) (EIf (EBinOp "||" (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "chars")) (ELit (LChar "\n"))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "chars")) (ELit (LChar "\r")))) (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EIf (EVar "otherwise") (EApp (EApp (EVar "leadingIndentLineStart") (EVar "chars")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "leadingIndentAllBlank" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
-(DFunDef false "leadingIndentAllBlank" ((PVar "chars") (PVar "i") (PVar "limit")) (EIf (EBinOp ">=" (EVar "i") (EVar "limit")) (EVar "True") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "chars")) (arm (PLit (LChar " ")) () (EApp (EApp (EApp (EVar "leadingIndentAllBlank") (EVar "chars")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "limit"))) (arm (PLit (LChar "\t")) () (EApp (EApp (EApp (EVar "leadingIndentAllBlank") (EVar "chars")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "limit"))) (arm PWild () (EVar "False"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "leadingIndentAllBlank" ((PVar "chars") (PVar "i0") (PVar "limit")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "limit")) (EVar "True") (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "chars")) (arm (PLit (LChar " ")) () (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (arm (PLit (LChar "\t")) () (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (arm PWild () (EVar "False"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EVar "go") (EVar "i0"))))
 (DTypeSig false "unexpectedLeftoverMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))))
 (DFunDef false "unexpectedLeftoverMsg" ((PVar "src") (PVar "toks") (PVar "offs") (PVar "srcLen") (PVar "pos")) (EBlock (DoLet false false (PVar "base") (EApp (EVar "unexpectedTokenMsg") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "pos")))) (DoLet false false (PVar "offset") (EApp (EApp (EApp (EApp (EVar "locateOffset") (EVar "toks")) (EVar "offs")) (EVar "srcLen")) (EVar "pos"))) (DoExpr (EMatch (EApp (EApp (EVar "leadingIndentAt") (EVar "src")) (EVar "offset")) (arm (PCon "Some" (PVar "col")) ((GBool (EBinOp ">" (EVar "col") (ELit (LInt 0))))) (EApp (EApp (EApp (EVar "leadingIndentMsg") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "pos"))) (EVar "base")) (EVar "col"))) (arm PWild () (EApp (EApp (EVar "trailingArrowLeftoverMsg") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "pos"))) (EVar "base")))))))
 (DTypeSig false "trailingArrowLeftoverMsg" (TyFun (TyCon "Token") (TyFun (TyCon "String") (TyCon "String"))))

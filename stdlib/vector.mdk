@@ -235,11 +235,13 @@ clear : Vector a -> Unit
 clear (Vector _ len) = len := 0
 
 mapInPlaceGo : (a -> a) -> Array a -> Int -> Int -> Unit
-mapInPlaceGo f arr i n
-  | i >= n = ()
-  | otherwise =
-    arraySetUnsafe i (f (arrayGetUnsafe i arr)) arr
-    mapInPlaceGo f arr (i + 1) n
+mapInPlaceGo f arr i0 n = go i0
+  where
+    go i
+      | i >= n = ()
+      | otherwise =
+        arraySetUnsafe i (f (arrayGetUnsafe i arr)) arr
+        go (i + 1)
 
 {- | Replaces every element with `f` applied to it.
 
@@ -262,22 +264,26 @@ mapInPlace f (Vector backing len) = mapInPlaceGo f !backing 0 !len
 -- Moves `arr[k - 1]` to `arr[k]` for k from `hi` down to `lo + 1`, opening
 -- slot `lo`. Walks downward so no element is read after it is overwritten.
 shiftUpGo : Array a -> Int -> Int -> Unit
-shiftUpGo arr hi lo =
-  if hi <= lo then
-    ()
-  else
-    arraySetUnsafe hi (arrayGetUnsafe (hi - 1) arr) arr
-    shiftUpGo arr (hi - 1) lo
+shiftUpGo arr hi0 lo = go hi0
+  where
+    go hi =
+      if hi <= lo then
+        ()
+      else
+        arraySetUnsafe hi (arrayGetUnsafe (hi - 1) arr) arr
+        go (hi - 1)
 
 -- Moves `arr[k + 1]` to `arr[k]` for k from `lo` up to `hi - 1`, closing the
 -- gap left by the removed element.
 shiftDownGo : Array a -> Int -> Int -> Unit
-shiftDownGo arr lo hi =
-  if lo >= hi then
-    ()
-  else
-    arraySetUnsafe lo (arrayGetUnsafe (lo + 1) arr) arr
-    shiftDownGo arr (lo + 1) hi
+shiftDownGo arr lo0 hi = go lo0
+  where
+    go lo =
+      if lo >= hi then
+        ()
+      else
+        arraySetUnsafe lo (arrayGetUnsafe (lo + 1) arr) arr
+        go (lo + 1)
 
 {- | Inserts `x` at index `i`, shifting the following elements right.
 
@@ -342,14 +348,18 @@ sortInPlace ma = sortInPlaceBy compare ma
 -- ── Folds (index-based; never allocate a list) ──────────────────────────
 
 foldGo : (b -> a -> <e> b) -> b -> Array a -> Int -> Int -> <e> b
-foldGo f z arr i n
-  | i >= n = z
-  | otherwise = foldGo f (f z (arrayGetUnsafe i arr)) arr (i + 1) n
+foldGo f z0 arr i0 n = go z0 i0
+  where
+    go z i
+      | i >= n = z
+      | otherwise = go (f z (arrayGetUnsafe i arr)) (i + 1)
 
 foldRightGo : (a -> b -> <e> b) -> b -> Array a -> Int -> <e> b
-foldRightGo f z arr i
-  | i < 0 = z
-  | otherwise = foldRightGo f (f (arrayGetUnsafe i arr) z) arr (i - 1)
+foldRightGo f z0 arr i0 = go z0 i0
+  where
+    go z i
+      | i < 0 = z
+      | otherwise = go (f (arrayGetUnsafe i arr) z) (i - 1)
 
 -- ── Instances ───────────────────────────────────────────────────────────
 

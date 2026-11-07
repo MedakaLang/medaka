@@ -1,5 +1,5 @@
 # META
-source_lines=78
+source_lines=79
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-discarded-result: `let _ = e` on a call whose declared result is a Result or an Option, in a plain block. The value is propagated, handled or named.
@@ -25,6 +25,7 @@ import tools.lint_core.{
   StdlibIndex,
   Visitor(..),
   mkVisitorRule,
+  noFix,
 }
 import tools.lint_index.{ProjectIndex}
 import tools.lint_scope.{FileScopes}
@@ -70,7 +71,7 @@ finding message loc = Finding {
   message = message,
   severity = SevWarning,
   loc = Some loc,
-  fix = None,
+  fix = noFix,
 }
 
 resultMessage : String
@@ -85,7 +86,7 @@ optionMessage =
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "DoStmt" false) (mem "Loc" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
 (DUse false (UseGroup ("tools" "lint_calls") ((mem "DiscardClass" true) (mem "discardOf" false) (mem "plainBlockVisitors" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" false) (mem "Finding" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "mkVisitorRule" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" false) (mem "Finding" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "mkVisitorRule" false) (mem "noFix" false))))
 (DUse false (UseGroup ("tools" "lint_index") ((mem "ProjectIndex" false))))
 (DUse false (UseGroup ("tools" "lint_scope") ((mem "FileScopes" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "ruleNameDiscardedResult" false))))
@@ -96,7 +97,7 @@ optionMessage =
 (DTypeSig false "resultStmt" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "FileScopes") (TyFun (TyCon "String") (TyFun (TyCon "DoStmt") (TyApp (TyCon "List") (TyCon "Finding")))))))
 (DFunDef false "resultStmt" ((PVar "ix") (PVar "scopes") (PVar "path") (PVar "s")) (EMatch (EApp (EApp (EApp (EApp (EVar "discardOf") (EVar "ix")) (EVar "scopes")) (EVar "path")) (EVar "s")) (arm (PCon "Some" (PTuple (PVar "loc") PWild (PCon "ClassResult"))) () (EListLit (EApp (EApp (EVar "finding") (EVar "resultMessage")) (EVar "loc")))) (arm (PCon "Some" (PTuple (PVar "loc") PWild (PCon "ClassOption"))) () (EListLit (EApp (EApp (EVar "finding") (EVar "optionMessage")) (EVar "loc")))) (arm PWild () (EListLit))))
 (DTypeSig false "finding" (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyCon "Finding"))))
-(DFunDef false "finding" ((PVar "message") (PVar "loc")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDiscardedResult")) (fa "message" (EVar "message")) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EVar "loc"))) (fa "fix" (EVar "None")))))
+(DFunDef false "finding" ((PVar "message") (PVar "loc")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDiscardedResult")) (fa "message" (EVar "message")) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EVar "loc"))) (fa "fix" (EVar "noFix")))))
 (DTypeSig false "resultMessage" (TyCon "String"))
 (DFunDef false "resultMessage" () (ELit (LString "`let _ = e` throws away a Result, and with it the error. Propagate the error (`?`, a match, `andThen`, or change the signature and its callers), or name the discard: `bestEffort \"<why this error is ignorable>\" (e)`")))
 (DTypeSig false "optionMessage" (TyCon "String"))
@@ -106,7 +107,7 @@ optionMessage =
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "DoStmt" false) (mem "Loc" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" true))))
 (DUse false (UseGroup ("tools" "lint_calls") ((mem "DiscardClass" true) (mem "discardOf" false) (mem "plainBlockVisitors" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" false) (mem "Finding" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "mkVisitorRule" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "FileFacts" false) (mem "Finding" true) (mem "Fixability" true) (mem "Need" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" false) (mem "Visitor" true) (mem "mkVisitorRule" false) (mem "noFix" false))))
 (DUse false (UseGroup ("tools" "lint_index") ((mem "ProjectIndex" false))))
 (DUse false (UseGroup ("tools" "lint_scope") ((mem "FileScopes" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "ruleNameDiscardedResult" false))))
@@ -117,7 +118,7 @@ optionMessage =
 (DTypeSig false "resultStmt" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "FileScopes") (TyFun (TyCon "String") (TyFun (TyCon "DoStmt") (TyApp (TyCon "List") (TyCon "Finding")))))))
 (DFunDef false "resultStmt" ((PVar "ix") (PVar "scopes") (PVar "path") (PVar "s")) (EMatch (EApp (EApp (EApp (EApp (EVar "discardOf") (EVar "ix")) (EVar "scopes")) (EVar "path")) (EVar "s")) (arm (PCon "Some" (PTuple (PVar "loc") PWild (PCon "ClassResult"))) () (EListLit (EApp (EApp (EVar "finding") (EVar "resultMessage")) (EVar "loc")))) (arm (PCon "Some" (PTuple (PVar "loc") PWild (PCon "ClassOption"))) () (EListLit (EApp (EApp (EVar "finding") (EVar "optionMessage")) (EVar "loc")))) (arm PWild () (EListLit))))
 (DTypeSig false "finding" (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyCon "Finding"))))
-(DFunDef false "finding" ((PVar "message") (PVar "loc")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDiscardedResult")) (fa "message" (EVar "message")) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EVar "loc"))) (fa "fix" (EVar "None")))))
+(DFunDef false "finding" ((PVar "message") (PVar "loc")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameDiscardedResult")) (fa "message" (EVar "message")) (fa "severity" (EVar "SevWarning")) (fa "loc" (EApp (EVar "Some") (EVar "loc"))) (fa "fix" (EVar "noFix")))))
 (DTypeSig false "resultMessage" (TyCon "String"))
 (DFunDef false "resultMessage" () (ELit (LString "`let _ = e` throws away a Result, and with it the error. Propagate the error (`?`, a match, `andThen`, or change the signature and its callers), or name the discard: `bestEffort \"<why this error is ignorable>\" (e)`")))
 (DTypeSig false "optionMessage" (TyCon "String"))

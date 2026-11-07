@@ -1678,12 +1678,14 @@ methodHeadArity target (CApp f _ _) = methodHeadArity target f
 methodHeadArity _ _ = None
 
 bindMethodArity : String -> String -> List CBind -> Option Int
-bindMethodArity _ _ [] = None
-bindMethodArity bindName method ((CBind name clauses _ _) :: rest)
-  | name == bindName = match clauses
-    (CClause _ body) :: _ => methodHeadArity method body
-    [] => None
-  | otherwise = bindMethodArity bindName method rest
+bindMethodArity bindName method xs0 = go xs0
+  where
+    go [] = None
+    go ((CBind name clauses _ _) :: rest)
+      | name == bindName = match clauses
+        (CClause _ body) :: _ => methodHeadArity method body
+        [] => None
+      | otherwise = go rest
 
 loweredMethodArity : String -> String -> String -> Option Int
 loweredMethodArity source bindName method =
@@ -2587,31 +2589,31 @@ sameIfaceSpelling : IfaceRef -> String -> Bool
 sameIfaceSpelling iface name = iface.irName == name
 
 anyMatchSupplied : String -> String -> List MethodDisposition -> Expectation
-anyMatchSupplied _ _ [] = fail "no supplied row has that instance and method"
-anyMatchSupplied wantMid wantMethod (d :: rest) = match d
-  Supplied { instance = i, method = m } =>
-    if instIdMid i == wantMid && m == wantMethod then
-      pass
-    else
-      anyMatchSupplied wantMid wantMethod rest
-  InheritedDefault _ _ _ => anyMatchSupplied wantMid wantMethod rest
+anyMatchSupplied wantMid wantMethod xs0 = go xs0
+  where
+    go [] = fail "no supplied row has that instance and method"
+    go (d :: rest) = match d
+      Supplied { instance = i, method = m } =>
+        if instIdMid i == wantMid && m == wantMethod then pass else go rest
+      InheritedDefault _ _ _ => go rest
 
 anyMatchInheritedDefault : String ->
   String ->
   String ->
   List MethodDisposition ->
   Expectation
-anyMatchInheritedDefault _ _ _ [] =
-  fail "no inherited default has that instance, interface and method"
-anyMatchInheritedDefault wantMid wantIface wantMethod (d :: rest) = match d
-  InheritedDefault { instance = i, iface = ir, method = m } =>
-    if instIdMid i == wantMid
-      && sameIfaceSpelling ir wantIface
-      && m == wantMethod then
-      pass
-    else
-      anyMatchInheritedDefault wantMid wantIface wantMethod rest
-  Supplied _ _ _ => anyMatchInheritedDefault wantMid wantIface wantMethod rest
+anyMatchInheritedDefault wantMid wantIface wantMethod xs0 = go xs0
+  where
+    go [] = fail "no inherited default has that instance, interface and method"
+    go (d :: rest) = match d
+      InheritedDefault { instance = i, iface = ir, method = m } =>
+        if instIdMid i == wantMid
+          && sameIfaceSpelling ir wantIface
+          && m == wantMethod then
+          pass
+        else
+          go rest
+      Supplied _ _ _ => go rest
 
 -- The shape: `Dog` implements two DIFFERENT interfaces (`ifa::Speak`,
 -- `ifb::Greet`) that happen to share the bare method name `speak`, both
@@ -5397,7 +5399,8 @@ methodEvInExpr target (ELoc _ expr) = methodEvInExpr target expr
 methodEvInExpr target (EApp fn arg) = match methodEvInExpr target fn
   Some ev => Some ev
   None => methodEvInExpr target arg
-methodEvInExpr _ _ = None
+methodEvInExpr _ (ELit _ | EVar _ | ELam _ _ | ELet _ _ _ _ _ | EMatch _ _ | EIf _ _ _ | EBinOp _ _ _ _ | EUnOp _ _ _ | EInfix _ _ _ | EFieldAccess _ _ _ | ETuple _ | EListLit _ | EArrayLit _ | ERangeList _ _ _ | ERangeArray _ _ _ | ESlice _ _ _ _ | ELetGroup _ _ | ESection _ | EIndex _ _ | EAnnot _ _ | EHeadAnnot _ _ | EBlock _ | EDo _ _ | EStringInterp _ | EGuards _ | ERecordCreate _ _ | ERecordUpdate _ _ _ | EVariantUpdate _ _ _ | EMapLit _ _ | ESetLit _ _ | EAsPat _ _ | EOrPat _ | EMethodRef _ | EDictApp _ | EVarAt _ _ | EVarId _ _ | EDictAt _ _ | EDoOrigin _ _ | ENumLit _ _ _ | EWideLit _ _ _ _) =
+  None
 
 methodEvInDecls : String -> List Decl -> Option EvId
 methodEvInDecls _ [] = None

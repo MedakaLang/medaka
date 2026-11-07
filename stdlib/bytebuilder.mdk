@@ -238,12 +238,14 @@ emitBeSint nbytes v buf
 -- the value's 64-bit two's-complement pattern (`U64.truncate`), and every byte
 -- above them repeats the sign.
 emitSignFill : Int -> Int -> Builder -> Unit
-emitSignFill n v buf =
-  if n <= 0 then
-    ()
-  else
-    emitLowByte (if v < 0 then 255 else 0) buf
-    emitSignFill (n - 1) v buf
+emitSignFill n0 v buf = go n0
+  where
+    go n =
+      if n <= 0 then
+        ()
+      else
+        emitLowByte (if v < 0 then 255 else 0) buf
+        go (n - 1)
 
 -- | Appends a non-negative integer as `nbytes` bytes, most significant
 -- byte first. The inverse of `beUint nbytes`.

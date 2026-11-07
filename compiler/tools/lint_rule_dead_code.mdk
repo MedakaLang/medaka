@@ -21,10 +21,11 @@ import tools.lint_core.{
   StdlibIndex,
   factComments,
   mkRule,
+  noFix,
+  factDeclLocs,
 }
 import tools.lint_shared.{
   dedupeNamesLoc,
-  declLocList,
   nameSetOf,
   ruleNameDeadCode,
   sortUniqS,
@@ -84,9 +85,9 @@ ruleDeadCode : StdlibIndex ->
   Positions ->
   List Decl ->
   List Finding
-ruleDeadCode _ _ facts pos prog =
+ruleDeadCode _ _ facts _ prog =
   let reach = reachableNames facts prog
-  map deadFinding (filterList (deadPair reach) (privateDefLocs pos prog))
+  map deadFinding (filterList (deadPair reach) (privateDefLocs facts prog))
 
 deadPair : HashMap String Unit -> (String, Option Loc) -> Bool
 deadPair reach (n, _) = not (has n reach)
@@ -100,7 +101,7 @@ deadFinding (name, loc) = Finding {
       ++ "' is unreachable from exports/main/doctests — remove it (dead code)",
   severity = SevWarning,
   loc = loc,
-  fix = None,
+  fix = noFix,
 }
 
 -- private (unexported) top-level fn/value bindings, deduped by name (first loc),
@@ -111,8 +112,8 @@ deadFinding (name, loc) = Finding {
 -- (`DTypeSig True`), NOT the `DFunDef` — so exportedness is decided by
 -- `exportedNames` (which unions DFunDef-pub and DTypeSig-pub), not the DFunDef
 -- flag alone.
-privateDefLocs : Positions -> List Decl -> List (String, Option Loc)
-privateDefLocs pos prog =
+privateDefLocs : FileFacts -> List Decl -> List (String, Option Loc)
+privateDefLocs facts prog =
   -- HashMap-as-set: `contains` over the exported LIST was O(exports) per decl,
   -- i.e. O(decls x exports) over the filterList — one of this rule's four
   -- List-as-a-set quadratics (see reachableNames).  Membership only; order
@@ -121,7 +122,7 @@ privateDefLocs pos prog =
   dedupeNamesLoc
     (filterList
       (candidatePair exported)
-      (flatMap allDefNameL (declLocList pos prog)))
+      (flatMap allDefNameL (factDeclLocs facts)))
 
 allDefNameL : (Decl, Option Loc) -> List (String, Option Loc)
 allDefNameL (DFunDef _ name _ _ _ _, loc) = [(name, loc)]
@@ -219,12 +220,14 @@ bfsReach : HashMap String (List String) ->
   HashMap String Unit ->
   List String ->
   Unit
-bfsReach _ _ [] = ()
-bfsReach refMap visited (x :: rest)
-  | has x visited = bfsReach refMap visited rest
-  | otherwise =
-    setInPlace x () visited
-    bfsReach refMap visited (refsOf refMap x ++ rest)
+bfsReach refMap visited xs0 = go xs0
+  where
+    go [] = ()
+    go (x :: rest)
+      | has x visited = go rest
+      | otherwise =
+        setInPlace x () visited
+        go (refsOf refMap x ++ rest)
 
 refsOf : HashMap String (List String) -> String -> List String
 refsOf refMap n = findWithDefault [] n refMap
@@ -257,6 +260,8 @@ identTokens s =
   identTokGo cs (arrayLength cs) 0
 
 identTokGo : Array Char -> Int -> Int -> List String
+-- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 identTokGo cs n i
   | i >= n = []
   | isIdentStart (arrayGetUnsafe i cs) =
@@ -278,10 +283,12 @@ isIdentStart : Char -> Bool
 isIdentStart c = isLower c || isUpper c || c == '_'
 
 identEnd : Array Char -> Int -> Int -> Int
-identEnd cs n i
-  | i >= n = i
-  | isAlnum (arrayGetUnsafe i cs) = identEnd cs n (i + 1)
-  | otherwise = i
+identEnd cs n i0 = go i0
+  where
+    go i
+      | i >= n = i
+      | isAlnum (arrayGetUnsafe i cs) = go (i + 1)
+      | otherwise = i
 
 -- ── doctest identifiers (string-aware comment channel) ────────────────────────
 -- Identifiers on `>` input lines of doctests (both `-- > expr` line-comment and

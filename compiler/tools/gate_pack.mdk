@@ -550,22 +550,25 @@ balUnsampled : List (String, Int) ->
   List (String, List String) ->
   S.Set String ->
   List String
-balUnsampled _ _ [] acc = toList acc
-balUnsampled ps es ((_, names) :: rest) acc =
-  balUnsampled ps es rest (balAddMissing ps es names acc)
+balUnsampled ps es xs0 acc0 = go xs0 acc0
+  where
+    go [] acc = toList acc
+    go ((_, names) :: rest) acc = go rest (balAddMissing ps es names acc)
 
 balAddMissing : List (String, Int) ->
   List String ->
   List String ->
   S.Set String ->
   S.Set String
-balAddMissing _ _ [] acc = acc
-balAddMissing ps es (n :: ns) acc
-  | not (contains n es) = balAddMissing ps es ns acc
-  | S.has n acc = balAddMissing ps es ns acc
-  | otherwise = match lookupAssoc n ps
-    Some _ => balAddMissing ps es ns acc
-    None => balAddMissing ps es ns (S.insert n acc)
+balAddMissing ps es xs0 acc0 = go xs0 acc0
+  where
+    go [] acc = acc
+    go (n :: ns) acc
+      | not (contains n es) = go ns acc
+      | S.has n acc = go ns acc
+      | otherwise = match lookupAssoc n ps
+        Some _ => go ns acc
+        None => go ns (S.insert n acc)
 
 -- The oracles one gate's row must build for it, priced: its scrape kept to
 -- what `build_oracles.sh` builds (`--for`'s own filter) and the multicall does
@@ -642,6 +645,8 @@ balUncosted base (g :: gs)
       "\{g.name} (baseline key '\{baselineKey g.run}')" :: balUncosted base gs
 
 balCands : Setup -> List GateCost -> List Gate -> List Cand
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 balCands _ _ [] = []
 balCands s base (g :: gs)
   | g.shard == balOtherJob = balCands s base gs
@@ -680,6 +685,8 @@ balCands s base (g :: gs)
 -- the balancer on its own output derives the same pin set, hence the same
 -- target.  See `balTarget`.
 balRows : Price -> List RunRecord -> List Shard -> List Row
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 balRows _ _ [] = []
 balRows p runs (s :: ss) =
   let j = balJobsFor s.name runs
@@ -913,9 +920,9 @@ balUnionOrcsGo ((n, ms) :: os) have names
    the second run emits the first run's assignment, byte for byte —
    `diff_compiler_gate_balance.sh`'s `_bal_real`-twice assertion. -}
 balPickStable : Cand -> List Row -> Option String
-balPickStable c rs = match balPick c rs
-  None => None
-  Some best => if balStays c best rs then Some c.curRow else Some best
+balPickStable c rs = do
+  best <- balPick c rs
+  if balStays c best rs then Some c.curRow else Some best
 
 {- | Clause (1)+(2)+(3) of `balPickStable`, in that order.  Kept separate so the
    legality clause is a readable line rather than a term inside an arithmetic
@@ -969,10 +976,12 @@ balRowTakes c (r :: rs)
 -- as 0, which `balStays` only ever reaches through `balRowTakes` having
 -- already answered False for the same name.
 balRowKey : Cand -> String -> List Row -> Int
-balRowKey _ _ [] = 0
-balRowKey c n (r :: rs)
-  | r.rname == n = balKey c r
-  | otherwise = balRowKey c n rs
+balRowKey c n rs0 = go rs0
+  where
+    go [] = 0
+    go (r :: rs)
+      | r.rname == n = balKey c r
+      | otherwise = go rs
 
 -- Put one gate on a row, and re-derive that row's load.
 --
@@ -984,6 +993,8 @@ balRowKey c n (r :: rs)
 -- so the committed assignment and the derived one are scored by the same
 -- model rather than by two schedules that happen to share a function.
 balAdd : String -> Cand -> List Row -> List Row
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 balAdd _ _ [] = []
 balAdd n c (r :: rs)
   | r.rname == n =
@@ -1027,6 +1038,8 @@ balBucketAdd ms [] = ms :: []
 balBucketAdd ms bs = balBucketPut ms (balMinL bs) bs
 
 balBucketPut : Int -> Int -> List Int -> List Int
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 balBucketPut _ _ [] = []
 balBucketPut ms m (b :: bs)
   | b == m = b + ms :: bs
@@ -1182,6 +1195,8 @@ balRowMembers n (g :: gs)
 -- Declared, but not there: the pinned gate has been moved off the closed row
 -- (F3(b)).  Naming where it went instead is the whole diagnosis.
 balPinMissing : String -> List Gate -> List String -> List String -> List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 balPinMissing _ _ [] _ = []
 balPinMissing n gs (p :: ps) members
   | balElemStr p members = balPinMissing n gs ps members
@@ -1201,6 +1216,8 @@ balShardOfGate n (g :: gs)
 
 -- There, but not declared: a gate has been moved onto the closed row (F3(a)).
 balPinExtra : String -> List String -> List String -> List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 balPinExtra _ _ [] = []
 balPinExtra n pinned (m :: ms)
   | balElemStr m pinned = balPinExtra n pinned ms
@@ -1262,12 +1279,11 @@ balTarget stab cs rows0 =
   -- pinned `Place`s are looked up by name downstream (`balPlaceOf`), so their
   -- order carries no meaning of its own.
   let sorted = balSortCands cs
-  match balSeedClosed sorted rows0 []
-    Err m => Err m
-    Ok (pinned, rows1) =>
-      map
-        ((placed, rows2) => (pinned ++ placed, rows2))
-        (balPlace stab (balSortCands (balOpenCands sorted rows0)) rows1 [])
+  do
+    (pinned, rows1) <- balSeedClosed sorted rows0 []
+    map
+      ((placed, rows2) => (pinned ++ placed, rows2))
+      (balPlace stab (balSortCands (balOpenCands sorted rows0)) rows1 [])
 
 -- The assignment already on disk, as the same shape, so the two can be scored
 -- by identical code rather than by two functions that could drift apart.
@@ -1623,6 +1639,8 @@ balDefaultTag False = ""
 
    A residual near zero or negative is the surprising one. -}
 balCalibLines : List Cand -> List Row -> List RunRecord -> List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 balCalibLines _ [] _ = []
 balCalibLines cs (r :: rs) runs =
   balCalibLine cs r runs :: balCalibLines cs rs runs
@@ -1742,6 +1760,8 @@ balJobLine cands r runs = match balJobGrade cands r runs
 
 -- Counts over the rows: (within, outside, not gradeable).
 balJobTally : List Cand -> List Row -> List RunRecord -> (Int, Int, Int)
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
 balJobTally _ [] _ = (0, 0, 0)
 balJobTally cands (r :: rs) runs =
   let (w, o, u) = balJobTally cands rs runs
@@ -1919,6 +1939,8 @@ balOosBlock base cs runs =
       ]
 
 balOosFolds : List (List Int) -> List String -> Int -> Int -> List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 balOosFolds vs ids i nr
   | i >= nr = []
   | otherwise =
@@ -1964,6 +1986,8 @@ balStatDrift (c :: cs)
 -- (`balUncosted`), so the `None` arm here is unreachable in a real run and
 -- drops rather than guesses.
 balOosVecs : List GateCost -> List Cand -> List String -> List (List Int)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 balOosVecs _ [] _ = []
 balOosVecs base (c :: cs) ids = match costRowOf c.crun base
   None => balOosVecs base cs ids
@@ -1975,9 +1999,9 @@ balOosVecs base (c :: cs) ids = match costRowOf c.crun base
 -- the "same admitted set across every fold" rule in `balOosBlock`.
 balOosVecFor : GateCost -> List String -> Option (List Int)
 balOosVecFor _ [] = Some []
-balOosVecFor g (r :: rs) = match balSampleForRun r g.ms g.sampleRuns None
-  None => None
-  Some v => map (v :: _) (balOosVecFor g rs)
+balOosVecFor g (r :: rs) = do
+  v <- balSampleForRun r g.ms g.sampleRuns None
+  map (v :: _) (balOosVecFor g rs)
 
 -- The one sample of `g` attributed to run `r`, or `None` if there are zero or
 -- more than one.  TWO is as disqualifying as zero: a runId that appears twice
@@ -2026,26 +2050,32 @@ balOosAct [] _ = 0
 balOosAct (v :: vs) i = balNth i v + balOosAct vs i
 
 balOosPredAll : List (List Int) -> Int -> Int -> Int
-balOosPredAll vs i nr
-  | i >= nr = 0
-  | otherwise = balOosPred vs i + balOosPredAll vs (i + 1) nr
+balOosPredAll vs i0 nr = go i0
+  where
+    go i
+      | i >= nr = 0
+      | otherwise = balOosPred vs i + go (i + 1)
 
 balOosActAll : List (List Int) -> Int -> Int -> Int
-balOosActAll vs i nr
-  | i >= nr = 0
-  | otherwise = balOosAct vs i + balOosActAll vs (i + 1) nr
+balOosActAll vs i0 nr = go i0
+  where
+    go i
+      | i >= nr = 0
+      | otherwise = balOosAct vs i + go (i + 1)
 
 -- Per-fold RELATIVE errors, summed in per-mille and averaged by the caller.
 -- Per-fold rather than pooled: a fold's own total is the denominator its own
 -- error means anything against.
 balOosAbsPm : List (List Int) -> Int -> Int -> Int -> Int
-balOosAbsPm vs i nr acc
-  | i >= nr = acc
-  | otherwise =
-    let p = balOosPred vs i
-    let a = balOosAct vs i
-    let d = if p >= a then p - a else a - p
-    balOosAbsPm vs (i + 1) nr (acc + (if a > 0 then d * 1000 / a else 0))
+balOosAbsPm vs i0 nr acc0 = go i0 acc0
+  where
+    go i acc
+      | i >= nr = acc
+      | otherwise =
+        let p = balOosPred vs i
+        let a = balOosAct vs i
+        let d = if p >= a then p - a else a - p
+        go (i + 1) (acc + (if a > 0 then d * 1000 / a else 0))
 
 balDropNth : Int -> List Int -> List Int
 balDropNth _ [] = []
@@ -2396,9 +2426,9 @@ balSetupOf : String ->
   List String ->
   List String ->
   Result String Setup
-balSetupOf baseSrc gateOrcs entries multicall = match parseOracleCosts baseSrc
-  Err m => Err m
-  Ok ocs => balSetup ocs gateOrcs entries multicall
+balSetupOf baseSrc gateOrcs entries multicall = do
+  ocs <- parseOracleCosts baseSrc
+  balSetup ocs gateOrcs entries multicall
 
 balCompute : String ->
   Setup ->
@@ -2413,52 +2443,51 @@ balCompute regPath setup gates shs base runs regSrc =
   let rows0 = balRows setup.price runs shs
   -- Cost-descending into BOTH scorings — `balAdd`'s and `balCurrent`'s notes.
   let (_, curRows) = balCurrent (balSortCands cs) rows0
-  match balTarget True cs rows0
-    Err m => Err m
-    Ok (ps, rows) =>
-      let illegal = not (balCurrentLegal cs curRows)
-      let gains = balPole rows * 100 < balPole curRows * (100 - balMarginPct)
-      let moved = balMoved ps > 0
-      let label =
-        if illegal then
-          "rebalanced (the committed assignment ran a gate on a row lacking its toolchain)"
-        else if moved then
-          "rebalanced"
+  do
+    (ps, rows) <- balTarget True cs rows0
+    let illegal = not (balCurrentLegal cs curRows)
+    let gains = balPole rows * 100 < balPole curRows * (100 - balMarginPct)
+    let moved = balMoved ps > 0
+    let label =
+      if illegal then
+        "rebalanced (the committed assignment ran a gate on a row lacking its toolchain)"
+      else if moved then
+        "rebalanced"
+      else
+        "unchanged (the committed assignment is already the derived one)"
+    let head = stringConcat
+      [
+        "medaka gate balance: \{regPath}\n",
+        balReport label setup cs rows ps runs,
+        balCoverage gates,
+        balThinLine base,
+        balOosBlock base cs runs,
+        balStabLine cs rows0 ps rows,
+        "  hysteresis: a move needs a pole gain of more than \{intToString balMarginPct}%",
+        balBandNote illegal gains moved,
+        "\n  budget pole/floor \{balMilli balTargetMilli}",
+        if balFactorMilli cs rows <= balTargetMilli then
+          " — MET\n"
         else
-          "unchanged (the committed assignment is already the derived one)"
-      let head = stringConcat
-        [
-          "medaka gate balance: \{regPath}\n",
-          balReport label setup cs rows ps runs,
-          balCoverage gates,
-          balThinLine base,
-          balOosBlock base cs runs,
-          balStabLine cs rows0 ps rows,
-          "  hysteresis: a move needs a pole gain of more than \{intToString balMarginPct}%",
-          balBandNote illegal gains moved,
-          "\n  budget pole/floor \{balMilli balTargetMilli}",
-          if balFactorMilli cs rows <= balTargetMilli then
-            " — MET\n"
-          else
-            " — MISSED\n",
-          balMoveLine ps,
-          -- Scored against `curRows`, never `rows`: the recorded wall clock came
-          -- from the COMMITTED assignment, so comparing it to the DERIVED one
-          -- would grade the model against a gate set that has never run.
-          "  calibration — last recorded CI wall clock vs this model's prediction for the COMMITTED assignment:\n",
-          if setup.modelled then
-            "  (recorded and predicted are the GATE wall, rowElapsedMs; the job-wall line under each row grades the predicted job wall against jobWallMs, the Actions job duration)\n"
-          else
-            "",
-          joinNl (balCalibLines cs curRows runs),
-          "\n",
-          balJobSummary cs curRows runs,
-        ]
-      match balEnforce cs rows
-        Some m => Err "\{head}\{m}"
-        None => match balSplice (balShardValues gates ps) (splitNl regSrc)
-          Err m => Err "\{head}\{m}"
-          Ok outLines => Ok (head, joinNl outLines)
+          " — MISSED\n",
+        balMoveLine ps,
+        -- Scored against `curRows`, never `rows`: the recorded wall clock came
+        -- from the COMMITTED assignment, so comparing it to the DERIVED one
+        -- would grade the model against a gate set that has never run.
+        "  calibration — last recorded CI wall clock vs this model's prediction for the COMMITTED assignment:\n",
+        if setup.modelled then
+          "  (recorded and predicted are the GATE wall, rowElapsedMs; the job-wall line under each row grades the predicted job wall against jobWallMs, the Actions job duration)\n"
+        else
+          "",
+        joinNl (balCalibLines cs curRows runs),
+        "\n",
+        balJobSummary cs curRows runs,
+      ]
+    match balEnforce cs rows
+      Some m => Err "\{head}\{m}"
+      None => match balSplice (balShardValues gates ps) (splitNl regSrc)
+        Err m => Err "\{head}\{m}"
+        Ok outLines => Ok (head, joinNl outLines)
 
 -- ── `gate budget` — #2180's governor (S-5) ──────────────────────────────────
 --
@@ -2627,6 +2656,8 @@ budgetTimeoutRemedy =
   "Re-classing a gate changes its CI kill timeout (cheap=300s / medium=900s / heavy=3600s, `timeoutFor`) — pick deliberately, not just to silence this gate."
 
 budgetOverClassLines : List GateCost -> String -> List Gate -> List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 budgetOverClassLines _ _ [] = []
 budgetOverClassLines base commitMessage (g :: gs) =
   -- `ms` is always `Some` here — `budgetOverClassGates` only keeps gates
@@ -2662,11 +2693,10 @@ budgetPoleFactor : Setup ->
   Result String (Option Int)
 budgetPoleFactor setup gates shs base runs =
   let cs = balCands setup base gates
-  match balTarget True cs (balRows setup.price runs shs)
-    Err m => Err m
-    Ok (_, rows) =>
-      let factor = balFactorMilli cs rows
-      if factor <= balTargetMilli then Ok None else Ok (Some factor)
+  do
+    (_, rows) <- balTarget True cs (balRows setup.price runs shs)
+    let factor = balFactorMilli cs rows
+    if factor <= balTargetMilli then Ok None else Ok (Some factor)
 
 budgetPoleFloorLines : String -> Option Int -> List String
 budgetPoleFloorLines _ None = []
@@ -2796,9 +2826,9 @@ budgetOutput regPath regSrc baseSrc gateOrcs entries multicall commitMessage =
               let uncosted = budgetUncosted base gates
               let overClass = budgetOverClassGates base gates
               let orphans = budgetOrphanNames base gates
-              let factor = match balSetupOf baseSrc gateOrcs entries multicall
-                Err m => Err m
-                Ok setup => budgetPoleFactor setup gates shs base runs
+              let factor = do
+                setup <- balSetupOf baseSrc gateOrcs entries multicall
+                budgetPoleFactor setup gates shs base runs
               match factor
                 Err m => Err "medaka gate budget: \{m}\n"
                 Ok poleFactorOpt =>

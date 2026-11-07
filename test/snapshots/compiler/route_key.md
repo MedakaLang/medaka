@@ -1,5 +1,5 @@
 # META
-source_lines=820
+source_lines=821
 stages=DESUGAR,MARK
 # SOURCE
 -- The SHARED ROUTE-WORD MINT (ARCH B-2, #1113) — the only mint of an impl route
@@ -205,14 +205,15 @@ entryOrdinal (EvEntry (EvId _ i) _) = i
 -- The position of the last of [runs] starting at or below ordinal [i], searched
 -- in positions [a] up to [b]; one less than [a] when none there does.
 runAt : Array EvRun -> Int -> Int -> Int -> Int
-runAt runs i a b =
-  if a >= b then
-    a - 1
-  else
-    let mid = (a + b) / 2
-    match arrayGetUnsafe mid runs
-      EvRun lo _ =>
-        if lo <= i then runAt runs i (mid + 1) b else runAt runs i a mid
+runAt runs i lo0 hi0 = go lo0 hi0
+  where
+    go a b =
+      if a >= b then
+        a - 1
+      else
+        let mid = (a + b) / 2
+        match arrayGetUnsafe mid runs
+          EvRun lo _ => if lo <= i then go (mid + 1) b else go a mid
 
 -- The run of [idx] holding ordinal [i]'s slot; panics when none does.
 runFor : EvIndex -> String -> Int -> EvRun
@@ -850,7 +851,7 @@ rkTyList =
 (DTypeSig false "entryOrdinal" (TyFun (TyCon "EvEntry") (TyCon "Int")))
 (DFunDef false "entryOrdinal" ((PCon "EvEntry" (PCon "EvId" PWild (PVar "i")) PWild)) (EVar "i"))
 (DTypeSig false "runAt" (TyFun (TyApp (TyCon "Array") (TyCon "EvRun")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
-(DFunDef false "runAt" ((PVar "runs") (PVar "i") (PVar "a") (PVar "b")) (EIf (EBinOp ">=" (EVar "a") (EVar "b")) (EBinOp "-" (EVar "a") (ELit (LInt 1))) (EBlock (DoLet false false (PVar "mid") (EBinOp "/" (EBinOp "+" (EVar "a") (EVar "b")) (ELit (LInt 2)))) (DoExpr (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "mid")) (EVar "runs")) (arm (PCon "EvRun" (PVar "lo") PWild) () (EIf (EBinOp "<=" (EVar "lo") (EVar "i")) (EApp (EApp (EApp (EApp (EVar "runAt") (EVar "runs")) (EVar "i")) (EBinOp "+" (EVar "mid") (ELit (LInt 1)))) (EVar "b")) (EApp (EApp (EApp (EApp (EVar "runAt") (EVar "runs")) (EVar "i")) (EVar "a")) (EVar "mid")))))))))
+(DFunDef false "runAt" ((PVar "runs") (PVar "i") (PVar "lo0") (PVar "hi0")) (ELetGroup ((lgb "go" (clause ((PVar "a") (PVar "b")) (EIf (EBinOp ">=" (EVar "a") (EVar "b")) (EBinOp "-" (EVar "a") (ELit (LInt 1))) (EBlock (DoLet false false (PVar "mid") (EBinOp "/" (EBinOp "+" (EVar "a") (EVar "b")) (ELit (LInt 2)))) (DoExpr (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "mid")) (EVar "runs")) (arm (PCon "EvRun" (PVar "lo") PWild) () (EIf (EBinOp "<=" (EVar "lo") (EVar "i")) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "mid") (ELit (LInt 1)))) (EVar "b")) (EApp (EApp (EVar "go") (EVar "a")) (EVar "mid"))))))))))) (EApp (EApp (EVar "go") (EVar "lo0")) (EVar "hi0"))))
 (DTypeSig false "runFor" (TyFun (TyCon "EvIndex") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "EvRun")))))
 (DFunDef false "runFor" ((PCon "EvIndex" (PVar "runs")) (PVar "m") (PVar "i")) (EBlock (DoLet false false (PVar "k") (EApp (EApp (EApp (EApp (EVar "runAt") (EVar "runs")) (EVar "i")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "runs")))) (DoExpr (EIf (EBinOp "<" (EVar "k") (ELit (LInt 0))) (EApp (EApp (EVar "noSlot") (EVar "m")) (EVar "i")) (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "k")) (EVar "runs")) (arm (PAs "run" (PCon "EvRun" (PVar "lo") (PVar "arr"))) () (EIf (EBinOp "<" (EBinOp "-" (EVar "i") (EVar "lo")) (EApp (EVar "arrayLength") (EVar "arr"))) (EVar "run") (EApp (EApp (EVar "noSlot") (EVar "m")) (EVar "i")))))))))
 (DTypeSig false "noSlot" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyVar "a"))))
@@ -1002,7 +1003,7 @@ rkTyList =
 (DTypeSig false "entryOrdinal" (TyFun (TyCon "EvEntry") (TyCon "Int")))
 (DFunDef false "entryOrdinal" ((PCon "EvEntry" (PCon "EvId" PWild (PVar "i")) PWild)) (EVar "i"))
 (DTypeSig false "runAt" (TyFun (TyApp (TyCon "Array") (TyCon "EvRun")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
-(DFunDef false "runAt" ((PVar "runs") (PVar "i") (PVar "a") (PVar "b")) (EIf (EBinOp ">=" (EVar "a") (EVar "b")) (EBinOp "-" (EVar "a") (ELit (LInt 1))) (EBlock (DoLet false false (PVar "mid") (EBinOp "/" (EBinOp "+" (EVar "a") (EVar "b")) (ELit (LInt 2)))) (DoExpr (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "mid")) (EVar "runs")) (arm (PCon "EvRun" (PVar "lo") PWild) () (EIf (EBinOp "<=" (EVar "lo") (EVar "i")) (EApp (EApp (EApp (EApp (EVar "runAt") (EVar "runs")) (EVar "i")) (EBinOp "+" (EVar "mid") (ELit (LInt 1)))) (EVar "b")) (EApp (EApp (EApp (EApp (EVar "runAt") (EVar "runs")) (EVar "i")) (EVar "a")) (EVar "mid")))))))))
+(DFunDef false "runAt" ((PVar "runs") (PVar "i") (PVar "lo0") (PVar "hi0")) (ELetGroup ((lgb "go" (clause ((PVar "a") (PVar "b")) (EIf (EBinOp ">=" (EVar "a") (EVar "b")) (EBinOp "-" (EVar "a") (ELit (LInt 1))) (EBlock (DoLet false false (PVar "mid") (EBinOp "/" (EBinOp "+" (EVar "a") (EVar "b")) (ELit (LInt 2)))) (DoExpr (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "mid")) (EVar "runs")) (arm (PCon "EvRun" (PVar "lo") PWild) () (EIf (EBinOp "<=" (EVar "lo") (EVar "i")) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "mid") (ELit (LInt 1)))) (EVar "b")) (EApp (EApp (EVar "go") (EVar "a")) (EVar "mid"))))))))))) (EApp (EApp (EVar "go") (EVar "lo0")) (EVar "hi0"))))
 (DTypeSig false "runFor" (TyFun (TyCon "EvIndex") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "EvRun")))))
 (DFunDef false "runFor" ((PCon "EvIndex" (PVar "runs")) (PVar "m") (PVar "i")) (EBlock (DoLet false false (PVar "k") (EApp (EApp (EApp (EApp (EVar "runAt") (EVar "runs")) (EVar "i")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "runs")))) (DoExpr (EIf (EBinOp "<" (EVar "k") (ELit (LInt 0))) (EApp (EApp (EVar "noSlot") (EVar "m")) (EVar "i")) (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "k")) (EVar "runs")) (arm (PAs "run" (PCon "EvRun" (PVar "lo") (PVar "arr"))) () (EIf (EBinOp "<" (EBinOp "-" (EVar "i") (EVar "lo")) (EApp (EVar "arrayLength") (EVar "arr"))) (EVar "run") (EApp (EApp (EVar "noSlot") (EVar "m")) (EVar "i")))))))))
 (DTypeSig false "noSlot" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyVar "a"))))

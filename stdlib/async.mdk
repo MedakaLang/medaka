@@ -316,19 +316,21 @@ schedule : Ref (List (Async e Unit)) ->
   Ref (List (List (Wait e), Unit -> <e> Async e Unit)) ->
   Int ->
   <e> Unit
-schedule front back parked budget =
-  if budget <= 0 then
-    wakeParked back parked False
-    schedule front back parked (max 1 (queueLength front back))
-  else match popTask front back
-    Some t =>
-      dispatch back parked (stepTask t)
-      schedule front back parked (budget - 1)
-    None => match !parked
-      [] => ()
-      _ =>
-        wakeParked back parked True
-        schedule front back parked (max 1 (queueLength front back))
+schedule front back parked budget0 = go budget0
+  where
+    go budget =
+      if budget <= 0 then
+        wakeParked back parked False
+        go (max 1 (queueLength front back))
+      else match popTask front back
+        Some t =>
+          dispatch back parked (stepTask t)
+          go (budget - 1)
+        None => match !parked
+          [] => ()
+          _ =>
+            wakeParked back parked True
+            go (max 1 (queueLength front back))
 
 stepTask : Async e Unit -> <e> Async e Unit
 stepTask (Suspend k) = k ()

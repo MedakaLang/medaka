@@ -92,6 +92,8 @@ splitComma s =
 -- nesting; a top-level comma (depth 0) splits.  Backward-compat: existing
 -- brace-free policies have depth 0 throughout ⇒ identical to the old split.
 splitCommaGo : Array Char -> Int -> Int -> Int -> Int -> List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 splitCommaGo cs n start i depth
   | i >= n = [sliceStr cs start n]
   | arrayGetUnsafe i cs == '{' = splitCommaGo cs n start (i + 1) (depth + 1)
@@ -104,6 +106,8 @@ sliceStr : Array Char -> Int -> Int -> String
 sliceStr cs a b = stringFromChars (arrayFromList (sliceGo cs a b))
 
 sliceGo : Array Char -> Int -> Int -> List Char
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 sliceGo cs a b
   | a >= b = []
   | otherwise = arrayGetUnsafe a cs :: sliceGo cs (a + 1) b
@@ -180,6 +184,8 @@ splitSemi : String -> List String
 splitSemi s = splitSemiGo (stringToChars s) (arrayLength (stringToChars s)) 0 0
 
 splitSemiGo : Array Char -> Int -> Int -> Int -> List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 splitSemiGo cs n start i
   | i >= n = [sliceStr cs start n]
   | arrayGetUnsafe i cs == ';' =
@@ -203,10 +209,12 @@ rhsIsSet rhs =
 
 -- Index of the first '=' in the char array, or None.
 splitOnFirstEq : Array Char -> Int -> Int -> Option Int
-splitOnFirstEq cs n i
-  | i >= n = None
-  | arrayGetUnsafe i cs == '=' = Some i
-  | otherwise = splitOnFirstEq cs n (i + 1)
+splitOnFirstEq cs n i0 = go i0
+  where
+    go i
+      | i >= n = None
+      | arrayGetUnsafe i cs == '=' = Some i
+      | otherwise = go (i + 1)
 
 -- The policy as the reject report renders it (`{…}`): a bare entry as the
 -- label, a parameterized one as an atom writes it (`L "pat"`).
@@ -475,7 +483,8 @@ isStringCon : Mono -> Bool
 isStringCon (TCon "String" _) = True
 -- A named argument's type is `String @κ`; the qualifier erases before runtime.
 isStringCon (TQual t _) = isStringCon (normalize t)
-isStringCon _ = False
+isStringCon (TVar _ | TCon _ _ | TRigid _ | TApp _ _ | TFun _ _ _ | TEff _ | TAuth _) =
+  False
 
 firstOf : List String -> String
 firstOf [] = ""
@@ -679,7 +688,7 @@ frozenVars (FrozenJoin members) vars =
   fold (acc a => frozenVars a acc) vars members
 frozenVars (FrozenProduct axes) vars =
   fold (acc a => frozenVars (snd a) acc) vars axes
-frozenVars _ vars = vars
+frozenVars (FrozenConst _) vars = vars
 
 frozenVariablesWhy : List FrozenVariable -> String
 frozenVariablesWhy vars = match map (v => "`" ++ frozenVarName v ++ "`") vars

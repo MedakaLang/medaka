@@ -11,8 +11,8 @@ checkEffectEscape : DynCtx -> List (String, Ty) -> String -> List Atom -> Unit
 checkEffectEscapeIn : ModuleCtx -> GroupCtx -> List (String, Ty) -> String -> List Atom -> Unit
 checkIfaceMethodEffs : ModuleCtx -> String -> List (String, List Kind) -> List IfaceMethod -> Unit
 checkImplEffVarRigidity : ModuleCtx -> String -> List (String, List Kind) -> Ty -> List (String, Ref Effvar) -> Bool -> List String -> Option Loc -> Unit
-checkIndexOnlyEffVarsOpen : ModuleCtx -> String -> List (String, Ref Effvar) -> Option Loc -> List String -> Unit
-checkIndexOnlyGo : ModuleCtx -> String -> List (String, Ref Effvar) -> Option Loc -> List String -> Unit
+checkIndexOnlyEffVarsOpen : ModuleCtx -> String -> Option Loc -> List String -> Unit
+checkIndexOnlyGo : ModuleCtx -> String -> Option Loc -> List String -> Unit
 checkMethodEffVarRigidity : ModuleCtx -> String -> List Mono -> List (String, List Kind) -> Ty -> List (String, Ref Effvar) -> Bool -> List String -> Option Loc -> Unit
 checkUndeterminedRetEffVars : ModuleCtx -> List Decl -> Unit
 checkUndeterminedRetEffVarsDecl : ModuleCtx -> Decl -> Unit

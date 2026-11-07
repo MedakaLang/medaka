@@ -1,5 +1,5 @@
 # META
-source_lines=211
+source_lines=212
 stages=DESUGAR,MARK
 # SOURCE
 -- lint rule rule-bind-then-destructure: a do-bind immediately destructured by an irrefutable single-arm `match`. Inline the pattern into the bind.
@@ -47,6 +47,7 @@ import tools.lint_core.{
   Visitor(..),
   mkVisitorRule,
   factOracle,
+  noFix,
 }
 import tools.lint_shared.{
   ctorIsSingle,
@@ -166,7 +167,7 @@ bindDestructureFinding loc v = Finding {
       ++ "' then immediately destructures it in a final `match`. Inline the pattern into the bind",
   severity = SevWarning,
   loc = loc,
-  fix = None,
+  fix = noFix,
 }
 
 -- ── autofix ──────────────────────────────────────────────────────────────────
@@ -221,7 +222,7 @@ whenSameHerald _ _ _ e = [DoExpr e]
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "reverseL" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "exprToString" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" true) (mem "Visitor" true) (mem "mkVisitorRule" false) (mem "factOracle" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" true) (mem "Visitor" true) (mem "mkVisitorRule" false) (mem "factOracle" false) (mem "noFix" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "ctorIsSingle" false) (mem "detApply" false) (mem "exprRuleFix" false) (mem "noExcl" false) (mem "ruleNameBindThenDestructure" false) (mem "unwrapLoc" false) (mem "wholeWordIn" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameBindThenDestructure")) (fa "summary" (ELit (LString "do-bind then immediately destructures the bound var with an irrefutable single-arm `match`. Inline the pattern into the bind"))) (fa "doc" (ELit (LString "A `do` bind that immediately destructures the bound variable with an irrefutable single-arm `match` can put the pattern in the bind itself.\n\nBefore:\n  p <- getPair\n  match p\n    (a, b) => use a b\nAfter:\n  (a, b) <- getPair\n  use a b"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "Fixable")) (fa "needs" (EListLit))))) (EVar "ruleBindThenDestructure")) (EApp (EVar "Some") (EVar "bindThenDestructureFix"))))
@@ -256,7 +257,7 @@ whenSameHerald _ _ _ e = [DoExpr e]
 (DFunDef false "blockStmts" ((PCon "EBlock" (PVar "stmts"))) (EApp (EVar "Some") (EVar "stmts")))
 (DFunDef false "blockStmts" (PWild) (EVar "None"))
 (DTypeSig false "bindDestructureFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyCon "Finding"))))
-(DFunDef false "bindDestructureFinding" ((PVar "loc") (PVar "v")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameBindThenDestructure")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "binds '")) (EVar "v")) (ELit (LString "' then immediately destructures it in a final `match`. Inline the pattern into the bind")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None")))))
+(DFunDef false "bindDestructureFinding" ((PVar "loc") (PVar "v")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameBindThenDestructure")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "binds '")) (EVar "v")) (ELit (LString "' then immediately destructures it in a final `match`. Inline the pattern into the bind")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "noFix")))))
 (DTypeSig false "bindThenDestructureFix" (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "bindThenDestructureFix" ((PVar "orc") (PVar "d")) (EApp (EApp (EApp (EVar "exprRuleFix") (EVar "noExcl")) (EApp (EVar "detApply") (EApp (EVar "bindThenDestructureRewrite") (EVar "orc")))) (EVar "d")))
 (DTypeSig false "bindThenDestructureRewrite" (TyFun (TyCon "Oracle") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr")))))
@@ -283,7 +284,7 @@ whenSameHerald _ _ _ e = [DoExpr e]
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "reverseL" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "exprToString" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false))))
-(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" true) (mem "Visitor" true) (mem "mkVisitorRule" false) (mem "factOracle" false))))
+(DUse false (UseGroup ("tools" "lint_core") ((mem "Category" true) (mem "Ctx" true) (mem "FileFacts" true) (mem "Finding" true) (mem "Fixability" true) (mem "Ratchet" true) (mem "Rule" false) (mem "RuleMeta" true) (mem "Scope" true) (mem "StdlibIndex" true) (mem "Visitor" true) (mem "mkVisitorRule" false) (mem "factOracle" false) (mem "noFix" false))))
 (DUse false (UseGroup ("tools" "lint_shared") ((mem "ctorIsSingle" false) (mem "detApply" false) (mem "exprRuleFix" false) (mem "noExcl" false) (mem "ruleNameBindThenDestructure" false) (mem "unwrapLoc" false) (mem "wholeWordIn" false))))
 (DTypeSig true "rule" (TyCon "Rule"))
 (DFunDef false "rule" () (EApp (EApp (EApp (EVar "mkVisitorRule") (ERecordCreate "RuleMeta" ((fa "name" (EVar "ruleNameBindThenDestructure")) (fa "summary" (ELit (LString "do-bind then immediately destructures the bound var with an irrefutable single-arm `match`. Inline the pattern into the bind"))) (fa "doc" (ELit (LString "A `do` bind that immediately destructures the bound variable with an irrefutable single-arm `match` can put the pattern in the bind itself.\n\nBefore:\n  p <- getPair\n  match p\n    (a, b) => use a b\nAfter:\n  (a, b) <- getPair\n  use a b"))) (fa "category" (EVar "Style")) (fa "scope" (EVar "Universal")) (fa "ratchet" (EVar "Gated")) (fa "defaultSeverity" (EVar "SevWarning")) (fa "fixability" (EVar "Fixable")) (fa "needs" (EListLit))))) (EVar "ruleBindThenDestructure")) (EApp (EVar "Some") (EVar "bindThenDestructureFix"))))
@@ -318,7 +319,7 @@ whenSameHerald _ _ _ e = [DoExpr e]
 (DFunDef false "blockStmts" ((PCon "EBlock" (PVar "stmts"))) (EApp (EVar "Some") (EVar "stmts")))
 (DFunDef false "blockStmts" (PWild) (EVar "None"))
 (DTypeSig false "bindDestructureFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyCon "Finding"))))
-(DFunDef false "bindDestructureFinding" ((PVar "loc") (PVar "v")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameBindThenDestructure")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "binds '")) (EVar "v")) (ELit (LString "' then immediately destructures it in a final `match`. Inline the pattern into the bind")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "None")))))
+(DFunDef false "bindDestructureFinding" ((PVar "loc") (PVar "v")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameBindThenDestructure")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "binds '")) (EVar "v")) (ELit (LString "' then immediately destructures it in a final `match`. Inline the pattern into the bind")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")) (fa "fix" (EVar "noFix")))))
 (DTypeSig false "bindThenDestructureFix" (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl"))))))
 (DFunDef false "bindThenDestructureFix" ((PVar "orc") (PVar "d")) (EApp (EApp (EApp (EVar "exprRuleFix") (EVar "noExcl")) (EApp (EVar "detApply") (EApp (EVar "bindThenDestructureRewrite") (EVar "orc")))) (EVar "d")))
 (DTypeSig false "bindThenDestructureRewrite" (TyFun (TyCon "Oracle") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr")))))

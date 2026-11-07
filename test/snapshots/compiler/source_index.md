@@ -1,5 +1,5 @@
 # META
-source_lines=196
+source_lines=202
 stages=DESUGAR,MARK
 # SOURCE
 import array.{fromList}
@@ -83,15 +83,17 @@ indexSource source =
 
 -- First index in [lo, hi) whose value exceeds target, or hi.
 upperBound : Array Int -> Int -> Int -> Int -> Int
-upperBound values target lo hi =
-  if lo >= hi then
-    lo
-  else
-    let mid = (lo + hi) / 2
-    if arrayGetUnsafe mid values <= target then
-      upperBound values target (mid + 1) hi
-    else
-      upperBound values target lo mid
+upperBound values target lo0 hi0 = go lo0 hi0
+  where
+    go lo hi =
+      if lo >= hi then
+        lo
+      else
+        let mid = (lo + hi) / 2
+        if arrayGetUnsafe mid values <= target then
+          go (mid + 1) hi
+        else
+          go lo mid
 
 export
 offsetToSourcePosition : SourceIndex -> Int -> Option (Int, Int)
@@ -162,6 +164,8 @@ lineStartsOf s =
   arrayFromList (0 :: lineStartsGo src len 0)
 
 lineStartsGo : Array Char -> Int -> Int -> List Int
+-- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 lineStartsGo src len i
   | i >= len = []
   | arrayGetUnsafe i src == '\r'
@@ -185,6 +189,8 @@ offsetToLineColFast lineStarts off =
 -- Rightmost index `idx` in [lo, hi] with `lineStarts[idx] <= off`.
 -- `lineStarts[0]` is 0 and `off >= 0`, so such an index always exists in range.
 lineStartSearch : Array Int -> Int -> Int -> Int -> Int
+-- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 lineStartSearch arr off lo hi
   | lo >= hi = lo
   | otherwise =
@@ -214,7 +220,7 @@ lineStartIndex lineStarts off =
 (DTypeSig true "indexSource" (TyFun (TyCon "String") (TyCon "SourceIndex")))
 (DFunDef false "indexSource" ((PVar "source")) (EApp (EApp (EApp (EApp (EApp (EVar "indexGo") (EApp (EVar "toChars") (EVar "source"))) (ERecordCreate "ScanState" ((fa "offset" (ELit (LInt 0))) (fa "lineStart" (ELit (LInt 0))) (fa "units" (ELit (LInt 0)))))) (EListLit)) (EListLit)) (EListLit)))
 (DTypeSig false "upperBound" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
-(DFunDef false "upperBound" ((PVar "values") (PVar "target") (PVar "lo") (PVar "hi")) (EIf (EBinOp ">=" (EVar "lo") (EVar "hi")) (EVar "lo") (EBlock (DoLet false false (PVar "mid") (EBinOp "/" (EBinOp "+" (EVar "lo") (EVar "hi")) (ELit (LInt 2)))) (DoExpr (EIf (EBinOp "<=" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "mid")) (EVar "values")) (EVar "target")) (EApp (EApp (EApp (EApp (EVar "upperBound") (EVar "values")) (EVar "target")) (EBinOp "+" (EVar "mid") (ELit (LInt 1)))) (EVar "hi")) (EApp (EApp (EApp (EApp (EVar "upperBound") (EVar "values")) (EVar "target")) (EVar "lo")) (EVar "mid")))))))
+(DFunDef false "upperBound" ((PVar "values") (PVar "target") (PVar "lo0") (PVar "hi0")) (ELetGroup ((lgb "go" (clause ((PVar "lo") (PVar "hi")) (EIf (EBinOp ">=" (EVar "lo") (EVar "hi")) (EVar "lo") (EBlock (DoLet false false (PVar "mid") (EBinOp "/" (EBinOp "+" (EVar "lo") (EVar "hi")) (ELit (LInt 2)))) (DoExpr (EIf (EBinOp "<=" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "mid")) (EVar "values")) (EVar "target")) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "mid") (ELit (LInt 1)))) (EVar "hi")) (EApp (EApp (EVar "go") (EVar "lo")) (EVar "mid"))))))))) (EApp (EApp (EVar "go") (EVar "lo0")) (EVar "hi0"))))
 (DTypeSig true "offsetToSourcePosition" (TyFun (TyCon "SourceIndex") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))))))
 (DFunDef false "offsetToSourcePosition" ((PCon "SourceIndex" (PVar "starts") (PVar "ends") PWild) (PVar "offset")) (EBlock (DoLet false false (PVar "upper") (EApp (EApp (EApp (EApp (EVar "upperBound") (EVar "starts")) (EVar "offset")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "starts")))) (DoLet false false (PVar "line") (EBinOp "-" (EVar "upper") (ELit (LInt 1)))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "upper") (ELit (LInt 0))) (EBinOp ">" (EVar "offset") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "line")) (EVar "ends")))) (EVar "None") (EApp (EVar "Some") (ETuple (EBinOp "+" (EVar "line") (ELit (LInt 1))) (EBinOp "-" (EVar "offset") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "line")) (EVar "starts")))))))))
 (DTypeSig true "sourcePositionToOffset" (TyFun (TyCon "SourceIndex") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))))
@@ -251,7 +257,7 @@ lineStartIndex lineStarts off =
 (DTypeSig true "indexSource" (TyFun (TyCon "String") (TyCon "SourceIndex")))
 (DFunDef false "indexSource" ((PVar "source")) (EApp (EApp (EApp (EApp (EApp (EVar "indexGo") (EApp (EVar "toChars") (EVar "source"))) (ERecordCreate "ScanState" ((fa "offset" (ELit (LInt 0))) (fa "lineStart" (ELit (LInt 0))) (fa "units" (ELit (LInt 0)))))) (EListLit)) (EListLit)) (EListLit)))
 (DTypeSig false "upperBound" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
-(DFunDef false "upperBound" ((PVar "values") (PVar "target") (PVar "lo") (PVar "hi")) (EIf (EBinOp ">=" (EVar "lo") (EVar "hi")) (EVar "lo") (EBlock (DoLet false false (PVar "mid") (EBinOp "/" (EBinOp "+" (EVar "lo") (EVar "hi")) (ELit (LInt 2)))) (DoExpr (EIf (EBinOp "<=" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "mid")) (EVar "values")) (EVar "target")) (EApp (EApp (EApp (EApp (EVar "upperBound") (EVar "values")) (EVar "target")) (EBinOp "+" (EVar "mid") (ELit (LInt 1)))) (EVar "hi")) (EApp (EApp (EApp (EApp (EVar "upperBound") (EVar "values")) (EVar "target")) (EVar "lo")) (EVar "mid")))))))
+(DFunDef false "upperBound" ((PVar "values") (PVar "target") (PVar "lo0") (PVar "hi0")) (ELetGroup ((lgb "go" (clause ((PVar "lo") (PVar "hi")) (EIf (EBinOp ">=" (EVar "lo") (EVar "hi")) (EVar "lo") (EBlock (DoLet false false (PVar "mid") (EBinOp "/" (EBinOp "+" (EVar "lo") (EVar "hi")) (ELit (LInt 2)))) (DoExpr (EIf (EBinOp "<=" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "mid")) (EVar "values")) (EVar "target")) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "mid") (ELit (LInt 1)))) (EVar "hi")) (EApp (EApp (EVar "go") (EVar "lo")) (EVar "mid"))))))))) (EApp (EApp (EVar "go") (EVar "lo0")) (EVar "hi0"))))
 (DTypeSig true "offsetToSourcePosition" (TyFun (TyCon "SourceIndex") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))))))
 (DFunDef false "offsetToSourcePosition" ((PCon "SourceIndex" (PVar "starts") (PVar "ends") PWild) (PVar "offset")) (EBlock (DoLet false false (PVar "upper") (EApp (EApp (EApp (EApp (EVar "upperBound") (EVar "starts")) (EVar "offset")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "starts")))) (DoLet false false (PVar "line") (EBinOp "-" (EVar "upper") (ELit (LInt 1)))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "upper") (ELit (LInt 0))) (EBinOp ">" (EVar "offset") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "line")) (EVar "ends")))) (EVar "None") (EApp (EVar "Some") (ETuple (EBinOp "+" (EVar "line") (ELit (LInt 1))) (EBinOp "-" (EVar "offset") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "line")) (EVar "starts")))))))))
 (DTypeSig true "sourcePositionToOffset" (TyFun (TyCon "SourceIndex") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))))

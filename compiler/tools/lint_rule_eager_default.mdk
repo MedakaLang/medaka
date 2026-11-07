@@ -12,6 +12,7 @@ import tools.lint_core.{
   Finding(..),
   Fix,
   Fixability(..),
+  Memo,
   Need(..),
   Ratchet(..),
   Rule,
@@ -91,13 +92,12 @@ eagerOf : StdlibIndex -> FileFacts -> Expr -> Option Expr
 eagerOf idx facts (EApp f x) = match unwrapLoc f
   EApp hd d => match unwrapLoc hd
     EVar "whenL" => if isFalseLit d && isCall x then Some (EApp f x) else None
-    EVar n => match lazyName n
-      Some lazy =>
-        if isCall d && usesPreludeName idx facts hd then
-          Some (EApp (EVar lazy) (ELam [PWild] d))
-        else
-          None
-      None => None
+    EVar n => do
+      lazy <- lazyName n
+      if isCall d && usesPreludeName idx facts hd then
+        Some (EApp (EVar lazy) (ELam [PWild] d))
+      else
+        None
     _ => None
   _ => None
 eagerOf _ _ _ = None
@@ -123,7 +123,7 @@ eagerEdit idx facts ctx (EApp f _) rewritten =
       (exprToString rewritten)
 eagerEdit _ _ _ _ _ = None
 
-eagerFinding : Option Loc -> Expr -> Option Fix -> Finding
+eagerFinding : Option Loc -> Expr -> Memo (Option Fix) -> Finding
 eagerFinding loc rewritten fix = Finding {
   rule = ruleNameEagerDefault,
   message =

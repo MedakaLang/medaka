@@ -1,5 +1,5 @@
 # META
-source_lines=296
+source_lines=298
 stages=DESUGAR,MARK
 # SOURCE
 import list.{reverse}
@@ -108,6 +108,8 @@ zipKids : SourceIndex ->
   List (Option Loc) ->
   List String ->
   List Json
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 zipKids _ _ _ _ [] = []
 zipKids index fb kind [] (nm :: nms) =
   jChildLoc index nm kind fb None :: zipKids index fb kind [] nms
@@ -263,9 +265,9 @@ strictDocumentSymbols src = match parseWithPositionsOpt src
 barrierLines : SourceIndex -> List InvalidRegion -> Option (List Int)
 barrierLines _ [] = Some []
 barrierLines index (region :: rest) = match invalidExtent region
-  SourceExtent start _ => match offsetToUtf16Position index start
-    None => None
-    Some (line, _) => map (line :: _) (barrierLines index rest)
+  SourceExtent start _ => do
+    (line, _) <- offsetToUtf16Position index start
+    map (line :: _) (barrierLines index rest)
 
 collapseRecovered : List Int -> List SymRow -> List SymRow
 collapseRecovered barriers rows = go barriers rows []
@@ -299,6 +301,7 @@ symbolsFromRecovered revision syntax =
         None => rows
       Ok (map (renderSymbol index len) collapsed)
 # DESUGAR
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("list") ((mem "reverse" false))))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "ExternDecl" true) (mem "Loc" true) (mem "Variant" true) (mem "LetBind" true) (mem "ConPayload" true) (mem "fieldName" false) (mem "ifaceMethodName" false) (mem "implMethodName" false) (mem "letBindName" false))))
@@ -348,12 +351,13 @@ symbolsFromRecovered revision syntax =
 (DFunDef false "strictDocumentSymbols" ((PVar "src")) (EMatch (EApp (EVar "parseWithPositionsOpt") (EVar "src")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PTuple (PVar "decls") (PVar "positions"))) () (EBlock (DoLet false false (PVar "index") (EApp (EVar "indexSource") (EVar "src"))) (DoLet false false (PVar "len") (EApp (EVar "stringLength") (EVar "src"))) (DoExpr (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EApp (EVar "positionsDecls") (EVar "positions")) (EApp (EApp (EApp (EVar "symbolParts") (EVar "index")) (EVar "len")) (EVar "decls"))) (EVar "collapseSymbols")) (EApp (EVar "map") (EApp (EApp (EVar "renderSymbol") (EVar "index")) (EVar "len")))))))))
 (DTypeSig false "barrierLines" (TyFun (TyCon "SourceIndex") (TyFun (TyApp (TyCon "List") (TyCon "InvalidRegion")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Int"))))))
 (DFunDef false "barrierLines" (PWild (PList)) (EApp (EVar "Some") (EListLit)))
-(DFunDef false "barrierLines" ((PVar "index") (PCons (PVar "region") (PVar "rest"))) (EMatch (EApp (EVar "invalidExtent") (EVar "region")) (arm (PCon "SourceExtent" (PVar "start") PWild) () (EMatch (EApp (EApp (EVar "offsetToUtf16Position") (EVar "index")) (EVar "start")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PTuple (PVar "line") PWild)) () (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "line") (EVar "_s")))) (EApp (EApp (EVar "barrierLines") (EVar "index")) (EVar "rest"))))))))
+(DFunDef false "barrierLines" ((PVar "index") (PCons (PVar "region") (PVar "rest"))) (EMatch (EApp (EVar "invalidExtent") (EVar "region")) (arm (PCon "SourceExtent" (PVar "start") PWild) () (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "offsetToUtf16Position") (EVar "index")) (EVar "start"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "line") PWild) () (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "line") (EVar "_s")))) (EApp (EApp (EVar "barrierLines") (EVar "index")) (EVar "rest"))))))))))
 (DTypeSig false "collapseRecovered" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "SymRow")) (TyApp (TyCon "List") (TyCon "SymRow")))))
 (DFunDef false "collapseRecovered" ((PVar "barriers") (PVar "rows")) (ELetGroup ((lgb "go" (clause (PWild (PList) (PVar "group")) (EApp (EVar "collapseSymbols") (EApp (EVar "reverse") (EVar "group")))) (clause ((PVar "bs") (PCons (PAs "row" (PCon "SymRow" PWild PWild (PVar "line") PWild PWild PWild PWild)) (PVar "rest")) (PVar "group")) (EMatch (EVar "bs") (arm (PCons (PVar "b") (PVar "tail")) () (EIf (EBinOp "<" (EVar "b") (EVar "line")) (EBinOp "++" (EApp (EVar "collapseSymbols") (EApp (EVar "reverse") (EVar "group"))) (EApp (EApp (EApp (EVar "go") (EVar "tail")) (EBinOp "::" (EVar "row") (EVar "rest"))) (EListLit))) (EApp (EApp (EApp (EVar "go") (EVar "bs")) (EVar "rest")) (EBinOp "::" (EVar "row") (EVar "group"))))) (arm (PList) () (EApp (EApp (EApp (EVar "go") (EListLit)) (EVar "rest")) (EBinOp "::" (EVar "row") (EVar "group")))))))) (EApp (EApp (EApp (EVar "go") (EVar "barriers")) (EVar "rows")) (EListLit))))
 (DTypeSig true "symbolsFromRecovered" (TyFun (TyCon "SourceRevision") (TyFun (TyCon "PreparedSyntax") (TyApp (TyApp (TyCon "Result") (TyCon "SnapshotMismatch")) (TyApp (TyCon "List") (TyCon "Json"))))))
 (DFunDef false "symbolsFromRecovered" ((PVar "revision") (PVar "syntax")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "snapshotSyntaxMatches") (EVar "revision")) (EVar "syntax"))) (EApp (EVar "Err") (EApp (EApp (EVar "SnapshotMismatch") (EApp (EVar "snapshotSyntaxId") (EVar "syntax"))) (EApp (EVar "revisionId") (EVar "revision")))) (EMatch (EApp (EVar "snapshotSyntaxSnapshot") (EVar "syntax")) (arm (PCon "None") () (EApp (EVar "Ok") (EListLit))) (arm (PCon "Some" (PCon "SourceSnapshot" PWild PWild PWild (PVar "src") (PVar "index"))) () (EBlock (DoLet false false (PVar "result") (EApp (EVar "snapshotSyntaxResult") (EVar "syntax"))) (DoLet false false (PVar "len") (EApp (EVar "stringLength") (EVar "src"))) (DoLet false false (PVar "rows") (EBinOp "|>" (EApp (EVar "positionsDecls") (EApp (EVar "recoveredPositions") (EVar "result"))) (EApp (EApp (EApp (EVar "symbolParts") (EVar "index")) (EVar "len")) (EApp (EVar "recoveredDecls") (EVar "result"))))) (DoLet false false (PVar "collapsed") (EMatch (EApp (EApp (EVar "barrierLines") (EVar "index")) (EApp (EVar "invalidRegions") (EVar "result"))) (arm (PCon "Some" (PVar "barriers")) () (EApp (EApp (EVar "collapseRecovered") (EVar "barriers")) (EVar "rows"))) (arm (PCon "None") () (EVar "rows")))) (DoExpr (EApp (EVar "Ok") (EApp (EApp (EVar "map") (EApp (EApp (EVar "renderSymbol") (EVar "index")) (EVar "len"))) (EVar "collapsed")))))))))
 # MARK
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("list") ((mem "reverse" false))))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "ExternDecl" true) (mem "Loc" true) (mem "Variant" true) (mem "LetBind" true) (mem "ConPayload" true) (mem "fieldName" false) (mem "ifaceMethodName" false) (mem "implMethodName" false) (mem "letBindName" false))))
@@ -403,7 +407,7 @@ symbolsFromRecovered revision syntax =
 (DFunDef false "strictDocumentSymbols" ((PVar "src")) (EMatch (EApp (EVar "parseWithPositionsOpt") (EVar "src")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PTuple (PVar "decls") (PVar "positions"))) () (EBlock (DoLet false false (PVar "index") (EApp (EVar "indexSource") (EVar "src"))) (DoLet false false (PVar "len") (EApp (EVar "stringLength") (EVar "src"))) (DoExpr (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EApp (EVar "positionsDecls") (EVar "positions")) (EApp (EApp (EApp (EVar "symbolParts") (EMethodRef "index")) (EVar "len")) (EVar "decls"))) (EVar "collapseSymbols")) (EApp (EMethodRef "map") (EApp (EApp (EVar "renderSymbol") (EMethodRef "index")) (EVar "len")))))))))
 (DTypeSig false "barrierLines" (TyFun (TyCon "SourceIndex") (TyFun (TyApp (TyCon "List") (TyCon "InvalidRegion")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Int"))))))
 (DFunDef false "barrierLines" (PWild (PList)) (EApp (EVar "Some") (EListLit)))
-(DFunDef false "barrierLines" ((PVar "index") (PCons (PVar "region") (PVar "rest"))) (EMatch (EApp (EVar "invalidExtent") (EVar "region")) (arm (PCon "SourceExtent" (PVar "start") PWild) () (EMatch (EApp (EApp (EVar "offsetToUtf16Position") (EMethodRef "index")) (EVar "start")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PTuple (PVar "line") PWild)) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "line") (EVar "_s")))) (EApp (EApp (EVar "barrierLines") (EMethodRef "index")) (EVar "rest"))))))))
+(DFunDef false "barrierLines" ((PVar "index") (PCons (PVar "region") (PVar "rest"))) (EMatch (EApp (EVar "invalidExtent") (EVar "region")) (arm (PCon "SourceExtent" (PVar "start") PWild) () (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "offsetToUtf16Position") (EMethodRef "index")) (EVar "start"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PTuple (PVar "line") PWild) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "line") (EVar "_s")))) (EApp (EApp (EVar "barrierLines") (EMethodRef "index")) (EVar "rest"))))))))))
 (DTypeSig false "collapseRecovered" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "SymRow")) (TyApp (TyCon "List") (TyCon "SymRow")))))
 (DFunDef false "collapseRecovered" ((PVar "barriers") (PVar "rows")) (ELetGroup ((lgb "go" (clause (PWild (PList) (PVar "group")) (EApp (EVar "collapseSymbols") (EApp (EVar "reverse") (EVar "group")))) (clause ((PVar "bs") (PCons (PAs "row" (PCon "SymRow" PWild PWild (PVar "line") PWild PWild PWild PWild)) (PVar "rest")) (PVar "group")) (EMatch (EVar "bs") (arm (PCons (PVar "b") (PVar "tail")) () (EIf (EBinOp "<" (EVar "b") (EVar "line")) (EBinOp "++" (EApp (EVar "collapseSymbols") (EApp (EVar "reverse") (EVar "group"))) (EApp (EApp (EApp (EVar "go") (EVar "tail")) (EBinOp "::" (EVar "row") (EVar "rest"))) (EListLit))) (EApp (EApp (EApp (EVar "go") (EVar "bs")) (EVar "rest")) (EBinOp "::" (EVar "row") (EVar "group"))))) (arm (PList) () (EApp (EApp (EApp (EVar "go") (EListLit)) (EVar "rest")) (EBinOp "::" (EVar "row") (EVar "group")))))))) (EApp (EApp (EApp (EVar "go") (EVar "barriers")) (EVar "rows")) (EListLit))))
 (DTypeSig true "symbolsFromRecovered" (TyFun (TyCon "SourceRevision") (TyFun (TyCon "PreparedSyntax") (TyApp (TyApp (TyCon "Result") (TyCon "SnapshotMismatch")) (TyApp (TyCon "List") (TyCon "Json"))))))

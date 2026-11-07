@@ -1,5 +1,5 @@
 # META
-source_lines=1243
+source_lines=1249
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted exhaust stage — standalone
@@ -117,16 +117,13 @@ parseDigits : Array Char -> Int -> Int -> Option Int
 parseDigits cs start end = parseDigitsGo cs start end 0 False
 
 parseDigitsGo : Array Char -> Int -> Int -> Int -> Bool -> Option Int
-parseDigitsGo cs i end acc seen
-  | i >= end = if seen then Some acc else None
-  | isDigitC (arrayGetUnsafe i cs) =
-    parseDigitsGo
-      cs
-      (i + 1)
-      end
-      (acc * 10 + digitVal (arrayGetUnsafe i cs))
-      True
-  | otherwise = None
+parseDigitsGo cs i0 end acc0 seen0 = go i0 acc0 seen0
+  where
+    go i acc seen
+      | i >= end = if seen then Some acc else None
+      | isDigitC (arrayGetUnsafe i cs) =
+        go (i + 1) (acc * 10 + digitVal (arrayGetUnsafe i cs)) True
+      | otherwise = None
 
 isDigitC : Char -> Bool
 isDigitC c = c >= '0' && c <= '9'
@@ -460,6 +457,8 @@ findRecField fn ((RecPatField f _ _ mPat) :: rest)
 -- recursion makes the inner call a statically-known one: same rows, same order,
 -- no allocation per row visited.
 specializeCon : String -> Int -> List (List Pat) -> List (List Pat)
+-- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 specializeCon _ _ [] = []
 specializeCon c arity (row :: rest) = match specConRow c arity row
   Some r => r :: specializeCon c arity rest
@@ -710,7 +709,8 @@ patHasRange (PList ps) = anyList patHasRange ps
 patHasRange (PAs _ _ _ p) = patHasRange p
 patHasRange (POr ps) = anyList patHasRange ps
 patHasRange (PRec _ fields _) = anyList recFieldHasRange fields
-patHasRange _ = False
+patHasRange (PAnn p _) = patHasRange p
+patHasRange (PVar _ _ _ | PWild | PLit _) = False
 
 recFieldHasRange : RecPatField -> Bool
 recFieldHasRange (RecPatField _ _ _ None) = False
@@ -771,11 +771,12 @@ firstWitnessBranch : Oracle ->
   List (List Pat) ->
   Int ->
   Option (List Pat)
-firstWitnessBranch _ [] _ _ = None
-firstWitnessBranch oracle (c :: cs) pmat ncols =
-  match witnessBranch oracle c pmat ncols
-    Some w => Some w
-    None => firstWitnessBranch oracle cs pmat ncols
+firstWitnessBranch oracle xs0 pmat ncols = go xs0
+  where
+    go [] = None
+    go (c :: cs) = match witnessBranch oracle c pmat ncols
+      Some w => Some w
+      None => go cs
 
 witnessBranch : Oracle -> String -> List (List Pat) -> Int -> Option (List Pat)
 witnessBranch oracle c pmat ncols =
@@ -847,7 +848,7 @@ isIrrefutablePat (PAs _ _ _ p) = isIrrefutablePat p
 isIrrefutablePat (POr ps) = anyList isIrrefutablePat ps
 isIrrefutablePat (PRec _ fields _) = allList recFieldIrrefutable fields
 isIrrefutablePat (PAnn p _) = isIrrefutablePat p
-isIrrefutablePat _ = False
+isIrrefutablePat (PLit _ | PCon _ _ | PCons _ _ | PList _ | PRng _ _ _) = False
 
 recFieldIrrefutable : RecPatField -> Bool
 recFieldIrrefutable (RecPatField _ _ _ None) = True
@@ -1114,7 +1115,12 @@ collectLetBinds (ESection (SecRight _ e0)) = collectLetBinds e0
 collectLetBinds (ESection (SecLeft e0 _)) = collectLetBinds e0
 collectLetBinds (ELoc _ e) = collectLetBinds e
 collectLetBinds (EDoOrigin _ e) = collectLetBinds e
-collectLetBinds _ = []
+collectLetBinds (EHeadAnnot e0 _) = collectLetBinds e0
+collectLetBinds (EMapLit _ kvs) =
+  flatMap (kv => collectLetBinds (fst kv) ++ collectLetBinds (snd kv)) kvs
+collectLetBinds (ESetLit _ es) = flatMap collectLetBinds es
+collectLetBinds (ELit _ | EVar _ | EAsPat _ _ | EOrPat _ | ESection (SecBare _) | EMethodRef _ | EDictApp _ | EVarAt _ _ | EVarId _ _ | EMethodAt _ _ _ | EDictAt _ _ | ENumLit _ _ _ | EWideLit _ _ _ _) =
+  []
 
 collectLetBindInner : LetBind -> List LetBind
 collectLetBindInner (LetBind _ funclauses _ _) =
@@ -1266,7 +1272,7 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DTypeSig false "parseDigits" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))))
 (DFunDef false "parseDigits" ((PVar "cs") (PVar "start") (PVar "end")) (EApp (EApp (EApp (EApp (EApp (EVar "parseDigitsGo") (EVar "cs")) (EVar "start")) (EVar "end")) (ELit (LInt 0))) (EVar "False")))
 (DTypeSig false "parseDigitsGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyApp (TyCon "Option") (TyCon "Int"))))))))
-(DFunDef false "parseDigitsGo" ((PVar "cs") (PVar "i") (PVar "end") (PVar "acc") (PVar "seen")) (EIf (EBinOp ">=" (EVar "i") (EVar "end")) (EIf (EVar "seen") (EApp (EVar "Some") (EVar "acc")) (EVar "None")) (EIf (EApp (EVar "isDigitC") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))) (EApp (EApp (EApp (EApp (EApp (EVar "parseDigitsGo") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "end")) (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 10))) (EApp (EVar "digitVal") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))))) (EVar "True")) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "parseDigitsGo" ((PVar "cs") (PVar "i0") (PVar "end") (PVar "acc0") (PVar "seen0")) (ELetGroup ((lgb "go" (clause ((PVar "i") (PVar "acc") (PVar "seen")) (EIf (EBinOp ">=" (EVar "i") (EVar "end")) (EIf (EVar "seen") (EApp (EVar "Some") (EVar "acc")) (EVar "None")) (EIf (EApp (EVar "isDigitC") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))) (EApp (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 10))) (EApp (EVar "digitVal") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))))) (EVar "True")) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))))) (EApp (EApp (EApp (EVar "go") (EVar "i0")) (EVar "acc0")) (EVar "seen0"))))
 (DTypeSig false "isDigitC" (TyFun (TyCon "Char") (TyCon "Bool")))
 (DFunDef false "isDigitC" ((PVar "c")) (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LChar "0"))) (EBinOp "<=" (EVar "c") (ELit (LChar "9")))))
 (DTypeSig false "digitVal" (TyFun (TyCon "Char") (TyCon "Int")))
@@ -1462,7 +1468,8 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "patHasRange" ((PCon "PAs" PWild PWild PWild (PVar "p"))) (EApp (EVar "patHasRange") (EVar "p")))
 (DFunDef false "patHasRange" ((PCon "POr" (PVar "ps"))) (EApp (EApp (EVar "anyList") (EVar "patHasRange")) (EVar "ps")))
 (DFunDef false "patHasRange" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EVar "anyList") (EVar "recFieldHasRange")) (EVar "fields")))
-(DFunDef false "patHasRange" (PWild) (EVar "False"))
+(DFunDef false "patHasRange" ((PCon "PAnn" (PVar "p") PWild)) (EApp (EVar "patHasRange") (EVar "p")))
+(DFunDef false "patHasRange" ((POr (PCon "PVar" PWild PWild PWild) (PCon "PWild") (PCon "PLit" PWild))) (EVar "False"))
 (DTypeSig false "recFieldHasRange" (TyFun (TyCon "RecPatField") (TyCon "Bool")))
 (DFunDef false "recFieldHasRange" ((PCon "RecPatField" PWild PWild PWild (PCon "None"))) (EVar "False"))
 (DFunDef false "recFieldHasRange" ((PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patHasRange") (EVar "p")))
@@ -1476,8 +1483,7 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DTypeSig false "witnessSig" (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Pat"))))))))
 (DFunDef false "witnessSig" ((PVar "oracle") (PVar "ctors") (PVar "pmat") (PVar "ncols")) (EIf (EApp (EApp (EVar "allCovered") (EVar "ctors")) (EApp (EApp (EVar "headBuckets") (EVar "pmat")) (EVar "omEmpty"))) (EApp (EApp (EApp (EApp (EVar "firstWitnessBranch") (EVar "oracle")) (EVar "ctors")) (EVar "pmat")) (EVar "ncols")) (EIf (EVar "otherwise") (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (EApp (EApp (EApp (EVar "missingCtorPat") (EVar "oracle")) (EVar "ctors")) (EApp (EVar "headCtors") (EVar "pmat"))) (EVar "_s")))) (EApp (EApp (EApp (EApp (EVar "usefulWitness") (EVar "oracle")) (EVar "None")) (EApp (EVar "defaultMatrix") (EVar "pmat"))) (EBinOp "-" (EVar "ncols") (ELit (LInt 1))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "firstWitnessBranch" (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Pat"))))))))
-(DFunDef false "firstWitnessBranch" (PWild (PList) PWild PWild) (EVar "None"))
-(DFunDef false "firstWitnessBranch" ((PVar "oracle") (PCons (PVar "c") (PVar "cs")) (PVar "pmat") (PVar "ncols")) (EMatch (EApp (EApp (EApp (EApp (EVar "witnessBranch") (EVar "oracle")) (EVar "c")) (EVar "pmat")) (EVar "ncols")) (arm (PCon "Some" (PVar "w")) () (EApp (EVar "Some") (EVar "w"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "firstWitnessBranch") (EVar "oracle")) (EVar "cs")) (EVar "pmat")) (EVar "ncols")))))
+(DFunDef false "firstWitnessBranch" ((PVar "oracle") (PVar "xs0") (PVar "pmat") (PVar "ncols")) (ELetGroup ((lgb "go" (clause ((PList)) (EVar "None")) (clause ((PCons (PVar "c") (PVar "cs"))) (EMatch (EApp (EApp (EApp (EApp (EVar "witnessBranch") (EVar "oracle")) (EVar "c")) (EVar "pmat")) (EVar "ncols")) (arm (PCon "Some" (PVar "w")) () (EApp (EVar "Some") (EVar "w"))) (arm (PCon "None") () (EApp (EVar "go") (EVar "cs"))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "witnessBranch" (TyFun (TyCon "Oracle") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Pat"))))))))
 (DFunDef false "witnessBranch" ((PVar "oracle") (PVar "c") (PVar "pmat") (PVar "ncols")) (EBlock (DoLet false false (PVar "a") (EApp (EApp (EVar "oGetArity") (EVar "oracle")) (EVar "c"))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "ws")) (EBinOp "::" (EApp (EApp (EVar "PCon") (EVar "c")) (EApp (EApp (EVar "take") (EVar "a")) (EVar "ws"))) (EApp (EApp (EVar "drop") (EVar "a")) (EVar "ws"))))) (EApp (EApp (EApp (EApp (EVar "usefulWitness") (EVar "oracle")) (EVar "None")) (EApp (EApp (EApp (EVar "specializeCon") (EVar "c")) (EVar "a")) (EVar "pmat"))) (EBinOp "-" (EBinOp "+" (EVar "a") (EVar "ncols")) (ELit (LInt 1))))))))
 (DTypeSig false "witnessPrepend" (TyFun (TyCon "Pat") (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Pat"))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Pat"))))))
@@ -1512,7 +1518,7 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "isIrrefutablePat" ((PCon "POr" (PVar "ps"))) (EApp (EApp (EVar "anyList") (EVar "isIrrefutablePat")) (EVar "ps")))
 (DFunDef false "isIrrefutablePat" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EVar "allList") (EVar "recFieldIrrefutable")) (EVar "fields")))
 (DFunDef false "isIrrefutablePat" ((PCon "PAnn" (PVar "p") PWild)) (EApp (EVar "isIrrefutablePat") (EVar "p")))
-(DFunDef false "isIrrefutablePat" (PWild) (EVar "False"))
+(DFunDef false "isIrrefutablePat" ((POr (PCon "PLit" PWild) (PCon "PCon" PWild PWild) (PCon "PCons" PWild PWild) (PCon "PList" PWild) (PCon "PRng" PWild PWild PWild))) (EVar "False"))
 (DTypeSig false "recFieldIrrefutable" (TyFun (TyCon "RecPatField") (TyCon "Bool")))
 (DFunDef false "recFieldIrrefutable" ((PCon "RecPatField" PWild PWild PWild (PCon "None"))) (EVar "True"))
 (DFunDef false "recFieldIrrefutable" ((PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "isIrrefutablePat") (EVar "p")))
@@ -1621,7 +1627,10 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "collectLetBinds" ((PCon "ESection" (PCon "SecLeft" (PVar "e0") PWild))) (EApp (EVar "collectLetBinds") (EVar "e0")))
 (DFunDef false "collectLetBinds" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "collectLetBinds") (EVar "e")))
 (DFunDef false "collectLetBinds" ((PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EVar "collectLetBinds") (EVar "e")))
-(DFunDef false "collectLetBinds" (PWild) (EListLit))
+(DFunDef false "collectLetBinds" ((PCon "EHeadAnnot" (PVar "e0") PWild)) (EApp (EVar "collectLetBinds") (EVar "e0")))
+(DFunDef false "collectLetBinds" ((PCon "EMapLit" PWild (PVar "kvs"))) (EApp (EApp (EVar "flatMap") (ELam ((PVar "kv")) (EBinOp "++" (EApp (EVar "collectLetBinds") (EApp (EVar "fst") (EVar "kv"))) (EApp (EVar "collectLetBinds") (EApp (EVar "snd") (EVar "kv")))))) (EVar "kvs")))
+(DFunDef false "collectLetBinds" ((PCon "ESetLit" PWild (PVar "es"))) (EApp (EApp (EVar "flatMap") (EVar "collectLetBinds")) (EVar "es")))
+(DFunDef false "collectLetBinds" ((POr (PCon "ELit" PWild) (PCon "EVar" PWild) (PCon "EAsPat" PWild PWild) (PCon "EOrPat" PWild) (PCon "ESection" (PCon "SecBare" PWild)) (PCon "EMethodRef" PWild) (PCon "EDictApp" PWild) (PCon "EVarAt" PWild PWild) (PCon "EVarId" PWild PWild) (PCon "EMethodAt" PWild PWild PWild) (PCon "EDictAt" PWild PWild) (PCon "ENumLit" PWild PWild PWild) (PCon "EWideLit" PWild PWild PWild PWild))) (EListLit))
 (DTypeSig false "collectLetBindInner" (TyFun (TyCon "LetBind") (TyApp (TyCon "List") (TyCon "LetBind"))))
 (DFunDef false "collectLetBindInner" ((PCon "LetBind" PWild (PVar "funclauses") PWild PWild)) (EApp (EApp (EVar "flatMap") (EVar "funClauseBinds")) (EVar "funclauses")))
 (DTypeSig false "funClauseBinds" (TyFun (TyCon "FunClause") (TyApp (TyCon "List") (TyCon "LetBind"))))
@@ -1700,7 +1709,7 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DTypeSig false "parseDigits" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))))
 (DFunDef false "parseDigits" ((PVar "cs") (PVar "start") (PVar "end")) (EApp (EApp (EApp (EApp (EApp (EVar "parseDigitsGo") (EVar "cs")) (EVar "start")) (EVar "end")) (ELit (LInt 0))) (EVar "False")))
 (DTypeSig false "parseDigitsGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyApp (TyCon "Option") (TyCon "Int"))))))))
-(DFunDef false "parseDigitsGo" ((PVar "cs") (PVar "i") (PVar "end") (PVar "acc") (PVar "seen")) (EIf (EBinOp ">=" (EVar "i") (EVar "end")) (EIf (EVar "seen") (EApp (EVar "Some") (EVar "acc")) (EVar "None")) (EIf (EApp (EVar "isDigitC") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))) (EApp (EApp (EApp (EApp (EApp (EVar "parseDigitsGo") (EVar "cs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "end")) (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 10))) (EApp (EVar "digitVal") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))))) (EVar "True")) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "parseDigitsGo" ((PVar "cs") (PVar "i0") (PVar "end") (PVar "acc0") (PVar "seen0")) (ELetGroup ((lgb "go" (clause ((PVar "i") (PVar "acc") (PVar "seen")) (EIf (EBinOp ">=" (EVar "i") (EVar "end")) (EIf (EVar "seen") (EApp (EVar "Some") (EVar "acc")) (EVar "None")) (EIf (EApp (EVar "isDigitC") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))) (EApp (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 10))) (EApp (EVar "digitVal") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))))) (EVar "True")) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))))) (EApp (EApp (EApp (EVar "go") (EVar "i0")) (EVar "acc0")) (EVar "seen0"))))
 (DTypeSig false "isDigitC" (TyFun (TyCon "Char") (TyCon "Bool")))
 (DFunDef false "isDigitC" ((PVar "c")) (EBinOp "&&" (EBinOp ">=" (EVar "c") (ELit (LChar "0"))) (EBinOp "<=" (EVar "c") (ELit (LChar "9")))))
 (DTypeSig false "digitVal" (TyFun (TyCon "Char") (TyCon "Int")))
@@ -1896,7 +1905,8 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "patHasRange" ((PCon "PAs" PWild PWild PWild (PVar "p"))) (EApp (EVar "patHasRange") (EVar "p")))
 (DFunDef false "patHasRange" ((PCon "POr" (PVar "ps"))) (EApp (EApp (EVar "anyList") (EVar "patHasRange")) (EVar "ps")))
 (DFunDef false "patHasRange" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EVar "anyList") (EVar "recFieldHasRange")) (EVar "fields")))
-(DFunDef false "patHasRange" (PWild) (EVar "False"))
+(DFunDef false "patHasRange" ((PCon "PAnn" (PVar "p") PWild)) (EApp (EVar "patHasRange") (EVar "p")))
+(DFunDef false "patHasRange" ((POr (PCon "PVar" PWild PWild PWild) (PCon "PWild") (PCon "PLit" PWild))) (EVar "False"))
 (DTypeSig false "recFieldHasRange" (TyFun (TyCon "RecPatField") (TyCon "Bool")))
 (DFunDef false "recFieldHasRange" ((PCon "RecPatField" PWild PWild PWild (PCon "None"))) (EVar "False"))
 (DFunDef false "recFieldHasRange" ((PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "patHasRange") (EVar "p")))
@@ -1910,8 +1920,7 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DTypeSig false "witnessSig" (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Pat"))))))))
 (DFunDef false "witnessSig" ((PVar "oracle") (PVar "ctors") (PVar "pmat") (PVar "ncols")) (EIf (EApp (EApp (EVar "allCovered") (EVar "ctors")) (EApp (EApp (EVar "headBuckets") (EVar "pmat")) (EVar "omEmpty"))) (EApp (EApp (EApp (EApp (EVar "firstWitnessBranch") (EVar "oracle")) (EVar "ctors")) (EVar "pmat")) (EVar "ncols")) (EIf (EVar "otherwise") (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (EApp (EApp (EApp (EVar "missingCtorPat") (EVar "oracle")) (EVar "ctors")) (EApp (EVar "headCtors") (EVar "pmat"))) (EVar "_s")))) (EApp (EApp (EApp (EApp (EVar "usefulWitness") (EVar "oracle")) (EVar "None")) (EApp (EVar "defaultMatrix") (EVar "pmat"))) (EBinOp "-" (EVar "ncols") (ELit (LInt 1))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "firstWitnessBranch" (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Pat"))))))))
-(DFunDef false "firstWitnessBranch" (PWild (PList) PWild PWild) (EVar "None"))
-(DFunDef false "firstWitnessBranch" ((PVar "oracle") (PCons (PVar "c") (PVar "cs")) (PVar "pmat") (PVar "ncols")) (EMatch (EApp (EApp (EApp (EApp (EVar "witnessBranch") (EVar "oracle")) (EVar "c")) (EVar "pmat")) (EVar "ncols")) (arm (PCon "Some" (PVar "w")) () (EApp (EVar "Some") (EVar "w"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "firstWitnessBranch") (EVar "oracle")) (EVar "cs")) (EVar "pmat")) (EVar "ncols")))))
+(DFunDef false "firstWitnessBranch" ((PVar "oracle") (PVar "xs0") (PVar "pmat") (PVar "ncols")) (ELetGroup ((lgb "go" (clause ((PList)) (EVar "None")) (clause ((PCons (PVar "c") (PVar "cs"))) (EMatch (EApp (EApp (EApp (EApp (EVar "witnessBranch") (EVar "oracle")) (EVar "c")) (EVar "pmat")) (EVar "ncols")) (arm (PCon "Some" (PVar "w")) () (EApp (EVar "Some") (EVar "w"))) (arm (PCon "None") () (EApp (EVar "go") (EVar "cs"))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "witnessBranch" (TyFun (TyCon "Oracle") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Pat"))) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Pat"))))))))
 (DFunDef false "witnessBranch" ((PVar "oracle") (PVar "c") (PVar "pmat") (PVar "ncols")) (EBlock (DoLet false false (PVar "a") (EApp (EApp (EVar "oGetArity") (EVar "oracle")) (EVar "c"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "ws")) (EBinOp "::" (EApp (EApp (EVar "PCon") (EVar "c")) (EApp (EApp (EVar "take") (EVar "a")) (EVar "ws"))) (EApp (EApp (EVar "drop") (EVar "a")) (EVar "ws"))))) (EApp (EApp (EApp (EApp (EVar "usefulWitness") (EVar "oracle")) (EVar "None")) (EApp (EApp (EApp (EVar "specializeCon") (EVar "c")) (EVar "a")) (EVar "pmat"))) (EBinOp "-" (EBinOp "+" (EVar "a") (EVar "ncols")) (ELit (LInt 1))))))))
 (DTypeSig false "witnessPrepend" (TyFun (TyCon "Pat") (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Pat"))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Pat"))))))
@@ -1946,7 +1955,7 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "isIrrefutablePat" ((PCon "POr" (PVar "ps"))) (EApp (EApp (EVar "anyList") (EVar "isIrrefutablePat")) (EVar "ps")))
 (DFunDef false "isIrrefutablePat" ((PCon "PRec" PWild (PVar "fields") PWild)) (EApp (EApp (EVar "allList") (EVar "recFieldIrrefutable")) (EVar "fields")))
 (DFunDef false "isIrrefutablePat" ((PCon "PAnn" (PVar "p") PWild)) (EApp (EVar "isIrrefutablePat") (EVar "p")))
-(DFunDef false "isIrrefutablePat" (PWild) (EVar "False"))
+(DFunDef false "isIrrefutablePat" ((POr (PCon "PLit" PWild) (PCon "PCon" PWild PWild) (PCon "PCons" PWild PWild) (PCon "PList" PWild) (PCon "PRng" PWild PWild PWild))) (EVar "False"))
 (DTypeSig false "recFieldIrrefutable" (TyFun (TyCon "RecPatField") (TyCon "Bool")))
 (DFunDef false "recFieldIrrefutable" ((PCon "RecPatField" PWild PWild PWild (PCon "None"))) (EVar "True"))
 (DFunDef false "recFieldIrrefutable" ((PCon "RecPatField" PWild PWild PWild (PCon "Some" (PVar "p")))) (EApp (EVar "isIrrefutablePat") (EVar "p")))
@@ -2055,7 +2064,10 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "collectLetBinds" ((PCon "ESection" (PCon "SecLeft" (PVar "e0") PWild))) (EApp (EVar "collectLetBinds") (EVar "e0")))
 (DFunDef false "collectLetBinds" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "collectLetBinds") (EVar "e")))
 (DFunDef false "collectLetBinds" ((PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EVar "collectLetBinds") (EVar "e")))
-(DFunDef false "collectLetBinds" (PWild) (EListLit))
+(DFunDef false "collectLetBinds" ((PCon "EHeadAnnot" (PVar "e0") PWild)) (EApp (EVar "collectLetBinds") (EVar "e0")))
+(DFunDef false "collectLetBinds" ((PCon "EMapLit" PWild (PVar "kvs"))) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "kv")) (EBinOp "++" (EApp (EVar "collectLetBinds") (EApp (EVar "fst") (EVar "kv"))) (EApp (EVar "collectLetBinds") (EApp (EVar "snd") (EVar "kv")))))) (EVar "kvs")))
+(DFunDef false "collectLetBinds" ((PCon "ESetLit" PWild (PVar "es"))) (EApp (EApp (EDictApp "flatMap") (EVar "collectLetBinds")) (EVar "es")))
+(DFunDef false "collectLetBinds" ((POr (PCon "ELit" PWild) (PCon "EVar" PWild) (PCon "EAsPat" PWild PWild) (PCon "EOrPat" PWild) (PCon "ESection" (PCon "SecBare" PWild)) (PCon "EMethodRef" PWild) (PCon "EDictApp" PWild) (PCon "EVarAt" PWild PWild) (PCon "EVarId" PWild PWild) (PCon "EMethodAt" PWild PWild PWild) (PCon "EDictAt" PWild PWild) (PCon "ENumLit" PWild PWild PWild) (PCon "EWideLit" PWild PWild PWild PWild))) (EListLit))
 (DTypeSig false "collectLetBindInner" (TyFun (TyCon "LetBind") (TyApp (TyCon "List") (TyCon "LetBind"))))
 (DFunDef false "collectLetBindInner" ((PCon "LetBind" PWild (PVar "funclauses") PWild PWild)) (EApp (EApp (EDictApp "flatMap") (EVar "funClauseBinds")) (EVar "funclauses")))
 (DTypeSig false "funClauseBinds" (TyFun (TyCon "FunClause") (TyApp (TyCon "List") (TyCon "LetBind"))))

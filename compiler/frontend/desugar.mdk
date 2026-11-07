@@ -215,7 +215,10 @@ mapDecl f (d@(DImpl { methods, ... })) =
 mapDecl f (DProp pub name params body) = DProp pub name params (mapExpr f body)
 mapDecl f (DTest pub name body) = DTest pub name (mapExpr f body)
 mapDecl f (DAttrib attrs d) = DAttrib attrs (mapDecl f d)
-mapDecl _ d = d
+mapDecl f (DLetGroup pub binds) =
+  DLetGroup pub (map (mapLetBind (mapExpr f)) binds)
+mapDecl _ (d@(DTypeSig _ _ _ _ | DExtern _ | DData {  } | DUse _ _ _ | DEffect _ _ _ _ _ _ | DTypeAlias {  } | DNewtype {  })) =
+  d
 
 mapIfaceMethod : (Expr -> Expr) -> IfaceMethod -> IfaceMethod
 mapIfaceMethod _ (IfaceMethod n ty None mloc) = IfaceMethod n ty None mloc
@@ -328,14 +331,15 @@ fallthrough : Expr
 fallthrough = EApp (EVar fallthroughName) (ELit LUnit)
 
 armChain : List Guard -> Expr -> Expr -> Expr
-armChain [] body _ = body
-armChain ((GBool e) :: qs) body els = EIf e (armChain qs body els) els
--- A guard-bind through an or-pattern keeps the guards after it on its match
--- arm, so a later guard that fails under one alternative re-tries the next.
-armChain ((GBind p e) :: qs) body els
-  | patHasOr p = eraseMatchAnnots e [Arm p qs body, Arm PWild [] els]
-  | otherwise =
-    eraseMatchAnnots e [Arm p [] (armChain qs body els), Arm PWild [] els]
+armChain quals0 body els = go quals0
+  where
+    go [] = body
+    go ((GBool e) :: qs) = EIf e (go qs) els
+    -- A guard-bind through an or-pattern keeps the guards after it on its match
+    -- arm, so a later guard that fails under one alternative re-tries the next.
+    go ((GBind p e) :: qs)
+      | patHasOr p = eraseMatchAnnots e [Arm p qs body, Arm PWild [] els]
+      | otherwise = eraseMatchAnnots e [Arm p [] (go qs), Arm PWild [] els]
 
 -- ── Pattern annotations ───────────────────────────────────────────────────
 -- `(p : T)` in a binding position is checked as the expression annotation
@@ -485,7 +489,7 @@ dropAnnots (PList ps) = PList (map dropAnnots ps)
 dropAnnots (PAs x l bid q) = PAs x l bid (dropAnnots q)
 dropAnnots (POr ps) = POr (flatMap orAlternatives ps)
 dropAnnots (PRec c fields open) = PRec c (map dropFieldAnnots fields) open
-dropAnnots p = p
+dropAnnots (p@(PVar _ _ _ | PWild | PLit _ | PRng _ _ _)) = p
 
 dropFieldAnnots : RecPatField -> RecPatField
 dropFieldAnnots (RecPatField k l bid (Some q)) =
@@ -503,7 +507,7 @@ dropBinders (PTuple ps) = PTuple (map dropBinders ps)
 dropBinders (PList ps) = PList (map dropBinders ps)
 dropBinders (POr ps) = POr (map dropBinders ps)
 dropBinders (PRec c fields open) = PRec c (map dropFieldBinders fields) open
-dropBinders p = p
+dropBinders (p@(PWild | PLit _ | PRng _ _ _)) = p
 
 dropFieldBinders : RecPatField -> RecPatField
 dropFieldBinders (RecPatField k l _ (Some q)) =
@@ -976,6 +980,8 @@ genVars : String -> Int -> List String
 genVars prefix n = genVarsGo prefix 0 n
 
 genVarsGo : String -> Int -> Int -> List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 genVarsGo prefix i n
   | i >= n = []
   | otherwise = prefix ++ intToString i :: genVarsGo prefix (i + 1) n
@@ -1246,7 +1252,8 @@ mergeIfaceDecl : Decl -> Decl
 mergeIfaceDecl (d@(DInterface { methods, ... })) =
   DInterface { d | methods = mergeIfaceMethods methods }
 mergeIfaceDecl (DAttrib attrs d) = DAttrib attrs (mergeIfaceDecl d)
-mergeIfaceDecl d = d
+mergeIfaceDecl (d@(DTypeSig _ _ _ _ | DExtern _ | DFunDef _ _ _ _ _ _ | DData {  } | DUse _ _ _ | DEffect _ _ _ _ _ _ | DProp _ _ _ _ | DTest _ _ _ | DImpl {  } | DTypeAlias {  } | DNewtype {  } | DLetGroup _ _)) =
+  d
 
 -- `OrdMap` iterates key-sorted, not insertion order, so "first-seen position"
 -- is preserved separately via `order` (a reversed name list, one cons per
@@ -1554,7 +1561,8 @@ stampDecl mid (DProp pub name params body) =
   DProp pub name params (stampExpr mid body)
 stampDecl mid (DTest pub name body) = DTest pub name (stampExpr mid body)
 stampDecl mid (DAttrib attrs d) = DAttrib attrs (stampDecl mid d)
-stampDecl _ d = d
+stampDecl _ (d@(DTypeSig _ _ _ _ | DExtern _ | DData {  } | DUse _ _ _ | DEffect _ _ _ _ _ _ | DTypeAlias {  } | DNewtype {  })) =
+  d
 
 stampIfaceMethod : String -> IfaceMethod -> IfaceMethod
 stampIfaceMethod _ (IfaceMethod n ty None mloc) = IfaceMethod n ty None mloc
@@ -1642,7 +1650,8 @@ stampPatBy mint (POr (p :: ps)) =
   let first = stampPatBy mint p
   let shared = patBinderIds first
   POr (first :: map (stampPatBy (x => sharedBinderId mint shared x)) ps)
-stampPatBy _ p = p
+stampPatBy mint (PAnn p t) = PAnn (stampPatBy mint p) t
+stampPatBy _ (p@(PWild | PLit _ | PRng _ _ _ | POr [])) = p
 
 sharedBinderId : (String -> BinderId) ->
   List (String, BinderId) ->
@@ -1663,7 +1672,8 @@ patBinderIds (PTuple ps) = flatMap patBinderIds ps
 patBinderIds (PList ps) = flatMap patBinderIds ps
 patBinderIds (PRec _ fields _) = flatMap recFieldBinderIds fields
 patBinderIds (POr (p :: _)) = patBinderIds p
-patBinderIds _ = []
+patBinderIds (PAnn p _) = patBinderIds p
+patBinderIds (PWild | PLit _ | PRng _ _ _ | POr []) = []
 
 recFieldBinderIds : RecPatField -> List (String, BinderId)
 recFieldBinderIds (RecPatField l _ b None) = [(l, b)]

@@ -250,13 +250,15 @@ polarityTyConNames (TyEffect _ _ t) acc = polarityTyConNames t acc
 polarityTyConNames (TyConstrained _ t) acc = polarityTyConNames t acc
 polarityTyConNames (TyNamed _ t _) acc = polarityTyConNames t acc
 polarityTyConNames (TyQual t _ _) acc = polarityTyConNames t acc
-polarityTyConNames _ acc = acc
+polarityTyConNames (TyVar _ | TyRow _ _ _ | TyAuth _ _) acc = acc
 
 declEnvPolarityFixGo : List (TabKey, List Polarity) ->
   List Decl ->
   Int ->
   List (TabKey, List Polarity) ->
   List (TabKey, List Polarity)
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
 declEnvPolarityFixGo base ds fuel prev =
   if fuel <= 0 then
     map (e => (fst e, map (_ => PInv) (snd e))) prev
@@ -419,63 +421,58 @@ paramOccPolarities : List (TabKey, List Polarity) ->
   Polarity ->
   Ty ->
   List Polarity
-paramOccPolarities _ p pol (TyVar n) = if n == p then [pol] else []
-paramOccPolarities _ _ _ (TyCon { tyConName = _ }) = []
-paramOccPolarities tab p pol (TyFun a b) =
-  paramOccPolarities tab p (polMul pol PContra) a
-    ++ paramOccPolarities tab p pol b
-paramOccPolarities tab p pol (TyTuple ts) =
-  flatMap (paramOccPolarities tab p pol) ts
-paramOccPolarities tab p pol (TyEffect _ _ t) = paramOccPolarities tab p pol t
-paramOccPolarities tab p pol (TyConstrained _ t) =
-  paramOccPolarities tab p pol t
-paramOccPolarities _ _ _ (TyRow _ _ _) = []
-paramOccPolarities _ _ _ (TyAuth _ _) = []
-paramOccPolarities tab p pol (TyNamed _ t _) = paramOccPolarities tab p pol t
-paramOccPolarities tab p pol (TyQual t _ _) = paramOccPolarities tab p pol t
-paramOccPolarities tab p pol (TyApp a b) = match tyAppSpine (TyApp a b)
-  -- OCCURRENCE MINT: same record pattern as
-  -- `argPerformableOccs`' spine arm, for the same reason — the head's name and
-  -- its acquired identity must be read off one pattern so they cannot drift.
-  (TyCon { tyConName = n, tyConOrigin = o }, args) =>
-    paramOccPolaritiesArgs
-      tab
-      p
-      pol
-      (paramPolaritiesIn tab (tyTabKey o n))
-      0
-      args
-  -- ── #2107: ABSTRACT HEAD ⇒ INVARIANT, not the lenient `PCo` default ──────
-  -- An abstract head — a type PARAMETER of this very declaration, as `f` is in
-  -- `data W f a = MkW (f a)` — records nothing anywhere, and unlike an
-  -- unregistered `TyCon` head it never will: `f`'s slot polarity is not a
-  -- property of `W` at all, it is whatever the head gets INSTANTIATED to at
-  -- each use.  `W Ref` needs `PInv`; `W List` would be sound at `PCo`.  The
-  -- declaration cannot tell them apart, so it takes the sound side and reports
-  -- every occurrence reached through such a head as `PInv`.
-  --
-  -- THIS IS A deliberate, measured acceptance narrowing — the one place in
-  -- this function that can reject a program a less conservative verdict accepts.  It is
-  -- the same trade `paramVarianceGuard`'s own "this does narrow acceptance
-  -- In the sound direction too" note already documents: equality is the only
-  -- symmetric sound rule available without direction, and here invariance is
-  -- the only sound verdict available without knowing `f`.  Cost, measured:
-  -- `data W f a = MkW (f a)` at `f := List` (immutable, covariant) can no
-  -- longer widen a closed effect row at `a`, though doing so would be sound.
-  -- Benefit: at `f := Ref` it no longer LAUNDERS one (#2107 — a `Unit -> Unit`
-  -- reader of a cell someone wrote a `<Stdout>` closure into, silently).
-  -- Recovering the sound half needs a DEPENDENT polarity (`f`'s slot resolved
-  -- against the mono argument actually applied at that index, at
-  -- `paramVarianceGuard`) — a new `Polarity` constructor and a resolution step,
-  -- not a change to this arm.
-  --
-  -- The count is preserved rather than fabricated: `map` over the occurrences
-  -- the two sides actually report, so a parameter that does not occur here
-  -- still contributes nothing.
-  _ =>
-    map
-      (q => polMul PInv q)
-      (paramOccPolarities tab p pol a ++ paramOccPolarities tab p pol b)
+paramOccPolarities tab p pol0 x0 = go pol0 x0
+  where
+    go pol (TyVar n) = if n == p then [pol] else []
+    go _ (TyCon { tyConName = _ }) = []
+    go pol (TyFun a b) = go (polMul pol PContra) a ++ go pol b
+    go pol (TyTuple ts) = flatMap (paramOccPolarities tab p pol) ts
+    go pol (TyEffect _ _ t) = go pol t
+    go pol (TyConstrained _ t) = go pol t
+    go _ (TyRow _ _ _) = []
+    go _ (TyAuth _ _) = []
+    go pol (TyNamed _ t _) = go pol t
+    go pol (TyQual t _ _) = go pol t
+    go pol (TyApp a b) = match tyAppSpine (TyApp a b)
+      -- OCCURRENCE MINT: same record pattern as
+      -- `argPerformableOccs`' spine arm, for the same reason — the head's name and
+      -- its acquired identity must be read off one pattern so they cannot drift.
+      (TyCon { tyConName = n, tyConOrigin = o }, args) =>
+        paramOccPolaritiesArgs
+          tab
+          p
+          pol
+          (paramPolaritiesIn tab (tyTabKey o n))
+          0
+          args
+      -- ── #2107: ABSTRACT HEAD ⇒ INVARIANT, not the lenient `PCo` default ──────
+      -- An abstract head — a type PARAMETER of this very declaration, as `f` is in
+      -- `data W f a = MkW (f a)` — records nothing anywhere, and unlike an
+      -- unregistered `TyCon` head it never will: `f`'s slot polarity is not a
+      -- property of `W` at all, it is whatever the head gets INSTANTIATED to at
+      -- each use.  `W Ref` needs `PInv`; `W List` would be sound at `PCo`.  The
+      -- declaration cannot tell them apart, so it takes the sound side and reports
+      -- every occurrence reached through such a head as `PInv`.
+      --
+      -- THIS IS A deliberate, measured acceptance narrowing — the one place in
+      -- this function that can reject a program a less conservative verdict accepts.  It is
+      -- the same trade `paramVarianceGuard`'s own "this does narrow acceptance
+      -- In the sound direction too" note already documents: equality is the only
+      -- symmetric sound rule available without direction, and here invariance is
+      -- the only sound verdict available without knowing `f`.  Cost, measured:
+      -- `data W f a = MkW (f a)` at `f := List` (immutable, covariant) can no
+      -- longer widen a closed effect row at `a`, though doing so would be sound.
+      -- Benefit: at `f := Ref` it no longer LAUNDERS one (#2107 — a `Unit -> Unit`
+      -- reader of a cell someone wrote a `<Stdout>` closure into, silently).
+      -- Recovering the sound half needs a DEPENDENT polarity (`f`'s slot resolved
+      -- against the mono argument actually applied at that index, at
+      -- `paramVarianceGuard`) — a new `Polarity` constructor and a resolution step,
+      -- not a change to this arm.
+      --
+      -- The count is preserved rather than fabricated: `map` over the occurrences
+      -- the two sides actually report, so a parameter that does not occur here
+      -- still contributes nothing.
+      _ => map (q => polMul PInv q) (go pol a ++ go pol b)
 
 paramOccPolaritiesArgs : List (TabKey, List Polarity) ->
   String ->
@@ -484,10 +481,12 @@ paramOccPolaritiesArgs : List (TabKey, List Polarity) ->
   Int ->
   List Ty ->
   List Polarity
-paramOccPolaritiesArgs _ _ _ _ _ [] = []
-paramOccPolaritiesArgs tab p pol headPols i (t :: rest) =
-  paramOccPolarities tab p (polMul pol (polarityAtOr headPols i)) t
-    ++ paramOccPolaritiesArgs tab p pol headPols (i + 1) rest
+paramOccPolaritiesArgs tab p pol headPols i0 xs0 = go i0 xs0
+  where
+    go _ [] = []
+    go i (t :: rest) =
+      paramOccPolarities tab p (polMul pol (polarityAtOr headPols i)) t
+        ++ go (i + 1) rest
 
 -- Sign composition over {+1, -1, 0} ≅ {PCo, PContra, PInv}: commutative, `PCo`
 -- is the unit and `PInv` absorbs; `PPhantom`, no occurrence at all, absorbs

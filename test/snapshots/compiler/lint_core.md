@@ -1,5 +1,5 @@
 # META
-source_lines=633
+source_lines=671
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_core.mdk — the lint framework's data types: `Finding`,
@@ -40,13 +40,15 @@ import frontend.exhaust.{Oracle}
 import frontend.lexer.{Comment}
 
 -- One lint hit: which rule produced it, the human message, its severity (the
--- CLI may promote this via `lintProgram`), and an optional source span.
+-- CLI may promote this via `lintProgram`), and an optional source span.  `fix`
+-- is derived on first demand (`findingFixOf`): inline suppression runs after
+-- the rules, and a finding it drops never computes its fix.
 public export data Finding = Finding {
   rule : String,
   message : String,
   severity : Severity,
   loc : Option Loc,
-  fix : Option Fix,
+  fix : Memo (Option Fix),
 }
 
 -- How far a fix may be trusted.  `Safe` is applied by `--fix`, `Unsafe` only
@@ -81,15 +83,17 @@ fixToDiagFix fx =
     (map (e => (e.feSpan, e.feText)) fx.fixEdits)
 
 -- A write-once cell holding a derived value, forced on first demand.  Rules run
--- under a pure `check`, and the cell is private to one file's `FileFacts`, so
--- two rules asking for the same derived value share one computation without any
--- table keyed by source text.
+-- under a pure `check`, and a cell is private to one file's run (its
+-- `FileFacts`, or the state a rule builds for that file's visitors), so two
+-- readers of the same derived value share one computation without any table
+-- keyed by source text.
 export data Memo a = Memo (Ref (Option a)) (Unit -> a)
 
 export
 memoNew : (Unit -> a) -> Memo a
 memoNew f = Memo (Ref None) f
 
+export
 memoGet : Memo a -> a
 memoGet (Memo cell f) = match !cell
   Some v => v
@@ -98,9 +102,34 @@ memoGet (Memo cell f) = match !cell
     cell := Some v
     v
 
+-- A cell already holding `v`.
+export
+memoReady : a -> Memo a
+memoReady v = Memo (Ref (Some v)) (_ => v)
+
+-- A cell holding `f` of what `m` holds, forcing `m` only when it is forced.
+export
+memoMap : (a -> b) -> Memo a -> Memo b
+memoMap f m = memoNew (_ => f (memoGet m))
+
+-- The fix of a finding that has none.
+export
+noFix : Memo (Option Fix)
+noFix = memoReady None
+
+-- A fix computed only when something reads it.
+export
+fixLater : (Unit -> Option Fix) -> Memo (Option Fix)
+fixLater = memoNew
+
+export
+findingFixOf : Finding -> Option Fix
+findingFixOf f = memoGet f.fix
+
 -- What every rule may ask of the one file being linted, each derived at most
 -- once per file and only if some active rule asks: the source text, its comment
--- side channel, the constructor `Oracle`, and the per-clause duplicate-body keys
+-- side channel, the constructor `Oracle`, every top-level decl paired with its
+-- start location (`ffDeclLocs`, `declLocList`), the per-clause duplicate-body keys
 -- shared by the same-file rule and the cross-file occurrence list, and the scope
 -- model (`tools/lint_scope.mdk`), built only for a rule whose metadata says
 -- `NeedsScopes`.  `ffLines` is the source split into lines, built when a fix
@@ -114,6 +143,7 @@ public export data FileFacts = FileFacts {
   ffSrc : String,
   ffComments : Memo (List Comment),
   ffOracle : Memo Oracle,
+  ffDeclLocs : Memo (List (Decl, Option Loc)),
   ffDupClauses : Memo (List DupClause),
   ffScopes : Memo FileScopes,
   ffLines : Memo (Array String),
@@ -128,6 +158,10 @@ factComments ff = memoGet ff.ffComments
 export
 factOracle : FileFacts -> Oracle
 factOracle ff = memoGet ff.ffOracle
+
+export
+factDeclLocs : FileFacts -> List (Decl, Option Loc)
+factDeclLocs ff = memoGet ff.ffDeclLocs
 
 export
 factDupClauses : FileFacts -> List DupClause
@@ -278,6 +312,9 @@ isScopesNeed NeedsWildIndex = False
 -- in the brackets of a parenthesised node; `None` for a node no `ELoc` wraps (an
 -- application or operator expression the parser leaves bare).  `ctxDeclLoc` is
 -- always the declaration's start line, where an inline suppression sits.
+-- `ctxBinding` is the name and site of the nearest `let` or `where` binding
+-- whose clause the node sits in, `None` outside every one; a node in the body
+-- a `let` scopes is not in its bindings.
 public export data Ctx = Ctx {
   ctxDeclName : String,
   ctxParams : List Pat,
@@ -286,6 +323,7 @@ public export data Ctx = Ctx {
   ctxSpan : Option Loc,
   ctxOwn : Option Loc,
   ctxDeclLoc : Option Loc,
+  ctxBinding : Option (String, Loc),
 }
 
 -- One callback a walking rule registers: on every expression node whose kind is
@@ -648,7 +686,7 @@ public export data DupClause = DupClause {
 (DUse false (UseGroup ("tools" "printer") ((mem "ppTy" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false))))
-(DData Public "Finding" () ((variant "Finding" (ConNamed (field "rule" (TyCon "String")) (field "message" (TyCon "String")) (field "severity" (TyCon "Severity")) (field "loc" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "fix" (TyApp (TyCon "Option") (TyCon "Fix")))))) ())
+(DData Public "Finding" () ((variant "Finding" (ConNamed (field "rule" (TyCon "String")) (field "message" (TyCon "String")) (field "severity" (TyCon "Severity")) (field "loc" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "fix" (TyApp (TyCon "Memo") (TyApp (TyCon "Option") (TyCon "Fix"))))))) ())
 (DData Public "Applicability" () ((variant "Safe" (ConPos)) (variant "Unsafe" (ConPos)) (variant "Suggest" (ConPos))) ())
 (DImpl true "Eq" ((TyCon "Applicability")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "Safe") (PCon "Safe")) () (EVar "True")) (arm (PTuple (PCon "Unsafe") (PCon "Unsafe")) () (EVar "True")) (arm (PTuple (PCon "Suggest") (PCon "Suggest")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DData Public "FixEdit" () ((variant "FixEdit" (ConNamed (field "feSpan" (TyCon "Loc")) (field "feText" (TyCon "String"))))) ())
@@ -662,13 +700,25 @@ public export data DupClause = DupClause {
 (DData Abstract "Memo" ("a") ((variant "Memo" (ConPos (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyVar "a"))) (TyFun (TyCon "Unit") (TyVar "a"))))) ())
 (DTypeSig true "memoNew" (TyFun (TyFun (TyCon "Unit") (TyVar "a")) (TyApp (TyCon "Memo") (TyVar "a"))))
 (DFunDef false "memoNew" ((PVar "f")) (EApp (EApp (EVar "Memo") (EApp (EVar "Ref") (EVar "None"))) (EVar "f")))
-(DTypeSig false "memoGet" (TyFun (TyApp (TyCon "Memo") (TyVar "a")) (TyVar "a")))
+(DTypeSig true "memoGet" (TyFun (TyApp (TyCon "Memo") (TyVar "a")) (TyVar "a")))
 (DFunDef false "memoGet" ((PCon "Memo" (PVar "cell") (PVar "f"))) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "Some" (PVar "v")) () (EVar "v")) (arm (PCon "None") () (EBlock (DoLet false false (PVar "v") (EApp (EVar "f") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "cell")) (EApp (EVar "Some") (EVar "v")))) (DoExpr (EVar "v"))))))
-(DData Public "FileFacts" () ((variant "FileFacts" (ConNamed (field "ffSrc" (TyCon "String")) (field "ffComments" (TyApp (TyCon "Memo") (TyApp (TyCon "List") (TyCon "Comment")))) (field "ffOracle" (TyApp (TyCon "Memo") (TyCon "Oracle"))) (field "ffDupClauses" (TyApp (TyCon "Memo") (TyApp (TyCon "List") (TyCon "DupClause")))) (field "ffScopes" (TyApp (TyCon "Memo") (TyCon "FileScopes"))) (field "ffLines" (TyApp (TyCon "Memo") (TyApp (TyCon "Array") (TyCon "String")))) (field "ffLocalMods" (TyApp (TyCon "List") (TyCon "String"))) (field "ffCanonPath" (TyCon "String"))))) ())
+(DTypeSig true "memoReady" (TyFun (TyVar "a") (TyApp (TyCon "Memo") (TyVar "a"))))
+(DFunDef false "memoReady" ((PVar "v")) (EApp (EApp (EVar "Memo") (EApp (EVar "Ref") (EApp (EVar "Some") (EVar "v")))) (ELam (PWild) (EVar "v"))))
+(DTypeSig true "memoMap" (TyFun (TyFun (TyVar "a") (TyVar "b")) (TyFun (TyApp (TyCon "Memo") (TyVar "a")) (TyApp (TyCon "Memo") (TyVar "b")))))
+(DFunDef false "memoMap" ((PVar "f") (PVar "m")) (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "f") (EApp (EVar "memoGet") (EVar "m"))))))
+(DTypeSig true "noFix" (TyApp (TyCon "Memo") (TyApp (TyCon "Option") (TyCon "Fix"))))
+(DFunDef false "noFix" () (EApp (EVar "memoReady") (EVar "None")))
+(DTypeSig true "fixLater" (TyFun (TyFun (TyCon "Unit") (TyApp (TyCon "Option") (TyCon "Fix"))) (TyApp (TyCon "Memo") (TyApp (TyCon "Option") (TyCon "Fix")))))
+(DFunDef false "fixLater" () (EVar "memoNew"))
+(DTypeSig true "findingFixOf" (TyFun (TyCon "Finding") (TyApp (TyCon "Option") (TyCon "Fix"))))
+(DFunDef false "findingFixOf" ((PVar "f")) (EApp (EVar "memoGet") (EFieldAccess (EVar "f") "fix")))
+(DData Public "FileFacts" () ((variant "FileFacts" (ConNamed (field "ffSrc" (TyCon "String")) (field "ffComments" (TyApp (TyCon "Memo") (TyApp (TyCon "List") (TyCon "Comment")))) (field "ffOracle" (TyApp (TyCon "Memo") (TyCon "Oracle"))) (field "ffDeclLocs" (TyApp (TyCon "Memo") (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc")))))) (field "ffDupClauses" (TyApp (TyCon "Memo") (TyApp (TyCon "List") (TyCon "DupClause")))) (field "ffScopes" (TyApp (TyCon "Memo") (TyCon "FileScopes"))) (field "ffLines" (TyApp (TyCon "Memo") (TyApp (TyCon "Array") (TyCon "String")))) (field "ffLocalMods" (TyApp (TyCon "List") (TyCon "String"))) (field "ffCanonPath" (TyCon "String"))))) ())
 (DTypeSig true "factComments" (TyFun (TyCon "FileFacts") (TyApp (TyCon "List") (TyCon "Comment"))))
 (DFunDef false "factComments" ((PVar "ff")) (EApp (EVar "memoGet") (EFieldAccess (EVar "ff") "ffComments")))
 (DTypeSig true "factOracle" (TyFun (TyCon "FileFacts") (TyCon "Oracle")))
 (DFunDef false "factOracle" ((PVar "ff")) (EApp (EVar "memoGet") (EFieldAccess (EVar "ff") "ffOracle")))
+(DTypeSig true "factDeclLocs" (TyFun (TyCon "FileFacts") (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))))))
+(DFunDef false "factDeclLocs" ((PVar "ff")) (EApp (EVar "memoGet") (EFieldAccess (EVar "ff") "ffDeclLocs")))
 (DTypeSig true "factDupClauses" (TyFun (TyCon "FileFacts") (TyApp (TyCon "List") (TyCon "DupClause"))))
 (DFunDef false "factDupClauses" ((PVar "ff")) (EApp (EVar "memoGet") (EFieldAccess (EVar "ff") "ffDupClauses")))
 (DTypeSig true "factScopes" (TyFun (TyCon "FileFacts") (TyCon "FileScopes")))
@@ -731,7 +781,7 @@ public export data DupClause = DupClause {
 (DFunDef false "isScopesNeed" ((PCon "NeedsStdlibIndex")) (EVar "False"))
 (DFunDef false "isScopesNeed" ((PCon "NeedsProjectIndex")) (EVar "False"))
 (DFunDef false "isScopesNeed" ((PCon "NeedsWildIndex")) (EVar "False"))
-(DData Public "Ctx" () ((variant "Ctx" (ConNamed (field "ctxDeclName" (TyCon "String")) (field "ctxParams" (TyApp (TyCon "List") (TyCon "Pat"))) (field "ctxInTest" (TyCon "Bool")) (field "ctxParent" (TyApp (TyCon "Option") (TyCon "ExprKind"))) (field "ctxSpan" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "ctxOwn" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "ctxDeclLoc" (TyApp (TyCon "Option") (TyCon "Loc")))))) ())
+(DData Public "Ctx" () ((variant "Ctx" (ConNamed (field "ctxDeclName" (TyCon "String")) (field "ctxParams" (TyApp (TyCon "List") (TyCon "Pat"))) (field "ctxInTest" (TyCon "Bool")) (field "ctxParent" (TyApp (TyCon "Option") (TyCon "ExprKind"))) (field "ctxSpan" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "ctxOwn" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "ctxDeclLoc" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "ctxBinding" (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Loc"))))))) ())
 (DData Public "Visitor" () ((variant "OnExpr" (ConPos (TyApp (TyCon "List") (TyCon "ExprKind")) (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding")))))) (variant "OnAnyExpr" (ConPos (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding")))))) (variant "OnDecl" (ConPos (TyFun (TyCon "Ctx") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Finding"))))))) ())
 (DData Public "RuleCheck" () ((variant "WholeFile" (ConPos (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))) (variant "Visits" (ConPos (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor")))))))))) ())
 (DData Public "Summary" () ((variant "DupOccs" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String") (TyCon "String")))))) ())
@@ -805,7 +855,7 @@ public export data DupClause = DupClause {
 (DUse false (UseGroup ("tools" "printer") ((mem "ppTy" false))))
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "Oracle" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false))))
-(DData Public "Finding" () ((variant "Finding" (ConNamed (field "rule" (TyCon "String")) (field "message" (TyCon "String")) (field "severity" (TyCon "Severity")) (field "loc" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "fix" (TyApp (TyCon "Option") (TyCon "Fix")))))) ())
+(DData Public "Finding" () ((variant "Finding" (ConNamed (field "rule" (TyCon "String")) (field "message" (TyCon "String")) (field "severity" (TyCon "Severity")) (field "loc" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "fix" (TyApp (TyCon "Memo") (TyApp (TyCon "Option") (TyCon "Fix"))))))) ())
 (DData Public "Applicability" () ((variant "Safe" (ConPos)) (variant "Unsafe" (ConPos)) (variant "Suggest" (ConPos))) ())
 (DImpl true "Eq" ((TyCon "Applicability")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "Safe") (PCon "Safe")) () (EVar "True")) (arm (PTuple (PCon "Unsafe") (PCon "Unsafe")) () (EVar "True")) (arm (PTuple (PCon "Suggest") (PCon "Suggest")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DData Public "FixEdit" () ((variant "FixEdit" (ConNamed (field "feSpan" (TyCon "Loc")) (field "feText" (TyCon "String"))))) ())
@@ -819,13 +869,25 @@ public export data DupClause = DupClause {
 (DData Abstract "Memo" ("a") ((variant "Memo" (ConPos (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyVar "a"))) (TyFun (TyCon "Unit") (TyVar "a"))))) ())
 (DTypeSig true "memoNew" (TyFun (TyFun (TyCon "Unit") (TyVar "a")) (TyApp (TyCon "Memo") (TyVar "a"))))
 (DFunDef false "memoNew" ((PVar "f")) (EApp (EApp (EVar "Memo") (EApp (EVar "Ref") (EVar "None"))) (EVar "f")))
-(DTypeSig false "memoGet" (TyFun (TyApp (TyCon "Memo") (TyVar "a")) (TyVar "a")))
+(DTypeSig true "memoGet" (TyFun (TyApp (TyCon "Memo") (TyVar "a")) (TyVar "a")))
 (DFunDef false "memoGet" ((PCon "Memo" (PVar "cell") (PVar "f"))) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "Some" (PVar "v")) () (EVar "v")) (arm (PCon "None") () (EBlock (DoLet false false (PVar "v") (EApp (EVar "f") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "cell")) (EApp (EVar "Some") (EVar "v")))) (DoExpr (EVar "v"))))))
-(DData Public "FileFacts" () ((variant "FileFacts" (ConNamed (field "ffSrc" (TyCon "String")) (field "ffComments" (TyApp (TyCon "Memo") (TyApp (TyCon "List") (TyCon "Comment")))) (field "ffOracle" (TyApp (TyCon "Memo") (TyCon "Oracle"))) (field "ffDupClauses" (TyApp (TyCon "Memo") (TyApp (TyCon "List") (TyCon "DupClause")))) (field "ffScopes" (TyApp (TyCon "Memo") (TyCon "FileScopes"))) (field "ffLines" (TyApp (TyCon "Memo") (TyApp (TyCon "Array") (TyCon "String")))) (field "ffLocalMods" (TyApp (TyCon "List") (TyCon "String"))) (field "ffCanonPath" (TyCon "String"))))) ())
+(DTypeSig true "memoReady" (TyFun (TyVar "a") (TyApp (TyCon "Memo") (TyVar "a"))))
+(DFunDef false "memoReady" ((PVar "v")) (EApp (EApp (EVar "Memo") (EApp (EVar "Ref") (EApp (EVar "Some") (EVar "v")))) (ELam (PWild) (EVar "v"))))
+(DTypeSig true "memoMap" (TyFun (TyFun (TyVar "a") (TyVar "b")) (TyFun (TyApp (TyCon "Memo") (TyVar "a")) (TyApp (TyCon "Memo") (TyVar "b")))))
+(DFunDef false "memoMap" ((PVar "f") (PVar "m")) (EApp (EVar "memoNew") (ELam (PWild) (EApp (EVar "f") (EApp (EVar "memoGet") (EVar "m"))))))
+(DTypeSig true "noFix" (TyApp (TyCon "Memo") (TyApp (TyCon "Option") (TyCon "Fix"))))
+(DFunDef false "noFix" () (EApp (EVar "memoReady") (EVar "None")))
+(DTypeSig true "fixLater" (TyFun (TyFun (TyCon "Unit") (TyApp (TyCon "Option") (TyCon "Fix"))) (TyApp (TyCon "Memo") (TyApp (TyCon "Option") (TyCon "Fix")))))
+(DFunDef false "fixLater" () (EVar "memoNew"))
+(DTypeSig true "findingFixOf" (TyFun (TyCon "Finding") (TyApp (TyCon "Option") (TyCon "Fix"))))
+(DFunDef false "findingFixOf" ((PVar "f")) (EApp (EVar "memoGet") (EFieldAccess (EVar "f") "fix")))
+(DData Public "FileFacts" () ((variant "FileFacts" (ConNamed (field "ffSrc" (TyCon "String")) (field "ffComments" (TyApp (TyCon "Memo") (TyApp (TyCon "List") (TyCon "Comment")))) (field "ffOracle" (TyApp (TyCon "Memo") (TyCon "Oracle"))) (field "ffDeclLocs" (TyApp (TyCon "Memo") (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc")))))) (field "ffDupClauses" (TyApp (TyCon "Memo") (TyApp (TyCon "List") (TyCon "DupClause")))) (field "ffScopes" (TyApp (TyCon "Memo") (TyCon "FileScopes"))) (field "ffLines" (TyApp (TyCon "Memo") (TyApp (TyCon "Array") (TyCon "String")))) (field "ffLocalMods" (TyApp (TyCon "List") (TyCon "String"))) (field "ffCanonPath" (TyCon "String"))))) ())
 (DTypeSig true "factComments" (TyFun (TyCon "FileFacts") (TyApp (TyCon "List") (TyCon "Comment"))))
 (DFunDef false "factComments" ((PVar "ff")) (EApp (EVar "memoGet") (EFieldAccess (EVar "ff") "ffComments")))
 (DTypeSig true "factOracle" (TyFun (TyCon "FileFacts") (TyCon "Oracle")))
 (DFunDef false "factOracle" ((PVar "ff")) (EApp (EVar "memoGet") (EFieldAccess (EVar "ff") "ffOracle")))
+(DTypeSig true "factDeclLocs" (TyFun (TyCon "FileFacts") (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))))))
+(DFunDef false "factDeclLocs" ((PVar "ff")) (EApp (EVar "memoGet") (EFieldAccess (EVar "ff") "ffDeclLocs")))
 (DTypeSig true "factDupClauses" (TyFun (TyCon "FileFacts") (TyApp (TyCon "List") (TyCon "DupClause"))))
 (DFunDef false "factDupClauses" ((PVar "ff")) (EApp (EVar "memoGet") (EFieldAccess (EVar "ff") "ffDupClauses")))
 (DTypeSig true "factScopes" (TyFun (TyCon "FileFacts") (TyCon "FileScopes")))
@@ -888,7 +950,7 @@ public export data DupClause = DupClause {
 (DFunDef false "isScopesNeed" ((PCon "NeedsStdlibIndex")) (EVar "False"))
 (DFunDef false "isScopesNeed" ((PCon "NeedsProjectIndex")) (EVar "False"))
 (DFunDef false "isScopesNeed" ((PCon "NeedsWildIndex")) (EVar "False"))
-(DData Public "Ctx" () ((variant "Ctx" (ConNamed (field "ctxDeclName" (TyCon "String")) (field "ctxParams" (TyApp (TyCon "List") (TyCon "Pat"))) (field "ctxInTest" (TyCon "Bool")) (field "ctxParent" (TyApp (TyCon "Option") (TyCon "ExprKind"))) (field "ctxSpan" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "ctxOwn" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "ctxDeclLoc" (TyApp (TyCon "Option") (TyCon "Loc")))))) ())
+(DData Public "Ctx" () ((variant "Ctx" (ConNamed (field "ctxDeclName" (TyCon "String")) (field "ctxParams" (TyApp (TyCon "List") (TyCon "Pat"))) (field "ctxInTest" (TyCon "Bool")) (field "ctxParent" (TyApp (TyCon "Option") (TyCon "ExprKind"))) (field "ctxSpan" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "ctxOwn" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "ctxDeclLoc" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "ctxBinding" (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "Loc"))))))) ())
 (DData Public "Visitor" () ((variant "OnExpr" (ConPos (TyApp (TyCon "List") (TyCon "ExprKind")) (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding")))))) (variant "OnAnyExpr" (ConPos (TyFun (TyCon "Ctx") (TyFun (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Finding")))))) (variant "OnDecl" (ConPos (TyFun (TyCon "Ctx") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "Finding"))))))) ())
 (DData Public "RuleCheck" () ((variant "WholeFile" (ConPos (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))) (variant "Visits" (ConPos (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "FileFacts") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Visitor")))))))))) ())
 (DData Public "Summary" () ((variant "DupOccs" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String") (TyCon "String")))))) ())

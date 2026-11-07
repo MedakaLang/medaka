@@ -13,7 +13,7 @@ dictParams : String -> Int -> List Pat
 dictParamsFrom : String -> Int -> Int -> List Pat
 dictParamsGo : String -> Int -> Int -> List Pat
 dictPass : ModuleCtx -> EvIndex -> String -> List String -> List Decl -> List Decl
-dictPassDecl : ModuleCtx -> PassEvidence -> Map String Unit -> List String -> Decl -> Decl
+dictPassDecl : ModuleCtx -> PassEvidence -> Map String Unit -> Decl -> Decl
 dictPassLetBind : ModuleCtx -> Map String Unit -> LetBind -> LetBind
 dictPassModulesIfEnabled : ModuleCtx -> List String -> Bool -> List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl))
 dictPassModulesScoped : ModuleCtx -> EvIndex -> List String -> List ((String, String), List PredicateSlot) -> Map String (Map String Unit) -> List Decl -> List (String, List Decl) -> List (String, List Decl) -> List (String, List Decl)

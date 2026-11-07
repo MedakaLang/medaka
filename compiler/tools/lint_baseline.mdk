@@ -1,5 +1,6 @@
 -- compiler/tools/lint_baseline.mdk — the per-(file, rule) finding-count baseline
--- behind `medaka lint --baseline` / `--write-baseline` (#2619).
+-- behind `medaka lint --baseline` / `--write-baseline` (#2619), and the
+-- hand-written path exemption table behind `--exempt` (last section).
 --
 -- WHY.  `.githooks/pre-commit`'s `GATED_LINT_RULES` is a MAX RATCHET: a rule may
 -- only be gated once the whole tree is at zero findings for it.  A rule whose
@@ -28,11 +29,20 @@
 import driver.diagnostics.{Diag(..), diagIdText, Severity(..)}
 import tools.lint.{Finding(..), applyFindingDeny}
 import support.util.{
-  contains, listLen, filterList, joinNl, startsWith, sortUniqS, reverseL
+  anyList,
+  contains,
+  listLen,
+  filterList,
+  joinNl,
+  joinWith,
+  startsWith,
+  sortUniqS,
+  reverseL,
 }
 import list.{sortOn}
+import string.{trim}
 import hash_map.{HashMap, new, setInPlace, findWithDefault}
-import toml.{Toml, parse, getString, getInt, tableCount, tableEntry}
+import toml.{Toml, parse, getArray, getString, getInt, tableCount, tableEntry}
 
 -- ── the data ────────────────────────────────────────────────────────────────
 
@@ -79,18 +89,20 @@ baselineRowsGo : Toml ->
   HashMap String (List String) ->
   List BaselineRow ->
   Result String (List BaselineRow)
-baselineRowsGo doc origin i n seen acc =
-  if i >= n then
-    Ok acc
-  else match baselineRowAt doc origin i
-    Err e => Err e
-    Ok r =>
-      let rules = findWithDefault [] r.file seen
-      if contains r.rule rules then
-        Err "\{origin}: duplicate row for '\{r.file}' / \{r.rule}"
-      else
-        setInPlace r.file (r.rule :: rules) seen
-        baselineRowsGo doc origin (i + 1) n seen (r :: acc)
+baselineRowsGo doc origin i0 n seen acc0 = go i0 acc0
+  where
+    go i acc =
+      if i >= n then
+        Ok acc
+      else match baselineRowAt doc origin i
+        Err e => Err e
+        Ok r =>
+          let rules = findWithDefault [] r.file seen
+          if contains r.rule rules then
+            Err "\{origin}: duplicate row for '\{r.file}' / \{r.rule}"
+          else
+            setInPlace r.file (r.rule :: rules) seen
+            go (i + 1) (r :: acc)
 
 baselineRowAt : Toml -> String -> Int -> Result String BaselineRow
 baselineRowAt doc origin i = match tableEntry "entry" i doc
@@ -124,10 +136,12 @@ baselineAllowed : LintBaseline -> String -> String -> Option Int
 baselineAllowed (LintBaseline rows) file rule = baselineAllowedGo rows file rule
 
 baselineAllowedGo : List BaselineRow -> String -> String -> Option Int
-baselineAllowedGo [] _ _ = None
-baselineAllowedGo (r :: rest) file rule
-  | r.file == file && r.rule == rule = Some r.count
-  | otherwise = baselineAllowedGo rest file rule
+baselineAllowedGo rows0 file rule = go rows0
+  where
+    go [] = None
+    go (r :: rest)
+      | r.file == file && r.rule == rule = Some r.count
+      | otherwise = go rest
 
 -- One entry per DISTINCT rule name in `names`, with how many times it occurs,
 -- rule-sorted.  `names` is one entry per finding, so the count is the finding
@@ -284,3 +298,114 @@ baselineFileHeader = stringConcat [
   "# for both consumers above).\n",
   "\n",
 ]
+
+-- ── the path exemption table (`--exempt`) ───────────────────────────────────
+--
+-- A hand-written table of `[[entry]]` rows `{ file, rules, reason }`: findings of
+-- `rules` in `file` are dropped before `--deny` and the count baseline see them.
+-- It exists for source whose bytes another gate pins, where neither an edit nor
+-- an inline directive is possible.  It holds the same invariant as the baseline:
+-- a row the table cannot justify (no reason, no rules, an unknown rule, a file
+-- that does not exist, a second row for one file) is an error, never a row that
+-- silently exempts nothing or everything.  `file` keys exactly as a baseline row
+-- does (`baselineKeyOf`).
+
+public export data ExemptRow = ExemptRow {
+  exemptFile : String,
+  exemptRules : List String,
+  exemptReason : String,
+}
+
+-- The rows plus the working directory their keys are relative to.
+public export data LintExempt = LintExempt String (List ExemptRow)
+
+-- The table `--exempt` was not given: it exempts nothing.
+export
+noExempt : LintExempt
+noExempt = LintExempt "" []
+
+-- Read, parse and validate an exemption table.  `known` is the registry's rule
+-- names; `cwd` anchors the row keys and the existence check.
+export
+readLintExempt : List String ->
+  String ->
+  String ->
+  <IO> Result String LintExempt
+readLintExempt known cwd path = match readFile path
+  Err msg => Err "cannot read lint exemption table '\{path}': \{msg}"
+  Ok src => do
+    rows <- parseLintExempt known path src
+    match filter (r => not (fileExists "\{cwd}/\{r.exemptFile}")) rows
+      [] => Ok (LintExempt cwd rows)
+      r :: _ => Err (exemptMissingFileErr path r.exemptFile)
+
+export
+exemptMissingFileErr : String -> String -> String
+exemptMissingFileErr origin file =
+  "\{origin}: row for '\{file}' names a file that does not exist"
+
+export
+parseLintExempt : List String ->
+  String ->
+  String ->
+  Result String (List ExemptRow)
+parseLintExempt known origin src = match parse src
+  Err e => Err "\{origin}: not valid TOML: \{e}"
+  Ok doc =>
+    map reverseL (exemptRowsGo known doc origin 0 (tableCount "entry" doc) [])
+
+exemptRowsGo : List String ->
+  Toml ->
+  String ->
+  Int ->
+  Int ->
+  List ExemptRow ->
+  Result String (List ExemptRow)
+exemptRowsGo known doc origin i0 n acc0 = go i0 acc0
+  where
+    go i acc =
+      if i >= n then
+        Ok acc
+      else match exemptRowAt known doc origin i
+        Err e => Err e
+        Ok r =>
+          if anyList (seen => seen.exemptFile == r.exemptFile) acc then
+            Err "\{origin}: duplicate row for '\{r.exemptFile}'"
+          else
+            go (i + 1) (r :: acc)
+
+exemptRowAt : List String -> Toml -> String -> Int -> Result String ExemptRow
+exemptRowAt known doc origin i = match tableEntry "entry" i doc
+  None => Err "\{origin}: [[entry]] #\{intToString i} is out of range"
+  Some e => match (getString "file" e, getArray "rules" e, getString "reason" e)
+    (Some f, Some rs, Some why) => checkExemptRow known origin i f rs why
+    (Some f, _, _) =>
+      Err
+        "\{origin}: [[entry]] #\{intToString i} ('\{f}') needs file, rules and reason"
+    _ =>
+      Err "\{origin}: [[entry]] #\{intToString i} needs file, rules and reason"
+
+checkExemptRow : List String ->
+  String ->
+  Int ->
+  String ->
+  List String ->
+  String ->
+  Result String ExemptRow
+checkExemptRow known origin i f rs why
+  | trim why == "" = Err "\{rowName}has an empty reason"
+  | isEmpty rs = Err "\{rowName}names no rules"
+  | otherwise = match filter (r => not (contains r known)) rs
+    [] => Ok ExemptRow { exemptFile = f, exemptRules = rs, exemptReason = why }
+    bad => Err "\{rowName}names unknown rule \{joinWith ", " bad}"
+  where
+    rowName = "\{origin}: [[entry]] #\{intToString i} ('\{f}') "
+
+-- The rules exempt for one lint target, by its baseline key.
+export
+exemptRulesFor : LintExempt -> String -> List String
+exemptRulesFor (LintExempt cwd rows) target =
+  let key = baselineKeyOf cwd target
+  match filter (r => r.exemptFile == key) rows
+    r :: _ => r.exemptRules
+    [] => []

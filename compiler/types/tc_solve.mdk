@@ -973,21 +973,23 @@ methodTemplateGivenScan : MethodPredicateTemplate ->
   List GivenEntry ->
   MethodTemplateGivenResult ->
   MethodTemplateGivenResult
-methodTemplateGivenScan _ _ [] result = result
-methodTemplateGivenScan template chain (given :: rest) result =
-  let result2 =
-    if givenInScope GSPredicateOnly given
-      && Scopes.visibleOnChain chain (Scopes.binderScope given.geBinder)
-      && methodPredicateTemplateMatchesSlot
-        template
-        given.geSlot then match result
-      MethodTemplateGivenNone => MethodTemplateGivenOne given
-      _ => MethodTemplateGivenMany
-    else
-      result
-  match result2
-    MethodTemplateGivenMany => MethodTemplateGivenMany
-    _ => methodTemplateGivenScan template chain rest result2
+methodTemplateGivenScan template chain xs0 result0 = go xs0 result0
+  where
+    go [] result = result
+    go (given :: rest) result =
+      let result2 =
+        if givenInScope GSPredicateOnly given
+          && Scopes.visibleOnChain chain (Scopes.binderScope given.geBinder)
+          && methodPredicateTemplateMatchesSlot
+            template
+            given.geSlot then match result
+          MethodTemplateGivenNone => MethodTemplateGivenOne given
+          _ => MethodTemplateGivenMany
+        else
+          result
+      match result2
+        MethodTemplateGivenMany => MethodTemplateGivenMany
+        _ => go rest result2
 
 methodPredicateTemplateMatchesSlot : MethodPredicateTemplate ->
   PredicateSlot ->
@@ -1083,6 +1085,8 @@ routesOfMonosTopV : SiteCtx ->
   List (List Mono) ->
   List Route
 -- no vectors at all (a caller with nothing to offer) ⇒ the scalar router, unchanged.
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 routesOfMonosTopV sx encl useScope monos ifaces [] =
   routesOfMonosTop sx encl useScope monos ifaces
 routesOfMonosTopV _sx _ _ [] _ _ = []
@@ -1136,6 +1140,8 @@ routesOfMonosTop : SiteCtx ->
   List Mono ->
   List IfaceRef ->
   List Route
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 routesOfMonosTop _sx _ _ [] _ = []
 routesOfMonosTop sx encl useScope (m :: rest) [] =
   routeOf sx ifaceRefNone encl useScope (CountImpls ifaceRefNone) m
@@ -1194,6 +1200,9 @@ recPredicateArgs gctx mono slot = match slot.psArgs
 
 recSlotSubst : Mono -> List Int -> Option (List (Int, Mono))
 recSlotSubst _ [] = Some []
+-- Bound: a recursion through `map` that is not a tail call, run once per slot of every
+-- recursive predicate; the `do` form allocates a closure per element.
+-- lint-disable-next-line rule-passthrough-arm
 recSlotSubst mono (id :: rest) = match findTvarInMono mono id
   None => None
   Some m => map ((id, m) :: _) (recSlotSubst mono rest)
@@ -1496,14 +1505,16 @@ methodReturnPrerequisitesMatch _ _ = False
 -- need one bound is left as it is, for `checkSigsTooGeneral` has already run.
 export
 improveByUniqueImpl : DynCtx -> OrdMap Unit -> List UObligation -> Unit
-improveByUniqueImpl _dyn _ [] = ()
-improveByUniqueImpl dyn sigIds (o :: rest) =
-  improveGoal
-    dyn
-    sigIds
-    o.pred.iface
-    (map normalize (uOblArgs dyn.dcModule.mcGraph o))
-  improveByUniqueImpl dyn sigIds rest
+improveByUniqueImpl dyn sigIds xs0 = go xs0
+  where
+    go [] = ()
+    go (o :: rest) =
+      improveGoal
+        dyn
+        sigIds
+        o.pred.iface
+        (map normalize (uOblArgs dyn.dcModule.mcGraph o))
+      go rest
 
 -- Determination by the unique unifying instance (DICT-SEMANTICS §3, the settle
 -- sequence's second step).  A goal of any arity that is not closed is unified with
@@ -1535,6 +1546,8 @@ determineByUniqueInstance mctx rigidIds obls =
 -- The fuel only bounds the loop: every sweep but the last changes some goal's
 -- shape.
 determineSweeps : ModuleCtx -> OrdMap Unit -> GoalWindow -> Int -> Unit
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
 determineSweeps mctx rigidIds window fuel =
   if fuel > 0
     && determineByUniqueInstanceGo
@@ -1552,11 +1565,13 @@ determineByUniqueInstanceGo : ModuleCtx ->
   Bool ->
   List (Int, UObligation) ->
   Bool
-determineByUniqueInstanceGo _mctx _ _ changed [] = changed
-determineByUniqueInstanceGo mctx rigidIds window changed ((_, o) :: rest) =
-  let args = map normalize (uOblArgs mctx.mcGraph o)
-  let now = determineGoal mctx rigidIds window o args
-  determineByUniqueInstanceGo mctx rigidIds window (now || changed) rest
+determineByUniqueInstanceGo mctx rigidIds window changed0 xs0 = go changed0 xs0
+  where
+    go changed [] = changed
+    go changed ((_, o) :: rest) =
+      let args = map normalize (uOblArgs mctx.mcGraph o)
+      let now = determineGoal mctx rigidIds window o args
+      go (now || changed) rest
 
 -- True when the commit changed the goal's shape.  A commit that only renames the
 -- goal's variables to the instance's fresh ones leaves the goal's size and its
@@ -1900,7 +1915,10 @@ walkDispatch typarams (TyApp a b) m = match peelQual m
 walkDispatch typarams (TyTuple ts) m = match tupleSpine m
   Some ms => flatMap (p => walkDispatch typarams (fst p) (snd p)) (zip ts ms)
   _ => []
-walkDispatch _ _ _ = []
+walkDispatch typarams (TyNamed _ t _) m = walkDispatch typarams t m
+walkDispatch typarams (TyQual t _ _) m = walkDispatch typarams t m
+walkDispatch _ (TyCon {  } | TyEffect _ _ _ | TyConstrained _ _ | TyRow _ _ _ | TyAuth _ _) _ =
+  []
 
 -- one mono per interface param, in declaration order; if ANY param has no
 -- recovered binding the whole obligation is abandoned (return [] → caller skips).
@@ -1912,6 +1930,9 @@ collectByParam typarams pairs = match collectByParamGo typarams pairs
 
 collectByParamGo : List String -> List (String, Mono) -> Option (List Mono)
 collectByParamGo [] _ = Some []
+-- Bound: a recursion through `map` that is not a tail call, run once per interface
+-- parameter of every solved goal; the `do` form allocates a closure per element.
+-- lint-disable-next-line rule-passthrough-arm
 collectByParamGo (p :: rest) pairs = match lookupAssoc p pairs
   None => None
   Some m => map (m :: _) (collectByParamGo rest pairs)

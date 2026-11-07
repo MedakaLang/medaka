@@ -139,9 +139,9 @@ rowPrefix row = match scratchDir ()
   Ok dir => Ok "\{dir}/\{row.name}"
 
 runRow : OracleRow -> <Exec, FileRead, IO> Result String RowOutput
-runRow row = match rowPrefix row
-  Err e => Err e
-  Ok prefix => runRowIn row prefix
+runRow row = do
+  prefix <- rowPrefix row
+  runRowIn row prefix
 
 runRowIn : OracleRow -> String -> <Exec, FileRead, IO> Result String RowOutput
 runRowIn row prefix =
@@ -671,9 +671,9 @@ test "wide_real: integers against REALs past 2^53 match sqlite3" =
    warning nobody reads is how a multi-page traversal test quietly becomes a
    single-page one, so it is an assertion here. -}
 multipageRootPageType : Unit -> <Exec, FileRead, IO> Result String String
-multipageRootPageType () = match scratchDir ()
-  Err e => Err e
-  Ok dir => rootPageTypeIn "\{dir}/multipage-pagetype.db"
+multipageRootPageType () = do
+  dir <- scratchDir ()
+  rootPageTypeIn "\{dir}/multipage-pagetype.db"
 
 -- Its own database, not the `multipage` row's: that row removes its file as
 -- soon as it is graded (see `rowPrefix`).
@@ -683,10 +683,9 @@ rootPageTypeIn db =
   finishScratch [db] out
 
 rootPageTypeOf : String -> <Exec, FileRead, IO> Result String String
-rootPageTypeOf db =
-  match seedDb db [SeedSql multipageSchema, SeedSql multipageInsert]
-    Err e => Err e
-    Ok _ => map trim (sqlite3Rows db [rootPageTypeSql db])
+rootPageTypeOf db = do
+  _ <- seedDb db [SeedSql multipageSchema, SeedSql multipageInsert]
+  map trim (sqlite3Rows db [rootPageTypeSql db])
 
 rootPageTypeSql : String -> String
 rootPageTypeSql db =

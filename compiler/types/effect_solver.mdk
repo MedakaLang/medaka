@@ -305,17 +305,19 @@ relationNodes : SummaryScope c ->
   List (RowRelation c) ->
   Map Int WorkNode ->
   Map Int WorkNode
-relationNodes _ _ [] nodes = nodes
-relationNodes scope protected (rel :: rest) nodes =
-  let candidates =
-    filter (eligibleUpper scope protected) (snd (rowFlat rel.esrUpper))
-  let nodes2 = match candidates
-    [cell] => match !cell
-      EUnbound id _ =>
-        if M.has id nodes then nodes else M.set id (newWorkNode cell) nodes
-      _ => nodes
-    _ => nodes
-  relationNodes scope protected rest nodes2
+relationNodes scope protected xs0 nodes0 = go xs0 nodes0
+  where
+    go [] nodes = nodes
+    go (rel :: rest) nodes =
+      let candidates =
+        filter (eligibleUpper scope protected) (snd (rowFlat rel.esrUpper))
+      let nodes2 = match candidates
+        [cell] => match !cell
+          EUnbound id _ =>
+            if M.has id nodes then nodes else M.set id (newWorkNode cell) nodes
+          _ => nodes
+        _ => nodes
+      go rest nodes2
 
 enqueue : SolveWork -> Int -> Unit
 enqueue work id =
@@ -375,25 +377,27 @@ addEdges : SolveWork ->
   Bool ->
   Map Int (Ref Effvar) ->
   Map Int (Ref Effvar)
-addEdges _ _ [] _ _ _ leaves = leaves
-addEdges work target (cell :: rest) coverAtoms coverLeaves exact leaves =
-  let id = effvarId cell
-  let leaves2 =
-    if M.has id coverLeaves then
-      leaves
-    else match M.get id work.eswNodes
-      Some node =>
-        node.ewnEdges :=
-          SolveEdge {
-              eseTarget = target,
-              eseCoverAtoms = coverAtoms,
-              eseCoverLeaves = coverLeaves,
-              eseExact = exact,
-            }
-            :: node.ewnEdges.value
-        leaves
-      None => M.set id cell leaves
-  addEdges work target rest coverAtoms coverLeaves exact leaves2
+addEdges work target xs0 coverAtoms coverLeaves exact leaves0 = go xs0 leaves0
+  where
+    go [] leaves = leaves
+    go (cell :: rest) leaves =
+      let id = effvarId cell
+      let leaves2 =
+        if M.has id coverLeaves then
+          leaves
+        else match M.get id work.eswNodes
+          Some node =>
+            node.ewnEdges :=
+              SolveEdge {
+                  eseTarget = target,
+                  eseCoverAtoms = coverAtoms,
+                  eseCoverLeaves = coverLeaves,
+                  eseExact = exact,
+                }
+                :: node.ewnEdges.value
+            leaves
+          None => M.set id cell leaves
+      go rest leaves2
 
 addBodyEquations : SolveWork -> List SummaryNode -> Unit
 addBodyEquations _ [] = ()
@@ -402,10 +406,12 @@ addBodyEquations work (node :: rest) =
   addBodyEquations work rest
 
 addLowers : SolveWork -> Int -> List EffRow -> Unit
-addLowers _ _ [] = ()
-addLowers work id (row :: rest) =
-  addEquation work id row [] Tip False
-  addLowers work id rest
+addLowers work id xs0 = go xs0
+  where
+    go [] = ()
+    go (row :: rest) =
+      addEquation work id row [] Tip False
+      go rest
 
 leafSet : List (Ref Effvar) -> Map Int Unit
 leafSet cells = leafSetGo cells Tip
@@ -457,35 +463,39 @@ propagate : SolveWork ->
   Map Int (Ref Effvar) ->
   List SolveEdge ->
   Unit
-propagate _ _ _ [] = ()
-propagate work atoms delta (edge :: rest) =
-  let leaves =
-    M.foldlWithKey
-      (acc id cell =>
-        if M.has id edge.eseCoverLeaves then acc else M.set id cell acc)
-      Tip
-      delta
-  grow
-    work
-    edge.eseTarget
-    (work.eswEscape edge.eseExact atoms edge.eseCoverAtoms)
-    leaves
-  propagate work atoms delta rest
+propagate work atoms delta xs0 = go xs0
+  where
+    go [] = ()
+    go (edge :: rest) =
+      let leaves =
+        M.foldlWithKey
+          (acc id cell =>
+            if M.has id edge.eseCoverLeaves then acc else M.set id cell acc)
+          Tip
+          delta
+      grow
+        work
+        edge.eseTarget
+        (work.eswEscape edge.eseExact atoms edge.eseCoverAtoms)
+        leaves
+      go rest
 
 linkSolutions : Int ->
   (List (Ref Effvar) -> Ref Effvar) ->
   List WorkNode ->
   Unit
-linkSolutions _ _ [] = ()
-linkSolutions owner makeJoin (node :: rest) =
-  let row = match M.values node.ewnLeaves.value
-    [] => EffRow node.ewnAtoms.value None
-    [cell] => EffRow node.ewnAtoms.value (Some cell)
-    cells => EffRow node.ewnAtoms.value (Some (makeJoin cells))
-  match !node.ewnCell
-    ESummary _ _ _ => solveSummaryCell owner node.ewnCell row
-    _ => linkRow node.ewnCell row
-  linkSolutions owner makeJoin rest
+linkSolutions owner makeJoin xs0 = go xs0
+  where
+    go [] = ()
+    go (node :: rest) =
+      let row = match M.values node.ewnLeaves.value
+        [] => EffRow node.ewnAtoms.value None
+        [cell] => EffRow node.ewnAtoms.value (Some cell)
+        cells => EffRow node.ewnAtoms.value (Some (makeJoin cells))
+      match !node.ewnCell
+        ESummary _ _ _ => solveSummaryCell owner node.ewnCell row
+        _ => linkRow node.ewnCell row
+      go rest
 
 missingLeaves : List (Ref Effvar) -> Map Int Unit -> Bool
 missingLeaves [] _ = False
@@ -497,66 +507,73 @@ validateRelations : SummarySolver c ->
   (Bool -> List Atom -> List Atom -> List Atom) ->
   List (RowRelation c) ->
   List (SummaryFailure c)
-validateRelations _ _ _ [] = []
-validateRelations solver protected escape (rel :: rest) =
-  if rowHasSummary rel.esrLower
-    || rowHasSummary rel.esrUpper then match solver.essStack.value
-    _ :: parent :: _ =>
-      retainRowAt parent.essLevel rel.esrLower
-      retainRowAt parent.essLevel rel.esrUpper
-      parent.essRelations :=
-        RowRelation {
-            esrLower = rel.esrLower,
-            esrUpper = rel.esrUpper,
-            esrExact = rel.esrExact,
-            esrContext = rel.esrContext,
-            esrProtected = protected,
-          }
-          :: parent.essRelations.value
-      validateRelations solver protected escape rest
-    -- An unresolved summary relation at the outermost boundary is a real
-    -- unsatisfied effect obligation, not a reason to reach for a nonexistent
-    -- parent scope. Keep it observable as a normal failure so laundering
-    -- cannot turn into a stack panic or an implicit acceptance.
-    _ =>
-      SummaryFailure {
-          esfLower = rel.esrLower,
-          esfUpper = rel.esrUpper,
-          esfExact = rel.esrExact,
-          esfContext = rel.esrContext,
-          esfAuthority = None,
-          esfWrittenUpper = None,
-          esfLabel = None,
-          esfResidualOf = None,
-        }
-        :: validateRelations solver protected escape rest
-  else
-    let (lowerAtoms, lowerCells) = rowFlat rel.esrLower
-    let (upperAtoms, upperCells) = rowFlat rel.esrUpper
-    let failures = validateRelations solver protected escape rest
-    let escaping =
-      authorityEscapes
-        (currentScope solver)
-        rel.esrContext
-        rel.esrExact
-        upperAtoms
-        (escape rel.esrExact lowerAtoms upperAtoms)
-    if isNonEmptyL escaping
-      || missingLeaves lowerCells (leafSet upperCells) then
-      SummaryFailure {
-          esfLower = rel.esrLower,
-          esfUpper = rel.esrUpper,
-          esfExact = rel.esrExact,
-          esfContext = rel.esrContext,
-          esfAuthority = None,
-          esfWrittenUpper = None,
-          esfLabel =
-            firstEscapingKey escaping lowerAtoms upperAtoms escape rel.esrExact,
-          esfResidualOf = None,
-        }
-        :: failures
-    else
-      failures
+validateRelations solver protected escape xs0 = go xs0
+  where
+    go [] = []
+    go (rel :: rest) =
+      if rowHasSummary rel.esrLower
+        || rowHasSummary rel.esrUpper then match solver.essStack.value
+        _ :: parent :: _ =>
+          retainRowAt parent.essLevel rel.esrLower
+          retainRowAt parent.essLevel rel.esrUpper
+          parent.essRelations :=
+            RowRelation {
+                esrLower = rel.esrLower,
+                esrUpper = rel.esrUpper,
+                esrExact = rel.esrExact,
+                esrContext = rel.esrContext,
+                esrProtected = protected,
+              }
+              :: parent.essRelations.value
+          go rest
+        -- An unresolved summary relation at the outermost boundary is a real
+        -- unsatisfied effect obligation, not a reason to reach for a nonexistent
+        -- parent scope. Keep it observable as a normal failure so laundering
+        -- cannot turn into a stack panic or an implicit acceptance.
+        _ =>
+          SummaryFailure {
+              esfLower = rel.esrLower,
+              esfUpper = rel.esrUpper,
+              esfExact = rel.esrExact,
+              esfContext = rel.esrContext,
+              esfAuthority = None,
+              esfWrittenUpper = None,
+              esfLabel = None,
+              esfResidualOf = None,
+            }
+            :: go rest
+      else
+        let (lowerAtoms, lowerCells) = rowFlat rel.esrLower
+        let (upperAtoms, upperCells) = rowFlat rel.esrUpper
+        let failures = go rest
+        let escaping =
+          authorityEscapes
+            (currentScope solver)
+            rel.esrContext
+            rel.esrExact
+            upperAtoms
+            (escape rel.esrExact lowerAtoms upperAtoms)
+        if isNonEmptyL escaping
+          || missingLeaves lowerCells (leafSet upperCells) then
+          SummaryFailure {
+              esfLower = rel.esrLower,
+              esfUpper = rel.esrUpper,
+              esfExact = rel.esrExact,
+              esfContext = rel.esrContext,
+              esfAuthority = None,
+              esfWrittenUpper = None,
+              esfLabel =
+                firstEscapingKey
+                  escaping
+                  lowerAtoms
+                  upperAtoms
+                  escape
+                  rel.esrExact,
+              esfResidualOf = None,
+            }
+            :: failures
+        else
+          failures
 
 -- The key of the first atom left escaping, for the report's location.
 firstEscapingKey : List Atom ->
@@ -582,28 +599,30 @@ authorityEscapes : SummaryScope c ->
   List Atom ->
   List Atom ->
   List Atom
-authorityEscapes _ _ _ _ [] = []
-authorityEscapes scope context exact upper (x :: rest) =
-  let others = authorityEscapes scope context exact upper rest
-  match findAtom (atomKey x) upper
-    Some y =>
-      if isSymbolic (atomAuth x) || isSymbolic (atomAuth y) then
-        scope.essAuthorities :=
-          map
-              (pair => AuthWanted {
-                awLower = fst pair,
-                awUpper = snd pair,
-                awContext = context,
-                awLabel = Some (atomKey x),
-                awExact = exact,
-                awResidualOf = None,
-              })
-              (authSplit (atomAuth x) (atomAuth y))
-            ++ scope.essAuthorities.value
-        others
-      else
-        x :: others
-    None => x :: others
+authorityEscapes scope context exact upper xs0 = go xs0
+  where
+    go [] = []
+    go (x :: rest) =
+      let others = go rest
+      match findAtom (atomKey x) upper
+        Some y =>
+          if isSymbolic (atomAuth x) || isSymbolic (atomAuth y) then
+            scope.essAuthorities :=
+              map
+                  (pair => AuthWanted {
+                    awLower = fst pair,
+                    awUpper = snd pair,
+                    awContext = context,
+                    awLabel = Some (atomKey x),
+                    awExact = exact,
+                    awResidualOf = None,
+                  })
+                  (authSplit (atomAuth x) (atomAuth y))
+                ++ scope.essAuthorities.value
+            others
+          else
+            x :: others
+        None => x :: others
 
 isSymbolic : Authority -> Bool
 isSymbolic q = match authVars q
@@ -1452,23 +1471,25 @@ partitionTransferred : SummaryScope c ->
   Int ->
   List (RowRelation c) ->
   List (RowRelation c)
-partitionTransferred _ _ _ _ [] = []
-partitionTransferred parent protected selected id (rel :: rest) =
-  if M.has id selected then
-    retainRowAt parent.essLevel rel.esrLower
-    retainRowAt parent.essLevel rel.esrUpper
-    parent.essRelations :=
-      RowRelation {
-          esrLower = rel.esrLower,
-          esrUpper = rel.esrUpper,
-          esrExact = rel.esrExact,
-          esrContext = rel.esrContext,
-          esrProtected = protected,
-        }
-        :: parent.essRelations.value
-    partitionTransferred parent protected selected (id + 1) rest
-  else
-    rel :: partitionTransferred parent protected selected (id + 1) rest
+partitionTransferred parent protected selected id0 xs0 = go id0 xs0
+  where
+    go _ [] = []
+    go id (rel :: rest) =
+      if M.has id selected then
+        retainRowAt parent.essLevel rel.esrLower
+        retainRowAt parent.essLevel rel.esrUpper
+        parent.essRelations :=
+          RowRelation {
+              esrLower = rel.esrLower,
+              esrUpper = rel.esrUpper,
+              esrExact = rel.esrExact,
+              esrContext = rel.esrContext,
+              esrProtected = protected,
+            }
+            :: parent.essRelations.value
+        go (id + 1) rest
+      else
+        rel :: go (id + 1) rest
 
 -- Transfer before solving: only original inference choices carry this role,
 -- never external leaves introduced by a solution's borrowed residual.

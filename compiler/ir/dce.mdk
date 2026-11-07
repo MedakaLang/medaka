@@ -129,19 +129,20 @@ externChain : HashMap String String ->
   HashMap String (String, String) ->
   (String, (Decl, Decl)) ->
   Option ((String, String), List (String, String))
-externChain reach declared (mid, (DAttrib _ d, DAttrib _ s)) =
-  externChain reach declared (mid, (d, s))
-externChain reach declared (mid, (DExtern ed, DExtern scoped)) =
-  if has scoped.edName reach then
-    Some (
-      (mid, ed.edName),
-      map
-        (n => findWithDefault ("", n) n declared)
-        (chainTo reach scoped.edName []),
-    )
-  else
-    None
-externChain _ _ _ = None
+externChain reach declared item0 = go item0
+  where
+    go (mid, (DAttrib _ d, DAttrib _ s)) = go (mid, (d, s))
+    go (mid, (DExtern ed, DExtern scoped)) =
+      if has scoped.edName reach then
+        Some (
+          (mid, ed.edName),
+          map
+            (n => findWithDefault ("", n) n declared)
+            (chainTo reach scoped.edName []),
+        )
+      else
+        None
+    go _ = None
 
 -- The names from the root to `n`, following each name to the one it was
 -- first reached from.
@@ -237,19 +238,20 @@ funGraphInto : HashMap String Unit ->
   List Decl ->
   HashMap String (List String) ->
   Unit
-funGraphInto _ [] _ = ()
--- #1037: see definedFnNamesInto — an attributed definition must still contribute
--- its call-graph edges.
-funGraphInto defined ((DAttrib _ d) :: rest) g =
-  funGraphInto defined (d :: rest) g
-funGraphInto defined ((DFunDef _ n ps body site bid) :: rest) g =
-  setInPlace
-    n
-    (map (canonRef defined) (declRefs (DFunDef False n ps body site bid))
-      ++ findWithDefault [] n g)
-    g
-  funGraphInto defined rest g
-funGraphInto defined (_ :: rest) g = funGraphInto defined rest g
+funGraphInto defined xs0 g = go xs0
+  where
+    go [] = ()
+    -- #1037: see definedFnNamesInto — an attributed definition must still contribute
+    -- its call-graph edges.
+    go ((DAttrib _ d) :: rest) = go (d :: rest)
+    go ((DFunDef _ n ps body site bid) :: rest) =
+      setInPlace
+        n
+        (map (canonRef defined) (declRefs (DFunDef False n ps body site bid))
+          ++ findWithDefault [] n g)
+        g
+      go rest
+    go (_ :: rest) = go rest
 
 -- roots from emitting non-DFunDef decls: impl-method + interface-default bodies.
 -- (declRefs walks an impl's method bodies / an interface's default bodies; it is
@@ -352,21 +354,22 @@ dispatchOf : HashMap String (List String) ->
   (List String -> List String) ->
   Decl ->
   Option DispatchEntry
-dispatchOf ifaces methods declared spell (DAttrib _ d) =
-  dispatchOf ifaces methods declared spell d
-dispatchOf ifaces methods declared spell (d@(DInterface { name, ... })) =
-  Some (dispatchOn ifaces methods declared spell name [] (declRefs d))
-dispatchOf ifaces methods declared spell (d@(DImpl { iface, methods = own, ... })) =
-  Some
-    (dispatchOn
-      ifaces
-      methods
-      declared
-      spell
-      (bareIfaceName iface)
-      (map implMethodName own)
-      (declRefs d))
-dispatchOf _ _ _ _ _ = None
+dispatchOf ifaces methods declared spell d0 = go d0
+  where
+    go (DAttrib _ d) = go d
+    go (d@(DInterface { name, ... })) =
+      Some (dispatchOn ifaces methods declared spell name [] (declRefs d))
+    go (d@(DImpl { iface, methods = own, ... })) =
+      Some
+        (dispatchOn
+          ifaces
+          methods
+          declared
+          spell
+          (bareIfaceName iface)
+          (map implMethodName own)
+          (declRefs d))
+    go _ = None
 
 -- `ifaces` and `methods` are the prelude's interfaces and method names,
 -- `declared` the modules' interfaces.
@@ -405,22 +408,20 @@ dispatchUntilStable : HashMap String Unit ->
   List String ->
   List (List String, List String) ->
   Unit
-dispatchUntilStable defined graph seen modules named pending =
-  let names = nameSet (flatMap (reachedRefs seen) modules ++ named)
-  match filterMap (firedBy names) pending
-    [] => ()
-    fired =>
-      closure
-        graph
-        seen
-        (map ((n, refs) => (n, map (canonRef defined) refs)) fired)
-      dispatchUntilStable
-        defined
-        graph
-        seen
-        modules
-        (flatMap snd fired ++ named)
-        (filter (p => isNone (firedBy names p)) pending)
+dispatchUntilStable defined graph seen modules named0 queue0 = go named0 queue0
+  where
+    go named pending =
+      let names = nameSet (flatMap (reachedRefs seen) modules ++ named)
+      match filterMap (firedBy names) pending
+        [] => ()
+        fired =>
+          closure
+            graph
+            seen
+            (map ((n, refs) => (n, map (canonRef defined) refs)) fired)
+          go
+            (flatMap snd fired ++ named)
+            (filter (p => isNone (firedBy names p)) pending)
 
 firedBy : HashMap String Unit ->
   (List String, List String) ->
@@ -500,28 +501,31 @@ letGroupGraphInto : HashMap String Unit ->
   List Decl ->
   HashMap String (List String) ->
   Unit
-letGroupGraphInto _ [] _ = ()
-letGroupGraphInto defined ((DAttrib _ d) :: rest) g =
-  letGroupGraphInto defined (d :: rest) g
-letGroupGraphInto defined ((DLetGroup pub binds) :: rest) g =
-  letBindsInto defined pub binds g
-  letGroupGraphInto defined rest g
-letGroupGraphInto defined (_ :: rest) g = letGroupGraphInto defined rest g
+letGroupGraphInto defined xs0 g = go xs0
+  where
+    go [] = ()
+    go ((DAttrib _ d) :: rest) = go (d :: rest)
+    go ((DLetGroup pub binds) :: rest) =
+      letBindsInto defined pub binds g
+      go rest
+    go (_ :: rest) = go rest
 
 letBindsInto : HashMap String Unit ->
   Bool ->
   List LetBind ->
   HashMap String (List String) ->
   Unit
-letBindsInto _ _ [] _ = ()
-letBindsInto defined pub (b :: rest) g =
-  let n = letBindName b
-  setInPlace
-    n
-    (map (canonRef defined) (declRefs (DLetGroup pub [b]))
-      ++ findWithDefault [] n g)
-    g
-  letBindsInto defined pub rest g
+letBindsInto defined pub xs0 g = go xs0
+  where
+    go [] = ()
+    go (b :: rest) =
+      let n = letBindName b
+      setInPlace
+        n
+        (map (canonRef defined) (declRefs (DLetGroup pub [b]))
+          ++ findWithDefault [] n g)
+        g
+      go rest
 
 -- ── worklist closure ───────────────────────────────────────────────────────
 -- Depth-first over the call graph.  The stack holds, per name being expanded,
@@ -532,13 +536,15 @@ closure : HashMap String (List String) ->
   HashMap String String ->
   List (String, List String) ->
   Unit
-closure _ _ [] = ()
-closure graph seen ((_, []) :: stack) = closure graph seen stack
-closure graph seen ((from, w :: ws) :: stack)
-  | has w seen = closure graph seen ((from, ws) :: stack)
-  | otherwise =
-    setInPlace w from seen
-    closure graph seen ((w, refsOf graph w) :: (from, ws) :: stack)
+closure graph seen xs0 = go xs0
+  where
+    go [] = ()
+    go ((_, []) :: stack) = go stack
+    go ((from, w :: ws) :: stack)
+      | has w seen = go ((from, ws) :: stack)
+      | otherwise =
+        setInPlace w from seen
+        go ((w, refsOf graph w) :: (from, ws) :: stack)
 
 refsOf : HashMap String (List String) -> String -> List String
 refsOf graph n = findWithDefault [] n graph

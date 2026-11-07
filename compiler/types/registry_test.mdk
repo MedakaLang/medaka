@@ -676,12 +676,14 @@ modelLookup ident ((other, value) :: rest) =
   if ident == other then Some value else modelLookup ident rest
 
 modelPut : Ident -> Int -> List (Ident, Int) -> List (Ident, Int)
-modelPut ident value [] = [(ident, value)]
-modelPut ident value ((other, prior) :: rest) =
-  if ident == other then
-    (ident, value) :: rest
-  else
-    (other, prior) :: modelPut ident value rest
+modelPut ident value xs0 = go xs0
+  where
+    go [] = [(ident, value)]
+    go ((other, prior) :: rest) =
+      if ident == other then
+        (ident, value) :: rest
+      else
+        (other, prior) :: go rest
 
 modelDelete : Ident -> List (Ident, Int) -> List (Ident, Int)
 modelDelete _ [] = []
@@ -694,10 +696,11 @@ registryMatchesModel registry model =
     && registryKeysMatch registry model scriptIdents
 
 registryKeysMatch : Registry Int -> List (Ident, Int) -> List Ident -> Bool
-registryKeysMatch _ _ [] = True
-registryKeysMatch registry model (ident :: rest) =
-  regLookupK (regKeyOf ident) registry == modelLookup ident model
-    && registryKeysMatch registry model rest
+registryKeysMatch registry model xs0 = go xs0
+  where
+    go [] = True
+    go (ident :: rest) =
+      regLookupK (regKeyOf ident) registry == modelLookup ident model && go rest
 
 -- Read the whole key pool before each mutation, then carry the resulting
 -- state to later words.  This is deliberately stronger than a final-state
@@ -724,12 +727,14 @@ registryScriptLaw raw = registryTraceMatches raw regEmpty []
 -- `MultiRegistry` has no delete: the independent model keeps a per-key list
 -- in the same newest-first order promised by `mregAdd`.
 multiModelAdd : Ident -> Int -> List (Ident, List Int) -> List (Ident, List Int)
-multiModelAdd ident value [] = [(ident, [value])]
-multiModelAdd ident value ((other, values) :: rest) =
-  if ident == other then
-    (ident, value :: values) :: rest
-  else
-    (other, values) :: multiModelAdd ident value rest
+multiModelAdd ident value xs0 = go xs0
+  where
+    go [] = [(ident, [value])]
+    go ((other, values) :: rest) =
+      if ident == other then
+        (ident, value :: values) :: rest
+      else
+        (other, values) :: go rest
 
 multiModelLookup : Ident -> List (Ident, List Int) -> List Int
 multiModelLookup _ [] = []
@@ -761,10 +766,11 @@ multiKeysMatch : MultiRegistry Int ->
   List (Ident, List Int) ->
   List Ident ->
   Bool
-multiKeysMatch _ _ [] = True
-multiKeysMatch registry model (ident :: rest) =
-  mregLookup ident registry == multiModelLookup ident model
-    && multiKeysMatch registry model rest
+multiKeysMatch registry model xs0 = go xs0
+  where
+    go [] = True
+    go (ident :: rest) =
+      mregLookup ident registry == multiModelLookup ident model && go rest
 
 setModelAdd : Ident -> List Ident -> List Ident
 setModelAdd ident [] = [ident]
@@ -797,10 +803,11 @@ setMatchesModel registry model =
   sregSize registry == listLen model && setKeysMatch registry model scriptIdents
 
 setKeysMatch : SetRegistry -> List Ident -> List Ident -> Bool
-setKeysMatch _ _ [] = True
-setKeysMatch registry model (ident :: rest) =
-  sregMember ident registry == setModelMember ident model
-    && setKeysMatch registry model rest
+setKeysMatch registry model xs0 = go xs0
+  where
+    go [] = True
+    go (ident :: rest) =
+      sregMember ident registry == setModelMember ident model && go rest
 
 -- SpellingPop keeps a floor for every spelling plus identity-indexed rows. The
 -- model is intentionally just association lists; it does not reuse an OrdMap.
@@ -829,31 +836,34 @@ modelReplaceRow : Ident ->
   (Ident, String, Int) ->
   List (Ident, String, Int) ->
   List (Ident, String, Int)
-modelReplaceRow _ row [] = [row]
-modelReplaceRow ident row (prior :: rest) =
-  if rowIdent prior == ident then
-    modelReplaceRow ident row rest
-  else
-    prior :: modelReplaceRow ident row rest
+modelReplaceRow ident row xs0 = go xs0
+  where
+    go [] = [row]
+    go (prior :: rest) =
+      if rowIdent prior == ident then go rest else prior :: go rest
 
 modelRowsPut : String ->
   (Ident, String, Int) ->
   List (String, List (Ident, String, Int)) ->
   List (String, List (Ident, String, Int))
-modelRowsPut spelling row [] = [(spelling, [row])]
-modelRowsPut spelling row ((other, rows) :: rest) =
-  if spelling == other then
-    (other, modelReplaceRow (rowIdent row) row rows) :: rest
-  else
-    (other, rows) :: modelRowsPut spelling row rest
+modelRowsPut spelling row xs0 = go xs0
+  where
+    go [] = [(spelling, [row])]
+    go ((other, rows) :: rest) =
+      if spelling == other then
+        (other, modelReplaceRow (rowIdent row) row rows) :: rest
+      else
+        (other, rows) :: go rest
 
 modelFloorPut : String -> Int -> List (String, Int) -> List (String, Int)
-modelFloorPut spelling value [] = [(spelling, value)]
-modelFloorPut spelling value ((other, prior) :: rest) =
-  if spelling == other then
-    (other, value) :: rest
-  else
-    (other, prior) :: modelFloorPut spelling value rest
+modelFloorPut spelling value xs0 = go xs0
+  where
+    go [] = [(spelling, value)]
+    go ((other, prior) :: rest) =
+      if spelling == other then
+        (other, value) :: rest
+      else
+        (other, prior) :: go rest
 
 spellingRun : List Int -> SpellingPop Int
 spellingRun raw = spellingRunGo raw spEmpty

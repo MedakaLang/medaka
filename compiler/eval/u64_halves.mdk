@@ -121,14 +121,16 @@ divModGo : Int ->
   (Int, Int) ->
   (Int, Int) ->
   ((Int, Int), (Int, Int))
-divModGo bit a b q r
-  | bit < 0 = (q, r)
-  | otherwise =
-    let r1 = bitOrU64 (shiftLeft64 r 1) (0, bitAt a bit)
-    if compareU64 r1 b == Lt then
-      divModGo (bit - 1) a b q r1
-    else
-      divModGo (bit - 1) a b (bitOrU64 q (shiftLeft64 (0, 1) bit)) (sub r1 b)
+divModGo bit0 a b q0 r0 = go bit0 q0 r0
+  where
+    go bit q r
+      | bit < 0 = (q, r)
+      | otherwise =
+        let r1 = bitOrU64 (shiftLeft64 r 1) (0, bitAt a bit)
+        if compareU64 r1 b == Lt then
+          go (bit - 1) q r1
+        else
+          go (bit - 1) (bitOrU64 q (shiftLeft64 (0, 1) bit)) (sub r1 b)
 
 bitAt : (Int, Int) -> Int -> Int
 bitAt (hi, lo) k

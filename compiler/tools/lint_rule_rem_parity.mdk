@@ -12,6 +12,7 @@ import tools.lint_core.{
   Finding(..),
   Fix,
   Fixability(..),
+  Memo,
   Need(..),
   Ratchet(..),
   Rule,
@@ -98,7 +99,7 @@ ruleRemParity idx _ facts _ _ =
     (remParityFix idx facts)
     remParityFinding
 
-remParityFinding : Option Loc -> Expr -> Option Fix -> Finding
+remParityFinding : Option Loc -> Expr -> Memo (Option Fix) -> Finding
 remParityFinding loc rewritten fix = Finding {
   rule = ruleNameRemParity,
   message = "parity test. Rewrite as '" ++ exprToString rewritten ++ "'",

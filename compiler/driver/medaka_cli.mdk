@@ -274,7 +274,10 @@ import tools.lint.{
 import tools.lint_cache.{storeEntries}
 import tools.lint_baseline.{
   LintBaseline,
+  LintExempt,
+  noExempt,
   readLintBaseline,
+  readLintExempt,
   renderLintBaseline,
 }
 import tools.codemod.{
@@ -412,9 +415,9 @@ sourceStalenessVerdict _ =
     let compilerDir = joinPath root "compiler"
     if not (fileExists compilerDir) then
       None
-    else match liveSourceFingerprint root
-      None => None
-      Some live => if live == baked then None else Some compilerDir
+    else do
+      live <- liveSourceFingerprint root
+      if live == baked then None else Some compilerDir
 
 -- C4 (docs/ops/CLI-CONFORMANCE.md §4): `run --json` and `test --json` are the
 -- invocations whose aborted run writes its envelope to stderr — `run`'s stdout
@@ -1031,6 +1034,8 @@ residualJsonTriples : String ->
   List (String, String) ->
   List (String, TcDiag) ->
   <IO> List (String, String, List Diag)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 residualJsonTriples entryFile _ [] =
   [(entryFile, readFileSafe entryFile, [genericResidualDiag entryFile])]
 residualJsonTriples entryFile pathMap ((mid, d) :: rest) =
@@ -1299,9 +1304,9 @@ checkTargetJson : String ->
   CheckJson ->
   Option CheckDrive ->
   <IO> Option CheckJson
-checkTargetJson rsrc csrc target stdlibDir cj drive = match !selectedProfile
-  None => None
-  Some _ => match drive
+checkTargetJson rsrc csrc target stdlibDir cj drive = do
+  _ <- !selectedProfile
+  match drive
     None => panic "check --json --target: a clean check left no drive to judge"
     Some dr =>
       let paths =
@@ -2237,13 +2242,12 @@ splitCodemodArgv (tok :: rest) mode cargs paths =
 -- which names to split).  A leading `=` (`--=v`) is not a flag name; leave it
 -- to the codemod's own `mk` to reject by name.
 codemodFlagEq : String -> Option (String, String)
-codemodFlagEq tok = match stringIndexOf "=" tok
-  Some i =>
-    if i <= 2 then
-      None
-    else
-      Some (stringSlice 0 i tok, stringSlice (i + 1) (stringLength tok) tok)
-  None => None
+codemodFlagEq tok = do
+  i <- stringIndexOf "=" tok
+  if i <= 2 then
+    None
+  else
+    Some (stringSlice 0 i tok, stringSlice (i + 1) (stringLength tok) tok)
 
 -- --stdout for a single file: parse errors exit 1, otherwise print the rewritten
 -- (or, if unchanged, the original) source.  Advisory warnings go to stderr.
@@ -2270,10 +2274,12 @@ codemodFilesGo : CodeMode ->
   List String ->
   Bool ->
   <IO> Bool
-codemodFilesGo _ _ _ [] acc = acc
-codemodFilesGo mode xf warnFn (f :: rest) acc =
-  let signal = codemodOneReport mode xf warnFn f
-  codemodFilesGo mode xf warnFn rest (acc || signal)
+codemodFilesGo mode xf warnFn xs0 acc0 = go xs0 acc0
+  where
+    go [] acc = acc
+    go (f :: rest) acc =
+      let signal = codemodOneReport mode xf warnFn f
+      go rest (acc || signal)
 
 codemodOneReport : CodeMode ->
   (Decl -> (Decl, Bool)) ->
@@ -2620,9 +2626,9 @@ defaultOutPath TWasm input = chopExt (baseOf input) ++ ".wasm"
 -- positionals any more, which is what the old "strip it here so it doesn't
 -- fall through to finishBuildArgs" arms existed to arrange (#1078).
 parseBuildArgs : Args -> Result String (String, Option String, BuildTarget)
-parseBuildArgs a = match buildTargetOf (lastValue "--target" a)
-  Err msg => Err msg
-  Ok target => finishBuildArgs a.positionals (lastValue "-o" a) target
+parseBuildArgs a = do
+  target <- buildTargetOf (lastValue "--target" a)
+  finishBuildArgs a.positionals (lastValue "-o" a) target
 
 buildTargetOf : Option String -> Result String BuildTarget
 buildTargetOf None = Ok TNative
@@ -2652,11 +2658,10 @@ selectBuildProfile a input =
     Err m => Err ("error: " ++ m)
     Ok name => match lookupProfile name
       Err m => Err ("error: " ++ m)
-      Ok p => match parseTarget name
-        Err m => Err m
-        Ok target =>
-          selectedProfile := Some p
-          Ok target
+      Ok p => do
+        target <- parseTarget name
+        let _ = selectedProfile := Some p
+        Ok target
 
 buildTargetOrDie : Args -> String -> <IO> BuildTarget
 buildTargetOrDie a input = match selectBuildProfile a input
@@ -3583,15 +3588,17 @@ collectModuleDocs : String ->
   String ->
   List String ->
   <IO> Result String (List ModuleDoc)
-collectModuleDocs _ _ _ [] = Ok []
-collectModuleDocs rsrc csrc stdlibDir (target :: rest) = match readSource target
-  Err msg => Err "\{target}: \{msg}"
-  Ok tsrc => match docParseError target tsrc
-    Some msg => Err msg
-    None =>
-      let roots = entrySearchRoots (dirOf target) ++ [stdlibDir]
-      let md = computeModuleDoc rsrc csrc tsrc target roots
-      map (md :: _) (collectModuleDocs rsrc csrc stdlibDir rest)
+collectModuleDocs rsrc csrc stdlibDir xs0 = go xs0
+  where
+    go [] = Ok []
+    go (target :: rest) = match readSource target
+      Err msg => Err "\{target}: \{msg}"
+      Ok tsrc => match docParseError target tsrc
+        Some msg => Err msg
+        None =>
+          let roots = entrySearchRoots (dirOf target) ++ [stdlibDir]
+          let md = computeModuleDoc rsrc csrc tsrc target roots
+          map (md :: _) (go rest)
 
 -- A library page is named for its module's DERIVED name (`mdName`: a stdlib
 -- module's import id, otherwise the basename minus `.mdk`), so two non-stdlib
@@ -3896,6 +3903,9 @@ runManifestArgs (ManifestArgs (Some target) fn) = match analyzeTarget target fn
 --                        findings and no row is an error, not a pass.
 --   --write-baseline=<f> regenerate <f> from this run instead of reporting;
 --                        the ONLY sanctioned way to move a count
+--   --exempt=<file>      drop the findings of each row's rules in that row's
+--                        file before --deny and --baseline (a hand-written,
+--                        reason-bearing table; see lint_baseline.mdk)
 -- Target resolution:
 --   ≥1 explicit file args   → lint each in order
 --   single directory arg    → lint all top-level .mdk files in that dir (sorted)
@@ -3930,6 +3940,10 @@ lintArgSpec =
         ["--write-baseline"]
         "<file>"
         "regenerate <file> from this run instead of reporting",
+      value
+        ["--exempt"]
+        "<file>"
+        "drop each listed file's findings of its listed rules",
       switch ["--list-rules"] "list every rule with its metadata",
       switch ["--markdown"] "with --list-rules: render docs/ops/LINT-RULES.md",
       value
@@ -3975,6 +3989,7 @@ lintRunFlags = [
   "--deny",
   "--baseline",
   "--write-baseline",
+  "--exempt",
 ]
 
 listRulesBannedFlags : List String
@@ -4078,6 +4093,7 @@ runLintTargets a =
   let baselineArg = flagValue "--baseline" a
   let writeBaselineArg = flagValue "--write-baseline" a
   assertBaselineFlagsCoherent baselineArg writeBaselineArg fixMode
+  let exemptArg = flagValue "--exempt" a
   let fileArgs = a.positionals
   assertLintTargetsExist fileArgs
   let files = resolveLintTargets fileArgs
@@ -4123,6 +4139,7 @@ runLintTargets a =
         jsonMode
         baselineArg
         writeBaselineArg
+        exemptArg
         files
 
 runLintWithIndex : StdlibIndex ->
@@ -4134,19 +4151,22 @@ runLintWithIndex : StdlibIndex ->
   Bool ->
   Option String ->
   Option String ->
+  Option String ->
   List String ->
   <IO> Unit
-runLintWithIndex stdlibIdx a disableNames onlyNames denyNames fixMode jsonMode baselineArg writeBaselineArg files =
+runLintWithIndex stdlibIdx a disableNames onlyNames denyNames fixMode jsonMode baselineArg writeBaselineArg exemptArg files =
   -- The baseline keys on paths relative to the process's working directory (see
   -- lint_baseline.mdk's header), so the anchor is resolved once, here, and
   -- handed down alongside the parsed rows.
   let cwd = canonicalizePath "."
   let baseCtx = loadLintBaselineCtx cwd baselineArg
+  let exempt = loadLintExempt cwd exemptArg
   let internalFlag = flag "--internal" a
   if isSome writeBaselineArg then
     runLintWriteBaselineCmd
       stdlibIdx
       internalFlag
+      exempt
       disableNames
       onlyNames
       denyNames
@@ -4157,6 +4177,7 @@ runLintWithIndex stdlibIdx a disableNames onlyNames denyNames fixMode jsonMode b
     runLintJsonCmd
       stdlibIdx
       internalFlag
+      exempt
       disableNames
       onlyNames
       denyNames
@@ -4169,6 +4190,7 @@ runLintWithIndex stdlibIdx a disableNames onlyNames denyNames fixMode jsonMode b
     let cacheCtx = lintCacheCtx (flag "--cache" a) fixMode
     let run = LintRun {
       lrInternal = internalFlag,
+      lrExempt = exempt,
       lrFix = fixMode,
       lrUnsafe = flag "--unsafe-fixes" a,
       lrMulti = multiFile,
@@ -4191,6 +4213,7 @@ runLintWithIndex stdlibIdx a disableNames onlyNames denyNames fixMode jsonMode b
         runProjectReport
           stdlibIdx
           internalFlag
+          exempt
           disableNames
           onlyNames
           denyNames
@@ -4252,6 +4275,16 @@ loadLintBaselineCtx cwd (Some path) = match readLintBaseline path
     None
   Ok base => Some (cwd, base)
 
+-- Same rule for the exemption table: a table that cannot be read or has a row
+-- it cannot justify ends the run, rather than exempting nothing.
+loadLintExempt : String -> Option String -> <IO> LintExempt
+loadLintExempt _ None = noExempt
+loadLintExempt cwd (Some path) = match readLintExempt allRuleNames cwd path
+  Err msg =>
+    dieMsg "medaka lint: \{msg}"
+    noExempt
+  Ok table => table
+
 -- `--write-baseline`: regenerate the file from THIS run rather than reporting
 -- against it.  Counts are read off the same per-file diagnostic triples the
 -- `--json` surface emits, so what gets pinned is exactly what a report would
@@ -4259,6 +4292,7 @@ loadLintBaselineCtx cwd (Some path) = match readLintBaseline path
 -- the one that checks it.
 runLintWriteBaselineCmd : StdlibIndex ->
   Bool ->
+  LintExempt ->
   List String ->
   List String ->
   List String ->
@@ -4266,11 +4300,12 @@ runLintWriteBaselineCmd : StdlibIndex ->
   String ->
   List String ->
   <IO> Unit
-runLintWriteBaselineCmd idx internalFlag disableNames onlyNames denyNames cwd out files =
+runLintWriteBaselineCmd idx internalFlag exempt disableNames onlyNames denyNames cwd out files =
   let triples =
     lintFilesToDiagTriples
       idx
       internalFlag
+      exempt
       disableNames
       onlyNames
       denyNames

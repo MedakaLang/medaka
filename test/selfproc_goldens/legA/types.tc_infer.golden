@@ -34,7 +34,7 @@ clauseResult : Int -> (Option Loc, Mono) -> (Option Loc, Mono)
 closeLocalScope : ModuleCtx -> Option ScopeId -> Unit
 composeOp : DynCtx -> Mono -> Mono -> Bool -> Mono
 consOp : DynCtx -> Mono -> Mono -> Mono
-deadAltIndexes : ModuleCtx -> Oracle -> Option TabKey -> List (List Pat) -> Bool -> List (List Pat) -> Int -> List Pat -> List Int
+deadAltIndexes : Oracle -> Option TabKey -> List (List Pat) -> Bool -> List (List Pat) -> Int -> List Pat -> List Int
 declareQuantified : ModuleCtx -> Scheme -> Unit
 declareRigidVars : ModuleCtx -> List String -> Unit
 derefOp : DynCtx -> Mono -> Mono
@@ -135,7 +135,7 @@ patIsVar : Pat -> Bool
 peelOntoParams : DynCtx -> Option Mono -> List Mono -> List Pat -> Unit
 pipeOp : TcEnv -> Expr -> Expr -> Mono -> Mono -> Mono
 plainAppHead : TcEnv -> Expr -> Bool
-preunifySigsEx : ModuleCtx -> List (String, Ty) -> List ScopedMember -> (List ConstraintReg, List (String, Ty, List (String, Mono)))
+preunifySigsEx : ModuleCtx -> List ScopedMember -> (List ConstraintReg, List (String, Ty, List (String, Mono)))
 processLetGroup : TcEnv -> List LetBind -> TcEnv
 publishProducedResults : DynCtx -> BindingSummary -> List (Option Loc, Mono) -> Unit
 pushDiscardedValueDesc : ModuleCtx -> String -> Expr -> Unit
@@ -154,7 +154,7 @@ unboundVarFresh : ModuleCtx -> String -> Mono
 unifyFieldAssignIdx : TcEnv -> String -> RecordInfo -> RecordSubst -> String -> Expr -> Unit
 unifyFieldAssignsIdx : TcEnv -> String -> RecordInfo -> RecordSubst -> List FieldAssign -> Unit
 unifySpineResult : TcEnv -> Expr -> Mono -> List (Expr, Mono) -> Mono
-unreachableAltIndexes : ModuleCtx -> Oracle -> Option TabKey -> List (List Pat) -> Bool -> Int -> List Pat -> List Int
+unreachableAltIndexes : Oracle -> Option TabKey -> List (List Pat) -> Bool -> Int -> List Pat -> List Int
 valueSpanLoc : Expr -> Option Loc
 warnUnreachableAlts : ModuleCtx -> Oracle -> Option TabKey -> List (List Pat) -> Bool -> Pat -> Pat -> Expr -> Unit
 warnedAt : Option Loc -> TcDiag -> Bool

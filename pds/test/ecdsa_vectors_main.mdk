@@ -362,6 +362,8 @@ runVerificationRows : Array Int ->
   List String ->
   Int ->
   <IO> Unit
+-- Bound: the head line of the where-go form cannot fit 80 columns and the parser rejects the two-line layout (#4896); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 runVerificationRows _ _ _ _ _ _ _ [] _ = ()
 runVerificationRows counts seen maxId acceptIdx rejectIdx uniqueIdx publicIdx (row :: rest) lineNo =
   let () =

@@ -1,5 +1,5 @@
 # META
-source_lines=1403
+source_lines=1415
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_mark: the mark pass: rewrite a binding group's method references into marked occurrences
@@ -246,36 +246,39 @@ mintDictAt mctx onDict n =
 -- so with the emit path off this would degenerate to the same node set mapProg
 -- visits.
 prePassDeclScoped : ModuleCtx -> ArgRw -> Decl -> Decl
-prePassDeclScoped mctx rw (DFunDef pub n ps e site bid) =
-  DFunDef
-    pub
-    n
-    ps
-    (rewriteArgScoped mctx rw (boundOfList (patVarsListTc ps)) e)
-    site
-    bid
-prePassDeclScoped mctx rw (d@(DInterface { methods, ... })) =
-  DInterface { d | methods = map (prePassIfaceMethodScoped mctx rw) methods }
-prePassDeclScoped mctx rw (d@(DImpl { methods, ... })) =
-  DImpl { d | methods = map (prePassImplMethodScoped mctx rw) methods }
-prePassDeclScoped mctx rw (DProp pub name params body) =
-  DProp
-    pub
-    name
-    params
-    (rewriteArgScoped mctx rw (boundOfList (propParamNamesTc params)) body)
-prePassDeclScoped mctx rw (DTest pub name body) =
-  DTest pub name (rewriteArgScoped mctx rw omEmpty body)
-prePassDeclScoped mctx rw (DAttrib attrs d) =
-  DAttrib attrs (prePassDeclScoped mctx rw d)
--- Top-level `let rec … with …` (DLetGroup): mapDecl/the catch-all skip its bodies,
--- so a constrained-fn occurrence inside a group body would never be rewritten to
--- EDictAt/EMethodAt → its call site gets no dict route → the dict-passed callee is
--- under-applied at eval.  Rewrite each clause body with that clause's params scoped
--- in, exactly like the DFunDef arm.
-prePassDeclScoped mctx rw (DLetGroup pub binds) =
-  DLetGroup pub (map (prePassLetBindScoped mctx rw) binds)
-prePassDeclScoped _mctx _ d = d
+prePassDeclScoped mctx rw x20 = go x20
+  where
+    go (DFunDef pub n ps e site bid) =
+      DFunDef
+        pub
+        n
+        ps
+        (rewriteArgScoped mctx rw (boundOfList (patVarsListTc ps)) e)
+        site
+        bid
+    go (d@(DInterface { methods, ... })) = DInterface { d |
+      methods = map (prePassIfaceMethodScoped mctx rw) methods,
+    }
+    go (d@(DImpl { methods, ... })) =
+      DImpl { d | methods = map (prePassImplMethodScoped mctx rw) methods }
+    go (DProp pub name params body) =
+      DProp
+        pub
+        name
+        params
+        (rewriteArgScoped mctx rw (boundOfList (propParamNamesTc params)) body)
+    go (DTest pub name body) =
+      DTest pub name (rewriteArgScoped mctx rw omEmpty body)
+    go (DAttrib attrs d) = DAttrib attrs (go d)
+    -- Top-level `let rec … with …` (DLetGroup): mapDecl/the catch-all skip its bodies,
+    -- so a constrained-fn occurrence inside a group body would never be rewritten to
+    -- EDictAt/EMethodAt → its call site gets no dict route → the dict-passed callee is
+    -- under-applied at eval.  Rewrite each clause body with that clause's params scoped
+    -- in, exactly like the DFunDef arm.
+    go (DLetGroup pub binds) =
+      DLetGroup pub (map (prePassLetBindScoped mctx rw) binds)
+    go (d@(DTypeSig _ _ _ _ | DExtern _ | DData {  } | DUse _ _ _ | DEffect _ _ _ _ _ _ | DTypeAlias {  } | DNewtype {  })) =
+      d
 
 prePassLetBindScoped : ModuleCtx -> ArgRw -> LetBind -> LetBind
 prePassLetBindScoped mctx rw (LetBind n clauses site bid) =
@@ -338,7 +341,8 @@ localAbsCandidate (ERecordCreate _ fs) =
     (fa => match fa
       FieldAssign _ e => localAbsCandidate e)
     fs
-localAbsCandidate _ = False
+localAbsCandidate (ELet _ _ _ _ _ | EMatch _ _ | EIf _ _ _ | EBinOp _ _ _ _ | EUnOp _ _ _ | EInfix _ _ _ | EFieldAccess _ _ _ | EArrayLit _ | ERangeList _ _ _ | ERangeArray _ _ _ | ESlice _ _ _ _ | ELetGroup _ _ | ESection _ | EIndex _ _ | EBlock _ | EDo _ _ | EStringInterp _ | EGuards _ | ERecordUpdate _ _ _ | EVariantUpdate _ _ _ | EMapLit _ _ | ESetLit _ _ | EAsPat _ _ | EOrPat _ | EDictApp _ | EVarAt _ _ | ENumLit _ _ _ | EWideLit _ _ _ _) =
+  False
 
 localAbsCtorSpine : Expr -> Bool
 localAbsCtorSpine (ELoc _ e) = localAbsCtorSpine e
@@ -346,7 +350,8 @@ localAbsCtorSpine (EDoOrigin _ e) = localAbsCtorSpine e
 localAbsCtorSpine (EApp f x) = localAbsCtorSpine f && localAbsCandidate x
 localAbsCtorSpine (EVar name) = ctorHeadShaped name
 localAbsCtorSpine (EVarId name _) = ctorHeadShaped name
-localAbsCtorSpine _ = False
+localAbsCtorSpine (ELit _ | ELam _ _ | ELet _ _ _ _ _ | EMatch _ _ | EIf _ _ _ | EBinOp _ _ _ _ | EUnOp _ _ _ | EInfix _ _ _ | EFieldAccess _ _ _ | ETuple _ | EListLit _ | EArrayLit _ | ERangeList _ _ _ | ERangeArray _ _ _ | ESlice _ _ _ _ | ELetGroup _ _ | ESection _ | EIndex _ _ | EAnnot _ _ | EHeadAnnot _ _ | EBlock _ | EDo _ _ | EStringInterp _ | EGuards _ | ERecordCreate _ _ | ERecordUpdate _ _ _ | EVariantUpdate _ _ _ | EMapLit _ _ | ESetLit _ _ | EAsPat _ _ | EOrPat _ | EMethodRef _ | EDictApp _ | EVarAt _ _ | EMethodAt _ _ _ | EDictAt _ _ | ENumLit _ _ _ | EWideLit _ _ _ _) =
+  False
 
 localAbsCandidateBind : LetBind -> Bool
 localAbsCandidateBind (LetBind _ clauses _ _) =
@@ -394,6 +399,8 @@ boundOfList ns = boundInsert ns omEmpty
 -- binders) extend `bound`; every other node recurses into its children with the
 -- same `bound`.
 rewriteArgScoped : ModuleCtx -> ArgRw -> OrdMap String -> Expr -> Expr
+-- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 rewriteArgScoped mctx (ArgRw rp dn an sm onDict granted) bound (EVar n)
   -- P0-18: `n` is a MANGLED definer-shadow standalone (`<mid>__size`).  Mark it
   -- `EMethodAt` with the BARE dispatch name (so `implFor` finds the impl when the
@@ -543,7 +550,8 @@ rewriteArgScoped mctx _ _ (ENumLit n ev lx) =
 rewriteArgScoped mctx _ _ (EWideLit hi lo ev lx) =
   EWideLit hi lo (mintedOr (mintOpSite mctx) ev) lx
 -- leaves (ELit / EMethodRef / EDictApp / EVarAt / EMethodAt / EDictAt / SecBare)
-rewriteArgScoped _mctx _ _ e = e
+rewriteArgScoped _mctx _ _ (e@(ESection _ | ELit _ | EMethodRef _ | EDictApp _ | EVarAt _ _ | EVarId _ _ | EMethodAt _ _ _)) =
+  e
 
 rewriteArgField : ModuleCtx ->
   ArgRw ->
@@ -602,16 +610,17 @@ rewriteArgGuards : ModuleCtx ->
   OrdMap String ->
   List Guard ->
   (List Guard, OrdMap String)
-rewriteArgGuards _mctx _ bound [] = ([], bound)
-rewriteArgGuards mctx rw bound ((GBool e) :: rest) =
-  let e2 = rewriteArgScoped mctx rw bound e
-  let (rest2, bnd) = rewriteArgGuards mctx rw bound rest
-  (GBool e2 :: rest2, bnd)
-rewriteArgGuards mctx rw bound ((GBind p e) :: rest) =
-  let e2 = rewriteArgScoped mctx rw bound e
-  let (rest2, bnd) =
-    rewriteArgGuards mctx rw (boundInsert (patVarsTc p) bound) rest
-  (GBind p e2 :: rest2, bnd)
+rewriteArgGuards mctx rw bound0 xs0 = go bound0 xs0
+  where
+    go bound [] = ([], bound)
+    go bound ((GBool e) :: rest) =
+      let e2 = rewriteArgScoped mctx rw bound e
+      let (rest2, bnd) = go bound rest
+      (GBool e2 :: rest2, bnd)
+    go bound ((GBind p e) :: rest) =
+      let e2 = rewriteArgScoped mctx rw bound e
+      let (rest2, bnd) = go (boundInsert (patVarsTc p) bound) rest
+      (GBind p e2 :: rest2, bnd)
 
 -- do/block statements: a DoBind/DoLet pattern binds for SUBSEQUENT
 -- statements (a recursive DoLet also for its own RHS).
@@ -620,6 +629,8 @@ rewriteArgStmts : ModuleCtx ->
   OrdMap String ->
   List DoStmt ->
   List DoStmt
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 rewriteArgStmts _mctx _ _ [] = []
 rewriteArgStmts mctx rw bound ((DoExpr e) :: rest) =
   DoExpr (rewriteArgScoped mctx rw bound e)
@@ -671,10 +682,12 @@ markTailDecls mctx mc dn granted decls =
   map (markTailDecl mctx (argRwOf mc dn noDictHook granted)) decls
 
 markTailDecl : ModuleCtx -> ArgRw -> Decl -> Decl
-markTailDecl _mctx _ (d@(DFunDef _ _ _ _ _ _)) = d
-markTailDecl _mctx _ (d@(DLetGroup _ _)) = d
-markTailDecl mctx rw (DAttrib attrs d) = DAttrib attrs (markTailDecl mctx rw d)
-markTailDecl mctx rw d = prePassDeclScoped mctx rw d
+markTailDecl mctx rw x20 = go x20
+  where
+    go (d@(DFunDef _ _ _ _ _ _)) = d
+    go (d@(DLetGroup _ _)) = d
+    go (DAttrib attrs d) = DAttrib attrs (go d)
+    go d = prePassDeclScoped mctx rw d
 
 markClauseWith : ModuleCtx -> ArgRw -> (List Pat, Expr) -> (List Pat, Expr)
 markClauseWith mctx rw (ps, e) =
@@ -880,27 +893,24 @@ recMarkMembers : ModuleCtx ->
   List ScopedMember ->
   OrdMap (List (List Pat, Expr)) ->
   OrdMap (List (List Pat, Expr))
-recMarkMembers _mctx _ _ [] grouped = grouped
-recMarkMembers mctx dn placeholders (member :: rest) grouped =
-  let m = member.smName
-  let onDict =
-    callee ev =>
-      pushRecDictAppGoal
-        mctx.mcGraph
-        (RecDictApp
-          (Ref [])
-          callee
-          m
-          (placeholderMonoOf callee placeholders)
-          member.smScope
-          ev)
-  let rw = ArgRw omEmpty dn omEmpty [] onDict (_ => False)
-  recMarkMembers
-    mctx
-    dn
-    placeholders
-    rest
-    (mapGroupClauses (markClauseWith mctx rw) [m] grouped)
+recMarkMembers mctx dn placeholders xs0 grouped0 = go xs0 grouped0
+  where
+    go [] grouped = grouped
+    go (member :: rest) grouped =
+      let m = member.smName
+      let onDict =
+        callee ev =>
+          pushRecDictAppGoal
+            mctx.mcGraph
+            (RecDictApp
+              (Ref [])
+              callee
+              m
+              (placeholderMonoOf callee placeholders)
+              member.smScope
+              ev)
+      let rw = ArgRw omEmpty dn omEmpty [] onDict (_ => False)
+      go rest (mapGroupClauses (markClauseWith mctx rw) [m] grouped)
 
 placeholderMonoOf : String -> List (String, Mono) -> Mono
 placeholderMonoOf callee placeholders = match lookupAssoc callee placeholders
@@ -956,11 +966,13 @@ rebuildFunClauses : OrdMap (List (List Pat, Expr)) ->
   String ->
   List FunClause ->
   (List FunClause, OrdMap (List (List Pat, Expr)))
-rebuildFunClauses _ pending _ [] = ([], pending)
-rebuildFunClauses grouped pending n (_ :: rest) =
-  let ((ps, e), pending2) = popMarkedClause grouped pending n
-  let (cs, pending3) = rebuildFunClauses grouped pending2 n rest
-  (FunClause ps e :: cs, pending3)
+rebuildFunClauses grouped pending0 n xs0 = go pending0 xs0
+  where
+    go pending [] = ([], pending)
+    go pending (_ :: rest) =
+      let ((ps, e), pending2) = popMarkedClause grouped pending n
+      let (cs, pending3) = go pending2 rest
+      (FunClause ps e :: cs, pending3)
 
 -- The next unconsumed marked clause of [n]: `pending` holds the clauses not yet
 -- written back, in source order, minted from `clausesOf` on first use.
@@ -1452,14 +1464,7 @@ finishModuleMarking mm env grouped prog =
 (DTypeSig false "mintDictAt" (TyFun (TyCon "ModuleCtx") (TyFun (TyFun (TyCon "String") (TyFun (TyCon "EvId") (TyCon "Unit"))) (TyFun (TyCon "String") (TyCon "Expr")))))
 (DFunDef false "mintDictAt" ((PVar "mctx") (PVar "onDict") (PVar "n")) (EBlock (DoLet false false (PVar "ev") (EApp (EApp (EVar "freshEvId") (EVar "mctx")) (ELit LUnit))) (DoExpr (EApp (EApp (EVar "onDict") (EVar "n")) (EVar "ev"))) (DoExpr (EApp (EApp (EVar "EDictAt") (EVar "n")) (EVar "ev")))))
 (DTypeSig false "prePassDeclScoped" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ArgRw") (TyFun (TyCon "Decl") (TyCon "Decl")))))
-(DFunDef false "prePassDeclScoped" ((PVar "mctx") (PVar "rw") (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "ps") (PVar "e") (PVar "site") (PVar "bid"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EVar "ps")) (EApp (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "mctx")) (EVar "rw")) (EApp (EVar "boundOfList") (EApp (EVar "patVarsListTc") (EVar "ps")))) (EVar "e"))) (EVar "site")) (EVar "bid")))
-(DFunDef false "prePassDeclScoped" ((PVar "mctx") (PVar "rw") (PAs "d" (PRec "DInterface" ((rf "methods" None)) true))) (EVariantUpdate "DInterface" (EVar "d") ((fa "methods" (EApp (EApp (EVar "map") (EApp (EApp (EVar "prePassIfaceMethodScoped") (EVar "mctx")) (EVar "rw"))) (EVar "methods"))))))
-(DFunDef false "prePassDeclScoped" ((PVar "mctx") (PVar "rw") (PAs "d" (PRec "DImpl" ((rf "methods" None)) true))) (EVariantUpdate "DImpl" (EVar "d") ((fa "methods" (EApp (EApp (EVar "map") (EApp (EApp (EVar "prePassImplMethodScoped") (EVar "mctx")) (EVar "rw"))) (EVar "methods"))))))
-(DFunDef false "prePassDeclScoped" ((PVar "mctx") (PVar "rw") (PCon "DProp" (PVar "pub") (PVar "name") (PVar "params") (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "DProp") (EVar "pub")) (EVar "name")) (EVar "params")) (EApp (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "mctx")) (EVar "rw")) (EApp (EVar "boundOfList") (EApp (EVar "propParamNamesTc") (EVar "params")))) (EVar "body"))))
-(DFunDef false "prePassDeclScoped" ((PVar "mctx") (PVar "rw") (PCon "DTest" (PVar "pub") (PVar "name") (PVar "body"))) (EApp (EApp (EApp (EVar "DTest") (EVar "pub")) (EVar "name")) (EApp (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "mctx")) (EVar "rw")) (EVar "omEmpty")) (EVar "body"))))
-(DFunDef false "prePassDeclScoped" ((PVar "mctx") (PVar "rw") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EApp (EVar "prePassDeclScoped") (EVar "mctx")) (EVar "rw")) (EVar "d"))))
-(DFunDef false "prePassDeclScoped" ((PVar "mctx") (PVar "rw") (PCon "DLetGroup" (PVar "pub") (PVar "binds"))) (EApp (EApp (EVar "DLetGroup") (EVar "pub")) (EApp (EApp (EVar "map") (EApp (EApp (EVar "prePassLetBindScoped") (EVar "mctx")) (EVar "rw"))) (EVar "binds"))))
-(DFunDef false "prePassDeclScoped" ((PVar "_mctx") PWild (PVar "d")) (EVar "d"))
+(DFunDef false "prePassDeclScoped" ((PVar "mctx") (PVar "rw") (PVar "x20")) (ELetGroup ((lgb "go" (clause ((PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "ps") (PVar "e") (PVar "site") (PVar "bid"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EVar "ps")) (EApp (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "mctx")) (EVar "rw")) (EApp (EVar "boundOfList") (EApp (EVar "patVarsListTc") (EVar "ps")))) (EVar "e"))) (EVar "site")) (EVar "bid"))) (clause ((PAs "d" (PRec "DInterface" ((rf "methods" None)) true))) (EVariantUpdate "DInterface" (EVar "d") ((fa "methods" (EApp (EApp (EVar "map") (EApp (EApp (EVar "prePassIfaceMethodScoped") (EVar "mctx")) (EVar "rw"))) (EVar "methods")))))) (clause ((PAs "d" (PRec "DImpl" ((rf "methods" None)) true))) (EVariantUpdate "DImpl" (EVar "d") ((fa "methods" (EApp (EApp (EVar "map") (EApp (EApp (EVar "prePassImplMethodScoped") (EVar "mctx")) (EVar "rw"))) (EVar "methods")))))) (clause ((PCon "DProp" (PVar "pub") (PVar "name") (PVar "params") (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "DProp") (EVar "pub")) (EVar "name")) (EVar "params")) (EApp (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "mctx")) (EVar "rw")) (EApp (EVar "boundOfList") (EApp (EVar "propParamNamesTc") (EVar "params")))) (EVar "body")))) (clause ((PCon "DTest" (PVar "pub") (PVar "name") (PVar "body"))) (EApp (EApp (EApp (EVar "DTest") (EVar "pub")) (EVar "name")) (EApp (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "mctx")) (EVar "rw")) (EVar "omEmpty")) (EVar "body")))) (clause ((PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EVar "go") (EVar "d")))) (clause ((PCon "DLetGroup" (PVar "pub") (PVar "binds"))) (EApp (EApp (EVar "DLetGroup") (EVar "pub")) (EApp (EApp (EVar "map") (EApp (EApp (EVar "prePassLetBindScoped") (EVar "mctx")) (EVar "rw"))) (EVar "binds")))) (clause ((PAs "d" (POr (PCon "DTypeSig" PWild PWild PWild PWild) (PCon "DExtern" PWild) (PRec "DData" () false) (PCon "DUse" PWild PWild PWild) (PCon "DEffect" PWild PWild PWild PWild PWild PWild) (PRec "DTypeAlias" () false) (PRec "DNewtype" () false)))) (EVar "d")))) (EApp (EVar "go") (EVar "x20"))))
 (DTypeSig false "prePassLetBindScoped" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ArgRw") (TyFun (TyCon "LetBind") (TyCon "LetBind")))))
 (DFunDef false "prePassLetBindScoped" ((PVar "mctx") (PVar "rw") (PCon "LetBind" (PVar "n") (PVar "clauses") (PVar "site") (PVar "bid"))) (EApp (EApp (EApp (EApp (EVar "LetBind") (EVar "n")) (EApp (EApp (EVar "map") (EApp (EApp (EVar "prePassFunClauseScoped") (EVar "mctx")) (EVar "rw"))) (EVar "clauses"))) (EVar "site")) (EVar "bid")))
 (DTypeSig false "prePassFunClauseScoped" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ArgRw") (TyFun (TyCon "FunClause") (TyCon "FunClause")))))
@@ -1488,14 +1493,14 @@ finishModuleMarking mm env grouped prog =
 (DFunDef false "localAbsCandidate" ((PCon "EListLit" (PVar "es"))) (EApp (EApp (EVar "allList") (EVar "localAbsCandidate")) (EVar "es")))
 (DFunDef false "localAbsCandidate" ((PAs "app" (PCon "EApp" PWild PWild))) (EApp (EVar "localAbsCtorSpine") (EVar "app")))
 (DFunDef false "localAbsCandidate" ((PCon "ERecordCreate" PWild (PVar "fs"))) (EApp (EApp (EVar "allList") (ELam ((PVar "fa")) (EMatch (EVar "fa") (arm (PCon "FieldAssign" PWild (PVar "e")) () (EApp (EVar "localAbsCandidate") (EVar "e")))))) (EVar "fs")))
-(DFunDef false "localAbsCandidate" (PWild) (EVar "False"))
+(DFunDef false "localAbsCandidate" ((POr (PCon "ELet" PWild PWild PWild PWild PWild) (PCon "EMatch" PWild PWild) (PCon "EIf" PWild PWild PWild) (PCon "EBinOp" PWild PWild PWild PWild) (PCon "EUnOp" PWild PWild PWild) (PCon "EInfix" PWild PWild PWild) (PCon "EFieldAccess" PWild PWild PWild) (PCon "EArrayLit" PWild) (PCon "ERangeList" PWild PWild PWild) (PCon "ERangeArray" PWild PWild PWild) (PCon "ESlice" PWild PWild PWild PWild) (PCon "ELetGroup" PWild PWild) (PCon "ESection" PWild) (PCon "EIndex" PWild PWild) (PCon "EBlock" PWild) (PCon "EDo" PWild PWild) (PCon "EStringInterp" PWild) (PCon "EGuards" PWild) (PCon "ERecordUpdate" PWild PWild PWild) (PCon "EVariantUpdate" PWild PWild PWild) (PCon "EMapLit" PWild PWild) (PCon "ESetLit" PWild PWild) (PCon "EAsPat" PWild PWild) (PCon "EOrPat" PWild) (PCon "EDictApp" PWild) (PCon "EVarAt" PWild PWild) (PCon "ENumLit" PWild PWild PWild) (PCon "EWideLit" PWild PWild PWild PWild))) (EVar "False"))
 (DTypeSig false "localAbsCtorSpine" (TyFun (TyCon "Expr") (TyCon "Bool")))
 (DFunDef false "localAbsCtorSpine" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "localAbsCtorSpine") (EVar "e")))
 (DFunDef false "localAbsCtorSpine" ((PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EVar "localAbsCtorSpine") (EVar "e")))
 (DFunDef false "localAbsCtorSpine" ((PCon "EApp" (PVar "f") (PVar "x"))) (EBinOp "&&" (EApp (EVar "localAbsCtorSpine") (EVar "f")) (EApp (EVar "localAbsCandidate") (EVar "x"))))
 (DFunDef false "localAbsCtorSpine" ((PCon "EVar" (PVar "name"))) (EApp (EVar "ctorHeadShaped") (EVar "name")))
 (DFunDef false "localAbsCtorSpine" ((PCon "EVarId" (PVar "name") PWild)) (EApp (EVar "ctorHeadShaped") (EVar "name")))
-(DFunDef false "localAbsCtorSpine" (PWild) (EVar "False"))
+(DFunDef false "localAbsCtorSpine" ((POr (PCon "ELit" PWild) (PCon "ELam" PWild PWild) (PCon "ELet" PWild PWild PWild PWild PWild) (PCon "EMatch" PWild PWild) (PCon "EIf" PWild PWild PWild) (PCon "EBinOp" PWild PWild PWild PWild) (PCon "EUnOp" PWild PWild PWild) (PCon "EInfix" PWild PWild PWild) (PCon "EFieldAccess" PWild PWild PWild) (PCon "ETuple" PWild) (PCon "EListLit" PWild) (PCon "EArrayLit" PWild) (PCon "ERangeList" PWild PWild PWild) (PCon "ERangeArray" PWild PWild PWild) (PCon "ESlice" PWild PWild PWild PWild) (PCon "ELetGroup" PWild PWild) (PCon "ESection" PWild) (PCon "EIndex" PWild PWild) (PCon "EAnnot" PWild PWild) (PCon "EHeadAnnot" PWild PWild) (PCon "EBlock" PWild) (PCon "EDo" PWild PWild) (PCon "EStringInterp" PWild) (PCon "EGuards" PWild) (PCon "ERecordCreate" PWild PWild) (PCon "ERecordUpdate" PWild PWild PWild) (PCon "EVariantUpdate" PWild PWild PWild) (PCon "EMapLit" PWild PWild) (PCon "ESetLit" PWild PWild) (PCon "EAsPat" PWild PWild) (PCon "EOrPat" PWild) (PCon "EMethodRef" PWild) (PCon "EDictApp" PWild) (PCon "EVarAt" PWild PWild) (PCon "EMethodAt" PWild PWild PWild) (PCon "EDictAt" PWild PWild) (PCon "ENumLit" PWild PWild PWild) (PCon "EWideLit" PWild PWild PWild PWild))) (EVar "False"))
 (DTypeSig false "localAbsCandidateBind" (TyFun (TyCon "LetBind") (TyCon "Bool")))
 (DFunDef false "localAbsCandidateBind" ((PCon "LetBind" PWild (PVar "clauses") PWild PWild)) (EApp (EApp (EVar "anyList") (EVar "localAbsCandidateClause")) (EVar "clauses")))
 (DTypeSig false "localAbsCandidateClause" (TyFun (TyCon "FunClause") (TyCon "Bool")))
@@ -1548,7 +1553,7 @@ finishModuleMarking mm env grouped prog =
 (DFunDef false "rewriteArgScoped" ((PVar "mctx") (PVar "rw") (PVar "bound") (PCon "EOrPat" (PVar "es"))) (EApp (EVar "EOrPat") (EApp (EApp (EVar "map") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "mctx")) (EVar "rw")) (EVar "bound"))) (EVar "es"))))
 (DFunDef false "rewriteArgScoped" ((PVar "mctx") PWild PWild (PCon "ENumLit" (PVar "n") (PVar "ev") (PVar "lx"))) (EApp (EApp (EApp (EVar "ENumLit") (EVar "n")) (EApp (EApp (EVar "mintedOr") (EApp (EVar "mintLitSite") (EVar "mctx"))) (EVar "ev"))) (EVar "lx")))
 (DFunDef false "rewriteArgScoped" ((PVar "mctx") PWild PWild (PCon "EWideLit" (PVar "hi") (PVar "lo") (PVar "ev") (PVar "lx"))) (EApp (EApp (EApp (EApp (EVar "EWideLit") (EVar "hi")) (EVar "lo")) (EApp (EApp (EVar "mintedOr") (EApp (EVar "mintOpSite") (EVar "mctx"))) (EVar "ev"))) (EVar "lx")))
-(DFunDef false "rewriteArgScoped" ((PVar "_mctx") PWild PWild (PVar "e")) (EVar "e"))
+(DFunDef false "rewriteArgScoped" ((PVar "_mctx") PWild PWild (PAs "e" (POr (PCon "ESection" PWild) (PCon "ELit" PWild) (PCon "EMethodRef" PWild) (PCon "EDictApp" PWild) (PCon "EVarAt" PWild PWild) (PCon "EVarId" PWild PWild) (PCon "EMethodAt" PWild PWild PWild)))) (EVar "e"))
 (DTypeSig false "rewriteArgField" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "FieldAssign") (TyCon "FieldAssign"))))))
 (DFunDef false "rewriteArgField" ((PVar "mctx") (PVar "rw") (PVar "bound") (PCon "FieldAssign" (PVar "n") (PVar "e"))) (EApp (EApp (EVar "FieldAssign") (EVar "n")) (EApp (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "mctx")) (EVar "rw")) (EVar "bound")) (EVar "e"))))
 (DTypeSig false "rewriteArgKv" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyTuple (TyCon "Expr") (TyCon "Expr")) (TyTuple (TyCon "Expr") (TyCon "Expr")))))))
@@ -1565,9 +1570,7 @@ finishModuleMarking mm env grouped prog =
 (DTypeSig false "rewriteArgGuardArm" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "GuardArm") (TyCon "GuardArm"))))))
 (DFunDef false "rewriteArgGuardArm" ((PVar "mctx") (PVar "rw") (PVar "bound") (PCon "GuardArm" (PVar "gs") (PVar "body"))) (EBlock (DoLet false false (PTuple (PVar "gs2") (PVar "bnd")) (EApp (EApp (EApp (EApp (EVar "rewriteArgGuards") (EVar "mctx")) (EVar "rw")) (EVar "bound")) (EVar "gs"))) (DoExpr (EApp (EApp (EVar "GuardArm") (EVar "gs2")) (EApp (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "mctx")) (EVar "rw")) (EVar "bnd")) (EVar "body"))))))
 (DTypeSig false "rewriteArgGuards" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Guard")) (TyTuple (TyApp (TyCon "List") (TyCon "Guard")) (TyApp (TyCon "OrdMap") (TyCon "String"))))))))
-(DFunDef false "rewriteArgGuards" ((PVar "_mctx") PWild (PVar "bound") (PList)) (ETuple (EListLit) (EVar "bound")))
-(DFunDef false "rewriteArgGuards" ((PVar "mctx") (PVar "rw") (PVar "bound") (PCons (PCon "GBool" (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PVar "e2") (EApp (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "mctx")) (EVar "rw")) (EVar "bound")) (EVar "e"))) (DoLet false false (PTuple (PVar "rest2") (PVar "bnd")) (EApp (EApp (EApp (EApp (EVar "rewriteArgGuards") (EVar "mctx")) (EVar "rw")) (EVar "bound")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EVar "GBool") (EVar "e2")) (EVar "rest2")) (EVar "bnd")))))
-(DFunDef false "rewriteArgGuards" ((PVar "mctx") (PVar "rw") (PVar "bound") (PCons (PCon "GBind" (PVar "p") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PVar "e2") (EApp (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "mctx")) (EVar "rw")) (EVar "bound")) (EVar "e"))) (DoLet false false (PTuple (PVar "rest2") (PVar "bnd")) (EApp (EApp (EApp (EApp (EVar "rewriteArgGuards") (EVar "mctx")) (EVar "rw")) (EApp (EApp (EVar "boundInsert") (EApp (EVar "patVarsTc") (EVar "p"))) (EVar "bound"))) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EVar "GBind") (EVar "p")) (EVar "e2")) (EVar "rest2")) (EVar "bnd")))))
+(DFunDef false "rewriteArgGuards" ((PVar "mctx") (PVar "rw") (PVar "bound0") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PVar "bound") (PList)) (ETuple (EListLit) (EVar "bound"))) (clause ((PVar "bound") (PCons (PCon "GBool" (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PVar "e2") (EApp (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "mctx")) (EVar "rw")) (EVar "bound")) (EVar "e"))) (DoLet false false (PTuple (PVar "rest2") (PVar "bnd")) (EApp (EApp (EVar "go") (EVar "bound")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EVar "GBool") (EVar "e2")) (EVar "rest2")) (EVar "bnd"))))) (clause ((PVar "bound") (PCons (PCon "GBind" (PVar "p") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PVar "e2") (EApp (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "mctx")) (EVar "rw")) (EVar "bound")) (EVar "e"))) (DoLet false false (PTuple (PVar "rest2") (PVar "bnd")) (EApp (EApp (EVar "go") (EApp (EApp (EVar "boundInsert") (EApp (EVar "patVarsTc") (EVar "p"))) (EVar "bound"))) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EVar "GBind") (EVar "p")) (EVar "e2")) (EVar "rest2")) (EVar "bnd"))))))) (EApp (EApp (EVar "go") (EVar "bound0")) (EVar "xs0"))))
 (DTypeSig false "rewriteArgStmts" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyApp (TyCon "List") (TyCon "DoStmt")))))))
 (DFunDef false "rewriteArgStmts" ((PVar "_mctx") PWild PWild (PList)) (EListLit))
 (DFunDef false "rewriteArgStmts" ((PVar "mctx") (PVar "rw") (PVar "bound") (PCons (PCon "DoExpr" (PVar "e")) (PVar "rest"))) (EBinOp "::" (EApp (EVar "DoExpr") (EApp (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "mctx")) (EVar "rw")) (EVar "bound")) (EVar "e"))) (EApp (EApp (EApp (EApp (EVar "rewriteArgStmts") (EVar "mctx")) (EVar "rw")) (EVar "bound")) (EVar "rest"))))
@@ -1582,10 +1585,7 @@ finishModuleMarking mm env grouped prog =
 (DTypeSig true "markTailDecls" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "MarkCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))))))
 (DFunDef false "markTailDecls" ((PVar "mctx") (PVar "mc") (PVar "dn") (PVar "granted") (PVar "decls")) (EApp (EApp (EVar "map") (EApp (EApp (EVar "markTailDecl") (EVar "mctx")) (EApp (EApp (EApp (EApp (EVar "argRwOf") (EVar "mc")) (EVar "dn")) (EVar "noDictHook")) (EVar "granted")))) (EVar "decls")))
 (DTypeSig false "markTailDecl" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ArgRw") (TyFun (TyCon "Decl") (TyCon "Decl")))))
-(DFunDef false "markTailDecl" ((PVar "_mctx") PWild (PAs "d" (PCon "DFunDef" PWild PWild PWild PWild PWild PWild))) (EVar "d"))
-(DFunDef false "markTailDecl" ((PVar "_mctx") PWild (PAs "d" (PCon "DLetGroup" PWild PWild))) (EVar "d"))
-(DFunDef false "markTailDecl" ((PVar "mctx") (PVar "rw") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EApp (EVar "markTailDecl") (EVar "mctx")) (EVar "rw")) (EVar "d"))))
-(DFunDef false "markTailDecl" ((PVar "mctx") (PVar "rw") (PVar "d")) (EApp (EApp (EApp (EVar "prePassDeclScoped") (EVar "mctx")) (EVar "rw")) (EVar "d")))
+(DFunDef false "markTailDecl" ((PVar "mctx") (PVar "rw") (PVar "x20")) (ELetGroup ((lgb "go" (clause ((PAs "d" (PCon "DFunDef" PWild PWild PWild PWild PWild PWild))) (EVar "d")) (clause ((PAs "d" (PCon "DLetGroup" PWild PWild))) (EVar "d")) (clause ((PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EVar "go") (EVar "d")))) (clause ((PVar "d")) (EApp (EApp (EApp (EVar "prePassDeclScoped") (EVar "mctx")) (EVar "rw")) (EVar "d"))))) (EApp (EVar "go") (EVar "x20"))))
 (DTypeSig false "markClauseWith" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ArgRw") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")) (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))))))
 (DFunDef false "markClauseWith" ((PVar "mctx") (PVar "rw") (PTuple (PVar "ps") (PVar "e"))) (ETuple (EVar "ps") (EApp (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "mctx")) (EVar "rw")) (EApp (EVar "boundOfList") (EApp (EVar "patVarsListTc") (EVar "ps")))) (EVar "e"))))
 (DTypeSig true "markSetsOf" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "PreludeMarkFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "MarkSets")))))))
@@ -1615,8 +1615,7 @@ finishModuleMarking mm env grouped prog =
 (DTypeSig true "markRecursiveOccurrences" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ModuleMarking") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyCon "ScopedMember")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))))))))))
 (DFunDef false "markRecursiveOccurrences" ((PVar "mctx") (PVar "mm") (PVar "placeholders") (PVar "scopedMembers") (PVar "grouped")) (EBlock (DoLet false false (PVar "promoted") (EApp (EApp (EVar "omFromNames") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "promotedRef") "value")) (EVar "omEmpty"))) (DoLet false false (PVar "fresh") (EApp (EApp (EVar "filterList") (ELam ((PVar "m")) (EBinOp "&&" (EApp (EApp (EVar "omHasKey") (EVar "m")) (EVar "promoted")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "m")) (EFieldAccess (EFieldAccess (EVar "mm") "mmDictSet") "value")))))) (EApp (EApp (EVar "map") (ELam ((PVar "member")) (EFieldAccess (EVar "member") "smName"))) (EVar "scopedMembers")))) (DoExpr (EMatch (EVar "fresh") (arm (PList) () (EVar "grouped")) (arm PWild () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "mm") "mmDictSet")) (EApp (EApp (EVar "omFromNames") (EVar "fresh")) (EFieldAccess (EFieldAccess (EVar "mm") "mmDictSet") "value")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "recMarkMembers") (EVar "mctx")) (EApp (EApp (EVar "omFromNames") (EVar "fresh")) (EVar "omEmpty"))) (EVar "placeholders")) (EVar "scopedMembers")) (EVar "grouped")))))))))
 (DTypeSig false "recMarkMembers" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyCon "ScopedMember")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))))))))))
-(DFunDef false "recMarkMembers" ((PVar "_mctx") PWild PWild (PList) (PVar "grouped")) (EVar "grouped"))
-(DFunDef false "recMarkMembers" ((PVar "mctx") (PVar "dn") (PVar "placeholders") (PCons (PVar "member") (PVar "rest")) (PVar "grouped")) (EBlock (DoLet false false (PVar "m") (EFieldAccess (EVar "member") "smName")) (DoLet false false (PVar "onDict") (ELam ((PVar "callee") (PVar "ev")) (EApp (EApp (EVar "pushRecDictAppGoal") (EFieldAccess (EVar "mctx") "mcGraph")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "RecDictApp") (EApp (EVar "Ref") (EListLit))) (EVar "callee")) (EVar "m")) (EApp (EApp (EVar "placeholderMonoOf") (EVar "callee")) (EVar "placeholders"))) (EFieldAccess (EVar "member") "smScope")) (EVar "ev"))))) (DoLet false false (PVar "rw") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "ArgRw") (EVar "omEmpty")) (EVar "dn")) (EVar "omEmpty")) (EListLit)) (EVar "onDict")) (ELam (PWild) (EVar "False")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "recMarkMembers") (EVar "mctx")) (EVar "dn")) (EVar "placeholders")) (EVar "rest")) (EApp (EApp (EApp (EVar "mapGroupClauses") (EApp (EApp (EVar "markClauseWith") (EVar "mctx")) (EVar "rw"))) (EListLit (EVar "m"))) (EVar "grouped"))))))
+(DFunDef false "recMarkMembers" ((PVar "mctx") (PVar "dn") (PVar "placeholders") (PVar "xs0") (PVar "grouped0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "grouped")) (EVar "grouped")) (clause ((PCons (PVar "member") (PVar "rest")) (PVar "grouped")) (EBlock (DoLet false false (PVar "m") (EFieldAccess (EVar "member") "smName")) (DoLet false false (PVar "onDict") (ELam ((PVar "callee") (PVar "ev")) (EApp (EApp (EVar "pushRecDictAppGoal") (EFieldAccess (EVar "mctx") "mcGraph")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "RecDictApp") (EApp (EVar "Ref") (EListLit))) (EVar "callee")) (EVar "m")) (EApp (EApp (EVar "placeholderMonoOf") (EVar "callee")) (EVar "placeholders"))) (EFieldAccess (EVar "member") "smScope")) (EVar "ev"))))) (DoLet false false (PVar "rw") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "ArgRw") (EVar "omEmpty")) (EVar "dn")) (EVar "omEmpty")) (EListLit)) (EVar "onDict")) (ELam (PWild) (EVar "False")))) (DoExpr (EApp (EApp (EVar "go") (EVar "rest")) (EApp (EApp (EApp (EVar "mapGroupClauses") (EApp (EApp (EVar "markClauseWith") (EVar "mctx")) (EVar "rw"))) (EListLit (EVar "m"))) (EVar "grouped")))))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "grouped0"))))
 (DTypeSig false "placeholderMonoOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyCon "Mono"))))
 (DFunDef false "placeholderMonoOf" ((PVar "callee") (PVar "placeholders")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "callee")) (EVar "placeholders")) (arm (PCon "Some" (PVar "v")) () (EVar "v")) (arm (PCon "None") () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "markRecursiveOccurrences: ")) (EApp (EVar "$core.display") (EVar "callee"))) (ELit (LString " is not a member of the group")))))))
 (DTypeSig true "rebuildGroupDecls" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
@@ -1631,8 +1630,7 @@ finishModuleMarking mm env grouped prog =
 (DFunDef false "rebuildLetBinds" (PWild (PVar "pending") (PList)) (ETuple (EListLit) (EVar "pending")))
 (DFunDef false "rebuildLetBinds" ((PVar "grouped") (PVar "pending") (PCons (PCon "LetBind" (PVar "n") (PVar "clauses") (PVar "site") (PVar "bid")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "clauses2") (PVar "pending2")) (EApp (EApp (EApp (EApp (EVar "rebuildFunClauses") (EVar "grouped")) (EVar "pending")) (EVar "n")) (EVar "clauses"))) (DoLet false false (PTuple (PVar "binds") (PVar "pending3")) (EApp (EApp (EApp (EVar "rebuildLetBinds") (EVar "grouped")) (EVar "pending2")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "LetBind") (EVar "n")) (EVar "clauses2")) (EVar "site")) (EVar "bid")) (EVar "binds")) (EVar "pending3")))))
 (DTypeSig false "rebuildFunClauses" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "FunClause")) (TyTuple (TyApp (TyCon "List") (TyCon "FunClause")) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))))))))))
-(DFunDef false "rebuildFunClauses" (PWild (PVar "pending") PWild (PList)) (ETuple (EListLit) (EVar "pending")))
-(DFunDef false "rebuildFunClauses" ((PVar "grouped") (PVar "pending") (PVar "n") (PCons PWild (PVar "rest"))) (EBlock (DoLet false false (PTuple (PTuple (PVar "ps") (PVar "e")) (PVar "pending2")) (EApp (EApp (EApp (EVar "popMarkedClause") (EVar "grouped")) (EVar "pending")) (EVar "n"))) (DoLet false false (PTuple (PVar "cs") (PVar "pending3")) (EApp (EApp (EApp (EApp (EVar "rebuildFunClauses") (EVar "grouped")) (EVar "pending2")) (EVar "n")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EVar "FunClause") (EVar "ps")) (EVar "e")) (EVar "cs")) (EVar "pending3")))))
+(DFunDef false "rebuildFunClauses" ((PVar "grouped") (PVar "pending0") (PVar "n") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PVar "pending") (PList)) (ETuple (EListLit) (EVar "pending"))) (clause ((PVar "pending") (PCons PWild (PVar "rest"))) (EBlock (DoLet false false (PTuple (PTuple (PVar "ps") (PVar "e")) (PVar "pending2")) (EApp (EApp (EApp (EVar "popMarkedClause") (EVar "grouped")) (EVar "pending")) (EVar "n"))) (DoLet false false (PTuple (PVar "cs") (PVar "pending3")) (EApp (EApp (EVar "go") (EVar "pending2")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EVar "FunClause") (EVar "ps")) (EVar "e")) (EVar "cs")) (EVar "pending3"))))))) (EApp (EApp (EVar "go") (EVar "pending0")) (EVar "xs0"))))
 (DTypeSig false "popMarkedClause" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyCon "String") (TyTuple (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))))))))
 (DFunDef false "popMarkedClause" ((PVar "grouped") (PVar "pending") (PVar "n")) (EBlock (DoLet false false (PVar "remaining") (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "pending")) (arm (PCon "Some" (PVar "cs")) () (EVar "cs")) (arm (PCon "None") () (EApp (EApp (EVar "clausesOf") (EVar "n")) (EVar "grouped"))))) (DoExpr (EMatch (EVar "remaining") (arm (PCons (PVar "c") (PVar "cs")) () (ETuple (EVar "c") (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EVar "cs")) (EVar "pending")))) (arm (PList) () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "rebuildGroupDecls: no marked clause left for ")) (EApp (EVar "$core.display") (EVar "n"))) (ELit (LString "")))))))))
 (DTypeSig true "computeMangledShadowMap" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
@@ -1718,14 +1716,7 @@ finishModuleMarking mm env grouped prog =
 (DTypeSig false "mintDictAt" (TyFun (TyCon "ModuleCtx") (TyFun (TyFun (TyCon "String") (TyFun (TyCon "EvId") (TyCon "Unit"))) (TyFun (TyCon "String") (TyCon "Expr")))))
 (DFunDef false "mintDictAt" ((PVar "mctx") (PVar "onDict") (PVar "n")) (EBlock (DoLet false false (PVar "ev") (EApp (EApp (EVar "freshEvId") (EVar "mctx")) (ELit LUnit))) (DoExpr (EApp (EApp (EVar "onDict") (EVar "n")) (EVar "ev"))) (DoExpr (EApp (EApp (EVar "EDictAt") (EVar "n")) (EVar "ev")))))
 (DTypeSig false "prePassDeclScoped" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ArgRw") (TyFun (TyCon "Decl") (TyCon "Decl")))))
-(DFunDef false "prePassDeclScoped" ((PVar "mctx") (PVar "rw") (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "ps") (PVar "e") (PVar "site") (PVar "bid"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EVar "ps")) (EApp (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "mctx")) (EVar "rw")) (EApp (EVar "boundOfList") (EApp (EVar "patVarsListTc") (EVar "ps")))) (EVar "e"))) (EVar "site")) (EVar "bid")))
-(DFunDef false "prePassDeclScoped" ((PVar "mctx") (PVar "rw") (PAs "d" (PRec "DInterface" ((rf "methods" None)) true))) (EVariantUpdate "DInterface" (EVar "d") ((fa "methods" (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "prePassIfaceMethodScoped") (EVar "mctx")) (EVar "rw"))) (EVar "methods"))))))
-(DFunDef false "prePassDeclScoped" ((PVar "mctx") (PVar "rw") (PAs "d" (PRec "DImpl" ((rf "methods" None)) true))) (EVariantUpdate "DImpl" (EVar "d") ((fa "methods" (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "prePassImplMethodScoped") (EVar "mctx")) (EVar "rw"))) (EVar "methods"))))))
-(DFunDef false "prePassDeclScoped" ((PVar "mctx") (PVar "rw") (PCon "DProp" (PVar "pub") (PVar "name") (PVar "params") (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "DProp") (EVar "pub")) (EVar "name")) (EVar "params")) (EApp (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "mctx")) (EVar "rw")) (EApp (EVar "boundOfList") (EApp (EVar "propParamNamesTc") (EVar "params")))) (EVar "body"))))
-(DFunDef false "prePassDeclScoped" ((PVar "mctx") (PVar "rw") (PCon "DTest" (PVar "pub") (PVar "name") (PVar "body"))) (EApp (EApp (EApp (EVar "DTest") (EVar "pub")) (EVar "name")) (EApp (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "mctx")) (EVar "rw")) (EVar "omEmpty")) (EVar "body"))))
-(DFunDef false "prePassDeclScoped" ((PVar "mctx") (PVar "rw") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EApp (EVar "prePassDeclScoped") (EVar "mctx")) (EVar "rw")) (EVar "d"))))
-(DFunDef false "prePassDeclScoped" ((PVar "mctx") (PVar "rw") (PCon "DLetGroup" (PVar "pub") (PVar "binds"))) (EApp (EApp (EVar "DLetGroup") (EVar "pub")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "prePassLetBindScoped") (EVar "mctx")) (EVar "rw"))) (EVar "binds"))))
-(DFunDef false "prePassDeclScoped" ((PVar "_mctx") PWild (PVar "d")) (EVar "d"))
+(DFunDef false "prePassDeclScoped" ((PVar "mctx") (PVar "rw") (PVar "x20")) (ELetGroup ((lgb "go" (clause ((PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "ps") (PVar "e") (PVar "site") (PVar "bid"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EVar "ps")) (EApp (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "mctx")) (EVar "rw")) (EApp (EVar "boundOfList") (EApp (EVar "patVarsListTc") (EVar "ps")))) (EVar "e"))) (EVar "site")) (EVar "bid"))) (clause ((PAs "d" (PRec "DInterface" ((rf "methods" None)) true))) (EVariantUpdate "DInterface" (EVar "d") ((fa "methods" (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "prePassIfaceMethodScoped") (EVar "mctx")) (EVar "rw"))) (EVar "methods")))))) (clause ((PAs "d" (PRec "DImpl" ((rf "methods" None)) true))) (EVariantUpdate "DImpl" (EVar "d") ((fa "methods" (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "prePassImplMethodScoped") (EVar "mctx")) (EVar "rw"))) (EVar "methods")))))) (clause ((PCon "DProp" (PVar "pub") (PVar "name") (PVar "params") (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "DProp") (EVar "pub")) (EVar "name")) (EVar "params")) (EApp (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "mctx")) (EVar "rw")) (EApp (EVar "boundOfList") (EApp (EVar "propParamNamesTc") (EVar "params")))) (EVar "body")))) (clause ((PCon "DTest" (PVar "pub") (PVar "name") (PVar "body"))) (EApp (EApp (EApp (EVar "DTest") (EVar "pub")) (EVar "name")) (EApp (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "mctx")) (EVar "rw")) (EVar "omEmpty")) (EVar "body")))) (clause ((PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EVar "go") (EVar "d")))) (clause ((PCon "DLetGroup" (PVar "pub") (PVar "binds"))) (EApp (EApp (EVar "DLetGroup") (EVar "pub")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "prePassLetBindScoped") (EVar "mctx")) (EVar "rw"))) (EVar "binds")))) (clause ((PAs "d" (POr (PCon "DTypeSig" PWild PWild PWild PWild) (PCon "DExtern" PWild) (PRec "DData" () false) (PCon "DUse" PWild PWild PWild) (PCon "DEffect" PWild PWild PWild PWild PWild PWild) (PRec "DTypeAlias" () false) (PRec "DNewtype" () false)))) (EVar "d")))) (EApp (EVar "go") (EVar "x20"))))
 (DTypeSig false "prePassLetBindScoped" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ArgRw") (TyFun (TyCon "LetBind") (TyCon "LetBind")))))
 (DFunDef false "prePassLetBindScoped" ((PVar "mctx") (PVar "rw") (PCon "LetBind" (PVar "n") (PVar "clauses") (PVar "site") (PVar "bid"))) (EApp (EApp (EApp (EApp (EVar "LetBind") (EVar "n")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "prePassFunClauseScoped") (EVar "mctx")) (EVar "rw"))) (EVar "clauses"))) (EVar "site")) (EVar "bid")))
 (DTypeSig false "prePassFunClauseScoped" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ArgRw") (TyFun (TyCon "FunClause") (TyCon "FunClause")))))
@@ -1754,14 +1745,14 @@ finishModuleMarking mm env grouped prog =
 (DFunDef false "localAbsCandidate" ((PCon "EListLit" (PVar "es"))) (EApp (EApp (EVar "allList") (EVar "localAbsCandidate")) (EVar "es")))
 (DFunDef false "localAbsCandidate" ((PAs "app" (PCon "EApp" PWild PWild))) (EApp (EVar "localAbsCtorSpine") (EVar "app")))
 (DFunDef false "localAbsCandidate" ((PCon "ERecordCreate" PWild (PVar "fs"))) (EApp (EApp (EVar "allList") (ELam ((PVar "fa")) (EMatch (EVar "fa") (arm (PCon "FieldAssign" PWild (PVar "e")) () (EApp (EVar "localAbsCandidate") (EVar "e")))))) (EVar "fs")))
-(DFunDef false "localAbsCandidate" (PWild) (EVar "False"))
+(DFunDef false "localAbsCandidate" ((POr (PCon "ELet" PWild PWild PWild PWild PWild) (PCon "EMatch" PWild PWild) (PCon "EIf" PWild PWild PWild) (PCon "EBinOp" PWild PWild PWild PWild) (PCon "EUnOp" PWild PWild PWild) (PCon "EInfix" PWild PWild PWild) (PCon "EFieldAccess" PWild PWild PWild) (PCon "EArrayLit" PWild) (PCon "ERangeList" PWild PWild PWild) (PCon "ERangeArray" PWild PWild PWild) (PCon "ESlice" PWild PWild PWild PWild) (PCon "ELetGroup" PWild PWild) (PCon "ESection" PWild) (PCon "EIndex" PWild PWild) (PCon "EBlock" PWild) (PCon "EDo" PWild PWild) (PCon "EStringInterp" PWild) (PCon "EGuards" PWild) (PCon "ERecordUpdate" PWild PWild PWild) (PCon "EVariantUpdate" PWild PWild PWild) (PCon "EMapLit" PWild PWild) (PCon "ESetLit" PWild PWild) (PCon "EAsPat" PWild PWild) (PCon "EOrPat" PWild) (PCon "EDictApp" PWild) (PCon "EVarAt" PWild PWild) (PCon "ENumLit" PWild PWild PWild) (PCon "EWideLit" PWild PWild PWild PWild))) (EVar "False"))
 (DTypeSig false "localAbsCtorSpine" (TyFun (TyCon "Expr") (TyCon "Bool")))
 (DFunDef false "localAbsCtorSpine" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "localAbsCtorSpine") (EVar "e")))
 (DFunDef false "localAbsCtorSpine" ((PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EVar "localAbsCtorSpine") (EVar "e")))
 (DFunDef false "localAbsCtorSpine" ((PCon "EApp" (PVar "f") (PVar "x"))) (EBinOp "&&" (EApp (EVar "localAbsCtorSpine") (EVar "f")) (EApp (EVar "localAbsCandidate") (EVar "x"))))
 (DFunDef false "localAbsCtorSpine" ((PCon "EVar" (PVar "name"))) (EApp (EVar "ctorHeadShaped") (EVar "name")))
 (DFunDef false "localAbsCtorSpine" ((PCon "EVarId" (PVar "name") PWild)) (EApp (EVar "ctorHeadShaped") (EVar "name")))
-(DFunDef false "localAbsCtorSpine" (PWild) (EVar "False"))
+(DFunDef false "localAbsCtorSpine" ((POr (PCon "ELit" PWild) (PCon "ELam" PWild PWild) (PCon "ELet" PWild PWild PWild PWild PWild) (PCon "EMatch" PWild PWild) (PCon "EIf" PWild PWild PWild) (PCon "EBinOp" PWild PWild PWild PWild) (PCon "EUnOp" PWild PWild PWild) (PCon "EInfix" PWild PWild PWild) (PCon "EFieldAccess" PWild PWild PWild) (PCon "ETuple" PWild) (PCon "EListLit" PWild) (PCon "EArrayLit" PWild) (PCon "ERangeList" PWild PWild PWild) (PCon "ERangeArray" PWild PWild PWild) (PCon "ESlice" PWild PWild PWild PWild) (PCon "ELetGroup" PWild PWild) (PCon "ESection" PWild) (PCon "EIndex" PWild PWild) (PCon "EAnnot" PWild PWild) (PCon "EHeadAnnot" PWild PWild) (PCon "EBlock" PWild) (PCon "EDo" PWild PWild) (PCon "EStringInterp" PWild) (PCon "EGuards" PWild) (PCon "ERecordCreate" PWild PWild) (PCon "ERecordUpdate" PWild PWild PWild) (PCon "EVariantUpdate" PWild PWild PWild) (PCon "EMapLit" PWild PWild) (PCon "ESetLit" PWild PWild) (PCon "EAsPat" PWild PWild) (PCon "EOrPat" PWild) (PCon "EMethodRef" PWild) (PCon "EDictApp" PWild) (PCon "EVarAt" PWild PWild) (PCon "EMethodAt" PWild PWild PWild) (PCon "EDictAt" PWild PWild) (PCon "ENumLit" PWild PWild PWild) (PCon "EWideLit" PWild PWild PWild PWild))) (EVar "False"))
 (DTypeSig false "localAbsCandidateBind" (TyFun (TyCon "LetBind") (TyCon "Bool")))
 (DFunDef false "localAbsCandidateBind" ((PCon "LetBind" PWild (PVar "clauses") PWild PWild)) (EApp (EApp (EVar "anyList") (EVar "localAbsCandidateClause")) (EVar "clauses")))
 (DTypeSig false "localAbsCandidateClause" (TyFun (TyCon "FunClause") (TyCon "Bool")))
@@ -1814,7 +1805,7 @@ finishModuleMarking mm env grouped prog =
 (DFunDef false "rewriteArgScoped" ((PVar "mctx") (PVar "rw") (PVar "bound") (PCon "EOrPat" (PVar "es"))) (EApp (EVar "EOrPat") (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "mctx")) (EVar "rw")) (EVar "bound"))) (EVar "es"))))
 (DFunDef false "rewriteArgScoped" ((PVar "mctx") PWild PWild (PCon "ENumLit" (PVar "n") (PVar "ev") (PVar "lx"))) (EApp (EApp (EApp (EVar "ENumLit") (EVar "n")) (EApp (EApp (EVar "mintedOr") (EApp (EVar "mintLitSite") (EVar "mctx"))) (EVar "ev"))) (EVar "lx")))
 (DFunDef false "rewriteArgScoped" ((PVar "mctx") PWild PWild (PCon "EWideLit" (PVar "hi") (PVar "lo") (PVar "ev") (PVar "lx"))) (EApp (EApp (EApp (EApp (EVar "EWideLit") (EVar "hi")) (EVar "lo")) (EApp (EApp (EVar "mintedOr") (EApp (EVar "mintOpSite") (EVar "mctx"))) (EVar "ev"))) (EVar "lx")))
-(DFunDef false "rewriteArgScoped" ((PVar "_mctx") PWild PWild (PVar "e")) (EVar "e"))
+(DFunDef false "rewriteArgScoped" ((PVar "_mctx") PWild PWild (PAs "e" (POr (PCon "ESection" PWild) (PCon "ELit" PWild) (PCon "EMethodRef" PWild) (PCon "EDictApp" PWild) (PCon "EVarAt" PWild PWild) (PCon "EVarId" PWild PWild) (PCon "EMethodAt" PWild PWild PWild)))) (EVar "e"))
 (DTypeSig false "rewriteArgField" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "FieldAssign") (TyCon "FieldAssign"))))))
 (DFunDef false "rewriteArgField" ((PVar "mctx") (PVar "rw") (PVar "bound") (PCon "FieldAssign" (PVar "n") (PVar "e"))) (EApp (EApp (EVar "FieldAssign") (EVar "n")) (EApp (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "mctx")) (EVar "rw")) (EVar "bound")) (EVar "e"))))
 (DTypeSig false "rewriteArgKv" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyTuple (TyCon "Expr") (TyCon "Expr")) (TyTuple (TyCon "Expr") (TyCon "Expr")))))))
@@ -1831,9 +1822,7 @@ finishModuleMarking mm env grouped prog =
 (DTypeSig false "rewriteArgGuardArm" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "GuardArm") (TyCon "GuardArm"))))))
 (DFunDef false "rewriteArgGuardArm" ((PVar "mctx") (PVar "rw") (PVar "bound") (PCon "GuardArm" (PVar "gs") (PVar "body"))) (EBlock (DoLet false false (PTuple (PVar "gs2") (PVar "bnd")) (EApp (EApp (EApp (EApp (EVar "rewriteArgGuards") (EVar "mctx")) (EVar "rw")) (EVar "bound")) (EVar "gs"))) (DoExpr (EApp (EApp (EVar "GuardArm") (EVar "gs2")) (EApp (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "mctx")) (EVar "rw")) (EVar "bnd")) (EVar "body"))))))
 (DTypeSig false "rewriteArgGuards" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Guard")) (TyTuple (TyApp (TyCon "List") (TyCon "Guard")) (TyApp (TyCon "OrdMap") (TyCon "String"))))))))
-(DFunDef false "rewriteArgGuards" ((PVar "_mctx") PWild (PVar "bound") (PList)) (ETuple (EListLit) (EVar "bound")))
-(DFunDef false "rewriteArgGuards" ((PVar "mctx") (PVar "rw") (PVar "bound") (PCons (PCon "GBool" (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PVar "e2") (EApp (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "mctx")) (EVar "rw")) (EVar "bound")) (EVar "e"))) (DoLet false false (PTuple (PVar "rest2") (PVar "bnd")) (EApp (EApp (EApp (EApp (EVar "rewriteArgGuards") (EVar "mctx")) (EVar "rw")) (EVar "bound")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EVar "GBool") (EVar "e2")) (EVar "rest2")) (EVar "bnd")))))
-(DFunDef false "rewriteArgGuards" ((PVar "mctx") (PVar "rw") (PVar "bound") (PCons (PCon "GBind" (PVar "p") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PVar "e2") (EApp (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "mctx")) (EVar "rw")) (EVar "bound")) (EVar "e"))) (DoLet false false (PTuple (PVar "rest2") (PVar "bnd")) (EApp (EApp (EApp (EApp (EVar "rewriteArgGuards") (EVar "mctx")) (EVar "rw")) (EApp (EApp (EVar "boundInsert") (EApp (EVar "patVarsTc") (EVar "p"))) (EVar "bound"))) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EVar "GBind") (EVar "p")) (EVar "e2")) (EVar "rest2")) (EVar "bnd")))))
+(DFunDef false "rewriteArgGuards" ((PVar "mctx") (PVar "rw") (PVar "bound0") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PVar "bound") (PList)) (ETuple (EListLit) (EVar "bound"))) (clause ((PVar "bound") (PCons (PCon "GBool" (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PVar "e2") (EApp (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "mctx")) (EVar "rw")) (EVar "bound")) (EVar "e"))) (DoLet false false (PTuple (PVar "rest2") (PVar "bnd")) (EApp (EApp (EVar "go") (EVar "bound")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EVar "GBool") (EVar "e2")) (EVar "rest2")) (EVar "bnd"))))) (clause ((PVar "bound") (PCons (PCon "GBind" (PVar "p") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PVar "e2") (EApp (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "mctx")) (EVar "rw")) (EVar "bound")) (EVar "e"))) (DoLet false false (PTuple (PVar "rest2") (PVar "bnd")) (EApp (EApp (EVar "go") (EApp (EApp (EVar "boundInsert") (EApp (EVar "patVarsTc") (EVar "p"))) (EVar "bound"))) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EVar "GBind") (EVar "p")) (EVar "e2")) (EVar "rest2")) (EVar "bnd"))))))) (EApp (EApp (EVar "go") (EVar "bound0")) (EVar "xs0"))))
 (DTypeSig false "rewriteArgStmts" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ArgRw") (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyApp (TyCon "List") (TyCon "DoStmt")))))))
 (DFunDef false "rewriteArgStmts" ((PVar "_mctx") PWild PWild (PList)) (EListLit))
 (DFunDef false "rewriteArgStmts" ((PVar "mctx") (PVar "rw") (PVar "bound") (PCons (PCon "DoExpr" (PVar "e")) (PVar "rest"))) (EBinOp "::" (EApp (EVar "DoExpr") (EApp (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "mctx")) (EVar "rw")) (EVar "bound")) (EVar "e"))) (EApp (EApp (EApp (EApp (EVar "rewriteArgStmts") (EVar "mctx")) (EVar "rw")) (EVar "bound")) (EVar "rest"))))
@@ -1848,10 +1837,7 @@ finishModuleMarking mm env grouped prog =
 (DTypeSig true "markTailDecls" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "MarkCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))))))
 (DFunDef false "markTailDecls" ((PVar "mctx") (PVar "mc") (PVar "dn") (PVar "granted") (PVar "decls")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "markTailDecl") (EVar "mctx")) (EApp (EApp (EApp (EApp (EVar "argRwOf") (EVar "mc")) (EVar "dn")) (EVar "noDictHook")) (EVar "granted")))) (EVar "decls")))
 (DTypeSig false "markTailDecl" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ArgRw") (TyFun (TyCon "Decl") (TyCon "Decl")))))
-(DFunDef false "markTailDecl" ((PVar "_mctx") PWild (PAs "d" (PCon "DFunDef" PWild PWild PWild PWild PWild PWild))) (EVar "d"))
-(DFunDef false "markTailDecl" ((PVar "_mctx") PWild (PAs "d" (PCon "DLetGroup" PWild PWild))) (EVar "d"))
-(DFunDef false "markTailDecl" ((PVar "mctx") (PVar "rw") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EApp (EVar "markTailDecl") (EVar "mctx")) (EVar "rw")) (EVar "d"))))
-(DFunDef false "markTailDecl" ((PVar "mctx") (PVar "rw") (PVar "d")) (EApp (EApp (EApp (EVar "prePassDeclScoped") (EVar "mctx")) (EVar "rw")) (EVar "d")))
+(DFunDef false "markTailDecl" ((PVar "mctx") (PVar "rw") (PVar "x20")) (ELetGroup ((lgb "go" (clause ((PAs "d" (PCon "DFunDef" PWild PWild PWild PWild PWild PWild))) (EVar "d")) (clause ((PAs "d" (PCon "DLetGroup" PWild PWild))) (EVar "d")) (clause ((PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EVar "go") (EVar "d")))) (clause ((PVar "d")) (EApp (EApp (EApp (EVar "prePassDeclScoped") (EVar "mctx")) (EVar "rw")) (EVar "d"))))) (EApp (EVar "go") (EVar "x20"))))
 (DTypeSig false "markClauseWith" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ArgRw") (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")) (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))))))
 (DFunDef false "markClauseWith" ((PVar "mctx") (PVar "rw") (PTuple (PVar "ps") (PVar "e"))) (ETuple (EVar "ps") (EApp (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "mctx")) (EVar "rw")) (EApp (EVar "boundOfList") (EApp (EVar "patVarsListTc") (EVar "ps")))) (EVar "e"))))
 (DTypeSig true "markSetsOf" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "PreludeMarkFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "MarkSets")))))))
@@ -1881,8 +1867,7 @@ finishModuleMarking mm env grouped prog =
 (DTypeSig true "markRecursiveOccurrences" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "ModuleMarking") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyCon "ScopedMember")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))))))))))
 (DFunDef false "markRecursiveOccurrences" ((PVar "mctx") (PVar "mm") (PVar "placeholders") (PVar "scopedMembers") (PVar "grouped")) (EBlock (DoLet false false (PVar "promoted") (EApp (EApp (EVar "omFromNames") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "promotedRef") "value")) (EVar "omEmpty"))) (DoLet false false (PVar "fresh") (EApp (EApp (EVar "filterList") (ELam ((PVar "m")) (EBinOp "&&" (EApp (EApp (EVar "omHasKey") (EVar "m")) (EVar "promoted")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "m")) (EFieldAccess (EFieldAccess (EVar "mm") "mmDictSet") "value")))))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "member")) (EFieldAccess (EVar "member") "smName"))) (EVar "scopedMembers")))) (DoExpr (EMatch (EVar "fresh") (arm (PList) () (EVar "grouped")) (arm PWild () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "mm") "mmDictSet")) (EApp (EApp (EVar "omFromNames") (EVar "fresh")) (EFieldAccess (EFieldAccess (EVar "mm") "mmDictSet") "value")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "recMarkMembers") (EVar "mctx")) (EApp (EApp (EVar "omFromNames") (EVar "fresh")) (EVar "omEmpty"))) (EVar "placeholders")) (EVar "scopedMembers")) (EVar "grouped")))))))))
 (DTypeSig false "recMarkMembers" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyCon "ScopedMember")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))))))))))
-(DFunDef false "recMarkMembers" ((PVar "_mctx") PWild PWild (PList) (PVar "grouped")) (EVar "grouped"))
-(DFunDef false "recMarkMembers" ((PVar "mctx") (PVar "dn") (PVar "placeholders") (PCons (PVar "member") (PVar "rest")) (PVar "grouped")) (EBlock (DoLet false false (PVar "m") (EFieldAccess (EVar "member") "smName")) (DoLet false false (PVar "onDict") (ELam ((PVar "callee") (PVar "ev")) (EApp (EApp (EVar "pushRecDictAppGoal") (EFieldAccess (EVar "mctx") "mcGraph")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "RecDictApp") (EApp (EVar "Ref") (EListLit))) (EVar "callee")) (EVar "m")) (EApp (EApp (EVar "placeholderMonoOf") (EVar "callee")) (EVar "placeholders"))) (EFieldAccess (EVar "member") "smScope")) (EVar "ev"))))) (DoLet false false (PVar "rw") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "ArgRw") (EVar "omEmpty")) (EVar "dn")) (EVar "omEmpty")) (EListLit)) (EVar "onDict")) (ELam (PWild) (EVar "False")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "recMarkMembers") (EVar "mctx")) (EVar "dn")) (EVar "placeholders")) (EVar "rest")) (EApp (EApp (EApp (EVar "mapGroupClauses") (EApp (EApp (EVar "markClauseWith") (EVar "mctx")) (EVar "rw"))) (EListLit (EVar "m"))) (EVar "grouped"))))))
+(DFunDef false "recMarkMembers" ((PVar "mctx") (PVar "dn") (PVar "placeholders") (PVar "xs0") (PVar "grouped0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "grouped")) (EVar "grouped")) (clause ((PCons (PVar "member") (PVar "rest")) (PVar "grouped")) (EBlock (DoLet false false (PVar "m") (EFieldAccess (EVar "member") "smName")) (DoLet false false (PVar "onDict") (ELam ((PVar "callee") (PVar "ev")) (EApp (EApp (EVar "pushRecDictAppGoal") (EFieldAccess (EVar "mctx") "mcGraph")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "RecDictApp") (EApp (EVar "Ref") (EListLit))) (EVar "callee")) (EVar "m")) (EApp (EApp (EVar "placeholderMonoOf") (EVar "callee")) (EVar "placeholders"))) (EFieldAccess (EVar "member") "smScope")) (EVar "ev"))))) (DoLet false false (PVar "rw") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "ArgRw") (EVar "omEmpty")) (EVar "dn")) (EVar "omEmpty")) (EListLit)) (EVar "onDict")) (ELam (PWild) (EVar "False")))) (DoExpr (EApp (EApp (EVar "go") (EVar "rest")) (EApp (EApp (EApp (EVar "mapGroupClauses") (EApp (EApp (EVar "markClauseWith") (EVar "mctx")) (EVar "rw"))) (EListLit (EVar "m"))) (EVar "grouped")))))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "grouped0"))))
 (DTypeSig false "placeholderMonoOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyCon "Mono"))))
 (DFunDef false "placeholderMonoOf" ((PVar "callee") (PVar "placeholders")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "callee")) (EVar "placeholders")) (arm (PCon "Some" (PVar "v")) () (EVar "v")) (arm (PCon "None") () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "markRecursiveOccurrences: ")) (EApp (EVar "$core.display") (EVar "callee"))) (ELit (LString " is not a member of the group")))))))
 (DTypeSig true "rebuildGroupDecls" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
@@ -1897,8 +1882,7 @@ finishModuleMarking mm env grouped prog =
 (DFunDef false "rebuildLetBinds" (PWild (PVar "pending") (PList)) (ETuple (EListLit) (EVar "pending")))
 (DFunDef false "rebuildLetBinds" ((PVar "grouped") (PVar "pending") (PCons (PCon "LetBind" (PVar "n") (PVar "clauses") (PVar "site") (PVar "bid")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "clauses2") (PVar "pending2")) (EApp (EApp (EApp (EApp (EVar "rebuildFunClauses") (EVar "grouped")) (EVar "pending")) (EVar "n")) (EVar "clauses"))) (DoLet false false (PTuple (PVar "binds") (PVar "pending3")) (EApp (EApp (EApp (EVar "rebuildLetBinds") (EVar "grouped")) (EVar "pending2")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "LetBind") (EVar "n")) (EVar "clauses2")) (EVar "site")) (EVar "bid")) (EVar "binds")) (EVar "pending3")))))
 (DTypeSig false "rebuildFunClauses" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "FunClause")) (TyTuple (TyApp (TyCon "List") (TyCon "FunClause")) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))))))))))
-(DFunDef false "rebuildFunClauses" (PWild (PVar "pending") PWild (PList)) (ETuple (EListLit) (EVar "pending")))
-(DFunDef false "rebuildFunClauses" ((PVar "grouped") (PVar "pending") (PVar "n") (PCons PWild (PVar "rest"))) (EBlock (DoLet false false (PTuple (PTuple (PVar "ps") (PVar "e")) (PVar "pending2")) (EApp (EApp (EApp (EVar "popMarkedClause") (EVar "grouped")) (EVar "pending")) (EVar "n"))) (DoLet false false (PTuple (PVar "cs") (PVar "pending3")) (EApp (EApp (EApp (EApp (EVar "rebuildFunClauses") (EVar "grouped")) (EVar "pending2")) (EVar "n")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EVar "FunClause") (EVar "ps")) (EVar "e")) (EVar "cs")) (EVar "pending3")))))
+(DFunDef false "rebuildFunClauses" ((PVar "grouped") (PVar "pending0") (PVar "n") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PVar "pending") (PList)) (ETuple (EListLit) (EVar "pending"))) (clause ((PVar "pending") (PCons PWild (PVar "rest"))) (EBlock (DoLet false false (PTuple (PTuple (PVar "ps") (PVar "e")) (PVar "pending2")) (EApp (EApp (EApp (EVar "popMarkedClause") (EVar "grouped")) (EVar "pending")) (EVar "n"))) (DoLet false false (PTuple (PVar "cs") (PVar "pending3")) (EApp (EApp (EVar "go") (EVar "pending2")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "::" (EApp (EApp (EVar "FunClause") (EVar "ps")) (EVar "e")) (EVar "cs")) (EVar "pending3"))))))) (EApp (EApp (EVar "go") (EVar "pending0")) (EVar "xs0"))))
 (DTypeSig false "popMarkedClause" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyCon "String") (TyTuple (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))))))))
 (DFunDef false "popMarkedClause" ((PVar "grouped") (PVar "pending") (PVar "n")) (EBlock (DoLet false false (PVar "remaining") (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "pending")) (arm (PCon "Some" (PVar "cs")) () (EVar "cs")) (arm (PCon "None") () (EApp (EApp (EVar "clausesOf") (EVar "n")) (EVar "grouped"))))) (DoExpr (EMatch (EVar "remaining") (arm (PCons (PVar "c") (PVar "cs")) () (ETuple (EVar "c") (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EVar "cs")) (EVar "pending")))) (arm (PList) () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "rebuildGroupDecls: no marked clause left for ")) (EApp (EVar "$core.display") (EVar "n"))) (ELit (LString "")))))))))
 (DTypeSig true "computeMangledShadowMap" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))

@@ -153,10 +153,12 @@ exhaust : RateLimitState ->
   Int ->
   Int ->
   RateLimitState
-exhaust state _ _ _ 0 = state
-exhaust state identity limitClass now n =
-  let (next, _) = step state identity limitClass now
-  exhaust next identity limitClass now (n - 1)
+exhaust state0 identity limitClass now n0 = go state0 n0
+  where
+    go state 0 = state
+    go state n =
+      let (next, _) = step state identity limitClass now
+      go next (n - 1)
 
 verdictFor : RateLimitState -> ClientIdentity -> RateLimitVerdict
 verdictFor state identity =
@@ -851,21 +853,29 @@ chargeHandle : RateLimitState ->
   Int ->
   Int ->
   (RateLimitState, List RateLimitVerdict)
-chargeHandle state _ _ 0 = (state, [])
-chargeHandle state did now n =
-  let (next, verdict) = stepHandleUpdate state did now
-  let (final, rest) = chargeHandle next did now (n - 1)
-  (final, verdict :: rest)
+chargeHandle state0 did now n0 = go state0 n0
+  where
+    go state 0 = (state, [])
+    go state n =
+      let (next, verdict) = stepHandleUpdate state did now
+      let (final, rest) = go next (n - 1)
+      (final, verdict :: rest)
 
 -- Ten charges in each short window from `from` up to, not including, `to`.
 fillShortWindows : RateLimitState -> String -> Int -> Int -> RateLimitState
-fillShortWindows state did from to =
-  if from >= to then
-    state
-  else
-    let (next, _) =
-      chargeHandle state did (shortWindowAt from) maxHandleUpdatesPerShortWindow
-    fillShortWindows next did (from + 1) to
+fillShortWindows state0 did from0 to = go state0 from0
+  where
+    go state from =
+      if from >= to then
+        state
+      else
+        let (next, _) =
+          chargeHandle
+            state
+            did
+            (shortWindowAt from)
+            maxHandleUpdatesPerShortWindow
+        go next (from + 1)
 
 -- One charge apiece for `count` distinct DIDs at `handleEpoch`.
 fillAccounts : RateLimitState -> Int -> RateLimitState

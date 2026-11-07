@@ -249,10 +249,16 @@ lower facts (EHeadAnnot e _) = lower facts e
 -- (instance-`requires` impl dicts — the second ref — are unsupported in the Core
 -- IR experiment; drop them, the core_ir fixtures carry no requires-impls)
 -- #2705: the occurrence's answer is read from the published evidence table, the
--- same seam `EDictAt` crosses on the next line.
+-- same seam `EDictAt` crosses below.
 lower facts (EMethodAt name _ ev) =
   cmethodOf name (evMethodRoutesIn facts.pfEvidence ev)
-lower facts (EDictAt name ev) = CDict name (evDictRoutesIn facts.pfEvidence ev)
+-- A dictionary application of no dictionaries is the plain name: the marker's
+-- dict-name set is bare-named, so a definition sharing its name with another
+-- module's constrained one reaches here with no routes, and a value global (a CAF)
+-- has no function to apply them to.
+lower facts (EDictAt name ev) = match evDictRoutesIn facts.pfEvidence ev
+  [] => CVar name AGlobal
+  routes => CDict name routes
 -- A located `match` keeps its keyword's span as the trap site of the decision
 -- it lowers to, the span the interpreter reports (`eval`'s `ELoc l (EMatch …)`
 -- arm); a refutable `let` takes its own site field (the `ELet` arm above).
@@ -426,7 +432,8 @@ cFallsThrough (CDecision scrut arms _) =
   cFallsThrough scrut || any armFallsThrough arms
 cFallsThrough (CMatch scrut arms) =
   cFallsThrough scrut || any armFallsThrough arms
-cFallsThrough _ = False
+cFallsThrough (CLit _ | CLam _ _ | CBinPrim _ _ _ _ _ | CUnOp _ _ | CTuple _ | CList _ | CRecord _ _ | CFieldAccess _ _ _ _ | CRecordUpdate _ _ _ | CVariantUpdate _ _ _ | CArray _ | CRangeList _ _ _ | CRangeArray _ _ _ | CMethod _ _ | CDict _ _) =
+  False
 
 stmtFallsThrough : CStmt -> Bool
 stmtFallsThrough (CSExpr e) = cFallsThrough e
@@ -450,7 +457,8 @@ patMayFail (PVar _ _ _) = False
 patMayFail (PLit LUnit) = False
 patMayFail (PAs _ _ _ p) = patMayFail p
 patMayFail (PTuple ps) = anyList patMayFail ps
-patMayFail _ = True
+patMayFail (PLit _ | PCon _ _ | PCons _ _ | PList _ | POr _ | PRng _ _ _ | PRec _ _ _ | PAnn _ _) =
+  True
 
 -- A block's statements.  A refutable `let` takes the rest of the block as its
 -- decision's body, so the block ends with that decision; a refutable `let` that
@@ -512,7 +520,7 @@ patNeedsGuard (PList ps) = anyList patNeedsGuard ps
 patNeedsGuard (PTuple ps) = anyList patNeedsGuard ps
 patNeedsGuard (PAs _ _ _ p) = patNeedsGuard p
 patNeedsGuard (POr _) = True
-patNeedsGuard _ = False
+patNeedsGuard (PVar _ _ _ | PWild | PLit _ | PAnn _ _) = False
 
 -- one matrix row per arm: its (canonicalised) pattern as a single column, paired
 -- with the arm's index (the leaves carry it back to the original CArm).
@@ -710,7 +718,7 @@ eraseBytePat (PAs x l bid p) = PAs x l bid (eraseBytePat p)
 eraseBytePat (POr ps) = POr (map eraseBytePat ps)
 eraseBytePat (PRng lo hi incl) = PRng (eraseByteLit lo) (eraseByteLit hi) incl
 eraseBytePat (PRec n fs open) = PRec n (map eraseBytePatField fs) open
-eraseBytePat p = p
+eraseBytePat (p@(PLit _ | PVar _ _ _ | PWild | PAnn _ _)) = p
 
 eraseBytePatField : RecPatField -> RecPatField
 eraseBytePatField (RecPatField n l bid sub) =
@@ -1079,7 +1087,7 @@ patCanMiss sib (PAs _ _ _ p) = patCanMiss sib p
 patCanMiss sib (PTuple ps) = anyList (patCanMiss sib) ps
 patCanMiss sib (PCon c ps) = ctorHasSibling sib c || anyList (patCanMiss sib) ps
 patCanMiss _ (PRec _ _ _) = False
-patCanMiss _ _ = True
+patCanMiss _ (PCons _ _ | PList _ | POr _ | PRng _ _ _ | PAnn _ _) = True
 
 ctorHasSibling : OrdMap Bool -> String -> Bool
 ctorHasSibling sib c = optionOr True (omLookup c sib)
@@ -1615,6 +1623,8 @@ implEntryMethodName (CImplEntry m _ _ _) = m
 -- dictionary or through no route, an application's result.
 export
 definedArityOf : ArityEnv -> CallScope -> CExpr -> Option Int
+-- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 definedArityOf env scope (CVar x _) = match omLookup x scope
   Some local => local
   None => globalArityOf env x
@@ -1624,7 +1634,8 @@ definedArityOf env _ (CMethod name (MethodEvidence _ _ (RLocal sym dicts) _ _)) 
   lessDicts (listLen dicts) (topArityOf env (if sym == "" then name else sym))
 definedArityOf env scope (CDict name routes) =
   lessDicts (listLen routes) (definedArityOf env scope (CVar name AGlobal))
-definedArityOf _ _ _ = None
+definedArityOf _ _ (CMethod _ _ | CLit _ | CApp _ _ _ | CLam _ _ | CLet _ _ _ _ | CLetGroup _ _ | CMatch _ _ | CDecision _ _ _ | CIf _ _ _ | CBinPrim _ _ _ _ _ | CUnOp _ _ | CTuple _ | CList _ | CRecord _ _ | CFieldAccess _ _ _ _ | CRecordUpdate _ _ _ | CVariantUpdate _ _ _ | CArray _ | CRangeList _ _ _ | CRangeArray _ _ _ | CBlock _) =
+  None
 
 lessDicts : Int -> Option Int -> Option Int
 lessDicts n (Some k) = Some (k - n)
@@ -2249,13 +2260,15 @@ attribTargetName (DFunDef _ n _ _ _ _) = [n]
 attribTargetName _ = []
 
 indexTwinOf : ProgramFacts -> OrdMap String -> Expr -> Option String
-indexTwinOf facts twins (ELoc _ h) = indexTwinOf facts twins h
-indexTwinOf facts twins (EMethodAt "index" _ ev) =
-  let evidence = facts.pfEvidence
-  match evMethodRoutesIn evidence ev
-    (_, _, RKey key _ _, _, _) => omLookup key twins
-    _ => None
-indexTwinOf _ _ _ = None
+indexTwinOf facts twins x0 = go x0
+  where
+    go (ELoc _ h) = go h
+    go (EMethodAt "index" _ ev) =
+      let evidence = facts.pfEvidence
+      match evMethodRoutesIn evidence ev
+        (_, _, RKey key _ _, _, _) => omLookup key twins
+        _ => None
+    go _ = None
 
 -- Every name a pattern or a local function binds in [d], its own parameters
 -- and its methods' included.
@@ -2342,7 +2355,8 @@ rewritePat fo (PCons h t) = PCons (rewritePat fo h) (rewritePat fo t)
 rewritePat fo (PTuple ps) = PTuple (map (rewritePat fo) ps)
 rewritePat fo (PList ps) = PList (map (rewritePat fo) ps)
 rewritePat fo (PAs x l bid p) = PAs x l bid (rewritePat fo p)
-rewritePat _ p = p
+rewritePat _ (p@(PVar _ _ _ | PWild | PLit _ | POr _ | PRng _ _ _ | PAnn _ _)) =
+  p
 
 -- the sub-pattern bound to declared field `label`: the named field's sub-pattern
 -- (recursively rewritten), `PVar label` for a pun, or `PWild` when the field is
@@ -2721,9 +2735,11 @@ memoSelectorOf : List (String, String, String) ->
   String ->
   String ->
   Option String
-memoSelectorOf [] _ _ = None
-memoSelectorOf ((m2, k2, sel) :: rest) m key =
-  if m == m2 && key == k2 then Some sel else memoSelectorOf rest m key
+memoSelectorOf xs0 m key = go xs0
+  where
+    go [] = None
+    go ((m2, k2, sel) :: rest) =
+      if m == m2 && key == k2 then Some sel else go rest
 
 -- #731 item 1: the (method, selector) instances whose dispatch is UNAMBIGUOUS by
 -- STATIC KNOWLEDGE regardless of route — exactly one tagged impl and no interface
@@ -2754,23 +2770,22 @@ distinctImplKeysL : List CImplEntry ->
   Int ->
   List String ->
   List String
-distinctImplKeysL [] _ _ acc = acc
-distinctImplKeysL _ _ cap acc
-  | listLen acc > cap = acc
-distinctImplKeysL ((CImplEntry n _ _ (CImplTagged _ k _ _ _ _ _)) :: rest) method cap acc
-  -- Bound: the only caller passes `cap = 1`, so the guard above stops the walk once `acc` holds more than 1 key.
-  -- lint-disable-next-line rule-list-as-set
-  | n == method && not (contains k acc) =
-    distinctImplKeysL rest method cap (k :: acc)
-  | otherwise = distinctImplKeysL rest method cap acc
-distinctImplKeysL ((CImplEntry n _ _ (CImplDefault _ _ k _ _ _ _)) :: rest) method cap acc
-  -- Bound: the only caller passes `cap = 1`, so the guard above stops the walk once `acc` holds more than 1 key.
-  -- lint-disable-next-line rule-list-as-set
-  | n == method && not (contains k acc) =
-    distinctImplKeysL rest method cap (k :: acc)
-  | otherwise = distinctImplKeysL rest method cap acc
-distinctImplKeysL (_ :: rest) method cap acc =
-  distinctImplKeysL rest method cap acc
+distinctImplKeysL xs0 method cap acc0 = go xs0 acc0
+  where
+    go [] acc = acc
+    go _ acc
+      | listLen acc > cap = acc
+    go ((CImplEntry n _ _ (CImplTagged _ k _ _ _ _ _)) :: rest) acc
+      -- Bound: the only caller passes `cap = 1`, so the guard above stops the walk once `acc` holds more than 1 key.
+      -- lint-disable-next-line rule-list-as-set
+      | n == method && not (contains k acc) = go rest (k :: acc)
+      | otherwise = go rest acc
+    go ((CImplEntry n _ _ (CImplDefault _ _ k _ _ _ _)) :: rest) acc
+      -- Bound: the only caller passes `cap = 1`, so the guard above stops the walk once `acc` holds more than 1 key.
+      -- lint-disable-next-line rule-list-as-set
+      | n == method && not (contains k acc) = go rest (k :: acc)
+      | otherwise = go rest acc
+    go (_ :: rest) acc = go rest acc
 
 -- ── LowerState — the per-emission hoist carrier (#1954) ──────────────────────
 -- Constructed once per `hoistNullaryMemo` call and threaded explicitly through the
@@ -2847,12 +2862,14 @@ recordMultiImplMemoGo : LowerState ->
   String ->
   List (String, String, String) ->
   Unit
-recordMultiImplMemoGo _ _ [] = ()
-recordMultiImplMemoGo st name ((m, key, sel) :: rest)
-  | m == name =
-    recordMemoRef st sel key name
-    recordMultiImplMemoGo st name rest
-  | otherwise = recordMultiImplMemoGo st name rest
+recordMultiImplMemoGo st name xs0 = go xs0
+  where
+    go [] = ()
+    go ((m, key, sel) :: rest)
+      | m == name =
+        recordMemoRef st sel key name
+        go rest
+      | otherwise = go rest
 
 -- the whole-program hoist: rewrite every memoisable occurrence to a CAF reference,
 -- then prepend one synthesized CAF value-bind per referenced instance.  A no-op (the
@@ -3362,32 +3379,36 @@ lowerDeclImpl : ProgramFacts ->
   Option DispositionTable ->
   Decl ->
   List CImplEntry
--- #1037: an ATTRIBUTE IS METADATA — it must never change which impls exist.  A
--- decl attribute parses to `DAttrib attrs <decl>` (parser.parseAttrib wraps ANY
--- decl), so `@deprecated "…" impl Speak Cat where …` reaches here as a DAttrib and
--- fell through to `_ => []`: the impl contributed ZERO entries and simply VANISHED
--- from the program's impl set.  Native then had an impl-less interface-with-default
--- and SIGSEGV'd through #948's arm-less dispatcher; eval's `declImplEntries` has the
--- same shape and silently answered from the interface default instead.
-lowerDeclImpl facts disp reqCounts arities dt (DAttrib _ d) =
-  lowerDeclImpl facts disp reqCounts arities dt d
--- B-2.2-e: `implOrigin` is bound here purely to reach `lowerImplMethod`'s route
--- word (the definition side of the identity-bearing key `keyForSite` stamps at the
--- call site).  Matched arm-for-arm by `eval.declImplEntries`, which threads the
--- same field for the same reason.
-lowerDeclImpl facts disp _ arities _ (DImpl { iface = ifaceName, implOrigin = o, tys = typeArgs, methods, ... }) =
-  flatMap (lowerImplMethod facts disp arities o ifaceName typeArgs) methods
--- An interface lowers one entry for each default per instance the table says
--- inherits it — lowered HERE, beside the interface's other code, because the body
--- is the interface module's (its names resolve there).  Every inherited slot
--- therefore has its own entry, and no engine is left to choose a default.  The interface word is read straight off `DInterface.ifaceOrigin`
--- (resolve stamps it in `elaborateModules`' preamble — `stampGraphTyOrigins`), the
--- same spelling the table's producer keys the slot by.
-lowerDeclImpl facts disp reqCounts arities (Some dt) (DInterface { name = ifaceName, ifaceOrigin = o, methods, ... }) =
-  flatMap
-    (lowerInheritedDefault facts disp reqCounts arities dt o ifaceName)
-    methods
-lowerDeclImpl _ _ _ _ _ _ = []
+lowerDeclImpl facts disp reqCounts arities dt decl0 = go decl0
+  where
+    -- #1037: an attribute is metadata: it must never change which impls exist.  A
+    -- decl attribute parses to `DAttrib attrs <decl>` (parser.parseAttrib wraps ANY
+    -- decl), so `@deprecated "…" impl Speak Cat where …` reaches here as a DAttrib and
+    -- fell through to `_ => []`: the impl contributed ZERO entries and simply VANISHED
+    -- from the program's impl set.  Native then had an impl-less interface-with-default
+    -- and SIGSEGV'd through #948's arm-less dispatcher; eval's `declImplEntries` has the
+    -- same shape and silently answered from the interface default instead.
+    go (DAttrib _ d) = go d
+    -- B-2.2-e: `implOrigin` is bound here purely to reach `lowerImplMethod`'s route
+    -- word (the definition side of the identity-bearing key `keyForSite` stamps at the
+    -- call site).  Matched arm-for-arm by `eval.declImplEntries`, which threads the
+    -- same field for the same reason.
+    go (DImpl { iface = ifaceName, implOrigin = o, tys = typeArgs, methods, ... }) =
+      flatMap (lowerImplMethod facts disp arities o ifaceName typeArgs) methods
+    -- An interface lowers one entry for each default per instance the table says
+    -- inherits it — lowered HERE, beside the interface's other code, because the body
+    -- is the interface module's (its names resolve there).  Every inherited slot
+    -- therefore has its own entry, and no engine is left to choose a default.  The interface word is read straight off `DInterface.ifaceOrigin`
+    -- (resolve stamps it in `elaborateModules`' preamble — `stampGraphTyOrigins`), the
+    -- same spelling the table's producer keys the slot by.
+    go (DInterface { name = ifaceName, ifaceOrigin = o, methods, ... }) =
+      match dt
+        Some t =>
+          flatMap
+            (lowerInheritedDefault facts disp reqCounts arities t o ifaceName)
+            methods
+        None => []
+    go _ = []
 
 lowerImplMethod : ProgramFacts ->
   PositionsIndex ->
@@ -3752,7 +3773,8 @@ methodArgTys (TyConstrained _ t) = methodArgTys t
 methodArgTys (TyEffect _ _ t) = methodArgTys t
 methodArgTys (TyFun (TyNamed _ a _) b) = a :: methodArgTys b
 methodArgTys (TyFun a b) = a :: methodArgTys b
-methodArgTys _ = []
+methodArgTys (TyCon {  } | TyVar _ | TyApp _ _ | TyTuple _ | TyNamed _ _ _ | TyQual _ _ _ | TyRow _ _ _ | TyAuth _ _) =
+  []
 
 -- ── method → (interface, full-arity) table (native backend: default methods) ─
 -- Per interface method name: the interface it belongs to and its full argument
@@ -4076,24 +4098,25 @@ tyIsFunReturningSelf (TyEffect _ _ t) params = tyIsFunReturningSelf t params
 tyIsFunReturningSelf _ _ = False
 
 funClausesOf : ProgramFacts -> SymbolOrigins -> List Decl -> List OriginClause
-funClausesOf _ _ [] = []
-funClausesOf facts origins ((DFunDef _ n pats body site bid) :: rest) =
-  originClauses facts origins n site bid (FunClause pats body)
-    ++ funClausesOf facts origins rest
-funClausesOf facts origins ((DLetGroup _ binds) :: rest) =
-  letGroupClausesOf facts origins binds ++ funClausesOf facts origins rest
-funClausesOf facts origins ((DAttrib _ d) :: rest) =
-  funClausesOf facts origins (d :: rest)
-funClausesOf facts origins (_ :: rest) = funClausesOf facts origins rest
+funClausesOf facts origins xs0 = go xs0
+  where
+    go [] = []
+    go ((DFunDef _ n pats body site bid) :: rest) =
+      originClauses facts origins n site bid (FunClause pats body) ++ go rest
+    go ((DLetGroup _ binds) :: rest) =
+      letGroupClausesOf facts origins binds ++ go rest
+    go ((DAttrib _ d) :: rest) = go (d :: rest)
+    go (_ :: rest) = go rest
 
 letGroupClausesOf : ProgramFacts ->
   SymbolOrigins ->
   List LetBind ->
   List OriginClause
-letGroupClausesOf _ _ [] = []
-letGroupClausesOf facts origins ((LetBind n clauses site bid) :: rest) =
-  flatMap (originClauses facts origins n site bid) clauses
-    ++ letGroupClausesOf facts origins rest
+letGroupClausesOf facts origins xs0 = go xs0
+  where
+    go [] = []
+    go ((LetBind n clauses site bid) :: rest) =
+      flatMap (originClauses facts origins n site bid) clauses ++ go rest
 
 originClauses : ProgramFacts ->
   SymbolOrigins ->

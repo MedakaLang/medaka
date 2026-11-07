@@ -271,17 +271,19 @@ priorityValid : Components ->
   Int ->
   List (Int, Int) ->
   Bool
-priorityValid _ _ [] _ _ = True
-priorityValid g facts (c :: cs) rank stack =
-  let key = lookup 0 c g.sourceKeys
-  let smaller = dropSmaller key stack
-  let d = match omLookup c facts
-    Some s => s.dependencyRank
-    None => -1
-  let valid = match smaller
-    (_, earlier) :: _ => earlier <= d
-    [] => True
-  valid && priorityValid g facts cs (rank + 1) ((key, rank) :: smaller)
+priorityValid g facts cs0 rank0 stack0 = go cs0 rank0 stack0
+  where
+    go [] _ _ = True
+    go (c :: cs) rank stack =
+      let key = lookup 0 c g.sourceKeys
+      let smaller = dropSmaller key stack
+      let d = match omLookup c facts
+        Some s => s.dependencyRank
+        None => -1
+      let valid = match smaller
+        (_, earlier) :: _ => earlier <= d
+        [] => True
+      valid && go cs (rank + 1) ((key, rank) :: smaller)
 
 export
 validateGlobalInit : CProgram -> List String -> GlobalInitPlan -> List String

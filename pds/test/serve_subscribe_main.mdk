@@ -156,17 +156,20 @@ readBodyChunks : Connection * ->
   List Bytes ->
   Int ->
   <Net> Result String String
-readBodyChunks conn want parts got =
-  if got >= want then match decodeUtf8 (B.take want (B.concat (reverse parts)))
-    Some text => Ok text
-    None => Err "serve_subscribe: refusal body is not UTF-8"
-  else match recv conn 4096
-    Err message => Err message
-    Ok chunk =>
-      if B.isEmpty chunk then
-        Err "serve_subscribe: refusal body ended before its content-length"
-      else
-        readBodyChunks conn want (chunk :: parts) (got + B.length chunk)
+readBodyChunks conn want parts0 got0 = go parts0 got0
+  where
+    go parts got =
+      if got
+        >= want then match decodeUtf8 (B.take want (B.concat (reverse parts)))
+        Some text => Ok text
+        None => Err "serve_subscribe: refusal body is not UTF-8"
+      else match recv conn 4096
+        Err message => Err message
+        Ok chunk =>
+          if B.isEmpty chunk then
+            Err "serve_subscribe: refusal body ended before its content-length"
+          else
+            go (chunk :: parts) (got + B.length chunk)
 
 {- | Complete a handshake and answer the bytes that arrived past the 101.
 
@@ -378,9 +381,9 @@ runLive port token did collection rkeyPrefix =
   ignoreResult (close conn)
 
 twoCommits : Connection * -> Bytes -> <Net> Result String (Int, Int)
-twoCommits conn buffered = match commitSeq conn buffered
-  Err message => Err message
-  Ok (first, rest) => map ((second, _) => (first, second)) (commitSeq conn rest)
+twoCommits conn buffered = do
+  (first, rest) <- commitSeq conn buffered
+  map ((second, _) => (first, second)) (commitSeq conn rest)
 
 -- | The sequence number of the next `#commit` event, refusing any other kind:
 -- an `#info` or an error frame where a commit is expected is a different
@@ -389,14 +392,13 @@ commitSeq : Connection * -> Bytes -> <Net> Result String (Int, Bytes)
 commitSeq conn buffered = match nextEvent conn buffered
   Err message => Err message
   Ok None => Err "serve_subscribe: stream ended before the next #commit"
-  Ok (Some (payload, rest)) => match splitEvent payload
-    Err message => Err message
-    Ok (header, body) =>
-      let kind = eventKind header
-      if kind /= "#commit" then
-        Err "serve_subscribe: expected a #commit event, got '\{kind}'"
-      else
-        Ok (intField body "seq", rest)
+  Ok (Some (payload, rest)) => do
+    (header, body) <- splitEvent payload
+    let kind = eventKind header
+    if kind /= "#commit" then
+      Err "serve_subscribe: expected a #commit event, got '\{kind}'"
+    else
+      Ok (intField body "seq", rest)
 
 {- | A repository's creation announces itself: a subscriber attached at cursor
    0 to a server whose data directory this run created receives exactly the
@@ -476,13 +478,12 @@ gradeGenesis [(identity, identityBody), (account, accountBody), (commit, commitB
     Err "serve_subscribe: genesis kinds \{join " " kinds}"
   else if seqs /= [1, 2, 3, 4] then
     Err "serve_subscribe: genesis sequence \{join " " (map intToString seqs)}"
-  else match gradeCommitCar commitBody
-    Err message => Err message
-    Ok dataCid =>
-      map
-        (head =>
-          "\{join " " kinds} at seq 1..4, #commit CAR = commit + data root \{dataCid}, #sync rooted at \{head}")
-        (gradeSyncCar commitBody syncBody)
+  else do
+    dataCid <- gradeCommitCar commitBody
+    map
+      (head =>
+        "\{join " " kinds} at seq 1..4, #commit CAR = commit + data root \{dataCid}, #sync rooted at \{head}")
+      (gradeSyncCar commitBody syncBody)
 gradeGenesis events =
   Err
     "serve_subscribe: read \{intToString (length events)} genesis events, expected \{intToString (length genesisKinds)}"
@@ -508,20 +509,19 @@ gradeCommitCar commitBody = match (
 )
   (Some head, Some (DcBytes carBytes)) => match carDecode carBytes
     Err message => Err "serve_subscribe: #commit CAR: \{message}"
-    Ok car => match commitDataCid car head
-      Err message => Err message
-      Ok dataCid =>
-        let roots = map cidToString (carRoots car)
-        let blocks = map ((cid, _) => cidToString cid) (carBlocks car)
-        if roots /= [cidToString head] then
-          Err "serve_subscribe: #commit CAR roots \{join " " roots}"
-        else if length blocks /= 2
-          || not (elem (cidToString head) blocks)
-          || not (elem dataCid blocks) then
-          Err
-            "serve_subscribe: #commit CAR blocks \{join " " blocks}, expected the commit and its data root \{dataCid}"
-        else
-          Ok dataCid
+    Ok car => do
+      dataCid <- commitDataCid car head
+      let roots = map cidToString (carRoots car)
+      let blocks = map ((cid, _) => cidToString cid) (carBlocks car)
+      if roots /= [cidToString head] then
+        Err "serve_subscribe: #commit CAR roots \{join " " roots}"
+      else if length blocks /= 2
+        || not (elem (cidToString head) blocks)
+        || not (elem dataCid blocks) then
+        Err
+          "serve_subscribe: #commit CAR blocks \{join " " blocks}, expected the commit and its data root \{dataCid}"
+      else
+        Ok dataCid
   _ => Err "serve_subscribe: #commit named no commit, or carried no blocks"
 
 -- | The `data` link inside the commit block the CAR is rooted at.
@@ -864,12 +864,11 @@ postUpdateHandle port token handle =
       (encodeUtf8
           "POST /xrpc/com.atproto.identity.updateHandle HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer \{token}\r\nContent-Type: application/json\r\nContent-Length: \{intToString (B.length body)}\r\n\r\n"
         ++ body)
-  let answer = match readHead conn empty
-    Err message => Err message
-    Ok (status, headerText, rest) =>
-      map
-        (text => (status, headerText, text))
-        (readRefusalBody conn headerText rest)
+  let answer = do
+    (status, headerText, rest) <- readHead conn empty
+    map
+      (text => (status, headerText, text))
+      (readRefusalBody conn headerText rest)
   let () = ignoreResult (close conn)
   answer
 
@@ -904,24 +903,23 @@ gradeHandleCell conn buffered did current previous (HandleCell sent wantStatus w
   else match nextEvent conn buffered
     Err message => Err "\{label}: \{message}"
     Ok None => Err "\{label}: stream ended before its #identity"
-    Ok (Some (payload, rest)) => match splitEvent payload
-      Err message => Err message
-      Ok (header, event) =>
-        let kind = eventKind header
-        let seq = intField event "seq"
-        let seqOk = match previous
-          None => True
-          Some prior => seq == prior + 1
-        if kind /= "#identity" then
-          Err "\{label}: expected #identity, got '\{kind}'"
-        else if textField event "did" /= did
-          || textField event "handle" /= current then
-          Err
-            "\{label}: #identity names '\{textField event "did"}' '\{textField event "handle"}'"
-        else if not seqOk then
-          Err "\{label}: #identity seq \{intToString seq} is not the next one"
-        else
-          Ok (Some seq, rest)
+    Ok (Some (payload, rest)) => do
+      (header, event) <- splitEvent payload
+      let kind = eventKind header
+      let seq = intField event "seq"
+      let seqOk = match previous
+        None => True
+        Some prior => seq == prior + 1
+      if kind /= "#identity" then
+        Err "\{label}: expected #identity, got '\{kind}'"
+      else if textField event "did" /= did
+        || textField event "handle" /= current then
+        Err
+          "\{label}: #identity names '\{textField event "did"}' '\{textField event "handle"}'"
+      else if not seqOk then
+        Err "\{label}: #identity seq \{intToString seq} is not the next one"
+      else
+        Ok (Some seq, rest)
 
 runHandleCells : Int ->
   Connection * ->
@@ -932,16 +930,17 @@ runHandleCells : Int ->
   Option Int ->
   List HandleCell ->
   <IO, Net> Result String (Option Int, Bytes)
-runHandleCells _ _ buffered _ _ _ previous [] = Ok (previous, buffered)
-runHandleCells port conn buffered token did current previous (cell :: more) =
-  let (HandleCell sent _ _ _) = cell
-  match postUpdateHandle port token sent
-    Err message => Err "handle '\{sent}': \{message}"
-    Ok answer =>
-      match gradeHandleCell conn buffered did current previous cell answer
-        Err message => Err message
-        Ok (seen, rest) =>
-          runHandleCells port conn rest token did current seen more
+runHandleCells port conn buf0 token did current prev0 cs0 = go buf0 prev0 cs0
+  where
+    go buffered previous [] = Ok (previous, buffered)
+    go buffered previous (cell :: more) =
+      let (HandleCell sent _ _ _) = cell
+      match postUpdateHandle port token sent
+        Err message => Err "handle '\{sent}': \{message}"
+        Ok answer =>
+          match gradeHandleCell conn buffered did current previous cell answer
+            Err message => Err message
+            Ok (seen, rest) => go rest seen more
 
 {- | `com.atproto.identity.updateHandle` as a subscriber sees it: each
    accepted call puts exactly one `#identity` event on the stream, numbered
@@ -1129,30 +1128,32 @@ soakLoop : Connection * ->
   Int ->
   Int ->
   <Clock, IO, Net> Result String (Int, Int)
-soakLoop conn buffered t0 budget events commits =
-  if elapsedSince t0 >= budget then
-    Ok (events, commits)
-  else match nextEvent conn buffered
-    Err message =>
-      if message == "Resource temporarily unavailable"
-        || message == "Operation timed out" then
-        soakLoop conn buffered t0 budget events commits
-      else
-        Err message
-    Ok None => Err "serve_subscribe: synthetic soak stream closed"
-    Ok (Some (payload, rest)) => match splitEvent payload
-      Err message => Err message
-      Ok (header, body) =>
-        let kind = eventKind header
-        if kind == "!error" then
-          Err "serve_subscribe: synthetic soak received an error event"
-        else if kind == "#commit" then match soakCommitPath body
+soakLoop conn buf0 t0 budget events0 commits0 = go buf0 events0 commits0
+  where
+    go buffered events commits =
+      if elapsedSince t0 >= budget then
+        Ok (events, commits)
+      else match nextEvent conn buffered
+        Err message =>
+          if message == "Resource temporarily unavailable"
+            || message == "Operation timed out" then
+            go buffered events commits
+          else
+            Err message
+        Ok None => Err "serve_subscribe: synthetic soak stream closed"
+        Ok (Some (payload, rest)) => match splitEvent payload
           Err message => Err message
-          Ok path =>
-            let () = println "relay-path \{path}"
-            soakLoop conn rest t0 budget (events + 1) (commits + 1)
-        else
-          soakLoop conn rest t0 budget (events + 1) commits
+          Ok (header, body) =>
+            let kind = eventKind header
+            if kind == "!error" then
+              Err "serve_subscribe: synthetic soak received an error event"
+            else if kind == "#commit" then match soakCommitPath body
+              Err message => Err message
+              Ok path =>
+                let () = println "relay-path \{path}"
+                go rest (events + 1) (commits + 1)
+            else
+              go rest (events + 1) commits
 
 runSoak : Int -> Int -> <IO, Net, Clock> Unit
 runSoak port durationMs =

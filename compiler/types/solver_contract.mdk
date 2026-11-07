@@ -106,25 +106,31 @@ instantiateExistingQualifiers : ExistingInstantiationServices subst ->
   List Qualifier ->
   List WantedTarget ->
   Option (List InstantiationArgument)
-instantiateExistingQualifiers _ _ _ _ [] [] = Some []
-instantiateExistingQualifiers services subst scope origin (qualifier :: rest) (target :: targets) =
-  let wanted = Wanted {
-    id = target.targetGoal,
-    predicate = ClassPredicate {
-      predicateInterface = qualifier.predicate.predicateInterface,
-      predicateArguments =
-        map
-          (services.substituteExistingArgument subst)
-          qualifier.predicate.predicateArguments,
-    },
-    origin = origin,
-    scope = scope,
-    destination = target.targetDestination,
-  }
-  map
-    (InstantiationArgument { formal = qualifier.formal, wanted = wanted } :: _)
-    (instantiateExistingQualifiers services subst scope origin rest targets)
-instantiateExistingQualifiers _ _ _ _ _ _ = None
+instantiateExistingQualifiers services subst scope origin qs0 ts0 = go qs0 ts0
+  where
+    go [] [] = Some []
+    go (qualifier :: rest) (target :: targets) =
+      let wanted = Wanted {
+        id = target.targetGoal,
+        predicate = ClassPredicate {
+          predicateInterface =
+            (qualifier : Qualifier).predicate.predicateInterface,
+          predicateArguments =
+            map
+              (services.substituteExistingArgument subst)
+              qualifier.predicate.predicateArguments,
+        },
+        origin = origin,
+        scope = scope,
+        destination = target.targetDestination,
+      }
+      map
+        (InstantiationArgument {
+          formal = qualifier.formal,
+          wanted = wanted,
+        } :: _)
+        (go rest targets)
+    go _ _ = None
 
 export
 instantiateQualifiedAt : ExistingInstantiationServices subst ->

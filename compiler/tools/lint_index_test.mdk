@@ -58,6 +58,7 @@ import tools.lint_core.{
   ProjectRule,
   Summary(..),
   FileFacts,
+  noFix,
   stdlibSigTextIn,
 }
 import tools.lint_walk.{indexForRostersIn, runProjectRulesOver}
@@ -516,7 +517,7 @@ probeCheck name idx _ _ _ _ = [
     message = optionOr "<none>" (stdlibSigTextIn idx "list" "singleton"),
     severity = SevWarning,
     loc = None,
-    fix = None,
+    fix = noFix,
   },
 ]
 
@@ -765,7 +766,7 @@ projectProbe name needs =
         message = intToString (listLen (projectRows ix)),
         severity = SevWarning,
         loc = None,
-        fix = None,
+        fix = noFix,
       },
     ])
 

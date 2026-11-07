@@ -1,5 +1,5 @@
 # META
-source_lines=11098
+source_lines=11073
 stages=DESUGAR,MARK
 # SOURCE
 import backend.package_identity.{IdentityPlan(..), packSite}
@@ -882,18 +882,16 @@ jsImportForW prog name = match selectedJsImport prog name
 
 selectedJsImport : Prog -> String -> Option JsImport
 selectedJsImport prog name = match omLookup name (progEmit prog).externFacts
-  Some fact if fact.bindingKind
-    == ForeignBinding => match hostSymbol "js" fact.hostBindings
-    Some host =>
-      map
-        (shape => JsImport {
-          medakaName = name,
-          jsName = host,
-          params = shape.parameterHeads,
-          result = shape.resultHead,
-        })
-        fact.callableShape
-    None => None
+  Some fact if fact.bindingKind == ForeignBinding => do
+    host <- hostSymbol "js" fact.hostBindings
+    map
+      (shape => JsImport {
+        medakaName = name,
+        jsName = host,
+        params = shape.parameterHeads,
+        result = shape.resultHead,
+      })
+      fact.callableShape
   _ => None
 
 -- A user extern applied: with all its arguments, the arguments and then its
@@ -1724,14 +1722,13 @@ emitProgramWith : WasmEmit ->
   EmitPlan ->
   CProgram ->
   Result (List SymbolDefect) String
-emitProgramWith emit input plan cp = match emitProgramCore emit input plan cp
-  Err defects => Err defects
-  Ok text =>
-    finishCheckedText
-      (RecordedGaps !emit.gapSymbols)
-      !emit.symbols
-      !emit.callCoverage
-      text
+emitProgramWith emit input plan cp = do
+  text <- emitProgramCore emit input plan cp
+  finishCheckedText
+    (RecordedGaps !emit.gapSymbols)
+    !emit.symbols
+    !emit.callCoverage
+    text
 
 -- Strict and record modes share one semantic gateway; only target gaps may
 -- become record events instead of a refusal.
@@ -1894,36 +1891,42 @@ emitProgramGaps input plan cp0 =
     defects => Err defects
 
 emitFnsGapsW : Prog -> Ref (List (List String)) -> List CBind -> Unit
-emitFnsGapsW _ _ [] = ()
-emitFnsGapsW prog fragments ((CBind name cs site bid) :: rest) =
-  setGapBindingOfW (progEmit prog) ("fn " ++ name)
-  let lines = emitRefFnBind prog (CBind name cs site bid)
-  setRef fragments (lines :: !fragments)
-  emitFnsGapsW prog fragments rest
+emitFnsGapsW prog fragments xs0 = go xs0
+  where
+    go [] = ()
+    go ((CBind name cs site bid) :: rest) =
+      setGapBindingOfW (progEmit prog) ("fn " ++ name)
+      let lines = emitRefFnBind prog (CBind name cs site bid)
+      setRef fragments (lines :: !fragments)
+      go rest
 
 emitImplsGapsW : Prog -> Ref (List (List String)) -> List ImplG -> Unit
-emitImplsGapsW _ _ [] = ()
-emitImplsGapsW prog fragments ((g@(ImplG method headTag _ _ _ _)) :: rest) =
-  setGapBindingOfW (progEmit prog) "impl \{method}@\{headTag}"
-  let lines = emitImplGroup prog g
-  setRef fragments (lines :: !fragments)
-  emitImplsGapsW prog fragments rest
+emitImplsGapsW prog fragments xs0 = go xs0
+  where
+    go [] = ()
+    go ((g@(ImplG method headTag _ _ _ _)) :: rest) =
+      setGapBindingOfW (progEmit prog) "impl \{method}@\{headTag}"
+      let lines = emitImplGroup prog g
+      setRef fragments (lines :: !fragments)
+      go rest
 
 emitValsGapsW : Prog -> Ref (List (List String)) -> List CBind -> Unit
-emitValsGapsW _ _ [] = ()
-emitValsGapsW prog fragments (b :: rest) =
-  setGapBindingOfW (progEmit prog) ("val " ++ bindName b)
-  let lines = emitRefValInit prog b
-  setRef fragments (lines :: !fragments)
-  emitValsGapsW prog fragments rest
+emitValsGapsW prog fragments xs0 = go xs0
+  where
+    go [] = ()
+    go (b :: rest) =
+      setGapBindingOfW (progEmit prog) ("val " ++ bindName b)
+      let lines = emitRefValInit prog b
+      setRef fragments (lines :: !fragments)
+      go rest
 
 externFamilyW : WasmEmit -> String -> Option WasmFamily
 externFamilyW emit name =
   if name == siteSentinelName then
     Some WasmLeaf
-  else match lookupAssoc name (emitDemandW emit).catalogFamilies
-    Some f => if isWasmExternFamily f then Some f else None
-    None => None
+  else do
+    f <- lookupAssoc name (emitDemandW emit).catalogFamilies
+    if isWasmExternFamily f then Some f else None
 
 isWasmEtaExtern : WasmEmit -> String -> Bool
 isWasmEtaExtern emit name = isSome (externFamilyW emit name)
@@ -2801,7 +2804,8 @@ mainBodyIsUnit prog cafs (CLet _ pat _ b) =
 mainBodyIsUnit prog cafs (CDecision _ arms _) = allArmsUnit prog cafs arms
 mainBodyIsUnit prog cafs (CMatch _ arms) = allArmsUnit prog cafs arms
 mainBodyIsUnit prog cafs (CBlock stmts) = blockTailIsUnit prog cafs stmts
-mainBodyIsUnit _ _ _ = False
+mainBodyIsUnit _ _ (CLit _ | CLam _ _ | CLetGroup _ _ | CIf _ _ _ | CBinPrim _ _ _ _ _ | CUnOp _ _ | CTuple _ | CList _ | CRecord _ _ | CFieldAccess _ _ _ _ | CRecordUpdate _ _ _ | CVariantUpdate _ _ _ | CArray _ | CRangeList _ _ _ | CRangeArray _ _ _ | CMethod _ _) =
+  False
 
 -- True iff every match/decision arm body is itself a Unit main body.  Empty ⇒ False
 -- (no leaves to prove Unit ⇒ don't suppress).
@@ -2810,13 +2814,15 @@ allArmsUnit _ _ [] = False
 allArmsUnit prog cafs arms = allArmsUnitGo prog cafs arms
 
 allArmsUnitGo : Prog -> OrdMap CExpr -> List CArm -> Bool
-allArmsUnitGo _ _ [] = True
-allArmsUnitGo prog cafs ((CArm pat _ body) :: rest) =
-  if mainBodyIsUnit prog (shadowCafs (patBinders pat) cafs) body then
-    allArmsUnitGo prog cafs rest
-  else
-    False
-allArmsUnitGo prog cafs ((CArmAlt _ _ _) :: rest) = allArmsUnitGo prog cafs rest
+allArmsUnitGo prog cafs xs0 = go xs0
+  where
+    go [] = True
+    go ((CArm pat _ body) :: rest) =
+      if mainBodyIsUnit prog (shadowCafs (patBinders pat) cafs) body then
+        go rest
+      else
+        False
+    go ((CArmAlt _ _ _) :: rest) = go rest
 
 blockTailIsUnit : Prog -> OrdMap CExpr -> List CStmt -> Bool
 blockTailIsUnit _ _ [] = False
@@ -3187,24 +3193,27 @@ emitClauseChainGo : Prog ->
   Int ->
   List String
 -- B5: the last clause fell through (non-exhaustive function) → coded trap.
-emitClauseChainGo prog _ _ _ _ [] _ site = wasmNonexhTrap (progEmit prog) site
-emitClauseChainGo prog baseEnv name params arity ((CClause pats body) :: rest) i site =
-  let clLabel = labelName WN.WClause i
-  let (tests, binds, env) = clausePatCodeEnv prog baseEnv pats params clLabel
-  -- A guard chain inside this clause's body desugars to `__fallthrough__` (the
-  -- "no arm matched, try the next clause" sentinel).  We REWRITE each such occurrence
-  -- in the body to a label-carrying sentinel `__ft__<clLabel>` BEFORE emitting, so the
-  -- emitter lowers it to `br <clLabel>` as a PURE function of the var name.  (A mutable
-  -- "current label" ref does NOT work here: this emitter builds the instruction list
-  -- lazily and forces the strings at final assembly, long after any setRef/restore —
-  -- so the read would see a stale/default label.  Encoding the target in the node is
-  -- timing-independent.)  `br <clLabel>` exits this clause's block, landing on the next
-  -- clause (or the chain's trailing `unreachable` for the last clause).
-  let body2 = labelFallthrough body clLabel
-  ["block " ++ clLabel]
-    ++ indent (tests ++ binds ++ emitRefTail prog env arity body2)
-    ++ ["end"]
-    ++ emitClauseChainGo prog baseEnv name params arity rest (i + 1) site
+emitClauseChainGo prog baseEnv _name params arity cls0 i0 site = go cls0 i0
+  where
+    go [] _ = wasmNonexhTrap (progEmit prog) site
+    go ((CClause pats body) :: rest) i =
+      let clLabel = labelName WN.WClause i
+      let (tests, binds, env) =
+        clausePatCodeEnv prog baseEnv pats params clLabel
+      -- A guard chain inside this clause's body desugars to `__fallthrough__` (the
+      -- "no arm matched, try the next clause" sentinel).  We REWRITE each such occurrence
+      -- in the body to a label-carrying sentinel `__ft__<clLabel>` BEFORE emitting, so the
+      -- emitter lowers it to `br <clLabel>` as a PURE function of the var name.  (A mutable
+      -- "current label" ref does NOT work here: this emitter builds the instruction list
+      -- lazily and forces the strings at final assembly, long after any setRef/restore —
+      -- so the read would see a stale/default label.  Encoding the target in the node is
+      -- timing-independent.)  `br <clLabel>` exits this clause's block, landing on the next
+      -- clause (or the chain's trailing `unreachable` for the last clause).
+      let body2 = labelFallthrough body clLabel
+      ["block " ++ clLabel]
+        ++ indent (tests ++ binds ++ emitRefTail prog env arity body2)
+        ++ ["end"]
+        ++ go rest (i + 1)
 
 -- `ftPrefix` / `labelFallthrough` are the BACKEND-NEUTRAL sentinel-labelling pass —
 -- they now live in `backend/emit_support.mdk` and are shared with the LLVM emitter,
@@ -3231,13 +3240,15 @@ clausePatGo : Prog ->
   List String ->
   Env ->
   (List String, List String, Env)
-clausePatGo _ [] _ tAcc bAcc env = (tAcc, bAcc, env)
-clausePatGo prog ((pat, a) :: rest) clLabel tAcc bAcc env =
-  let occ = ["local.get $" ++ wParamId a]
-  let (t, b, env2) = patTestBind prog pat occ clLabel env
-  -- Bound: one step per clause parameter, bounded by the clause arity.
-  -- lint-disable-next-line rule-accumulator-append
-  clausePatGo prog rest clLabel (tAcc ++ t) (bAcc ++ b) env2
+clausePatGo prog xs0 clLabel tAcc0 bAcc0 env0 = go xs0 tAcc0 bAcc0 env0
+  where
+    go [] tAcc bAcc env = (tAcc, bAcc, env)
+    go ((pat, a) :: rest) tAcc bAcc env =
+      let occ = ["local.get $" ++ wParamId a]
+      let (t, b, env2) = patTestBind prog pat occ clLabel env
+      -- Bound: one step per clause parameter, bounded by the clause arity.
+      -- lint-disable-next-line rule-accumulator-append
+      go rest (tAcc ++ t) (bAcc ++ b) env2
 
 -- (tests, binds, env') for matching `pat` against the value snippet `occ`.
 patTestBind : Prog ->
@@ -3246,133 +3257,139 @@ patTestBind : Prog ->
   String ->
   Env ->
   (List String, List String, Env)
-patTestBind _prog PWild _occ _clLabel env = ([], [], env)
-patTestBind _prog (PVar x _ bid) occ _clLabel env =
-  ([], occ ++ ["local.set $" ++ gname x], envBind x bid env)
--- #759: unbox the scrutinee through the $mdk_unbox_int seam (i31 OR $boxint) and
--- compare at full i64 width.  An `i31.get_s` + `i32.const n` path truncates to
--- 31 bits — for |n| >= 2^30 the `i32.const` overflows (wasm-tools REJECTS the module)
--- and a boxed scrutinee ref.casts to i31 and TRAPS.
-patTestBind prog (PLit (LInt n)) occ clLabel env = (
-  occ
-    ++ [
-      unboxIntW prog,
-      "i64.const " ++ intToString n,
-      "i64.ne",
-      "br_if " ++ clLabel,
-    ],
-  [],
-  env,
-)
-patTestBind _prog (PLit (LBool b)) occ clLabel env = (
-  occ
-    ++ [
-      "ref.cast (ref i31)",
-      "i31.get_u",
-      "i32.const " ++ (if b then "1" else "0"),
-      "i32.ne",
-      "br_if " ++ clLabel,
-    ],
-  [],
-  env,
-)
--- W9: a `()` (Unit) clause head — Unit is the i31 0 immediate, irrefutable here
--- (the type guarantees the value is Unit), so no test and no binding.
-patTestBind _prog (PLit LUnit) _occ _clLabel env = ([], [], env)
--- W9: a Char-literal clause head — a Char is an i31 codepoint immediate (same rep
--- as emitLitRef (LChar)); compare the i31 against the codepoint constant.
-patTestBind _prog (PLit (LChar c)) occ clLabel env = (
-  occ
-    ++ [
-      "ref.cast (ref i31)",
-      "i31.get_u",
-      "i32.const "
-        ++ intToString (charCode (arrayGetUnsafe 0 (stringToChars c))),
-      "i32.ne",
-      "br_if " ++ clLabel,
-    ],
-  [],
-  env,
-)
-patTestBind prog (PLit (LString s)) occ clLabel env =
-  let cmpSuffix = [
-    rtCallW prog "mdk_str_compare" 2,
-    "ref.cast (ref i31)",
-    "i31.get_u",
-    "i32.const 1",
-    "i32.ne",
-    "br_if " ++ clLabel,
-  ]
-  (
-    occ ++ ["ref.cast (ref $str)"] ++ emitLitRef prog (LString s) ++ cmpSuffix,
-    [],
-    env,
-  )
--- W10: a constructor clause head — test the discriminant, then descend into each
--- field with patTestBind (NOT bindConFields).  A nested field pattern can itself be
--- refutable (e.g. `Variant cname (ConNamed fs)` — the inner `ConNamed` discriminates
--- against a sibling `ConPos` of the same payload type), so the field must emit its own
--- discriminant test, else its struct cast runs unconditionally and traps `illegal
--- cast` on the sibling shape.  bindConFields only binds (no tests), so it is unsound
--- for refutable nested ctors — mirror PCons/PTuple/PList, which recurse via patTestBind.
-patTestBind prog (PCon c args) occ clLabel env =
-  let ctest =
-    discrimReadOf prog occ (ctorTypeName prog c)
-      ++ [
-        "i32.const " ++ intToString (ctorOrdinal prog c),
+patTestBind prog pat0 occ0 clLabel env0 = go pat0 occ0 env0
+  where
+    go PWild _occ env = ([], [], env)
+    go (PVar x _ bid) occ env =
+      ([], occ ++ ["local.set $" ++ gname x], envBind x bid env)
+    -- #759: unbox the scrutinee through the $mdk_unbox_int seam (i31 OR $boxint) and
+    -- compare at full i64 width.  An `i31.get_s` + `i32.const n` path truncates to
+    -- 31 bits — for |n| >= 2^30 the `i32.const` overflows (wasm-tools REJECTS the module)
+    -- and a boxed scrutinee ref.casts to i31 and TRAPS.
+    go (PLit (LInt n)) occ env = (
+      occ
+        ++ [
+          unboxIntW prog,
+          "i64.const " ++ intToString n,
+          "i64.ne",
+          "br_if " ++ clLabel,
+        ],
+      [],
+      env,
+    )
+    go (PLit (LBool b)) occ env = (
+      occ
+        ++ [
+          "ref.cast (ref i31)",
+          "i31.get_u",
+          "i32.const " ++ (if b then "1" else "0"),
+          "i32.ne",
+          "br_if " ++ clLabel,
+        ],
+      [],
+      env,
+    )
+    -- W9: a `()` (Unit) clause head — Unit is the i31 0 immediate, irrefutable here
+    -- (the type guarantees the value is Unit), so no test and no binding.
+    go (PLit LUnit) _occ env = ([], [], env)
+    -- W9: a Char-literal clause head — a Char is an i31 codepoint immediate (same rep
+    -- as emitLitRef (LChar)); compare the i31 against the codepoint constant.
+    go (PLit (LChar c)) occ env = (
+      occ
+        ++ [
+          "ref.cast (ref i31)",
+          "i31.get_u",
+          "i32.const "
+            ++ intToString (charCode (arrayGetUnsafe 0 (stringToChars c))),
+          "i32.ne",
+          "br_if " ++ clLabel,
+        ],
+      [],
+      env,
+    )
+    go (PLit (LString s)) occ env =
+      let cmpSuffix = [
+        rtCallW prog "mdk_str_compare" 2,
+        "ref.cast (ref i31)",
+        "i31.get_u",
+        "i32.const 1",
         "i32.ne",
         "br_if " ++ clLabel,
       ]
-  let (ft, fb, env2) = patTestBindCon prog c args occ clLabel env 0
-  (ctest ++ ft, fb, env2)
-patTestBind prog (PAs x _ bid p) occ clLabel env =
-  let setX = occ ++ ["local.set $" ++ gname x]
-  let (t, b, env2) = patTestBind prog p occ clLabel (envBind x bid env)
-  (t, setX ++ b, env2)
--- W9: a refutable cons-cell clause head `(h :: t)` — the focus must be a Cons
--- (ordinal 0; Nil is ordinal 1), else fall to the next clause.  Then test+bind
--- the head (field 1) and tail (field 2) recursively (nested patterns may also be
--- refutable, e.g. `[x] = (x :: [])`).
-patTestBind prog (PCons h t) occ clLabel env =
-  let consTest =
-    discrimReadOf prog occ "List"
-      ++ ["i32.const 0", "i32.ne", "br_if " ++ clLabel]
-  let hSnip = occ ++ ["ref.cast (ref $C_Cons)", "struct.get $C_Cons 1"]
-  let tSnip = occ ++ ["ref.cast (ref $C_Cons)", "struct.get $C_Cons 2"]
-  let (ht, hb, env2) = patTestBind prog h hSnip clLabel env
-  let (tt, tb, env3) = patTestBind prog t tSnip clLabel env2
-  (consTest ++ ht ++ tt, hb ++ tb, env3)
--- W9: a refutable fixed-length list clause head `[p0, p1, …]` — descend the Cons
--- spine: each element's cell must be a Cons (else fall through), then the final
--- tail must be Nil (ordinal 1).
-patTestBind prog (PList ps) occ clLabel env =
-  patTestBindList prog ps occ clLabel env
--- W9: a tuple clause head `(p0, p1, …)` — a tuple is single-shape (irrefutable),
--- so no test; bind each field (field i+1 of $C_Tup<n>) and recurse for nested
--- refutable subpatterns.
-patTestBind prog (PTuple ps) occ clLabel env =
-  patTestBindTuple prog (tupleCtorName (listLen ps)) ps occ clLabel env 0
--- G6 (#379): a range pattern `lo..=hi` / `lo..hi`.  PRng canonicalizes to PWild in the
--- decision matrix (core_ir_lower's canonPat), so the tree routes to this arm
--- UNCONDITIONALLY and marks it patNeedsGuard — the actual comparison must happen here,
--- in the guarded-arm re-match.  Peer of llvm_emit's `emitRefutMatch (PRng ...)`.
--- One signed i64 test serves both Int and Char (Char = its codepoint, cf. the PLit
--- LChar arm above); rngCmpW unboxes via $mdk_unbox_int so NEGATIVE bounds (`-1..1`) and
--- Int bounds >= 2^30 are both correct.  Fail-fast, mirroring eval.mdk's inIntRange/inCharRange:
--- `v < lo` fails; then `v > hi` (incl) / `v >= hi` (exclusive `..`) fails.
-patTestBind prog (PRng lo hi incl) occ clLabel env = (
-  rngCmpW prog occ (rngBound lo) "i64.lt_s" clLabel
-    ++ rngCmpW
-      prog
-      occ
-      (rngBound hi)
-      (if incl then "i64.gt_s" else "i64.ge_s")
-      clLabel,
-  [],
-  env,
-)
-patTestBind prog other _occ _clLabel _env =
-  gapL3P prog ("ref-mode: unsupported clause parameter pattern " ++ ptag other)
+      (
+        occ
+          ++ ["ref.cast (ref $str)"]
+          ++ emitLitRef prog (LString s)
+          ++ cmpSuffix,
+        [],
+        env,
+      )
+    -- W10: a constructor clause head — test the discriminant, then descend into each
+    -- field with go . A field pattern can itself be
+    -- refutable (e.g. `Variant cname (ConNamed fs)` — the inner `ConNamed` discriminates
+    -- against a sibling `ConPos` of the same payload type), so the field must emit its own
+    -- discriminant test, else its struct cast runs unconditionally and traps `illegal
+    -- cast` on the sibling shape.  bindConFields only binds (no tests), so it is unsound
+    -- for refutable nested ctors — mirror PCons/PTuple/PList, which recurse via go
+    go (PCon c args) occ env =
+      let ctest =
+        discrimReadOf prog occ (ctorTypeName prog c)
+          ++ [
+            "i32.const " ++ intToString (ctorOrdinal prog c),
+            "i32.ne",
+            "br_if " ++ clLabel,
+          ]
+      let (ft, fb, env2) = patTestBindCon prog c args occ clLabel env 0
+      (ctest ++ ft, fb, env2)
+    go (PAs x _ bid p) occ env =
+      let setX = occ ++ ["local.set $" ++ gname x]
+      let (t, b, env2) = go p occ (envBind x bid env)
+      (t, setX ++ b, env2)
+    -- W9: a refutable cons-cell clause head `(h :: t)` — the focus must be a Cons
+    -- (ordinal 0; Nil is ordinal 1), else fall to the next clause.  Then test+bind
+    -- the head (field 1) and tail (field 2) recursively (nested patterns may also be
+    -- refutable, e.g. `[x] = (x :: [])`).
+    go (PCons h t) occ env =
+      let consTest =
+        discrimReadOf prog occ "List"
+          ++ ["i32.const 0", "i32.ne", "br_if " ++ clLabel]
+      let hSnip = occ ++ ["ref.cast (ref $C_Cons)", "struct.get $C_Cons 1"]
+      let tSnip = occ ++ ["ref.cast (ref $C_Cons)", "struct.get $C_Cons 2"]
+      let (ht, hb, env2) = go h hSnip env
+      let (tt, tb, env3) = go t tSnip env2
+      (consTest ++ ht ++ tt, hb ++ tb, env3)
+    -- W9: a refutable fixed-length list clause head `[p0, p1, …]` — descend the Cons
+    -- spine: each element's cell must be a Cons (else fall through), then the final
+    -- tail must be Nil (ordinal 1).
+    go (PList ps) occ env = patTestBindList prog ps occ clLabel env
+    -- W9: a tuple clause head `(p0, p1, …)` — a tuple is single-shape (irrefutable),
+    -- so no test; bind each field (field i+1 of $C_Tup<n>) and recurse for nested
+    -- refutable subpatterns.
+    go (PTuple ps) occ env =
+      patTestBindTuple prog (tupleCtorName (listLen ps)) ps occ clLabel env 0
+    -- G6 (#379): a range pattern `lo..=hi` / `lo..hi`.  PRng canonicalizes to PWild in the
+    -- decision matrix (core_ir_lower's canonPat), so the tree routes to this arm
+    -- UNCONDITIONALLY and marks it patNeedsGuard — the actual comparison must happen here,
+    -- in the guarded-arm re-match.  Peer of llvm_emit's `emitRefutMatch (PRng ...)`.
+    -- One signed i64 test serves both Int and Char (Char = its codepoint, cf. the PLit
+    -- LChar arm above); rngCmpW unboxes via $mdk_unbox_int so NEGATIVE bounds (`-1..1`) and
+    -- Int bounds >= 2^30 are both correct.  Fail-fast, mirroring eval.mdk's inIntRange/inCharRange:
+    -- `v < lo` fails; then `v > hi` (incl) / `v >= hi` (exclusive `..`) fails.
+    go (PRng lo hi incl) occ env = (
+      rngCmpW prog occ (rngBound lo) "i64.lt_s" clLabel
+        ++ rngCmpW
+          prog
+          occ
+          (rngBound hi)
+          (if incl then "i64.gt_s" else "i64.ge_s")
+          clLabel,
+      [],
+      env,
+    )
+    go other _occ _env =
+      gapL3P
+        prog
+        ("ref-mode: unsupported clause parameter pattern " ++ ptag other)
 
 -- one half of a range test: unbox `occ` to i64 and `br_if clLabel` when `cmp` against
 -- `bound` holds (i.e. when the value is OUT of range).  `occ` is re-embedded per half —
@@ -3399,21 +3416,23 @@ patTestBindList : Prog ->
   String ->
   Env ->
   (List String, List String, Env)
-patTestBindList prog [] occ clLabel env = (
-  discrimReadOf prog occ "List"
-    ++ ["i32.const 1", "i32.ne", "br_if " ++ clLabel],
-  [],
-  env,
-)
-patTestBindList prog (p :: ps) occ clLabel env =
-  let consTest =
-    discrimReadOf prog occ "List"
-      ++ ["i32.const 0", "i32.ne", "br_if " ++ clLabel]
-  let hSnip = occ ++ ["ref.cast (ref $C_Cons)", "struct.get $C_Cons 1"]
-  let tSnip = occ ++ ["ref.cast (ref $C_Cons)", "struct.get $C_Cons 2"]
-  let (ht, hb, env2) = patTestBind prog p hSnip clLabel env
-  let (tt, tb, env3) = patTestBindList prog ps tSnip clLabel env2
-  (consTest ++ ht ++ tt, hb ++ tb, env3)
+patTestBindList prog ps0 occ0 clLabel env0 = go ps0 occ0 env0
+  where
+    go [] occ env = (
+      discrimReadOf prog occ "List"
+        ++ ["i32.const 1", "i32.ne", "br_if " ++ clLabel],
+      [],
+      env,
+    )
+    go (p :: ps) occ env =
+      let consTest =
+        discrimReadOf prog occ "List"
+          ++ ["i32.const 0", "i32.ne", "br_if " ++ clLabel]
+      let hSnip = occ ++ ["ref.cast (ref $C_Cons)", "struct.get $C_Cons 1"]
+      let tSnip = occ ++ ["ref.cast (ref $C_Cons)", "struct.get $C_Cons 2"]
+      let (ht, hb, env2) = patTestBind prog p hSnip clLabel env
+      let (tt, tb, env3) = go ps tSnip env2
+      (consTest ++ ht ++ tt, hb ++ tb, env3)
 
 -- (tests, binds, env') for a tuple clause head: each field i+1 of $C_Tup<n> (after
 -- the i32 tag), recursing into the sub-pattern (which may itself be refutable).
@@ -3425,17 +3444,19 @@ patTestBindTuple : Prog ->
   Env ->
   Int ->
   (List String, List String, Env)
-patTestBindTuple _ _ [] _ _ env _ = ([], [], env)
-patTestBindTuple prog tc (p :: rest) occ clLabel env i =
-  let fieldSnip =
-    occ
-      ++ [
-        "ref.cast (ref $" ++ typeNameW prog (ctorStructName tc) ++ ")",
-        "struct.get $\{typeNameW prog (ctorStructName tc)} \{intToString (i + 1)}",
-      ]
-  let (ft, fb, env2) = patTestBind prog p fieldSnip clLabel env
-  let (rt, rb, env3) = patTestBindTuple prog tc rest occ clLabel env2 (i + 1)
-  (ft ++ rt, fb ++ rb, env3)
+patTestBindTuple prog tc xs0 occ clLabel env0 i0 = go xs0 env0 i0
+  where
+    go [] env _ = ([], [], env)
+    go (p :: rest) env i =
+      let fieldSnip =
+        occ
+          ++ [
+            "ref.cast (ref $" ++ typeNameW prog (ctorStructName tc) ++ ")",
+            "struct.get $\{typeNameW prog (ctorStructName tc)} \{intToString (i + 1)}",
+          ]
+      let (ft, fb, env2) = patTestBind prog p fieldSnip clLabel env
+      let (rt, rb, env3) = go rest env2 (i + 1)
+      (ft ++ rt, fb ++ rb, env3)
 
 -- (tests, binds, env') for a constructor clause head's fields: field i+1 of the ctor's
 -- struct (after the i32 tag), recursing into each sub-pattern with patTestBind so a
@@ -3448,17 +3469,19 @@ patTestBindCon : Prog ->
   Env ->
   Int ->
   (List String, List String, Env)
-patTestBindCon _ _ [] _ _ env _ = ([], [], env)
-patTestBindCon prog c (p :: rest) occ clLabel env i =
-  let fieldSnip =
-    occ
-      ++ [
-        "ref.cast (ref $" ++ typeNameW prog (ctorStructName c) ++ ")",
-        "struct.get $\{typeNameW prog (ctorStructName c)} \{intToString (i + 1)}",
-      ]
-  let (ft, fb, env2) = patTestBind prog p fieldSnip clLabel env
-  let (rt, rb, env3) = patTestBindCon prog c rest occ clLabel env2 (i + 1)
-  (ft ++ rt, fb ++ rb, env3)
+patTestBindCon prog c xs0 occ clLabel env0 i0 = go xs0 env0 i0
+  where
+    go [] env _ = ([], [], env)
+    go (p :: rest) env i =
+      let fieldSnip =
+        occ
+          ++ [
+            "ref.cast (ref $" ++ typeNameW prog (ctorStructName c) ++ ")",
+            "struct.get $\{typeNameW prog (ctorStructName c)} \{intToString (i + 1)}",
+          ]
+      let (ft, fb, env2) = patTestBind prog p fieldSnip clLabel env
+      let (rt, rb, env3) = go rest env2 (i + 1)
+      (ft ++ rt, fb ++ rb, env3)
 
 -- all locals a clause group needs: every clause's param-bound vars + body locals.
 clauseLocals : List CClause -> List String
@@ -3865,45 +3888,45 @@ routeWitness : Prog -> Env -> Int -> Route -> List String
 -- The array holds the dictionary's direct supers first, then its requires (the
 -- LLVM cell's order), so a projection indexes the same field whichever instance
 -- the dictionary is.
-routeWitness prog env d (route@(RKey tag reqs sups)) =
-  match closedDictW prog route
-    Some initBody => wConstDict prog initBody
-    None =>
-      let fieldWitnesses = flatMap (routeWitness prog env d) (sups ++ reqs)
-      ["i32.const " ++ intToString (dictTag tag)]
-        ++ fieldWitnesses
-        ++ [
-          "array.new_fixed $dictarr "
-            ++ intToString (listLen sups + listLen reqs),
-        ]
-        ++ slotArraysW prog tag
-        ++ ["struct.new $dict"]
--- a super projected out of a dictionary: a dictionary with supers is always a table
-routeWitness prog env d (RProj r path) =
-  routeWitness prog env d r ++ flatMap superFieldW path
-routeWitness prog env _ (RDict dpar) =
-  if envHas dpar env then
-    ["local.get $" ++ gname dpar]
-  else
-    gapLP prog ("wasm W5: forwarded dict '" ++ dpar ++ "' not in scope")
-routeWitness prog env _ (RDictFwd dpar) =
-  if envHas dpar env then
-    ["local.get $" ++ gname dpar]
-  else
-    gapLP prog ("wasm W5: forwarded dict '" ++ dpar ++ "' not in scope")
--- RNone as a witness is the dictionary for an unconstrained type variable under a
--- `requires` (the element of `None : Option a`, the error of `Ok 1 : Result e Int`).
--- There is no value of that type for a method to take, so no value-position
--- dispatch goes through it: the constructor-only and Display/Eq/Ord shapes never
--- call it.  It is the no-op i31 (dict tag 0), mirroring llvm_emit's
--- `dictWordOfRoute _ _ RNone = "0"`.
-routeWitness _ _ _ RNone = ["i32.const 0", "ref.i31"]
--- S-1: RLocal's own dicts are the call's leading dict ARGS (pushed by emitMethodRef's
--- RLocal arm via emitDictRef), not a dict WITNESS for this route — so as a witness it
--- stays the no-op i31 (dict tag 0), mirroring llvm_emit's
--- `dictWordOfRoute (RLocal _ _) = "0"`.  RScalar (scalar-tag) likewise.
-routeWitness _ _ _ (RLocal _ _) = ["i32.const 0", "ref.i31"]
-routeWitness _ _ _ (RScalar _) = ["i32.const 0", "ref.i31"]
+routeWitness prog env d route0 = go route0
+  where
+    go (route@(RKey tag reqs sups)) = match closedDictW prog route
+      Some initBody => wConstDict prog initBody
+      None =>
+        let fieldWitnesses = flatMap (routeWitness prog env d) (sups ++ reqs)
+        ["i32.const " ++ intToString (dictTag tag)]
+          ++ fieldWitnesses
+          ++ [
+            "array.new_fixed $dictarr "
+              ++ intToString (listLen sups + listLen reqs),
+          ]
+          ++ slotArraysW prog tag
+          ++ ["struct.new $dict"]
+    -- a super projected out of a dictionary: a dictionary with supers is always a table
+    go (RProj r path) = go r ++ flatMap superFieldW path
+    go (RDict dpar) =
+      if envHas dpar env then
+        ["local.get $" ++ gname dpar]
+      else
+        gapLP prog ("wasm W5: forwarded dict '" ++ dpar ++ "' not in scope")
+    go (RDictFwd dpar) =
+      if envHas dpar env then
+        ["local.get $" ++ gname dpar]
+      else
+        gapLP prog ("wasm W5: forwarded dict '" ++ dpar ++ "' not in scope")
+    -- RNone as a witness is the dictionary for an unconstrained type variable under a
+    -- `requires` (the element of `None : Option a`, the error of `Ok 1 : Result e Int`).
+    -- There is no value of that type for a method to take, so no value-position
+    -- dispatch goes through it: the constructor-only and Display/Eq/Ord shapes never
+    -- call it.  It is the no-op i31 (dict tag 0), mirroring llvm_emit's
+    -- `dictWordOfRoute _ _ RNone = "0"`.
+    go RNone = ["i32.const 0", "ref.i31"]
+    -- S-1: RLocal's own dicts are the call's leading dict ARGS (pushed by emitMethodRef's
+    -- RLocal arm via emitDictRef), not a dict WITNESS for this route — so as a witness it
+    -- stays the no-op i31 (dict tag 0), mirroring llvm_emit's
+    -- `dictWordOfRoute (RLocal _ _) = "0"`.  RScalar (scalar-tag) likewise.
+    go (RLocal _ _) = ["i32.const 0", "ref.i31"]
+    go (RScalar _) = ["i32.const 0", "ref.i31"]
 
 superFieldW : Int -> List String
 superFieldW i = [
@@ -3951,22 +3974,20 @@ instanceFillsW prog key =
 -- concrete route, its supers and `requires` likewise, and the null word of an
 -- unconstrained witness.
 closedDictW : Prog -> Route -> Option String
-closedDictW prog (RKey tag reqs sups) =
-  match allSomeW (map (closedDictW prog) (sups ++ reqs))
-    None => None
-    Some fields =>
-      let fills = instanceFillsW prog tag
-      let functions = flatMap (slotFunctionW prog tag) fills
-      let closures = flatMap (slotClosureW prog tag) fills
-      let tag32 = intToString (dictTag tag)
-      let slotText = constArrayW "$slotarr" (map foldedW functions)
-      let closureText = constArrayW "$dictarr" (map foldedW closures)
-      Some
-        "(struct.new $dict (i32.const \{tag32}) \{constArrayW "$dictarr" fields} \{slotText} \{closureText})"
+closedDictW prog (RKey tag reqs sups) = do
+  fields <- allSomeW (map (closedDictW prog) (sups ++ reqs))
+  let fills = instanceFillsW prog tag
+  let functions = flatMap (slotFunctionW prog tag) fills
+  let closures = flatMap (slotClosureW prog tag) fills
+  let tag32 = intToString (dictTag tag)
+  let slotText = constArrayW "$slotarr" (map foldedW functions)
+  let closureText = constArrayW "$dictarr" (map foldedW closures)
+  Some
+    "(struct.new $dict (i32.const \{tag32}) \{constArrayW "$dictarr" fields} \{slotText} \{closureText})"
 closedDictW _ RNone = Some "(ref.i31 (i32.const 0))"
 closedDictW _ (RLocal _ _) = Some "(ref.i31 (i32.const 0))"
 closedDictW _ (RScalar _) = Some "(ref.i31 (i32.const 0))"
-closedDictW _ _ = None
+closedDictW _ (RDict _ | RDictFwd _ | RProj _ _) = None
 
 -- the constant array of type [ty] holding [elements], each a folded expression
 constArrayW : String -> List String -> String
@@ -4495,25 +4516,20 @@ groupEntryW prog (ImplG method _ _ _ _ fnName) =
 implForWSite : Prog -> String -> String -> String -> Int -> Option CImplEntry
 implForWSite prog method iface tag siteArity =
   findByKeyArityW
-    prog
-    method
     tag
     siteArity
     (narrowByIfaceW iface (methodEntriesW prog method))
 
-findByKeyArityW : Prog ->
-  String ->
-  String ->
-  Int ->
-  List CImplEntry ->
-  Option CImplEntry
-findByKeyArityW _ _ _ _ [] = None
-findByKeyArityW prog method tag siteArity (entry :: rest) =
-  if implEntryAnswersW tag entry
-    && implEntryDeclaredArity entry == siteArity then
-    Some entry
-  else
-    findByKeyArityW prog method tag siteArity rest
+findByKeyArityW : String -> Int -> List CImplEntry -> Option CImplEntry
+findByKeyArityW tag siteArity xs0 = go xs0
+  where
+    go [] = None
+    go (entry :: rest) =
+      if implEntryAnswersW tag entry
+        && implEntryDeclaredArity entry == siteArity then
+        Some entry
+      else
+        go rest
 
 -- `hashName` (djb2, seed 5381) and `dictTag` (its 30-bit mask, the i32 dictionary
 -- header) live in `types.private_mangle`, shared with the LLVM emitter.  The header
@@ -4538,86 +4554,103 @@ refOnlyValueW prog expr body =
     WasmValue WBoxEq (body ())
 
 emitValueW : Prog -> Env -> Int -> CExpr -> WasmValue
-emitValueW prog _env _d (CLit l) =
-  if rawProgramW prog then
-    let (lines, ty) = emitLitI32 (progEmit prog) l
-    WasmValue (rawReprW ty) lines
-  else
-    WasmValue WBoxEq (emitLitRef prog l)
-emitValueW prog env d (CVar x _) = programValueW prog (emitVarRef prog env d x)
-emitValueW prog env d (CBinPrim op l r tag loc) =
-  let code =
-    if rawProgramW prog then
-      emitIntBinRef prog env d op l r tag (sitePackedW (progEmit prog) loc)
-    else
-      emitBinRef prog env d op l r tag (sitePackedW (progEmit prog) loc)
-  WasmValue (if rawProgramW prog then rawReprW (binOpTy op) else WBoxEq) code
-emitValueW prog env d (CUnOp op x) =
-  programValueW prog (emitUnRef prog env d op x)
-emitValueW prog env d (CIf c t f) =
-  let ci = emitRefExpr prog env d c ++ conditionW prog
-  let tv = emitValueW prog env d t
-  let fv = emitValueW prog env d f
-  WasmValue
-    (valueRepr tv)
-    (ci
-      ++ ["if (result " ++ physicalType (programReprW prog) ++ ")"]
-      ++ indent (valueLines tv)
-      ++ ["else"]
-      ++ indent (valueLines fv)
-      ++ ["end"])
-emitValueW prog env d (CLet recF pat e1 e2) =
-  let (prefix, env2) = emitLetBindingW prog env d recF pat e1
-  prependValueW prefix (emitValueW prog env2 d e2)
-emitValueW prog env d (CLetGroup binds body) = refOnlyValueW prog (CLetGroup
-  binds
-  body) (() =>
-  emitLetGroupWith prog env d (env2 b => emitRefExpr prog env2 d b) binds body)
-emitValueW prog env d (CBlock stmts) = emitBlockRef prog env d stmts
-emitValueW prog env d (app@(CApp _ _ _)) =
-  programValueW prog (emitAppRef prog env d app)
-emitValueW prog env d (node@(CDecision scrut arms tree)) =
-  refOnlyValueW prog node (() => emitDecisionRef prog env d scrut arms tree)
-emitValueW prog env d (node@(CLam pats body)) =
-  refOnlyValueW prog node (() => emitClosure prog env d pats body)
-emitValueW prog env d (node@(CMethod name (MethodEvidence iface arity route implRoutes methRoutes))) = refOnlyValueW
-  prog
-  node
-  (() =>
-    emitMethodValueRef prog env d name iface arity route implRoutes methRoutes)
-emitValueW prog env d (node@(CDict name routes)) =
-  refOnlyValueW prog node (() => emitDictValueRef prog env d name routes)
-emitValueW prog env d (node@(CTuple es)) =
-  refOnlyValueW prog node (() => emitTupleRef prog env d es)
-emitValueW prog env d (node@(CList es)) =
-  refOnlyValueW prog node (() => emitListRef prog env d es)
-emitValueW prog env d (node@(CRangeList lo hi incl)) =
-  refOnlyValueW prog node (() => emitRangeListRef prog env d lo hi incl)
-emitValueW prog env d (node@(CArray es)) =
-  refOnlyValueW prog node (() => emitArrayCreateRef prog env d es)
-emitValueW prog env d (node@(CRangeArray lo hi incl)) =
-  refOnlyValueW prog node (() => emitRangeArrayRef prog env d lo hi incl)
-emitValueW prog env d (node@(CRecord name fields)) =
-  refOnlyValueW prog node (() => emitRecordRef prog env d name fields)
-emitValueW prog env d (node@(CFieldAccess ex label recName ord)) = refOnlyValueW
-  prog
-  node
-  (() => emitFieldAccessRef prog env d ex label recName ord)
-emitValueW prog env d (node@(CRecordUpdate recName base fields)) = refOnlyValueW
-  prog
-  node
-  (() => emitRecordUpdateRef prog env d recName base fields)
-emitValueW prog env d (node@(CVariantUpdate con base fields)) = refOnlyValueW
-  prog
-  node
-  (() => emitVariantUpdateRef prog env d con base fields)
-emitValueW prog _env _d other =
-  programValueW
-    prog
-    (gapLP prog (if rawProgramW prog then
-      "scalar-mode: unsupported Core IR node " ++ ctag other
-    else
-      "ref-mode: unsupported Core IR node \{ctag other} [in \{progBinding prog}]"))
+emitValueW prog env0 d app0 = go env0 app0
+  where
+    go _env (CLit l) =
+      if rawProgramW prog then
+        let (lines, ty) = emitLitI32 (progEmit prog) l
+        WasmValue (rawReprW ty) lines
+      else
+        WasmValue WBoxEq (emitLitRef prog l)
+    go env (CVar x _) = programValueW prog (emitVarRef prog env d x)
+    go env (CBinPrim op l r tag loc) =
+      let code =
+        if rawProgramW prog then
+          emitIntBinRef prog env d op l r tag (sitePackedW (progEmit prog) loc)
+        else
+          emitBinRef prog env d op l r tag (sitePackedW (progEmit prog) loc)
+      WasmValue
+        (if rawProgramW prog then rawReprW (binOpTy op) else WBoxEq)
+        code
+    go env (CUnOp op x) = programValueW prog (emitUnRef prog env d op x)
+    go env (CIf c t f) =
+      let ci = emitRefExpr prog env d c ++ conditionW prog
+      let tv = go env t
+      let fv = go env f
+      WasmValue
+        (valueRepr tv)
+        (ci
+          ++ ["if (result " ++ physicalType (programReprW prog) ++ ")"]
+          ++ indent (valueLines tv)
+          ++ ["else"]
+          ++ indent (valueLines fv)
+          ++ ["end"])
+    go env (CLet recF pat e1 e2) =
+      let (prefix, env2) = emitLetBindingW prog env d recF pat e1
+      prependValueW prefix (go env2 e2)
+    go env (CLetGroup binds body) = refOnlyValueW prog (CLetGroup
+      binds
+      body) (() =>
+      emitLetGroupWith
+        prog
+        env
+        d
+        (env2 b => emitRefExpr prog env2 d b)
+        binds
+        body)
+    go env (CBlock stmts) = emitBlockRef prog env d stmts
+    go env (app@(CApp _ _ _)) = programValueW prog (emitAppRef prog env d app)
+    go env (node@(CDecision scrut arms tree)) =
+      refOnlyValueW prog node (() => emitDecisionRef prog env d scrut arms tree)
+    go env (node@(CLam pats body)) =
+      refOnlyValueW prog node (() => emitClosure prog env d pats body)
+    go env (node@(CMethod name (MethodEvidence iface arity route implRoutes methRoutes))) = refOnlyValueW
+      prog
+      node
+      (() =>
+        emitMethodValueRef
+          prog
+          env
+          d
+          name
+          iface
+          arity
+          route
+          implRoutes
+          methRoutes)
+    go env (node@(CDict name routes)) =
+      refOnlyValueW prog node (() => emitDictValueRef prog env d name routes)
+    go env (node@(CTuple es)) =
+      refOnlyValueW prog node (() => emitTupleRef prog env d es)
+    go env (node@(CList es)) =
+      refOnlyValueW prog node (() => emitListRef prog env d es)
+    go env (node@(CRangeList lo hi incl)) =
+      refOnlyValueW prog node (() => emitRangeListRef prog env d lo hi incl)
+    go env (node@(CArray es)) =
+      refOnlyValueW prog node (() => emitArrayCreateRef prog env d es)
+    go env (node@(CRangeArray lo hi incl)) =
+      refOnlyValueW prog node (() => emitRangeArrayRef prog env d lo hi incl)
+    go env (node@(CRecord name fields)) =
+      refOnlyValueW prog node (() => emitRecordRef prog env d name fields)
+    go env (node@(CFieldAccess ex label recName ord)) = refOnlyValueW
+      prog
+      node
+      (() => emitFieldAccessRef prog env d ex label recName ord)
+    go env (node@(CRecordUpdate recName base fields)) = refOnlyValueW
+      prog
+      node
+      (() => emitRecordUpdateRef prog env d recName base fields)
+    go env (node@(CVariantUpdate con base fields)) = refOnlyValueW
+      prog
+      node
+      (() => emitVariantUpdateRef prog env d con base fields)
+    go _env other =
+      programValueW
+        prog
+        (gapLP prog (if rawProgramW prog then
+          "scalar-mode: unsupported Core IR node " ++ ctag other
+        else
+          "ref-mode: unsupported Core IR node \{ctag other} [in \{progBinding prog}]"))
 
 -- a scalar literal → an i31 immediate.  Int: ref.i31 of the value.  Bool: 1/0.
 -- Unit: i31 0 (a placeholder immediate; Unit is never inspected in this slice).
@@ -5594,25 +5627,27 @@ emitLetBindingW prog env _ _ _ _ = (
 )
 
 emitBlockRef : Prog -> Env -> Int -> List CStmt -> WasmValue
-emitBlockRef prog env d [CSExpr ex] = emitValueW prog env d ex
-emitBlockRef prog env d ((CSExpr ex) :: rest) =
-  let prefix = emitRefExpr prog env d ex ++ ["drop"]
-  prependValueW prefix (emitBlockRef prog env d rest)
-emitBlockRef prog env d ((CSLet recF pat ex) :: rest) =
-  let (prefix, env2) = emitBlockBindingW prog env d recF pat ex
-  prependValueW prefix (emitBlockRef prog env2 d rest)
-emitBlockRef prog env d ((CSAssign x ex) :: rest) =
-  let prefix =
-    emitRefExpr prog env d ex ++ ["local.set " ++ localTargetW prog env x]
-  prependValueW prefix (emitBlockRef prog env d rest)
-emitBlockRef prog env d [] = emitValueW prog env d (CLit LUnit)
-emitBlockRef prog _ _ _ =
-  programValueW
-    prog
-    (gapLP prog (if rawProgramW prog then
-      "scalar-mode: unsupported block statement"
-    else
-      "ref-mode: unsupported block statement"))
+emitBlockRef prog env0 d xs0 = go env0 xs0
+  where
+    go env [CSExpr ex] = emitValueW prog env d ex
+    go env ((CSExpr ex) :: rest) =
+      let prefix = emitRefExpr prog env d ex ++ ["drop"]
+      prependValueW prefix (go env rest)
+    go env ((CSLet recF pat ex) :: rest) =
+      let (prefix, env2) = emitBlockBindingW prog env d recF pat ex
+      prependValueW prefix (go env2 rest)
+    go env ((CSAssign x ex) :: rest) =
+      let prefix =
+        emitRefExpr prog env d ex ++ ["local.set " ++ localTargetW prog env x]
+      prependValueW prefix (go env rest)
+    go env [] = emitValueW prog env d (CLit LUnit)
+    go _ _ =
+      programValueW
+        prog
+        (gapLP prog (if rawProgramW prog then
+          "scalar-mode: unsupported block statement"
+        else
+          "ref-mode: unsupported block statement"))
 
 emitBlockBindingW : Prog ->
   Env ->
@@ -6057,664 +6092,652 @@ emitLeafExternRef : Prog -> Env -> Int -> String -> List CExpr -> List String
 -- draws 457532755261734).  $mdk_random_int is i64→i64 (mirrors native mdk_random_int:
 -- inclusive, unsigned modulus of hi-lo+1).
 -- lo > hi answers lo; every other span, the full Int range's 2^63 included, draws.
-emitLeafExternRef prog env d "randomInt" [lo, hi] =
-  emitRefExpr prog env d lo
-    ++ [unboxIntW prog]
-    ++ emitRefExpr prog env d hi
-    ++ [unboxIntW prog]
-    ++ [rtCallW prog "mdk_random_int" 2, boxIntW prog]
-emitLeafExternRef prog _env _d "randomInt" _ =
-  gapLP prog "wasm W8: randomInt takes exactly two arguments"
-emitLeafExternRef prog env d "randomBool" [u] =
-  emitRefExpr prog env d u
-    ++ ["drop", rtCallW prog "mdk_random_bool" 0, "ref.i31"]
-emitLeafExternRef prog _env _d "randomBool" _ =
-  gapLP prog "wasm W8: randomBool takes exactly one (Unit) argument"
-emitLeafExternRef prog env d "randomChar" [u] =
-  emitRefExpr prog env d u
-    ++ ["drop", rtCallW prog "mdk_random_char" 0, "ref.i31"]
-emitLeafExternRef prog _env _d "randomChar" _ =
-  gapLP prog "wasm W8: randomChar takes exactly one (Unit) argument"
--- #199: the seed is a general Int; unbox the full width through $mdk_unbox_int (→ i64)
--- so `setSeed 4503599627370497` no longer traps the i31 cast.
-emitLeafExternRef prog env d "setSeed" [n] =
-  emitRefExpr prog env d n
-    ++ [
-      unboxIntW prog,
-      globalW prog "global.set" rngStateW,
-      "i32.const 1",
-      globalW prog "global.set" rngSeededW,
-      "i32.const 0",
-      "ref.i31",
-    ]
-emitLeafExternRef prog _env _d "setSeed" _ =
-  gapLP prog "wasm W8: setSeed takes exactly one argument"
-emitLeafExternRef prog env d "randomState" [u] =
-  emitRefExpr prog env d u
-    ++ [
-      "drop",
-      rtCallW prog "mdk_rng_ensure" 0,
-      globalW prog "global.get" rngStateW,
-      "struct.new $u64",
-    ]
-emitLeafExternRef prog _env _d "randomState" _ =
-  gapLP prog "wasm W8: randomState takes exactly one (Unit) argument"
-emitLeafExternRef prog env d "restoreRandomState" [state] =
-  emitRefExpr prog env d state
-    ++ unboxU64W
-    ++ [
-      globalW prog "global.set" rngStateW,
-      "i32.const 1",
-      globalW prog "global.set" rngSeededW,
-      "i32.const 0",
-      "ref.i31",
-    ]
-emitLeafExternRef prog _env _d "restoreRandomState" _ =
-  gapLP prog "wasm W8: restoreRandomState takes exactly one argument"
--- #199: hashInt unboxes the FULL-WIDTH Int (via $mdk_unbox_int → i64) so an Int key
--- outside ±2^30 (e.g. a HashMap Int) hashes correctly instead of trapping the i31 cast;
--- $mdk_hash_int now takes i64.  hashChar's codepoint fits i32 → sign-extend to i64.
-emitLeafExternRef prog env d "hashInt" [a] =
-  emitRefExpr prog env d a
-    ++ [unboxIntW prog, rtCallW prog "mdk_hash_int" 1, "ref.i31"]
-emitLeafExternRef prog _env _d "hashInt" _ =
-  gapLP prog "wasm W8: hashInt takes exactly one argument"
-emitLeafExternRef prog env d "hashChar" [a] =
-  emitRefExpr prog env d a
-    ++ [
-      "ref.cast (ref i31)",
-      "i31.get_u",
-      "i64.extend_i32_s",
-      rtCallW prog "mdk_hash_int" 1,
-      "ref.i31",
-    ]
-emitLeafExternRef prog _env _d "hashChar" _ =
-  gapLP prog "wasm W8: hashChar takes exactly one argument"
-emitLeafExternRef prog env d "hashBool" [a] =
-  emitRefExpr prog env d a
-    ++ [
-      "ref.cast (ref i31)",
-      "i31.get_u",
-      rtCallW prog "mdk_hash_bool" 1,
-      "ref.i31",
-    ]
-emitLeafExternRef prog _env _d "hashBool" _ =
-  gapLP prog "wasm W8: hashBool takes exactly one argument"
--- W11: charCode : Char -> Int — a Char is an i31 codepoint immediate.  Cast to i31,
--- read the unsigned payload (the codepoint), wrap back as an i31 Int.  The unbox +
--- rebox is identity on the bits (both Char and Int are i31 codepoint / integer), but
--- the cast ensures Wasm's type-safe path through (ref eq).
-emitLeafExternRef prog env d "charCode" [a] =
-  emitRefExpr prog env d a ++ ["ref.cast (ref i31)", "i31.get_u", "ref.i31"]
-emitLeafExternRef prog _env _d "charCode" _ =
-  gapLP prog "wasm W11: charCode takes exactly one argument"
--- W11b: char classification predicates (ASCII-only, byte-identical to medaka_rt.c).
--- Char is i31 codepoint; unbox with i31.get_u, call WAT helper, result is i32 0/1 → ref.i31.
--- charIsAlpha c → (c>='a'&&c<='z')||(c>='A'&&c<='Z')
-emitLeafExternRef prog env d "charIsAlpha" [a] =
-  emitRefExpr prog env d a
-    ++ [
-      "ref.cast (ref i31)",
-      "i31.get_u",
-      rtCallW prog "mdk_char_is_alpha" 1,
-      "ref.i31",
-    ]
-emitLeafExternRef prog _env _d "charIsAlpha" _ =
-  gapLP prog "wasm W11b: charIsAlpha takes exactly one argument"
--- charIsSpace c → c==32 || (c>=9 && c<=13)
-emitLeafExternRef prog env d "charIsSpace" [a] =
-  emitRefExpr prog env d a
-    ++ [
-      "ref.cast (ref i31)",
-      "i31.get_u",
-      rtCallW prog "mdk_char_is_space" 1,
-      "ref.i31",
-    ]
-emitLeafExternRef prog _env _d "charIsSpace" _ =
-  gapLP prog "wasm W11b: charIsSpace takes exactly one argument"
--- charIsUpper c → c>='A'&&c<='Z'
-emitLeafExternRef prog env d "charIsUpper" [a] =
-  emitRefExpr prog env d a
-    ++ [
-      "ref.cast (ref i31)",
-      "i31.get_u",
-      rtCallW prog "mdk_char_is_upper" 1,
-      "ref.i31",
-    ]
-emitLeafExternRef prog _env _d "charIsUpper" _ =
-  gapLP prog "wasm W11b: charIsUpper takes exactly one argument"
--- charIsLower c → c>='a'&&c<='z'
-emitLeafExternRef prog env d "charIsLower" [a] =
-  emitRefExpr prog env d a
-    ++ [
-      "ref.cast (ref i31)",
-      "i31.get_u",
-      rtCallW prog "mdk_char_is_lower" 1,
-      "ref.i31",
-    ]
-emitLeafExternRef prog _env _d "charIsLower" _ =
-  gapLP prog "wasm W11b: charIsLower takes exactly one argument"
--- charIsPunct: exact set from medaka_rt.c switch — Unicode Pc/Pd/Pe/Pf/Pi/Po/Ps for ASCII.
-emitLeafExternRef prog env d "charIsPunct" [a] =
-  emitRefExpr prog env d a
-    ++ [
-      "ref.cast (ref i31)",
-      "i31.get_u",
-      rtCallW prog "mdk_char_is_punct" 1,
-      "ref.i31",
-    ]
-emitLeafExternRef prog _env _d "charIsPunct" _ =
-  gapLP prog "wasm W11b: charIsPunct takes exactly one argument"
--- charToUpper c → if c>='a'&&c<='z' then c-32 else c  (result = Char i31 codepoint)
-emitLeafExternRef prog env d "charToUpper" [a] =
-  emitRefExpr prog env d a
-    ++ [
-      "ref.cast (ref i31)",
-      "i31.get_u",
-      rtCallW prog "mdk_char_to_upper" 1,
-      "ref.i31",
-    ]
-emitLeafExternRef prog _env _d "charToUpper" _ =
-  gapLP prog "wasm W11b: charToUpper takes exactly one argument"
--- charToLower c → if c>='A'&&c<='Z' then c+32 else c  (result = Char i31 codepoint)
-emitLeafExternRef prog env d "charToLower" [a] =
-  emitRefExpr prog env d a
-    ++ [
-      "ref.cast (ref i31)",
-      "i31.get_u",
-      rtCallW prog "mdk_char_to_lower" 1,
-      "ref.i31",
-    ]
-emitLeafExternRef prog _env _d "charToLower" _ =
-  gapLP prog "wasm W11b: charToLower takes exactly one argument"
--- W8b Float leaf externs.  #199: intToFloat unboxes its Int arg through the $mdk_unbox_int
--- (→ i64) seam, and floatToInt reboxes its i64 truncation via $mdk_box_int — the SAME seam
--- randomInt/bitAnd use — so full-width Ints outside ±2^30 no longer trap the i31 cast.
--- hashFloat : $float → masked i32 → i31.  randomFloat : Unit arg dropped → $mdk_random_float.
-emitLeafExternRef prog env d "intToFloat" [a] =
-  emitRefExpr prog env d a
-    ++ [unboxIntW prog, rtCallW prog "mdk_int_to_float" 1]
-emitLeafExternRef prog _env _d "intToFloat" _ =
-  gapLP prog "wasm W8b: intToFloat takes exactly one argument"
-emitLeafExternRef prog env d "floatToInt" [a] =
-  emitRefExpr prog env d a
-    ++ [
-      "ref.cast (ref $float)",
-      rtCallW prog "mdk_float_to_int" 1,
-      boxIntW prog,
-    ]
-emitLeafExternRef prog _env _d "floatToInt" _ =
-  gapLP prog "wasm W8b: floatToInt takes exactly one argument"
-emitLeafExternRef prog env d "hashFloat" [a] =
-  emitRefExpr prog env d a
-    ++ ["ref.cast (ref $float)", rtCallW prog "mdk_hash_float" 1, "ref.i31"]
-emitLeafExternRef prog _env _d "hashFloat" _ =
-  gapLP prog "wasm W8b: hashFloat takes exactly one argument"
-emitLeafExternRef prog env d "randomFloat" [u] =
-  emitRefExpr prog env d u ++ ["drop", rtCallW prog "mdk_random_float" 0]
-emitLeafExternRef prog _env _d "randomFloat" _ =
-  gapLP prog "wasm W8b: randomFloat takes exactly one (Unit) argument"
--- W12 IO host-surface externs.  readFile/fileExists/getEnv take a $str path/name;
--- args takes a Unit (dropped); exit takes an i31 Int.  Each routes through the
--- byte-channel host-import runtime (ioHostRuntimeLines).  readFile returns a Result
--- (ref eq), fileExists a Bool i31, getEnv an Option (ref eq), args a List (ref eq),
--- exit traps (mdk_exit + unreachable, stack-polymorphic like panic).
--- A file extern whose path is an authority takes its grant last
--- (EFFECTS-SEMANTICS §8), and its runtime body hands both to the host, which
--- confines the path (`ioHostRuntimeLines`).
-emitLeafExternRef prog env d "readFile" [p, g] =
-  emitRefExpr prog env d p
-    ++ ["ref.cast (ref $str)"]
-    ++ emitRefExpr prog env d g
-    ++ [rtCallW prog "mdk_read_file_io" 2]
-emitLeafExternRef prog _env _d "readFile" _ =
-  gapLP prog "wasm W12: readFile takes exactly one argument and its grant"
-emitLeafExternRef prog env d "canonicalizePath" [p, g] =
-  emitRefExpr prog env d p
-    ++ ["ref.cast (ref $str)"]
-    ++ emitRefExpr prog env d g
-    ++ [rtCallW prog "mdk_canonicalize_path_io" 2]
-emitLeafExternRef prog _env _d "canonicalizePath" _ =
-  gapLP prog "wasm: canonicalizePath takes exactly one argument and its grant"
-emitLeafExternRef prog env d "fileExists" [p, g] =
-  emitRefExpr prog env d p
-    ++ ["ref.cast (ref $str)"]
-    ++ emitRefExpr prog env d g
-    ++ [rtCallW prog "mdk_file_exists_io" 2]
-emitLeafExternRef prog _env _d "fileExists" _ =
-  gapLP prog "wasm W12: fileExists takes exactly one argument and its grant"
-emitLeafExternRef prog env d "getEnv" [n] =
-  emitRefExpr prog env d n
-    ++ ["ref.cast (ref $str)", rtCallW prog "mdk_get_env_io" 1]
-emitLeafExternRef prog _env _d "getEnv" _ =
-  gapLP prog "wasm W12: getEnv takes exactly one argument"
--- The stdin readers share one host-side buffer: a Unit argument is dropped, and
--- readExactly's Int is unboxed to the i64 the import takes.
-emitLeafExternRef prog env d "readLine" [u] =
-  emitRefExpr prog env d u ++ ["drop", rtCallW prog "mdk_read_line_io" 0]
-emitLeafExternRef prog _env _d "readLine" _ =
-  gapLP prog "wasm: readLine takes exactly one (Unit) argument"
-emitLeafExternRef prog env d "readLineOpt" [u] =
-  emitRefExpr prog env d u ++ ["drop", rtCallW prog "mdk_read_line_opt_io" 0]
-emitLeafExternRef prog _env _d "readLineOpt" _ =
-  gapLP prog "wasm: readLineOpt takes exactly one (Unit) argument"
-emitLeafExternRef prog env d "readAll" [u] =
-  emitRefExpr prog env d u ++ ["drop", rtCallW prog "mdk_read_all_io" 0]
-emitLeafExternRef prog _env _d "readAll" _ =
-  gapLP prog "wasm: readAll takes exactly one (Unit) argument"
-emitLeafExternRef prog env d "readExactly" [n] =
-  emitRefExpr prog env d n
-    ++ [unboxIntW prog, rtCallW prog "mdk_read_exactly_io" 1]
-emitLeafExternRef prog _env _d "readExactly" _ =
-  gapLP prog "wasm: readExactly takes exactly one argument"
--- osEntropyBytes unboxes its Int to the i64 the import takes and builds an Array Int;
--- executablePath takes a Unit (dropped) and answers its String through the result channel.
-emitLeafExternRef prog env d "osEntropyBytes" [n] =
-  emitRefExpr prog env d n
-    ++ [unboxIntW prog, rtCallW prog "mdk_os_entropy_io" 1]
-emitLeafExternRef prog _env _d "osEntropyBytes" _ =
-  gapLP prog "wasm: osEntropyBytes takes exactly one argument"
-emitLeafExternRef prog env d "executablePath" [u] =
-  emitRefExpr prog env d u ++ ["drop", rtCallW prog "mdk_executable_path_io" 0]
-emitLeafExternRef prog _env _d "executablePath" _ =
-  gapLP prog "wasm: executablePath takes exactly one (Unit) argument"
-emitLeafExternRef prog env d "args" [u] =
-  emitRefExpr prog env d u ++ ["drop", rtCallW prog "mdk_args_io" 0]
-emitLeafExternRef prog _env _d "args" _args =
-  gapLP prog "wasm W12: args takes exactly one (Unit) argument"
-emitLeafExternRef prog env d "exit" [code] =
-  emitRefExpr prog env d code
-    ++ [
-      "ref.cast (ref i31)",
-      "i31.get_s",
-      rtCallW prog "mdk_exit" 1,
-      "unreachable",
-    ]
-emitLeafExternRef prog _env _d "exit" _ =
-  gapLP prog "wasm W12: exit takes exactly one argument"
--- The clock externs: the two reads box the host's f64 seconds; sleepMs unboxes its
--- Int to the i64 the import takes (a non-positive count returns at once, host-side,
--- as medaka_rt.c's mdk_sleep_ms does).
-emitLeafExternRef prog env d "wallTimeSec" [u] =
-  emitRefExpr prog env d u
-    ++ ["drop", rtCallW prog "mdk_wall_time_sec" 0, "struct.new $float"]
-emitLeafExternRef prog _env _d "wallTimeSec" _ =
-  gapLP prog "wasm: wallTimeSec takes exactly one (Unit) argument"
-emitLeafExternRef prog env d "monotonicSec" [u] =
-  emitRefExpr prog env d u
-    ++ ["drop", rtCallW prog "mdk_monotonic_sec" 0, "struct.new $float"]
-emitLeafExternRef prog _env _d "monotonicSec" _ =
-  gapLP prog "wasm: monotonicSec takes exactly one (Unit) argument"
-emitLeafExternRef prog env d "sleepMs" [n] =
-  emitRefExpr prog env d n
-    ++ [unboxIntW prog, rtCallW prog "mdk_sleep_ms" 1, "i32.const 0", "ref.i31"]
-emitLeafExternRef prog _env _d "sleepMs" _ =
-  gapLP prog "wasm: sleepMs takes exactly one argument"
--- fetchText pushes its url through the path channel and answers a Result through the
--- result channel, as readFile does; Net carries no grant argument.
-emitLeafExternRef prog env d "fetchText" [u] =
-  emitRefExpr prog env d u
-    ++ ["ref.cast (ref $str)", rtCallW prog "mdk_fetch_text_io" 1]
-emitLeafExternRef prog _env _d "fetchText" _ =
-  gapLP prog "wasm: fetchText takes exactly one argument"
--- ioPoll: no wasm host binds descriptor readiness, so a call stops with a coded
--- runtime error.  It traps at run time, not at build time, because the async
--- scheduler (`systemPoller`) names ioPoll and calls it only when a task waits on
--- a descriptor; a clock-only async program must still build.  The arguments are
--- evaluated left to right first, as native evaluates them.
-emitLeafExternRef prog env d "ioPoll" [fds, interests, timeout] =
-  emitRefExpr prog env d fds
-    ++ ["drop"]
-    ++ emitRefExpr prog env d interests
-    ++ ["drop"]
-    ++ emitRefExpr prog env d timeout
-    ++ ["drop"]
-    ++ wasmTrap
-      (progEmit prog)
-      EWasmNoBinding
-      "ioPoll: descriptor readiness has no wasm binding (Net and Stdin bindings: #3666); build for a native target"
-emitLeafExternRef prog _env _d "ioPoll" _ =
-  gapLP prog "wasm: ioPoll takes exactly three arguments"
--- stage-D: byte-clean file I/O.  readFileBytes returns a Result String (Array Int);
--- writeFileBytes takes (path, Array Int) and returns Result String Unit.  Both route
--- into the fileBytes host seam ($mdk_read_file_bytes_io / $mdk_write_file_bytes_io).
-emitLeafExternRef prog env d "readFileBytes" [p, g] =
-  emitRefExpr prog env d p
-    ++ ["ref.cast (ref $str)"]
-    ++ emitRefExpr prog env d g
-    ++ [rtCallW prog "mdk_read_file_bytes_io" 2]
-emitLeafExternRef prog _env _d "readFileBytes" _ =
-  gapLP
-    prog
-    "wasm stage-D: readFileBytes takes exactly one argument and its grant"
-emitLeafExternRef prog env d "writeFileBytes" [p, arr, g] =
-  emitRefExpr prog env d p
-    ++ ["ref.cast (ref $str)"]
-    ++ emitRefExpr prog env d arr
-    ++ ["ref.cast (ref $arr)"]
-    ++ emitRefExpr prog env d g
-    ++ [rtCallW prog "mdk_write_file_bytes_io" 3]
-emitLeafExternRef prog _env _d "writeFileBytes" _ =
-  gapLP
-    prog
-    "wasm stage-D: writeFileBytes takes exactly two arguments and its grant"
-emitLeafExternRef prog env d "writeFile" [p, s, g] =
-  emitRefExpr prog env d p
-    ++ ["ref.cast (ref $str)"]
-    ++ emitRefExpr prog env d s
-    ++ ["ref.cast (ref $str)"]
-    ++ emitRefExpr prog env d g
-    ++ [rtCallW prog "mdk_write_file_io" 3]
-emitLeafExternRef prog _env _d "writeFile" _ =
-  gapLP prog "wasm: writeFile takes exactly two arguments and its grant"
-emitLeafExternRef prog env d "appendFile" [p, s, g] =
-  emitRefExpr prog env d p
-    ++ ["ref.cast (ref $str)"]
-    ++ emitRefExpr prog env d s
-    ++ ["ref.cast (ref $str)"]
-    ++ emitRefExpr prog env d g
-    ++ [rtCallW prog "mdk_append_file_io" 3]
-emitLeafExternRef prog _env _d "appendFile" _ =
-  gapLP prog "wasm: appendFile takes exactly two arguments and its grant"
-emitLeafExternRef prog env d "rename" [src, dst, gs, gd] =
-  emitRefExpr prog env d src
-    ++ ["ref.cast (ref $str)"]
-    ++ emitRefExpr prog env d dst
-    ++ ["ref.cast (ref $str)"]
-    ++ emitRefExpr prog env d gs
-    ++ emitRefExpr prog env d gd
-    ++ [rtCallW prog "mdk_rename_io" 4]
-emitLeafExternRef prog _env _d "rename" _ =
-  gapLP prog "wasm: rename takes exactly two arguments and the grant of each"
-emitLeafExternRef prog env d "listDir" [p, g] =
-  emitRefExpr prog env d p
-    ++ ["ref.cast (ref $str)"]
-    ++ emitRefExpr prog env d g
-    ++ [rtCallW prog "mdk_list_dir_io" 2]
-emitLeafExternRef prog _env _d "listDir" _ =
-  gapLP prog "wasm: listDir takes exactly one argument and its grant"
-emitLeafExternRef prog env d "statFile" [p, g] =
-  emitRefExpr prog env d p
-    ++ ["ref.cast (ref $str)"]
-    ++ emitRefExpr prog env d g
-    ++ [rtCallW prog "mdk_stat_file_io" 2]
-emitLeafExternRef prog _env _d "statFile" _ =
-  gapLP prog "wasm: statFile takes exactly one argument and its grant"
-emitLeafExternRef prog env d "makeDir" [p, g] =
-  emitRefExpr prog env d p
-    ++ ["ref.cast (ref $str)"]
-    ++ emitRefExpr prog env d g
-    ++ [rtCallW prog "mdk_make_dir_io" 2]
-emitLeafExternRef prog _env _d "makeDir" _ =
-  gapLP prog "wasm: makeDir takes exactly one argument and its grant"
-emitLeafExternRef prog env d "removeFile" [p, g] =
-  emitRefExpr prog env d p
-    ++ ["ref.cast (ref $str)"]
-    ++ emitRefExpr prog env d g
-    ++ [rtCallW prog "mdk_remove_file_io" 2]
-emitLeafExternRef prog _env _d "removeFile" _ =
-  gapLP prog "wasm: removeFile takes exactly one argument and its grant"
-emitLeafExternRef prog env d "removeDir" [p, g] =
-  emitRefExpr prog env d p
-    ++ ["ref.cast (ref $str)"]
-    ++ emitRefExpr prog env d g
-    ++ [rtCallW prog "mdk_remove_dir_io" 2]
-emitLeafExternRef prog _env _d "removeDir" _ =
-  gapLP prog "wasm: removeDir takes exactly one argument and its grant"
-emitLeafExternRef prog env d "fsync" [p, g] =
-  emitRefExpr prog env d p
-    ++ ["ref.cast (ref $str)"]
-    ++ emitRefExpr prog env d g
-    ++ [rtCallW prog "mdk_fsync_io" 2]
-emitLeafExternRef prog _env _d "fsync" _ =
-  gapLP prog "wasm: fsync takes exactly one argument and its grant"
-emitLeafExternRef prog env d "fileMode" [p, g] =
-  emitRefExpr prog env d p
-    ++ ["ref.cast (ref $str)"]
-    ++ emitRefExpr prog env d g
-    ++ [rtCallW prog "mdk_file_mode_io" 2]
-emitLeafExternRef prog _env _d "fileMode" _ =
-  gapLP prog "wasm: fileMode takes exactly one argument and its grant"
-emitLeafExternRef prog env d "writeFileMode" [p, m, s, g] =
-  emitRefExpr prog env d p
-    ++ ["ref.cast (ref $str)"]
-    ++ emitRefExpr prog env d m
-    ++ emitRefExpr prog env d s
-    ++ ["ref.cast (ref $str)"]
-    ++ emitRefExpr prog env d g
-    ++ [rtCallW prog "mdk_write_file_mode_io" 4]
-emitLeafExternRef prog _env _d "writeFileMode" _ =
-  gapLP prog "wasm: writeFileMode takes three arguments and its grant"
--- W10/B5: `panic msg` → stream the coded line `runtime error [E-PANIC]: <msg>\n` to
--- stderr, then `unreachable` (peer of native @mdk_panic / the interp's runtimePanic).
--- The fixed prefix is unrolled to byte-writes; the user message (a $str (ref eq), any
--- expression) is streamed through $mdk_eprint_str (forced via `WasmEmit.useEPut`, which the
--- catalog demands for `panic`), then a trailing newline byte.  `unreachable` is stack-polymorphic, so it
--- validates as any result type.
-emitLeafExternRef prog env d "panic" [msg] =
-  wasmTrapBytes (progEmit prog) "runtime error [\{EPanic}]: "
-    ++ emitRefExpr prog env d msg
-    ++ ["ref.cast (ref $str)", rtCallW prog "mdk_eprint_str" 1]
-    ++ trapByteInstr (progEmit prog) 10
-    ++ ["unreachable"]
-emitLeafExternRef prog _env _d "panic" _ =
-  gapLP prog "wasm W10: panic takes exactly one argument"
--- Index-16a: `indexError msg` streams the coded line `runtime error
--- [E-INDEX-OOB]: <msg>` to stderr and traps, the same shape `panic` uses above
--- and the same line native's @mdk_oob_msg and the interpreter both print.  The
--- $str rep and $mdk_eprint_str are demanded for `indexError` in the catalog.
-emitLeafExternRef prog env d "indexError" [msg] =
-  wasmTrapBytes (progEmit prog) "runtime error [\{EIndexOob}]: "
-    ++ emitRefExpr prog env d msg
-    ++ ["ref.cast (ref $str)", rtCallW prog "mdk_eprint_str" 1]
-    ++ trapByteInstr (progEmit prog) 10
-    ++ ["unreachable"]
-emitLeafExternRef prog _env _d "indexError" _ =
-  gapLP prog "wasm Index-16a: indexError takes exactly one argument"
--- #1787: `indexErrorAt idx` raises E-INDEX-OOB naming the offending index, so all
--- three engines print the SAME line.  Dropping it here instead (as sliceError's
--- bounds still are) would redden test/wasm/diff_wasm_modules.sh, which since #531
--- compares stderr and exit code as well as stdout -- w7_array_oob.mdk exists to
--- assert exactly this parity.
-emitLeafExternRef prog env d "indexErrorAt" [idx] =
-  wasmTrapNum
-    (progEmit prog)
-    EIndexOob
-    "index "
-    (emitRefExpr prog env d idx)
-    " out of bounds"
-emitLeafExternRef prog _env _d "indexErrorAt" _ =
-  gapLP prog "wasm #1787: indexErrorAt takes exactly one argument"
-emitLeafExternRef prog env d "indexErrorAtSite" [site, idx] =
-  siteExprInstrs prog env d site
-    ++ emitLeafExternRef prog env d "indexErrorAt" [idx]
-emitLeafExternRef prog _env _d "indexErrorAtSite" _ =
-  gapLP prog "wasm: indexErrorAtSite takes exactly two arguments"
-emitLeafExternRef prog env d "panicAt" [site, msg] =
-  siteExprInstrs prog env d site ++ emitLeafExternRef prog env d "panic" [msg]
-emitLeafExternRef prog _env _d "__site__" [CLit (LString f), CLit (LInt line), CLit (LInt col)] =
-  emitLitRef
-    prog
-    (LInt (sitePackedW (progEmit prog) (Loc f line col line (col + 1))))
-emitLeafExternRef prog _env _d "__site__" _ =
-  gapLP prog "wasm: a trap-site literal takes a file, a line and a column"
-emitLeafExternRef prog _env _d "panicAt" _ =
-  gapLP prog "wasm: panicAt takes exactly two arguments"
--- #670: `sliceError lo hiIncl` reuses the existing coded E-SLICE-OOB trap (the
--- same fixed text the built-in slice path emits) -- both bound arguments are
--- dropped, where native's @mdk_slice_oob formats them into the line.
-emitLeafExternRef prog _env _d "sliceError" [_lo, _hi] =
-  wasmTrap (progEmit prog) ESliceOob "slice out of bounds"
-emitLeafExternRef prog _env _d "sliceError" _ =
-  gapLP prog "wasm #670: sliceError takes exactly two arguments"
--- The `int`-prefixed bit externs are the originals under unshadowable names.
-emitLeafExternRef prog env d "intBitAnd" args =
-  emitLeafExternRef prog env d "bitAnd" args
-emitLeafExternRef prog env d "intBitOr" args =
-  emitLeafExternRef prog env d "bitOr" args
-emitLeafExternRef prog env d "intBitXor" args =
-  emitLeafExternRef prog env d "bitXor" args
-emitLeafExternRef prog env d "intBitNot" args =
-  emitLeafExternRef prog env d "bitNot" args
-emitLeafExternRef prog env d "intShiftLeft" args =
-  emitLeafExternRef prog env d "shiftLeft" args
-emitLeafExternRef prog env d "intShiftRight" args =
-  emitLeafExternRef prog env d "shiftRight" args
--- stage-A: bitwise / shift externs (Int -> Int -> Int).  Args are (ref eq) boxed Ints;
--- unbox both to i64 via $mdk_unbox_int, apply the i64 op, rebox via $mdk_box_int.
--- The shifts call `$mdk_shift_left`/`$mdk_shift_right` (intRuntimeLines), which
--- define every amount as native's mdk_shift_left/right do: a negative amount panics,
--- 63 or more shifts every bit out, and shiftRight is arithmetic.  shiftLeft's bits
--- past bit 62 are dropped by $mdk_box_int's sign-extend, as native's retag drops them.
-emitLeafExternRef prog env d "bitAnd" [a, b] =
-  emitRefExpr prog env d a
-    ++ [unboxIntW prog]
-    ++ emitRefExpr prog env d b
-    ++ [unboxIntW prog]
-    ++ ["i64.and", boxIntW prog]
-emitLeafExternRef prog _env _d "bitAnd" _ =
-  gapLP prog "wasm stage-A: bitAnd takes exactly two arguments"
-emitLeafExternRef prog env d "shiftLeft" [a, b] =
-  emitRefExpr prog env d a
-    ++ [unboxIntW prog]
-    ++ emitRefExpr prog env d b
-    ++ [unboxIntW prog]
-    ++ intShiftCall prog "left"
-    ++ [boxIntW prog]
-emitLeafExternRef prog _env _d "shiftLeft" _ =
-  gapLP prog "wasm stage-A: shiftLeft takes exactly two arguments"
-emitLeafExternRef prog env d "shiftRight" [a, b] =
-  emitRefExpr prog env d a
-    ++ [unboxIntW prog]
-    ++ emitRefExpr prog env d b
-    ++ [unboxIntW prog]
-    ++ intShiftCall prog "right"
-    ++ [boxIntW prog]
-emitLeafExternRef prog _env _d "shiftRight" _ =
-  gapLP prog "wasm stage-A: shiftRight takes exactly two arguments"
--- #101: bitwise completion (mirror llvm mdk_bit_or/xor/not).  bitOr/bitXor are exact
--- i64 two's-complement ops; bitNot n = n xor -1 (== ~n = -n-1, matches native mdk_bit_not
--- for all in-range Ints).  intBitsToFloat reinterprets the unboxed i64 bit pattern as f64.
-emitLeafExternRef prog env d "bitOr" [a, b] =
-  emitRefExpr prog env d a
-    ++ [unboxIntW prog]
-    ++ emitRefExpr prog env d b
-    ++ [unboxIntW prog]
-    ++ ["i64.or", boxIntW prog]
-emitLeafExternRef prog env d "bitXor" [a, b] =
-  emitRefExpr prog env d a
-    ++ [unboxIntW prog]
-    ++ emitRefExpr prog env d b
-    ++ [unboxIntW prog]
-    ++ ["i64.xor", boxIntW prog]
-emitLeafExternRef prog env d "bitNot" [a] =
-  emitRefExpr prog env d a
-    ++ [unboxIntW prog, "i64.const -1", "i64.xor", boxIntW prog]
-emitLeafExternRef prog env d "intBitsToFloat" [a] =
-  emitRefExpr prog env d a
-    ++ [unboxIntW prog, "f64.reinterpret_i64", "struct.new $float"]
--- `u8Truncate`/`u16Truncate`/`u32Truncate` keep the low n bits of the Int (a
--- non-negative result, so a U32 above 2^30 reboxes into `$boxint`); the `ToInt`
--- forms are the identity on the word.
-emitLeafExternRef prog env d "u8Truncate" [a] =
-  emitTruncateRef prog env d "U8" a
-emitLeafExternRef prog env d "u16Truncate" [a] =
-  emitTruncateRef prog env d "U16" a
-emitLeafExternRef prog env d "u32Truncate" [a] =
-  emitTruncateRef prog env d "U32" a
-emitLeafExternRef prog env d "u8ToInt" [a] = emitRefExpr prog env d a
-emitLeafExternRef prog env d "u16ToInt" [a] = emitRefExpr prog env d a
-emitLeafExternRef prog env d "u32ToInt" [a] = emitRefExpr prog env d a
--- `i32Truncate` sign-extends the Int's low 32 bits, so a negative `I32` stays an
--- i31 or `$boxint` word like any Int; `i32ToInt` is the identity on that word.
-emitLeafExternRef prog env d "i32Truncate" [a] =
-  emitRefExpr prog env d a ++ [unboxIntW prog, "i64.extend32_s", boxIntW prog]
-emitLeafExternRef prog env d "i32ToInt" [a] = emitRefExpr prog env d a
--- the `I64` doors keep the 64 bits and change the cell they are read from.
-emitLeafExternRef prog env d "i64FromBits" [a] =
-  emitRefExpr prog env d a ++ unboxU64W ++ ["struct.new $i64"]
-emitLeafExternRef prog env d "i64ToBits" [a] =
-  emitRefExpr prog env d a ++ unboxI64W ++ ["struct.new $u64"]
--- `u64Truncate` boxes the Int's sign-extended i64, which is its value modulo
--- 2^64; `u64TruncateToInt` reboxes the payload as an Int, and `$mdk_box_int`'s
--- renormalization from bit 62 is exactly "the low 63 bits, bit 62 the sign".
-emitLeafExternRef prog env d "u64Truncate" [a] =
-  emitRefExpr prog env d a ++ [unboxIntW prog, "struct.new $u64"]
-emitLeafExternRef prog env d "u64TruncateToInt" [a] =
-  emitRefExpr prog env d a ++ unboxU64W ++ [boxIntW prog]
-emitLeafExternRef prog env d "u64BitAnd" [a, b] =
-  emitU64KernelRef prog env d a b "i64.and"
-emitLeafExternRef prog env d "u64BitOr" [a, b] =
-  emitU64KernelRef prog env d a b "i64.or"
-emitLeafExternRef prog env d "u64BitXor" [a, b] =
-  emitU64KernelRef prog env d a b "i64.xor"
-emitLeafExternRef prog env d "u64MulHigh" [a, b] =
-  emitU64KernelRef prog env d a b (rtCallW prog "mdk_u64_mulhi" 2)
-emitLeafExternRef prog env d "u64ShiftLeft" [a, k] =
-  emitU64ShiftRef prog env d a k (rtCallW prog "mdk_u64_shl" 2)
-emitLeafExternRef prog env d "u64ShiftRight" [a, k] =
-  emitU64ShiftRef prog env d a k (rtCallW prog "mdk_u64_shr" 2)
--- #101: libm math externs.  IEEE-exact unary ops → native f64 opcodes (correctly-rounded,
--- byte-match native libm); round → $mdk_round (C round(): half away from zero);
--- transcendentals → JS Math.* host imports; binary pow/atan2/hypot → host imports;
--- floatRem → $mdk_float_rem (WAT fmod, floatRemRuntimeLines).  A $float is
--- unboxed to f64, the op runs, the f64 result reboxes into a fresh (struct $float).
-emitLeafExternRef prog env d "sqrt" [a] =
-  floatArgW prog env d a ++ ["f64.sqrt", "struct.new $float"]
-emitLeafExternRef prog env d "floor" [a] =
-  floatArgW prog env d a ++ ["f64.floor", "struct.new $float"]
-emitLeafExternRef prog env d "ceil" [a] =
-  floatArgW prog env d a ++ ["f64.ceil", "struct.new $float"]
-emitLeafExternRef prog env d "trunc" [a] =
-  floatArgW prog env d a ++ ["f64.trunc", "struct.new $float"]
-emitLeafExternRef prog env d "round" [a] =
-  floatArgW prog env d a ++ [rtCallW prog "mdk_round" 1, "struct.new $float"]
-emitLeafExternRef prog env d "cbrt" [a] =
-  floatArgW prog env d a ++ [rtCallW prog "mdk_cbrt" 1, "struct.new $float"]
-emitLeafExternRef prog env d "exp" [a] =
-  floatArgW prog env d a ++ [rtCallW prog "mdk_exp" 1, "struct.new $float"]
-emitLeafExternRef prog env d "log" [a] =
-  floatArgW prog env d a ++ [rtCallW prog "mdk_log" 1, "struct.new $float"]
-emitLeafExternRef prog env d "log2" [a] =
-  floatArgW prog env d a ++ [rtCallW prog "mdk_log2" 1, "struct.new $float"]
-emitLeafExternRef prog env d "log10" [a] =
-  floatArgW prog env d a ++ [rtCallW prog "mdk_log10" 1, "struct.new $float"]
-emitLeafExternRef prog env d "sin" [a] =
-  floatArgW prog env d a ++ [rtCallW prog "mdk_sin" 1, "struct.new $float"]
-emitLeafExternRef prog env d "cos" [a] =
-  floatArgW prog env d a ++ [rtCallW prog "mdk_cos" 1, "struct.new $float"]
-emitLeafExternRef prog env d "tan" [a] =
-  floatArgW prog env d a ++ [rtCallW prog "mdk_tan" 1, "struct.new $float"]
-emitLeafExternRef prog env d "asin" [a] =
-  floatArgW prog env d a ++ [rtCallW prog "mdk_asin" 1, "struct.new $float"]
-emitLeafExternRef prog env d "acos" [a] =
-  floatArgW prog env d a ++ [rtCallW prog "mdk_acos" 1, "struct.new $float"]
-emitLeafExternRef prog env d "atan" [a] =
-  floatArgW prog env d a ++ [rtCallW prog "mdk_atan" 1, "struct.new $float"]
-emitLeafExternRef prog env d "sinh" [a] =
-  floatArgW prog env d a ++ [rtCallW prog "mdk_sinh" 1, "struct.new $float"]
-emitLeafExternRef prog env d "cosh" [a] =
-  floatArgW prog env d a ++ [rtCallW prog "mdk_cosh" 1, "struct.new $float"]
-emitLeafExternRef prog env d "tanh" [a] =
-  floatArgW prog env d a ++ [rtCallW prog "mdk_tanh" 1, "struct.new $float"]
-emitLeafExternRef prog env d "pow" [a, b] =
-  floatArgW prog env d a
-    ++ floatArgW prog env d b
-    ++ [rtCallW prog "mdk_pow" 2, "struct.new $float"]
-emitLeafExternRef prog env d "atan2" [a, b] =
-  floatArgW prog env d a
-    ++ floatArgW prog env d b
-    ++ [rtCallW prog "mdk_atan2" 2, "struct.new $float"]
-emitLeafExternRef prog env d "hypot" [a, b] =
-  floatArgW prog env d a
-    ++ floatArgW prog env d b
-    ++ [rtCallW prog "mdk_hypot" 2, "struct.new $float"]
-emitLeafExternRef prog env d "floatRem" [a, b] =
-  floatArgW prog env d a
-    ++ floatArgW prog env d b
-    ++ [rtCallW prog "mdk_float_rem" 2, "struct.new $float"]
-emitLeafExternRef prog _ _ name _ =
-  gapLP prog ("wasm W8: unsupported leaf extern '" ++ name ++ "'")
+emitLeafExternRef prog env d name0 args0 = go name0 args0
+  where
+    go "randomInt" [lo, hi] =
+      emitRefExpr prog env d lo
+        ++ [unboxIntW prog]
+        ++ emitRefExpr prog env d hi
+        ++ [unboxIntW prog]
+        ++ [rtCallW prog "mdk_random_int" 2, boxIntW prog]
+    go "randomInt" _ =
+      gapLP prog "wasm W8: randomInt takes exactly two arguments"
+    go "randomBool" [u] =
+      emitRefExpr prog env d u
+        ++ ["drop", rtCallW prog "mdk_random_bool" 0, "ref.i31"]
+    go "randomBool" _ =
+      gapLP prog "wasm W8: randomBool takes exactly one (Unit) argument"
+    go "randomChar" [u] =
+      emitRefExpr prog env d u
+        ++ ["drop", rtCallW prog "mdk_random_char" 0, "ref.i31"]
+    go "randomChar" _ =
+      gapLP prog "wasm W8: randomChar takes exactly one (Unit) argument"
+    -- #199: the seed is a general Int; unbox the full width through $mdk_unbox_int (→ i64)
+    -- so `setSeed 4503599627370497` no longer traps the i31 cast.
+    go "setSeed" [n] =
+      emitRefExpr prog env d n
+        ++ [
+          unboxIntW prog,
+          globalW prog "global.set" rngStateW,
+          "i32.const 1",
+          globalW prog "global.set" rngSeededW,
+          "i32.const 0",
+          "ref.i31",
+        ]
+    go "setSeed" _ = gapLP prog "wasm W8: setSeed takes exactly one argument"
+    go "randomState" [u] =
+      emitRefExpr prog env d u
+        ++ [
+          "drop",
+          rtCallW prog "mdk_rng_ensure" 0,
+          globalW prog "global.get" rngStateW,
+          "struct.new $u64",
+        ]
+    go "randomState" _ =
+      gapLP prog "wasm W8: randomState takes exactly one (Unit) argument"
+    go "restoreRandomState" [state] =
+      emitRefExpr prog env d state
+        ++ unboxU64W
+        ++ [
+          globalW prog "global.set" rngStateW,
+          "i32.const 1",
+          globalW prog "global.set" rngSeededW,
+          "i32.const 0",
+          "ref.i31",
+        ]
+    go "restoreRandomState" _ =
+      gapLP prog "wasm W8: restoreRandomState takes exactly one argument"
+    -- #199: hashInt unboxes the FULL-WIDTH Int (via $mdk_unbox_int → i64) so an Int key
+    -- outside ±2^30 (e.g. a HashMap Int) hashes correctly instead of trapping the i31 cast;
+    -- $mdk_hash_int now takes i64.  hashChar's codepoint fits i32 → sign-extend to i64.
+    go "hashInt" [a] =
+      emitRefExpr prog env d a
+        ++ [unboxIntW prog, rtCallW prog "mdk_hash_int" 1, "ref.i31"]
+    go "hashInt" _ = gapLP prog "wasm W8: hashInt takes exactly one argument"
+    go "hashChar" [a] =
+      emitRefExpr prog env d a
+        ++ [
+          "ref.cast (ref i31)",
+          "i31.get_u",
+          "i64.extend_i32_s",
+          rtCallW prog "mdk_hash_int" 1,
+          "ref.i31",
+        ]
+    go "hashChar" _ = gapLP prog "wasm W8: hashChar takes exactly one argument"
+    go "hashBool" [a] =
+      emitRefExpr prog env d a
+        ++ [
+          "ref.cast (ref i31)",
+          "i31.get_u",
+          rtCallW prog "mdk_hash_bool" 1,
+          "ref.i31",
+        ]
+    go "hashBool" _ = gapLP prog "wasm W8: hashBool takes exactly one argument"
+    -- W11: charCode : Char -> Int — a Char is an i31 codepoint immediate.  Cast to i31,
+    -- read the unsigned payload (the codepoint), wrap back as an i31 Int.  The unbox +
+    -- rebox is identity on the bits (both Char and Int are i31 codepoint / integer), but
+    -- the cast ensures Wasm's type-safe path through (ref eq).
+    go "charCode" [a] =
+      emitRefExpr prog env d a ++ ["ref.cast (ref i31)", "i31.get_u", "ref.i31"]
+    go "charCode" _ = gapLP prog "wasm W11: charCode takes exactly one argument"
+    -- W11b: char classification predicates (ASCII-only, byte-identical to medaka_rt.c).
+    -- Char is i31 codepoint; unbox with i31.get_u, call WAT helper, result is i32 0/1 → ref.i31.
+    -- charIsAlpha c → (c>='a'&&c<='z')||(c>='A'&&c<='Z')
+    go "charIsAlpha" [a] =
+      emitRefExpr prog env d a
+        ++ [
+          "ref.cast (ref i31)",
+          "i31.get_u",
+          rtCallW prog "mdk_char_is_alpha" 1,
+          "ref.i31",
+        ]
+    go "charIsAlpha" _ =
+      gapLP prog "wasm W11b: charIsAlpha takes exactly one argument"
+    -- charIsSpace c → c==32 || (c>=9 && c<=13)
+    go "charIsSpace" [a] =
+      emitRefExpr prog env d a
+        ++ [
+          "ref.cast (ref i31)",
+          "i31.get_u",
+          rtCallW prog "mdk_char_is_space" 1,
+          "ref.i31",
+        ]
+    go "charIsSpace" _ =
+      gapLP prog "wasm W11b: charIsSpace takes exactly one argument"
+    -- charIsUpper c → c>='A'&&c<='Z'
+    go "charIsUpper" [a] =
+      emitRefExpr prog env d a
+        ++ [
+          "ref.cast (ref i31)",
+          "i31.get_u",
+          rtCallW prog "mdk_char_is_upper" 1,
+          "ref.i31",
+        ]
+    go "charIsUpper" _ =
+      gapLP prog "wasm W11b: charIsUpper takes exactly one argument"
+    -- charIsLower c → c>='a'&&c<='z'
+    go "charIsLower" [a] =
+      emitRefExpr prog env d a
+        ++ [
+          "ref.cast (ref i31)",
+          "i31.get_u",
+          rtCallW prog "mdk_char_is_lower" 1,
+          "ref.i31",
+        ]
+    go "charIsLower" _ =
+      gapLP prog "wasm W11b: charIsLower takes exactly one argument"
+    -- charIsPunct: exact set from medaka_rt.c switch — Unicode Pc/Pd/Pe/Pf/Pi/Po/Ps for ASCII.
+    go "charIsPunct" [a] =
+      emitRefExpr prog env d a
+        ++ [
+          "ref.cast (ref i31)",
+          "i31.get_u",
+          rtCallW prog "mdk_char_is_punct" 1,
+          "ref.i31",
+        ]
+    go "charIsPunct" _ =
+      gapLP prog "wasm W11b: charIsPunct takes exactly one argument"
+    -- charToUpper c → if c>='a'&&c<='z' then c-32 else c  (result = Char i31 codepoint)
+    go "charToUpper" [a] =
+      emitRefExpr prog env d a
+        ++ [
+          "ref.cast (ref i31)",
+          "i31.get_u",
+          rtCallW prog "mdk_char_to_upper" 1,
+          "ref.i31",
+        ]
+    go "charToUpper" _ =
+      gapLP prog "wasm W11b: charToUpper takes exactly one argument"
+    -- charToLower c → if c>='A'&&c<='Z' then c+32 else c  (result = Char i31 codepoint)
+    go "charToLower" [a] =
+      emitRefExpr prog env d a
+        ++ [
+          "ref.cast (ref i31)",
+          "i31.get_u",
+          rtCallW prog "mdk_char_to_lower" 1,
+          "ref.i31",
+        ]
+    go "charToLower" _ =
+      gapLP prog "wasm W11b: charToLower takes exactly one argument"
+    -- W8b Float leaf externs.  #199: intToFloat unboxes its Int arg through the $mdk_unbox_int
+    -- (→ i64) seam, and floatToInt reboxes its i64 truncation via $mdk_box_int — the SAME seam
+    -- randomInt/bitAnd use — so full-width Ints outside ±2^30 no longer trap the i31 cast.
+    -- hashFloat : $float → masked i32 → i31.  randomFloat : Unit arg dropped → $mdk_random_float.
+    go "intToFloat" [a] =
+      emitRefExpr prog env d a
+        ++ [unboxIntW prog, rtCallW prog "mdk_int_to_float" 1]
+    go "intToFloat" _ =
+      gapLP prog "wasm W8b: intToFloat takes exactly one argument"
+    go "floatToInt" [a] =
+      emitRefExpr prog env d a
+        ++ [
+          "ref.cast (ref $float)",
+          rtCallW prog "mdk_float_to_int" 1,
+          boxIntW prog,
+        ]
+    go "floatToInt" _ =
+      gapLP prog "wasm W8b: floatToInt takes exactly one argument"
+    go "hashFloat" [a] =
+      emitRefExpr prog env d a
+        ++ ["ref.cast (ref $float)", rtCallW prog "mdk_hash_float" 1, "ref.i31"]
+    go "hashFloat" _ =
+      gapLP prog "wasm W8b: hashFloat takes exactly one argument"
+    go "randomFloat" [u] =
+      emitRefExpr prog env d u ++ ["drop", rtCallW prog "mdk_random_float" 0]
+    go "randomFloat" _ =
+      gapLP prog "wasm W8b: randomFloat takes exactly one (Unit) argument"
+    -- W12 IO host-surface externs.  readFile/fileExists/getEnv take a $str path/name;
+    -- args takes a Unit (dropped); exit takes an i31 Int.  Each routes through the
+    -- byte-channel host-import runtime (ioHostRuntimeLines).  readFile returns a Result
+    -- (ref eq), fileExists a Bool i31, getEnv an Option (ref eq), args a List (ref eq),
+    -- exit traps (mdk_exit + unreachable, stack-polymorphic like panic).
+    -- A file extern whose path is an authority takes its grant last
+    -- (EFFECTS-SEMANTICS §8), and its runtime body hands both to the host, which
+    -- confines the path (`ioHostRuntimeLines`).
+    go "readFile" [p, g] =
+      emitRefExpr prog env d p
+        ++ ["ref.cast (ref $str)"]
+        ++ emitRefExpr prog env d g
+        ++ [rtCallW prog "mdk_read_file_io" 2]
+    go "readFile" _ =
+      gapLP prog "wasm W12: readFile takes exactly one argument and its grant"
+    go "canonicalizePath" [p, g] =
+      emitRefExpr prog env d p
+        ++ ["ref.cast (ref $str)"]
+        ++ emitRefExpr prog env d g
+        ++ [rtCallW prog "mdk_canonicalize_path_io" 2]
+    go "canonicalizePath" _ =
+      gapLP
+        prog
+        "wasm: canonicalizePath takes exactly one argument and its grant"
+    go "fileExists" [p, g] =
+      emitRefExpr prog env d p
+        ++ ["ref.cast (ref $str)"]
+        ++ emitRefExpr prog env d g
+        ++ [rtCallW prog "mdk_file_exists_io" 2]
+    go "fileExists" _ =
+      gapLP prog "wasm W12: fileExists takes exactly one argument and its grant"
+    go "getEnv" [n] =
+      emitRefExpr prog env d n
+        ++ ["ref.cast (ref $str)", rtCallW prog "mdk_get_env_io" 1]
+    go "getEnv" _ = gapLP prog "wasm W12: getEnv takes exactly one argument"
+    -- The stdin readers share one host-side buffer: a Unit argument is dropped, and
+    -- readExactly's Int is unboxed to the i64 the import takes.
+    go "readLine" [u] =
+      emitRefExpr prog env d u ++ ["drop", rtCallW prog "mdk_read_line_io" 0]
+    go "readLine" _ =
+      gapLP prog "wasm: readLine takes exactly one (Unit) argument"
+    go "readLineOpt" [u] =
+      emitRefExpr prog env d u
+        ++ ["drop", rtCallW prog "mdk_read_line_opt_io" 0]
+    go "readLineOpt" _ =
+      gapLP prog "wasm: readLineOpt takes exactly one (Unit) argument"
+    go "readAll" [u] =
+      emitRefExpr prog env d u ++ ["drop", rtCallW prog "mdk_read_all_io" 0]
+    go "readAll" _ =
+      gapLP prog "wasm: readAll takes exactly one (Unit) argument"
+    go "readExactly" [n] =
+      emitRefExpr prog env d n
+        ++ [unboxIntW prog, rtCallW prog "mdk_read_exactly_io" 1]
+    go "readExactly" _ =
+      gapLP prog "wasm: readExactly takes exactly one argument"
+    -- osEntropyBytes unboxes its Int to the i64 the import takes and builds an Array Int;
+    -- executablePath takes a Unit (dropped) and answers its String through the result channel.
+    go "osEntropyBytes" [n] =
+      emitRefExpr prog env d n
+        ++ [unboxIntW prog, rtCallW prog "mdk_os_entropy_io" 1]
+    go "osEntropyBytes" _ =
+      gapLP prog "wasm: osEntropyBytes takes exactly one argument"
+    go "executablePath" [u] =
+      emitRefExpr prog env d u
+        ++ ["drop", rtCallW prog "mdk_executable_path_io" 0]
+    go "executablePath" _ =
+      gapLP prog "wasm: executablePath takes exactly one (Unit) argument"
+    go "args" [u] =
+      emitRefExpr prog env d u ++ ["drop", rtCallW prog "mdk_args_io" 0]
+    go "args" _args =
+      gapLP prog "wasm W12: args takes exactly one (Unit) argument"
+    go "exit" [code] =
+      emitRefExpr prog env d code
+        ++ [
+          "ref.cast (ref i31)",
+          "i31.get_s",
+          rtCallW prog "mdk_exit" 1,
+          "unreachable",
+        ]
+    go "exit" _ = gapLP prog "wasm W12: exit takes exactly one argument"
+    -- The clock externs: the two reads box the host's f64 seconds; sleepMs unboxes its
+    -- Int to the i64 the import takes (a non-positive count returns at once, host-side,
+    -- as medaka_rt.c's mdk_sleep_ms does).
+    go "wallTimeSec" [u] =
+      emitRefExpr prog env d u
+        ++ ["drop", rtCallW prog "mdk_wall_time_sec" 0, "struct.new $float"]
+    go "wallTimeSec" _ =
+      gapLP prog "wasm: wallTimeSec takes exactly one (Unit) argument"
+    go "monotonicSec" [u] =
+      emitRefExpr prog env d u
+        ++ ["drop", rtCallW prog "mdk_monotonic_sec" 0, "struct.new $float"]
+    go "monotonicSec" _ =
+      gapLP prog "wasm: monotonicSec takes exactly one (Unit) argument"
+    go "sleepMs" [n] =
+      emitRefExpr prog env d n
+        ++ [
+          unboxIntW prog,
+          rtCallW prog "mdk_sleep_ms" 1,
+          "i32.const 0",
+          "ref.i31",
+        ]
+    go "sleepMs" _ = gapLP prog "wasm: sleepMs takes exactly one argument"
+    -- fetchText pushes its url through the path channel and answers a Result through the
+    -- result channel, as readFile does; Net carries no grant argument.
+    go "fetchText" [u] =
+      emitRefExpr prog env d u
+        ++ ["ref.cast (ref $str)", rtCallW prog "mdk_fetch_text_io" 1]
+    go "fetchText" _ = gapLP prog "wasm: fetchText takes exactly one argument"
+    -- ioPoll: no wasm host binds descriptor readiness, so a call stops with a coded
+    -- runtime error.  It traps at run time, not at build time, because the async
+    -- scheduler (`systemPoller`) names ioPoll and calls it only when a task waits on
+    -- a descriptor; a clock-only async program must still build.  The arguments are
+    -- evaluated left to right first, as native evaluates them.
+    go "ioPoll" [fds, interests, timeout] =
+      emitRefExpr prog env d fds
+        ++ ["drop"]
+        ++ emitRefExpr prog env d interests
+        ++ ["drop"]
+        ++ emitRefExpr prog env d timeout
+        ++ ["drop"]
+        ++ wasmTrap
+          (progEmit prog)
+          EWasmNoBinding
+          "ioPoll: descriptor readiness has no wasm binding (Net and Stdin bindings: #3666); build for a native target"
+    go "ioPoll" _ = gapLP prog "wasm: ioPoll takes exactly three arguments"
+    -- stage-D: byte-clean file I/O.  readFileBytes returns a Result String (Array Int);
+    -- writeFileBytes takes (path, Array Int) and returns Result String Unit.  Both route
+    -- into the fileBytes host seam ($mdk_read_file_bytes_io / $mdk_write_file_bytes_io).
+    go "readFileBytes" [p, g] =
+      emitRefExpr prog env d p
+        ++ ["ref.cast (ref $str)"]
+        ++ emitRefExpr prog env d g
+        ++ [rtCallW prog "mdk_read_file_bytes_io" 2]
+    go "readFileBytes" _ =
+      gapLP
+        prog
+        "wasm stage-D: readFileBytes takes exactly one argument and its grant"
+    go "writeFileBytes" [p, arr, g] =
+      emitRefExpr prog env d p
+        ++ ["ref.cast (ref $str)"]
+        ++ emitRefExpr prog env d arr
+        ++ ["ref.cast (ref $arr)"]
+        ++ emitRefExpr prog env d g
+        ++ [rtCallW prog "mdk_write_file_bytes_io" 3]
+    go "writeFileBytes" _ =
+      gapLP
+        prog
+        "wasm stage-D: writeFileBytes takes exactly two arguments and its grant"
+    go "writeFile" [p, s, g] =
+      emitRefExpr prog env d p
+        ++ ["ref.cast (ref $str)"]
+        ++ emitRefExpr prog env d s
+        ++ ["ref.cast (ref $str)"]
+        ++ emitRefExpr prog env d g
+        ++ [rtCallW prog "mdk_write_file_io" 3]
+    go "writeFile" _ =
+      gapLP prog "wasm: writeFile takes exactly two arguments and its grant"
+    go "appendFile" [p, s, g] =
+      emitRefExpr prog env d p
+        ++ ["ref.cast (ref $str)"]
+        ++ emitRefExpr prog env d s
+        ++ ["ref.cast (ref $str)"]
+        ++ emitRefExpr prog env d g
+        ++ [rtCallW prog "mdk_append_file_io" 3]
+    go "appendFile" _ =
+      gapLP prog "wasm: appendFile takes exactly two arguments and its grant"
+    go "rename" [src, dst, gs, gd] =
+      emitRefExpr prog env d src
+        ++ ["ref.cast (ref $str)"]
+        ++ emitRefExpr prog env d dst
+        ++ ["ref.cast (ref $str)"]
+        ++ emitRefExpr prog env d gs
+        ++ emitRefExpr prog env d gd
+        ++ [rtCallW prog "mdk_rename_io" 4]
+    go "rename" _ =
+      gapLP
+        prog
+        "wasm: rename takes exactly two arguments and the grant of each"
+    go "listDir" [p, g] =
+      emitRefExpr prog env d p
+        ++ ["ref.cast (ref $str)"]
+        ++ emitRefExpr prog env d g
+        ++ [rtCallW prog "mdk_list_dir_io" 2]
+    go "listDir" _ =
+      gapLP prog "wasm: listDir takes exactly one argument and its grant"
+    go "statFile" [p, g] =
+      emitRefExpr prog env d p
+        ++ ["ref.cast (ref $str)"]
+        ++ emitRefExpr prog env d g
+        ++ [rtCallW prog "mdk_stat_file_io" 2]
+    go "statFile" _ =
+      gapLP prog "wasm: statFile takes exactly one argument and its grant"
+    go "makeDir" [p, g] =
+      emitRefExpr prog env d p
+        ++ ["ref.cast (ref $str)"]
+        ++ emitRefExpr prog env d g
+        ++ [rtCallW prog "mdk_make_dir_io" 2]
+    go "makeDir" _ =
+      gapLP prog "wasm: makeDir takes exactly one argument and its grant"
+    go "removeFile" [p, g] =
+      emitRefExpr prog env d p
+        ++ ["ref.cast (ref $str)"]
+        ++ emitRefExpr prog env d g
+        ++ [rtCallW prog "mdk_remove_file_io" 2]
+    go "removeFile" _ =
+      gapLP prog "wasm: removeFile takes exactly one argument and its grant"
+    go "removeDir" [p, g] =
+      emitRefExpr prog env d p
+        ++ ["ref.cast (ref $str)"]
+        ++ emitRefExpr prog env d g
+        ++ [rtCallW prog "mdk_remove_dir_io" 2]
+    go "removeDir" _ =
+      gapLP prog "wasm: removeDir takes exactly one argument and its grant"
+    go "fsync" [p, g] =
+      emitRefExpr prog env d p
+        ++ ["ref.cast (ref $str)"]
+        ++ emitRefExpr prog env d g
+        ++ [rtCallW prog "mdk_fsync_io" 2]
+    go "fsync" _ =
+      gapLP prog "wasm: fsync takes exactly one argument and its grant"
+    go "fileMode" [p, g] =
+      emitRefExpr prog env d p
+        ++ ["ref.cast (ref $str)"]
+        ++ emitRefExpr prog env d g
+        ++ [rtCallW prog "mdk_file_mode_io" 2]
+    go "fileMode" _ =
+      gapLP prog "wasm: fileMode takes exactly one argument and its grant"
+    go "writeFileMode" [p, m, s, g] =
+      emitRefExpr prog env d p
+        ++ ["ref.cast (ref $str)"]
+        ++ emitRefExpr prog env d m
+        ++ emitRefExpr prog env d s
+        ++ ["ref.cast (ref $str)"]
+        ++ emitRefExpr prog env d g
+        ++ [rtCallW prog "mdk_write_file_mode_io" 4]
+    go "writeFileMode" _ =
+      gapLP prog "wasm: writeFileMode takes three arguments and its grant"
+    -- W10/B5: `panic msg` → stream the coded line `runtime error [E-PANIC]: <msg>\n` to
+    -- stderr, then `unreachable` (peer of native @mdk_panic / the interp's runtimePanic).
+    -- The fixed prefix is unrolled to byte-writes; the user message (a $str (ref eq), any
+    -- expression) is streamed through $mdk_eprint_str (forced via `WasmEmit.useEPut`, which the
+    -- catalog demands for `panic`), then a trailing newline byte.  `unreachable` is stack-polymorphic, so it
+    -- validates as any result type.
+    go "panic" [msg] =
+      wasmTrapBytes (progEmit prog) "runtime error [\{EPanic}]: "
+        ++ emitRefExpr prog env d msg
+        ++ ["ref.cast (ref $str)", rtCallW prog "mdk_eprint_str" 1]
+        ++ trapByteInstr (progEmit prog) 10
+        ++ ["unreachable"]
+    go "panic" _ = gapLP prog "wasm W10: panic takes exactly one argument"
+    -- Index-16a: `indexError msg` streams the coded line `runtime error
+    -- [E-INDEX-OOB]: <msg>` to stderr and traps, the same shape `panic` uses above
+    -- and the same line native's @mdk_oob_msg and the interpreter both print.  The
+    -- $str rep and $mdk_eprint_str are demanded for `indexError` in the catalog.
+    go "indexError" [msg] =
+      wasmTrapBytes (progEmit prog) "runtime error [\{EIndexOob}]: "
+        ++ emitRefExpr prog env d msg
+        ++ ["ref.cast (ref $str)", rtCallW prog "mdk_eprint_str" 1]
+        ++ trapByteInstr (progEmit prog) 10
+        ++ ["unreachable"]
+    go "indexError" _ =
+      gapLP prog "wasm Index-16a: indexError takes exactly one argument"
+    -- #1787: `indexErrorAt idx` raises E-INDEX-OOB naming the offending index, so all
+    -- three engines print the SAME line.  Dropping it here instead (as sliceError's
+    -- bounds still are) would redden test/wasm/diff_wasm_modules.sh, which since #531
+    -- compares stderr and exit code as well as stdout -- w7_array_oob.mdk exists to
+    -- assert exactly this parity.
+    go "indexErrorAt" [idx] =
+      wasmTrapNum
+        (progEmit prog)
+        EIndexOob
+        "index "
+        (emitRefExpr prog env d idx)
+        " out of bounds"
+    go "indexErrorAt" _ =
+      gapLP prog "wasm #1787: indexErrorAt takes exactly one argument"
+    go "indexErrorAtSite" [site, idx] =
+      siteExprInstrs prog env d site ++ go "indexErrorAt" [idx]
+    go "indexErrorAtSite" _ =
+      gapLP prog "wasm: indexErrorAtSite takes exactly two arguments"
+    go "panicAt" [site, msg] =
+      siteExprInstrs prog env d site ++ go "panic" [msg]
+    go "__site__" [CLit (LString f), CLit (LInt line), CLit (LInt col)] =
+      emitLitRef
+        prog
+        (LInt (sitePackedW (progEmit prog) (Loc f line col line (col + 1))))
+    go "__site__" _ =
+      gapLP prog "wasm: a trap-site literal takes a file, a line and a column"
+    go "panicAt" _ = gapLP prog "wasm: panicAt takes exactly two arguments"
+    -- #670: `sliceError lo hiIncl` reuses the existing coded E-SLICE-OOB trap (the
+    -- same fixed text the built-in slice path emits) -- both bound arguments are
+    -- dropped, where native's @mdk_slice_oob formats them into the line.
+    go "sliceError" [_lo, _hi] =
+      wasmTrap (progEmit prog) ESliceOob "slice out of bounds"
+    go "sliceError" _ =
+      gapLP prog "wasm #670: sliceError takes exactly two arguments"
+    -- The `int`-prefixed bit externs are the originals under unshadowable names.
+    go "intBitAnd" args = go "bitAnd" args
+    go "intBitOr" args = go "bitOr" args
+    go "intBitXor" args = go "bitXor" args
+    go "intBitNot" args = go "bitNot" args
+    go "intShiftLeft" args = go "shiftLeft" args
+    go "intShiftRight" args = go "shiftRight" args
+    -- stage-A: bitwise / shift externs (Int -> Int -> Int).  Args are (ref eq) boxed Ints;
+    -- unbox both to i64 via $mdk_unbox_int, apply the i64 op, rebox via $mdk_box_int.
+    -- The shifts call `$mdk_shift_left`/`$mdk_shift_right` (intRuntimeLines), which
+    -- define every amount as native's mdk_shift_left/right do: a negative amount panics,
+    -- 63 or more shifts every bit out, and shiftRight is arithmetic.  shiftLeft's bits
+    -- past bit 62 are dropped by $mdk_box_int's sign-extend, as native's retag drops them.
+    go "bitAnd" [a, b] =
+      emitRefExpr prog env d a
+        ++ [unboxIntW prog]
+        ++ emitRefExpr prog env d b
+        ++ [unboxIntW prog]
+        ++ ["i64.and", boxIntW prog]
+    go "bitAnd" _ =
+      gapLP prog "wasm stage-A: bitAnd takes exactly two arguments"
+    go "shiftLeft" [a, b] =
+      emitRefExpr prog env d a
+        ++ [unboxIntW prog]
+        ++ emitRefExpr prog env d b
+        ++ [unboxIntW prog]
+        ++ intShiftCall prog "left"
+        ++ [boxIntW prog]
+    go "shiftLeft" _ =
+      gapLP prog "wasm stage-A: shiftLeft takes exactly two arguments"
+    go "shiftRight" [a, b] =
+      emitRefExpr prog env d a
+        ++ [unboxIntW prog]
+        ++ emitRefExpr prog env d b
+        ++ [unboxIntW prog]
+        ++ intShiftCall prog "right"
+        ++ [boxIntW prog]
+    go "shiftRight" _ =
+      gapLP prog "wasm stage-A: shiftRight takes exactly two arguments"
+    -- #101: bitwise completion (mirror llvm mdk_bit_or/xor/not).  bitOr/bitXor are exact
+    -- i64 two's-complement ops; bitNot n = n xor -1 (== ~n = -n-1, matches native mdk_bit_not
+    -- for all in-range Ints).  intBitsToFloat reinterprets the unboxed i64 bit pattern as f64.
+    go "bitOr" [a, b] =
+      emitRefExpr prog env d a
+        ++ [unboxIntW prog]
+        ++ emitRefExpr prog env d b
+        ++ [unboxIntW prog]
+        ++ ["i64.or", boxIntW prog]
+    go "bitXor" [a, b] =
+      emitRefExpr prog env d a
+        ++ [unboxIntW prog]
+        ++ emitRefExpr prog env d b
+        ++ [unboxIntW prog]
+        ++ ["i64.xor", boxIntW prog]
+    go "bitNot" [a] =
+      emitRefExpr prog env d a
+        ++ [unboxIntW prog, "i64.const -1", "i64.xor", boxIntW prog]
+    go "intBitsToFloat" [a] =
+      emitRefExpr prog env d a
+        ++ [unboxIntW prog, "f64.reinterpret_i64", "struct.new $float"]
+    -- `u8Truncate`/`u16Truncate`/`u32Truncate` keep the low n bits of the Int (a
+    -- non-negative result, so a U32 above 2^30 reboxes into `$boxint`); the `ToInt`
+    -- forms are the identity on the word.
+    go "u8Truncate" [a] = emitTruncateRef prog env d "U8" a
+    go "u16Truncate" [a] = emitTruncateRef prog env d "U16" a
+    go "u32Truncate" [a] = emitTruncateRef prog env d "U32" a
+    go "u8ToInt" [a] = emitRefExpr prog env d a
+    go "u16ToInt" [a] = emitRefExpr prog env d a
+    go "u32ToInt" [a] = emitRefExpr prog env d a
+    -- `i32Truncate` sign-extends the Int's low 32 bits, so a negative `I32` stays an
+    -- i31 or `$boxint` word like any Int; `i32ToInt` is the identity on that word.
+    go "i32Truncate" [a] =
+      emitRefExpr prog env d a
+        ++ [unboxIntW prog, "i64.extend32_s", boxIntW prog]
+    go "i32ToInt" [a] = emitRefExpr prog env d a
+    -- the `I64` doors keep the 64 bits and change the cell they are read from.
+    go "i64FromBits" [a] =
+      emitRefExpr prog env d a ++ unboxU64W ++ ["struct.new $i64"]
+    go "i64ToBits" [a] =
+      emitRefExpr prog env d a ++ unboxI64W ++ ["struct.new $u64"]
+    -- `u64Truncate` boxes the Int's sign-extended i64, which is its value modulo
+    -- 2^64; `u64TruncateToInt` reboxes the payload as an Int, and `$mdk_box_int`'s
+    -- renormalization from bit 62 is exactly "the low 63 bits, bit 62 the sign".
+    go "u64Truncate" [a] =
+      emitRefExpr prog env d a ++ [unboxIntW prog, "struct.new $u64"]
+    go "u64TruncateToInt" [a] =
+      emitRefExpr prog env d a ++ unboxU64W ++ [boxIntW prog]
+    go "u64BitAnd" [a, b] = emitU64KernelRef prog env d a b "i64.and"
+    go "u64BitOr" [a, b] = emitU64KernelRef prog env d a b "i64.or"
+    go "u64BitXor" [a, b] = emitU64KernelRef prog env d a b "i64.xor"
+    go "u64MulHigh" [a, b] =
+      emitU64KernelRef prog env d a b (rtCallW prog "mdk_u64_mulhi" 2)
+    go "u64ShiftLeft" [a, k] =
+      emitU64ShiftRef prog env d a k (rtCallW prog "mdk_u64_shl" 2)
+    go "u64ShiftRight" [a, k] =
+      emitU64ShiftRef prog env d a k (rtCallW prog "mdk_u64_shr" 2)
+    -- #101: libm math externs.  IEEE-exact unary ops → native f64 opcodes (correctly-rounded,
+    -- byte-match native libm); round → $mdk_round (C round(): half away from zero);
+    -- transcendentals → JS Math.* host imports; binary pow/atan2/hypot → host imports;
+    -- floatRem → $mdk_float_rem (WAT fmod, floatRemRuntimeLines).  A $float is
+    -- unboxed to f64, the op runs, the f64 result reboxes into a fresh (struct $float).
+    go "sqrt" [a] = floatArgW prog env d a ++ ["f64.sqrt", "struct.new $float"]
+    go "floor" [a] =
+      floatArgW prog env d a ++ ["f64.floor", "struct.new $float"]
+    go "ceil" [a] = floatArgW prog env d a ++ ["f64.ceil", "struct.new $float"]
+    go "trunc" [a] =
+      floatArgW prog env d a ++ ["f64.trunc", "struct.new $float"]
+    go "round" [a] =
+      floatArgW prog env d a
+        ++ [rtCallW prog "mdk_round" 1, "struct.new $float"]
+    go "cbrt" [a] =
+      floatArgW prog env d a ++ [rtCallW prog "mdk_cbrt" 1, "struct.new $float"]
+    go "exp" [a] =
+      floatArgW prog env d a ++ [rtCallW prog "mdk_exp" 1, "struct.new $float"]
+    go "log" [a] =
+      floatArgW prog env d a ++ [rtCallW prog "mdk_log" 1, "struct.new $float"]
+    go "log2" [a] =
+      floatArgW prog env d a ++ [rtCallW prog "mdk_log2" 1, "struct.new $float"]
+    go "log10" [a] =
+      floatArgW prog env d a
+        ++ [rtCallW prog "mdk_log10" 1, "struct.new $float"]
+    go "sin" [a] =
+      floatArgW prog env d a ++ [rtCallW prog "mdk_sin" 1, "struct.new $float"]
+    go "cos" [a] =
+      floatArgW prog env d a ++ [rtCallW prog "mdk_cos" 1, "struct.new $float"]
+    go "tan" [a] =
+      floatArgW prog env d a ++ [rtCallW prog "mdk_tan" 1, "struct.new $float"]
+    go "asin" [a] =
+      floatArgW prog env d a ++ [rtCallW prog "mdk_asin" 1, "struct.new $float"]
+    go "acos" [a] =
+      floatArgW prog env d a ++ [rtCallW prog "mdk_acos" 1, "struct.new $float"]
+    go "atan" [a] =
+      floatArgW prog env d a ++ [rtCallW prog "mdk_atan" 1, "struct.new $float"]
+    go "sinh" [a] =
+      floatArgW prog env d a ++ [rtCallW prog "mdk_sinh" 1, "struct.new $float"]
+    go "cosh" [a] =
+      floatArgW prog env d a ++ [rtCallW prog "mdk_cosh" 1, "struct.new $float"]
+    go "tanh" [a] =
+      floatArgW prog env d a ++ [rtCallW prog "mdk_tanh" 1, "struct.new $float"]
+    go "pow" [a, b] =
+      floatArgW prog env d a
+        ++ floatArgW prog env d b
+        ++ [rtCallW prog "mdk_pow" 2, "struct.new $float"]
+    go "atan2" [a, b] =
+      floatArgW prog env d a
+        ++ floatArgW prog env d b
+        ++ [rtCallW prog "mdk_atan2" 2, "struct.new $float"]
+    go "hypot" [a, b] =
+      floatArgW prog env d a
+        ++ floatArgW prog env d b
+        ++ [rtCallW prog "mdk_hypot" 2, "struct.new $float"]
+    go "floatRem" [a, b] =
+      floatArgW prog env d a
+        ++ floatArgW prog env d b
+        ++ [rtCallW prog "mdk_float_rem" 2, "struct.new $float"]
+    go name _ = gapLP prog ("wasm W8: unsupported leaf extern '" ++ name ++ "'")
 
 -- #101: unbox a boxed $float argument to a raw f64 on the WAT stack.  Shared by every
 -- libm math arm above (unary opcode, host-import transcendental, and binary).
@@ -7560,15 +7583,22 @@ wTrmcLinkChain : Prog ->
   Int ->
   List String ->
   List String
-wTrmcLinkChain _ _ [] _ _ = []
-wTrmcLinkChain prog isBuiltinList [(ctorName, selfIdx)] _ valInstrs =
-  wTrmcLinkOne prog isBuiltinList ctorName selfIdx valInstrs
-wTrmcLinkChain prog isBuiltinList ((ctorName, selfIdx) :: rest) k valInstrs =
-  ["local.get " ++ wTrmcDctorL, "i32.const " ++ intToString k, "i32.eq", "if"]
-    ++ indent (wTrmcLinkOne prog isBuiltinList ctorName selfIdx valInstrs)
-    ++ ["else"]
-    ++ indent (wTrmcLinkChain prog isBuiltinList rest (k + 1) valInstrs)
-    ++ ["end"]
+wTrmcLinkChain prog isBuiltinList xs0 k0 valInstrs = go xs0 k0
+  where
+    go [] _ = []
+    go [(ctorName, selfIdx)] _ =
+      wTrmcLinkOne prog isBuiltinList ctorName selfIdx valInstrs
+    go ((ctorName, selfIdx) :: rest) k =
+      [
+          "local.get " ++ wTrmcDctorL,
+          "i32.const " ++ intToString k,
+          "i32.eq",
+          "if",
+        ]
+        ++ indent (wTrmcLinkOne prog isBuiltinList ctorName selfIdx valInstrs)
+        ++ ["else"]
+        ++ indent (go rest (k + 1))
+        ++ ["end"]
 
 -- record which ctor the NEW dest cell is (mixed sets only; a singleton set needs
 -- no tracking — the parent type is static).
@@ -7627,11 +7657,13 @@ wTrmcEmitArgsToTemps : Prog -> Env -> List CExpr -> Int -> List String
 wTrmcEmitArgsToTemps prog env args base = wTrmcArgsGo prog env args base 0
 
 wTrmcArgsGo : Prog -> Env -> List CExpr -> Int -> Int -> List String
-wTrmcArgsGo _ _ [] _ _ = []
-wTrmcArgsGo prog env (a :: rest) base k =
-  emitRefExpr prog env 0 a
-    ++ ["local.set " ++ wTrmcTempL (base + k)]
-    ++ wTrmcArgsGo prog env rest base (k + 1)
+wTrmcArgsGo prog env xs0 base k0 = go xs0 k0
+  where
+    go [] _ = []
+    go (a :: rest) k =
+      emitRefExpr prog env 0 a
+        ++ ["local.set " ++ wTrmcTempL (base + k)]
+        ++ go rest (k + 1)
 
 -- store each recomputed temp into the matching param slot ($a<i>), left-to-right.
 wTrmcStoreSlots : List String -> List CExpr -> Int -> List String
@@ -7762,39 +7794,47 @@ snd (_, b) = b
 -- collect the (ctor name, selfIdx) of every cons/ctor-tail leaf reachable through
 -- the tail wrappers (if/let/block/decision).  Mirrors trmcBodyHasCons's descent.
 wTrmcCtorTailsOf : Prog -> SelfRef -> Int -> CExpr -> List (String, Int)
-wTrmcCtorTailsOf prog self arity (CIf _ t f) =
-  wTrmcCtorTailsOf prog self arity t ++ wTrmcCtorTailsOf prog self arity f
-wTrmcCtorTailsOf prog self arity (CLet _ _ _ b) =
-  wTrmcCtorTailsOf prog self arity b
-wTrmcCtorTailsOf prog self arity (CBlock stmts) = match lastStmtExpr stmts
-  Some ex => wTrmcCtorTailsOf prog self arity ex
-  None => []
-wTrmcCtorTailsOf prog self arity (CDecision _ arms _) =
-  flatMap (a => wTrmcCtorTailsOf prog self arity (armBody a)) arms
-wTrmcCtorTailsOf prog self arity ex =
-  if isCtorTail (c => isCtor prog c) (c => ctorArity prog c) self arity ex then
-    [(ctorTailName ex, ctorTailSelfIdx ex)]
-  else
-    []
+wTrmcCtorTailsOf prog self arity ex0 = go ex0
+  where
+    go (CIf _ t f) = go t ++ go f
+    go (CLet _ _ _ b) = go b
+    go (CBlock stmts) = match lastStmtExpr stmts
+      Some ex => go ex
+      None => []
+    go (CDecision _ arms _) = flatMap (a => go (armBody a)) arms
+    go ex =
+      if isCtorTail
+        (c => isCtor prog c)
+        (c => ctorArity prog c)
+        self
+        arity
+        ex then
+        [(ctorTailName ex, ctorTailSelfIdx ex)]
+      else
+        []
 
 -- #712: the ctor-tail LEAF exprs (same descent as wTrmcCtorTailsOf), so the caller
 -- can ask `ctorTailIsCons` per leaf.  Used to decide whether a fn builds the
 -- built-in list (`::` → `$C_Cons`) or a user ADT (`$C_<ctor>` / `$CU_Cons`).
 wTrmcCtorTailExprs : Prog -> SelfRef -> Int -> CExpr -> List CExpr
-wTrmcCtorTailExprs prog self arity (CIf _ t f) =
-  wTrmcCtorTailExprs prog self arity t ++ wTrmcCtorTailExprs prog self arity f
-wTrmcCtorTailExprs prog self arity (CLet _ _ _ b) =
-  wTrmcCtorTailExprs prog self arity b
-wTrmcCtorTailExprs prog self arity (CBlock stmts) = match lastStmtExpr stmts
-  Some ex => wTrmcCtorTailExprs prog self arity ex
-  None => []
-wTrmcCtorTailExprs prog self arity (CDecision _ arms _) =
-  flatMap (a => wTrmcCtorTailExprs prog self arity (armBody a)) arms
-wTrmcCtorTailExprs prog self arity ex =
-  if isCtorTail (c => isCtor prog c) (c => ctorArity prog c) self arity ex then
-    [ex]
-  else
-    []
+wTrmcCtorTailExprs prog self arity ex0 = go ex0
+  where
+    go (CIf _ t f) = go t ++ go f
+    go (CLet _ _ _ b) = go b
+    go (CBlock stmts) = match lastStmtExpr stmts
+      Some ex => go ex
+      None => []
+    go (CDecision _ arms _) = flatMap (a => go (armBody a)) arms
+    go ex =
+      if isCtorTail
+        (c => isCtor prog c)
+        (c => ctorArity prog c)
+        self
+        arity
+        ex then
+        [ex]
+      else
+        []
 
 -- whether an eligible TRMC fn's cons leaves are the built-in `h :: t` (homogeneous
 -- per fn — a fn returns one type).  Governs the cons-cell struct id (#712).
@@ -8362,21 +8402,23 @@ emitTailCallW prog env app =
 -- statement (effect/let).  (W4 blocks in tail position only appear via desugared
 -- sequencing; the last expr is the result.)
 emitBlockTail : Prog -> Env -> Int -> List CStmt -> List String
-emitBlockTail prog env arity [CSExpr ex] = emitRefTail prog env arity ex
-emitBlockTail prog env arity ((CSExpr ex) :: rest) =
-  emitRefExpr prog env 0 ex ++ ["drop"] ++ emitBlockTail prog env arity rest
-emitBlockTail prog env arity ((CSLet recF pat ex) :: rest) =
-  let (prefix, env2) = emitBlockBindingW prog env 0 recF pat ex
-  prefix ++ emitBlockTail prog env2 arity rest
-emitBlockTail prog env arity ((CSAssign x ex) :: rest) =
-  emitRefExpr prog env 0 ex
-    ++ ["local.set " ++ localTargetW prog env x]
-    ++ emitBlockTail prog env arity rest
-emitBlockTail prog env arity [] = emitRefTail prog env arity (CLit LUnit)
-emitBlockTail prog _ _ _ = gapLP prog (if rawProgramW prog then
-  "scalar-mode: unsupported block statement"
-else
-  "ref-mode: unsupported block statement in tail position")
+emitBlockTail prog env0 arity ss0 = go env0 ss0
+  where
+    go env [CSExpr ex] = emitRefTail prog env arity ex
+    go env ((CSExpr ex) :: rest) =
+      emitRefExpr prog env 0 ex ++ ["drop"] ++ go env rest
+    go env ((CSLet recF pat ex) :: rest) =
+      let (prefix, env2) = emitBlockBindingW prog env 0 recF pat ex
+      prefix ++ go env2 rest
+    go env ((CSAssign x ex) :: rest) =
+      emitRefExpr prog env 0 ex
+        ++ ["local.set " ++ localTargetW prog env x]
+        ++ go env rest
+    go env [] = emitRefTail prog env arity (CLit LUnit)
+    go _ _ = gapLP prog (if rawProgramW prog then
+      "scalar-mode: unsupported block statement"
+    else
+      "ref-mode: unsupported block statement in tail position")
 
 -- a CDecision in tail position: each arm body is itself in tail position.  Reuse the
 -- W3 decision machinery but route arm bodies through emitRefTail (so a tail call in
@@ -8426,16 +8468,15 @@ emitTreeTail : Prog ->
   List CArm ->
   CTree ->
   List String
-emitTreeTail prog _env _arity _d _root _occs _arms (CTFail fs) =
-  wasmFailTrap (progEmit prog) fs
-emitTreeTail prog env arity _d root _occs arms (CTLeaf i) =
-  emitLeafTail prog env arity root arms i
-emitTreeTail prog env arity d root occs arms (CTGuard i fail) =
-  emitGuardArmTail prog env arity d root occs arms i fail
-emitTreeTail prog env arity d root occs arms (CTDrop sub) =
-  emitTreeTail prog env arity d root (tailList occs) arms sub
-emitTreeTail prog env arity d root occs arms (CTSwitch branches dft) =
-  emitSwitchTail prog env arity d root occs arms branches dft
+emitTreeTail prog env arity d root occs0 arms x0 = go occs0 x0
+  where
+    go _occs (CTFail fs) = wasmFailTrap (progEmit prog) fs
+    go _occs (CTLeaf i) = emitLeafTail prog env arity root arms i
+    go occs (CTGuard i fail) =
+      emitGuardArmTail prog env arity d root occs arms i fail
+    go occs (CTDrop sub) = go (tailList occs) sub
+    go occs (CTSwitch branches dft) =
+      emitSwitchTail prog env arity d root occs arms branches dft
 
 -- Like emitLeafRef, for an arm body in TAIL POSITION (emitRefTail path).
 emitLeafTail : Prog ->
@@ -8603,38 +8644,15 @@ towerBodiesTail : Prog ->
   Int ->
   Int ->
   List String
-towerBodiesTail prog env arity d root svRead rest arms branches dft ty sd k =
-  if k < 0 then
-    ["end"] ++ emitTreeTail prog env arity d root rest arms dft
-  else
-    ["end"]
-      ++ emitOrdinalSlotTail
-        prog
-        env
-        arity
-        d
-        root
-        svRead
-        rest
-        arms
-        branches
-        ty
-        sd
-        k
-      ++ towerBodiesTail
-        prog
-        env
-        arity
-        d
-        root
-        svRead
-        rest
-        arms
-        branches
-        dft
-        ty
-        sd
-        (k - 1)
+towerBodiesTail prog env arity d root sr rest arms brs dft ty sd k0 = go k0
+  where
+    go k =
+      if k < 0 then
+        ["end"] ++ emitTreeTail prog env arity d root rest arms dft
+      else
+        ["end"]
+          ++ emitOrdinalSlotTail prog env arity d root sr rest arms brs ty sd k
+          ++ go (k - 1)
 
 emitOrdinalSlotTail : Prog ->
   Env ->
@@ -8682,61 +8700,61 @@ emitLitSwitchTail : Prog ->
   CTree ->
   Int ->
   List String
-emitLitSwitchTail prog env arity d root _foc rest arms [] dft idt =
-  indentBy idt (emitTreeTail prog env arity d root rest arms dft)
--- #759: unbox to i64 ($mdk_unbox_int handles i31 immediate OR $boxint) and compare at
--- full width, so a head |k| >= 2^30 neither overflows `i32.const` (module rejected) nor
--- ref.casts a boxed scrutinee to i31 (trap).
-emitLitSwitchTail prog env arity d root foc rest arms ((CTBranch (HLit (LInt k)) sub) :: more) dft idt =
-  indentBy
-      idt
-      (foc
-        ++ [unboxIntW prog, "i64.const " ++ intToString k, "i64.eq"]
-        ++ ["if"])
-    ++ indentBy (idt + 1) (emitTreeTail prog env arity d root rest arms sub)
-    ++ indentBy idt ["else"]
-    ++ emitLitSwitchTail prog env arity d root foc rest arms more dft (idt + 1)
-    ++ indentBy idt ["end", "unreachable"]
--- W6: Char-literal switch head — a Char is an i31 codepoint immediate (cf.
--- `PLit (LChar)`); compare the i31 against the codepoint constant.
-emitLitSwitchTail prog env arity d root foc rest arms ((CTBranch (HLit (LChar c)) sub) :: more) dft idt =
-  indentBy
-      idt
-      (foc
-        ++ [
-          "ref.cast (ref i31)",
-          "i31.get_u",
-          "i32.const "
-            ++ intToString (charCode (arrayGetUnsafe 0 (stringToChars c))),
-          "i32.eq",
-        ]
-        ++ ["if"])
-    ++ indentBy (idt + 1) (emitTreeTail prog env arity d root rest arms sub)
-    ++ indentBy idt ["else"]
-    ++ emitLitSwitchTail prog env arity d root foc rest arms more dft (idt + 1)
-    ++ indentBy idt ["end", "unreachable"]
--- W6: String-literal switch head — compare the focus $str against each literal via
--- `$mdk_str_compare` (returns the i31 1 on equal), reusing the `PLit (LString)` logic.
-emitLitSwitchTail prog env arity d root foc rest arms ((CTBranch (HLit (LString s)) sub) :: more) dft idt =
-  indentBy
-      idt
-      (foc
-        ++ ["ref.cast (ref $str)"]
-        ++ emitLitRef prog (LString s)
-        ++ [
-          rtCallW prog "mdk_str_compare" 2,
-          "ref.cast (ref i31)",
-          "i31.get_u",
-          "i32.const 1",
-          "i32.eq",
-        ]
-        ++ ["if"])
-    ++ indentBy (idt + 1) (emitTreeTail prog env arity d root rest arms sub)
-    ++ indentBy idt ["else"]
-    ++ emitLitSwitchTail prog env arity d root foc rest arms more dft (idt + 1)
-    ++ indentBy idt ["end", "unreachable"]
-emitLitSwitchTail prog _ _ _ _ _ _ _ _ _ _ =
-  gapLP prog "ref-mode: non-Int literal tail switch head"
+emitLitSwitchTail prog env arity d root foc rest arms xs0 dft idt0 = go xs0 idt0
+  where
+    go [] idt = indentBy idt (emitTreeTail prog env arity d root rest arms dft)
+    -- #759: unbox to i64 ($mdk_unbox_int handles i31 immediate OR $boxint) and compare at
+    -- full width, so a head |k| >= 2^30 neither overflows `i32.const` (module rejected) nor
+    -- ref.casts a boxed scrutinee to i31 (trap).
+    go ((CTBranch (HLit (LInt k)) sub) :: more) idt =
+      indentBy
+          idt
+          (foc
+            ++ [unboxIntW prog, "i64.const " ++ intToString k, "i64.eq"]
+            ++ ["if"])
+        ++ indentBy (idt + 1) (emitTreeTail prog env arity d root rest arms sub)
+        ++ indentBy idt ["else"]
+        ++ go more (idt + 1)
+        ++ indentBy idt ["end", "unreachable"]
+    -- W6: Char-literal switch head — a Char is an i31 codepoint immediate (cf.
+    -- `PLit (LChar)`); compare the i31 against the codepoint constant.
+    go ((CTBranch (HLit (LChar c)) sub) :: more) idt =
+      indentBy
+          idt
+          (foc
+            ++ [
+              "ref.cast (ref i31)",
+              "i31.get_u",
+              "i32.const "
+                ++ intToString (charCode (arrayGetUnsafe 0 (stringToChars c))),
+              "i32.eq",
+            ]
+            ++ ["if"])
+        ++ indentBy (idt + 1) (emitTreeTail prog env arity d root rest arms sub)
+        ++ indentBy idt ["else"]
+        ++ go more (idt + 1)
+        ++ indentBy idt ["end", "unreachable"]
+    -- W6: String-literal switch head — compare the focus $str against each literal via
+    -- `$mdk_str_compare` (returns the i31 1 on equal), reusing the `PLit (LString)` logic.
+    go ((CTBranch (HLit (LString s)) sub) :: more) idt =
+      indentBy
+          idt
+          (foc
+            ++ ["ref.cast (ref $str)"]
+            ++ emitLitRef prog (LString s)
+            ++ [
+              rtCallW prog "mdk_str_compare" 2,
+              "ref.cast (ref i31)",
+              "i31.get_u",
+              "i32.const 1",
+              "i32.eq",
+            ]
+            ++ ["if"])
+        ++ indentBy (idt + 1) (emitTreeTail prog env arity d root rest arms sub)
+        ++ indentBy idt ["else"]
+        ++ go more (idt + 1)
+        ++ indentBy idt ["end", "unreachable"]
+    go _ _ = gapLP prog "ref-mode: non-Int literal tail switch head"
 
 -- ── §4 closure (CLam) lowering — lambda-lift + arity-in-struct ───────────────
 -- A CLam is lambda-lifted to a top-level $codety function `$mdk_lamN`.  Its FREE
@@ -8991,18 +9009,20 @@ emitLetGroupWith prog env d emitBody binds body =
 -- knot is tied by RECONSTRUCTION inside `emitLgLifted`'s prologue — which this never
 -- touches — and not by patching the use-site struct.
 useSiteRebuilds : Prog -> Int -> List String -> List CBind -> List String
-useSiteRebuilds _ _ _ [] = []
-useSiteRebuilds prog gid groupCaps (b :: rest) =
-  let laterNames = map lgBindName rest
-  let hoistable =
-    listLen groupCaps == 0
-      && not (anyOfList laterNames (freeVarsClauses omEmpty b))
-  let here =
-    if hoistable then
-      constLgClosure prog gid b
-    else
-      rebuildLgClosure prog gid groupCaps b
-  here ++ useSiteRebuilds prog gid groupCaps rest
+useSiteRebuilds prog gid groupCaps xs0 = go xs0
+  where
+    go [] = []
+    go (b :: rest) =
+      let laterNames = map lgBindName rest
+      let hoistable =
+        listLen groupCaps == 0
+          && not (anyOfList laterNames (freeVarsClauses omEmpty b))
+      let here =
+        if hoistable then
+          constLgClosure prog gid b
+        else
+          rebuildLgClosure prog gid groupCaps b
+      here ++ go rest
 
 -- S-4 (prologue half): the member-closure rebuilds a LIFTED member runs on every
 -- entry, including a tail self-call's re-entry.  Its hoist condition is weaker than
@@ -9036,12 +9056,14 @@ isLgValBind _ = False
 -- P1: evaluate each value binding's rhs into its local, threading the bound names
 -- through the env so a later value binding can reference an earlier one.
 emitLgValBinds : Prog -> Env -> Int -> List CBind -> List String
-emitLgValBinds _ _ _ [] = []
-emitLgValBinds prog env d ((CBind name [CClause [] rhs] _ bid) :: rest) =
-  emitRefExpr prog env d rhs
-    ++ ["local.set $" ++ gname name]
-    ++ emitLgValBinds prog (envBind name bid env) d rest
-emitLgValBinds prog env d (_ :: rest) = emitLgValBinds prog env d rest
+emitLgValBinds prog env0 d xs0 = go env0 xs0
+  where
+    go _ [] = []
+    go env ((CBind name [CClause [] rhs] _ bid) :: rest) =
+      emitRefExpr prog env d rhs
+        ++ ["local.set $" ++ gname name]
+        ++ go (envBind name bid env) rest
+    go env (_ :: rest) = go env rest
 
 -- P1: does any name in `xs` occur in `ys`?
 anyOfList : List String -> List String -> Bool
@@ -9193,7 +9215,6 @@ freeVarsExpr bound (CMethod _ (MethodEvidence _ _ route implRoutes methRoutes)) 
   freeGivens bound (route :: implRoutes ++ methRoutes)
 freeVarsExpr bound (CDict name routes) =
   (if omHasKey name bound then [] else [name]) ++ freeGivens bound routes
-freeVarsExpr _bound _ = []
 
 -- free vars of a CLetGroup binding's clauses (each clause's params are locally bound).
 freeVarsClauses : OrdMap Unit -> CBind -> List String
@@ -9626,6 +9647,8 @@ orOwnerStep seen (CArmAlt _ _ owner) = omInsert (intToString owner) () seen
 orOwnerStep seen _ = seen
 
 orArmsFrom : String -> OrdMap Unit -> Int -> List CArm -> List OrArm
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 orArmsFrom _ _ _ [] = []
 orArmsFrom prefix owners i ((CArm pat guards body) :: rest)
   | omHasKey (intToString i) owners =
@@ -9703,16 +9726,15 @@ emitTreeRef : Prog ->
   List CArm ->
   CTree ->
   List String
-emitTreeRef prog _env _d _decLabel _root _occs _arms (CTFail fs) =
-  wasmFailTrap (progEmit prog) fs
-emitTreeRef prog env d decLabel root _occs arms (CTLeaf i) =
-  emitLeafRef prog env d decLabel root arms i
-emitTreeRef prog env d decLabel root occs arms (CTGuard i fail) =
-  emitGuardArmRef prog env d decLabel root occs arms i fail
-emitTreeRef prog env d decLabel root occs arms (CTDrop sub) =
-  emitTreeRef prog env d decLabel root (tailList occs) arms sub
-emitTreeRef prog env d decLabel root occs arms (CTSwitch branches dft) =
-  emitSwitchRef prog env d decLabel root occs arms branches dft
+emitTreeRef prog env d decLabel root occs0 arms x0 = go occs0 x0
+  where
+    go _occs (CTFail fs) = wasmFailTrap (progEmit prog) fs
+    go _occs (CTLeaf i) = emitLeafRef prog env d decLabel root arms i
+    go occs (CTGuard i fail) =
+      emitGuardArmRef prog env d decLabel root occs arms i fail
+    go occs (CTDrop sub) = go (tailList occs) sub
+    go occs (CTSwitch branches dft) =
+      emitSwitchRef prog env d decLabel root occs arms branches dft
 
 -- a leaf: re-match arm i's pattern against `root` to bind its PVars (loading struct
 -- fields), then emit the body, then `br decLabel` with the value.
@@ -9807,18 +9829,22 @@ emitGuardChainRef : Prog ->
   String ->
   List CGuard ->
   (List String, Env)
-emitGuardChainRef _ env _ _ [] = ([], env)
-emitGuardChainRef prog env d gLabel ((CGBool g) :: rest) =
-  let unbox = ["ref.cast (ref i31)", "i31.get_u", "i32.eqz", "br_if " ++ gLabel]
-  let boolTest = emitRefExpr prog env d g ++ unbox
-  let (more, env2) = emitGuardChainRef prog env d gLabel rest
-  (boolTest ++ more, env2)
-emitGuardChainRef prog env d gLabel ((CGBind p ex) :: rest) =
-  let sv = WN.wasmName (WN.WSyntheticLocal WN.WGuard 0)
-  let rhs = emitRefExpr prog env d ex ++ ["local.set $" ++ sv]
-  let (tests, binds, env2) = patTestBind prog p ["local.get $" ++ sv] gLabel env
-  let (more, env3) = emitGuardChainRef prog env2 d gLabel rest
-  (rhs ++ tests ++ binds ++ more, env3)
+emitGuardChainRef prog env0 d gLabel xs0 = go env0 xs0
+  where
+    go env [] = ([], env)
+    go env ((CGBool g) :: rest) =
+      let unbox =
+        ["ref.cast (ref i31)", "i31.get_u", "i32.eqz", "br_if " ++ gLabel]
+      let boolTest = emitRefExpr prog env d g ++ unbox
+      let (more, env2) = go env rest
+      (boolTest ++ more, env2)
+    go env ((CGBind p ex) :: rest) =
+      let sv = WN.wasmName (WN.WSyntheticLocal WN.WGuard 0)
+      let rhs = emitRefExpr prog env d ex ++ ["local.set $" ++ sv]
+      let (tests, binds, env2) =
+        patTestBind prog p ["local.get $" ++ sv] gLabel env
+      let (more, env3) = go env2 rest
+      (rhs ++ tests ++ binds ++ more, env3)
 
 -- a CTSwitch on the focus column.  All heads in one switch are homogeneous.  ADT
 -- heads → discriminant + br_table on the dense per-type ordinal.  Int-literal heads
@@ -9976,38 +10002,15 @@ towerBodies : Prog ->
   Int ->
   Int ->
   List String
-towerBodies prog env d decLabel root svRead rest arms branches dft ty sd k =
-  if k < 0 then
-    ["end"] ++ emitTreeRef prog env d decLabel root rest arms dft
-  else
-    ["end"]
-      ++ emitOrdinalSlot
-        prog
-        env
-        d
-        decLabel
-        root
-        svRead
-        rest
-        arms
-        branches
-        ty
-        sd
-        k
-      ++ towerBodies
-        prog
-        env
-        d
-        decLabel
-        root
-        svRead
-        rest
-        arms
-        branches
-        dft
-        ty
-        sd
-        (k - 1)
+towerBodies prog env d decLabel root sr rest arms brs dft ty sd k0 = go k0
+  where
+    go k =
+      if k < 0 then
+        ["end"] ++ emitTreeRef prog env d decLabel root rest arms dft
+      else
+        ["end"]
+          ++ emitOrdinalSlot prog env d decLabel root sr rest arms brs ty sd k
+          ++ go (k - 1)
 
 -- ordinal k's arm: the branch whose head has ordinal k.  Present → extract its
 -- fields (ref.cast to the ctor struct + struct.get i+1) as new leading occurrences,
@@ -10063,112 +10066,80 @@ emitLitSwitchRef : Prog ->
   CTree ->
   Int ->
   List String
-emitLitSwitchRef prog env d decLabel root _foc rest arms [] dft idt =
-  indentBy idt (emitTreeRef prog env d decLabel root rest arms dft)
-emitLitSwitchRef prog env d decLabel root foc rest arms ((CTBranch (HLit (LInt k)) sub) :: more) dft idt =
-  -- W6 (validate fix): a NO-RESULT `if`.  Every decision-tree path is `br`-terminated
-  -- (leaves `br decLabel`, CTFail → unreachable, the else-chain recurses to another
-  -- br-terminated `if` or the br-terminated `dft`), so the `if` never falls through
-  -- with a value.  A `(result (ref eq))` form leaves a PHANTOM `(ref eq)` on the stack
-  -- when this switch is NESTED inside a con-tower slot — at the slot's untyped `end`
-  -- that strands the value ("values remaining on stack at end of block").  No result
-  -- type ⇒ nothing stranded.
-  --
-  -- …but a no-result `if` is REACHABLE-after: wasm types it `[] -> []` and does NOT
-  -- propagate "both arms diverged", so control notionally falls out of `end` with an
-  -- empty stack.  Under a `block $dec… (result (ref eq))` head (a value-position
-  -- scrutinee, e.g. `main = match "if"`) that fall-out hits the block's end owing a
-  -- `(ref eq)` and strands it the other way — "expected (ref eq) but nothing on
-  -- stack", an INVALID module (#374).  Every path here really is `br`-terminated, so
-  -- close with `unreachable`: the fall-out goes stack-polymorphic and validates under
-  -- BOTH a result-typed head and an untyped con-tower slot.  This is exactly what the
-  -- `emitLitSwitchTail` twin already does — the fix was ported to only one of the pair.
-  -- #759: unbox to i64 ($mdk_unbox_int handles i31 immediate OR $boxint); see
-  -- emitLitSwitchTail — the i31/i32 path truncated/trapped for |k| >= 2^30.
-  indentBy
-      idt
-      (foc
-        ++ [unboxIntW prog, "i64.const " ++ intToString k, "i64.eq"]
-        ++ ["if"])
-    ++ indentBy (idt + 1) (emitTreeRef prog env d decLabel root rest arms sub)
-    ++ indentBy idt ["else"]
-    ++ emitLitSwitchRef
-      prog
-      env
-      d
-      decLabel
-      root
-      foc
-      rest
-      arms
-      more
-      dft
-      (idt + 1)
-    ++ indentBy idt ["end", "unreachable"]
--- W6: Char-literal switch head — a Char is an i31 codepoint immediate (cf.
--- `PLit (LChar)`); compare the i31 against the codepoint constant.
-emitLitSwitchRef prog env d decLabel root foc rest arms ((CTBranch (HLit (LChar c)) sub) :: more) dft idt =
-  indentBy
-      idt
-      (foc
-        ++ [
-          "ref.cast (ref i31)",
-          "i31.get_u",
-          "i32.const "
-            ++ intToString (charCode (arrayGetUnsafe 0 (stringToChars c))),
-          "i32.eq",
-        ]
-        ++ ["if"])
-    ++ indentBy (idt + 1) (emitTreeRef prog env d decLabel root rest arms sub)
-    ++ indentBy idt ["else"]
-    ++ emitLitSwitchRef
-      prog
-      env
-      d
-      decLabel
-      root
-      foc
-      rest
-      arms
-      more
-      dft
-      (idt + 1)
-    ++ indentBy idt ["end", "unreachable"]
--- W6: String-literal switch head — compare the focus $str against each literal via
--- `$mdk_str_compare` (returns the i31 1 on equal), reusing the `PLit (LString)` logic.
-emitLitSwitchRef prog env d decLabel root foc rest arms ((CTBranch (HLit (LString s)) sub) :: more) dft idt =
-  indentBy
-      idt
-      (foc
-        ++ ["ref.cast (ref $str)"]
-        ++ emitLitRef prog (LString s)
-        ++ [
-          rtCallW prog "mdk_str_compare" 2,
-          "ref.cast (ref i31)",
-          "i31.get_u",
-          "i32.const 1",
-          "i32.eq",
-        ]
-        ++ ["if"])
-    ++ indentBy (idt + 1) (emitTreeRef prog env d decLabel root rest arms sub)
-    ++ indentBy idt ["else"]
-    ++ emitLitSwitchRef
-      prog
-      env
-      d
-      decLabel
-      root
-      foc
-      rest
-      arms
-      more
-      dft
-      (idt + 1)
-    ++ indentBy idt ["end", "unreachable"]
-emitLitSwitchRef prog _ _ _ _ _ _ _ _ _ _ =
-  gapLP
-    prog
-    "ref-mode: non-Int literal switch head (Char/String literals are W6)"
+emitLitSwitchRef prog env d dl root foc rest arms xs0 dft idt0 = go xs0 idt0
+  where
+    go [] idt = indentBy idt (emitTreeRef prog env d dl root rest arms dft)
+    go ((CTBranch (HLit (LInt k)) sub) :: more) idt =
+      -- W6 (validate fix): a NO-RESULT `if`.  Every decision-tree path is `br`-terminated
+      -- (leaves `br dl`, CTFail → unreachable, the else-chain recurses to another
+      -- br-terminated `if` or the br-terminated `dft`), so the `if` never falls through
+      -- with a value.  A `(result (ref eq))` form leaves a PHANTOM `(ref eq)` on the stack
+      -- when this switch is NESTED inside a con-tower slot — at the slot's untyped `end`
+      -- that strands the value ("values remaining on stack at end of block").  No result
+      -- type ⇒ nothing stranded.
+      --
+      -- …but a no-result `if` is REACHABLE-after: wasm types it `[] -> []` and does NOT
+      -- propagate "both arms diverged", so control notionally falls out of `end` with an
+      -- empty stack.  Under a `block $dec… (result (ref eq))` head (a value-position
+      -- scrutinee, e.g. `main = match "if"`) that fall-out hits the block's end owing a
+      -- `(ref eq)` and strands it the other way — "expected (ref eq) but nothing on
+      -- stack", an INVALID module (#374).  Every path here really is `br`-terminated, so
+      -- close with `unreachable`: the fall-out goes stack-polymorphic and validates under
+      -- BOTH a result-typed head and an untyped con-tower slot.  This is exactly what the
+      -- `emitLitSwitchTail` twin already does — the fix was ported to only one of the pair.
+      -- #759: unbox to i64 ($mdk_unbox_int handles i31 immediate OR $boxint); see
+      -- emitLitSwitchTail — the i31/i32 path truncated/trapped for |k| >= 2^30.
+      indentBy
+          idt
+          (foc
+            ++ [unboxIntW prog, "i64.const " ++ intToString k, "i64.eq"]
+            ++ ["if"])
+        ++ indentBy (idt + 1) (emitTreeRef prog env d dl root rest arms sub)
+        ++ indentBy idt ["else"]
+        ++ go more (idt + 1)
+        ++ indentBy idt ["end", "unreachable"]
+    -- W6: Char-literal switch head — a Char is an i31 codepoint immediate (cf.
+    -- `PLit (LChar)`); compare the i31 against the codepoint constant.
+    go ((CTBranch (HLit (LChar c)) sub) :: more) idt =
+      indentBy
+          idt
+          (foc
+            ++ [
+              "ref.cast (ref i31)",
+              "i31.get_u",
+              "i32.const "
+                ++ intToString (charCode (arrayGetUnsafe 0 (stringToChars c))),
+              "i32.eq",
+            ]
+            ++ ["if"])
+        ++ indentBy (idt + 1) (emitTreeRef prog env d dl root rest arms sub)
+        ++ indentBy idt ["else"]
+        ++ go more (idt + 1)
+        ++ indentBy idt ["end", "unreachable"]
+    -- W6: String-literal switch head — compare the focus $str against each literal via
+    -- `$mdk_str_compare` (returns the i31 1 on equal), reusing the `PLit (LString)` logic.
+    go ((CTBranch (HLit (LString s)) sub) :: more) idt =
+      indentBy
+          idt
+          (foc
+            ++ ["ref.cast (ref $str)"]
+            ++ emitLitRef prog (LString s)
+            ++ [
+              rtCallW prog "mdk_str_compare" 2,
+              "ref.cast (ref i31)",
+              "i31.get_u",
+              "i32.const 1",
+              "i32.eq",
+            ]
+            ++ ["if"])
+        ++ indentBy (idt + 1) (emitTreeRef prog env d dl root rest arms sub)
+        ++ indentBy idt ["else"]
+        ++ go more (idt + 1)
+        ++ indentBy idt ["end", "unreachable"]
+    go _ _ =
+      gapLP
+        prog
+        "ref-mode: non-Int literal switch head (Char/String literals are W6)"
 
 -- ── pattern binding (leaf re-match) ──────────────────────────────────────────
 -- bind a pattern's PVars against the value the snippet `v` produces, emitting struct
@@ -10222,17 +10193,19 @@ bindTupleFields : Prog ->
   List String ->
   Int ->
   (List String, Env)
-bindTupleFields _ env _ [] _ _ = ([], env)
-bindTupleFields prog env tc (p :: rest) v i =
-  let fieldSnippet =
-    v
-      ++ [
-        "ref.cast (ref $" ++ typeNameW prog (ctorStructName tc) ++ ")",
-        "struct.get $\{typeNameW prog (ctorStructName tc)} \{intToString (i + 1)}",
-      ]
-  let (cur, env2) = bindPatRef prog env p fieldSnippet
-  let (more, env3) = bindTupleFields prog env2 tc rest v (i + 1)
-  (cur ++ more, env3)
+bindTupleFields prog env0 tc xs0 v i0 = go env0 xs0 i0
+  where
+    go env [] _ = ([], env)
+    go env (p :: rest) i =
+      let fieldSnippet =
+        v
+          ++ [
+            "ref.cast (ref $" ++ typeNameW prog (ctorStructName tc) ++ ")",
+            "struct.get $\{typeNameW prog (ctorStructName tc)} \{intToString (i + 1)}",
+          ]
+      let (cur, env2) = bindPatRef prog env p fieldSnippet
+      let (more, env3) = go env2 rest (i + 1)
+      (cur ++ more, env3)
 
 -- bind a constructor pattern's fields: for each field i, extract via ref.cast +
 -- struct.get (field i+1, after the i32 tag), then recurse into the sub-pattern.
@@ -10251,17 +10224,19 @@ bindConFieldsGo : Prog ->
   List String ->
   Int ->
   (List String, Env)
-bindConFieldsGo _ env _ [] _ _ = ([], env)
-bindConFieldsGo prog env c (p :: rest) v i =
-  let fieldSnippet =
-    v
-      ++ [
-        "ref.cast (ref $" ++ typeNameW prog (ctorStructName c) ++ ")",
-        "struct.get $\{typeNameW prog (ctorStructName c)} \{intToString (i + 1)}",
-      ]
-  let (cur, env2) = bindPatRef prog env p fieldSnippet
-  let (more, env3) = bindConFieldsGo prog env2 c rest v (i + 1)
-  (cur ++ more, env3)
+bindConFieldsGo prog env0 c xs0 v i0 = go env0 xs0 i0
+  where
+    go env [] _ = ([], env)
+    go env (p :: rest) i =
+      let fieldSnippet =
+        v
+          ++ [
+            "ref.cast (ref $" ++ typeNameW prog (ctorStructName c) ++ ")",
+            "struct.get $\{typeNameW prog (ctorStructName c)} \{intToString (i + 1)}",
+          ]
+      let (cur, env2) = bindPatRef prog env p fieldSnippet
+      let (more, env3) = go env2 rest (i + 1)
+      (cur ++ more, env3)
 
 -- ── helpers shared by both modes ─────────────────────────────────────────────
 
@@ -10351,7 +10326,7 @@ collectExprLocals (CLetGroup binds body) =
 -- a method dispatched on a projected super dictionary reads it through a local
 collectExprLocals (CMethod _ (MethodEvidence _ _ (RProj r path) _ _)) =
   [projLocalName r path]
-collectExprLocals _ = []
+collectExprLocals (CMethod _ _ | CLit _ | CVar _ _ | CLam _ _ | CDict _ _) = []
 
 collectFieldLocals : CField -> List String
 collectFieldLocals (CField _ _ value) = collectExprLocals value
@@ -11239,7 +11214,7 @@ hasFamilyW prog symbol tag =
 (DTypeSig false "jsImportForW" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyApp (TyCon "List") (TyCon "String"))) (TyCon "JsImport")))))
 (DFunDef false "jsImportForW" ((PVar "prog") (PVar "name")) (EMatch (EApp (EApp (EVar "selectedJsImport") (EVar "prog")) (EVar "name")) (arm (PCon "Some" (PVar "imp")) () (EIf (EApp (EVar "not") (EApp (EApp (EVar "allList") (EVar "jsCrossableHead")) (EBinOp "::" (EFieldAccess (EVar "imp") "result") (EFieldAccess (EVar "imp") "params")))) (EApp (EVar "Err") (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "wasm: a non-crossable type reached the lowering of foreign call '")) (EApp (EVar "$core.display") (EApp (EApp (EVar "externDisplayW") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "name")))) (ELit (LString "' (compiler/FFI-ABI.md section 1)"))))) (EIf (EBinOp "==" (EFieldAccess (EVar "imp") "result") (ELit (LString "Array"))) (EApp (EVar "Err") (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "wasm: foreign call '")) (EApp (EVar "$core.display") (EApp (EApp (EVar "externDisplayW") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "name")))) (ELit (LString "' returns 'Array Int', which no FFI target can return (compiler/FFI-ABI.md section 2.4, docs/spec/WASM-SEMANTICS.md section 3.1). Declare the array as a parameter instead and have the binding fill it in place: its elements are copied back after the call returns"))))) (EApp (EVar "Ok") (EVar "imp"))))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "ffiBindsOfW") (EVar "prog")) (EVar "name")) (arm (PCon "Some" (PVar "binds")) ((GBool (EApp (EVar "isSome") (EApp (EApp (EVar "hostSymbol") (ELit (LString "js"))) (EVar "binds"))))) (EApp (EVar "Err") (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "internal error: the emit plan has no `jsffi` import for the reached extern '")) (EApp (EVar "$core.display") (EApp (EApp (EVar "externDisplayW") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "name")))) (ELit (LString "'")))))) (arm PWild () (EApp (EVar "Err") (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "wasm: the extern '")) (EApp (EVar "$core.display") (EApp (EApp (EVar "externDisplayW") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "name")))) (ELit (LString "' has no `js` binding, so the module has nothing to import for it; `check --target` refuses a reached extern with no binding for its target's host (T-TARGET-NO-BINDING)"))))))))))
 (DTypeSig false "selectedJsImport" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "JsImport")))))
-(DFunDef false "selectedJsImport" ((PVar "prog") (PVar "name")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EFieldAccess (EApp (EVar "progEmit") (EVar "prog")) "externFacts")) (arm (PCon "Some" (PVar "fact")) ((GBool (EBinOp "==" (EFieldAccess (EVar "fact") "bindingKind") (EVar "ForeignBinding")))) (EMatch (EApp (EApp (EVar "hostSymbol") (ELit (LString "js"))) (EFieldAccess (EVar "fact") "hostBindings")) (arm (PCon "Some" (PVar "host")) () (EApp (EApp (EVar "map") (ELam ((PVar "shape")) (ERecordCreate "JsImport" ((fa "medakaName" (EVar "name")) (fa "jsName" (EVar "host")) (fa "params" (EFieldAccess (EVar "shape") "parameterHeads")) (fa "result" (EFieldAccess (EVar "shape") "resultHead")))))) (EFieldAccess (EVar "fact") "callableShape"))) (arm (PCon "None") () (EVar "None")))) (arm PWild () (EVar "None"))))
+(DFunDef false "selectedJsImport" ((PVar "prog") (PVar "name")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EFieldAccess (EApp (EVar "progEmit") (EVar "prog")) "externFacts")) (arm (PCon "Some" (PVar "fact")) ((GBool (EBinOp "==" (EFieldAccess (EVar "fact") "bindingKind") (EVar "ForeignBinding")))) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "hostSymbol") (ELit (LString "js"))) (EFieldAccess (EVar "fact") "hostBindings"))) (ELam ((PVar "host")) (EApp (EApp (EVar "map") (ELam ((PVar "shape")) (ERecordCreate "JsImport" ((fa "medakaName" (EVar "name")) (fa "jsName" (EVar "host")) (fa "params" (EFieldAccess (EVar "shape") "parameterHeads")) (fa "result" (EFieldAccess (EVar "shape") "resultHead")))))) (EFieldAccess (EVar "fact") "callableShape"))))) (arm PWild () (EVar "None"))))
 (DTypeSig false "emitFfiAppW" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "CExpr") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyFun (TyCon "CallEndW") (TyApp (TyCon "List") (TyCon "String"))))))))))
 (DFunDef false "emitFfiAppW" ((PVar "prog") (PVar "env") (PVar "d") (PVar "hd") (PVar "name") (PVar "args") (PVar "end")) (EMatch (EApp (EApp (EVar "jsImportForW") (EVar "prog")) (EVar "name")) (arm (PCon "Err" (PVar "gap")) () (EVar "gap")) (arm (PCon "Ok" (PVar "imp")) () (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "args")) (EApp (EVar "listLen") (EFieldAccess (EVar "imp") "params"))) (EBinOp "++" (EApp (EApp (EVar "flatMap") (ELam ((PVar "a")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")))) (EVar "args")) (EListLit (EApp (EApp (EApp (EApp (EVar "callFnW") (EVar "prog")) (EVar "end")) (EApp (EApp (EVar "jsffiWrapperW") (EVar "prog")) (EVar "imp"))) (EApp (EVar "listLen") (EVar "args"))))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitIndirectApp") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "hd")) (EVar "args")) (EVar "end"))))))
 (DTypeSig false "emitFfiEtaW" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
@@ -11383,7 +11358,7 @@ hasFamilyW prog symbol tag =
 (DTypeSig true "emitProgramRecord" (TyFun (TyCon "WasmEmitInput") (TyFun (TyCon "EmitPlan") (TyFun (TyCon "CProgram") (TyApp (TyApp (TyCon "Result") (TyApp (TyCon "List") (TyCon "SymbolDefect"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "emitProgramRecord" ((PVar "input") (PVar "plan") (PVar "cp")) (EBlock (DoLet false false (PVar "emit") (EApp (EVar "freshWasmEmit") (EVar "WGapRecord"))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "text")) (ETuple (EVar "text") (EApp (EVar "gapEventsOfW") (EVar "emit"))))) (EApp (EApp (EApp (EApp (EVar "emitProgramWith") (EVar "emit")) (EVar "input")) (EVar "plan")) (EVar "cp"))))))
 (DTypeSig false "emitProgramWith" (TyFun (TyCon "WasmEmit") (TyFun (TyCon "WasmEmitInput") (TyFun (TyCon "EmitPlan") (TyFun (TyCon "CProgram") (TyApp (TyApp (TyCon "Result") (TyApp (TyCon "List") (TyCon "SymbolDefect"))) (TyCon "String")))))))
-(DFunDef false "emitProgramWith" ((PVar "emit") (PVar "input") (PVar "plan") (PVar "cp")) (EMatch (EApp (EApp (EApp (EApp (EVar "emitProgramCore") (EVar "emit")) (EVar "input")) (EVar "plan")) (EVar "cp")) (arm (PCon "Err" (PVar "defects")) () (EApp (EVar "Err") (EVar "defects"))) (arm (PCon "Ok" (PVar "text")) () (EApp (EApp (EApp (EApp (EVar "finishCheckedText") (EApp (EVar "RecordedGaps") (EUnOp "!" (EFieldAccess (EVar "emit") "gapSymbols")))) (EUnOp "!" (EFieldAccess (EVar "emit") "symbols"))) (EUnOp "!" (EFieldAccess (EVar "emit") "callCoverage"))) (EVar "text")))))
+(DFunDef false "emitProgramWith" ((PVar "emit") (PVar "input") (PVar "plan") (PVar "cp")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EApp (EVar "emitProgramCore") (EVar "emit")) (EVar "input")) (EVar "plan")) (EVar "cp"))) (ELam ((PVar "text")) (EApp (EApp (EApp (EApp (EVar "finishCheckedText") (EApp (EVar "RecordedGaps") (EUnOp "!" (EFieldAccess (EVar "emit") "gapSymbols")))) (EUnOp "!" (EFieldAccess (EVar "emit") "symbols"))) (EUnOp "!" (EFieldAccess (EVar "emit") "callCoverage"))) (EVar "text")))))
 (DTypeSig false "refuseUnprovidedExternsW" (TyFun (TyCon "WasmEmit") (TyFun (TyCon "WasmEmitInput") (TyFun (TyCon "EmitPlan") (TyFun (TyCon "CProgram") (TyCon "Unit"))))))
 (DFunDef false "refuseUnprovidedExternsW" ((PVar "emit") (PVar "input") (PVar "plan") (PVar "cp")) (EBlock (DoLet false false (PVar "validation") (EApp (EApp (EApp (EApp (EApp (EVar "validateForEmission") (EVar "WasmBackend")) (EApp (EVar "inputRuntimeExternsW") (EVar "input"))) (EApp (EVar "inputManifestRequirementW") (EVar "input"))) (EVar "plan")) (EVar "cp"))) (DoExpr (EMatch (EFieldAccess (EVar "validation") "defects") (arm (PCons (PVar "bad") PWild) () (EApp (EVar "panic") (EApp (EVar "coreDefectMessage") (EVar "bad")))) (arm (PList) () (EMatch (EFieldAccess (EVar "validation") "externFindings") (arm (PList) () (ELit LUnit)) (arm (PVar "findings") () (EMatch (EFieldAccess (EVar "emit") "gapMode") (arm (PCon "WGapStrict") () (EApp (EVar "panic") (EApp (EVar "renderExternRefusal") (EVar "findings")))) (arm (PCon "WGapRecord") () (EApp (EApp (EVar "forEachU") (ELam ((PVar "f")) (EApp (EApp (EApp (EVar "noteGapAtW") (EVar "emit")) (EApp (EVar "findingBinding") (EVar "f"))) (EApp (EVar "renderExternFinding") (EVar "f"))))) (EVar "findings")))))))))))
 (DTypeSig false "emitProgramCore" (TyFun (TyCon "WasmEmit") (TyFun (TyCon "WasmEmitInput") (TyFun (TyCon "EmitPlan") (TyFun (TyCon "CProgram") (TyApp (TyApp (TyCon "Result") (TyApp (TyCon "List") (TyCon "SymbolDefect"))) (TyCon "String")))))))
@@ -11393,16 +11368,13 @@ hasFamilyW prog symbol tag =
 (DTypeSig true "emitProgramGaps" (TyFun (TyCon "WasmEmitInput") (TyFun (TyCon "EmitPlan") (TyFun (TyCon "CProgram") (TyApp (TyApp (TyCon "Result") (TyApp (TyCon "List") (TyCon "SymbolDefect"))) (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "emitProgramGaps" ((PVar "input") (PVar "plan") (PVar "cp0")) (EBlock (DoLet false false (PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") (PVar "mctx") (PVar "facts")) (EVar "cp0")) (DoLet false false (PVar "emit") (EApp (EVar "freshWasmEmit") (EVar "WGapRecord"))) (DoLet false false (PVar "emit") (ERecordUpdate (EVar "emit") ((fa "externFacts" (EApp (EVar "requirementFacts") (EFieldAccess (EVar "plan") "externRequirements"))) (fa "physical" (EFieldAccess (EVar "plan") "wasmPhysical")) (fa "closureChecked" (EVar "False")) (fa "identity" (EMatch (EFieldAccess (EVar "plan") "identity") (arm (PCon "Ok" (PVar "identity")) () (EApp (EVar "Some") (EVar "identity"))) (arm (PCon "Err" PWild) () (EVar "None"))))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "refuseUnprovidedExternsW") (EVar "emit")) (EVar "input")) (EVar "plan")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls")) (EVar "mctx")) (EVar "facts")))) (DoExpr (EApp (EApp (EVar "seedPhysicalW") (EVar "emit")) (EApp (EVar "physicalPlanW") (EVar "plan")))) (DoLet false false (PVar "emit") (ERecordUpdate (EVar "emit") ((fa "physical" (EApp (EVar "Some") (EApp (EVar "WD.censusWasmDemand") (EApp (EVar "physicalPlanW") (EVar "plan")))))))) (DoLet false false (PVar "fnNames") (EApp (EVar "collectFnNames") (EVar "groups"))) (DoLet false false (PVar "valNames") (EApp (EVar "collectValNames") (EVar "groups"))) (DoLet false false (PVar "index") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "makeWasmProgramIndexGaps") (EFieldAccess (EVar "plan") "constructorFacts")) (EFieldAccess (EFieldAccess (EVar "plan") "wasmInputs") "ctorFloatFields")) (EFieldAccess (EVar "plan") "trmc")) (EFieldAccess (EVar "plan") "methodTables")) (EVar "facts")) (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls")) (EVar "fnNames")) (EVar "valNames")) (EFieldAccess (EApp (EVar "physicalPlanW") (EVar "plan")) "fnValues"))) (DoLet false false (PVar "useClos") (EFieldAccess (EApp (EVar "physicalPlanW") (EVar "plan")) "useClos")) (DoLet false false (PVar "typeNames") (EFieldAccess (EFieldAccess (EVar "plan") "constructorFacts") "typeOrder")) (DoLet false false (PVar "prog") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Prog") (EVar "index")) (EVar "typeNames")) (EVar "valNames")) (EVar "useClos")) (EVar "impls")) (EApp (EApp (EVar "resolveImplGroupsW") (EVar "impls")) (EFieldAccess (EVar "plan") "implGroups"))) (EVar "input")) (EVar "emit")) (EApp (EVar "freshFnCtx") (ELit LUnit)))) (DoExpr (EApp (EApp (EApp (EVar "seedSymbolsW") (EVar "prog")) (EApp (EVar "WD.censusWasmDemand") (EApp (EVar "physicalPlanW") (EVar "plan")))) (EListLit))) (DoLet false false (PVar "fragments") (EApp (EVar "Ref") (EListLit))) (DoExpr (EApp (EApp (EApp (EVar "emitFnsGapsW") (EVar "prog")) (EVar "fragments")) (EApp (EVar "userFnBinds") (EVar "groups")))) (DoExpr (EApp (EApp (EApp (EVar "emitImplsGapsW") (EVar "prog")) (EVar "fragments")) (EApp (EVar "progImplGroups") (EVar "prog")))) (DoExpr (EApp (EApp (EApp (EVar "emitValsGapsW") (EVar "prog")) (EVar "fragments")) (EApp (EApp (EVar "filterList") (EVar "isValBind")) (EVar "groups")))) (DoLet false false (PVar "lifted") (EApp (EApp (EVar "flatMap") (ELam ((PVar "x")) (EVar "x"))) (EApp (EVar "reverseL") (EUnOp "!" (EFieldAccess (EVar "emit") "liftedDefinitions"))))) (DoLet false false (PVar "text") (EApp (EVar "joinNl") (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "flatMap") (ELam ((PVar "x")) (EVar "x"))) (EApp (EVar "reverseL") (EUnOp "!" (EVar "fragments")))) (EVar "lifted")) (EApp (EVar "trapMsgRuntimeOf") (EVar "emit"))))) (DoExpr (EMatch (EApp (EVar "symbolDefectsW") (EVar "emit")) (arm (PList) () (EApp (EApp (EVar "map") (ELam (PWild) (EApp (EVar "gapEventsOfW") (EVar "emit")))) (EApp (EApp (EApp (EVar "checkCheckedFragment") (EUnOp "!" (EFieldAccess (EVar "emit") "symbols"))) (EUnOp "!" (EFieldAccess (EVar "emit") "callCoverage"))) (EVar "text")))) (arm (PVar "defects") () (EApp (EVar "Err") (EVar "defects")))))))
 (DTypeSig false "emitFnsGapsW" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyCon "Unit")))))
-(DFunDef false "emitFnsGapsW" (PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "emitFnsGapsW" ((PVar "prog") (PVar "fragments") (PCons (PCon "CBind" (PVar "name") (PVar "cs") (PVar "site") (PVar "bid")) (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EVar "setGapBindingOfW") (EApp (EVar "progEmit") (EVar "prog"))) (EBinOp "++" (ELit (LString "fn ")) (EVar "name")))) (DoLet false false (PVar "lines") (EApp (EApp (EVar "emitRefFnBind") (EVar "prog")) (EApp (EApp (EApp (EApp (EVar "CBind") (EVar "name")) (EVar "cs")) (EVar "site")) (EVar "bid")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "fragments")) (EBinOp "::" (EVar "lines") (EUnOp "!" (EVar "fragments"))))) (DoExpr (EApp (EApp (EApp (EVar "emitFnsGapsW") (EVar "prog")) (EVar "fragments")) (EVar "rest")))))
+(DFunDef false "emitFnsGapsW" ((PVar "prog") (PVar "fragments") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PCon "CBind" (PVar "name") (PVar "cs") (PVar "site") (PVar "bid")) (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EVar "setGapBindingOfW") (EApp (EVar "progEmit") (EVar "prog"))) (EBinOp "++" (ELit (LString "fn ")) (EVar "name")))) (DoLet false false (PVar "lines") (EApp (EApp (EVar "emitRefFnBind") (EVar "prog")) (EApp (EApp (EApp (EApp (EVar "CBind") (EVar "name")) (EVar "cs")) (EVar "site")) (EVar "bid")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "fragments")) (EBinOp "::" (EVar "lines") (EUnOp "!" (EVar "fragments"))))) (DoExpr (EApp (EVar "go") (EVar "rest"))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "emitImplsGapsW" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyCon "ImplG")) (TyCon "Unit")))))
-(DFunDef false "emitImplsGapsW" (PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "emitImplsGapsW" ((PVar "prog") (PVar "fragments") (PCons (PAs "g" (PCon "ImplG" (PVar "method") (PVar "headTag") PWild PWild PWild PWild)) (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EVar "setGapBindingOfW") (EApp (EVar "progEmit") (EVar "prog"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "impl ")) (EApp (EVar "$core.display") (EVar "method"))) (ELit (LString "@"))) (EApp (EVar "$core.display") (EVar "headTag"))) (ELit (LString ""))))) (DoLet false false (PVar "lines") (EApp (EApp (EVar "emitImplGroup") (EVar "prog")) (EVar "g"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "fragments")) (EBinOp "::" (EVar "lines") (EUnOp "!" (EVar "fragments"))))) (DoExpr (EApp (EApp (EApp (EVar "emitImplsGapsW") (EVar "prog")) (EVar "fragments")) (EVar "rest")))))
+(DFunDef false "emitImplsGapsW" ((PVar "prog") (PVar "fragments") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PAs "g" (PCon "ImplG" (PVar "method") (PVar "headTag") PWild PWild PWild PWild)) (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EVar "setGapBindingOfW") (EApp (EVar "progEmit") (EVar "prog"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "impl ")) (EApp (EVar "$core.display") (EVar "method"))) (ELit (LString "@"))) (EApp (EVar "$core.display") (EVar "headTag"))) (ELit (LString ""))))) (DoLet false false (PVar "lines") (EApp (EApp (EVar "emitImplGroup") (EVar "prog")) (EVar "g"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "fragments")) (EBinOp "::" (EVar "lines") (EUnOp "!" (EVar "fragments"))))) (DoExpr (EApp (EVar "go") (EVar "rest"))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "emitValsGapsW" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyCon "Unit")))))
-(DFunDef false "emitValsGapsW" (PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "emitValsGapsW" ((PVar "prog") (PVar "fragments") (PCons (PVar "b") (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EVar "setGapBindingOfW") (EApp (EVar "progEmit") (EVar "prog"))) (EBinOp "++" (ELit (LString "val ")) (EApp (EVar "bindName") (EVar "b"))))) (DoLet false false (PVar "lines") (EApp (EApp (EVar "emitRefValInit") (EVar "prog")) (EVar "b"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "fragments")) (EBinOp "::" (EVar "lines") (EUnOp "!" (EVar "fragments"))))) (DoExpr (EApp (EApp (EApp (EVar "emitValsGapsW") (EVar "prog")) (EVar "fragments")) (EVar "rest")))))
+(DFunDef false "emitValsGapsW" ((PVar "prog") (PVar "fragments") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PVar "b") (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EVar "setGapBindingOfW") (EApp (EVar "progEmit") (EVar "prog"))) (EBinOp "++" (ELit (LString "val ")) (EApp (EVar "bindName") (EVar "b"))))) (DoLet false false (PVar "lines") (EApp (EApp (EVar "emitRefValInit") (EVar "prog")) (EVar "b"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "fragments")) (EBinOp "::" (EVar "lines") (EUnOp "!" (EVar "fragments"))))) (DoExpr (EApp (EVar "go") (EVar "rest"))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "externFamilyW" (TyFun (TyCon "WasmEmit") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "WasmFamily")))))
-(DFunDef false "externFamilyW" ((PVar "emit") (PVar "name")) (EIf (EBinOp "==" (EVar "name") (EVar "siteSentinelName")) (EApp (EVar "Some") (EVar "WasmLeaf")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EFieldAccess (EApp (EVar "emitDemandW") (EVar "emit")) "catalogFamilies")) (arm (PCon "Some" (PVar "f")) () (EIf (EApp (EVar "isWasmExternFamily") (EVar "f")) (EApp (EVar "Some") (EVar "f")) (EVar "None"))) (arm (PCon "None") () (EVar "None")))))
+(DFunDef false "externFamilyW" ((PVar "emit") (PVar "name")) (EIf (EBinOp "==" (EVar "name") (EVar "siteSentinelName")) (EApp (EVar "Some") (EVar "WasmLeaf")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EFieldAccess (EApp (EVar "emitDemandW") (EVar "emit")) "catalogFamilies"))) (ELam ((PVar "f")) (EIf (EApp (EVar "isWasmExternFamily") (EVar "f")) (EApp (EVar "Some") (EVar "f")) (EVar "None"))))))
 (DTypeSig false "isWasmEtaExtern" (TyFun (TyCon "WasmEmit") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "isWasmEtaExtern" ((PVar "emit") (PVar "name")) (EApp (EVar "isSome") (EApp (EApp (EVar "externFamilyW") (EVar "emit")) (EVar "name"))))
 (DTypeSig false "fileBoundW" (TyFun (TyCon "CExpr") (TyApp (TyCon "Option") (TyTuple (TyCon "CExpr") (TyCon "CExpr") (TyCon "Int")))))
@@ -11579,14 +11551,12 @@ hasFamilyW prog symbol tag =
 (DFunDef false "mainBodyIsUnit" ((PVar "prog") (PVar "cafs") (PCon "CDecision" PWild (PVar "arms") PWild)) (EApp (EApp (EApp (EVar "allArmsUnit") (EVar "prog")) (EVar "cafs")) (EVar "arms")))
 (DFunDef false "mainBodyIsUnit" ((PVar "prog") (PVar "cafs") (PCon "CMatch" PWild (PVar "arms"))) (EApp (EApp (EApp (EVar "allArmsUnit") (EVar "prog")) (EVar "cafs")) (EVar "arms")))
 (DFunDef false "mainBodyIsUnit" ((PVar "prog") (PVar "cafs") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EApp (EVar "blockTailIsUnit") (EVar "prog")) (EVar "cafs")) (EVar "stmts")))
-(DFunDef false "mainBodyIsUnit" (PWild PWild PWild) (EVar "False"))
+(DFunDef false "mainBodyIsUnit" (PWild PWild (POr (PCon "CLit" PWild) (PCon "CLam" PWild PWild) (PCon "CLetGroup" PWild PWild) (PCon "CIf" PWild PWild PWild) (PCon "CBinPrim" PWild PWild PWild PWild PWild) (PCon "CUnOp" PWild PWild) (PCon "CTuple" PWild) (PCon "CList" PWild) (PCon "CRecord" PWild PWild) (PCon "CFieldAccess" PWild PWild PWild PWild) (PCon "CRecordUpdate" PWild PWild PWild) (PCon "CVariantUpdate" PWild PWild PWild) (PCon "CArray" PWild) (PCon "CRangeList" PWild PWild PWild) (PCon "CRangeArray" PWild PWild PWild) (PCon "CMethod" PWild PWild))) (EVar "False"))
 (DTypeSig false "allArmsUnit" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "OrdMap") (TyCon "CExpr")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyCon "Bool")))))
 (DFunDef false "allArmsUnit" (PWild PWild (PList)) (EVar "False"))
 (DFunDef false "allArmsUnit" ((PVar "prog") (PVar "cafs") (PVar "arms")) (EApp (EApp (EApp (EVar "allArmsUnitGo") (EVar "prog")) (EVar "cafs")) (EVar "arms")))
 (DTypeSig false "allArmsUnitGo" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "OrdMap") (TyCon "CExpr")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyCon "Bool")))))
-(DFunDef false "allArmsUnitGo" (PWild PWild (PList)) (EVar "True"))
-(DFunDef false "allArmsUnitGo" ((PVar "prog") (PVar "cafs") (PCons (PCon "CArm" (PVar "pat") PWild (PVar "body")) (PVar "rest"))) (EIf (EApp (EApp (EApp (EVar "mainBodyIsUnit") (EVar "prog")) (EApp (EApp (EVar "shadowCafs") (EApp (EVar "patBinders") (EVar "pat"))) (EVar "cafs"))) (EVar "body")) (EApp (EApp (EApp (EVar "allArmsUnitGo") (EVar "prog")) (EVar "cafs")) (EVar "rest")) (EVar "False")))
-(DFunDef false "allArmsUnitGo" ((PVar "prog") (PVar "cafs") (PCons (PCon "CArmAlt" PWild PWild PWild) (PVar "rest"))) (EApp (EApp (EApp (EVar "allArmsUnitGo") (EVar "prog")) (EVar "cafs")) (EVar "rest")))
+(DFunDef false "allArmsUnitGo" ((PVar "prog") (PVar "cafs") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EVar "True")) (clause ((PCons (PCon "CArm" (PVar "pat") PWild (PVar "body")) (PVar "rest"))) (EIf (EApp (EApp (EApp (EVar "mainBodyIsUnit") (EVar "prog")) (EApp (EApp (EVar "shadowCafs") (EApp (EVar "patBinders") (EVar "pat"))) (EVar "cafs"))) (EVar "body")) (EApp (EVar "go") (EVar "rest")) (EVar "False"))) (clause ((PCons (PCon "CArmAlt" PWild PWild PWild) (PVar "rest"))) (EApp (EVar "go") (EVar "rest"))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "blockTailIsUnit" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "OrdMap") (TyCon "CExpr")) (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyCon "Bool")))))
 (DFunDef false "blockTailIsUnit" (PWild PWild (PList)) (EVar "False"))
 (DFunDef false "blockTailIsUnit" ((PVar "prog") (PVar "cafs") (PList (PCon "CSExpr" (PVar "e")))) (EApp (EApp (EApp (EVar "mainBodyIsUnit") (EVar "prog")) (EVar "cafs")) (EVar "e")))
@@ -11674,39 +11644,21 @@ hasFamilyW prog symbol tag =
 (DTypeSig false "emitClauseChainRefEnv" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "WParam")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyApp (TyCon "List") (TyCon "String")))))))))
 (DFunDef false "emitClauseChainRefEnv" ((PVar "prog") (PVar "baseEnv") (PVar "name") (PVar "params") (PVar "arity") (PVar "clauses")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitClauseChainGo") (EVar "prog")) (EVar "baseEnv")) (EVar "name")) (EVar "params")) (EVar "arity")) (EVar "clauses")) (ELit (LInt 0))) (EFieldAccess (EApp (EVar "progFnCtx") (EVar "prog")) "site")))
 (DTypeSig false "emitClauseChainGo" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "WParam")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))))))))
-(DFunDef false "emitClauseChainGo" ((PVar "prog") PWild PWild PWild PWild (PList) PWild (PVar "site")) (EApp (EApp (EVar "wasmNonexhTrap") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "site")))
-(DFunDef false "emitClauseChainGo" ((PVar "prog") (PVar "baseEnv") (PVar "name") (PVar "params") (PVar "arity") (PCons (PCon "CClause" (PVar "pats") (PVar "body")) (PVar "rest")) (PVar "i") (PVar "site")) (EBlock (DoLet false false (PVar "clLabel") (EApp (EApp (EVar "labelName") (EVar "WN.WClause")) (EVar "i"))) (DoLet false false (PTuple (PVar "tests") (PVar "binds") (PVar "env")) (EApp (EApp (EApp (EApp (EApp (EVar "clausePatCodeEnv") (EVar "prog")) (EVar "baseEnv")) (EVar "pats")) (EVar "params")) (EVar "clLabel"))) (DoLet false false (PVar "body2") (EApp (EApp (EVar "labelFallthrough") (EVar "body")) (EVar "clLabel"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (ELit (LString "block ")) (EVar "clLabel"))) (EApp (EVar "indent") (EBinOp "++" (EBinOp "++" (EVar "tests") (EVar "binds")) (EApp (EApp (EApp (EApp (EVar "emitRefTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "body2"))))) (EListLit (ELit (LString "end")))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitClauseChainGo") (EVar "prog")) (EVar "baseEnv")) (EVar "name")) (EVar "params")) (EVar "arity")) (EVar "rest")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "site"))))))
+(DFunDef false "emitClauseChainGo" ((PVar "prog") (PVar "baseEnv") (PVar "_name") (PVar "params") (PVar "arity") (PVar "cls0") (PVar "i0") (PVar "site")) (ELetGroup ((lgb "go" (clause ((PList) PWild) (EApp (EApp (EVar "wasmNonexhTrap") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "site"))) (clause ((PCons (PCon "CClause" (PVar "pats") (PVar "body")) (PVar "rest")) (PVar "i")) (EBlock (DoLet false false (PVar "clLabel") (EApp (EApp (EVar "labelName") (EVar "WN.WClause")) (EVar "i"))) (DoLet false false (PTuple (PVar "tests") (PVar "binds") (PVar "env")) (EApp (EApp (EApp (EApp (EApp (EVar "clausePatCodeEnv") (EVar "prog")) (EVar "baseEnv")) (EVar "pats")) (EVar "params")) (EVar "clLabel"))) (DoLet false false (PVar "body2") (EApp (EApp (EVar "labelFallthrough") (EVar "body")) (EVar "clLabel"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (ELit (LString "block ")) (EVar "clLabel"))) (EApp (EVar "indent") (EBinOp "++" (EBinOp "++" (EVar "tests") (EVar "binds")) (EApp (EApp (EApp (EApp (EVar "emitRefTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "body2"))))) (EListLit (ELit (LString "end")))) (EApp (EApp (EVar "go") (EVar "rest")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))))))) (EApp (EApp (EVar "go") (EVar "cls0")) (EVar "i0"))))
 (DTypeSig false "clausePatCodeEnv" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "List") (TyCon "WParam")) (TyFun (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")) (TyCon "Env"))))))))
 (DFunDef false "clausePatCodeEnv" ((PVar "prog") (PVar "baseEnv") (PVar "pats") (PVar "params") (PVar "clLabel")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "clausePatGo") (EVar "prog")) (EApp (EApp (EVar "zipPats") (EVar "pats")) (EVar "params"))) (EVar "clLabel")) (EListLit)) (EListLit)) (EVar "baseEnv")))
 (DTypeSig false "clausePatGo" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Pat") (TyCon "WParam"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Env") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")) (TyCon "Env")))))))))
-(DFunDef false "clausePatGo" (PWild (PList) PWild (PVar "tAcc") (PVar "bAcc") (PVar "env")) (ETuple (EVar "tAcc") (EVar "bAcc") (EVar "env")))
-(DFunDef false "clausePatGo" ((PVar "prog") (PCons (PTuple (PVar "pat") (PVar "a")) (PVar "rest")) (PVar "clLabel") (PVar "tAcc") (PVar "bAcc") (PVar "env")) (EBlock (DoLet false false (PVar "occ") (EListLit (EBinOp "++" (ELit (LString "local.get $")) (EApp (EVar "wParamId") (EVar "a"))))) (DoLet false false (PTuple (PVar "t") (PVar "b") (PVar "env2")) (EApp (EApp (EApp (EApp (EApp (EVar "patTestBind") (EVar "prog")) (EVar "pat")) (EVar "occ")) (EVar "clLabel")) (EVar "env"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "clausePatGo") (EVar "prog")) (EVar "rest")) (EVar "clLabel")) (EBinOp "++" (EVar "tAcc") (EVar "t"))) (EBinOp "++" (EVar "bAcc") (EVar "b"))) (EVar "env2")))))
+(DFunDef false "clausePatGo" ((PVar "prog") (PVar "xs0") (PVar "clLabel") (PVar "tAcc0") (PVar "bAcc0") (PVar "env0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "tAcc") (PVar "bAcc") (PVar "env")) (ETuple (EVar "tAcc") (EVar "bAcc") (EVar "env"))) (clause ((PCons (PTuple (PVar "pat") (PVar "a")) (PVar "rest")) (PVar "tAcc") (PVar "bAcc") (PVar "env")) (EBlock (DoLet false false (PVar "occ") (EListLit (EBinOp "++" (ELit (LString "local.get $")) (EApp (EVar "wParamId") (EVar "a"))))) (DoLet false false (PTuple (PVar "t") (PVar "b") (PVar "env2")) (EApp (EApp (EApp (EApp (EApp (EVar "patTestBind") (EVar "prog")) (EVar "pat")) (EVar "occ")) (EVar "clLabel")) (EVar "env"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "go") (EVar "rest")) (EBinOp "++" (EVar "tAcc") (EVar "t"))) (EBinOp "++" (EVar "bAcc") (EVar "b"))) (EVar "env2"))))))) (EApp (EApp (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "tAcc0")) (EVar "bAcc0")) (EVar "env0"))))
 (DTypeSig false "patTestBind" (TyFun (TyCon "Prog") (TyFun (TyCon "Pat") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "Env") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")) (TyCon "Env"))))))))
-(DFunDef false "patTestBind" ((PVar "_prog") (PCon "PWild") (PVar "_occ") (PVar "_clLabel") (PVar "env")) (ETuple (EListLit) (EListLit) (EVar "env")))
-(DFunDef false "patTestBind" ((PVar "_prog") (PCon "PVar" (PVar "x") PWild (PVar "bid")) (PVar "occ") (PVar "_clLabel") (PVar "env")) (ETuple (EListLit) (EBinOp "++" (EVar "occ") (EListLit (EBinOp "++" (ELit (LString "local.set $")) (EApp (EVar "gname") (EVar "x"))))) (EApp (EApp (EApp (EVar "envBind") (EVar "x")) (EVar "bid")) (EVar "env"))))
-(DFunDef false "patTestBind" ((PVar "prog") (PCon "PLit" (PCon "LInt" (PVar "n"))) (PVar "occ") (PVar "clLabel") (PVar "env")) (ETuple (EBinOp "++" (EVar "occ") (EListLit (EApp (EVar "unboxIntW") (EVar "prog")) (EBinOp "++" (ELit (LString "i64.const ")) (EApp (EVar "intToString") (EVar "n"))) (ELit (LString "i64.ne")) (EBinOp "++" (ELit (LString "br_if ")) (EVar "clLabel")))) (EListLit) (EVar "env")))
-(DFunDef false "patTestBind" ((PVar "_prog") (PCon "PLit" (PCon "LBool" (PVar "b"))) (PVar "occ") (PVar "clLabel") (PVar "env")) (ETuple (EBinOp "++" (EVar "occ") (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (EBinOp "++" (ELit (LString "i32.const ")) (EIf (EVar "b") (ELit (LString "1")) (ELit (LString "0")))) (ELit (LString "i32.ne")) (EBinOp "++" (ELit (LString "br_if ")) (EVar "clLabel")))) (EListLit) (EVar "env")))
-(DFunDef false "patTestBind" ((PVar "_prog") (PCon "PLit" (PCon "LUnit")) (PVar "_occ") (PVar "_clLabel") (PVar "env")) (ETuple (EListLit) (EListLit) (EVar "env")))
-(DFunDef false "patTestBind" ((PVar "_prog") (PCon "PLit" (PCon "LChar" (PVar "c"))) (PVar "occ") (PVar "clLabel") (PVar "env")) (ETuple (EBinOp "++" (EVar "occ") (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (EBinOp "++" (ELit (LString "i32.const ")) (EApp (EVar "intToString") (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EApp (EVar "stringToChars") (EVar "c")))))) (ELit (LString "i32.ne")) (EBinOp "++" (ELit (LString "br_if ")) (EVar "clLabel")))) (EListLit) (EVar "env")))
-(DFunDef false "patTestBind" ((PVar "prog") (PCon "PLit" (PCon "LString" (PVar "s"))) (PVar "occ") (PVar "clLabel") (PVar "env")) (EBlock (DoLet false false (PVar "cmpSuffix") (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_str_compare"))) (ELit (LInt 2))) (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (ELit (LString "i32.const 1")) (ELit (LString "i32.ne")) (EBinOp "++" (ELit (LString "br_if ")) (EVar "clLabel")))) (DoExpr (ETuple (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "occ") (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EVar "emitLitRef") (EVar "prog")) (EApp (EVar "LString") (EVar "s")))) (EVar "cmpSuffix")) (EListLit) (EVar "env")))))
-(DFunDef false "patTestBind" ((PVar "prog") (PCon "PCon" (PVar "c") (PVar "args")) (PVar "occ") (PVar "clLabel") (PVar "env")) (EBlock (DoLet false false (PVar "ctest") (EBinOp "++" (EApp (EApp (EApp (EVar "discrimReadOf") (EVar "prog")) (EVar "occ")) (EApp (EApp (EVar "ctorTypeName") (EVar "prog")) (EVar "c"))) (EListLit (EBinOp "++" (ELit (LString "i32.const ")) (EApp (EVar "intToString") (EApp (EApp (EVar "ctorOrdinal") (EVar "prog")) (EVar "c")))) (ELit (LString "i32.ne")) (EBinOp "++" (ELit (LString "br_if ")) (EVar "clLabel"))))) (DoLet false false (PTuple (PVar "ft") (PVar "fb") (PVar "env2")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "patTestBindCon") (EVar "prog")) (EVar "c")) (EVar "args")) (EVar "occ")) (EVar "clLabel")) (EVar "env")) (ELit (LInt 0)))) (DoExpr (ETuple (EBinOp "++" (EVar "ctest") (EVar "ft")) (EVar "fb") (EVar "env2")))))
-(DFunDef false "patTestBind" ((PVar "prog") (PCon "PAs" (PVar "x") PWild (PVar "bid") (PVar "p")) (PVar "occ") (PVar "clLabel") (PVar "env")) (EBlock (DoLet false false (PVar "setX") (EBinOp "++" (EVar "occ") (EListLit (EBinOp "++" (ELit (LString "local.set $")) (EApp (EVar "gname") (EVar "x")))))) (DoLet false false (PTuple (PVar "t") (PVar "b") (PVar "env2")) (EApp (EApp (EApp (EApp (EApp (EVar "patTestBind") (EVar "prog")) (EVar "p")) (EVar "occ")) (EVar "clLabel")) (EApp (EApp (EApp (EVar "envBind") (EVar "x")) (EVar "bid")) (EVar "env")))) (DoExpr (ETuple (EVar "t") (EBinOp "++" (EVar "setX") (EVar "b")) (EVar "env2")))))
-(DFunDef false "patTestBind" ((PVar "prog") (PCon "PCons" (PVar "h") (PVar "t")) (PVar "occ") (PVar "clLabel") (PVar "env")) (EBlock (DoLet false false (PVar "consTest") (EBinOp "++" (EApp (EApp (EApp (EVar "discrimReadOf") (EVar "prog")) (EVar "occ")) (ELit (LString "List"))) (EListLit (ELit (LString "i32.const 0")) (ELit (LString "i32.ne")) (EBinOp "++" (ELit (LString "br_if ")) (EVar "clLabel"))))) (DoLet false false (PVar "hSnip") (EBinOp "++" (EVar "occ") (EListLit (ELit (LString "ref.cast (ref $C_Cons)")) (ELit (LString "struct.get $C_Cons 1"))))) (DoLet false false (PVar "tSnip") (EBinOp "++" (EVar "occ") (EListLit (ELit (LString "ref.cast (ref $C_Cons)")) (ELit (LString "struct.get $C_Cons 2"))))) (DoLet false false (PTuple (PVar "ht") (PVar "hb") (PVar "env2")) (EApp (EApp (EApp (EApp (EApp (EVar "patTestBind") (EVar "prog")) (EVar "h")) (EVar "hSnip")) (EVar "clLabel")) (EVar "env"))) (DoLet false false (PTuple (PVar "tt") (PVar "tb") (PVar "env3")) (EApp (EApp (EApp (EApp (EApp (EVar "patTestBind") (EVar "prog")) (EVar "t")) (EVar "tSnip")) (EVar "clLabel")) (EVar "env2"))) (DoExpr (ETuple (EBinOp "++" (EBinOp "++" (EVar "consTest") (EVar "ht")) (EVar "tt")) (EBinOp "++" (EVar "hb") (EVar "tb")) (EVar "env3")))))
-(DFunDef false "patTestBind" ((PVar "prog") (PCon "PList" (PVar "ps")) (PVar "occ") (PVar "clLabel") (PVar "env")) (EApp (EApp (EApp (EApp (EApp (EVar "patTestBindList") (EVar "prog")) (EVar "ps")) (EVar "occ")) (EVar "clLabel")) (EVar "env")))
-(DFunDef false "patTestBind" ((PVar "prog") (PCon "PTuple" (PVar "ps")) (PVar "occ") (PVar "clLabel") (PVar "env")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "patTestBindTuple") (EVar "prog")) (EApp (EVar "tupleCtorName") (EApp (EVar "listLen") (EVar "ps")))) (EVar "ps")) (EVar "occ")) (EVar "clLabel")) (EVar "env")) (ELit (LInt 0))))
-(DFunDef false "patTestBind" ((PVar "prog") (PCon "PRng" (PVar "lo") (PVar "hi") (PVar "incl")) (PVar "occ") (PVar "clLabel") (PVar "env")) (ETuple (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EVar "rngCmpW") (EVar "prog")) (EVar "occ")) (EApp (EVar "rngBound") (EVar "lo"))) (ELit (LString "i64.lt_s"))) (EVar "clLabel")) (EApp (EApp (EApp (EApp (EApp (EVar "rngCmpW") (EVar "prog")) (EVar "occ")) (EApp (EVar "rngBound") (EVar "hi"))) (EIf (EVar "incl") (ELit (LString "i64.gt_s")) (ELit (LString "i64.ge_s")))) (EVar "clLabel"))) (EListLit) (EVar "env")))
-(DFunDef false "patTestBind" ((PVar "prog") (PVar "other") (PVar "_occ") (PVar "_clLabel") (PVar "_env")) (EApp (EApp (EVar "gapL3P") (EVar "prog")) (EBinOp "++" (ELit (LString "ref-mode: unsupported clause parameter pattern ")) (EApp (EVar "ptag") (EVar "other")))))
+(DFunDef false "patTestBind" ((PVar "prog") (PVar "pat0") (PVar "occ0") (PVar "clLabel") (PVar "env0")) (ELetGroup ((lgb "go" (clause ((PCon "PWild") (PVar "_occ") (PVar "env")) (ETuple (EListLit) (EListLit) (EVar "env"))) (clause ((PCon "PVar" (PVar "x") PWild (PVar "bid")) (PVar "occ") (PVar "env")) (ETuple (EListLit) (EBinOp "++" (EVar "occ") (EListLit (EBinOp "++" (ELit (LString "local.set $")) (EApp (EVar "gname") (EVar "x"))))) (EApp (EApp (EApp (EVar "envBind") (EVar "x")) (EVar "bid")) (EVar "env")))) (clause ((PCon "PLit" (PCon "LInt" (PVar "n"))) (PVar "occ") (PVar "env")) (ETuple (EBinOp "++" (EVar "occ") (EListLit (EApp (EVar "unboxIntW") (EVar "prog")) (EBinOp "++" (ELit (LString "i64.const ")) (EApp (EVar "intToString") (EVar "n"))) (ELit (LString "i64.ne")) (EBinOp "++" (ELit (LString "br_if ")) (EVar "clLabel")))) (EListLit) (EVar "env"))) (clause ((PCon "PLit" (PCon "LBool" (PVar "b"))) (PVar "occ") (PVar "env")) (ETuple (EBinOp "++" (EVar "occ") (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (EBinOp "++" (ELit (LString "i32.const ")) (EIf (EVar "b") (ELit (LString "1")) (ELit (LString "0")))) (ELit (LString "i32.ne")) (EBinOp "++" (ELit (LString "br_if ")) (EVar "clLabel")))) (EListLit) (EVar "env"))) (clause ((PCon "PLit" (PCon "LUnit")) (PVar "_occ") (PVar "env")) (ETuple (EListLit) (EListLit) (EVar "env"))) (clause ((PCon "PLit" (PCon "LChar" (PVar "c"))) (PVar "occ") (PVar "env")) (ETuple (EBinOp "++" (EVar "occ") (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (EBinOp "++" (ELit (LString "i32.const ")) (EApp (EVar "intToString") (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EApp (EVar "stringToChars") (EVar "c")))))) (ELit (LString "i32.ne")) (EBinOp "++" (ELit (LString "br_if ")) (EVar "clLabel")))) (EListLit) (EVar "env"))) (clause ((PCon "PLit" (PCon "LString" (PVar "s"))) (PVar "occ") (PVar "env")) (EBlock (DoLet false false (PVar "cmpSuffix") (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_str_compare"))) (ELit (LInt 2))) (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (ELit (LString "i32.const 1")) (ELit (LString "i32.ne")) (EBinOp "++" (ELit (LString "br_if ")) (EVar "clLabel")))) (DoExpr (ETuple (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "occ") (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EVar "emitLitRef") (EVar "prog")) (EApp (EVar "LString") (EVar "s")))) (EVar "cmpSuffix")) (EListLit) (EVar "env"))))) (clause ((PCon "PCon" (PVar "c") (PVar "args")) (PVar "occ") (PVar "env")) (EBlock (DoLet false false (PVar "ctest") (EBinOp "++" (EApp (EApp (EApp (EVar "discrimReadOf") (EVar "prog")) (EVar "occ")) (EApp (EApp (EVar "ctorTypeName") (EVar "prog")) (EVar "c"))) (EListLit (EBinOp "++" (ELit (LString "i32.const ")) (EApp (EVar "intToString") (EApp (EApp (EVar "ctorOrdinal") (EVar "prog")) (EVar "c")))) (ELit (LString "i32.ne")) (EBinOp "++" (ELit (LString "br_if ")) (EVar "clLabel"))))) (DoLet false false (PTuple (PVar "ft") (PVar "fb") (PVar "env2")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "patTestBindCon") (EVar "prog")) (EVar "c")) (EVar "args")) (EVar "occ")) (EVar "clLabel")) (EVar "env")) (ELit (LInt 0)))) (DoExpr (ETuple (EBinOp "++" (EVar "ctest") (EVar "ft")) (EVar "fb") (EVar "env2"))))) (clause ((PCon "PAs" (PVar "x") PWild (PVar "bid") (PVar "p")) (PVar "occ") (PVar "env")) (EBlock (DoLet false false (PVar "setX") (EBinOp "++" (EVar "occ") (EListLit (EBinOp "++" (ELit (LString "local.set $")) (EApp (EVar "gname") (EVar "x")))))) (DoLet false false (PTuple (PVar "t") (PVar "b") (PVar "env2")) (EApp (EApp (EApp (EVar "go") (EVar "p")) (EVar "occ")) (EApp (EApp (EApp (EVar "envBind") (EVar "x")) (EVar "bid")) (EVar "env")))) (DoExpr (ETuple (EVar "t") (EBinOp "++" (EVar "setX") (EVar "b")) (EVar "env2"))))) (clause ((PCon "PCons" (PVar "h") (PVar "t")) (PVar "occ") (PVar "env")) (EBlock (DoLet false false (PVar "consTest") (EBinOp "++" (EApp (EApp (EApp (EVar "discrimReadOf") (EVar "prog")) (EVar "occ")) (ELit (LString "List"))) (EListLit (ELit (LString "i32.const 0")) (ELit (LString "i32.ne")) (EBinOp "++" (ELit (LString "br_if ")) (EVar "clLabel"))))) (DoLet false false (PVar "hSnip") (EBinOp "++" (EVar "occ") (EListLit (ELit (LString "ref.cast (ref $C_Cons)")) (ELit (LString "struct.get $C_Cons 1"))))) (DoLet false false (PVar "tSnip") (EBinOp "++" (EVar "occ") (EListLit (ELit (LString "ref.cast (ref $C_Cons)")) (ELit (LString "struct.get $C_Cons 2"))))) (DoLet false false (PTuple (PVar "ht") (PVar "hb") (PVar "env2")) (EApp (EApp (EApp (EVar "go") (EVar "h")) (EVar "hSnip")) (EVar "env"))) (DoLet false false (PTuple (PVar "tt") (PVar "tb") (PVar "env3")) (EApp (EApp (EApp (EVar "go") (EVar "t")) (EVar "tSnip")) (EVar "env2"))) (DoExpr (ETuple (EBinOp "++" (EBinOp "++" (EVar "consTest") (EVar "ht")) (EVar "tt")) (EBinOp "++" (EVar "hb") (EVar "tb")) (EVar "env3"))))) (clause ((PCon "PList" (PVar "ps")) (PVar "occ") (PVar "env")) (EApp (EApp (EApp (EApp (EApp (EVar "patTestBindList") (EVar "prog")) (EVar "ps")) (EVar "occ")) (EVar "clLabel")) (EVar "env"))) (clause ((PCon "PTuple" (PVar "ps")) (PVar "occ") (PVar "env")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "patTestBindTuple") (EVar "prog")) (EApp (EVar "tupleCtorName") (EApp (EVar "listLen") (EVar "ps")))) (EVar "ps")) (EVar "occ")) (EVar "clLabel")) (EVar "env")) (ELit (LInt 0)))) (clause ((PCon "PRng" (PVar "lo") (PVar "hi") (PVar "incl")) (PVar "occ") (PVar "env")) (ETuple (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EVar "rngCmpW") (EVar "prog")) (EVar "occ")) (EApp (EVar "rngBound") (EVar "lo"))) (ELit (LString "i64.lt_s"))) (EVar "clLabel")) (EApp (EApp (EApp (EApp (EApp (EVar "rngCmpW") (EVar "prog")) (EVar "occ")) (EApp (EVar "rngBound") (EVar "hi"))) (EIf (EVar "incl") (ELit (LString "i64.gt_s")) (ELit (LString "i64.ge_s")))) (EVar "clLabel"))) (EListLit) (EVar "env"))) (clause ((PVar "other") (PVar "_occ") (PVar "_env")) (EApp (EApp (EVar "gapL3P") (EVar "prog")) (EBinOp "++" (ELit (LString "ref-mode: unsupported clause parameter pattern ")) (EApp (EVar "ptag") (EVar "other"))))))) (EApp (EApp (EApp (EVar "go") (EVar "pat0")) (EVar "occ0")) (EVar "env0"))))
 (DTypeSig false "rngCmpW" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "rngCmpW" ((PVar "prog") (PVar "occ") (PVar "bound") (PVar "cmp") (PVar "clLabel")) (EBinOp "++" (EVar "occ") (EListLit (EApp (EVar "unboxIntW") (EVar "prog")) (EBinOp "++" (ELit (LString "i64.const ")) (EApp (EVar "intToString") (EVar "bound"))) (EVar "cmp") (EBinOp "++" (ELit (LString "br_if ")) (EVar "clLabel")))))
 (DTypeSig false "patTestBindList" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "Env") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")) (TyCon "Env"))))))))
-(DFunDef false "patTestBindList" ((PVar "prog") (PList) (PVar "occ") (PVar "clLabel") (PVar "env")) (ETuple (EBinOp "++" (EApp (EApp (EApp (EVar "discrimReadOf") (EVar "prog")) (EVar "occ")) (ELit (LString "List"))) (EListLit (ELit (LString "i32.const 1")) (ELit (LString "i32.ne")) (EBinOp "++" (ELit (LString "br_if ")) (EVar "clLabel")))) (EListLit) (EVar "env")))
-(DFunDef false "patTestBindList" ((PVar "prog") (PCons (PVar "p") (PVar "ps")) (PVar "occ") (PVar "clLabel") (PVar "env")) (EBlock (DoLet false false (PVar "consTest") (EBinOp "++" (EApp (EApp (EApp (EVar "discrimReadOf") (EVar "prog")) (EVar "occ")) (ELit (LString "List"))) (EListLit (ELit (LString "i32.const 0")) (ELit (LString "i32.ne")) (EBinOp "++" (ELit (LString "br_if ")) (EVar "clLabel"))))) (DoLet false false (PVar "hSnip") (EBinOp "++" (EVar "occ") (EListLit (ELit (LString "ref.cast (ref $C_Cons)")) (ELit (LString "struct.get $C_Cons 1"))))) (DoLet false false (PVar "tSnip") (EBinOp "++" (EVar "occ") (EListLit (ELit (LString "ref.cast (ref $C_Cons)")) (ELit (LString "struct.get $C_Cons 2"))))) (DoLet false false (PTuple (PVar "ht") (PVar "hb") (PVar "env2")) (EApp (EApp (EApp (EApp (EApp (EVar "patTestBind") (EVar "prog")) (EVar "p")) (EVar "hSnip")) (EVar "clLabel")) (EVar "env"))) (DoLet false false (PTuple (PVar "tt") (PVar "tb") (PVar "env3")) (EApp (EApp (EApp (EApp (EApp (EVar "patTestBindList") (EVar "prog")) (EVar "ps")) (EVar "tSnip")) (EVar "clLabel")) (EVar "env2"))) (DoExpr (ETuple (EBinOp "++" (EBinOp "++" (EVar "consTest") (EVar "ht")) (EVar "tt")) (EBinOp "++" (EVar "hb") (EVar "tb")) (EVar "env3")))))
+(DFunDef false "patTestBindList" ((PVar "prog") (PVar "ps0") (PVar "occ0") (PVar "clLabel") (PVar "env0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "occ") (PVar "env")) (ETuple (EBinOp "++" (EApp (EApp (EApp (EVar "discrimReadOf") (EVar "prog")) (EVar "occ")) (ELit (LString "List"))) (EListLit (ELit (LString "i32.const 1")) (ELit (LString "i32.ne")) (EBinOp "++" (ELit (LString "br_if ")) (EVar "clLabel")))) (EListLit) (EVar "env"))) (clause ((PCons (PVar "p") (PVar "ps")) (PVar "occ") (PVar "env")) (EBlock (DoLet false false (PVar "consTest") (EBinOp "++" (EApp (EApp (EApp (EVar "discrimReadOf") (EVar "prog")) (EVar "occ")) (ELit (LString "List"))) (EListLit (ELit (LString "i32.const 0")) (ELit (LString "i32.ne")) (EBinOp "++" (ELit (LString "br_if ")) (EVar "clLabel"))))) (DoLet false false (PVar "hSnip") (EBinOp "++" (EVar "occ") (EListLit (ELit (LString "ref.cast (ref $C_Cons)")) (ELit (LString "struct.get $C_Cons 1"))))) (DoLet false false (PVar "tSnip") (EBinOp "++" (EVar "occ") (EListLit (ELit (LString "ref.cast (ref $C_Cons)")) (ELit (LString "struct.get $C_Cons 2"))))) (DoLet false false (PTuple (PVar "ht") (PVar "hb") (PVar "env2")) (EApp (EApp (EApp (EApp (EApp (EVar "patTestBind") (EVar "prog")) (EVar "p")) (EVar "hSnip")) (EVar "clLabel")) (EVar "env"))) (DoLet false false (PTuple (PVar "tt") (PVar "tb") (PVar "env3")) (EApp (EApp (EApp (EVar "go") (EVar "ps")) (EVar "tSnip")) (EVar "env2"))) (DoExpr (ETuple (EBinOp "++" (EBinOp "++" (EVar "consTest") (EVar "ht")) (EVar "tt")) (EBinOp "++" (EVar "hb") (EVar "tb")) (EVar "env3"))))))) (EApp (EApp (EApp (EVar "go") (EVar "ps0")) (EVar "occ0")) (EVar "env0"))))
 (DTypeSig false "patTestBindTuple" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")) (TyCon "Env"))))))))))
-(DFunDef false "patTestBindTuple" (PWild PWild (PList) PWild PWild (PVar "env") PWild) (ETuple (EListLit) (EListLit) (EVar "env")))
-(DFunDef false "patTestBindTuple" ((PVar "prog") (PVar "tc") (PCons (PVar "p") (PVar "rest")) (PVar "occ") (PVar "clLabel") (PVar "env") (PVar "i")) (EBlock (DoLet false false (PVar "fieldSnip") (EBinOp "++" (EVar "occ") (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "ref.cast (ref $")) (EApp (EApp (EVar "typeNameW") (EVar "prog")) (EApp (EVar "ctorStructName") (EVar "tc")))) (ELit (LString ")"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "struct.get $")) (EApp (EVar "$core.display") (EApp (EApp (EVar "typeNameW") (EVar "prog")) (EApp (EVar "ctorStructName") (EVar "tc"))))) (ELit (LString " "))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EBinOp "+" (EVar "i") (ELit (LInt 1)))))) (ELit (LString "")))))) (DoLet false false (PTuple (PVar "ft") (PVar "fb") (PVar "env2")) (EApp (EApp (EApp (EApp (EApp (EVar "patTestBind") (EVar "prog")) (EVar "p")) (EVar "fieldSnip")) (EVar "clLabel")) (EVar "env"))) (DoLet false false (PTuple (PVar "rt") (PVar "rb") (PVar "env3")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "patTestBindTuple") (EVar "prog")) (EVar "tc")) (EVar "rest")) (EVar "occ")) (EVar "clLabel")) (EVar "env2")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (DoExpr (ETuple (EBinOp "++" (EVar "ft") (EVar "rt")) (EBinOp "++" (EVar "fb") (EVar "rb")) (EVar "env3")))))
+(DFunDef false "patTestBindTuple" ((PVar "prog") (PVar "tc") (PVar "xs0") (PVar "occ") (PVar "clLabel") (PVar "env0") (PVar "i0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "env") PWild) (ETuple (EListLit) (EListLit) (EVar "env"))) (clause ((PCons (PVar "p") (PVar "rest")) (PVar "env") (PVar "i")) (EBlock (DoLet false false (PVar "fieldSnip") (EBinOp "++" (EVar "occ") (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "ref.cast (ref $")) (EApp (EApp (EVar "typeNameW") (EVar "prog")) (EApp (EVar "ctorStructName") (EVar "tc")))) (ELit (LString ")"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "struct.get $")) (EApp (EVar "$core.display") (EApp (EApp (EVar "typeNameW") (EVar "prog")) (EApp (EVar "ctorStructName") (EVar "tc"))))) (ELit (LString " "))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EBinOp "+" (EVar "i") (ELit (LInt 1)))))) (ELit (LString "")))))) (DoLet false false (PTuple (PVar "ft") (PVar "fb") (PVar "env2")) (EApp (EApp (EApp (EApp (EApp (EVar "patTestBind") (EVar "prog")) (EVar "p")) (EVar "fieldSnip")) (EVar "clLabel")) (EVar "env"))) (DoLet false false (PTuple (PVar "rt") (PVar "rb") (PVar "env3")) (EApp (EApp (EApp (EVar "go") (EVar "rest")) (EVar "env2")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (DoExpr (ETuple (EBinOp "++" (EVar "ft") (EVar "rt")) (EBinOp "++" (EVar "fb") (EVar "rb")) (EVar "env3"))))))) (EApp (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "env0")) (EVar "i0"))))
 (DTypeSig false "patTestBindCon" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")) (TyCon "Env"))))))))))
-(DFunDef false "patTestBindCon" (PWild PWild (PList) PWild PWild (PVar "env") PWild) (ETuple (EListLit) (EListLit) (EVar "env")))
-(DFunDef false "patTestBindCon" ((PVar "prog") (PVar "c") (PCons (PVar "p") (PVar "rest")) (PVar "occ") (PVar "clLabel") (PVar "env") (PVar "i")) (EBlock (DoLet false false (PVar "fieldSnip") (EBinOp "++" (EVar "occ") (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "ref.cast (ref $")) (EApp (EApp (EVar "typeNameW") (EVar "prog")) (EApp (EVar "ctorStructName") (EVar "c")))) (ELit (LString ")"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "struct.get $")) (EApp (EVar "$core.display") (EApp (EApp (EVar "typeNameW") (EVar "prog")) (EApp (EVar "ctorStructName") (EVar "c"))))) (ELit (LString " "))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EBinOp "+" (EVar "i") (ELit (LInt 1)))))) (ELit (LString "")))))) (DoLet false false (PTuple (PVar "ft") (PVar "fb") (PVar "env2")) (EApp (EApp (EApp (EApp (EApp (EVar "patTestBind") (EVar "prog")) (EVar "p")) (EVar "fieldSnip")) (EVar "clLabel")) (EVar "env"))) (DoLet false false (PTuple (PVar "rt") (PVar "rb") (PVar "env3")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "patTestBindCon") (EVar "prog")) (EVar "c")) (EVar "rest")) (EVar "occ")) (EVar "clLabel")) (EVar "env2")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (DoExpr (ETuple (EBinOp "++" (EVar "ft") (EVar "rt")) (EBinOp "++" (EVar "fb") (EVar "rb")) (EVar "env3")))))
+(DFunDef false "patTestBindCon" ((PVar "prog") (PVar "c") (PVar "xs0") (PVar "occ") (PVar "clLabel") (PVar "env0") (PVar "i0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "env") PWild) (ETuple (EListLit) (EListLit) (EVar "env"))) (clause ((PCons (PVar "p") (PVar "rest")) (PVar "env") (PVar "i")) (EBlock (DoLet false false (PVar "fieldSnip") (EBinOp "++" (EVar "occ") (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "ref.cast (ref $")) (EApp (EApp (EVar "typeNameW") (EVar "prog")) (EApp (EVar "ctorStructName") (EVar "c")))) (ELit (LString ")"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "struct.get $")) (EApp (EVar "$core.display") (EApp (EApp (EVar "typeNameW") (EVar "prog")) (EApp (EVar "ctorStructName") (EVar "c"))))) (ELit (LString " "))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EBinOp "+" (EVar "i") (ELit (LInt 1)))))) (ELit (LString "")))))) (DoLet false false (PTuple (PVar "ft") (PVar "fb") (PVar "env2")) (EApp (EApp (EApp (EApp (EApp (EVar "patTestBind") (EVar "prog")) (EVar "p")) (EVar "fieldSnip")) (EVar "clLabel")) (EVar "env"))) (DoLet false false (PTuple (PVar "rt") (PVar "rb") (PVar "env3")) (EApp (EApp (EApp (EVar "go") (EVar "rest")) (EVar "env2")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (DoExpr (ETuple (EBinOp "++" (EVar "ft") (EVar "rt")) (EBinOp "++" (EVar "fb") (EVar "rb")) (EVar "env3"))))))) (EApp (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "env0")) (EVar "i0"))))
 (DTypeSig false "clauseLocals" (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "clauseLocals" ((PVar "clauses")) (EApp (EApp (EVar "flatMap") (EVar "oneClauseLocals")) (EVar "clauses")))
 (DTypeSig false "oneClauseLocals" (TyFun (TyCon "CClause") (TyApp (TyCon "List") (TyCon "String"))))
@@ -11773,13 +11725,7 @@ hasFamilyW prog symbol tag =
 (DFunDef false "takeRoutesW" (PWild (PList)) (EListLit))
 (DFunDef false "takeRoutesW" ((PVar "n") (PCons (PVar "r") (PVar "rest"))) (EBinOp "::" (EVar "r") (EApp (EApp (EVar "takeRoutesW") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "rest"))))
 (DTypeSig false "routeWitness" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "Route") (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "routeWitness" ((PVar "prog") (PVar "env") (PVar "d") (PAs "route" (PCon "RKey" (PVar "tag") (PVar "reqs") (PVar "sups")))) (EMatch (EApp (EApp (EVar "closedDictW") (EVar "prog")) (EVar "route")) (arm (PCon "Some" (PVar "initBody")) () (EApp (EApp (EVar "wConstDict") (EVar "prog")) (EVar "initBody"))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "fieldWitnesses") (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "routeWitness") (EVar "prog")) (EVar "env")) (EVar "d"))) (EBinOp "++" (EVar "sups") (EVar "reqs")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (ELit (LString "i32.const ")) (EApp (EVar "intToString") (EApp (EVar "dictTag") (EVar "tag"))))) (EVar "fieldWitnesses")) (EListLit (EBinOp "++" (ELit (LString "array.new_fixed $dictarr ")) (EApp (EVar "intToString") (EBinOp "+" (EApp (EVar "listLen") (EVar "sups")) (EApp (EVar "listLen") (EVar "reqs"))))))) (EApp (EApp (EVar "slotArraysW") (EVar "prog")) (EVar "tag"))) (EListLit (ELit (LString "struct.new $dict")))))))))
-(DFunDef false "routeWitness" ((PVar "prog") (PVar "env") (PVar "d") (PCon "RProj" (PVar "r") (PVar "path"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "routeWitness") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "r")) (EApp (EApp (EVar "flatMap") (EVar "superFieldW")) (EVar "path"))))
-(DFunDef false "routeWitness" ((PVar "prog") (PVar "env") PWild (PCon "RDict" (PVar "dpar"))) (EIf (EApp (EApp (EVar "envHas") (EVar "dpar")) (EVar "env")) (EListLit (EBinOp "++" (ELit (LString "local.get $")) (EApp (EVar "gname") (EVar "dpar")))) (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "wasm W5: forwarded dict '")) (EVar "dpar")) (ELit (LString "' not in scope"))))))
-(DFunDef false "routeWitness" ((PVar "prog") (PVar "env") PWild (PCon "RDictFwd" (PVar "dpar"))) (EIf (EApp (EApp (EVar "envHas") (EVar "dpar")) (EVar "env")) (EListLit (EBinOp "++" (ELit (LString "local.get $")) (EApp (EVar "gname") (EVar "dpar")))) (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "wasm W5: forwarded dict '")) (EVar "dpar")) (ELit (LString "' not in scope"))))))
-(DFunDef false "routeWitness" (PWild PWild PWild (PCon "RNone")) (EListLit (ELit (LString "i32.const 0")) (ELit (LString "ref.i31"))))
-(DFunDef false "routeWitness" (PWild PWild PWild (PCon "RLocal" PWild PWild)) (EListLit (ELit (LString "i32.const 0")) (ELit (LString "ref.i31"))))
-(DFunDef false "routeWitness" (PWild PWild PWild (PCon "RScalar" PWild)) (EListLit (ELit (LString "i32.const 0")) (ELit (LString "ref.i31"))))
+(DFunDef false "routeWitness" ((PVar "prog") (PVar "env") (PVar "d") (PVar "route0")) (ELetGroup ((lgb "go" (clause ((PAs "route" (PCon "RKey" (PVar "tag") (PVar "reqs") (PVar "sups")))) (EMatch (EApp (EApp (EVar "closedDictW") (EVar "prog")) (EVar "route")) (arm (PCon "Some" (PVar "initBody")) () (EApp (EApp (EVar "wConstDict") (EVar "prog")) (EVar "initBody"))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "fieldWitnesses") (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "routeWitness") (EVar "prog")) (EVar "env")) (EVar "d"))) (EBinOp "++" (EVar "sups") (EVar "reqs")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (ELit (LString "i32.const ")) (EApp (EVar "intToString") (EApp (EVar "dictTag") (EVar "tag"))))) (EVar "fieldWitnesses")) (EListLit (EBinOp "++" (ELit (LString "array.new_fixed $dictarr ")) (EApp (EVar "intToString") (EBinOp "+" (EApp (EVar "listLen") (EVar "sups")) (EApp (EVar "listLen") (EVar "reqs"))))))) (EApp (EApp (EVar "slotArraysW") (EVar "prog")) (EVar "tag"))) (EListLit (ELit (LString "struct.new $dict"))))))))) (clause ((PCon "RProj" (PVar "r") (PVar "path"))) (EBinOp "++" (EApp (EVar "go") (EVar "r")) (EApp (EApp (EVar "flatMap") (EVar "superFieldW")) (EVar "path")))) (clause ((PCon "RDict" (PVar "dpar"))) (EIf (EApp (EApp (EVar "envHas") (EVar "dpar")) (EVar "env")) (EListLit (EBinOp "++" (ELit (LString "local.get $")) (EApp (EVar "gname") (EVar "dpar")))) (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "wasm W5: forwarded dict '")) (EVar "dpar")) (ELit (LString "' not in scope")))))) (clause ((PCon "RDictFwd" (PVar "dpar"))) (EIf (EApp (EApp (EVar "envHas") (EVar "dpar")) (EVar "env")) (EListLit (EBinOp "++" (ELit (LString "local.get $")) (EApp (EVar "gname") (EVar "dpar")))) (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "wasm W5: forwarded dict '")) (EVar "dpar")) (ELit (LString "' not in scope")))))) (clause ((PCon "RNone")) (EListLit (ELit (LString "i32.const 0")) (ELit (LString "ref.i31")))) (clause ((PCon "RLocal" PWild PWild)) (EListLit (ELit (LString "i32.const 0")) (ELit (LString "ref.i31")))) (clause ((PCon "RScalar" PWild)) (EListLit (ELit (LString "i32.const 0")) (ELit (LString "ref.i31")))))) (EApp (EVar "go") (EVar "route0"))))
 (DTypeSig false "superFieldW" (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "superFieldW" ((PVar "i")) (EListLit (ELit (LString "ref.cast (ref $dict)")) (ELit (LString "struct.get $dict 1")) (EBinOp "++" (ELit (LString "i32.const ")) (EApp (EVar "intToString") (EVar "i"))) (ELit (LString "array.get $dictarr")) (ELit (LString "ref.as_non_null"))))
 (DTypeSig false "slotArraysW" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
@@ -11787,11 +11733,11 @@ hasFamilyW prog symbol tag =
 (DTypeSig false "instanceFillsW" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "MethodSlot") (TyApp (TyCon "List") (TyCon "SlotCallee")))))))
 (DFunDef false "instanceFillsW" ((PVar "prog") (PVar "key")) (EBlock (DoLet false false (PVar "tables") (EFieldAccess (EFieldAccess (EApp (EVar "progIndex") (EVar "prog")) "fnImpl") "methodTables")) (DoLet false false (PVar "slots") (EApp (EApp (EVar "interfaceSlots") (EVar "tables")) (EApp (EVar "ifaceWordOfKey") (EVar "key")))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "key")) (EFieldAccess (EVar "tables") "instances")) (arm (PCon "Some" (PVar "table")) () (EApp (EApp (EVar "zip") (EVar "slots")) (EFieldAccess (EVar "table") "fills"))) (arm (PCon "None") () (EApp (EApp (EVar "map") (ELam ((PVar "slot")) (ETuple (EVar "slot") (EListLit)))) (EVar "slots")))))))
 (DTypeSig false "closedDictW" (TyFun (TyCon "Prog") (TyFun (TyCon "Route") (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "closedDictW" ((PVar "prog") (PCon "RKey" (PVar "tag") (PVar "reqs") (PVar "sups"))) (EMatch (EApp (EVar "allSomeW") (EApp (EApp (EVar "map") (EApp (EVar "closedDictW") (EVar "prog"))) (EBinOp "++" (EVar "sups") (EVar "reqs")))) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "fields")) () (EBlock (DoLet false false (PVar "fills") (EApp (EApp (EVar "instanceFillsW") (EVar "prog")) (EVar "tag"))) (DoLet false false (PVar "functions") (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "slotFunctionW") (EVar "prog")) (EVar "tag"))) (EVar "fills"))) (DoLet false false (PVar "closures") (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "slotClosureW") (EVar "prog")) (EVar "tag"))) (EVar "fills"))) (DoLet false false (PVar "tag32") (EApp (EVar "intToString") (EApp (EVar "dictTag") (EVar "tag")))) (DoLet false false (PVar "slotText") (EApp (EApp (EVar "constArrayW") (ELit (LString "$slotarr"))) (EApp (EApp (EVar "map") (EVar "foldedW")) (EVar "functions")))) (DoLet false false (PVar "closureText") (EApp (EApp (EVar "constArrayW") (ELit (LString "$dictarr"))) (EApp (EApp (EVar "map") (EVar "foldedW")) (EVar "closures")))) (DoExpr (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(struct.new $dict (i32.const ")) (EApp (EVar "$core.display") (EVar "tag32"))) (ELit (LString ") "))) (EApp (EVar "$core.display") (EApp (EApp (EVar "constArrayW") (ELit (LString "$dictarr"))) (EVar "fields")))) (ELit (LString " "))) (EApp (EVar "$core.display") (EVar "slotText"))) (ELit (LString " "))) (EApp (EVar "$core.display") (EVar "closureText"))) (ELit (LString ")")))))))))
+(DFunDef false "closedDictW" ((PVar "prog") (PCon "RKey" (PVar "tag") (PVar "reqs") (PVar "sups"))) (EApp (EApp (EVar "$core.andThen") (EApp (EVar "allSomeW") (EApp (EApp (EVar "map") (EApp (EVar "closedDictW") (EVar "prog"))) (EBinOp "++" (EVar "sups") (EVar "reqs"))))) (ELam ((PVar "fields")) (ELet false (PVar "fills") (EApp (EApp (EVar "instanceFillsW") (EVar "prog")) (EVar "tag")) (ELet false (PVar "functions") (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "slotFunctionW") (EVar "prog")) (EVar "tag"))) (EVar "fills")) (ELet false (PVar "closures") (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "slotClosureW") (EVar "prog")) (EVar "tag"))) (EVar "fills")) (ELet false (PVar "tag32") (EApp (EVar "intToString") (EApp (EVar "dictTag") (EVar "tag"))) (ELet false (PVar "slotText") (EApp (EApp (EVar "constArrayW") (ELit (LString "$slotarr"))) (EApp (EApp (EVar "map") (EVar "foldedW")) (EVar "functions"))) (ELet false (PVar "closureText") (EApp (EApp (EVar "constArrayW") (ELit (LString "$dictarr"))) (EApp (EApp (EVar "map") (EVar "foldedW")) (EVar "closures"))) (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(struct.new $dict (i32.const ")) (EApp (EVar "$core.display") (EVar "tag32"))) (ELit (LString ") "))) (EApp (EVar "$core.display") (EApp (EApp (EVar "constArrayW") (ELit (LString "$dictarr"))) (EVar "fields")))) (ELit (LString " "))) (EApp (EVar "$core.display") (EVar "slotText"))) (ELit (LString " "))) (EApp (EVar "$core.display") (EVar "closureText"))) (ELit (LString ")")))))))))))))
 (DFunDef false "closedDictW" (PWild (PCon "RNone")) (EApp (EVar "Some") (ELit (LString "(ref.i31 (i32.const 0))"))))
 (DFunDef false "closedDictW" (PWild (PCon "RLocal" PWild PWild)) (EApp (EVar "Some") (ELit (LString "(ref.i31 (i32.const 0))"))))
 (DFunDef false "closedDictW" (PWild (PCon "RScalar" PWild)) (EApp (EVar "Some") (ELit (LString "(ref.i31 (i32.const 0))"))))
-(DFunDef false "closedDictW" (PWild PWild) (EVar "None"))
+(DFunDef false "closedDictW" (PWild (POr (PCon "RDict" PWild) (PCon "RDictFwd" PWild) (PCon "RProj" PWild PWild))) (EVar "None"))
 (DTypeSig false "constArrayW" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
 (DFunDef false "constArrayW" ((PVar "ty") (PVar "elements")) (EBlock (DoLet false false (PVar "elementText") (EApp (EApp (EVar "joinWith") (ELit (LString ""))) (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "++" (ELit (LString " ")) (EVar "_s")))) (EVar "elements")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(array.new_fixed ")) (EApp (EVar "$core.display") (EVar "ty"))) (ELit (LString " "))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "elements"))))) (ELit (LString ""))) (EApp (EVar "$core.display") (EVar "elementText"))) (ELit (LString ")"))))))
 (DTypeSig false "foldedW" (TyFun (TyCon "String") (TyCon "String")))
@@ -11883,38 +11829,15 @@ hasFamilyW prog symbol tag =
 (DTypeSig false "groupEntryW" (TyFun (TyCon "Prog") (TyFun (TyCon "ImplG") (TyApp (TyCon "Option") (TyCon "CImplEntry")))))
 (DFunDef false "groupEntryW" ((PVar "prog") (PCon "ImplG" (PVar "method") PWild PWild PWild PWild (PVar "fnName"))) (EApp (EApp (EVar "find") (ELam ((PVar "ent")) (EBinOp "==" (EApp (EApp (EVar "implEntrySymW") (EVar "method")) (EVar "ent")) (EVar "fnName")))) (EApp (EApp (EVar "methodEntriesW") (EVar "prog")) (EVar "method"))))
 (DTypeSig false "implForWSite" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "CImplEntry"))))))))
-(DFunDef false "implForWSite" ((PVar "prog") (PVar "method") (PVar "iface") (PVar "tag") (PVar "siteArity")) (EApp (EApp (EApp (EApp (EApp (EVar "findByKeyArityW") (EVar "prog")) (EVar "method")) (EVar "tag")) (EVar "siteArity")) (EApp (EApp (EVar "narrowByIfaceW") (EVar "iface")) (EApp (EApp (EVar "methodEntriesW") (EVar "prog")) (EVar "method")))))
-(DTypeSig false "findByKeyArityW" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyApp (TyCon "Option") (TyCon "CImplEntry"))))))))
-(DFunDef false "findByKeyArityW" (PWild PWild PWild PWild (PList)) (EVar "None"))
-(DFunDef false "findByKeyArityW" ((PVar "prog") (PVar "method") (PVar "tag") (PVar "siteArity") (PCons (PVar "entry") (PVar "rest"))) (EIf (EBinOp "&&" (EApp (EApp (EVar "implEntryAnswersW") (EVar "tag")) (EVar "entry")) (EBinOp "==" (EApp (EVar "implEntryDeclaredArity") (EVar "entry")) (EVar "siteArity"))) (EApp (EVar "Some") (EVar "entry")) (EApp (EApp (EApp (EApp (EApp (EVar "findByKeyArityW") (EVar "prog")) (EVar "method")) (EVar "tag")) (EVar "siteArity")) (EVar "rest"))))
+(DFunDef false "implForWSite" ((PVar "prog") (PVar "method") (PVar "iface") (PVar "tag") (PVar "siteArity")) (EApp (EApp (EApp (EVar "findByKeyArityW") (EVar "tag")) (EVar "siteArity")) (EApp (EApp (EVar "narrowByIfaceW") (EVar "iface")) (EApp (EApp (EVar "methodEntriesW") (EVar "prog")) (EVar "method")))))
+(DTypeSig false "findByKeyArityW" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyApp (TyCon "Option") (TyCon "CImplEntry"))))))
+(DFunDef false "findByKeyArityW" ((PVar "tag") (PVar "siteArity") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EVar "None")) (clause ((PCons (PVar "entry") (PVar "rest"))) (EIf (EBinOp "&&" (EApp (EApp (EVar "implEntryAnswersW") (EVar "tag")) (EVar "entry")) (EBinOp "==" (EApp (EVar "implEntryDeclaredArity") (EVar "entry")) (EVar "siteArity"))) (EApp (EVar "Some") (EVar "entry")) (EApp (EVar "go") (EVar "rest")))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "emitRefExpr" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "emitRefExpr" ((PVar "prog") (PVar "env") (PVar "d") (PVar "expr")) (EApp (EVar "valueLines") (EApp (EApp (EApp (EApp (EVar "emitValueW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "expr"))))
 (DTypeSig false "refOnlyValueW" (TyFun (TyCon "Prog") (TyFun (TyCon "CExpr") (TyFun (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyCon "String"))) (TyCon "WasmValue")))))
 (DFunDef false "refOnlyValueW" ((PVar "prog") (PVar "expr") (PVar "body")) (EIf (EApp (EVar "rawProgramW") (EVar "prog")) (EApp (EApp (EVar "programValueW") (EVar "prog")) (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (ELit (LString "scalar-mode: unsupported Core IR node ")) (EApp (EVar "ctag") (EVar "expr"))))) (EApp (EApp (EVar "WasmValue") (EVar "WBoxEq")) (EApp (EVar "body") (ELit LUnit)))))
 (DTypeSig false "emitValueW" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "CExpr") (TyCon "WasmValue"))))))
-(DFunDef false "emitValueW" ((PVar "prog") (PVar "_env") (PVar "_d") (PCon "CLit" (PVar "l"))) (EIf (EApp (EVar "rawProgramW") (EVar "prog")) (EBlock (DoLet false false (PTuple (PVar "lines") (PVar "ty")) (EApp (EApp (EVar "emitLitI32") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "l"))) (DoExpr (EApp (EApp (EVar "WasmValue") (EApp (EVar "rawReprW") (EVar "ty"))) (EVar "lines")))) (EApp (EApp (EVar "WasmValue") (EVar "WBoxEq")) (EApp (EApp (EVar "emitLitRef") (EVar "prog")) (EVar "l")))))
-(DFunDef false "emitValueW" ((PVar "prog") (PVar "env") (PVar "d") (PCon "CVar" (PVar "x") PWild)) (EApp (EApp (EVar "programValueW") (EVar "prog")) (EApp (EApp (EApp (EApp (EVar "emitVarRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "x"))))
-(DFunDef false "emitValueW" ((PVar "prog") (PVar "env") (PVar "d") (PCon "CBinPrim" (PVar "op") (PVar "l") (PVar "r") (PVar "tag") (PVar "loc"))) (EBlock (DoLet false false (PVar "code") (EIf (EApp (EVar "rawProgramW") (EVar "prog")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitIntBinRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "op")) (EVar "l")) (EVar "r")) (EVar "tag")) (EApp (EApp (EVar "sitePackedW") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "loc"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitBinRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "op")) (EVar "l")) (EVar "r")) (EVar "tag")) (EApp (EApp (EVar "sitePackedW") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "loc"))))) (DoExpr (EApp (EApp (EVar "WasmValue") (EIf (EApp (EVar "rawProgramW") (EVar "prog")) (EApp (EVar "rawReprW") (EApp (EVar "binOpTy") (EVar "op"))) (EVar "WBoxEq"))) (EVar "code")))))
-(DFunDef false "emitValueW" ((PVar "prog") (PVar "env") (PVar "d") (PCon "CUnOp" (PVar "op") (PVar "x"))) (EApp (EApp (EVar "programValueW") (EVar "prog")) (EApp (EApp (EApp (EApp (EApp (EVar "emitUnRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "op")) (EVar "x"))))
-(DFunDef false "emitValueW" ((PVar "prog") (PVar "env") (PVar "d") (PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EBlock (DoLet false false (PVar "ci") (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "c")) (EApp (EVar "conditionW") (EVar "prog")))) (DoLet false false (PVar "tv") (EApp (EApp (EApp (EApp (EVar "emitValueW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "t"))) (DoLet false false (PVar "fv") (EApp (EApp (EApp (EApp (EVar "emitValueW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "f"))) (DoExpr (EApp (EApp (EVar "WasmValue") (EApp (EVar "valueRepr") (EVar "tv"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "ci") (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "if (result ")) (EApp (EVar "physicalType") (EApp (EVar "programReprW") (EVar "prog")))) (ELit (LString ")"))))) (EApp (EVar "indent") (EApp (EVar "valueLines") (EVar "tv")))) (EListLit (ELit (LString "else")))) (EApp (EVar "indent") (EApp (EVar "valueLines") (EVar "fv")))) (EListLit (ELit (LString "end"))))))))
-(DFunDef false "emitValueW" ((PVar "prog") (PVar "env") (PVar "d") (PCon "CLet" (PVar "recF") (PVar "pat") (PVar "e1") (PVar "e2"))) (EBlock (DoLet false false (PTuple (PVar "prefix") (PVar "env2")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitLetBindingW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "recF")) (EVar "pat")) (EVar "e1"))) (DoExpr (EApp (EApp (EVar "prependValueW") (EVar "prefix")) (EApp (EApp (EApp (EApp (EVar "emitValueW") (EVar "prog")) (EVar "env2")) (EVar "d")) (EVar "e2"))))))
-(DFunDef false "emitValueW" ((PVar "prog") (PVar "env") (PVar "d") (PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EApp (EApp (EVar "CLetGroup") (EVar "binds")) (EVar "body"))) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitLetGroupWith") (EVar "prog")) (EVar "env")) (EVar "d")) (ELam ((PVar "env2") (PVar "b")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env2")) (EVar "d")) (EVar "b")))) (EVar "binds")) (EVar "body")))))
-(DFunDef false "emitValueW" ((PVar "prog") (PVar "env") (PVar "d") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EApp (EApp (EVar "emitBlockRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "stmts")))
-(DFunDef false "emitValueW" ((PVar "prog") (PVar "env") (PVar "d") (PAs "app" (PCon "CApp" PWild PWild PWild))) (EApp (EApp (EVar "programValueW") (EVar "prog")) (EApp (EApp (EApp (EApp (EVar "emitAppRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "app"))))
-(DFunDef false "emitValueW" ((PVar "prog") (PVar "env") (PVar "d") (PAs "node" (PCon "CDecision" (PVar "scrut") (PVar "arms") (PVar "tree")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitDecisionRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "scrut")) (EVar "arms")) (EVar "tree")))))
-(DFunDef false "emitValueW" ((PVar "prog") (PVar "env") (PVar "d") (PAs "node" (PCon "CLam" (PVar "pats") (PVar "body")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EApp (EVar "emitClosure") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "pats")) (EVar "body")))))
-(DFunDef false "emitValueW" ((PVar "prog") (PVar "env") (PVar "d") (PAs "node" (PCon "CMethod" (PVar "name") (PCon "MethodEvidence" (PVar "iface") (PVar "arity") (PVar "route") (PVar "implRoutes") (PVar "methRoutes"))))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitMethodValueRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "name")) (EVar "iface")) (EVar "arity")) (EVar "route")) (EVar "implRoutes")) (EVar "methRoutes")))))
-(DFunDef false "emitValueW" ((PVar "prog") (PVar "env") (PVar "d") (PAs "node" (PCon "CDict" (PVar "name") (PVar "routes")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EApp (EVar "emitDictValueRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "name")) (EVar "routes")))))
-(DFunDef false "emitValueW" ((PVar "prog") (PVar "env") (PVar "d") (PAs "node" (PCon "CTuple" (PVar "es")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EVar "emitTupleRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "es")))))
-(DFunDef false "emitValueW" ((PVar "prog") (PVar "env") (PVar "d") (PAs "node" (PCon "CList" (PVar "es")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EVar "emitListRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "es")))))
-(DFunDef false "emitValueW" ((PVar "prog") (PVar "env") (PVar "d") (PAs "node" (PCon "CRangeList" (PVar "lo") (PVar "hi") (PVar "incl")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRangeListRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "lo")) (EVar "hi")) (EVar "incl")))))
-(DFunDef false "emitValueW" ((PVar "prog") (PVar "env") (PVar "d") (PAs "node" (PCon "CArray" (PVar "es")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EVar "emitArrayCreateRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "es")))))
-(DFunDef false "emitValueW" ((PVar "prog") (PVar "env") (PVar "d") (PAs "node" (PCon "CRangeArray" (PVar "lo") (PVar "hi") (PVar "incl")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRangeArrayRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "lo")) (EVar "hi")) (EVar "incl")))))
-(DFunDef false "emitValueW" ((PVar "prog") (PVar "env") (PVar "d") (PAs "node" (PCon "CRecord" (PVar "name") (PVar "fields")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EApp (EVar "emitRecordRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "name")) (EVar "fields")))))
-(DFunDef false "emitValueW" ((PVar "prog") (PVar "env") (PVar "d") (PAs "node" (PCon "CFieldAccess" (PVar "ex") (PVar "label") (PVar "recName") (PVar "ord")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitFieldAccessRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "ex")) (EVar "label")) (EVar "recName")) (EVar "ord")))))
-(DFunDef false "emitValueW" ((PVar "prog") (PVar "env") (PVar "d") (PAs "node" (PCon "CRecordUpdate" (PVar "recName") (PVar "base") (PVar "fields")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRecordUpdateRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "recName")) (EVar "base")) (EVar "fields")))))
-(DFunDef false "emitValueW" ((PVar "prog") (PVar "env") (PVar "d") (PAs "node" (PCon "CVariantUpdate" (PVar "con") (PVar "base") (PVar "fields")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitVariantUpdateRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "con")) (EVar "base")) (EVar "fields")))))
-(DFunDef false "emitValueW" ((PVar "prog") (PVar "_env") (PVar "_d") (PVar "other")) (EApp (EApp (EVar "programValueW") (EVar "prog")) (EApp (EApp (EVar "gapLP") (EVar "prog")) (EIf (EApp (EVar "rawProgramW") (EVar "prog")) (EBinOp "++" (ELit (LString "scalar-mode: unsupported Core IR node ")) (EApp (EVar "ctag") (EVar "other"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "ref-mode: unsupported Core IR node ")) (EApp (EVar "$core.display") (EApp (EVar "ctag") (EVar "other")))) (ELit (LString " [in "))) (EApp (EVar "$core.display") (EApp (EVar "progBinding") (EVar "prog")))) (ELit (LString "]")))))))
+(DFunDef false "emitValueW" ((PVar "prog") (PVar "env0") (PVar "d") (PVar "app0")) (ELetGroup ((lgb "go" (clause ((PVar "_env") (PCon "CLit" (PVar "l"))) (EIf (EApp (EVar "rawProgramW") (EVar "prog")) (EBlock (DoLet false false (PTuple (PVar "lines") (PVar "ty")) (EApp (EApp (EVar "emitLitI32") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "l"))) (DoExpr (EApp (EApp (EVar "WasmValue") (EApp (EVar "rawReprW") (EVar "ty"))) (EVar "lines")))) (EApp (EApp (EVar "WasmValue") (EVar "WBoxEq")) (EApp (EApp (EVar "emitLitRef") (EVar "prog")) (EVar "l"))))) (clause ((PVar "env") (PCon "CVar" (PVar "x") PWild)) (EApp (EApp (EVar "programValueW") (EVar "prog")) (EApp (EApp (EApp (EApp (EVar "emitVarRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "x")))) (clause ((PVar "env") (PCon "CBinPrim" (PVar "op") (PVar "l") (PVar "r") (PVar "tag") (PVar "loc"))) (EBlock (DoLet false false (PVar "code") (EIf (EApp (EVar "rawProgramW") (EVar "prog")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitIntBinRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "op")) (EVar "l")) (EVar "r")) (EVar "tag")) (EApp (EApp (EVar "sitePackedW") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "loc"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitBinRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "op")) (EVar "l")) (EVar "r")) (EVar "tag")) (EApp (EApp (EVar "sitePackedW") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "loc"))))) (DoExpr (EApp (EApp (EVar "WasmValue") (EIf (EApp (EVar "rawProgramW") (EVar "prog")) (EApp (EVar "rawReprW") (EApp (EVar "binOpTy") (EVar "op"))) (EVar "WBoxEq"))) (EVar "code"))))) (clause ((PVar "env") (PCon "CUnOp" (PVar "op") (PVar "x"))) (EApp (EApp (EVar "programValueW") (EVar "prog")) (EApp (EApp (EApp (EApp (EApp (EVar "emitUnRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "op")) (EVar "x")))) (clause ((PVar "env") (PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EBlock (DoLet false false (PVar "ci") (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "c")) (EApp (EVar "conditionW") (EVar "prog")))) (DoLet false false (PVar "tv") (EApp (EApp (EVar "go") (EVar "env")) (EVar "t"))) (DoLet false false (PVar "fv") (EApp (EApp (EVar "go") (EVar "env")) (EVar "f"))) (DoExpr (EApp (EApp (EVar "WasmValue") (EApp (EVar "valueRepr") (EVar "tv"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "ci") (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "if (result ")) (EApp (EVar "physicalType") (EApp (EVar "programReprW") (EVar "prog")))) (ELit (LString ")"))))) (EApp (EVar "indent") (EApp (EVar "valueLines") (EVar "tv")))) (EListLit (ELit (LString "else")))) (EApp (EVar "indent") (EApp (EVar "valueLines") (EVar "fv")))) (EListLit (ELit (LString "end")))))))) (clause ((PVar "env") (PCon "CLet" (PVar "recF") (PVar "pat") (PVar "e1") (PVar "e2"))) (EBlock (DoLet false false (PTuple (PVar "prefix") (PVar "env2")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitLetBindingW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "recF")) (EVar "pat")) (EVar "e1"))) (DoExpr (EApp (EApp (EVar "prependValueW") (EVar "prefix")) (EApp (EApp (EVar "go") (EVar "env2")) (EVar "e2")))))) (clause ((PVar "env") (PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EApp (EApp (EVar "CLetGroup") (EVar "binds")) (EVar "body"))) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitLetGroupWith") (EVar "prog")) (EVar "env")) (EVar "d")) (ELam ((PVar "env2") (PVar "b")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env2")) (EVar "d")) (EVar "b")))) (EVar "binds")) (EVar "body"))))) (clause ((PVar "env") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EApp (EApp (EVar "emitBlockRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "stmts"))) (clause ((PVar "env") (PAs "app" (PCon "CApp" PWild PWild PWild))) (EApp (EApp (EVar "programValueW") (EVar "prog")) (EApp (EApp (EApp (EApp (EVar "emitAppRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "app")))) (clause ((PVar "env") (PAs "node" (PCon "CDecision" (PVar "scrut") (PVar "arms") (PVar "tree")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitDecisionRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "scrut")) (EVar "arms")) (EVar "tree"))))) (clause ((PVar "env") (PAs "node" (PCon "CLam" (PVar "pats") (PVar "body")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EApp (EVar "emitClosure") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "pats")) (EVar "body"))))) (clause ((PVar "env") (PAs "node" (PCon "CMethod" (PVar "name") (PCon "MethodEvidence" (PVar "iface") (PVar "arity") (PVar "route") (PVar "implRoutes") (PVar "methRoutes"))))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitMethodValueRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "name")) (EVar "iface")) (EVar "arity")) (EVar "route")) (EVar "implRoutes")) (EVar "methRoutes"))))) (clause ((PVar "env") (PAs "node" (PCon "CDict" (PVar "name") (PVar "routes")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EApp (EVar "emitDictValueRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "name")) (EVar "routes"))))) (clause ((PVar "env") (PAs "node" (PCon "CTuple" (PVar "es")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EVar "emitTupleRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "es"))))) (clause ((PVar "env") (PAs "node" (PCon "CList" (PVar "es")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EVar "emitListRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "es"))))) (clause ((PVar "env") (PAs "node" (PCon "CRangeList" (PVar "lo") (PVar "hi") (PVar "incl")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRangeListRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "lo")) (EVar "hi")) (EVar "incl"))))) (clause ((PVar "env") (PAs "node" (PCon "CArray" (PVar "es")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EVar "emitArrayCreateRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "es"))))) (clause ((PVar "env") (PAs "node" (PCon "CRangeArray" (PVar "lo") (PVar "hi") (PVar "incl")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRangeArrayRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "lo")) (EVar "hi")) (EVar "incl"))))) (clause ((PVar "env") (PAs "node" (PCon "CRecord" (PVar "name") (PVar "fields")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EApp (EVar "emitRecordRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "name")) (EVar "fields"))))) (clause ((PVar "env") (PAs "node" (PCon "CFieldAccess" (PVar "ex") (PVar "label") (PVar "recName") (PVar "ord")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitFieldAccessRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "ex")) (EVar "label")) (EVar "recName")) (EVar "ord"))))) (clause ((PVar "env") (PAs "node" (PCon "CRecordUpdate" (PVar "recName") (PVar "base") (PVar "fields")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRecordUpdateRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "recName")) (EVar "base")) (EVar "fields"))))) (clause ((PVar "env") (PAs "node" (PCon "CVariantUpdate" (PVar "con") (PVar "base") (PVar "fields")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitVariantUpdateRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "con")) (EVar "base")) (EVar "fields"))))) (clause ((PVar "_env") (PVar "other")) (EApp (EApp (EVar "programValueW") (EVar "prog")) (EApp (EApp (EVar "gapLP") (EVar "prog")) (EIf (EApp (EVar "rawProgramW") (EVar "prog")) (EBinOp "++" (ELit (LString "scalar-mode: unsupported Core IR node ")) (EApp (EVar "ctag") (EVar "other"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "ref-mode: unsupported Core IR node ")) (EApp (EVar "$core.display") (EApp (EVar "ctag") (EVar "other")))) (ELit (LString " [in "))) (EApp (EVar "$core.display") (EApp (EVar "progBinding") (EVar "prog")))) (ELit (LString "]"))))))))) (EApp (EApp (EVar "go") (EVar "env0")) (EVar "app0"))))
 (DTypeSig false "emitLitRef" (TyFun (TyCon "Prog") (TyFun (TyCon "Lit") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "emitLitRef" ((PVar "prog") (PCon "LInt" (PVar "n"))) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "n") (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1073741824)))) (EBinOp "<" (EVar "n") (ELit (LInt 1073741824)))) (EListLit (EBinOp "++" (ELit (LString "i32.const ")) (EApp (EVar "intToString") (EVar "n"))) (ELit (LString "ref.i31"))) (EListLit (EBinOp "++" (ELit (LString "i64.const ")) (EApp (EVar "intToString") (EVar "n"))) (EApp (EVar "boxIntW") (EVar "prog")))))
 (DFunDef false "emitLitRef" (PWild (PCon "LBool" (PVar "b"))) (EListLit (EIf (EVar "b") (ELit (LString "i32.const 1")) (ELit (LString "i32.const 0"))) (ELit (LString "ref.i31"))))
@@ -12091,12 +12014,7 @@ hasFamilyW prog symbol tag =
 (DFunDef false "emitLetBindingW" ((PVar "prog") (PVar "env") PWild (PCon "True") (PCon "PVar" (PVar "x") PWild (PVar "bid")) (PCon "CLam" (PVar "pats") (PVar "body"))) (EIf (EApp (EVar "rawProgramW") (EVar "prog")) (ETuple (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "scalar-mode: only non-recursive `let x = e` / `let _ = e`"))) (EVar "env")) (ETuple (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitSelfRecLocalBind") (EVar "prog")) (EVar "env")) (EVar "x")) (EVar "bid")) (EVar "pats")) (EVar "body")) (EApp (EApp (EApp (EVar "envBind") (EVar "x")) (EVar "bid")) (EVar "env")))))
 (DFunDef false "emitLetBindingW" ((PVar "prog") (PVar "env") PWild PWild PWild PWild) (ETuple (EApp (EApp (EVar "gapLP") (EVar "prog")) (EIf (EApp (EVar "rawProgramW") (EVar "prog")) (ELit (LString "scalar-mode: only non-recursive `let x = e` / `let _ = e`")) (ELit (LString "ref-mode: recursive non-function `let` binding (value knot)")))) (EVar "env")))
 (DTypeSig false "emitBlockRef" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyCon "WasmValue"))))))
-(DFunDef false "emitBlockRef" ((PVar "prog") (PVar "env") (PVar "d") (PList (PCon "CSExpr" (PVar "ex")))) (EApp (EApp (EApp (EApp (EVar "emitValueW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "ex")))
-(DFunDef false "emitBlockRef" ((PVar "prog") (PVar "env") (PVar "d") (PCons (PCon "CSExpr" (PVar "ex")) (PVar "rest"))) (EBlock (DoLet false false (PVar "prefix") (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "ex")) (EListLit (ELit (LString "drop"))))) (DoExpr (EApp (EApp (EVar "prependValueW") (EVar "prefix")) (EApp (EApp (EApp (EApp (EVar "emitBlockRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "rest"))))))
-(DFunDef false "emitBlockRef" ((PVar "prog") (PVar "env") (PVar "d") (PCons (PCon "CSLet" (PVar "recF") (PVar "pat") (PVar "ex")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "prefix") (PVar "env2")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitBlockBindingW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "recF")) (EVar "pat")) (EVar "ex"))) (DoExpr (EApp (EApp (EVar "prependValueW") (EVar "prefix")) (EApp (EApp (EApp (EApp (EVar "emitBlockRef") (EVar "prog")) (EVar "env2")) (EVar "d")) (EVar "rest"))))))
-(DFunDef false "emitBlockRef" ((PVar "prog") (PVar "env") (PVar "d") (PCons (PCon "CSAssign" (PVar "x") (PVar "ex")) (PVar "rest"))) (EBlock (DoLet false false (PVar "prefix") (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "ex")) (EListLit (EBinOp "++" (ELit (LString "local.set ")) (EApp (EApp (EApp (EVar "localTargetW") (EVar "prog")) (EVar "env")) (EVar "x")))))) (DoExpr (EApp (EApp (EVar "prependValueW") (EVar "prefix")) (EApp (EApp (EApp (EApp (EVar "emitBlockRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "rest"))))))
-(DFunDef false "emitBlockRef" ((PVar "prog") (PVar "env") (PVar "d") (PList)) (EApp (EApp (EApp (EApp (EVar "emitValueW") (EVar "prog")) (EVar "env")) (EVar "d")) (EApp (EVar "CLit") (EVar "LUnit"))))
-(DFunDef false "emitBlockRef" ((PVar "prog") PWild PWild PWild) (EApp (EApp (EVar "programValueW") (EVar "prog")) (EApp (EApp (EVar "gapLP") (EVar "prog")) (EIf (EApp (EVar "rawProgramW") (EVar "prog")) (ELit (LString "scalar-mode: unsupported block statement")) (ELit (LString "ref-mode: unsupported block statement"))))))
+(DFunDef false "emitBlockRef" ((PVar "prog") (PVar "env0") (PVar "d") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PVar "env") (PList (PCon "CSExpr" (PVar "ex")))) (EApp (EApp (EApp (EApp (EVar "emitValueW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "ex"))) (clause ((PVar "env") (PCons (PCon "CSExpr" (PVar "ex")) (PVar "rest"))) (EBlock (DoLet false false (PVar "prefix") (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "ex")) (EListLit (ELit (LString "drop"))))) (DoExpr (EApp (EApp (EVar "prependValueW") (EVar "prefix")) (EApp (EApp (EVar "go") (EVar "env")) (EVar "rest")))))) (clause ((PVar "env") (PCons (PCon "CSLet" (PVar "recF") (PVar "pat") (PVar "ex")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "prefix") (PVar "env2")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitBlockBindingW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "recF")) (EVar "pat")) (EVar "ex"))) (DoExpr (EApp (EApp (EVar "prependValueW") (EVar "prefix")) (EApp (EApp (EVar "go") (EVar "env2")) (EVar "rest")))))) (clause ((PVar "env") (PCons (PCon "CSAssign" (PVar "x") (PVar "ex")) (PVar "rest"))) (EBlock (DoLet false false (PVar "prefix") (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "ex")) (EListLit (EBinOp "++" (ELit (LString "local.set ")) (EApp (EApp (EApp (EVar "localTargetW") (EVar "prog")) (EVar "env")) (EVar "x")))))) (DoExpr (EApp (EApp (EVar "prependValueW") (EVar "prefix")) (EApp (EApp (EVar "go") (EVar "env")) (EVar "rest")))))) (clause ((PVar "env") (PList)) (EApp (EApp (EApp (EApp (EVar "emitValueW") (EVar "prog")) (EVar "env")) (EVar "d")) (EApp (EVar "CLit") (EVar "LUnit")))) (clause (PWild PWild) (EApp (EApp (EVar "programValueW") (EVar "prog")) (EApp (EApp (EVar "gapLP") (EVar "prog")) (EIf (EApp (EVar "rawProgramW") (EVar "prog")) (ELit (LString "scalar-mode: unsupported block statement")) (ELit (LString "ref-mode: unsupported block statement")))))))) (EApp (EApp (EVar "go") (EVar "env0")) (EVar "xs0"))))
 (DTypeSig false "emitBlockBindingW" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyFun (TyCon "Pat") (TyFun (TyCon "CExpr") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Env")))))))))
 (DFunDef false "emitBlockBindingW" ((PVar "prog") (PVar "env") (PVar "d") PWild (PVar "pat") (PVar "ex")) (EMatch (ETuple (EVar "pat") (EVar "ex")) (arm (PTuple (PCon "PVar" (PVar "x") PWild (PVar "bid")) (PCon "CLam" (PVar "pats") (PVar "body"))) () (EIf (EApp (EVar "rawProgramW") (EVar "prog")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitLetBindingW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "False")) (EVar "pat")) (EVar "ex")) (ETuple (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitSelfRecLocalBind") (EVar "prog")) (EVar "env")) (EVar "x")) (EVar "bid")) (EVar "pats")) (EVar "body")) (EApp (EApp (EApp (EVar "envBind") (EVar "x")) (EVar "bid")) (EVar "env"))))) (arm PWild () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitLetBindingW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "False")) (EVar "pat")) (EVar "ex")))))
 (DTypeSig false "emitDirectRawCallW" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "CExpr") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String")))))))))
@@ -12184,180 +12102,7 @@ hasFamilyW prog symbol tag =
 (DFunDef false "emitRefBoxSet" ((PVar "prog") (PVar "env") (PVar "d") (PList (PVar "r") (PVar "v"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "r")) (EListLit (ELit (LString "ref.cast (ref $refbox)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "v"))) (EListLit (ELit (LString "struct.set $refbox 0")) (ELit (LString "i32.const 0")) (ELit (LString "ref.i31")))))
 (DFunDef false "emitRefBoxSet" ((PVar "prog") (PVar "_env") (PVar "_d") PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm Ref: setRef takes exactly two arguments"))))
 (DTypeSig false "emitLeafExternRef" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "randomInt")) (PList (PVar "lo") (PVar "hi"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "lo")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "hi"))) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_random_int"))) (ELit (LInt 2))) (EApp (EVar "boxIntW") (EVar "prog")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "randomInt")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8: randomInt takes exactly two arguments"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "randomBool")) (PList (PVar "u"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "u")) (EListLit (ELit (LString "drop")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_random_bool"))) (ELit (LInt 0))) (ELit (LString "ref.i31")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "randomBool")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8: randomBool takes exactly one (Unit) argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "randomChar")) (PList (PVar "u"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "u")) (EListLit (ELit (LString "drop")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_random_char"))) (ELit (LInt 0))) (ELit (LString "ref.i31")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "randomChar")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8: randomChar takes exactly one (Unit) argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "setSeed")) (PList (PVar "n"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "n")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")) (EApp (EApp (EApp (EVar "globalW") (EVar "prog")) (ELit (LString "global.set"))) (EVar "rngStateW")) (ELit (LString "i32.const 1")) (EApp (EApp (EApp (EVar "globalW") (EVar "prog")) (ELit (LString "global.set"))) (EVar "rngSeededW")) (ELit (LString "i32.const 0")) (ELit (LString "ref.i31")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "setSeed")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8: setSeed takes exactly one argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "randomState")) (PList (PVar "u"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "u")) (EListLit (ELit (LString "drop")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_rng_ensure"))) (ELit (LInt 0))) (EApp (EApp (EApp (EVar "globalW") (EVar "prog")) (ELit (LString "global.get"))) (EVar "rngStateW")) (ELit (LString "struct.new $u64")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "randomState")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8: randomState takes exactly one (Unit) argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "restoreRandomState")) (PList (PVar "state"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "state")) (EVar "unboxU64W")) (EListLit (EApp (EApp (EApp (EVar "globalW") (EVar "prog")) (ELit (LString "global.set"))) (EVar "rngStateW")) (ELit (LString "i32.const 1")) (EApp (EApp (EApp (EVar "globalW") (EVar "prog")) (ELit (LString "global.set"))) (EVar "rngSeededW")) (ELit (LString "i32.const 0")) (ELit (LString "ref.i31")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "restoreRandomState")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8: restoreRandomState takes exactly one argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "hashInt")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_hash_int"))) (ELit (LInt 1))) (ELit (LString "ref.i31")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "hashInt")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8: hashInt takes exactly one argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "hashChar")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (ELit (LString "i64.extend_i32_s")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_hash_int"))) (ELit (LInt 1))) (ELit (LString "ref.i31")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "hashChar")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8: hashChar takes exactly one argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "hashBool")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_hash_bool"))) (ELit (LInt 1))) (ELit (LString "ref.i31")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "hashBool")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8: hashBool takes exactly one argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "charCode")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (ELit (LString "ref.i31")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "charCode")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W11: charCode takes exactly one argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "charIsAlpha")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_char_is_alpha"))) (ELit (LInt 1))) (ELit (LString "ref.i31")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "charIsAlpha")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W11b: charIsAlpha takes exactly one argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "charIsSpace")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_char_is_space"))) (ELit (LInt 1))) (ELit (LString "ref.i31")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "charIsSpace")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W11b: charIsSpace takes exactly one argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "charIsUpper")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_char_is_upper"))) (ELit (LInt 1))) (ELit (LString "ref.i31")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "charIsUpper")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W11b: charIsUpper takes exactly one argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "charIsLower")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_char_is_lower"))) (ELit (LInt 1))) (ELit (LString "ref.i31")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "charIsLower")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W11b: charIsLower takes exactly one argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "charIsPunct")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_char_is_punct"))) (ELit (LInt 1))) (ELit (LString "ref.i31")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "charIsPunct")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W11b: charIsPunct takes exactly one argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "charToUpper")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_char_to_upper"))) (ELit (LInt 1))) (ELit (LString "ref.i31")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "charToUpper")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W11b: charToUpper takes exactly one argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "charToLower")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_char_to_lower"))) (ELit (LInt 1))) (ELit (LString "ref.i31")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "charToLower")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W11b: charToLower takes exactly one argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "intToFloat")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_int_to_float"))) (ELit (LInt 1))))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "intToFloat")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8b: intToFloat takes exactly one argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "floatToInt")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "ref.cast (ref $float)")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_float_to_int"))) (ELit (LInt 1))) (EApp (EVar "boxIntW") (EVar "prog")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "floatToInt")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8b: floatToInt takes exactly one argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "hashFloat")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "ref.cast (ref $float)")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_hash_float"))) (ELit (LInt 1))) (ELit (LString "ref.i31")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "hashFloat")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8b: hashFloat takes exactly one argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "randomFloat")) (PList (PVar "u"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "u")) (EListLit (ELit (LString "drop")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_random_float"))) (ELit (LInt 0))))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "randomFloat")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8b: randomFloat takes exactly one (Unit) argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "readFile")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_read_file_io"))) (ELit (LInt 2))))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "readFile")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W12: readFile takes exactly one argument and its grant"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "canonicalizePath")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_canonicalize_path_io"))) (ELit (LInt 2))))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "canonicalizePath")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: canonicalizePath takes exactly one argument and its grant"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "fileExists")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_file_exists_io"))) (ELit (LInt 2))))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "fileExists")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W12: fileExists takes exactly one argument and its grant"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "getEnv")) (PList (PVar "n"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "n")) (EListLit (ELit (LString "ref.cast (ref $str)")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_get_env_io"))) (ELit (LInt 1))))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "getEnv")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W12: getEnv takes exactly one argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "readLine")) (PList (PVar "u"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "u")) (EListLit (ELit (LString "drop")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_read_line_io"))) (ELit (LInt 0))))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "readLine")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: readLine takes exactly one (Unit) argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "readLineOpt")) (PList (PVar "u"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "u")) (EListLit (ELit (LString "drop")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_read_line_opt_io"))) (ELit (LInt 0))))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "readLineOpt")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: readLineOpt takes exactly one (Unit) argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "readAll")) (PList (PVar "u"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "u")) (EListLit (ELit (LString "drop")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_read_all_io"))) (ELit (LInt 0))))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "readAll")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: readAll takes exactly one (Unit) argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "readExactly")) (PList (PVar "n"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "n")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_read_exactly_io"))) (ELit (LInt 1))))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "readExactly")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: readExactly takes exactly one argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "osEntropyBytes")) (PList (PVar "n"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "n")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_os_entropy_io"))) (ELit (LInt 1))))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "osEntropyBytes")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: osEntropyBytes takes exactly one argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "executablePath")) (PList (PVar "u"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "u")) (EListLit (ELit (LString "drop")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_executable_path_io"))) (ELit (LInt 0))))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "executablePath")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: executablePath takes exactly one (Unit) argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "args")) (PList (PVar "u"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "u")) (EListLit (ELit (LString "drop")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_args_io"))) (ELit (LInt 0))))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "args")) (PVar "_args")) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W12: args takes exactly one (Unit) argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "exit")) (PList (PVar "code"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "code")) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_s")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_exit"))) (ELit (LInt 1))) (ELit (LString "unreachable")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "exit")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W12: exit takes exactly one argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "wallTimeSec")) (PList (PVar "u"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "u")) (EListLit (ELit (LString "drop")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_wall_time_sec"))) (ELit (LInt 0))) (ELit (LString "struct.new $float")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "wallTimeSec")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: wallTimeSec takes exactly one (Unit) argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "monotonicSec")) (PList (PVar "u"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "u")) (EListLit (ELit (LString "drop")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_monotonic_sec"))) (ELit (LInt 0))) (ELit (LString "struct.new $float")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "monotonicSec")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: monotonicSec takes exactly one (Unit) argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "sleepMs")) (PList (PVar "n"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "n")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_sleep_ms"))) (ELit (LInt 1))) (ELit (LString "i32.const 0")) (ELit (LString "ref.i31")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "sleepMs")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: sleepMs takes exactly one argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "fetchText")) (PList (PVar "u"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "u")) (EListLit (ELit (LString "ref.cast (ref $str)")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_fetch_text_io"))) (ELit (LInt 1))))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "fetchText")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: fetchText takes exactly one argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "ioPoll")) (PList (PVar "fds") (PVar "interests") (PVar "timeout"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "fds")) (EListLit (ELit (LString "drop")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "interests"))) (EListLit (ELit (LString "drop")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "timeout"))) (EListLit (ELit (LString "drop")))) (EApp (EApp (EApp (EVar "wasmTrap") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "EWasmNoBinding")) (ELit (LString "ioPoll: descriptor readiness has no wasm binding (Net and Stdin bindings: #3666); build for a native target")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "ioPoll")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: ioPoll takes exactly three arguments"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "readFileBytes")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_read_file_bytes_io"))) (ELit (LInt 2))))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "readFileBytes")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm stage-D: readFileBytes takes exactly one argument and its grant"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "writeFileBytes")) (PList (PVar "p") (PVar "arr") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "arr"))) (EListLit (ELit (LString "ref.cast (ref $arr)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_write_file_bytes_io"))) (ELit (LInt 3))))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "writeFileBytes")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm stage-D: writeFileBytes takes exactly two arguments and its grant"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "writeFile")) (PList (PVar "p") (PVar "s") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "s"))) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_write_file_io"))) (ELit (LInt 3))))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "writeFile")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: writeFile takes exactly two arguments and its grant"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "appendFile")) (PList (PVar "p") (PVar "s") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "s"))) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_append_file_io"))) (ELit (LInt 3))))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "appendFile")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: appendFile takes exactly two arguments and its grant"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "rename")) (PList (PVar "src") (PVar "dst") (PVar "gs") (PVar "gd"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "src")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "dst"))) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "gs"))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "gd"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_rename_io"))) (ELit (LInt 4))))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "rename")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: rename takes exactly two arguments and the grant of each"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "listDir")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_list_dir_io"))) (ELit (LInt 2))))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "listDir")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: listDir takes exactly one argument and its grant"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "statFile")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_stat_file_io"))) (ELit (LInt 2))))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "statFile")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: statFile takes exactly one argument and its grant"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "makeDir")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_make_dir_io"))) (ELit (LInt 2))))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "makeDir")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: makeDir takes exactly one argument and its grant"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "removeFile")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_remove_file_io"))) (ELit (LInt 2))))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "removeFile")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: removeFile takes exactly one argument and its grant"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "removeDir")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_remove_dir_io"))) (ELit (LInt 2))))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "removeDir")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: removeDir takes exactly one argument and its grant"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "fsync")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_fsync_io"))) (ELit (LInt 2))))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "fsync")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: fsync takes exactly one argument and its grant"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "fileMode")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_file_mode_io"))) (ELit (LInt 2))))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "fileMode")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: fileMode takes exactly one argument and its grant"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "writeFileMode")) (PList (PVar "p") (PVar "m") (PVar "s") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "m"))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "s"))) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_write_file_mode_io"))) (ELit (LInt 4))))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "writeFileMode")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: writeFileMode takes three arguments and its grant"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "panic")) (PList (PVar "msg"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "wasmTrapBytes") (EApp (EVar "progEmit") (EVar "prog"))) (EBinOp "++" (EBinOp "++" (ELit (LString "runtime error [")) (EApp (EVar "$core.display") (EVar "EPanic"))) (ELit (LString "]: ")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "msg"))) (EListLit (ELit (LString "ref.cast (ref $str)")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_eprint_str"))) (ELit (LInt 1))))) (EApp (EApp (EVar "trapByteInstr") (EApp (EVar "progEmit") (EVar "prog"))) (ELit (LInt 10)))) (EListLit (ELit (LString "unreachable")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "panic")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W10: panic takes exactly one argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "indexError")) (PList (PVar "msg"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "wasmTrapBytes") (EApp (EVar "progEmit") (EVar "prog"))) (EBinOp "++" (EBinOp "++" (ELit (LString "runtime error [")) (EApp (EVar "$core.display") (EVar "EIndexOob"))) (ELit (LString "]: ")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "msg"))) (EListLit (ELit (LString "ref.cast (ref $str)")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_eprint_str"))) (ELit (LInt 1))))) (EApp (EApp (EVar "trapByteInstr") (EApp (EVar "progEmit") (EVar "prog"))) (ELit (LInt 10)))) (EListLit (ELit (LString "unreachable")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "indexError")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm Index-16a: indexError takes exactly one argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "indexErrorAt")) (PList (PVar "idx"))) (EApp (EApp (EApp (EApp (EApp (EVar "wasmTrapNum") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "EIndexOob")) (ELit (LString "index "))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "idx"))) (ELit (LString " out of bounds"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "indexErrorAt")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm #1787: indexErrorAt takes exactly one argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "indexErrorAtSite")) (PList (PVar "site") (PVar "idx"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "siteExprInstrs") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "site")) (EApp (EApp (EApp (EApp (EApp (EVar "emitLeafExternRef") (EVar "prog")) (EVar "env")) (EVar "d")) (ELit (LString "indexErrorAt"))) (EListLit (EVar "idx")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "indexErrorAtSite")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: indexErrorAtSite takes exactly two arguments"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "panicAt")) (PList (PVar "site") (PVar "msg"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "siteExprInstrs") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "site")) (EApp (EApp (EApp (EApp (EApp (EVar "emitLeafExternRef") (EVar "prog")) (EVar "env")) (EVar "d")) (ELit (LString "panic"))) (EListLit (EVar "msg")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "__site__")) (PList (PCon "CLit" (PCon "LString" (PVar "f"))) (PCon "CLit" (PCon "LInt" (PVar "line"))) (PCon "CLit" (PCon "LInt" (PVar "col"))))) (EApp (EApp (EVar "emitLitRef") (EVar "prog")) (EApp (EVar "LInt") (EApp (EApp (EVar "sitePackedW") (EApp (EVar "progEmit") (EVar "prog"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "line")) (EVar "col")) (EVar "line")) (EBinOp "+" (EVar "col") (ELit (LInt 1))))))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "__site__")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: a trap-site literal takes a file, a line and a column"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "panicAt")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: panicAt takes exactly two arguments"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "sliceError")) (PList (PVar "_lo") (PVar "_hi"))) (EApp (EApp (EApp (EVar "wasmTrap") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "ESliceOob")) (ELit (LString "slice out of bounds"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "sliceError")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm #670: sliceError takes exactly two arguments"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "intBitAnd")) (PVar "args")) (EApp (EApp (EApp (EApp (EApp (EVar "emitLeafExternRef") (EVar "prog")) (EVar "env")) (EVar "d")) (ELit (LString "bitAnd"))) (EVar "args")))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "intBitOr")) (PVar "args")) (EApp (EApp (EApp (EApp (EApp (EVar "emitLeafExternRef") (EVar "prog")) (EVar "env")) (EVar "d")) (ELit (LString "bitOr"))) (EVar "args")))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "intBitXor")) (PVar "args")) (EApp (EApp (EApp (EApp (EApp (EVar "emitLeafExternRef") (EVar "prog")) (EVar "env")) (EVar "d")) (ELit (LString "bitXor"))) (EVar "args")))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "intBitNot")) (PVar "args")) (EApp (EApp (EApp (EApp (EApp (EVar "emitLeafExternRef") (EVar "prog")) (EVar "env")) (EVar "d")) (ELit (LString "bitNot"))) (EVar "args")))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "intShiftLeft")) (PVar "args")) (EApp (EApp (EApp (EApp (EApp (EVar "emitLeafExternRef") (EVar "prog")) (EVar "env")) (EVar "d")) (ELit (LString "shiftLeft"))) (EVar "args")))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "intShiftRight")) (PVar "args")) (EApp (EApp (EApp (EApp (EApp (EVar "emitLeafExternRef") (EVar "prog")) (EVar "env")) (EVar "d")) (ELit (LString "shiftRight"))) (EVar "args")))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "bitAnd")) (PList (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "b"))) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")))) (EListLit (ELit (LString "i64.and")) (EApp (EVar "boxIntW") (EVar "prog")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "bitAnd")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm stage-A: bitAnd takes exactly two arguments"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "shiftLeft")) (PList (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "b"))) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")))) (EApp (EApp (EVar "intShiftCall") (EVar "prog")) (ELit (LString "left")))) (EListLit (EApp (EVar "boxIntW") (EVar "prog")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "shiftLeft")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm stage-A: shiftLeft takes exactly two arguments"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "shiftRight")) (PList (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "b"))) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")))) (EApp (EApp (EVar "intShiftCall") (EVar "prog")) (ELit (LString "right")))) (EListLit (EApp (EVar "boxIntW") (EVar "prog")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "shiftRight")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm stage-A: shiftRight takes exactly two arguments"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "bitOr")) (PList (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "b"))) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")))) (EListLit (ELit (LString "i64.or")) (EApp (EVar "boxIntW") (EVar "prog")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "bitXor")) (PList (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "b"))) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")))) (EListLit (ELit (LString "i64.xor")) (EApp (EVar "boxIntW") (EVar "prog")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "bitNot")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")) (ELit (LString "i64.const -1")) (ELit (LString "i64.xor")) (EApp (EVar "boxIntW") (EVar "prog")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "intBitsToFloat")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")) (ELit (LString "f64.reinterpret_i64")) (ELit (LString "struct.new $float")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "u8Truncate")) (PList (PVar "a"))) (EApp (EApp (EApp (EApp (EApp (EVar "emitTruncateRef") (EVar "prog")) (EVar "env")) (EVar "d")) (ELit (LString "U8"))) (EVar "a")))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "u16Truncate")) (PList (PVar "a"))) (EApp (EApp (EApp (EApp (EApp (EVar "emitTruncateRef") (EVar "prog")) (EVar "env")) (EVar "d")) (ELit (LString "U16"))) (EVar "a")))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "u32Truncate")) (PList (PVar "a"))) (EApp (EApp (EApp (EApp (EApp (EVar "emitTruncateRef") (EVar "prog")) (EVar "env")) (EVar "d")) (ELit (LString "U32"))) (EVar "a")))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "u8ToInt")) (PList (PVar "a"))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "u16ToInt")) (PList (PVar "a"))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "u32ToInt")) (PList (PVar "a"))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "i32Truncate")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")) (ELit (LString "i64.extend32_s")) (EApp (EVar "boxIntW") (EVar "prog")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "i32ToInt")) (PList (PVar "a"))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "i64FromBits")) (PList (PVar "a"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EVar "unboxU64W")) (EListLit (ELit (LString "struct.new $i64")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "i64ToBits")) (PList (PVar "a"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EVar "unboxI64W")) (EListLit (ELit (LString "struct.new $u64")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "u64Truncate")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")) (ELit (LString "struct.new $u64")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "u64TruncateToInt")) (PList (PVar "a"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EVar "unboxU64W")) (EListLit (EApp (EVar "boxIntW") (EVar "prog")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "u64BitAnd")) (PList (PVar "a") (PVar "b"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitU64KernelRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EVar "b")) (ELit (LString "i64.and"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "u64BitOr")) (PList (PVar "a") (PVar "b"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitU64KernelRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EVar "b")) (ELit (LString "i64.or"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "u64BitXor")) (PList (PVar "a") (PVar "b"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitU64KernelRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EVar "b")) (ELit (LString "i64.xor"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "u64MulHigh")) (PList (PVar "a") (PVar "b"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitU64KernelRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EVar "b")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_u64_mulhi"))) (ELit (LInt 2)))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "u64ShiftLeft")) (PList (PVar "a") (PVar "k"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitU64ShiftRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EVar "k")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_u64_shl"))) (ELit (LInt 2)))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "u64ShiftRight")) (PList (PVar "a") (PVar "k"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitU64ShiftRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EVar "k")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_u64_shr"))) (ELit (LInt 2)))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "sqrt")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "f64.sqrt")) (ELit (LString "struct.new $float")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "floor")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "f64.floor")) (ELit (LString "struct.new $float")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "ceil")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "f64.ceil")) (ELit (LString "struct.new $float")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "trunc")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "f64.trunc")) (ELit (LString "struct.new $float")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "round")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_round"))) (ELit (LInt 1))) (ELit (LString "struct.new $float")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "cbrt")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_cbrt"))) (ELit (LInt 1))) (ELit (LString "struct.new $float")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "exp")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_exp"))) (ELit (LInt 1))) (ELit (LString "struct.new $float")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "log")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_log"))) (ELit (LInt 1))) (ELit (LString "struct.new $float")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "log2")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_log2"))) (ELit (LInt 1))) (ELit (LString "struct.new $float")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "log10")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_log10"))) (ELit (LInt 1))) (ELit (LString "struct.new $float")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "sin")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_sin"))) (ELit (LInt 1))) (ELit (LString "struct.new $float")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "cos")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_cos"))) (ELit (LInt 1))) (ELit (LString "struct.new $float")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "tan")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_tan"))) (ELit (LInt 1))) (ELit (LString "struct.new $float")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "asin")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_asin"))) (ELit (LInt 1))) (ELit (LString "struct.new $float")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "acos")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_acos"))) (ELit (LInt 1))) (ELit (LString "struct.new $float")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "atan")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_atan"))) (ELit (LInt 1))) (ELit (LString "struct.new $float")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "sinh")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_sinh"))) (ELit (LInt 1))) (ELit (LString "struct.new $float")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "cosh")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_cosh"))) (ELit (LInt 1))) (ELit (LString "struct.new $float")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "tanh")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_tanh"))) (ELit (LInt 1))) (ELit (LString "struct.new $float")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "pow")) (PList (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "b"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_pow"))) (ELit (LInt 2))) (ELit (LString "struct.new $float")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "atan2")) (PList (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "b"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_atan2"))) (ELit (LInt 2))) (ELit (LString "struct.new $float")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "hypot")) (PList (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "b"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_hypot"))) (ELit (LInt 2))) (ELit (LString "struct.new $float")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "floatRem")) (PList (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "b"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_float_rem"))) (ELit (LInt 2))) (ELit (LString "struct.new $float")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") PWild PWild (PVar "name") PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "wasm W8: unsupported leaf extern '")) (EVar "name")) (ELit (LString "'")))))
+(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "name0") (PVar "args0")) (ELetGroup ((lgb "go" (clause ((PLit (LString "randomInt")) (PList (PVar "lo") (PVar "hi"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "lo")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "hi"))) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_random_int"))) (ELit (LInt 2))) (EApp (EVar "boxIntW") (EVar "prog"))))) (clause ((PLit (LString "randomInt")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8: randomInt takes exactly two arguments")))) (clause ((PLit (LString "randomBool")) (PList (PVar "u"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "u")) (EListLit (ELit (LString "drop")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_random_bool"))) (ELit (LInt 0))) (ELit (LString "ref.i31"))))) (clause ((PLit (LString "randomBool")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8: randomBool takes exactly one (Unit) argument")))) (clause ((PLit (LString "randomChar")) (PList (PVar "u"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "u")) (EListLit (ELit (LString "drop")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_random_char"))) (ELit (LInt 0))) (ELit (LString "ref.i31"))))) (clause ((PLit (LString "randomChar")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8: randomChar takes exactly one (Unit) argument")))) (clause ((PLit (LString "setSeed")) (PList (PVar "n"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "n")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")) (EApp (EApp (EApp (EVar "globalW") (EVar "prog")) (ELit (LString "global.set"))) (EVar "rngStateW")) (ELit (LString "i32.const 1")) (EApp (EApp (EApp (EVar "globalW") (EVar "prog")) (ELit (LString "global.set"))) (EVar "rngSeededW")) (ELit (LString "i32.const 0")) (ELit (LString "ref.i31"))))) (clause ((PLit (LString "setSeed")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8: setSeed takes exactly one argument")))) (clause ((PLit (LString "randomState")) (PList (PVar "u"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "u")) (EListLit (ELit (LString "drop")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_rng_ensure"))) (ELit (LInt 0))) (EApp (EApp (EApp (EVar "globalW") (EVar "prog")) (ELit (LString "global.get"))) (EVar "rngStateW")) (ELit (LString "struct.new $u64"))))) (clause ((PLit (LString "randomState")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8: randomState takes exactly one (Unit) argument")))) (clause ((PLit (LString "restoreRandomState")) (PList (PVar "state"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "state")) (EVar "unboxU64W")) (EListLit (EApp (EApp (EApp (EVar "globalW") (EVar "prog")) (ELit (LString "global.set"))) (EVar "rngStateW")) (ELit (LString "i32.const 1")) (EApp (EApp (EApp (EVar "globalW") (EVar "prog")) (ELit (LString "global.set"))) (EVar "rngSeededW")) (ELit (LString "i32.const 0")) (ELit (LString "ref.i31"))))) (clause ((PLit (LString "restoreRandomState")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8: restoreRandomState takes exactly one argument")))) (clause ((PLit (LString "hashInt")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_hash_int"))) (ELit (LInt 1))) (ELit (LString "ref.i31"))))) (clause ((PLit (LString "hashInt")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8: hashInt takes exactly one argument")))) (clause ((PLit (LString "hashChar")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (ELit (LString "i64.extend_i32_s")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_hash_int"))) (ELit (LInt 1))) (ELit (LString "ref.i31"))))) (clause ((PLit (LString "hashChar")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8: hashChar takes exactly one argument")))) (clause ((PLit (LString "hashBool")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_hash_bool"))) (ELit (LInt 1))) (ELit (LString "ref.i31"))))) (clause ((PLit (LString "hashBool")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8: hashBool takes exactly one argument")))) (clause ((PLit (LString "charCode")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (ELit (LString "ref.i31"))))) (clause ((PLit (LString "charCode")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W11: charCode takes exactly one argument")))) (clause ((PLit (LString "charIsAlpha")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_char_is_alpha"))) (ELit (LInt 1))) (ELit (LString "ref.i31"))))) (clause ((PLit (LString "charIsAlpha")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W11b: charIsAlpha takes exactly one argument")))) (clause ((PLit (LString "charIsSpace")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_char_is_space"))) (ELit (LInt 1))) (ELit (LString "ref.i31"))))) (clause ((PLit (LString "charIsSpace")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W11b: charIsSpace takes exactly one argument")))) (clause ((PLit (LString "charIsUpper")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_char_is_upper"))) (ELit (LInt 1))) (ELit (LString "ref.i31"))))) (clause ((PLit (LString "charIsUpper")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W11b: charIsUpper takes exactly one argument")))) (clause ((PLit (LString "charIsLower")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_char_is_lower"))) (ELit (LInt 1))) (ELit (LString "ref.i31"))))) (clause ((PLit (LString "charIsLower")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W11b: charIsLower takes exactly one argument")))) (clause ((PLit (LString "charIsPunct")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_char_is_punct"))) (ELit (LInt 1))) (ELit (LString "ref.i31"))))) (clause ((PLit (LString "charIsPunct")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W11b: charIsPunct takes exactly one argument")))) (clause ((PLit (LString "charToUpper")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_char_to_upper"))) (ELit (LInt 1))) (ELit (LString "ref.i31"))))) (clause ((PLit (LString "charToUpper")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W11b: charToUpper takes exactly one argument")))) (clause ((PLit (LString "charToLower")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_char_to_lower"))) (ELit (LInt 1))) (ELit (LString "ref.i31"))))) (clause ((PLit (LString "charToLower")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W11b: charToLower takes exactly one argument")))) (clause ((PLit (LString "intToFloat")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_int_to_float"))) (ELit (LInt 1)))))) (clause ((PLit (LString "intToFloat")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8b: intToFloat takes exactly one argument")))) (clause ((PLit (LString "floatToInt")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "ref.cast (ref $float)")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_float_to_int"))) (ELit (LInt 1))) (EApp (EVar "boxIntW") (EVar "prog"))))) (clause ((PLit (LString "floatToInt")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8b: floatToInt takes exactly one argument")))) (clause ((PLit (LString "hashFloat")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "ref.cast (ref $float)")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_hash_float"))) (ELit (LInt 1))) (ELit (LString "ref.i31"))))) (clause ((PLit (LString "hashFloat")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8b: hashFloat takes exactly one argument")))) (clause ((PLit (LString "randomFloat")) (PList (PVar "u"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "u")) (EListLit (ELit (LString "drop")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_random_float"))) (ELit (LInt 0)))))) (clause ((PLit (LString "randomFloat")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8b: randomFloat takes exactly one (Unit) argument")))) (clause ((PLit (LString "readFile")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_read_file_io"))) (ELit (LInt 2)))))) (clause ((PLit (LString "readFile")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W12: readFile takes exactly one argument and its grant")))) (clause ((PLit (LString "canonicalizePath")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_canonicalize_path_io"))) (ELit (LInt 2)))))) (clause ((PLit (LString "canonicalizePath")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: canonicalizePath takes exactly one argument and its grant")))) (clause ((PLit (LString "fileExists")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_file_exists_io"))) (ELit (LInt 2)))))) (clause ((PLit (LString "fileExists")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W12: fileExists takes exactly one argument and its grant")))) (clause ((PLit (LString "getEnv")) (PList (PVar "n"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "n")) (EListLit (ELit (LString "ref.cast (ref $str)")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_get_env_io"))) (ELit (LInt 1)))))) (clause ((PLit (LString "getEnv")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W12: getEnv takes exactly one argument")))) (clause ((PLit (LString "readLine")) (PList (PVar "u"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "u")) (EListLit (ELit (LString "drop")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_read_line_io"))) (ELit (LInt 0)))))) (clause ((PLit (LString "readLine")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: readLine takes exactly one (Unit) argument")))) (clause ((PLit (LString "readLineOpt")) (PList (PVar "u"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "u")) (EListLit (ELit (LString "drop")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_read_line_opt_io"))) (ELit (LInt 0)))))) (clause ((PLit (LString "readLineOpt")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: readLineOpt takes exactly one (Unit) argument")))) (clause ((PLit (LString "readAll")) (PList (PVar "u"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "u")) (EListLit (ELit (LString "drop")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_read_all_io"))) (ELit (LInt 0)))))) (clause ((PLit (LString "readAll")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: readAll takes exactly one (Unit) argument")))) (clause ((PLit (LString "readExactly")) (PList (PVar "n"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "n")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_read_exactly_io"))) (ELit (LInt 1)))))) (clause ((PLit (LString "readExactly")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: readExactly takes exactly one argument")))) (clause ((PLit (LString "osEntropyBytes")) (PList (PVar "n"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "n")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_os_entropy_io"))) (ELit (LInt 1)))))) (clause ((PLit (LString "osEntropyBytes")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: osEntropyBytes takes exactly one argument")))) (clause ((PLit (LString "executablePath")) (PList (PVar "u"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "u")) (EListLit (ELit (LString "drop")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_executable_path_io"))) (ELit (LInt 0)))))) (clause ((PLit (LString "executablePath")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: executablePath takes exactly one (Unit) argument")))) (clause ((PLit (LString "args")) (PList (PVar "u"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "u")) (EListLit (ELit (LString "drop")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_args_io"))) (ELit (LInt 0)))))) (clause ((PLit (LString "args")) (PVar "_args")) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W12: args takes exactly one (Unit) argument")))) (clause ((PLit (LString "exit")) (PList (PVar "code"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "code")) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_s")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_exit"))) (ELit (LInt 1))) (ELit (LString "unreachable"))))) (clause ((PLit (LString "exit")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W12: exit takes exactly one argument")))) (clause ((PLit (LString "wallTimeSec")) (PList (PVar "u"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "u")) (EListLit (ELit (LString "drop")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_wall_time_sec"))) (ELit (LInt 0))) (ELit (LString "struct.new $float"))))) (clause ((PLit (LString "wallTimeSec")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: wallTimeSec takes exactly one (Unit) argument")))) (clause ((PLit (LString "monotonicSec")) (PList (PVar "u"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "u")) (EListLit (ELit (LString "drop")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_monotonic_sec"))) (ELit (LInt 0))) (ELit (LString "struct.new $float"))))) (clause ((PLit (LString "monotonicSec")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: monotonicSec takes exactly one (Unit) argument")))) (clause ((PLit (LString "sleepMs")) (PList (PVar "n"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "n")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_sleep_ms"))) (ELit (LInt 1))) (ELit (LString "i32.const 0")) (ELit (LString "ref.i31"))))) (clause ((PLit (LString "sleepMs")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: sleepMs takes exactly one argument")))) (clause ((PLit (LString "fetchText")) (PList (PVar "u"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "u")) (EListLit (ELit (LString "ref.cast (ref $str)")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_fetch_text_io"))) (ELit (LInt 1)))))) (clause ((PLit (LString "fetchText")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: fetchText takes exactly one argument")))) (clause ((PLit (LString "ioPoll")) (PList (PVar "fds") (PVar "interests") (PVar "timeout"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "fds")) (EListLit (ELit (LString "drop")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "interests"))) (EListLit (ELit (LString "drop")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "timeout"))) (EListLit (ELit (LString "drop")))) (EApp (EApp (EApp (EVar "wasmTrap") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "EWasmNoBinding")) (ELit (LString "ioPoll: descriptor readiness has no wasm binding (Net and Stdin bindings: #3666); build for a native target"))))) (clause ((PLit (LString "ioPoll")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: ioPoll takes exactly three arguments")))) (clause ((PLit (LString "readFileBytes")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_read_file_bytes_io"))) (ELit (LInt 2)))))) (clause ((PLit (LString "readFileBytes")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm stage-D: readFileBytes takes exactly one argument and its grant")))) (clause ((PLit (LString "writeFileBytes")) (PList (PVar "p") (PVar "arr") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "arr"))) (EListLit (ELit (LString "ref.cast (ref $arr)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_write_file_bytes_io"))) (ELit (LInt 3)))))) (clause ((PLit (LString "writeFileBytes")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm stage-D: writeFileBytes takes exactly two arguments and its grant")))) (clause ((PLit (LString "writeFile")) (PList (PVar "p") (PVar "s") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "s"))) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_write_file_io"))) (ELit (LInt 3)))))) (clause ((PLit (LString "writeFile")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: writeFile takes exactly two arguments and its grant")))) (clause ((PLit (LString "appendFile")) (PList (PVar "p") (PVar "s") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "s"))) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_append_file_io"))) (ELit (LInt 3)))))) (clause ((PLit (LString "appendFile")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: appendFile takes exactly two arguments and its grant")))) (clause ((PLit (LString "rename")) (PList (PVar "src") (PVar "dst") (PVar "gs") (PVar "gd"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "src")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "dst"))) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "gs"))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "gd"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_rename_io"))) (ELit (LInt 4)))))) (clause ((PLit (LString "rename")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: rename takes exactly two arguments and the grant of each")))) (clause ((PLit (LString "listDir")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_list_dir_io"))) (ELit (LInt 2)))))) (clause ((PLit (LString "listDir")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: listDir takes exactly one argument and its grant")))) (clause ((PLit (LString "statFile")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_stat_file_io"))) (ELit (LInt 2)))))) (clause ((PLit (LString "statFile")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: statFile takes exactly one argument and its grant")))) (clause ((PLit (LString "makeDir")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_make_dir_io"))) (ELit (LInt 2)))))) (clause ((PLit (LString "makeDir")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: makeDir takes exactly one argument and its grant")))) (clause ((PLit (LString "removeFile")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_remove_file_io"))) (ELit (LInt 2)))))) (clause ((PLit (LString "removeFile")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: removeFile takes exactly one argument and its grant")))) (clause ((PLit (LString "removeDir")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_remove_dir_io"))) (ELit (LInt 2)))))) (clause ((PLit (LString "removeDir")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: removeDir takes exactly one argument and its grant")))) (clause ((PLit (LString "fsync")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_fsync_io"))) (ELit (LInt 2)))))) (clause ((PLit (LString "fsync")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: fsync takes exactly one argument and its grant")))) (clause ((PLit (LString "fileMode")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_file_mode_io"))) (ELit (LInt 2)))))) (clause ((PLit (LString "fileMode")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: fileMode takes exactly one argument and its grant")))) (clause ((PLit (LString "writeFileMode")) (PList (PVar "p") (PVar "m") (PVar "s") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "m"))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "s"))) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_write_file_mode_io"))) (ELit (LInt 4)))))) (clause ((PLit (LString "writeFileMode")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: writeFileMode takes three arguments and its grant")))) (clause ((PLit (LString "panic")) (PList (PVar "msg"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "wasmTrapBytes") (EApp (EVar "progEmit") (EVar "prog"))) (EBinOp "++" (EBinOp "++" (ELit (LString "runtime error [")) (EApp (EVar "$core.display") (EVar "EPanic"))) (ELit (LString "]: ")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "msg"))) (EListLit (ELit (LString "ref.cast (ref $str)")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_eprint_str"))) (ELit (LInt 1))))) (EApp (EApp (EVar "trapByteInstr") (EApp (EVar "progEmit") (EVar "prog"))) (ELit (LInt 10)))) (EListLit (ELit (LString "unreachable"))))) (clause ((PLit (LString "panic")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W10: panic takes exactly one argument")))) (clause ((PLit (LString "indexError")) (PList (PVar "msg"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "wasmTrapBytes") (EApp (EVar "progEmit") (EVar "prog"))) (EBinOp "++" (EBinOp "++" (ELit (LString "runtime error [")) (EApp (EVar "$core.display") (EVar "EIndexOob"))) (ELit (LString "]: ")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "msg"))) (EListLit (ELit (LString "ref.cast (ref $str)")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_eprint_str"))) (ELit (LInt 1))))) (EApp (EApp (EVar "trapByteInstr") (EApp (EVar "progEmit") (EVar "prog"))) (ELit (LInt 10)))) (EListLit (ELit (LString "unreachable"))))) (clause ((PLit (LString "indexError")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm Index-16a: indexError takes exactly one argument")))) (clause ((PLit (LString "indexErrorAt")) (PList (PVar "idx"))) (EApp (EApp (EApp (EApp (EApp (EVar "wasmTrapNum") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "EIndexOob")) (ELit (LString "index "))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "idx"))) (ELit (LString " out of bounds")))) (clause ((PLit (LString "indexErrorAt")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm #1787: indexErrorAt takes exactly one argument")))) (clause ((PLit (LString "indexErrorAtSite")) (PList (PVar "site") (PVar "idx"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "siteExprInstrs") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "site")) (EApp (EApp (EVar "go") (ELit (LString "indexErrorAt"))) (EListLit (EVar "idx"))))) (clause ((PLit (LString "indexErrorAtSite")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: indexErrorAtSite takes exactly two arguments")))) (clause ((PLit (LString "panicAt")) (PList (PVar "site") (PVar "msg"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "siteExprInstrs") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "site")) (EApp (EApp (EVar "go") (ELit (LString "panic"))) (EListLit (EVar "msg"))))) (clause ((PLit (LString "__site__")) (PList (PCon "CLit" (PCon "LString" (PVar "f"))) (PCon "CLit" (PCon "LInt" (PVar "line"))) (PCon "CLit" (PCon "LInt" (PVar "col"))))) (EApp (EApp (EVar "emitLitRef") (EVar "prog")) (EApp (EVar "LInt") (EApp (EApp (EVar "sitePackedW") (EApp (EVar "progEmit") (EVar "prog"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "line")) (EVar "col")) (EVar "line")) (EBinOp "+" (EVar "col") (ELit (LInt 1)))))))) (clause ((PLit (LString "__site__")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: a trap-site literal takes a file, a line and a column")))) (clause ((PLit (LString "panicAt")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: panicAt takes exactly two arguments")))) (clause ((PLit (LString "sliceError")) (PList (PVar "_lo") (PVar "_hi"))) (EApp (EApp (EApp (EVar "wasmTrap") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "ESliceOob")) (ELit (LString "slice out of bounds")))) (clause ((PLit (LString "sliceError")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm #670: sliceError takes exactly two arguments")))) (clause ((PLit (LString "intBitAnd")) (PVar "args")) (EApp (EApp (EVar "go") (ELit (LString "bitAnd"))) (EVar "args"))) (clause ((PLit (LString "intBitOr")) (PVar "args")) (EApp (EApp (EVar "go") (ELit (LString "bitOr"))) (EVar "args"))) (clause ((PLit (LString "intBitXor")) (PVar "args")) (EApp (EApp (EVar "go") (ELit (LString "bitXor"))) (EVar "args"))) (clause ((PLit (LString "intBitNot")) (PVar "args")) (EApp (EApp (EVar "go") (ELit (LString "bitNot"))) (EVar "args"))) (clause ((PLit (LString "intShiftLeft")) (PVar "args")) (EApp (EApp (EVar "go") (ELit (LString "shiftLeft"))) (EVar "args"))) (clause ((PLit (LString "intShiftRight")) (PVar "args")) (EApp (EApp (EVar "go") (ELit (LString "shiftRight"))) (EVar "args"))) (clause ((PLit (LString "bitAnd")) (PList (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "b"))) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")))) (EListLit (ELit (LString "i64.and")) (EApp (EVar "boxIntW") (EVar "prog"))))) (clause ((PLit (LString "bitAnd")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm stage-A: bitAnd takes exactly two arguments")))) (clause ((PLit (LString "shiftLeft")) (PList (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "b"))) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")))) (EApp (EApp (EVar "intShiftCall") (EVar "prog")) (ELit (LString "left")))) (EListLit (EApp (EVar "boxIntW") (EVar "prog"))))) (clause ((PLit (LString "shiftLeft")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm stage-A: shiftLeft takes exactly two arguments")))) (clause ((PLit (LString "shiftRight")) (PList (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "b"))) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")))) (EApp (EApp (EVar "intShiftCall") (EVar "prog")) (ELit (LString "right")))) (EListLit (EApp (EVar "boxIntW") (EVar "prog"))))) (clause ((PLit (LString "shiftRight")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm stage-A: shiftRight takes exactly two arguments")))) (clause ((PLit (LString "bitOr")) (PList (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "b"))) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")))) (EListLit (ELit (LString "i64.or")) (EApp (EVar "boxIntW") (EVar "prog"))))) (clause ((PLit (LString "bitXor")) (PList (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "b"))) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")))) (EListLit (ELit (LString "i64.xor")) (EApp (EVar "boxIntW") (EVar "prog"))))) (clause ((PLit (LString "bitNot")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")) (ELit (LString "i64.const -1")) (ELit (LString "i64.xor")) (EApp (EVar "boxIntW") (EVar "prog"))))) (clause ((PLit (LString "intBitsToFloat")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")) (ELit (LString "f64.reinterpret_i64")) (ELit (LString "struct.new $float"))))) (clause ((PLit (LString "u8Truncate")) (PList (PVar "a"))) (EApp (EApp (EApp (EApp (EApp (EVar "emitTruncateRef") (EVar "prog")) (EVar "env")) (EVar "d")) (ELit (LString "U8"))) (EVar "a"))) (clause ((PLit (LString "u16Truncate")) (PList (PVar "a"))) (EApp (EApp (EApp (EApp (EApp (EVar "emitTruncateRef") (EVar "prog")) (EVar "env")) (EVar "d")) (ELit (LString "U16"))) (EVar "a"))) (clause ((PLit (LString "u32Truncate")) (PList (PVar "a"))) (EApp (EApp (EApp (EApp (EApp (EVar "emitTruncateRef") (EVar "prog")) (EVar "env")) (EVar "d")) (ELit (LString "U32"))) (EVar "a"))) (clause ((PLit (LString "u8ToInt")) (PList (PVar "a"))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a"))) (clause ((PLit (LString "u16ToInt")) (PList (PVar "a"))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a"))) (clause ((PLit (LString "u32ToInt")) (PList (PVar "a"))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a"))) (clause ((PLit (LString "i32Truncate")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")) (ELit (LString "i64.extend32_s")) (EApp (EVar "boxIntW") (EVar "prog"))))) (clause ((PLit (LString "i32ToInt")) (PList (PVar "a"))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a"))) (clause ((PLit (LString "i64FromBits")) (PList (PVar "a"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EVar "unboxU64W")) (EListLit (ELit (LString "struct.new $i64"))))) (clause ((PLit (LString "i64ToBits")) (PList (PVar "a"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EVar "unboxI64W")) (EListLit (ELit (LString "struct.new $u64"))))) (clause ((PLit (LString "u64Truncate")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")) (ELit (LString "struct.new $u64"))))) (clause ((PLit (LString "u64TruncateToInt")) (PList (PVar "a"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EVar "unboxU64W")) (EListLit (EApp (EVar "boxIntW") (EVar "prog"))))) (clause ((PLit (LString "u64BitAnd")) (PList (PVar "a") (PVar "b"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitU64KernelRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EVar "b")) (ELit (LString "i64.and")))) (clause ((PLit (LString "u64BitOr")) (PList (PVar "a") (PVar "b"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitU64KernelRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EVar "b")) (ELit (LString "i64.or")))) (clause ((PLit (LString "u64BitXor")) (PList (PVar "a") (PVar "b"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitU64KernelRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EVar "b")) (ELit (LString "i64.xor")))) (clause ((PLit (LString "u64MulHigh")) (PList (PVar "a") (PVar "b"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitU64KernelRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EVar "b")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_u64_mulhi"))) (ELit (LInt 2))))) (clause ((PLit (LString "u64ShiftLeft")) (PList (PVar "a") (PVar "k"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitU64ShiftRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EVar "k")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_u64_shl"))) (ELit (LInt 2))))) (clause ((PLit (LString "u64ShiftRight")) (PList (PVar "a") (PVar "k"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitU64ShiftRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EVar "k")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_u64_shr"))) (ELit (LInt 2))))) (clause ((PLit (LString "sqrt")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "f64.sqrt")) (ELit (LString "struct.new $float"))))) (clause ((PLit (LString "floor")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "f64.floor")) (ELit (LString "struct.new $float"))))) (clause ((PLit (LString "ceil")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "f64.ceil")) (ELit (LString "struct.new $float"))))) (clause ((PLit (LString "trunc")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "f64.trunc")) (ELit (LString "struct.new $float"))))) (clause ((PLit (LString "round")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_round"))) (ELit (LInt 1))) (ELit (LString "struct.new $float"))))) (clause ((PLit (LString "cbrt")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_cbrt"))) (ELit (LInt 1))) (ELit (LString "struct.new $float"))))) (clause ((PLit (LString "exp")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_exp"))) (ELit (LInt 1))) (ELit (LString "struct.new $float"))))) (clause ((PLit (LString "log")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_log"))) (ELit (LInt 1))) (ELit (LString "struct.new $float"))))) (clause ((PLit (LString "log2")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_log2"))) (ELit (LInt 1))) (ELit (LString "struct.new $float"))))) (clause ((PLit (LString "log10")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_log10"))) (ELit (LInt 1))) (ELit (LString "struct.new $float"))))) (clause ((PLit (LString "sin")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_sin"))) (ELit (LInt 1))) (ELit (LString "struct.new $float"))))) (clause ((PLit (LString "cos")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_cos"))) (ELit (LInt 1))) (ELit (LString "struct.new $float"))))) (clause ((PLit (LString "tan")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_tan"))) (ELit (LInt 1))) (ELit (LString "struct.new $float"))))) (clause ((PLit (LString "asin")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_asin"))) (ELit (LInt 1))) (ELit (LString "struct.new $float"))))) (clause ((PLit (LString "acos")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_acos"))) (ELit (LInt 1))) (ELit (LString "struct.new $float"))))) (clause ((PLit (LString "atan")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_atan"))) (ELit (LInt 1))) (ELit (LString "struct.new $float"))))) (clause ((PLit (LString "sinh")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_sinh"))) (ELit (LInt 1))) (ELit (LString "struct.new $float"))))) (clause ((PLit (LString "cosh")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_cosh"))) (ELit (LInt 1))) (ELit (LString "struct.new $float"))))) (clause ((PLit (LString "tanh")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_tanh"))) (ELit (LInt 1))) (ELit (LString "struct.new $float"))))) (clause ((PLit (LString "pow")) (PList (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "b"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_pow"))) (ELit (LInt 2))) (ELit (LString "struct.new $float"))))) (clause ((PLit (LString "atan2")) (PList (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "b"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_atan2"))) (ELit (LInt 2))) (ELit (LString "struct.new $float"))))) (clause ((PLit (LString "hypot")) (PList (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "b"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_hypot"))) (ELit (LInt 2))) (ELit (LString "struct.new $float"))))) (clause ((PLit (LString "floatRem")) (PList (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "b"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_float_rem"))) (ELit (LInt 2))) (ELit (LString "struct.new $float"))))) (clause ((PVar "name") PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "wasm W8: unsupported leaf extern '")) (EVar "name")) (ELit (LString "'"))))))) (EApp (EApp (EVar "go") (EVar "name0")) (EVar "args0"))))
 (DTypeSig false "floatArgW" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "floatArgW" ((PVar "prog") (PVar "env") (PVar "d") (PVar "a")) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "ref.cast (ref $float)")) (ELit (LString "struct.get $float 0")))))
 (DTypeSig false "emitArrayExternRef" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyApp (TyCon "List") (TyCon "String"))))))))
@@ -12476,9 +12221,7 @@ hasFamilyW prog symbol tag =
 (DTypeSig false "wTrmcLinkOne" (TyFun (TyCon "Prog") (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "wTrmcLinkOne" ((PVar "prog") (PVar "isBuiltinList") (PVar "ctorName") (PVar "selfIdx") (PVar "valInstrs")) (EBlock (DoLet false false (PVar "cellStruct") (EApp (EApp (EVar "trmcCellStruct") (EVar "isBuiltinList")) (EVar "ctorName"))) (DoExpr (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (ELit (LString "local.get ")) (EVar "wTrmcDestL")) (EBinOp "++" (EBinOp "++" (ELit (LString "ref.cast (ref $")) (EApp (EApp (EVar "typeNameW") (EVar "prog")) (EVar "cellStruct"))) (ELit (LString ")")))) (EVar "valInstrs")) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "struct.set $")) (EApp (EVar "$core.display") (EApp (EApp (EVar "typeNameW") (EVar "prog")) (EVar "cellStruct")))) (ELit (LString " "))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EBinOp "+" (EVar "selfIdx") (ELit (LInt 1)))))) (ELit (LString ""))))))))
 (DTypeSig false "wTrmcLinkChain" (TyFun (TyCon "Prog") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "wTrmcLinkChain" (PWild PWild (PList) PWild PWild) (EListLit))
-(DFunDef false "wTrmcLinkChain" ((PVar "prog") (PVar "isBuiltinList") (PList (PTuple (PVar "ctorName") (PVar "selfIdx"))) PWild (PVar "valInstrs")) (EApp (EApp (EApp (EApp (EApp (EVar "wTrmcLinkOne") (EVar "prog")) (EVar "isBuiltinList")) (EVar "ctorName")) (EVar "selfIdx")) (EVar "valInstrs")))
-(DFunDef false "wTrmcLinkChain" ((PVar "prog") (PVar "isBuiltinList") (PCons (PTuple (PVar "ctorName") (PVar "selfIdx")) (PVar "rest")) (PVar "k") (PVar "valInstrs")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (ELit (LString "local.get ")) (EVar "wTrmcDctorL")) (EBinOp "++" (ELit (LString "i32.const ")) (EApp (EVar "intToString") (EVar "k"))) (ELit (LString "i32.eq")) (ELit (LString "if"))) (EApp (EVar "indent") (EApp (EApp (EApp (EApp (EApp (EVar "wTrmcLinkOne") (EVar "prog")) (EVar "isBuiltinList")) (EVar "ctorName")) (EVar "selfIdx")) (EVar "valInstrs")))) (EListLit (ELit (LString "else")))) (EApp (EVar "indent") (EApp (EApp (EApp (EApp (EApp (EVar "wTrmcLinkChain") (EVar "prog")) (EVar "isBuiltinList")) (EVar "rest")) (EBinOp "+" (EVar "k") (ELit (LInt 1)))) (EVar "valInstrs")))) (EListLit (ELit (LString "end")))))
+(DFunDef false "wTrmcLinkChain" ((PVar "prog") (PVar "isBuiltinList") (PVar "xs0") (PVar "k0") (PVar "valInstrs")) (ELetGroup ((lgb "go" (clause ((PList) PWild) (EListLit)) (clause ((PList (PTuple (PVar "ctorName") (PVar "selfIdx"))) PWild) (EApp (EApp (EApp (EApp (EApp (EVar "wTrmcLinkOne") (EVar "prog")) (EVar "isBuiltinList")) (EVar "ctorName")) (EVar "selfIdx")) (EVar "valInstrs"))) (clause ((PCons (PTuple (PVar "ctorName") (PVar "selfIdx")) (PVar "rest")) (PVar "k")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (ELit (LString "local.get ")) (EVar "wTrmcDctorL")) (EBinOp "++" (ELit (LString "i32.const ")) (EApp (EVar "intToString") (EVar "k"))) (ELit (LString "i32.eq")) (ELit (LString "if"))) (EApp (EVar "indent") (EApp (EApp (EApp (EApp (EApp (EVar "wTrmcLinkOne") (EVar "prog")) (EVar "isBuiltinList")) (EVar "ctorName")) (EVar "selfIdx")) (EVar "valInstrs")))) (EListLit (ELit (LString "else")))) (EApp (EVar "indent") (EApp (EApp (EVar "go") (EVar "rest")) (EBinOp "+" (EVar "k") (ELit (LInt 1)))))) (EListLit (ELit (LString "end"))))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "k0"))))
 (DTypeSig false "wTrmcRecordDctor" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "wTrmcRecordDctor" ((PList PWild) PWild) (EListLit))
 (DFunDef false "wTrmcRecordDctor" ((PVar "ctorSet") (PVar "ctorName")) (EListLit (EBinOp "++" (ELit (LString "i32.const ")) (EApp (EVar "intToString") (EApp (EApp (EApp (EVar "wTrmcCtorIndex") (EVar "ctorSet")) (EVar "ctorName")) (ELit (LInt 0))))) (EBinOp "++" (ELit (LString "local.set ")) (EVar "wTrmcDctorL"))))
@@ -12492,8 +12235,7 @@ hasFamilyW prog symbol tag =
 (DTypeSig false "wTrmcEmitArgsToTemps" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "wTrmcEmitArgsToTemps" ((PVar "prog") (PVar "env") (PVar "args") (PVar "base")) (EApp (EApp (EApp (EApp (EApp (EVar "wTrmcArgsGo") (EVar "prog")) (EVar "env")) (EVar "args")) (EVar "base")) (ELit (LInt 0))))
 (DTypeSig false "wTrmcArgsGo" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "wTrmcArgsGo" (PWild PWild (PList) PWild PWild) (EListLit))
-(DFunDef false "wTrmcArgsGo" ((PVar "prog") (PVar "env") (PCons (PVar "a") (PVar "rest")) (PVar "base") (PVar "k")) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "a")) (EListLit (EBinOp "++" (ELit (LString "local.set ")) (EApp (EVar "wTrmcTempL") (EBinOp "+" (EVar "base") (EVar "k")))))) (EApp (EApp (EApp (EApp (EApp (EVar "wTrmcArgsGo") (EVar "prog")) (EVar "env")) (EVar "rest")) (EVar "base")) (EBinOp "+" (EVar "k") (ELit (LInt 1))))))
+(DFunDef false "wTrmcArgsGo" ((PVar "prog") (PVar "env") (PVar "xs0") (PVar "base") (PVar "k0")) (ELetGroup ((lgb "go" (clause ((PList) PWild) (EListLit)) (clause ((PCons (PVar "a") (PVar "rest")) (PVar "k")) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "a")) (EListLit (EBinOp "++" (ELit (LString "local.set ")) (EApp (EVar "wTrmcTempL") (EBinOp "+" (EVar "base") (EVar "k")))))) (EApp (EApp (EVar "go") (EVar "rest")) (EBinOp "+" (EVar "k") (ELit (LInt 1)))))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "k0"))))
 (DTypeSig false "wTrmcStoreSlots" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "wTrmcStoreSlots" ((PVar "pslots") (PVar "args") (PVar "base")) (EApp (EApp (EApp (EApp (EVar "wTrmcStoreGo") (EVar "pslots")) (EVar "args")) (EVar "base")) (ELit (LInt 0))))
 (DTypeSig false "wTrmcStoreGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))))
@@ -12514,17 +12256,9 @@ hasFamilyW prog symbol tag =
 (DTypeSig false "snd" (TyFun (TyTuple (TyVar "a") (TyVar "b")) (TyVar "b")))
 (DFunDef false "snd" ((PTuple PWild (PVar "b"))) (EVar "b"))
 (DTypeSig false "wTrmcCtorTailsOf" (TyFun (TyCon "Prog") (TyFun (TyCon "SelfRef") (TyFun (TyCon "Int") (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))))))
-(DFunDef false "wTrmcCtorTailsOf" ((PVar "prog") (PVar "self") (PVar "arity") (PCon "CIf" PWild (PVar "t") (PVar "f"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "wTrmcCtorTailsOf") (EVar "prog")) (EVar "self")) (EVar "arity")) (EVar "t")) (EApp (EApp (EApp (EApp (EVar "wTrmcCtorTailsOf") (EVar "prog")) (EVar "self")) (EVar "arity")) (EVar "f"))))
-(DFunDef false "wTrmcCtorTailsOf" ((PVar "prog") (PVar "self") (PVar "arity") (PCon "CLet" PWild PWild PWild (PVar "b"))) (EApp (EApp (EApp (EApp (EVar "wTrmcCtorTailsOf") (EVar "prog")) (EVar "self")) (EVar "arity")) (EVar "b")))
-(DFunDef false "wTrmcCtorTailsOf" ((PVar "prog") (PVar "self") (PVar "arity") (PCon "CBlock" (PVar "stmts"))) (EMatch (EApp (EVar "lastStmtExpr") (EVar "stmts")) (arm (PCon "Some" (PVar "ex")) () (EApp (EApp (EApp (EApp (EVar "wTrmcCtorTailsOf") (EVar "prog")) (EVar "self")) (EVar "arity")) (EVar "ex"))) (arm (PCon "None") () (EListLit))))
-(DFunDef false "wTrmcCtorTailsOf" ((PVar "prog") (PVar "self") (PVar "arity") (PCon "CDecision" PWild (PVar "arms") PWild)) (EApp (EApp (EVar "flatMap") (ELam ((PVar "a")) (EApp (EApp (EApp (EApp (EVar "wTrmcCtorTailsOf") (EVar "prog")) (EVar "self")) (EVar "arity")) (EApp (EVar "armBody") (EVar "a"))))) (EVar "arms")))
-(DFunDef false "wTrmcCtorTailsOf" ((PVar "prog") (PVar "self") (PVar "arity") (PVar "ex")) (EIf (EApp (EApp (EApp (EApp (EApp (EVar "isCtorTail") (ELam ((PVar "c")) (EApp (EApp (EVar "isCtor") (EVar "prog")) (EVar "c")))) (ELam ((PVar "c")) (EApp (EApp (EVar "ctorArity") (EVar "prog")) (EVar "c")))) (EVar "self")) (EVar "arity")) (EVar "ex")) (EListLit (ETuple (EApp (EVar "ctorTailName") (EVar "ex")) (EApp (EVar "ctorTailSelfIdx") (EVar "ex")))) (EListLit)))
+(DFunDef false "wTrmcCtorTailsOf" ((PVar "prog") (PVar "self") (PVar "arity") (PVar "ex0")) (ELetGroup ((lgb "go" (clause ((PCon "CIf" PWild (PVar "t") (PVar "f"))) (EBinOp "++" (EApp (EVar "go") (EVar "t")) (EApp (EVar "go") (EVar "f")))) (clause ((PCon "CLet" PWild PWild PWild (PVar "b"))) (EApp (EVar "go") (EVar "b"))) (clause ((PCon "CBlock" (PVar "stmts"))) (EMatch (EApp (EVar "lastStmtExpr") (EVar "stmts")) (arm (PCon "Some" (PVar "ex")) () (EApp (EVar "go") (EVar "ex"))) (arm (PCon "None") () (EListLit)))) (clause ((PCon "CDecision" PWild (PVar "arms") PWild)) (EApp (EApp (EVar "flatMap") (ELam ((PVar "a")) (EApp (EVar "go") (EApp (EVar "armBody") (EVar "a"))))) (EVar "arms"))) (clause ((PVar "ex")) (EIf (EApp (EApp (EApp (EApp (EApp (EVar "isCtorTail") (ELam ((PVar "c")) (EApp (EApp (EVar "isCtor") (EVar "prog")) (EVar "c")))) (ELam ((PVar "c")) (EApp (EApp (EVar "ctorArity") (EVar "prog")) (EVar "c")))) (EVar "self")) (EVar "arity")) (EVar "ex")) (EListLit (ETuple (EApp (EVar "ctorTailName") (EVar "ex")) (EApp (EVar "ctorTailSelfIdx") (EVar "ex")))) (EListLit))))) (EApp (EVar "go") (EVar "ex0"))))
 (DTypeSig false "wTrmcCtorTailExprs" (TyFun (TyCon "Prog") (TyFun (TyCon "SelfRef") (TyFun (TyCon "Int") (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CExpr")))))))
-(DFunDef false "wTrmcCtorTailExprs" ((PVar "prog") (PVar "self") (PVar "arity") (PCon "CIf" PWild (PVar "t") (PVar "f"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "wTrmcCtorTailExprs") (EVar "prog")) (EVar "self")) (EVar "arity")) (EVar "t")) (EApp (EApp (EApp (EApp (EVar "wTrmcCtorTailExprs") (EVar "prog")) (EVar "self")) (EVar "arity")) (EVar "f"))))
-(DFunDef false "wTrmcCtorTailExprs" ((PVar "prog") (PVar "self") (PVar "arity") (PCon "CLet" PWild PWild PWild (PVar "b"))) (EApp (EApp (EApp (EApp (EVar "wTrmcCtorTailExprs") (EVar "prog")) (EVar "self")) (EVar "arity")) (EVar "b")))
-(DFunDef false "wTrmcCtorTailExprs" ((PVar "prog") (PVar "self") (PVar "arity") (PCon "CBlock" (PVar "stmts"))) (EMatch (EApp (EVar "lastStmtExpr") (EVar "stmts")) (arm (PCon "Some" (PVar "ex")) () (EApp (EApp (EApp (EApp (EVar "wTrmcCtorTailExprs") (EVar "prog")) (EVar "self")) (EVar "arity")) (EVar "ex"))) (arm (PCon "None") () (EListLit))))
-(DFunDef false "wTrmcCtorTailExprs" ((PVar "prog") (PVar "self") (PVar "arity") (PCon "CDecision" PWild (PVar "arms") PWild)) (EApp (EApp (EVar "flatMap") (ELam ((PVar "a")) (EApp (EApp (EApp (EApp (EVar "wTrmcCtorTailExprs") (EVar "prog")) (EVar "self")) (EVar "arity")) (EApp (EVar "armBody") (EVar "a"))))) (EVar "arms")))
-(DFunDef false "wTrmcCtorTailExprs" ((PVar "prog") (PVar "self") (PVar "arity") (PVar "ex")) (EIf (EApp (EApp (EApp (EApp (EApp (EVar "isCtorTail") (ELam ((PVar "c")) (EApp (EApp (EVar "isCtor") (EVar "prog")) (EVar "c")))) (ELam ((PVar "c")) (EApp (EApp (EVar "ctorArity") (EVar "prog")) (EVar "c")))) (EVar "self")) (EVar "arity")) (EVar "ex")) (EListLit (EVar "ex")) (EListLit)))
+(DFunDef false "wTrmcCtorTailExprs" ((PVar "prog") (PVar "self") (PVar "arity") (PVar "ex0")) (ELetGroup ((lgb "go" (clause ((PCon "CIf" PWild (PVar "t") (PVar "f"))) (EBinOp "++" (EApp (EVar "go") (EVar "t")) (EApp (EVar "go") (EVar "f")))) (clause ((PCon "CLet" PWild PWild PWild (PVar "b"))) (EApp (EVar "go") (EVar "b"))) (clause ((PCon "CBlock" (PVar "stmts"))) (EMatch (EApp (EVar "lastStmtExpr") (EVar "stmts")) (arm (PCon "Some" (PVar "ex")) () (EApp (EVar "go") (EVar "ex"))) (arm (PCon "None") () (EListLit)))) (clause ((PCon "CDecision" PWild (PVar "arms") PWild)) (EApp (EApp (EVar "flatMap") (ELam ((PVar "a")) (EApp (EVar "go") (EApp (EVar "armBody") (EVar "a"))))) (EVar "arms"))) (clause ((PVar "ex")) (EIf (EApp (EApp (EApp (EApp (EApp (EVar "isCtorTail") (ELam ((PVar "c")) (EApp (EApp (EVar "isCtor") (EVar "prog")) (EVar "c")))) (ELam ((PVar "c")) (EApp (EApp (EVar "ctorArity") (EVar "prog")) (EVar "c")))) (EVar "self")) (EVar "arity")) (EVar "ex")) (EListLit (EVar "ex")) (EListLit))))) (EApp (EVar "go") (EVar "ex0"))))
 (DTypeSig false "wTrmcBuildsBuiltinList" (TyFun (TyCon "Prog") (TyFun (TyCon "SelfRef") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyCon "Bool"))))))
 (DFunDef false "wTrmcBuildsBuiltinList" ((PVar "prog") (PVar "self") (PVar "arity") (PVar "clauses")) (EApp (EApp (EVar "anyList") (EVar "ctorTailIsCons")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "c")) (EApp (EApp (EApp (EApp (EVar "wTrmcCtorTailExprs") (EVar "prog")) (EVar "self")) (EVar "arity")) (EApp (EVar "clauseBodyOf") (EVar "c"))))) (EVar "clauses"))))
 (DTypeSig false "emitWasmTrmcFn" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "List") (TyCon "String"))))))))
@@ -12570,22 +12304,13 @@ hasFamilyW prog symbol tag =
 (DTypeSig false "emitTailCallW" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "emitTailCallW" ((PVar "prog") (PVar "env") (PVar "app")) (EBlock (DoLet false false (PTuple (PVar "hd") (PVar "args") (PVar "mode")) (EApp (EVar "appParts") (EVar "app"))) (DoExpr (EMatch (EVar "hd") (arm (PCon "CVar" (PVar "f0") PWild) () (EBlock (DoLet false false (PVar "f") (EApp (EApp (EVar "canonFn") (EVar "prog")) (EVar "f0"))) (DoExpr (EIf (EApp (EApp (EVar "envHas") (EVar "f0")) (EVar "env")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitIndirectApp") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "hd")) (EVar "args")) (EVar "CallTailW")) (EIf (EApp (EApp (EVar "isCtor") (EVar "prog")) (EVar "f")) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "app")) (EListLit (ELit (LString "return")))) (EIf (EApp (EApp (EVar "isFfiExternW") (EVar "prog")) (EVar "f")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitFfiAppW") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "hd")) (EVar "f")) (EVar "args")) (EVar "CallTailW")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "f0") (EVar "siteSentinelName")) (EBinOp "&&" (EApp (EApp (EApp (EVar "hasFamilyW") (EVar "prog")) (EVar "f0")) (ELit (LString "ref"))) (EBinOp "==" (EApp (EApp (EVar "runtimeNameW") (EVar "prog")) (EVar "f0")) (ELit (LString "Ref"))))) (EBinOp "&&" (EApp (EApp (EApp (EVar "hasFamilyW") (EVar "prog")) (EVar "f0")) (ELit (LString "ref"))) (EBinOp "==" (EApp (EApp (EVar "runtimeNameW") (EVar "prog")) (EVar "f0")) (ELit (LString "setRef"))))) (EApp (EVar "isSome") (EApp (EApp (EVar "externFamilyW") (EApp (EVar "progEmit") (EVar "prog"))) (EApp (EApp (EVar "runtimeNameW") (EVar "prog")) (EVar "f0"))))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitAppRef") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "app")) (EListLit (ELit (LString "return")))) (EIf (EBinOp "&&" (EApp (EApp (EVar "progFnMemberW") (EVar "prog")) (EVar "f")) (EApp (EVar "isExactCall") (EVar "mode"))) (EBinOp "++" (EApp (EApp (EVar "flatMap") (ELam ((PVar "a")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "a")))) (EVar "args")) (EListLit (EApp (EApp (EApp (EApp (EVar "callFnW") (EVar "prog")) (EVar "CallTailW")) (EApp (EVar "userFnW") (EVar "f"))) (EApp (EVar "listLen") (EVar "args"))))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitIndirectApp") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "hd")) (EVar "args")) (EVar "CallTailW")))))))))) (arm (PCon "CMethod" (PVar "name") (PCon "MethodEvidence" (PVar "iface") (PVar "arity") (PVar "route") (PVar "implRoutes") (PVar "methRoutes"))) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitMethodRef") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "name")) (EVar "iface")) (EVar "arity")) (EVar "route")) (EVar "implRoutes")) (EVar "methRoutes")) (EVar "args")) (EVar "mode")) (EVar "CallTailW"))) (arm (PCon "CDict" (PVar "name") (PVar "routes")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitDictRef") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "name")) (EVar "routes")) (EVar "args")) (EVar "mode")) (EVar "CallTailW"))) (arm PWild () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitIndirectApp") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "hd")) (EVar "args")) (EVar "CallTailW")))))))
 (DTypeSig false "emitBlockTail" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "emitBlockTail" ((PVar "prog") (PVar "env") (PVar "arity") (PList (PCon "CSExpr" (PVar "ex")))) (EApp (EApp (EApp (EApp (EVar "emitRefTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "ex")))
-(DFunDef false "emitBlockTail" ((PVar "prog") (PVar "env") (PVar "arity") (PCons (PCon "CSExpr" (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "ex")) (EListLit (ELit (LString "drop")))) (EApp (EApp (EApp (EApp (EVar "emitBlockTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "rest"))))
-(DFunDef false "emitBlockTail" ((PVar "prog") (PVar "env") (PVar "arity") (PCons (PCon "CSLet" (PVar "recF") (PVar "pat") (PVar "ex")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "prefix") (PVar "env2")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitBlockBindingW") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "recF")) (EVar "pat")) (EVar "ex"))) (DoExpr (EBinOp "++" (EVar "prefix") (EApp (EApp (EApp (EApp (EVar "emitBlockTail") (EVar "prog")) (EVar "env2")) (EVar "arity")) (EVar "rest"))))))
-(DFunDef false "emitBlockTail" ((PVar "prog") (PVar "env") (PVar "arity") (PCons (PCon "CSAssign" (PVar "x") (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "ex")) (EListLit (EBinOp "++" (ELit (LString "local.set ")) (EApp (EApp (EApp (EVar "localTargetW") (EVar "prog")) (EVar "env")) (EVar "x"))))) (EApp (EApp (EApp (EApp (EVar "emitBlockTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "rest"))))
-(DFunDef false "emitBlockTail" ((PVar "prog") (PVar "env") (PVar "arity") (PList)) (EApp (EApp (EApp (EApp (EVar "emitRefTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EApp (EVar "CLit") (EVar "LUnit"))))
-(DFunDef false "emitBlockTail" ((PVar "prog") PWild PWild PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (EIf (EApp (EVar "rawProgramW") (EVar "prog")) (ELit (LString "scalar-mode: unsupported block statement")) (ELit (LString "ref-mode: unsupported block statement in tail position")))))
+(DFunDef false "emitBlockTail" ((PVar "prog") (PVar "env0") (PVar "arity") (PVar "ss0")) (ELetGroup ((lgb "go" (clause ((PVar "env") (PList (PCon "CSExpr" (PVar "ex")))) (EApp (EApp (EApp (EApp (EVar "emitRefTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "ex"))) (clause ((PVar "env") (PCons (PCon "CSExpr" (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "ex")) (EListLit (ELit (LString "drop")))) (EApp (EApp (EVar "go") (EVar "env")) (EVar "rest")))) (clause ((PVar "env") (PCons (PCon "CSLet" (PVar "recF") (PVar "pat") (PVar "ex")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "prefix") (PVar "env2")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitBlockBindingW") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "recF")) (EVar "pat")) (EVar "ex"))) (DoExpr (EBinOp "++" (EVar "prefix") (EApp (EApp (EVar "go") (EVar "env2")) (EVar "rest")))))) (clause ((PVar "env") (PCons (PCon "CSAssign" (PVar "x") (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "ex")) (EListLit (EBinOp "++" (ELit (LString "local.set ")) (EApp (EApp (EApp (EVar "localTargetW") (EVar "prog")) (EVar "env")) (EVar "x"))))) (EApp (EApp (EVar "go") (EVar "env")) (EVar "rest")))) (clause ((PVar "env") (PList)) (EApp (EApp (EApp (EApp (EVar "emitRefTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EApp (EVar "CLit") (EVar "LUnit")))) (clause (PWild PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (EIf (EApp (EVar "rawProgramW") (EVar "prog")) (ELit (LString "scalar-mode: unsupported block statement")) (ELit (LString "ref-mode: unsupported block statement in tail position"))))))) (EApp (EApp (EVar "go") (EVar "env0")) (EVar "ss0"))))
 (DTypeSig false "emitDecisionTail" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "CExpr") (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "CTree") (TyApp (TyCon "List") (TyCon "String")))))))))
 (DFunDef false "emitDecisionTail" ((PVar "prog") (PVar "env") (PVar "arity") (PVar "scrut") (PVar "arms") (PVar "tree")) (EBlock (DoLet false false (PVar "st") (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "scrut"))) (DoLet false false (PVar "scrutL") (EApp (EVar "scratchLocal") (ELit (LInt 0)))) (DoLet false false (PVar "occ0") (EListLit (EBinOp "++" (ELit (LString "local.get $")) (EVar "scrutL")))) (DoLet false false (PVar "shared") (EApp (EApp (EVar "orArms") (ELit (LString "$ort"))) (EVar "arms"))) (DoLet false false (PVar "progT") (EApp (EApp (EVar "progWithOrBlocks") (EVar "shared")) (EVar "prog"))) (DoLet false false (PVar "treeCode") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeTail") (EVar "progT")) (EVar "env")) (EVar "arity")) (ELit (LInt 1))) (EVar "occ0")) (EListLit (EVar "occ0"))) (EVar "arms")) (EVar "tree"))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "st") (EListLit (EBinOp "++" (ELit (LString "local.set $")) (EVar "scrutL")))) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "inner") (PVar "a")) (EApp (EApp (EApp (EApp (EApp (EVar "orBlockTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "a")) (EVar "inner")))) (EVar "treeCode")) (EVar "shared"))))))
 (DTypeSig false "orBlockTail" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "OrArm") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "orBlockTail" ((PVar "prog") (PVar "env") (PVar "arity") (PVar "a") (PVar "inner")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EVar "orBlockOpen") (EVar "a")) (EApp (EVar "indent") (EBinOp "++" (EVar "inner") (EListLit (ELit (LString "unreachable")))))) (EApp (EVar "orBlockClose") (EVar "a"))) (EApp (EApp (EApp (EApp (EVar "emitRefTail") (EVar "prog")) (EApp (EApp (EVar "orBodyEnv") (EVar "env")) (EVar "a"))) (EVar "arity")) (EFieldAccess (EVar "a") "oaBody"))))
 (DTypeSig false "emitTreeTail" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "CTree") (TyApp (TyCon "List") (TyCon "String")))))))))))
-(DFunDef false "emitTreeTail" ((PVar "prog") (PVar "_env") (PVar "_arity") (PVar "_d") (PVar "_root") (PVar "_occs") (PVar "_arms") (PCon "CTFail" (PVar "fs"))) (EApp (EApp (EVar "wasmFailTrap") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "fs")))
-(DFunDef false "emitTreeTail" ((PVar "prog") (PVar "env") (PVar "arity") (PVar "_d") (PVar "root") (PVar "_occs") (PVar "arms") (PCon "CTLeaf" (PVar "i"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitLeafTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "root")) (EVar "arms")) (EVar "i")))
-(DFunDef false "emitTreeTail" ((PVar "prog") (PVar "env") (PVar "arity") (PVar "d") (PVar "root") (PVar "occs") (PVar "arms") (PCon "CTGuard" (PVar "i") (PVar "fail"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitGuardArmTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "d")) (EVar "root")) (EVar "occs")) (EVar "arms")) (EVar "i")) (EVar "fail")))
-(DFunDef false "emitTreeTail" ((PVar "prog") (PVar "env") (PVar "arity") (PVar "d") (PVar "root") (PVar "occs") (PVar "arms") (PCon "CTDrop" (PVar "sub"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "d")) (EVar "root")) (EApp (EVar "tailList") (EVar "occs"))) (EVar "arms")) (EVar "sub")))
-(DFunDef false "emitTreeTail" ((PVar "prog") (PVar "env") (PVar "arity") (PVar "d") (PVar "root") (PVar "occs") (PVar "arms") (PCon "CTSwitch" (PVar "branches") (PVar "dft"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitSwitchTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "d")) (EVar "root")) (EVar "occs")) (EVar "arms")) (EVar "branches")) (EVar "dft")))
+(DFunDef false "emitTreeTail" ((PVar "prog") (PVar "env") (PVar "arity") (PVar "d") (PVar "root") (PVar "occs0") (PVar "arms") (PVar "x0")) (ELetGroup ((lgb "go" (clause ((PVar "_occs") (PCon "CTFail" (PVar "fs"))) (EApp (EApp (EVar "wasmFailTrap") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "fs"))) (clause ((PVar "_occs") (PCon "CTLeaf" (PVar "i"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitLeafTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "root")) (EVar "arms")) (EVar "i"))) (clause ((PVar "occs") (PCon "CTGuard" (PVar "i") (PVar "fail"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitGuardArmTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "d")) (EVar "root")) (EVar "occs")) (EVar "arms")) (EVar "i")) (EVar "fail"))) (clause ((PVar "occs") (PCon "CTDrop" (PVar "sub"))) (EApp (EApp (EVar "go") (EApp (EVar "tailList") (EVar "occs"))) (EVar "sub"))) (clause ((PVar "occs") (PCon "CTSwitch" (PVar "branches") (PVar "dft"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitSwitchTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "d")) (EVar "root")) (EVar "occs")) (EVar "arms")) (EVar "branches")) (EVar "dft"))))) (EApp (EApp (EVar "go") (EVar "occs0")) (EVar "x0"))))
 (DTypeSig false "emitLeafTail" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))))))
 (DFunDef false "emitLeafTail" ((PVar "prog") (PVar "env") (PVar "arity") (PVar "root") (PVar "arms") (PVar "i")) (EMatch (EApp (EApp (EApp (EVar "leafArm") (EVar "prog")) (EVar "arms")) (EVar "i")) (arm (PCon "Some" (PTuple (PVar "pat") PWild (PVar "body") (PVar "share"))) () (EBlock (DoLet false false (PTuple (PVar "binds") (PVar "env2")) (EApp (EApp (EApp (EApp (EVar "bindPatRef") (EVar "prog")) (EVar "env")) (EVar "pat")) (EVar "root"))) (DoExpr (EBinOp "++" (EVar "binds") (EApp (EApp (EApp (EApp (EApp (EVar "armExitTail") (EVar "prog")) (EVar "env2")) (EVar "arity")) (EVar "body")) (EVar "share")))))) (arm (PCon "None") () (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "ref-mode: tail decision arm index out of range"))))))
 (DTypeSig false "armExitTail" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "CExpr") (TyFun (TyApp (TyCon "Option") (TyCon "OrArm")) (TyApp (TyCon "List") (TyCon "String"))))))))
@@ -12604,15 +12329,11 @@ hasFamilyW prog symbol tag =
 (DTypeSig false "emitBrTableTowerTail" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "CTBranch")) (TyFun (TyCon "CTree") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))))))))))))
 (DFunDef false "emitBrTableTowerTail" ((PVar "prog") (PVar "env") (PVar "arity") (PVar "d") (PVar "root") (PVar "svRead") (PVar "rest") (PVar "arms") (PVar "branches") (PVar "dft") (PVar "ty") (PVar "sd") (PVar "nOrd")) (EBlock (DoLet false false (PVar "labels") (EApp (EApp (EVar "map") (EApp (EApp (EVar "labelBranch") (EVar "WN.WSwitchTail")) (EVar "sd"))) (EApp (EApp (EVar "rangeList") (ELit (LInt 0))) (EVar "nOrd")))) (DoLet false false (PVar "dftLabel") (EApp (EApp (EVar "labelName") (EVar "WN.WSwitchTail")) (EVar "sd"))) (DoLet false false (PVar "tableInstr") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "br_table ")) (EApp (EVar "$core.display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EVar "labels")))) (ELit (LString " "))) (EApp (EVar "$core.display") (EVar "dftLabel"))) (ELit (LString "")))) (DoLet false false (PVar "opens") (EBinOp "++" (EListLit (EBinOp "++" (ELit (LString "block ")) (EVar "dftLabel"))) (EApp (EApp (EVar "map") (ELam ((PVar "k")) (EBinOp "++" (ELit (LString "block ")) (EApp (EApp (EApp (EVar "labelBranch") (EVar "WN.WSwitchTail")) (EVar "sd")) (EVar "k"))))) (EApp (EApp (EVar "rangeList") (ELit (LInt 0))) (EVar "nOrd"))))) (DoLet false false (PVar "pick") (EBinOp "++" (EApp (EApp (EApp (EVar "discrimReadOf") (EVar "prog")) (EVar "svRead")) (EVar "ty")) (EListLit (EVar "tableInstr")))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "opens") (EVar "pick")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "towerBodiesTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "d")) (EVar "root")) (EVar "svRead")) (EVar "rest")) (EVar "arms")) (EVar "branches")) (EVar "dft")) (EVar "ty")) (EVar "sd")) (EBinOp "-" (EVar "nOrd") (ELit (LInt 1))))))))
 (DTypeSig false "towerBodiesTail" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "CTBranch")) (TyFun (TyCon "CTree") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))))))))))))
-(DFunDef false "towerBodiesTail" ((PVar "prog") (PVar "env") (PVar "arity") (PVar "d") (PVar "root") (PVar "svRead") (PVar "rest") (PVar "arms") (PVar "branches") (PVar "dft") (PVar "ty") (PVar "sd") (PVar "k")) (EIf (EBinOp "<" (EVar "k") (ELit (LInt 0))) (EBinOp "++" (EListLit (ELit (LString "end"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "d")) (EVar "root")) (EVar "rest")) (EVar "arms")) (EVar "dft"))) (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "end"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitOrdinalSlotTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "d")) (EVar "root")) (EVar "svRead")) (EVar "rest")) (EVar "arms")) (EVar "branches")) (EVar "ty")) (EVar "sd")) (EVar "k"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "towerBodiesTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "d")) (EVar "root")) (EVar "svRead")) (EVar "rest")) (EVar "arms")) (EVar "branches")) (EVar "dft")) (EVar "ty")) (EVar "sd")) (EBinOp "-" (EVar "k") (ELit (LInt 1)))))))
+(DFunDef false "towerBodiesTail" ((PVar "prog") (PVar "env") (PVar "arity") (PVar "d") (PVar "root") (PVar "sr") (PVar "rest") (PVar "arms") (PVar "brs") (PVar "dft") (PVar "ty") (PVar "sd") (PVar "k0")) (ELetGroup ((lgb "go" (clause ((PVar "k")) (EIf (EBinOp "<" (EVar "k") (ELit (LInt 0))) (EBinOp "++" (EListLit (ELit (LString "end"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "d")) (EVar "root")) (EVar "rest")) (EVar "arms")) (EVar "dft"))) (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "end"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitOrdinalSlotTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "d")) (EVar "root")) (EVar "sr")) (EVar "rest")) (EVar "arms")) (EVar "brs")) (EVar "ty")) (EVar "sd")) (EVar "k"))) (EApp (EVar "go") (EBinOp "-" (EVar "k") (ELit (LInt 1))))))))) (EApp (EVar "go") (EVar "k0"))))
 (DTypeSig false "emitOrdinalSlotTail" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "CTBranch")) (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))))))))))))
 (DFunDef false "emitOrdinalSlotTail" ((PVar "prog") (PVar "env") (PVar "arity") (PVar "d") (PVar "root") (PVar "svRead") (PVar "rest") (PVar "arms") (PVar "branches") (PVar "_ty") (PVar "sd") (PVar "k")) (EMatch (EApp (EApp (EVar "branchForOrdinal") (EVar "branches")) (EVar "k")) (arm (PCon "Some" (PCon "CTBranch" (PVar "h") (PVar "sub"))) () (EBlock (DoLet false false (PVar "cs") (EApp (EApp (EVar "headCtorStructName") (EVar "prog")) (EVar "h"))) (DoLet false false (PVar "a") (EApp (EVar "snd") (EApp (EApp (EVar "conHeadInfoUnsafe") (EVar "prog")) (EVar "h")))) (DoLet false false (PVar "fieldOccs") (EApp (EApp (EVar "map") (ELam ((PVar "i")) (EBinOp "++" (EVar "svRead") (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "ref.cast (ref $")) (EApp (EApp (EVar "typeNameW") (EVar "prog")) (EVar "cs"))) (ELit (LString ")"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "struct.get $")) (EApp (EVar "$core.display") (EApp (EApp (EVar "typeNameW") (EVar "prog")) (EVar "cs")))) (ELit (LString " "))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EBinOp "+" (EVar "i") (ELit (LInt 1)))))) (ELit (LString ""))))))) (EApp (EApp (EVar "rangeList") (ELit (LInt 0))) (EVar "a")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "d")) (EVar "root")) (EBinOp "++" (EVar "fieldOccs") (EVar "rest"))) (EVar "arms")) (EVar "sub"))))) (arm (PCon "None") () (EListLit (EBinOp "++" (ELit (LString "br ")) (EApp (EApp (EVar "labelName") (EVar "WN.WSwitchTail")) (EVar "sd")))))))
 (DTypeSig false "emitLitSwitchTail" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyApp (TyCon "List") (TyCon "CTBranch")) (TyFun (TyCon "CTree") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))))))))))
-(DFunDef false "emitLitSwitchTail" ((PVar "prog") (PVar "env") (PVar "arity") (PVar "d") (PVar "root") (PVar "_foc") (PVar "rest") (PVar "arms") (PList) (PVar "dft") (PVar "idt")) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "d")) (EVar "root")) (EVar "rest")) (EVar "arms")) (EVar "dft"))))
-(DFunDef false "emitLitSwitchTail" ((PVar "prog") (PVar "env") (PVar "arity") (PVar "d") (PVar "root") (PVar "foc") (PVar "rest") (PVar "arms") (PCons (PCon "CTBranch" (PCon "HLit" (PCon "LInt" (PVar "k"))) (PVar "sub")) (PVar "more")) (PVar "dft") (PVar "idt")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "indentBy") (EVar "idt")) (EBinOp "++" (EBinOp "++" (EVar "foc") (EListLit (EApp (EVar "unboxIntW") (EVar "prog")) (EBinOp "++" (ELit (LString "i64.const ")) (EApp (EVar "intToString") (EVar "k"))) (ELit (LString "i64.eq")))) (EListLit (ELit (LString "if"))))) (EApp (EApp (EVar "indentBy") (EBinOp "+" (EVar "idt") (ELit (LInt 1)))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "d")) (EVar "root")) (EVar "rest")) (EVar "arms")) (EVar "sub")))) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EListLit (ELit (LString "else"))))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitLitSwitchTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "d")) (EVar "root")) (EVar "foc")) (EVar "rest")) (EVar "arms")) (EVar "more")) (EVar "dft")) (EBinOp "+" (EVar "idt") (ELit (LInt 1))))) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EListLit (ELit (LString "end")) (ELit (LString "unreachable"))))))
-(DFunDef false "emitLitSwitchTail" ((PVar "prog") (PVar "env") (PVar "arity") (PVar "d") (PVar "root") (PVar "foc") (PVar "rest") (PVar "arms") (PCons (PCon "CTBranch" (PCon "HLit" (PCon "LChar" (PVar "c"))) (PVar "sub")) (PVar "more")) (PVar "dft") (PVar "idt")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "indentBy") (EVar "idt")) (EBinOp "++" (EBinOp "++" (EVar "foc") (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (EBinOp "++" (ELit (LString "i32.const ")) (EApp (EVar "intToString") (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EApp (EVar "stringToChars") (EVar "c")))))) (ELit (LString "i32.eq")))) (EListLit (ELit (LString "if"))))) (EApp (EApp (EVar "indentBy") (EBinOp "+" (EVar "idt") (ELit (LInt 1)))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "d")) (EVar "root")) (EVar "rest")) (EVar "arms")) (EVar "sub")))) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EListLit (ELit (LString "else"))))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitLitSwitchTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "d")) (EVar "root")) (EVar "foc")) (EVar "rest")) (EVar "arms")) (EVar "more")) (EVar "dft")) (EBinOp "+" (EVar "idt") (ELit (LInt 1))))) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EListLit (ELit (LString "end")) (ELit (LString "unreachable"))))))
-(DFunDef false "emitLitSwitchTail" ((PVar "prog") (PVar "env") (PVar "arity") (PVar "d") (PVar "root") (PVar "foc") (PVar "rest") (PVar "arms") (PCons (PCon "CTBranch" (PCon "HLit" (PCon "LString" (PVar "s"))) (PVar "sub")) (PVar "more")) (PVar "dft") (PVar "idt")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "indentBy") (EVar "idt")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "foc") (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EVar "emitLitRef") (EVar "prog")) (EApp (EVar "LString") (EVar "s")))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_str_compare"))) (ELit (LInt 2))) (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (ELit (LString "i32.const 1")) (ELit (LString "i32.eq")))) (EListLit (ELit (LString "if"))))) (EApp (EApp (EVar "indentBy") (EBinOp "+" (EVar "idt") (ELit (LInt 1)))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "d")) (EVar "root")) (EVar "rest")) (EVar "arms")) (EVar "sub")))) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EListLit (ELit (LString "else"))))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitLitSwitchTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "d")) (EVar "root")) (EVar "foc")) (EVar "rest")) (EVar "arms")) (EVar "more")) (EVar "dft")) (EBinOp "+" (EVar "idt") (ELit (LInt 1))))) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EListLit (ELit (LString "end")) (ELit (LString "unreachable"))))))
-(DFunDef false "emitLitSwitchTail" ((PVar "prog") PWild PWild PWild PWild PWild PWild PWild PWild PWild PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "ref-mode: non-Int literal tail switch head"))))
+(DFunDef false "emitLitSwitchTail" ((PVar "prog") (PVar "env") (PVar "arity") (PVar "d") (PVar "root") (PVar "foc") (PVar "rest") (PVar "arms") (PVar "xs0") (PVar "dft") (PVar "idt0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "idt")) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "d")) (EVar "root")) (EVar "rest")) (EVar "arms")) (EVar "dft")))) (clause ((PCons (PCon "CTBranch" (PCon "HLit" (PCon "LInt" (PVar "k"))) (PVar "sub")) (PVar "more")) (PVar "idt")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "indentBy") (EVar "idt")) (EBinOp "++" (EBinOp "++" (EVar "foc") (EListLit (EApp (EVar "unboxIntW") (EVar "prog")) (EBinOp "++" (ELit (LString "i64.const ")) (EApp (EVar "intToString") (EVar "k"))) (ELit (LString "i64.eq")))) (EListLit (ELit (LString "if"))))) (EApp (EApp (EVar "indentBy") (EBinOp "+" (EVar "idt") (ELit (LInt 1)))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "d")) (EVar "root")) (EVar "rest")) (EVar "arms")) (EVar "sub")))) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EListLit (ELit (LString "else"))))) (EApp (EApp (EVar "go") (EVar "more")) (EBinOp "+" (EVar "idt") (ELit (LInt 1))))) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EListLit (ELit (LString "end")) (ELit (LString "unreachable")))))) (clause ((PCons (PCon "CTBranch" (PCon "HLit" (PCon "LChar" (PVar "c"))) (PVar "sub")) (PVar "more")) (PVar "idt")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "indentBy") (EVar "idt")) (EBinOp "++" (EBinOp "++" (EVar "foc") (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (EBinOp "++" (ELit (LString "i32.const ")) (EApp (EVar "intToString") (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EApp (EVar "stringToChars") (EVar "c")))))) (ELit (LString "i32.eq")))) (EListLit (ELit (LString "if"))))) (EApp (EApp (EVar "indentBy") (EBinOp "+" (EVar "idt") (ELit (LInt 1)))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "d")) (EVar "root")) (EVar "rest")) (EVar "arms")) (EVar "sub")))) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EListLit (ELit (LString "else"))))) (EApp (EApp (EVar "go") (EVar "more")) (EBinOp "+" (EVar "idt") (ELit (LInt 1))))) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EListLit (ELit (LString "end")) (ELit (LString "unreachable")))))) (clause ((PCons (PCon "CTBranch" (PCon "HLit" (PCon "LString" (PVar "s"))) (PVar "sub")) (PVar "more")) (PVar "idt")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "indentBy") (EVar "idt")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "foc") (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EVar "emitLitRef") (EVar "prog")) (EApp (EVar "LString") (EVar "s")))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_str_compare"))) (ELit (LInt 2))) (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (ELit (LString "i32.const 1")) (ELit (LString "i32.eq")))) (EListLit (ELit (LString "if"))))) (EApp (EApp (EVar "indentBy") (EBinOp "+" (EVar "idt") (ELit (LInt 1)))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "d")) (EVar "root")) (EVar "rest")) (EVar "arms")) (EVar "sub")))) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EListLit (ELit (LString "else"))))) (EApp (EApp (EVar "go") (EVar "more")) (EBinOp "+" (EVar "idt") (ELit (LInt 1))))) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EListLit (ELit (LString "end")) (ELit (LString "unreachable")))))) (clause (PWild PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "ref-mode: non-Int literal tail switch head")))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "idt0"))))
 (DTypeSig false "emitClosure" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "emitClosure" ((PVar "prog") (PVar "env") (PVar "_d") (PVar "pats") (PVar "body")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "freshLamId") (EApp (EVar "progEmit") (EVar "prog")))) (DoLet false false (PVar "lamName") (EBinOp "++" (ELit (LString "$")) (EApp (EVar "WN.wasmName") (EApp (EApp (EApp (EVar "WN.WGenerated") (EVar "WN.WLambda")) (ELit (LString ""))) (EVar "n"))))) (DoLet false false (PVar "boundVars") (EApp (EApp (EVar "flatMap") (EVar "patBinders")) (EVar "pats"))) (DoLet false false (PVar "captured") (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EApp (EApp (EVar "envHas") (EVar "c")) (EVar "env")))) (EApp (EVar "dedupKeep") (EApp (EApp (EVar "freeVarsExpr") (EApp (EApp (EVar "omFromNames") (EVar "boundVars")) (EVar "omEmpty"))) (EVar "body"))))) (DoExpr (EApp (EApp (EVar "noteFuncRef") (EVar "prog")) (EVar "lamName"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "addLifted") (EVar "prog")) (EVar "lamName")) (EVar "codeShapeW")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitLamDefine") (EVar "prog")) (EVar "lamName")) (EVar "pats")) (EVar "captured")) (EApp (EApp (EVar "envRestrict") (EVar "captured")) (EVar "env"))) (EVar "body")))) (DoExpr (EMatch (EVar "captured") (arm (PList) () (EApp (EApp (EApp (EVar "wConstClos") (EVar "prog")) (EVar "lamName")) (EApp (EVar "listLen") (EVar "pats")))) (arm PWild () (EBlock (DoLet false false (PVar "capInstrs") (EApp (EApp (EVar "flatMap") (ELam ((PVar "c")) (EListLit (EBinOp "++" (ELit (LString "local.get $")) (EApp (EVar "gname") (EVar "c")))))) (EVar "captured"))) (DoExpr (EBinOp "++" (EBinOp "++" (EListLit (EApp (EApp (EVar "refFuncW") (EVar "prog")) (EVar "lamName")) (EBinOp "++" (ELit (LString "i32.const ")) (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "pats"))))) (EVar "capInstrs")) (EListLit (EBinOp "++" (ELit (LString "array.new_fixed $argarr ")) (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "captured")))) (ELit (LString "struct.new $clos")))))))))))
 (DTypeSig false "emitLamDefine" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Env") (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String")))))))))
@@ -12635,8 +12356,7 @@ hasFamilyW prog symbol tag =
 (DTypeSig false "emitLetGroupWith" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyFun (TyCon "Env") (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String")))))))))
 (DFunDef false "emitLetGroupWith" ((PVar "prog") (PVar "env") (PVar "d") (PVar "emitBody") (PVar "binds") (PVar "body")) (EBlock (DoLet false false (PVar "gid") (EApp (EVar "freshLamId") (EApp (EVar "progEmit") (EVar "prog")))) (DoLet false false (PVar "valBinds") (EApp (EApp (EVar "filterList") (EVar "isLgValBind")) (EVar "binds"))) (DoLet false false (PVar "fnBinds") (EApp (EApp (EVar "filterList") (ELam ((PVar "b")) (EApp (EVar "not") (EApp (EVar "isLgValBind") (EVar "b"))))) (EVar "binds"))) (DoLet false false (PVar "valNames") (EApp (EApp (EVar "map") (EVar "lgBindName")) (EVar "valBinds"))) (DoLet false false (PVar "names") (EApp (EApp (EVar "map") (EVar "lgBindName")) (EVar "fnBinds"))) (DoLet false false (PVar "allParams") (EApp (EApp (EVar "flatMap") (EVar "lgBindParams")) (EVar "fnBinds"))) (DoLet false false (PVar "valFree") (EApp (EVar "dedupKeep") (EApp (EApp (EVar "flatMap") (EApp (EVar "freeVarsClauses") (EVar "omEmpty"))) (EVar "valBinds")))) (DoExpr (EIf (EApp (EApp (EVar "anyOfList") (EVar "names")) (EVar "valFree")) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W9: unsupported let-group — a VALUE binding's right-hand side calls a sibling FUNCTION of the same group; the value must be computed before the group's closures are built (peer of the native emitter's knot-tying restriction)"))) (EBlock (DoLet false false (PVar "freeCaps") (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EApp (EApp (EVar "envHas") (EVar "c")) (EVar "env")))) (EApp (EVar "dedupKeep") (EApp (EApp (EVar "filterList") (EApp (EVar "notIn") (EBinOp "++" (EBinOp "++" (EVar "names") (EVar "valNames")) (EVar "allParams")))) (EApp (EApp (EVar "flatMap") (EApp (EVar "freeVarsClauses") (EVar "omEmpty"))) (EVar "binds")))))) (DoLet false false (PVar "groupCaps") (EBinOp "++" (EVar "freeCaps") (EVar "valNames"))) (DoLet false false (PVar "groupEnv") (EApp (EApp (EVar "envBindGroups") (EVar "binds")) (EApp (EApp (EVar "envRestrict") (EVar "freeCaps")) (EVar "env")))) (DoExpr (EApp (EApp (EVar "forEachU") (ELam ((PVar "b")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitLgLifted") (EVar "prog")) (EVar "gid")) (EVar "names")) (EVar "groupCaps")) (EVar "groupEnv")) (EVar "fnBinds")) (EVar "b")))) (EVar "fnBinds"))) (DoLet false false (PVar "valInit") (EApp (EApp (EApp (EApp (EVar "emitLgValBinds") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "valBinds"))) (DoLet false false (PVar "rebuilds") (EApp (EApp (EApp (EApp (EVar "useSiteRebuilds") (EVar "prog")) (EVar "gid")) (EVar "groupCaps")) (EVar "fnBinds"))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "valInit") (EVar "rebuilds")) (EApp (EApp (EVar "emitBody") (EApp (EApp (EVar "envBindGroups") (EVar "binds")) (EVar "env"))) (EVar "body")))))))))
 (DTypeSig false "useSiteRebuilds" (TyFun (TyCon "Prog") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "useSiteRebuilds" (PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "useSiteRebuilds" ((PVar "prog") (PVar "gid") (PVar "groupCaps") (PCons (PVar "b") (PVar "rest"))) (EBlock (DoLet false false (PVar "laterNames") (EApp (EApp (EVar "map") (EVar "lgBindName")) (EVar "rest"))) (DoLet false false (PVar "hoistable") (EBinOp "&&" (EBinOp "==" (EApp (EVar "listLen") (EVar "groupCaps")) (ELit (LInt 0))) (EApp (EVar "not") (EApp (EApp (EVar "anyOfList") (EVar "laterNames")) (EApp (EApp (EVar "freeVarsClauses") (EVar "omEmpty")) (EVar "b")))))) (DoLet false false (PVar "here") (EIf (EVar "hoistable") (EApp (EApp (EApp (EVar "constLgClosure") (EVar "prog")) (EVar "gid")) (EVar "b")) (EApp (EApp (EApp (EApp (EVar "rebuildLgClosure") (EVar "prog")) (EVar "gid")) (EVar "groupCaps")) (EVar "b")))) (DoExpr (EBinOp "++" (EVar "here") (EApp (EApp (EApp (EApp (EVar "useSiteRebuilds") (EVar "prog")) (EVar "gid")) (EVar "groupCaps")) (EVar "rest"))))))
+(DFunDef false "useSiteRebuilds" ((PVar "prog") (PVar "gid") (PVar "groupCaps") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EListLit)) (clause ((PCons (PVar "b") (PVar "rest"))) (EBlock (DoLet false false (PVar "laterNames") (EApp (EApp (EVar "map") (EVar "lgBindName")) (EVar "rest"))) (DoLet false false (PVar "hoistable") (EBinOp "&&" (EBinOp "==" (EApp (EVar "listLen") (EVar "groupCaps")) (ELit (LInt 0))) (EApp (EVar "not") (EApp (EApp (EVar "anyOfList") (EVar "laterNames")) (EApp (EApp (EVar "freeVarsClauses") (EVar "omEmpty")) (EVar "b")))))) (DoLet false false (PVar "here") (EIf (EVar "hoistable") (EApp (EApp (EApp (EVar "constLgClosure") (EVar "prog")) (EVar "gid")) (EVar "b")) (EApp (EApp (EApp (EApp (EVar "rebuildLgClosure") (EVar "prog")) (EVar "gid")) (EVar "groupCaps")) (EVar "b")))) (DoExpr (EBinOp "++" (EVar "here") (EApp (EVar "go") (EVar "rest")))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "liftedMemberRebuilds" (TyFun (TyCon "Prog") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "liftedMemberRebuilds" ((PVar "prog") (PVar "gid") (PVar "groupCaps") (PVar "binds")) (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "groupCaps")) (ELit (LInt 0))) (EApp (EApp (EVar "flatMap") (ELam ((PVar "b")) (EApp (EApp (EApp (EVar "constLgClosure") (EVar "prog")) (EVar "gid")) (EVar "b")))) (EVar "binds")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "b")) (EApp (EApp (EApp (EApp (EVar "rebuildLgClosure") (EVar "prog")) (EVar "gid")) (EVar "groupCaps")) (EVar "b")))) (EVar "binds"))))
 (DTypeSig false "constLgClosure" (TyFun (TyCon "Prog") (TyFun (TyCon "Int") (TyFun (TyCon "CBind") (TyApp (TyCon "List") (TyCon "String"))))))
@@ -12645,9 +12365,7 @@ hasFamilyW prog symbol tag =
 (DFunDef false "isLgValBind" ((PCon "CBind" PWild (PList (PCon "CClause" (PList) PWild)) PWild PWild)) (EVar "True"))
 (DFunDef false "isLgValBind" (PWild) (EVar "False"))
 (DTypeSig false "emitLgValBinds" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "emitLgValBinds" (PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "emitLgValBinds" ((PVar "prog") (PVar "env") (PVar "d") (PCons (PCon "CBind" (PVar "name") (PList (PCon "CClause" (PList) (PVar "rhs"))) PWild (PVar "bid")) (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "rhs")) (EListLit (EBinOp "++" (ELit (LString "local.set $")) (EApp (EVar "gname") (EVar "name"))))) (EApp (EApp (EApp (EApp (EVar "emitLgValBinds") (EVar "prog")) (EApp (EApp (EApp (EVar "envBind") (EVar "name")) (EVar "bid")) (EVar "env"))) (EVar "d")) (EVar "rest"))))
-(DFunDef false "emitLgValBinds" ((PVar "prog") (PVar "env") (PVar "d") (PCons PWild (PVar "rest"))) (EApp (EApp (EApp (EApp (EVar "emitLgValBinds") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "rest")))
+(DFunDef false "emitLgValBinds" ((PVar "prog") (PVar "env0") (PVar "d") (PVar "xs0")) (ELetGroup ((lgb "go" (clause (PWild (PList)) (EListLit)) (clause ((PVar "env") (PCons (PCon "CBind" (PVar "name") (PList (PCon "CClause" (PList) (PVar "rhs"))) PWild (PVar "bid")) (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "rhs")) (EListLit (EBinOp "++" (ELit (LString "local.set $")) (EApp (EVar "gname") (EVar "name"))))) (EApp (EApp (EVar "go") (EApp (EApp (EApp (EVar "envBind") (EVar "name")) (EVar "bid")) (EVar "env"))) (EVar "rest")))) (clause ((PVar "env") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "go") (EVar "env")) (EVar "rest"))))) (EApp (EApp (EVar "go") (EVar "env0")) (EVar "xs0"))))
 (DTypeSig false "anyOfList" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
 (DFunDef false "anyOfList" ((PVar "xs") (PVar "ys")) (EApp (EApp (EVar "anyList") (ELam ((PVar "x")) (EApp (EApp (EVar "contains") (EVar "x")) (EVar "ys")))) (EVar "xs")))
 (DTypeSig false "lgBindParams" (TyFun (TyCon "CBind") (TyApp (TyCon "List") (TyCon "String"))))
@@ -12683,7 +12401,6 @@ hasFamilyW prog symbol tag =
 (DFunDef false "freeVarsExpr" ((PVar "bound") (PCon "CRangeArray" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "lo")) (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "hi"))))
 (DFunDef false "freeVarsExpr" ((PVar "bound") (PCon "CMethod" PWild (PCon "MethodEvidence" PWild PWild (PVar "route") (PVar "implRoutes") (PVar "methRoutes")))) (EApp (EApp (EVar "freeGivens") (EVar "bound")) (EBinOp "::" (EVar "route") (EBinOp "++" (EVar "implRoutes") (EVar "methRoutes")))))
 (DFunDef false "freeVarsExpr" ((PVar "bound") (PCon "CDict" (PVar "name") (PVar "routes"))) (EBinOp "++" (EIf (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "bound")) (EListLit) (EListLit (EVar "name"))) (EApp (EApp (EVar "freeGivens") (EVar "bound")) (EVar "routes"))))
-(DFunDef false "freeVarsExpr" ((PVar "_bound") PWild) (EListLit))
 (DTypeSig false "freeVarsClauses" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CBind") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "freeVarsClauses" ((PVar "bound") (PCon "CBind" PWild (PVar "clauses") PWild PWild)) (EApp (EApp (EVar "flatMap") (EApp (EVar "freeVarsClause") (EVar "bound"))) (EVar "clauses")))
 (DTypeSig false "freeVarsClause" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CClause") (TyApp (TyCon "List") (TyCon "String")))))
@@ -12764,11 +12481,7 @@ hasFamilyW prog symbol tag =
 (DFunDef false "guardBindEnv" ((PVar "env") (PCon "CGBind" (PVar "p") PWild)) (EApp (EApp (EVar "envBindPat") (EVar "p")) (EVar "env")))
 (DFunDef false "guardBindEnv" ((PVar "env") (PCon "CGBool" PWild)) (EVar "env"))
 (DTypeSig false "emitTreeRef" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "CTree") (TyApp (TyCon "List") (TyCon "String")))))))))))
-(DFunDef false "emitTreeRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PVar "_decLabel") (PVar "_root") (PVar "_occs") (PVar "_arms") (PCon "CTFail" (PVar "fs"))) (EApp (EApp (EVar "wasmFailTrap") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "fs")))
-(DFunDef false "emitTreeRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "decLabel") (PVar "root") (PVar "_occs") (PVar "arms") (PCon "CTLeaf" (PVar "i"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitLeafRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "decLabel")) (EVar "root")) (EVar "arms")) (EVar "i")))
-(DFunDef false "emitTreeRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "decLabel") (PVar "root") (PVar "occs") (PVar "arms") (PCon "CTGuard" (PVar "i") (PVar "fail"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitGuardArmRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "decLabel")) (EVar "root")) (EVar "occs")) (EVar "arms")) (EVar "i")) (EVar "fail")))
-(DFunDef false "emitTreeRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "decLabel") (PVar "root") (PVar "occs") (PVar "arms") (PCon "CTDrop" (PVar "sub"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "decLabel")) (EVar "root")) (EApp (EVar "tailList") (EVar "occs"))) (EVar "arms")) (EVar "sub")))
-(DFunDef false "emitTreeRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "decLabel") (PVar "root") (PVar "occs") (PVar "arms") (PCon "CTSwitch" (PVar "branches") (PVar "dft"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitSwitchRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "decLabel")) (EVar "root")) (EVar "occs")) (EVar "arms")) (EVar "branches")) (EVar "dft")))
+(DFunDef false "emitTreeRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "decLabel") (PVar "root") (PVar "occs0") (PVar "arms") (PVar "x0")) (ELetGroup ((lgb "go" (clause ((PVar "_occs") (PCon "CTFail" (PVar "fs"))) (EApp (EApp (EVar "wasmFailTrap") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "fs"))) (clause ((PVar "_occs") (PCon "CTLeaf" (PVar "i"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitLeafRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "decLabel")) (EVar "root")) (EVar "arms")) (EVar "i"))) (clause ((PVar "occs") (PCon "CTGuard" (PVar "i") (PVar "fail"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitGuardArmRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "decLabel")) (EVar "root")) (EVar "occs")) (EVar "arms")) (EVar "i")) (EVar "fail"))) (clause ((PVar "occs") (PCon "CTDrop" (PVar "sub"))) (EApp (EApp (EVar "go") (EApp (EVar "tailList") (EVar "occs"))) (EVar "sub"))) (clause ((PVar "occs") (PCon "CTSwitch" (PVar "branches") (PVar "dft"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitSwitchRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "decLabel")) (EVar "root")) (EVar "occs")) (EVar "arms")) (EVar "branches")) (EVar "dft"))))) (EApp (EApp (EVar "go") (EVar "occs0")) (EVar "x0"))))
 (DTypeSig false "emitLeafRef" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))))))
 (DFunDef false "emitLeafRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "decLabel") (PVar "root") (PVar "arms") (PVar "i")) (EMatch (EApp (EApp (EApp (EVar "leafArm") (EVar "prog")) (EVar "arms")) (EVar "i")) (arm (PCon "Some" (PTuple (PVar "pat") PWild (PVar "body") (PVar "share"))) () (EBlock (DoLet false false (PTuple (PVar "binds") (PVar "env2")) (EApp (EApp (EApp (EApp (EVar "bindPatRef") (EVar "prog")) (EVar "env")) (EVar "pat")) (EVar "root"))) (DoExpr (EBinOp "++" (EVar "binds") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "armExitRef") (EVar "prog")) (EVar "env2")) (EVar "d")) (EVar "decLabel")) (EVar "body")) (EVar "share")))))) (arm (PCon "None") () (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "ref-mode: decision arm index out of range"))))))
 (DTypeSig false "armExitRef" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "CExpr") (TyFun (TyApp (TyCon "Option") (TyCon "OrArm")) (TyApp (TyCon "List") (TyCon "String")))))))))
@@ -12777,9 +12490,7 @@ hasFamilyW prog symbol tag =
 (DTypeSig false "emitGuardArmRef" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "Int") (TyFun (TyCon "CTree") (TyApp (TyCon "List") (TyCon "String"))))))))))))
 (DFunDef false "emitGuardArmRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "decLabel") (PVar "root") (PVar "occs") (PVar "arms") (PVar "i") (PVar "fail")) (EMatch (EApp (EApp (EApp (EVar "leafArm") (EVar "prog")) (EVar "arms")) (EVar "i")) (arm (PCon "Some" (PTuple (PVar "pat") (PVar "guards") (PVar "body") (PVar "share"))) () (EBlock (DoLet false false (PVar "gLabel") (EApp (EApp (EVar "labelName") (EVar "WN.WGuardValue")) (EVar "d"))) (DoLet false false (PTuple (PVar "tests") (PVar "binds") (PVar "env2")) (EApp (EApp (EApp (EApp (EApp (EVar "patTestBind") (EVar "prog")) (EVar "pat")) (EVar "root")) (EVar "gLabel")) (EVar "env"))) (DoLet false false (PTuple (PVar "gcode") (PVar "env3")) (EApp (EApp (EApp (EApp (EApp (EVar "emitGuardChainRef") (EVar "prog")) (EVar "env2")) (EVar "d")) (EVar "gLabel")) (EVar "guards"))) (DoLet false false (PVar "armCode") (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (ELit (LString "block ")) (EVar "gLabel"))) (EApp (EVar "indent") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "tests") (EVar "binds")) (EVar "gcode")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "armExitRef") (EVar "prog")) (EVar "env3")) (EVar "d")) (EVar "decLabel")) (EVar "body")) (EVar "share"))))) (EListLit (ELit (LString "end"))))) (DoExpr (EBinOp "++" (EVar "armCode") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "decLabel")) (EVar "root")) (EVar "occs")) (EVar "arms")) (EVar "fail")))))) (arm (PCon "None") () (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "ref-mode: guarded arm index out of range"))))))
 (DTypeSig false "emitGuardChainRef" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CGuard")) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Env"))))))))
-(DFunDef false "emitGuardChainRef" (PWild (PVar "env") PWild PWild (PList)) (ETuple (EListLit) (EVar "env")))
-(DFunDef false "emitGuardChainRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "gLabel") (PCons (PCon "CGBool" (PVar "g")) (PVar "rest"))) (EBlock (DoLet false false (PVar "unbox") (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (ELit (LString "i32.eqz")) (EBinOp "++" (ELit (LString "br_if ")) (EVar "gLabel")))) (DoLet false false (PVar "boolTest") (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g")) (EVar "unbox"))) (DoLet false false (PTuple (PVar "more") (PVar "env2")) (EApp (EApp (EApp (EApp (EApp (EVar "emitGuardChainRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "gLabel")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "++" (EVar "boolTest") (EVar "more")) (EVar "env2")))))
-(DFunDef false "emitGuardChainRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "gLabel") (PCons (PCon "CGBind" (PVar "p") (PVar "ex")) (PVar "rest"))) (EBlock (DoLet false false (PVar "sv") (EApp (EVar "WN.wasmName") (EApp (EApp (EVar "WN.WSyntheticLocal") (EVar "WN.WGuard")) (ELit (LInt 0))))) (DoLet false false (PVar "rhs") (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "ex")) (EListLit (EBinOp "++" (ELit (LString "local.set $")) (EVar "sv"))))) (DoLet false false (PTuple (PVar "tests") (PVar "binds") (PVar "env2")) (EApp (EApp (EApp (EApp (EApp (EVar "patTestBind") (EVar "prog")) (EVar "p")) (EListLit (EBinOp "++" (ELit (LString "local.get $")) (EVar "sv")))) (EVar "gLabel")) (EVar "env"))) (DoLet false false (PTuple (PVar "more") (PVar "env3")) (EApp (EApp (EApp (EApp (EApp (EVar "emitGuardChainRef") (EVar "prog")) (EVar "env2")) (EVar "d")) (EVar "gLabel")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "rhs") (EVar "tests")) (EVar "binds")) (EVar "more")) (EVar "env3")))))
+(DFunDef false "emitGuardChainRef" ((PVar "prog") (PVar "env0") (PVar "d") (PVar "gLabel") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PVar "env") (PList)) (ETuple (EListLit) (EVar "env"))) (clause ((PVar "env") (PCons (PCon "CGBool" (PVar "g")) (PVar "rest"))) (EBlock (DoLet false false (PVar "unbox") (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (ELit (LString "i32.eqz")) (EBinOp "++" (ELit (LString "br_if ")) (EVar "gLabel")))) (DoLet false false (PVar "boolTest") (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g")) (EVar "unbox"))) (DoLet false false (PTuple (PVar "more") (PVar "env2")) (EApp (EApp (EVar "go") (EVar "env")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "++" (EVar "boolTest") (EVar "more")) (EVar "env2"))))) (clause ((PVar "env") (PCons (PCon "CGBind" (PVar "p") (PVar "ex")) (PVar "rest"))) (EBlock (DoLet false false (PVar "sv") (EApp (EVar "WN.wasmName") (EApp (EApp (EVar "WN.WSyntheticLocal") (EVar "WN.WGuard")) (ELit (LInt 0))))) (DoLet false false (PVar "rhs") (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "ex")) (EListLit (EBinOp "++" (ELit (LString "local.set $")) (EVar "sv"))))) (DoLet false false (PTuple (PVar "tests") (PVar "binds") (PVar "env2")) (EApp (EApp (EApp (EApp (EApp (EVar "patTestBind") (EVar "prog")) (EVar "p")) (EListLit (EBinOp "++" (ELit (LString "local.get $")) (EVar "sv")))) (EVar "gLabel")) (EVar "env"))) (DoLet false false (PTuple (PVar "more") (PVar "env3")) (EApp (EApp (EVar "go") (EVar "env2")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "rhs") (EVar "tests")) (EVar "binds")) (EVar "more")) (EVar "env3"))))))) (EApp (EApp (EVar "go") (EVar "env0")) (EVar "xs0"))))
 (DTypeSig false "emitSwitchRef" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyApp (TyCon "List") (TyCon "CTBranch")) (TyFun (TyCon "CTree") (TyApp (TyCon "List") (TyCon "String"))))))))))))
 (DFunDef false "emitSwitchRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "decLabel") (PVar "root") (PList) (PVar "arms") (PVar "_branches") (PVar "dft")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "decLabel")) (EVar "root")) (EListLit)) (EVar "arms")) (EVar "dft")))
 (DFunDef false "emitSwitchRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "decLabel") (PVar "root") (PCons (PVar "_foc") (PVar "rest")) (PVar "arms") (PList) (PVar "dft")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "decLabel")) (EVar "root")) (EVar "rest")) (EVar "arms")) (EVar "dft")))
@@ -12793,15 +12504,11 @@ hasFamilyW prog symbol tag =
 (DTypeSig false "emitBrTableTower" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "CTBranch")) (TyFun (TyCon "CTree") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))))))))))))
 (DFunDef false "emitBrTableTower" ((PVar "prog") (PVar "env") (PVar "d") (PVar "decLabel") (PVar "root") (PVar "svRead") (PVar "rest") (PVar "arms") (PVar "branches") (PVar "dft") (PVar "ty") (PVar "sd") (PVar "nOrd")) (EBlock (DoLet false false (PVar "labels") (EApp (EApp (EVar "map") (EApp (EApp (EVar "labelBranch") (EVar "WN.WSwitch")) (EVar "sd"))) (EApp (EApp (EVar "rangeList") (ELit (LInt 0))) (EVar "nOrd")))) (DoLet false false (PVar "tableInstr") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "br_table ")) (EApp (EVar "$core.display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EVar "labels")))) (ELit (LString " "))) (EApp (EVar "$core.display") (EApp (EApp (EVar "labelName") (EVar "WN.WSwitch")) (EVar "sd")))) (ELit (LString "")))) (DoLet false false (PVar "opens") (EBinOp "++" (EListLit (EBinOp "++" (ELit (LString "block ")) (EApp (EApp (EVar "labelName") (EVar "WN.WSwitch")) (EVar "sd")))) (EApp (EApp (EVar "map") (ELam ((PVar "k")) (EBinOp "++" (ELit (LString "block ")) (EApp (EApp (EApp (EVar "labelBranch") (EVar "WN.WSwitch")) (EVar "sd")) (EVar "k"))))) (EApp (EApp (EVar "rangeList") (ELit (LInt 0))) (EVar "nOrd"))))) (DoLet false false (PVar "pick") (EBinOp "++" (EApp (EApp (EApp (EVar "discrimReadOf") (EVar "prog")) (EVar "svRead")) (EVar "ty")) (EListLit (EVar "tableInstr")))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "opens") (EVar "pick")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "towerBodies") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "decLabel")) (EVar "root")) (EVar "svRead")) (EVar "rest")) (EVar "arms")) (EVar "branches")) (EVar "dft")) (EVar "ty")) (EVar "sd")) (EBinOp "-" (EVar "nOrd") (ELit (LInt 1))))))))
 (DTypeSig false "towerBodies" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "CTBranch")) (TyFun (TyCon "CTree") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))))))))))))
-(DFunDef false "towerBodies" ((PVar "prog") (PVar "env") (PVar "d") (PVar "decLabel") (PVar "root") (PVar "svRead") (PVar "rest") (PVar "arms") (PVar "branches") (PVar "dft") (PVar "ty") (PVar "sd") (PVar "k")) (EIf (EBinOp "<" (EVar "k") (ELit (LInt 0))) (EBinOp "++" (EListLit (ELit (LString "end"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "decLabel")) (EVar "root")) (EVar "rest")) (EVar "arms")) (EVar "dft"))) (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "end"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitOrdinalSlot") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "decLabel")) (EVar "root")) (EVar "svRead")) (EVar "rest")) (EVar "arms")) (EVar "branches")) (EVar "ty")) (EVar "sd")) (EVar "k"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "towerBodies") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "decLabel")) (EVar "root")) (EVar "svRead")) (EVar "rest")) (EVar "arms")) (EVar "branches")) (EVar "dft")) (EVar "ty")) (EVar "sd")) (EBinOp "-" (EVar "k") (ELit (LInt 1)))))))
+(DFunDef false "towerBodies" ((PVar "prog") (PVar "env") (PVar "d") (PVar "decLabel") (PVar "root") (PVar "sr") (PVar "rest") (PVar "arms") (PVar "brs") (PVar "dft") (PVar "ty") (PVar "sd") (PVar "k0")) (ELetGroup ((lgb "go" (clause ((PVar "k")) (EIf (EBinOp "<" (EVar "k") (ELit (LInt 0))) (EBinOp "++" (EListLit (ELit (LString "end"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "decLabel")) (EVar "root")) (EVar "rest")) (EVar "arms")) (EVar "dft"))) (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "end"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitOrdinalSlot") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "decLabel")) (EVar "root")) (EVar "sr")) (EVar "rest")) (EVar "arms")) (EVar "brs")) (EVar "ty")) (EVar "sd")) (EVar "k"))) (EApp (EVar "go") (EBinOp "-" (EVar "k") (ELit (LInt 1))))))))) (EApp (EVar "go") (EVar "k0"))))
 (DTypeSig false "emitOrdinalSlot" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "CTBranch")) (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))))))))))))
 (DFunDef false "emitOrdinalSlot" ((PVar "prog") (PVar "env") (PVar "d") (PVar "decLabel") (PVar "root") (PVar "svRead") (PVar "rest") (PVar "arms") (PVar "branches") (PVar "_ty") (PVar "sd") (PVar "k")) (EMatch (EApp (EApp (EVar "branchForOrdinal") (EVar "branches")) (EVar "k")) (arm (PCon "Some" (PCon "CTBranch" (PVar "h") (PVar "sub"))) () (EBlock (DoLet false false (PVar "cs") (EApp (EApp (EVar "headCtorStructName") (EVar "prog")) (EVar "h"))) (DoLet false false (PVar "a") (EApp (EVar "snd") (EApp (EApp (EVar "conHeadInfoUnsafe") (EVar "prog")) (EVar "h")))) (DoLet false false (PVar "fieldOccs") (EApp (EApp (EVar "map") (ELam ((PVar "i")) (EBinOp "++" (EVar "svRead") (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "ref.cast (ref $")) (EApp (EApp (EVar "typeNameW") (EVar "prog")) (EVar "cs"))) (ELit (LString ")"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "struct.get $")) (EApp (EVar "$core.display") (EApp (EApp (EVar "typeNameW") (EVar "prog")) (EVar "cs")))) (ELit (LString " "))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EBinOp "+" (EVar "i") (ELit (LInt 1)))))) (ELit (LString ""))))))) (EApp (EApp (EVar "rangeList") (ELit (LInt 0))) (EVar "a")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "decLabel")) (EVar "root")) (EBinOp "++" (EVar "fieldOccs") (EVar "rest"))) (EVar "arms")) (EVar "sub"))))) (arm (PCon "None") () (EListLit (EBinOp "++" (ELit (LString "br ")) (EApp (EApp (EVar "labelName") (EVar "WN.WSwitch")) (EVar "sd")))))))
 (DTypeSig false "emitLitSwitchRef" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyApp (TyCon "List") (TyCon "CTBranch")) (TyFun (TyCon "CTree") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))))))))))
-(DFunDef false "emitLitSwitchRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "decLabel") (PVar "root") (PVar "_foc") (PVar "rest") (PVar "arms") (PList) (PVar "dft") (PVar "idt")) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "decLabel")) (EVar "root")) (EVar "rest")) (EVar "arms")) (EVar "dft"))))
-(DFunDef false "emitLitSwitchRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "decLabel") (PVar "root") (PVar "foc") (PVar "rest") (PVar "arms") (PCons (PCon "CTBranch" (PCon "HLit" (PCon "LInt" (PVar "k"))) (PVar "sub")) (PVar "more")) (PVar "dft") (PVar "idt")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "indentBy") (EVar "idt")) (EBinOp "++" (EBinOp "++" (EVar "foc") (EListLit (EApp (EVar "unboxIntW") (EVar "prog")) (EBinOp "++" (ELit (LString "i64.const ")) (EApp (EVar "intToString") (EVar "k"))) (ELit (LString "i64.eq")))) (EListLit (ELit (LString "if"))))) (EApp (EApp (EVar "indentBy") (EBinOp "+" (EVar "idt") (ELit (LInt 1)))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "decLabel")) (EVar "root")) (EVar "rest")) (EVar "arms")) (EVar "sub")))) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EListLit (ELit (LString "else"))))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitLitSwitchRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "decLabel")) (EVar "root")) (EVar "foc")) (EVar "rest")) (EVar "arms")) (EVar "more")) (EVar "dft")) (EBinOp "+" (EVar "idt") (ELit (LInt 1))))) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EListLit (ELit (LString "end")) (ELit (LString "unreachable"))))))
-(DFunDef false "emitLitSwitchRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "decLabel") (PVar "root") (PVar "foc") (PVar "rest") (PVar "arms") (PCons (PCon "CTBranch" (PCon "HLit" (PCon "LChar" (PVar "c"))) (PVar "sub")) (PVar "more")) (PVar "dft") (PVar "idt")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "indentBy") (EVar "idt")) (EBinOp "++" (EBinOp "++" (EVar "foc") (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (EBinOp "++" (ELit (LString "i32.const ")) (EApp (EVar "intToString") (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EApp (EVar "stringToChars") (EVar "c")))))) (ELit (LString "i32.eq")))) (EListLit (ELit (LString "if"))))) (EApp (EApp (EVar "indentBy") (EBinOp "+" (EVar "idt") (ELit (LInt 1)))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "decLabel")) (EVar "root")) (EVar "rest")) (EVar "arms")) (EVar "sub")))) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EListLit (ELit (LString "else"))))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitLitSwitchRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "decLabel")) (EVar "root")) (EVar "foc")) (EVar "rest")) (EVar "arms")) (EVar "more")) (EVar "dft")) (EBinOp "+" (EVar "idt") (ELit (LInt 1))))) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EListLit (ELit (LString "end")) (ELit (LString "unreachable"))))))
-(DFunDef false "emitLitSwitchRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "decLabel") (PVar "root") (PVar "foc") (PVar "rest") (PVar "arms") (PCons (PCon "CTBranch" (PCon "HLit" (PCon "LString" (PVar "s"))) (PVar "sub")) (PVar "more")) (PVar "dft") (PVar "idt")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "indentBy") (EVar "idt")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "foc") (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EVar "emitLitRef") (EVar "prog")) (EApp (EVar "LString") (EVar "s")))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_str_compare"))) (ELit (LInt 2))) (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (ELit (LString "i32.const 1")) (ELit (LString "i32.eq")))) (EListLit (ELit (LString "if"))))) (EApp (EApp (EVar "indentBy") (EBinOp "+" (EVar "idt") (ELit (LInt 1)))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "decLabel")) (EVar "root")) (EVar "rest")) (EVar "arms")) (EVar "sub")))) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EListLit (ELit (LString "else"))))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitLitSwitchRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "decLabel")) (EVar "root")) (EVar "foc")) (EVar "rest")) (EVar "arms")) (EVar "more")) (EVar "dft")) (EBinOp "+" (EVar "idt") (ELit (LInt 1))))) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EListLit (ELit (LString "end")) (ELit (LString "unreachable"))))))
-(DFunDef false "emitLitSwitchRef" ((PVar "prog") PWild PWild PWild PWild PWild PWild PWild PWild PWild PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "ref-mode: non-Int literal switch head (Char/String literals are W6)"))))
+(DFunDef false "emitLitSwitchRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "dl") (PVar "root") (PVar "foc") (PVar "rest") (PVar "arms") (PVar "xs0") (PVar "dft") (PVar "idt0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "idt")) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "dl")) (EVar "root")) (EVar "rest")) (EVar "arms")) (EVar "dft")))) (clause ((PCons (PCon "CTBranch" (PCon "HLit" (PCon "LInt" (PVar "k"))) (PVar "sub")) (PVar "more")) (PVar "idt")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "indentBy") (EVar "idt")) (EBinOp "++" (EBinOp "++" (EVar "foc") (EListLit (EApp (EVar "unboxIntW") (EVar "prog")) (EBinOp "++" (ELit (LString "i64.const ")) (EApp (EVar "intToString") (EVar "k"))) (ELit (LString "i64.eq")))) (EListLit (ELit (LString "if"))))) (EApp (EApp (EVar "indentBy") (EBinOp "+" (EVar "idt") (ELit (LInt 1)))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "dl")) (EVar "root")) (EVar "rest")) (EVar "arms")) (EVar "sub")))) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EListLit (ELit (LString "else"))))) (EApp (EApp (EVar "go") (EVar "more")) (EBinOp "+" (EVar "idt") (ELit (LInt 1))))) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EListLit (ELit (LString "end")) (ELit (LString "unreachable")))))) (clause ((PCons (PCon "CTBranch" (PCon "HLit" (PCon "LChar" (PVar "c"))) (PVar "sub")) (PVar "more")) (PVar "idt")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "indentBy") (EVar "idt")) (EBinOp "++" (EBinOp "++" (EVar "foc") (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (EBinOp "++" (ELit (LString "i32.const ")) (EApp (EVar "intToString") (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EApp (EVar "stringToChars") (EVar "c")))))) (ELit (LString "i32.eq")))) (EListLit (ELit (LString "if"))))) (EApp (EApp (EVar "indentBy") (EBinOp "+" (EVar "idt") (ELit (LInt 1)))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "dl")) (EVar "root")) (EVar "rest")) (EVar "arms")) (EVar "sub")))) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EListLit (ELit (LString "else"))))) (EApp (EApp (EVar "go") (EVar "more")) (EBinOp "+" (EVar "idt") (ELit (LInt 1))))) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EListLit (ELit (LString "end")) (ELit (LString "unreachable")))))) (clause ((PCons (PCon "CTBranch" (PCon "HLit" (PCon "LString" (PVar "s"))) (PVar "sub")) (PVar "more")) (PVar "idt")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "indentBy") (EVar "idt")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "foc") (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EVar "emitLitRef") (EVar "prog")) (EApp (EVar "LString") (EVar "s")))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_str_compare"))) (ELit (LInt 2))) (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (ELit (LString "i32.const 1")) (ELit (LString "i32.eq")))) (EListLit (ELit (LString "if"))))) (EApp (EApp (EVar "indentBy") (EBinOp "+" (EVar "idt") (ELit (LInt 1)))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "dl")) (EVar "root")) (EVar "rest")) (EVar "arms")) (EVar "sub")))) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EListLit (ELit (LString "else"))))) (EApp (EApp (EVar "go") (EVar "more")) (EBinOp "+" (EVar "idt") (ELit (LInt 1))))) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EListLit (ELit (LString "end")) (ELit (LString "unreachable")))))) (clause (PWild PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "ref-mode: non-Int literal switch head (Char/String literals are W6)")))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "idt0"))))
 (DTypeSig false "bindPatRef" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Pat") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Env")))))))
 (DFunDef false "bindPatRef" ((PVar "_prog") (PVar "env") (PCon "PWild") (PVar "_v")) (ETuple (EListLit) (EVar "env")))
 (DFunDef false "bindPatRef" ((PVar "_prog") (PVar "env") (PCon "PLit" PWild) (PVar "_v")) (ETuple (EListLit) (EVar "env")))
@@ -12816,13 +12523,11 @@ hasFamilyW prog symbol tag =
 (DFunDef false "bindListPat" (PWild (PVar "env") (PList) PWild) (ETuple (EListLit) (EVar "env")))
 (DFunDef false "bindListPat" ((PVar "prog") (PVar "env") (PCons (PVar "p") (PVar "ps")) (PVar "v")) (EBlock (DoLet false false (PVar "hSnip") (EBinOp "++" (EVar "v") (EListLit (ELit (LString "ref.cast (ref $C_Cons)")) (ELit (LString "struct.get $C_Cons 1"))))) (DoLet false false (PVar "tSnip") (EBinOp "++" (EVar "v") (EListLit (ELit (LString "ref.cast (ref $C_Cons)")) (ELit (LString "struct.get $C_Cons 2"))))) (DoLet false false (PTuple (PVar "hb") (PVar "env2")) (EApp (EApp (EApp (EApp (EVar "bindPatRef") (EVar "prog")) (EVar "env")) (EVar "p")) (EVar "hSnip"))) (DoLet false false (PTuple (PVar "tb") (PVar "env3")) (EApp (EApp (EApp (EApp (EVar "bindListPat") (EVar "prog")) (EVar "env2")) (EVar "ps")) (EVar "tSnip"))) (DoExpr (ETuple (EBinOp "++" (EVar "hb") (EVar "tb")) (EVar "env3")))))
 (DTypeSig false "bindTupleFields" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Env")))))))))
-(DFunDef false "bindTupleFields" (PWild (PVar "env") PWild (PList) PWild PWild) (ETuple (EListLit) (EVar "env")))
-(DFunDef false "bindTupleFields" ((PVar "prog") (PVar "env") (PVar "tc") (PCons (PVar "p") (PVar "rest")) (PVar "v") (PVar "i")) (EBlock (DoLet false false (PVar "fieldSnippet") (EBinOp "++" (EVar "v") (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "ref.cast (ref $")) (EApp (EApp (EVar "typeNameW") (EVar "prog")) (EApp (EVar "ctorStructName") (EVar "tc")))) (ELit (LString ")"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "struct.get $")) (EApp (EVar "$core.display") (EApp (EApp (EVar "typeNameW") (EVar "prog")) (EApp (EVar "ctorStructName") (EVar "tc"))))) (ELit (LString " "))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EBinOp "+" (EVar "i") (ELit (LInt 1)))))) (ELit (LString "")))))) (DoLet false false (PTuple (PVar "cur") (PVar "env2")) (EApp (EApp (EApp (EApp (EVar "bindPatRef") (EVar "prog")) (EVar "env")) (EVar "p")) (EVar "fieldSnippet"))) (DoLet false false (PTuple (PVar "more") (PVar "env3")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "bindTupleFields") (EVar "prog")) (EVar "env2")) (EVar "tc")) (EVar "rest")) (EVar "v")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (DoExpr (ETuple (EBinOp "++" (EVar "cur") (EVar "more")) (EVar "env3")))))
+(DFunDef false "bindTupleFields" ((PVar "prog") (PVar "env0") (PVar "tc") (PVar "xs0") (PVar "v") (PVar "i0")) (ELetGroup ((lgb "go" (clause ((PVar "env") (PList) PWild) (ETuple (EListLit) (EVar "env"))) (clause ((PVar "env") (PCons (PVar "p") (PVar "rest")) (PVar "i")) (EBlock (DoLet false false (PVar "fieldSnippet") (EBinOp "++" (EVar "v") (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "ref.cast (ref $")) (EApp (EApp (EVar "typeNameW") (EVar "prog")) (EApp (EVar "ctorStructName") (EVar "tc")))) (ELit (LString ")"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "struct.get $")) (EApp (EVar "$core.display") (EApp (EApp (EVar "typeNameW") (EVar "prog")) (EApp (EVar "ctorStructName") (EVar "tc"))))) (ELit (LString " "))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EBinOp "+" (EVar "i") (ELit (LInt 1)))))) (ELit (LString "")))))) (DoLet false false (PTuple (PVar "cur") (PVar "env2")) (EApp (EApp (EApp (EApp (EVar "bindPatRef") (EVar "prog")) (EVar "env")) (EVar "p")) (EVar "fieldSnippet"))) (DoLet false false (PTuple (PVar "more") (PVar "env3")) (EApp (EApp (EApp (EVar "go") (EVar "env2")) (EVar "rest")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (DoExpr (ETuple (EBinOp "++" (EVar "cur") (EVar "more")) (EVar "env3"))))))) (EApp (EApp (EApp (EVar "go") (EVar "env0")) (EVar "xs0")) (EVar "i0"))))
 (DTypeSig false "bindConFields" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Env"))))))))
 (DFunDef false "bindConFields" ((PVar "prog") (PVar "env") (PVar "c") (PVar "args") (PVar "v")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "bindConFieldsGo") (EVar "prog")) (EVar "env")) (EVar "c")) (EVar "args")) (EVar "v")) (ELit (LInt 0))))
 (DTypeSig false "bindConFieldsGo" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Env")))))))))
-(DFunDef false "bindConFieldsGo" (PWild (PVar "env") PWild (PList) PWild PWild) (ETuple (EListLit) (EVar "env")))
-(DFunDef false "bindConFieldsGo" ((PVar "prog") (PVar "env") (PVar "c") (PCons (PVar "p") (PVar "rest")) (PVar "v") (PVar "i")) (EBlock (DoLet false false (PVar "fieldSnippet") (EBinOp "++" (EVar "v") (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "ref.cast (ref $")) (EApp (EApp (EVar "typeNameW") (EVar "prog")) (EApp (EVar "ctorStructName") (EVar "c")))) (ELit (LString ")"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "struct.get $")) (EApp (EVar "$core.display") (EApp (EApp (EVar "typeNameW") (EVar "prog")) (EApp (EVar "ctorStructName") (EVar "c"))))) (ELit (LString " "))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EBinOp "+" (EVar "i") (ELit (LInt 1)))))) (ELit (LString "")))))) (DoLet false false (PTuple (PVar "cur") (PVar "env2")) (EApp (EApp (EApp (EApp (EVar "bindPatRef") (EVar "prog")) (EVar "env")) (EVar "p")) (EVar "fieldSnippet"))) (DoLet false false (PTuple (PVar "more") (PVar "env3")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "bindConFieldsGo") (EVar "prog")) (EVar "env2")) (EVar "c")) (EVar "rest")) (EVar "v")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (DoExpr (ETuple (EBinOp "++" (EVar "cur") (EVar "more")) (EVar "env3")))))
+(DFunDef false "bindConFieldsGo" ((PVar "prog") (PVar "env0") (PVar "c") (PVar "xs0") (PVar "v") (PVar "i0")) (ELetGroup ((lgb "go" (clause ((PVar "env") (PList) PWild) (ETuple (EListLit) (EVar "env"))) (clause ((PVar "env") (PCons (PVar "p") (PVar "rest")) (PVar "i")) (EBlock (DoLet false false (PVar "fieldSnippet") (EBinOp "++" (EVar "v") (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "ref.cast (ref $")) (EApp (EApp (EVar "typeNameW") (EVar "prog")) (EApp (EVar "ctorStructName") (EVar "c")))) (ELit (LString ")"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "struct.get $")) (EApp (EVar "$core.display") (EApp (EApp (EVar "typeNameW") (EVar "prog")) (EApp (EVar "ctorStructName") (EVar "c"))))) (ELit (LString " "))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EBinOp "+" (EVar "i") (ELit (LInt 1)))))) (ELit (LString "")))))) (DoLet false false (PTuple (PVar "cur") (PVar "env2")) (EApp (EApp (EApp (EApp (EVar "bindPatRef") (EVar "prog")) (EVar "env")) (EVar "p")) (EVar "fieldSnippet"))) (DoLet false false (PTuple (PVar "more") (PVar "env3")) (EApp (EApp (EApp (EVar "go") (EVar "env2")) (EVar "rest")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (DoExpr (ETuple (EBinOp "++" (EVar "cur") (EVar "more")) (EVar "env3"))))))) (EApp (EApp (EApp (EVar "go") (EVar "env0")) (EVar "xs0")) (EVar "i0"))))
 (DTypeSig false "isFnBind" (TyFun (TyCon "CBind") (TyCon "Bool")))
 (DFunDef false "isFnBind" ((PCon "CBind" (PLit (LString "main")) PWild PWild PWild)) (EVar "False"))
 (DFunDef false "isFnBind" ((PVar "b")) (EApp (EVar "not") (EApp (EVar "isValBind") (EVar "b"))))
@@ -12867,7 +12572,7 @@ hasFamilyW prog symbol tag =
 (DFunDef false "collectExprLocals" ((PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EBinOp "++" (EApp (EVar "collectExprLocals") (EVar "scrut")) (EApp (EApp (EVar "flatMap") (EVar "collectArmLocals")) (EVar "arms"))))
 (DFunDef false "collectExprLocals" ((PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "map") (EVar "lgBindName")) (EVar "binds")) (EApp (EApp (EVar "flatMap") (EVar "collectLgValLocals")) (EVar "binds"))) (EApp (EVar "collectExprLocals") (EVar "body"))))
 (DFunDef false "collectExprLocals" ((PCon "CMethod" PWild (PCon "MethodEvidence" PWild PWild (PCon "RProj" (PVar "r") (PVar "path")) PWild PWild))) (EListLit (EApp (EApp (EVar "projLocalName") (EVar "r")) (EVar "path"))))
-(DFunDef false "collectExprLocals" (PWild) (EListLit))
+(DFunDef false "collectExprLocals" ((POr (PCon "CMethod" PWild PWild) (PCon "CLit" PWild) (PCon "CVar" PWild PWild) (PCon "CLam" PWild PWild) (PCon "CDict" PWild PWild))) (EListLit))
 (DTypeSig false "collectFieldLocals" (TyFun (TyCon "CField") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "collectFieldLocals" ((PCon "CField" PWild PWild (PVar "value"))) (EApp (EVar "collectExprLocals") (EVar "value")))
 (DTypeSig false "collectLgValLocals" (TyFun (TyCon "CBind") (TyApp (TyCon "List") (TyCon "String"))))
@@ -13274,7 +12979,7 @@ hasFamilyW prog symbol tag =
 (DTypeSig false "jsImportForW" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyApp (TyCon "List") (TyCon "String"))) (TyCon "JsImport")))))
 (DFunDef false "jsImportForW" ((PVar "prog") (PVar "name")) (EMatch (EApp (EApp (EVar "selectedJsImport") (EVar "prog")) (EVar "name")) (arm (PCon "Some" (PVar "imp")) () (EIf (EApp (EVar "not") (EApp (EApp (EVar "allList") (EVar "jsCrossableHead")) (EBinOp "::" (EFieldAccess (EVar "imp") "result") (EFieldAccess (EVar "imp") "params")))) (EApp (EVar "Err") (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "wasm: a non-crossable type reached the lowering of foreign call '")) (EApp (EVar "$core.display") (EApp (EApp (EVar "externDisplayW") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "name")))) (ELit (LString "' (compiler/FFI-ABI.md section 1)"))))) (EIf (EBinOp "==" (EFieldAccess (EVar "imp") "result") (ELit (LString "Array"))) (EApp (EVar "Err") (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "wasm: foreign call '")) (EApp (EVar "$core.display") (EApp (EApp (EVar "externDisplayW") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "name")))) (ELit (LString "' returns 'Array Int', which no FFI target can return (compiler/FFI-ABI.md section 2.4, docs/spec/WASM-SEMANTICS.md section 3.1). Declare the array as a parameter instead and have the binding fill it in place: its elements are copied back after the call returns"))))) (EApp (EVar "Ok") (EVar "imp"))))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "ffiBindsOfW") (EVar "prog")) (EVar "name")) (arm (PCon "Some" (PVar "binds")) ((GBool (EApp (EVar "isSome") (EApp (EApp (EVar "hostSymbol") (ELit (LString "js"))) (EVar "binds"))))) (EApp (EVar "Err") (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "internal error: the emit plan has no `jsffi` import for the reached extern '")) (EApp (EVar "$core.display") (EApp (EApp (EVar "externDisplayW") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "name")))) (ELit (LString "'")))))) (arm PWild () (EApp (EVar "Err") (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "wasm: the extern '")) (EApp (EVar "$core.display") (EApp (EApp (EVar "externDisplayW") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "name")))) (ELit (LString "' has no `js` binding, so the module has nothing to import for it; `check --target` refuses a reached extern with no binding for its target's host (T-TARGET-NO-BINDING)"))))))))))
 (DTypeSig false "selectedJsImport" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "JsImport")))))
-(DFunDef false "selectedJsImport" ((PVar "prog") (PVar "name")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EFieldAccess (EApp (EVar "progEmit") (EVar "prog")) "externFacts")) (arm (PCon "Some" (PVar "fact")) ((GBool (EBinOp "==" (EFieldAccess (EVar "fact") "bindingKind") (EVar "ForeignBinding")))) (EMatch (EApp (EApp (EVar "hostSymbol") (ELit (LString "js"))) (EFieldAccess (EVar "fact") "hostBindings")) (arm (PCon "Some" (PVar "host")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "shape")) (ERecordCreate "JsImport" ((fa "medakaName" (EVar "name")) (fa "jsName" (EVar "host")) (fa "params" (EFieldAccess (EVar "shape") "parameterHeads")) (fa "result" (EFieldAccess (EVar "shape") "resultHead")))))) (EFieldAccess (EVar "fact") "callableShape"))) (arm (PCon "None") () (EVar "None")))) (arm PWild () (EVar "None"))))
+(DFunDef false "selectedJsImport" ((PVar "prog") (PVar "name")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EFieldAccess (EApp (EVar "progEmit") (EVar "prog")) "externFacts")) (arm (PCon "Some" (PVar "fact")) ((GBool (EBinOp "==" (EFieldAccess (EVar "fact") "bindingKind") (EVar "ForeignBinding")))) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "hostSymbol") (ELit (LString "js"))) (EFieldAccess (EVar "fact") "hostBindings"))) (ELam ((PVar "host")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "shape")) (ERecordCreate "JsImport" ((fa "medakaName" (EVar "name")) (fa "jsName" (EVar "host")) (fa "params" (EFieldAccess (EVar "shape") "parameterHeads")) (fa "result" (EFieldAccess (EVar "shape") "resultHead")))))) (EFieldAccess (EVar "fact") "callableShape"))))) (arm PWild () (EVar "None"))))
 (DTypeSig false "emitFfiAppW" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "CExpr") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyFun (TyCon "CallEndW") (TyApp (TyCon "List") (TyCon "String"))))))))))
 (DFunDef false "emitFfiAppW" ((PVar "prog") (PVar "env") (PVar "d") (PVar "hd") (PVar "name") (PVar "args") (PVar "end")) (EMatch (EApp (EApp (EVar "jsImportForW") (EVar "prog")) (EVar "name")) (arm (PCon "Err" (PVar "gap")) () (EVar "gap")) (arm (PCon "Ok" (PVar "imp")) () (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "args")) (EApp (EVar "listLen") (EFieldAccess (EVar "imp") "params"))) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "a")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")))) (EVar "args")) (EListLit (EApp (EApp (EApp (EApp (EVar "callFnW") (EVar "prog")) (EVar "end")) (EApp (EApp (EVar "jsffiWrapperW") (EVar "prog")) (EVar "imp"))) (EApp (EVar "listLen") (EVar "args"))))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitIndirectApp") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "hd")) (EVar "args")) (EVar "end"))))))
 (DTypeSig false "emitFfiEtaW" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
@@ -13418,7 +13123,7 @@ hasFamilyW prog symbol tag =
 (DTypeSig true "emitProgramRecord" (TyFun (TyCon "WasmEmitInput") (TyFun (TyCon "EmitPlan") (TyFun (TyCon "CProgram") (TyApp (TyApp (TyCon "Result") (TyApp (TyCon "List") (TyCon "SymbolDefect"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "emitProgramRecord" ((PVar "input") (PVar "plan") (PVar "cp")) (EBlock (DoLet false false (PVar "emit") (EApp (EVar "freshWasmEmit") (EVar "WGapRecord"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "text")) (ETuple (EVar "text") (EApp (EVar "gapEventsOfW") (EVar "emit"))))) (EApp (EApp (EApp (EApp (EVar "emitProgramWith") (EVar "emit")) (EVar "input")) (EVar "plan")) (EVar "cp"))))))
 (DTypeSig false "emitProgramWith" (TyFun (TyCon "WasmEmit") (TyFun (TyCon "WasmEmitInput") (TyFun (TyCon "EmitPlan") (TyFun (TyCon "CProgram") (TyApp (TyApp (TyCon "Result") (TyApp (TyCon "List") (TyCon "SymbolDefect"))) (TyCon "String")))))))
-(DFunDef false "emitProgramWith" ((PVar "emit") (PVar "input") (PVar "plan") (PVar "cp")) (EMatch (EApp (EApp (EApp (EApp (EVar "emitProgramCore") (EVar "emit")) (EVar "input")) (EVar "plan")) (EVar "cp")) (arm (PCon "Err" (PVar "defects")) () (EApp (EVar "Err") (EVar "defects"))) (arm (PCon "Ok" (PVar "text")) () (EApp (EApp (EApp (EApp (EVar "finishCheckedText") (EApp (EVar "RecordedGaps") (EUnOp "!" (EFieldAccess (EVar "emit") "gapSymbols")))) (EUnOp "!" (EFieldAccess (EVar "emit") "symbols"))) (EUnOp "!" (EFieldAccess (EVar "emit") "callCoverage"))) (EVar "text")))))
+(DFunDef false "emitProgramWith" ((PVar "emit") (PVar "input") (PVar "plan") (PVar "cp")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EApp (EVar "emitProgramCore") (EVar "emit")) (EVar "input")) (EVar "plan")) (EVar "cp"))) (ELam ((PVar "text")) (EApp (EApp (EApp (EApp (EVar "finishCheckedText") (EApp (EVar "RecordedGaps") (EUnOp "!" (EFieldAccess (EVar "emit") "gapSymbols")))) (EUnOp "!" (EFieldAccess (EVar "emit") "symbols"))) (EUnOp "!" (EFieldAccess (EVar "emit") "callCoverage"))) (EVar "text")))))
 (DTypeSig false "refuseUnprovidedExternsW" (TyFun (TyCon "WasmEmit") (TyFun (TyCon "WasmEmitInput") (TyFun (TyCon "EmitPlan") (TyFun (TyCon "CProgram") (TyCon "Unit"))))))
 (DFunDef false "refuseUnprovidedExternsW" ((PVar "emit") (PVar "input") (PVar "plan") (PVar "cp")) (EBlock (DoLet false false (PVar "validation") (EApp (EApp (EApp (EApp (EApp (EVar "validateForEmission") (EVar "WasmBackend")) (EApp (EVar "inputRuntimeExternsW") (EVar "input"))) (EApp (EVar "inputManifestRequirementW") (EVar "input"))) (EVar "plan")) (EVar "cp"))) (DoExpr (EMatch (EFieldAccess (EVar "validation") "defects") (arm (PCons (PVar "bad") PWild) () (EApp (EVar "panic") (EApp (EVar "coreDefectMessage") (EVar "bad")))) (arm (PList) () (EMatch (EFieldAccess (EVar "validation") "externFindings") (arm (PList) () (ELit LUnit)) (arm (PVar "findings") () (EMatch (EFieldAccess (EVar "emit") "gapMode") (arm (PCon "WGapStrict") () (EApp (EVar "panic") (EApp (EVar "renderExternRefusal") (EVar "findings")))) (arm (PCon "WGapRecord") () (EApp (EApp (EVar "forEachU") (ELam ((PVar "f")) (EApp (EApp (EApp (EVar "noteGapAtW") (EVar "emit")) (EApp (EVar "findingBinding") (EVar "f"))) (EApp (EVar "renderExternFinding") (EVar "f"))))) (EVar "findings")))))))))))
 (DTypeSig false "emitProgramCore" (TyFun (TyCon "WasmEmit") (TyFun (TyCon "WasmEmitInput") (TyFun (TyCon "EmitPlan") (TyFun (TyCon "CProgram") (TyApp (TyApp (TyCon "Result") (TyApp (TyCon "List") (TyCon "SymbolDefect"))) (TyCon "String")))))))
@@ -13428,16 +13133,13 @@ hasFamilyW prog symbol tag =
 (DTypeSig true "emitProgramGaps" (TyFun (TyCon "WasmEmitInput") (TyFun (TyCon "EmitPlan") (TyFun (TyCon "CProgram") (TyApp (TyApp (TyCon "Result") (TyApp (TyCon "List") (TyCon "SymbolDefect"))) (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "emitProgramGaps" ((PVar "input") (PVar "plan") (PVar "cp0")) (EBlock (DoLet false false (PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") (PVar "mctx") (PVar "facts")) (EVar "cp0")) (DoLet false false (PVar "emit") (EApp (EVar "freshWasmEmit") (EVar "WGapRecord"))) (DoLet false false (PVar "emit") (ERecordUpdate (EVar "emit") ((fa "externFacts" (EApp (EVar "requirementFacts") (EFieldAccess (EVar "plan") "externRequirements"))) (fa "physical" (EFieldAccess (EVar "plan") "wasmPhysical")) (fa "closureChecked" (EVar "False")) (fa "identity" (EMatch (EFieldAccess (EVar "plan") "identity") (arm (PCon "Ok" (PVar "identity")) () (EApp (EVar "Some") (EVar "identity"))) (arm (PCon "Err" PWild) () (EVar "None"))))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "refuseUnprovidedExternsW") (EVar "emit")) (EVar "input")) (EVar "plan")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls")) (EVar "mctx")) (EVar "facts")))) (DoExpr (EApp (EApp (EVar "seedPhysicalW") (EVar "emit")) (EApp (EVar "physicalPlanW") (EVar "plan")))) (DoLet false false (PVar "emit") (ERecordUpdate (EVar "emit") ((fa "physical" (EApp (EVar "Some") (EApp (EVar "WD.censusWasmDemand") (EApp (EVar "physicalPlanW") (EVar "plan")))))))) (DoLet false false (PVar "fnNames") (EApp (EVar "collectFnNames") (EVar "groups"))) (DoLet false false (PVar "valNames") (EApp (EVar "collectValNames") (EVar "groups"))) (DoLet false false (PVar "index") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "makeWasmProgramIndexGaps") (EFieldAccess (EVar "plan") "constructorFacts")) (EFieldAccess (EFieldAccess (EVar "plan") "wasmInputs") "ctorFloatFields")) (EFieldAccess (EVar "plan") "trmc")) (EFieldAccess (EVar "plan") "methodTables")) (EVar "facts")) (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls")) (EVar "fnNames")) (EVar "valNames")) (EFieldAccess (EApp (EVar "physicalPlanW") (EVar "plan")) "fnValues"))) (DoLet false false (PVar "useClos") (EFieldAccess (EApp (EVar "physicalPlanW") (EVar "plan")) "useClos")) (DoLet false false (PVar "typeNames") (EFieldAccess (EFieldAccess (EVar "plan") "constructorFacts") "typeOrder")) (DoLet false false (PVar "prog") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Prog") (EMethodRef "index")) (EVar "typeNames")) (EVar "valNames")) (EVar "useClos")) (EVar "impls")) (EApp (EApp (EVar "resolveImplGroupsW") (EVar "impls")) (EFieldAccess (EVar "plan") "implGroups"))) (EVar "input")) (EVar "emit")) (EApp (EVar "freshFnCtx") (ELit LUnit)))) (DoExpr (EApp (EApp (EApp (EVar "seedSymbolsW") (EVar "prog")) (EApp (EVar "WD.censusWasmDemand") (EApp (EVar "physicalPlanW") (EVar "plan")))) (EListLit))) (DoLet false false (PVar "fragments") (EApp (EVar "Ref") (EListLit))) (DoExpr (EApp (EApp (EApp (EVar "emitFnsGapsW") (EVar "prog")) (EVar "fragments")) (EApp (EVar "userFnBinds") (EVar "groups")))) (DoExpr (EApp (EApp (EApp (EVar "emitImplsGapsW") (EVar "prog")) (EVar "fragments")) (EApp (EVar "progImplGroups") (EVar "prog")))) (DoExpr (EApp (EApp (EApp (EVar "emitValsGapsW") (EVar "prog")) (EVar "fragments")) (EApp (EApp (EVar "filterList") (EVar "isValBind")) (EVar "groups")))) (DoLet false false (PVar "lifted") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "x")) (EVar "x"))) (EApp (EVar "reverseL") (EUnOp "!" (EFieldAccess (EVar "emit") "liftedDefinitions"))))) (DoLet false false (PVar "text") (EApp (EVar "joinNl") (EBinOp "++" (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "x")) (EVar "x"))) (EApp (EVar "reverseL") (EUnOp "!" (EVar "fragments")))) (EVar "lifted")) (EApp (EVar "trapMsgRuntimeOf") (EVar "emit"))))) (DoExpr (EMatch (EApp (EVar "symbolDefectsW") (EVar "emit")) (arm (PList) () (EApp (EApp (EMethodRef "map") (ELam (PWild) (EApp (EVar "gapEventsOfW") (EVar "emit")))) (EApp (EApp (EApp (EVar "checkCheckedFragment") (EUnOp "!" (EFieldAccess (EVar "emit") "symbols"))) (EUnOp "!" (EFieldAccess (EVar "emit") "callCoverage"))) (EVar "text")))) (arm (PVar "defects") () (EApp (EVar "Err") (EVar "defects")))))))
 (DTypeSig false "emitFnsGapsW" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyCon "Unit")))))
-(DFunDef false "emitFnsGapsW" (PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "emitFnsGapsW" ((PVar "prog") (PVar "fragments") (PCons (PCon "CBind" (PVar "name") (PVar "cs") (PVar "site") (PVar "bid")) (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EVar "setGapBindingOfW") (EApp (EVar "progEmit") (EVar "prog"))) (EBinOp "++" (ELit (LString "fn ")) (EVar "name")))) (DoLet false false (PVar "lines") (EApp (EApp (EVar "emitRefFnBind") (EVar "prog")) (EApp (EApp (EApp (EApp (EVar "CBind") (EVar "name")) (EVar "cs")) (EVar "site")) (EVar "bid")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "fragments")) (EBinOp "::" (EVar "lines") (EUnOp "!" (EVar "fragments"))))) (DoExpr (EApp (EApp (EApp (EVar "emitFnsGapsW") (EVar "prog")) (EVar "fragments")) (EVar "rest")))))
+(DFunDef false "emitFnsGapsW" ((PVar "prog") (PVar "fragments") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PCon "CBind" (PVar "name") (PVar "cs") (PVar "site") (PVar "bid")) (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EVar "setGapBindingOfW") (EApp (EVar "progEmit") (EVar "prog"))) (EBinOp "++" (ELit (LString "fn ")) (EVar "name")))) (DoLet false false (PVar "lines") (EApp (EApp (EVar "emitRefFnBind") (EVar "prog")) (EApp (EApp (EApp (EApp (EVar "CBind") (EVar "name")) (EVar "cs")) (EVar "site")) (EVar "bid")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "fragments")) (EBinOp "::" (EVar "lines") (EUnOp "!" (EVar "fragments"))))) (DoExpr (EApp (EVar "go") (EVar "rest"))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "emitImplsGapsW" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyCon "ImplG")) (TyCon "Unit")))))
-(DFunDef false "emitImplsGapsW" (PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "emitImplsGapsW" ((PVar "prog") (PVar "fragments") (PCons (PAs "g" (PCon "ImplG" (PVar "method") (PVar "headTag") PWild PWild PWild PWild)) (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EVar "setGapBindingOfW") (EApp (EVar "progEmit") (EVar "prog"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "impl ")) (EApp (EVar "$core.display") (EVar "method"))) (ELit (LString "@"))) (EApp (EVar "$core.display") (EVar "headTag"))) (ELit (LString ""))))) (DoLet false false (PVar "lines") (EApp (EApp (EVar "emitImplGroup") (EVar "prog")) (EVar "g"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "fragments")) (EBinOp "::" (EVar "lines") (EUnOp "!" (EVar "fragments"))))) (DoExpr (EApp (EApp (EApp (EVar "emitImplsGapsW") (EVar "prog")) (EVar "fragments")) (EVar "rest")))))
+(DFunDef false "emitImplsGapsW" ((PVar "prog") (PVar "fragments") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PAs "g" (PCon "ImplG" (PVar "method") (PVar "headTag") PWild PWild PWild PWild)) (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EVar "setGapBindingOfW") (EApp (EVar "progEmit") (EVar "prog"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "impl ")) (EApp (EVar "$core.display") (EVar "method"))) (ELit (LString "@"))) (EApp (EVar "$core.display") (EVar "headTag"))) (ELit (LString ""))))) (DoLet false false (PVar "lines") (EApp (EApp (EVar "emitImplGroup") (EVar "prog")) (EVar "g"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "fragments")) (EBinOp "::" (EVar "lines") (EUnOp "!" (EVar "fragments"))))) (DoExpr (EApp (EVar "go") (EVar "rest"))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "emitValsGapsW" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyCon "Unit")))))
-(DFunDef false "emitValsGapsW" (PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "emitValsGapsW" ((PVar "prog") (PVar "fragments") (PCons (PVar "b") (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EVar "setGapBindingOfW") (EApp (EVar "progEmit") (EVar "prog"))) (EBinOp "++" (ELit (LString "val ")) (EApp (EVar "bindName") (EVar "b"))))) (DoLet false false (PVar "lines") (EApp (EApp (EVar "emitRefValInit") (EVar "prog")) (EVar "b"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "fragments")) (EBinOp "::" (EVar "lines") (EUnOp "!" (EVar "fragments"))))) (DoExpr (EApp (EApp (EApp (EVar "emitValsGapsW") (EVar "prog")) (EVar "fragments")) (EVar "rest")))))
+(DFunDef false "emitValsGapsW" ((PVar "prog") (PVar "fragments") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PVar "b") (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EVar "setGapBindingOfW") (EApp (EVar "progEmit") (EVar "prog"))) (EBinOp "++" (ELit (LString "val ")) (EApp (EVar "bindName") (EVar "b"))))) (DoLet false false (PVar "lines") (EApp (EApp (EVar "emitRefValInit") (EVar "prog")) (EVar "b"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "fragments")) (EBinOp "::" (EVar "lines") (EUnOp "!" (EVar "fragments"))))) (DoExpr (EApp (EVar "go") (EVar "rest"))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "externFamilyW" (TyFun (TyCon "WasmEmit") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "WasmFamily")))))
-(DFunDef false "externFamilyW" ((PVar "emit") (PVar "name")) (EIf (EBinOp "==" (EVar "name") (EVar "siteSentinelName")) (EApp (EVar "Some") (EVar "WasmLeaf")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EFieldAccess (EApp (EVar "emitDemandW") (EVar "emit")) "catalogFamilies")) (arm (PCon "Some" (PVar "f")) () (EIf (EApp (EVar "isWasmExternFamily") (EVar "f")) (EApp (EVar "Some") (EVar "f")) (EVar "None"))) (arm (PCon "None") () (EVar "None")))))
+(DFunDef false "externFamilyW" ((PVar "emit") (PVar "name")) (EIf (EBinOp "==" (EVar "name") (EVar "siteSentinelName")) (EApp (EVar "Some") (EVar "WasmLeaf")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EFieldAccess (EApp (EVar "emitDemandW") (EVar "emit")) "catalogFamilies"))) (ELam ((PVar "f")) (EIf (EApp (EVar "isWasmExternFamily") (EVar "f")) (EApp (EVar "Some") (EVar "f")) (EVar "None"))))))
 (DTypeSig false "isWasmEtaExtern" (TyFun (TyCon "WasmEmit") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "isWasmEtaExtern" ((PVar "emit") (PVar "name")) (EApp (EVar "isSome") (EApp (EApp (EVar "externFamilyW") (EVar "emit")) (EVar "name"))))
 (DTypeSig false "fileBoundW" (TyFun (TyCon "CExpr") (TyApp (TyCon "Option") (TyTuple (TyCon "CExpr") (TyCon "CExpr") (TyCon "Int")))))
@@ -13614,14 +13316,12 @@ hasFamilyW prog symbol tag =
 (DFunDef false "mainBodyIsUnit" ((PVar "prog") (PVar "cafs") (PCon "CDecision" PWild (PVar "arms") PWild)) (EApp (EApp (EApp (EVar "allArmsUnit") (EVar "prog")) (EVar "cafs")) (EVar "arms")))
 (DFunDef false "mainBodyIsUnit" ((PVar "prog") (PVar "cafs") (PCon "CMatch" PWild (PVar "arms"))) (EApp (EApp (EApp (EVar "allArmsUnit") (EVar "prog")) (EVar "cafs")) (EVar "arms")))
 (DFunDef false "mainBodyIsUnit" ((PVar "prog") (PVar "cafs") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EApp (EVar "blockTailIsUnit") (EVar "prog")) (EVar "cafs")) (EVar "stmts")))
-(DFunDef false "mainBodyIsUnit" (PWild PWild PWild) (EVar "False"))
+(DFunDef false "mainBodyIsUnit" (PWild PWild (POr (PCon "CLit" PWild) (PCon "CLam" PWild PWild) (PCon "CLetGroup" PWild PWild) (PCon "CIf" PWild PWild PWild) (PCon "CBinPrim" PWild PWild PWild PWild PWild) (PCon "CUnOp" PWild PWild) (PCon "CTuple" PWild) (PCon "CList" PWild) (PCon "CRecord" PWild PWild) (PCon "CFieldAccess" PWild PWild PWild PWild) (PCon "CRecordUpdate" PWild PWild PWild) (PCon "CVariantUpdate" PWild PWild PWild) (PCon "CArray" PWild) (PCon "CRangeList" PWild PWild PWild) (PCon "CRangeArray" PWild PWild PWild) (PCon "CMethod" PWild PWild))) (EVar "False"))
 (DTypeSig false "allArmsUnit" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "OrdMap") (TyCon "CExpr")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyCon "Bool")))))
 (DFunDef false "allArmsUnit" (PWild PWild (PList)) (EVar "False"))
 (DFunDef false "allArmsUnit" ((PVar "prog") (PVar "cafs") (PVar "arms")) (EApp (EApp (EApp (EVar "allArmsUnitGo") (EVar "prog")) (EVar "cafs")) (EVar "arms")))
 (DTypeSig false "allArmsUnitGo" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "OrdMap") (TyCon "CExpr")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyCon "Bool")))))
-(DFunDef false "allArmsUnitGo" (PWild PWild (PList)) (EVar "True"))
-(DFunDef false "allArmsUnitGo" ((PVar "prog") (PVar "cafs") (PCons (PCon "CArm" (PVar "pat") PWild (PVar "body")) (PVar "rest"))) (EIf (EApp (EApp (EApp (EVar "mainBodyIsUnit") (EVar "prog")) (EApp (EApp (EVar "shadowCafs") (EApp (EVar "patBinders") (EVar "pat"))) (EVar "cafs"))) (EVar "body")) (EApp (EApp (EApp (EVar "allArmsUnitGo") (EVar "prog")) (EVar "cafs")) (EVar "rest")) (EVar "False")))
-(DFunDef false "allArmsUnitGo" ((PVar "prog") (PVar "cafs") (PCons (PCon "CArmAlt" PWild PWild PWild) (PVar "rest"))) (EApp (EApp (EApp (EVar "allArmsUnitGo") (EVar "prog")) (EVar "cafs")) (EVar "rest")))
+(DFunDef false "allArmsUnitGo" ((PVar "prog") (PVar "cafs") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EVar "True")) (clause ((PCons (PCon "CArm" (PVar "pat") PWild (PVar "body")) (PVar "rest"))) (EIf (EApp (EApp (EApp (EVar "mainBodyIsUnit") (EVar "prog")) (EApp (EApp (EVar "shadowCafs") (EApp (EVar "patBinders") (EVar "pat"))) (EVar "cafs"))) (EVar "body")) (EApp (EVar "go") (EVar "rest")) (EVar "False"))) (clause ((PCons (PCon "CArmAlt" PWild PWild PWild) (PVar "rest"))) (EApp (EVar "go") (EVar "rest"))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "blockTailIsUnit" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "OrdMap") (TyCon "CExpr")) (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyCon "Bool")))))
 (DFunDef false "blockTailIsUnit" (PWild PWild (PList)) (EVar "False"))
 (DFunDef false "blockTailIsUnit" ((PVar "prog") (PVar "cafs") (PList (PCon "CSExpr" (PVar "e")))) (EApp (EApp (EApp (EVar "mainBodyIsUnit") (EVar "prog")) (EVar "cafs")) (EVar "e")))
@@ -13709,39 +13409,21 @@ hasFamilyW prog symbol tag =
 (DTypeSig false "emitClauseChainRefEnv" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "WParam")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyApp (TyCon "List") (TyCon "String")))))))))
 (DFunDef false "emitClauseChainRefEnv" ((PVar "prog") (PVar "baseEnv") (PVar "name") (PVar "params") (PVar "arity") (PVar "clauses")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitClauseChainGo") (EVar "prog")) (EVar "baseEnv")) (EVar "name")) (EVar "params")) (EVar "arity")) (EVar "clauses")) (ELit (LInt 0))) (EFieldAccess (EApp (EVar "progFnCtx") (EVar "prog")) "site")))
 (DTypeSig false "emitClauseChainGo" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "WParam")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))))))))
-(DFunDef false "emitClauseChainGo" ((PVar "prog") PWild PWild PWild PWild (PList) PWild (PVar "site")) (EApp (EApp (EVar "wasmNonexhTrap") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "site")))
-(DFunDef false "emitClauseChainGo" ((PVar "prog") (PVar "baseEnv") (PVar "name") (PVar "params") (PVar "arity") (PCons (PCon "CClause" (PVar "pats") (PVar "body")) (PVar "rest")) (PVar "i") (PVar "site")) (EBlock (DoLet false false (PVar "clLabel") (EApp (EApp (EVar "labelName") (EVar "WN.WClause")) (EVar "i"))) (DoLet false false (PTuple (PVar "tests") (PVar "binds") (PVar "env")) (EApp (EApp (EApp (EApp (EApp (EVar "clausePatCodeEnv") (EVar "prog")) (EVar "baseEnv")) (EVar "pats")) (EVar "params")) (EVar "clLabel"))) (DoLet false false (PVar "body2") (EApp (EApp (EVar "labelFallthrough") (EVar "body")) (EVar "clLabel"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (ELit (LString "block ")) (EVar "clLabel"))) (EApp (EVar "indent") (EBinOp "++" (EBinOp "++" (EVar "tests") (EVar "binds")) (EApp (EApp (EApp (EApp (EVar "emitRefTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "body2"))))) (EListLit (ELit (LString "end")))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitClauseChainGo") (EVar "prog")) (EVar "baseEnv")) (EVar "name")) (EVar "params")) (EVar "arity")) (EVar "rest")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "site"))))))
+(DFunDef false "emitClauseChainGo" ((PVar "prog") (PVar "baseEnv") (PVar "_name") (PVar "params") (PVar "arity") (PVar "cls0") (PVar "i0") (PVar "site")) (ELetGroup ((lgb "go" (clause ((PList) PWild) (EApp (EApp (EVar "wasmNonexhTrap") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "site"))) (clause ((PCons (PCon "CClause" (PVar "pats") (PVar "body")) (PVar "rest")) (PVar "i")) (EBlock (DoLet false false (PVar "clLabel") (EApp (EApp (EVar "labelName") (EVar "WN.WClause")) (EVar "i"))) (DoLet false false (PTuple (PVar "tests") (PVar "binds") (PVar "env")) (EApp (EApp (EApp (EApp (EApp (EVar "clausePatCodeEnv") (EVar "prog")) (EVar "baseEnv")) (EVar "pats")) (EVar "params")) (EVar "clLabel"))) (DoLet false false (PVar "body2") (EApp (EApp (EVar "labelFallthrough") (EVar "body")) (EVar "clLabel"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (ELit (LString "block ")) (EVar "clLabel"))) (EApp (EVar "indent") (EBinOp "++" (EBinOp "++" (EVar "tests") (EVar "binds")) (EApp (EApp (EApp (EApp (EVar "emitRefTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "body2"))))) (EListLit (ELit (LString "end")))) (EApp (EApp (EVar "go") (EVar "rest")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))))))) (EApp (EApp (EVar "go") (EVar "cls0")) (EVar "i0"))))
 (DTypeSig false "clausePatCodeEnv" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "List") (TyCon "WParam")) (TyFun (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")) (TyCon "Env"))))))))
 (DFunDef false "clausePatCodeEnv" ((PVar "prog") (PVar "baseEnv") (PVar "pats") (PVar "params") (PVar "clLabel")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "clausePatGo") (EVar "prog")) (EApp (EApp (EVar "zipPats") (EVar "pats")) (EVar "params"))) (EVar "clLabel")) (EListLit)) (EListLit)) (EVar "baseEnv")))
 (DTypeSig false "clausePatGo" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Pat") (TyCon "WParam"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Env") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")) (TyCon "Env")))))))))
-(DFunDef false "clausePatGo" (PWild (PList) PWild (PVar "tAcc") (PVar "bAcc") (PVar "env")) (ETuple (EVar "tAcc") (EVar "bAcc") (EVar "env")))
-(DFunDef false "clausePatGo" ((PVar "prog") (PCons (PTuple (PVar "pat") (PVar "a")) (PVar "rest")) (PVar "clLabel") (PVar "tAcc") (PVar "bAcc") (PVar "env")) (EBlock (DoLet false false (PVar "occ") (EListLit (EBinOp "++" (ELit (LString "local.get $")) (EApp (EVar "wParamId") (EVar "a"))))) (DoLet false false (PTuple (PVar "t") (PVar "b") (PVar "env2")) (EApp (EApp (EApp (EApp (EApp (EVar "patTestBind") (EVar "prog")) (EVar "pat")) (EVar "occ")) (EVar "clLabel")) (EVar "env"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "clausePatGo") (EVar "prog")) (EVar "rest")) (EVar "clLabel")) (EBinOp "++" (EVar "tAcc") (EVar "t"))) (EBinOp "++" (EVar "bAcc") (EVar "b"))) (EVar "env2")))))
+(DFunDef false "clausePatGo" ((PVar "prog") (PVar "xs0") (PVar "clLabel") (PVar "tAcc0") (PVar "bAcc0") (PVar "env0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "tAcc") (PVar "bAcc") (PVar "env")) (ETuple (EVar "tAcc") (EVar "bAcc") (EVar "env"))) (clause ((PCons (PTuple (PVar "pat") (PVar "a")) (PVar "rest")) (PVar "tAcc") (PVar "bAcc") (PVar "env")) (EBlock (DoLet false false (PVar "occ") (EListLit (EBinOp "++" (ELit (LString "local.get $")) (EApp (EVar "wParamId") (EVar "a"))))) (DoLet false false (PTuple (PVar "t") (PVar "b") (PVar "env2")) (EApp (EApp (EApp (EApp (EApp (EVar "patTestBind") (EVar "prog")) (EVar "pat")) (EVar "occ")) (EVar "clLabel")) (EVar "env"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "go") (EVar "rest")) (EBinOp "++" (EVar "tAcc") (EVar "t"))) (EBinOp "++" (EVar "bAcc") (EVar "b"))) (EVar "env2"))))))) (EApp (EApp (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "tAcc0")) (EVar "bAcc0")) (EVar "env0"))))
 (DTypeSig false "patTestBind" (TyFun (TyCon "Prog") (TyFun (TyCon "Pat") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "Env") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")) (TyCon "Env"))))))))
-(DFunDef false "patTestBind" ((PVar "_prog") (PCon "PWild") (PVar "_occ") (PVar "_clLabel") (PVar "env")) (ETuple (EListLit) (EListLit) (EVar "env")))
-(DFunDef false "patTestBind" ((PVar "_prog") (PCon "PVar" (PVar "x") PWild (PVar "bid")) (PVar "occ") (PVar "_clLabel") (PVar "env")) (ETuple (EListLit) (EBinOp "++" (EVar "occ") (EListLit (EBinOp "++" (ELit (LString "local.set $")) (EApp (EVar "gname") (EVar "x"))))) (EApp (EApp (EApp (EVar "envBind") (EVar "x")) (EVar "bid")) (EVar "env"))))
-(DFunDef false "patTestBind" ((PVar "prog") (PCon "PLit" (PCon "LInt" (PVar "n"))) (PVar "occ") (PVar "clLabel") (PVar "env")) (ETuple (EBinOp "++" (EVar "occ") (EListLit (EApp (EVar "unboxIntW") (EVar "prog")) (EBinOp "++" (ELit (LString "i64.const ")) (EApp (EVar "intToString") (EVar "n"))) (ELit (LString "i64.ne")) (EBinOp "++" (ELit (LString "br_if ")) (EVar "clLabel")))) (EListLit) (EVar "env")))
-(DFunDef false "patTestBind" ((PVar "_prog") (PCon "PLit" (PCon "LBool" (PVar "b"))) (PVar "occ") (PVar "clLabel") (PVar "env")) (ETuple (EBinOp "++" (EVar "occ") (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (EBinOp "++" (ELit (LString "i32.const ")) (EIf (EVar "b") (ELit (LString "1")) (ELit (LString "0")))) (ELit (LString "i32.ne")) (EBinOp "++" (ELit (LString "br_if ")) (EVar "clLabel")))) (EListLit) (EVar "env")))
-(DFunDef false "patTestBind" ((PVar "_prog") (PCon "PLit" (PCon "LUnit")) (PVar "_occ") (PVar "_clLabel") (PVar "env")) (ETuple (EListLit) (EListLit) (EVar "env")))
-(DFunDef false "patTestBind" ((PVar "_prog") (PCon "PLit" (PCon "LChar" (PVar "c"))) (PVar "occ") (PVar "clLabel") (PVar "env")) (ETuple (EBinOp "++" (EVar "occ") (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (EBinOp "++" (ELit (LString "i32.const ")) (EApp (EVar "intToString") (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EApp (EVar "stringToChars") (EVar "c")))))) (ELit (LString "i32.ne")) (EBinOp "++" (ELit (LString "br_if ")) (EVar "clLabel")))) (EListLit) (EVar "env")))
-(DFunDef false "patTestBind" ((PVar "prog") (PCon "PLit" (PCon "LString" (PVar "s"))) (PVar "occ") (PVar "clLabel") (PVar "env")) (EBlock (DoLet false false (PVar "cmpSuffix") (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_str_compare"))) (ELit (LInt 2))) (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (ELit (LString "i32.const 1")) (ELit (LString "i32.ne")) (EBinOp "++" (ELit (LString "br_if ")) (EVar "clLabel")))) (DoExpr (ETuple (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "occ") (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EVar "emitLitRef") (EVar "prog")) (EApp (EVar "LString") (EVar "s")))) (EVar "cmpSuffix")) (EListLit) (EVar "env")))))
-(DFunDef false "patTestBind" ((PVar "prog") (PCon "PCon" (PVar "c") (PVar "args")) (PVar "occ") (PVar "clLabel") (PVar "env")) (EBlock (DoLet false false (PVar "ctest") (EBinOp "++" (EApp (EApp (EApp (EVar "discrimReadOf") (EVar "prog")) (EVar "occ")) (EApp (EApp (EVar "ctorTypeName") (EVar "prog")) (EVar "c"))) (EListLit (EBinOp "++" (ELit (LString "i32.const ")) (EApp (EVar "intToString") (EApp (EApp (EVar "ctorOrdinal") (EVar "prog")) (EVar "c")))) (ELit (LString "i32.ne")) (EBinOp "++" (ELit (LString "br_if ")) (EVar "clLabel"))))) (DoLet false false (PTuple (PVar "ft") (PVar "fb") (PVar "env2")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "patTestBindCon") (EVar "prog")) (EVar "c")) (EVar "args")) (EVar "occ")) (EVar "clLabel")) (EVar "env")) (ELit (LInt 0)))) (DoExpr (ETuple (EBinOp "++" (EVar "ctest") (EVar "ft")) (EVar "fb") (EVar "env2")))))
-(DFunDef false "patTestBind" ((PVar "prog") (PCon "PAs" (PVar "x") PWild (PVar "bid") (PVar "p")) (PVar "occ") (PVar "clLabel") (PVar "env")) (EBlock (DoLet false false (PVar "setX") (EBinOp "++" (EVar "occ") (EListLit (EBinOp "++" (ELit (LString "local.set $")) (EApp (EVar "gname") (EVar "x")))))) (DoLet false false (PTuple (PVar "t") (PVar "b") (PVar "env2")) (EApp (EApp (EApp (EApp (EApp (EVar "patTestBind") (EVar "prog")) (EVar "p")) (EVar "occ")) (EVar "clLabel")) (EApp (EApp (EApp (EVar "envBind") (EVar "x")) (EVar "bid")) (EVar "env")))) (DoExpr (ETuple (EVar "t") (EBinOp "++" (EVar "setX") (EVar "b")) (EVar "env2")))))
-(DFunDef false "patTestBind" ((PVar "prog") (PCon "PCons" (PVar "h") (PVar "t")) (PVar "occ") (PVar "clLabel") (PVar "env")) (EBlock (DoLet false false (PVar "consTest") (EBinOp "++" (EApp (EApp (EApp (EVar "discrimReadOf") (EVar "prog")) (EVar "occ")) (ELit (LString "List"))) (EListLit (ELit (LString "i32.const 0")) (ELit (LString "i32.ne")) (EBinOp "++" (ELit (LString "br_if ")) (EVar "clLabel"))))) (DoLet false false (PVar "hSnip") (EBinOp "++" (EVar "occ") (EListLit (ELit (LString "ref.cast (ref $C_Cons)")) (ELit (LString "struct.get $C_Cons 1"))))) (DoLet false false (PVar "tSnip") (EBinOp "++" (EVar "occ") (EListLit (ELit (LString "ref.cast (ref $C_Cons)")) (ELit (LString "struct.get $C_Cons 2"))))) (DoLet false false (PTuple (PVar "ht") (PVar "hb") (PVar "env2")) (EApp (EApp (EApp (EApp (EApp (EVar "patTestBind") (EVar "prog")) (EVar "h")) (EVar "hSnip")) (EVar "clLabel")) (EVar "env"))) (DoLet false false (PTuple (PVar "tt") (PVar "tb") (PVar "env3")) (EApp (EApp (EApp (EApp (EApp (EVar "patTestBind") (EVar "prog")) (EVar "t")) (EVar "tSnip")) (EVar "clLabel")) (EVar "env2"))) (DoExpr (ETuple (EBinOp "++" (EBinOp "++" (EVar "consTest") (EVar "ht")) (EVar "tt")) (EBinOp "++" (EVar "hb") (EVar "tb")) (EVar "env3")))))
-(DFunDef false "patTestBind" ((PVar "prog") (PCon "PList" (PVar "ps")) (PVar "occ") (PVar "clLabel") (PVar "env")) (EApp (EApp (EApp (EApp (EApp (EVar "patTestBindList") (EVar "prog")) (EVar "ps")) (EVar "occ")) (EVar "clLabel")) (EVar "env")))
-(DFunDef false "patTestBind" ((PVar "prog") (PCon "PTuple" (PVar "ps")) (PVar "occ") (PVar "clLabel") (PVar "env")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "patTestBindTuple") (EVar "prog")) (EApp (EVar "tupleCtorName") (EApp (EVar "listLen") (EVar "ps")))) (EVar "ps")) (EVar "occ")) (EVar "clLabel")) (EVar "env")) (ELit (LInt 0))))
-(DFunDef false "patTestBind" ((PVar "prog") (PCon "PRng" (PVar "lo") (PVar "hi") (PVar "incl")) (PVar "occ") (PVar "clLabel") (PVar "env")) (ETuple (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EVar "rngCmpW") (EVar "prog")) (EVar "occ")) (EApp (EVar "rngBound") (EVar "lo"))) (ELit (LString "i64.lt_s"))) (EVar "clLabel")) (EApp (EApp (EApp (EApp (EApp (EVar "rngCmpW") (EVar "prog")) (EVar "occ")) (EApp (EVar "rngBound") (EVar "hi"))) (EIf (EVar "incl") (ELit (LString "i64.gt_s")) (ELit (LString "i64.ge_s")))) (EVar "clLabel"))) (EListLit) (EVar "env")))
-(DFunDef false "patTestBind" ((PVar "prog") (PVar "other") (PVar "_occ") (PVar "_clLabel") (PVar "_env")) (EApp (EApp (EVar "gapL3P") (EVar "prog")) (EBinOp "++" (ELit (LString "ref-mode: unsupported clause parameter pattern ")) (EApp (EVar "ptag") (EVar "other")))))
+(DFunDef false "patTestBind" ((PVar "prog") (PVar "pat0") (PVar "occ0") (PVar "clLabel") (PVar "env0")) (ELetGroup ((lgb "go" (clause ((PCon "PWild") (PVar "_occ") (PVar "env")) (ETuple (EListLit) (EListLit) (EVar "env"))) (clause ((PCon "PVar" (PVar "x") PWild (PVar "bid")) (PVar "occ") (PVar "env")) (ETuple (EListLit) (EBinOp "++" (EVar "occ") (EListLit (EBinOp "++" (ELit (LString "local.set $")) (EApp (EVar "gname") (EVar "x"))))) (EApp (EApp (EApp (EVar "envBind") (EVar "x")) (EVar "bid")) (EVar "env")))) (clause ((PCon "PLit" (PCon "LInt" (PVar "n"))) (PVar "occ") (PVar "env")) (ETuple (EBinOp "++" (EVar "occ") (EListLit (EApp (EVar "unboxIntW") (EVar "prog")) (EBinOp "++" (ELit (LString "i64.const ")) (EApp (EVar "intToString") (EVar "n"))) (ELit (LString "i64.ne")) (EBinOp "++" (ELit (LString "br_if ")) (EVar "clLabel")))) (EListLit) (EVar "env"))) (clause ((PCon "PLit" (PCon "LBool" (PVar "b"))) (PVar "occ") (PVar "env")) (ETuple (EBinOp "++" (EVar "occ") (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (EBinOp "++" (ELit (LString "i32.const ")) (EIf (EVar "b") (ELit (LString "1")) (ELit (LString "0")))) (ELit (LString "i32.ne")) (EBinOp "++" (ELit (LString "br_if ")) (EVar "clLabel")))) (EListLit) (EVar "env"))) (clause ((PCon "PLit" (PCon "LUnit")) (PVar "_occ") (PVar "env")) (ETuple (EListLit) (EListLit) (EVar "env"))) (clause ((PCon "PLit" (PCon "LChar" (PVar "c"))) (PVar "occ") (PVar "env")) (ETuple (EBinOp "++" (EVar "occ") (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (EBinOp "++" (ELit (LString "i32.const ")) (EApp (EVar "intToString") (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EApp (EVar "stringToChars") (EVar "c")))))) (ELit (LString "i32.ne")) (EBinOp "++" (ELit (LString "br_if ")) (EVar "clLabel")))) (EListLit) (EVar "env"))) (clause ((PCon "PLit" (PCon "LString" (PVar "s"))) (PVar "occ") (PVar "env")) (EBlock (DoLet false false (PVar "cmpSuffix") (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_str_compare"))) (ELit (LInt 2))) (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (ELit (LString "i32.const 1")) (ELit (LString "i32.ne")) (EBinOp "++" (ELit (LString "br_if ")) (EVar "clLabel")))) (DoExpr (ETuple (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "occ") (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EVar "emitLitRef") (EVar "prog")) (EApp (EVar "LString") (EVar "s")))) (EVar "cmpSuffix")) (EListLit) (EVar "env"))))) (clause ((PCon "PCon" (PVar "c") (PVar "args")) (PVar "occ") (PVar "env")) (EBlock (DoLet false false (PVar "ctest") (EBinOp "++" (EApp (EApp (EApp (EVar "discrimReadOf") (EVar "prog")) (EVar "occ")) (EApp (EApp (EVar "ctorTypeName") (EVar "prog")) (EVar "c"))) (EListLit (EBinOp "++" (ELit (LString "i32.const ")) (EApp (EVar "intToString") (EApp (EApp (EVar "ctorOrdinal") (EVar "prog")) (EVar "c")))) (ELit (LString "i32.ne")) (EBinOp "++" (ELit (LString "br_if ")) (EVar "clLabel"))))) (DoLet false false (PTuple (PVar "ft") (PVar "fb") (PVar "env2")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "patTestBindCon") (EVar "prog")) (EVar "c")) (EVar "args")) (EVar "occ")) (EVar "clLabel")) (EVar "env")) (ELit (LInt 0)))) (DoExpr (ETuple (EBinOp "++" (EVar "ctest") (EVar "ft")) (EVar "fb") (EVar "env2"))))) (clause ((PCon "PAs" (PVar "x") PWild (PVar "bid") (PVar "p")) (PVar "occ") (PVar "env")) (EBlock (DoLet false false (PVar "setX") (EBinOp "++" (EVar "occ") (EListLit (EBinOp "++" (ELit (LString "local.set $")) (EApp (EVar "gname") (EVar "x")))))) (DoLet false false (PTuple (PVar "t") (PVar "b") (PVar "env2")) (EApp (EApp (EApp (EVar "go") (EVar "p")) (EVar "occ")) (EApp (EApp (EApp (EVar "envBind") (EVar "x")) (EVar "bid")) (EVar "env")))) (DoExpr (ETuple (EVar "t") (EBinOp "++" (EVar "setX") (EVar "b")) (EVar "env2"))))) (clause ((PCon "PCons" (PVar "h") (PVar "t")) (PVar "occ") (PVar "env")) (EBlock (DoLet false false (PVar "consTest") (EBinOp "++" (EApp (EApp (EApp (EVar "discrimReadOf") (EVar "prog")) (EVar "occ")) (ELit (LString "List"))) (EListLit (ELit (LString "i32.const 0")) (ELit (LString "i32.ne")) (EBinOp "++" (ELit (LString "br_if ")) (EVar "clLabel"))))) (DoLet false false (PVar "hSnip") (EBinOp "++" (EVar "occ") (EListLit (ELit (LString "ref.cast (ref $C_Cons)")) (ELit (LString "struct.get $C_Cons 1"))))) (DoLet false false (PVar "tSnip") (EBinOp "++" (EVar "occ") (EListLit (ELit (LString "ref.cast (ref $C_Cons)")) (ELit (LString "struct.get $C_Cons 2"))))) (DoLet false false (PTuple (PVar "ht") (PVar "hb") (PVar "env2")) (EApp (EApp (EApp (EVar "go") (EVar "h")) (EVar "hSnip")) (EVar "env"))) (DoLet false false (PTuple (PVar "tt") (PVar "tb") (PVar "env3")) (EApp (EApp (EApp (EVar "go") (EVar "t")) (EVar "tSnip")) (EVar "env2"))) (DoExpr (ETuple (EBinOp "++" (EBinOp "++" (EVar "consTest") (EVar "ht")) (EVar "tt")) (EBinOp "++" (EVar "hb") (EVar "tb")) (EVar "env3"))))) (clause ((PCon "PList" (PVar "ps")) (PVar "occ") (PVar "env")) (EApp (EApp (EApp (EApp (EApp (EVar "patTestBindList") (EVar "prog")) (EVar "ps")) (EVar "occ")) (EVar "clLabel")) (EVar "env"))) (clause ((PCon "PTuple" (PVar "ps")) (PVar "occ") (PVar "env")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "patTestBindTuple") (EVar "prog")) (EApp (EVar "tupleCtorName") (EApp (EVar "listLen") (EVar "ps")))) (EVar "ps")) (EVar "occ")) (EVar "clLabel")) (EVar "env")) (ELit (LInt 0)))) (clause ((PCon "PRng" (PVar "lo") (PVar "hi") (PVar "incl")) (PVar "occ") (PVar "env")) (ETuple (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EVar "rngCmpW") (EVar "prog")) (EVar "occ")) (EApp (EVar "rngBound") (EVar "lo"))) (ELit (LString "i64.lt_s"))) (EVar "clLabel")) (EApp (EApp (EApp (EApp (EApp (EVar "rngCmpW") (EVar "prog")) (EVar "occ")) (EApp (EVar "rngBound") (EVar "hi"))) (EIf (EVar "incl") (ELit (LString "i64.gt_s")) (ELit (LString "i64.ge_s")))) (EVar "clLabel"))) (EListLit) (EVar "env"))) (clause ((PVar "other") (PVar "_occ") (PVar "_env")) (EApp (EApp (EVar "gapL3P") (EVar "prog")) (EBinOp "++" (ELit (LString "ref-mode: unsupported clause parameter pattern ")) (EApp (EVar "ptag") (EVar "other"))))))) (EApp (EApp (EApp (EVar "go") (EVar "pat0")) (EVar "occ0")) (EVar "env0"))))
 (DTypeSig false "rngCmpW" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "rngCmpW" ((PVar "prog") (PVar "occ") (PVar "bound") (PVar "cmp") (PVar "clLabel")) (EBinOp "++" (EVar "occ") (EListLit (EApp (EVar "unboxIntW") (EVar "prog")) (EBinOp "++" (ELit (LString "i64.const ")) (EApp (EVar "intToString") (EVar "bound"))) (EVar "cmp") (EBinOp "++" (ELit (LString "br_if ")) (EVar "clLabel")))))
 (DTypeSig false "patTestBindList" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "Env") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")) (TyCon "Env"))))))))
-(DFunDef false "patTestBindList" ((PVar "prog") (PList) (PVar "occ") (PVar "clLabel") (PVar "env")) (ETuple (EBinOp "++" (EApp (EApp (EApp (EVar "discrimReadOf") (EVar "prog")) (EVar "occ")) (ELit (LString "List"))) (EListLit (ELit (LString "i32.const 1")) (ELit (LString "i32.ne")) (EBinOp "++" (ELit (LString "br_if ")) (EVar "clLabel")))) (EListLit) (EVar "env")))
-(DFunDef false "patTestBindList" ((PVar "prog") (PCons (PVar "p") (PVar "ps")) (PVar "occ") (PVar "clLabel") (PVar "env")) (EBlock (DoLet false false (PVar "consTest") (EBinOp "++" (EApp (EApp (EApp (EVar "discrimReadOf") (EVar "prog")) (EVar "occ")) (ELit (LString "List"))) (EListLit (ELit (LString "i32.const 0")) (ELit (LString "i32.ne")) (EBinOp "++" (ELit (LString "br_if ")) (EVar "clLabel"))))) (DoLet false false (PVar "hSnip") (EBinOp "++" (EVar "occ") (EListLit (ELit (LString "ref.cast (ref $C_Cons)")) (ELit (LString "struct.get $C_Cons 1"))))) (DoLet false false (PVar "tSnip") (EBinOp "++" (EVar "occ") (EListLit (ELit (LString "ref.cast (ref $C_Cons)")) (ELit (LString "struct.get $C_Cons 2"))))) (DoLet false false (PTuple (PVar "ht") (PVar "hb") (PVar "env2")) (EApp (EApp (EApp (EApp (EApp (EVar "patTestBind") (EVar "prog")) (EVar "p")) (EVar "hSnip")) (EVar "clLabel")) (EVar "env"))) (DoLet false false (PTuple (PVar "tt") (PVar "tb") (PVar "env3")) (EApp (EApp (EApp (EApp (EApp (EVar "patTestBindList") (EVar "prog")) (EVar "ps")) (EVar "tSnip")) (EVar "clLabel")) (EVar "env2"))) (DoExpr (ETuple (EBinOp "++" (EBinOp "++" (EVar "consTest") (EVar "ht")) (EVar "tt")) (EBinOp "++" (EVar "hb") (EVar "tb")) (EVar "env3")))))
+(DFunDef false "patTestBindList" ((PVar "prog") (PVar "ps0") (PVar "occ0") (PVar "clLabel") (PVar "env0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "occ") (PVar "env")) (ETuple (EBinOp "++" (EApp (EApp (EApp (EVar "discrimReadOf") (EVar "prog")) (EVar "occ")) (ELit (LString "List"))) (EListLit (ELit (LString "i32.const 1")) (ELit (LString "i32.ne")) (EBinOp "++" (ELit (LString "br_if ")) (EVar "clLabel")))) (EListLit) (EVar "env"))) (clause ((PCons (PVar "p") (PVar "ps")) (PVar "occ") (PVar "env")) (EBlock (DoLet false false (PVar "consTest") (EBinOp "++" (EApp (EApp (EApp (EVar "discrimReadOf") (EVar "prog")) (EVar "occ")) (ELit (LString "List"))) (EListLit (ELit (LString "i32.const 0")) (ELit (LString "i32.ne")) (EBinOp "++" (ELit (LString "br_if ")) (EVar "clLabel"))))) (DoLet false false (PVar "hSnip") (EBinOp "++" (EVar "occ") (EListLit (ELit (LString "ref.cast (ref $C_Cons)")) (ELit (LString "struct.get $C_Cons 1"))))) (DoLet false false (PVar "tSnip") (EBinOp "++" (EVar "occ") (EListLit (ELit (LString "ref.cast (ref $C_Cons)")) (ELit (LString "struct.get $C_Cons 2"))))) (DoLet false false (PTuple (PVar "ht") (PVar "hb") (PVar "env2")) (EApp (EApp (EApp (EApp (EApp (EVar "patTestBind") (EVar "prog")) (EVar "p")) (EVar "hSnip")) (EVar "clLabel")) (EVar "env"))) (DoLet false false (PTuple (PVar "tt") (PVar "tb") (PVar "env3")) (EApp (EApp (EApp (EVar "go") (EVar "ps")) (EVar "tSnip")) (EVar "env2"))) (DoExpr (ETuple (EBinOp "++" (EBinOp "++" (EVar "consTest") (EVar "ht")) (EVar "tt")) (EBinOp "++" (EVar "hb") (EVar "tb")) (EVar "env3"))))))) (EApp (EApp (EApp (EVar "go") (EVar "ps0")) (EVar "occ0")) (EVar "env0"))))
 (DTypeSig false "patTestBindTuple" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")) (TyCon "Env"))))))))))
-(DFunDef false "patTestBindTuple" (PWild PWild (PList) PWild PWild (PVar "env") PWild) (ETuple (EListLit) (EListLit) (EVar "env")))
-(DFunDef false "patTestBindTuple" ((PVar "prog") (PVar "tc") (PCons (PVar "p") (PVar "rest")) (PVar "occ") (PVar "clLabel") (PVar "env") (PVar "i")) (EBlock (DoLet false false (PVar "fieldSnip") (EBinOp "++" (EVar "occ") (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "ref.cast (ref $")) (EApp (EApp (EVar "typeNameW") (EVar "prog")) (EApp (EVar "ctorStructName") (EVar "tc")))) (ELit (LString ")"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "struct.get $")) (EApp (EVar "$core.display") (EApp (EApp (EVar "typeNameW") (EVar "prog")) (EApp (EVar "ctorStructName") (EVar "tc"))))) (ELit (LString " "))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EBinOp "+" (EVar "i") (ELit (LInt 1)))))) (ELit (LString "")))))) (DoLet false false (PTuple (PVar "ft") (PVar "fb") (PVar "env2")) (EApp (EApp (EApp (EApp (EApp (EVar "patTestBind") (EVar "prog")) (EVar "p")) (EVar "fieldSnip")) (EVar "clLabel")) (EVar "env"))) (DoLet false false (PTuple (PVar "rt") (PVar "rb") (PVar "env3")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "patTestBindTuple") (EVar "prog")) (EVar "tc")) (EVar "rest")) (EVar "occ")) (EVar "clLabel")) (EVar "env2")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (DoExpr (ETuple (EBinOp "++" (EVar "ft") (EVar "rt")) (EBinOp "++" (EVar "fb") (EVar "rb")) (EVar "env3")))))
+(DFunDef false "patTestBindTuple" ((PVar "prog") (PVar "tc") (PVar "xs0") (PVar "occ") (PVar "clLabel") (PVar "env0") (PVar "i0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "env") PWild) (ETuple (EListLit) (EListLit) (EVar "env"))) (clause ((PCons (PVar "p") (PVar "rest")) (PVar "env") (PVar "i")) (EBlock (DoLet false false (PVar "fieldSnip") (EBinOp "++" (EVar "occ") (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "ref.cast (ref $")) (EApp (EApp (EVar "typeNameW") (EVar "prog")) (EApp (EVar "ctorStructName") (EVar "tc")))) (ELit (LString ")"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "struct.get $")) (EApp (EVar "$core.display") (EApp (EApp (EVar "typeNameW") (EVar "prog")) (EApp (EVar "ctorStructName") (EVar "tc"))))) (ELit (LString " "))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EBinOp "+" (EVar "i") (ELit (LInt 1)))))) (ELit (LString "")))))) (DoLet false false (PTuple (PVar "ft") (PVar "fb") (PVar "env2")) (EApp (EApp (EApp (EApp (EApp (EVar "patTestBind") (EVar "prog")) (EVar "p")) (EVar "fieldSnip")) (EVar "clLabel")) (EVar "env"))) (DoLet false false (PTuple (PVar "rt") (PVar "rb") (PVar "env3")) (EApp (EApp (EApp (EVar "go") (EVar "rest")) (EVar "env2")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (DoExpr (ETuple (EBinOp "++" (EVar "ft") (EVar "rt")) (EBinOp "++" (EVar "fb") (EVar "rb")) (EVar "env3"))))))) (EApp (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "env0")) (EVar "i0"))))
 (DTypeSig false "patTestBindCon" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")) (TyCon "Env"))))))))))
-(DFunDef false "patTestBindCon" (PWild PWild (PList) PWild PWild (PVar "env") PWild) (ETuple (EListLit) (EListLit) (EVar "env")))
-(DFunDef false "patTestBindCon" ((PVar "prog") (PVar "c") (PCons (PVar "p") (PVar "rest")) (PVar "occ") (PVar "clLabel") (PVar "env") (PVar "i")) (EBlock (DoLet false false (PVar "fieldSnip") (EBinOp "++" (EVar "occ") (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "ref.cast (ref $")) (EApp (EApp (EVar "typeNameW") (EVar "prog")) (EApp (EVar "ctorStructName") (EVar "c")))) (ELit (LString ")"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "struct.get $")) (EApp (EVar "$core.display") (EApp (EApp (EVar "typeNameW") (EVar "prog")) (EApp (EVar "ctorStructName") (EVar "c"))))) (ELit (LString " "))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EBinOp "+" (EVar "i") (ELit (LInt 1)))))) (ELit (LString "")))))) (DoLet false false (PTuple (PVar "ft") (PVar "fb") (PVar "env2")) (EApp (EApp (EApp (EApp (EApp (EVar "patTestBind") (EVar "prog")) (EVar "p")) (EVar "fieldSnip")) (EVar "clLabel")) (EVar "env"))) (DoLet false false (PTuple (PVar "rt") (PVar "rb") (PVar "env3")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "patTestBindCon") (EVar "prog")) (EVar "c")) (EVar "rest")) (EVar "occ")) (EVar "clLabel")) (EVar "env2")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (DoExpr (ETuple (EBinOp "++" (EVar "ft") (EVar "rt")) (EBinOp "++" (EVar "fb") (EVar "rb")) (EVar "env3")))))
+(DFunDef false "patTestBindCon" ((PVar "prog") (PVar "c") (PVar "xs0") (PVar "occ") (PVar "clLabel") (PVar "env0") (PVar "i0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "env") PWild) (ETuple (EListLit) (EListLit) (EVar "env"))) (clause ((PCons (PVar "p") (PVar "rest")) (PVar "env") (PVar "i")) (EBlock (DoLet false false (PVar "fieldSnip") (EBinOp "++" (EVar "occ") (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "ref.cast (ref $")) (EApp (EApp (EVar "typeNameW") (EVar "prog")) (EApp (EVar "ctorStructName") (EVar "c")))) (ELit (LString ")"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "struct.get $")) (EApp (EVar "$core.display") (EApp (EApp (EVar "typeNameW") (EVar "prog")) (EApp (EVar "ctorStructName") (EVar "c"))))) (ELit (LString " "))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EBinOp "+" (EVar "i") (ELit (LInt 1)))))) (ELit (LString "")))))) (DoLet false false (PTuple (PVar "ft") (PVar "fb") (PVar "env2")) (EApp (EApp (EApp (EApp (EApp (EVar "patTestBind") (EVar "prog")) (EVar "p")) (EVar "fieldSnip")) (EVar "clLabel")) (EVar "env"))) (DoLet false false (PTuple (PVar "rt") (PVar "rb") (PVar "env3")) (EApp (EApp (EApp (EVar "go") (EVar "rest")) (EVar "env2")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (DoExpr (ETuple (EBinOp "++" (EVar "ft") (EVar "rt")) (EBinOp "++" (EVar "fb") (EVar "rb")) (EVar "env3"))))))) (EApp (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "env0")) (EVar "i0"))))
 (DTypeSig false "clauseLocals" (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "clauseLocals" ((PVar "clauses")) (EApp (EApp (EDictApp "flatMap") (EVar "oneClauseLocals")) (EVar "clauses")))
 (DTypeSig false "oneClauseLocals" (TyFun (TyCon "CClause") (TyApp (TyCon "List") (TyCon "String"))))
@@ -13808,13 +13490,7 @@ hasFamilyW prog symbol tag =
 (DFunDef false "takeRoutesW" (PWild (PList)) (EListLit))
 (DFunDef false "takeRoutesW" ((PVar "n") (PCons (PVar "r") (PVar "rest"))) (EBinOp "::" (EVar "r") (EApp (EApp (EVar "takeRoutesW") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "rest"))))
 (DTypeSig false "routeWitness" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "Route") (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "routeWitness" ((PVar "prog") (PVar "env") (PVar "d") (PAs "route" (PCon "RKey" (PVar "tag") (PVar "reqs") (PVar "sups")))) (EMatch (EApp (EApp (EVar "closedDictW") (EVar "prog")) (EVar "route")) (arm (PCon "Some" (PVar "initBody")) () (EApp (EApp (EVar "wConstDict") (EVar "prog")) (EVar "initBody"))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "fieldWitnesses") (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "routeWitness") (EVar "prog")) (EVar "env")) (EVar "d"))) (EBinOp "++" (EVar "sups") (EVar "reqs")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (ELit (LString "i32.const ")) (EApp (EVar "intToString") (EApp (EVar "dictTag") (EVar "tag"))))) (EVar "fieldWitnesses")) (EListLit (EBinOp "++" (ELit (LString "array.new_fixed $dictarr ")) (EApp (EVar "intToString") (EBinOp "+" (EApp (EVar "listLen") (EVar "sups")) (EApp (EVar "listLen") (EVar "reqs"))))))) (EApp (EApp (EVar "slotArraysW") (EVar "prog")) (EVar "tag"))) (EListLit (ELit (LString "struct.new $dict")))))))))
-(DFunDef false "routeWitness" ((PVar "prog") (PVar "env") (PVar "d") (PCon "RProj" (PVar "r") (PVar "path"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "routeWitness") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "r")) (EApp (EApp (EDictApp "flatMap") (EVar "superFieldW")) (EVar "path"))))
-(DFunDef false "routeWitness" ((PVar "prog") (PVar "env") PWild (PCon "RDict" (PVar "dpar"))) (EIf (EApp (EApp (EVar "envHas") (EVar "dpar")) (EVar "env")) (EListLit (EBinOp "++" (ELit (LString "local.get $")) (EApp (EVar "gname") (EVar "dpar")))) (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "wasm W5: forwarded dict '")) (EVar "dpar")) (ELit (LString "' not in scope"))))))
-(DFunDef false "routeWitness" ((PVar "prog") (PVar "env") PWild (PCon "RDictFwd" (PVar "dpar"))) (EIf (EApp (EApp (EVar "envHas") (EVar "dpar")) (EVar "env")) (EListLit (EBinOp "++" (ELit (LString "local.get $")) (EApp (EVar "gname") (EVar "dpar")))) (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "wasm W5: forwarded dict '")) (EVar "dpar")) (ELit (LString "' not in scope"))))))
-(DFunDef false "routeWitness" (PWild PWild PWild (PCon "RNone")) (EListLit (ELit (LString "i32.const 0")) (ELit (LString "ref.i31"))))
-(DFunDef false "routeWitness" (PWild PWild PWild (PCon "RLocal" PWild PWild)) (EListLit (ELit (LString "i32.const 0")) (ELit (LString "ref.i31"))))
-(DFunDef false "routeWitness" (PWild PWild PWild (PCon "RScalar" PWild)) (EListLit (ELit (LString "i32.const 0")) (ELit (LString "ref.i31"))))
+(DFunDef false "routeWitness" ((PVar "prog") (PVar "env") (PVar "d") (PVar "route0")) (ELetGroup ((lgb "go" (clause ((PAs "route" (PCon "RKey" (PVar "tag") (PVar "reqs") (PVar "sups")))) (EMatch (EApp (EApp (EVar "closedDictW") (EVar "prog")) (EVar "route")) (arm (PCon "Some" (PVar "initBody")) () (EApp (EApp (EVar "wConstDict") (EVar "prog")) (EVar "initBody"))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "fieldWitnesses") (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "routeWitness") (EVar "prog")) (EVar "env")) (EVar "d"))) (EBinOp "++" (EVar "sups") (EVar "reqs")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (ELit (LString "i32.const ")) (EApp (EVar "intToString") (EApp (EVar "dictTag") (EVar "tag"))))) (EVar "fieldWitnesses")) (EListLit (EBinOp "++" (ELit (LString "array.new_fixed $dictarr ")) (EApp (EVar "intToString") (EBinOp "+" (EApp (EVar "listLen") (EVar "sups")) (EApp (EVar "listLen") (EVar "reqs"))))))) (EApp (EApp (EVar "slotArraysW") (EVar "prog")) (EVar "tag"))) (EListLit (ELit (LString "struct.new $dict"))))))))) (clause ((PCon "RProj" (PVar "r") (PVar "path"))) (EBinOp "++" (EApp (EVar "go") (EVar "r")) (EApp (EApp (EDictApp "flatMap") (EVar "superFieldW")) (EVar "path")))) (clause ((PCon "RDict" (PVar "dpar"))) (EIf (EApp (EApp (EVar "envHas") (EVar "dpar")) (EVar "env")) (EListLit (EBinOp "++" (ELit (LString "local.get $")) (EApp (EVar "gname") (EVar "dpar")))) (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "wasm W5: forwarded dict '")) (EVar "dpar")) (ELit (LString "' not in scope")))))) (clause ((PCon "RDictFwd" (PVar "dpar"))) (EIf (EApp (EApp (EVar "envHas") (EVar "dpar")) (EVar "env")) (EListLit (EBinOp "++" (ELit (LString "local.get $")) (EApp (EVar "gname") (EVar "dpar")))) (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "wasm W5: forwarded dict '")) (EVar "dpar")) (ELit (LString "' not in scope")))))) (clause ((PCon "RNone")) (EListLit (ELit (LString "i32.const 0")) (ELit (LString "ref.i31")))) (clause ((PCon "RLocal" PWild PWild)) (EListLit (ELit (LString "i32.const 0")) (ELit (LString "ref.i31")))) (clause ((PCon "RScalar" PWild)) (EListLit (ELit (LString "i32.const 0")) (ELit (LString "ref.i31")))))) (EApp (EVar "go") (EVar "route0"))))
 (DTypeSig false "superFieldW" (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "superFieldW" ((PVar "i")) (EListLit (ELit (LString "ref.cast (ref $dict)")) (ELit (LString "struct.get $dict 1")) (EBinOp "++" (ELit (LString "i32.const ")) (EApp (EVar "intToString") (EVar "i"))) (ELit (LString "array.get $dictarr")) (ELit (LString "ref.as_non_null"))))
 (DTypeSig false "slotArraysW" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
@@ -13822,11 +13498,11 @@ hasFamilyW prog symbol tag =
 (DTypeSig false "instanceFillsW" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "MethodSlot") (TyApp (TyCon "List") (TyCon "SlotCallee")))))))
 (DFunDef false "instanceFillsW" ((PVar "prog") (PVar "key")) (EBlock (DoLet false false (PVar "tables") (EFieldAccess (EFieldAccess (EApp (EVar "progIndex") (EVar "prog")) "fnImpl") "methodTables")) (DoLet false false (PVar "slots") (EApp (EApp (EVar "interfaceSlots") (EVar "tables")) (EApp (EVar "ifaceWordOfKey") (EVar "key")))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "key")) (EFieldAccess (EVar "tables") "instances")) (arm (PCon "Some" (PVar "table")) () (EApp (EApp (EVar "zip") (EVar "slots")) (EFieldAccess (EVar "table") "fills"))) (arm (PCon "None") () (EApp (EApp (EMethodRef "map") (ELam ((PVar "slot")) (ETuple (EVar "slot") (EListLit)))) (EVar "slots")))))))
 (DTypeSig false "closedDictW" (TyFun (TyCon "Prog") (TyFun (TyCon "Route") (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "closedDictW" ((PVar "prog") (PCon "RKey" (PVar "tag") (PVar "reqs") (PVar "sups"))) (EMatch (EApp (EVar "allSomeW") (EApp (EApp (EMethodRef "map") (EApp (EVar "closedDictW") (EVar "prog"))) (EBinOp "++" (EVar "sups") (EVar "reqs")))) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "fields")) () (EBlock (DoLet false false (PVar "fills") (EApp (EApp (EVar "instanceFillsW") (EVar "prog")) (EVar "tag"))) (DoLet false false (PVar "functions") (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "slotFunctionW") (EVar "prog")) (EVar "tag"))) (EVar "fills"))) (DoLet false false (PVar "closures") (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "slotClosureW") (EVar "prog")) (EVar "tag"))) (EVar "fills"))) (DoLet false false (PVar "tag32") (EApp (EVar "intToString") (EApp (EVar "dictTag") (EVar "tag")))) (DoLet false false (PVar "slotText") (EApp (EApp (EVar "constArrayW") (ELit (LString "$slotarr"))) (EApp (EApp (EMethodRef "map") (EVar "foldedW")) (EVar "functions")))) (DoLet false false (PVar "closureText") (EApp (EApp (EVar "constArrayW") (ELit (LString "$dictarr"))) (EApp (EApp (EMethodRef "map") (EVar "foldedW")) (EVar "closures")))) (DoExpr (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(struct.new $dict (i32.const ")) (EApp (EVar "$core.display") (EVar "tag32"))) (ELit (LString ") "))) (EApp (EVar "$core.display") (EApp (EApp (EVar "constArrayW") (ELit (LString "$dictarr"))) (EVar "fields")))) (ELit (LString " "))) (EApp (EVar "$core.display") (EVar "slotText"))) (ELit (LString " "))) (EApp (EVar "$core.display") (EVar "closureText"))) (ELit (LString ")")))))))))
+(DFunDef false "closedDictW" ((PVar "prog") (PCon "RKey" (PVar "tag") (PVar "reqs") (PVar "sups"))) (EApp (EApp (EVar "$core.andThen") (EApp (EVar "allSomeW") (EApp (EApp (EMethodRef "map") (EApp (EVar "closedDictW") (EVar "prog"))) (EBinOp "++" (EVar "sups") (EVar "reqs"))))) (ELam ((PVar "fields")) (ELet false (PVar "fills") (EApp (EApp (EVar "instanceFillsW") (EVar "prog")) (EVar "tag")) (ELet false (PVar "functions") (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "slotFunctionW") (EVar "prog")) (EVar "tag"))) (EVar "fills")) (ELet false (PVar "closures") (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "slotClosureW") (EVar "prog")) (EVar "tag"))) (EVar "fills")) (ELet false (PVar "tag32") (EApp (EVar "intToString") (EApp (EVar "dictTag") (EVar "tag"))) (ELet false (PVar "slotText") (EApp (EApp (EVar "constArrayW") (ELit (LString "$slotarr"))) (EApp (EApp (EMethodRef "map") (EVar "foldedW")) (EVar "functions"))) (ELet false (PVar "closureText") (EApp (EApp (EVar "constArrayW") (ELit (LString "$dictarr"))) (EApp (EApp (EMethodRef "map") (EVar "foldedW")) (EVar "closures"))) (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(struct.new $dict (i32.const ")) (EApp (EVar "$core.display") (EVar "tag32"))) (ELit (LString ") "))) (EApp (EVar "$core.display") (EApp (EApp (EVar "constArrayW") (ELit (LString "$dictarr"))) (EVar "fields")))) (ELit (LString " "))) (EApp (EVar "$core.display") (EVar "slotText"))) (ELit (LString " "))) (EApp (EVar "$core.display") (EVar "closureText"))) (ELit (LString ")")))))))))))))
 (DFunDef false "closedDictW" (PWild (PCon "RNone")) (EApp (EVar "Some") (ELit (LString "(ref.i31 (i32.const 0))"))))
 (DFunDef false "closedDictW" (PWild (PCon "RLocal" PWild PWild)) (EApp (EVar "Some") (ELit (LString "(ref.i31 (i32.const 0))"))))
 (DFunDef false "closedDictW" (PWild (PCon "RScalar" PWild)) (EApp (EVar "Some") (ELit (LString "(ref.i31 (i32.const 0))"))))
-(DFunDef false "closedDictW" (PWild PWild) (EVar "None"))
+(DFunDef false "closedDictW" (PWild (POr (PCon "RDict" PWild) (PCon "RDictFwd" PWild) (PCon "RProj" PWild PWild))) (EVar "None"))
 (DTypeSig false "constArrayW" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
 (DFunDef false "constArrayW" ((PVar "ty") (PVar "elements")) (EBlock (DoLet false false (PVar "elementText") (EApp (EApp (EVar "joinWith") (ELit (LString ""))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "++" (ELit (LString " ")) (EVar "_s")))) (EVar "elements")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(array.new_fixed ")) (EApp (EVar "$core.display") (EVar "ty"))) (ELit (LString " "))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "elements"))))) (ELit (LString ""))) (EApp (EVar "$core.display") (EVar "elementText"))) (ELit (LString ")"))))))
 (DTypeSig false "foldedW" (TyFun (TyCon "String") (TyCon "String")))
@@ -13918,38 +13594,15 @@ hasFamilyW prog symbol tag =
 (DTypeSig false "groupEntryW" (TyFun (TyCon "Prog") (TyFun (TyCon "ImplG") (TyApp (TyCon "Option") (TyCon "CImplEntry")))))
 (DFunDef false "groupEntryW" ((PVar "prog") (PCon "ImplG" (PVar "method") PWild PWild PWild PWild (PVar "fnName"))) (EApp (EApp (EDictApp "find") (ELam ((PVar "ent")) (EBinOp "==" (EApp (EApp (EVar "implEntrySymW") (EVar "method")) (EVar "ent")) (EVar "fnName")))) (EApp (EApp (EVar "methodEntriesW") (EVar "prog")) (EVar "method"))))
 (DTypeSig false "implForWSite" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "CImplEntry"))))))))
-(DFunDef false "implForWSite" ((PVar "prog") (PVar "method") (PVar "iface") (PVar "tag") (PVar "siteArity")) (EApp (EApp (EApp (EApp (EApp (EVar "findByKeyArityW") (EVar "prog")) (EVar "method")) (EVar "tag")) (EVar "siteArity")) (EApp (EApp (EVar "narrowByIfaceW") (EVar "iface")) (EApp (EApp (EVar "methodEntriesW") (EVar "prog")) (EVar "method")))))
-(DTypeSig false "findByKeyArityW" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyApp (TyCon "Option") (TyCon "CImplEntry"))))))))
-(DFunDef false "findByKeyArityW" (PWild PWild PWild PWild (PList)) (EVar "None"))
-(DFunDef false "findByKeyArityW" ((PVar "prog") (PVar "method") (PVar "tag") (PVar "siteArity") (PCons (PVar "entry") (PVar "rest"))) (EIf (EBinOp "&&" (EApp (EApp (EVar "implEntryAnswersW") (EVar "tag")) (EVar "entry")) (EBinOp "==" (EApp (EVar "implEntryDeclaredArity") (EVar "entry")) (EVar "siteArity"))) (EApp (EVar "Some") (EVar "entry")) (EApp (EApp (EApp (EApp (EApp (EVar "findByKeyArityW") (EVar "prog")) (EVar "method")) (EVar "tag")) (EVar "siteArity")) (EVar "rest"))))
+(DFunDef false "implForWSite" ((PVar "prog") (PVar "method") (PVar "iface") (PVar "tag") (PVar "siteArity")) (EApp (EApp (EApp (EVar "findByKeyArityW") (EVar "tag")) (EVar "siteArity")) (EApp (EApp (EVar "narrowByIfaceW") (EVar "iface")) (EApp (EApp (EVar "methodEntriesW") (EVar "prog")) (EVar "method")))))
+(DTypeSig false "findByKeyArityW" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyApp (TyCon "Option") (TyCon "CImplEntry"))))))
+(DFunDef false "findByKeyArityW" ((PVar "tag") (PVar "siteArity") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EVar "None")) (clause ((PCons (PVar "entry") (PVar "rest"))) (EIf (EBinOp "&&" (EApp (EApp (EVar "implEntryAnswersW") (EVar "tag")) (EVar "entry")) (EBinOp "==" (EApp (EVar "implEntryDeclaredArity") (EVar "entry")) (EVar "siteArity"))) (EApp (EVar "Some") (EVar "entry")) (EApp (EVar "go") (EVar "rest")))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "emitRefExpr" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "emitRefExpr" ((PVar "prog") (PVar "env") (PVar "d") (PVar "expr")) (EApp (EVar "valueLines") (EApp (EApp (EApp (EApp (EVar "emitValueW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "expr"))))
 (DTypeSig false "refOnlyValueW" (TyFun (TyCon "Prog") (TyFun (TyCon "CExpr") (TyFun (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyCon "String"))) (TyCon "WasmValue")))))
 (DFunDef false "refOnlyValueW" ((PVar "prog") (PVar "expr") (PVar "body")) (EIf (EApp (EVar "rawProgramW") (EVar "prog")) (EApp (EApp (EVar "programValueW") (EVar "prog")) (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (ELit (LString "scalar-mode: unsupported Core IR node ")) (EApp (EVar "ctag") (EVar "expr"))))) (EApp (EApp (EVar "WasmValue") (EVar "WBoxEq")) (EApp (EVar "body") (ELit LUnit)))))
 (DTypeSig false "emitValueW" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "CExpr") (TyCon "WasmValue"))))))
-(DFunDef false "emitValueW" ((PVar "prog") (PVar "_env") (PVar "_d") (PCon "CLit" (PVar "l"))) (EIf (EApp (EVar "rawProgramW") (EVar "prog")) (EBlock (DoLet false false (PTuple (PVar "lines") (PVar "ty")) (EApp (EApp (EVar "emitLitI32") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "l"))) (DoExpr (EApp (EApp (EVar "WasmValue") (EApp (EVar "rawReprW") (EVar "ty"))) (EVar "lines")))) (EApp (EApp (EVar "WasmValue") (EVar "WBoxEq")) (EApp (EApp (EVar "emitLitRef") (EVar "prog")) (EVar "l")))))
-(DFunDef false "emitValueW" ((PVar "prog") (PVar "env") (PVar "d") (PCon "CVar" (PVar "x") PWild)) (EApp (EApp (EVar "programValueW") (EVar "prog")) (EApp (EApp (EApp (EApp (EVar "emitVarRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "x"))))
-(DFunDef false "emitValueW" ((PVar "prog") (PVar "env") (PVar "d") (PCon "CBinPrim" (PVar "op") (PVar "l") (PVar "r") (PVar "tag") (PVar "loc"))) (EBlock (DoLet false false (PVar "code") (EIf (EApp (EVar "rawProgramW") (EVar "prog")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitIntBinRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "op")) (EVar "l")) (EVar "r")) (EVar "tag")) (EApp (EApp (EVar "sitePackedW") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "loc"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitBinRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "op")) (EVar "l")) (EVar "r")) (EVar "tag")) (EApp (EApp (EVar "sitePackedW") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "loc"))))) (DoExpr (EApp (EApp (EVar "WasmValue") (EIf (EApp (EVar "rawProgramW") (EVar "prog")) (EApp (EVar "rawReprW") (EApp (EVar "binOpTy") (EVar "op"))) (EVar "WBoxEq"))) (EVar "code")))))
-(DFunDef false "emitValueW" ((PVar "prog") (PVar "env") (PVar "d") (PCon "CUnOp" (PVar "op") (PVar "x"))) (EApp (EApp (EVar "programValueW") (EVar "prog")) (EApp (EApp (EApp (EApp (EApp (EVar "emitUnRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "op")) (EVar "x"))))
-(DFunDef false "emitValueW" ((PVar "prog") (PVar "env") (PVar "d") (PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EBlock (DoLet false false (PVar "ci") (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "c")) (EApp (EVar "conditionW") (EVar "prog")))) (DoLet false false (PVar "tv") (EApp (EApp (EApp (EApp (EVar "emitValueW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "t"))) (DoLet false false (PVar "fv") (EApp (EApp (EApp (EApp (EVar "emitValueW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "f"))) (DoExpr (EApp (EApp (EVar "WasmValue") (EApp (EVar "valueRepr") (EVar "tv"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "ci") (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "if (result ")) (EApp (EVar "physicalType") (EApp (EVar "programReprW") (EVar "prog")))) (ELit (LString ")"))))) (EApp (EVar "indent") (EApp (EVar "valueLines") (EVar "tv")))) (EListLit (ELit (LString "else")))) (EApp (EVar "indent") (EApp (EVar "valueLines") (EVar "fv")))) (EListLit (ELit (LString "end"))))))))
-(DFunDef false "emitValueW" ((PVar "prog") (PVar "env") (PVar "d") (PCon "CLet" (PVar "recF") (PVar "pat") (PVar "e1") (PVar "e2"))) (EBlock (DoLet false false (PTuple (PVar "prefix") (PVar "env2")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitLetBindingW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "recF")) (EVar "pat")) (EVar "e1"))) (DoExpr (EApp (EApp (EVar "prependValueW") (EVar "prefix")) (EApp (EApp (EApp (EApp (EVar "emitValueW") (EVar "prog")) (EVar "env2")) (EVar "d")) (EVar "e2"))))))
-(DFunDef false "emitValueW" ((PVar "prog") (PVar "env") (PVar "d") (PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EApp (EApp (EVar "CLetGroup") (EVar "binds")) (EVar "body"))) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitLetGroupWith") (EVar "prog")) (EVar "env")) (EVar "d")) (ELam ((PVar "env2") (PVar "b")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env2")) (EVar "d")) (EVar "b")))) (EVar "binds")) (EVar "body")))))
-(DFunDef false "emitValueW" ((PVar "prog") (PVar "env") (PVar "d") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EApp (EApp (EVar "emitBlockRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "stmts")))
-(DFunDef false "emitValueW" ((PVar "prog") (PVar "env") (PVar "d") (PAs "app" (PCon "CApp" PWild PWild PWild))) (EApp (EApp (EVar "programValueW") (EVar "prog")) (EApp (EApp (EApp (EApp (EVar "emitAppRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "app"))))
-(DFunDef false "emitValueW" ((PVar "prog") (PVar "env") (PVar "d") (PAs "node" (PCon "CDecision" (PVar "scrut") (PVar "arms") (PVar "tree")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitDecisionRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "scrut")) (EVar "arms")) (EVar "tree")))))
-(DFunDef false "emitValueW" ((PVar "prog") (PVar "env") (PVar "d") (PAs "node" (PCon "CLam" (PVar "pats") (PVar "body")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EApp (EVar "emitClosure") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "pats")) (EVar "body")))))
-(DFunDef false "emitValueW" ((PVar "prog") (PVar "env") (PVar "d") (PAs "node" (PCon "CMethod" (PVar "name") (PCon "MethodEvidence" (PVar "iface") (PVar "arity") (PVar "route") (PVar "implRoutes") (PVar "methRoutes"))))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitMethodValueRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "name")) (EVar "iface")) (EVar "arity")) (EVar "route")) (EVar "implRoutes")) (EVar "methRoutes")))))
-(DFunDef false "emitValueW" ((PVar "prog") (PVar "env") (PVar "d") (PAs "node" (PCon "CDict" (PVar "name") (PVar "routes")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EApp (EVar "emitDictValueRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "name")) (EVar "routes")))))
-(DFunDef false "emitValueW" ((PVar "prog") (PVar "env") (PVar "d") (PAs "node" (PCon "CTuple" (PVar "es")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EVar "emitTupleRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "es")))))
-(DFunDef false "emitValueW" ((PVar "prog") (PVar "env") (PVar "d") (PAs "node" (PCon "CList" (PVar "es")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EVar "emitListRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "es")))))
-(DFunDef false "emitValueW" ((PVar "prog") (PVar "env") (PVar "d") (PAs "node" (PCon "CRangeList" (PVar "lo") (PVar "hi") (PVar "incl")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRangeListRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "lo")) (EVar "hi")) (EVar "incl")))))
-(DFunDef false "emitValueW" ((PVar "prog") (PVar "env") (PVar "d") (PAs "node" (PCon "CArray" (PVar "es")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EVar "emitArrayCreateRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "es")))))
-(DFunDef false "emitValueW" ((PVar "prog") (PVar "env") (PVar "d") (PAs "node" (PCon "CRangeArray" (PVar "lo") (PVar "hi") (PVar "incl")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRangeArrayRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "lo")) (EVar "hi")) (EVar "incl")))))
-(DFunDef false "emitValueW" ((PVar "prog") (PVar "env") (PVar "d") (PAs "node" (PCon "CRecord" (PVar "name") (PVar "fields")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EApp (EVar "emitRecordRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "name")) (EVar "fields")))))
-(DFunDef false "emitValueW" ((PVar "prog") (PVar "env") (PVar "d") (PAs "node" (PCon "CFieldAccess" (PVar "ex") (PVar "label") (PVar "recName") (PVar "ord")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitFieldAccessRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "ex")) (EVar "label")) (EVar "recName")) (EVar "ord")))))
-(DFunDef false "emitValueW" ((PVar "prog") (PVar "env") (PVar "d") (PAs "node" (PCon "CRecordUpdate" (PVar "recName") (PVar "base") (PVar "fields")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRecordUpdateRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "recName")) (EVar "base")) (EVar "fields")))))
-(DFunDef false "emitValueW" ((PVar "prog") (PVar "env") (PVar "d") (PAs "node" (PCon "CVariantUpdate" (PVar "con") (PVar "base") (PVar "fields")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitVariantUpdateRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "con")) (EVar "base")) (EVar "fields")))))
-(DFunDef false "emitValueW" ((PVar "prog") (PVar "_env") (PVar "_d") (PVar "other")) (EApp (EApp (EVar "programValueW") (EVar "prog")) (EApp (EApp (EVar "gapLP") (EVar "prog")) (EIf (EApp (EVar "rawProgramW") (EVar "prog")) (EBinOp "++" (ELit (LString "scalar-mode: unsupported Core IR node ")) (EApp (EVar "ctag") (EVar "other"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "ref-mode: unsupported Core IR node ")) (EApp (EVar "$core.display") (EApp (EVar "ctag") (EVar "other")))) (ELit (LString " [in "))) (EApp (EVar "$core.display") (EApp (EVar "progBinding") (EVar "prog")))) (ELit (LString "]")))))))
+(DFunDef false "emitValueW" ((PVar "prog") (PVar "env0") (PVar "d") (PVar "app0")) (ELetGroup ((lgb "go" (clause ((PVar "_env") (PCon "CLit" (PVar "l"))) (EIf (EApp (EVar "rawProgramW") (EVar "prog")) (EBlock (DoLet false false (PTuple (PVar "lines") (PVar "ty")) (EApp (EApp (EVar "emitLitI32") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "l"))) (DoExpr (EApp (EApp (EVar "WasmValue") (EApp (EVar "rawReprW") (EVar "ty"))) (EVar "lines")))) (EApp (EApp (EVar "WasmValue") (EVar "WBoxEq")) (EApp (EApp (EVar "emitLitRef") (EVar "prog")) (EVar "l"))))) (clause ((PVar "env") (PCon "CVar" (PVar "x") PWild)) (EApp (EApp (EVar "programValueW") (EVar "prog")) (EApp (EApp (EApp (EApp (EVar "emitVarRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "x")))) (clause ((PVar "env") (PCon "CBinPrim" (PVar "op") (PVar "l") (PVar "r") (PVar "tag") (PVar "loc"))) (EBlock (DoLet false false (PVar "code") (EIf (EApp (EVar "rawProgramW") (EVar "prog")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitIntBinRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "op")) (EVar "l")) (EVar "r")) (EVar "tag")) (EApp (EApp (EVar "sitePackedW") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "loc"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitBinRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "op")) (EVar "l")) (EVar "r")) (EVar "tag")) (EApp (EApp (EVar "sitePackedW") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "loc"))))) (DoExpr (EApp (EApp (EVar "WasmValue") (EIf (EApp (EVar "rawProgramW") (EVar "prog")) (EApp (EVar "rawReprW") (EApp (EVar "binOpTy") (EVar "op"))) (EVar "WBoxEq"))) (EVar "code"))))) (clause ((PVar "env") (PCon "CUnOp" (PVar "op") (PVar "x"))) (EApp (EApp (EVar "programValueW") (EVar "prog")) (EApp (EApp (EApp (EApp (EApp (EVar "emitUnRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "op")) (EVar "x")))) (clause ((PVar "env") (PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EBlock (DoLet false false (PVar "ci") (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "c")) (EApp (EVar "conditionW") (EVar "prog")))) (DoLet false false (PVar "tv") (EApp (EApp (EVar "go") (EVar "env")) (EVar "t"))) (DoLet false false (PVar "fv") (EApp (EApp (EVar "go") (EVar "env")) (EVar "f"))) (DoExpr (EApp (EApp (EVar "WasmValue") (EApp (EVar "valueRepr") (EVar "tv"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "ci") (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "if (result ")) (EApp (EVar "physicalType") (EApp (EVar "programReprW") (EVar "prog")))) (ELit (LString ")"))))) (EApp (EVar "indent") (EApp (EVar "valueLines") (EVar "tv")))) (EListLit (ELit (LString "else")))) (EApp (EVar "indent") (EApp (EVar "valueLines") (EVar "fv")))) (EListLit (ELit (LString "end")))))))) (clause ((PVar "env") (PCon "CLet" (PVar "recF") (PVar "pat") (PVar "e1") (PVar "e2"))) (EBlock (DoLet false false (PTuple (PVar "prefix") (PVar "env2")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitLetBindingW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "recF")) (EVar "pat")) (EVar "e1"))) (DoExpr (EApp (EApp (EVar "prependValueW") (EVar "prefix")) (EApp (EApp (EVar "go") (EVar "env2")) (EVar "e2")))))) (clause ((PVar "env") (PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EApp (EApp (EVar "CLetGroup") (EVar "binds")) (EVar "body"))) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitLetGroupWith") (EVar "prog")) (EVar "env")) (EVar "d")) (ELam ((PVar "env2") (PVar "b")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env2")) (EVar "d")) (EVar "b")))) (EVar "binds")) (EVar "body"))))) (clause ((PVar "env") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EApp (EApp (EVar "emitBlockRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "stmts"))) (clause ((PVar "env") (PAs "app" (PCon "CApp" PWild PWild PWild))) (EApp (EApp (EVar "programValueW") (EVar "prog")) (EApp (EApp (EApp (EApp (EVar "emitAppRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "app")))) (clause ((PVar "env") (PAs "node" (PCon "CDecision" (PVar "scrut") (PVar "arms") (PVar "tree")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitDecisionRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "scrut")) (EVar "arms")) (EVar "tree"))))) (clause ((PVar "env") (PAs "node" (PCon "CLam" (PVar "pats") (PVar "body")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EApp (EVar "emitClosure") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "pats")) (EVar "body"))))) (clause ((PVar "env") (PAs "node" (PCon "CMethod" (PVar "name") (PCon "MethodEvidence" (PVar "iface") (PVar "arity") (PVar "route") (PVar "implRoutes") (PVar "methRoutes"))))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitMethodValueRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "name")) (EVar "iface")) (EVar "arity")) (EVar "route")) (EVar "implRoutes")) (EVar "methRoutes"))))) (clause ((PVar "env") (PAs "node" (PCon "CDict" (PVar "name") (PVar "routes")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EApp (EVar "emitDictValueRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "name")) (EVar "routes"))))) (clause ((PVar "env") (PAs "node" (PCon "CTuple" (PVar "es")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EVar "emitTupleRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "es"))))) (clause ((PVar "env") (PAs "node" (PCon "CList" (PVar "es")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EVar "emitListRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "es"))))) (clause ((PVar "env") (PAs "node" (PCon "CRangeList" (PVar "lo") (PVar "hi") (PVar "incl")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRangeListRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "lo")) (EVar "hi")) (EVar "incl"))))) (clause ((PVar "env") (PAs "node" (PCon "CArray" (PVar "es")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EVar "emitArrayCreateRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "es"))))) (clause ((PVar "env") (PAs "node" (PCon "CRangeArray" (PVar "lo") (PVar "hi") (PVar "incl")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRangeArrayRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "lo")) (EVar "hi")) (EVar "incl"))))) (clause ((PVar "env") (PAs "node" (PCon "CRecord" (PVar "name") (PVar "fields")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EApp (EVar "emitRecordRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "name")) (EVar "fields"))))) (clause ((PVar "env") (PAs "node" (PCon "CFieldAccess" (PVar "ex") (PVar "label") (PVar "recName") (PVar "ord")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitFieldAccessRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "ex")) (EVar "label")) (EVar "recName")) (EVar "ord"))))) (clause ((PVar "env") (PAs "node" (PCon "CRecordUpdate" (PVar "recName") (PVar "base") (PVar "fields")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRecordUpdateRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "recName")) (EVar "base")) (EVar "fields"))))) (clause ((PVar "env") (PAs "node" (PCon "CVariantUpdate" (PVar "con") (PVar "base") (PVar "fields")))) (EApp (EApp (EApp (EVar "refOnlyValueW") (EVar "prog")) (EVar "node")) (ELam ((PLit LUnit)) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitVariantUpdateRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "con")) (EVar "base")) (EVar "fields"))))) (clause ((PVar "_env") (PVar "other")) (EApp (EApp (EVar "programValueW") (EVar "prog")) (EApp (EApp (EVar "gapLP") (EVar "prog")) (EIf (EApp (EVar "rawProgramW") (EVar "prog")) (EBinOp "++" (ELit (LString "scalar-mode: unsupported Core IR node ")) (EApp (EVar "ctag") (EVar "other"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "ref-mode: unsupported Core IR node ")) (EApp (EVar "$core.display") (EApp (EVar "ctag") (EVar "other")))) (ELit (LString " [in "))) (EApp (EVar "$core.display") (EApp (EVar "progBinding") (EVar "prog")))) (ELit (LString "]"))))))))) (EApp (EApp (EVar "go") (EVar "env0")) (EVar "app0"))))
 (DTypeSig false "emitLitRef" (TyFun (TyCon "Prog") (TyFun (TyCon "Lit") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "emitLitRef" ((PVar "prog") (PCon "LInt" (PVar "n"))) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "n") (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1073741824)))) (EBinOp "<" (EVar "n") (ELit (LInt 1073741824)))) (EListLit (EBinOp "++" (ELit (LString "i32.const ")) (EApp (EVar "intToString") (EVar "n"))) (ELit (LString "ref.i31"))) (EListLit (EBinOp "++" (ELit (LString "i64.const ")) (EApp (EVar "intToString") (EVar "n"))) (EApp (EVar "boxIntW") (EVar "prog")))))
 (DFunDef false "emitLitRef" (PWild (PCon "LBool" (PVar "b"))) (EListLit (EIf (EVar "b") (ELit (LString "i32.const 1")) (ELit (LString "i32.const 0"))) (ELit (LString "ref.i31"))))
@@ -14126,12 +13779,7 @@ hasFamilyW prog symbol tag =
 (DFunDef false "emitLetBindingW" ((PVar "prog") (PVar "env") PWild (PCon "True") (PCon "PVar" (PVar "x") PWild (PVar "bid")) (PCon "CLam" (PVar "pats") (PVar "body"))) (EIf (EApp (EVar "rawProgramW") (EVar "prog")) (ETuple (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "scalar-mode: only non-recursive `let x = e` / `let _ = e`"))) (EVar "env")) (ETuple (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitSelfRecLocalBind") (EVar "prog")) (EVar "env")) (EVar "x")) (EVar "bid")) (EVar "pats")) (EVar "body")) (EApp (EApp (EApp (EVar "envBind") (EVar "x")) (EVar "bid")) (EVar "env")))))
 (DFunDef false "emitLetBindingW" ((PVar "prog") (PVar "env") PWild PWild PWild PWild) (ETuple (EApp (EApp (EVar "gapLP") (EVar "prog")) (EIf (EApp (EVar "rawProgramW") (EVar "prog")) (ELit (LString "scalar-mode: only non-recursive `let x = e` / `let _ = e`")) (ELit (LString "ref-mode: recursive non-function `let` binding (value knot)")))) (EVar "env")))
 (DTypeSig false "emitBlockRef" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyCon "WasmValue"))))))
-(DFunDef false "emitBlockRef" ((PVar "prog") (PVar "env") (PVar "d") (PList (PCon "CSExpr" (PVar "ex")))) (EApp (EApp (EApp (EApp (EVar "emitValueW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "ex")))
-(DFunDef false "emitBlockRef" ((PVar "prog") (PVar "env") (PVar "d") (PCons (PCon "CSExpr" (PVar "ex")) (PVar "rest"))) (EBlock (DoLet false false (PVar "prefix") (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "ex")) (EListLit (ELit (LString "drop"))))) (DoExpr (EApp (EApp (EVar "prependValueW") (EVar "prefix")) (EApp (EApp (EApp (EApp (EVar "emitBlockRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "rest"))))))
-(DFunDef false "emitBlockRef" ((PVar "prog") (PVar "env") (PVar "d") (PCons (PCon "CSLet" (PVar "recF") (PVar "pat") (PVar "ex")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "prefix") (PVar "env2")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitBlockBindingW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "recF")) (EVar "pat")) (EVar "ex"))) (DoExpr (EApp (EApp (EVar "prependValueW") (EVar "prefix")) (EApp (EApp (EApp (EApp (EVar "emitBlockRef") (EVar "prog")) (EVar "env2")) (EVar "d")) (EVar "rest"))))))
-(DFunDef false "emitBlockRef" ((PVar "prog") (PVar "env") (PVar "d") (PCons (PCon "CSAssign" (PVar "x") (PVar "ex")) (PVar "rest"))) (EBlock (DoLet false false (PVar "prefix") (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "ex")) (EListLit (EBinOp "++" (ELit (LString "local.set ")) (EApp (EApp (EApp (EVar "localTargetW") (EVar "prog")) (EVar "env")) (EVar "x")))))) (DoExpr (EApp (EApp (EVar "prependValueW") (EVar "prefix")) (EApp (EApp (EApp (EApp (EVar "emitBlockRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "rest"))))))
-(DFunDef false "emitBlockRef" ((PVar "prog") (PVar "env") (PVar "d") (PList)) (EApp (EApp (EApp (EApp (EVar "emitValueW") (EVar "prog")) (EVar "env")) (EVar "d")) (EApp (EVar "CLit") (EVar "LUnit"))))
-(DFunDef false "emitBlockRef" ((PVar "prog") PWild PWild PWild) (EApp (EApp (EVar "programValueW") (EVar "prog")) (EApp (EApp (EVar "gapLP") (EVar "prog")) (EIf (EApp (EVar "rawProgramW") (EVar "prog")) (ELit (LString "scalar-mode: unsupported block statement")) (ELit (LString "ref-mode: unsupported block statement"))))))
+(DFunDef false "emitBlockRef" ((PVar "prog") (PVar "env0") (PVar "d") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PVar "env") (PList (PCon "CSExpr" (PVar "ex")))) (EApp (EApp (EApp (EApp (EVar "emitValueW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "ex"))) (clause ((PVar "env") (PCons (PCon "CSExpr" (PVar "ex")) (PVar "rest"))) (EBlock (DoLet false false (PVar "prefix") (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "ex")) (EListLit (ELit (LString "drop"))))) (DoExpr (EApp (EApp (EVar "prependValueW") (EVar "prefix")) (EApp (EApp (EVar "go") (EVar "env")) (EVar "rest")))))) (clause ((PVar "env") (PCons (PCon "CSLet" (PVar "recF") (PVar "pat") (PVar "ex")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "prefix") (PVar "env2")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitBlockBindingW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "recF")) (EVar "pat")) (EVar "ex"))) (DoExpr (EApp (EApp (EVar "prependValueW") (EVar "prefix")) (EApp (EApp (EVar "go") (EVar "env2")) (EVar "rest")))))) (clause ((PVar "env") (PCons (PCon "CSAssign" (PVar "x") (PVar "ex")) (PVar "rest"))) (EBlock (DoLet false false (PVar "prefix") (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "ex")) (EListLit (EBinOp "++" (ELit (LString "local.set ")) (EApp (EApp (EApp (EVar "localTargetW") (EVar "prog")) (EVar "env")) (EVar "x")))))) (DoExpr (EApp (EApp (EVar "prependValueW") (EVar "prefix")) (EApp (EApp (EVar "go") (EVar "env")) (EVar "rest")))))) (clause ((PVar "env") (PList)) (EApp (EApp (EApp (EApp (EVar "emitValueW") (EVar "prog")) (EVar "env")) (EVar "d")) (EApp (EVar "CLit") (EVar "LUnit")))) (clause (PWild PWild) (EApp (EApp (EVar "programValueW") (EVar "prog")) (EApp (EApp (EVar "gapLP") (EVar "prog")) (EIf (EApp (EVar "rawProgramW") (EVar "prog")) (ELit (LString "scalar-mode: unsupported block statement")) (ELit (LString "ref-mode: unsupported block statement")))))))) (EApp (EApp (EVar "go") (EVar "env0")) (EVar "xs0"))))
 (DTypeSig false "emitBlockBindingW" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyFun (TyCon "Pat") (TyFun (TyCon "CExpr") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Env")))))))))
 (DFunDef false "emitBlockBindingW" ((PVar "prog") (PVar "env") (PVar "d") PWild (PVar "pat") (PVar "ex")) (EMatch (ETuple (EVar "pat") (EVar "ex")) (arm (PTuple (PCon "PVar" (PVar "x") PWild (PVar "bid")) (PCon "CLam" (PVar "pats") (PVar "body"))) () (EIf (EApp (EVar "rawProgramW") (EVar "prog")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitLetBindingW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "False")) (EVar "pat")) (EVar "ex")) (ETuple (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitSelfRecLocalBind") (EVar "prog")) (EVar "env")) (EVar "x")) (EVar "bid")) (EVar "pats")) (EVar "body")) (EApp (EApp (EApp (EVar "envBind") (EVar "x")) (EVar "bid")) (EVar "env"))))) (arm PWild () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitLetBindingW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "False")) (EVar "pat")) (EVar "ex")))))
 (DTypeSig false "emitDirectRawCallW" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "CExpr") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyCon "String")))))))))
@@ -14219,180 +13867,7 @@ hasFamilyW prog symbol tag =
 (DFunDef false "emitRefBoxSet" ((PVar "prog") (PVar "env") (PVar "d") (PList (PVar "r") (PVar "v"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "r")) (EListLit (ELit (LString "ref.cast (ref $refbox)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "v"))) (EListLit (ELit (LString "struct.set $refbox 0")) (ELit (LString "i32.const 0")) (ELit (LString "ref.i31")))))
 (DFunDef false "emitRefBoxSet" ((PVar "prog") (PVar "_env") (PVar "_d") PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm Ref: setRef takes exactly two arguments"))))
 (DTypeSig false "emitLeafExternRef" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "randomInt")) (PList (PVar "lo") (PVar "hi"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "lo")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "hi"))) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_random_int"))) (ELit (LInt 2))) (EApp (EVar "boxIntW") (EVar "prog")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "randomInt")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8: randomInt takes exactly two arguments"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "randomBool")) (PList (PVar "u"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "u")) (EListLit (ELit (LString "drop")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_random_bool"))) (ELit (LInt 0))) (ELit (LString "ref.i31")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "randomBool")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8: randomBool takes exactly one (Unit) argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "randomChar")) (PList (PVar "u"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "u")) (EListLit (ELit (LString "drop")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_random_char"))) (ELit (LInt 0))) (ELit (LString "ref.i31")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "randomChar")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8: randomChar takes exactly one (Unit) argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "setSeed")) (PList (PVar "n"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "n")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")) (EApp (EApp (EApp (EVar "globalW") (EVar "prog")) (ELit (LString "global.set"))) (EVar "rngStateW")) (ELit (LString "i32.const 1")) (EApp (EApp (EApp (EVar "globalW") (EVar "prog")) (ELit (LString "global.set"))) (EVar "rngSeededW")) (ELit (LString "i32.const 0")) (ELit (LString "ref.i31")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "setSeed")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8: setSeed takes exactly one argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "randomState")) (PList (PVar "u"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "u")) (EListLit (ELit (LString "drop")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_rng_ensure"))) (ELit (LInt 0))) (EApp (EApp (EApp (EVar "globalW") (EVar "prog")) (ELit (LString "global.get"))) (EVar "rngStateW")) (ELit (LString "struct.new $u64")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "randomState")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8: randomState takes exactly one (Unit) argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "restoreRandomState")) (PList (PVar "state"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "state")) (EVar "unboxU64W")) (EListLit (EApp (EApp (EApp (EVar "globalW") (EVar "prog")) (ELit (LString "global.set"))) (EVar "rngStateW")) (ELit (LString "i32.const 1")) (EApp (EApp (EApp (EVar "globalW") (EVar "prog")) (ELit (LString "global.set"))) (EVar "rngSeededW")) (ELit (LString "i32.const 0")) (ELit (LString "ref.i31")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "restoreRandomState")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8: restoreRandomState takes exactly one argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "hashInt")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_hash_int"))) (ELit (LInt 1))) (ELit (LString "ref.i31")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "hashInt")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8: hashInt takes exactly one argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "hashChar")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (ELit (LString "i64.extend_i32_s")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_hash_int"))) (ELit (LInt 1))) (ELit (LString "ref.i31")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "hashChar")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8: hashChar takes exactly one argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "hashBool")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_hash_bool"))) (ELit (LInt 1))) (ELit (LString "ref.i31")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "hashBool")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8: hashBool takes exactly one argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "charCode")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (ELit (LString "ref.i31")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "charCode")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W11: charCode takes exactly one argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "charIsAlpha")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_char_is_alpha"))) (ELit (LInt 1))) (ELit (LString "ref.i31")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "charIsAlpha")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W11b: charIsAlpha takes exactly one argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "charIsSpace")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_char_is_space"))) (ELit (LInt 1))) (ELit (LString "ref.i31")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "charIsSpace")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W11b: charIsSpace takes exactly one argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "charIsUpper")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_char_is_upper"))) (ELit (LInt 1))) (ELit (LString "ref.i31")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "charIsUpper")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W11b: charIsUpper takes exactly one argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "charIsLower")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_char_is_lower"))) (ELit (LInt 1))) (ELit (LString "ref.i31")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "charIsLower")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W11b: charIsLower takes exactly one argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "charIsPunct")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_char_is_punct"))) (ELit (LInt 1))) (ELit (LString "ref.i31")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "charIsPunct")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W11b: charIsPunct takes exactly one argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "charToUpper")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_char_to_upper"))) (ELit (LInt 1))) (ELit (LString "ref.i31")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "charToUpper")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W11b: charToUpper takes exactly one argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "charToLower")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_char_to_lower"))) (ELit (LInt 1))) (ELit (LString "ref.i31")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "charToLower")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W11b: charToLower takes exactly one argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "intToFloat")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_int_to_float"))) (ELit (LInt 1))))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "intToFloat")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8b: intToFloat takes exactly one argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "floatToInt")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "ref.cast (ref $float)")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_float_to_int"))) (ELit (LInt 1))) (EApp (EVar "boxIntW") (EVar "prog")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "floatToInt")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8b: floatToInt takes exactly one argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "hashFloat")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "ref.cast (ref $float)")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_hash_float"))) (ELit (LInt 1))) (ELit (LString "ref.i31")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "hashFloat")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8b: hashFloat takes exactly one argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "randomFloat")) (PList (PVar "u"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "u")) (EListLit (ELit (LString "drop")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_random_float"))) (ELit (LInt 0))))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "randomFloat")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8b: randomFloat takes exactly one (Unit) argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "readFile")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_read_file_io"))) (ELit (LInt 2))))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "readFile")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W12: readFile takes exactly one argument and its grant"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "canonicalizePath")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_canonicalize_path_io"))) (ELit (LInt 2))))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "canonicalizePath")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: canonicalizePath takes exactly one argument and its grant"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "fileExists")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_file_exists_io"))) (ELit (LInt 2))))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "fileExists")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W12: fileExists takes exactly one argument and its grant"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "getEnv")) (PList (PVar "n"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "n")) (EListLit (ELit (LString "ref.cast (ref $str)")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_get_env_io"))) (ELit (LInt 1))))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "getEnv")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W12: getEnv takes exactly one argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "readLine")) (PList (PVar "u"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "u")) (EListLit (ELit (LString "drop")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_read_line_io"))) (ELit (LInt 0))))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "readLine")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: readLine takes exactly one (Unit) argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "readLineOpt")) (PList (PVar "u"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "u")) (EListLit (ELit (LString "drop")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_read_line_opt_io"))) (ELit (LInt 0))))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "readLineOpt")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: readLineOpt takes exactly one (Unit) argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "readAll")) (PList (PVar "u"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "u")) (EListLit (ELit (LString "drop")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_read_all_io"))) (ELit (LInt 0))))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "readAll")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: readAll takes exactly one (Unit) argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "readExactly")) (PList (PVar "n"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "n")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_read_exactly_io"))) (ELit (LInt 1))))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "readExactly")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: readExactly takes exactly one argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "osEntropyBytes")) (PList (PVar "n"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "n")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_os_entropy_io"))) (ELit (LInt 1))))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "osEntropyBytes")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: osEntropyBytes takes exactly one argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "executablePath")) (PList (PVar "u"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "u")) (EListLit (ELit (LString "drop")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_executable_path_io"))) (ELit (LInt 0))))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "executablePath")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: executablePath takes exactly one (Unit) argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "args")) (PList (PVar "u"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "u")) (EListLit (ELit (LString "drop")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_args_io"))) (ELit (LInt 0))))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "args")) (PVar "_args")) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W12: args takes exactly one (Unit) argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "exit")) (PList (PVar "code"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "code")) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_s")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_exit"))) (ELit (LInt 1))) (ELit (LString "unreachable")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "exit")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W12: exit takes exactly one argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "wallTimeSec")) (PList (PVar "u"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "u")) (EListLit (ELit (LString "drop")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_wall_time_sec"))) (ELit (LInt 0))) (ELit (LString "struct.new $float")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "wallTimeSec")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: wallTimeSec takes exactly one (Unit) argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "monotonicSec")) (PList (PVar "u"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "u")) (EListLit (ELit (LString "drop")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_monotonic_sec"))) (ELit (LInt 0))) (ELit (LString "struct.new $float")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "monotonicSec")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: monotonicSec takes exactly one (Unit) argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "sleepMs")) (PList (PVar "n"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "n")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_sleep_ms"))) (ELit (LInt 1))) (ELit (LString "i32.const 0")) (ELit (LString "ref.i31")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "sleepMs")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: sleepMs takes exactly one argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "fetchText")) (PList (PVar "u"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "u")) (EListLit (ELit (LString "ref.cast (ref $str)")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_fetch_text_io"))) (ELit (LInt 1))))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "fetchText")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: fetchText takes exactly one argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "ioPoll")) (PList (PVar "fds") (PVar "interests") (PVar "timeout"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "fds")) (EListLit (ELit (LString "drop")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "interests"))) (EListLit (ELit (LString "drop")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "timeout"))) (EListLit (ELit (LString "drop")))) (EApp (EApp (EApp (EVar "wasmTrap") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "EWasmNoBinding")) (ELit (LString "ioPoll: descriptor readiness has no wasm binding (Net and Stdin bindings: #3666); build for a native target")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "ioPoll")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: ioPoll takes exactly three arguments"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "readFileBytes")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_read_file_bytes_io"))) (ELit (LInt 2))))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "readFileBytes")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm stage-D: readFileBytes takes exactly one argument and its grant"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "writeFileBytes")) (PList (PVar "p") (PVar "arr") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "arr"))) (EListLit (ELit (LString "ref.cast (ref $arr)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_write_file_bytes_io"))) (ELit (LInt 3))))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "writeFileBytes")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm stage-D: writeFileBytes takes exactly two arguments and its grant"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "writeFile")) (PList (PVar "p") (PVar "s") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "s"))) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_write_file_io"))) (ELit (LInt 3))))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "writeFile")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: writeFile takes exactly two arguments and its grant"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "appendFile")) (PList (PVar "p") (PVar "s") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "s"))) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_append_file_io"))) (ELit (LInt 3))))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "appendFile")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: appendFile takes exactly two arguments and its grant"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "rename")) (PList (PVar "src") (PVar "dst") (PVar "gs") (PVar "gd"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "src")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "dst"))) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "gs"))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "gd"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_rename_io"))) (ELit (LInt 4))))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "rename")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: rename takes exactly two arguments and the grant of each"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "listDir")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_list_dir_io"))) (ELit (LInt 2))))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "listDir")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: listDir takes exactly one argument and its grant"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "statFile")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_stat_file_io"))) (ELit (LInt 2))))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "statFile")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: statFile takes exactly one argument and its grant"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "makeDir")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_make_dir_io"))) (ELit (LInt 2))))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "makeDir")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: makeDir takes exactly one argument and its grant"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "removeFile")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_remove_file_io"))) (ELit (LInt 2))))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "removeFile")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: removeFile takes exactly one argument and its grant"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "removeDir")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_remove_dir_io"))) (ELit (LInt 2))))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "removeDir")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: removeDir takes exactly one argument and its grant"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "fsync")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_fsync_io"))) (ELit (LInt 2))))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "fsync")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: fsync takes exactly one argument and its grant"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "fileMode")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_file_mode_io"))) (ELit (LInt 2))))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "fileMode")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: fileMode takes exactly one argument and its grant"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "writeFileMode")) (PList (PVar "p") (PVar "m") (PVar "s") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "m"))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "s"))) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_write_file_mode_io"))) (ELit (LInt 4))))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "writeFileMode")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: writeFileMode takes three arguments and its grant"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "panic")) (PList (PVar "msg"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "wasmTrapBytes") (EApp (EVar "progEmit") (EVar "prog"))) (EBinOp "++" (EBinOp "++" (ELit (LString "runtime error [")) (EApp (EVar "$core.display") (EVar "EPanic"))) (ELit (LString "]: ")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "msg"))) (EListLit (ELit (LString "ref.cast (ref $str)")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_eprint_str"))) (ELit (LInt 1))))) (EApp (EApp (EVar "trapByteInstr") (EApp (EVar "progEmit") (EVar "prog"))) (ELit (LInt 10)))) (EListLit (ELit (LString "unreachable")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "panic")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W10: panic takes exactly one argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "indexError")) (PList (PVar "msg"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "wasmTrapBytes") (EApp (EVar "progEmit") (EVar "prog"))) (EBinOp "++" (EBinOp "++" (ELit (LString "runtime error [")) (EApp (EVar "$core.display") (EVar "EIndexOob"))) (ELit (LString "]: ")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "msg"))) (EListLit (ELit (LString "ref.cast (ref $str)")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_eprint_str"))) (ELit (LInt 1))))) (EApp (EApp (EVar "trapByteInstr") (EApp (EVar "progEmit") (EVar "prog"))) (ELit (LInt 10)))) (EListLit (ELit (LString "unreachable")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "indexError")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm Index-16a: indexError takes exactly one argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "indexErrorAt")) (PList (PVar "idx"))) (EApp (EApp (EApp (EApp (EApp (EVar "wasmTrapNum") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "EIndexOob")) (ELit (LString "index "))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "idx"))) (ELit (LString " out of bounds"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "indexErrorAt")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm #1787: indexErrorAt takes exactly one argument"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "indexErrorAtSite")) (PList (PVar "site") (PVar "idx"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "siteExprInstrs") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "site")) (EApp (EApp (EApp (EApp (EApp (EVar "emitLeafExternRef") (EVar "prog")) (EVar "env")) (EVar "d")) (ELit (LString "indexErrorAt"))) (EListLit (EVar "idx")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "indexErrorAtSite")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: indexErrorAtSite takes exactly two arguments"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "panicAt")) (PList (PVar "site") (PVar "msg"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "siteExprInstrs") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "site")) (EApp (EApp (EApp (EApp (EApp (EVar "emitLeafExternRef") (EVar "prog")) (EVar "env")) (EVar "d")) (ELit (LString "panic"))) (EListLit (EVar "msg")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "__site__")) (PList (PCon "CLit" (PCon "LString" (PVar "f"))) (PCon "CLit" (PCon "LInt" (PVar "line"))) (PCon "CLit" (PCon "LInt" (PVar "col"))))) (EApp (EApp (EVar "emitLitRef") (EVar "prog")) (EApp (EVar "LInt") (EApp (EApp (EVar "sitePackedW") (EApp (EVar "progEmit") (EVar "prog"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "line")) (EVar "col")) (EVar "line")) (EBinOp "+" (EVar "col") (ELit (LInt 1))))))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "__site__")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: a trap-site literal takes a file, a line and a column"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "panicAt")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: panicAt takes exactly two arguments"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "sliceError")) (PList (PVar "_lo") (PVar "_hi"))) (EApp (EApp (EApp (EVar "wasmTrap") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "ESliceOob")) (ELit (LString "slice out of bounds"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "sliceError")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm #670: sliceError takes exactly two arguments"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "intBitAnd")) (PVar "args")) (EApp (EApp (EApp (EApp (EApp (EVar "emitLeafExternRef") (EVar "prog")) (EVar "env")) (EVar "d")) (ELit (LString "bitAnd"))) (EVar "args")))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "intBitOr")) (PVar "args")) (EApp (EApp (EApp (EApp (EApp (EVar "emitLeafExternRef") (EVar "prog")) (EVar "env")) (EVar "d")) (ELit (LString "bitOr"))) (EVar "args")))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "intBitXor")) (PVar "args")) (EApp (EApp (EApp (EApp (EApp (EVar "emitLeafExternRef") (EVar "prog")) (EVar "env")) (EVar "d")) (ELit (LString "bitXor"))) (EVar "args")))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "intBitNot")) (PVar "args")) (EApp (EApp (EApp (EApp (EApp (EVar "emitLeafExternRef") (EVar "prog")) (EVar "env")) (EVar "d")) (ELit (LString "bitNot"))) (EVar "args")))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "intShiftLeft")) (PVar "args")) (EApp (EApp (EApp (EApp (EApp (EVar "emitLeafExternRef") (EVar "prog")) (EVar "env")) (EVar "d")) (ELit (LString "shiftLeft"))) (EVar "args")))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "intShiftRight")) (PVar "args")) (EApp (EApp (EApp (EApp (EApp (EVar "emitLeafExternRef") (EVar "prog")) (EVar "env")) (EVar "d")) (ELit (LString "shiftRight"))) (EVar "args")))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "bitAnd")) (PList (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "b"))) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")))) (EListLit (ELit (LString "i64.and")) (EApp (EVar "boxIntW") (EVar "prog")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "bitAnd")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm stage-A: bitAnd takes exactly two arguments"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "shiftLeft")) (PList (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "b"))) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")))) (EApp (EApp (EVar "intShiftCall") (EVar "prog")) (ELit (LString "left")))) (EListLit (EApp (EVar "boxIntW") (EVar "prog")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "shiftLeft")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm stage-A: shiftLeft takes exactly two arguments"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "shiftRight")) (PList (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "b"))) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")))) (EApp (EApp (EVar "intShiftCall") (EVar "prog")) (ELit (LString "right")))) (EListLit (EApp (EVar "boxIntW") (EVar "prog")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PLit (LString "shiftRight")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm stage-A: shiftRight takes exactly two arguments"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "bitOr")) (PList (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "b"))) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")))) (EListLit (ELit (LString "i64.or")) (EApp (EVar "boxIntW") (EVar "prog")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "bitXor")) (PList (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "b"))) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")))) (EListLit (ELit (LString "i64.xor")) (EApp (EVar "boxIntW") (EVar "prog")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "bitNot")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")) (ELit (LString "i64.const -1")) (ELit (LString "i64.xor")) (EApp (EVar "boxIntW") (EVar "prog")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "intBitsToFloat")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")) (ELit (LString "f64.reinterpret_i64")) (ELit (LString "struct.new $float")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "u8Truncate")) (PList (PVar "a"))) (EApp (EApp (EApp (EApp (EApp (EVar "emitTruncateRef") (EVar "prog")) (EVar "env")) (EVar "d")) (ELit (LString "U8"))) (EVar "a")))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "u16Truncate")) (PList (PVar "a"))) (EApp (EApp (EApp (EApp (EApp (EVar "emitTruncateRef") (EVar "prog")) (EVar "env")) (EVar "d")) (ELit (LString "U16"))) (EVar "a")))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "u32Truncate")) (PList (PVar "a"))) (EApp (EApp (EApp (EApp (EApp (EVar "emitTruncateRef") (EVar "prog")) (EVar "env")) (EVar "d")) (ELit (LString "U32"))) (EVar "a")))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "u8ToInt")) (PList (PVar "a"))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "u16ToInt")) (PList (PVar "a"))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "u32ToInt")) (PList (PVar "a"))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "i32Truncate")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")) (ELit (LString "i64.extend32_s")) (EApp (EVar "boxIntW") (EVar "prog")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "i32ToInt")) (PList (PVar "a"))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "i64FromBits")) (PList (PVar "a"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EVar "unboxU64W")) (EListLit (ELit (LString "struct.new $i64")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "i64ToBits")) (PList (PVar "a"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EVar "unboxI64W")) (EListLit (ELit (LString "struct.new $u64")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "u64Truncate")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")) (ELit (LString "struct.new $u64")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "u64TruncateToInt")) (PList (PVar "a"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EVar "unboxU64W")) (EListLit (EApp (EVar "boxIntW") (EVar "prog")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "u64BitAnd")) (PList (PVar "a") (PVar "b"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitU64KernelRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EVar "b")) (ELit (LString "i64.and"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "u64BitOr")) (PList (PVar "a") (PVar "b"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitU64KernelRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EVar "b")) (ELit (LString "i64.or"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "u64BitXor")) (PList (PVar "a") (PVar "b"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitU64KernelRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EVar "b")) (ELit (LString "i64.xor"))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "u64MulHigh")) (PList (PVar "a") (PVar "b"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitU64KernelRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EVar "b")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_u64_mulhi"))) (ELit (LInt 2)))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "u64ShiftLeft")) (PList (PVar "a") (PVar "k"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitU64ShiftRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EVar "k")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_u64_shl"))) (ELit (LInt 2)))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "u64ShiftRight")) (PList (PVar "a") (PVar "k"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitU64ShiftRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EVar "k")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_u64_shr"))) (ELit (LInt 2)))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "sqrt")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "f64.sqrt")) (ELit (LString "struct.new $float")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "floor")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "f64.floor")) (ELit (LString "struct.new $float")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "ceil")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "f64.ceil")) (ELit (LString "struct.new $float")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "trunc")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "f64.trunc")) (ELit (LString "struct.new $float")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "round")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_round"))) (ELit (LInt 1))) (ELit (LString "struct.new $float")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "cbrt")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_cbrt"))) (ELit (LInt 1))) (ELit (LString "struct.new $float")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "exp")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_exp"))) (ELit (LInt 1))) (ELit (LString "struct.new $float")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "log")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_log"))) (ELit (LInt 1))) (ELit (LString "struct.new $float")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "log2")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_log2"))) (ELit (LInt 1))) (ELit (LString "struct.new $float")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "log10")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_log10"))) (ELit (LInt 1))) (ELit (LString "struct.new $float")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "sin")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_sin"))) (ELit (LInt 1))) (ELit (LString "struct.new $float")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "cos")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_cos"))) (ELit (LInt 1))) (ELit (LString "struct.new $float")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "tan")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_tan"))) (ELit (LInt 1))) (ELit (LString "struct.new $float")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "asin")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_asin"))) (ELit (LInt 1))) (ELit (LString "struct.new $float")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "acos")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_acos"))) (ELit (LInt 1))) (ELit (LString "struct.new $float")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "atan")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_atan"))) (ELit (LInt 1))) (ELit (LString "struct.new $float")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "sinh")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_sinh"))) (ELit (LInt 1))) (ELit (LString "struct.new $float")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "cosh")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_cosh"))) (ELit (LInt 1))) (ELit (LString "struct.new $float")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "tanh")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_tanh"))) (ELit (LInt 1))) (ELit (LString "struct.new $float")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "pow")) (PList (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "b"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_pow"))) (ELit (LInt 2))) (ELit (LString "struct.new $float")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "atan2")) (PList (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "b"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_atan2"))) (ELit (LInt 2))) (ELit (LString "struct.new $float")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "hypot")) (PList (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "b"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_hypot"))) (ELit (LInt 2))) (ELit (LString "struct.new $float")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "floatRem")) (PList (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "b"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_float_rem"))) (ELit (LInt 2))) (ELit (LString "struct.new $float")))))
-(DFunDef false "emitLeafExternRef" ((PVar "prog") PWild PWild (PVar "name") PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "wasm W8: unsupported leaf extern '")) (EVar "name")) (ELit (LString "'")))))
+(DFunDef false "emitLeafExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "name0") (PVar "args0")) (ELetGroup ((lgb "go" (clause ((PLit (LString "randomInt")) (PList (PVar "lo") (PVar "hi"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "lo")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "hi"))) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_random_int"))) (ELit (LInt 2))) (EApp (EVar "boxIntW") (EVar "prog"))))) (clause ((PLit (LString "randomInt")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8: randomInt takes exactly two arguments")))) (clause ((PLit (LString "randomBool")) (PList (PVar "u"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "u")) (EListLit (ELit (LString "drop")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_random_bool"))) (ELit (LInt 0))) (ELit (LString "ref.i31"))))) (clause ((PLit (LString "randomBool")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8: randomBool takes exactly one (Unit) argument")))) (clause ((PLit (LString "randomChar")) (PList (PVar "u"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "u")) (EListLit (ELit (LString "drop")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_random_char"))) (ELit (LInt 0))) (ELit (LString "ref.i31"))))) (clause ((PLit (LString "randomChar")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8: randomChar takes exactly one (Unit) argument")))) (clause ((PLit (LString "setSeed")) (PList (PVar "n"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "n")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")) (EApp (EApp (EApp (EVar "globalW") (EVar "prog")) (ELit (LString "global.set"))) (EVar "rngStateW")) (ELit (LString "i32.const 1")) (EApp (EApp (EApp (EVar "globalW") (EVar "prog")) (ELit (LString "global.set"))) (EVar "rngSeededW")) (ELit (LString "i32.const 0")) (ELit (LString "ref.i31"))))) (clause ((PLit (LString "setSeed")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8: setSeed takes exactly one argument")))) (clause ((PLit (LString "randomState")) (PList (PVar "u"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "u")) (EListLit (ELit (LString "drop")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_rng_ensure"))) (ELit (LInt 0))) (EApp (EApp (EApp (EVar "globalW") (EVar "prog")) (ELit (LString "global.get"))) (EVar "rngStateW")) (ELit (LString "struct.new $u64"))))) (clause ((PLit (LString "randomState")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8: randomState takes exactly one (Unit) argument")))) (clause ((PLit (LString "restoreRandomState")) (PList (PVar "state"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "state")) (EVar "unboxU64W")) (EListLit (EApp (EApp (EApp (EVar "globalW") (EVar "prog")) (ELit (LString "global.set"))) (EVar "rngStateW")) (ELit (LString "i32.const 1")) (EApp (EApp (EApp (EVar "globalW") (EVar "prog")) (ELit (LString "global.set"))) (EVar "rngSeededW")) (ELit (LString "i32.const 0")) (ELit (LString "ref.i31"))))) (clause ((PLit (LString "restoreRandomState")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8: restoreRandomState takes exactly one argument")))) (clause ((PLit (LString "hashInt")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_hash_int"))) (ELit (LInt 1))) (ELit (LString "ref.i31"))))) (clause ((PLit (LString "hashInt")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8: hashInt takes exactly one argument")))) (clause ((PLit (LString "hashChar")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (ELit (LString "i64.extend_i32_s")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_hash_int"))) (ELit (LInt 1))) (ELit (LString "ref.i31"))))) (clause ((PLit (LString "hashChar")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8: hashChar takes exactly one argument")))) (clause ((PLit (LString "hashBool")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_hash_bool"))) (ELit (LInt 1))) (ELit (LString "ref.i31"))))) (clause ((PLit (LString "hashBool")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8: hashBool takes exactly one argument")))) (clause ((PLit (LString "charCode")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (ELit (LString "ref.i31"))))) (clause ((PLit (LString "charCode")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W11: charCode takes exactly one argument")))) (clause ((PLit (LString "charIsAlpha")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_char_is_alpha"))) (ELit (LInt 1))) (ELit (LString "ref.i31"))))) (clause ((PLit (LString "charIsAlpha")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W11b: charIsAlpha takes exactly one argument")))) (clause ((PLit (LString "charIsSpace")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_char_is_space"))) (ELit (LInt 1))) (ELit (LString "ref.i31"))))) (clause ((PLit (LString "charIsSpace")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W11b: charIsSpace takes exactly one argument")))) (clause ((PLit (LString "charIsUpper")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_char_is_upper"))) (ELit (LInt 1))) (ELit (LString "ref.i31"))))) (clause ((PLit (LString "charIsUpper")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W11b: charIsUpper takes exactly one argument")))) (clause ((PLit (LString "charIsLower")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_char_is_lower"))) (ELit (LInt 1))) (ELit (LString "ref.i31"))))) (clause ((PLit (LString "charIsLower")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W11b: charIsLower takes exactly one argument")))) (clause ((PLit (LString "charIsPunct")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_char_is_punct"))) (ELit (LInt 1))) (ELit (LString "ref.i31"))))) (clause ((PLit (LString "charIsPunct")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W11b: charIsPunct takes exactly one argument")))) (clause ((PLit (LString "charToUpper")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_char_to_upper"))) (ELit (LInt 1))) (ELit (LString "ref.i31"))))) (clause ((PLit (LString "charToUpper")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W11b: charToUpper takes exactly one argument")))) (clause ((PLit (LString "charToLower")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_char_to_lower"))) (ELit (LInt 1))) (ELit (LString "ref.i31"))))) (clause ((PLit (LString "charToLower")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W11b: charToLower takes exactly one argument")))) (clause ((PLit (LString "intToFloat")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_int_to_float"))) (ELit (LInt 1)))))) (clause ((PLit (LString "intToFloat")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8b: intToFloat takes exactly one argument")))) (clause ((PLit (LString "floatToInt")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "ref.cast (ref $float)")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_float_to_int"))) (ELit (LInt 1))) (EApp (EVar "boxIntW") (EVar "prog"))))) (clause ((PLit (LString "floatToInt")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8b: floatToInt takes exactly one argument")))) (clause ((PLit (LString "hashFloat")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "ref.cast (ref $float)")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_hash_float"))) (ELit (LInt 1))) (ELit (LString "ref.i31"))))) (clause ((PLit (LString "hashFloat")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8b: hashFloat takes exactly one argument")))) (clause ((PLit (LString "randomFloat")) (PList (PVar "u"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "u")) (EListLit (ELit (LString "drop")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_random_float"))) (ELit (LInt 0)))))) (clause ((PLit (LString "randomFloat")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W8b: randomFloat takes exactly one (Unit) argument")))) (clause ((PLit (LString "readFile")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_read_file_io"))) (ELit (LInt 2)))))) (clause ((PLit (LString "readFile")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W12: readFile takes exactly one argument and its grant")))) (clause ((PLit (LString "canonicalizePath")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_canonicalize_path_io"))) (ELit (LInt 2)))))) (clause ((PLit (LString "canonicalizePath")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: canonicalizePath takes exactly one argument and its grant")))) (clause ((PLit (LString "fileExists")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_file_exists_io"))) (ELit (LInt 2)))))) (clause ((PLit (LString "fileExists")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W12: fileExists takes exactly one argument and its grant")))) (clause ((PLit (LString "getEnv")) (PList (PVar "n"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "n")) (EListLit (ELit (LString "ref.cast (ref $str)")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_get_env_io"))) (ELit (LInt 1)))))) (clause ((PLit (LString "getEnv")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W12: getEnv takes exactly one argument")))) (clause ((PLit (LString "readLine")) (PList (PVar "u"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "u")) (EListLit (ELit (LString "drop")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_read_line_io"))) (ELit (LInt 0)))))) (clause ((PLit (LString "readLine")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: readLine takes exactly one (Unit) argument")))) (clause ((PLit (LString "readLineOpt")) (PList (PVar "u"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "u")) (EListLit (ELit (LString "drop")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_read_line_opt_io"))) (ELit (LInt 0)))))) (clause ((PLit (LString "readLineOpt")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: readLineOpt takes exactly one (Unit) argument")))) (clause ((PLit (LString "readAll")) (PList (PVar "u"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "u")) (EListLit (ELit (LString "drop")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_read_all_io"))) (ELit (LInt 0)))))) (clause ((PLit (LString "readAll")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: readAll takes exactly one (Unit) argument")))) (clause ((PLit (LString "readExactly")) (PList (PVar "n"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "n")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_read_exactly_io"))) (ELit (LInt 1)))))) (clause ((PLit (LString "readExactly")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: readExactly takes exactly one argument")))) (clause ((PLit (LString "osEntropyBytes")) (PList (PVar "n"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "n")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_os_entropy_io"))) (ELit (LInt 1)))))) (clause ((PLit (LString "osEntropyBytes")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: osEntropyBytes takes exactly one argument")))) (clause ((PLit (LString "executablePath")) (PList (PVar "u"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "u")) (EListLit (ELit (LString "drop")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_executable_path_io"))) (ELit (LInt 0)))))) (clause ((PLit (LString "executablePath")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: executablePath takes exactly one (Unit) argument")))) (clause ((PLit (LString "args")) (PList (PVar "u"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "u")) (EListLit (ELit (LString "drop")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_args_io"))) (ELit (LInt 0)))))) (clause ((PLit (LString "args")) (PVar "_args")) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W12: args takes exactly one (Unit) argument")))) (clause ((PLit (LString "exit")) (PList (PVar "code"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "code")) (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_s")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_exit"))) (ELit (LInt 1))) (ELit (LString "unreachable"))))) (clause ((PLit (LString "exit")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W12: exit takes exactly one argument")))) (clause ((PLit (LString "wallTimeSec")) (PList (PVar "u"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "u")) (EListLit (ELit (LString "drop")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_wall_time_sec"))) (ELit (LInt 0))) (ELit (LString "struct.new $float"))))) (clause ((PLit (LString "wallTimeSec")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: wallTimeSec takes exactly one (Unit) argument")))) (clause ((PLit (LString "monotonicSec")) (PList (PVar "u"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "u")) (EListLit (ELit (LString "drop")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_monotonic_sec"))) (ELit (LInt 0))) (ELit (LString "struct.new $float"))))) (clause ((PLit (LString "monotonicSec")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: monotonicSec takes exactly one (Unit) argument")))) (clause ((PLit (LString "sleepMs")) (PList (PVar "n"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "n")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_sleep_ms"))) (ELit (LInt 1))) (ELit (LString "i32.const 0")) (ELit (LString "ref.i31"))))) (clause ((PLit (LString "sleepMs")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: sleepMs takes exactly one argument")))) (clause ((PLit (LString "fetchText")) (PList (PVar "u"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "u")) (EListLit (ELit (LString "ref.cast (ref $str)")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_fetch_text_io"))) (ELit (LInt 1)))))) (clause ((PLit (LString "fetchText")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: fetchText takes exactly one argument")))) (clause ((PLit (LString "ioPoll")) (PList (PVar "fds") (PVar "interests") (PVar "timeout"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "fds")) (EListLit (ELit (LString "drop")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "interests"))) (EListLit (ELit (LString "drop")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "timeout"))) (EListLit (ELit (LString "drop")))) (EApp (EApp (EApp (EVar "wasmTrap") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "EWasmNoBinding")) (ELit (LString "ioPoll: descriptor readiness has no wasm binding (Net and Stdin bindings: #3666); build for a native target"))))) (clause ((PLit (LString "ioPoll")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: ioPoll takes exactly three arguments")))) (clause ((PLit (LString "readFileBytes")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_read_file_bytes_io"))) (ELit (LInt 2)))))) (clause ((PLit (LString "readFileBytes")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm stage-D: readFileBytes takes exactly one argument and its grant")))) (clause ((PLit (LString "writeFileBytes")) (PList (PVar "p") (PVar "arr") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "arr"))) (EListLit (ELit (LString "ref.cast (ref $arr)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_write_file_bytes_io"))) (ELit (LInt 3)))))) (clause ((PLit (LString "writeFileBytes")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm stage-D: writeFileBytes takes exactly two arguments and its grant")))) (clause ((PLit (LString "writeFile")) (PList (PVar "p") (PVar "s") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "s"))) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_write_file_io"))) (ELit (LInt 3)))))) (clause ((PLit (LString "writeFile")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: writeFile takes exactly two arguments and its grant")))) (clause ((PLit (LString "appendFile")) (PList (PVar "p") (PVar "s") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "s"))) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_append_file_io"))) (ELit (LInt 3)))))) (clause ((PLit (LString "appendFile")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: appendFile takes exactly two arguments and its grant")))) (clause ((PLit (LString "rename")) (PList (PVar "src") (PVar "dst") (PVar "gs") (PVar "gd"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "src")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "dst"))) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "gs"))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "gd"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_rename_io"))) (ELit (LInt 4)))))) (clause ((PLit (LString "rename")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: rename takes exactly two arguments and the grant of each")))) (clause ((PLit (LString "listDir")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_list_dir_io"))) (ELit (LInt 2)))))) (clause ((PLit (LString "listDir")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: listDir takes exactly one argument and its grant")))) (clause ((PLit (LString "statFile")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_stat_file_io"))) (ELit (LInt 2)))))) (clause ((PLit (LString "statFile")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: statFile takes exactly one argument and its grant")))) (clause ((PLit (LString "makeDir")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_make_dir_io"))) (ELit (LInt 2)))))) (clause ((PLit (LString "makeDir")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: makeDir takes exactly one argument and its grant")))) (clause ((PLit (LString "removeFile")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_remove_file_io"))) (ELit (LInt 2)))))) (clause ((PLit (LString "removeFile")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: removeFile takes exactly one argument and its grant")))) (clause ((PLit (LString "removeDir")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_remove_dir_io"))) (ELit (LInt 2)))))) (clause ((PLit (LString "removeDir")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: removeDir takes exactly one argument and its grant")))) (clause ((PLit (LString "fsync")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_fsync_io"))) (ELit (LInt 2)))))) (clause ((PLit (LString "fsync")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: fsync takes exactly one argument and its grant")))) (clause ((PLit (LString "fileMode")) (PList (PVar "p") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_file_mode_io"))) (ELit (LInt 2)))))) (clause ((PLit (LString "fileMode")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: fileMode takes exactly one argument and its grant")))) (clause ((PLit (LString "writeFileMode")) (PList (PVar "p") (PVar "m") (PVar "s") (PVar "g"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "p")) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "m"))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "s"))) (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_write_file_mode_io"))) (ELit (LInt 4)))))) (clause ((PLit (LString "writeFileMode")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: writeFileMode takes three arguments and its grant")))) (clause ((PLit (LString "panic")) (PList (PVar "msg"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "wasmTrapBytes") (EApp (EVar "progEmit") (EVar "prog"))) (EBinOp "++" (EBinOp "++" (ELit (LString "runtime error [")) (EApp (EVar "$core.display") (EVar "EPanic"))) (ELit (LString "]: ")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "msg"))) (EListLit (ELit (LString "ref.cast (ref $str)")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_eprint_str"))) (ELit (LInt 1))))) (EApp (EApp (EVar "trapByteInstr") (EApp (EVar "progEmit") (EVar "prog"))) (ELit (LInt 10)))) (EListLit (ELit (LString "unreachable"))))) (clause ((PLit (LString "panic")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W10: panic takes exactly one argument")))) (clause ((PLit (LString "indexError")) (PList (PVar "msg"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "wasmTrapBytes") (EApp (EVar "progEmit") (EVar "prog"))) (EBinOp "++" (EBinOp "++" (ELit (LString "runtime error [")) (EApp (EVar "$core.display") (EVar "EIndexOob"))) (ELit (LString "]: ")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "msg"))) (EListLit (ELit (LString "ref.cast (ref $str)")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_eprint_str"))) (ELit (LInt 1))))) (EApp (EApp (EVar "trapByteInstr") (EApp (EVar "progEmit") (EVar "prog"))) (ELit (LInt 10)))) (EListLit (ELit (LString "unreachable"))))) (clause ((PLit (LString "indexError")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm Index-16a: indexError takes exactly one argument")))) (clause ((PLit (LString "indexErrorAt")) (PList (PVar "idx"))) (EApp (EApp (EApp (EApp (EApp (EVar "wasmTrapNum") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "EIndexOob")) (ELit (LString "index "))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "idx"))) (ELit (LString " out of bounds")))) (clause ((PLit (LString "indexErrorAt")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm #1787: indexErrorAt takes exactly one argument")))) (clause ((PLit (LString "indexErrorAtSite")) (PList (PVar "site") (PVar "idx"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "siteExprInstrs") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "site")) (EApp (EApp (EVar "go") (ELit (LString "indexErrorAt"))) (EListLit (EVar "idx"))))) (clause ((PLit (LString "indexErrorAtSite")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: indexErrorAtSite takes exactly two arguments")))) (clause ((PLit (LString "panicAt")) (PList (PVar "site") (PVar "msg"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "siteExprInstrs") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "site")) (EApp (EApp (EVar "go") (ELit (LString "panic"))) (EListLit (EVar "msg"))))) (clause ((PLit (LString "__site__")) (PList (PCon "CLit" (PCon "LString" (PVar "f"))) (PCon "CLit" (PCon "LInt" (PVar "line"))) (PCon "CLit" (PCon "LInt" (PVar "col"))))) (EApp (EApp (EVar "emitLitRef") (EVar "prog")) (EApp (EVar "LInt") (EApp (EApp (EVar "sitePackedW") (EApp (EVar "progEmit") (EVar "prog"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "f")) (EVar "line")) (EVar "col")) (EVar "line")) (EBinOp "+" (EVar "col") (ELit (LInt 1)))))))) (clause ((PLit (LString "__site__")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: a trap-site literal takes a file, a line and a column")))) (clause ((PLit (LString "panicAt")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: panicAt takes exactly two arguments")))) (clause ((PLit (LString "sliceError")) (PList (PVar "_lo") (PVar "_hi"))) (EApp (EApp (EApp (EVar "wasmTrap") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "ESliceOob")) (ELit (LString "slice out of bounds")))) (clause ((PLit (LString "sliceError")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm #670: sliceError takes exactly two arguments")))) (clause ((PLit (LString "intBitAnd")) (PVar "args")) (EApp (EApp (EVar "go") (ELit (LString "bitAnd"))) (EVar "args"))) (clause ((PLit (LString "intBitOr")) (PVar "args")) (EApp (EApp (EVar "go") (ELit (LString "bitOr"))) (EVar "args"))) (clause ((PLit (LString "intBitXor")) (PVar "args")) (EApp (EApp (EVar "go") (ELit (LString "bitXor"))) (EVar "args"))) (clause ((PLit (LString "intBitNot")) (PVar "args")) (EApp (EApp (EVar "go") (ELit (LString "bitNot"))) (EVar "args"))) (clause ((PLit (LString "intShiftLeft")) (PVar "args")) (EApp (EApp (EVar "go") (ELit (LString "shiftLeft"))) (EVar "args"))) (clause ((PLit (LString "intShiftRight")) (PVar "args")) (EApp (EApp (EVar "go") (ELit (LString "shiftRight"))) (EVar "args"))) (clause ((PLit (LString "bitAnd")) (PList (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "b"))) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")))) (EListLit (ELit (LString "i64.and")) (EApp (EVar "boxIntW") (EVar "prog"))))) (clause ((PLit (LString "bitAnd")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm stage-A: bitAnd takes exactly two arguments")))) (clause ((PLit (LString "shiftLeft")) (PList (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "b"))) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")))) (EApp (EApp (EVar "intShiftCall") (EVar "prog")) (ELit (LString "left")))) (EListLit (EApp (EVar "boxIntW") (EVar "prog"))))) (clause ((PLit (LString "shiftLeft")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm stage-A: shiftLeft takes exactly two arguments")))) (clause ((PLit (LString "shiftRight")) (PList (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "b"))) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")))) (EApp (EApp (EVar "intShiftCall") (EVar "prog")) (ELit (LString "right")))) (EListLit (EApp (EVar "boxIntW") (EVar "prog"))))) (clause ((PLit (LString "shiftRight")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm stage-A: shiftRight takes exactly two arguments")))) (clause ((PLit (LString "bitOr")) (PList (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "b"))) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")))) (EListLit (ELit (LString "i64.or")) (EApp (EVar "boxIntW") (EVar "prog"))))) (clause ((PLit (LString "bitXor")) (PList (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "b"))) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")))) (EListLit (ELit (LString "i64.xor")) (EApp (EVar "boxIntW") (EVar "prog"))))) (clause ((PLit (LString "bitNot")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")) (ELit (LString "i64.const -1")) (ELit (LString "i64.xor")) (EApp (EVar "boxIntW") (EVar "prog"))))) (clause ((PLit (LString "intBitsToFloat")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")) (ELit (LString "f64.reinterpret_i64")) (ELit (LString "struct.new $float"))))) (clause ((PLit (LString "u8Truncate")) (PList (PVar "a"))) (EApp (EApp (EApp (EApp (EApp (EVar "emitTruncateRef") (EVar "prog")) (EVar "env")) (EVar "d")) (ELit (LString "U8"))) (EVar "a"))) (clause ((PLit (LString "u16Truncate")) (PList (PVar "a"))) (EApp (EApp (EApp (EApp (EApp (EVar "emitTruncateRef") (EVar "prog")) (EVar "env")) (EVar "d")) (ELit (LString "U16"))) (EVar "a"))) (clause ((PLit (LString "u32Truncate")) (PList (PVar "a"))) (EApp (EApp (EApp (EApp (EApp (EVar "emitTruncateRef") (EVar "prog")) (EVar "env")) (EVar "d")) (ELit (LString "U32"))) (EVar "a"))) (clause ((PLit (LString "u8ToInt")) (PList (PVar "a"))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a"))) (clause ((PLit (LString "u16ToInt")) (PList (PVar "a"))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a"))) (clause ((PLit (LString "u32ToInt")) (PList (PVar "a"))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a"))) (clause ((PLit (LString "i32Truncate")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")) (ELit (LString "i64.extend32_s")) (EApp (EVar "boxIntW") (EVar "prog"))))) (clause ((PLit (LString "i32ToInt")) (PList (PVar "a"))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a"))) (clause ((PLit (LString "i64FromBits")) (PList (PVar "a"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EVar "unboxU64W")) (EListLit (ELit (LString "struct.new $i64"))))) (clause ((PLit (LString "i64ToBits")) (PList (PVar "a"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EVar "unboxI64W")) (EListLit (ELit (LString "struct.new $u64"))))) (clause ((PLit (LString "u64Truncate")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EVar "unboxIntW") (EVar "prog")) (ELit (LString "struct.new $u64"))))) (clause ((PLit (LString "u64TruncateToInt")) (PList (PVar "a"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EVar "unboxU64W")) (EListLit (EApp (EVar "boxIntW") (EVar "prog"))))) (clause ((PLit (LString "u64BitAnd")) (PList (PVar "a") (PVar "b"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitU64KernelRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EVar "b")) (ELit (LString "i64.and")))) (clause ((PLit (LString "u64BitOr")) (PList (PVar "a") (PVar "b"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitU64KernelRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EVar "b")) (ELit (LString "i64.or")))) (clause ((PLit (LString "u64BitXor")) (PList (PVar "a") (PVar "b"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitU64KernelRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EVar "b")) (ELit (LString "i64.xor")))) (clause ((PLit (LString "u64MulHigh")) (PList (PVar "a") (PVar "b"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitU64KernelRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EVar "b")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_u64_mulhi"))) (ELit (LInt 2))))) (clause ((PLit (LString "u64ShiftLeft")) (PList (PVar "a") (PVar "k"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitU64ShiftRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EVar "k")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_u64_shl"))) (ELit (LInt 2))))) (clause ((PLit (LString "u64ShiftRight")) (PList (PVar "a") (PVar "k"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitU64ShiftRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EVar "k")) (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_u64_shr"))) (ELit (LInt 2))))) (clause ((PLit (LString "sqrt")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "f64.sqrt")) (ELit (LString "struct.new $float"))))) (clause ((PLit (LString "floor")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "f64.floor")) (ELit (LString "struct.new $float"))))) (clause ((PLit (LString "ceil")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "f64.ceil")) (ELit (LString "struct.new $float"))))) (clause ((PLit (LString "trunc")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "f64.trunc")) (ELit (LString "struct.new $float"))))) (clause ((PLit (LString "round")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_round"))) (ELit (LInt 1))) (ELit (LString "struct.new $float"))))) (clause ((PLit (LString "cbrt")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_cbrt"))) (ELit (LInt 1))) (ELit (LString "struct.new $float"))))) (clause ((PLit (LString "exp")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_exp"))) (ELit (LInt 1))) (ELit (LString "struct.new $float"))))) (clause ((PLit (LString "log")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_log"))) (ELit (LInt 1))) (ELit (LString "struct.new $float"))))) (clause ((PLit (LString "log2")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_log2"))) (ELit (LInt 1))) (ELit (LString "struct.new $float"))))) (clause ((PLit (LString "log10")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_log10"))) (ELit (LInt 1))) (ELit (LString "struct.new $float"))))) (clause ((PLit (LString "sin")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_sin"))) (ELit (LInt 1))) (ELit (LString "struct.new $float"))))) (clause ((PLit (LString "cos")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_cos"))) (ELit (LInt 1))) (ELit (LString "struct.new $float"))))) (clause ((PLit (LString "tan")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_tan"))) (ELit (LInt 1))) (ELit (LString "struct.new $float"))))) (clause ((PLit (LString "asin")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_asin"))) (ELit (LInt 1))) (ELit (LString "struct.new $float"))))) (clause ((PLit (LString "acos")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_acos"))) (ELit (LInt 1))) (ELit (LString "struct.new $float"))))) (clause ((PLit (LString "atan")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_atan"))) (ELit (LInt 1))) (ELit (LString "struct.new $float"))))) (clause ((PLit (LString "sinh")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_sinh"))) (ELit (LInt 1))) (ELit (LString "struct.new $float"))))) (clause ((PLit (LString "cosh")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_cosh"))) (ELit (LInt 1))) (ELit (LString "struct.new $float"))))) (clause ((PLit (LString "tanh")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_tanh"))) (ELit (LInt 1))) (ELit (LString "struct.new $float"))))) (clause ((PLit (LString "pow")) (PList (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "b"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_pow"))) (ELit (LInt 2))) (ELit (LString "struct.new $float"))))) (clause ((PLit (LString "atan2")) (PList (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "b"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_atan2"))) (ELit (LInt 2))) (ELit (LString "struct.new $float"))))) (clause ((PLit (LString "hypot")) (PList (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "b"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_hypot"))) (ELit (LInt 2))) (ELit (LString "struct.new $float"))))) (clause ((PLit (LString "floatRem")) (PList (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EApp (EApp (EApp (EApp (EVar "floatArgW") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "b"))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_float_rem"))) (ELit (LInt 2))) (ELit (LString "struct.new $float"))))) (clause ((PVar "name") PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "wasm W8: unsupported leaf extern '")) (EVar "name")) (ELit (LString "'"))))))) (EApp (EApp (EVar "go") (EVar "name0")) (EVar "args0"))))
 (DTypeSig false "floatArgW" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "floatArgW" ((PVar "prog") (PVar "env") (PVar "d") (PVar "a")) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "ref.cast (ref $float)")) (ELit (LString "struct.get $float 0")))))
 (DTypeSig false "emitArrayExternRef" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyApp (TyCon "List") (TyCon "String"))))))))
@@ -14511,9 +13986,7 @@ hasFamilyW prog symbol tag =
 (DTypeSig false "wTrmcLinkOne" (TyFun (TyCon "Prog") (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "wTrmcLinkOne" ((PVar "prog") (PVar "isBuiltinList") (PVar "ctorName") (PVar "selfIdx") (PVar "valInstrs")) (EBlock (DoLet false false (PVar "cellStruct") (EApp (EApp (EVar "trmcCellStruct") (EVar "isBuiltinList")) (EVar "ctorName"))) (DoExpr (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (ELit (LString "local.get ")) (EVar "wTrmcDestL")) (EBinOp "++" (EBinOp "++" (ELit (LString "ref.cast (ref $")) (EApp (EApp (EVar "typeNameW") (EVar "prog")) (EVar "cellStruct"))) (ELit (LString ")")))) (EVar "valInstrs")) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "struct.set $")) (EApp (EVar "$core.display") (EApp (EApp (EVar "typeNameW") (EVar "prog")) (EVar "cellStruct")))) (ELit (LString " "))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EBinOp "+" (EVar "selfIdx") (ELit (LInt 1)))))) (ELit (LString ""))))))))
 (DTypeSig false "wTrmcLinkChain" (TyFun (TyCon "Prog") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "wTrmcLinkChain" (PWild PWild (PList) PWild PWild) (EListLit))
-(DFunDef false "wTrmcLinkChain" ((PVar "prog") (PVar "isBuiltinList") (PList (PTuple (PVar "ctorName") (PVar "selfIdx"))) PWild (PVar "valInstrs")) (EApp (EApp (EApp (EApp (EApp (EVar "wTrmcLinkOne") (EVar "prog")) (EVar "isBuiltinList")) (EVar "ctorName")) (EVar "selfIdx")) (EVar "valInstrs")))
-(DFunDef false "wTrmcLinkChain" ((PVar "prog") (PVar "isBuiltinList") (PCons (PTuple (PVar "ctorName") (PVar "selfIdx")) (PVar "rest")) (PVar "k") (PVar "valInstrs")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (ELit (LString "local.get ")) (EVar "wTrmcDctorL")) (EBinOp "++" (ELit (LString "i32.const ")) (EApp (EVar "intToString") (EVar "k"))) (ELit (LString "i32.eq")) (ELit (LString "if"))) (EApp (EVar "indent") (EApp (EApp (EApp (EApp (EApp (EVar "wTrmcLinkOne") (EVar "prog")) (EVar "isBuiltinList")) (EVar "ctorName")) (EVar "selfIdx")) (EVar "valInstrs")))) (EListLit (ELit (LString "else")))) (EApp (EVar "indent") (EApp (EApp (EApp (EApp (EApp (EVar "wTrmcLinkChain") (EVar "prog")) (EVar "isBuiltinList")) (EVar "rest")) (EBinOp "+" (EVar "k") (ELit (LInt 1)))) (EVar "valInstrs")))) (EListLit (ELit (LString "end")))))
+(DFunDef false "wTrmcLinkChain" ((PVar "prog") (PVar "isBuiltinList") (PVar "xs0") (PVar "k0") (PVar "valInstrs")) (ELetGroup ((lgb "go" (clause ((PList) PWild) (EListLit)) (clause ((PList (PTuple (PVar "ctorName") (PVar "selfIdx"))) PWild) (EApp (EApp (EApp (EApp (EApp (EVar "wTrmcLinkOne") (EVar "prog")) (EVar "isBuiltinList")) (EVar "ctorName")) (EVar "selfIdx")) (EVar "valInstrs"))) (clause ((PCons (PTuple (PVar "ctorName") (PVar "selfIdx")) (PVar "rest")) (PVar "k")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (ELit (LString "local.get ")) (EVar "wTrmcDctorL")) (EBinOp "++" (ELit (LString "i32.const ")) (EApp (EVar "intToString") (EVar "k"))) (ELit (LString "i32.eq")) (ELit (LString "if"))) (EApp (EVar "indent") (EApp (EApp (EApp (EApp (EApp (EVar "wTrmcLinkOne") (EVar "prog")) (EVar "isBuiltinList")) (EVar "ctorName")) (EVar "selfIdx")) (EVar "valInstrs")))) (EListLit (ELit (LString "else")))) (EApp (EVar "indent") (EApp (EApp (EVar "go") (EVar "rest")) (EBinOp "+" (EVar "k") (ELit (LInt 1)))))) (EListLit (ELit (LString "end"))))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "k0"))))
 (DTypeSig false "wTrmcRecordDctor" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "wTrmcRecordDctor" ((PList PWild) PWild) (EListLit))
 (DFunDef false "wTrmcRecordDctor" ((PVar "ctorSet") (PVar "ctorName")) (EListLit (EBinOp "++" (ELit (LString "i32.const ")) (EApp (EVar "intToString") (EApp (EApp (EApp (EVar "wTrmcCtorIndex") (EVar "ctorSet")) (EVar "ctorName")) (ELit (LInt 0))))) (EBinOp "++" (ELit (LString "local.set ")) (EVar "wTrmcDctorL"))))
@@ -14527,8 +14000,7 @@ hasFamilyW prog symbol tag =
 (DTypeSig false "wTrmcEmitArgsToTemps" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "wTrmcEmitArgsToTemps" ((PVar "prog") (PVar "env") (PVar "args") (PVar "base")) (EApp (EApp (EApp (EApp (EApp (EVar "wTrmcArgsGo") (EVar "prog")) (EVar "env")) (EVar "args")) (EVar "base")) (ELit (LInt 0))))
 (DTypeSig false "wTrmcArgsGo" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "wTrmcArgsGo" (PWild PWild (PList) PWild PWild) (EListLit))
-(DFunDef false "wTrmcArgsGo" ((PVar "prog") (PVar "env") (PCons (PVar "a") (PVar "rest")) (PVar "base") (PVar "k")) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "a")) (EListLit (EBinOp "++" (ELit (LString "local.set ")) (EApp (EVar "wTrmcTempL") (EBinOp "+" (EVar "base") (EVar "k")))))) (EApp (EApp (EApp (EApp (EApp (EVar "wTrmcArgsGo") (EVar "prog")) (EVar "env")) (EVar "rest")) (EVar "base")) (EBinOp "+" (EVar "k") (ELit (LInt 1))))))
+(DFunDef false "wTrmcArgsGo" ((PVar "prog") (PVar "env") (PVar "xs0") (PVar "base") (PVar "k0")) (ELetGroup ((lgb "go" (clause ((PList) PWild) (EListLit)) (clause ((PCons (PVar "a") (PVar "rest")) (PVar "k")) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "a")) (EListLit (EBinOp "++" (ELit (LString "local.set ")) (EApp (EVar "wTrmcTempL") (EBinOp "+" (EVar "base") (EVar "k")))))) (EApp (EApp (EVar "go") (EVar "rest")) (EBinOp "+" (EVar "k") (ELit (LInt 1)))))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "k0"))))
 (DTypeSig false "wTrmcStoreSlots" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "wTrmcStoreSlots" ((PVar "pslots") (PVar "args") (PVar "base")) (EApp (EApp (EApp (EApp (EVar "wTrmcStoreGo") (EVar "pslots")) (EVar "args")) (EVar "base")) (ELit (LInt 0))))
 (DTypeSig false "wTrmcStoreGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))))
@@ -14549,17 +14021,9 @@ hasFamilyW prog symbol tag =
 (DTypeSig false "snd" (TyFun (TyTuple (TyVar "a") (TyVar "b")) (TyVar "b")))
 (DFunDef false "snd" ((PTuple PWild (PVar "b"))) (EVar "b"))
 (DTypeSig false "wTrmcCtorTailsOf" (TyFun (TyCon "Prog") (TyFun (TyCon "SelfRef") (TyFun (TyCon "Int") (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))))))
-(DFunDef false "wTrmcCtorTailsOf" ((PVar "prog") (PVar "self") (PVar "arity") (PCon "CIf" PWild (PVar "t") (PVar "f"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "wTrmcCtorTailsOf") (EVar "prog")) (EVar "self")) (EVar "arity")) (EVar "t")) (EApp (EApp (EApp (EApp (EVar "wTrmcCtorTailsOf") (EVar "prog")) (EVar "self")) (EVar "arity")) (EVar "f"))))
-(DFunDef false "wTrmcCtorTailsOf" ((PVar "prog") (PVar "self") (PVar "arity") (PCon "CLet" PWild PWild PWild (PVar "b"))) (EApp (EApp (EApp (EApp (EVar "wTrmcCtorTailsOf") (EVar "prog")) (EVar "self")) (EVar "arity")) (EVar "b")))
-(DFunDef false "wTrmcCtorTailsOf" ((PVar "prog") (PVar "self") (PVar "arity") (PCon "CBlock" (PVar "stmts"))) (EMatch (EApp (EVar "lastStmtExpr") (EVar "stmts")) (arm (PCon "Some" (PVar "ex")) () (EApp (EApp (EApp (EApp (EVar "wTrmcCtorTailsOf") (EVar "prog")) (EVar "self")) (EVar "arity")) (EVar "ex"))) (arm (PCon "None") () (EListLit))))
-(DFunDef false "wTrmcCtorTailsOf" ((PVar "prog") (PVar "self") (PVar "arity") (PCon "CDecision" PWild (PVar "arms") PWild)) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "a")) (EApp (EApp (EApp (EApp (EVar "wTrmcCtorTailsOf") (EVar "prog")) (EVar "self")) (EVar "arity")) (EApp (EVar "armBody") (EVar "a"))))) (EVar "arms")))
-(DFunDef false "wTrmcCtorTailsOf" ((PVar "prog") (PVar "self") (PVar "arity") (PVar "ex")) (EIf (EApp (EApp (EApp (EApp (EApp (EVar "isCtorTail") (ELam ((PVar "c")) (EApp (EApp (EVar "isCtor") (EVar "prog")) (EVar "c")))) (ELam ((PVar "c")) (EApp (EApp (EVar "ctorArity") (EVar "prog")) (EVar "c")))) (EVar "self")) (EVar "arity")) (EVar "ex")) (EListLit (ETuple (EApp (EVar "ctorTailName") (EVar "ex")) (EApp (EVar "ctorTailSelfIdx") (EVar "ex")))) (EListLit)))
+(DFunDef false "wTrmcCtorTailsOf" ((PVar "prog") (PVar "self") (PVar "arity") (PVar "ex0")) (ELetGroup ((lgb "go" (clause ((PCon "CIf" PWild (PVar "t") (PVar "f"))) (EBinOp "++" (EApp (EVar "go") (EVar "t")) (EApp (EVar "go") (EVar "f")))) (clause ((PCon "CLet" PWild PWild PWild (PVar "b"))) (EApp (EVar "go") (EVar "b"))) (clause ((PCon "CBlock" (PVar "stmts"))) (EMatch (EApp (EVar "lastStmtExpr") (EVar "stmts")) (arm (PCon "Some" (PVar "ex")) () (EApp (EVar "go") (EVar "ex"))) (arm (PCon "None") () (EListLit)))) (clause ((PCon "CDecision" PWild (PVar "arms") PWild)) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "a")) (EApp (EVar "go") (EApp (EVar "armBody") (EVar "a"))))) (EVar "arms"))) (clause ((PVar "ex")) (EIf (EApp (EApp (EApp (EApp (EApp (EVar "isCtorTail") (ELam ((PVar "c")) (EApp (EApp (EVar "isCtor") (EVar "prog")) (EVar "c")))) (ELam ((PVar "c")) (EApp (EApp (EVar "ctorArity") (EVar "prog")) (EVar "c")))) (EVar "self")) (EVar "arity")) (EVar "ex")) (EListLit (ETuple (EApp (EVar "ctorTailName") (EVar "ex")) (EApp (EVar "ctorTailSelfIdx") (EVar "ex")))) (EListLit))))) (EApp (EVar "go") (EVar "ex0"))))
 (DTypeSig false "wTrmcCtorTailExprs" (TyFun (TyCon "Prog") (TyFun (TyCon "SelfRef") (TyFun (TyCon "Int") (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CExpr")))))))
-(DFunDef false "wTrmcCtorTailExprs" ((PVar "prog") (PVar "self") (PVar "arity") (PCon "CIf" PWild (PVar "t") (PVar "f"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "wTrmcCtorTailExprs") (EVar "prog")) (EVar "self")) (EVar "arity")) (EVar "t")) (EApp (EApp (EApp (EApp (EVar "wTrmcCtorTailExprs") (EVar "prog")) (EVar "self")) (EVar "arity")) (EVar "f"))))
-(DFunDef false "wTrmcCtorTailExprs" ((PVar "prog") (PVar "self") (PVar "arity") (PCon "CLet" PWild PWild PWild (PVar "b"))) (EApp (EApp (EApp (EApp (EVar "wTrmcCtorTailExprs") (EVar "prog")) (EVar "self")) (EVar "arity")) (EVar "b")))
-(DFunDef false "wTrmcCtorTailExprs" ((PVar "prog") (PVar "self") (PVar "arity") (PCon "CBlock" (PVar "stmts"))) (EMatch (EApp (EVar "lastStmtExpr") (EVar "stmts")) (arm (PCon "Some" (PVar "ex")) () (EApp (EApp (EApp (EApp (EVar "wTrmcCtorTailExprs") (EVar "prog")) (EVar "self")) (EVar "arity")) (EVar "ex"))) (arm (PCon "None") () (EListLit))))
-(DFunDef false "wTrmcCtorTailExprs" ((PVar "prog") (PVar "self") (PVar "arity") (PCon "CDecision" PWild (PVar "arms") PWild)) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "a")) (EApp (EApp (EApp (EApp (EVar "wTrmcCtorTailExprs") (EVar "prog")) (EVar "self")) (EVar "arity")) (EApp (EVar "armBody") (EVar "a"))))) (EVar "arms")))
-(DFunDef false "wTrmcCtorTailExprs" ((PVar "prog") (PVar "self") (PVar "arity") (PVar "ex")) (EIf (EApp (EApp (EApp (EApp (EApp (EVar "isCtorTail") (ELam ((PVar "c")) (EApp (EApp (EVar "isCtor") (EVar "prog")) (EVar "c")))) (ELam ((PVar "c")) (EApp (EApp (EVar "ctorArity") (EVar "prog")) (EVar "c")))) (EVar "self")) (EVar "arity")) (EVar "ex")) (EListLit (EVar "ex")) (EListLit)))
+(DFunDef false "wTrmcCtorTailExprs" ((PVar "prog") (PVar "self") (PVar "arity") (PVar "ex0")) (ELetGroup ((lgb "go" (clause ((PCon "CIf" PWild (PVar "t") (PVar "f"))) (EBinOp "++" (EApp (EVar "go") (EVar "t")) (EApp (EVar "go") (EVar "f")))) (clause ((PCon "CLet" PWild PWild PWild (PVar "b"))) (EApp (EVar "go") (EVar "b"))) (clause ((PCon "CBlock" (PVar "stmts"))) (EMatch (EApp (EVar "lastStmtExpr") (EVar "stmts")) (arm (PCon "Some" (PVar "ex")) () (EApp (EVar "go") (EVar "ex"))) (arm (PCon "None") () (EListLit)))) (clause ((PCon "CDecision" PWild (PVar "arms") PWild)) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "a")) (EApp (EVar "go") (EApp (EVar "armBody") (EVar "a"))))) (EVar "arms"))) (clause ((PVar "ex")) (EIf (EApp (EApp (EApp (EApp (EApp (EVar "isCtorTail") (ELam ((PVar "c")) (EApp (EApp (EVar "isCtor") (EVar "prog")) (EVar "c")))) (ELam ((PVar "c")) (EApp (EApp (EVar "ctorArity") (EVar "prog")) (EVar "c")))) (EVar "self")) (EVar "arity")) (EVar "ex")) (EListLit (EVar "ex")) (EListLit))))) (EApp (EVar "go") (EVar "ex0"))))
 (DTypeSig false "wTrmcBuildsBuiltinList" (TyFun (TyCon "Prog") (TyFun (TyCon "SelfRef") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyCon "Bool"))))))
 (DFunDef false "wTrmcBuildsBuiltinList" ((PVar "prog") (PVar "self") (PVar "arity") (PVar "clauses")) (EApp (EApp (EVar "anyList") (EVar "ctorTailIsCons")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "c")) (EApp (EApp (EApp (EApp (EVar "wTrmcCtorTailExprs") (EVar "prog")) (EVar "self")) (EVar "arity")) (EApp (EVar "clauseBodyOf") (EVar "c"))))) (EVar "clauses"))))
 (DTypeSig false "emitWasmTrmcFn" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "List") (TyCon "String"))))))))
@@ -14605,22 +14069,13 @@ hasFamilyW prog symbol tag =
 (DTypeSig false "emitTailCallW" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "emitTailCallW" ((PVar "prog") (PVar "env") (PVar "app")) (EBlock (DoLet false false (PTuple (PVar "hd") (PVar "args") (PVar "mode")) (EApp (EVar "appParts") (EVar "app"))) (DoExpr (EMatch (EVar "hd") (arm (PCon "CVar" (PVar "f0") PWild) () (EBlock (DoLet false false (PVar "f") (EApp (EApp (EVar "canonFn") (EVar "prog")) (EVar "f0"))) (DoExpr (EIf (EApp (EApp (EVar "envHas") (EVar "f0")) (EVar "env")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitIndirectApp") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "hd")) (EVar "args")) (EVar "CallTailW")) (EIf (EApp (EApp (EVar "isCtor") (EVar "prog")) (EVar "f")) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "app")) (EListLit (ELit (LString "return")))) (EIf (EApp (EApp (EVar "isFfiExternW") (EVar "prog")) (EVar "f")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitFfiAppW") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "hd")) (EVar "f")) (EVar "args")) (EVar "CallTailW")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "f0") (EVar "siteSentinelName")) (EBinOp "&&" (EApp (EApp (EApp (EVar "hasFamilyW") (EVar "prog")) (EVar "f0")) (ELit (LString "ref"))) (EBinOp "==" (EApp (EApp (EVar "runtimeNameW") (EVar "prog")) (EVar "f0")) (ELit (LString "Ref"))))) (EBinOp "&&" (EApp (EApp (EApp (EVar "hasFamilyW") (EVar "prog")) (EVar "f0")) (ELit (LString "ref"))) (EBinOp "==" (EApp (EApp (EVar "runtimeNameW") (EVar "prog")) (EVar "f0")) (ELit (LString "setRef"))))) (EApp (EVar "isSome") (EApp (EApp (EVar "externFamilyW") (EApp (EVar "progEmit") (EVar "prog"))) (EApp (EApp (EVar "runtimeNameW") (EVar "prog")) (EVar "f0"))))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitAppRef") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "app")) (EListLit (ELit (LString "return")))) (EIf (EBinOp "&&" (EApp (EApp (EVar "progFnMemberW") (EVar "prog")) (EVar "f")) (EApp (EVar "isExactCall") (EVar "mode"))) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "a")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "a")))) (EVar "args")) (EListLit (EApp (EApp (EApp (EApp (EVar "callFnW") (EVar "prog")) (EVar "CallTailW")) (EApp (EVar "userFnW") (EVar "f"))) (EApp (EVar "listLen") (EVar "args"))))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitIndirectApp") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "hd")) (EVar "args")) (EVar "CallTailW")))))))))) (arm (PCon "CMethod" (PVar "name") (PCon "MethodEvidence" (PVar "iface") (PVar "arity") (PVar "route") (PVar "implRoutes") (PVar "methRoutes"))) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitMethodRef") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "name")) (EVar "iface")) (EVar "arity")) (EVar "route")) (EVar "implRoutes")) (EVar "methRoutes")) (EVar "args")) (EVar "mode")) (EVar "CallTailW"))) (arm (PCon "CDict" (PVar "name") (PVar "routes")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitDictRef") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "name")) (EVar "routes")) (EVar "args")) (EVar "mode")) (EVar "CallTailW"))) (arm PWild () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitIndirectApp") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "hd")) (EVar "args")) (EVar "CallTailW")))))))
 (DTypeSig false "emitBlockTail" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "emitBlockTail" ((PVar "prog") (PVar "env") (PVar "arity") (PList (PCon "CSExpr" (PVar "ex")))) (EApp (EApp (EApp (EApp (EVar "emitRefTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "ex")))
-(DFunDef false "emitBlockTail" ((PVar "prog") (PVar "env") (PVar "arity") (PCons (PCon "CSExpr" (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "ex")) (EListLit (ELit (LString "drop")))) (EApp (EApp (EApp (EApp (EVar "emitBlockTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "rest"))))
-(DFunDef false "emitBlockTail" ((PVar "prog") (PVar "env") (PVar "arity") (PCons (PCon "CSLet" (PVar "recF") (PVar "pat") (PVar "ex")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "prefix") (PVar "env2")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitBlockBindingW") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "recF")) (EVar "pat")) (EVar "ex"))) (DoExpr (EBinOp "++" (EVar "prefix") (EApp (EApp (EApp (EApp (EVar "emitBlockTail") (EVar "prog")) (EVar "env2")) (EVar "arity")) (EVar "rest"))))))
-(DFunDef false "emitBlockTail" ((PVar "prog") (PVar "env") (PVar "arity") (PCons (PCon "CSAssign" (PVar "x") (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "ex")) (EListLit (EBinOp "++" (ELit (LString "local.set ")) (EApp (EApp (EApp (EVar "localTargetW") (EVar "prog")) (EVar "env")) (EVar "x"))))) (EApp (EApp (EApp (EApp (EVar "emitBlockTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "rest"))))
-(DFunDef false "emitBlockTail" ((PVar "prog") (PVar "env") (PVar "arity") (PList)) (EApp (EApp (EApp (EApp (EVar "emitRefTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EApp (EVar "CLit") (EVar "LUnit"))))
-(DFunDef false "emitBlockTail" ((PVar "prog") PWild PWild PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (EIf (EApp (EVar "rawProgramW") (EVar "prog")) (ELit (LString "scalar-mode: unsupported block statement")) (ELit (LString "ref-mode: unsupported block statement in tail position")))))
+(DFunDef false "emitBlockTail" ((PVar "prog") (PVar "env0") (PVar "arity") (PVar "ss0")) (ELetGroup ((lgb "go" (clause ((PVar "env") (PList (PCon "CSExpr" (PVar "ex")))) (EApp (EApp (EApp (EApp (EVar "emitRefTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "ex"))) (clause ((PVar "env") (PCons (PCon "CSExpr" (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "ex")) (EListLit (ELit (LString "drop")))) (EApp (EApp (EVar "go") (EVar "env")) (EVar "rest")))) (clause ((PVar "env") (PCons (PCon "CSLet" (PVar "recF") (PVar "pat") (PVar "ex")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "prefix") (PVar "env2")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitBlockBindingW") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "recF")) (EVar "pat")) (EVar "ex"))) (DoExpr (EBinOp "++" (EVar "prefix") (EApp (EApp (EVar "go") (EVar "env2")) (EVar "rest")))))) (clause ((PVar "env") (PCons (PCon "CSAssign" (PVar "x") (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "ex")) (EListLit (EBinOp "++" (ELit (LString "local.set ")) (EApp (EApp (EApp (EVar "localTargetW") (EVar "prog")) (EVar "env")) (EVar "x"))))) (EApp (EApp (EVar "go") (EVar "env")) (EVar "rest")))) (clause ((PVar "env") (PList)) (EApp (EApp (EApp (EApp (EVar "emitRefTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EApp (EVar "CLit") (EVar "LUnit")))) (clause (PWild PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (EIf (EApp (EVar "rawProgramW") (EVar "prog")) (ELit (LString "scalar-mode: unsupported block statement")) (ELit (LString "ref-mode: unsupported block statement in tail position"))))))) (EApp (EApp (EVar "go") (EVar "env0")) (EVar "ss0"))))
 (DTypeSig false "emitDecisionTail" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "CExpr") (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "CTree") (TyApp (TyCon "List") (TyCon "String")))))))))
 (DFunDef false "emitDecisionTail" ((PVar "prog") (PVar "env") (PVar "arity") (PVar "scrut") (PVar "arms") (PVar "tree")) (EBlock (DoLet false false (PVar "st") (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "scrut"))) (DoLet false false (PVar "scrutL") (EApp (EVar "scratchLocal") (ELit (LInt 0)))) (DoLet false false (PVar "occ0") (EListLit (EBinOp "++" (ELit (LString "local.get $")) (EVar "scrutL")))) (DoLet false false (PVar "shared") (EApp (EApp (EVar "orArms") (ELit (LString "$ort"))) (EVar "arms"))) (DoLet false false (PVar "progT") (EApp (EApp (EVar "progWithOrBlocks") (EVar "shared")) (EVar "prog"))) (DoLet false false (PVar "treeCode") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeTail") (EVar "progT")) (EVar "env")) (EVar "arity")) (ELit (LInt 1))) (EVar "occ0")) (EListLit (EVar "occ0"))) (EVar "arms")) (EVar "tree"))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "st") (EListLit (EBinOp "++" (ELit (LString "local.set $")) (EVar "scrutL")))) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "inner") (PVar "a")) (EApp (EApp (EApp (EApp (EApp (EVar "orBlockTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "a")) (EVar "inner")))) (EVar "treeCode")) (EVar "shared"))))))
 (DTypeSig false "orBlockTail" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "OrArm") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "orBlockTail" ((PVar "prog") (PVar "env") (PVar "arity") (PVar "a") (PVar "inner")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EVar "orBlockOpen") (EVar "a")) (EApp (EVar "indent") (EBinOp "++" (EVar "inner") (EListLit (ELit (LString "unreachable")))))) (EApp (EVar "orBlockClose") (EVar "a"))) (EApp (EApp (EApp (EApp (EVar "emitRefTail") (EVar "prog")) (EApp (EApp (EVar "orBodyEnv") (EVar "env")) (EVar "a"))) (EVar "arity")) (EFieldAccess (EVar "a") "oaBody"))))
 (DTypeSig false "emitTreeTail" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "CTree") (TyApp (TyCon "List") (TyCon "String")))))))))))
-(DFunDef false "emitTreeTail" ((PVar "prog") (PVar "_env") (PVar "_arity") (PVar "_d") (PVar "_root") (PVar "_occs") (PVar "_arms") (PCon "CTFail" (PVar "fs"))) (EApp (EApp (EVar "wasmFailTrap") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "fs")))
-(DFunDef false "emitTreeTail" ((PVar "prog") (PVar "env") (PVar "arity") (PVar "_d") (PVar "root") (PVar "_occs") (PVar "arms") (PCon "CTLeaf" (PVar "i"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitLeafTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "root")) (EVar "arms")) (EVar "i")))
-(DFunDef false "emitTreeTail" ((PVar "prog") (PVar "env") (PVar "arity") (PVar "d") (PVar "root") (PVar "occs") (PVar "arms") (PCon "CTGuard" (PVar "i") (PVar "fail"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitGuardArmTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "d")) (EVar "root")) (EVar "occs")) (EVar "arms")) (EVar "i")) (EVar "fail")))
-(DFunDef false "emitTreeTail" ((PVar "prog") (PVar "env") (PVar "arity") (PVar "d") (PVar "root") (PVar "occs") (PVar "arms") (PCon "CTDrop" (PVar "sub"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "d")) (EVar "root")) (EApp (EVar "tailList") (EVar "occs"))) (EVar "arms")) (EMethodRef "sub")))
-(DFunDef false "emitTreeTail" ((PVar "prog") (PVar "env") (PVar "arity") (PVar "d") (PVar "root") (PVar "occs") (PVar "arms") (PCon "CTSwitch" (PVar "branches") (PVar "dft"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitSwitchTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "d")) (EVar "root")) (EVar "occs")) (EVar "arms")) (EVar "branches")) (EVar "dft")))
+(DFunDef false "emitTreeTail" ((PVar "prog") (PVar "env") (PVar "arity") (PVar "d") (PVar "root") (PVar "occs0") (PVar "arms") (PVar "x0")) (ELetGroup ((lgb "go" (clause ((PVar "_occs") (PCon "CTFail" (PVar "fs"))) (EApp (EApp (EVar "wasmFailTrap") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "fs"))) (clause ((PVar "_occs") (PCon "CTLeaf" (PVar "i"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitLeafTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "root")) (EVar "arms")) (EVar "i"))) (clause ((PVar "occs") (PCon "CTGuard" (PVar "i") (PVar "fail"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitGuardArmTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "d")) (EVar "root")) (EVar "occs")) (EVar "arms")) (EVar "i")) (EVar "fail"))) (clause ((PVar "occs") (PCon "CTDrop" (PVar "sub"))) (EApp (EApp (EVar "go") (EApp (EVar "tailList") (EVar "occs"))) (EMethodRef "sub"))) (clause ((PVar "occs") (PCon "CTSwitch" (PVar "branches") (PVar "dft"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitSwitchTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "d")) (EVar "root")) (EVar "occs")) (EVar "arms")) (EVar "branches")) (EVar "dft"))))) (EApp (EApp (EVar "go") (EVar "occs0")) (EVar "x0"))))
 (DTypeSig false "emitLeafTail" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))))))
 (DFunDef false "emitLeafTail" ((PVar "prog") (PVar "env") (PVar "arity") (PVar "root") (PVar "arms") (PVar "i")) (EMatch (EApp (EApp (EApp (EVar "leafArm") (EVar "prog")) (EVar "arms")) (EVar "i")) (arm (PCon "Some" (PTuple (PVar "pat") PWild (PVar "body") (PVar "share"))) () (EBlock (DoLet false false (PTuple (PVar "binds") (PVar "env2")) (EApp (EApp (EApp (EApp (EVar "bindPatRef") (EVar "prog")) (EVar "env")) (EVar "pat")) (EVar "root"))) (DoExpr (EBinOp "++" (EVar "binds") (EApp (EApp (EApp (EApp (EApp (EVar "armExitTail") (EVar "prog")) (EVar "env2")) (EVar "arity")) (EVar "body")) (EVar "share")))))) (arm (PCon "None") () (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "ref-mode: tail decision arm index out of range"))))))
 (DTypeSig false "armExitTail" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "CExpr") (TyFun (TyApp (TyCon "Option") (TyCon "OrArm")) (TyApp (TyCon "List") (TyCon "String"))))))))
@@ -14639,15 +14094,11 @@ hasFamilyW prog symbol tag =
 (DTypeSig false "emitBrTableTowerTail" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "CTBranch")) (TyFun (TyCon "CTree") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))))))))))))
 (DFunDef false "emitBrTableTowerTail" ((PVar "prog") (PVar "env") (PVar "arity") (PVar "d") (PVar "root") (PVar "svRead") (PVar "rest") (PVar "arms") (PVar "branches") (PVar "dft") (PVar "ty") (PVar "sd") (PVar "nOrd")) (EBlock (DoLet false false (PVar "labels") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "labelBranch") (EVar "WN.WSwitchTail")) (EVar "sd"))) (EApp (EApp (EVar "rangeList") (ELit (LInt 0))) (EVar "nOrd")))) (DoLet false false (PVar "dftLabel") (EApp (EApp (EVar "labelName") (EVar "WN.WSwitchTail")) (EVar "sd"))) (DoLet false false (PVar "tableInstr") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "br_table ")) (EApp (EVar "$core.display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EVar "labels")))) (ELit (LString " "))) (EApp (EVar "$core.display") (EVar "dftLabel"))) (ELit (LString "")))) (DoLet false false (PVar "opens") (EBinOp "++" (EListLit (EBinOp "++" (ELit (LString "block ")) (EVar "dftLabel"))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "k")) (EBinOp "++" (ELit (LString "block ")) (EApp (EApp (EApp (EVar "labelBranch") (EVar "WN.WSwitchTail")) (EVar "sd")) (EVar "k"))))) (EApp (EApp (EVar "rangeList") (ELit (LInt 0))) (EVar "nOrd"))))) (DoLet false false (PVar "pick") (EBinOp "++" (EApp (EApp (EApp (EVar "discrimReadOf") (EVar "prog")) (EVar "svRead")) (EVar "ty")) (EListLit (EVar "tableInstr")))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "opens") (EVar "pick")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "towerBodiesTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "d")) (EVar "root")) (EVar "svRead")) (EVar "rest")) (EVar "arms")) (EVar "branches")) (EVar "dft")) (EVar "ty")) (EVar "sd")) (EBinOp "-" (EVar "nOrd") (ELit (LInt 1))))))))
 (DTypeSig false "towerBodiesTail" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "CTBranch")) (TyFun (TyCon "CTree") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))))))))))))
-(DFunDef false "towerBodiesTail" ((PVar "prog") (PVar "env") (PVar "arity") (PVar "d") (PVar "root") (PVar "svRead") (PVar "rest") (PVar "arms") (PVar "branches") (PVar "dft") (PVar "ty") (PVar "sd") (PVar "k")) (EIf (EBinOp "<" (EVar "k") (ELit (LInt 0))) (EBinOp "++" (EListLit (ELit (LString "end"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "d")) (EVar "root")) (EVar "rest")) (EVar "arms")) (EVar "dft"))) (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "end"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitOrdinalSlotTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "d")) (EVar "root")) (EVar "svRead")) (EVar "rest")) (EVar "arms")) (EVar "branches")) (EVar "ty")) (EVar "sd")) (EVar "k"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "towerBodiesTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "d")) (EVar "root")) (EVar "svRead")) (EVar "rest")) (EVar "arms")) (EVar "branches")) (EVar "dft")) (EVar "ty")) (EVar "sd")) (EBinOp "-" (EVar "k") (ELit (LInt 1)))))))
+(DFunDef false "towerBodiesTail" ((PVar "prog") (PVar "env") (PVar "arity") (PVar "d") (PVar "root") (PVar "sr") (PVar "rest") (PVar "arms") (PVar "brs") (PVar "dft") (PVar "ty") (PVar "sd") (PVar "k0")) (ELetGroup ((lgb "go" (clause ((PVar "k")) (EIf (EBinOp "<" (EVar "k") (ELit (LInt 0))) (EBinOp "++" (EListLit (ELit (LString "end"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "d")) (EVar "root")) (EVar "rest")) (EVar "arms")) (EVar "dft"))) (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "end"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitOrdinalSlotTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "d")) (EVar "root")) (EVar "sr")) (EVar "rest")) (EVar "arms")) (EVar "brs")) (EVar "ty")) (EVar "sd")) (EVar "k"))) (EApp (EVar "go") (EBinOp "-" (EVar "k") (ELit (LInt 1))))))))) (EApp (EVar "go") (EVar "k0"))))
 (DTypeSig false "emitOrdinalSlotTail" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "CTBranch")) (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))))))))))))
 (DFunDef false "emitOrdinalSlotTail" ((PVar "prog") (PVar "env") (PVar "arity") (PVar "d") (PVar "root") (PVar "svRead") (PVar "rest") (PVar "arms") (PVar "branches") (PVar "_ty") (PVar "sd") (PVar "k")) (EMatch (EApp (EApp (EVar "branchForOrdinal") (EVar "branches")) (EVar "k")) (arm (PCon "Some" (PCon "CTBranch" (PVar "h") (PVar "sub"))) () (EBlock (DoLet false false (PVar "cs") (EApp (EApp (EVar "headCtorStructName") (EVar "prog")) (EVar "h"))) (DoLet false false (PVar "a") (EApp (EVar "snd") (EApp (EApp (EVar "conHeadInfoUnsafe") (EVar "prog")) (EVar "h")))) (DoLet false false (PVar "fieldOccs") (EApp (EApp (EMethodRef "map") (ELam ((PVar "i")) (EBinOp "++" (EVar "svRead") (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "ref.cast (ref $")) (EApp (EApp (EVar "typeNameW") (EVar "prog")) (EVar "cs"))) (ELit (LString ")"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "struct.get $")) (EApp (EVar "$core.display") (EApp (EApp (EVar "typeNameW") (EVar "prog")) (EVar "cs")))) (ELit (LString " "))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EBinOp "+" (EVar "i") (ELit (LInt 1)))))) (ELit (LString ""))))))) (EApp (EApp (EVar "rangeList") (ELit (LInt 0))) (EVar "a")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "d")) (EVar "root")) (EBinOp "++" (EVar "fieldOccs") (EVar "rest"))) (EVar "arms")) (EMethodRef "sub"))))) (arm (PCon "None") () (EListLit (EBinOp "++" (ELit (LString "br ")) (EApp (EApp (EVar "labelName") (EVar "WN.WSwitchTail")) (EVar "sd")))))))
 (DTypeSig false "emitLitSwitchTail" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyApp (TyCon "List") (TyCon "CTBranch")) (TyFun (TyCon "CTree") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))))))))))
-(DFunDef false "emitLitSwitchTail" ((PVar "prog") (PVar "env") (PVar "arity") (PVar "d") (PVar "root") (PVar "_foc") (PVar "rest") (PVar "arms") (PList) (PVar "dft") (PVar "idt")) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "d")) (EVar "root")) (EVar "rest")) (EVar "arms")) (EVar "dft"))))
-(DFunDef false "emitLitSwitchTail" ((PVar "prog") (PVar "env") (PVar "arity") (PVar "d") (PVar "root") (PVar "foc") (PVar "rest") (PVar "arms") (PCons (PCon "CTBranch" (PCon "HLit" (PCon "LInt" (PVar "k"))) (PVar "sub")) (PVar "more")) (PVar "dft") (PVar "idt")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "indentBy") (EVar "idt")) (EBinOp "++" (EBinOp "++" (EVar "foc") (EListLit (EApp (EVar "unboxIntW") (EVar "prog")) (EBinOp "++" (ELit (LString "i64.const ")) (EApp (EVar "intToString") (EVar "k"))) (ELit (LString "i64.eq")))) (EListLit (ELit (LString "if"))))) (EApp (EApp (EVar "indentBy") (EBinOp "+" (EVar "idt") (ELit (LInt 1)))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "d")) (EVar "root")) (EVar "rest")) (EVar "arms")) (EMethodRef "sub")))) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EListLit (ELit (LString "else"))))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitLitSwitchTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "d")) (EVar "root")) (EVar "foc")) (EVar "rest")) (EVar "arms")) (EVar "more")) (EVar "dft")) (EBinOp "+" (EVar "idt") (ELit (LInt 1))))) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EListLit (ELit (LString "end")) (ELit (LString "unreachable"))))))
-(DFunDef false "emitLitSwitchTail" ((PVar "prog") (PVar "env") (PVar "arity") (PVar "d") (PVar "root") (PVar "foc") (PVar "rest") (PVar "arms") (PCons (PCon "CTBranch" (PCon "HLit" (PCon "LChar" (PVar "c"))) (PVar "sub")) (PVar "more")) (PVar "dft") (PVar "idt")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "indentBy") (EVar "idt")) (EBinOp "++" (EBinOp "++" (EVar "foc") (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (EBinOp "++" (ELit (LString "i32.const ")) (EApp (EVar "intToString") (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EApp (EVar "stringToChars") (EVar "c")))))) (ELit (LString "i32.eq")))) (EListLit (ELit (LString "if"))))) (EApp (EApp (EVar "indentBy") (EBinOp "+" (EVar "idt") (ELit (LInt 1)))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "d")) (EVar "root")) (EVar "rest")) (EVar "arms")) (EMethodRef "sub")))) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EListLit (ELit (LString "else"))))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitLitSwitchTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "d")) (EVar "root")) (EVar "foc")) (EVar "rest")) (EVar "arms")) (EVar "more")) (EVar "dft")) (EBinOp "+" (EVar "idt") (ELit (LInt 1))))) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EListLit (ELit (LString "end")) (ELit (LString "unreachable"))))))
-(DFunDef false "emitLitSwitchTail" ((PVar "prog") (PVar "env") (PVar "arity") (PVar "d") (PVar "root") (PVar "foc") (PVar "rest") (PVar "arms") (PCons (PCon "CTBranch" (PCon "HLit" (PCon "LString" (PVar "s"))) (PVar "sub")) (PVar "more")) (PVar "dft") (PVar "idt")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "indentBy") (EVar "idt")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "foc") (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EVar "emitLitRef") (EVar "prog")) (EApp (EVar "LString") (EVar "s")))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_str_compare"))) (ELit (LInt 2))) (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (ELit (LString "i32.const 1")) (ELit (LString "i32.eq")))) (EListLit (ELit (LString "if"))))) (EApp (EApp (EVar "indentBy") (EBinOp "+" (EVar "idt") (ELit (LInt 1)))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "d")) (EVar "root")) (EVar "rest")) (EVar "arms")) (EMethodRef "sub")))) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EListLit (ELit (LString "else"))))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitLitSwitchTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "d")) (EVar "root")) (EVar "foc")) (EVar "rest")) (EVar "arms")) (EVar "more")) (EVar "dft")) (EBinOp "+" (EVar "idt") (ELit (LInt 1))))) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EListLit (ELit (LString "end")) (ELit (LString "unreachable"))))))
-(DFunDef false "emitLitSwitchTail" ((PVar "prog") PWild PWild PWild PWild PWild PWild PWild PWild PWild PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "ref-mode: non-Int literal tail switch head"))))
+(DFunDef false "emitLitSwitchTail" ((PVar "prog") (PVar "env") (PVar "arity") (PVar "d") (PVar "root") (PVar "foc") (PVar "rest") (PVar "arms") (PVar "xs0") (PVar "dft") (PVar "idt0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "idt")) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "d")) (EVar "root")) (EVar "rest")) (EVar "arms")) (EVar "dft")))) (clause ((PCons (PCon "CTBranch" (PCon "HLit" (PCon "LInt" (PVar "k"))) (PVar "sub")) (PVar "more")) (PVar "idt")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "indentBy") (EVar "idt")) (EBinOp "++" (EBinOp "++" (EVar "foc") (EListLit (EApp (EVar "unboxIntW") (EVar "prog")) (EBinOp "++" (ELit (LString "i64.const ")) (EApp (EVar "intToString") (EVar "k"))) (ELit (LString "i64.eq")))) (EListLit (ELit (LString "if"))))) (EApp (EApp (EVar "indentBy") (EBinOp "+" (EVar "idt") (ELit (LInt 1)))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "d")) (EVar "root")) (EVar "rest")) (EVar "arms")) (EMethodRef "sub")))) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EListLit (ELit (LString "else"))))) (EApp (EApp (EVar "go") (EVar "more")) (EBinOp "+" (EVar "idt") (ELit (LInt 1))))) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EListLit (ELit (LString "end")) (ELit (LString "unreachable")))))) (clause ((PCons (PCon "CTBranch" (PCon "HLit" (PCon "LChar" (PVar "c"))) (PVar "sub")) (PVar "more")) (PVar "idt")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "indentBy") (EVar "idt")) (EBinOp "++" (EBinOp "++" (EVar "foc") (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (EBinOp "++" (ELit (LString "i32.const ")) (EApp (EVar "intToString") (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EApp (EVar "stringToChars") (EVar "c")))))) (ELit (LString "i32.eq")))) (EListLit (ELit (LString "if"))))) (EApp (EApp (EVar "indentBy") (EBinOp "+" (EVar "idt") (ELit (LInt 1)))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "d")) (EVar "root")) (EVar "rest")) (EVar "arms")) (EMethodRef "sub")))) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EListLit (ELit (LString "else"))))) (EApp (EApp (EVar "go") (EVar "more")) (EBinOp "+" (EVar "idt") (ELit (LInt 1))))) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EListLit (ELit (LString "end")) (ELit (LString "unreachable")))))) (clause ((PCons (PCon "CTBranch" (PCon "HLit" (PCon "LString" (PVar "s"))) (PVar "sub")) (PVar "more")) (PVar "idt")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "indentBy") (EVar "idt")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "foc") (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EVar "emitLitRef") (EVar "prog")) (EApp (EVar "LString") (EVar "s")))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_str_compare"))) (ELit (LInt 2))) (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (ELit (LString "i32.const 1")) (ELit (LString "i32.eq")))) (EListLit (ELit (LString "if"))))) (EApp (EApp (EVar "indentBy") (EBinOp "+" (EVar "idt") (ELit (LInt 1)))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "d")) (EVar "root")) (EVar "rest")) (EVar "arms")) (EMethodRef "sub")))) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EListLit (ELit (LString "else"))))) (EApp (EApp (EVar "go") (EVar "more")) (EBinOp "+" (EVar "idt") (ELit (LInt 1))))) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EListLit (ELit (LString "end")) (ELit (LString "unreachable")))))) (clause (PWild PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "ref-mode: non-Int literal tail switch head")))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "idt0"))))
 (DTypeSig false "emitClosure" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "emitClosure" ((PVar "prog") (PVar "env") (PVar "_d") (PVar "pats") (PVar "body")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "freshLamId") (EApp (EVar "progEmit") (EVar "prog")))) (DoLet false false (PVar "lamName") (EBinOp "++" (ELit (LString "$")) (EApp (EVar "WN.wasmName") (EApp (EApp (EApp (EVar "WN.WGenerated") (EVar "WN.WLambda")) (ELit (LString ""))) (EVar "n"))))) (DoLet false false (PVar "boundVars") (EApp (EApp (EDictApp "flatMap") (EVar "patBinders")) (EVar "pats"))) (DoLet false false (PVar "captured") (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EApp (EApp (EVar "envHas") (EVar "c")) (EVar "env")))) (EApp (EVar "dedupKeep") (EApp (EApp (EVar "freeVarsExpr") (EApp (EApp (EVar "omFromNames") (EVar "boundVars")) (EVar "omEmpty"))) (EVar "body"))))) (DoExpr (EApp (EApp (EVar "noteFuncRef") (EVar "prog")) (EVar "lamName"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "addLifted") (EVar "prog")) (EVar "lamName")) (EVar "codeShapeW")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitLamDefine") (EVar "prog")) (EVar "lamName")) (EVar "pats")) (EVar "captured")) (EApp (EApp (EVar "envRestrict") (EVar "captured")) (EVar "env"))) (EVar "body")))) (DoExpr (EMatch (EVar "captured") (arm (PList) () (EApp (EApp (EApp (EVar "wConstClos") (EVar "prog")) (EVar "lamName")) (EApp (EVar "listLen") (EVar "pats")))) (arm PWild () (EBlock (DoLet false false (PVar "capInstrs") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "c")) (EListLit (EBinOp "++" (ELit (LString "local.get $")) (EApp (EVar "gname") (EVar "c")))))) (EVar "captured"))) (DoExpr (EBinOp "++" (EBinOp "++" (EListLit (EApp (EApp (EVar "refFuncW") (EVar "prog")) (EVar "lamName")) (EBinOp "++" (ELit (LString "i32.const ")) (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "pats"))))) (EVar "capInstrs")) (EListLit (EBinOp "++" (ELit (LString "array.new_fixed $argarr ")) (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "captured")))) (ELit (LString "struct.new $clos")))))))))))
 (DTypeSig false "emitLamDefine" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Env") (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String")))))))))
@@ -14670,8 +14121,7 @@ hasFamilyW prog symbol tag =
 (DTypeSig false "emitLetGroupWith" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyFun (TyCon "Env") (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String")))))))))
 (DFunDef false "emitLetGroupWith" ((PVar "prog") (PVar "env") (PVar "d") (PVar "emitBody") (PVar "binds") (PVar "body")) (EBlock (DoLet false false (PVar "gid") (EApp (EVar "freshLamId") (EApp (EVar "progEmit") (EVar "prog")))) (DoLet false false (PVar "valBinds") (EApp (EApp (EVar "filterList") (EVar "isLgValBind")) (EVar "binds"))) (DoLet false false (PVar "fnBinds") (EApp (EApp (EVar "filterList") (ELam ((PVar "b")) (EApp (EVar "not") (EApp (EVar "isLgValBind") (EVar "b"))))) (EVar "binds"))) (DoLet false false (PVar "valNames") (EApp (EApp (EMethodRef "map") (EVar "lgBindName")) (EVar "valBinds"))) (DoLet false false (PVar "names") (EApp (EApp (EMethodRef "map") (EVar "lgBindName")) (EVar "fnBinds"))) (DoLet false false (PVar "allParams") (EApp (EApp (EDictApp "flatMap") (EVar "lgBindParams")) (EVar "fnBinds"))) (DoLet false false (PVar "valFree") (EApp (EVar "dedupKeep") (EApp (EApp (EDictApp "flatMap") (EApp (EVar "freeVarsClauses") (EVar "omEmpty"))) (EVar "valBinds")))) (DoExpr (EIf (EApp (EApp (EVar "anyOfList") (EVar "names")) (EVar "valFree")) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W9: unsupported let-group — a VALUE binding's right-hand side calls a sibling FUNCTION of the same group; the value must be computed before the group's closures are built (peer of the native emitter's knot-tying restriction)"))) (EBlock (DoLet false false (PVar "freeCaps") (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EApp (EApp (EVar "envHas") (EVar "c")) (EVar "env")))) (EApp (EVar "dedupKeep") (EApp (EApp (EVar "filterList") (EApp (EVar "notIn") (EBinOp "++" (EBinOp "++" (EVar "names") (EVar "valNames")) (EVar "allParams")))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "freeVarsClauses") (EVar "omEmpty"))) (EVar "binds")))))) (DoLet false false (PVar "groupCaps") (EBinOp "++" (EVar "freeCaps") (EVar "valNames"))) (DoLet false false (PVar "groupEnv") (EApp (EApp (EVar "envBindGroups") (EVar "binds")) (EApp (EApp (EVar "envRestrict") (EVar "freeCaps")) (EVar "env")))) (DoExpr (EApp (EApp (EVar "forEachU") (ELam ((PVar "b")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitLgLifted") (EVar "prog")) (EVar "gid")) (EVar "names")) (EVar "groupCaps")) (EVar "groupEnv")) (EVar "fnBinds")) (EVar "b")))) (EVar "fnBinds"))) (DoLet false false (PVar "valInit") (EApp (EApp (EApp (EApp (EVar "emitLgValBinds") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "valBinds"))) (DoLet false false (PVar "rebuilds") (EApp (EApp (EApp (EApp (EVar "useSiteRebuilds") (EVar "prog")) (EVar "gid")) (EVar "groupCaps")) (EVar "fnBinds"))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "valInit") (EVar "rebuilds")) (EApp (EApp (EVar "emitBody") (EApp (EApp (EVar "envBindGroups") (EVar "binds")) (EVar "env"))) (EVar "body")))))))))
 (DTypeSig false "useSiteRebuilds" (TyFun (TyCon "Prog") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "useSiteRebuilds" (PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "useSiteRebuilds" ((PVar "prog") (PVar "gid") (PVar "groupCaps") (PCons (PVar "b") (PVar "rest"))) (EBlock (DoLet false false (PVar "laterNames") (EApp (EApp (EMethodRef "map") (EVar "lgBindName")) (EVar "rest"))) (DoLet false false (PVar "hoistable") (EBinOp "&&" (EBinOp "==" (EApp (EVar "listLen") (EVar "groupCaps")) (ELit (LInt 0))) (EApp (EVar "not") (EApp (EApp (EVar "anyOfList") (EVar "laterNames")) (EApp (EApp (EVar "freeVarsClauses") (EVar "omEmpty")) (EVar "b")))))) (DoLet false false (PVar "here") (EIf (EVar "hoistable") (EApp (EApp (EApp (EVar "constLgClosure") (EVar "prog")) (EVar "gid")) (EVar "b")) (EApp (EApp (EApp (EApp (EVar "rebuildLgClosure") (EVar "prog")) (EVar "gid")) (EVar "groupCaps")) (EVar "b")))) (DoExpr (EBinOp "++" (EVar "here") (EApp (EApp (EApp (EApp (EVar "useSiteRebuilds") (EVar "prog")) (EVar "gid")) (EVar "groupCaps")) (EVar "rest"))))))
+(DFunDef false "useSiteRebuilds" ((PVar "prog") (PVar "gid") (PVar "groupCaps") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EListLit)) (clause ((PCons (PVar "b") (PVar "rest"))) (EBlock (DoLet false false (PVar "laterNames") (EApp (EApp (EMethodRef "map") (EVar "lgBindName")) (EVar "rest"))) (DoLet false false (PVar "hoistable") (EBinOp "&&" (EBinOp "==" (EApp (EVar "listLen") (EVar "groupCaps")) (ELit (LInt 0))) (EApp (EVar "not") (EApp (EApp (EVar "anyOfList") (EVar "laterNames")) (EApp (EApp (EVar "freeVarsClauses") (EVar "omEmpty")) (EVar "b")))))) (DoLet false false (PVar "here") (EIf (EVar "hoistable") (EApp (EApp (EApp (EVar "constLgClosure") (EVar "prog")) (EVar "gid")) (EVar "b")) (EApp (EApp (EApp (EApp (EVar "rebuildLgClosure") (EVar "prog")) (EVar "gid")) (EVar "groupCaps")) (EVar "b")))) (DoExpr (EBinOp "++" (EVar "here") (EApp (EVar "go") (EVar "rest")))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "liftedMemberRebuilds" (TyFun (TyCon "Prog") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "liftedMemberRebuilds" ((PVar "prog") (PVar "gid") (PVar "groupCaps") (PVar "binds")) (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "groupCaps")) (ELit (LInt 0))) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "b")) (EApp (EApp (EApp (EVar "constLgClosure") (EVar "prog")) (EVar "gid")) (EVar "b")))) (EVar "binds")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "b")) (EApp (EApp (EApp (EApp (EVar "rebuildLgClosure") (EVar "prog")) (EVar "gid")) (EVar "groupCaps")) (EVar "b")))) (EVar "binds"))))
 (DTypeSig false "constLgClosure" (TyFun (TyCon "Prog") (TyFun (TyCon "Int") (TyFun (TyCon "CBind") (TyApp (TyCon "List") (TyCon "String"))))))
@@ -14680,9 +14130,7 @@ hasFamilyW prog symbol tag =
 (DFunDef false "isLgValBind" ((PCon "CBind" PWild (PList (PCon "CClause" (PList) PWild)) PWild PWild)) (EVar "True"))
 (DFunDef false "isLgValBind" (PWild) (EVar "False"))
 (DTypeSig false "emitLgValBinds" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "emitLgValBinds" (PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "emitLgValBinds" ((PVar "prog") (PVar "env") (PVar "d") (PCons (PCon "CBind" (PVar "name") (PList (PCon "CClause" (PList) (PVar "rhs"))) PWild (PVar "bid")) (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "rhs")) (EListLit (EBinOp "++" (ELit (LString "local.set $")) (EApp (EVar "gname") (EVar "name"))))) (EApp (EApp (EApp (EApp (EVar "emitLgValBinds") (EVar "prog")) (EApp (EApp (EApp (EVar "envBind") (EVar "name")) (EVar "bid")) (EVar "env"))) (EVar "d")) (EVar "rest"))))
-(DFunDef false "emitLgValBinds" ((PVar "prog") (PVar "env") (PVar "d") (PCons PWild (PVar "rest"))) (EApp (EApp (EApp (EApp (EVar "emitLgValBinds") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "rest")))
+(DFunDef false "emitLgValBinds" ((PVar "prog") (PVar "env0") (PVar "d") (PVar "xs0")) (ELetGroup ((lgb "go" (clause (PWild (PList)) (EListLit)) (clause ((PVar "env") (PCons (PCon "CBind" (PVar "name") (PList (PCon "CClause" (PList) (PVar "rhs"))) PWild (PVar "bid")) (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "rhs")) (EListLit (EBinOp "++" (ELit (LString "local.set $")) (EApp (EVar "gname") (EVar "name"))))) (EApp (EApp (EVar "go") (EApp (EApp (EApp (EVar "envBind") (EVar "name")) (EVar "bid")) (EVar "env"))) (EVar "rest")))) (clause ((PVar "env") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "go") (EVar "env")) (EVar "rest"))))) (EApp (EApp (EVar "go") (EVar "env0")) (EVar "xs0"))))
 (DTypeSig false "anyOfList" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
 (DFunDef false "anyOfList" ((PVar "xs") (PVar "ys")) (EApp (EApp (EVar "anyList") (ELam ((PVar "x")) (EApp (EApp (EVar "contains") (EVar "x")) (EVar "ys")))) (EVar "xs")))
 (DTypeSig false "lgBindParams" (TyFun (TyCon "CBind") (TyApp (TyCon "List") (TyCon "String"))))
@@ -14718,7 +14166,6 @@ hasFamilyW prog symbol tag =
 (DFunDef false "freeVarsExpr" ((PVar "bound") (PCon "CRangeArray" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "lo")) (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "hi"))))
 (DFunDef false "freeVarsExpr" ((PVar "bound") (PCon "CMethod" PWild (PCon "MethodEvidence" PWild PWild (PVar "route") (PVar "implRoutes") (PVar "methRoutes")))) (EApp (EApp (EVar "freeGivens") (EVar "bound")) (EBinOp "::" (EVar "route") (EBinOp "++" (EVar "implRoutes") (EVar "methRoutes")))))
 (DFunDef false "freeVarsExpr" ((PVar "bound") (PCon "CDict" (PVar "name") (PVar "routes"))) (EBinOp "++" (EIf (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "bound")) (EListLit) (EListLit (EVar "name"))) (EApp (EApp (EVar "freeGivens") (EVar "bound")) (EVar "routes"))))
-(DFunDef false "freeVarsExpr" ((PVar "_bound") PWild) (EListLit))
 (DTypeSig false "freeVarsClauses" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CBind") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "freeVarsClauses" ((PVar "bound") (PCon "CBind" PWild (PVar "clauses") PWild PWild)) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "freeVarsClause") (EVar "bound"))) (EVar "clauses")))
 (DTypeSig false "freeVarsClause" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CClause") (TyApp (TyCon "List") (TyCon "String")))))
@@ -14799,11 +14246,7 @@ hasFamilyW prog symbol tag =
 (DFunDef false "guardBindEnv" ((PVar "env") (PCon "CGBind" (PVar "p") PWild)) (EApp (EApp (EVar "envBindPat") (EVar "p")) (EVar "env")))
 (DFunDef false "guardBindEnv" ((PVar "env") (PCon "CGBool" PWild)) (EVar "env"))
 (DTypeSig false "emitTreeRef" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "CTree") (TyApp (TyCon "List") (TyCon "String")))))))))))
-(DFunDef false "emitTreeRef" ((PVar "prog") (PVar "_env") (PVar "_d") (PVar "_decLabel") (PVar "_root") (PVar "_occs") (PVar "_arms") (PCon "CTFail" (PVar "fs"))) (EApp (EApp (EVar "wasmFailTrap") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "fs")))
-(DFunDef false "emitTreeRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "decLabel") (PVar "root") (PVar "_occs") (PVar "arms") (PCon "CTLeaf" (PVar "i"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitLeafRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "decLabel")) (EVar "root")) (EVar "arms")) (EVar "i")))
-(DFunDef false "emitTreeRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "decLabel") (PVar "root") (PVar "occs") (PVar "arms") (PCon "CTGuard" (PVar "i") (PVar "fail"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitGuardArmRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "decLabel")) (EVar "root")) (EVar "occs")) (EVar "arms")) (EVar "i")) (EVar "fail")))
-(DFunDef false "emitTreeRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "decLabel") (PVar "root") (PVar "occs") (PVar "arms") (PCon "CTDrop" (PVar "sub"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "decLabel")) (EVar "root")) (EApp (EVar "tailList") (EVar "occs"))) (EVar "arms")) (EMethodRef "sub")))
-(DFunDef false "emitTreeRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "decLabel") (PVar "root") (PVar "occs") (PVar "arms") (PCon "CTSwitch" (PVar "branches") (PVar "dft"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitSwitchRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "decLabel")) (EVar "root")) (EVar "occs")) (EVar "arms")) (EVar "branches")) (EVar "dft")))
+(DFunDef false "emitTreeRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "decLabel") (PVar "root") (PVar "occs0") (PVar "arms") (PVar "x0")) (ELetGroup ((lgb "go" (clause ((PVar "_occs") (PCon "CTFail" (PVar "fs"))) (EApp (EApp (EVar "wasmFailTrap") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "fs"))) (clause ((PVar "_occs") (PCon "CTLeaf" (PVar "i"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitLeafRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "decLabel")) (EVar "root")) (EVar "arms")) (EVar "i"))) (clause ((PVar "occs") (PCon "CTGuard" (PVar "i") (PVar "fail"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitGuardArmRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "decLabel")) (EVar "root")) (EVar "occs")) (EVar "arms")) (EVar "i")) (EVar "fail"))) (clause ((PVar "occs") (PCon "CTDrop" (PVar "sub"))) (EApp (EApp (EVar "go") (EApp (EVar "tailList") (EVar "occs"))) (EMethodRef "sub"))) (clause ((PVar "occs") (PCon "CTSwitch" (PVar "branches") (PVar "dft"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitSwitchRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "decLabel")) (EVar "root")) (EVar "occs")) (EVar "arms")) (EVar "branches")) (EVar "dft"))))) (EApp (EApp (EVar "go") (EVar "occs0")) (EVar "x0"))))
 (DTypeSig false "emitLeafRef" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))))))
 (DFunDef false "emitLeafRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "decLabel") (PVar "root") (PVar "arms") (PVar "i")) (EMatch (EApp (EApp (EApp (EVar "leafArm") (EVar "prog")) (EVar "arms")) (EVar "i")) (arm (PCon "Some" (PTuple (PVar "pat") PWild (PVar "body") (PVar "share"))) () (EBlock (DoLet false false (PTuple (PVar "binds") (PVar "env2")) (EApp (EApp (EApp (EApp (EVar "bindPatRef") (EVar "prog")) (EVar "env")) (EVar "pat")) (EVar "root"))) (DoExpr (EBinOp "++" (EVar "binds") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "armExitRef") (EVar "prog")) (EVar "env2")) (EVar "d")) (EVar "decLabel")) (EVar "body")) (EVar "share")))))) (arm (PCon "None") () (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "ref-mode: decision arm index out of range"))))))
 (DTypeSig false "armExitRef" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "CExpr") (TyFun (TyApp (TyCon "Option") (TyCon "OrArm")) (TyApp (TyCon "List") (TyCon "String")))))))))
@@ -14812,9 +14255,7 @@ hasFamilyW prog symbol tag =
 (DTypeSig false "emitGuardArmRef" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyCon "Int") (TyFun (TyCon "CTree") (TyApp (TyCon "List") (TyCon "String"))))))))))))
 (DFunDef false "emitGuardArmRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "decLabel") (PVar "root") (PVar "occs") (PVar "arms") (PVar "i") (PVar "fail")) (EMatch (EApp (EApp (EApp (EVar "leafArm") (EVar "prog")) (EVar "arms")) (EVar "i")) (arm (PCon "Some" (PTuple (PVar "pat") (PVar "guards") (PVar "body") (PVar "share"))) () (EBlock (DoLet false false (PVar "gLabel") (EApp (EApp (EVar "labelName") (EVar "WN.WGuardValue")) (EVar "d"))) (DoLet false false (PTuple (PVar "tests") (PVar "binds") (PVar "env2")) (EApp (EApp (EApp (EApp (EApp (EVar "patTestBind") (EVar "prog")) (EVar "pat")) (EVar "root")) (EVar "gLabel")) (EVar "env"))) (DoLet false false (PTuple (PVar "gcode") (PVar "env3")) (EApp (EApp (EApp (EApp (EApp (EVar "emitGuardChainRef") (EVar "prog")) (EVar "env2")) (EVar "d")) (EVar "gLabel")) (EVar "guards"))) (DoLet false false (PVar "armCode") (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (ELit (LString "block ")) (EVar "gLabel"))) (EApp (EVar "indent") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "tests") (EVar "binds")) (EVar "gcode")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "armExitRef") (EVar "prog")) (EVar "env3")) (EVar "d")) (EVar "decLabel")) (EVar "body")) (EVar "share"))))) (EListLit (ELit (LString "end"))))) (DoExpr (EBinOp "++" (EVar "armCode") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "decLabel")) (EVar "root")) (EVar "occs")) (EVar "arms")) (EVar "fail")))))) (arm (PCon "None") () (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "ref-mode: guarded arm index out of range"))))))
 (DTypeSig false "emitGuardChainRef" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CGuard")) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Env"))))))))
-(DFunDef false "emitGuardChainRef" (PWild (PVar "env") PWild PWild (PList)) (ETuple (EListLit) (EVar "env")))
-(DFunDef false "emitGuardChainRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "gLabel") (PCons (PCon "CGBool" (PVar "g")) (PVar "rest"))) (EBlock (DoLet false false (PVar "unbox") (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (ELit (LString "i32.eqz")) (EBinOp "++" (ELit (LString "br_if ")) (EVar "gLabel")))) (DoLet false false (PVar "boolTest") (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g")) (EVar "unbox"))) (DoLet false false (PTuple (PVar "more") (PVar "env2")) (EApp (EApp (EApp (EApp (EApp (EVar "emitGuardChainRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "gLabel")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "++" (EVar "boolTest") (EVar "more")) (EVar "env2")))))
-(DFunDef false "emitGuardChainRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "gLabel") (PCons (PCon "CGBind" (PVar "p") (PVar "ex")) (PVar "rest"))) (EBlock (DoLet false false (PVar "sv") (EApp (EVar "WN.wasmName") (EApp (EApp (EVar "WN.WSyntheticLocal") (EVar "WN.WGuard")) (ELit (LInt 0))))) (DoLet false false (PVar "rhs") (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "ex")) (EListLit (EBinOp "++" (ELit (LString "local.set $")) (EVar "sv"))))) (DoLet false false (PTuple (PVar "tests") (PVar "binds") (PVar "env2")) (EApp (EApp (EApp (EApp (EApp (EVar "patTestBind") (EVar "prog")) (EVar "p")) (EListLit (EBinOp "++" (ELit (LString "local.get $")) (EVar "sv")))) (EVar "gLabel")) (EVar "env"))) (DoLet false false (PTuple (PVar "more") (PVar "env3")) (EApp (EApp (EApp (EApp (EApp (EVar "emitGuardChainRef") (EVar "prog")) (EVar "env2")) (EVar "d")) (EVar "gLabel")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "rhs") (EVar "tests")) (EVar "binds")) (EVar "more")) (EVar "env3")))))
+(DFunDef false "emitGuardChainRef" ((PVar "prog") (PVar "env0") (PVar "d") (PVar "gLabel") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PVar "env") (PList)) (ETuple (EListLit) (EVar "env"))) (clause ((PVar "env") (PCons (PCon "CGBool" (PVar "g")) (PVar "rest"))) (EBlock (DoLet false false (PVar "unbox") (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (ELit (LString "i32.eqz")) (EBinOp "++" (ELit (LString "br_if ")) (EVar "gLabel")))) (DoLet false false (PVar "boolTest") (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "g")) (EVar "unbox"))) (DoLet false false (PTuple (PVar "more") (PVar "env2")) (EApp (EApp (EVar "go") (EVar "env")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "++" (EVar "boolTest") (EVar "more")) (EVar "env2"))))) (clause ((PVar "env") (PCons (PCon "CGBind" (PVar "p") (PVar "ex")) (PVar "rest"))) (EBlock (DoLet false false (PVar "sv") (EApp (EVar "WN.wasmName") (EApp (EApp (EVar "WN.WSyntheticLocal") (EVar "WN.WGuard")) (ELit (LInt 0))))) (DoLet false false (PVar "rhs") (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "ex")) (EListLit (EBinOp "++" (ELit (LString "local.set $")) (EVar "sv"))))) (DoLet false false (PTuple (PVar "tests") (PVar "binds") (PVar "env2")) (EApp (EApp (EApp (EApp (EApp (EVar "patTestBind") (EVar "prog")) (EVar "p")) (EListLit (EBinOp "++" (ELit (LString "local.get $")) (EVar "sv")))) (EVar "gLabel")) (EVar "env"))) (DoLet false false (PTuple (PVar "more") (PVar "env3")) (EApp (EApp (EVar "go") (EVar "env2")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "rhs") (EVar "tests")) (EVar "binds")) (EVar "more")) (EVar "env3"))))))) (EApp (EApp (EVar "go") (EVar "env0")) (EVar "xs0"))))
 (DTypeSig false "emitSwitchRef" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyApp (TyCon "List") (TyCon "CTBranch")) (TyFun (TyCon "CTree") (TyApp (TyCon "List") (TyCon "String"))))))))))))
 (DFunDef false "emitSwitchRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "decLabel") (PVar "root") (PList) (PVar "arms") (PVar "_branches") (PVar "dft")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "decLabel")) (EVar "root")) (EListLit)) (EVar "arms")) (EVar "dft")))
 (DFunDef false "emitSwitchRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "decLabel") (PVar "root") (PCons (PVar "_foc") (PVar "rest")) (PVar "arms") (PList) (PVar "dft")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "decLabel")) (EVar "root")) (EVar "rest")) (EVar "arms")) (EVar "dft")))
@@ -14828,15 +14269,11 @@ hasFamilyW prog symbol tag =
 (DTypeSig false "emitBrTableTower" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "CTBranch")) (TyFun (TyCon "CTree") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))))))))))))
 (DFunDef false "emitBrTableTower" ((PVar "prog") (PVar "env") (PVar "d") (PVar "decLabel") (PVar "root") (PVar "svRead") (PVar "rest") (PVar "arms") (PVar "branches") (PVar "dft") (PVar "ty") (PVar "sd") (PVar "nOrd")) (EBlock (DoLet false false (PVar "labels") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "labelBranch") (EVar "WN.WSwitch")) (EVar "sd"))) (EApp (EApp (EVar "rangeList") (ELit (LInt 0))) (EVar "nOrd")))) (DoLet false false (PVar "tableInstr") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "br_table ")) (EApp (EVar "$core.display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EVar "labels")))) (ELit (LString " "))) (EApp (EVar "$core.display") (EApp (EApp (EVar "labelName") (EVar "WN.WSwitch")) (EVar "sd")))) (ELit (LString "")))) (DoLet false false (PVar "opens") (EBinOp "++" (EListLit (EBinOp "++" (ELit (LString "block ")) (EApp (EApp (EVar "labelName") (EVar "WN.WSwitch")) (EVar "sd")))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "k")) (EBinOp "++" (ELit (LString "block ")) (EApp (EApp (EApp (EVar "labelBranch") (EVar "WN.WSwitch")) (EVar "sd")) (EVar "k"))))) (EApp (EApp (EVar "rangeList") (ELit (LInt 0))) (EVar "nOrd"))))) (DoLet false false (PVar "pick") (EBinOp "++" (EApp (EApp (EApp (EVar "discrimReadOf") (EVar "prog")) (EVar "svRead")) (EVar "ty")) (EListLit (EVar "tableInstr")))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "opens") (EVar "pick")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "towerBodies") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "decLabel")) (EVar "root")) (EVar "svRead")) (EVar "rest")) (EVar "arms")) (EVar "branches")) (EVar "dft")) (EVar "ty")) (EVar "sd")) (EBinOp "-" (EVar "nOrd") (ELit (LInt 1))))))))
 (DTypeSig false "towerBodies" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "CTBranch")) (TyFun (TyCon "CTree") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))))))))))))
-(DFunDef false "towerBodies" ((PVar "prog") (PVar "env") (PVar "d") (PVar "decLabel") (PVar "root") (PVar "svRead") (PVar "rest") (PVar "arms") (PVar "branches") (PVar "dft") (PVar "ty") (PVar "sd") (PVar "k")) (EIf (EBinOp "<" (EVar "k") (ELit (LInt 0))) (EBinOp "++" (EListLit (ELit (LString "end"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "decLabel")) (EVar "root")) (EVar "rest")) (EVar "arms")) (EVar "dft"))) (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "end"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitOrdinalSlot") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "decLabel")) (EVar "root")) (EVar "svRead")) (EVar "rest")) (EVar "arms")) (EVar "branches")) (EVar "ty")) (EVar "sd")) (EVar "k"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "towerBodies") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "decLabel")) (EVar "root")) (EVar "svRead")) (EVar "rest")) (EVar "arms")) (EVar "branches")) (EVar "dft")) (EVar "ty")) (EVar "sd")) (EBinOp "-" (EVar "k") (ELit (LInt 1)))))))
+(DFunDef false "towerBodies" ((PVar "prog") (PVar "env") (PVar "d") (PVar "decLabel") (PVar "root") (PVar "sr") (PVar "rest") (PVar "arms") (PVar "brs") (PVar "dft") (PVar "ty") (PVar "sd") (PVar "k0")) (ELetGroup ((lgb "go" (clause ((PVar "k")) (EIf (EBinOp "<" (EVar "k") (ELit (LInt 0))) (EBinOp "++" (EListLit (ELit (LString "end"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "decLabel")) (EVar "root")) (EVar "rest")) (EVar "arms")) (EVar "dft"))) (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "end"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitOrdinalSlot") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "decLabel")) (EVar "root")) (EVar "sr")) (EVar "rest")) (EVar "arms")) (EVar "brs")) (EVar "ty")) (EVar "sd")) (EVar "k"))) (EApp (EVar "go") (EBinOp "-" (EVar "k") (ELit (LInt 1))))))))) (EApp (EVar "go") (EVar "k0"))))
 (DTypeSig false "emitOrdinalSlot" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "CTBranch")) (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))))))))))))
 (DFunDef false "emitOrdinalSlot" ((PVar "prog") (PVar "env") (PVar "d") (PVar "decLabel") (PVar "root") (PVar "svRead") (PVar "rest") (PVar "arms") (PVar "branches") (PVar "_ty") (PVar "sd") (PVar "k")) (EMatch (EApp (EApp (EVar "branchForOrdinal") (EVar "branches")) (EVar "k")) (arm (PCon "Some" (PCon "CTBranch" (PVar "h") (PVar "sub"))) () (EBlock (DoLet false false (PVar "cs") (EApp (EApp (EVar "headCtorStructName") (EVar "prog")) (EVar "h"))) (DoLet false false (PVar "a") (EApp (EVar "snd") (EApp (EApp (EVar "conHeadInfoUnsafe") (EVar "prog")) (EVar "h")))) (DoLet false false (PVar "fieldOccs") (EApp (EApp (EMethodRef "map") (ELam ((PVar "i")) (EBinOp "++" (EVar "svRead") (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "ref.cast (ref $")) (EApp (EApp (EVar "typeNameW") (EVar "prog")) (EVar "cs"))) (ELit (LString ")"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "struct.get $")) (EApp (EVar "$core.display") (EApp (EApp (EVar "typeNameW") (EVar "prog")) (EVar "cs")))) (ELit (LString " "))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EBinOp "+" (EVar "i") (ELit (LInt 1)))))) (ELit (LString ""))))))) (EApp (EApp (EVar "rangeList") (ELit (LInt 0))) (EVar "a")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "decLabel")) (EVar "root")) (EBinOp "++" (EVar "fieldOccs") (EVar "rest"))) (EVar "arms")) (EMethodRef "sub"))))) (arm (PCon "None") () (EListLit (EBinOp "++" (ELit (LString "br ")) (EApp (EApp (EVar "labelName") (EVar "WN.WSwitch")) (EVar "sd")))))))
 (DTypeSig false "emitLitSwitchRef" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "CArm")) (TyFun (TyApp (TyCon "List") (TyCon "CTBranch")) (TyFun (TyCon "CTree") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))))))))))
-(DFunDef false "emitLitSwitchRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "decLabel") (PVar "root") (PVar "_foc") (PVar "rest") (PVar "arms") (PList) (PVar "dft") (PVar "idt")) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "decLabel")) (EVar "root")) (EVar "rest")) (EVar "arms")) (EVar "dft"))))
-(DFunDef false "emitLitSwitchRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "decLabel") (PVar "root") (PVar "foc") (PVar "rest") (PVar "arms") (PCons (PCon "CTBranch" (PCon "HLit" (PCon "LInt" (PVar "k"))) (PVar "sub")) (PVar "more")) (PVar "dft") (PVar "idt")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "indentBy") (EVar "idt")) (EBinOp "++" (EBinOp "++" (EVar "foc") (EListLit (EApp (EVar "unboxIntW") (EVar "prog")) (EBinOp "++" (ELit (LString "i64.const ")) (EApp (EVar "intToString") (EVar "k"))) (ELit (LString "i64.eq")))) (EListLit (ELit (LString "if"))))) (EApp (EApp (EVar "indentBy") (EBinOp "+" (EVar "idt") (ELit (LInt 1)))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "decLabel")) (EVar "root")) (EVar "rest")) (EVar "arms")) (EMethodRef "sub")))) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EListLit (ELit (LString "else"))))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitLitSwitchRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "decLabel")) (EVar "root")) (EVar "foc")) (EVar "rest")) (EVar "arms")) (EVar "more")) (EVar "dft")) (EBinOp "+" (EVar "idt") (ELit (LInt 1))))) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EListLit (ELit (LString "end")) (ELit (LString "unreachable"))))))
-(DFunDef false "emitLitSwitchRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "decLabel") (PVar "root") (PVar "foc") (PVar "rest") (PVar "arms") (PCons (PCon "CTBranch" (PCon "HLit" (PCon "LChar" (PVar "c"))) (PVar "sub")) (PVar "more")) (PVar "dft") (PVar "idt")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "indentBy") (EVar "idt")) (EBinOp "++" (EBinOp "++" (EVar "foc") (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (EBinOp "++" (ELit (LString "i32.const ")) (EApp (EVar "intToString") (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EApp (EVar "stringToChars") (EVar "c")))))) (ELit (LString "i32.eq")))) (EListLit (ELit (LString "if"))))) (EApp (EApp (EVar "indentBy") (EBinOp "+" (EVar "idt") (ELit (LInt 1)))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "decLabel")) (EVar "root")) (EVar "rest")) (EVar "arms")) (EMethodRef "sub")))) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EListLit (ELit (LString "else"))))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitLitSwitchRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "decLabel")) (EVar "root")) (EVar "foc")) (EVar "rest")) (EVar "arms")) (EVar "more")) (EVar "dft")) (EBinOp "+" (EVar "idt") (ELit (LInt 1))))) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EListLit (ELit (LString "end")) (ELit (LString "unreachable"))))))
-(DFunDef false "emitLitSwitchRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "decLabel") (PVar "root") (PVar "foc") (PVar "rest") (PVar "arms") (PCons (PCon "CTBranch" (PCon "HLit" (PCon "LString" (PVar "s"))) (PVar "sub")) (PVar "more")) (PVar "dft") (PVar "idt")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "indentBy") (EVar "idt")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "foc") (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EVar "emitLitRef") (EVar "prog")) (EApp (EVar "LString") (EVar "s")))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_str_compare"))) (ELit (LInt 2))) (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (ELit (LString "i32.const 1")) (ELit (LString "i32.eq")))) (EListLit (ELit (LString "if"))))) (EApp (EApp (EVar "indentBy") (EBinOp "+" (EVar "idt") (ELit (LInt 1)))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "decLabel")) (EVar "root")) (EVar "rest")) (EVar "arms")) (EMethodRef "sub")))) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EListLit (ELit (LString "else"))))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitLitSwitchRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "decLabel")) (EVar "root")) (EVar "foc")) (EVar "rest")) (EVar "arms")) (EVar "more")) (EVar "dft")) (EBinOp "+" (EVar "idt") (ELit (LInt 1))))) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EListLit (ELit (LString "end")) (ELit (LString "unreachable"))))))
-(DFunDef false "emitLitSwitchRef" ((PVar "prog") PWild PWild PWild PWild PWild PWild PWild PWild PWild PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "ref-mode: non-Int literal switch head (Char/String literals are W6)"))))
+(DFunDef false "emitLitSwitchRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "dl") (PVar "root") (PVar "foc") (PVar "rest") (PVar "arms") (PVar "xs0") (PVar "dft") (PVar "idt0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "idt")) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "dl")) (EVar "root")) (EVar "rest")) (EVar "arms")) (EVar "dft")))) (clause ((PCons (PCon "CTBranch" (PCon "HLit" (PCon "LInt" (PVar "k"))) (PVar "sub")) (PVar "more")) (PVar "idt")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "indentBy") (EVar "idt")) (EBinOp "++" (EBinOp "++" (EVar "foc") (EListLit (EApp (EVar "unboxIntW") (EVar "prog")) (EBinOp "++" (ELit (LString "i64.const ")) (EApp (EVar "intToString") (EVar "k"))) (ELit (LString "i64.eq")))) (EListLit (ELit (LString "if"))))) (EApp (EApp (EVar "indentBy") (EBinOp "+" (EVar "idt") (ELit (LInt 1)))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "dl")) (EVar "root")) (EVar "rest")) (EVar "arms")) (EMethodRef "sub")))) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EListLit (ELit (LString "else"))))) (EApp (EApp (EVar "go") (EVar "more")) (EBinOp "+" (EVar "idt") (ELit (LInt 1))))) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EListLit (ELit (LString "end")) (ELit (LString "unreachable")))))) (clause ((PCons (PCon "CTBranch" (PCon "HLit" (PCon "LChar" (PVar "c"))) (PVar "sub")) (PVar "more")) (PVar "idt")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "indentBy") (EVar "idt")) (EBinOp "++" (EBinOp "++" (EVar "foc") (EListLit (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (EBinOp "++" (ELit (LString "i32.const ")) (EApp (EVar "intToString") (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EApp (EVar "stringToChars") (EVar "c")))))) (ELit (LString "i32.eq")))) (EListLit (ELit (LString "if"))))) (EApp (EApp (EVar "indentBy") (EBinOp "+" (EVar "idt") (ELit (LInt 1)))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "dl")) (EVar "root")) (EVar "rest")) (EVar "arms")) (EMethodRef "sub")))) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EListLit (ELit (LString "else"))))) (EApp (EApp (EVar "go") (EVar "more")) (EBinOp "+" (EVar "idt") (ELit (LInt 1))))) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EListLit (ELit (LString "end")) (ELit (LString "unreachable")))))) (clause ((PCons (PCon "CTBranch" (PCon "HLit" (PCon "LString" (PVar "s"))) (PVar "sub")) (PVar "more")) (PVar "idt")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "indentBy") (EVar "idt")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "foc") (EListLit (ELit (LString "ref.cast (ref $str)")))) (EApp (EApp (EVar "emitLitRef") (EVar "prog")) (EApp (EVar "LString") (EVar "s")))) (EListLit (EApp (EApp (EApp (EVar "rtCallW") (EVar "prog")) (ELit (LString "mdk_str_compare"))) (ELit (LInt 2))) (ELit (LString "ref.cast (ref i31)")) (ELit (LString "i31.get_u")) (ELit (LString "i32.const 1")) (ELit (LString "i32.eq")))) (EListLit (ELit (LString "if"))))) (EApp (EApp (EVar "indentBy") (EBinOp "+" (EVar "idt") (ELit (LInt 1)))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitTreeRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "dl")) (EVar "root")) (EVar "rest")) (EVar "arms")) (EMethodRef "sub")))) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EListLit (ELit (LString "else"))))) (EApp (EApp (EVar "go") (EVar "more")) (EBinOp "+" (EVar "idt") (ELit (LInt 1))))) (EApp (EApp (EVar "indentBy") (EVar "idt")) (EListLit (ELit (LString "end")) (ELit (LString "unreachable")))))) (clause (PWild PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "ref-mode: non-Int literal switch head (Char/String literals are W6)")))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "idt0"))))
 (DTypeSig false "bindPatRef" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "Pat") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Env")))))))
 (DFunDef false "bindPatRef" ((PVar "_prog") (PVar "env") (PCon "PWild") (PVar "_v")) (ETuple (EListLit) (EVar "env")))
 (DFunDef false "bindPatRef" ((PVar "_prog") (PVar "env") (PCon "PLit" PWild) (PVar "_v")) (ETuple (EListLit) (EVar "env")))
@@ -14851,13 +14288,11 @@ hasFamilyW prog symbol tag =
 (DFunDef false "bindListPat" (PWild (PVar "env") (PList) PWild) (ETuple (EListLit) (EVar "env")))
 (DFunDef false "bindListPat" ((PVar "prog") (PVar "env") (PCons (PVar "p") (PVar "ps")) (PVar "v")) (EBlock (DoLet false false (PVar "hSnip") (EBinOp "++" (EVar "v") (EListLit (ELit (LString "ref.cast (ref $C_Cons)")) (ELit (LString "struct.get $C_Cons 1"))))) (DoLet false false (PVar "tSnip") (EBinOp "++" (EVar "v") (EListLit (ELit (LString "ref.cast (ref $C_Cons)")) (ELit (LString "struct.get $C_Cons 2"))))) (DoLet false false (PTuple (PVar "hb") (PVar "env2")) (EApp (EApp (EApp (EApp (EVar "bindPatRef") (EVar "prog")) (EVar "env")) (EVar "p")) (EVar "hSnip"))) (DoLet false false (PTuple (PVar "tb") (PVar "env3")) (EApp (EApp (EApp (EApp (EVar "bindListPat") (EVar "prog")) (EVar "env2")) (EVar "ps")) (EVar "tSnip"))) (DoExpr (ETuple (EBinOp "++" (EVar "hb") (EVar "tb")) (EVar "env3")))))
 (DTypeSig false "bindTupleFields" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Env")))))))))
-(DFunDef false "bindTupleFields" (PWild (PVar "env") PWild (PList) PWild PWild) (ETuple (EListLit) (EVar "env")))
-(DFunDef false "bindTupleFields" ((PVar "prog") (PVar "env") (PVar "tc") (PCons (PVar "p") (PVar "rest")) (PVar "v") (PVar "i")) (EBlock (DoLet false false (PVar "fieldSnippet") (EBinOp "++" (EVar "v") (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "ref.cast (ref $")) (EApp (EApp (EVar "typeNameW") (EVar "prog")) (EApp (EVar "ctorStructName") (EVar "tc")))) (ELit (LString ")"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "struct.get $")) (EApp (EVar "$core.display") (EApp (EApp (EVar "typeNameW") (EVar "prog")) (EApp (EVar "ctorStructName") (EVar "tc"))))) (ELit (LString " "))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EBinOp "+" (EVar "i") (ELit (LInt 1)))))) (ELit (LString "")))))) (DoLet false false (PTuple (PVar "cur") (PVar "env2")) (EApp (EApp (EApp (EApp (EVar "bindPatRef") (EVar "prog")) (EVar "env")) (EVar "p")) (EVar "fieldSnippet"))) (DoLet false false (PTuple (PVar "more") (PVar "env3")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "bindTupleFields") (EVar "prog")) (EVar "env2")) (EVar "tc")) (EVar "rest")) (EVar "v")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (DoExpr (ETuple (EBinOp "++" (EVar "cur") (EVar "more")) (EVar "env3")))))
+(DFunDef false "bindTupleFields" ((PVar "prog") (PVar "env0") (PVar "tc") (PVar "xs0") (PVar "v") (PVar "i0")) (ELetGroup ((lgb "go" (clause ((PVar "env") (PList) PWild) (ETuple (EListLit) (EVar "env"))) (clause ((PVar "env") (PCons (PVar "p") (PVar "rest")) (PVar "i")) (EBlock (DoLet false false (PVar "fieldSnippet") (EBinOp "++" (EVar "v") (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "ref.cast (ref $")) (EApp (EApp (EVar "typeNameW") (EVar "prog")) (EApp (EVar "ctorStructName") (EVar "tc")))) (ELit (LString ")"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "struct.get $")) (EApp (EVar "$core.display") (EApp (EApp (EVar "typeNameW") (EVar "prog")) (EApp (EVar "ctorStructName") (EVar "tc"))))) (ELit (LString " "))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EBinOp "+" (EVar "i") (ELit (LInt 1)))))) (ELit (LString "")))))) (DoLet false false (PTuple (PVar "cur") (PVar "env2")) (EApp (EApp (EApp (EApp (EVar "bindPatRef") (EVar "prog")) (EVar "env")) (EVar "p")) (EVar "fieldSnippet"))) (DoLet false false (PTuple (PVar "more") (PVar "env3")) (EApp (EApp (EApp (EVar "go") (EVar "env2")) (EVar "rest")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (DoExpr (ETuple (EBinOp "++" (EVar "cur") (EVar "more")) (EVar "env3"))))))) (EApp (EApp (EApp (EVar "go") (EVar "env0")) (EVar "xs0")) (EVar "i0"))))
 (DTypeSig false "bindConFields" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Env"))))))))
 (DFunDef false "bindConFields" ((PVar "prog") (PVar "env") (PVar "c") (PVar "args") (PVar "v")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "bindConFieldsGo") (EVar "prog")) (EVar "env")) (EVar "c")) (EVar "args")) (EVar "v")) (ELit (LInt 0))))
 (DTypeSig false "bindConFieldsGo" (TyFun (TyCon "Prog") (TyFun (TyCon "Env") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Env")))))))))
-(DFunDef false "bindConFieldsGo" (PWild (PVar "env") PWild (PList) PWild PWild) (ETuple (EListLit) (EVar "env")))
-(DFunDef false "bindConFieldsGo" ((PVar "prog") (PVar "env") (PVar "c") (PCons (PVar "p") (PVar "rest")) (PVar "v") (PVar "i")) (EBlock (DoLet false false (PVar "fieldSnippet") (EBinOp "++" (EVar "v") (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "ref.cast (ref $")) (EApp (EApp (EVar "typeNameW") (EVar "prog")) (EApp (EVar "ctorStructName") (EVar "c")))) (ELit (LString ")"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "struct.get $")) (EApp (EVar "$core.display") (EApp (EApp (EVar "typeNameW") (EVar "prog")) (EApp (EVar "ctorStructName") (EVar "c"))))) (ELit (LString " "))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EBinOp "+" (EVar "i") (ELit (LInt 1)))))) (ELit (LString "")))))) (DoLet false false (PTuple (PVar "cur") (PVar "env2")) (EApp (EApp (EApp (EApp (EVar "bindPatRef") (EVar "prog")) (EVar "env")) (EVar "p")) (EVar "fieldSnippet"))) (DoLet false false (PTuple (PVar "more") (PVar "env3")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "bindConFieldsGo") (EVar "prog")) (EVar "env2")) (EVar "c")) (EVar "rest")) (EVar "v")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (DoExpr (ETuple (EBinOp "++" (EVar "cur") (EVar "more")) (EVar "env3")))))
+(DFunDef false "bindConFieldsGo" ((PVar "prog") (PVar "env0") (PVar "c") (PVar "xs0") (PVar "v") (PVar "i0")) (ELetGroup ((lgb "go" (clause ((PVar "env") (PList) PWild) (ETuple (EListLit) (EVar "env"))) (clause ((PVar "env") (PCons (PVar "p") (PVar "rest")) (PVar "i")) (EBlock (DoLet false false (PVar "fieldSnippet") (EBinOp "++" (EVar "v") (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "ref.cast (ref $")) (EApp (EApp (EVar "typeNameW") (EVar "prog")) (EApp (EVar "ctorStructName") (EVar "c")))) (ELit (LString ")"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "struct.get $")) (EApp (EVar "$core.display") (EApp (EApp (EVar "typeNameW") (EVar "prog")) (EApp (EVar "ctorStructName") (EVar "c"))))) (ELit (LString " "))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EBinOp "+" (EVar "i") (ELit (LInt 1)))))) (ELit (LString "")))))) (DoLet false false (PTuple (PVar "cur") (PVar "env2")) (EApp (EApp (EApp (EApp (EVar "bindPatRef") (EVar "prog")) (EVar "env")) (EVar "p")) (EVar "fieldSnippet"))) (DoLet false false (PTuple (PVar "more") (PVar "env3")) (EApp (EApp (EApp (EVar "go") (EVar "env2")) (EVar "rest")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (DoExpr (ETuple (EBinOp "++" (EVar "cur") (EVar "more")) (EVar "env3"))))))) (EApp (EApp (EApp (EVar "go") (EVar "env0")) (EVar "xs0")) (EVar "i0"))))
 (DTypeSig false "isFnBind" (TyFun (TyCon "CBind") (TyCon "Bool")))
 (DFunDef false "isFnBind" ((PCon "CBind" (PLit (LString "main")) PWild PWild PWild)) (EVar "False"))
 (DFunDef false "isFnBind" ((PVar "b")) (EApp (EVar "not") (EApp (EVar "isValBind") (EVar "b"))))
@@ -14902,7 +14337,7 @@ hasFamilyW prog symbol tag =
 (DFunDef false "collectExprLocals" ((PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EBinOp "++" (EApp (EVar "collectExprLocals") (EVar "scrut")) (EApp (EApp (EDictApp "flatMap") (EVar "collectArmLocals")) (EVar "arms"))))
 (DFunDef false "collectExprLocals" ((PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "lgBindName")) (EVar "binds")) (EApp (EApp (EDictApp "flatMap") (EVar "collectLgValLocals")) (EVar "binds"))) (EApp (EVar "collectExprLocals") (EVar "body"))))
 (DFunDef false "collectExprLocals" ((PCon "CMethod" PWild (PCon "MethodEvidence" PWild PWild (PCon "RProj" (PVar "r") (PVar "path")) PWild PWild))) (EListLit (EApp (EApp (EVar "projLocalName") (EVar "r")) (EVar "path"))))
-(DFunDef false "collectExprLocals" (PWild) (EListLit))
+(DFunDef false "collectExprLocals" ((POr (PCon "CMethod" PWild PWild) (PCon "CLit" PWild) (PCon "CVar" PWild PWild) (PCon "CLam" PWild PWild) (PCon "CDict" PWild PWild))) (EListLit))
 (DTypeSig false "collectFieldLocals" (TyFun (TyCon "CField") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "collectFieldLocals" ((PCon "CField" PWild PWild (PVar "value"))) (EApp (EVar "collectExprLocals") (EVar "value")))
 (DTypeSig false "collectLgValLocals" (TyFun (TyCon "CBind") (TyApp (TyCon "List") (TyCon "String"))))

@@ -761,14 +761,13 @@ coherenceFindings : List TargetProfile ->
 coherenceFindings profiles labelsOf rows =
   filterMap
     (c => match c
-      (pn, ext, k, why) => match find (p => profileName p == pn) profiles
-        Some p =>
-          if isUnprovidedOn (profileColumn p) ext then
-            None
-          else
-            Some
-              "`\{ext}` on \{pn}: \{gapKindName k} (\{why}) under a granted label, and the target check does not refuse it"
-        None => None)
+      (pn, ext, k, why) => do
+        p <- find (p => profileName p == pn) profiles
+        if isUnprovidedOn (profileColumn p) ext then
+          None
+        else
+          Some
+            "`\{ext}` on \{pn}: \{gapKindName k} (\{why}) under a granted label, and the target check does not refuse it")
     (unboundCells profiles labelsOf rows)
 
 -- The ratchet rows still owed, one line per backend and extern, naming the

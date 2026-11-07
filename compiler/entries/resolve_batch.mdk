@@ -13,8 +13,10 @@ oracleMain : Unit -> <IO> Unit
 oracleMain () = driveParseSources renderAll
 
 renderAll : List Decl -> List Decl -> List (String, String) -> String
-renderAll _runtimeP _coreP [] = ""
-renderAll runtimeP coreP ((path, src) :: rest) =
-  "===SELFHOST-FIX=== \{path}\n\{resolveToLines runtimeP coreP (desugar (parse src))}\n\{renderAll runtimeP coreP rest}"
+renderAll runtimeP coreP xs0 = go xs0
+  where
+    go [] = ""
+    go ((path, src) :: rest) =
+      "===SELFHOST-FIX=== \{path}\n\{resolveToLines runtimeP coreP (desugar (parse src))}\n\{go rest}"
 
 main = oracleMain ()

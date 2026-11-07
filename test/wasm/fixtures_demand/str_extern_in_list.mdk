@@ -1,0 +1,7 @@
+-- The only string-mode extern sits inside a list literal, so only the structural
+-- string-demand walk sees it; the emitted module must still define its helpers.
+hd xs = match xs
+  [] => 0
+  f :: _ => f
+
+main = hd [stringLength (intToString 99)]

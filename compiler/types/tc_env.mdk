@@ -285,9 +285,9 @@ ifaceExportsIndex gctx _ = gctx.declEnvsRef.value.deMethods.meIfaceExports
 -- belong to the same allocation as their scheme, not the final definition's ids.
 export
 bindingDeclared : TcEnv -> String -> Option CDeclared
-bindingDeclared env name = match lookupBinding env name
-  Some binding => binding.ebValue.vsDeclared
-  None => None
+bindingDeclared env name = do
+  binding <- lookupBinding env name
+  binding.ebValue.vsDeclared
 
 export
 attachStandaloneSources : OrdMap Scheme ->
@@ -1013,10 +1013,12 @@ implRowsOf : String ->
   Int ->
   List (IfaceRef, List Ty, List Require, List String, Option Loc) ->
   List ImplRow
-implRowsOf _ _ _ [] = []
-implRowsOf mid ord seq ((iface, tys, reqs, ms, loc) :: rest) =
-  ImplRow ord (InstRef mid ord seq) iface tys reqs ms loc
-    :: implRowsOf mid ord (seq + 1) rest
+implRowsOf mid ord seq0 xs0 = go seq0 xs0
+  where
+    go _ [] = []
+    go seq ((iface, tys, reqs, ms, loc) :: rest) =
+      ImplRow ord (InstRef mid ord seq) iface tys reqs ms loc
+        :: go (seq + 1) rest
 
 -- UPDATES `ieRows` and the three index buckets. does **NOT** UPDATE `ieUnivSnaps`.
 -- Read that as the design-law hazard it is, not as a note.
@@ -1349,12 +1351,14 @@ buildClassEnvGo : GraphCtx ->
   List DeclEnvModule ->
   ClassEnv ->
   ClassEnv
-buildClassEnvGo _gctx _ [] env = env
-buildClassEnvGo gctx known (m :: rest) env =
-  let rows = match classEnvDeclFacts m.demDecls
-    [] => []
-    facts => classEnvModuleRows gctx known m env facts
-  buildClassEnvGo gctx known rest (ceAddRows rows env)
+buildClassEnvGo gctx known xs0 env0 = go xs0 env0
+  where
+    go [] env = env
+    go (m :: rest) env =
+      let rows = match classEnvDeclFacts m.demDecls
+        [] => []
+        facts => classEnvModuleRows gctx known m env facts
+      go rest (ceAddRows rows env)
 
 -- One module's interface rows, each built against the rows before it.  A
 -- parameter's kind may follow from a head of the module or from another of
@@ -1467,27 +1471,30 @@ classEnvRowsOf : GraphCtx ->
   ClassEnv ->
   List (String, List String, List (Option KindAnn), List IfaceMethod, List Super, TyConOrigin, Option Loc) ->
   List CeRow
-classEnvRowsOf _gctx _ _ _ [] = []
-classEnvRowsOf gctx readsIn ord ce ((name, typarams, kinds, methods, supers, o, loc) :: rest) =
-  let reads = readsIn ce
-  let scope = declGradedScope gctx typarams kinds methods
-  let row =
-    CeRow
-      (regKeyOfTab (ifaceTabKey o name))
-      ord
-      IfaceRef {
-        irName = name,
-        irOrigin = o,
-      }
-      typarams
-      (map (ceMethodOf scope) methods)
-      supers
-      (map
-        (pa => ifaceParamKindsDecl gctx reads (snd pa) (fst pa) supers methods)
-        (zipL typarams (padAnns typarams kinds)))
-      (requiredMethodNames methods)
-      loc
-  row :: classEnvRowsOf gctx readsIn ord (ceInsertRow row ce) rest
+classEnvRowsOf gctx readsIn ord ce0 xs0 = go ce0 xs0
+  where
+    go _ [] = []
+    go ce ((name, typarams, kinds, methods, supers, o, loc) :: rest) =
+      let reads = readsIn ce
+      let scope = declGradedScope gctx typarams kinds
+      let row =
+        CeRow
+          (regKeyOfTab (ifaceTabKey o name))
+          ord
+          IfaceRef {
+            irName = name,
+            irOrigin = o,
+          }
+          typarams
+          (map (ceMethodOf scope) methods)
+          supers
+          (map
+            (pa =>
+              ifaceParamKindsDecl gctx reads (snd pa) (fst pa) supers methods)
+            (zipL typarams (padAnns typarams kinds)))
+          (requiredMethodNames methods)
+          loc
+      row :: go (ceInsertRow row ce) rest
 
 ceMethodOf : List (String, List Kind) ->
   IfaceMethod ->
@@ -1521,9 +1528,9 @@ ceInsertRow r env = ClassEnv { env |
 -- mistaken for finishing early.
 export
 ceLookupAt : RegKey -> Int -> ClassEnv -> Option CeRow
-ceLookupAt key cur env = match regLookupK key env.ceByKey
-  None => None
-  Some r => if declEnvVisibleAt cur (ceRowOrd r) then Some r else None
+ceLookupAt key cur env = do
+  r <- regLookupK key env.ceByKey
+  if declEnvVisibleAt cur (ceRowOrd r) then Some r else None
 
 -- An interface named by a RESOLVED reference: the reference's origin was bound by
 -- resolve at a site that could see the declaration, so no ordinal filter applies.
@@ -1569,9 +1576,9 @@ ceRowsOwnedBy cur env = filterList (r => ceRowOrd r == cur) env.ceRows
 -- impl has type arguments".
 export
 ceSlotKindsAt : RegKey -> Int -> Int -> ClassEnv -> Option (List Kind)
-ceSlotKindsAt key cur i env = match ceLookupAt key cur env
-  None => None
-  Some r => nthKindList i (ceRowParamKinds r)
+ceSlotKindsAt key cur i env = do
+  r <- ceLookupAt key cur env
+  nthKindList i (ceRowParamKinds r)
 
 -- #1557 A-3.5a: interface [key]'s REQUIRED-method names at the reading module's
 -- ordinal — the relocation target of `universeIfaceRequiredRef`'s registry lookup
@@ -1634,23 +1641,22 @@ methodRowsInto : GraphCtx ->
   List Decl ->
   OrdMap (List MethodRow) ->
   OrdMap (List MethodRow)
-methodRowsInto _gctx _ [] acc = acc
-methodRowsInto gctx ord ((DAttrib _ d) :: rest) acc =
-  methodRowsInto gctx ord rest (methodRowsInto gctx ord [d] acc)
-methodRowsInto gctx ord ((DInterface { name, typarams, typaramKinds, methods, ifaceOrigin, ... }) :: rest) acc =
-  methodRowsInto
-    gctx
-    ord
-    rest
-    (methodRowsOfIface
-      ord
-      IfaceRef { irName = name, irOrigin = ifaceOrigin }
-      (regKeyOfTab (ifaceTabKey ifaceOrigin name))
-      typarams
-      (declGradedScope gctx typarams typaramKinds methods)
-      methods
-      acc)
-methodRowsInto gctx ord (_ :: rest) acc = methodRowsInto gctx ord rest acc
+methodRowsInto gctx ord xs0 acc0 = go xs0 acc0
+  where
+    go [] acc = acc
+    go ((DAttrib _ d) :: rest) acc = go rest (go [d] acc)
+    go ((DInterface { name, typarams, typaramKinds, methods, ifaceOrigin, ... }) :: rest) acc =
+      go
+        rest
+        (methodRowsOfIface
+          ord
+          IfaceRef { irName = name, irOrigin = ifaceOrigin }
+          (regKeyOfTab (ifaceTabKey ifaceOrigin name))
+          typarams
+          (declGradedScope gctx typarams typaramKinds)
+          methods
+          acc)
+    go (_ :: rest) acc = go rest acc
 
 -- A declaration with no module id mints no `Ident` and contributes no row (honest
 -- absence, §8 I6.3).  Upsert BY IDENTITY: two interfaces of one module declaring the
@@ -1665,23 +1671,27 @@ methodRowsOfIface : Int ->
   List IfaceMethod ->
   OrdMap (List MethodRow) ->
   OrdMap (List MethodRow)
-methodRowsOfIface _ _ _ _ _ [] acc = acc
-methodRowsOfIface ord iface key typarams scope ((IfaceMethod mname mty _ _) :: rest) acc =
-  let acc2 = match mkIdent NsMethod iface.irOrigin mname
-    None => acc
-    Some ident =>
-      let row = MethodRow {
-        mrIdent = ident,
-        mrOrd = ord,
-        mrIface = key,
-        mrEntry = (iface, typarams, mty, scope),
-      }
-      omInsert
-        mname
-        (filterList (r => r.mrIdent /= ident) (optionOr [] (omLookup mname acc))
-          ++ [row])
-        acc
-  methodRowsOfIface ord iface key typarams scope rest acc2
+methodRowsOfIface ord iface key typarams scope xs0 acc0 = go xs0 acc0
+  where
+    go [] acc = acc
+    go ((IfaceMethod mname mty _ _) :: rest) acc =
+      let acc2 = match mkIdent NsMethod iface.irOrigin mname
+        None => acc
+        Some ident =>
+          let row = MethodRow {
+            mrIdent = ident,
+            mrOrd = ord,
+            mrIface = key,
+            mrEntry = (iface, typarams, mty, scope),
+          }
+          omInsert
+            mname
+            (filterList
+                (r => r.mrIdent /= ident)
+                (optionOr [] (omLookup mname acc))
+              ++ [row])
+            acc
+      go rest acc2
 
 export
 methodRowById : Ident -> List MethodRow -> Option MethodRow
@@ -1771,9 +1781,9 @@ lookupVar env n = match omLookup n env.teVars
 
 export
 lookupMethodRow : TcEnv -> String -> Option MethodSchemeRow
-lookupMethodRow env n = match lookupBinding env n
-  Some binding => binding.ebMethodRow
-  None => None
+lookupMethodRow env n = do
+  binding <- lookupBinding env n
+  binding.ebMethodRow
 
 export
 lookupCtor : TcEnv -> String -> Option Scheme
@@ -1821,17 +1831,17 @@ lookupStandaloneVar env name =
 
 export
 lookupStandaloneValue : TcEnv -> String -> Option ValueScheme
-lookupStandaloneValue env name = match lookupBinding env name
-  Some binding => map snd binding.ebStandalone
-  None => None
+lookupStandaloneValue env name = do
+  binding <- lookupBinding env name
+  map snd binding.ebStandalone
 
 export
 lookupImportedStandalone : TcEnv -> String -> Option Scheme
-lookupImportedStandalone env name = match lookupBinding env name
-  Some binding => match binding.ebStandalone
+lookupImportedStandalone env name = do
+  binding <- lookupBinding env name
+  match binding.ebStandalone
     Some (ImportedStandalone, value) => Some value.vsScheme
     _ => None
-  None => None
 
 -- #739: is [name] an explicitly-imported value (has a known source module)?  A miss in
 -- the qual constraint table for such a name is authoritative ("unconstrained in its
@@ -1949,11 +1959,14 @@ lookupIdxById : IfaceRef ->
   String ->
   List ((IfaceRef, String), Int) ->
   Option Int
-lookupIdxById _ _ [] = None
-lookupIdxById iface n (((ir, mn), i) :: rest)
-  | mn == n && sameTyConHead ir.irName ir.irOrigin iface.irName iface.irOrigin =
-    Some i
-  | otherwise = lookupIdxById iface n rest
+lookupIdxById iface n xs0 = go xs0
+  where
+    go [] = None
+    go (((ir, mn), i) :: rest)
+      | mn == n
+        && sameTyConHead ir.irName ir.irOrigin iface.irName iface.irOrigin =
+        Some i
+      | otherwise = go rest
 
 -- `ebMethodRow = Some` certifies this predicate.  Every environment producer either
 -- calls `extendMethodRows`, or installs a row returned by `admittedRowFor`; both
@@ -2046,7 +2059,7 @@ export
 kindTypeOnly : Kind -> Bool
 kindTypeOnly KType = True
 kindTypeOnly (KArrow d r) = kindTypeOnly d && kindTypeOnly r
-kindTypeOnly _ = False
+kindTypeOnly (KRow | KAuth _ _) = False
 
 -- Two `Authority` kinds agree only on one label and one `*` (§6.1).
 export
@@ -2169,11 +2182,11 @@ kindUsesAt : KindReads ->
   List Kind ->
   List Ty ->
   List (String, Kind)
-kindUsesAt _ _ _ [] = []
-kindUsesAt reads vars (k :: ks) (a :: as2) =
-  kindUses reads vars (Some k) a ++ kindUsesAt reads vars ks as2
-kindUsesAt reads vars [] (a :: as2) =
-  kindUses reads vars None a ++ kindUsesAt reads vars [] as2
+kindUsesAt reads vars xs0 xs1 = go xs0 xs1
+  where
+    go _ [] = []
+    go (k :: ks) (a :: as2) = kindUses reads vars (Some k) a ++ go ks as2
+    go [] (a :: as2) = kindUses reads vars None a ++ go [] as2
 
 -- The kind of each variable [items] write, each item a type with the kind
 -- its position takes: [declared] first, then a kind involving `Effect` or
@@ -2213,6 +2226,8 @@ varKindsFix : KindReads ->
   Int ->
   List (String, Kind) ->
   List (String, Kind)
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
 varKindsFix reads declared items fuel cur =
   let next = varKindsRound reads declared items cur
   if fuel <= 0 || sameVarKinds cur next then
@@ -2246,7 +2261,7 @@ kindJoin : Kind -> Kind -> Kind
 kindJoin (KArrow d1 r1) (KArrow d2 r2) =
   KArrow (kindJoin d1 d2) (kindJoin r1 r2)
 kindJoin KType b = b
-kindJoin a _ = a
+kindJoin (a@(KRow | KAuth _ _ | KArrow _ _)) _ = a
 
 sameVarKinds : List (String, Kind) -> List (String, Kind) -> Bool
 sameVarKinds ((a, ka) :: as2) ((b, kb) :: bs) =
@@ -2286,7 +2301,7 @@ constraintHeadsIn (TyTuple ts) = flatMap constraintHeadsIn ts
 constraintHeadsIn (TyEffect _ _ t) = constraintHeadsIn t
 constraintHeadsIn (TyNamed _ t _) = constraintHeadsIn t
 constraintHeadsIn (TyQual t _ _) = constraintHeadsIn t
-constraintHeadsIn _ = []
+constraintHeadsIn (TyCon {  } | TyVar _ | TyRow _ _ _ | TyAuth _ _) = []
 
 -- A constructor kind: an arrow over `Type`.
 export
@@ -2306,20 +2321,24 @@ kindHeadsOf gctx ds = map (d => kindHeadOf gctx (kindPublicDataDecl d) d) ds
 
 -- mirrors `registerData` arm for arm, `DAttrib` unwrapped
 kindHeadOf : GraphCtx -> Bool -> Decl -> Option KindHead
-kindHeadOf gctx pub (DAttrib _ d) = kindHeadOf gctx pub d
-kindHeadOf gctx pub (DData { dataName = n, dataParams = ps, dataParamKinds = ks, dataCtors = vs, dataOrigin = o }) =
-  Some
-    (KindHead
-      (tyTabKey o n)
-      pub
-      ps
-      (declaredParamKinds gctx ps ks)
-      (flatMap variantFieldTys vs))
-kindHeadOf gctx pub (DNewtype { newtypeName = n, newtypeParams = ps, newtypeParamKinds = ks, newtypeFieldTy = fty, newtypeOrigin = o }) =
-  Some (KindHead (tyTabKey o n) pub ps (declaredParamKinds gctx ps ks) [fty])
-kindHeadOf gctx pub (DTypeAlias { tyAliasName = n, tyAliasParams = ps, tyAliasParamKinds = ks, tyAliasRhs = rhs, tyAliasOrigin = o }) =
-  Some (KindHead (tyTabKey o n) pub ps (declaredParamKinds gctx ps ks) [rhs])
-kindHeadOf _gctx _ _ = None
+kindHeadOf gctx pub x0 = go x0
+  where
+    go (DAttrib _ d) = go d
+    go (DData { dataName = n, dataParams = ps, dataParamKinds = ks, dataCtors = vs, dataOrigin = o }) =
+      Some
+        (KindHead
+          (tyTabKey o n)
+          pub
+          ps
+          (declaredParamKinds gctx ps ks)
+          (flatMap variantFieldTys vs))
+    go (DNewtype { newtypeName = n, newtypeParams = ps, newtypeParamKinds = ks, newtypeFieldTy = fty, newtypeOrigin = o }) =
+      Some
+        (KindHead (tyTabKey o n) pub ps (declaredParamKinds gctx ps ks) [fty])
+    go (DTypeAlias { tyAliasName = n, tyAliasParams = ps, tyAliasParamKinds = ks, tyAliasRhs = rhs, tyAliasOrigin = o }) =
+      Some
+        (KindHead (tyTabKey o n) pub ps (declaredParamKinds gctx ps ks) [rhs])
+    go _ = None
 
 declaredParamKinds : GraphCtx ->
   List String ->
@@ -2622,16 +2641,13 @@ export
 declGradedScope : GraphCtx ->
   List String ->
   List (Option KindAnn) ->
-  List IfaceMethod ->
   List (String, List Kind)
-declGradedScope _gctx [] _ _ = []
-declGradedScope gctx (p :: ps) [] methods =
-  declGradedScope gctx (p :: ps) [None] methods
-declGradedScope gctx (p :: ps) (a :: anns) methods =
-  declGradedScopeAdd
-    p
-    (declaredSlotKinds gctx a)
-    (declGradedScope gctx ps anns methods)
+declGradedScope gctx ps0 anns0 = go ps0 anns0
+  where
+    go [] _ = []
+    go (p :: ps) [] = go (p :: ps) [None]
+    go (p :: ps) (a :: anns) =
+      declGradedScopeAdd p (declaredSlotKinds gctx a) (go ps anns)
 
 -- The slot kinds a parameter's declared arrow kind gives it; none otherwise.
 declaredSlotKinds : GraphCtx -> Option KindAnn -> List Kind
@@ -2709,11 +2725,11 @@ ifaceMethodVarApps p (IfaceMethod _ mty _ _) =
   map (args => (args, tails)) (varHeadApps p mty)
 
 ifaceSlotKinds : Int -> Int -> List (List Ty, List String) -> List Kind
-ifaceSlotKinds arity i apps
-  | i >= arity = []
-  | otherwise =
-    (if anySlotIsRow i apps then KRow else KType)
-      :: ifaceSlotKinds arity (i + 1) apps
+ifaceSlotKinds arity i0 apps = go i0
+  where
+    go i
+      | i >= arity = []
+      | otherwise = (if anySlotIsRow i apps then KRow else KType) :: go (i + 1)
 
 anySlotIsRow : Int -> List (List Ty, List String) -> Bool
 anySlotIsRow _ [] = False
@@ -2732,7 +2748,9 @@ varHeadApps p (TyFun a b) = varHeadApps p a ++ varHeadApps p b
 varHeadApps p (TyTuple ts) = flatMap (varHeadApps p) ts
 varHeadApps p (TyEffect _ _ t) = varHeadApps p t
 varHeadApps p (TyConstrained _ t) = varHeadApps p t
-varHeadApps _ _ = []
+varHeadApps p (TyNamed _ t _) = varHeadApps p t
+varHeadApps p (TyQual t _ _) = varHeadApps p t
+varHeadApps _ (TyCon {  } | TyVar _ | TyRow _ _ _ | TyAuth _ _) = []
 
 varHeadHere : String -> Ty -> List Ty -> List (List Ty)
 varHeadHere p (TyVar h) args
@@ -2911,12 +2929,14 @@ ieImplExistsForHeadGo : GraphCtx ->
   TabKey ->
   Option (List IfaceRef) ->
   Bool
-ieImplExistsForHeadGo _gctx [] _ _ _ = False
-ieImplExistsForHeadGo gctx ((r@(ImplRow _ _ ir tys _ ms _)) :: rest) name goal admitted
-  | headTabIs (univReceiverTag tys) goal
-    && ieRowAdmittedBy ir admitted
-    && ieRowAnswersMethod gctx r ms name admitted = True
-  | otherwise = ieImplExistsForHeadGo gctx rest name goal admitted
+ieImplExistsForHeadGo gctx xs0 name goal admitted = go xs0
+  where
+    go [] = False
+    go ((r@(ImplRow _ _ ir tys _ ms _)) :: rest)
+      | headTabIs (univReceiverTag tys) goal
+        && ieRowAdmittedBy ir admitted
+        && ieRowAnswersMethod gctx r ms name admitted = True
+      | otherwise = go rest
 
 -- Does this row's interface match the declaration the querying module admits?
 --
@@ -2965,12 +2985,14 @@ ieDefinesReqMethodAt env method hd =
   ieDefinesReqMethodAtGo (ieHeadRows hd env) method (headTabOf hd)
 
 ieDefinesReqMethodAtGo : List ImplRow -> String -> Option TabKey -> Bool
-ieDefinesReqMethodAtGo [] _ _ = False
-ieDefinesReqMethodAtGo ((ImplRow _ _ _ tys reqs ms _) :: rest) method goal
-  | implRowHasReqs reqs
-    && headTabEq (univReceiverTag tys) goal
-    && contains method ms = True
-  | otherwise = ieDefinesReqMethodAtGo rest method goal
+ieDefinesReqMethodAtGo xs0 method goal = go xs0
+  where
+    go [] = False
+    go ((ImplRow _ _ _ tys reqs ms _) :: rest)
+      | implRowHasReqs reqs
+        && headTabEq (univReceiverTag tys) goal
+        && contains method ms = True
+      | otherwise = go rest
 
 -- `implEntryOf`'s `match reqs [] => []` arm, as a predicate over an `IE` row.
 implRowHasReqs : List Require -> Bool
@@ -3220,6 +3242,8 @@ ieRowIfaceMatches ir iface =
 
 export
 ieEntriesForIface : List ImplRow -> IfaceRef -> List Mono -> List KeyEntry
+-- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 ieEntriesForIface [] _ _ = []
 ieEntriesForIface ((r@(ImplRow _ _ ir tys _ _ _)) :: rest) iface goals
   | ieRowIfaceMatches ir iface && ieRowHeadMatches tys goals =
@@ -3270,6 +3294,8 @@ ieEntriesForMethod : GraphCtx ->
   Option (List IfaceRef) ->
   List Mono ->
   List KeyEntry
+-- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 ieEntriesForMethod _gctx [] _ _ _ = []
 ieEntriesForMethod gctx ((r@(ImplRow _ _ ir tys _ ms _)) :: rest) name admitted goals
   | ieRowAdmittedBy ir admitted
@@ -3494,9 +3520,10 @@ insertUnivImplKeys : List TabKey ->
   List Require ->
   ImplUniverse ->
   ImplUniverse
-insertUnivImplKeys [] _ _ univ = univ
-insertUnivImplKeys (ifk :: rest) tys reqs univ =
-  insertUnivImplKeys rest tys reqs (insertUnivImplAt ifk tys reqs univ)
+insertUnivImplKeys xs0 tys reqs univ0 = go xs0 univ0
+  where
+    go [] univ = univ
+    go (ifk :: rest) univ = go rest (insertUnivImplAt ifk tys reqs univ)
 
 -- the interface keys an IMPL is indexed under: the identity key, plus the bare
 -- spelling key when the two differ (an identity-less occurrence mints the bare key
@@ -3628,18 +3655,20 @@ ceMethodTyAt : IfaceRef ->
   Option (List String, Ty, List (String, List Kind))
 ceMethodTyAt iface mname cur ce =
   let key = regKeyOfTab (ifaceTabKey iface.irOrigin iface.irName)
-  match ceLookupAt key cur ce
-    Some row => ceMethodTyIn (ceRowTyparams row) mname (ceRowMethods row)
-    None => None
+  do
+    row <- ceLookupAt key cur ce
+    ceMethodTyIn (ceRowTyparams row) mname (ceRowMethods row)
 
 ceMethodTyIn : List String ->
   String ->
   List (String, Ty, List (String, List Kind)) ->
   Option (List String, Ty, List (String, List Kind))
-ceMethodTyIn _ _ [] = None
-ceMethodTyIn typarams mname ((name, mty, scope) :: rest)
-  | name == mname = Some (typarams, mty, scope)
-  | otherwise = ceMethodTyIn typarams mname rest
+ceMethodTyIn typarams mname xs0 = go xs0
+  where
+    go [] = None
+    go ((name, mty, scope) :: rest)
+      | name == mname = Some (typarams, mty, scope)
+      | otherwise = go rest
 
 -- Declaration identity for numeric anchors, predicate slots, and obligation keys.
 -- Resolved occurrences compare by (module, name); two unresolved occurrences in
@@ -3765,17 +3794,16 @@ lookupMethodRowById : IfaceRef ->
   String ->
   Registry MethodSchemeRow ->
   Option MethodSchemeRow
-lookupMethodRowById iface n rows = match regLookupK (methodRowKey iface n) rows
-  Some row =>
-    if sameTyConHead
-      row.msrIface.irName
-      row.msrIface.irOrigin
-      iface.irName
-      iface.irOrigin then
-      Some row
-    else
-      None
-  None => None
+lookupMethodRowById iface n rows = do
+  row <- regLookupK (methodRowKey iface n) rows
+  if sameTyConHead
+    row.msrIface.irName
+    row.msrIface.irOrigin
+    iface.irName
+    iface.irOrigin then
+    Some row
+  else
+    None
 
 -- `sameTyConHead`, not a bare `irName` compare: this is a LOOKUP, where a false HIT
 -- is silent wrongness (the wrong interface's scheme), so absence-makes-no-claim plus

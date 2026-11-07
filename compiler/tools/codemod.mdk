@@ -149,30 +149,29 @@ export
 codemodSource : (Decl -> (Decl, Bool)) ->
   String ->
   Result ParseError (Option String)
-codemodSource xf src = match parseResult src
-  Err e => Err e
-  Ok _ =>
-    let (toks, pairs) = tokenizeWithOffsetPairs src
-    let parsed =
-      optionOrPanic "parse error" (parseSourceSyntaxPairs src toks pairs)
-    let decls = parsedDecls parsed
-    let pos = parsedPositions parsed
-    let metadata = parsedMetadata parsed
-    let (decls2, changed) = mapDeclsChanged xf decls
-    if not changed then
-      Ok None
-    else
-      let comments = collectComments src
-      Ok
-        (Some
-          (formatProgram
-            decls2
-            (positionsDecls pos)
-            (positionsVariantLines pos)
-            (metadataTrailingCommas metadata)
-            (metadataUnitStarts metadata)
-            comments
-            src))
+codemodSource xf src = do
+  _ <- parseResult src
+  let (toks, pairs) = tokenizeWithOffsetPairs src
+  let parsed =
+    optionOrPanic "parse error" (parseSourceSyntaxPairs src toks pairs)
+  let decls = parsedDecls parsed
+  let pos = parsedPositions parsed
+  let metadata = parsedMetadata parsed
+  let (decls2, changed) = mapDeclsChanged xf decls
+  if not changed then
+    Ok None
+  else
+    let comments = collectComments src
+    Ok
+      (Some
+        (formatProgram
+          decls2
+          (positionsDecls pos)
+          (positionsVariantLines pos)
+          (metadataTrailingCommas metadata)
+          (metadataUnitStarts metadata)
+          comments
+          src))
 
 mapDeclsChanged : (Decl -> (Decl, Bool)) -> List Decl -> (List Decl, Bool)
 mapDeclsChanged _ [] = ([], False)

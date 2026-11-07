@@ -84,7 +84,8 @@ argsOfTy (TyConstrained _ t) = argsOfTy t
 argsOfTy (TyEffect _ _ t) = argsOfTy t
 argsOfTy (TyFun (TyNamed _ a _) b) = a :: argsOfTy b
 argsOfTy (TyFun a b) = a :: argsOfTy b
-argsOfTy _ = []
+argsOfTy (TyCon {  } | TyVar _ | TyApp _ _ | TyTuple _ | TyNamed _ _ _ | TyQual _ _ _ | TyRow _ _ _ | TyAuth _ _) =
+  []
 
 filterMentions : Int -> List Ty -> List String -> List Int
 filterMentions _ [] _ = []

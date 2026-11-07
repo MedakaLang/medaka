@@ -22,6 +22,7 @@ import tools.lint_core.{
   Fix(..),
   FixEdit(..),
   Fixability(..),
+  Memo,
   Need(..),
   Ratchet(..),
   Rule,
@@ -154,7 +155,7 @@ ruleForPreferAssign idx _ facts _ _ =
 -- helpful "prefer …" form the sibling rules use), while a block-collapse hit does
 -- NOT render the rewritten node — that node is the WHOLE block, and printing it
 -- would bury the one-line point in a wall of unrelated statements.
-preferAssignFinding : Option Loc -> Expr -> Option Fix -> Finding
+preferAssignFinding : Option Loc -> Expr -> Memo (Option Fix) -> Finding
 preferAssignFinding loc rewritten fix = Finding {
   rule = ruleNamePreferAssignOp,
   message = preferAssignMessage rewritten,

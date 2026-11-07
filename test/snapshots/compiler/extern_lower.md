@@ -138,11 +138,11 @@ externHeadRows (CProgram _ _ _ _ _ facts) =
 
 export
 externRuntimeKey : OrdMap ExternDeclFact -> String -> Option String
-externRuntimeKey inventory symbol = match omLookup symbol inventory
-  Some fact => match fact.bindingKind
+externRuntimeKey inventory symbol = do
+  fact <- omLookup symbol inventory
+  match fact.bindingKind
     RuntimeBinding key => Some key
     ForeignBinding => None
-  None => None
 
 walkBind : ExternVisitor -> OrdMap Unit -> CBind -> CBind
 walkBind env scope (CBind name clauses site bid) =
@@ -284,6 +284,7 @@ externFactIndex =
         omInsert fact.symbol fact index)
     omEmpty
 # DESUGAR
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("support" "symbol_encoding") ((mem "encodePair" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Addr" true) (mem "Pat" false))))
 (DUse false (UseGroup ("ir" "core_walk") ((mem "bindPats" false) (mem "patBinders" false))))
@@ -317,7 +318,7 @@ externFactIndex =
 (DTypeSig true "externHeadRows" (TyFun (TyCon "CProgram") (TyCon "ExternHeadRows")))
 (DFunDef false "externHeadRows" ((PCon "CProgram" PWild PWild PWild PWild PWild (PVar "facts"))) (EApp (EApp (EVar "flatMap") (ELam ((PVar "key")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "key")) (EFieldAccess (EVar "facts") "factExterns")) (arm (PCon "Some" (PVar "fact")) () (EMatch (ETuple (EFieldAccess (EVar "fact") "bindingKind") (EFieldAccess (EVar "fact") "callableShape")) (arm (PTuple (PCon "ForeignBinding") (PCon "Some" (PVar "shape"))) () (EListLit (ETuple (EFieldAccess (EVar "fact") "symbol") (ETuple (EFieldAccess (EVar "fact") "hostBindings") (ETuple (EFieldAccess (EVar "shape") "parameterHeads") (EFieldAccess (EVar "shape") "resultHead")))))) (arm PWild () (EListLit)))) (arm (PCon "None") () (EListLit))))) (EApp (EVar "omKeys") (EFieldAccess (EVar "facts") "factExterns"))))
 (DTypeSig true "externRuntimeKey" (TyFun (TyApp (TyCon "OrdMap") (TyCon "ExternDeclFact")) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "externRuntimeKey" ((PVar "inventory") (PVar "symbol")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "symbol")) (EVar "inventory")) (arm (PCon "Some" (PVar "fact")) () (EMatch (EFieldAccess (EVar "fact") "bindingKind") (arm (PCon "RuntimeBinding" (PVar "key")) () (EApp (EVar "Some") (EVar "key"))) (arm (PCon "ForeignBinding") () (EVar "None")))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "externRuntimeKey" ((PVar "inventory") (PVar "symbol")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "omLookup") (EVar "symbol")) (EVar "inventory"))) (ELam ((PVar "fact")) (EMatch (EFieldAccess (EVar "fact") "bindingKind") (arm (PCon "RuntimeBinding" (PVar "key")) () (EApp (EVar "Some") (EVar "key"))) (arm (PCon "ForeignBinding") () (EVar "None"))))))
 (DTypeSig false "walkBind" (TyFun (TyCon "ExternVisitor") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CBind") (TyCon "CBind")))))
 (DFunDef false "walkBind" ((PVar "env") (PVar "scope") (PCon "CBind" (PVar "name") (PVar "clauses") (PVar "site") (PVar "bid"))) (EApp (EApp (EApp (EApp (EVar "CBind") (EVar "name")) (EApp (EApp (EVar "map") (EApp (EApp (EVar "walkClause") (EVar "env")) (EVar "scope"))) (EVar "clauses"))) (EVar "site")) (EVar "bid")))
 (DTypeSig false "walkClause" (TyFun (TyCon "ExternVisitor") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CClause") (TyCon "CClause")))))
@@ -367,6 +368,7 @@ externFactIndex =
 (DTypeSig true "externFactIndex" (TyFun (TyApp (TyCon "List") (TyCon "ExternDeclFact")) (TyApp (TyCon "OrdMap") (TyCon "ExternDeclFact"))))
 (DFunDef false "externFactIndex" () (EApp (EApp (EVar "fold") (ELam ((PVar "index") (PVar "fact")) (EIf (EApp (EApp (EVar "omHasKey") (EFieldAccess (EVar "fact") "symbol")) (EVar "index")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "duplicate-extern-declaration: ")) (EFieldAccess (EVar "fact") "symbol"))) (EApp (EApp (EApp (EVar "omInsert") (EFieldAccess (EVar "fact") "symbol")) (EVar "fact")) (EVar "index"))))) (EVar "omEmpty")))
 # MARK
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("support" "symbol_encoding") ((mem "encodePair" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Addr" true) (mem "Pat" false))))
 (DUse false (UseGroup ("ir" "core_walk") ((mem "bindPats" false) (mem "patBinders" false))))
@@ -400,7 +402,7 @@ externFactIndex =
 (DTypeSig true "externHeadRows" (TyFun (TyCon "CProgram") (TyCon "ExternHeadRows")))
 (DFunDef false "externHeadRows" ((PCon "CProgram" PWild PWild PWild PWild PWild (PVar "facts"))) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "key")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "key")) (EFieldAccess (EVar "facts") "factExterns")) (arm (PCon "Some" (PVar "fact")) () (EMatch (ETuple (EFieldAccess (EVar "fact") "bindingKind") (EFieldAccess (EVar "fact") "callableShape")) (arm (PTuple (PCon "ForeignBinding") (PCon "Some" (PVar "shape"))) () (EListLit (ETuple (EFieldAccess (EVar "fact") "symbol") (ETuple (EFieldAccess (EVar "fact") "hostBindings") (ETuple (EFieldAccess (EVar "shape") "parameterHeads") (EFieldAccess (EVar "shape") "resultHead")))))) (arm PWild () (EListLit)))) (arm (PCon "None") () (EListLit))))) (EApp (EVar "omKeys") (EFieldAccess (EVar "facts") "factExterns"))))
 (DTypeSig true "externRuntimeKey" (TyFun (TyApp (TyCon "OrdMap") (TyCon "ExternDeclFact")) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "externRuntimeKey" ((PVar "inventory") (PVar "symbol")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "symbol")) (EVar "inventory")) (arm (PCon "Some" (PVar "fact")) () (EMatch (EFieldAccess (EVar "fact") "bindingKind") (arm (PCon "RuntimeBinding" (PVar "key")) () (EApp (EVar "Some") (EVar "key"))) (arm (PCon "ForeignBinding") () (EVar "None")))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "externRuntimeKey" ((PVar "inventory") (PVar "symbol")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "omLookup") (EVar "symbol")) (EVar "inventory"))) (ELam ((PVar "fact")) (EMatch (EFieldAccess (EVar "fact") "bindingKind") (arm (PCon "RuntimeBinding" (PVar "key")) () (EApp (EVar "Some") (EVar "key"))) (arm (PCon "ForeignBinding") () (EVar "None"))))))
 (DTypeSig false "walkBind" (TyFun (TyCon "ExternVisitor") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CBind") (TyCon "CBind")))))
 (DFunDef false "walkBind" ((PVar "env") (PVar "scope") (PCon "CBind" (PVar "name") (PVar "clauses") (PVar "site") (PVar "bid"))) (EApp (EApp (EApp (EApp (EVar "CBind") (EVar "name")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "walkClause") (EVar "env")) (EVar "scope"))) (EVar "clauses"))) (EVar "site")) (EVar "bid")))
 (DTypeSig false "walkClause" (TyFun (TyCon "ExternVisitor") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CClause") (TyCon "CClause")))))

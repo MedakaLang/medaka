@@ -1,5 +1,5 @@
 # META
-source_lines=288
+source_lines=287
 stages=DESUGAR,MARK
 # SOURCE
 import types.invocation_basis.{publishInvocationView}
@@ -245,17 +245,16 @@ joinKey atoms = joinWith "," (map (a => "\{atomKey a} \{renderAtom a}") atoms)
 
 export
 preludeCacheHit : (Int, Int) -> List Atom -> Option PreludeInterface
-preludeCacheHit generation join = match !preludeCacheRef
-  None => None
-  Some entry =>
-    if entry.pceGeneration == generation then
-      map
-        snd
-        (find
-          (section => any (j => joinKey j == joinKey join) (fst section))
-          entry.pceSections)
-    else
-      None
+preludeCacheHit generation join = do
+  entry <- !preludeCacheRef
+  if entry.pceGeneration == generation then
+    map
+      snd
+      (find
+        (section => any (j => joinKey j == joinKey join) (fst section))
+        entry.pceSections)
+  else
+    None
 
 export
 currentPreludeInterface : Unit -> List (List (List Atom), PreludeInterface)
@@ -337,7 +336,7 @@ keysMatch a b
 (DTypeSig false "joinKey" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String")))
 (DFunDef false "joinKey" ((PVar "atoms")) (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EApp (EApp (EVar "map") (ELam ((PVar "a")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EApp (EVar "atomKey") (EVar "a")))) (ELit (LString " "))) (EApp (EVar "$core.display") (EApp (EVar "renderAtom") (EVar "a")))) (ELit (LString ""))))) (EVar "atoms"))))
 (DTypeSig true "preludeCacheHit" (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "Option") (TyCon "PreludeInterface")))))
-(DFunDef false "preludeCacheHit" ((PVar "generation") (PVar "join")) (EMatch (EUnOp "!" (EVar "preludeCacheRef")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "entry")) () (EIf (EBinOp "==" (EFieldAccess (EVar "entry") "pceGeneration") (EVar "generation")) (EApp (EApp (EVar "map") (EVar "snd")) (EApp (EApp (EVar "find") (ELam ((PVar "section")) (EApp (EApp (EVar "any") (ELam ((PVar "j")) (EBinOp "==" (EApp (EVar "joinKey") (EVar "j")) (EApp (EVar "joinKey") (EVar "join"))))) (EApp (EVar "fst") (EVar "section"))))) (EFieldAccess (EVar "entry") "pceSections"))) (EVar "None")))))
+(DFunDef false "preludeCacheHit" ((PVar "generation") (PVar "join")) (EApp (EApp (EVar "$core.andThen") (EUnOp "!" (EVar "preludeCacheRef"))) (ELam ((PVar "entry")) (EIf (EBinOp "==" (EFieldAccess (EVar "entry") "pceGeneration") (EVar "generation")) (EApp (EApp (EVar "map") (EVar "snd")) (EApp (EApp (EVar "find") (ELam ((PVar "section")) (EApp (EApp (EVar "any") (ELam ((PVar "j")) (EBinOp "==" (EApp (EVar "joinKey") (EVar "j")) (EApp (EVar "joinKey") (EVar "join"))))) (EApp (EVar "fst") (EVar "section"))))) (EFieldAccess (EVar "entry") "pceSections"))) (EVar "None")))))
 (DTypeSig true "currentPreludeInterface" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom"))) (TyCon "PreludeInterface")))))
 (DFunDef false "currentPreludeInterface" (PWild) (EMatch (EUnOp "!" (EVar "preludeCacheRef")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "entry")) () (EFieldAccess (EVar "entry") "pceSections"))))
 (DData Public "InterfaceKey" () ((variant "InterfaceKey" (ConNamed (field "ikFormat" (TyCon "Int")) (field "ikSources" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "ikCompiler" (TyCon "String"))))) ())
@@ -392,7 +391,7 @@ keysMatch a b
 (DTypeSig false "joinKey" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String")))
 (DFunDef false "joinKey" ((PVar "atoms")) (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "a")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EApp (EVar "atomKey") (EVar "a")))) (ELit (LString " "))) (EApp (EVar "$core.display") (EApp (EVar "renderAtom") (EVar "a")))) (ELit (LString ""))))) (EVar "atoms"))))
 (DTypeSig true "preludeCacheHit" (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "Option") (TyCon "PreludeInterface")))))
-(DFunDef false "preludeCacheHit" ((PVar "generation") (PVar "join")) (EMatch (EUnOp "!" (EVar "preludeCacheRef")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "entry")) () (EIf (EBinOp "==" (EFieldAccess (EVar "entry") "pceGeneration") (EVar "generation")) (EApp (EApp (EMethodRef "map") (EVar "snd")) (EApp (EApp (EDictApp "find") (ELam ((PVar "section")) (EApp (EApp (EDictApp "any") (ELam ((PVar "j")) (EBinOp "==" (EApp (EVar "joinKey") (EVar "j")) (EApp (EVar "joinKey") (EVar "join"))))) (EApp (EVar "fst") (EVar "section"))))) (EFieldAccess (EVar "entry") "pceSections"))) (EVar "None")))))
+(DFunDef false "preludeCacheHit" ((PVar "generation") (PVar "join")) (EApp (EApp (EVar "$core.andThen") (EUnOp "!" (EVar "preludeCacheRef"))) (ELam ((PVar "entry")) (EIf (EBinOp "==" (EFieldAccess (EVar "entry") "pceGeneration") (EVar "generation")) (EApp (EApp (EMethodRef "map") (EVar "snd")) (EApp (EApp (EDictApp "find") (ELam ((PVar "section")) (EApp (EApp (EDictApp "any") (ELam ((PVar "j")) (EBinOp "==" (EApp (EVar "joinKey") (EVar "j")) (EApp (EVar "joinKey") (EVar "join"))))) (EApp (EVar "fst") (EVar "section"))))) (EFieldAccess (EVar "entry") "pceSections"))) (EVar "None")))))
 (DTypeSig true "currentPreludeInterface" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "Atom"))) (TyCon "PreludeInterface")))))
 (DFunDef false "currentPreludeInterface" (PWild) (EMatch (EUnOp "!" (EVar "preludeCacheRef")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "entry")) () (EFieldAccess (EVar "entry") "pceSections"))))
 (DData Public "InterfaceKey" () ((variant "InterfaceKey" (ConNamed (field "ikFormat" (TyCon "Int")) (field "ikSources" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))) (field "ikCompiler" (TyCon "String"))))) ())

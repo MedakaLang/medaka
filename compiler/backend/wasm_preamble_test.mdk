@@ -50,6 +50,8 @@ hitsAfter : String -> String -> List Int
 hitsAfter needle line = hitsFrom needle line 0
 
 hitsFrom : String -> String -> Int -> List Int
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 hitsFrom needle line from =
   let rest = stringSlice from (stringLength line) line
   match stringIndexOf needle rest

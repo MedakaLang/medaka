@@ -131,7 +131,7 @@ False
 
 ```
 findWithDefault : Ord k => v -> k -> Map k v -> v
-findWithDefault d _k _
+findWithDefault d k m
 ```
 
 The value at `k`, or `d` when the key is absent.
@@ -180,7 +180,7 @@ is absent, `v` is stored as it is.
 
 ```
 adjust : Ord k => (v -> v) -> k -> Map k v -> Map k v
-adjust _f _k _
+adjust f k m
 ```
 
 The map with the function applied to the value at `k`.

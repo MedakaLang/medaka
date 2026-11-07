@@ -162,11 +162,13 @@ judgeWaiting : Entry ->
   List Waiting ->
   SymbolRegistry ->
   Result SymbolDefect SymbolRegistry
-judgeWaiting _ [] reg = Ok reg
-judgeWaiting entry ((Waiting sym operands at) :: rest) reg =
-  match callDefect sym operands at entry
-    Some d => Err d
-    None => judgeWaiting entry rest reg
+judgeWaiting entry xs0 reg = go xs0
+  where
+    go [] = Ok reg
+    go ((Waiting sym operands at) :: rest) =
+      match callDefect sym operands at entry
+        Some d => Err d
+        None => go rest
 
 callDefect : WasmSymbol ->
   Option Int ->

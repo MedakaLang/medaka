@@ -1,5 +1,5 @@
 # META
-source_lines=159
+source_lines=160
 stages=DESUGAR,MARK
 # SOURCE
 import frontend.ast.{BinderId(..), Decl(..), LetBind(..), variantName}
@@ -105,23 +105,24 @@ unitDecl : (String -> SymbolOrigin) ->
   SymbolOrigins ->
   Decl ->
   SymbolOrigins
-unitDecl origin rm acc (DFunDef _ n _ _ _ bid) =
-  addFunction (renamed rm n) bid (origin n) acc
-unitDecl origin rm acc (DLetGroup _ binds) = fold (unitBind origin rm) acc binds
-unitDecl origin rm acc (DData { dataName = n, dataOrigin = o, dataCtors = variants }) =
-  fold
-    (a v =>
-      addConstructor
-        (typeTagOf o n)
-        (renamed rm (variantName v))
-        (origin (variantName v))
-        a)
-    acc
-    variants
-unitDecl origin rm acc (DNewtype { newtypeName = n, newtypeOrigin = o, newtypeCtor = c }) =
-  addConstructor (typeTagOf o n) (renamed rm c) (origin c) acc
-unitDecl origin rm acc (DAttrib _ d) = unitDecl origin rm acc d
-unitDecl _ _ acc _ = acc
+unitDecl origin rm acc x0 = go x0
+  where
+    go (DFunDef _ n _ _ _ bid) = addFunction (renamed rm n) bid (origin n) acc
+    go (DLetGroup _ binds) = fold (unitBind origin rm) acc binds
+    go (DData { dataName = n, dataOrigin = o, dataCtors = variants }) =
+      fold
+        (a v =>
+          addConstructor
+            (typeTagOf o n)
+            (renamed rm (variantName v))
+            (origin (variantName v))
+            a)
+        acc
+        variants
+    go (DNewtype { newtypeName = n, newtypeOrigin = o, newtypeCtor = c }) =
+      addConstructor (typeTagOf o n) (renamed rm c) (origin c) acc
+    go (DAttrib _ d) = go d
+    go _ = acc
 
 unitBind : (String -> SymbolOrigin) ->
   OrdMap String ->
@@ -195,12 +196,7 @@ mergeOrigins a b =
 (DTypeSig false "renamed" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "renamed" ((PVar "rm") (PVar "name")) (EApp (EApp (EVar "optionOr") (EVar "name")) (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "rm"))))
 (DTypeSig false "unitDecl" (TyFun (TyFun (TyCon "String") (TyCon "SymbolOrigin")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "SymbolOrigins") (TyFun (TyCon "Decl") (TyCon "SymbolOrigins"))))))
-(DFunDef false "unitDecl" ((PVar "origin") (PVar "rm") (PVar "acc") (PCon "DFunDef" PWild (PVar "n") PWild PWild PWild (PVar "bid"))) (EApp (EApp (EApp (EApp (EVar "addFunction") (EApp (EApp (EVar "renamed") (EVar "rm")) (EVar "n"))) (EVar "bid")) (EApp (EVar "origin") (EVar "n"))) (EVar "acc")))
-(DFunDef false "unitDecl" ((PVar "origin") (PVar "rm") (PVar "acc") (PCon "DLetGroup" PWild (PVar "binds"))) (EApp (EApp (EApp (EVar "fold") (EApp (EApp (EVar "unitBind") (EVar "origin")) (EVar "rm"))) (EVar "acc")) (EVar "binds")))
-(DFunDef false "unitDecl" ((PVar "origin") (PVar "rm") (PVar "acc") (PRec "DData" ((rf "dataName" (PVar "n")) (rf "dataOrigin" (PVar "o")) (rf "dataCtors" (PVar "variants"))) false)) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "a") (PVar "v")) (EApp (EApp (EApp (EApp (EVar "addConstructor") (EApp (EApp (EVar "typeTagOf") (EVar "o")) (EVar "n"))) (EApp (EApp (EVar "renamed") (EVar "rm")) (EApp (EVar "variantName") (EVar "v")))) (EApp (EVar "origin") (EApp (EVar "variantName") (EVar "v")))) (EVar "a")))) (EVar "acc")) (EVar "variants")))
-(DFunDef false "unitDecl" ((PVar "origin") (PVar "rm") (PVar "acc") (PRec "DNewtype" ((rf "newtypeName" (PVar "n")) (rf "newtypeOrigin" (PVar "o")) (rf "newtypeCtor" (PVar "c"))) false)) (EApp (EApp (EApp (EApp (EVar "addConstructor") (EApp (EApp (EVar "typeTagOf") (EVar "o")) (EVar "n"))) (EApp (EApp (EVar "renamed") (EVar "rm")) (EVar "c"))) (EApp (EVar "origin") (EVar "c"))) (EVar "acc")))
-(DFunDef false "unitDecl" ((PVar "origin") (PVar "rm") (PVar "acc") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EApp (EApp (EVar "unitDecl") (EVar "origin")) (EVar "rm")) (EVar "acc")) (EVar "d")))
-(DFunDef false "unitDecl" (PWild PWild (PVar "acc") PWild) (EVar "acc"))
+(DFunDef false "unitDecl" ((PVar "origin") (PVar "rm") (PVar "acc") (PVar "x0")) (ELetGroup ((lgb "go" (clause ((PCon "DFunDef" PWild (PVar "n") PWild PWild PWild (PVar "bid"))) (EApp (EApp (EApp (EApp (EVar "addFunction") (EApp (EApp (EVar "renamed") (EVar "rm")) (EVar "n"))) (EVar "bid")) (EApp (EVar "origin") (EVar "n"))) (EVar "acc"))) (clause ((PCon "DLetGroup" PWild (PVar "binds"))) (EApp (EApp (EApp (EVar "fold") (EApp (EApp (EVar "unitBind") (EVar "origin")) (EVar "rm"))) (EVar "acc")) (EVar "binds"))) (clause ((PRec "DData" ((rf "dataName" (PVar "n")) (rf "dataOrigin" (PVar "o")) (rf "dataCtors" (PVar "variants"))) false)) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "a") (PVar "v")) (EApp (EApp (EApp (EApp (EVar "addConstructor") (EApp (EApp (EVar "typeTagOf") (EVar "o")) (EVar "n"))) (EApp (EApp (EVar "renamed") (EVar "rm")) (EApp (EVar "variantName") (EVar "v")))) (EApp (EVar "origin") (EApp (EVar "variantName") (EVar "v")))) (EVar "a")))) (EVar "acc")) (EVar "variants"))) (clause ((PRec "DNewtype" ((rf "newtypeName" (PVar "n")) (rf "newtypeOrigin" (PVar "o")) (rf "newtypeCtor" (PVar "c"))) false)) (EApp (EApp (EApp (EApp (EVar "addConstructor") (EApp (EApp (EVar "typeTagOf") (EVar "o")) (EVar "n"))) (EApp (EApp (EVar "renamed") (EVar "rm")) (EVar "c"))) (EApp (EVar "origin") (EVar "c"))) (EVar "acc"))) (clause ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "go") (EVar "d"))) (clause (PWild) (EVar "acc")))) (EApp (EVar "go") (EVar "x0"))))
 (DTypeSig false "unitBind" (TyFun (TyFun (TyCon "String") (TyCon "SymbolOrigin")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "SymbolOrigins") (TyFun (TyCon "LetBind") (TyCon "SymbolOrigins"))))))
 (DFunDef false "unitBind" ((PVar "origin") (PVar "rm") (PVar "acc") (PCon "LetBind" (PVar "n") PWild PWild (PVar "bid"))) (EApp (EApp (EApp (EApp (EVar "addFunction") (EApp (EApp (EVar "renamed") (EVar "rm")) (EVar "n"))) (EVar "bid")) (EApp (EVar "origin") (EVar "n"))) (EVar "acc")))
 (DTypeSig true "unitOrigins" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "SymbolOrigins")))))
@@ -243,12 +239,7 @@ mergeOrigins a b =
 (DTypeSig false "renamed" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "renamed" ((PVar "rm") (PVar "name")) (EApp (EApp (EVar "optionOr") (EVar "name")) (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "rm"))))
 (DTypeSig false "unitDecl" (TyFun (TyFun (TyCon "String") (TyCon "SymbolOrigin")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "SymbolOrigins") (TyFun (TyCon "Decl") (TyCon "SymbolOrigins"))))))
-(DFunDef false "unitDecl" ((PVar "origin") (PVar "rm") (PVar "acc") (PCon "DFunDef" PWild (PVar "n") PWild PWild PWild (PVar "bid"))) (EApp (EApp (EApp (EApp (EVar "addFunction") (EApp (EApp (EVar "renamed") (EVar "rm")) (EVar "n"))) (EVar "bid")) (EApp (EVar "origin") (EVar "n"))) (EVar "acc")))
-(DFunDef false "unitDecl" ((PVar "origin") (PVar "rm") (PVar "acc") (PCon "DLetGroup" PWild (PVar "binds"))) (EApp (EApp (EApp (EMethodRef "fold") (EApp (EApp (EVar "unitBind") (EVar "origin")) (EVar "rm"))) (EVar "acc")) (EVar "binds")))
-(DFunDef false "unitDecl" ((PVar "origin") (PVar "rm") (PVar "acc") (PRec "DData" ((rf "dataName" (PVar "n")) (rf "dataOrigin" (PVar "o")) (rf "dataCtors" (PVar "variants"))) false)) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "a") (PVar "v")) (EApp (EApp (EApp (EApp (EVar "addConstructor") (EApp (EApp (EVar "typeTagOf") (EVar "o")) (EVar "n"))) (EApp (EApp (EVar "renamed") (EVar "rm")) (EApp (EVar "variantName") (EVar "v")))) (EApp (EVar "origin") (EApp (EVar "variantName") (EVar "v")))) (EVar "a")))) (EVar "acc")) (EVar "variants")))
-(DFunDef false "unitDecl" ((PVar "origin") (PVar "rm") (PVar "acc") (PRec "DNewtype" ((rf "newtypeName" (PVar "n")) (rf "newtypeOrigin" (PVar "o")) (rf "newtypeCtor" (PVar "c"))) false)) (EApp (EApp (EApp (EApp (EVar "addConstructor") (EApp (EApp (EVar "typeTagOf") (EVar "o")) (EVar "n"))) (EApp (EApp (EVar "renamed") (EVar "rm")) (EVar "c"))) (EApp (EVar "origin") (EVar "c"))) (EVar "acc")))
-(DFunDef false "unitDecl" ((PVar "origin") (PVar "rm") (PVar "acc") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EApp (EApp (EVar "unitDecl") (EVar "origin")) (EVar "rm")) (EVar "acc")) (EVar "d")))
-(DFunDef false "unitDecl" (PWild PWild (PVar "acc") PWild) (EVar "acc"))
+(DFunDef false "unitDecl" ((PVar "origin") (PVar "rm") (PVar "acc") (PVar "x0")) (ELetGroup ((lgb "go" (clause ((PCon "DFunDef" PWild (PVar "n") PWild PWild PWild (PVar "bid"))) (EApp (EApp (EApp (EApp (EVar "addFunction") (EApp (EApp (EVar "renamed") (EVar "rm")) (EVar "n"))) (EVar "bid")) (EApp (EVar "origin") (EVar "n"))) (EVar "acc"))) (clause ((PCon "DLetGroup" PWild (PVar "binds"))) (EApp (EApp (EApp (EMethodRef "fold") (EApp (EApp (EVar "unitBind") (EVar "origin")) (EVar "rm"))) (EVar "acc")) (EVar "binds"))) (clause ((PRec "DData" ((rf "dataName" (PVar "n")) (rf "dataOrigin" (PVar "o")) (rf "dataCtors" (PVar "variants"))) false)) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "a") (PVar "v")) (EApp (EApp (EApp (EApp (EVar "addConstructor") (EApp (EApp (EVar "typeTagOf") (EVar "o")) (EVar "n"))) (EApp (EApp (EVar "renamed") (EVar "rm")) (EApp (EVar "variantName") (EVar "v")))) (EApp (EVar "origin") (EApp (EVar "variantName") (EVar "v")))) (EVar "a")))) (EVar "acc")) (EVar "variants"))) (clause ((PRec "DNewtype" ((rf "newtypeName" (PVar "n")) (rf "newtypeOrigin" (PVar "o")) (rf "newtypeCtor" (PVar "c"))) false)) (EApp (EApp (EApp (EApp (EVar "addConstructor") (EApp (EApp (EVar "typeTagOf") (EVar "o")) (EVar "n"))) (EApp (EApp (EVar "renamed") (EVar "rm")) (EVar "c"))) (EApp (EVar "origin") (EVar "c"))) (EVar "acc"))) (clause ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "go") (EVar "d"))) (clause (PWild) (EVar "acc")))) (EApp (EVar "go") (EVar "x0"))))
 (DTypeSig false "unitBind" (TyFun (TyFun (TyCon "String") (TyCon "SymbolOrigin")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "SymbolOrigins") (TyFun (TyCon "LetBind") (TyCon "SymbolOrigins"))))))
 (DFunDef false "unitBind" ((PVar "origin") (PVar "rm") (PVar "acc") (PCon "LetBind" (PVar "n") PWild PWild (PVar "bid"))) (EApp (EApp (EApp (EApp (EVar "addFunction") (EApp (EApp (EVar "renamed") (EVar "rm")) (EVar "n"))) (EVar "bid")) (EApp (EVar "origin") (EVar "n"))) (EVar "acc")))
 (DTypeSig true "unitOrigins" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "SymbolOrigins")))))

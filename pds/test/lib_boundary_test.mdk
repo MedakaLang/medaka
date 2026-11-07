@@ -391,10 +391,12 @@ secretInterpolationHits (path, content) =
   secretScan path (basename path) 1 (lines content)
 
 secretScan : String -> String -> Int -> List String -> List String
-secretScan _ _ _ [] = []
-secretScan path base n (line :: rest) =
-  flatMap (leakedInterpolation path base n) (interpolations line)
-    ++ secretScan path base (n + 1) rest
+secretScan path base n0 xs0 = go n0 xs0
+  where
+    go _ [] = []
+    go n (line :: rest) =
+      flatMap (leakedInterpolation path base n) (interpolations line)
+        ++ go (n + 1) rest
 
 leakedInterpolation : String -> String -> Int -> String -> List String
 leakedInterpolation path base n expr =
@@ -513,25 +515,27 @@ stripFrom : Array Char ->
   Bool ->
   Int ->
   (List Char, Int)
-stripFrom cs n i kept inQuote depth =
-  if i >= n then
-    (kept, depth)
-  else
-    let c = arrayGetUnsafe i cs
-    if inQuote && c == '\\' then
-      stripFrom cs n (i + 2) kept True depth
-    else if inQuote then
-      stripFrom cs n (i + 1) (keeping depth c kept) (c /= '"') depth
-    else if depth == 0 && c == '"' then
-      stripFrom cs n (i + 1) (c :: kept) True depth
-    else if depth == 0 && c == '-' && charAt cs n (i + 1) == Some '-' then
-      (kept, depth)
-    else if c == '{' && charAt cs n (i + 1) == Some '-' then
-      stripFrom cs n (i + 2) kept False (depth + 1)
-    else if c == '-' && charAt cs n (i + 1) == Some '}' then
-      stripFrom cs n (i + 2) kept False (if depth > 0 then depth - 1 else 0)
-    else
-      stripFrom cs n (i + 1) (keeping depth c kept) False depth
+stripFrom cs n i0 kept0 inQuote0 depth0 = go i0 kept0 inQuote0 depth0
+  where
+    go i kept inQuote depth =
+      if i >= n then
+        (kept, depth)
+      else
+        let c = arrayGetUnsafe i cs
+        if inQuote && c == '\\' then
+          go (i + 2) kept True depth
+        else if inQuote then
+          go (i + 1) (keeping depth c kept) (c /= '"') depth
+        else if depth == 0 && c == '"' then
+          go (i + 1) (c :: kept) True depth
+        else if depth == 0 && c == '-' && charAt cs n (i + 1) == Some '-' then
+          (kept, depth)
+        else if c == '{' && charAt cs n (i + 1) == Some '-' then
+          go (i + 2) kept False (depth + 1)
+        else if c == '-' && charAt cs n (i + 1) == Some '}' then
+          go (i + 2) kept False (if depth > 0 then depth - 1 else 0)
+        else
+          go (i + 1) (keeping depth c kept) False depth
 
 -- | The character at `i`, if `i` is within the first `n` of `cs`.
 charAt : Array Char -> Int -> Int -> Option Char
@@ -944,9 +948,9 @@ cleanProbe = ["export", "topProbeForTest : Int -> Int", "topProbeForTest x = x"]
 
 nestedSources : Unit ->
   <Exec, FileRead, FileWrite> Result String (List (String, String))
-nestedSources () = match nestedTree ()
-  Err e => Err e
-  Ok root => sourcesUnder root
+nestedSources () = do
+  root <- nestedTree ()
+  sourcesUnder root
 
 test "mutation control: an effect-bearing export in a nested directory is caught" =
   expectFindings
@@ -1071,13 +1075,12 @@ serverContent () = match readFile (serverPath ())
 
 test "mutation control: the pds/shell call site this control mutates is still there" = expectNoFindings
   "the pds/shell call site this control mutates has moved — repoint it"
-  (match serverContent ()
-    Err e => Err e
-    Ok content =>
-      if contains realCallSite content then
-        Ok []
-      else
-        Ok ["\{serverPath ()}: no `\{realCallSite}` call site"])
+  (do
+    content <- serverContent ()
+    if contains realCallSite content then
+      Ok []
+    else
+      Ok ["\{serverPath ()}: no `\{realCallSite}` call site"])
 
 test "mutation control: a secret at a real pds/shell call site is caught" =
   expectFindings
@@ -1160,9 +1163,9 @@ test "mutation control: the raw-signer ledger is per name, not per file" =
    the count at the time of writing, less a small margin for a module being
    deleted. -}
 sourceCount : Unit -> <FileRead, IO> Result String Int
-sourceCount () = match plusEntry (libSources ())
-  Err e => Err e
-  Ok lib => map (shell => length lib + length shell) (shellSources ())
+sourceCount () = do
+  lib <- plusEntry (libSources ())
+  map (shell => length lib + length shell) (shellSources ())
 
 fileFloor : Int
 fileFloor = 40

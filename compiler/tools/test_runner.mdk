@@ -24,6 +24,7 @@ import eval.eval.{
 }
 import types.program_facts.{ProgramFacts}
 import support.util.{filterList}
+import support.graph.{markReachable}
 import tools.doctest.{ExResult(..)}
 import hash_map.{HashMap, new, setInPlace, has, findWithDefault}
 
@@ -139,7 +140,7 @@ uncapableExternNames corpus bound tests =
     [] => []
     _ =>
       let seen = new ()
-      closureOver
+      markReachable
         (refGraph corpus)
         seen
         (flatMap
@@ -185,6 +186,8 @@ externScan : List Decl ->
   HashMap String Unit ->
   HashMap String Unit ->
   List String
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 externScan [] _ _ = []
 externScan ((DAttrib _ d) :: rest) bound emitted =
   externScan (d :: rest) bound emitted
@@ -227,14 +230,3 @@ refGraphInto ((DFunDef _ n ps body site bid) :: rest) g =
 -- under-approximation the header names: an extern reachable ONLY through a
 -- dictionary-passed method is missed here and still caught by eval's panic.
 refGraphInto (_ :: rest) g = refGraphInto rest g
-
-closureOver : HashMap String (List String) ->
-  HashMap String Unit ->
-  List String ->
-  Unit
-closureOver _ _ [] = ()
-closureOver graph seen (w :: work)
-  | has w seen = closureOver graph seen work
-  | otherwise =
-    setInPlace w () seen
-    closureOver graph seen (findWithDefault [] w graph ++ work)

@@ -225,11 +225,13 @@ readGateEntry i e = do
   }
 
 readGatesFrom : Toml -> Int -> Int -> List Gate -> Result String (List Gate)
-readGatesFrom doc i n acc
-  | i >= n = Ok (reverseGates acc [])
-  | otherwise = match readGate doc i
-    Err m => Err m
-    Ok g => readGatesFrom doc (i + 1) n (g :: acc)
+readGatesFrom doc i0 n acc0 = go i0 acc0
+  where
+    go i acc
+      | i >= n = Ok (reverseGates acc [])
+      | otherwise = match readGate doc i
+        Err m => Err m
+        Ok g => go (i + 1) (g :: acc)
 
 reverseGates : List Gate -> List Gate -> List Gate
 reverseGates [] acc = acc
@@ -325,11 +327,13 @@ readShardEntry i e = do
   }
 
 readShardsFrom : Toml -> Int -> Int -> List Shard -> Result String (List Shard)
-readShardsFrom doc i n acc
-  | i >= n = Ok (reverseShards acc [])
-  | otherwise = match readShard doc i
-    Err m => Err m
-    Ok sh => readShardsFrom doc (i + 1) n (sh :: acc)
+readShardsFrom doc i0 n acc0 = go i0 acc0
+  where
+    go i acc
+      | i >= n = Ok (reverseShards acc [])
+      | otherwise = match readShard doc i
+        Err m => Err m
+        Ok sh => go (i + 1) (sh :: acc)
 
 reverseShards : List Shard -> List Shard -> List Shard
 reverseShards [] acc = acc

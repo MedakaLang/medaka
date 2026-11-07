@@ -21,6 +21,7 @@ import tools.lint_core.{
   StdlibIndex,
   Visitor(..),
   mkVisitorRule,
+  noFix,
 }
 import tools.lint_index.{ProjectIndex}
 import tools.lint_scope.{FileScopes}
@@ -66,7 +67,7 @@ finding message loc = Finding {
   message = message,
   severity = SevWarning,
   loc = Some loc,
-  fix = None,
+  fix = noFix,
 }
 
 resultMessage : String

@@ -123,6 +123,8 @@ splitNl s =
   splitNlGo chars (arrayLength chars) 0 0
 
 splitNlGo : Array Char -> Int -> Int -> Int -> List String
+-- Bound: hot compiler path: the where-go form allocates one closure per call until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 splitNlGo chars n start i
   | i >= n = [stringFromChars (arraySubChars chars start n)]
   | arrayGetUnsafe i chars == '\n' =
@@ -437,14 +439,12 @@ utf8CharWidth cp
   | otherwise = 4
 
 utf8LenGo : Array Char -> Int -> Int -> Int -> Int
-utf8LenGo arr len i acc
-  | i >= len = acc
-  | otherwise =
-    utf8LenGo
-      arr
-      len
-      (i + 1)
-      (acc + utf8CharWidth (charCode (arrayGetUnsafe i arr)))
+utf8LenGo arr len i0 acc0 = go i0 acc0
+  where
+    go i acc
+      | i >= len = acc
+      | otherwise =
+        go (i + 1) (acc + utf8CharWidth (charCode (arrayGetUnsafe i arr)))
 
 export
 utf8Len : String -> Int
@@ -463,10 +463,12 @@ utf8Len s =
 -- Index of the first significant digit (leading zeros skipped), but never past
 -- the last char, so an all-zero string normalizes to a single "0".
 decMagFirstSig : Array Char -> Int -> Int -> Int
-decMagFirstSig cs n i
-  | i + 1 >= n = i
-  | arrayGetUnsafe i cs == '0' = decMagFirstSig cs n (i + 1)
-  | otherwise = i
+decMagFirstSig cs n i0 = go i0
+  where
+    go i
+      | i + 1 >= n = i
+      | arrayGetUnsafe i cs == '0' = go (i + 1)
+      | otherwise = i
 
 decMagNorm : String -> String
 decMagNorm s =
@@ -494,6 +496,8 @@ compareDecMag a b =
   if la < lb then Lt else if la > lb then Gt else stringCompare na nb
 
 decDigitsNoUs : Array Char -> Int -> Int -> List Char
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 decDigitsNoUs cs n i
   | i >= n = []
   | arrayGetUnsafe i cs == '_' = decDigitsNoUs cs n (i + 1)

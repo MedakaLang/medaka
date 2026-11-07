@@ -36,13 +36,15 @@ import frontend.exhaust.{Oracle}
 import frontend.lexer.{Comment}
 
 -- One lint hit: which rule produced it, the human message, its severity (the
--- CLI may promote this via `lintProgram`), and an optional source span.
+-- CLI may promote this via `lintProgram`), and an optional source span.  `fix`
+-- is derived on first demand (`findingFixOf`): inline suppression runs after
+-- the rules, and a finding it drops never computes its fix.
 public export data Finding = Finding {
   rule : String,
   message : String,
   severity : Severity,
   loc : Option Loc,
-  fix : Option Fix,
+  fix : Memo (Option Fix),
 }
 
 -- How far a fix may be trusted.  `Safe` is applied by `--fix`, `Unsafe` only
@@ -77,15 +79,17 @@ fixToDiagFix fx =
     (map (e => (e.feSpan, e.feText)) fx.fixEdits)
 
 -- A write-once cell holding a derived value, forced on first demand.  Rules run
--- under a pure `check`, and the cell is private to one file's `FileFacts`, so
--- two rules asking for the same derived value share one computation without any
--- table keyed by source text.
+-- under a pure `check`, and a cell is private to one file's run (its
+-- `FileFacts`, or the state a rule builds for that file's visitors), so two
+-- readers of the same derived value share one computation without any table
+-- keyed by source text.
 export data Memo a = Memo (Ref (Option a)) (Unit -> a)
 
 export
 memoNew : (Unit -> a) -> Memo a
 memoNew f = Memo (Ref None) f
 
+export
 memoGet : Memo a -> a
 memoGet (Memo cell f) = match !cell
   Some v => v
@@ -94,9 +98,34 @@ memoGet (Memo cell f) = match !cell
     cell := Some v
     v
 
+-- A cell already holding `v`.
+export
+memoReady : a -> Memo a
+memoReady v = Memo (Ref (Some v)) (_ => v)
+
+-- A cell holding `f` of what `m` holds, forcing `m` only when it is forced.
+export
+memoMap : (a -> b) -> Memo a -> Memo b
+memoMap f m = memoNew (_ => f (memoGet m))
+
+-- The fix of a finding that has none.
+export
+noFix : Memo (Option Fix)
+noFix = memoReady None
+
+-- A fix computed only when something reads it.
+export
+fixLater : (Unit -> Option Fix) -> Memo (Option Fix)
+fixLater = memoNew
+
+export
+findingFixOf : Finding -> Option Fix
+findingFixOf f = memoGet f.fix
+
 -- What every rule may ask of the one file being linted, each derived at most
 -- once per file and only if some active rule asks: the source text, its comment
--- side channel, the constructor `Oracle`, and the per-clause duplicate-body keys
+-- side channel, the constructor `Oracle`, every top-level decl paired with its
+-- start location (`ffDeclLocs`, `declLocList`), the per-clause duplicate-body keys
 -- shared by the same-file rule and the cross-file occurrence list, and the scope
 -- model (`tools/lint_scope.mdk`), built only for a rule whose metadata says
 -- `NeedsScopes`.  `ffLines` is the source split into lines, built when a fix
@@ -110,6 +139,7 @@ public export data FileFacts = FileFacts {
   ffSrc : String,
   ffComments : Memo (List Comment),
   ffOracle : Memo Oracle,
+  ffDeclLocs : Memo (List (Decl, Option Loc)),
   ffDupClauses : Memo (List DupClause),
   ffScopes : Memo FileScopes,
   ffLines : Memo (Array String),
@@ -124,6 +154,10 @@ factComments ff = memoGet ff.ffComments
 export
 factOracle : FileFacts -> Oracle
 factOracle ff = memoGet ff.ffOracle
+
+export
+factDeclLocs : FileFacts -> List (Decl, Option Loc)
+factDeclLocs ff = memoGet ff.ffDeclLocs
 
 export
 factDupClauses : FileFacts -> List DupClause
@@ -274,6 +308,9 @@ isScopesNeed NeedsWildIndex = False
 -- in the brackets of a parenthesised node; `None` for a node no `ELoc` wraps (an
 -- application or operator expression the parser leaves bare).  `ctxDeclLoc` is
 -- always the declaration's start line, where an inline suppression sits.
+-- `ctxBinding` is the name and site of the nearest `let` or `where` binding
+-- whose clause the node sits in, `None` outside every one; a node in the body
+-- a `let` scopes is not in its bindings.
 public export data Ctx = Ctx {
   ctxDeclName : String,
   ctxParams : List Pat,
@@ -282,6 +319,7 @@ public export data Ctx = Ctx {
   ctxSpan : Option Loc,
   ctxOwn : Option Loc,
   ctxDeclLoc : Option Loc,
+  ctxBinding : Option (String, Loc),
 }
 
 -- One callback a walking rule registers: on every expression node whose kind is

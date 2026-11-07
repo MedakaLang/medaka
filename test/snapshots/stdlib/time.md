@@ -291,9 +291,9 @@ isoRe = mustCompile "^(\\d{4})-(\\d{2})-(\\d{2})T(\\d{2}):(\\d{2}):(\\d{2})Z$"
    None -}
 export
 parseIso : String -> Option DateTime
-parseIso s = match reFind isoRe s
-  None => None
-  Some m => match m.groups
+parseIso s = do
+  m <- reFind isoRe s
+  match m.groups
     (Some gy) :: (Some gmo) :: (Some gd) :: (Some gh) :: (Some gmi) :: (Some gs) :: [] =>
       let y = toInt gy.text
       let mo = toInt gmo.text
@@ -301,9 +301,9 @@ parseIso s = match reFind isoRe s
       let h = toInt gh.text
       let mi = toInt gmi.text
       let sec = toInt gs.text
-      match isoFields y mo d h mi sec
-        Some dt => if formatIso dt == s then Some dt else None
-        None => None
+      do
+        dt <- isoFields y mo d h mi sec
+        if formatIso dt == s then Some dt else None
     _ => None
 
 -- > parseIso "2024-03-05T07:08:09Z" == Some (DateTime { year = 2024, month = 3, day = 5, hour = 7, minute = 8, second = 9 })
@@ -502,7 +502,7 @@ prop "Monoid Duration: empty is a two-sided identity" (n : Int) =
 (DTypeSig false "isoRe" (TyCon "Regex"))
 (DFunDef false "isoRe" () (EApp (EVar "mustCompile") (ELit (LString "^(\\d{4})-(\\d{2})-(\\d{2})T(\\d{2}):(\\d{2}):(\\d{2})Z$"))))
 (DTypeSig true "parseIso" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "DateTime"))))
-(DFunDef false "parseIso" ((PVar "s")) (EMatch (EApp (EApp (EVar "reFind") (EVar "isoRe")) (EVar "s")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "m")) () (EMatch (EFieldAccess (EVar "m") "groups") (arm (PCons (PCon "Some" (PVar "gy")) (PCons (PCon "Some" (PVar "gmo")) (PCons (PCon "Some" (PVar "gd")) (PCons (PCon "Some" (PVar "gh")) (PCons (PCon "Some" (PVar "gmi")) (PCons (PCon "Some" (PVar "gs")) (PList))))))) () (EBlock (DoLet false false (PVar "y") (EApp (EVar "toInt") (EFieldAccess (EVar "gy") "text"))) (DoLet false false (PVar "mo") (EApp (EVar "toInt") (EFieldAccess (EVar "gmo") "text"))) (DoLet false false (PVar "d") (EApp (EVar "toInt") (EFieldAccess (EVar "gd") "text"))) (DoLet false false (PVar "h") (EApp (EVar "toInt") (EFieldAccess (EVar "gh") "text"))) (DoLet false false (PVar "mi") (EApp (EVar "toInt") (EFieldAccess (EVar "gmi") "text"))) (DoLet false false (PVar "sec") (EApp (EVar "toInt") (EFieldAccess (EVar "gs") "text"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "isoFields") (EVar "y")) (EVar "mo")) (EVar "d")) (EVar "h")) (EVar "mi")) (EVar "sec")) (arm (PCon "Some" (PVar "dt")) () (EIf (EBinOp "==" (EApp (EVar "formatIso") (EVar "dt")) (EVar "s")) (EApp (EVar "Some") (EVar "dt")) (EVar "None"))) (arm (PCon "None") () (EVar "None")))))) (arm PWild () (EVar "None"))))))
+(DFunDef false "parseIso" ((PVar "s")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "reFind") (EVar "isoRe")) (EVar "s"))) (ELam ((PVar "m")) (EMatch (EFieldAccess (EVar "m") "groups") (arm (PCons (PCon "Some" (PVar "gy")) (PCons (PCon "Some" (PVar "gmo")) (PCons (PCon "Some" (PVar "gd")) (PCons (PCon "Some" (PVar "gh")) (PCons (PCon "Some" (PVar "gmi")) (PCons (PCon "Some" (PVar "gs")) (PList))))))) () (EBlock (DoLet false false (PVar "y") (EApp (EVar "toInt") (EFieldAccess (EVar "gy") "text"))) (DoLet false false (PVar "mo") (EApp (EVar "toInt") (EFieldAccess (EVar "gmo") "text"))) (DoLet false false (PVar "d") (EApp (EVar "toInt") (EFieldAccess (EVar "gd") "text"))) (DoLet false false (PVar "h") (EApp (EVar "toInt") (EFieldAccess (EVar "gh") "text"))) (DoLet false false (PVar "mi") (EApp (EVar "toInt") (EFieldAccess (EVar "gmi") "text"))) (DoLet false false (PVar "sec") (EApp (EVar "toInt") (EFieldAccess (EVar "gs") "text"))) (DoExpr (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "isoFields") (EVar "y")) (EVar "mo")) (EVar "d")) (EVar "h")) (EVar "mi")) (EVar "sec"))) (ELam ((PVar "dt")) (EIf (EBinOp "==" (EApp (EVar "formatIso") (EVar "dt")) (EVar "s")) (EApp (EVar "Some") (EVar "dt")) (EVar "None"))))))) (arm PWild () (EVar "None"))))))
 (DImpl true "Display" ((TyCon "Duration")) () ((im "display" ((PCon "Duration" (PVar "ms"))) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EVar "ms")))) (ELit (LString "ms"))))))
 (DImpl true "Display" ((TyCon "DateTime")) () ((im "display" ((PVar "dt")) (EApp (EVar "formatIso") (EVar "dt")))))
 (DImpl true "Semigroup" ((TyCon "Duration")) () ((im "append" ((PVar "a") (PVar "b")) (EApp (EApp (EVar "addDuration") (EVar "a")) (EVar "b")))))
@@ -587,7 +587,7 @@ prop "Monoid Duration: empty is a two-sided identity" (n : Int) =
 (DTypeSig false "isoRe" (TyCon "Regex"))
 (DFunDef false "isoRe" () (EApp (EVar "mustCompile") (ELit (LString "^(\\d{4})-(\\d{2})-(\\d{2})T(\\d{2}):(\\d{2}):(\\d{2})Z$"))))
 (DTypeSig true "parseIso" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "DateTime"))))
-(DFunDef false "parseIso" ((PVar "s")) (EMatch (EApp (EApp (EVar "reFind") (EVar "isoRe")) (EVar "s")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "m")) () (EMatch (EFieldAccess (EVar "m") "groups") (arm (PCons (PCon "Some" (PVar "gy")) (PCons (PCon "Some" (PVar "gmo")) (PCons (PCon "Some" (PVar "gd")) (PCons (PCon "Some" (PVar "gh")) (PCons (PCon "Some" (PVar "gmi")) (PCons (PCon "Some" (PVar "gs")) (PList))))))) () (EBlock (DoLet false false (PVar "y") (EApp (EVar "toInt") (EFieldAccess (EVar "gy") "text"))) (DoLet false false (PVar "mo") (EApp (EVar "toInt") (EFieldAccess (EVar "gmo") "text"))) (DoLet false false (PVar "d") (EApp (EVar "toInt") (EFieldAccess (EVar "gd") "text"))) (DoLet false false (PVar "h") (EApp (EVar "toInt") (EFieldAccess (EVar "gh") "text"))) (DoLet false false (PVar "mi") (EApp (EVar "toInt") (EFieldAccess (EVar "gmi") "text"))) (DoLet false false (PVar "sec") (EApp (EVar "toInt") (EFieldAccess (EVar "gs") "text"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "isoFields") (EVar "y")) (EVar "mo")) (EVar "d")) (EVar "h")) (EVar "mi")) (EVar "sec")) (arm (PCon "Some" (PVar "dt")) () (EIf (EBinOp "==" (EApp (EVar "formatIso") (EVar "dt")) (EVar "s")) (EApp (EVar "Some") (EVar "dt")) (EVar "None"))) (arm (PCon "None") () (EVar "None")))))) (arm PWild () (EVar "None"))))))
+(DFunDef false "parseIso" ((PVar "s")) (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EVar "reFind") (EVar "isoRe")) (EVar "s"))) (ELam ((PVar "m")) (EMatch (EFieldAccess (EVar "m") "groups") (arm (PCons (PCon "Some" (PVar "gy")) (PCons (PCon "Some" (PVar "gmo")) (PCons (PCon "Some" (PVar "gd")) (PCons (PCon "Some" (PVar "gh")) (PCons (PCon "Some" (PVar "gmi")) (PCons (PCon "Some" (PVar "gs")) (PList))))))) () (EBlock (DoLet false false (PVar "y") (EApp (EVar "toInt") (EFieldAccess (EVar "gy") "text"))) (DoLet false false (PVar "mo") (EApp (EVar "toInt") (EFieldAccess (EVar "gmo") "text"))) (DoLet false false (PVar "d") (EApp (EVar "toInt") (EFieldAccess (EVar "gd") "text"))) (DoLet false false (PVar "h") (EApp (EVar "toInt") (EFieldAccess (EVar "gh") "text"))) (DoLet false false (PVar "mi") (EApp (EVar "toInt") (EFieldAccess (EVar "gmi") "text"))) (DoLet false false (PVar "sec") (EApp (EVar "toInt") (EFieldAccess (EVar "gs") "text"))) (DoExpr (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "isoFields") (EVar "y")) (EVar "mo")) (EVar "d")) (EVar "h")) (EVar "mi")) (EVar "sec"))) (ELam ((PVar "dt")) (EIf (EBinOp "==" (EApp (EVar "formatIso") (EVar "dt")) (EVar "s")) (EApp (EVar "Some") (EVar "dt")) (EVar "None"))))))) (arm PWild () (EVar "None"))))))
 (DImpl true "Display" ((TyCon "Duration")) () ((im "display" ((PCon "Duration" (PVar "ms"))) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EVar "ms")))) (ELit (LString "ms"))))))
 (DImpl true "Display" ((TyCon "DateTime")) () ((im "display" ((PVar "dt")) (EApp (EVar "formatIso") (EVar "dt")))))
 (DImpl true "Semigroup" ((TyCon "Duration")) () ((im "append" ((PVar "a") (PVar "b")) (EApp (EApp (EVar "addDuration") (EVar "a")) (EVar "b")))))

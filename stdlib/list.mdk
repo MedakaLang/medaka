@@ -323,10 +323,12 @@ scanLeft f z (x :: xs) = z :: scanLeft f (f z x) xs
    [6, 5, 3, 0] -}
 export
 scanRight : (a -> b -> <e> b) -> b -> List a -> <e> List b
-scanRight _ z [] = [z]
-scanRight f z (x :: xs) = match scanRight f z xs
-  q :: qs => f x q :: q :: qs
-  [] => [f x z]
+scanRight f z xs = go xs
+  where
+    go [] = [z]
+    go (x :: rest) = match go rest
+      q :: qs => f x q :: q :: qs
+      [] => [f x z]
 
 {- | A left fold that uses the first element as the seed.
 
@@ -513,11 +515,13 @@ mapAccumL f s (x :: xs) =
    (6, [5, 3, 0]) -}
 export
 mapAccumR : (s -> a -> <e> (s, b)) -> s -> List a -> <e> (s, List b)
-mapAccumR _ s [] = (s, [])
-mapAccumR f s (x :: xs) =
-  let (s2, ys) = mapAccumR f s xs
-  let (s3, y) = f s2 x
-  (s3, y :: ys)
+mapAccumR f s xs = go xs
+  where
+    go [] = (s, [])
+    go (x :: rest) =
+      let (s2, ys) = go rest
+      let (s3, y) = f s2 x
+      (s3, y :: ys)
 
 -- # Positional edits
 
@@ -982,6 +986,8 @@ nub xs = nubBy (==) xs
    [1, 3, 2] -}
 export
 deleteBy : (a -> a -> <e> Bool) -> a -> List a -> <e> List a
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 deleteBy _ _ [] = []
 deleteBy same x (y :: rest)
   | same x y = rest
@@ -1247,6 +1253,8 @@ prop "sort is ascending and length-preserving" (xs : List Int) =
 
 -- Reference stable sort: insert each element after the last element that does not compare greater.
 refInsert : (a -> a -> <e> Ordering) -> a -> List a -> <e> List a
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 refInsert _ x [] = [x]
 refInsert cmp x (y :: ys) = match cmp y x
   Gt => x :: y :: ys

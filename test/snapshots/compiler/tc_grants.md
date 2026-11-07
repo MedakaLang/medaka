@@ -1,5 +1,5 @@
 # META
-source_lines=647
+source_lines=649
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_grants: capability grant recording: which grants a binding records (the top, recursive,
@@ -629,6 +629,8 @@ narrowFileAtom atom = match atomLabelOf atom
 
 export
 recordClauseFileBound : ModuleCtx -> Expr -> Int -> Mono -> Unit
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
 recordClauseFileBound mctx body arity ty
   | arity <= 0 = ()
   | otherwise = match normalize ty

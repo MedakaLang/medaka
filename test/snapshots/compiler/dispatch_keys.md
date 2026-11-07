@@ -1,5 +1,5 @@
 # META
-source_lines=166
+source_lines=167
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/types/dispatch_keys.mdk — the pure projections of a declaration list
@@ -88,7 +88,8 @@ argsOfTy (TyConstrained _ t) = argsOfTy t
 argsOfTy (TyEffect _ _ t) = argsOfTy t
 argsOfTy (TyFun (TyNamed _ a _) b) = a :: argsOfTy b
 argsOfTy (TyFun a b) = a :: argsOfTy b
-argsOfTy _ = []
+argsOfTy (TyCon {  } | TyVar _ | TyApp _ _ | TyTuple _ | TyNamed _ _ _ | TyQual _ _ _ | TyRow _ _ _ | TyAuth _ _) =
+  []
 
 filterMentions : Int -> List Ty -> List String -> List Int
 filterMentions _ [] _ = []
@@ -210,7 +211,7 @@ ctorTypeEntries _ = []
 (DFunDef false "argsOfTy" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "argsOfTy") (EVar "t")))
 (DFunDef false "argsOfTy" ((PCon "TyFun" (PCon "TyNamed" PWild (PVar "a") PWild) (PVar "b"))) (EBinOp "::" (EVar "a") (EApp (EVar "argsOfTy") (EVar "b"))))
 (DFunDef false "argsOfTy" ((PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "::" (EVar "a") (EApp (EVar "argsOfTy") (EVar "b"))))
-(DFunDef false "argsOfTy" (PWild) (EListLit))
+(DFunDef false "argsOfTy" ((POr (PRec "TyCon" () false) (PCon "TyVar" PWild) (PCon "TyApp" PWild PWild) (PCon "TyTuple" PWild) (PCon "TyNamed" PWild PWild PWild) (PCon "TyQual" PWild PWild PWild) (PCon "TyRow" PWild PWild PWild) (PCon "TyAuth" PWild PWild))) (EListLit))
 (DTypeSig false "filterMentions" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int"))))))
 (DFunDef false "filterMentions" (PWild (PList) PWild) (EListLit))
 (DFunDef false "filterMentions" ((PVar "i") (PCons (PVar "t") (PVar "ts")) (PVar "params")) (EIf (EApp (EApp (EVar "tyMentions") (EVar "t")) (EVar "params")) (EBinOp "::" (EVar "i") (EApp (EApp (EApp (EVar "filterMentions") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "ts")) (EVar "params"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "filterMentions") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "ts")) (EVar "params")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -286,7 +287,7 @@ ctorTypeEntries _ = []
 (DFunDef false "argsOfTy" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "argsOfTy") (EVar "t")))
 (DFunDef false "argsOfTy" ((PCon "TyFun" (PCon "TyNamed" PWild (PVar "a") PWild) (PVar "b"))) (EBinOp "::" (EVar "a") (EApp (EVar "argsOfTy") (EVar "b"))))
 (DFunDef false "argsOfTy" ((PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "::" (EVar "a") (EApp (EVar "argsOfTy") (EVar "b"))))
-(DFunDef false "argsOfTy" (PWild) (EListLit))
+(DFunDef false "argsOfTy" ((POr (PRec "TyCon" () false) (PCon "TyVar" PWild) (PCon "TyApp" PWild PWild) (PCon "TyTuple" PWild) (PCon "TyNamed" PWild PWild PWild) (PCon "TyQual" PWild PWild PWild) (PCon "TyRow" PWild PWild PWild) (PCon "TyAuth" PWild PWild))) (EListLit))
 (DTypeSig false "filterMentions" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int"))))))
 (DFunDef false "filterMentions" (PWild (PList) PWild) (EListLit))
 (DFunDef false "filterMentions" ((PVar "i") (PCons (PVar "t") (PVar "ts")) (PVar "params")) (EIf (EApp (EApp (EVar "tyMentions") (EVar "t")) (EVar "params")) (EBinOp "::" (EVar "i") (EApp (EApp (EApp (EVar "filterMentions") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "ts")) (EVar "params"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "filterMentions") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "ts")) (EVar "params")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))

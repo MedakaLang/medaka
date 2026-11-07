@@ -1,5 +1,5 @@
 # META
-source_lines=289
+source_lines=297
 stages=DESUGAR,MARK
 # SOURCE
 {- | A mutable set of distinct elements, keyed by hash.
@@ -157,17 +157,21 @@ reinsertAll : Hashable a =>
   Ref (Array (List a)) ->
   Ref Int ->
   Unit
-reinsertAll oldArr i n buckets count
-  | i >= n = ()
-  | otherwise =
-    reinsertBucket (arrayGetUnsafe i oldArr) buckets count
-    reinsertAll oldArr (i + 1) n buckets count
+reinsertAll oldArr i0 n buckets count = go i0
+  where
+    go i
+      | i >= n = ()
+      | otherwise =
+        reinsertBucket (arrayGetUnsafe i oldArr) buckets count
+        go (i + 1)
 
 reinsertBucket : Hashable a => List a -> Ref (Array (List a)) -> Ref Int -> Unit
-reinsertBucket [] _ _ = ()
-reinsertBucket (x :: rest) buckets count =
-  putRaw x buckets count
-  reinsertBucket rest buckets count
+reinsertBucket xs0 buckets count = go xs0
+  where
+    go [] = ()
+    go (x :: rest) =
+      putRaw x buckets count
+      go rest
 
 putRaw : Hashable a => a -> Ref (Array (List a)) -> Ref Int -> Unit
 putRaw x buckets count =
@@ -195,16 +199,20 @@ deleteAt x arr idx count =
 -- ── Iteration / folds ───────────────────────────────────────────────────
 
 collectElems : Array (List a) -> Int -> Int -> List a -> List a
-collectElems arr i n acc
-  | i >= n = acc
-  | otherwise = collectElems arr (i + 1) n (arrayGetUnsafe i arr ++ acc)
+collectElems arr i0 n acc0 = go i0 acc0
+  where
+    go i acc
+      | i >= n = acc
+      | otherwise = go (i + 1) (arrayGetUnsafe i arr ++ acc)
 
 elemList : HashSet a -> List a
 elemList (HashSet buckets _) = collectElems !buckets 0 (arrayLength !buckets) []
 
 foldrElems : (a -> b -> <e> b) -> b -> List a -> <e> b
-foldrElems _ z [] = z
-foldrElems f z (x :: rest) = f x (foldrElems f z rest)
+foldrElems f z xs0 = go xs0
+  where
+    go [] = z
+    go (x :: rest) = f x (go rest)
 
 foldlElems : (b -> a -> <e> b) -> b -> List a -> <e> b
 foldlElems _ z [] = z
@@ -326,10 +334,9 @@ prop "Display HashSet agrees with Eq and lists elements ascending" (xs : List In
 (DTypeSig false "resize" (TyConstrained ((cstr "Hashable" (TyVar "a"))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Array") (TyApp (TyCon "List") (TyVar "a")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyCon "Unit")))))
 (DFunDef false "resize" ((PVar "buckets") (PVar "count")) (EBlock (DoLet false false (PVar "oldArr") (EUnOp "!" (EVar "buckets"))) (DoLet false false (PVar "newArr") (EApp (EApp (EVar "arrayMake") (EBinOp "*" (EApp (EVar "arrayLength") (EVar "oldArr")) (ELit (LInt 2)))) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "buckets")) (EVar "newArr"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "count")) (ELit (LInt 0)))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "reinsertAll") (EVar "oldArr")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "oldArr"))) (EVar "buckets")) (EVar "count")))))
 (DTypeSig false "reinsertAll" (TyConstrained ((cstr "Hashable" (TyVar "a"))) (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "List") (TyVar "a"))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Array") (TyApp (TyCon "List") (TyVar "a")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyCon "Unit"))))))))
-(DFunDef false "reinsertAll" ((PVar "oldArr") (PVar "i") (PVar "n") (PVar "buckets") (PVar "count")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (ELit LUnit) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EApp (EVar "reinsertBucket") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "oldArr"))) (EVar "buckets")) (EVar "count"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "reinsertAll") (EVar "oldArr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EVar "buckets")) (EVar "count")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "reinsertAll" ((PVar "oldArr") (PVar "i0") (PVar "n") (PVar "buckets") (PVar "count")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (ELit LUnit) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EApp (EVar "reinsertBucket") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "oldArr"))) (EVar "buckets")) (EVar "count"))) (DoExpr (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EVar "go") (EVar "i0"))))
 (DTypeSig false "reinsertBucket" (TyConstrained ((cstr "Hashable" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Array") (TyApp (TyCon "List") (TyVar "a")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyCon "Unit"))))))
-(DFunDef false "reinsertBucket" ((PList) PWild PWild) (ELit LUnit))
-(DFunDef false "reinsertBucket" ((PCons (PVar "x") (PVar "rest")) (PVar "buckets") (PVar "count")) (EBlock (DoExpr (EApp (EApp (EApp (EVar "putRaw") (EVar "x")) (EVar "buckets")) (EVar "count"))) (DoExpr (EApp (EApp (EApp (EVar "reinsertBucket") (EVar "rest")) (EVar "buckets")) (EVar "count")))))
+(DFunDef false "reinsertBucket" ((PVar "xs0") (PVar "buckets") (PVar "count")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PVar "x") (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EApp (EVar "putRaw") (EVar "x")) (EVar "buckets")) (EVar "count"))) (DoExpr (EApp (EVar "go") (EVar "rest"))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "putRaw" (TyConstrained ((cstr "Hashable" (TyVar "a"))) (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Array") (TyApp (TyCon "List") (TyVar "a")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyCon "Unit"))))))
 (DFunDef false "putRaw" ((PVar "x") (PVar "buckets") (PVar "count")) (EBlock (DoLet false false (PVar "arr") (EUnOp "!" (EVar "buckets"))) (DoLet false false (PVar "idx") (EApp (EApp (EVar "slotOf") (EVar "x")) (EApp (EVar "arrayLength") (EVar "arr")))) (DoExpr (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "idx")) (EBinOp "::" (EVar "x") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "idx")) (EVar "arr")))) (EVar "arr"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "count")) (EBinOp "+" (EUnOp "!" (EVar "count")) (ELit (LInt 1)))))))
 (DTypeSig true "deleteInPlace" (TyConstrained ((cstr "Eq" (TyVar "a")) (cstr "Hashable" (TyVar "a"))) (TyFun (TyVar "a") (TyFun (TyApp (TyCon "HashSet") (TyVar "a")) (TyCon "Unit")))))
@@ -337,12 +344,11 @@ prop "Display HashSet agrees with Eq and lists elements ascending" (xs : List In
 (DTypeSig false "deleteAt" (TyConstrained ((cstr "Eq" (TyVar "a")) (cstr "Hashable" (TyVar "a"))) (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "List") (TyVar "a"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyCon "Unit")))))))
 (DFunDef false "deleteAt" ((PVar "x") (PVar "arr") (PVar "idx") (PVar "count")) (EIf (EApp (EApp (EVar "bucketHas") (EVar "x")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "idx")) (EVar "arr"))) (EBlock (DoExpr (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "idx")) (EApp (EApp (EVar "bucketRemove") (EVar "x")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "idx")) (EVar "arr")))) (EVar "arr"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "count")) (EBinOp "-" (EUnOp "!" (EVar "count")) (ELit (LInt 1)))))) (ELit LUnit)))
 (DTypeSig false "collectElems" (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "List") (TyVar "a"))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))))
-(DFunDef false "collectElems" ((PVar "arr") (PVar "i") (PVar "n") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "acc") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "collectElems") (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EBinOp "++" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (EVar "acc"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "collectElems" ((PVar "arr") (PVar "i0") (PVar "n") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "acc") (EIf (EVar "otherwise") (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "++" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (EVar "acc"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EApp (EVar "go") (EVar "i0")) (EVar "acc0"))))
 (DTypeSig false "elemList" (TyFun (TyApp (TyCon "HashSet") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))))
 (DFunDef false "elemList" ((PCon "HashSet" (PVar "buckets") PWild)) (EApp (EApp (EApp (EApp (EVar "collectElems") (EUnOp "!" (EVar "buckets"))) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EUnOp "!" (EVar "buckets")))) (EListLit)))
 (DTypeSig false "foldrElems" (TyFun (TyFun (TyVar "a") (TyFun (TyVar "b") (TyEffect () (Some "e") (TyVar "b")))) (TyFun (TyVar "b") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyVar "b"))))))
-(DFunDef false "foldrElems" (PWild (PVar "z") (PList)) (EVar "z"))
-(DFunDef false "foldrElems" ((PVar "f") (PVar "z") (PCons (PVar "x") (PVar "rest"))) (EApp (EApp (EVar "f") (EVar "x")) (EApp (EApp (EApp (EVar "foldrElems") (EVar "f")) (EVar "z")) (EVar "rest"))))
+(DFunDef false "foldrElems" ((PVar "f") (PVar "z") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EVar "z")) (clause ((PCons (PVar "x") (PVar "rest"))) (EApp (EApp (EVar "f") (EVar "x")) (EApp (EVar "go") (EVar "rest")))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "foldlElems" (TyFun (TyFun (TyVar "b") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyVar "b")))) (TyFun (TyVar "b") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyVar "b"))))))
 (DFunDef false "foldlElems" (PWild (PVar "z") (PList)) (EVar "z"))
 (DFunDef false "foldlElems" ((PVar "f") (PVar "z") (PCons (PVar "x") (PVar "rest"))) (EApp (EApp (EApp (EVar "foldlElems") (EVar "f")) (EApp (EApp (EVar "f") (EVar "z")) (EVar "x"))) (EVar "rest")))
@@ -396,10 +402,9 @@ prop "Display HashSet agrees with Eq and lists elements ascending" (xs : List In
 (DTypeSig false "resize" (TyConstrained ((cstr "Hashable" (TyVar "a"))) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Array") (TyApp (TyCon "List") (TyVar "a")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyCon "Unit")))))
 (DFunDef false "resize" ((PVar "buckets") (PVar "count")) (EBlock (DoLet false false (PVar "oldArr") (EUnOp "!" (EVar "buckets"))) (DoLet false false (PVar "newArr") (EApp (EApp (EVar "arrayMake") (EBinOp "*" (EApp (EVar "arrayLength") (EVar "oldArr")) (ELit (LInt 2)))) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "buckets")) (EVar "newArr"))) (DoExpr (EApp (EApp (EVar "setRef") (EDictApp "count")) (ELit (LInt 0)))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EDictApp "reinsertAll") (EVar "oldArr")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "oldArr"))) (EVar "buckets")) (EDictApp "count")))))
 (DTypeSig false "reinsertAll" (TyConstrained ((cstr "Hashable" (TyVar "a"))) (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "List") (TyVar "a"))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Array") (TyApp (TyCon "List") (TyVar "a")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyCon "Unit"))))))))
-(DFunDef false "reinsertAll" ((PVar "oldArr") (PVar "i") (PVar "n") (PVar "buckets") (PVar "count")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (ELit LUnit) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EApp (EDictApp "reinsertBucket") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "oldArr"))) (EVar "buckets")) (EDictApp "count"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EDictApp "reinsertAll") (EVar "oldArr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EVar "buckets")) (EDictApp "count")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "reinsertAll" ((PVar "oldArr") (PVar "i0") (PVar "n") (PVar "buckets") (PVar "count")) (ELetGroup ((lgb "go" (clause ((PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (ELit LUnit) (EIf (EVar "otherwise") (EBlock (DoExpr (EApp (EApp (EApp (EDictApp "reinsertBucket") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "oldArr"))) (EVar "buckets")) (EDictApp "count"))) (DoExpr (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EVar "go") (EVar "i0"))))
 (DTypeSig false "reinsertBucket" (TyConstrained ((cstr "Hashable" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Array") (TyApp (TyCon "List") (TyVar "a")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyCon "Unit"))))))
-(DFunDef false "reinsertBucket" ((PList) PWild PWild) (ELit LUnit))
-(DFunDef false "reinsertBucket" ((PCons (PVar "x") (PVar "rest")) (PVar "buckets") (PVar "count")) (EBlock (DoExpr (EApp (EApp (EApp (EDictApp "putRaw") (EVar "x")) (EVar "buckets")) (EDictApp "count"))) (DoExpr (EApp (EApp (EApp (EDictApp "reinsertBucket") (EVar "rest")) (EVar "buckets")) (EDictApp "count")))))
+(DFunDef false "reinsertBucket" ((PVar "xs0") (PVar "buckets") (PVar "count")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PVar "x") (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EApp (EDictApp "putRaw") (EVar "x")) (EVar "buckets")) (EDictApp "count"))) (DoExpr (EApp (EVar "go") (EVar "rest"))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "putRaw" (TyConstrained ((cstr "Hashable" (TyVar "a"))) (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Array") (TyApp (TyCon "List") (TyVar "a")))) (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyCon "Unit"))))))
 (DFunDef false "putRaw" ((PVar "x") (PVar "buckets") (PVar "count")) (EBlock (DoLet false false (PVar "arr") (EUnOp "!" (EVar "buckets"))) (DoLet false false (PVar "idx") (EApp (EApp (EDictApp "slotOf") (EVar "x")) (EApp (EVar "arrayLength") (EVar "arr")))) (DoExpr (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "idx")) (EBinOp "::" (EVar "x") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "idx")) (EVar "arr")))) (EVar "arr"))) (DoExpr (EApp (EApp (EVar "setRef") (EDictApp "count")) (EBinOp "+" (EUnOp "!" (EDictApp "count")) (ELit (LInt 1)))))))
 (DTypeSig true "deleteInPlace" (TyConstrained ((cstr "Eq" (TyVar "a")) (cstr "Hashable" (TyVar "a"))) (TyFun (TyVar "a") (TyFun (TyApp (TyCon "HashSet") (TyVar "a")) (TyCon "Unit")))))
@@ -407,12 +412,11 @@ prop "Display HashSet agrees with Eq and lists elements ascending" (xs : List In
 (DTypeSig false "deleteAt" (TyConstrained ((cstr "Eq" (TyVar "a")) (cstr "Hashable" (TyVar "a"))) (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "List") (TyVar "a"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyCon "Unit")))))))
 (DFunDef false "deleteAt" ((PVar "x") (PVar "arr") (PVar "idx") (PVar "count")) (EIf (EApp (EApp (EDictApp "bucketHas") (EVar "x")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "idx")) (EVar "arr"))) (EBlock (DoExpr (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "idx")) (EApp (EApp (EDictApp "bucketRemove") (EVar "x")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "idx")) (EVar "arr")))) (EVar "arr"))) (DoExpr (EApp (EApp (EVar "setRef") (EDictApp "count")) (EBinOp "-" (EUnOp "!" (EDictApp "count")) (ELit (LInt 1)))))) (ELit LUnit)))
 (DTypeSig false "collectElems" (TyFun (TyApp (TyCon "Array") (TyApp (TyCon "List") (TyVar "a"))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))))
-(DFunDef false "collectElems" ((PVar "arr") (PVar "i") (PVar "n") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "acc") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "collectElems") (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EBinOp "++" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (EVar "acc"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "collectElems" ((PVar "arr") (PVar "i0") (PVar "n") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "acc") (EIf (EVar "otherwise") (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "++" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (EVar "acc"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EApp (EVar "go") (EVar "i0")) (EVar "acc0"))))
 (DTypeSig false "elemList" (TyFun (TyApp (TyCon "HashSet") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))))
 (DFunDef false "elemList" ((PCon "HashSet" (PVar "buckets") PWild)) (EApp (EApp (EApp (EApp (EVar "collectElems") (EUnOp "!" (EVar "buckets"))) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EUnOp "!" (EVar "buckets")))) (EListLit)))
 (DTypeSig false "foldrElems" (TyFun (TyFun (TyVar "a") (TyFun (TyVar "b") (TyEffect () (Some "e") (TyVar "b")))) (TyFun (TyVar "b") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyVar "b"))))))
-(DFunDef false "foldrElems" (PWild (PVar "z") (PList)) (EVar "z"))
-(DFunDef false "foldrElems" ((PVar "f") (PVar "z") (PCons (PVar "x") (PVar "rest"))) (EApp (EApp (EVar "f") (EVar "x")) (EApp (EApp (EApp (EVar "foldrElems") (EVar "f")) (EVar "z")) (EVar "rest"))))
+(DFunDef false "foldrElems" ((PVar "f") (PVar "z") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (EVar "z")) (clause ((PCons (PVar "x") (PVar "rest"))) (EApp (EApp (EVar "f") (EVar "x")) (EApp (EVar "go") (EVar "rest")))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig false "foldlElems" (TyFun (TyFun (TyVar "b") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyVar "b")))) (TyFun (TyVar "b") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyVar "b"))))))
 (DFunDef false "foldlElems" (PWild (PVar "z") (PList)) (EVar "z"))
 (DFunDef false "foldlElems" ((PVar "f") (PVar "z") (PCons (PVar "x") (PVar "rest"))) (EApp (EApp (EApp (EVar "foldlElems") (EVar "f")) (EApp (EApp (EVar "f") (EVar "z")) (EVar "x"))) (EVar "rest")))

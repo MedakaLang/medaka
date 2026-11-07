@@ -1,0 +1,26 @@
+-- Private constrained functions whose bare names the entry module reuses for its
+-- own top-level values: the marker's dict-name set is bare-named, so each of the
+-- entry's uses reaches lowering as a dictionary application of no dictionaries.
+export
+count : Eq a => a -> List a -> Int
+count x xs = length (pick x xs)
+
+export
+square : Num a => a -> a
+square x = scale x
+
+export
+describe : Debug a => a -> String
+describe x = label x
+
+pick : Eq a => a -> List a -> List a
+pick x xs = filter (y => y == x) xs
+
+scale : Num a => a -> a
+scale x = x * x
+
+label : Debug a => a -> String
+label x = "<" ++ debug x ++ ">"
+
+step : Eq a => a -> a -> Bool
+step a b = a == b

@@ -1,5 +1,5 @@
 # META
-source_lines=2233
+source_lines=2254
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_solve: one solving judgment over one goal store, above the entailment core: the exact-return
@@ -977,21 +977,23 @@ methodTemplateGivenScan : MethodPredicateTemplate ->
   List GivenEntry ->
   MethodTemplateGivenResult ->
   MethodTemplateGivenResult
-methodTemplateGivenScan _ _ [] result = result
-methodTemplateGivenScan template chain (given :: rest) result =
-  let result2 =
-    if givenInScope GSPredicateOnly given
-      && Scopes.visibleOnChain chain (Scopes.binderScope given.geBinder)
-      && methodPredicateTemplateMatchesSlot
-        template
-        given.geSlot then match result
-      MethodTemplateGivenNone => MethodTemplateGivenOne given
-      _ => MethodTemplateGivenMany
-    else
-      result
-  match result2
-    MethodTemplateGivenMany => MethodTemplateGivenMany
-    _ => methodTemplateGivenScan template chain rest result2
+methodTemplateGivenScan template chain xs0 result0 = go xs0 result0
+  where
+    go [] result = result
+    go (given :: rest) result =
+      let result2 =
+        if givenInScope GSPredicateOnly given
+          && Scopes.visibleOnChain chain (Scopes.binderScope given.geBinder)
+          && methodPredicateTemplateMatchesSlot
+            template
+            given.geSlot then match result
+          MethodTemplateGivenNone => MethodTemplateGivenOne given
+          _ => MethodTemplateGivenMany
+        else
+          result
+      match result2
+        MethodTemplateGivenMany => MethodTemplateGivenMany
+        _ => go rest result2
 
 methodPredicateTemplateMatchesSlot : MethodPredicateTemplate ->
   PredicateSlot ->
@@ -1087,6 +1089,8 @@ routesOfMonosTopV : SiteCtx ->
   List (List Mono) ->
   List Route
 -- no vectors at all (a caller with nothing to offer) ⇒ the scalar router, unchanged.
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 routesOfMonosTopV sx encl useScope monos ifaces [] =
   routesOfMonosTop sx encl useScope monos ifaces
 routesOfMonosTopV _sx _ _ [] _ _ = []
@@ -1140,6 +1144,8 @@ routesOfMonosTop : SiteCtx ->
   List Mono ->
   List IfaceRef ->
   List Route
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 routesOfMonosTop _sx _ _ [] _ = []
 routesOfMonosTop sx encl useScope (m :: rest) [] =
   routeOf sx ifaceRefNone encl useScope (CountImpls ifaceRefNone) m
@@ -1198,6 +1204,9 @@ recPredicateArgs gctx mono slot = match slot.psArgs
 
 recSlotSubst : Mono -> List Int -> Option (List (Int, Mono))
 recSlotSubst _ [] = Some []
+-- Bound: a recursion through `map` that is not a tail call, run once per slot of every
+-- recursive predicate; the `do` form allocates a closure per element.
+-- lint-disable-next-line rule-passthrough-arm
 recSlotSubst mono (id :: rest) = match findTvarInMono mono id
   None => None
   Some m => map ((id, m) :: _) (recSlotSubst mono rest)
@@ -1500,14 +1509,16 @@ methodReturnPrerequisitesMatch _ _ = False
 -- need one bound is left as it is, for `checkSigsTooGeneral` has already run.
 export
 improveByUniqueImpl : DynCtx -> OrdMap Unit -> List UObligation -> Unit
-improveByUniqueImpl _dyn _ [] = ()
-improveByUniqueImpl dyn sigIds (o :: rest) =
-  improveGoal
-    dyn
-    sigIds
-    o.pred.iface
-    (map normalize (uOblArgs dyn.dcModule.mcGraph o))
-  improveByUniqueImpl dyn sigIds rest
+improveByUniqueImpl dyn sigIds xs0 = go xs0
+  where
+    go [] = ()
+    go (o :: rest) =
+      improveGoal
+        dyn
+        sigIds
+        o.pred.iface
+        (map normalize (uOblArgs dyn.dcModule.mcGraph o))
+      go rest
 
 -- Determination by the unique unifying instance (DICT-SEMANTICS §3, the settle
 -- sequence's second step).  A goal of any arity that is not closed is unified with
@@ -1539,6 +1550,8 @@ determineByUniqueInstance mctx rigidIds obls =
 -- The fuel only bounds the loop: every sweep but the last changes some goal's
 -- shape.
 determineSweeps : ModuleCtx -> OrdMap Unit -> GoalWindow -> Int -> Unit
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
 determineSweeps mctx rigidIds window fuel =
   if fuel > 0
     && determineByUniqueInstanceGo
@@ -1556,11 +1569,13 @@ determineByUniqueInstanceGo : ModuleCtx ->
   Bool ->
   List (Int, UObligation) ->
   Bool
-determineByUniqueInstanceGo _mctx _ _ changed [] = changed
-determineByUniqueInstanceGo mctx rigidIds window changed ((_, o) :: rest) =
-  let args = map normalize (uOblArgs mctx.mcGraph o)
-  let now = determineGoal mctx rigidIds window o args
-  determineByUniqueInstanceGo mctx rigidIds window (now || changed) rest
+determineByUniqueInstanceGo mctx rigidIds window changed0 xs0 = go changed0 xs0
+  where
+    go changed [] = changed
+    go changed ((_, o) :: rest) =
+      let args = map normalize (uOblArgs mctx.mcGraph o)
+      let now = determineGoal mctx rigidIds window o args
+      go (now || changed) rest
 
 -- True when the commit changed the goal's shape.  A commit that only renames the
 -- goal's variables to the instance's fresh ones leaves the goal's size and its
@@ -1904,7 +1919,10 @@ walkDispatch typarams (TyApp a b) m = match peelQual m
 walkDispatch typarams (TyTuple ts) m = match tupleSpine m
   Some ms => flatMap (p => walkDispatch typarams (fst p) (snd p)) (zip ts ms)
   _ => []
-walkDispatch _ _ _ = []
+walkDispatch typarams (TyNamed _ t _) m = walkDispatch typarams t m
+walkDispatch typarams (TyQual t _ _) m = walkDispatch typarams t m
+walkDispatch _ (TyCon {  } | TyEffect _ _ _ | TyConstrained _ _ | TyRow _ _ _ | TyAuth _ _) _ =
+  []
 
 -- one mono per interface param, in declaration order; if ANY param has no
 -- recovered binding the whole obligation is abandoned (return [] → caller skips).
@@ -1916,6 +1934,9 @@ collectByParam typarams pairs = match collectByParamGo typarams pairs
 
 collectByParamGo : List String -> List (String, Mono) -> Option (List Mono)
 collectByParamGo [] _ = Some []
+-- Bound: a recursion through `map` that is not a tail call, run once per interface
+-- parameter of every solved goal; the `do` form allocates a closure per element.
+-- lint-disable-next-line rule-passthrough-arm
 collectByParamGo (p :: rest) pairs = match lookupAssoc p pairs
   None => None
   Some m => map (m :: _) (collectByParamGo rest pairs)
@@ -2424,8 +2445,7 @@ methodReturnProbeOblIfaces (obl :: rest) =
 (DTypeSig false "uniqueMethodTemplateGiven" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "MethodPredicateTemplate") (TyFun (TyCon "ScopeId") (TyFun (TyApp (TyCon "List") (TyCon "GivenEntry")) (TyApp (TyCon "Option") (TyCon "GivenEntry")))))))
 (DFunDef false "uniqueMethodTemplateGiven" ((PVar "gctx") (PVar "template") (PVar "useScope") (PVar "givens")) (EBlock (DoLet false false (PVar "chain") (EApp (EApp (EVar "Scopes.visibleChain") (EApp (EApp (EVar "currentScopeStore") (EVar "gctx")) (ELit LUnit))) (EVar "useScope"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "methodTemplateGivenScan") (EVar "template")) (EVar "chain")) (EVar "givens")) (EVar "MethodTemplateGivenNone")) (arm (PCon "MethodTemplateGivenOne" (PVar "given")) () (EApp (EVar "Some") (EVar "given"))) (arm PWild () (EVar "None"))))))
 (DTypeSig false "methodTemplateGivenScan" (TyFun (TyCon "MethodPredicateTemplate") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "GivenEntry")) (TyFun (TyCon "MethodTemplateGivenResult") (TyCon "MethodTemplateGivenResult"))))))
-(DFunDef false "methodTemplateGivenScan" (PWild PWild (PList) (PVar "result")) (EVar "result"))
-(DFunDef false "methodTemplateGivenScan" ((PVar "template") (PVar "chain") (PCons (PVar "given") (PVar "rest")) (PVar "result")) (EBlock (DoLet false false (PVar "result2") (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "givenInScope") (EVar "GSPredicateOnly")) (EVar "given")) (EApp (EApp (EVar "Scopes.visibleOnChain") (EVar "chain")) (EApp (EVar "Scopes.binderScope") (EFieldAccess (EVar "given") "geBinder")))) (EApp (EApp (EVar "methodPredicateTemplateMatchesSlot") (EVar "template")) (EFieldAccess (EVar "given") "geSlot"))) (EMatch (EVar "result") (arm (PCon "MethodTemplateGivenNone") () (EApp (EVar "MethodTemplateGivenOne") (EVar "given"))) (arm PWild () (EVar "MethodTemplateGivenMany"))) (EVar "result"))) (DoExpr (EMatch (EVar "result2") (arm (PCon "MethodTemplateGivenMany") () (EVar "MethodTemplateGivenMany")) (arm PWild () (EApp (EApp (EApp (EApp (EVar "methodTemplateGivenScan") (EVar "template")) (EVar "chain")) (EVar "rest")) (EVar "result2")))))))
+(DFunDef false "methodTemplateGivenScan" ((PVar "template") (PVar "chain") (PVar "xs0") (PVar "result0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "result")) (EVar "result")) (clause ((PCons (PVar "given") (PVar "rest")) (PVar "result")) (EBlock (DoLet false false (PVar "result2") (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "givenInScope") (EVar "GSPredicateOnly")) (EVar "given")) (EApp (EApp (EVar "Scopes.visibleOnChain") (EVar "chain")) (EApp (EVar "Scopes.binderScope") (EFieldAccess (EVar "given") "geBinder")))) (EApp (EApp (EVar "methodPredicateTemplateMatchesSlot") (EVar "template")) (EFieldAccess (EVar "given") "geSlot"))) (EMatch (EVar "result") (arm (PCon "MethodTemplateGivenNone") () (EApp (EVar "MethodTemplateGivenOne") (EVar "given"))) (arm PWild () (EVar "MethodTemplateGivenMany"))) (EVar "result"))) (DoExpr (EMatch (EVar "result2") (arm (PCon "MethodTemplateGivenMany") () (EVar "MethodTemplateGivenMany")) (arm PWild () (EApp (EApp (EVar "go") (EVar "rest")) (EVar "result2"))))))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "result0"))))
 (DTypeSig false "methodPredicateTemplateMatchesSlot" (TyFun (TyCon "MethodPredicateTemplate") (TyFun (TyCon "PredicateSlot") (TyCon "Bool"))))
 (DFunDef false "methodPredicateTemplateMatchesSlot" ((PVar "template") (PVar "slot")) (EBinOp "&&" (EApp (EApp (EVar "sameIfaceDecl") (EFieldAccess (EVar "template") "mptInterface")) (EFieldAccess (EVar "slot") "psIface")) (EMatch (EFieldAccess (EVar "slot") "psArgs") (arm (PCon "PSArgsUnknown") () (EVar "False")) (arm (PCon "PSArgsKnown" (PVar "arguments")) () (EApp (EApp (EVar "methodPredicateTemplateArgumentsMatch") (EFieldAccess (EVar "template") "mptArguments")) (EVar "arguments"))))))
 (DTypeSig false "methodPredicateTemplateArgumentsMatch" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool"))))
@@ -2511,15 +2531,13 @@ methodReturnProbeOblIfaces (obl :: rest) =
 (DFunDef false "methodReturnPrerequisitesMatch" ((PCons (PVar "left") (PVar "ls")) (PCons (PVar "right") (PVar "rs"))) (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "sameIfaceDecl") (EFieldAccess (EVar "left") "prerequisiteInterface")) (EFieldAccess (EVar "right") "prerequisiteInterface")) (EApp (EApp (EVar "monoVecSameGiven") (EFieldAccess (EVar "left") "prerequisiteArguments")) (EFieldAccess (EVar "right") "prerequisiteArguments"))) (EApp (EApp (EVar "methodReturnPrerequisitesMatch") (EVar "ls")) (EVar "rs"))))
 (DFunDef false "methodReturnPrerequisitesMatch" (PWild PWild) (EVar "False"))
 (DTypeSig true "improveByUniqueImpl" (TyFun (TyCon "DynCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "UObligation")) (TyCon "Unit")))))
-(DFunDef false "improveByUniqueImpl" ((PVar "_dyn") PWild (PList)) (ELit LUnit))
-(DFunDef false "improveByUniqueImpl" ((PVar "dyn") (PVar "sigIds") (PCons (PVar "o") (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EVar "improveGoal") (EVar "dyn")) (EVar "sigIds")) (EFieldAccess (EFieldAccess (EVar "o") "pred") "iface")) (EApp (EApp (EVar "map") (EVar "normalize")) (EApp (EApp (EVar "uOblArgs") (EFieldAccess (EFieldAccess (EVar "dyn") "dcModule") "mcGraph")) (EVar "o"))))) (DoExpr (EApp (EApp (EApp (EVar "improveByUniqueImpl") (EVar "dyn")) (EVar "sigIds")) (EVar "rest")))))
+(DFunDef false "improveByUniqueImpl" ((PVar "dyn") (PVar "sigIds") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PVar "o") (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EVar "improveGoal") (EVar "dyn")) (EVar "sigIds")) (EFieldAccess (EFieldAccess (EVar "o") "pred") "iface")) (EApp (EApp (EVar "map") (EVar "normalize")) (EApp (EApp (EVar "uOblArgs") (EFieldAccess (EFieldAccess (EVar "dyn") "dcModule") "mcGraph")) (EVar "o"))))) (DoExpr (EApp (EVar "go") (EVar "rest"))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig true "determineByUniqueInstance" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "UObligation")) (TyCon "Unit")))))
 (DFunDef false "determineByUniqueInstance" ((PVar "mctx") (PVar "rigidIds") (PVar "obls")) (EIf (EApp (EVar "isNonEmptyL") (EVar "obls")) (EApp (EApp (EApp (EApp (EVar "determineSweeps") (EVar "mctx")) (EVar "rigidIds")) (EApp (EApp (EVar "goalWindowOf") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "obls"))) (EBinOp "+" (EApp (EVar "listLen") (EVar "obls")) (ELit (LInt 1)))) (ELit LUnit)))
 (DTypeSig false "determineSweeps" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "GoalWindow") (TyFun (TyCon "Int") (TyCon "Unit"))))))
 (DFunDef false "determineSweeps" ((PVar "mctx") (PVar "rigidIds") (PVar "window") (PVar "fuel")) (EIf (EBinOp "&&" (EBinOp ">" (EVar "fuel") (ELit (LInt 0))) (EApp (EApp (EApp (EApp (EApp (EVar "determineByUniqueInstanceGo") (EVar "mctx")) (EVar "rigidIds")) (EVar "window")) (EVar "False")) (EFieldAccess (EVar "window") "gwGoals"))) (EApp (EApp (EApp (EApp (EVar "determineSweeps") (EVar "mctx")) (EVar "rigidIds")) (EVar "window")) (EBinOp "-" (EVar "fuel") (ELit (LInt 1)))) (ELit LUnit)))
 (DTypeSig false "determineByUniqueInstanceGo" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "GoalWindow") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "UObligation"))) (TyCon "Bool")))))))
-(DFunDef false "determineByUniqueInstanceGo" ((PVar "_mctx") PWild PWild (PVar "changed") (PList)) (EVar "changed"))
-(DFunDef false "determineByUniqueInstanceGo" ((PVar "mctx") (PVar "rigidIds") (PVar "window") (PVar "changed") (PCons (PTuple PWild (PVar "o")) (PVar "rest"))) (EBlock (DoLet false false (PVar "args") (EApp (EApp (EVar "map") (EVar "normalize")) (EApp (EApp (EVar "uOblArgs") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "o")))) (DoLet false false (PVar "now") (EApp (EApp (EApp (EApp (EApp (EVar "determineGoal") (EVar "mctx")) (EVar "rigidIds")) (EVar "window")) (EVar "o")) (EVar "args"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "determineByUniqueInstanceGo") (EVar "mctx")) (EVar "rigidIds")) (EVar "window")) (EBinOp "||" (EVar "now") (EVar "changed"))) (EVar "rest")))))
+(DFunDef false "determineByUniqueInstanceGo" ((PVar "mctx") (PVar "rigidIds") (PVar "window") (PVar "changed0") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PVar "changed") (PList)) (EVar "changed")) (clause ((PVar "changed") (PCons (PTuple PWild (PVar "o")) (PVar "rest"))) (EBlock (DoLet false false (PVar "args") (EApp (EApp (EVar "map") (EVar "normalize")) (EApp (EApp (EVar "uOblArgs") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "o")))) (DoLet false false (PVar "now") (EApp (EApp (EApp (EApp (EApp (EVar "determineGoal") (EVar "mctx")) (EVar "rigidIds")) (EVar "window")) (EVar "o")) (EVar "args"))) (DoExpr (EApp (EApp (EVar "go") (EBinOp "||" (EVar "now") (EVar "changed"))) (EVar "rest"))))))) (EApp (EApp (EVar "go") (EVar "changed0")) (EVar "xs0"))))
 (DTypeSig false "determineGoal" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "GoalWindow") (TyFun (TyCon "UObligation") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool")))))))
 (DFunDef false "determineGoal" ((PVar "mctx") (PVar "rigidIds0") (PVar "window") (PVar "o") (PVar "args")) (EBlock (DoLet false false (PVar "rigidIds") (EApp (EApp (EApp (EVar "withDeclaredVars") (EVar "mctx")) (EVar "rigidIds0")) (EVar "args"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "determineHeldGoal") (EVar "mctx")) (EVar "rigidIds")) (EVar "window")) (EVar "o")) (EVar "args")))))
 (DTypeSig false "withDeclaredVars" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))
@@ -2575,7 +2593,9 @@ methodReturnProbeOblIfaces (obl :: rest) =
 (DFunDef false "walkDispatch" ((PVar "typarams") (PCon "TyFun" (PVar "a") (PVar "b")) (PVar "m")) (EMatch (EApp (EVar "peelQual") (EVar "m")) (arm (PCon "TFun" (PVar "ma") PWild (PVar "mb")) () (EBinOp "++" (EApp (EApp (EApp (EVar "walkDispatch") (EVar "typarams")) (EApp (EVar "stripTyConstraints") (EVar "a"))) (EVar "ma")) (EApp (EApp (EApp (EVar "walkDispatch") (EVar "typarams")) (EApp (EVar "stripTyConstraints") (EVar "b"))) (EVar "mb")))) (arm PWild () (EListLit))))
 (DFunDef false "walkDispatch" ((PVar "typarams") (PCon "TyApp" (PVar "a") (PVar "b")) (PVar "m")) (EMatch (EApp (EVar "peelQual") (EVar "m")) (arm (PCon "TApp" (PVar "ma") (PVar "mb")) () (EBinOp "++" (EApp (EApp (EApp (EVar "walkDispatch") (EVar "typarams")) (EVar "a")) (EVar "ma")) (EApp (EApp (EApp (EVar "walkDispatch") (EVar "typarams")) (EVar "b")) (EVar "mb")))) (arm PWild () (EListLit))))
 (DFunDef false "walkDispatch" ((PVar "typarams") (PCon "TyTuple" (PVar "ts")) (PVar "m")) (EMatch (EApp (EVar "tupleSpine") (EVar "m")) (arm (PCon "Some" (PVar "ms")) () (EApp (EApp (EVar "flatMap") (ELam ((PVar "p")) (EApp (EApp (EApp (EVar "walkDispatch") (EVar "typarams")) (EApp (EVar "fst") (EVar "p"))) (EApp (EVar "snd") (EVar "p"))))) (EApp (EApp (EVar "zip") (EVar "ts")) (EVar "ms")))) (arm PWild () (EListLit))))
-(DFunDef false "walkDispatch" (PWild PWild PWild) (EListLit))
+(DFunDef false "walkDispatch" ((PVar "typarams") (PCon "TyNamed" PWild (PVar "t") PWild) (PVar "m")) (EApp (EApp (EApp (EVar "walkDispatch") (EVar "typarams")) (EVar "t")) (EVar "m")))
+(DFunDef false "walkDispatch" ((PVar "typarams") (PCon "TyQual" (PVar "t") PWild PWild) (PVar "m")) (EApp (EApp (EApp (EVar "walkDispatch") (EVar "typarams")) (EVar "t")) (EVar "m")))
+(DFunDef false "walkDispatch" (PWild (POr (PRec "TyCon" () false) (PCon "TyEffect" PWild PWild PWild) (PCon "TyConstrained" PWild PWild) (PCon "TyRow" PWild PWild PWild) (PCon "TyAuth" PWild PWild)) PWild) (EListLit))
 (DTypeSig true "collectByParam" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "List") (TyCon "Mono")))))
 (DFunDef false "collectByParam" ((PVar "typarams") (PVar "pairs")) (EMatch (EApp (EApp (EVar "collectByParamGo") (EVar "typarams")) (EVar "pairs")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "ms")) () (EVar "ms"))))
 (DTypeSig false "collectByParamGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Mono"))))))
@@ -2835,8 +2855,7 @@ methodReturnProbeOblIfaces (obl :: rest) =
 (DTypeSig false "uniqueMethodTemplateGiven" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "MethodPredicateTemplate") (TyFun (TyCon "ScopeId") (TyFun (TyApp (TyCon "List") (TyCon "GivenEntry")) (TyApp (TyCon "Option") (TyCon "GivenEntry")))))))
 (DFunDef false "uniqueMethodTemplateGiven" ((PVar "gctx") (PVar "template") (PVar "useScope") (PVar "givens")) (EBlock (DoLet false false (PVar "chain") (EApp (EApp (EVar "Scopes.visibleChain") (EApp (EApp (EVar "currentScopeStore") (EVar "gctx")) (ELit LUnit))) (EVar "useScope"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "methodTemplateGivenScan") (EVar "template")) (EVar "chain")) (EVar "givens")) (EVar "MethodTemplateGivenNone")) (arm (PCon "MethodTemplateGivenOne" (PVar "given")) () (EApp (EVar "Some") (EVar "given"))) (arm PWild () (EVar "None"))))))
 (DTypeSig false "methodTemplateGivenScan" (TyFun (TyCon "MethodPredicateTemplate") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "GivenEntry")) (TyFun (TyCon "MethodTemplateGivenResult") (TyCon "MethodTemplateGivenResult"))))))
-(DFunDef false "methodTemplateGivenScan" (PWild PWild (PList) (PVar "result")) (EVar "result"))
-(DFunDef false "methodTemplateGivenScan" ((PVar "template") (PVar "chain") (PCons (PVar "given") (PVar "rest")) (PVar "result")) (EBlock (DoLet false false (PVar "result2") (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "givenInScope") (EVar "GSPredicateOnly")) (EVar "given")) (EApp (EApp (EVar "Scopes.visibleOnChain") (EVar "chain")) (EApp (EVar "Scopes.binderScope") (EFieldAccess (EVar "given") "geBinder")))) (EApp (EApp (EVar "methodPredicateTemplateMatchesSlot") (EVar "template")) (EFieldAccess (EVar "given") "geSlot"))) (EMatch (EVar "result") (arm (PCon "MethodTemplateGivenNone") () (EApp (EVar "MethodTemplateGivenOne") (EVar "given"))) (arm PWild () (EVar "MethodTemplateGivenMany"))) (EVar "result"))) (DoExpr (EMatch (EVar "result2") (arm (PCon "MethodTemplateGivenMany") () (EVar "MethodTemplateGivenMany")) (arm PWild () (EApp (EApp (EApp (EApp (EVar "methodTemplateGivenScan") (EVar "template")) (EVar "chain")) (EVar "rest")) (EVar "result2")))))))
+(DFunDef false "methodTemplateGivenScan" ((PVar "template") (PVar "chain") (PVar "xs0") (PVar "result0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "result")) (EVar "result")) (clause ((PCons (PVar "given") (PVar "rest")) (PVar "result")) (EBlock (DoLet false false (PVar "result2") (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "givenInScope") (EVar "GSPredicateOnly")) (EVar "given")) (EApp (EApp (EVar "Scopes.visibleOnChain") (EVar "chain")) (EApp (EVar "Scopes.binderScope") (EFieldAccess (EVar "given") "geBinder")))) (EApp (EApp (EVar "methodPredicateTemplateMatchesSlot") (EVar "template")) (EFieldAccess (EVar "given") "geSlot"))) (EMatch (EVar "result") (arm (PCon "MethodTemplateGivenNone") () (EApp (EVar "MethodTemplateGivenOne") (EVar "given"))) (arm PWild () (EVar "MethodTemplateGivenMany"))) (EVar "result"))) (DoExpr (EMatch (EVar "result2") (arm (PCon "MethodTemplateGivenMany") () (EVar "MethodTemplateGivenMany")) (arm PWild () (EApp (EApp (EVar "go") (EVar "rest")) (EVar "result2"))))))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "result0"))))
 (DTypeSig false "methodPredicateTemplateMatchesSlot" (TyFun (TyCon "MethodPredicateTemplate") (TyFun (TyCon "PredicateSlot") (TyCon "Bool"))))
 (DFunDef false "methodPredicateTemplateMatchesSlot" ((PVar "template") (PVar "slot")) (EBinOp "&&" (EApp (EApp (EVar "sameIfaceDecl") (EFieldAccess (EVar "template") "mptInterface")) (EFieldAccess (EVar "slot") "psIface")) (EMatch (EFieldAccess (EVar "slot") "psArgs") (arm (PCon "PSArgsUnknown") () (EVar "False")) (arm (PCon "PSArgsKnown" (PVar "arguments")) () (EApp (EApp (EVar "methodPredicateTemplateArgumentsMatch") (EFieldAccess (EVar "template") "mptArguments")) (EVar "arguments"))))))
 (DTypeSig false "methodPredicateTemplateArgumentsMatch" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool"))))
@@ -2922,15 +2941,13 @@ methodReturnProbeOblIfaces (obl :: rest) =
 (DFunDef false "methodReturnPrerequisitesMatch" ((PCons (PVar "left") (PVar "ls")) (PCons (PVar "right") (PVar "rs"))) (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "sameIfaceDecl") (EFieldAccess (EVar "left") "prerequisiteInterface")) (EFieldAccess (EVar "right") "prerequisiteInterface")) (EApp (EApp (EVar "monoVecSameGiven") (EFieldAccess (EVar "left") "prerequisiteArguments")) (EFieldAccess (EVar "right") "prerequisiteArguments"))) (EApp (EApp (EVar "methodReturnPrerequisitesMatch") (EVar "ls")) (EVar "rs"))))
 (DFunDef false "methodReturnPrerequisitesMatch" (PWild PWild) (EVar "False"))
 (DTypeSig true "improveByUniqueImpl" (TyFun (TyCon "DynCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "UObligation")) (TyCon "Unit")))))
-(DFunDef false "improveByUniqueImpl" ((PVar "_dyn") PWild (PList)) (ELit LUnit))
-(DFunDef false "improveByUniqueImpl" ((PVar "dyn") (PVar "sigIds") (PCons (PVar "o") (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EVar "improveGoal") (EVar "dyn")) (EVar "sigIds")) (EFieldAccess (EFieldAccess (EVar "o") "pred") "iface")) (EApp (EApp (EMethodRef "map") (EVar "normalize")) (EApp (EApp (EVar "uOblArgs") (EFieldAccess (EFieldAccess (EVar "dyn") "dcModule") "mcGraph")) (EVar "o"))))) (DoExpr (EApp (EApp (EApp (EVar "improveByUniqueImpl") (EVar "dyn")) (EVar "sigIds")) (EVar "rest")))))
+(DFunDef false "improveByUniqueImpl" ((PVar "dyn") (PVar "sigIds") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PVar "o") (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EVar "improveGoal") (EVar "dyn")) (EVar "sigIds")) (EFieldAccess (EFieldAccess (EVar "o") "pred") "iface")) (EApp (EApp (EMethodRef "map") (EVar "normalize")) (EApp (EApp (EVar "uOblArgs") (EFieldAccess (EFieldAccess (EVar "dyn") "dcModule") "mcGraph")) (EVar "o"))))) (DoExpr (EApp (EVar "go") (EVar "rest"))))))) (EApp (EVar "go") (EVar "xs0"))))
 (DTypeSig true "determineByUniqueInstance" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "UObligation")) (TyCon "Unit")))))
 (DFunDef false "determineByUniqueInstance" ((PVar "mctx") (PVar "rigidIds") (PVar "obls")) (EIf (EApp (EVar "isNonEmptyL") (EVar "obls")) (EApp (EApp (EApp (EApp (EVar "determineSweeps") (EVar "mctx")) (EVar "rigidIds")) (EApp (EApp (EVar "goalWindowOf") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "obls"))) (EBinOp "+" (EApp (EVar "listLen") (EVar "obls")) (ELit (LInt 1)))) (ELit LUnit)))
 (DTypeSig false "determineSweeps" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "GoalWindow") (TyFun (TyCon "Int") (TyCon "Unit"))))))
 (DFunDef false "determineSweeps" ((PVar "mctx") (PVar "rigidIds") (PVar "window") (PVar "fuel")) (EIf (EBinOp "&&" (EBinOp ">" (EVar "fuel") (ELit (LInt 0))) (EApp (EApp (EApp (EApp (EApp (EVar "determineByUniqueInstanceGo") (EVar "mctx")) (EVar "rigidIds")) (EVar "window")) (EVar "False")) (EFieldAccess (EVar "window") "gwGoals"))) (EApp (EApp (EApp (EApp (EVar "determineSweeps") (EVar "mctx")) (EVar "rigidIds")) (EVar "window")) (EBinOp "-" (EVar "fuel") (ELit (LInt 1)))) (ELit LUnit)))
 (DTypeSig false "determineByUniqueInstanceGo" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "GoalWindow") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "UObligation"))) (TyCon "Bool")))))))
-(DFunDef false "determineByUniqueInstanceGo" ((PVar "_mctx") PWild PWild (PVar "changed") (PList)) (EVar "changed"))
-(DFunDef false "determineByUniqueInstanceGo" ((PVar "mctx") (PVar "rigidIds") (PVar "window") (PVar "changed") (PCons (PTuple PWild (PVar "o")) (PVar "rest"))) (EBlock (DoLet false false (PVar "args") (EApp (EApp (EMethodRef "map") (EVar "normalize")) (EApp (EApp (EVar "uOblArgs") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "o")))) (DoLet false false (PVar "now") (EApp (EApp (EApp (EApp (EApp (EVar "determineGoal") (EVar "mctx")) (EVar "rigidIds")) (EVar "window")) (EVar "o")) (EVar "args"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "determineByUniqueInstanceGo") (EVar "mctx")) (EVar "rigidIds")) (EVar "window")) (EBinOp "||" (EVar "now") (EVar "changed"))) (EVar "rest")))))
+(DFunDef false "determineByUniqueInstanceGo" ((PVar "mctx") (PVar "rigidIds") (PVar "window") (PVar "changed0") (PVar "xs0")) (ELetGroup ((lgb "go" (clause ((PVar "changed") (PList)) (EVar "changed")) (clause ((PVar "changed") (PCons (PTuple PWild (PVar "o")) (PVar "rest"))) (EBlock (DoLet false false (PVar "args") (EApp (EApp (EMethodRef "map") (EVar "normalize")) (EApp (EApp (EVar "uOblArgs") (EFieldAccess (EVar "mctx") "mcGraph")) (EVar "o")))) (DoLet false false (PVar "now") (EApp (EApp (EApp (EApp (EApp (EVar "determineGoal") (EVar "mctx")) (EVar "rigidIds")) (EVar "window")) (EVar "o")) (EVar "args"))) (DoExpr (EApp (EApp (EVar "go") (EBinOp "||" (EVar "now") (EVar "changed"))) (EVar "rest"))))))) (EApp (EApp (EVar "go") (EVar "changed0")) (EVar "xs0"))))
 (DTypeSig false "determineGoal" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "GoalWindow") (TyFun (TyCon "UObligation") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool")))))))
 (DFunDef false "determineGoal" ((PVar "mctx") (PVar "rigidIds0") (PVar "window") (PVar "o") (PVar "args")) (EBlock (DoLet false false (PVar "rigidIds") (EApp (EApp (EApp (EVar "withDeclaredVars") (EVar "mctx")) (EVar "rigidIds0")) (EVar "args"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "determineHeldGoal") (EVar "mctx")) (EVar "rigidIds")) (EVar "window")) (EVar "o")) (EVar "args")))))
 (DTypeSig false "withDeclaredVars" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))
@@ -2986,7 +3003,9 @@ methodReturnProbeOblIfaces (obl :: rest) =
 (DFunDef false "walkDispatch" ((PVar "typarams") (PCon "TyFun" (PVar "a") (PVar "b")) (PVar "m")) (EMatch (EApp (EVar "peelQual") (EVar "m")) (arm (PCon "TFun" (PVar "ma") PWild (PVar "mb")) () (EBinOp "++" (EApp (EApp (EApp (EVar "walkDispatch") (EVar "typarams")) (EApp (EVar "stripTyConstraints") (EVar "a"))) (EVar "ma")) (EApp (EApp (EApp (EVar "walkDispatch") (EVar "typarams")) (EApp (EVar "stripTyConstraints") (EVar "b"))) (EVar "mb")))) (arm PWild () (EListLit))))
 (DFunDef false "walkDispatch" ((PVar "typarams") (PCon "TyApp" (PVar "a") (PVar "b")) (PVar "m")) (EMatch (EApp (EVar "peelQual") (EVar "m")) (arm (PCon "TApp" (PVar "ma") (PVar "mb")) () (EBinOp "++" (EApp (EApp (EApp (EVar "walkDispatch") (EVar "typarams")) (EVar "a")) (EVar "ma")) (EApp (EApp (EApp (EVar "walkDispatch") (EVar "typarams")) (EVar "b")) (EVar "mb")))) (arm PWild () (EListLit))))
 (DFunDef false "walkDispatch" ((PVar "typarams") (PCon "TyTuple" (PVar "ts")) (PVar "m")) (EMatch (EApp (EVar "tupleSpine") (EVar "m")) (arm (PCon "Some" (PVar "ms")) () (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "p")) (EApp (EApp (EApp (EVar "walkDispatch") (EVar "typarams")) (EApp (EVar "fst") (EVar "p"))) (EApp (EVar "snd") (EVar "p"))))) (EApp (EApp (EVar "zip") (EVar "ts")) (EVar "ms")))) (arm PWild () (EListLit))))
-(DFunDef false "walkDispatch" (PWild PWild PWild) (EListLit))
+(DFunDef false "walkDispatch" ((PVar "typarams") (PCon "TyNamed" PWild (PVar "t") PWild) (PVar "m")) (EApp (EApp (EApp (EVar "walkDispatch") (EVar "typarams")) (EVar "t")) (EVar "m")))
+(DFunDef false "walkDispatch" ((PVar "typarams") (PCon "TyQual" (PVar "t") PWild PWild) (PVar "m")) (EApp (EApp (EApp (EVar "walkDispatch") (EVar "typarams")) (EVar "t")) (EVar "m")))
+(DFunDef false "walkDispatch" (PWild (POr (PRec "TyCon" () false) (PCon "TyEffect" PWild PWild PWild) (PCon "TyConstrained" PWild PWild) (PCon "TyRow" PWild PWild PWild) (PCon "TyAuth" PWild PWild)) PWild) (EListLit))
 (DTypeSig true "collectByParam" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "List") (TyCon "Mono")))))
 (DFunDef false "collectByParam" ((PVar "typarams") (PVar "pairs")) (EMatch (EApp (EApp (EVar "collectByParamGo") (EVar "typarams")) (EVar "pairs")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "ms")) () (EVar "ms"))))
 (DTypeSig false "collectByParamGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Mono"))))))

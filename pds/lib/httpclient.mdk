@@ -25,52 +25,56 @@ byteAt : Bytes -> Int -> Int
 byteAt input i = U8.toInt input[i]
 
 validTargetByte : Bytes -> Int -> Int -> Bool -> Bool
-validTargetByte input pos end query =
-  if pos >= end then
-    True
-  else
-    let byte = byteAt input pos
-    if byte == 37 then
-      pos + 2 < end
-        && isSome (H.hexDigit (byteAt input (pos + 1)))
-        && isSome (H.hexDigit (byteAt input (pos + 2)))
-        && validTargetByte input (pos + 3) end query
-    else
-      let unreserved =
-        byte >= 48 && byte <= 57
-          || byte >= 65 && byte <= 90
-          || byte >= 97 && byte <= 122
-          || byte == 45
-          || byte == 46
-          || byte == 95
-          || byte == 126
-      let subDelimiter =
-        byte == 33
-          || byte == 36
-          || byte == 38
-          || byte == 39
-          || byte == 40
-          || byte == 41
-          || byte == 42
-          || byte == 43
-          || byte == 44
-          || byte == 59
-          || byte == 61
-      let pchar = unreserved || subDelimiter || byte == 58 || byte == 64
-      if pchar || byte == 47 || query && byte == 63 then
-        validTargetByte input (pos + 1) end query
-      else if not query && byte == 63 then
-        validTargetByte input (pos + 1) end True
+validTargetByte input pos0 end query0 = go pos0 query0
+  where
+    go pos query =
+      if pos >= end then
+        True
       else
-        False
+        let byte = byteAt input pos
+        if byte == 37 then
+          pos + 2 < end
+            && isSome (H.hexDigit (byteAt input (pos + 1)))
+            && isSome (H.hexDigit (byteAt input (pos + 2)))
+            && go (pos + 3) query
+        else
+          let unreserved =
+            byte >= 48 && byte <= 57
+              || byte >= 65 && byte <= 90
+              || byte >= 97 && byte <= 122
+              || byte == 45
+              || byte == 46
+              || byte == 95
+              || byte == 126
+          let subDelimiter =
+            byte == 33
+              || byte == 36
+              || byte == 38
+              || byte == 39
+              || byte == 40
+              || byte == 41
+              || byte == 42
+              || byte == 43
+              || byte == 44
+              || byte == 59
+              || byte == 61
+          let pchar = unreserved || subDelimiter || byte == 58 || byte == 64
+          if pchar || byte == 47 || query && byte == 63 then
+            go (pos + 1) query
+          else if not query && byte == 63 then
+            go (pos + 1) True
+          else
+            False
 
 validAsciiValue : Bytes -> Int -> Int -> Bool
-validAsciiValue input i end =
-  if i >= end then
-    True
-  else
-    let byte = byteAt input i
-    byte >= 32 && byte <= 126 && validAsciiValue input (i + 1) end
+validAsciiValue input i0 end = go i0
+  where
+    go i =
+      if i >= end then
+        True
+      else
+        let byte = byteAt input i
+        byte >= 32 && byte <= 126 && go (i + 1)
 
 emitRequestText : String -> Builder -> Unit
 emitRequestText text out = emitBytes (encodeUtf8 text) out

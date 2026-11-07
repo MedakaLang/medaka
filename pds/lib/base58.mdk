@@ -112,35 +112,44 @@ countLeadingZeroBytes bytes i
 -- carry is exhausted AND we have reached at least as far as any earlier
 -- byte reached (`length`). Returns the new `length`.
 carryByteIntoDigits : Array Int -> Int -> Int -> Int -> Int -> Int
-carryByteIntoDigits buf size i carry length =
-  let j = size - 1 - i
-  if carry == 0 && i >= length || j < 0 then
-    i
-  else
-    let cur = carry + 256 * digitAt j buf
-    buf[j] := cur % 58
-    carryByteIntoDigits buf size (i + 1) (cur / 58) length
+carryByteIntoDigits buf size i0 carry0 length = go i0 carry0
+  where
+    go i carry =
+      let j = size - 1 - i
+      if carry == 0 && i >= length || j < 0 then
+        i
+      else
+        let cur = carry + 256 * digitAt j buf
+        buf[j] := cur % 58
+        go (i + 1) (cur / 58)
 
 -- Fold every input byte (index `idx .. n-1`) into the digit buffer in turn.
 -- Returns the final `length` (count of digit slots touched, from the end).
 foldBytesIntoDigits : Bytes -> Int -> Int -> Array Int -> Int -> Int -> Int
-foldBytesIntoDigits bytes idx n buf size length
-  | idx >= n = length
-  | otherwise =
-    let newLength = carryByteIntoDigits buf size 0 (byteAtB idx bytes) length
-    foldBytesIntoDigits bytes (idx + 1) n buf size newLength
+foldBytesIntoDigits bytes idx0 n buf size length0 = go idx0 length0
+  where
+    go idx length
+      | idx >= n = length
+      | otherwise =
+        let newLength =
+          carryByteIntoDigits buf size 0 (byteAtB idx bytes) length
+        go (idx + 1) newLength
 
 -- First non-zero digit at or after `i`, bounded by `limit` (skips the
 -- digit buffer's unused leading zero slots, distinct from the input's
 -- leading zero BYTES handled separately by the '1'-prefix below).
 skipZeroDigits : Array Int -> Int -> Int -> Int
-skipZeroDigits buf i limit
-  | i >= limit = i
-  | digitAt i buf /= 0 = i
-  | otherwise = skipZeroDigits buf (i + 1) limit
+skipZeroDigits buf i0 limit = go i0
+  where
+    go i
+      | i >= limit = i
+      | digitAt i buf /= 0 = i
+      | otherwise = go (i + 1)
 
 -- Map digit-buffer slots `i .. size-1` through the alphabet, in order.
 digitsToChars : Array Int -> Int -> Int -> List Char
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 digitsToChars buf i size
   | i >= size = []
   | otherwise =
@@ -198,10 +207,12 @@ digitIndexOf c i
 
 -- Length of the leading run of `'1'` characters starting at `i`.
 countLeadingOneChars : Array Char -> Int -> Int -> Int
-countLeadingOneChars chars i n
-  | i >= n = i
-  | charAtA i chars /= '1' = i
-  | otherwise = countLeadingOneChars chars (i + 1) n
+countLeadingOneChars chars i0 n = go i0
+  where
+    go i
+      | i >= n = i
+      | charAtA i chars /= '1' = i
+      | otherwise = go (i + 1)
 
 -- One character's digit value, or the `Err` this decode should fail with.
 digitValueOrErr : Char -> Result String Int
@@ -212,31 +223,39 @@ digitValueOrErr c = match digitIndexOf c 0
 -- Validate + collect every character from `i .. n-1` as its base58 digit
 -- value, `Err` naming the first offending character.
 collectDigitValues : Array Char -> Int -> Int -> Result String (List Int)
-collectDigitValues chars i n =
-  if i >= n then
-    Ok []
-  else match digitValueOrErr (charAtA i chars)
-    Err e => Err e
-    Ok d => map (d :: _) (collectDigitValues chars (i + 1) n)
+collectDigitValues chars i0 n = go i0
+  where
+    go i =
+      if i >= n then
+        Ok []
+      else do
+        d <- digitValueOrErr (charAtA i chars)
+        map (d :: _) (go (i + 1))
 
 -- Mirror of `carryByteIntoDigits`, base 58 -> base 256.
 carryDigitIntoBytes : Array Int -> Int -> Int -> Int -> Int -> Int
-carryDigitIntoBytes buf size i carry length =
-  let j = size - 1 - i
-  if carry == 0 && i >= length || j < 0 then
-    i
-  else
-    let cur = carry + 58 * byteAt j buf
-    buf[j] := cur % 256
-    carryDigitIntoBytes buf size (i + 1) (cur / 256) length
+carryDigitIntoBytes buf size i0 carry0 length = go i0 carry0
+  where
+    go i carry =
+      let j = size - 1 - i
+      if carry == 0 && i >= length || j < 0 then
+        i
+      else
+        let cur = carry + 58 * byteAt j buf
+        buf[j] := cur % 256
+        go (i + 1) (cur / 256)
 
 foldDigitsIntoBytes : List Int -> Array Int -> Int -> Int -> Int
-foldDigitsIntoBytes [] _buf _size length = length
-foldDigitsIntoBytes (d :: rest) buf size length =
-  let newLength = carryDigitIntoBytes buf size 0 d length
-  foldDigitsIntoBytes rest buf size newLength
+foldDigitsIntoBytes xs0 buf size length0 = go xs0 length0
+  where
+    go [] length = length
+    go (d :: rest) length =
+      let newLength = carryDigitIntoBytes buf size 0 d length
+      go rest newLength
 
 collectBytesFrom : Array Int -> Int -> Int -> List Int
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 collectBytesFrom buf i limit
   | i >= limit = []
   | otherwise = byteAt i buf :: collectBytesFrom buf (i + 1) limit
@@ -272,18 +291,17 @@ base58btcDecode s =
       "base58btcDecode: input longer than \{intToString base58btcMaxInputChars} characters (denial-of-service guard, not a protocol limit)"
   else
     let zeroes = countLeadingOneChars chars 0 n
-    match collectDigitValues chars zeroes n
-      Err e => Err e
-      Ok digits =>
-        let remaining = n - zeroes
-        let size = remaining * 733 / 1000 + 1
-        let buf = make size 0
-        let length = foldDigitsIntoBytes digits buf size 0
-        let start = size - length
-        -- masked: every element of this array is `cur % 256` from
-        -- `carryDigitIntoBytes`, or a literal `0` from `replicateInt`, so it
-        -- is in the byte domain by construction — no scan is owed.
-        Ok
-          (fromArrayAssumeByteDomain
-            (arrayFromList
-              (replicateInt 0 zeroes ++ collectBytesFrom buf start size)))
+    do
+      digits <- collectDigitValues chars zeroes n
+      let remaining = n - zeroes
+      let size = remaining * 733 / 1000 + 1
+      let buf = make size 0
+      let length = foldDigitsIntoBytes digits buf size 0
+      let start = size - length
+      -- masked: every element of this array is `cur % 256` from
+      -- `carryDigitIntoBytes`, or a literal `0` from `replicateInt`, so it
+      -- is in the byte domain by construction — no scan is owed.
+      Ok
+        (fromArrayAssumeByteDomain
+          (arrayFromList
+            (replicateInt 0 zeroes ++ collectBytesFrom buf start size)))

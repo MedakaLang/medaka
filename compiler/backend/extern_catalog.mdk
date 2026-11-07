@@ -207,9 +207,9 @@ catalogRow name = omLookup name catalogIndex
 -- runtime extern or has no llvm lowering.
 export
 llvmFamily : String -> Option LlvmFamily
-llvmFamily name = match catalogRow name
-  Some r => dispositionFamily (rowLlvm r)
-  None => None
+llvmFamily name = do
+  r <- catalogRow name
+  dispositionFamily (rowLlvm r)
 
 -- Is this llvm family one a saturated call dispatches through?  The `Ref` cell,
 -- the in-place constants and the fallthrough sentinel are matched by their own
@@ -225,9 +225,9 @@ isLlvmExternFamily _ = True
 -- runtime extern or has no wasm lowering.
 export
 wasmFamily : String -> Option WasmFamily
-wasmFamily name = match catalogRow name
-  Some r => dispositionFamily (rowWasm r)
-  None => None
+wasmFamily name = do
+  r <- catalogRow name
+  dispositionFamily (rowWasm r)
 
 -- Is this wasm family one an application dispatches through?  The `Ref` cell,
 -- the in-place constants and the fallthrough sentinel are matched by their own

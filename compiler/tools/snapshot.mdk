@@ -786,10 +786,12 @@ workerLoop : String ->
   List Decl ->
   List String ->
   <IO> Unit
-workerLoop _ _ _ _ [] = ()
-workerLoop root sel runtimeDecls coreDecls (f :: rest) =
-  workerOne root sel runtimeDecls coreDecls f
-  workerLoop root sel runtimeDecls coreDecls rest
+workerLoop root sel runtimeDecls coreDecls xs0 = go xs0
+  where
+    go [] = ()
+    go (f :: rest) =
+      workerOne root sel runtimeDecls coreDecls f
+      go rest
 
 workerOne : String ->
   List String ->
@@ -957,6 +959,8 @@ chunksOf : String ->
   List String ->
   List String ->
   <IO> List Chunk
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 chunksOf _ _ _ _ [] = []
 chunksOf root outDir forceIsolate cli (f :: rest) =
   let meta = metaOf root outDir f
@@ -978,6 +982,8 @@ takeRun : String ->
   Int ->
   List String ->
   <IO> (List String, List String)
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
 takeRun _ _ _ _ _ _ [] = ([], [])
 takeRun root outDir forceIsolate cli sel n (f :: rest) =
   if n <= 0 then
@@ -1024,10 +1030,12 @@ superviseChunks : String ->
   Option String ->
   List Chunk ->
   <IO> List SnapResult
-superviseChunks _ _ _ [] = []
-superviseChunks root mode outDir ((sel, fs) :: rest) =
-  let here = runChunk root mode outDir sel fs
-  here ++ superviseChunks root mode outDir rest
+superviseChunks root mode outDir xs0 = go xs0
+  where
+    go [] = []
+    go ((sel, fs) :: rest) =
+      let here = runChunk root mode outDir sel fs
+      here ++ go rest
 
 -- Run one chunk in a child.  On a crash: bank every fixture the child COMPLETED, write
 -- the crasher's snapshot from the sections it managed to stream plus its stderr, then
@@ -1038,45 +1046,45 @@ runChunk : String ->
   List String ->
   List String ->
   <IO> List SnapResult
-runChunk _ _ _ _ [] = []
-runChunk root mode outDir sel pending =
-  match runCommand (executablePath ()) (workerArgv root sel pending)
-    Err e => map (f => (f, "ERROR spawn failed: \{e}", False)) pending
-    Ok (code, out, err) =>
-      let streamed = parseStream out
-      let done = map fixtureOf streamed
-      let banked = map (settle root mode outDir sel) streamed
-      let missing = notIn done pending
-      -- COMPLETENESS, not exit code, decides whether the worker survived.  A fixture that
-      -- calls `exit 0` kills the worker with a SUCCESS status, so `code == 0` would report
-      -- a clean run while silently dropping every fixture after it.  "Every pending fixture
-      -- reached its END" is the only claim worth trusting.
-      if isEmpty missing then
-        banked
-      else match lastBegun out
-        -- the child died: the last BEGIN with no END names the killer.
+runChunk root mode outDir sel pending0 = go pending0
+  where
+    go [] = []
+    go pending =
+      match runCommand (executablePath ()) (workerArgv root sel pending)
+        Err e => map (f => (f, "ERROR spawn failed: \{e}", False)) pending
+        Ok (code, out, err) =>
+          let streamed = parseStream out
+          let done = map fixtureOf streamed
+          let banked = map (settle root mode outDir sel) streamed
+          let missing = notIn done pending
+          -- COMPLETENESS, not exit code, decides whether the worker survived.  A fixture that
+          -- calls `exit 0` kills the worker with a SUCCESS status, so `code == 0` would report
+          -- a clean run while silently dropping every fixture after it.  "Every pending fixture
+          -- reached its END" is the only claim worth trusting.
+          if isEmpty missing then
+            banked
+          else match lastBegun out
+            -- the child died: the last BEGIN with no END names the killer.
 
-        None =>
-          banked
-            ++ map
-              (f => (
-                f,
-                "ERROR worker died with no BEGIN (exit \{intToString code})",
-                False,
-              ))
-              missing
-        Some victim =>
-          -- the victim's own snapshot = whatever it streamed before dying + its stderr.
-          -- `# CRASH` is a stderr dump, so it is diagnostic BY CONSTRUCTION — which makes
-          -- a crashing fixture's snapshot permanently unblessable.  That is intended: the
-          -- day a panic message changes, someone reads it.
-          let crashSecs =
-            streamTail out ++ [("CRASH", normalizeText root err, True)]
-          let (_, v, _) = settle root mode outDir sel (victim, crashSecs)
-          let remaining = afterFirst victim pending
-          banked
-            ++ [(victim, v, True)]
-            ++ runChunk root mode outDir sel remaining
+            None =>
+              banked
+                ++ map
+                  (f => (
+                    f,
+                    "ERROR worker died with no BEGIN (exit \{intToString code})",
+                    False,
+                  ))
+                  missing
+            Some victim =>
+              -- the victim's own snapshot = whatever it streamed before dying + its stderr.
+              -- `# CRASH` is a stderr dump, so it is diagnostic BY CONSTRUCTION — which makes
+              -- a crashing fixture's snapshot permanently unblessable.  That is intended: the
+              -- day a panic message changes, someone reads it.
+              let crashSecs =
+                streamTail out ++ [("CRASH", normalizeText root err, True)]
+              let (_, v, _) = settle root mode outDir sel (victim, crashSecs)
+              let remaining = afterFirst victim pending
+              banked ++ [(victim, v, True)] ++ go remaining
 
 workerArgv : String -> List String -> List String -> List String
 workerArgv root [] files = ["snapshot", "--worker", "--root", root] ++ files

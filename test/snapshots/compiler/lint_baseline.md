@@ -1,9 +1,10 @@
 # META
-source_lines=286
+source_lines=411
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_baseline.mdk — the per-(file, rule) finding-count baseline
--- behind `medaka lint --baseline` / `--write-baseline` (#2619).
+-- behind `medaka lint --baseline` / `--write-baseline` (#2619), and the
+-- hand-written path exemption table behind `--exempt` (last section).
 --
 -- WHY.  `.githooks/pre-commit`'s `GATED_LINT_RULES` is a MAX RATCHET: a rule may
 -- only be gated once the whole tree is at zero findings for it.  A rule whose
@@ -32,11 +33,20 @@ stages=DESUGAR,MARK
 import driver.diagnostics.{Diag(..), diagIdText, Severity(..)}
 import tools.lint.{Finding(..), applyFindingDeny}
 import support.util.{
-  contains, listLen, filterList, joinNl, startsWith, sortUniqS, reverseL
+  anyList,
+  contains,
+  listLen,
+  filterList,
+  joinNl,
+  joinWith,
+  startsWith,
+  sortUniqS,
+  reverseL,
 }
 import list.{sortOn}
+import string.{trim}
 import hash_map.{HashMap, new, setInPlace, findWithDefault}
-import toml.{Toml, parse, getString, getInt, tableCount, tableEntry}
+import toml.{Toml, parse, getArray, getString, getInt, tableCount, tableEntry}
 
 -- ── the data ────────────────────────────────────────────────────────────────
 
@@ -83,18 +93,20 @@ baselineRowsGo : Toml ->
   HashMap String (List String) ->
   List BaselineRow ->
   Result String (List BaselineRow)
-baselineRowsGo doc origin i n seen acc =
-  if i >= n then
-    Ok acc
-  else match baselineRowAt doc origin i
-    Err e => Err e
-    Ok r =>
-      let rules = findWithDefault [] r.file seen
-      if contains r.rule rules then
-        Err "\{origin}: duplicate row for '\{r.file}' / \{r.rule}"
-      else
-        setInPlace r.file (r.rule :: rules) seen
-        baselineRowsGo doc origin (i + 1) n seen (r :: acc)
+baselineRowsGo doc origin i0 n seen acc0 = go i0 acc0
+  where
+    go i acc =
+      if i >= n then
+        Ok acc
+      else match baselineRowAt doc origin i
+        Err e => Err e
+        Ok r =>
+          let rules = findWithDefault [] r.file seen
+          if contains r.rule rules then
+            Err "\{origin}: duplicate row for '\{r.file}' / \{r.rule}"
+          else
+            setInPlace r.file (r.rule :: rules) seen
+            go (i + 1) (r :: acc)
 
 baselineRowAt : Toml -> String -> Int -> Result String BaselineRow
 baselineRowAt doc origin i = match tableEntry "entry" i doc
@@ -128,10 +140,12 @@ baselineAllowed : LintBaseline -> String -> String -> Option Int
 baselineAllowed (LintBaseline rows) file rule = baselineAllowedGo rows file rule
 
 baselineAllowedGo : List BaselineRow -> String -> String -> Option Int
-baselineAllowedGo [] _ _ = None
-baselineAllowedGo (r :: rest) file rule
-  | r.file == file && r.rule == rule = Some r.count
-  | otherwise = baselineAllowedGo rest file rule
+baselineAllowedGo rows0 file rule = go rows0
+  where
+    go [] = None
+    go (r :: rest)
+      | r.file == file && r.rule == rule = Some r.count
+      | otherwise = go rest
 
 -- One entry per DISTINCT rule name in `names`, with how many times it occurs,
 -- rule-sorted.  `names` is one entry per finding, so the count is the finding
@@ -288,14 +302,126 @@ baselineFileHeader = stringConcat [
   "# for both consumers above).\n",
   "\n",
 ]
+
+-- ── the path exemption table (`--exempt`) ───────────────────────────────────
+--
+-- A hand-written table of `[[entry]]` rows `{ file, rules, reason }`: findings of
+-- `rules` in `file` are dropped before `--deny` and the count baseline see them.
+-- It exists for source whose bytes another gate pins, where neither an edit nor
+-- an inline directive is possible.  It holds the same invariant as the baseline:
+-- a row the table cannot justify (no reason, no rules, an unknown rule, a file
+-- that does not exist, a second row for one file) is an error, never a row that
+-- silently exempts nothing or everything.  `file` keys exactly as a baseline row
+-- does (`baselineKeyOf`).
+
+public export data ExemptRow = ExemptRow {
+  exemptFile : String,
+  exemptRules : List String,
+  exemptReason : String,
+}
+
+-- The rows plus the working directory their keys are relative to.
+public export data LintExempt = LintExempt String (List ExemptRow)
+
+-- The table `--exempt` was not given: it exempts nothing.
+export
+noExempt : LintExempt
+noExempt = LintExempt "" []
+
+-- Read, parse and validate an exemption table.  `known` is the registry's rule
+-- names; `cwd` anchors the row keys and the existence check.
+export
+readLintExempt : List String ->
+  String ->
+  String ->
+  <IO> Result String LintExempt
+readLintExempt known cwd path = match readFile path
+  Err msg => Err "cannot read lint exemption table '\{path}': \{msg}"
+  Ok src => do
+    rows <- parseLintExempt known path src
+    match filter (r => not (fileExists "\{cwd}/\{r.exemptFile}")) rows
+      [] => Ok (LintExempt cwd rows)
+      r :: _ => Err (exemptMissingFileErr path r.exemptFile)
+
+export
+exemptMissingFileErr : String -> String -> String
+exemptMissingFileErr origin file =
+  "\{origin}: row for '\{file}' names a file that does not exist"
+
+export
+parseLintExempt : List String ->
+  String ->
+  String ->
+  Result String (List ExemptRow)
+parseLintExempt known origin src = match parse src
+  Err e => Err "\{origin}: not valid TOML: \{e}"
+  Ok doc =>
+    map reverseL (exemptRowsGo known doc origin 0 (tableCount "entry" doc) [])
+
+exemptRowsGo : List String ->
+  Toml ->
+  String ->
+  Int ->
+  Int ->
+  List ExemptRow ->
+  Result String (List ExemptRow)
+exemptRowsGo known doc origin i0 n acc0 = go i0 acc0
+  where
+    go i acc =
+      if i >= n then
+        Ok acc
+      else match exemptRowAt known doc origin i
+        Err e => Err e
+        Ok r =>
+          if anyList (seen => seen.exemptFile == r.exemptFile) acc then
+            Err "\{origin}: duplicate row for '\{r.exemptFile}'"
+          else
+            go (i + 1) (r :: acc)
+
+exemptRowAt : List String -> Toml -> String -> Int -> Result String ExemptRow
+exemptRowAt known doc origin i = match tableEntry "entry" i doc
+  None => Err "\{origin}: [[entry]] #\{intToString i} is out of range"
+  Some e => match (getString "file" e, getArray "rules" e, getString "reason" e)
+    (Some f, Some rs, Some why) => checkExemptRow known origin i f rs why
+    (Some f, _, _) =>
+      Err
+        "\{origin}: [[entry]] #\{intToString i} ('\{f}') needs file, rules and reason"
+    _ =>
+      Err "\{origin}: [[entry]] #\{intToString i} needs file, rules and reason"
+
+checkExemptRow : List String ->
+  String ->
+  Int ->
+  String ->
+  List String ->
+  String ->
+  Result String ExemptRow
+checkExemptRow known origin i f rs why
+  | trim why == "" = Err "\{rowName}has an empty reason"
+  | isEmpty rs = Err "\{rowName}names no rules"
+  | otherwise = match filter (r => not (contains r known)) rs
+    [] => Ok ExemptRow { exemptFile = f, exemptRules = rs, exemptReason = why }
+    bad => Err "\{rowName}names unknown rule \{joinWith ", " bad}"
+  where
+    rowName = "\{origin}: [[entry]] #\{intToString i} ('\{f}') "
+
+-- The rules exempt for one lint target, by its baseline key.
+export
+exemptRulesFor : LintExempt -> String -> List String
+exemptRulesFor (LintExempt cwd rows) target =
+  let key = baselineKeyOf cwd target
+  match filter (r => r.exemptFile == key) rows
+    r :: _ => r.exemptRules
+    [] => []
 # DESUGAR
 (DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" true) (mem "diagIdText" false) (mem "Severity" true))))
 (DUse false (UseGroup ("tools" "lint") ((mem "Finding" true) (mem "applyFindingDeny" false))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "filterList" false) (mem "joinNl" false) (mem "startsWith" false) (mem "sortUniqS" false) (mem "reverseL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "listLen" false) (mem "filterList" false) (mem "joinNl" false) (mem "joinWith" false) (mem "startsWith" false) (mem "sortUniqS" false) (mem "reverseL" false))))
 (DUse false (UseGroup ("list") ((mem "sortOn" false))))
+(DUse false (UseGroup ("string") ((mem "trim" false))))
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "setInPlace" false) (mem "findWithDefault" false))))
-(DUse false (UseGroup ("toml") ((mem "Toml" false) (mem "parse" false) (mem "getString" false) (mem "getInt" false) (mem "tableCount" false) (mem "tableEntry" false))))
+(DUse false (UseGroup ("toml") ((mem "Toml" false) (mem "parse" false) (mem "getArray" false) (mem "getString" false) (mem "getInt" false) (mem "tableCount" false) (mem "tableEntry" false))))
 (DData Public "BaselineRow" () ((variant "BaselineRow" (ConNamed (field "file" (TyCon "String")) (field "rule" (TyCon "String")) (field "count" (TyCon "Int"))))) ())
 (DData Public "LintBaseline" () ((variant "LintBaseline" (ConPos (TyApp (TyCon "List") (TyCon "BaselineRow"))))) ())
 (DTypeSig true "readLintBaseline" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "LintBaseline")))))
@@ -305,7 +431,7 @@ baselineFileHeader = stringConcat [
 (DTypeSig false "parseLintBaseline" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "LintBaseline")))))
 (DFunDef false "parseLintBaseline" ((PVar "origin") (PVar "src")) (EMatch (EApp (EVar "parse") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "origin"))) (ELit (LString ": not valid TOML: "))) (EApp (EVar "$core.display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "doc")) () (EApp (EApp (EVar "map") (ELam ((PVar "rows")) (EApp (EVar "LintBaseline") (EApp (EVar "reverseL") (EVar "rows"))))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "baselineRowsGo") (EVar "doc")) (EVar "origin")) (ELit (LInt 0))) (EApp (EApp (EVar "tableCount") (ELit (LString "entry"))) (EVar "doc"))) (EApp (EVar "new") (ELit LUnit))) (EListLit))))))
 (DTypeSig false "baselineRowsGo" (TyFun (TyCon "Toml") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "BaselineRow")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "BaselineRow"))))))))))
-(DFunDef false "baselineRowsGo" ((PVar "doc") (PVar "origin") (PVar "i") (PVar "n") (PVar "seen") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EApp (EVar "Ok") (EVar "acc")) (EMatch (EApp (EApp (EApp (EVar "baselineRowAt") (EVar "doc")) (EVar "origin")) (EVar "i")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "r")) () (EBlock (DoLet false false (PVar "rules") (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EFieldAccess (EVar "r") "file")) (EVar "seen"))) (DoExpr (EIf (EApp (EApp (EVar "contains") (EFieldAccess (EVar "r") "rule")) (EVar "rules")) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "origin"))) (ELit (LString ": duplicate row for '"))) (EApp (EVar "$core.display") (EFieldAccess (EVar "r") "file"))) (ELit (LString "' / "))) (EApp (EVar "$core.display") (EFieldAccess (EVar "r") "rule"))) (ELit (LString "")))) (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EFieldAccess (EVar "r") "file")) (EBinOp "::" (EFieldAccess (EVar "r") "rule") (EVar "rules"))) (EVar "seen"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "baselineRowsGo") (EVar "doc")) (EVar "origin")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EVar "seen")) (EBinOp "::" (EVar "r") (EVar "acc"))))))))))))
+(DFunDef false "baselineRowsGo" ((PVar "doc") (PVar "origin") (PVar "i0") (PVar "n") (PVar "seen") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EApp (EVar "Ok") (EVar "acc")) (EMatch (EApp (EApp (EApp (EVar "baselineRowAt") (EVar "doc")) (EVar "origin")) (EVar "i")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "r")) () (EBlock (DoLet false false (PVar "rules") (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EFieldAccess (EVar "r") "file")) (EVar "seen"))) (DoExpr (EIf (EApp (EApp (EVar "contains") (EFieldAccess (EVar "r") "rule")) (EVar "rules")) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "origin"))) (ELit (LString ": duplicate row for '"))) (EApp (EVar "$core.display") (EFieldAccess (EVar "r") "file"))) (ELit (LString "' / "))) (EApp (EVar "$core.display") (EFieldAccess (EVar "r") "rule"))) (ELit (LString "")))) (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EFieldAccess (EVar "r") "file")) (EBinOp "::" (EFieldAccess (EVar "r") "rule") (EVar "rules"))) (EVar "seen"))) (DoExpr (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "::" (EVar "r") (EVar "acc")))))))))))))) (EApp (EApp (EVar "go") (EVar "i0")) (EVar "acc0"))))
 (DTypeSig false "baselineRowAt" (TyFun (TyCon "Toml") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "BaselineRow"))))))
 (DFunDef false "baselineRowAt" ((PVar "doc") (PVar "origin") (PVar "i")) (EMatch (EApp (EApp (EApp (EVar "tableEntry") (ELit (LString "entry"))) (EVar "i")) (EVar "doc")) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "origin"))) (ELit (LString ": [[entry]] #"))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " is out of range"))))) (arm (PCon "Some" (PVar "e")) () (EMatch (ETuple (EApp (EApp (EVar "getString") (ELit (LString "file"))) (EVar "e")) (EApp (EApp (EVar "getString") (ELit (LString "rule"))) (EVar "e")) (EApp (EApp (EVar "getInt") (ELit (LString "count"))) (EVar "e"))) (arm (PTuple (PCon "Some" (PVar "f")) (PCon "Some" (PVar "r")) (PCon "Some" (PVar "c"))) () (EIf (EBinOp "<" (EVar "c") (ELit (LInt 0))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "origin"))) (ELit (LString ": [[entry]] #"))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " has a negative count")))) (EApp (EVar "Ok") (ERecordCreate "BaselineRow" ((fa "file" (EVar "f")) (fa "rule" (EVar "r")) (fa "count" (EVar "c"))))))) (arm PWild () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "origin"))) (ELit (LString ": [[entry]] #"))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " needs file, rule and count")))))))))
 (DTypeSig true "baselineKeyOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
@@ -313,8 +439,7 @@ baselineFileHeader = stringConcat [
 (DTypeSig false "baselineAllowed" (TyFun (TyCon "LintBaseline") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int"))))))
 (DFunDef false "baselineAllowed" ((PCon "LintBaseline" (PVar "rows")) (PVar "file") (PVar "rule")) (EApp (EApp (EApp (EVar "baselineAllowedGo") (EVar "rows")) (EVar "file")) (EVar "rule")))
 (DTypeSig false "baselineAllowedGo" (TyFun (TyApp (TyCon "List") (TyCon "BaselineRow")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int"))))))
-(DFunDef false "baselineAllowedGo" ((PList) PWild PWild) (EVar "None"))
-(DFunDef false "baselineAllowedGo" ((PCons (PVar "r") (PVar "rest")) (PVar "file") (PVar "rule")) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "r") "file") (EVar "file")) (EBinOp "==" (EFieldAccess (EVar "r") "rule") (EVar "rule"))) (EApp (EVar "Some") (EFieldAccess (EVar "r") "count")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "baselineAllowedGo") (EVar "rest")) (EVar "file")) (EVar "rule")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "baselineAllowedGo" ((PVar "rows0") (PVar "file") (PVar "rule")) (ELetGroup ((lgb "go" (clause ((PList)) (EVar "None")) (clause ((PCons (PVar "r") (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "r") "file") (EVar "file")) (EBinOp "==" (EFieldAccess (EVar "r") "rule") (EVar "rule"))) (EApp (EVar "Some") (EFieldAccess (EVar "r") "count")) (EIf (EVar "otherwise") (EApp (EVar "go") (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EVar "go") (EVar "rows0"))))
 (DTypeSig true "ruleCounts" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))
 (DFunDef false "ruleCounts" ((PVar "names")) (EApp (EApp (EVar "map") (ELam ((PVar "r")) (ETuple (EVar "r") (EApp (EApp (EVar "occurrencesOf") (EVar "r")) (EVar "names"))))) (EApp (EVar "sortUniqS") (EVar "names"))))
 (DTypeSig false "occurrencesOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Int"))))
@@ -361,14 +486,33 @@ baselineFileHeader = stringConcat [
 (DFunDef false "renderBaselineRow" ((PVar "r")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "[[entry]]\nfile = \"")) (EApp (EVar "$core.display") (EFieldAccess (EVar "r") "file"))) (ELit (LString "\"\nrule = \""))) (EApp (EVar "$core.display") (EFieldAccess (EVar "r") "rule"))) (ELit (LString "\"\ncount = "))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EFieldAccess (EVar "r") "count")))) (ELit (LString "\n"))))
 (DTypeSig false "baselineFileHeader" (TyCon "String"))
 (DFunDef false "baselineFileHeader" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "# lint finding-count baseline — GENERATED, never hand-edited (#2619).\n")) (ELit (LString "#\n")) (ELit (LString "# One [[entry]] per (file, rule) with at least one finding: the number of\n")) (ELit (LString "# findings that file is currently ALLOWED for that rule.  A file may drop\n")) (ELit (LString "# below its count freely; exceeding it is an error, and so is having\n")) (ELit (LString "# findings for a rule with no row here at all.\n")) (ELit (LString "#\n")) (ELit (LString "# Enforced by .githooks/pre-commit (every baselined rule the registry lists, per staged file)\n")) (ELit (LString "# and by test/diff_compiler_lint_baseline.sh (whole tree, so --no-verify\n")) (ELit (LString "# cannot smuggle an increase past the hook).\n")) (ELit (LString "#\n")) (ELit (LString "# Regenerate from the repo root, never by hand:\n")) (ELit (LString "#\n")) (ELit (LString "#   sh test/diff_compiler_lint_baseline.sh --write\n")) (ELit (LString "#\n")) (ELit (LString "# Paths are relative to the directory `medaka lint` runs in (the repo root\n")) (ELit (LString "# for both consumers above).\n")) (ELit (LString "\n")))))
+(DData Public "ExemptRow" () ((variant "ExemptRow" (ConNamed (field "exemptFile" (TyCon "String")) (field "exemptRules" (TyApp (TyCon "List") (TyCon "String"))) (field "exemptReason" (TyCon "String"))))) ())
+(DData Public "LintExempt" () ((variant "LintExempt" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "ExemptRow"))))) ())
+(DTypeSig true "noExempt" (TyCon "LintExempt"))
+(DFunDef false "noExempt" () (EApp (EApp (EVar "LintExempt") (ELit (LString ""))) (EListLit)))
+(DTypeSig true "readLintExempt" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "LintExempt")))))))
+(DFunDef false "readLintExempt" ((PVar "known") (PVar "cwd") (PVar "path")) (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "cannot read lint exemption table '")) (EApp (EVar "$core.display") (EVar "path"))) (ELit (LString "': "))) (EApp (EVar "$core.display") (EVar "msg"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "src")) () (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EVar "parseLintExempt") (EVar "known")) (EVar "path")) (EVar "src"))) (ELam ((PVar "rows")) (EMatch (EApp (EApp (EVar "filter") (ELam ((PVar "r")) (EApp (EVar "not") (EApp (EVar "fileExists") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "cwd"))) (ELit (LString "/"))) (EApp (EVar "$core.display") (EFieldAccess (EVar "r") "exemptFile"))) (ELit (LString ""))))))) (EVar "rows")) (arm (PList) () (EApp (EVar "Ok") (EApp (EApp (EVar "LintExempt") (EVar "cwd")) (EVar "rows")))) (arm (PCons (PVar "r") PWild) () (EApp (EVar "Err") (EApp (EApp (EVar "exemptMissingFileErr") (EVar "path")) (EFieldAccess (EVar "r") "exemptFile"))))))))))
+(DTypeSig true "exemptMissingFileErr" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "exemptMissingFileErr" ((PVar "origin") (PVar "file")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "origin"))) (ELit (LString ": row for '"))) (EApp (EVar "$core.display") (EVar "file"))) (ELit (LString "' names a file that does not exist"))))
+(DTypeSig true "parseLintExempt" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "ExemptRow")))))))
+(DFunDef false "parseLintExempt" ((PVar "known") (PVar "origin") (PVar "src")) (EMatch (EApp (EVar "parse") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "origin"))) (ELit (LString ": not valid TOML: "))) (EApp (EVar "$core.display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "doc")) () (EApp (EApp (EVar "map") (EVar "reverseL")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "exemptRowsGo") (EVar "known")) (EVar "doc")) (EVar "origin")) (ELit (LInt 0))) (EApp (EApp (EVar "tableCount") (ELit (LString "entry"))) (EVar "doc"))) (EListLit))))))
+(DTypeSig false "exemptRowsGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Toml") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "ExemptRow")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "ExemptRow"))))))))))
+(DFunDef false "exemptRowsGo" ((PVar "known") (PVar "doc") (PVar "origin") (PVar "i0") (PVar "n") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EApp (EVar "Ok") (EVar "acc")) (EMatch (EApp (EApp (EApp (EApp (EVar "exemptRowAt") (EVar "known")) (EVar "doc")) (EVar "origin")) (EVar "i")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "r")) () (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "seen")) (EBinOp "==" (EFieldAccess (EVar "seen") "exemptFile") (EFieldAccess (EVar "r") "exemptFile")))) (EVar "acc")) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "origin"))) (ELit (LString ": duplicate row for '"))) (EApp (EVar "$core.display") (EFieldAccess (EVar "r") "exemptFile"))) (ELit (LString "'")))) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "::" (EVar "r") (EVar "acc")))))))))) (EApp (EApp (EVar "go") (EVar "i0")) (EVar "acc0"))))
+(DTypeSig false "exemptRowAt" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Toml") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "ExemptRow")))))))
+(DFunDef false "exemptRowAt" ((PVar "known") (PVar "doc") (PVar "origin") (PVar "i")) (EMatch (EApp (EApp (EApp (EVar "tableEntry") (ELit (LString "entry"))) (EVar "i")) (EVar "doc")) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "origin"))) (ELit (LString ": [[entry]] #"))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " is out of range"))))) (arm (PCon "Some" (PVar "e")) () (EMatch (ETuple (EApp (EApp (EVar "getString") (ELit (LString "file"))) (EVar "e")) (EApp (EApp (EVar "getArray") (ELit (LString "rules"))) (EVar "e")) (EApp (EApp (EVar "getString") (ELit (LString "reason"))) (EVar "e"))) (arm (PTuple (PCon "Some" (PVar "f")) (PCon "Some" (PVar "rs")) (PCon "Some" (PVar "why"))) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkExemptRow") (EVar "known")) (EVar "origin")) (EVar "i")) (EVar "f")) (EVar "rs")) (EVar "why"))) (arm (PTuple (PCon "Some" (PVar "f")) PWild PWild) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "origin"))) (ELit (LString ": [[entry]] #"))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " ('"))) (EApp (EVar "$core.display") (EVar "f"))) (ELit (LString "') needs file, rules and reason"))))) (arm PWild () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "origin"))) (ELit (LString ": [[entry]] #"))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " needs file, rules and reason")))))))))
+(DTypeSig false "checkExemptRow" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "ExemptRow")))))))))
+(DFunDef false "checkExemptRow" ((PVar "known") (PVar "origin") (PVar "i") (PVar "f") (PVar "rs") (PVar "why")) (ELetGroup ((lgb "rowName" (clause () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "origin"))) (ELit (LString ": [[entry]] #"))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " ('"))) (EApp (EVar "$core.display") (EVar "f"))) (ELit (LString "') ")))))) (EIf (EBinOp "==" (EApp (EVar "trim") (EVar "why")) (ELit (LString ""))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "rowName"))) (ELit (LString "has an empty reason")))) (EIf (EApp (EVar "isEmpty") (EVar "rs")) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "rowName"))) (ELit (LString "names no rules")))) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "filter") (ELam ((PVar "r")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "r")) (EVar "known"))))) (EVar "rs")) (arm (PList) () (EApp (EVar "Ok") (ERecordCreate "ExemptRow" ((fa "exemptFile" (EVar "f")) (fa "exemptRules" (EVar "rs")) (fa "exemptReason" (EVar "why")))))) (arm (PVar "bad") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "rowName"))) (ELit (LString "names unknown rule "))) (EApp (EVar "$core.display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "bad")))) (ELit (LString "")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DTypeSig true "exemptRulesFor" (TyFun (TyCon "LintExempt") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "exemptRulesFor" ((PCon "LintExempt" (PVar "cwd") (PVar "rows")) (PVar "target")) (EBlock (DoLet false false (PVar "key") (EApp (EApp (EVar "baselineKeyOf") (EVar "cwd")) (EVar "target"))) (DoExpr (EMatch (EApp (EApp (EVar "filter") (ELam ((PVar "r")) (EBinOp "==" (EFieldAccess (EVar "r") "exemptFile") (EVar "key")))) (EVar "rows")) (arm (PCons (PVar "r") PWild) () (EFieldAccess (EVar "r") "exemptRules")) (arm (PList) () (EListLit))))))
 # MARK
 (DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" true) (mem "diagIdText" false) (mem "Severity" true))))
 (DUse false (UseGroup ("tools" "lint") ((mem "Finding" true) (mem "applyFindingDeny" false))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "filterList" false) (mem "joinNl" false) (mem "startsWith" false) (mem "sortUniqS" false) (mem "reverseL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "contains" false) (mem "listLen" false) (mem "filterList" false) (mem "joinNl" false) (mem "joinWith" false) (mem "startsWith" false) (mem "sortUniqS" false) (mem "reverseL" false))))
 (DUse false (UseGroup ("list") ((mem "sortOn" false))))
+(DUse false (UseGroup ("string") ((mem "trim" false))))
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "setInPlace" false) (mem "findWithDefault" false))))
-(DUse false (UseGroup ("toml") ((mem "Toml" false) (mem "parse" false) (mem "getString" false) (mem "getInt" false) (mem "tableCount" false) (mem "tableEntry" false))))
+(DUse false (UseGroup ("toml") ((mem "Toml" false) (mem "parse" false) (mem "getArray" false) (mem "getString" false) (mem "getInt" false) (mem "tableCount" false) (mem "tableEntry" false))))
 (DData Public "BaselineRow" () ((variant "BaselineRow" (ConNamed (field "file" (TyCon "String")) (field "rule" (TyCon "String")) (field "count" (TyCon "Int"))))) ())
 (DData Public "LintBaseline" () ((variant "LintBaseline" (ConPos (TyApp (TyCon "List") (TyCon "BaselineRow"))))) ())
 (DTypeSig true "readLintBaseline" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "LintBaseline")))))
@@ -378,7 +522,7 @@ baselineFileHeader = stringConcat [
 (DTypeSig false "parseLintBaseline" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "LintBaseline")))))
 (DFunDef false "parseLintBaseline" ((PVar "origin") (PVar "src")) (EMatch (EApp (EVar "parse") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "origin"))) (ELit (LString ": not valid TOML: "))) (EApp (EVar "$core.display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "doc")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "rows")) (EApp (EVar "LintBaseline") (EApp (EVar "reverseL") (EVar "rows"))))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "baselineRowsGo") (EVar "doc")) (EVar "origin")) (ELit (LInt 0))) (EApp (EApp (EVar "tableCount") (ELit (LString "entry"))) (EVar "doc"))) (EApp (EVar "new") (ELit LUnit))) (EListLit))))))
 (DTypeSig false "baselineRowsGo" (TyFun (TyCon "Toml") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "BaselineRow")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "BaselineRow"))))))))))
-(DFunDef false "baselineRowsGo" ((PVar "doc") (PVar "origin") (PVar "i") (PVar "n") (PVar "seen") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EApp (EVar "Ok") (EVar "acc")) (EMatch (EApp (EApp (EApp (EVar "baselineRowAt") (EVar "doc")) (EVar "origin")) (EVar "i")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "r")) () (EBlock (DoLet false false (PVar "rules") (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EFieldAccess (EVar "r") "file")) (EVar "seen"))) (DoExpr (EIf (EApp (EApp (EVar "contains") (EFieldAccess (EVar "r") "rule")) (EVar "rules")) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "origin"))) (ELit (LString ": duplicate row for '"))) (EApp (EVar "$core.display") (EFieldAccess (EVar "r") "file"))) (ELit (LString "' / "))) (EApp (EVar "$core.display") (EFieldAccess (EVar "r") "rule"))) (ELit (LString "")))) (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EFieldAccess (EVar "r") "file")) (EBinOp "::" (EFieldAccess (EVar "r") "rule") (EVar "rules"))) (EVar "seen"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "baselineRowsGo") (EVar "doc")) (EVar "origin")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EVar "seen")) (EBinOp "::" (EVar "r") (EVar "acc"))))))))))))
+(DFunDef false "baselineRowsGo" ((PVar "doc") (PVar "origin") (PVar "i0") (PVar "n") (PVar "seen") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EApp (EVar "Ok") (EVar "acc")) (EMatch (EApp (EApp (EApp (EVar "baselineRowAt") (EVar "doc")) (EVar "origin")) (EVar "i")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "r")) () (EBlock (DoLet false false (PVar "rules") (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EFieldAccess (EVar "r") "file")) (EVar "seen"))) (DoExpr (EIf (EApp (EApp (EVar "contains") (EFieldAccess (EVar "r") "rule")) (EVar "rules")) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "origin"))) (ELit (LString ": duplicate row for '"))) (EApp (EVar "$core.display") (EFieldAccess (EVar "r") "file"))) (ELit (LString "' / "))) (EApp (EVar "$core.display") (EFieldAccess (EVar "r") "rule"))) (ELit (LString "")))) (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EFieldAccess (EVar "r") "file")) (EBinOp "::" (EFieldAccess (EVar "r") "rule") (EVar "rules"))) (EVar "seen"))) (DoExpr (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "::" (EVar "r") (EVar "acc")))))))))))))) (EApp (EApp (EVar "go") (EVar "i0")) (EVar "acc0"))))
 (DTypeSig false "baselineRowAt" (TyFun (TyCon "Toml") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "BaselineRow"))))))
 (DFunDef false "baselineRowAt" ((PVar "doc") (PVar "origin") (PVar "i")) (EMatch (EApp (EApp (EApp (EVar "tableEntry") (ELit (LString "entry"))) (EVar "i")) (EVar "doc")) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "origin"))) (ELit (LString ": [[entry]] #"))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " is out of range"))))) (arm (PCon "Some" (PVar "e")) () (EMatch (ETuple (EApp (EApp (EVar "getString") (ELit (LString "file"))) (EVar "e")) (EApp (EApp (EVar "getString") (ELit (LString "rule"))) (EVar "e")) (EApp (EApp (EVar "getInt") (ELit (LString "count"))) (EVar "e"))) (arm (PTuple (PCon "Some" (PVar "f")) (PCon "Some" (PVar "r")) (PCon "Some" (PVar "c"))) () (EIf (EBinOp "<" (EVar "c") (ELit (LInt 0))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "origin"))) (ELit (LString ": [[entry]] #"))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " has a negative count")))) (EApp (EVar "Ok") (ERecordCreate "BaselineRow" ((fa "file" (EVar "f")) (fa "rule" (EVar "r")) (fa "count" (EVar "c"))))))) (arm PWild () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "origin"))) (ELit (LString ": [[entry]] #"))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " needs file, rule and count")))))))))
 (DTypeSig true "baselineKeyOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
@@ -386,8 +530,7 @@ baselineFileHeader = stringConcat [
 (DTypeSig false "baselineAllowed" (TyFun (TyCon "LintBaseline") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int"))))))
 (DFunDef false "baselineAllowed" ((PCon "LintBaseline" (PVar "rows")) (PVar "file") (PVar "rule")) (EApp (EApp (EApp (EVar "baselineAllowedGo") (EVar "rows")) (EVar "file")) (EVar "rule")))
 (DTypeSig false "baselineAllowedGo" (TyFun (TyApp (TyCon "List") (TyCon "BaselineRow")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int"))))))
-(DFunDef false "baselineAllowedGo" ((PList) PWild PWild) (EVar "None"))
-(DFunDef false "baselineAllowedGo" ((PCons (PVar "r") (PVar "rest")) (PVar "file") (PVar "rule")) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "r") "file") (EVar "file")) (EBinOp "==" (EFieldAccess (EVar "r") "rule") (EVar "rule"))) (EApp (EVar "Some") (EFieldAccess (EVar "r") "count")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "baselineAllowedGo") (EVar "rest")) (EVar "file")) (EVar "rule")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "baselineAllowedGo" ((PVar "rows0") (PVar "file") (PVar "rule")) (ELetGroup ((lgb "go" (clause ((PList)) (EVar "None")) (clause ((PCons (PVar "r") (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "r") "file") (EVar "file")) (EBinOp "==" (EFieldAccess (EVar "r") "rule") (EVar "rule"))) (EApp (EVar "Some") (EFieldAccess (EVar "r") "count")) (EIf (EVar "otherwise") (EApp (EVar "go") (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EVar "go") (EVar "rows0"))))
 (DTypeSig true "ruleCounts" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))
 (DFunDef false "ruleCounts" ((PVar "names")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "r")) (ETuple (EVar "r") (EApp (EApp (EVar "occurrencesOf") (EVar "r")) (EVar "names"))))) (EApp (EVar "sortUniqS") (EVar "names"))))
 (DTypeSig false "occurrencesOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Int"))))
@@ -434,3 +577,21 @@ baselineFileHeader = stringConcat [
 (DFunDef false "renderBaselineRow" ((PVar "r")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "[[entry]]\nfile = \"")) (EApp (EVar "$core.display") (EFieldAccess (EVar "r") "file"))) (ELit (LString "\"\nrule = \""))) (EApp (EVar "$core.display") (EFieldAccess (EVar "r") "rule"))) (ELit (LString "\"\ncount = "))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EFieldAccess (EVar "r") "count")))) (ELit (LString "\n"))))
 (DTypeSig false "baselineFileHeader" (TyCon "String"))
 (DFunDef false "baselineFileHeader" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "# lint finding-count baseline — GENERATED, never hand-edited (#2619).\n")) (ELit (LString "#\n")) (ELit (LString "# One [[entry]] per (file, rule) with at least one finding: the number of\n")) (ELit (LString "# findings that file is currently ALLOWED for that rule.  A file may drop\n")) (ELit (LString "# below its count freely; exceeding it is an error, and so is having\n")) (ELit (LString "# findings for a rule with no row here at all.\n")) (ELit (LString "#\n")) (ELit (LString "# Enforced by .githooks/pre-commit (every baselined rule the registry lists, per staged file)\n")) (ELit (LString "# and by test/diff_compiler_lint_baseline.sh (whole tree, so --no-verify\n")) (ELit (LString "# cannot smuggle an increase past the hook).\n")) (ELit (LString "#\n")) (ELit (LString "# Regenerate from the repo root, never by hand:\n")) (ELit (LString "#\n")) (ELit (LString "#   sh test/diff_compiler_lint_baseline.sh --write\n")) (ELit (LString "#\n")) (ELit (LString "# Paths are relative to the directory `medaka lint` runs in (the repo root\n")) (ELit (LString "# for both consumers above).\n")) (ELit (LString "\n")))))
+(DData Public "ExemptRow" () ((variant "ExemptRow" (ConNamed (field "exemptFile" (TyCon "String")) (field "exemptRules" (TyApp (TyCon "List") (TyCon "String"))) (field "exemptReason" (TyCon "String"))))) ())
+(DData Public "LintExempt" () ((variant "LintExempt" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "ExemptRow"))))) ())
+(DTypeSig true "noExempt" (TyCon "LintExempt"))
+(DFunDef false "noExempt" () (EApp (EApp (EVar "LintExempt") (ELit (LString ""))) (EListLit)))
+(DTypeSig true "readLintExempt" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "LintExempt")))))))
+(DFunDef false "readLintExempt" ((PVar "known") (PVar "cwd") (PVar "path")) (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "cannot read lint exemption table '")) (EApp (EVar "$core.display") (EVar "path"))) (ELit (LString "': "))) (EApp (EVar "$core.display") (EVar "msg"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "src")) () (EApp (EApp (EVar "$core.andThen") (EApp (EApp (EApp (EVar "parseLintExempt") (EVar "known")) (EVar "path")) (EVar "src"))) (ELam ((PVar "rows")) (EMatch (EApp (EApp (EMethodRef "filter") (ELam ((PVar "r")) (EApp (EVar "not") (EApp (EVar "fileExists") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "cwd"))) (ELit (LString "/"))) (EApp (EVar "$core.display") (EFieldAccess (EVar "r") "exemptFile"))) (ELit (LString ""))))))) (EVar "rows")) (arm (PList) () (EApp (EVar "Ok") (EApp (EApp (EVar "LintExempt") (EVar "cwd")) (EVar "rows")))) (arm (PCons (PVar "r") PWild) () (EApp (EVar "Err") (EApp (EApp (EVar "exemptMissingFileErr") (EVar "path")) (EFieldAccess (EVar "r") "exemptFile"))))))))))
+(DTypeSig true "exemptMissingFileErr" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "exemptMissingFileErr" ((PVar "origin") (PVar "file")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "origin"))) (ELit (LString ": row for '"))) (EApp (EVar "$core.display") (EVar "file"))) (ELit (LString "' names a file that does not exist"))))
+(DTypeSig true "parseLintExempt" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "ExemptRow")))))))
+(DFunDef false "parseLintExempt" ((PVar "known") (PVar "origin") (PVar "src")) (EMatch (EApp (EVar "parse") (EVar "src")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "origin"))) (ELit (LString ": not valid TOML: "))) (EApp (EVar "$core.display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "doc")) () (EApp (EApp (EMethodRef "map") (EVar "reverseL")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "exemptRowsGo") (EVar "known")) (EVar "doc")) (EVar "origin")) (ELit (LInt 0))) (EApp (EApp (EVar "tableCount") (ELit (LString "entry"))) (EVar "doc"))) (EListLit))))))
+(DTypeSig false "exemptRowsGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Toml") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "ExemptRow")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "ExemptRow"))))))))))
+(DFunDef false "exemptRowsGo" ((PVar "known") (PVar "doc") (PVar "origin") (PVar "i0") (PVar "n") (PVar "acc0")) (ELetGroup ((lgb "go" (clause ((PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EApp (EVar "Ok") (EVar "acc")) (EMatch (EApp (EApp (EApp (EApp (EVar "exemptRowAt") (EVar "known")) (EVar "doc")) (EVar "origin")) (EVar "i")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "r")) () (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "seen")) (EBinOp "==" (EFieldAccess (EVar "seen") "exemptFile") (EFieldAccess (EVar "r") "exemptFile")))) (EVar "acc")) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "origin"))) (ELit (LString ": duplicate row for '"))) (EApp (EVar "$core.display") (EFieldAccess (EVar "r") "exemptFile"))) (ELit (LString "'")))) (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "::" (EVar "r") (EVar "acc")))))))))) (EApp (EApp (EVar "go") (EVar "i0")) (EVar "acc0"))))
+(DTypeSig false "exemptRowAt" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Toml") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "ExemptRow")))))))
+(DFunDef false "exemptRowAt" ((PVar "known") (PVar "doc") (PVar "origin") (PVar "i")) (EMatch (EApp (EApp (EApp (EVar "tableEntry") (ELit (LString "entry"))) (EVar "i")) (EVar "doc")) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "origin"))) (ELit (LString ": [[entry]] #"))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " is out of range"))))) (arm (PCon "Some" (PVar "e")) () (EMatch (ETuple (EApp (EApp (EVar "getString") (ELit (LString "file"))) (EVar "e")) (EApp (EApp (EVar "getArray") (ELit (LString "rules"))) (EVar "e")) (EApp (EApp (EVar "getString") (ELit (LString "reason"))) (EVar "e"))) (arm (PTuple (PCon "Some" (PVar "f")) (PCon "Some" (PVar "rs")) (PCon "Some" (PVar "why"))) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkExemptRow") (EVar "known")) (EVar "origin")) (EVar "i")) (EVar "f")) (EVar "rs")) (EVar "why"))) (arm (PTuple (PCon "Some" (PVar "f")) PWild PWild) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "origin"))) (ELit (LString ": [[entry]] #"))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " ('"))) (EApp (EVar "$core.display") (EVar "f"))) (ELit (LString "') needs file, rules and reason"))))) (arm PWild () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "origin"))) (ELit (LString ": [[entry]] #"))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " needs file, rules and reason")))))))))
+(DTypeSig false "checkExemptRow" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "ExemptRow")))))))))
+(DFunDef false "checkExemptRow" ((PVar "known") (PVar "origin") (PVar "i") (PVar "f") (PVar "rs") (PVar "why")) (ELetGroup ((lgb "rowName" (clause () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "origin"))) (ELit (LString ": [[entry]] #"))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " ('"))) (EApp (EVar "$core.display") (EVar "f"))) (ELit (LString "') ")))))) (EIf (EBinOp "==" (EApp (EVar "trim") (EVar "why")) (ELit (LString ""))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "rowName"))) (ELit (LString "has an empty reason")))) (EIf (EApp (EMethodRef "isEmpty") (EVar "rs")) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "rowName"))) (ELit (LString "names no rules")))) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EMethodRef "filter") (ELam ((PVar "r")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "r")) (EVar "known"))))) (EVar "rs")) (arm (PList) () (EApp (EVar "Ok") (ERecordCreate "ExemptRow" ((fa "exemptFile" (EVar "f")) (fa "exemptRules" (EVar "rs")) (fa "exemptReason" (EVar "why")))))) (arm (PVar "bad") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "rowName"))) (ELit (LString "names unknown rule "))) (EApp (EVar "$core.display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "bad")))) (ELit (LString "")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DTypeSig true "exemptRulesFor" (TyFun (TyCon "LintExempt") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "exemptRulesFor" ((PCon "LintExempt" (PVar "cwd") (PVar "rows")) (PVar "target")) (EBlock (DoLet false false (PVar "key") (EApp (EApp (EVar "baselineKeyOf") (EVar "cwd")) (EVar "target"))) (DoExpr (EMatch (EApp (EApp (EMethodRef "filter") (ELam ((PVar "r")) (EBinOp "==" (EFieldAccess (EVar "r") "exemptFile") (EVar "key")))) (EVar "rows")) (arm (PCons (PVar "r") PWild) () (EFieldAccess (EVar "r") "exemptRules")) (arm (PList) () (EListLit))))))

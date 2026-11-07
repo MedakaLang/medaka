@@ -79,10 +79,12 @@ declPosChildLocs : DeclPos -> List (Option Loc)
 declPosChildLocs (DeclPos _ _ _ cs) = cs
 
 lastContentIdx : Array Token -> Int -> Int -> Int
-lastContentIdx toks s i
-  | i < s = s
-  | isNoiseTok (arrayGetUnsafe i toks) = lastContentIdx toks s (i - 1)
-  | otherwise = i
+lastContentIdx toks s i0 = go i0
+  where
+    go i
+      | i < s = s
+      | isNoiseTok (arrayGetUnsafe i toks) = go (i - 1)
+      | otherwise = i
 lineAt : Array Int -> Int -> Int
 lineAt lines i
   | i < arrayLength lines = arrayGetUnsafe i lines
@@ -226,6 +228,8 @@ zipVariantIdxs : Array Token ->
   List Variant ->
   List Int ->
   List (Option Int)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 zipVariantIdxs _ _ [] _ = []
 zipVariantIdxs toks e ((Variant _ (ConNamed fs True)) :: vs) (b :: bs) =
   zipFieldIdxs fs (fieldNameIdxsIn toks (b + 1) e)
@@ -269,15 +273,18 @@ methodNameIdxs toks s e = match findWhereIdx toks s e
       []
 
 findWhereIdx : Array Token -> Int -> Int -> Option Int
-findWhereIdx toks i e
-  | i >= e = None
-  | isWhereTok (arrayGetUnsafe i toks) = Some i
-  | otherwise = findWhereIdx toks (i + 1) e
+findWhereIdx toks i0 e = go i0
+  where
+    go i
+      | i >= e = None
+      | isWhereTok (arrayGetUnsafe i toks) = Some i
+      | otherwise = go (i + 1)
 skipNewlineToks : Array Token -> Int -> Int -> Int
-skipNewlineToks toks i e
-  | i < e && isNewlineTok (arrayGetUnsafe i toks) =
-    skipNewlineToks toks (i + 1) e
-  | otherwise = i
+skipNewlineToks toks i0 e = go i0
+  where
+    go i
+      | i < e && isNewlineTok (arrayGetUnsafe i toks) = go (i + 1)
+      | otherwise = i
 
 methodNameGo : Array Token -> Int -> Int -> Int -> Bool -> List (Option Int)
 methodNameGo toks i e depth atStart
@@ -355,19 +362,22 @@ variantStartsAt toks lines i e depth seenEq t
     lineAt lines (i + 1) :: variantStartsGo toks lines (i + 1) e depth seenEq
   | otherwise = variantStartsGo toks lines (i + 1) e depth seenEq
 nextSigIsPipe : Array Token -> Int -> Int -> Bool
-nextSigIsPipe toks e j
-  | j >= e = False
-  | isLayoutTok (arrayGetUnsafe j toks) = nextSigIsPipe toks e (j + 1)
-  | otherwise = isPipeTok (arrayGetUnsafe j toks)
+nextSigIsPipe toks e j0 = go j0
+  where
+    go j
+      | j >= e = False
+      | isLayoutTok (arrayGetUnsafe j toks) = go (j + 1)
+      | otherwise = isPipeTok (arrayGetUnsafe j toks)
 isDataDecl : Decl -> Bool
 isDataDecl (DData { dataOrigin = _ }) = True
 isDataDecl _ = False
 allVariantLines : Array Token -> Array Int -> List (Decl, Int, Int) -> List Int
-allVariantLines _toks _lines [] = []
-allVariantLines toks lines ((d, s, e) :: rest)
-  | isDataDecl d =
-    variantStartsIn toks lines s e ++ allVariantLines toks lines rest
-  | otherwise = allVariantLines toks lines rest
+allVariantLines toks lines xs0 = go xs0
+  where
+    go [] = []
+    go ((d, s, e) :: rest)
+      | isDataDecl d = variantStartsIn toks lines s e ++ go rest
+      | otherwise = go rest
 isContinuationOpStr : String -> Bool
 isContinuationOpStr op =
   op == "|>"
@@ -395,11 +405,15 @@ bodyChainTopOp (EBinOp op _ _ _) =
   if isContinuationOpStr op then Some op else None
 bodyChainTopOp _ = None
 firstContentAt : Array Token -> Int -> Int -> Int
-firstContentAt toks i e
-  | i >= e = e
-  | isNoiseTok (arrayGetUnsafe i toks) = firstContentAt toks (i + 1) e
-  | otherwise = i
+firstContentAt toks i0 e = go i0
+  where
+    go i
+      | i >= e = e
+      | isNoiseTok (arrayGetUnsafe i toks) = go (i + 1)
+      | otherwise = i
 rhsStartIdx : Array Token -> Int -> Int -> Int -> Int
+-- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds).
+-- lint-disable-next-line rule-threaded-invariant
 rhsStartIdx toks i e depth
   | i >= e = e
   | isOpenDelim (arrayGetUnsafe i toks) = rhsStartIdx toks (i + 1) e (depth + 1)
@@ -450,10 +464,12 @@ bodyIsBlock (EBlock _) = True
 bodyIsBlock (EDo _ _) = True
 bodyIsBlock _ = False
 firstIndentIdx : Array Token -> Int -> Int -> Int
-firstIndentIdx toks i e
-  | i >= e = e
-  | isIndentTok (arrayGetUnsafe i toks) = i + 1
-  | otherwise = firstIndentIdx toks (i + 1) e
+firstIndentIdx toks i0 e = go i0
+  where
+    go i
+      | i >= e = e
+      | isIndentTok (arrayGetUnsafe i toks) = i + 1
+      | otherwise = go (i + 1)
 
 blockStmtLines : Array Token -> Array Int -> Int -> Int -> List Int
 blockStmtLines toks lines rs e =
@@ -492,6 +508,8 @@ allChainLines : Array Token ->
   Array Int ->
   List (Decl, Int, Int) ->
   List (List Int)
+-- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
+-- lint-disable-next-line rule-threaded-invariant
 allChainLines _toks _lines [] = []
 allChainLines toks lines ((d, s, e) :: rest) =
   declChainLines toks lines d s e :: allChainLines toks lines rest
@@ -503,13 +521,11 @@ lastContentLineGo : Array Token ->
   List (Decl, Int, Int) ->
   Int ->
   Int
-lastContentLineGo _toks _lines [] acc = acc
-lastContentLineGo toks lines ((_, s, e) :: rest) _acc =
-  lastContentLineGo
-    toks
-    lines
-    rest
-    (lineAt lines (lastContentIdx toks s (e - 1)))
+lastContentLineGo toks lines xs0 acc0 = go xs0 acc0
+  where
+    go [] acc = acc
+    go ((_, s, e) :: rest) _acc =
+      go rest (lineAt lines (lastContentIdx toks s (e - 1)))
 
 export
 positionsFromSpans : Array Int ->

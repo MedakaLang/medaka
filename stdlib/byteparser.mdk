@@ -220,13 +220,13 @@ many : ByteParser a -> ByteParser (List a)
 many p = ByteParserE (input pos end => manyGo p input pos end [])
 
 manyGo : ByteParser a -> Bytes -> Int -> Int -> List a -> BResult (List a)
-manyGo p input pos end acc = match runBP p input pos end
-  BErr _ _ => BOk (reverse acc) pos
-  BOk a pos2 =>
-    if pos2 == pos then
-      BOk (reverse acc) pos2  -- no progress: stop to avoid infinite loop
-    else
-      manyGo p input pos2 end (a :: acc)
+manyGo p input pos0 end acc0 = go pos0 acc0
+  where
+    go pos acc = match runBP p input pos end
+      BErr _ _ => BOk (reverse acc) pos
+      BOk a pos2 =>
+        -- no progress: stop to avoid infinite loop
+        if pos2 == pos then BOk (reverse acc) pos2 else go pos2 (a :: acc)
 
 {- | One or more `p`.
 
@@ -295,13 +295,15 @@ chainl1 p op = defer
   chainl1Rest p op x
 
 chainl1Rest : ByteParser a -> ByteParser (a -> a -> a) -> a -> ByteParser a
-chainl1Rest p op acc =
-  orElse
-    (defer
-      f <- op
-      y <- p
-      chainl1Rest p op (f acc y))
-    (deferPure acc)
+chainl1Rest p op acc0 = go acc0
+  where
+    go acc =
+      orElse
+        (defer
+          f <- op
+          y <- p
+          go (f acc y))
+        (deferPure acc)
 
 {- | Exactly `n` bytes, as a `Bytes`.
 
@@ -348,12 +350,13 @@ beUint n = ByteParserE (beUintGo n 0)
 -- Before each step the value so far must be below 2^54, or the next byte would
 -- carry it past `Int`'s largest value, 2^62 - 1.
 beUintGo : Int -> Int -> Bytes -> Int -> Int -> BResult Int
-beUintGo n acc input pos end
-  | n <= 0 = BOk acc pos
-  | pos >= end = BErr "unexpected end of input" pos
-  | acc >= 18014398509481984 = BErr intRangeMessage pos
-  | otherwise =
-    beUintGo (n - 1) (acc * 256 + U8.toInt input[pos]) input (pos + 1) end
+beUintGo n0 acc0 input pos0 end = go n0 acc0 pos0
+  where
+    go n acc pos
+      | n <= 0 = BOk acc pos
+      | pos >= end = BErr "unexpected end of input" pos
+      | acc >= 18014398509481984 = BErr intRangeMessage pos
+      | otherwise = go (n - 1) (acc * 256 + U8.toInt input[pos]) (pos + 1)
 
 intRangeMessage : String
 intRangeMessage = "integer does not fit Int (read a U64 with beU64 or leU64)"
@@ -397,7 +400,9 @@ signedFrom64 fill x =
     failWith intRangeMessage
 
 allEqual : Int -> Array Int -> Int -> Bool
-allEqual b arr i = i >= arrayLength arr || arr[i] == b && allEqual b arr (i + 1)
+allEqual b arr i0 = go i0
+  where
+    go i = i >= arrayLength arr || arr[i] == b && go (i + 1)
 
 -- 2^n by left shift; valid for n in 0..62 on a 63-bit Int.
 pow2 : Int -> Int
@@ -433,17 +438,19 @@ leUint n = ByteParserE (leUintGo n 0 0)
 -- The byte at bit [shift] fits `Int` when it is below 2^(62 - shift): any byte
 -- below bit 56, a byte under 64 at bit 56, and only a zero byte from bit 64 on.
 leUintGo : Int -> Int -> Int -> Bytes -> Int -> Int -> BResult Int
-leUintGo n shift acc input pos end
-  | n <= 0 = BOk acc pos
-  | pos >= end = BErr "unexpected end of input" pos
-  | otherwise =
-    let b = U8.toInt input[pos]
-    if shift < 56 || shift == 56 && b < 64 then
-      leUintGo (n - 1) (shift + 8) (acc + b * pow2 shift) input (pos + 1) end
-    else if b == 0 then
-      leUintGo (n - 1) (shift + 8) acc input (pos + 1) end
-    else
-      BErr intRangeMessage pos
+leUintGo n0 shift0 acc0 input pos0 end = go n0 shift0 acc0 pos0
+  where
+    go n shift acc pos
+      | n <= 0 = BOk acc pos
+      | pos >= end = BErr "unexpected end of input" pos
+      | otherwise =
+        let b = U8.toInt input[pos]
+        if shift < 56 || shift == 56 && b < 64 then
+          go (n - 1) (shift + 8) (acc + b * pow2 shift) (pos + 1)
+        else if b == 0 then
+          go (n - 1) (shift + 8) acc (pos + 1)
+        else
+          BErr intRangeMessage pos
 
 {- | A signed two's-complement integer of `n` bytes, least significant byte
    first.
@@ -516,11 +523,12 @@ beU64 : ByteParser U64
 beU64 = ByteParserE (beU64Go 8 0)
 
 beU64Go : Int -> U64 -> Bytes -> Int -> Int -> BResult U64
-beU64Go n acc input pos end
-  | n <= 0 = BOk acc pos
-  | pos >= end = BErr "unexpected end of input" pos
-  | otherwise =
-    beU64Go (n - 1) (acc * 256 + U64.fromU8 input[pos]) input (pos + 1) end
+beU64Go n0 acc0 input pos0 end = go n0 acc0 pos0
+  where
+    go n acc pos
+      | n <= 0 = BOk acc pos
+      | pos >= end = BErr "unexpected end of input" pos
+      | otherwise = go (n - 1) (acc * 256 + U64.fromU8 input[pos]) (pos + 1)
 
 {- | A `U16` from two bytes, least significant byte first. The inverse of
    `bytebuilder.emitU16LE`.
@@ -554,18 +562,14 @@ leU64 : ByteParser U64
 leU64 = ByteParserE (leU64Go 8 0 0)
 
 leU64Go : Int -> Int -> U64 -> Bytes -> Int -> Int -> BResult U64
-leU64Go n shift acc input pos end
-  | n <= 0 = BOk acc pos
-  | pos >= end = BErr "unexpected end of input" pos
-  | otherwise =
-    let b = U64.fromU8 input[pos]
-    leU64Go
-      (n - 1)
-      (shift + 8)
-      (U64.bitOr acc (U64.shiftLeft b shift))
-      input
-      (pos + 1)
-      end
+leU64Go n0 shift0 acc0 input pos0 end = go n0 shift0 acc0 pos0
+  where
+    go n shift acc pos
+      | n <= 0 = BOk acc pos
+      | pos >= end = BErr "unexpected end of input" pos
+      | otherwise =
+        let b = U64.fromU8 input[pos]
+        go (n - 1) (shift + 8) (U64.bitOr acc (U64.shiftLeft b shift)) (pos + 1)
 
 -- # Running a parser
 

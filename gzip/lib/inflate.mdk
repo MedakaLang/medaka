@@ -127,20 +127,22 @@ copyBack distance len out =
     copyBackGo distance len out
 
 copyBackGo : Int -> Int -> Vector Int -> Result String Unit
-copyBackGo distance remaining out
-  | remaining <= 0 = Ok ()
-  | otherwise =
-    let outLen = length out
-    match maGet (outLen - distance) out
-      Some b =>
-        push b out
-        copyBackGo distance (remaining - 1) out
-      -- `outLen` only grows across this loop (one `push` per iteration) and
-      -- `distance <= outLen` was already established by `copyBack` before
-      -- the first call, so `outLen - distance` is always a valid live index
-      -- — this arm is unreachable. Panic rather than a quiet `Err`: a
-      -- violated loop invariant here is a bug in this module, not bad input.
-      None => panic "copyBack: source index out of range (unreachable)"
+copyBackGo distance remaining0 out = go remaining0
+  where
+    go remaining
+      | remaining <= 0 = Ok ()
+      | otherwise =
+        let outLen = length out
+        match maGet (outLen - distance) out
+          Some b =>
+            push b out
+            go (remaining - 1)
+          -- `outLen` only grows across this loop (one `push` per iteration) and
+          -- `distance <= outLen` was already established by `copyBack` before
+          -- the first call, so `outLen - distance` is always a valid live index
+          -- — this arm is unreachable. Panic rather than a quiet `Err`: a
+          -- violated loop invariant here is a bug in this module, not bad input.
+          None => panic "copyBack: source index out of range (unreachable)"
 
 copyBackPacked : Int -> Int -> Builder -> Result String Unit
 copyBackPacked distance len out =
@@ -158,19 +160,21 @@ copyBackPackedGo : Int ->
   MutBytes ->
   Int ->
   Result String Unit
-copyBackPackedGo distance remaining out backing outLen
-  | remaining <= 0 = Ok ()
-  | otherwise = match MB.get (outLen - distance) backing
-    Some byte =>
-      let full = outLen == MB.length backing
-      emitU8 byte out
-      -- emitU8 replaces a full backing block; later reads must use that copy.
-      if full then
-        let (nextBacking, nextLen) = builderParts out
-        copyBackPackedGo distance (remaining - 1) out nextBacking nextLen
-      else
-        copyBackPackedGo distance (remaining - 1) out backing (outLen + 1)
-    None => panic "copyBack: source index out of range (unreachable)"
+copyBackPackedGo distance rem0 out back0 len0 = go rem0 back0 len0
+  where
+    go remaining backing outLen
+      | remaining <= 0 = Ok ()
+      | otherwise = match MB.get (outLen - distance) backing
+        Some byte =>
+          let full = outLen == MB.length backing
+          emitU8 byte out
+          -- emitU8 replaces a full backing block; later reads must use that copy.
+          if full then
+            let (nextBacking, nextLen) = builderParts out
+            go (remaining - 1) nextBacking nextLen
+          else
+            go (remaining - 1) backing (outLen + 1)
+        None => panic "copyBack: source index out of range (unreachable)"
 
 -- ---------------------------------------------------------------------------
 -- Stored blocks (BTYPE 00)
@@ -278,18 +282,21 @@ inflateHuffmanBlock : Huffman ->
   BitReader ->
   Builder ->
   Result String Unit
-inflateHuffmanBlock litHuff distHuff r out = match decodeSym litHuff r
-  Err e => Err e
-  Ok sym if sym < 256 =>
-    emitU8 (U8.truncate sym) out
-    inflateHuffmanBlock litHuff distHuff r out
-  Ok sym if sym == symEndOfBlock => Ok ()
-  Ok sym if sym <= maxLenSym => match inflateLengthDistance distHuff sym r out
-    Err e => Err e
-    Ok _ => inflateHuffmanBlock litHuff distHuff r out
-  Ok sym =>
-    Err
-      "inflate: invalid literal/length symbol \{sym} (must be 0..\{maxLenSym} or \{symEndOfBlock})"
+inflateHuffmanBlock litHuff distHuff r out = go ()
+  where
+    go () = match decodeSym litHuff r
+      Err e => Err e
+      Ok sym if sym < 256 =>
+        emitU8 (U8.truncate sym) out
+        go ()
+      Ok sym if sym == symEndOfBlock => Ok ()
+      Ok sym if sym
+        <= maxLenSym => match inflateLengthDistance distHuff sym r out
+        Err e => Err e
+        Ok _ => go ()
+      Ok sym =>
+        Err
+          "inflate: invalid literal/length symbol \{sym} (must be 0..\{maxLenSym} or \{symEndOfBlock})"
 
 -- | Fixed-Huffman blocks (BTYPE 01): the RFC 1951 §3.2.6 fixed literal/length
 --   and distance tables, unchanged from Phase 2.
@@ -339,13 +346,15 @@ readClLengthsGo : BitReader ->
   Int ->
   Array Int ->
   Result String (Array Int)
-readClLengthsGo r i nClen lens
-  | i >= nClen = Ok lens
-  | otherwise = do
-    v <- getBits 3 r
-    idx <- lookupTable clOrder i "clOrder"
-    let _ = lens[idx] := v
-    readClLengthsGo r (i + 1) nClen lens
+readClLengthsGo r i0 nClen lens = go i0
+  where
+    go i
+      | i >= nClen = Ok lens
+      | otherwise = do
+        v <- getBits 3 r
+        idx <- lookupTable clOrder i "clOrder"
+        let _ = lens[idx] := v
+        go (i + 1)
 
 -- | Read HLIT/HDIST/HCLEN and the HCLEN code-length lengths, and build the
 --   code-length alphabet's own canonical table. `buildHuffmanStrict`, NOT
@@ -377,11 +386,13 @@ fillRepeat lens i total val count =
     Ok (i + count)
 
 fillRepeatGo : Array Int -> Int -> Int -> Int -> Unit
-fillRepeatGo lens i limit val
-  | i >= limit = ()
-  | otherwise =
-    lens[i] := val
-    fillRepeatGo lens (i + 1) limit val
+fillRepeatGo lens i0 limit val = go i0
+  where
+    go i
+      | i >= limit = ()
+      | otherwise =
+        lens[i] := val
+        go (i + 1)
 
 -- | Decode `total` (= HLIT+257 + HDIST+1) code lengths for the real
 --   literal/length + distance alphabets, using the code-length alphabet
@@ -403,34 +414,37 @@ readCodeLengthsGo : Huffman ->
   Int ->
   Int ->
   Result String (Array Int)
-readCodeLengthsGo clHuff r lens i total prevLen
-  | i >= total = Ok lens
-  | otherwise = match decodeSym clHuff r
-    Err e => Err e
-    Ok sym if sym < symRepPrev =>
-      lens[i] := sym
-      readCodeLengthsGo clHuff r lens (i + 1) total sym
-    Ok sym if sym == symRepPrev =>
-      if prevLen < 0 then
-        Err
-          "dynamic Huffman: repeat-previous code (16) with no previous code length to repeat"
-      else match getBits 2 r
+readCodeLengthsGo clHuff r lens i0 total prevLen0 = go i0 prevLen0
+  where
+    go i prevLen
+      | i >= total = Ok lens
+      | otherwise = match decodeSym clHuff r
         Err e => Err e
-        Ok extra => match fillRepeat lens i total prevLen (3 + extra)
+        Ok sym if sym < symRepPrev =>
+          lens[i] := sym
+          go (i + 1) sym
+        Ok sym if sym == symRepPrev =>
+          if prevLen < 0 then
+            Err
+              "dynamic Huffman: repeat-previous code (16) with no previous code length to repeat"
+          else match getBits 2 r
+            Err e => Err e
+            Ok extra => match fillRepeat lens i total prevLen (3 + extra)
+              Err e => Err e
+              Ok i2 => go i2 prevLen
+        Ok sym if sym == symRepZero3 => match getBits 3 r
           Err e => Err e
-          Ok i2 => readCodeLengthsGo clHuff r lens i2 total prevLen
-    Ok sym if sym == symRepZero3 => match getBits 3 r
-      Err e => Err e
-      Ok extra => match fillRepeat lens i total 0 (3 + extra)
-        Err e => Err e
-        Ok i2 => readCodeLengthsGo clHuff r lens i2 total prevLen
-    Ok sym if sym == symRepZero7 => match getBits 7 r
-      Err e => Err e
-      Ok extra => match fillRepeat lens i total 0 (11 + extra)
-        Err e => Err e
-        Ok i2 => readCodeLengthsGo clHuff r lens i2 total prevLen
-    Ok sym =>
-      Err "dynamic Huffman: invalid code-length symbol \{sym} (must be 0..18)"
+          Ok extra => match fillRepeat lens i total 0 (3 + extra)
+            Err e => Err e
+            Ok i2 => go i2 prevLen
+        Ok sym if sym == symRepZero7 => match getBits 7 r
+          Err e => Err e
+          Ok extra => match fillRepeat lens i total 0 (11 + extra)
+            Err e => Err e
+            Ok i2 => go i2 prevLen
+        Ok sym =>
+          Err
+            "dynamic Huffman: invalid code-length symbol \{sym} (must be 0..18)"
 
 -- | Decode a whole dynamic-Huffman block: header + code-length alphabet +
 --   the HLIT/HDIST code lengths (with run-length escapes), split into the
@@ -470,11 +484,13 @@ inflateBlock btype r out
 -- Read BFINAL (1 bit) + BTYPE (2 bits), both LSB-first, decode one block,
 -- and loop until a block with BFINAL=1.
 inflateBlocks : BitReader -> Builder -> Result String Unit
-inflateBlocks r out = do
-  bfinal <- getBits 1 r
-  btype <- getBits 2 r
-  _ <- inflateBlock btype r out
-  if bfinal == 1 then Ok () else inflateBlocks r out
+inflateBlocks r out = go ()
+  where
+    go () = do
+      bfinal <- getBits 1 r
+      btype <- getBits 2 r
+      _ <- inflateBlock btype r out
+      if bfinal == 1 then Ok () else go ()
 
 {- | Decode a raw DEFLATE stream (RFC 1951) — no gzip/zlib framing — to its
    uncompressed bytes.
