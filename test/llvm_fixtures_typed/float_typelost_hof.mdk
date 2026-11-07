@@ -3,7 +3,9 @@
 -- `identity 2.5` gives `y` a ground Float type, so `y + y` is a direct primitive;
 -- the emitter used to default the operand LTy to Int → integer op on a boxed-Float
 -- word → garbage.  Now typecheck stamps the arith site Float (RScalar → EAnnot)
--- and the emitter emits fadd.  Anchored through `fid : Float -> Float` for print.
+-- and the emitter emits fadd.  `identity` is `@noinline` so the call that loses
+-- the type survives unfolding.
+@noinline
 identity x = x
 fid : Float -> Float
 fid x = x

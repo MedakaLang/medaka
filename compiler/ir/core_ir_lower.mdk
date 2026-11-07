@@ -17,7 +17,7 @@ import types.symbol_origins.{
 
 import ir.extern_lower.{lowerExterns}
 import ir.core_walk.{patBinders}
-import ir.core_opt_num.{foldNumIntFromInt}
+import ir.core_opt_unfold.{inlineTrivialCalls, propagateLiteralGlobals}
 import ir.core_pass.{
   CorePass(..), PassConfig(..), PassRun(..), PassFault(..), defaultPassConfig,
   runPasses
@@ -1012,6 +1012,7 @@ lowerProgramWithFacts facts prog =
       pcSited = prog,
       pcLowering = UntypedLowering,
       pcFieldOrders = [],
+      pcNoInline = [],
     }
     interpPasses
     (lowerProgramWith facts None [] prog)
@@ -1032,6 +1033,7 @@ lowerTypedProgramWith facts prog =
       pcSited = prog,
       pcLowering = TypedLowering,
       pcFieldOrders = [],
+      pcNoInline = [],
     }
     interpPasses
     (lowerProgramWith facts (Some dispositions) [] prog)
@@ -1291,6 +1293,7 @@ lowerProgramEmitConfigured config facts pins prog =
       pcSited = sited,
       pcLowering = lowering,
       pcFieldOrders = declaredRecordFieldOrders prog,
+      pcNoInline = noInlineFnNames prog,
     }
     emitPasses
     (lowerProgramWith facts dispositions pins sited)
@@ -1477,14 +1480,16 @@ cprogramCtorTypes (CProgram _ _ ctorTypes _ _ _) = ctorTypes
 -- `definedArityOf`, so the stamp and the check cannot disagree about a table.
 
 -- What a pass list reads besides the program: the facts, the declarations as
--- given and as the site-trap rewrite left them, the lowering mode, and the
--- declared field order of each record.
+-- given and as the site-trap rewrite left them, the lowering mode, the
+-- declared field order of each record, and the top-level functions a
+-- `@noinline` attribute marks.
 data PassCtx = PassCtx {
   pcFacts : ProgramFacts,
   pcDecls : List Decl,
   pcSited : List Decl,
   pcLowering : Lowering,
   pcFieldOrders : List (String, List String),
+  pcNoInline : List String,
 }
 
 namedPass : String -> (PassCtx -> CProgram -> CProgram) -> CorePass PassCtx
@@ -1525,10 +1530,22 @@ emitPasses =
       namedPass "hoist-nullary-memo" (_ p => hoistNullaryMemo p),
       -- optimization slot: passes here run before the stamps below, so eta, call
       -- modes, tail marks and binder stamps all see their output
-      namedPass "fold-num-int-fromint" (_ p => foldNumIntFromInt p),
+      -- typed lowering only: the untyped lowering takes a value's representation
+      -- from the declared signature of a call head (the binder rows
+      -- `stampDeclaredSignatures` writes), so a rewrite that deletes a call head
+      -- deletes that evidence.  The rewrite preserves meaning only when
+      -- elaboration typed every node.
+      namedPass "inline-trivial-calls" (c p =>
+        typedOnly c.pcLowering (inlineTrivialCalls c.pcNoInline) p),
+      namedPass "propagate-literal-globals" (c p =>
+        typedOnly c.pcLowering (propagateLiteralGlobals c.pcNoInline) p),
     ]
     ++ finishPasses
     ++ [namedPass "lower-externs" (c p => lowerExterns c.pcFacts c.pcDecls p)]
+
+typedOnly : Lowering -> (CProgram -> CProgram) -> CProgram -> CProgram
+typedOnly TypedLowering f p = f p
+typedOnly UntypedLowering _ p = p
 
 -- The names of `emitPasses`, in order: what a dump request may name.
 export
@@ -1823,10 +1840,11 @@ spineOf e = (e, [])
 -- literal's `fromInt` is one only through the prelude's `Num` at `Float`, whose
 -- conversion cannot fail: any other impl may panic (a range check), and delaying it
 -- would move or drop the panic.  `Num Int`'s `fromInt` is not atomic here.  In
--- `emitPasses` it is already folded to its literal by `fold-num-int-fromint`, which
--- runs before `eta-saturate` reads this; `interpPasses` runs no
--- fold, so there a partial application with such an argument stays unsaturated
--- (a partial call) instead of being eta-expanded.
+-- `emitPasses` both are already unfolded by `inline-trivial-calls` (`Num Int`'s
+-- to its argument, `Num Float`'s to `intToFloat`), which runs before
+-- `eta-saturate` reads this; `interpPasses` does not inline, so there a partial
+-- application with such an argument stays unsaturated (a partial call) instead
+-- of being eta-expanded.
 isAtomicArg : CExpr -> Bool
 isAtomicArg (CVar _ _) = True
 isAtomicArg (CLit _) = True

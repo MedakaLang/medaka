@@ -773,7 +773,11 @@ closure_grade=$(cksum "$WORK/full-closure.lst" | awk '{print $1 " " $2}')
 # callers now load the static global. The five thunks left
 # (`expPMinus2`, `expNMinus2`, `generatorX`, `generatorY`, `pointGenerator`)
 # are constants too, with public initializers. 119 definitions.
-[ "$closure_grade" = '2864391331 3447' ] || fail "emitted transitive closure drifted ($closure_grade)"
+# The closure holds no definition that only forwards its parameters to an
+# extern or a constructor (or returns its one parameter): the Core IR pass
+# `inline-trivial-calls` unfolds those into their callers, so the pin counts
+# 113 definitions and a branch-free wrapper must not reappear as a symbol.
+[ "$closure_grade" = '3690762057 3321' ] || fail "emitted transitive closure drifted ($closure_grade)"
 # Two of the modules live in stdlib/crypto/, which mangles as `crypto_` rather
 # than `lib_`, and one is stdlib/u32.mdk, so the prefixes are spelled out
 # rather than built from a module name.
@@ -926,7 +930,13 @@ control_grade=$(cksum "$WORK/control.manifest" | awk '{print $1 " " $2}')
 # `i * 4` and `i * 4 + k` on the public counter, and its ten calls are the four
 # `__mdk_apply` slow paths, three `mdk_shift_left` by a literal amount and
 # three `mdk_bit_or`. The bytes reach only the shifts and ors. No other row moved.
-[ "$control_grade" = '932988870 5382' ] || fail "emitted control/index/allocation manifest drifted ($control_grade)"
+# The control grade pins every surviving row's branch, comparison, index, write,
+# copy and trap columns, and counts each call to an unfolded wrapper as no call.
+# A row's call column therefore excludes `adoptByteBlockUnsafe` (the `Bytes`
+# constructor's allocation is not a call), `u32.toInt`, `u8.toInt` and the
+# `String` display of a public length-panic message. The `make` column counts
+# `arrayMake`, the extern that an `array.make` call unfolds to.
+[ "$control_grade" = '4152268280 5158' ] || fail "emitted control/index/allocation manifest drifted ($control_grade)"
 pass 'emitted helper bodies retain the audited branch/index/allocation shape; only fixed public controls remain'
 
 for symbol in \
@@ -1225,7 +1235,9 @@ public_control_grade=$(cksum "$WORK/public-control.manifest" | awk '{print $1 " 
 # public consumer reaches, each losing the feOne/feZero forces and moving in
 # no other column: affineToPoint 1 -> 0 calls and pointIsCanonicalInfinity
 # 7 -> 5.
-if [ "$public_closure_grade" != '1872915056 3802' ] || [ "$public_control_grade" != '3090551942 5934' ]; then
+# The public union is the internal grade's closure and control rows under the
+# same unfolding rule, with no row beyond the two public-only rows above.
+if [ "$public_closure_grade" != '250216018 3676' ] || [ "$public_control_grade" != '427649443 5710' ]; then
   fail "public union exact grades drifted (closure=$public_closure_grade control=$public_control_grade)"
 fi
 pass "public-root LLVM union excludes ForTest and retains the audited signing/key topology ($(wc -l < "$WORK/full-closure.lst") definitions)"

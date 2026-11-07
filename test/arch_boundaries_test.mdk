@@ -737,8 +737,8 @@ test "arch_boundaries: ir.core_ir_lower closure matches its golden" =
 test "arch_boundaries: ir.core_lint closure matches its golden" =
   closurePin "ir.core_lint"
 
-test "arch_boundaries: ir.core_opt_num closure matches its golden" =
-  closurePin "ir.core_opt_num"
+test "arch_boundaries: ir.core_opt_unfold closure matches its golden" =
+  closurePin "ir.core_opt_unfold"
 
 test "arch_boundaries: ir.core_pass closure matches its golden" =
   closurePin "ir.core_pass"

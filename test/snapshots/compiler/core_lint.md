@@ -1,5 +1,5 @@
 # META
-source_lines=190
+source_lines=186
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/ir/core_lint.mdk — invariants of Core IR that hold after every pass
@@ -16,7 +16,6 @@ stages=DESUGAR,MARK
 -- program does not declare before `lower-externs`.
 -- A variable's `Addr` is not read: a clause parameter carries `AGlobal`.
 
-import frontend.ast.{Pat}
 import ir.core_ir.{
   CArm(..),
   CBind(..),
@@ -33,7 +32,7 @@ import ir.core_ir.{
   DeclFacts(..),
   siteSentinelName,
 }
-import ir.core_walk.{bindNames, foldExpr, implName, patBinders}
+import ir.core_walk.{bindNames, bindPats, foldExpr, implName}
 import list.{reverse}
 import types.runtime_abi_data.{runtimeAbiRows}
 import support.ordmap.{OrdMap, omEmpty, omFromNames, omHasKey, omKeys}
@@ -72,22 +71,19 @@ lintBind globals (CBind name clauses _ _) =
 
 lintClause : OrdMap Unit -> String -> CClause -> List String
 lintClause globals where_ (CClause pats body) =
-  lintBody globals (bindAll pats omEmpty) where_ body
+  lintBody globals (bindPats pats omEmpty) where_ body
 
 lintImpl : OrdMap Unit -> CImplEntry -> List String
 lintImpl globals (CImplEntry name _ _ (CImplTagged _ _ _ _ _ pats body)) =
-  lintBody globals (bindAll pats omEmpty) ("impl " ++ name) body
+  lintBody globals (bindPats pats omEmpty) ("impl " ++ name) body
 lintImpl globals (CImplEntry name _ _ (CImplDefault _ _ _ _ _ pats body)) =
-  lintBody globals (bindAll pats omEmpty) ("impl " ++ name) body
+  lintBody globals (bindPats pats omEmpty) ("impl " ++ name) body
 
 lintBody : OrdMap Unit -> OrdMap Unit -> String -> CExpr -> List String
 lintBody globals scope where_ body =
   map
     (f => "\{where_}: \{f}")
     (scopeFaults globals scope body ++ shapeFaults body)
-
-bindAll : List Pat -> OrdMap Unit -> OrdMap Unit
-bindAll pats scope = omFromNames (flatMap patBinders pats) scope
 
 -- ── spine and decision shape: node-local, so one fold ───────────────────────
 shapeFaults : CExpr -> List String
@@ -128,9 +124,9 @@ scopeFaults globals scope (CVar x _) =
     ["unbound variable \{x}"]
 scopeFaults _ _ (CLit _) = []
 scopeFaults g s (CApp h args _) = flatMap (scopeFaults g s) (h :: args)
-scopeFaults g s (CLam pats body) = scopeFaults g (bindAll pats s) body
+scopeFaults g s (CLam pats body) = scopeFaults g (bindPats pats s) body
 scopeFaults g s (CLet isRec pat rhs body) =
-  let inner = bindAll [pat] s
+  let inner = bindPats [pat] s
   scopeFaults g (if isRec then inner else s) rhs ++ scopeFaults g inner body
 scopeFaults g s (CLetGroup binds body) =
   let inner = omFromNames (bindNames binds) s
@@ -162,15 +158,15 @@ fieldFaults g s (CField _ _ e) = scopeFaults g s e
 
 groupClauseFaults : OrdMap Unit -> OrdMap Unit -> CBind -> List String
 groupClauseFaults g s (CBind _ clauses _ _) =
-  flatMap ((CClause pats body) => scopeFaults g (bindAll pats s) body) clauses
+  flatMap ((CClause pats body) => scopeFaults g (bindPats pats s) body) clauses
 
 -- A guard's pattern binds for the guards after it and for the body.
 armFaults : OrdMap Unit -> OrdMap Unit -> CArm -> List String
 armFaults g s (CArm pat guards body) =
-  let (faults, inner) = guardFaults g (bindAll [pat] s) guards
+  let (faults, inner) = guardFaults g (bindPats [pat] s) guards
   faults ++ scopeFaults g inner body
 armFaults g s (CArmAlt pat guards _) =
-  fst (guardFaults g (bindAll [pat] s) guards)
+  fst (guardFaults g (bindPats [pat] s) guards)
 
 guardFaults : OrdMap Unit ->
   OrdMap Unit ->
@@ -181,7 +177,7 @@ guardFaults g s ((CGBool e) :: rest) =
   let (more, out) = guardFaults g s rest
   (scopeFaults g s e ++ more, out)
 guardFaults g s ((CGBind p e) :: rest) =
-  let (more, out) = guardFaults g (bindAll [p] s) rest
+  let (more, out) = guardFaults g (bindPats [p] s) rest
   (scopeFaults g s e ++ more, out)
 
 blockFaults : OrdMap Unit -> OrdMap Unit -> List CStmt -> List String
@@ -190,13 +186,12 @@ blockFaults g s ((CSExpr e) :: rest) = scopeFaults g s e ++ blockFaults g s rest
 blockFaults g s ((CSAssign _ e) :: rest) =
   scopeFaults g s e ++ blockFaults g s rest
 blockFaults g s ((CSLet isRec pat e) :: rest) =
-  let inner = bindAll [pat] s
+  let inner = bindPats [pat] s
   scopeFaults g (if isRec then inner else s) e ++ blockFaults g inner rest
 # DESUGAR
 (DUse false (UseAlias ("core") "$core"))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Pat" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CArm" true) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "CField" true) (mem "CGuard" true) (mem "CImplBody" true) (mem "CImplEntry" true) (mem "CProgram" true) (mem "CStmt" true) (mem "CTBranch" true) (mem "CTree" true) (mem "DeclFacts" true) (mem "siteSentinelName" false))))
-(DUse false (UseGroup ("ir" "core_walk") ((mem "bindNames" false) (mem "foldExpr" false) (mem "implName" false) (mem "patBinders" false))))
+(DUse false (UseGroup ("ir" "core_walk") ((mem "bindNames" false) (mem "bindPats" false) (mem "foldExpr" false) (mem "implName" false))))
 (DUse false (UseGroup ("list") ((mem "reverse" false))))
 (DUse false (UseGroup ("types" "runtime_abi_data") ((mem "runtimeAbiRows" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omKeys" false))))
@@ -208,14 +203,12 @@ blockFaults g s ((CSLet isRec pat e) :: rest) =
 (DTypeSig false "lintBind" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CBind") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "lintBind" ((PVar "globals") (PCon "CBind" (PVar "name") (PVar "clauses") PWild PWild)) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "lintClause") (EVar "globals")) (EBinOp "++" (ELit (LString "binding ")) (EVar "name")))) (EVar "clauses")))
 (DTypeSig false "lintClause" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "String") (TyFun (TyCon "CClause") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "lintClause" ((PVar "globals") (PVar "where_") (PCon "CClause" (PVar "pats") (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "lintBody") (EVar "globals")) (EApp (EApp (EVar "bindAll") (EVar "pats")) (EVar "omEmpty"))) (EVar "where_")) (EVar "body")))
+(DFunDef false "lintClause" ((PVar "globals") (PVar "where_") (PCon "CClause" (PVar "pats") (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "lintBody") (EVar "globals")) (EApp (EApp (EVar "bindPats") (EVar "pats")) (EVar "omEmpty"))) (EVar "where_")) (EVar "body")))
 (DTypeSig false "lintImpl" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CImplEntry") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "lintImpl" ((PVar "globals") (PCon "CImplEntry" (PVar "name") PWild PWild (PCon "CImplTagged" PWild PWild PWild PWild PWild (PVar "pats") (PVar "body")))) (EApp (EApp (EApp (EApp (EVar "lintBody") (EVar "globals")) (EApp (EApp (EVar "bindAll") (EVar "pats")) (EVar "omEmpty"))) (EBinOp "++" (ELit (LString "impl ")) (EVar "name"))) (EVar "body")))
-(DFunDef false "lintImpl" ((PVar "globals") (PCon "CImplEntry" (PVar "name") PWild PWild (PCon "CImplDefault" PWild PWild PWild PWild PWild (PVar "pats") (PVar "body")))) (EApp (EApp (EApp (EApp (EVar "lintBody") (EVar "globals")) (EApp (EApp (EVar "bindAll") (EVar "pats")) (EVar "omEmpty"))) (EBinOp "++" (ELit (LString "impl ")) (EVar "name"))) (EVar "body")))
+(DFunDef false "lintImpl" ((PVar "globals") (PCon "CImplEntry" (PVar "name") PWild PWild (PCon "CImplTagged" PWild PWild PWild PWild PWild (PVar "pats") (PVar "body")))) (EApp (EApp (EApp (EApp (EVar "lintBody") (EVar "globals")) (EApp (EApp (EVar "bindPats") (EVar "pats")) (EVar "omEmpty"))) (EBinOp "++" (ELit (LString "impl ")) (EVar "name"))) (EVar "body")))
+(DFunDef false "lintImpl" ((PVar "globals") (PCon "CImplEntry" (PVar "name") PWild PWild (PCon "CImplDefault" PWild PWild PWild PWild PWild (PVar "pats") (PVar "body")))) (EApp (EApp (EApp (EApp (EVar "lintBody") (EVar "globals")) (EApp (EApp (EVar "bindPats") (EVar "pats")) (EVar "omEmpty"))) (EBinOp "++" (ELit (LString "impl ")) (EVar "name"))) (EVar "body")))
 (DTypeSig false "lintBody" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "String") (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "lintBody" ((PVar "globals") (PVar "scope") (PVar "where_") (PVar "body")) (EApp (EApp (EVar "map") (ELam ((PVar "f")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "where_"))) (ELit (LString ": "))) (EApp (EVar "$core.display") (EVar "f"))) (ELit (LString ""))))) (EBinOp "++" (EApp (EApp (EApp (EVar "scopeFaults") (EVar "globals")) (EVar "scope")) (EVar "body")) (EApp (EVar "shapeFaults") (EVar "body")))))
-(DTypeSig false "bindAll" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
-(DFunDef false "bindAll" ((PVar "pats") (PVar "scope")) (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "flatMap") (EVar "patBinders")) (EVar "pats"))) (EVar "scope")))
 (DTypeSig false "shapeFaults" (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "shapeFaults" ((PVar "e")) (EApp (EVar "reverse") (EApp (EApp (EApp (EVar "foldExpr") (EVar "shapeStep")) (EListLit)) (EVar "e"))))
 (DTypeSig false "shapeStep" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String")))))
@@ -237,8 +230,8 @@ blockFaults g s ((CSLet isRec pat e) :: rest) =
 (DFunDef false "scopeFaults" ((PVar "globals") (PVar "scope") (PCon "CVar" (PVar "x") PWild)) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "x") (EVar "fallthroughName")) (EApp (EApp (EVar "startsWith") (ELit (LString "$extern$"))) (EVar "x"))) (EApp (EApp (EVar "omHasKey") (EVar "x")) (EVar "scope"))) (EApp (EApp (EVar "omHasKey") (EVar "x")) (EVar "globals"))) (EListLit) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "unbound variable ")) (EApp (EVar "$core.display") (EVar "x"))) (ELit (LString ""))))))
 (DFunDef false "scopeFaults" (PWild PWild (PCon "CLit" PWild)) (EListLit))
 (DFunDef false "scopeFaults" ((PVar "g") (PVar "s") (PCon "CApp" (PVar "h") (PVar "args") PWild)) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "scopeFaults") (EVar "g")) (EVar "s"))) (EBinOp "::" (EVar "h") (EVar "args"))))
-(DFunDef false "scopeFaults" ((PVar "g") (PVar "s") (PCon "CLam" (PVar "pats") (PVar "body"))) (EApp (EApp (EApp (EVar "scopeFaults") (EVar "g")) (EApp (EApp (EVar "bindAll") (EVar "pats")) (EVar "s"))) (EVar "body")))
-(DFunDef false "scopeFaults" ((PVar "g") (PVar "s") (PCon "CLet" (PVar "isRec") (PVar "pat") (PVar "rhs") (PVar "body"))) (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EVar "bindAll") (EListLit (EVar "pat"))) (EVar "s"))) (DoExpr (EBinOp "++" (EApp (EApp (EApp (EVar "scopeFaults") (EVar "g")) (EIf (EVar "isRec") (EVar "inner") (EVar "s"))) (EVar "rhs")) (EApp (EApp (EApp (EVar "scopeFaults") (EVar "g")) (EVar "inner")) (EVar "body"))))))
+(DFunDef false "scopeFaults" ((PVar "g") (PVar "s") (PCon "CLam" (PVar "pats") (PVar "body"))) (EApp (EApp (EApp (EVar "scopeFaults") (EVar "g")) (EApp (EApp (EVar "bindPats") (EVar "pats")) (EVar "s"))) (EVar "body")))
+(DFunDef false "scopeFaults" ((PVar "g") (PVar "s") (PCon "CLet" (PVar "isRec") (PVar "pat") (PVar "rhs") (PVar "body"))) (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EVar "bindPats") (EListLit (EVar "pat"))) (EVar "s"))) (DoExpr (EBinOp "++" (EApp (EApp (EApp (EVar "scopeFaults") (EVar "g")) (EIf (EVar "isRec") (EVar "inner") (EVar "s"))) (EVar "rhs")) (EApp (EApp (EApp (EVar "scopeFaults") (EVar "g")) (EVar "inner")) (EVar "body"))))))
 (DFunDef false "scopeFaults" ((PVar "g") (PVar "s") (PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EVar "omFromNames") (EApp (EVar "bindNames") (EVar "binds"))) (EVar "s"))) (DoExpr (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "groupClauseFaults") (EVar "g")) (EVar "inner"))) (EVar "binds")) (EApp (EApp (EApp (EVar "scopeFaults") (EVar "g")) (EVar "inner")) (EVar "body"))))))
 (DFunDef false "scopeFaults" ((PVar "g") (PVar "s") (PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EBinOp "++" (EApp (EApp (EApp (EVar "scopeFaults") (EVar "g")) (EVar "s")) (EVar "scrut")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "armFaults") (EVar "g")) (EVar "s"))) (EVar "arms"))))
 (DFunDef false "scopeFaults" ((PVar "g") (PVar "s") (PCon "CDecision" (PVar "scrut") (PVar "arms") PWild)) (EBinOp "++" (EApp (EApp (EApp (EVar "scopeFaults") (EVar "g")) (EVar "s")) (EVar "scrut")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "armFaults") (EVar "g")) (EVar "s"))) (EVar "arms"))))
@@ -260,24 +253,23 @@ blockFaults g s ((CSLet isRec pat e) :: rest) =
 (DTypeSig false "fieldFaults" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CField") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "fieldFaults" ((PVar "g") (PVar "s") (PCon "CField" PWild PWild (PVar "e"))) (EApp (EApp (EApp (EVar "scopeFaults") (EVar "g")) (EVar "s")) (EVar "e")))
 (DTypeSig false "groupClauseFaults" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CBind") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "groupClauseFaults" ((PVar "g") (PVar "s") (PCon "CBind" PWild (PVar "clauses") PWild PWild)) (EApp (EApp (EVar "flatMap") (ELam ((PCon "CClause" (PVar "pats") (PVar "body"))) (EApp (EApp (EApp (EVar "scopeFaults") (EVar "g")) (EApp (EApp (EVar "bindAll") (EVar "pats")) (EVar "s"))) (EVar "body")))) (EVar "clauses")))
+(DFunDef false "groupClauseFaults" ((PVar "g") (PVar "s") (PCon "CBind" PWild (PVar "clauses") PWild PWild)) (EApp (EApp (EVar "flatMap") (ELam ((PCon "CClause" (PVar "pats") (PVar "body"))) (EApp (EApp (EApp (EVar "scopeFaults") (EVar "g")) (EApp (EApp (EVar "bindPats") (EVar "pats")) (EVar "s"))) (EVar "body")))) (EVar "clauses")))
 (DTypeSig false "armFaults" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CArm") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "armFaults" ((PVar "g") (PVar "s") (PCon "CArm" (PVar "pat") (PVar "guards") (PVar "body"))) (EBlock (DoLet false false (PTuple (PVar "faults") (PVar "inner")) (EApp (EApp (EApp (EVar "guardFaults") (EVar "g")) (EApp (EApp (EVar "bindAll") (EListLit (EVar "pat"))) (EVar "s"))) (EVar "guards"))) (DoExpr (EBinOp "++" (EVar "faults") (EApp (EApp (EApp (EVar "scopeFaults") (EVar "g")) (EVar "inner")) (EVar "body"))))))
-(DFunDef false "armFaults" ((PVar "g") (PVar "s") (PCon "CArmAlt" (PVar "pat") (PVar "guards") PWild)) (EApp (EVar "fst") (EApp (EApp (EApp (EVar "guardFaults") (EVar "g")) (EApp (EApp (EVar "bindAll") (EListLit (EVar "pat"))) (EVar "s"))) (EVar "guards"))))
+(DFunDef false "armFaults" ((PVar "g") (PVar "s") (PCon "CArm" (PVar "pat") (PVar "guards") (PVar "body"))) (EBlock (DoLet false false (PTuple (PVar "faults") (PVar "inner")) (EApp (EApp (EApp (EVar "guardFaults") (EVar "g")) (EApp (EApp (EVar "bindPats") (EListLit (EVar "pat"))) (EVar "s"))) (EVar "guards"))) (DoExpr (EBinOp "++" (EVar "faults") (EApp (EApp (EApp (EVar "scopeFaults") (EVar "g")) (EVar "inner")) (EVar "body"))))))
+(DFunDef false "armFaults" ((PVar "g") (PVar "s") (PCon "CArmAlt" (PVar "pat") (PVar "guards") PWild)) (EApp (EVar "fst") (EApp (EApp (EApp (EVar "guardFaults") (EVar "g")) (EApp (EApp (EVar "bindPats") (EListLit (EVar "pat"))) (EVar "s"))) (EVar "guards"))))
 (DTypeSig false "guardFaults" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CGuard")) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))))
 (DFunDef false "guardFaults" (PWild (PVar "s") (PList)) (ETuple (EListLit) (EVar "s")))
 (DFunDef false "guardFaults" ((PVar "g") (PVar "s") (PCons (PCon "CGBool" (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "more") (PVar "out")) (EApp (EApp (EApp (EVar "guardFaults") (EVar "g")) (EVar "s")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "++" (EApp (EApp (EApp (EVar "scopeFaults") (EVar "g")) (EVar "s")) (EVar "e")) (EVar "more")) (EVar "out")))))
-(DFunDef false "guardFaults" ((PVar "g") (PVar "s") (PCons (PCon "CGBind" (PVar "p") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "more") (PVar "out")) (EApp (EApp (EApp (EVar "guardFaults") (EVar "g")) (EApp (EApp (EVar "bindAll") (EListLit (EVar "p"))) (EVar "s"))) (EVar "rest"))) (DoExpr (ETuple (EBinOp "++" (EApp (EApp (EApp (EVar "scopeFaults") (EVar "g")) (EVar "s")) (EVar "e")) (EVar "more")) (EVar "out")))))
+(DFunDef false "guardFaults" ((PVar "g") (PVar "s") (PCons (PCon "CGBind" (PVar "p") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "more") (PVar "out")) (EApp (EApp (EApp (EVar "guardFaults") (EVar "g")) (EApp (EApp (EVar "bindPats") (EListLit (EVar "p"))) (EVar "s"))) (EVar "rest"))) (DoExpr (ETuple (EBinOp "++" (EApp (EApp (EApp (EVar "scopeFaults") (EVar "g")) (EVar "s")) (EVar "e")) (EVar "more")) (EVar "out")))))
 (DTypeSig false "blockFaults" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "blockFaults" (PWild PWild (PList)) (EListLit))
 (DFunDef false "blockFaults" ((PVar "g") (PVar "s") (PCons (PCon "CSExpr" (PVar "e")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EApp (EVar "scopeFaults") (EVar "g")) (EVar "s")) (EVar "e")) (EApp (EApp (EApp (EVar "blockFaults") (EVar "g")) (EVar "s")) (EVar "rest"))))
 (DFunDef false "blockFaults" ((PVar "g") (PVar "s") (PCons (PCon "CSAssign" PWild (PVar "e")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EApp (EVar "scopeFaults") (EVar "g")) (EVar "s")) (EVar "e")) (EApp (EApp (EApp (EVar "blockFaults") (EVar "g")) (EVar "s")) (EVar "rest"))))
-(DFunDef false "blockFaults" ((PVar "g") (PVar "s") (PCons (PCon "CSLet" (PVar "isRec") (PVar "pat") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EVar "bindAll") (EListLit (EVar "pat"))) (EVar "s"))) (DoExpr (EBinOp "++" (EApp (EApp (EApp (EVar "scopeFaults") (EVar "g")) (EIf (EVar "isRec") (EVar "inner") (EVar "s"))) (EVar "e")) (EApp (EApp (EApp (EVar "blockFaults") (EVar "g")) (EVar "inner")) (EVar "rest"))))))
+(DFunDef false "blockFaults" ((PVar "g") (PVar "s") (PCons (PCon "CSLet" (PVar "isRec") (PVar "pat") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EVar "bindPats") (EListLit (EVar "pat"))) (EVar "s"))) (DoExpr (EBinOp "++" (EApp (EApp (EApp (EVar "scopeFaults") (EVar "g")) (EIf (EVar "isRec") (EVar "inner") (EVar "s"))) (EVar "e")) (EApp (EApp (EApp (EVar "blockFaults") (EVar "g")) (EVar "inner")) (EVar "rest"))))))
 # MARK
 (DUse false (UseAlias ("core") "$core"))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Pat" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CArm" true) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "CField" true) (mem "CGuard" true) (mem "CImplBody" true) (mem "CImplEntry" true) (mem "CProgram" true) (mem "CStmt" true) (mem "CTBranch" true) (mem "CTree" true) (mem "DeclFacts" true) (mem "siteSentinelName" false))))
-(DUse false (UseGroup ("ir" "core_walk") ((mem "bindNames" false) (mem "foldExpr" false) (mem "implName" false) (mem "patBinders" false))))
+(DUse false (UseGroup ("ir" "core_walk") ((mem "bindNames" false) (mem "bindPats" false) (mem "foldExpr" false) (mem "implName" false))))
 (DUse false (UseGroup ("list") ((mem "reverse" false))))
 (DUse false (UseGroup ("types" "runtime_abi_data") ((mem "runtimeAbiRows" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omKeys" false))))
@@ -289,14 +281,12 @@ blockFaults g s ((CSLet isRec pat e) :: rest) =
 (DTypeSig false "lintBind" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CBind") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "lintBind" ((PVar "globals") (PCon "CBind" (PVar "name") (PVar "clauses") PWild PWild)) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "lintClause") (EVar "globals")) (EBinOp "++" (ELit (LString "binding ")) (EVar "name")))) (EVar "clauses")))
 (DTypeSig false "lintClause" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "String") (TyFun (TyCon "CClause") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "lintClause" ((PVar "globals") (PVar "where_") (PCon "CClause" (PVar "pats") (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "lintBody") (EVar "globals")) (EApp (EApp (EVar "bindAll") (EVar "pats")) (EVar "omEmpty"))) (EVar "where_")) (EVar "body")))
+(DFunDef false "lintClause" ((PVar "globals") (PVar "where_") (PCon "CClause" (PVar "pats") (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "lintBody") (EVar "globals")) (EApp (EApp (EVar "bindPats") (EVar "pats")) (EVar "omEmpty"))) (EVar "where_")) (EVar "body")))
 (DTypeSig false "lintImpl" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CImplEntry") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "lintImpl" ((PVar "globals") (PCon "CImplEntry" (PVar "name") PWild PWild (PCon "CImplTagged" PWild PWild PWild PWild PWild (PVar "pats") (PVar "body")))) (EApp (EApp (EApp (EApp (EVar "lintBody") (EVar "globals")) (EApp (EApp (EVar "bindAll") (EVar "pats")) (EVar "omEmpty"))) (EBinOp "++" (ELit (LString "impl ")) (EVar "name"))) (EVar "body")))
-(DFunDef false "lintImpl" ((PVar "globals") (PCon "CImplEntry" (PVar "name") PWild PWild (PCon "CImplDefault" PWild PWild PWild PWild PWild (PVar "pats") (PVar "body")))) (EApp (EApp (EApp (EApp (EVar "lintBody") (EVar "globals")) (EApp (EApp (EVar "bindAll") (EVar "pats")) (EVar "omEmpty"))) (EBinOp "++" (ELit (LString "impl ")) (EVar "name"))) (EVar "body")))
+(DFunDef false "lintImpl" ((PVar "globals") (PCon "CImplEntry" (PVar "name") PWild PWild (PCon "CImplTagged" PWild PWild PWild PWild PWild (PVar "pats") (PVar "body")))) (EApp (EApp (EApp (EApp (EVar "lintBody") (EVar "globals")) (EApp (EApp (EVar "bindPats") (EVar "pats")) (EVar "omEmpty"))) (EBinOp "++" (ELit (LString "impl ")) (EVar "name"))) (EVar "body")))
+(DFunDef false "lintImpl" ((PVar "globals") (PCon "CImplEntry" (PVar "name") PWild PWild (PCon "CImplDefault" PWild PWild PWild PWild PWild (PVar "pats") (PVar "body")))) (EApp (EApp (EApp (EApp (EVar "lintBody") (EVar "globals")) (EApp (EApp (EVar "bindPats") (EVar "pats")) (EVar "omEmpty"))) (EBinOp "++" (ELit (LString "impl ")) (EVar "name"))) (EVar "body")))
 (DTypeSig false "lintBody" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "String") (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "lintBody" ((PVar "globals") (PVar "scope") (PVar "where_") (PVar "body")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "f")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "where_"))) (ELit (LString ": "))) (EApp (EVar "$core.display") (EVar "f"))) (ELit (LString ""))))) (EBinOp "++" (EApp (EApp (EApp (EVar "scopeFaults") (EVar "globals")) (EVar "scope")) (EVar "body")) (EApp (EVar "shapeFaults") (EVar "body")))))
-(DTypeSig false "bindAll" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
-(DFunDef false "bindAll" ((PVar "pats") (PVar "scope")) (EApp (EApp (EVar "omFromNames") (EApp (EApp (EDictApp "flatMap") (EVar "patBinders")) (EVar "pats"))) (EVar "scope")))
 (DTypeSig false "shapeFaults" (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "shapeFaults" ((PVar "e")) (EApp (EVar "reverse") (EApp (EApp (EApp (EVar "foldExpr") (EVar "shapeStep")) (EListLit)) (EVar "e"))))
 (DTypeSig false "shapeStep" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String")))))
@@ -318,8 +308,8 @@ blockFaults g s ((CSLet isRec pat e) :: rest) =
 (DFunDef false "scopeFaults" ((PVar "globals") (PVar "scope") (PCon "CVar" (PVar "x") PWild)) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "x") (EVar "fallthroughName")) (EApp (EApp (EVar "startsWith") (ELit (LString "$extern$"))) (EVar "x"))) (EApp (EApp (EVar "omHasKey") (EVar "x")) (EVar "scope"))) (EApp (EApp (EVar "omHasKey") (EVar "x")) (EVar "globals"))) (EListLit) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "unbound variable ")) (EApp (EVar "$core.display") (EVar "x"))) (ELit (LString ""))))))
 (DFunDef false "scopeFaults" (PWild PWild (PCon "CLit" PWild)) (EListLit))
 (DFunDef false "scopeFaults" ((PVar "g") (PVar "s") (PCon "CApp" (PVar "h") (PVar "args") PWild)) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "scopeFaults") (EVar "g")) (EVar "s"))) (EBinOp "::" (EVar "h") (EVar "args"))))
-(DFunDef false "scopeFaults" ((PVar "g") (PVar "s") (PCon "CLam" (PVar "pats") (PVar "body"))) (EApp (EApp (EApp (EVar "scopeFaults") (EVar "g")) (EApp (EApp (EVar "bindAll") (EVar "pats")) (EVar "s"))) (EVar "body")))
-(DFunDef false "scopeFaults" ((PVar "g") (PVar "s") (PCon "CLet" (PVar "isRec") (PVar "pat") (PVar "rhs") (PVar "body"))) (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EVar "bindAll") (EListLit (EVar "pat"))) (EVar "s"))) (DoExpr (EBinOp "++" (EApp (EApp (EApp (EVar "scopeFaults") (EVar "g")) (EIf (EVar "isRec") (EVar "inner") (EVar "s"))) (EVar "rhs")) (EApp (EApp (EApp (EVar "scopeFaults") (EVar "g")) (EVar "inner")) (EVar "body"))))))
+(DFunDef false "scopeFaults" ((PVar "g") (PVar "s") (PCon "CLam" (PVar "pats") (PVar "body"))) (EApp (EApp (EApp (EVar "scopeFaults") (EVar "g")) (EApp (EApp (EVar "bindPats") (EVar "pats")) (EVar "s"))) (EVar "body")))
+(DFunDef false "scopeFaults" ((PVar "g") (PVar "s") (PCon "CLet" (PVar "isRec") (PVar "pat") (PVar "rhs") (PVar "body"))) (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EVar "bindPats") (EListLit (EVar "pat"))) (EVar "s"))) (DoExpr (EBinOp "++" (EApp (EApp (EApp (EVar "scopeFaults") (EVar "g")) (EIf (EVar "isRec") (EVar "inner") (EVar "s"))) (EVar "rhs")) (EApp (EApp (EApp (EVar "scopeFaults") (EVar "g")) (EVar "inner")) (EVar "body"))))))
 (DFunDef false "scopeFaults" ((PVar "g") (PVar "s") (PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EVar "omFromNames") (EApp (EVar "bindNames") (EVar "binds"))) (EVar "s"))) (DoExpr (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "groupClauseFaults") (EVar "g")) (EVar "inner"))) (EVar "binds")) (EApp (EApp (EApp (EVar "scopeFaults") (EVar "g")) (EVar "inner")) (EVar "body"))))))
 (DFunDef false "scopeFaults" ((PVar "g") (PVar "s") (PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EBinOp "++" (EApp (EApp (EApp (EVar "scopeFaults") (EVar "g")) (EVar "s")) (EVar "scrut")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "armFaults") (EVar "g")) (EVar "s"))) (EVar "arms"))))
 (DFunDef false "scopeFaults" ((PVar "g") (PVar "s") (PCon "CDecision" (PVar "scrut") (PVar "arms") PWild)) (EBinOp "++" (EApp (EApp (EApp (EVar "scopeFaults") (EVar "g")) (EVar "s")) (EVar "scrut")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "armFaults") (EVar "g")) (EVar "s"))) (EVar "arms"))))
@@ -341,16 +331,16 @@ blockFaults g s ((CSLet isRec pat e) :: rest) =
 (DTypeSig false "fieldFaults" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CField") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "fieldFaults" ((PVar "g") (PVar "s") (PCon "CField" PWild PWild (PVar "e"))) (EApp (EApp (EApp (EVar "scopeFaults") (EVar "g")) (EVar "s")) (EVar "e")))
 (DTypeSig false "groupClauseFaults" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CBind") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "groupClauseFaults" ((PVar "g") (PVar "s") (PCon "CBind" PWild (PVar "clauses") PWild PWild)) (EApp (EApp (EDictApp "flatMap") (ELam ((PCon "CClause" (PVar "pats") (PVar "body"))) (EApp (EApp (EApp (EVar "scopeFaults") (EVar "g")) (EApp (EApp (EVar "bindAll") (EVar "pats")) (EVar "s"))) (EVar "body")))) (EVar "clauses")))
+(DFunDef false "groupClauseFaults" ((PVar "g") (PVar "s") (PCon "CBind" PWild (PVar "clauses") PWild PWild)) (EApp (EApp (EDictApp "flatMap") (ELam ((PCon "CClause" (PVar "pats") (PVar "body"))) (EApp (EApp (EApp (EVar "scopeFaults") (EVar "g")) (EApp (EApp (EVar "bindPats") (EVar "pats")) (EVar "s"))) (EVar "body")))) (EVar "clauses")))
 (DTypeSig false "armFaults" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CArm") (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "armFaults" ((PVar "g") (PVar "s") (PCon "CArm" (PVar "pat") (PVar "guards") (PVar "body"))) (EBlock (DoLet false false (PTuple (PVar "faults") (PVar "inner")) (EApp (EApp (EApp (EVar "guardFaults") (EVar "g")) (EApp (EApp (EVar "bindAll") (EListLit (EVar "pat"))) (EVar "s"))) (EVar "guards"))) (DoExpr (EBinOp "++" (EVar "faults") (EApp (EApp (EApp (EVar "scopeFaults") (EVar "g")) (EVar "inner")) (EVar "body"))))))
-(DFunDef false "armFaults" ((PVar "g") (PVar "s") (PCon "CArmAlt" (PVar "pat") (PVar "guards") PWild)) (EApp (EVar "fst") (EApp (EApp (EApp (EVar "guardFaults") (EVar "g")) (EApp (EApp (EVar "bindAll") (EListLit (EVar "pat"))) (EVar "s"))) (EVar "guards"))))
+(DFunDef false "armFaults" ((PVar "g") (PVar "s") (PCon "CArm" (PVar "pat") (PVar "guards") (PVar "body"))) (EBlock (DoLet false false (PTuple (PVar "faults") (PVar "inner")) (EApp (EApp (EApp (EVar "guardFaults") (EVar "g")) (EApp (EApp (EVar "bindPats") (EListLit (EVar "pat"))) (EVar "s"))) (EVar "guards"))) (DoExpr (EBinOp "++" (EVar "faults") (EApp (EApp (EApp (EVar "scopeFaults") (EVar "g")) (EVar "inner")) (EVar "body"))))))
+(DFunDef false "armFaults" ((PVar "g") (PVar "s") (PCon "CArmAlt" (PVar "pat") (PVar "guards") PWild)) (EApp (EVar "fst") (EApp (EApp (EApp (EVar "guardFaults") (EVar "g")) (EApp (EApp (EVar "bindPats") (EListLit (EVar "pat"))) (EVar "s"))) (EVar "guards"))))
 (DTypeSig false "guardFaults" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CGuard")) (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))))
 (DFunDef false "guardFaults" (PWild (PVar "s") (PList)) (ETuple (EListLit) (EVar "s")))
 (DFunDef false "guardFaults" ((PVar "g") (PVar "s") (PCons (PCon "CGBool" (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "more") (PVar "out")) (EApp (EApp (EApp (EVar "guardFaults") (EVar "g")) (EVar "s")) (EVar "rest"))) (DoExpr (ETuple (EBinOp "++" (EApp (EApp (EApp (EVar "scopeFaults") (EVar "g")) (EVar "s")) (EVar "e")) (EVar "more")) (EVar "out")))))
-(DFunDef false "guardFaults" ((PVar "g") (PVar "s") (PCons (PCon "CGBind" (PVar "p") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "more") (PVar "out")) (EApp (EApp (EApp (EVar "guardFaults") (EVar "g")) (EApp (EApp (EVar "bindAll") (EListLit (EVar "p"))) (EVar "s"))) (EVar "rest"))) (DoExpr (ETuple (EBinOp "++" (EApp (EApp (EApp (EVar "scopeFaults") (EVar "g")) (EVar "s")) (EVar "e")) (EVar "more")) (EVar "out")))))
+(DFunDef false "guardFaults" ((PVar "g") (PVar "s") (PCons (PCon "CGBind" (PVar "p") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "more") (PVar "out")) (EApp (EApp (EApp (EVar "guardFaults") (EVar "g")) (EApp (EApp (EVar "bindPats") (EListLit (EVar "p"))) (EVar "s"))) (EVar "rest"))) (DoExpr (ETuple (EBinOp "++" (EApp (EApp (EApp (EVar "scopeFaults") (EVar "g")) (EVar "s")) (EVar "e")) (EVar "more")) (EVar "out")))))
 (DTypeSig false "blockFaults" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "blockFaults" (PWild PWild (PList)) (EListLit))
 (DFunDef false "blockFaults" ((PVar "g") (PVar "s") (PCons (PCon "CSExpr" (PVar "e")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EApp (EVar "scopeFaults") (EVar "g")) (EVar "s")) (EVar "e")) (EApp (EApp (EApp (EVar "blockFaults") (EVar "g")) (EVar "s")) (EVar "rest"))))
 (DFunDef false "blockFaults" ((PVar "g") (PVar "s") (PCons (PCon "CSAssign" PWild (PVar "e")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EApp (EVar "scopeFaults") (EVar "g")) (EVar "s")) (EVar "e")) (EApp (EApp (EApp (EVar "blockFaults") (EVar "g")) (EVar "s")) (EVar "rest"))))
-(DFunDef false "blockFaults" ((PVar "g") (PVar "s") (PCons (PCon "CSLet" (PVar "isRec") (PVar "pat") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EVar "bindAll") (EListLit (EVar "pat"))) (EVar "s"))) (DoExpr (EBinOp "++" (EApp (EApp (EApp (EVar "scopeFaults") (EVar "g")) (EIf (EVar "isRec") (EVar "inner") (EVar "s"))) (EVar "e")) (EApp (EApp (EApp (EVar "blockFaults") (EVar "g")) (EVar "inner")) (EVar "rest"))))))
+(DFunDef false "blockFaults" ((PVar "g") (PVar "s") (PCons (PCon "CSLet" (PVar "isRec") (PVar "pat") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EVar "bindPats") (EListLit (EVar "pat"))) (EVar "s"))) (DoExpr (EBinOp "++" (EApp (EApp (EApp (EVar "scopeFaults") (EVar "g")) (EIf (EVar "isRec") (EVar "inner") (EVar "s"))) (EVar "e")) (EApp (EApp (EApp (EVar "blockFaults") (EVar "g")) (EVar "inner")) (EVar "rest"))))))

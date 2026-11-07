@@ -33,7 +33,16 @@ import ir.core_ir.{
   noImplSym,
 }
 import ir.core_ir_sexp.{cexprSexp, cprogramToSexp, ctreeSexp, defaultSexpMode}
-import ir.core_walk.{foldExpr, patBinders, rewriteExpr, rewriteProgram}
+import ir.core_walk.{
+  clauseBody,
+  foldExpr,
+  patBinders,
+  rewriteExpr,
+  rewriteExprScoped,
+  rewriteProgram,
+  rewriteProgramScoped,
+}
+import support.ordmap.{OrdMap, omEmpty, omKeys}
 -- Sibling test module for `compiler/ir/core_walk.mdk` ([P-TEST-SIBLING]).
 --
 -- Each fixture is a function of the variable name it reads, one fixture per
@@ -282,3 +291,82 @@ test "patBinders reads a PRec pun as a binder and a field pattern by its subpatt
           [RecPatField "a" noDeclLoc noBinderId (Some (pv "inner")), pun "z"]
           True)),
   ]
+
+-- ── scoped rewrite: the scope at each `mark` node ────────────────────────────
+-- A marked node is replaced by a tuple of the scope's names, so the result
+-- holds one tuple per mark in source order.
+
+mark : CExpr
+mark = v "mark"
+
+stamp : OrdMap Unit -> CExpr -> CExpr
+stamp s (CVar "mark" _) = CTuple (map v (omKeys s))
+stamp _ e = e
+
+stamped : CExpr -> List (List String)
+stamped e =
+  reverseL (foldExpr collectStamp [] (rewriteExprScoped stamp omEmpty e))
+
+collectStamp : List (List String) -> CExpr -> List (List String)
+collectStamp acc (CTuple es) = map varName es :: acc
+collectStamp acc _ = acc
+
+varName : CExpr -> String
+varName (CVar x _) = x
+varName _ = "?"
+
+-- Mirrors core_lint.scopeFaults lines 127 (CLam), 128-130 (CLet), 131-133 and
+-- 159-161 (CLetGroup), 134-137 and 164-181 (arms, guards), 152 and 183-190
+-- (blocks), 70-77 (top-level clause parameters seed the scope).
+test "a lambda parameter is in scope in its body" =
+  expectEqual [["a"]] (stamped (CLam [pv "a"] mark))
+
+test "a let pattern scopes over the body, and over the right-hand side only when recursive" = expectAll
+  [
+    expectEqual [[], ["a"]] (stamped (CLet False (pv "a") mark mark)),
+    expectEqual [["a"], ["a"]] (stamped (CLet True (pv "a") mark mark)),
+  ]
+
+test "a let-group name and its clause parameters are in scope in the clause bodies" =
+  expectEqual
+    [["f", "p"], ["f"]]
+    (stamped
+      (CLetGroup [CBind "f" [CClause [pv "p"] mark] noDeclLoc noBinderId] mark))
+
+test "an arm pattern is in scope in its guards and body, a guard pattern after its expression" =
+  expectEqual
+    [[], ["a"], ["a"], ["a", "b"], ["a", "b"]]
+    (stamped
+      (CMatch mark [
+        CArm (pv "a") [CGBool mark, CGBind (pv "b") mark, CGBool mark] mark,
+      ]))
+
+test "a block statement is in scope for the statements after it" =
+  expectEqual
+    [[], [], ["a"]]
+    (stamped (CBlock [CSExpr mark, CSLet False (pv "a") mark, CSExpr mark]))
+
+test "a top-level name is absent from the scope; clause parameters seed it" =
+  let prog =
+    CProgram
+      [
+        CBind "top" [CClause [] mark] noDeclLoc noBinderId,
+        CBind
+          "g"
+          [CClause [pv "p"] (CApp (v "top") [mark] site)]
+          noDeclLoc
+          noBinderId,
+      ]
+      []
+      []
+      []
+      []
+      noDeclFacts
+  expectEqual
+    [[], ["p"]]
+    (match rewriteProgramScoped stamp prog
+      CProgram binds _ _ _ _ _ => flatMap bindStamps binds)
+
+bindStamps : CBind -> List (List String)
+bindStamps (CBind _ clauses _ _) =
+  flatMap (c => reverseL (foldExpr collectStamp [] (clauseBody c))) clauses
