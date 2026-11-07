@@ -1,0 +1,18 @@
+-- Fixture for rule-comment-ruling: hits are a full-line comment and a line of a block comment.
+-- expect-at-line 5 rule-comment-ruling
+-- expect-at-line 10 rule-comment-ruling
+
+-- refuted by review.
+a : Int
+a = 1
+
+{- a block
+   ratified here. -}
+
+-- Non-hits follow: a string literal opening a phantom block comment, a string, a trailing comment.
+s : String
+s = "{-"
+t : String
+t = "withdrawn ratified refuted"
+u : Int
+u = 3 -- refuted by review.

@@ -1,0 +1,267 @@
+-- lint rules rule-comment-history, rule-comment-ruling, rule-comment-tombstone, rule-comment-emoji, rule-comment-draft, rule-comment-deictic, rule-comment-dead-path, rule-comment-shout: comment lines in a register that goes stale.
+
+import frontend.ast.{Loc(..)}
+import driver.diagnostics.{Severity(..)}
+import support.util.{anyList, filterList, splitNl}
+import string.{contains, startsWith, trim}
+import list.{partition}
+import regex.{Regex, mustCompile, isMatch}
+import frontend.lexer.{Comment, commentCol, commentLine, commentText}
+import tools.lint_core.{
+  Category(..),
+  FileFacts(..),
+  Finding(..),
+  Fixability(..),
+  Ratchet(..),
+  Rule,
+  RuleMeta(..),
+  Scope(..),
+  factComments,
+  factLines,
+  mkRule,
+  noFix,
+}
+import tools.lint_shared.{
+  ruleNameCommentDeadPath,
+  ruleNameCommentDeictic,
+  ruleNameCommentDraft,
+  ruleNameCommentEmoji,
+  ruleNameCommentHistory,
+  ruleNameCommentRuling,
+  ruleNameCommentShout,
+  ruleNameCommentTombstone,
+}
+
+-- One rule per comment-register class. A finding is one comment LINE: a block
+-- comment contributes one finding per physical line that matches. A `--`
+-- comment that trails code is skipped, because the register is about prose a
+-- reader meets as prose; every line of a `{- -}` block counts.
+export
+rules : List Rule
+rules = [
+  classRuleCoarse
+    ruleNameCommentHistory
+    "comment line narrates history (\"formerly\", \"used to\", \"The old \", \"Until 2026-\")"
+    "A comment line that narrates what the code used to be (\"formerly\", \"used to\", \"withdrawn\", \"The old \", \"Until 2026-\") goes stale the day it is written; state the constraint the code carries now.\n\nBefore:\n  -- formerly a list, now a map\nAfter:\n  -- keyed by name so lookups stay O(log n)"
+    hasHistoryPhrase
+    isHistoryLine,
+  classRule
+    ruleNameCommentRuling
+    "comment line uses reviewer-addressed ruling vocabulary (\"refuted\", \"ratified\", \"withdrawn\")"
+    "Ruling vocabulary (\"refuted\", \"ratified\", \"withdrawn\", \"ruling\") addresses a reviewer; it belongs on the PR or issue, not in the source.\n\nBefore:\n  -- ratified in review\nAfter:\n  -- the invariant the review settled, stated directly"
+    isRulingLine,
+  classRule
+    ruleNameCommentTombstone
+    "comment line is a tombstone for code that no longer exists"
+    "A tombstone (\"was HERE and is RETIRED\", \"do not re-add\", \"now lives in\", \"moved to\", \"now comes from\") points at code that is gone.\n\nBefore:\n  -- moved to util.mdk\nAfter:\n  delete the comment"
+    isTombstoneLine,
+  classRule
+    ruleNameCommentEmoji
+    "comment line carries an emoji shout"
+    "An emoji shout (a siren, a warning sign or a lock) in a comment; state the constraint in words.\n\nBefore:\n  -- (siren) never edit this\nAfter:\n  -- byte-pinned by a gate: edits break its golden"
+    isEmojiLine,
+  classRule
+    ruleNameCommentDraft
+    "comment line narrates a draft (\"earlier cut\", \"first cut\", \"earlier revision\")"
+    "Draft self-narration (\"earlier cut\", \"first cut\", \"earlier revision\") describes the author's process, not the code.\n\nBefore:\n  -- the first cut used a list\nAfter:\n  delete the comment"
+    isDraftLine,
+  classRule
+    ruleNameCommentDeictic
+    "comment line points at \"this PR\""
+    "A comment that says \"this PR\" does not survive the PR merging.\n\nBefore:\n  -- added in this PR\nAfter:\n  delete the comment"
+    isDeicticLine,
+  classRule
+    ruleNameCommentDeadPath
+    "comment line cites a dead OCaml path (lib/*.ml)"
+    "A comment that cites a path under lib/ ending in .ml points at the removed OCaml compiler.\n\nBefore:\n  -- see lib/typecheck.ml\nAfter:\n  cite the Medaka module that holds the code"
+    isDeadPathLine,
+  classRule
+    ruleNameCommentShout
+    "comment line has three consecutive capitalised words"
+    "Three consecutive words in capitals read as shouting; state the constraint in plain words.\n\nBefore:\n  -- (caps) do not edit this\nAfter:\n  -- byte-pinned by a gate"
+    isShoutLine,
+]
+
+classRule : String -> String -> String -> (String -> Bool) -> Rule
+classRule name summary doc hit = classRuleCoarse name summary doc hit hit
+
+-- `coarse` holds of any text with a hit line in it: a block comment is split
+-- into lines only when it does.
+classRuleCoarse : String ->
+  String ->
+  String ->
+  (String -> Bool) ->
+  (String -> Bool) ->
+  Rule
+classRuleCoarse name summary doc coarse hit =
+  mkRule
+    RuleMeta {
+      name = name,
+      summary = summary,
+      doc = doc,
+      category = Style,
+      scope = Internal,
+      ratchet = Baselined,
+      defaultSeverity = SevWarning,
+      fixability = NotFixable,
+      needs = [],
+    }
+    (_ _ facts _ _ => commentLineFindings name coarse hit facts)
+    None
+
+commentLineFindings : String ->
+  (String -> Bool) ->
+  (String -> Bool) ->
+  FileFacts ->
+  List Finding
+commentLineFindings name coarse hit facts =
+  let (blockCs, lineCs) = partition isBlockComment (factComments facts)
+  let lineHits = filterList (c => hit (commentText c)) lineCs
+  let blocks = filterList (c => coarse (commentText c)) blockCs
+  flatMap (blockFindings name hit) blocks ++ ownLineFindings name facts lineHits
+
+-- The opener is joined from two pieces: the shell census reads a literal one
+-- inside a string as an unterminated block comment, and fmt rewrites an escape
+-- back to the literal.
+blockOpener : String
+blockOpener = "{" ++ "-"
+
+isBlockComment : Comment -> Bool
+isBlockComment c = startsWith blockOpener (commentText c)
+
+ownLineFindings : String -> FileFacts -> List Comment -> List Finding
+ownLineFindings name facts hits =
+  hits
+    |> filterList (ownLine facts)
+    |> map (c => lineFinding name (commentLine c))
+
+blockFindings : String -> (String -> Bool) -> Comment -> List Finding
+blockFindings name hit c = go (commentLine c) (splitNl (commentText c))
+  where
+    go _ [] = []
+    go n (l :: rest) =
+      if hit l then lineFinding name n :: go (n + 1) rest else go (n + 1) rest
+
+-- Nothing but blanks before the comment on its source line. A comment in
+-- column 0 needs no look at the source, so the file's line array is built
+-- only for a file with an indented `--` hit.
+ownLine : FileFacts -> Comment -> Bool
+ownLine facts c = commentCol c == 0 || blankBefore (factLines facts) c
+
+blankBefore : Array String -> Comment -> Bool
+blankBefore srcLines c =
+  let i = commentLine c - 1
+  i >= 0
+    && i < arrayLength srcLines
+    && trim (stringSlice 0 (commentCol c) (arrayGetUnsafe i srcLines)) == ""
+
+lineFinding : String -> Int -> Finding
+lineFinding name line = Finding {
+  rule = name,
+  message = "comment line in the `\{name}` register",
+  severity = SevWarning,
+  loc = Some (Loc "" line 1 line 1),
+  fix = noFix,
+}
+
+anyInfix : List String -> String -> Bool
+anyInfix needles s = anyList (n => contains n s) needles
+
+historyWordRe : Regex
+historyWordRe =
+  mustCompile "(^|[^A-Za-z0-9_])(formerly|withdrawn|used to)([^A-Za-z0-9_]|$)"
+
+hasHistoryPhrase : String -> Bool
+hasHistoryPhrase l =
+  contains "Until 2026-" l
+    || contains "The old " l
+    || anyInfix ["formerly", "withdrawn", "used to"] l
+      && isMatch historyWordRe l
+
+-- A line that says "is used to" (and kin) describes present use, not history.
+isHistoryLine : String -> Bool
+isHistoryLine l =
+  hasHistoryPhrase l
+    && not
+      (anyInfix
+        [
+          "is used to",
+          "are used to",
+          "was used to",
+          "be used to",
+          "been used to",
+        ]
+        l)
+
+isRulingLine : String -> Bool
+isRulingLine = anyInfix ["refuted", "ratified", "withdrawn", "\"ruling\""]
+
+isTombstoneLine : String -> Bool
+isTombstoneLine = anyInfix [
+  "was HERE and is RETIRED",
+  "do not re-add",
+  "now lives in",
+  "moved to",
+  "now comes from",
+]
+
+isEmojiLine : String -> Bool
+isEmojiLine l =
+  stringByteLength l /= stringLength l && anyInfix ["🚨", "⚠️", "🔒"] l
+
+isDraftLine : String -> Bool
+isDraftLine = anyInfix ["earlier cut", "first cut", "earlier revision"]
+
+isDeicticLine : String -> Bool
+isDeicticLine = contains "this PR"
+
+deadPathRe : Regex
+deadPathRe = mustCompile "lib/[A-Za-z0-9_./]*\\.ml[a-z]*"
+
+isDeadPathLine : String -> Bool
+isDeadPathLine l = contains "lib/" l && isMatch deadPathRe l
+
+-- Three words of capitals (two letters or more) in a row, each of the first
+-- two followed by at most one of `,.:;)` and one space.
+isShoutLine : String -> Bool
+isShoutLine l = shoutFrom (stringToChars l)
+
+-- Runs of capitals are visited whole, so each is tested once.
+shoutFrom : Array Char -> Bool
+shoutFrom arr = go 0
+  where
+    go i
+      | i >= arrayLength arr = False
+      | isUpperAt arr i =
+        let e = runEnd arr i
+        e - i >= 2 && shoutRest arr e 2 || go e
+      | otherwise = go (i + 1)
+
+-- `k` more words of capitals must follow the run that ended at `e`.
+shoutRest : Array Char -> Int -> Int -> Bool
+shoutRest arr e k = match afterSep arr e
+  Some j =>
+    let e2 = runEnd arr j
+    e2 - j >= 2 && (k == 1 || shoutRest arr e2 (k - 1))
+  None => False
+
+runEnd : Array Char -> Int -> Int
+runEnd arr i = if isUpperAt arr i then runEnd arr (i + 1) else i
+
+afterSep : Array Char -> Int -> Option Int
+afterSep arr e
+  | charAt arr e == ' ' = Some (e + 1)
+  | isShoutPunct (charAt arr e) && charAt arr (e + 1) == ' ' = Some (e + 2)
+  | otherwise = None
+
+isShoutPunct : Char -> Bool
+isShoutPunct c = c == ',' || c == '.' || c == ':' || c == ';' || c == ')'
+
+charAt : Array Char -> Int -> Char
+charAt arr i = if i < arrayLength arr then arrayGetUnsafe i arr else '\0'
+
+isUpperAt : Array Char -> Int -> Bool
+isUpperAt arr i =
+  i < arrayLength arr
+    && arrayGetUnsafe i arr >= 'A'
+    && arrayGetUnsafe i arr <= 'Z'

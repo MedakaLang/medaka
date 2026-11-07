@@ -103,6 +103,14 @@ fixtureNames = [
   "bool-simplify",
   "clause-map",
   "clone-type",
+  "comment-dead-path",
+  "comment-deictic",
+  "comment-draft",
+  "comment-emoji",
+  "comment-history",
+  "comment-ruling",
+  "comment-shout",
+  "comment-tombstone",
   "complement-predicate",
   "concat-to-interp",
   "dead-code",
@@ -459,6 +467,22 @@ test "rule-test-equal-in-true fixture" = fixtureHolds "test-equal-in-true"
 test "rule-threaded-invariant fixture" = fixtureHolds "threaded-invariant"
 
 test "rule-passthrough-arm fixture" = fixtureHolds "passthrough-arm"
+
+test "rule-comment-dead-path fixture" = fixtureHolds "comment-dead-path"
+
+test "rule-comment-deictic fixture" = fixtureHolds "comment-deictic"
+
+test "rule-comment-draft fixture" = fixtureHolds "comment-draft"
+
+test "rule-comment-emoji fixture" = fixtureHolds "comment-emoji"
+
+test "rule-comment-history fixture" = fixtureHolds "comment-history"
+
+test "rule-comment-ruling fixture" = fixtureHolds "comment-ruling"
+
+test "rule-comment-shout fixture" = fixtureHolds "comment-shout"
+
+test "rule-comment-tombstone fixture" = fixtureHolds "comment-tombstone"
 
 test "rule-unused-import fixture" = fixtureHolds "unused-import"
 

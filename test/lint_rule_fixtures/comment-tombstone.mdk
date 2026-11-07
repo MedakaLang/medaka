@@ -1,0 +1,18 @@
+-- Fixture for rule-comment-tombstone: hits are a full-line comment and a line of a block comment.
+-- expect-at-line 5 rule-comment-tombstone
+-- expect-at-line 10 rule-comment-tombstone
+
+-- moved to util.
+a : Int
+a = 1
+
+{- a block
+   now lives in util. -}
+
+-- Non-hits follow: a string literal opening a phantom block comment, a string, a trailing comment.
+s : String
+s = "{-"
+t : String
+t = "do not re-add moved to"
+u : Int
+u = 3 -- moved to util.

@@ -1,0 +1,21 @@
+-- Fixture for rule-comment-history: hits are a full-line comment and a line of a block comment.
+-- expect-at-line 5 rule-comment-history
+-- expect-at-line 10 rule-comment-history
+
+-- formerly a list.
+a : Int
+a = 1
+
+{- a block
+   The old shape. -}
+
+-- Non-hits follow: a string literal opening a phantom block comment, a string, a trailing comment.
+s : String
+s = "{-"
+t : String
+t = "The old formerly withdrawn"
+u : Int
+u = 3 -- formerly a list.
+
+-- The table is used to count rows.
+-- Clauses are used to match.

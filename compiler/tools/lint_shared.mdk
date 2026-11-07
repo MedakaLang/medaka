@@ -1111,6 +1111,38 @@ export
 ruleNamePassthroughArm : String
 ruleNamePassthroughArm = "rule-passthrough-arm"
 
+export
+ruleNameCommentHistory : String
+ruleNameCommentHistory = "rule-comment-history"
+
+export
+ruleNameCommentRuling : String
+ruleNameCommentRuling = "rule-comment-ruling"
+
+export
+ruleNameCommentTombstone : String
+ruleNameCommentTombstone = "rule-comment-tombstone"
+
+export
+ruleNameCommentEmoji : String
+ruleNameCommentEmoji = "rule-comment-emoji"
+
+export
+ruleNameCommentDraft : String
+ruleNameCommentDraft = "rule-comment-draft"
+
+export
+ruleNameCommentDeictic : String
+ruleNameCommentDeictic = "rule-comment-deictic"
+
+export
+ruleNameCommentDeadPath : String
+ruleNameCommentDeadPath = "rule-comment-dead-path"
+
+export
+ruleNameCommentShout : String
+ruleNameCommentShout = "rule-comment-shout"
+
 -- Columns of leading whitespace on a source line.
 export
 indentWidth : String -> Int

@@ -1,0 +1,20 @@
+-- Fixture for rule-comment-shout: hits are a full-line comment and a line of a block comment.
+-- expect-at-line 5 rule-comment-shout
+-- expect-at-line 10 rule-comment-shout
+
+-- DO NOT EDIT THIS
+a : Int
+a = 1
+
+{- a block
+   READ ONLY NOW -}
+
+-- Non-hits follow: a string literal opening a phantom block comment, a string, a trailing comment.
+s : String
+s = "{-"
+t : String
+t = "READ ONLY NOW OK"
+u : Int
+u = 3 -- DO NOT EDIT THIS
+
+-- ONLY TWO words, then QUIET.

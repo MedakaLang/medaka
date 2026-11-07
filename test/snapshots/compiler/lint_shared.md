@@ -1,5 +1,5 @@
 # META
-source_lines=1122
+source_lines=1154
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_shared.mdk — helpers used by more than one lint module:
@@ -1115,6 +1115,38 @@ export
 ruleNamePassthroughArm : String
 ruleNamePassthroughArm = "rule-passthrough-arm"
 
+export
+ruleNameCommentHistory : String
+ruleNameCommentHistory = "rule-comment-history"
+
+export
+ruleNameCommentRuling : String
+ruleNameCommentRuling = "rule-comment-ruling"
+
+export
+ruleNameCommentTombstone : String
+ruleNameCommentTombstone = "rule-comment-tombstone"
+
+export
+ruleNameCommentEmoji : String
+ruleNameCommentEmoji = "rule-comment-emoji"
+
+export
+ruleNameCommentDraft : String
+ruleNameCommentDraft = "rule-comment-draft"
+
+export
+ruleNameCommentDeictic : String
+ruleNameCommentDeictic = "rule-comment-deictic"
+
+export
+ruleNameCommentDeadPath : String
+ruleNameCommentDeadPath = "rule-comment-dead-path"
+
+export
+ruleNameCommentShout : String
+ruleNameCommentShout = "rule-comment-shout"
+
 -- Columns of leading whitespace on a source line.
 export
 indentWidth : String -> Int
@@ -1492,6 +1524,22 @@ isCodeText l = not (trim l == "" || startsWith "--" (trim l))
 (DFunDef false "ruleNameThreadedInvariant" () (ELit (LString "rule-threaded-invariant")))
 (DTypeSig true "ruleNamePassthroughArm" (TyCon "String"))
 (DFunDef false "ruleNamePassthroughArm" () (ELit (LString "rule-passthrough-arm")))
+(DTypeSig true "ruleNameCommentHistory" (TyCon "String"))
+(DFunDef false "ruleNameCommentHistory" () (ELit (LString "rule-comment-history")))
+(DTypeSig true "ruleNameCommentRuling" (TyCon "String"))
+(DFunDef false "ruleNameCommentRuling" () (ELit (LString "rule-comment-ruling")))
+(DTypeSig true "ruleNameCommentTombstone" (TyCon "String"))
+(DFunDef false "ruleNameCommentTombstone" () (ELit (LString "rule-comment-tombstone")))
+(DTypeSig true "ruleNameCommentEmoji" (TyCon "String"))
+(DFunDef false "ruleNameCommentEmoji" () (ELit (LString "rule-comment-emoji")))
+(DTypeSig true "ruleNameCommentDraft" (TyCon "String"))
+(DFunDef false "ruleNameCommentDraft" () (ELit (LString "rule-comment-draft")))
+(DTypeSig true "ruleNameCommentDeictic" (TyCon "String"))
+(DFunDef false "ruleNameCommentDeictic" () (ELit (LString "rule-comment-deictic")))
+(DTypeSig true "ruleNameCommentDeadPath" (TyCon "String"))
+(DFunDef false "ruleNameCommentDeadPath" () (ELit (LString "rule-comment-dead-path")))
+(DTypeSig true "ruleNameCommentShout" (TyCon "String"))
+(DFunDef false "ruleNameCommentShout" () (ELit (LString "rule-comment-shout")))
 (DTypeSig true "indentWidth" (TyFun (TyCon "String") (TyCon "Int")))
 (DFunDef false "indentWidth" ((PVar "l")) (EBinOp "-" (EApp (EVar "stringLength") (EVar "l")) (EApp (EVar "stringLength") (EApp (EVar "trimLeft") (EVar "l")))))
 (DTypeSig true "isCodeText" (TyFun (TyCon "String") (TyCon "Bool")))
@@ -1864,6 +1912,22 @@ isCodeText l = not (trim l == "" || startsWith "--" (trim l))
 (DFunDef false "ruleNameThreadedInvariant" () (ELit (LString "rule-threaded-invariant")))
 (DTypeSig true "ruleNamePassthroughArm" (TyCon "String"))
 (DFunDef false "ruleNamePassthroughArm" () (ELit (LString "rule-passthrough-arm")))
+(DTypeSig true "ruleNameCommentHistory" (TyCon "String"))
+(DFunDef false "ruleNameCommentHistory" () (ELit (LString "rule-comment-history")))
+(DTypeSig true "ruleNameCommentRuling" (TyCon "String"))
+(DFunDef false "ruleNameCommentRuling" () (ELit (LString "rule-comment-ruling")))
+(DTypeSig true "ruleNameCommentTombstone" (TyCon "String"))
+(DFunDef false "ruleNameCommentTombstone" () (ELit (LString "rule-comment-tombstone")))
+(DTypeSig true "ruleNameCommentEmoji" (TyCon "String"))
+(DFunDef false "ruleNameCommentEmoji" () (ELit (LString "rule-comment-emoji")))
+(DTypeSig true "ruleNameCommentDraft" (TyCon "String"))
+(DFunDef false "ruleNameCommentDraft" () (ELit (LString "rule-comment-draft")))
+(DTypeSig true "ruleNameCommentDeictic" (TyCon "String"))
+(DFunDef false "ruleNameCommentDeictic" () (ELit (LString "rule-comment-deictic")))
+(DTypeSig true "ruleNameCommentDeadPath" (TyCon "String"))
+(DFunDef false "ruleNameCommentDeadPath" () (ELit (LString "rule-comment-dead-path")))
+(DTypeSig true "ruleNameCommentShout" (TyCon "String"))
+(DFunDef false "ruleNameCommentShout" () (ELit (LString "rule-comment-shout")))
 (DTypeSig true "indentWidth" (TyFun (TyCon "String") (TyCon "Int")))
 (DFunDef false "indentWidth" ((PVar "l")) (EBinOp "-" (EApp (EVar "stringLength") (EVar "l")) (EApp (EVar "stringLength") (EApp (EVar "trimLeft") (EVar "l")))))
 (DTypeSig true "isCodeText" (TyFun (TyCon "String") (TyCon "Bool")))

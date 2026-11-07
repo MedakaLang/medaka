@@ -52,6 +52,14 @@ Every rule `medaka lint` knows. `universal` rules are meaningful in any Medaka p
 | [`rule-walker-wildcard`](#rule-walker-wildcard) | internal | style | gated | not-fixable | file |
 | [`rule-threaded-invariant`](#rule-threaded-invariant) | internal | style | gated | fixable-unsafe | file |
 | [`rule-passthrough-arm`](#rule-passthrough-arm) | internal | style | gated | fixable-unsafe | file |
+| [`rule-comment-history`](#rule-comment-history) | internal | style | baselined | not-fixable | file |
+| [`rule-comment-ruling`](#rule-comment-ruling) | internal | style | baselined | not-fixable | file |
+| [`rule-comment-tombstone`](#rule-comment-tombstone) | internal | style | baselined | not-fixable | file |
+| [`rule-comment-emoji`](#rule-comment-emoji) | internal | style | baselined | not-fixable | file |
+| [`rule-comment-draft`](#rule-comment-draft) | internal | style | baselined | not-fixable | file |
+| [`rule-comment-deictic`](#rule-comment-deictic) | internal | style | baselined | not-fixable | file |
+| [`rule-comment-dead-path`](#rule-comment-dead-path) | internal | style | baselined | not-fixable | file |
+| [`rule-comment-shout`](#rule-comment-shout) | internal | style | baselined | not-fixable | file |
 
 ## rule-match-on-param
 
@@ -725,4 +733,108 @@ After:
   do
     r <- catalogRow n
     g r
+```
+
+## rule-comment-history
+
+comment line narrates history ("formerly", "used to", "The old ", "Until 2026-")
+
+A comment line that narrates what the code used to be ("formerly", "used to", "withdrawn", "The old ", "Until 2026-") goes stale the day it is written; state the constraint the code carries now.
+
+```
+Before:
+  -- formerly a list, now a map
+After:
+  -- keyed by name so lookups stay O(log n)
+```
+
+## rule-comment-ruling
+
+comment line uses reviewer-addressed ruling vocabulary ("refuted", "ratified", "withdrawn")
+
+Ruling vocabulary ("refuted", "ratified", "withdrawn", "ruling") addresses a reviewer; it belongs on the PR or issue, not in the source.
+
+```
+Before:
+  -- ratified in review
+After:
+  -- the invariant the review settled, stated directly
+```
+
+## rule-comment-tombstone
+
+comment line is a tombstone for code that no longer exists
+
+A tombstone ("was HERE and is RETIRED", "do not re-add", "now lives in", "moved to", "now comes from") points at code that is gone.
+
+```
+Before:
+  -- moved to util.mdk
+After:
+  delete the comment
+```
+
+## rule-comment-emoji
+
+comment line carries an emoji shout
+
+An emoji shout (a siren, a warning sign or a lock) in a comment; state the constraint in words.
+
+```
+Before:
+  -- (siren) never edit this
+After:
+  -- byte-pinned by a gate: edits break its golden
+```
+
+## rule-comment-draft
+
+comment line narrates a draft ("earlier cut", "first cut", "earlier revision")
+
+Draft self-narration ("earlier cut", "first cut", "earlier revision") describes the author's process, not the code.
+
+```
+Before:
+  -- the first cut used a list
+After:
+  delete the comment
+```
+
+## rule-comment-deictic
+
+comment line points at "this PR"
+
+A comment that says "this PR" does not survive the PR merging.
+
+```
+Before:
+  -- added in this PR
+After:
+  delete the comment
+```
+
+## rule-comment-dead-path
+
+comment line cites a dead OCaml path (lib/*.ml)
+
+A comment that cites a path under lib/ ending in .ml points at the removed OCaml compiler.
+
+```
+Before:
+  -- see lib/typecheck.ml
+After:
+  cite the Medaka module that holds the code
+```
+
+## rule-comment-shout
+
+comment line has three consecutive capitalised words
+
+Three consecutive words in capitals read as shouting; state the constraint in plain words.
+
+```
+Before:
+  -- (caps) do not edit this
+After:
+  -- byte-pinned by a gate
 ```

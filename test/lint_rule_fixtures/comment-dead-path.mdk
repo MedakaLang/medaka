@@ -1,0 +1,18 @@
+-- Fixture for rule-comment-dead-path: hits are a full-line comment and a line of a block comment.
+-- expect-at-line 5 rule-comment-dead-path
+-- expect-at-line 10 rule-comment-dead-path
+
+-- see lib/typecheck.ml
+a : Int
+a = 1
+
+{- a block
+   lib/eval.mli -}
+
+-- Non-hits follow: a string literal opening a phantom block comment, a string, a trailing comment.
+s : String
+s = "{-"
+t : String
+t = "lib/typecheck.ml"
+u : Int
+u = 3 -- see lib/typecheck.ml

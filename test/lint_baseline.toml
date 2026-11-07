@@ -17,9 +17,54 @@
 # for both consumers above).
 
 [[entry]]
+file = "compiler/backend/emit_support.mdk"
+rule = "rule-comment-emoji"
+count = 6
+
+[[entry]]
+file = "compiler/backend/emit_support.mdk"
+rule = "rule-comment-shout"
+count = 5
+
+[[entry]]
+file = "compiler/backend/llvm_emit.mdk"
+rule = "rule-comment-emoji"
+count = 11
+
+[[entry]]
+file = "compiler/backend/llvm_emit.mdk"
+rule = "rule-comment-history"
+count = 2
+
+[[entry]]
+file = "compiler/backend/llvm_emit.mdk"
+rule = "rule-comment-ruling"
+count = 3
+
+[[entry]]
+file = "compiler/backend/llvm_emit.mdk"
+rule = "rule-comment-shout"
+count = 12
+
+[[entry]]
 file = "compiler/backend/llvm_emit.mdk"
 rule = "rule-stdlib-reimpl"
 count = 3
+
+[[entry]]
+file = "compiler/backend/trmc_analysis.mdk"
+rule = "rule-comment-emoji"
+count = 2
+
+[[entry]]
+file = "compiler/backend/trmc_analysis.mdk"
+rule = "rule-comment-history"
+count = 1
+
+[[entry]]
+file = "compiler/backend/trmc_analysis.mdk"
+rule = "rule-comment-shout"
+count = 1
 
 [[entry]]
 file = "compiler/backend/trmc_analysis.mdk"
@@ -28,8 +73,78 @@ count = 1
 
 [[entry]]
 file = "compiler/backend/wasm_emit.mdk"
+rule = "rule-comment-emoji"
+count = 2
+
+[[entry]]
+file = "compiler/backend/wasm_emit.mdk"
+rule = "rule-comment-history"
+count = 1
+
+[[entry]]
+file = "compiler/backend/wasm_emit.mdk"
+rule = "rule-comment-shout"
+count = 6
+
+[[entry]]
+file = "compiler/backend/wasm_emit.mdk"
 rule = "rule-stdlib-reimpl"
 count = 1
+
+[[entry]]
+file = "compiler/backend/wasm_preamble.mdk"
+rule = "rule-comment-emoji"
+count = 2
+
+[[entry]]
+file = "compiler/backend/wasm_preamble.mdk"
+rule = "rule-comment-shout"
+count = 1
+
+[[entry]]
+file = "compiler/backend/wasm_reach.mdk"
+rule = "rule-comment-shout"
+count = 3
+
+[[entry]]
+file = "compiler/driver/build_cmd.mdk"
+rule = "rule-comment-emoji"
+count = 7
+
+[[entry]]
+file = "compiler/driver/build_cmd.mdk"
+rule = "rule-comment-shout"
+count = 10
+
+[[entry]]
+file = "compiler/driver/diagnostics.mdk"
+rule = "rule-comment-emoji"
+count = 9
+
+[[entry]]
+file = "compiler/driver/diagnostics.mdk"
+rule = "rule-comment-history"
+count = 1
+
+[[entry]]
+file = "compiler/driver/diagnostics.mdk"
+rule = "rule-comment-shout"
+count = 6
+
+[[entry]]
+file = "compiler/driver/loader.mdk"
+rule = "rule-comment-emoji"
+count = 12
+
+[[entry]]
+file = "compiler/driver/loader.mdk"
+rule = "rule-comment-history"
+count = 1
+
+[[entry]]
+file = "compiler/driver/loader.mdk"
+rule = "rule-comment-shout"
+count = 8
 
 [[entry]]
 file = "compiler/driver/loader.mdk"
@@ -37,9 +152,154 @@ rule = "rule-stdlib-reimpl"
 count = 3
 
 [[entry]]
+file = "compiler/driver/main_autoprint.mdk"
+rule = "rule-comment-emoji"
+count = 1
+
+[[entry]]
+file = "compiler/driver/main_autoprint.mdk"
+rule = "rule-comment-shout"
+count = 3
+
+[[entry]]
+file = "compiler/driver/medaka_cli.mdk"
+rule = "rule-comment-emoji"
+count = 11
+
+[[entry]]
+file = "compiler/driver/medaka_cli.mdk"
+rule = "rule-comment-history"
+count = 1
+
+[[entry]]
+file = "compiler/driver/medaka_cli.mdk"
+rule = "rule-comment-ruling"
+count = 2
+
+[[entry]]
+file = "compiler/driver/medaka_cli.mdk"
+rule = "rule-comment-shout"
+count = 13
+
+[[entry]]
+file = "compiler/entries/check_batch.mdk"
+rule = "rule-comment-emoji"
+count = 1
+
+[[entry]]
+file = "compiler/entries/core_ir_typed_modules_main.mdk"
+rule = "rule-comment-emoji"
+count = 1
+
+[[entry]]
+file = "compiler/entries/core_ir_typed_modules_main.mdk"
+rule = "rule-comment-shout"
+count = 1
+
+[[entry]]
+file = "compiler/entries/fuzz_gen_main.mdk"
+rule = "rule-comment-shout"
+count = 1
+
+[[entry]]
+file = "compiler/entries/lint_main.mdk"
+rule = "rule-comment-shout"
+count = 1
+
+[[entry]]
+file = "compiler/entries/llvm_emit_modules_main.mdk"
+rule = "rule-comment-emoji"
+count = 1
+
+[[entry]]
+file = "compiler/entries/llvm_emit_modules_main.mdk"
+rule = "rule-comment-shout"
+count = 2
+
+[[entry]]
+file = "compiler/entries/native_doctest_probe_main.mdk"
+rule = "rule-comment-emoji"
+count = 1
+
+[[entry]]
+file = "compiler/entries/playground_main.mdk"
+rule = "rule-comment-emoji"
+count = 2
+
+[[entry]]
+file = "compiler/entries/playground_main.mdk"
+rule = "rule-comment-history"
+count = 1
+
+[[entry]]
+file = "compiler/entries/playground_main.mdk"
+rule = "rule-comment-shout"
+count = 4
+
+[[entry]]
+file = "compiler/entries/profile_eval_main.mdk"
+rule = "rule-comment-emoji"
+count = 2
+
+[[entry]]
+file = "compiler/entries/profile_eval_main.mdk"
+rule = "rule-comment-shout"
+count = 1
+
+[[entry]]
+file = "compiler/entries/profile_main.mdk"
+rule = "rule-comment-emoji"
+count = 4
+
+[[entry]]
+file = "compiler/entries/profile_main.mdk"
+rule = "rule-comment-shout"
+count = 8
+
+[[entry]]
+file = "compiler/eval/eval.mdk"
+rule = "rule-comment-emoji"
+count = 13
+
+[[entry]]
+file = "compiler/eval/eval.mdk"
+rule = "rule-comment-history"
+count = 1
+
+[[entry]]
+file = "compiler/eval/eval.mdk"
+rule = "rule-comment-shout"
+count = 16
+
+[[entry]]
 file = "compiler/eval/eval.mdk"
 rule = "rule-stdlib-reimpl"
 count = 1
+
+[[entry]]
+file = "compiler/frontend/ast.mdk"
+rule = "rule-comment-deictic"
+count = 1
+
+[[entry]]
+file = "compiler/frontend/ast.mdk"
+rule = "rule-comment-emoji"
+count = 49
+
+[[entry]]
+file = "compiler/frontend/ast.mdk"
+rule = "rule-comment-history"
+count = 1
+
+[[entry]]
+file = "compiler/frontend/ast.mdk"
+rule = "rule-comment-shout"
+count = 35
+
+[[entry]]
+file = "compiler/frontend/exhaust.mdk"
+rule = "rule-comment-emoji"
+count = 3
 
 [[entry]]
 file = "compiler/frontend/exhaust.mdk"
@@ -52,9 +312,54 @@ rule = "rule-stdlib-reimpl"
 count = 1
 
 [[entry]]
+file = "compiler/frontend/marker.mdk"
+rule = "rule-comment-history"
+count = 1
+
+[[entry]]
 file = "compiler/frontend/parse_cache.mdk"
 rule = "rule-stdlib-reimpl"
 count = 1
+
+[[entry]]
+file = "compiler/frontend/parser.mdk"
+rule = "rule-comment-emoji"
+count = 3
+
+[[entry]]
+file = "compiler/frontend/parser.mdk"
+rule = "rule-comment-shout"
+count = 1
+
+[[entry]]
+file = "compiler/frontend/resolve.mdk"
+rule = "rule-comment-emoji"
+count = 67
+
+[[entry]]
+file = "compiler/frontend/resolve.mdk"
+rule = "rule-comment-history"
+count = 2
+
+[[entry]]
+file = "compiler/frontend/resolve.mdk"
+rule = "rule-comment-ruling"
+count = 1
+
+[[entry]]
+file = "compiler/frontend/resolve.mdk"
+rule = "rule-comment-shout"
+count = 48
+
+[[entry]]
+file = "compiler/ir/core_ir.mdk"
+rule = "rule-comment-shout"
+count = 1
+
+[[entry]]
+file = "compiler/ir/core_ir_lower.mdk"
+rule = "rule-comment-shout"
+count = 4
 
 [[entry]]
 file = "compiler/ir/core_ir_sexp_parse.mdk"
@@ -67,14 +372,104 @@ rule = "rule-stdlib-reimpl"
 count = 4
 
 [[entry]]
+file = "compiler/support/opcount.mdk"
+rule = "rule-comment-shout"
+count = 1
+
+[[entry]]
+file = "compiler/support/ordmap.mdk"
+rule = "rule-comment-history"
+count = 1
+
+[[entry]]
 file = "compiler/support/path.mdk"
 rule = "rule-stdlib-reimpl"
 count = 2
 
 [[entry]]
+file = "compiler/support/timer.mdk"
+rule = "rule-comment-emoji"
+count = 3
+
+[[entry]]
+file = "compiler/support/timer.mdk"
+rule = "rule-comment-shout"
+count = 2
+
+[[entry]]
+file = "compiler/support/util.mdk"
+rule = "rule-comment-emoji"
+count = 3
+
+[[entry]]
+file = "compiler/support/util.mdk"
+rule = "rule-comment-shout"
+count = 2
+
+[[entry]]
 file = "compiler/support/util.mdk"
 rule = "rule-stdlib-reimpl"
-count = 4
+count = 1
+
+[[entry]]
+file = "compiler/tools/codemod.mdk"
+rule = "rule-comment-emoji"
+count = 2
+
+[[entry]]
+file = "compiler/tools/doc.mdk"
+rule = "rule-comment-shout"
+count = 1
+
+[[entry]]
+file = "compiler/tools/gate_cmd.mdk"
+rule = "rule-comment-emoji"
+count = 8
+
+[[entry]]
+file = "compiler/tools/gate_cmd.mdk"
+rule = "rule-comment-shout"
+count = 11
+
+[[entry]]
+file = "compiler/tools/gate_cost.mdk"
+rule = "rule-comment-emoji"
+count = 6
+
+[[entry]]
+file = "compiler/tools/gate_cost.mdk"
+rule = "rule-comment-shout"
+count = 7
+
+[[entry]]
+file = "compiler/tools/gate_pack.mdk"
+rule = "rule-comment-shout"
+count = 39
+
+[[entry]]
+file = "compiler/tools/gate_registry.mdk"
+rule = "rule-comment-shout"
+count = 2
+
+[[entry]]
+file = "compiler/tools/lint_baseline_test.mdk"
+rule = "rule-comment-shout"
+count = 1
+
+[[entry]]
+file = "compiler/tools/lint_dup.mdk"
+rule = "rule-comment-history"
+count = 1
+
+[[entry]]
+file = "compiler/tools/lsp.mdk"
+rule = "rule-comment-emoji"
+count = 1
+
+[[entry]]
+file = "compiler/tools/lsp.mdk"
+rule = "rule-comment-shout"
+count = 3
 
 [[entry]]
 file = "compiler/tools/lsp_harness.mdk"
@@ -82,9 +477,54 @@ rule = "rule-stdlib-reimpl"
 count = 1
 
 [[entry]]
+file = "compiler/tools/mcp.mdk"
+rule = "rule-comment-shout"
+count = 1
+
+[[entry]]
+file = "compiler/tools/native_doctest.mdk"
+rule = "rule-comment-emoji"
+count = 5
+
+[[entry]]
+file = "compiler/tools/native_doctest.mdk"
+rule = "rule-comment-shout"
+count = 3
+
+[[entry]]
+file = "compiler/tools/native_test_decls.mdk"
+rule = "rule-comment-emoji"
+count = 3
+
+[[entry]]
+file = "compiler/tools/native_test_decls.mdk"
+rule = "rule-comment-shout"
+count = 3
+
+[[entry]]
+file = "compiler/tools/printer.mdk"
+rule = "rule-comment-shout"
+count = 3
+
+[[entry]]
 file = "compiler/tools/printer.mdk"
 rule = "rule-stdlib-reimpl"
 count = 1
+
+[[entry]]
+file = "compiler/tools/prop_runner.mdk"
+rule = "rule-comment-emoji"
+count = 1
+
+[[entry]]
+file = "compiler/tools/refindex.mdk"
+rule = "rule-comment-emoji"
+count = 3
+
+[[entry]]
+file = "compiler/tools/refindex.mdk"
+rule = "rule-comment-shout"
+count = 5
 
 [[entry]]
 file = "compiler/tools/refindex.mdk"
@@ -94,11 +534,121 @@ count = 1
 [[entry]]
 file = "compiler/tools/repl.mdk"
 rule = "rule-stdlib-reimpl"
-count = 2
+count = 1
+
+[[entry]]
+file = "compiler/tools/snapshot.mdk"
+rule = "rule-comment-emoji"
+count = 1
+
+[[entry]]
+file = "compiler/tools/snapshot.mdk"
+rule = "rule-comment-shout"
+count = 4
 
 [[entry]]
 file = "compiler/tools/snapshot.mdk"
 rule = "rule-stdlib-reimpl"
+count = 1
+
+[[entry]]
+file = "compiler/tools/test_cmd.mdk"
+rule = "rule-comment-emoji"
+count = 4
+
+[[entry]]
+file = "compiler/tools/test_cmd.mdk"
+rule = "rule-comment-shout"
+count = 4
+
+[[entry]]
+file = "compiler/tools/test_runner.mdk"
+rule = "rule-comment-emoji"
+count = 1
+
+[[entry]]
+file = "compiler/types/annotate.mdk"
+rule = "rule-comment-emoji"
+count = 1
+
+[[entry]]
+file = "compiler/types/private_mangle.mdk"
+rule = "rule-comment-emoji"
+count = 4
+
+[[entry]]
+file = "compiler/types/private_mangle.mdk"
+rule = "rule-comment-shout"
+count = 9
+
+[[entry]]
+file = "compiler/types/registry.mdk"
+rule = "rule-comment-draft"
+count = 1
+
+[[entry]]
+file = "compiler/types/registry.mdk"
+rule = "rule-comment-emoji"
+count = 36
+
+[[entry]]
+file = "compiler/types/registry.mdk"
+rule = "rule-comment-shout"
+count = 33
+
+[[entry]]
+file = "compiler/types/registry_test.mdk"
+rule = "rule-comment-emoji"
+count = 1
+
+[[entry]]
+file = "compiler/types/registry_test.mdk"
+rule = "rule-comment-shout"
+count = 2
+
+[[entry]]
+file = "compiler/types/repr.mdk"
+rule = "rule-comment-shout"
+count = 18
+
+[[entry]]
+file = "compiler/types/route_key.mdk"
+rule = "rule-comment-emoji"
+count = 7
+
+[[entry]]
+file = "compiler/types/route_key.mdk"
+rule = "rule-comment-shout"
+count = 9
+
+[[entry]]
+file = "compiler/types/tc_env.mdk"
+rule = "rule-comment-draft"
+count = 2
+
+[[entry]]
+file = "compiler/types/tc_env.mdk"
+rule = "rule-comment-history"
+count = 9
+
+[[entry]]
+file = "compiler/types/tc_env.mdk"
+rule = "rule-comment-ruling"
+count = 1
+
+[[entry]]
+file = "compiler/types/tc_env.mdk"
+rule = "rule-comment-tombstone"
+count = 3
+
+[[entry]]
+file = "compiler/types/tc_scope.mdk"
+rule = "rule-comment-history"
+count = 1
+
+[[entry]]
+file = "compiler/types/tc_state.mdk"
+rule = "rule-comment-history"
 count = 1
 
 [[entry]]
@@ -107,9 +657,84 @@ rule = "rule-clone-type"
 count = 2
 
 [[entry]]
+file = "compiler/types/tc_types.mdk"
+rule = "rule-comment-draft"
+count = 1
+
+[[entry]]
+file = "compiler/types/tc_types.mdk"
+rule = "rule-comment-history"
+count = 14
+
+[[entry]]
+file = "compiler/types/tc_types.mdk"
+rule = "rule-comment-ruling"
+count = 1
+
+[[entry]]
+file = "compiler/types/tc_unify.mdk"
+rule = "rule-comment-draft"
+count = 1
+
+[[entry]]
+file = "compiler/types/typecheck.mdk"
+rule = "rule-comment-emoji"
+count = 14
+
+[[entry]]
+file = "compiler/types/typecheck.mdk"
+rule = "rule-comment-shout"
+count = 16
+
+[[entry]]
+file = "gzip/lib/container.mdk"
+rule = "rule-comment-shout"
+count = 1
+
+[[entry]]
+file = "gzip/lib/deflate.mdk"
+rule = "rule-comment-emoji"
+count = 3
+
+[[entry]]
+file = "gzip/lib/deflate.mdk"
+rule = "rule-comment-shout"
+count = 3
+
+[[entry]]
+file = "gzip/lib/inflate.mdk"
+rule = "rule-comment-emoji"
+count = 1
+
+[[entry]]
+file = "pds/lib/accesslog.mdk"
+rule = "rule-comment-shout"
+count = 1
+
+[[entry]]
 file = "pds/lib/base58.mdk"
 rule = "rule-stdlib-reimpl"
 count = 2
+
+[[entry]]
+file = "pds/lib/event_log_record.mdk"
+rule = "rule-comment-shout"
+count = 1
+
+[[entry]]
+file = "pds/lib/field.mdk"
+rule = "rule-comment-shout"
+count = 1
+
+[[entry]]
+file = "pds/lib/handlers.mdk"
+rule = "rule-comment-history"
+count = 1
+
+[[entry]]
+file = "pds/lib/handlers.mdk"
+rule = "rule-comment-shout"
+count = 1
 
 [[entry]]
 file = "pds/lib/httpclient.mdk"
@@ -123,8 +748,348 @@ count = 2
 
 [[entry]]
 file = "pds/lib/multiformats.mdk"
+rule = "rule-comment-history"
+count = 1
+
+[[entry]]
+file = "pds/lib/multiformats.mdk"
 rule = "rule-stdlib-reimpl"
 count = 2
+
+[[entry]]
+file = "pds/lib/proxy.mdk"
+rule = "rule-comment-shout"
+count = 2
+
+[[entry]]
+file = "pds/lib/scalar.mdk"
+rule = "rule-comment-shout"
+count = 1
+
+[[entry]]
+file = "pds/shell/egress.mdk"
+rule = "rule-comment-shout"
+count = 2
+
+[[entry]]
+file = "pds/shell/eventlog.mdk"
+rule = "rule-comment-history"
+count = 1
+
+[[entry]]
+file = "pds/shell/eventlog.mdk"
+rule = "rule-comment-shout"
+count = 2
+
+[[entry]]
+file = "pds/test/crawl_stub_main.mdk"
+rule = "rule-comment-shout"
+count = 1
+
+[[entry]]
+file = "pds/test/encodings_vectors_main.mdk"
+rule = "rule-comment-history"
+count = 2
+
+[[entry]]
+file = "pds/test/jwt_test.mdk"
+rule = "rule-comment-tombstone"
+count = 1
+
+[[entry]]
+file = "pds/test/ratelimit_test.mdk"
+rule = "rule-comment-history"
+count = 2
+
+[[entry]]
+file = "pds/test/read_handlers_main.mdk"
+rule = "rule-comment-history"
+count = 1
+
+[[entry]]
+file = "pds/test/read_routes_all_engines_main.mdk"
+rule = "rule-comment-history"
+count = 1
+
+[[entry]]
+file = "pds/test/scalar_test.mdk"
+rule = "rule-comment-emoji"
+count = 1
+
+[[entry]]
+file = "pds/test/scalar_test.mdk"
+rule = "rule-comment-shout"
+count = 1
+
+[[entry]]
+file = "pds/test/scalar_vectors_main.mdk"
+rule = "rule-comment-emoji"
+count = 1
+
+[[entry]]
+file = "pds/test/serve_client_main.mdk"
+rule = "rule-comment-history"
+count = 4
+
+[[entry]]
+file = "pds/test/sign_key_test.mdk"
+rule = "rule-comment-history"
+count = 1
+
+[[entry]]
+file = "pds/test/store_persistence_main.mdk"
+rule = "rule-comment-history"
+count = 1
+
+[[entry]]
+file = "pds/test/sync_car_shapes_main.mdk"
+rule = "rule-comment-shout"
+count = 1
+
+[[entry]]
+file = "pds/test/trust_boundary_guards_test.mdk"
+rule = "rule-comment-shout"
+count = 1
+
+[[entry]]
+file = "pds/test/vector_runner.mdk"
+rule = "rule-comment-shout"
+count = 1
+
+[[entry]]
+file = "sqlite/dml_probe.mdk"
+rule = "rule-comment-shout"
+count = 1
+
+[[entry]]
+file = "sqlite/groupby_demo.mdk"
+rule = "rule-comment-history"
+count = 1
+
+[[entry]]
+file = "sqlite/groupby_demo.mdk"
+rule = "rule-comment-shout"
+count = 1
+
+[[entry]]
+file = "sqlite/index_fill_demo.mdk"
+rule = "rule-comment-shout"
+count = 1
+
+[[entry]]
+file = "sqlite/index_types_demo.mdk"
+rule = "rule-comment-shout"
+count = 1
+
+[[entry]]
+file = "sqlite/index_write_demo.mdk"
+rule = "rule-comment-shout"
+count = 1
+
+[[entry]]
+file = "sqlite/inmem_aggregate_probe.mdk"
+rule = "rule-comment-shout"
+count = 1
+
+[[entry]]
+file = "sqlite/inmem_sqlparse_probe.mdk"
+rule = "rule-comment-history"
+count = 2
+
+[[entry]]
+file = "sqlite/inmem_sqlparse_probe.mdk"
+rule = "rule-comment-shout"
+count = 1
+
+[[entry]]
+file = "sqlite/inmem_tablecase_probe.mdk"
+rule = "rule-comment-history"
+count = 1
+
+[[entry]]
+file = "sqlite/lib/aggregate.mdk"
+rule = "rule-comment-history"
+count = 2
+
+[[entry]]
+file = "sqlite/lib/aggregate.mdk"
+rule = "rule-comment-shout"
+count = 4
+
+[[entry]]
+file = "sqlite/lib/dbwriter.mdk"
+rule = "rule-comment-history"
+count = 1
+
+[[entry]]
+file = "sqlite/lib/dbwriter.mdk"
+rule = "rule-comment-shout"
+count = 3
+
+[[entry]]
+file = "sqlite/lib/indexlookup.mdk"
+rule = "rule-comment-shout"
+count = 1
+
+[[entry]]
+file = "sqlite/lib/mutate.mdk"
+rule = "rule-comment-shout"
+count = 5
+
+[[entry]]
+file = "sqlite/lib/query.mdk"
+rule = "rule-comment-shout"
+count = 1
+
+[[entry]]
+file = "sqlite/lib/rowtype.mdk"
+rule = "rule-comment-emoji"
+count = 1
+
+[[entry]]
+file = "sqlite/lib/schemadef.mdk"
+rule = "rule-comment-emoji"
+count = 1
+
+[[entry]]
+file = "sqlite/lib/schemadef.mdk"
+rule = "rule-comment-shout"
+count = 14
+
+[[entry]]
+file = "sqlite/lib/select.mdk"
+rule = "rule-comment-emoji"
+count = 1
+
+[[entry]]
+file = "sqlite/lib/select.mdk"
+rule = "rule-comment-history"
+count = 4
+
+[[entry]]
+file = "sqlite/lib/select.mdk"
+rule = "rule-comment-shout"
+count = 14
+
+[[entry]]
+file = "sqlite/lib/sqlite.mdk"
+rule = "rule-comment-shout"
+count = 5
+
+[[entry]]
+file = "sqlite/lib/sqlparse.mdk"
+rule = "rule-comment-shout"
+count = 4
+
+[[entry]]
+file = "sqlite/lib/sqlstmt.mdk"
+rule = "rule-comment-emoji"
+count = 1
+
+[[entry]]
+file = "sqlite/lib/sqlstmt.mdk"
+rule = "rule-comment-shout"
+count = 12
+
+[[entry]]
+file = "sqlite/lib/writer.mdk"
+rule = "rule-comment-shout"
+count = 6
+
+[[entry]]
+file = "sqlite/multipage_write_demo.mdk"
+rule = "rule-comment-shout"
+count = 1
+
+[[entry]]
+file = "sqlite/multitable_write_demo.mdk"
+rule = "rule-comment-shout"
+count = 2
+
+[[entry]]
+file = "sqlite/overflow_demo.mdk"
+rule = "rule-comment-shout"
+count = 2
+
+[[entry]]
+file = "sqlite/sql_probe.mdk"
+rule = "rule-comment-shout"
+count = 4
+
+[[entry]]
+file = "sqlite/sqlparse_probe.mdk"
+rule = "rule-comment-shout"
+count = 1
+
+[[entry]]
+file = "sqlite/test/arith_rowid_test.mdk"
+rule = "rule-comment-shout"
+count = 1
+
+[[entry]]
+file = "sqlite/test/dml_oracle_test.mdk"
+rule = "rule-comment-shout"
+count = 2
+
+[[entry]]
+file = "sqlite/test/dml_oracle_test.mdk"
+rule = "rule-comment-tombstone"
+count = 1
+
+[[entry]]
+file = "sqlite/test/index_seek_test.mdk"
+rule = "rule-comment-shout"
+count = 1
+
+[[entry]]
+file = "sqlite/test/inlang_test_oracle_test.mdk"
+rule = "rule-comment-shout"
+count = 1
+
+[[entry]]
+file = "sqlite/test/oracle_test.mdk"
+rule = "rule-comment-shout"
+count = 1
+
+[[entry]]
+file = "sqlite/test/plan_test.mdk"
+rule = "rule-comment-shout"
+count = 2
+
+[[entry]]
+file = "sqlite/test/query_test.mdk"
+rule = "rule-comment-shout"
+count = 1
+
+[[entry]]
+file = "sqlite/test/writer_oracle_test.mdk"
+rule = "rule-comment-shout"
+count = 1
+
+[[entry]]
+file = "sqlite/test/writer_oracle_test.mdk"
+rule = "rule-comment-tombstone"
+count = 1
+
+[[entry]]
+file = "sqlite/writer_api_demo.mdk"
+rule = "rule-comment-shout"
+count = 2
+
+[[entry]]
+file = "sqlite/writer_demo.mdk"
+rule = "rule-comment-shout"
+count = 3
+
+[[entry]]
+file = "stdlib/args.mdk"
+rule = "rule-comment-ruling"
+count = 1
+
+[[entry]]
+file = "stdlib/hash_map.mdk"
+rule = "rule-comment-shout"
+count = 1
 
 [[entry]]
 file = "stdlib/http.mdk"
@@ -134,6 +1099,11 @@ count = 2
 [[entry]]
 file = "stdlib/json.mdk"
 rule = "rule-stdlib-reimpl"
+count = 1
+
+[[entry]]
+file = "stdlib/regex.mdk"
+rule = "rule-comment-history"
 count = 1
 
 [[entry]]

@@ -1,0 +1,18 @@
+-- Fixture for rule-comment-deictic: hits are a full-line comment and a line of a block comment.
+-- expect-at-line 5 rule-comment-deictic
+-- expect-at-line 10 rule-comment-deictic
+
+-- added in this PR.
+a : Int
+a = 1
+
+{- a block
+   this PR also -}
+
+-- Non-hits follow: a string literal opening a phantom block comment, a string, a trailing comment.
+s : String
+s = "{-"
+t : String
+t = "this PR"
+u : Int
+u = 3 -- added in this PR.

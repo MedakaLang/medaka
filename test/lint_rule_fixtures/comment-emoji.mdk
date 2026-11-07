@@ -1,0 +1,18 @@
+-- Fixture for rule-comment-emoji: hits are a full-line comment and a line of a block comment.
+-- expect-at-line 5 rule-comment-emoji
+-- expect-at-line 10 rule-comment-emoji
+
+-- 🚨 careful
+a : Int
+a = 1
+
+{- a block
+   🔒 pinned -}
+
+-- Non-hits follow: a string literal opening a phantom block comment, a string, a trailing comment.
+s : String
+s = "{-"
+t : String
+t = "🚨⚠️🔒"
+u : Int
+u = 3 -- 🚨 careful

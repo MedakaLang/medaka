@@ -1,0 +1,18 @@
+-- Fixture for rule-comment-draft: hits are a full-line comment and a line of a block comment.
+-- expect-at-line 5 rule-comment-draft
+-- expect-at-line 10 rule-comment-draft
+
+-- the earlier cut used a list.
+a : Int
+a = 1
+
+{- a block
+   first cut here. -}
+
+-- Non-hits follow: a string literal opening a phantom block comment, a string, a trailing comment.
+s : String
+s = "{-"
+t : String
+t = "earlier revision first cut"
+u : Int
+u = 3 -- the earlier cut used a list.
