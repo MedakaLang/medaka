@@ -878,6 +878,7 @@ data Emit = Emit {
   -- each top-level value binding's stamped type, by name
   globalTys : OrdMap LTy,
   lams : Ref (List String),
+  entryAllocas : Ref (List String),
   implEntries : Ref (List CImplEntry),
   implGroups : Ref (List ImplGroup),
   -- the defined arity of every top-level binding, constructor and impl entry of
@@ -1095,7 +1096,7 @@ freshReg e = "%t" ++ intToString (freshLocal e)
 --
 -- Tail contexts contain labels and slots belonging to their own define.
 data DefScope =
-  DefScope Int (List (String, LTy)) (List (String, (String, Int))) TrmcCtx GDispCtx (Option TailDefine)
+  DefScope Int (List String) (List (String, LTy)) (List (String, (String, Int))) TrmcCtx GDispCtx (Option TailDefine)
 
 -- Start a fresh `define` scope, returning the enclosing one (for `endDefine`).
 --
@@ -1110,6 +1111,7 @@ beginDefine e =
   let saved =
     DefScope
       !e.defineCounter
+      !e.entryAllocas
       !e.closureRetTy
       !e.directFn
       !e.trmcCtx
@@ -1117,6 +1119,7 @@ beginDefine e =
       !e.selfTailCtx
   markScope e
   e.defineCounter := 0
+  e.entryAllocas := []
   e.closureRetTy := []
   e.directFn := []
   e.trmcCtx := TrmcOff
@@ -1127,8 +1130,9 @@ beginDefine e =
 -- restore the enclosing `define` scope (only needed where a define NESTS inside
 -- another's emission, i.e. at each bufRef save/restore swap).
 endDefine : Emit -> DefScope -> Unit
-endDefine e (DefScope n rt df trmc gd st) =
+endDefine e (DefScope n al rt df trmc gd st) =
   e.defineCounter := n
+  e.entryAllocas := al
   e.closureRetTy := rt
   e.directFn := df
   e.trmcCtx := trmc
@@ -6710,7 +6714,7 @@ emitGroupBindDefine e env lamName name arity clauses captured site =
     arity
     (clauseList clauses)
     site
-  emit e "}"
+  closeDefine e
   emit e ""
   let lamLines = (bufRef e).value
   lamsRef e := lamLines ++ (lamsRef e).value
@@ -7527,7 +7531,7 @@ emitMethodValDefine e env lamName name iface siteArity route implRoutes methRout
       synArgs
       mode
   emit e ("  ret i64 " ++ r)
-  emit e "}"
+  closeDefine e
   emit e ""
   let lamLines = (bufRef e).value
   lamsRef e := lamLines ++ (lamsRef e).value
@@ -7593,7 +7597,7 @@ emitDictValDefine e lamName name nDicts valArity =
       (i64Ops synArgs)
   emit e "  \{r} = \{call}"
   emit e ("  ret i64 " ++ r)
-  emit e "}"
+  closeDefine e
   emit e ""
   let lamLines = (bufRef e).value
   lamsRef e := lamLines ++ (lamsRef e).value
@@ -7752,64 +7756,33 @@ emitWideRefusal e hdr msg m =
   emit e "  unreachable"
   emit e (runL ++ ":")
 
--- A constant-size `alloca` is emitted into the define's entry block (see
--- [hoistEntryAllocas]), where LLVM can promote it to a register.  One emitted
--- mid-function, past a branch, is a dynamic alloca and blocks promotion and inlining.
-entryAllocaTag : String
-entryAllocaTag = ";entry-alloca;"
-
+-- A constant-size `alloca` belongs in its define's entry block, where LLVM can
+-- promote it to a register; one emitted mid-function, past a branch, is a dynamic
+-- alloca that blocks promotion and inlining.  The line is held per define and
+-- [closeDefine] splices it in after `entry:`.
 emitEntryAlloca : Emit -> String -> Unit
-emitEntryAlloca e line = emit e (entryAllocaTag ++ line)
+emitEntryAlloca e line = e.entryAllocas := line :: !e.entryAllocas
 
--- Move every line [emitEntryAlloca] tagged to just after its define's `entry:`
--- label.  Over the finished text, in order: lines outside a define pass through.
-hoistEntryAllocas : List String -> List String
-hoistEntryAllocas lines = hoistGo lines []
+-- Close the current define: its entry allocas (held newest-first) go right after
+-- the nearest `entry:` in the buffer, in emission order, then the closing brace.
+-- The buffer is newest-first, so the held lines splice in as they are.
+closeDefine : Emit -> Unit
+closeDefine e =
+  e.buf := spliceAfterEntry !e.entryAllocas !e.buf
+  e.entryAllocas := []
+  emit e "}"
 
-hoistGo : List String -> List String -> List String
-hoistGo [] acc = reverseL acc
-hoistGo (l :: rest) acc =
-  if startsWith "define" l then
-    let (body, after) = takeDefineBody rest []
-    hoistGo after (reverseL (hoistDefine (l :: body)) ++ acc)
-  else
-    hoistGo rest (untagAlloca l :: acc)
+spliceAfterEntry : List String -> List String -> List String
+spliceAfterEntry [] buf = buf
+spliceAfterEntry newestFirst buf = spliceGo newestFirst buf []
 
--- the lines of a define up to and including its closing `}`, and what follows
-takeDefineBody : List String -> List String -> (List String, List String)
-takeDefineBody [] acc = (reverseL acc, [])
-takeDefineBody (l :: rest) acc =
-  if l == "}" then
-    (reverseL (l :: acc), rest)
-  else
-    takeDefineBody rest (l :: acc)
-
-untagAlloca : String -> String
-untagAlloca l =
-  if startsWith entryAllocaTag l then
-    stringSlice (stringLength entryAllocaTag) (stringLength l) l
-  else
-    l
-
-hoistDefine : List String -> List String
-hoistDefine ls =
-  let tagged = filterList (startsWith entryAllocaTag) ls
-  if isEmptyL tagged then
-    ls
-  else
-    let kept = filterList (l => not (startsWith entryAllocaTag l)) ls
-    if anyList (== "entry:") kept then
-      insertAfterEntry (map untagAlloca tagged) kept
-    else
-      map untagAlloca ls
-
-insertAfterEntry : List String -> List String -> List String
-insertAfterEntry _ [] = []
-insertAfterEntry hoisted (l :: rest) =
+spliceGo : List String -> List String -> List String -> List String
+spliceGo _ [] acc = reverseL acc
+spliceGo newestFirst (l :: rest) acc =
   if l == "entry:" then
-    l :: hoisted ++ rest
+    reverseL acc ++ newestFirst ++ (l :: rest)
   else
-    l :: insertAfterEntry hoisted rest
+    spliceGo newestFirst rest (l :: acc)
 
 -- the runtime-generic path: materialize `argOps` into an [N x i64] alloca and call
 -- @mdk_apply(cw, N, ptr).  Handles partial / over application + PAP flatten.
@@ -7878,7 +7851,7 @@ emitPapDefine e papName fname supplied remaining =
   let call = wordCall e fname allArgs
   emit e "  \{r} = \{call}"
   emit e ("  ret i64 " ++ r)
-  emit e "}"
+  closeDefine e
   emit e ""
   let lamLines = (bufRef e).value
   lamsRef e := lamLines ++ (lamsRef e).value
@@ -7928,7 +7901,7 @@ emitPapDefineIndirect e papName supplied remaining =
   let r = freshReg e
   emit e "  \{r} = call i64 \{fp}(\{argDecls (innerCw :: allArgs)})"
   emit e ("  ret i64 " ++ r)
-  emit e "}"
+  closeDefine e
   emit e ""
   let lamLines = (bufRef e).value
   lamsRef e := lamLines ++ (lamsRef e).value
@@ -8315,7 +8288,7 @@ emitSlotCallHelper e sym arity =
   let clos = loadFieldDyn e "%dict" "%field"
   let r = emitApplyAny e clos ("%dict" :: args)
   emit e ("  ret i64 " ++ r)
-  emit e "}"
+  closeDefine e
   emit e ""
   let lamLines = (bufRef e).value
   lamsRef e := lamLines ++ (lamsRef e).value
@@ -8475,7 +8448,7 @@ emitSlotWrapper e key iface slot callee closName = withProgramScope e (_ =>
   emit e "entry:"
   let (r, _) = emitSlotBody e iface slot callee g values
   emit e ("  ret i64 " ++ r)
-  emit e "}"
+  closeDefine e
   emit e ""
   let lamLines = (bufRef e).value
   lamsRef e := lamLines ++ (lamsRef e).value
@@ -9183,7 +9156,7 @@ emitGroupDefine e (ImplGroup method tag key _ positions arity clauses fname) =
     emit e "entry:"
     emitGroupBody e fname tag positions arity clauses
     clearCurImplSelfFns e
-    emit e "}"
+    closeDefine e
     emit e ""
 -- native backend: set the self-returning-fn-param context for this impl body so
 -- `emitIndirect` types `f x` (a callback returning the container) as the impl's
@@ -9231,7 +9204,7 @@ trmcImplTry e fname method tag key positions arity clauses =
     tmcMarker e fname "trmc"
     emitTrmcHeader e fname arity ""
     emitTrmcLoopBody e self arity slotTys clauses single spats sbody noDeclLoc
-    emit e "}"
+    closeDefine e
     emit e ""
     True
   else
@@ -9802,7 +9775,7 @@ emitRecLamDefine e env lamName f pats captured body =
     (envMergeL (omInsert f ("%clos", LTClosure) cenv) penv)
     (TailDefine lamName (listLen pats) True)
     body
-  emit e "}"
+  closeDefine e
   emit e ""
   let lamLines = (bufRef e).value
   lamsRef e := lamLines ++ (lamsRef e).value
@@ -9846,7 +9819,7 @@ emitPatLamDefine e env lamName extra pats captured body =
     [(pats, body)]
     ""
     noDeclLoc
-  emit e "}"
+  closeDefine e
   emit e ""
   let lamLines = (bufRef e).value
   lamsRef e := lamLines ++ (lamsRef e).value
@@ -9926,7 +9899,7 @@ emitCtorPapDefine e lamName name arity supplied =
   let suppliedOps = loadPapCaptures e supplied 0
   let (w, _) = emitCtorAlloc e name (suppliedOps ++ etaArgOps remaining 0)
   emit e ("  ret i64 " ++ w)
-  emit e "}"
+  closeDefine e
   emit e ""
   let lamLines = (bufRef e).value
   lamsRef e := lamLines ++ (lamsRef e).value
@@ -9960,7 +9933,7 @@ emitCtorEtaDefine e lamName name arity =
   emit e "entry:"
   let (w, _) = emitCtorAlloc e name (argNames arity 0)
   emit e ("  ret i64 " ++ w)
-  emit e "}"
+  closeDefine e
   emit e ""
   let lamLines = (bufRef e).value
   lamsRef e := lamLines ++ (lamsRef e).value
@@ -9994,7 +9967,7 @@ emitLamDefine e env lamName pats captured body =
     (envMergeL cenv penv)
     (TailDefine lamName (listLen pats) True)
     body
-  emit e "}"
+  closeDefine e
   emit e ""
   let lamLines = (bufRef e).value
   lamsRef e := lamLines ++ (lamsRef e).value
@@ -10019,7 +9992,7 @@ emitEtaDefine e lamName fname arity =
       (i64Ops (argNames arity 0))
   emit e "  \{r} = \{call}"
   emit e ("  ret i64 " ++ r)
-  emit e "}"
+  closeDefine e
   emit e ""
   let lamLines = (bufRef e).value
   lamsRef e := lamLines ++ (lamsRef e).value
@@ -10070,7 +10043,7 @@ emitMethodEtaDefine e lamName name arity =
   let synArgs = etaArgOps arity 0
   let (r, _) = emitMethodArgDispatch e name "" arity synArgs
   emit e ("  ret i64 " ++ r)
-  emit e "}"
+  closeDefine e
   emit e ""
   let lamLines = (bufRef e).value
   lamsRef e := lamLines ++ (lamsRef e).value
@@ -10102,7 +10075,7 @@ emitExternEtaDefine e lamName name arity =
   let synArgs = etaArgVars arity 0
   let (r, _) = emitExternApplied e argEnv name synArgs
   emit e ("  ret i64 " ++ r)
-  emit e "}"
+  closeDefine e
   emit e ""
   let lamLines = (bufRef e).value
   lamsRef e := lamLines ++ (lamsRef e).value
@@ -10135,7 +10108,7 @@ emitFfiEtaDefine e lamName name arity =
   let synArgs = etaArgVars arity 0
   let (r, _) = emitFfiCall e argEnv name synArgs
   emit e ("  ret i64 " ++ r)
-  emit e "}"
+  closeDefine e
   emit e ""
   let lamLines = (bufRef e).value
   lamsRef e := lamLines ++ (lamsRef e).value
@@ -11888,7 +11861,7 @@ emitMultiClauseFn e name clauses site =
     arity
     clauses
     site
-  emit e "}"
+  closeDefine e
   emit e ""
 
 -- the (List Pat, CExpr) clause pairs of a fn-bind, in source order.
@@ -11958,7 +11931,7 @@ emitTrmcFn e name arity ptys clauses single singlePats singleBody site =
     singlePats
     singleBody
     site
-  emit e "}"
+  closeDefine e
   emit e ""
 
 -- emit the `define` header + entry label for a TRMC define.  `defineName` is the
@@ -12374,7 +12347,7 @@ emitGDispGroup e grp =
   let r = freshReg e
   emit e "  \{r} = load i64, ptr \{hole}"
   emit e ("  ret i64 " ++ r)
-  emit e "}"
+  closeDefine e
   emit e ""
 
 -- one shared `alloca i64` slot per uniform param position, seeded from the
@@ -12905,7 +12878,7 @@ emitFloatFwOnly e name pats ptys body =
     (FuncProto "double" (paramDeclsD pats fp 0) (fnAttrs e name))
   emit e "entry:"
   emitFnBodyD e wenv name worker fp arity body
-  emit e "}"
+  closeDefine e
   emit e ""
 
 emitFloatWorkerFn : Emit -> String -> List Pat -> List LTy -> CExpr -> Unit
@@ -12928,7 +12901,7 @@ emitFloatWorkerFn e name pats ptys body =
   emit e "  \{r} = \{call}"
   let b = boxFloat e r
   emit e ("  ret i64 " ++ b)
-  emit e "}"
+  closeDefine e
   emit e ""
 
 -- ── the raw worker (see `RawWorker`) ────────────────────────────────────────
@@ -13106,7 +13079,7 @@ emitRawWorkerFn e name pats body (RawWorker arity ks rk) =
     (FuncProto rty (rawParamDecls ks 0) (fnAttrs e name))
   emit e "entry:"
   emitFnBodyRaw e wenv (RawTail name worker (RawWorker arity ks rk)) body
-  emit e "}"
+  closeDefine e
   emit e ""
   let _ = beginDefine e
   defineHeader
@@ -13125,7 +13098,7 @@ emitRawWorkerFn e name pats body (RawWorker arity ks rk) =
     RawI32 => tagI32 e r
     RawWord => r
   emit e "  ret i64 \{out}"
-  emit e "}"
+  closeDefine e
   emit e ""
 
 -- the worker's parameter list: `i32` for a U32 or I32 position, `i64` otherwise.
@@ -13277,7 +13250,7 @@ emitFnClauseW e name pats ptys body =
     env
     (TailDefine (LN.llvmName (LN.LUserFunction name)) (listLen pats) False)
     body
-  emit e "}"
+  closeDefine e
   emit e ""
 
 -- every parameter is a plain variable pattern (the slice-2 ABI requirement).
@@ -14558,7 +14531,7 @@ runStrictEmission e input plan groups implEntries =
         !e.coverage
         (joinNl
           (siteTrapDeclares e
-            ++ hoistEntryAllocas (reverseL !e.buf ++ reverseL !e.lams)
+            ++ (reverseL !e.buf ++ reverseL !e.lams)
             ++ siteFiles))
     defects => Err defects
 
@@ -14691,6 +14664,7 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries facts =
     superCounts = omFromPairs facts.factSupers omEmpty,
     globalTys = globalStampTys rows (filter (b => not (isFnBind b)) groups),
     lams = Ref [],
+    entryAllocas = Ref [],
     implEntries = Ref implEntries,
     implGroups = Ref [],
     arities =
@@ -14883,7 +14857,7 @@ emitProgramMain e plan groups =
   let mty2 = if planEntryMainIsFloat plan then LTFloat else mainPrintTy e mty
   let _ = if mainIsUnit plan e mty2 then () else emitPrint e mv mty2
   emit e "  ret i32 0"
-  emit e "}"
+  closeDefine e
 -- declare a module global per top-level value/`Ref` binding.
 
 -- emit `@main` FIRST: its init prologue computes each value-binding rhs in
@@ -15019,7 +14993,7 @@ emitForceFn e name body =
   emit e "  store i64 \{v}, ptr @\{g}"
   emit e "  store i8 2, ptr @\{gs}"
   emit e "  ret i64 \{v}"
-  emit e "}"
+  closeDefine e
 
 -- " in <file>" when a source name was installed, else "" — a shared clause for the
 -- two main-shape diagnostics below.  A function (not a lazy nullary value) so it
@@ -15181,7 +15155,7 @@ emitProgramGaps input plan (cp@(CProgram groups ctorArs ctorTypes implEntries _ 
           !e.coverage
           (joinNl
             (siteTrapDeclares e
-              ++ hoistEntryAllocas (reverseL !e.buf ++ reverseL !e.lams)
+              ++ (reverseL !e.buf ++ reverseL !e.lams)
               ++ siteFileTable e)))
     defects => Err defects
 
