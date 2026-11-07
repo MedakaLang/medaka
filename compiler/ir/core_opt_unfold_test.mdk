@@ -396,3 +396,47 @@ g : Int
 g = k
 main = g
 """)
+
+-- Inlining `wrap` would force the value `g` before the argument runs, moving
+-- which panic fires.  `main` does not run `h`, since the interpreter aborts on the
+-- panic; the probe `wrap (boom "arg")` as `main` is held to `arg` by the native
+-- and `run` engines.
+test "a wrapper whose head is a top-level value keeps its call" =
+  expectCase
+    (wrapArg "boom")
+    (wrapArg "panic")
+    "0"
+    (passCase
+      inlineAll
+      "h"
+      """
+boom : String -> Int
+boom msg = panic msg
+g : Int -> Int
+g = if boom "init" > 0 then (x => x) else (x => x + 1)
+wrap : Int -> Int
+wrap x = g x
+h : Int
+h = wrap (boom "arg")
+main = 0
+""")
+
+test "a wrapper whose head is an ordinary function is still inlined" =
+  expectCase
+    (callOf "wrap" (intLit 4) "false")
+    (callOf "g" "(CLit (LInt 4))" "false")
+    "5"
+    (passCase
+      inlineAll
+      "main"
+      """
+g : Int -> Int
+g y = y + 1
+wrap : Int -> Int
+wrap x = g x
+main = wrap 4
+""")
+
+-- `wrap (f "arg")`, kept as a call of `wrap`; `boom` itself unfolds to `panic`.
+wrapArg : String -> String
+wrapArg f = callOf "wrap" (callOf f "(CLit (LString \"arg\"))" "false") "false"

@@ -15,6 +15,7 @@ import types.symbol_origins as SO
 import backend.llvm_symbol_names as LN
 import support.symbol_encoding.{encodeComponent}
 import support.symbol_encoding.{encodePair}
+import ir.core_opt_unfold.{varNames}
 import ir.core_walk.{patBinders}
 import backend.trmc_analysis.{TrmcVerdicts, isTrmcFn, isTrmcImpl}
 -- Core IR -> textual LLVM IR — Stage 2.4 NATIVE BACKEND (slices 1–8+).
@@ -3490,8 +3491,7 @@ emitU64Raw e env (CBinPrim op l r tag site)
   | otherwise = unboxU64 e (fst (emitExpr e env (CBinPrim op l r tag site)))
 emitU64Raw e env (CVar x a) = match omLookup x env
   Some (reg, LTU64U) => reg
-  Some _ => emitU64RawApp e env (CVar x a) (CVar x a, [])
-  None => emitU64RawApp e env (CVar x a) (CVar x a, [])
+  _ => emitU64RawApp e env (CVar x a) (CVar x a, [])
 emitU64Raw e env (CIf c t f) = emitRawIf e env RawU64 c t f
 emitU64Raw e env (CBlock stmts) = emitRawBlock e env RawU64 stmts
 emitU64Raw e env (CLet False (PVar x a bid) e1 e2) = match e1
@@ -3799,8 +3799,7 @@ emitU32Raw e env (CBinPrim op l r tag site)
 emitU32Raw e env (CVar x a) = match omLookup x env
   Some (reg, LTU32U) => reg
   Some (reg, LTI32U) => reg
-  Some _ => untagU32 e (fst (emitExpr e env (CVar x a)))
-  None => untagU32 e (fst (emitExpr e env (CVar x a)))
+  _ => untagU32 e (fst (emitExpr e env (CVar x a)))
 emitU32Raw e env (CIf c t f) = emitRawIf e env RawU32 c t f
 emitU32Raw e env (CBlock stmts) = emitRawBlock e env RawU32 stmts
 emitU32Raw e env (CLet False (PVar x a bid) e1 e2) = match e1
@@ -4390,19 +4389,15 @@ tupleBody _ _ = None
 -- non-negative literal amount, where that refusal cannot fire.
 u64KernelAlias : Emit -> String -> List CExpr -> Option String
 u64KernelAlias e f args = match omLookup (canonFnName e f) !e.gDispBindMap
-  Some (CBind _ [CClause pats body] _ _) => match paramNames pats
+  Some (CBind _ [CClause pats body] _ _) => match varNames pats
     Some ps =>
       if lengthS ps == lengthS args then u64AliasBody e ps body args else None
     None => None
   _ => None
 
--- the parameter names of an all-variable pattern list.
-paramNames : List Pat -> Option (List String)
-paramNames [] = Some []
-paramNames ((PVar n _ _) :: rest) = map (n :: _) (paramNames rest)
-paramNames _ = None
-
--- the shift guard stays until the general inliner (#4912) covers it.
+-- Live where the inliner skips a call because a local binder spells the head,
+-- so the wrapper is still called here.
+-- The shift guard stays until the general inliner (#4912) covers it.
 u64AliasBody : Emit -> List String -> CExpr -> List CExpr -> Option String
 u64AliasBody e ps (CIf (CBinPrim "<" (CVar k _) zero _ _) _ body) args = match (
   u64KernelApplied e ps (skipOtherwise body),
@@ -5541,6 +5536,7 @@ floatFromIntArg e env ex = match flattenApp ex []
       Some a
     else
       None
+  -- Live where the inliner skipped a call because a local binder spells the head.
   (h, a :: []) =>
     if headNameIs h "intToFloat" || headNameIs h "fromInt" then Some a else None
   _ => None

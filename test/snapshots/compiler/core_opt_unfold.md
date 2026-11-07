@@ -1,5 +1,5 @@
 # META
-source_lines=279
+source_lines=299
 stages=DESUGAR,MARK
 # SOURCE
 import frontend.ast.{Lit(..), Pat(..), Route(..)}
@@ -29,7 +29,9 @@ import ir.core_walk.{rewriteProgramScoped}
 --   dictionary, and whose body is its one parameter (`fromInt x = x`) or applies a
 --   head to all its parameters in order (`fromInt x = intToFloat x`).  The head
 --   must read no parameter and no given dictionary, so it means the same at every
---   call site that does not rebind its name.
+--   call site that does not rebind its name.  The head is a function, an extern,
+--   a constructor or a method: a head naming a zero-parameter top-level binding
+--   is left out, since unfolding would force that value before the arguments.
 --
 -- `propagateLiteralGlobals` then replaces each read of such a value by the
 -- literal.
@@ -132,7 +134,21 @@ unfoldingTable noInline (CProgram binds _ _ impls _ _) =
       (memo key => snd (resolveKey raw omEmpty key memo))
       omEmpty
       (omKeys raw)
-  fold (acc key => keepResolved key resolved acc) omEmpty (omKeys resolved)
+  let values = valueBinds binds
+  fold
+    (acc key => keepResolved values key resolved acc)
+    omEmpty
+    (omKeys resolved)
+
+-- The zero-parameter top-level bindings: their bodies run once, on first read.
+valueBinds : List CBind -> OrdMap Unit
+valueBinds binds =
+  fold
+    (acc b => match b
+      CBind name [CClause [] _] _ _ => omInsert name () acc
+      _ => acc)
+    omEmpty
+    binds
 
 bindRow : OrdMap Unit -> CBind -> OrdMap Unfolding -> OrdMap Unfolding
 bindRow excluded (CBind name [CClause pats body] _ _) acc
@@ -198,6 +214,7 @@ forwarding params (CApp head args _) =
     None
 forwarding _ _ = None
 
+export
 varNames : List Pat -> Option (List String)
 varNames [] = Some []
 varNames ((PVar x _ _) :: rest) = map (x :: _) (varNames rest)
@@ -272,12 +289,15 @@ followLink raw path (u@(Forward n head)) memo = match headTarget head
 followLink _ _ u memo = (u, memo)
 
 -- A resolved unfolding whose head names its own definition is a call of
--- itself, so it is dropped.
-keepResolved : String ->
+-- itself, and one whose head is a [values] binding would force it early; both
+-- are dropped.
+keepResolved : OrdMap Unit ->
+  String ->
   OrdMap Unfolding ->
   OrdMap Unfolding ->
   OrdMap Unfolding
-keepResolved key resolved acc = match omLookup key resolved
+keepResolved values key resolved acc = match omLookup key resolved
+  Some (Forward _ (CVar name _)) if omHasKey name values => acc
   Some (Forward _ head) if map targetKey (headTarget head) == Some key => acc
   Some u => omInsert key u acc
   None => acc
@@ -322,7 +342,9 @@ keepResolved key resolved acc = match omLookup key resolved
 (DFunDef false "unfoldingArity" ((PCon "Identity")) (ELit (LInt 1)))
 (DFunDef false "unfoldingArity" ((PCon "Forward" (PVar "n") PWild)) (EVar "n"))
 (DTypeSig false "unfoldingTable" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CProgram") (TyApp (TyCon "OrdMap") (TyCon "Unfolding")))))
-(DFunDef false "unfoldingTable" ((PVar "noInline") (PCon "CProgram" (PVar "binds") PWild PWild (PVar "impls") PWild PWild)) (EBlock (DoLet false false (PVar "excluded") (EApp (EApp (EVar "omFromNames") (EVar "noInline")) (EVar "omEmpty"))) (DoLet false false (PVar "own") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "b")) (EApp (EApp (EApp (EVar "bindRow") (EVar "excluded")) (EVar "b")) (EVar "acc")))) (EVar "omEmpty")) (EVar "binds"))) (DoLet false false (PVar "raw") (EApp (EApp (EVar "entryRows") (EVar "impls")) (EVar "own"))) (DoLet false false (PVar "resolved") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "memo") (PVar "key")) (EApp (EVar "snd") (EApp (EApp (EApp (EApp (EVar "resolveKey") (EVar "raw")) (EVar "omEmpty")) (EVar "key")) (EVar "memo"))))) (EVar "omEmpty")) (EApp (EVar "omKeys") (EVar "raw")))) (DoExpr (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "key")) (EApp (EApp (EApp (EVar "keepResolved") (EVar "key")) (EVar "resolved")) (EVar "acc")))) (EVar "omEmpty")) (EApp (EVar "omKeys") (EVar "resolved"))))))
+(DFunDef false "unfoldingTable" ((PVar "noInline") (PCon "CProgram" (PVar "binds") PWild PWild (PVar "impls") PWild PWild)) (EBlock (DoLet false false (PVar "excluded") (EApp (EApp (EVar "omFromNames") (EVar "noInline")) (EVar "omEmpty"))) (DoLet false false (PVar "own") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "b")) (EApp (EApp (EApp (EVar "bindRow") (EVar "excluded")) (EVar "b")) (EVar "acc")))) (EVar "omEmpty")) (EVar "binds"))) (DoLet false false (PVar "raw") (EApp (EApp (EVar "entryRows") (EVar "impls")) (EVar "own"))) (DoLet false false (PVar "resolved") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "memo") (PVar "key")) (EApp (EVar "snd") (EApp (EApp (EApp (EApp (EVar "resolveKey") (EVar "raw")) (EVar "omEmpty")) (EVar "key")) (EVar "memo"))))) (EVar "omEmpty")) (EApp (EVar "omKeys") (EVar "raw")))) (DoLet false false (PVar "values") (EApp (EVar "valueBinds") (EVar "binds"))) (DoExpr (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "key")) (EApp (EApp (EApp (EApp (EVar "keepResolved") (EVar "values")) (EVar "key")) (EVar "resolved")) (EVar "acc")))) (EVar "omEmpty")) (EApp (EVar "omKeys") (EVar "resolved"))))))
+(DTypeSig false "valueBinds" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))
+(DFunDef false "valueBinds" ((PVar "binds")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "b")) (EMatch (EVar "b") (arm (PCon "CBind" (PVar "name") (PList (PCon "CClause" (PList) PWild)) PWild PWild) () (EApp (EApp (EApp (EVar "omInsert") (EVar "name")) (ELit LUnit)) (EVar "acc"))) (arm PWild () (EVar "acc"))))) (EVar "omEmpty")) (EVar "binds")))
 (DTypeSig false "bindRow" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CBind") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unfolding")) (TyApp (TyCon "OrdMap") (TyCon "Unfolding"))))))
 (DFunDef false "bindRow" ((PVar "excluded") (PCon "CBind" (PVar "name") (PList (PCon "CClause" (PVar "pats") (PVar "body"))) PWild PWild) (PVar "acc")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "excluded"))) (EMatch (EApp (EApp (EVar "bindUnfolding") (EVar "pats")) (EVar "body")) (arm (PCon "Some" (PVar "u")) () (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "targetKey") (EApp (EVar "TopLevel") (EVar "name")))) (EVar "u")) (EVar "acc"))) (arm (PCon "None") () (EVar "acc"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "bindRow" (PWild PWild (PVar "acc")) (EVar "acc"))
@@ -346,7 +368,7 @@ keepResolved key resolved acc = match omLookup key resolved
 (DTypeSig false "forwarding" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CExpr") (TyApp (TyCon "Option") (TyCon "Unfolding")))))
 (DFunDef false "forwarding" ((PVar "params") (PCon "CApp" (PVar "head") (PVar "args") PWild)) (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EVar "isPlainHead") (EVar "head")) (EApp (EApp (EVar "all") (ELam ((PVar "n")) (EApp (EVar "not") (EApp (EApp (EVar "elem") (EVar "n")) (EVar "params"))))) (EApp (EVar "headNames") (EVar "head")))) (EApp (EApp (EVar "sameVars") (EVar "params")) (EVar "args"))) (EApp (EVar "Some") (EApp (EApp (EVar "Forward") (EApp (EVar "length") (EVar "params"))) (EVar "head"))) (EVar "None")))
 (DFunDef false "forwarding" (PWild PWild) (EVar "None"))
-(DTypeSig false "varNames" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String")))))
+(DTypeSig true "varNames" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "varNames" ((PList)) (EApp (EVar "Some") (EListLit)))
 (DFunDef false "varNames" ((PCons (PCon "PVar" (PVar "x") PWild PWild) (PVar "rest"))) (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "x") (EVar "_s")))) (EApp (EVar "varNames") (EVar "rest"))))
 (DFunDef false "varNames" (PWild) (EVar "None"))
@@ -379,8 +401,8 @@ keepResolved key resolved acc = match omLookup key resolved
 (DTypeSig false "followLink" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unfolding")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Unfolding") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unfolding")) (TyTuple (TyCon "Unfolding") (TyApp (TyCon "OrdMap") (TyCon "Unfolding"))))))))
 (DFunDef false "followLink" ((PVar "raw") (PVar "path") (PAs "u" (PCon "Forward" (PVar "n") (PVar "head"))) (PVar "memo")) (EMatch (EApp (EVar "headTarget") (EVar "head")) (arm (PCon "Some" (PVar "next")) () (EBlock (DoLet false false (PTuple (PVar "found") (PVar "memo2")) (EApp (EApp (EApp (EApp (EVar "resolveKey") (EVar "raw")) (EVar "path")) (EApp (EVar "targetKey") (EVar "next"))) (EVar "memo"))) (DoExpr (EMatch (EVar "found") (arm (PCon "Some" (PVar "v")) ((GBool (EBinOp "==" (EApp (EVar "unfoldingArity") (EVar "v")) (EVar "n")))) (ETuple (EVar "v") (EVar "memo2"))) (arm PWild () (ETuple (EVar "u") (EVar "memo2"))))))) (arm (PCon "None") () (ETuple (EVar "u") (EVar "memo")))))
 (DFunDef false "followLink" (PWild PWild (PVar "u") (PVar "memo")) (ETuple (EVar "u") (EVar "memo")))
-(DTypeSig false "keepResolved" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unfolding")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unfolding")) (TyApp (TyCon "OrdMap") (TyCon "Unfolding"))))))
-(DFunDef false "keepResolved" ((PVar "key") (PVar "resolved") (PVar "acc")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "key")) (EVar "resolved")) (arm (PCon "Some" (PCon "Forward" PWild (PVar "head"))) ((GBool (EBinOp "==" (EApp (EApp (EVar "map") (EVar "targetKey")) (EApp (EVar "headTarget") (EVar "head"))) (EApp (EVar "Some") (EVar "key"))))) (EVar "acc")) (arm (PCon "Some" (PVar "u")) () (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (EVar "u")) (EVar "acc"))) (arm (PCon "None") () (EVar "acc"))))
+(DTypeSig false "keepResolved" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unfolding")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unfolding")) (TyApp (TyCon "OrdMap") (TyCon "Unfolding")))))))
+(DFunDef false "keepResolved" ((PVar "values") (PVar "key") (PVar "resolved") (PVar "acc")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "key")) (EVar "resolved")) (arm (PCon "Some" (PCon "Forward" PWild (PCon "CVar" (PVar "name") PWild))) ((GBool (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "values")))) (EVar "acc")) (arm (PCon "Some" (PCon "Forward" PWild (PVar "head"))) ((GBool (EBinOp "==" (EApp (EApp (EVar "map") (EVar "targetKey")) (EApp (EVar "headTarget") (EVar "head"))) (EApp (EVar "Some") (EVar "key"))))) (EVar "acc")) (arm (PCon "Some" (PVar "u")) () (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (EVar "u")) (EVar "acc"))) (arm (PCon "None") () (EVar "acc"))))
 # MARK
 (DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "Route" true))))
@@ -422,7 +444,9 @@ keepResolved key resolved acc = match omLookup key resolved
 (DFunDef false "unfoldingArity" ((PCon "Identity")) (ELit (LInt 1)))
 (DFunDef false "unfoldingArity" ((PCon "Forward" (PVar "n") PWild)) (EVar "n"))
 (DTypeSig false "unfoldingTable" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CProgram") (TyApp (TyCon "OrdMap") (TyCon "Unfolding")))))
-(DFunDef false "unfoldingTable" ((PVar "noInline") (PCon "CProgram" (PVar "binds") PWild PWild (PVar "impls") PWild PWild)) (EBlock (DoLet false false (PVar "excluded") (EApp (EApp (EVar "omFromNames") (EVar "noInline")) (EVar "omEmpty"))) (DoLet false false (PVar "own") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "b")) (EApp (EApp (EApp (EVar "bindRow") (EVar "excluded")) (EVar "b")) (EVar "acc")))) (EVar "omEmpty")) (EVar "binds"))) (DoLet false false (PVar "raw") (EApp (EApp (EVar "entryRows") (EVar "impls")) (EVar "own"))) (DoLet false false (PVar "resolved") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "memo") (PVar "key")) (EApp (EVar "snd") (EApp (EApp (EApp (EApp (EVar "resolveKey") (EVar "raw")) (EVar "omEmpty")) (EVar "key")) (EVar "memo"))))) (EVar "omEmpty")) (EApp (EVar "omKeys") (EVar "raw")))) (DoExpr (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "key")) (EApp (EApp (EApp (EVar "keepResolved") (EVar "key")) (EVar "resolved")) (EVar "acc")))) (EVar "omEmpty")) (EApp (EVar "omKeys") (EVar "resolved"))))))
+(DFunDef false "unfoldingTable" ((PVar "noInline") (PCon "CProgram" (PVar "binds") PWild PWild (PVar "impls") PWild PWild)) (EBlock (DoLet false false (PVar "excluded") (EApp (EApp (EVar "omFromNames") (EVar "noInline")) (EVar "omEmpty"))) (DoLet false false (PVar "own") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "b")) (EApp (EApp (EApp (EVar "bindRow") (EVar "excluded")) (EVar "b")) (EVar "acc")))) (EVar "omEmpty")) (EVar "binds"))) (DoLet false false (PVar "raw") (EApp (EApp (EVar "entryRows") (EVar "impls")) (EVar "own"))) (DoLet false false (PVar "resolved") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "memo") (PVar "key")) (EApp (EVar "snd") (EApp (EApp (EApp (EApp (EVar "resolveKey") (EVar "raw")) (EVar "omEmpty")) (EVar "key")) (EVar "memo"))))) (EVar "omEmpty")) (EApp (EVar "omKeys") (EVar "raw")))) (DoLet false false (PVar "values") (EApp (EVar "valueBinds") (EVar "binds"))) (DoExpr (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "key")) (EApp (EApp (EApp (EApp (EVar "keepResolved") (EVar "values")) (EVar "key")) (EVar "resolved")) (EVar "acc")))) (EVar "omEmpty")) (EApp (EVar "omKeys") (EVar "resolved"))))))
+(DTypeSig false "valueBinds" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))
+(DFunDef false "valueBinds" ((PVar "binds")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "b")) (EMatch (EVar "b") (arm (PCon "CBind" (PVar "name") (PList (PCon "CClause" (PList) PWild)) PWild PWild) () (EApp (EApp (EApp (EVar "omInsert") (EVar "name")) (ELit LUnit)) (EVar "acc"))) (arm PWild () (EVar "acc"))))) (EVar "omEmpty")) (EVar "binds")))
 (DTypeSig false "bindRow" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CBind") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unfolding")) (TyApp (TyCon "OrdMap") (TyCon "Unfolding"))))))
 (DFunDef false "bindRow" ((PVar "excluded") (PCon "CBind" (PVar "name") (PList (PCon "CClause" (PVar "pats") (PVar "body"))) PWild PWild) (PVar "acc")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "excluded"))) (EMatch (EApp (EApp (EVar "bindUnfolding") (EVar "pats")) (EVar "body")) (arm (PCon "Some" (PVar "u")) () (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "targetKey") (EApp (EVar "TopLevel") (EVar "name")))) (EVar "u")) (EVar "acc"))) (arm (PCon "None") () (EVar "acc"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "bindRow" (PWild PWild (PVar "acc")) (EVar "acc"))
@@ -446,7 +470,7 @@ keepResolved key resolved acc = match omLookup key resolved
 (DTypeSig false "forwarding" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CExpr") (TyApp (TyCon "Option") (TyCon "Unfolding")))))
 (DFunDef false "forwarding" ((PVar "params") (PCon "CApp" (PVar "head") (PVar "args") PWild)) (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EVar "isPlainHead") (EVar "head")) (EApp (EApp (EDictApp "all") (ELam ((PVar "n")) (EApp (EVar "not") (EApp (EApp (EDictApp "elem") (EVar "n")) (EVar "params"))))) (EApp (EVar "headNames") (EVar "head")))) (EApp (EApp (EVar "sameVars") (EVar "params")) (EVar "args"))) (EApp (EVar "Some") (EApp (EApp (EVar "Forward") (EApp (EMethodRef "length") (EVar "params"))) (EVar "head"))) (EVar "None")))
 (DFunDef false "forwarding" (PWild PWild) (EVar "None"))
-(DTypeSig false "varNames" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String")))))
+(DTypeSig true "varNames" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "varNames" ((PList)) (EApp (EVar "Some") (EListLit)))
 (DFunDef false "varNames" ((PCons (PCon "PVar" (PVar "x") PWild PWild) (PVar "rest"))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "x") (EVar "_s")))) (EApp (EVar "varNames") (EVar "rest"))))
 (DFunDef false "varNames" (PWild) (EVar "None"))
@@ -479,5 +503,5 @@ keepResolved key resolved acc = match omLookup key resolved
 (DTypeSig false "followLink" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unfolding")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Unfolding") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unfolding")) (TyTuple (TyCon "Unfolding") (TyApp (TyCon "OrdMap") (TyCon "Unfolding"))))))))
 (DFunDef false "followLink" ((PVar "raw") (PVar "path") (PAs "u" (PCon "Forward" (PVar "n") (PVar "head"))) (PVar "memo")) (EMatch (EApp (EVar "headTarget") (EVar "head")) (arm (PCon "Some" (PVar "next")) () (EBlock (DoLet false false (PTuple (PVar "found") (PVar "memo2")) (EApp (EApp (EApp (EApp (EVar "resolveKey") (EVar "raw")) (EVar "path")) (EApp (EVar "targetKey") (EVar "next"))) (EVar "memo"))) (DoExpr (EMatch (EVar "found") (arm (PCon "Some" (PVar "v")) ((GBool (EBinOp "==" (EApp (EVar "unfoldingArity") (EVar "v")) (EVar "n")))) (ETuple (EVar "v") (EVar "memo2"))) (arm PWild () (ETuple (EVar "u") (EVar "memo2"))))))) (arm (PCon "None") () (ETuple (EVar "u") (EVar "memo")))))
 (DFunDef false "followLink" (PWild PWild (PVar "u") (PVar "memo")) (ETuple (EVar "u") (EVar "memo")))
-(DTypeSig false "keepResolved" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unfolding")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unfolding")) (TyApp (TyCon "OrdMap") (TyCon "Unfolding"))))))
-(DFunDef false "keepResolved" ((PVar "key") (PVar "resolved") (PVar "acc")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "key")) (EVar "resolved")) (arm (PCon "Some" (PCon "Forward" PWild (PVar "head"))) ((GBool (EBinOp "==" (EApp (EApp (EMethodRef "map") (EVar "targetKey")) (EApp (EVar "headTarget") (EVar "head"))) (EApp (EVar "Some") (EVar "key"))))) (EVar "acc")) (arm (PCon "Some" (PVar "u")) () (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (EVar "u")) (EVar "acc"))) (arm (PCon "None") () (EVar "acc"))))
+(DTypeSig false "keepResolved" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unfolding")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unfolding")) (TyApp (TyCon "OrdMap") (TyCon "Unfolding")))))))
+(DFunDef false "keepResolved" ((PVar "values") (PVar "key") (PVar "resolved") (PVar "acc")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "key")) (EVar "resolved")) (arm (PCon "Some" (PCon "Forward" PWild (PCon "CVar" (PVar "name") PWild))) ((GBool (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "values")))) (EVar "acc")) (arm (PCon "Some" (PCon "Forward" PWild (PVar "head"))) ((GBool (EBinOp "==" (EApp (EApp (EMethodRef "map") (EVar "targetKey")) (EApp (EVar "headTarget") (EVar "head"))) (EApp (EVar "Some") (EVar "key"))))) (EVar "acc")) (arm (PCon "Some" (PVar "u")) () (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (EVar "u")) (EVar "acc"))) (arm (PCon "None") () (EVar "acc"))))

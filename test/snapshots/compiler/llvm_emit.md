@@ -1,5 +1,5 @@
 # META
-source_lines=15200
+source_lines=15196
 stages=DESUGAR,MARK
 # SOURCE
 import backend.package_identity.{IdentityPlan(..), IdentityDefect, packSite}
@@ -19,6 +19,7 @@ import types.symbol_origins as SO
 import backend.llvm_symbol_names as LN
 import support.symbol_encoding.{encodeComponent}
 import support.symbol_encoding.{encodePair}
+import ir.core_opt_unfold.{varNames}
 import ir.core_walk.{patBinders}
 import backend.trmc_analysis.{TrmcVerdicts, isTrmcFn, isTrmcImpl}
 -- Core IR -> textual LLVM IR — Stage 2.4 NATIVE BACKEND (slices 1–8+).
@@ -3494,8 +3495,7 @@ emitU64Raw e env (CBinPrim op l r tag site)
   | otherwise = unboxU64 e (fst (emitExpr e env (CBinPrim op l r tag site)))
 emitU64Raw e env (CVar x a) = match omLookup x env
   Some (reg, LTU64U) => reg
-  Some _ => emitU64RawApp e env (CVar x a) (CVar x a, [])
-  None => emitU64RawApp e env (CVar x a) (CVar x a, [])
+  _ => emitU64RawApp e env (CVar x a) (CVar x a, [])
 emitU64Raw e env (CIf c t f) = emitRawIf e env RawU64 c t f
 emitU64Raw e env (CBlock stmts) = emitRawBlock e env RawU64 stmts
 emitU64Raw e env (CLet False (PVar x a bid) e1 e2) = match e1
@@ -3803,8 +3803,7 @@ emitU32Raw e env (CBinPrim op l r tag site)
 emitU32Raw e env (CVar x a) = match omLookup x env
   Some (reg, LTU32U) => reg
   Some (reg, LTI32U) => reg
-  Some _ => untagU32 e (fst (emitExpr e env (CVar x a)))
-  None => untagU32 e (fst (emitExpr e env (CVar x a)))
+  _ => untagU32 e (fst (emitExpr e env (CVar x a)))
 emitU32Raw e env (CIf c t f) = emitRawIf e env RawU32 c t f
 emitU32Raw e env (CBlock stmts) = emitRawBlock e env RawU32 stmts
 emitU32Raw e env (CLet False (PVar x a bid) e1 e2) = match e1
@@ -4394,19 +4393,15 @@ tupleBody _ _ = None
 -- non-negative literal amount, where that refusal cannot fire.
 u64KernelAlias : Emit -> String -> List CExpr -> Option String
 u64KernelAlias e f args = match omLookup (canonFnName e f) !e.gDispBindMap
-  Some (CBind _ [CClause pats body] _ _) => match paramNames pats
+  Some (CBind _ [CClause pats body] _ _) => match varNames pats
     Some ps =>
       if lengthS ps == lengthS args then u64AliasBody e ps body args else None
     None => None
   _ => None
 
--- the parameter names of an all-variable pattern list.
-paramNames : List Pat -> Option (List String)
-paramNames [] = Some []
-paramNames ((PVar n _ _) :: rest) = map (n :: _) (paramNames rest)
-paramNames _ = None
-
--- the shift guard stays until the general inliner (#4912) covers it.
+-- Live where the inliner skips a call because a local binder spells the head,
+-- so the wrapper is still called here.
+-- The shift guard stays until the general inliner (#4912) covers it.
 u64AliasBody : Emit -> List String -> CExpr -> List CExpr -> Option String
 u64AliasBody e ps (CIf (CBinPrim "<" (CVar k _) zero _ _) _ body) args = match (
   u64KernelApplied e ps (skipOtherwise body),
@@ -5545,6 +5540,7 @@ floatFromIntArg e env ex = match flattenApp ex []
       Some a
     else
       None
+  -- Live where the inliner skipped a call because a local binder spells the head.
   (h, a :: []) =>
     if headNameIs h "intToFloat" || headNameIs h "fromInt" then Some a else None
   _ => None
@@ -15213,6 +15209,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DUse false (UseAlias ("backend" "llvm_symbol_names") "LN"))
 (DUse false (UseGroup ("support" "symbol_encoding") ((mem "encodeComponent" false))))
 (DUse false (UseGroup ("support" "symbol_encoding") ((mem "encodePair" false))))
+(DUse false (UseGroup ("ir" "core_opt_unfold") ((mem "varNames" false))))
 (DUse false (UseGroup ("ir" "core_walk") ((mem "patBinders" false))))
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "TrmcVerdicts" false) (mem "isTrmcFn" false) (mem "isTrmcImpl" false))))
 (DUse false (UseGroup ("types" "extern_source") ((mem "ExternBindingKind" true))))
@@ -15817,7 +15814,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DFunDef false "emitU64Extern" ((PVar "e") (PVar "env") (PVar "name") (PVar "args")) (ETuple (EApp (EApp (EVar "boxU64") (EVar "e")) (EApp (EApp (EApp (EApp (EVar "emitU64Kernel") (EVar "e")) (EVar "env")) (EVar "name")) (EVar "args"))) (EVar "LTU64")))
 (DTypeSig false "emitU64Raw" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "CExpr") (TyCon "String")))))
 (DFunDef false "emitU64Raw" ((PVar "e") (PVar "env") (PCon "CBinPrim" (PVar "op") (PVar "l") (PVar "r") (PVar "tag") (PVar "site"))) (EIf (EBinOp "&&" (EApp (EVar "isBoxed64Head") (EVar "tag")) (EApp (EVar "isArithOp") (EVar "op"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitU64RawArith") (EVar "e")) (EVar "env")) (EApp (EVar "isI64Head") (EVar "tag"))) (EVar "op")) (EVar "l")) (EVar "r")) (EVar "site")) (EIf (EVar "otherwise") (EApp (EApp (EVar "unboxU64") (EVar "e")) (EApp (EVar "fst") (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EApp (EApp (EApp (EApp (EApp (EVar "CBinPrim") (EVar "op")) (EVar "l")) (EVar "r")) (EVar "tag")) (EVar "site"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DFunDef false "emitU64Raw" ((PVar "e") (PVar "env") (PCon "CVar" (PVar "x") (PVar "a"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "x")) (EVar "env")) (arm (PCon "Some" (PTuple (PVar "reg") (PCon "LTU64U"))) () (EVar "reg")) (arm (PCon "Some" PWild) () (EApp (EApp (EApp (EApp (EVar "emitU64RawApp") (EVar "e")) (EVar "env")) (EApp (EApp (EVar "CVar") (EVar "x")) (EVar "a"))) (ETuple (EApp (EApp (EVar "CVar") (EVar "x")) (EVar "a")) (EListLit)))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "emitU64RawApp") (EVar "e")) (EVar "env")) (EApp (EApp (EVar "CVar") (EVar "x")) (EVar "a"))) (ETuple (EApp (EApp (EVar "CVar") (EVar "x")) (EVar "a")) (EListLit))))))
+(DFunDef false "emitU64Raw" ((PVar "e") (PVar "env") (PCon "CVar" (PVar "x") (PVar "a"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "x")) (EVar "env")) (arm (PCon "Some" (PTuple (PVar "reg") (PCon "LTU64U"))) () (EVar "reg")) (arm PWild () (EApp (EApp (EApp (EApp (EVar "emitU64RawApp") (EVar "e")) (EVar "env")) (EApp (EApp (EVar "CVar") (EVar "x")) (EVar "a"))) (ETuple (EApp (EApp (EVar "CVar") (EVar "x")) (EVar "a")) (EListLit))))))
 (DFunDef false "emitU64Raw" ((PVar "e") (PVar "env") (PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRawIf") (EVar "e")) (EVar "env")) (EVar "RawU64")) (EVar "c")) (EVar "t")) (EVar "f")))
 (DFunDef false "emitU64Raw" ((PVar "e") (PVar "env") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EApp (EApp (EVar "emitRawBlock") (EVar "e")) (EVar "env")) (EVar "RawU64")) (EVar "stmts")))
 (DFunDef false "emitU64Raw" ((PVar "e") (PVar "env") (PCon "CLet" (PCon "False") (PCon "PVar" (PVar "x") (PVar "a") (PVar "bid")) (PVar "e1") (PVar "e2"))) (EMatch (EVar "e1") (arm (PCon "CLam" PWild PWild) () (EApp (EApp (EVar "unboxU64") (EVar "e")) (EApp (EVar "fst") (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EApp (EApp (EApp (EApp (EVar "CLet") (EVar "False")) (EApp (EApp (EApp (EVar "PVar") (EVar "x")) (EVar "a")) (EVar "bid"))) (EVar "e1")) (EVar "e2")))))) (arm PWild () (EApp (EApp (EApp (EVar "emitU64Raw") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "bindLetRaw") (EVar "e")) (EVar "env")) (EVar "x")) (EVar "bid")) (EVar "e1")) (EVar "e2"))) (EVar "e2")))))
@@ -15912,7 +15909,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "emitU32Raw" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "CExpr") (TyCon "String")))))
 (DFunDef false "emitU32Raw" (PWild PWild (PCon "CLit" (PCon "LInt" (PVar "n")))) (EApp (EVar "u32Const") (EVar "n")))
 (DFunDef false "emitU32Raw" ((PVar "e") (PVar "env") (PCon "CBinPrim" (PVar "op") (PVar "l") (PVar "r") (PVar "tag") (PVar "site"))) (EIf (EBinOp "&&" (EApp (EVar "isW32Head") (EVar "tag")) (EApp (EVar "isArithOp") (EVar "op"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitU32RawArith") (EVar "e")) (EVar "env")) (EApp (EVar "isI32Head") (EVar "tag"))) (EVar "op")) (EVar "l")) (EVar "r")) (EVar "site")) (EIf (EVar "otherwise") (EApp (EApp (EVar "untagU32") (EVar "e")) (EApp (EVar "fst") (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EApp (EApp (EApp (EApp (EApp (EVar "CBinPrim") (EVar "op")) (EVar "l")) (EVar "r")) (EVar "tag")) (EVar "site"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DFunDef false "emitU32Raw" ((PVar "e") (PVar "env") (PCon "CVar" (PVar "x") (PVar "a"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "x")) (EVar "env")) (arm (PCon "Some" (PTuple (PVar "reg") (PCon "LTU32U"))) () (EVar "reg")) (arm (PCon "Some" (PTuple (PVar "reg") (PCon "LTI32U"))) () (EVar "reg")) (arm (PCon "Some" PWild) () (EApp (EApp (EVar "untagU32") (EVar "e")) (EApp (EVar "fst") (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EApp (EApp (EVar "CVar") (EVar "x")) (EVar "a")))))) (arm (PCon "None") () (EApp (EApp (EVar "untagU32") (EVar "e")) (EApp (EVar "fst") (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EApp (EApp (EVar "CVar") (EVar "x")) (EVar "a"))))))))
+(DFunDef false "emitU32Raw" ((PVar "e") (PVar "env") (PCon "CVar" (PVar "x") (PVar "a"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "x")) (EVar "env")) (arm (PCon "Some" (PTuple (PVar "reg") (PCon "LTU32U"))) () (EVar "reg")) (arm (PCon "Some" (PTuple (PVar "reg") (PCon "LTI32U"))) () (EVar "reg")) (arm PWild () (EApp (EApp (EVar "untagU32") (EVar "e")) (EApp (EVar "fst") (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EApp (EApp (EVar "CVar") (EVar "x")) (EVar "a"))))))))
 (DFunDef false "emitU32Raw" ((PVar "e") (PVar "env") (PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRawIf") (EVar "e")) (EVar "env")) (EVar "RawU32")) (EVar "c")) (EVar "t")) (EVar "f")))
 (DFunDef false "emitU32Raw" ((PVar "e") (PVar "env") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EApp (EApp (EVar "emitRawBlock") (EVar "e")) (EVar "env")) (EVar "RawU32")) (EVar "stmts")))
 (DFunDef false "emitU32Raw" ((PVar "e") (PVar "env") (PCon "CLet" (PCon "False") (PCon "PVar" (PVar "x") (PVar "a") (PVar "bid")) (PVar "e1") (PVar "e2"))) (EMatch (EVar "e1") (arm (PCon "CLam" PWild PWild) () (EApp (EApp (EVar "untagU32") (EVar "e")) (EApp (EVar "fst") (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EApp (EApp (EApp (EApp (EVar "CLet") (EVar "False")) (EApp (EApp (EApp (EVar "PVar") (EVar "x")) (EVar "a")) (EVar "bid"))) (EVar "e1")) (EVar "e2")))))) (arm PWild () (EApp (EApp (EApp (EVar "emitU32Raw") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "bindLetRaw") (EVar "e")) (EVar "env")) (EVar "x")) (EVar "bid")) (EVar "e1")) (EVar "e2"))) (EVar "e2")))))
@@ -16061,11 +16058,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DFunDef false "tupleBody" ((PCon "CBlock" (PVar "stmts")) (PVar "n")) (EMatch (EApp (EVar "reverseL") (EVar "stmts")) (arm (PCons (PCon "CSExpr" (PCon "CTuple" (PVar "es"))) (PVar "lead")) () (EIf (EBinOp "==" (EApp (EVar "lengthS") (EVar "es")) (EVar "n")) (EApp (EVar "Some") (ETuple (EApp (EVar "reverseL") (EVar "lead")) (EVar "es"))) (EVar "None"))) (arm PWild () (EVar "None"))))
 (DFunDef false "tupleBody" (PWild PWild) (EVar "None"))
 (DTypeSig false "u64KernelAlias" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyApp (TyCon "Option") (TyCon "String"))))))
-(DFunDef false "u64KernelAlias" ((PVar "e") (PVar "f") (PVar "args")) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EApp (EVar "canonFnName") (EVar "e")) (EVar "f"))) (EUnOp "!" (EFieldAccess (EVar "e") "gDispBindMap"))) (arm (PCon "Some" (PCon "CBind" PWild (PList (PCon "CClause" (PVar "pats") (PVar "body"))) PWild PWild)) () (EMatch (EApp (EVar "paramNames") (EVar "pats")) (arm (PCon "Some" (PVar "ps")) () (EIf (EBinOp "==" (EApp (EVar "lengthS") (EVar "ps")) (EApp (EVar "lengthS") (EVar "args"))) (EApp (EApp (EApp (EApp (EVar "u64AliasBody") (EVar "e")) (EVar "ps")) (EVar "body")) (EVar "args")) (EVar "None"))) (arm (PCon "None") () (EVar "None")))) (arm PWild () (EVar "None"))))
-(DTypeSig false "paramNames" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "paramNames" ((PList)) (EApp (EVar "Some") (EListLit)))
-(DFunDef false "paramNames" ((PCons (PCon "PVar" (PVar "n") PWild PWild) (PVar "rest"))) (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "n") (EVar "_s")))) (EApp (EVar "paramNames") (EVar "rest"))))
-(DFunDef false "paramNames" (PWild) (EVar "None"))
+(DFunDef false "u64KernelAlias" ((PVar "e") (PVar "f") (PVar "args")) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EApp (EVar "canonFnName") (EVar "e")) (EVar "f"))) (EUnOp "!" (EFieldAccess (EVar "e") "gDispBindMap"))) (arm (PCon "Some" (PCon "CBind" PWild (PList (PCon "CClause" (PVar "pats") (PVar "body"))) PWild PWild)) () (EMatch (EApp (EVar "varNames") (EVar "pats")) (arm (PCon "Some" (PVar "ps")) () (EIf (EBinOp "==" (EApp (EVar "lengthS") (EVar "ps")) (EApp (EVar "lengthS") (EVar "args"))) (EApp (EApp (EApp (EApp (EVar "u64AliasBody") (EVar "e")) (EVar "ps")) (EVar "body")) (EVar "args")) (EVar "None"))) (arm (PCon "None") () (EVar "None")))) (arm PWild () (EVar "None"))))
 (DTypeSig false "u64AliasBody" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CExpr") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyApp (TyCon "Option") (TyCon "String")))))))
 (DFunDef false "u64AliasBody" ((PVar "e") (PVar "ps") (PCon "CIf" (PCon "CBinPrim" (PLit (LString "<")) (PCon "CVar" (PVar "k") PWild) (PVar "zero") PWild PWild) PWild (PVar "body")) (PVar "args")) (EMatch (ETuple (EApp (EApp (EApp (EVar "u64KernelApplied") (EVar "e")) (EVar "ps")) (EApp (EVar "skipOtherwise") (EVar "body"))) (EVar "ps") (EVar "args") (EApp (EVar "intLitOf") (EVar "zero"))) (arm (PTuple (PCon "Some" (PVar "kern")) (PList PWild (PVar "amount")) (PList PWild (PVar "lit")) (PCon "Some" (PLit (LInt 0)))) () (EMatch (EApp (EVar "intLitOf") (EVar "lit")) (arm (PCon "Some" (PVar "n")) () (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EVar "isU64ShiftKernel") (EVar "kern")) (EBinOp "==" (EVar "amount") (EVar "k"))) (EBinOp ">=" (EVar "n") (ELit (LInt 0)))) (EApp (EVar "Some") (EVar "kern")) (EVar "None"))) (arm (PCon "None") () (EVar "None")))) (arm PWild () (EVar "None"))))
 (DFunDef false "u64AliasBody" ((PVar "e") (PVar "ps") (PVar "body") PWild) (EMatch (EApp (EApp (EApp (EVar "u64KernelApplied") (EVar "e")) (EVar "ps")) (EVar "body")) (arm (PCon "Some" (PVar "kern")) () (EIf (EApp (EVar "isU64ShiftKernel") (EVar "kern")) (EVar "None") (EApp (EVar "Some") (EVar "kern")))) (arm (PCon "None") () (EVar "None"))))
@@ -17999,6 +17992,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DUse false (UseAlias ("backend" "llvm_symbol_names") "LN"))
 (DUse false (UseGroup ("support" "symbol_encoding") ((mem "encodeComponent" false))))
 (DUse false (UseGroup ("support" "symbol_encoding") ((mem "encodePair" false))))
+(DUse false (UseGroup ("ir" "core_opt_unfold") ((mem "varNames" false))))
 (DUse false (UseGroup ("ir" "core_walk") ((mem "patBinders" false))))
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "TrmcVerdicts" false) (mem "isTrmcFn" false) (mem "isTrmcImpl" false))))
 (DUse false (UseGroup ("types" "extern_source") ((mem "ExternBindingKind" true))))
@@ -18603,7 +18597,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DFunDef false "emitU64Extern" ((PVar "e") (PVar "env") (PVar "name") (PVar "args")) (ETuple (EApp (EApp (EVar "boxU64") (EVar "e")) (EApp (EApp (EApp (EApp (EVar "emitU64Kernel") (EVar "e")) (EVar "env")) (EVar "name")) (EVar "args"))) (EVar "LTU64")))
 (DTypeSig false "emitU64Raw" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "CExpr") (TyCon "String")))))
 (DFunDef false "emitU64Raw" ((PVar "e") (PVar "env") (PCon "CBinPrim" (PVar "op") (PVar "l") (PVar "r") (PVar "tag") (PVar "site"))) (EIf (EBinOp "&&" (EApp (EVar "isBoxed64Head") (EVar "tag")) (EApp (EVar "isArithOp") (EVar "op"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitU64RawArith") (EVar "e")) (EVar "env")) (EApp (EVar "isI64Head") (EVar "tag"))) (EVar "op")) (EVar "l")) (EVar "r")) (EVar "site")) (EIf (EVar "otherwise") (EApp (EApp (EVar "unboxU64") (EVar "e")) (EApp (EVar "fst") (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EApp (EApp (EApp (EApp (EApp (EVar "CBinPrim") (EVar "op")) (EVar "l")) (EVar "r")) (EVar "tag")) (EVar "site"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DFunDef false "emitU64Raw" ((PVar "e") (PVar "env") (PCon "CVar" (PVar "x") (PVar "a"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "x")) (EVar "env")) (arm (PCon "Some" (PTuple (PVar "reg") (PCon "LTU64U"))) () (EVar "reg")) (arm (PCon "Some" PWild) () (EApp (EApp (EApp (EApp (EVar "emitU64RawApp") (EVar "e")) (EVar "env")) (EApp (EApp (EVar "CVar") (EVar "x")) (EVar "a"))) (ETuple (EApp (EApp (EVar "CVar") (EVar "x")) (EVar "a")) (EListLit)))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "emitU64RawApp") (EVar "e")) (EVar "env")) (EApp (EApp (EVar "CVar") (EVar "x")) (EVar "a"))) (ETuple (EApp (EApp (EVar "CVar") (EVar "x")) (EVar "a")) (EListLit))))))
+(DFunDef false "emitU64Raw" ((PVar "e") (PVar "env") (PCon "CVar" (PVar "x") (PVar "a"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "x")) (EVar "env")) (arm (PCon "Some" (PTuple (PVar "reg") (PCon "LTU64U"))) () (EVar "reg")) (arm PWild () (EApp (EApp (EApp (EApp (EVar "emitU64RawApp") (EVar "e")) (EVar "env")) (EApp (EApp (EVar "CVar") (EVar "x")) (EVar "a"))) (ETuple (EApp (EApp (EVar "CVar") (EVar "x")) (EVar "a")) (EListLit))))))
 (DFunDef false "emitU64Raw" ((PVar "e") (PVar "env") (PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRawIf") (EVar "e")) (EVar "env")) (EVar "RawU64")) (EVar "c")) (EVar "t")) (EVar "f")))
 (DFunDef false "emitU64Raw" ((PVar "e") (PVar "env") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EApp (EApp (EVar "emitRawBlock") (EVar "e")) (EVar "env")) (EVar "RawU64")) (EVar "stmts")))
 (DFunDef false "emitU64Raw" ((PVar "e") (PVar "env") (PCon "CLet" (PCon "False") (PCon "PVar" (PVar "x") (PVar "a") (PVar "bid")) (PVar "e1") (PVar "e2"))) (EMatch (EVar "e1") (arm (PCon "CLam" PWild PWild) () (EApp (EApp (EVar "unboxU64") (EVar "e")) (EApp (EVar "fst") (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EApp (EApp (EApp (EApp (EVar "CLet") (EVar "False")) (EApp (EApp (EApp (EVar "PVar") (EVar "x")) (EVar "a")) (EVar "bid"))) (EVar "e1")) (EVar "e2")))))) (arm PWild () (EApp (EApp (EApp (EVar "emitU64Raw") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "bindLetRaw") (EVar "e")) (EVar "env")) (EVar "x")) (EVar "bid")) (EVar "e1")) (EVar "e2"))) (EVar "e2")))))
@@ -18698,7 +18692,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DTypeSig false "emitU32Raw" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "CExpr") (TyCon "String")))))
 (DFunDef false "emitU32Raw" (PWild PWild (PCon "CLit" (PCon "LInt" (PVar "n")))) (EApp (EVar "u32Const") (EVar "n")))
 (DFunDef false "emitU32Raw" ((PVar "e") (PVar "env") (PCon "CBinPrim" (PVar "op") (PVar "l") (PVar "r") (PVar "tag") (PVar "site"))) (EIf (EBinOp "&&" (EApp (EVar "isW32Head") (EVar "tag")) (EApp (EVar "isArithOp") (EVar "op"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitU32RawArith") (EVar "e")) (EVar "env")) (EApp (EVar "isI32Head") (EVar "tag"))) (EVar "op")) (EVar "l")) (EVar "r")) (EVar "site")) (EIf (EVar "otherwise") (EApp (EApp (EVar "untagU32") (EVar "e")) (EApp (EVar "fst") (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EApp (EApp (EApp (EApp (EApp (EVar "CBinPrim") (EVar "op")) (EVar "l")) (EVar "r")) (EVar "tag")) (EVar "site"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DFunDef false "emitU32Raw" ((PVar "e") (PVar "env") (PCon "CVar" (PVar "x") (PVar "a"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "x")) (EVar "env")) (arm (PCon "Some" (PTuple (PVar "reg") (PCon "LTU32U"))) () (EVar "reg")) (arm (PCon "Some" (PTuple (PVar "reg") (PCon "LTI32U"))) () (EVar "reg")) (arm (PCon "Some" PWild) () (EApp (EApp (EVar "untagU32") (EVar "e")) (EApp (EVar "fst") (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EApp (EApp (EVar "CVar") (EVar "x")) (EVar "a")))))) (arm (PCon "None") () (EApp (EApp (EVar "untagU32") (EVar "e")) (EApp (EVar "fst") (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EApp (EApp (EVar "CVar") (EVar "x")) (EVar "a"))))))))
+(DFunDef false "emitU32Raw" ((PVar "e") (PVar "env") (PCon "CVar" (PVar "x") (PVar "a"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "x")) (EVar "env")) (arm (PCon "Some" (PTuple (PVar "reg") (PCon "LTU32U"))) () (EVar "reg")) (arm (PCon "Some" (PTuple (PVar "reg") (PCon "LTI32U"))) () (EVar "reg")) (arm PWild () (EApp (EApp (EVar "untagU32") (EVar "e")) (EApp (EVar "fst") (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EApp (EApp (EVar "CVar") (EVar "x")) (EVar "a"))))))))
 (DFunDef false "emitU32Raw" ((PVar "e") (PVar "env") (PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitRawIf") (EVar "e")) (EVar "env")) (EVar "RawU32")) (EVar "c")) (EVar "t")) (EVar "f")))
 (DFunDef false "emitU32Raw" ((PVar "e") (PVar "env") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EApp (EApp (EVar "emitRawBlock") (EVar "e")) (EVar "env")) (EVar "RawU32")) (EVar "stmts")))
 (DFunDef false "emitU32Raw" ((PVar "e") (PVar "env") (PCon "CLet" (PCon "False") (PCon "PVar" (PVar "x") (PVar "a") (PVar "bid")) (PVar "e1") (PVar "e2"))) (EMatch (EVar "e1") (arm (PCon "CLam" PWild PWild) () (EApp (EApp (EVar "untagU32") (EVar "e")) (EApp (EVar "fst") (EApp (EApp (EApp (EVar "emitExpr") (EVar "e")) (EVar "env")) (EApp (EApp (EApp (EApp (EVar "CLet") (EVar "False")) (EApp (EApp (EApp (EVar "PVar") (EVar "x")) (EVar "a")) (EVar "bid"))) (EVar "e1")) (EVar "e2")))))) (arm PWild () (EApp (EApp (EApp (EVar "emitU32Raw") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "bindLetRaw") (EVar "e")) (EVar "env")) (EVar "x")) (EVar "bid")) (EVar "e1")) (EVar "e2"))) (EVar "e2")))))
@@ -18847,11 +18841,7 @@ runtimeName e symbol = optionOr "" (externRuntimeKey e.externFacts symbol)
 (DFunDef false "tupleBody" ((PCon "CBlock" (PVar "stmts")) (PVar "n")) (EMatch (EApp (EVar "reverseL") (EVar "stmts")) (arm (PCons (PCon "CSExpr" (PCon "CTuple" (PVar "es"))) (PVar "lead")) () (EIf (EBinOp "==" (EApp (EVar "lengthS") (EVar "es")) (EVar "n")) (EApp (EVar "Some") (ETuple (EApp (EVar "reverseL") (EVar "lead")) (EVar "es"))) (EVar "None"))) (arm PWild () (EVar "None"))))
 (DFunDef false "tupleBody" (PWild PWild) (EVar "None"))
 (DTypeSig false "u64KernelAlias" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyApp (TyCon "Option") (TyCon "String"))))))
-(DFunDef false "u64KernelAlias" ((PVar "e") (PVar "f") (PVar "args")) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EApp (EVar "canonFnName") (EVar "e")) (EVar "f"))) (EUnOp "!" (EFieldAccess (EVar "e") "gDispBindMap"))) (arm (PCon "Some" (PCon "CBind" PWild (PList (PCon "CClause" (PVar "pats") (PVar "body"))) PWild PWild)) () (EMatch (EApp (EVar "paramNames") (EVar "pats")) (arm (PCon "Some" (PVar "ps")) () (EIf (EBinOp "==" (EApp (EVar "lengthS") (EVar "ps")) (EApp (EVar "lengthS") (EVar "args"))) (EApp (EApp (EApp (EApp (EVar "u64AliasBody") (EVar "e")) (EVar "ps")) (EVar "body")) (EVar "args")) (EVar "None"))) (arm (PCon "None") () (EVar "None")))) (arm PWild () (EVar "None"))))
-(DTypeSig false "paramNames" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "paramNames" ((PList)) (EApp (EVar "Some") (EListLit)))
-(DFunDef false "paramNames" ((PCons (PCon "PVar" (PVar "n") PWild PWild) (PVar "rest"))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "n") (EVar "_s")))) (EApp (EVar "paramNames") (EVar "rest"))))
-(DFunDef false "paramNames" (PWild) (EVar "None"))
+(DFunDef false "u64KernelAlias" ((PVar "e") (PVar "f") (PVar "args")) (EMatch (EApp (EApp (EVar "omLookup") (EApp (EApp (EVar "canonFnName") (EVar "e")) (EVar "f"))) (EUnOp "!" (EFieldAccess (EVar "e") "gDispBindMap"))) (arm (PCon "Some" (PCon "CBind" PWild (PList (PCon "CClause" (PVar "pats") (PVar "body"))) PWild PWild)) () (EMatch (EApp (EVar "varNames") (EVar "pats")) (arm (PCon "Some" (PVar "ps")) () (EIf (EBinOp "==" (EApp (EVar "lengthS") (EVar "ps")) (EApp (EVar "lengthS") (EVar "args"))) (EApp (EApp (EApp (EApp (EVar "u64AliasBody") (EVar "e")) (EVar "ps")) (EVar "body")) (EVar "args")) (EVar "None"))) (arm (PCon "None") () (EVar "None")))) (arm PWild () (EVar "None"))))
 (DTypeSig false "u64AliasBody" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CExpr") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyApp (TyCon "Option") (TyCon "String")))))))
 (DFunDef false "u64AliasBody" ((PVar "e") (PVar "ps") (PCon "CIf" (PCon "CBinPrim" (PLit (LString "<")) (PCon "CVar" (PVar "k") PWild) (PVar "zero") PWild PWild) PWild (PVar "body")) (PVar "args")) (EMatch (ETuple (EApp (EApp (EApp (EVar "u64KernelApplied") (EVar "e")) (EVar "ps")) (EApp (EVar "skipOtherwise") (EVar "body"))) (EVar "ps") (EVar "args") (EApp (EVar "intLitOf") (EVar "zero"))) (arm (PTuple (PCon "Some" (PVar "kern")) (PList PWild (PVar "amount")) (PList PWild (PVar "lit")) (PCon "Some" (PLit (LInt 0)))) () (EMatch (EApp (EVar "intLitOf") (EVar "lit")) (arm (PCon "Some" (PVar "n")) () (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EVar "isU64ShiftKernel") (EVar "kern")) (EBinOp "==" (EVar "amount") (EVar "k"))) (EBinOp ">=" (EVar "n") (ELit (LInt 0)))) (EApp (EVar "Some") (EVar "kern")) (EVar "None"))) (arm (PCon "None") () (EVar "None")))) (arm PWild () (EVar "None"))))
 (DFunDef false "u64AliasBody" ((PVar "e") (PVar "ps") (PVar "body") PWild) (EMatch (EApp (EApp (EApp (EVar "u64KernelApplied") (EVar "e")) (EVar "ps")) (EVar "body")) (arm (PCon "Some" (PVar "kern")) () (EIf (EApp (EVar "isU64ShiftKernel") (EVar "kern")) (EVar "None") (EApp (EVar "Some") (EVar "kern")))) (arm (PCon "None") () (EVar "None"))))
