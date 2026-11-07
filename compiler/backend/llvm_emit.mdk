@@ -935,9 +935,6 @@ data Emit = Emit {
   -- the functions with a raw worker (`rawWorkerOf`), by name; built once per
   -- program, since a call site can precede its callee's define.
   rawWorkers : Ref (OrdMap RawWorker),
-  -- the top-level value bindings whose body is a literal, by name
-  -- (`collectConstGlobals`).
-  constGlobals : Ref (OrdMap Lit),
   -- how many `u32Inline` inlinings are open at the current emission point.
   inlineOpen : Ref Int,
   -- how many inlinings the current outermost inlining site has opened.
@@ -3494,10 +3491,7 @@ emitU64Raw e env (CBinPrim op l r tag site)
 emitU64Raw e env (CVar x a) = match omLookup x env
   Some (reg, LTU64U) => reg
   Some _ => emitU64RawApp e env (CVar x a) (CVar x a, [])
-  None => match omLookup x !e.constGlobals
-    Some (LU64 hi lo) => emitU64Raw e env (CLit (LU64 hi lo))
-    Some (LI64 hi lo) => emitU64Raw e env (CLit (LI64 hi lo))
-    _ => emitU64RawApp e env (CVar x a) (CVar x a, [])
+  None => emitU64RawApp e env (CVar x a) (CVar x a, [])
 emitU64Raw e env (CIf c t f) = emitRawIf e env RawU64 c t f
 emitU64Raw e env (CBlock stmts) = emitRawBlock e env RawU64 stmts
 emitU64Raw e env (CLet False (PVar x a bid) e1 e2) = match e1
@@ -3806,9 +3800,7 @@ emitU32Raw e env (CVar x a) = match omLookup x env
   Some (reg, LTU32U) => reg
   Some (reg, LTI32U) => reg
   Some _ => untagU32 e (fst (emitExpr e env (CVar x a)))
-  None => match omLookup x !e.constGlobals
-    Some (LInt n) => u32Const n
-    _ => untagU32 e (fst (emitExpr e env (CVar x a)))
+  None => untagU32 e (fst (emitExpr e env (CVar x a)))
 emitU32Raw e env (CIf c t f) = emitRawIf e env RawU32 c t f
 emitU32Raw e env (CBlock stmts) = emitRawBlock e env RawU32 stmts
 emitU32Raw e env (CLet False (PVar x a bid) e1 e2) = match e1
@@ -4410,6 +4402,7 @@ paramNames [] = Some []
 paramNames ((PVar n _ _) :: rest) = map (n :: _) (paramNames rest)
 paramNames _ = None
 
+-- the shift guard stays until the general inliner (#4912) covers it.
 u64AliasBody : Emit -> List String -> CExpr -> List CExpr -> Option String
 u64AliasBody e ps (CIf (CBinPrim "<" (CVar k _) zero _ _) _ body) args = match (
   u64KernelApplied e ps (skipOtherwise body),
@@ -5544,8 +5537,7 @@ floatFwFp e f = match lookupAssoc f !e.floatFwSet
 floatFromIntArg : Emit -> OrdMap (String, LTy) -> CExpr -> Option CExpr
 floatFromIntArg e env ex = match flattenApp ex []
   (CVar f _, a :: []) =>
-    if runtimeName e f == "intToFloat" && not (isLocal env f)
-      || f == "fromInt" then
+    if runtimeName e f == "intToFloat" && not (isLocal env f) then
       Some a
     else
       None
@@ -12972,16 +12964,6 @@ rawWorkerOf e refine (CBind name [CClause pats body] _ bid) =
     None
 rawWorkerOf _ _ _ = None
 
--- A top-level value binding whose body is a literal (`limbMask : U64 =
--- 0x3ffffff`).  Read where a raw U64 or U32 is wanted, it is that literal,
--- which LLVM folds, rather than a load of the global's word and, for a U64,
--- of its cell's payload.
-collectConstGlobals : List CBind -> OrdMap Lit
-collectConstGlobals [] = omEmpty
-collectConstGlobals ((CBind name [CClause [] (CLit l)] _ _) :: rest) =
-  omInsert name l (collectConstGlobals rest)
-collectConstGlobals (_ :: rest) = collectConstGlobals rest
-
 -- A U64 parameter stays raw only if no occurrence would box it, and a raw
 -- result only if its tail calls stay tail calls (`rawRetOk`); both depend on
 -- which positions of the functions called are raw.  The first pass takes every
@@ -14729,7 +14711,6 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries facts =
     floatFwSet = Ref [],
     floatClosureFns = Ref [],
     rawWorkers = Ref omEmpty,
-    constGlobals = Ref omEmpty,
     inlineOpen = Ref 0,
     inlineSpent = Ref 0,
     siteTraps = Ref [],
@@ -14769,7 +14750,6 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries facts =
   installDispatchState e cfg.dispGroups (fnBinds groups)
   e.floatClosureFns := collectFloatClosureFns e (fnBinds groups)
   e.rawWorkers := collectRawWorkers e (fnBinds groups)
-  e.constGlobals := collectConstGlobals (valBinds groups)
   e
 
 emitProgramMode : GapMode ->
