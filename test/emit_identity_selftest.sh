@@ -1,5 +1,5 @@
 #!/bin/sh
-# shell-because: external-harness — drives two emitter processes per run and compares their output bytes
+# shell-because: external-harness — scripts/emit_identity.sh drives two emitter processes per run and compares their output bytes
 # emit_identity_selftest.sh: proves scripts/emit_identity.sh can go green AND red.
 #
 # On a two-entry corpus of tiny fixtures (test/llvm_fixtures/char_lit.mdk, char_code.mdk):
