@@ -1,5 +1,5 @@
 # META
-source_lines=2519
+source_lines=2499
 stages=DESUGAR,MARK
 # SOURCE
 {- | The prelude: the types, interfaces, and functions every Medaka program
@@ -407,8 +407,6 @@ export impl Debug (List a) requires Debug a where
 -- prepended to `acc` from the back; mirrors `debugListItems` but walks by
 -- index (arrays aren't cons-lists).
 debugArrayItems : Debug a => Array a -> Int -> Int -> List String -> List String
--- Bound: prelude, linked into every program: the where-go form adds a capturing closure group to every wasm module until the lambda-lift pass (#4878); convert then.
--- lint-disable-next-line rule-threaded-invariant
 debugArrayItems arr lo j acc
   | j < lo = acc
   | otherwise =
@@ -434,8 +432,6 @@ export impl Eq (Array a) requires Eq a where
     if arrayLength a /= arrayLength b then False else eqGo a b 0 (arrayLength a)
 
 eqGo : Eq a => Array a -> Array a -> Int -> Int -> Bool
--- Bound: prelude, linked into every program: the where-go form adds a capturing closure group to every wasm module until the lambda-lift pass (#4878); convert then.
--- lint-disable-next-line rule-threaded-invariant
 eqGo a b i n =
   if i >= n then
     True
@@ -477,8 +473,6 @@ arrFoldUntilGo : (b -> a -> <e> ControlFlow b) ->
   Int ->
   b ->
   <e> b
--- Bound: prelude, linked into every program: the where-go form adds a capturing closure group to every wasm module until the lambda-lift pass (#4878); convert then.
--- lint-disable-next-line rule-threaded-invariant
 arrFoldUntilGo f arr i n acc =
   if i >= n then
     acc
@@ -487,8 +481,6 @@ arrFoldUntilGo f arr i n acc =
     Break r => r
 
 arrFoldGo : (b -> a -> <e> b) -> Array a -> Int -> Int -> b -> <e> b
--- Bound: prelude, linked into every program: the where-go form adds a capturing closure group to every wasm module until the lambda-lift pass (#4878); convert then.
--- lint-disable-next-line rule-threaded-invariant
 arrFoldGo f arr i n acc =
   if i >= n then
     acc
@@ -496,8 +488,6 @@ arrFoldGo f arr i n acc =
     arrFoldGo f arr (i + 1) n (f acc (arrayGetUnsafe i arr))
 
 arrFoldRightGo : (a -> b -> <e> b) -> Array a -> Int -> b -> <e> b
--- Bound: prelude, linked into every program: the where-go form adds a capturing closure group to every wasm module until the lambda-lift pass (#4878); convert then.
--- lint-disable-next-line rule-threaded-invariant
 arrFoldRightGo f arr i acc =
   if i < 0 then
     acc
@@ -611,8 +601,6 @@ displayArrayItems : Display a =>
   Int ->
   List String ->
   List String
--- Bound: prelude, linked into every program: the where-go form adds a capturing closure group to every wasm module until the lambda-lift pass (#4878); convert then.
--- lint-disable-next-line rule-threaded-invariant
 displayArrayItems arr lo j acc
   | j < lo = acc
   | otherwise =
@@ -704,8 +692,6 @@ derivedArgNeedsParens s =
       c == '-' || derivedHasTopLevelSpace chars 0 (stringLength s) 0
 
 derivedHasTopLevelSpace : Array Char -> Int -> Int -> Int -> Bool
--- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds).
--- lint-disable-next-line rule-threaded-invariant
 derivedHasTopLevelSpace chars i n depth =
   if i >= n then
     False
@@ -803,8 +789,6 @@ export impl Hashable (Array a) requires Hashable a where
   hash arr = hashArrGo 0 arr 0 (arrayLength arr)
 
 hashArrGo : Hashable a => Int -> Array a -> Int -> Int -> Int
--- Bound: prelude, linked into every program: the where-go form adds a capturing closure group to every wasm module until the lambda-lift pass (#4878); convert then.
--- lint-disable-next-line rule-threaded-invariant
 hashArrGo acc arr i n =
   if i >= n then
     acc
@@ -1530,8 +1514,6 @@ listIndexAt site xs i =
 -- to the base case, so the out-of-bounds message can name the index the caller
 -- passed rather than the leftover 0 from the recursion.
 indexGo : Int -> List a -> Int -> Int -> a
--- Bound: a where-local go over this signature is let-generalised and dictionary-passes the loop (#4921, MonoLocalBinds).
--- lint-disable-next-line rule-threaded-invariant
 indexGo site [] i0 _ = indexErrorAtSite site i0
 indexGo site (h :: t) i0 i = if i <= 0 then h else indexGo site t i0 (i - 1)
 
@@ -1627,8 +1609,6 @@ sliceInclusiveEnd hi = if hi == intMaxBound then hi else hi + 1
 -- index is still below `hi` is the `hi > length` half of `Slice (Array a)`'s
 -- guard, decided here so the walk doubles as the length check.
 sliceListGo : List a -> Int -> Int -> Int -> List a
--- Bound: list built in tail position modulo cons: a where-local go loses the constant-stack loop until the lambda-lift pass (#4878); convert then.
--- lint-disable-next-line rule-threaded-invariant
 sliceListGo [] i lo hi
   | i >= hi = []
   | otherwise = sliceError lo (sliceLastIndex hi)

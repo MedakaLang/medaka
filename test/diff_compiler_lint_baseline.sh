@@ -27,7 +27,7 @@
 #
 #   Both passes take test/lint_path_exempt.toml via `--exempt`, and assertion 0
 #   bounds that table: every row names in `pinned-by` the pds/test/constant_time_*.sh
-#   gate that pins its file, and carries a reason.
+#   gate (or the lease replay) that pins its file, and carries a reason.
 #
 # The rule lists come from the binary (`medaka lint --list-rules --names`), never
 # from this file or the hook: a rule cannot exist without registry metadata, so
@@ -130,7 +130,8 @@ fi
 
 # ── assertion 0: the exemption table is not a general escape hatch ──────────
 # Every row must carry a non-empty reason and a `pinned-by` naming the
-# pds/test/constant_time_*.sh gate that pins its file. That script must name the
+# pds/test/constant_time_*.sh gate, or test/process_authority_fixtures/lease_replay.py,
+# that pins its file. That script must name the
 # file on a non-comment line (a manifest or anchor), or, for a file the script
 # pins only through the emitted IR closure it checks, the row's reason must say
 # so. `medaka lint` checks the reason too; this gate also says WHICH files may be
@@ -151,14 +152,14 @@ while IFS="$tab" read -r f why by; do
   [ -n "$f" ] || continue
   exempt_checked=$((exempt_checked + 1))
   case "$by" in
-    pds/test/constant_time_*.sh) [ -f "$ROOT/$by" ] || by="" ;;
+    pds/test/constant_time_*.sh | test/process_authority_fixtures/lease_replay.py) [ -f "$ROOT/$by" ] || by="" ;;
     *) by="" ;;
   esac
   if [ -z "$why" ]; then
     echo "FAIL: $EXEMPT_REL row for $f has no reason"
     exempt_bad=1
   elif [ -z "$by" ]; then
-    echo "FAIL: $EXEMPT_REL row for $f needs pinned-by = an existing pds/test/constant_time_*.sh"
+    echo "FAIL: $EXEMPT_REL row for $f needs pinned-by = an existing pds/test/constant_time_*.sh or test/process_authority_fixtures/lease_replay.py"
     exempt_bad=1
   elif ! grep -v '^[[:space:]]*#' "$ROOT/$by" | grep -qF "$f"; then
     case "$why" in

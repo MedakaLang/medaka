@@ -8,7 +8,8 @@
 # Consumers: .githooks/pre-commit (lint check, and its fmt check skips these
 # files) and test/diff_compiler_lint_baseline.sh (both assertions). That gate
 # also bounds the table: every row names, in `pinned-by`, the
-# pds/test/constant_time_*.sh gate that pins it. That script must name `file` on
+# pds/test/constant_time_*.sh gate (or test/process_authority_fixtures/lease_replay.py)
+# that pins it. That script must name `file` on
 # a non-comment line, or the row's reason must name the emitted closure the
 # script pins. This table is for bytes another gate pins, not a general way to
 # silence a rule.
@@ -56,3 +57,9 @@ file = "stdlib/mut_bytes.mdk"
 rules = ["rule-threaded-invariant"]
 reason = "fillFrom is in the emitted closure pinned by pds/test/constant_time_signing.sh"
 pinned-by = "pds/test/constant_time_signing.sh"
+
+[[entry]]
+file = "stdlib/core.mdk"
+rules = ["rule-threaded-invariant"]
+reason = "byte-pinned by the source pins in docs/findings/mcp-runtime-stdio-lease/summary.json, which test/process_authority_fixtures/lease_replay.py replays"
+pinned-by = "test/process_authority_fixtures/lease_replay.py"
