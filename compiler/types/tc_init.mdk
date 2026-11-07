@@ -166,19 +166,45 @@ public export data InitViolation =
 export
 checkInitRules : InitInputs -> InitGraph -> List InitViolation
 checkInitRules inputs g =
-  let values =
-    filter
-      (n =>
-        n.inodeKind == ValueNode
-          && not (omHasKey n.inodeName g.igraphNotInitialised))
-      g.igraphNodes
-  let valueNames =
-    fold
-      (acc n =>
-        if n.inodeKind == ValueNode then omInsert n.inodeName () acc else acc)
-      omEmpty
-      g.igraphNodes
+  let values = initialisedValues g
+  let valueNames = valueNamesOf g
+  rulesOver inputs g values valueNames (valueReach g valueNames values)
+
+-- The rules and the order of one graph, which share the may-reach components when the
+-- rules compute them.
+export
+initRulesAndOrder : InitInputs -> InitGraph -> (List InitViolation, List String)
+initRulesAndOrder inputs g =
+  let values = initialisedValues g
+  let valueNames = valueNamesOf g
   let reach = valueReach g valueNames values
+  (rulesOver inputs g values valueNames reach, orderOf reach values g)
+
+-- The value nodes that are initialised: not `main` (I4) and not a constrained nullary
+-- binding (I6).
+initialisedValues : InitGraph -> List InitNode
+initialisedValues g =
+  filter
+    (n =>
+      n.inodeKind == ValueNode
+        && not (omHasKey n.inodeName g.igraphNotInitialised))
+    g.igraphNodes
+
+valueNamesOf : InitGraph -> OrdMap Unit
+valueNamesOf g =
+  fold
+    (acc n =>
+      if n.inodeKind == ValueNode then omInsert n.inodeName () acc else acc)
+    omEmpty
+    g.igraphNodes
+
+rulesOver : InitInputs ->
+  InitGraph ->
+  List InitNode ->
+  OrdMap Unit ->
+  Option MayReach ->
+  List InitViolation
+rulesOver inputs g values valueNames reach =
   let labels =
     fold
       (acc n =>
@@ -1331,9 +1357,30 @@ bindPat p bound = omFromNames (patBoundNames p) bound
 -- ready component with the earliest member first, and its members in source order.
 export
 initOrder : InitGraph -> List String
-initOrder g =
-  let nodes = g.igraphNodes
-  let compOf = (mayReach g).mrComp
+initOrder g = orderOf None (initialisedValues g) g
+
+-- The order of the initialised [values], over the components [shared] already holds or
+-- over those of the nodes the values may reach.  A value's place depends only on what it
+-- may reach, and a component that reaches a value without being reached from one never
+-- delays a value, so the nodes no value reaches are left out of the components and of
+-- the ordering both.
+orderOf : Option MayReach -> List InitNode -> InitGraph -> List String
+orderOf _ [] _ = []
+orderOf _ [v] _ = [v.inodeName]
+orderOf shared values g =
+  let adj = match shared
+    Some r => r.mrAdj
+    None => adjacency g
+  let reached = reachedFrom adj values g.igraphNodes
+  let compOf = match shared
+    Some r => r.mrComp
+    None => (mayReachOver adj reached).mrComp
+  orderOver compOf reached g
+
+-- The value nodes of [nodes], dependency-first over the components [compOf], which number
+-- every node of [nodes] and every node they mention.
+orderOver : OrdMap Int -> List InitNode -> InitGraph -> List String
+orderOver compOf nodes g =
   let members = componentMembers compOf (reverseL nodes) empty
   let deps = componentDeps compOf nodes empty
   let indegree = M.mapWithKey (_ ds => M.size ds) deps
@@ -1357,26 +1404,47 @@ initOrder g =
       members
   reverseL (kahn g members dependents indegree ready [])
 
+-- The nodes of [nodes] that [roots] may reach, the roots included, in source order.
+reachedFrom : OrdMap (List String) ->
+  List InitNode ->
+  List InitNode ->
+  List InitNode
+reachedFrom adj roots nodes =
+  let seen = reachClosure adj (map (n => n.inodeName) roots) omEmpty
+  filter (n => omHasKey n.inodeName seen) nodes
+
+reachClosure : OrdMap (List String) -> List String -> OrdMap Unit -> OrdMap Unit
+reachClosure _ [] seen = seen
+reachClosure adj (x :: rest) seen
+  | omHasKey x seen = reachClosure adj rest seen
+  | otherwise =
+    reachClosure
+      adj
+      (fold (acc t => t :: acc) rest (optionOr [] (omLookup x adj)))
+      (omInsert x () seen)
+
 -- The may-reach relation, every mention of every node, and its strongly connected
 -- components: [mrComp] numbers each node's component.
 data MayReach = MayReach { mrAdj : OrdMap (List String), mrComp : OrdMap Int }
 
 mayReach : InitGraph -> MayReach
-mayReach g =
-  let adj =
-    omFromPairs
-      (map
-        (n => (n.inodeName, map (m => m.mentionTarget) n.inodeMentions))
-        g.igraphNodes)
-      omEmpty
-  MayReach {
-    mrAdj = adj,
-    mrComp =
-      componentIndex
-        (tarjanSCCs (map (n => n.inodeName) g.igraphNodes) adj)
-        0
-        omEmpty,
-  }
+mayReach g = mayReachOver (adjacency g) g.igraphNodes
+
+adjacency : InitGraph -> OrdMap (List String)
+adjacency g =
+  omFromPairs
+    (map
+      (n => (n.inodeName, map (m => m.mentionTarget) n.inodeMentions))
+      g.igraphNodes)
+    omEmpty
+
+-- The components of [nodes], a set every mention of which [adj] keeps inside it.
+mayReachOver : OrdMap (List String) -> List InitNode -> MayReach
+mayReachOver adj nodes = MayReach {
+  mrAdj = adj,
+  mrComp =
+    componentIndex (tarjanSCCs (map (n => n.inodeName) nodes) adj) 0 omEmpty,
+}
 
 componentIndex : List (List String) -> Int -> OrdMap Int -> OrdMap Int
 componentIndex [] _ acc = acc

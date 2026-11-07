@@ -396,7 +396,8 @@ declFactsSexp facts =
           [node "manifests" (map manifestSexp facts.factManifests)])
         ++ (match facts.factSymbolOrigins
           None => []
-          Some origins => [originsSexp origins]))
+          Some origins =>
+            originsSexp origins :: initOrderSexp facts.factInitOrder))
   else
     node
       "facts"
@@ -412,6 +413,18 @@ declFactsSexp facts =
         ++ (match facts.factEntryOutcome
           Some outcome => [entryOutcomeSexp outcome]
           None => []))
+
+-- The carried order rides after the origins it was lowered through, and is
+-- written only when one was carried.
+initOrderSexp : Option (List (String, List String)) -> List String
+initOrderSexp None = []
+initOrderSexp (Some rows) = [
+  node
+    "init-order"
+    (map
+      ((mid, names) => node "module" [escStr mid, slist (map escStr names)])
+      rows),
+]
 
 originSexp : SymbolOrigin -> String
 originSexp (ModuleOrigin mid name) = node "module" [escStr mid, escStr name]

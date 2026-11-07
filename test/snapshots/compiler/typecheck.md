@@ -1,5 +1,5 @@
 # META
-source_lines=3668
+source_lines=3664
 stages=DESUGAR,MARK
 # SOURCE
 -- typecheck: the entry module: the graph drive (`driveGraphK`), the chain and core memos and
@@ -149,7 +149,7 @@ import types.tc_types.{
   GraphDrive(..),
   GraphPreamble(..),
   ElabResult(..),
-  ElabFacts(..),
+  elabFactsOf,
   DrainFinding(..),
   MarkSets(..),
   PreludeMarkFacts(..),
@@ -3582,11 +3582,7 @@ elabDriveResult g = (
       erResidual = g.gdResidual,
       erEvidence = g.gdEvTable,
       erDispositions = g.gdDispositions,
-      erFacts = ElabFacts {
-        efManifests = g.gdOutputs.doManifests,
-        efBinders = g.gdBinders,
-        efEntryOutcome = g.gdOutputs.doEntryOutcome,
-      },
+      erFacts = elabFactsOf g.gdOutputs g.gdBinders,
     },
     g.gdReport,
     g.gdOutputs,
@@ -3680,7 +3676,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DUse false (UseGroup ("types" "effect_rows") ((mem "Atom" true) (mem "builtinLabel" false) (mem "atomWith" false) (mem "pureRow" false))))
 (DUse false (UseAlias ("types" "effect_solver") "EffectSolver"))
 (DUse false (UseGroup ("types" "effect_invocation") ((mem "InvocationOps" true))))
-(DUse false (UseGroup ("types" "tc_types") ((mem "StandaloneOrigin" true) (mem "SiteKind" true) (mem "ServeStep" true) (mem "Provenance" true) (mem "NumBoundaryDisposition" true) (mem "GoalPayload" true) (mem "DeclaringBinder" true) (mem "Accumulate" true) (mem "ModulePlace" true) (mem "FoldPlan" true) (mem "siteFor" false) (mem "DeclEnvModule" true) (mem "DeclEnvs" true) (mem "ImplRow" true) (mem "ImplEnv" true) (mem "ClassEnv" true) (mem "GraphCtx" true) (mem "TcConfig" true) (mem "DriveInputs" true) (mem "DriveArgs" true) (mem "DriveOutputs" true) (mem "withPublishedManifests" false) (mem "manifestDriverFor" false) (mem "Predicate" true) (mem "GraphRun" true) (mem "ModuleCtx" true) (mem "InvocationView" true) (mem "ModuleBindings" true) (mem "ExportBinding" true) (mem "ModuleSeed" true) (mem "PreludePreamble" true) (mem "GraphOut" true) (mem "ModuleServe" true) (mem "GraphDrive" true) (mem "GraphPreamble" true) (mem "ElabResult" true) (mem "ElabFacts" true) (mem "DrainFinding" true) (mem "MarkSets" true) (mem "PreludeMarkFacts" true))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "StandaloneOrigin" true) (mem "SiteKind" true) (mem "ServeStep" true) (mem "Provenance" true) (mem "NumBoundaryDisposition" true) (mem "GoalPayload" true) (mem "DeclaringBinder" true) (mem "Accumulate" true) (mem "ModulePlace" true) (mem "FoldPlan" true) (mem "siteFor" false) (mem "DeclEnvModule" true) (mem "DeclEnvs" true) (mem "ImplRow" true) (mem "ImplEnv" true) (mem "ClassEnv" true) (mem "GraphCtx" true) (mem "TcConfig" true) (mem "DriveInputs" true) (mem "DriveArgs" true) (mem "DriveOutputs" true) (mem "withPublishedManifests" false) (mem "manifestDriverFor" false) (mem "Predicate" true) (mem "GraphRun" true) (mem "ModuleCtx" true) (mem "InvocationView" true) (mem "ModuleBindings" true) (mem "ExportBinding" true) (mem "ModuleSeed" true) (mem "PreludePreamble" true) (mem "GraphOut" true) (mem "ModuleServe" true) (mem "GraphDrive" true) (mem "GraphPreamble" true) (mem "ElabResult" true) (mem "elabFactsOf" false) (mem "DrainFinding" true) (mem "MarkSets" true) (mem "PreludeMarkFacts" true))))
 (DUse false (UseAlias ("map") "IdMap"))
 (DUse false (UseGroup ("types" "evidence") ((mem "ScopeId" true))))
 (DUse false (UseGroup ("types" "scopes") ((mem "ScopeOwner" true))))
@@ -4064,7 +4060,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "elabTreesDrive" (TyFun (TyCon "DriveArgs") (TyTuple (TyTuple (TyCon "ElabResult") (TyCon "TcReport") (TyCon "DriveOutputs")) (TyCon "GraphCtx"))))
 (DFunDef false "elabTreesDrive" ((PVar "args")) (EApp (EVar "elabDriveResult") (EApp (EApp (EVar "driveGraphK") (EVar "GOutTrees")) (EVar "args"))))
 (DTypeSig false "elabDriveResult" (TyFun (TyCon "GraphDrive") (TyTuple (TyTuple (TyCon "ElabResult") (TyCon "TcReport") (TyCon "DriveOutputs")) (TyCon "GraphCtx"))))
-(DFunDef false "elabDriveResult" ((PVar "g")) (ETuple (ETuple (ERecordCreate "ElabResult" ((fa "erCore" (EFieldAccess (EVar "g") "gdCore")) (fa "erModules" (EFieldAccess (EVar "g") "gdModules")) (fa "erPerModule" (EApp (EApp (EVar "map") (EVar "dropModSchemes")) (EFieldAccess (EVar "g") "gdPerMod"))) (fa "erResidual" (EFieldAccess (EVar "g") "gdResidual")) (fa "erEvidence" (EFieldAccess (EVar "g") "gdEvTable")) (fa "erDispositions" (EFieldAccess (EVar "g") "gdDispositions")) (fa "erFacts" (ERecordCreate "ElabFacts" ((fa "efManifests" (EFieldAccess (EFieldAccess (EVar "g") "gdOutputs") "doManifests")) (fa "efBinders" (EFieldAccess (EVar "g") "gdBinders")) (fa "efEntryOutcome" (EFieldAccess (EFieldAccess (EVar "g") "gdOutputs") "doEntryOutcome"))))))) (EFieldAccess (EVar "g") "gdReport") (EFieldAccess (EVar "g") "gdOutputs")) (EFieldAccess (EVar "g") "gdGraph")))
+(DFunDef false "elabDriveResult" ((PVar "g")) (ETuple (ETuple (ERecordCreate "ElabResult" ((fa "erCore" (EFieldAccess (EVar "g") "gdCore")) (fa "erModules" (EFieldAccess (EVar "g") "gdModules")) (fa "erPerModule" (EApp (EApp (EVar "map") (EVar "dropModSchemes")) (EFieldAccess (EVar "g") "gdPerMod"))) (fa "erResidual" (EFieldAccess (EVar "g") "gdResidual")) (fa "erEvidence" (EFieldAccess (EVar "g") "gdEvTable")) (fa "erDispositions" (EFieldAccess (EVar "g") "gdDispositions")) (fa "erFacts" (EApp (EApp (EVar "elabFactsOf") (EFieldAccess (EVar "g") "gdOutputs")) (EFieldAccess (EVar "g") "gdBinders"))))) (EFieldAccess (EVar "g") "gdReport") (EFieldAccess (EVar "g") "gdOutputs")) (EFieldAccess (EVar "g") "gdGraph")))
 (DTypeSig true "elaborateModulesReport" (TyFun (TyCon "DriveInputs") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "TcReport"))))))
 (DFunDef false "elaborateModulesReport" ((PVar "inputs") (PVar "runtimeDecls") (PVar "coreDecls0") (PVar "modulesIn")) (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "elaborateModulesWithReport") (EVar "inputs")) (EVar "False")) (EVar "None")) (EVar "runtimeDecls")) (EVar "coreDecls0")) (EVar "modulesIn")) (arm (PTuple PWild (PVar "report") PWild) () (EVar "report"))))
 (DTypeSig false "attachDrainFindings" (TyFun (TyApp (TyCon "List") (TyCon "DrainFinding")) (TyFun (TyApp (TyCon "List") (TyCon "ModDiags")) (TyApp (TyCon "List") (TyCon "ModDiags")))))
@@ -4089,7 +4085,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DUse false (UseGroup ("types" "effect_rows") ((mem "Atom" true) (mem "builtinLabel" false) (mem "atomWith" false) (mem "pureRow" false))))
 (DUse false (UseAlias ("types" "effect_solver") "EffectSolver"))
 (DUse false (UseGroup ("types" "effect_invocation") ((mem "InvocationOps" true))))
-(DUse false (UseGroup ("types" "tc_types") ((mem "StandaloneOrigin" true) (mem "SiteKind" true) (mem "ServeStep" true) (mem "Provenance" true) (mem "NumBoundaryDisposition" true) (mem "GoalPayload" true) (mem "DeclaringBinder" true) (mem "Accumulate" true) (mem "ModulePlace" true) (mem "FoldPlan" true) (mem "siteFor" false) (mem "DeclEnvModule" true) (mem "DeclEnvs" true) (mem "ImplRow" true) (mem "ImplEnv" true) (mem "ClassEnv" true) (mem "GraphCtx" true) (mem "TcConfig" true) (mem "DriveInputs" true) (mem "DriveArgs" true) (mem "DriveOutputs" true) (mem "withPublishedManifests" false) (mem "manifestDriverFor" false) (mem "Predicate" true) (mem "GraphRun" true) (mem "ModuleCtx" true) (mem "InvocationView" true) (mem "ModuleBindings" true) (mem "ExportBinding" true) (mem "ModuleSeed" true) (mem "PreludePreamble" true) (mem "GraphOut" true) (mem "ModuleServe" true) (mem "GraphDrive" true) (mem "GraphPreamble" true) (mem "ElabResult" true) (mem "ElabFacts" true) (mem "DrainFinding" true) (mem "MarkSets" true) (mem "PreludeMarkFacts" true))))
+(DUse false (UseGroup ("types" "tc_types") ((mem "StandaloneOrigin" true) (mem "SiteKind" true) (mem "ServeStep" true) (mem "Provenance" true) (mem "NumBoundaryDisposition" true) (mem "GoalPayload" true) (mem "DeclaringBinder" true) (mem "Accumulate" true) (mem "ModulePlace" true) (mem "FoldPlan" true) (mem "siteFor" false) (mem "DeclEnvModule" true) (mem "DeclEnvs" true) (mem "ImplRow" true) (mem "ImplEnv" true) (mem "ClassEnv" true) (mem "GraphCtx" true) (mem "TcConfig" true) (mem "DriveInputs" true) (mem "DriveArgs" true) (mem "DriveOutputs" true) (mem "withPublishedManifests" false) (mem "manifestDriverFor" false) (mem "Predicate" true) (mem "GraphRun" true) (mem "ModuleCtx" true) (mem "InvocationView" true) (mem "ModuleBindings" true) (mem "ExportBinding" true) (mem "ModuleSeed" true) (mem "PreludePreamble" true) (mem "GraphOut" true) (mem "ModuleServe" true) (mem "GraphDrive" true) (mem "GraphPreamble" true) (mem "ElabResult" true) (mem "elabFactsOf" false) (mem "DrainFinding" true) (mem "MarkSets" true) (mem "PreludeMarkFacts" true))))
 (DUse false (UseAlias ("map") "IdMap"))
 (DUse false (UseGroup ("types" "evidence") ((mem "ScopeId" true))))
 (DUse false (UseGroup ("types" "scopes") ((mem "ScopeOwner" true))))
@@ -4473,7 +4469,7 @@ schemeLines ((n, p) :: rest) = "\{n} : \{ppPubScheme p}" :: schemeLines rest
 (DTypeSig false "elabTreesDrive" (TyFun (TyCon "DriveArgs") (TyTuple (TyTuple (TyCon "ElabResult") (TyCon "TcReport") (TyCon "DriveOutputs")) (TyCon "GraphCtx"))))
 (DFunDef false "elabTreesDrive" ((PVar "args")) (EApp (EVar "elabDriveResult") (EApp (EApp (EVar "driveGraphK") (EVar "GOutTrees")) (EVar "args"))))
 (DTypeSig false "elabDriveResult" (TyFun (TyCon "GraphDrive") (TyTuple (TyTuple (TyCon "ElabResult") (TyCon "TcReport") (TyCon "DriveOutputs")) (TyCon "GraphCtx"))))
-(DFunDef false "elabDriveResult" ((PVar "g")) (ETuple (ETuple (ERecordCreate "ElabResult" ((fa "erCore" (EFieldAccess (EVar "g") "gdCore")) (fa "erModules" (EFieldAccess (EVar "g") "gdModules")) (fa "erPerModule" (EApp (EApp (EMethodRef "map") (EVar "dropModSchemes")) (EFieldAccess (EVar "g") "gdPerMod"))) (fa "erResidual" (EFieldAccess (EVar "g") "gdResidual")) (fa "erEvidence" (EFieldAccess (EVar "g") "gdEvTable")) (fa "erDispositions" (EFieldAccess (EVar "g") "gdDispositions")) (fa "erFacts" (ERecordCreate "ElabFacts" ((fa "efManifests" (EFieldAccess (EFieldAccess (EVar "g") "gdOutputs") "doManifests")) (fa "efBinders" (EFieldAccess (EVar "g") "gdBinders")) (fa "efEntryOutcome" (EFieldAccess (EFieldAccess (EVar "g") "gdOutputs") "doEntryOutcome"))))))) (EFieldAccess (EVar "g") "gdReport") (EFieldAccess (EVar "g") "gdOutputs")) (EFieldAccess (EVar "g") "gdGraph")))
+(DFunDef false "elabDriveResult" ((PVar "g")) (ETuple (ETuple (ERecordCreate "ElabResult" ((fa "erCore" (EFieldAccess (EVar "g") "gdCore")) (fa "erModules" (EFieldAccess (EVar "g") "gdModules")) (fa "erPerModule" (EApp (EApp (EMethodRef "map") (EVar "dropModSchemes")) (EFieldAccess (EVar "g") "gdPerMod"))) (fa "erResidual" (EFieldAccess (EVar "g") "gdResidual")) (fa "erEvidence" (EFieldAccess (EVar "g") "gdEvTable")) (fa "erDispositions" (EFieldAccess (EVar "g") "gdDispositions")) (fa "erFacts" (EApp (EApp (EVar "elabFactsOf") (EFieldAccess (EVar "g") "gdOutputs")) (EFieldAccess (EVar "g") "gdBinders"))))) (EFieldAccess (EVar "g") "gdReport") (EFieldAccess (EVar "g") "gdOutputs")) (EFieldAccess (EVar "g") "gdGraph")))
 (DTypeSig true "elaborateModulesReport" (TyFun (TyCon "DriveInputs") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "TcReport"))))))
 (DFunDef false "elaborateModulesReport" ((PVar "inputs") (PVar "runtimeDecls") (PVar "coreDecls0") (PVar "modulesIn")) (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "elaborateModulesWithReport") (EVar "inputs")) (EVar "False")) (EVar "None")) (EVar "runtimeDecls")) (EVar "coreDecls0")) (EVar "modulesIn")) (arm (PTuple PWild (PVar "report") PWild) () (EVar "report"))))
 (DTypeSig false "attachDrainFindings" (TyFun (TyApp (TyCon "List") (TyCon "DrainFinding")) (TyFun (TyApp (TyCon "List") (TyCon "ModDiags")) (TyApp (TyCon "List") (TyCon "ModDiags")))))

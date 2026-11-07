@@ -14,6 +14,7 @@ fileBoundSite : String -> Loc -> String
 fileValueKey : String -> Expr -> Option String
 fileValueShape : Expr -> String
 finishFileValueScope : ModuleCtx -> Unit -> Unit
+firstSpan : Expr -> Option Loc
 grantCalleeOf : ModuleCtx -> String -> GrantCallee
 grantChainAt : GraphCtx -> ScopeId -> List GrantBinder
 grantNameIn : TcEnv -> String -> Bool

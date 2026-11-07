@@ -1,0 +1,8 @@
+export interface Desc a where
+  desc : a -> String
+
+public export data T = MkT
+
+export
+x : String
+x = desc MkT

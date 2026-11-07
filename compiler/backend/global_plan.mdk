@@ -1,18 +1,45 @@
-import ir.core_ir.{CProgram(..), CBind(..), CClause(..)}
-import backend.emit_support.{eagerCalleesMap, taintSourceSet}
+import ir.core_ir.{
+  CProgram(..),
+  CBind(..),
+  CClause(..),
+  CImplEntry(..),
+  DeclFacts,
+  isModuleMain,
+  isNullaryMemo,
+  originModule,
+}
+import backend.emit_support.{
+  Mention(..),
+  bindMentions,
+  eagerCalleesMap,
+  eagerReachMap,
+  implMentions,
+  taintSourceSet,
+}
 import ir.constructor_facts.{planConstructors}
 import support.scc.{tarjanSCCs}
+import support.symbol_encoding.{encodePair}
 import support.ordmap.{
   OrdMap, omEmpty, omInsert, omLookup, omHasKey, omFromNames, omKeys,
   omMapValues
 }
 import support.util.{reverseL, filterList, listLen, maxI}
+import list.{mapWithIndex, zip}
 import map as Q
 
+-- `moduleOrder` is the initialisation order the typechecker carried
+-- (`DeclFacts.factInitOrder`), one row per module in module order; with none
+-- carried it is source order, grouped by declaring module.
 public export data GlobalInitPlan = GlobalInitPlan {
   valueOrder : List String,
   eagerOrder : List String,
+  moduleOrder : List ModuleInit,
 }
+
+public export data ModuleInit = ModuleInit {
+  module : String,
+  values : List String,
+} deriving (Eq, Debug)
 
 data Components = Components {
   ids : List String,
@@ -155,7 +182,7 @@ queueOrder g q rev = match Q.minView q.ready
 
 export
 planGlobals : CProgram -> List String -> OrdMap (List String) -> GlobalInitPlan
-planGlobals (CProgram binds _ _ _ _ _) lazy reach =
+planGlobals (CProgram binds _ _ _ _ facts) lazy reach =
   let names = map nameOf (filterList isValue binds)
   let universe = omFromNames names omEmpty
   let adj =
@@ -173,7 +200,40 @@ planGlobals (CProgram binds _ _ _ _ _) lazy reach =
   GlobalInitPlan {
     valueOrder = order,
     eagerOrder = filterList (n => not (omHasKey n lazySet)) order,
+    moduleOrder = moduleOrderOf facts names,
   }
+
+-- The carried order keeps only the values this program holds, because a reach
+-- filter (`wasm_reach.wasmReachFilter`) drops values after the facts were
+-- lowered.
+moduleOrderOf : DeclFacts -> List String -> List ModuleInit
+moduleOrderOf facts values = match facts.factInitOrder
+  Some rows =>
+    let present = omFromNames values omEmpty
+    map
+      ((m, names) => ModuleInit {
+        module = m,
+        values = filterList (n => omHasKey n present) names,
+      })
+      rows
+  None => sourceModules facts (filterList (n => not (unplaced facts n)) values)
+
+sourceModules : DeclFacts -> List String -> List ModuleInit
+sourceModules facts names =
+  let modules = map (originModule facts) names
+  let owners = fold (m (n, mid) => omInsert n mid m) omEmpty (zip names modules)
+  let grouped = sourceMembers owners names
+  map
+    (m => ModuleInit { module = m, values = lookup [] m grouped })
+    (firstOccurrences modules omEmpty)
+
+firstOccurrences : List String -> OrdMap Unit -> List String
+firstOccurrences [] _ = []
+firstOccurrences (n :: ns) seen =
+  if omHasKey n seen then
+    firstOccurrences ns seen
+  else
+    n :: firstOccurrences ns (omInsert n () seen)
 
 unique : List String -> OrdMap Unit -> Bool
 unique [] _ = True
@@ -331,4 +391,216 @@ validateGlobalInit prog lazy candidate =
         /= filterList (n => not (omHasKey n lazySet)) candidate.valueOrder then
         ["global init: lazy partition"]
       else
-        []
+        validateModuleOrder prog candidate.moduleOrder
+
+-- The module order's own arms, each refusing with its first defect.  Only a
+-- carried order is held to membership and dependency: an untyped program still
+-- initialises through the lazy partition, so its arms wait in
+-- `validateUntypedInit` until that partition goes.
+validateModuleOrder : CProgram -> List ModuleInit -> List String
+validateModuleOrder prog order =
+  let (CProgram _ _ _ _ _ facts) = prog
+  match facts.factInitOrder
+    Some _ => firstDefect (typedArms prog order)
+    None => contiguityDefects facts order
+
+typedArms : CProgram -> List ModuleInit -> List (Unit -> List String)
+typedArms prog order =
+  let (CProgram binds _ _ impls _ facts) = prog
+  let values = map nameOf (filterList isValue binds)
+  let placed = flatMap (m => m.values) order
+  let ranks = rankNames placed 0 omEmpty
+  [
+    () => placementDefects facts values placed,
+    () => contiguityDefects facts order,
+    () => dependencyDefects binds impls placed ranks,
+  ]
+
+-- The module-order arms for a program that carries no order: the typed arms,
+-- then no value eagerly reaching itself or a value source order initialises
+-- after it.  No emit path calls it yet.
+export
+validateUntypedInit : CProgram -> GlobalInitPlan -> List String
+validateUntypedInit prog candidate =
+  let (CProgram binds _ _ _ _ _) = prog
+  let placed = flatMap (m => m.values) candidate.moduleOrder
+  let ranks = rankNames placed 0 omEmpty
+  firstDefect
+    (typedArms prog candidate.moduleOrder
+      ++ [() => untypedDefects binds placed ranks])
+
+firstDefect : List (Unit -> List String) -> List String
+firstDefect [] = []
+firstDefect (arm :: rest) = match arm ()
+  [] => firstDefect rest
+  defect :: _ => [defect]
+
+-- The values with no place in the module order, which the dependency arm
+-- therefore treats as functions.  A `main` in any module is never initialised
+-- (spec rule I4).  A nullary-memo CAF is forced where it is read, until the
+-- hoist that makes it goes.
+unplaced : DeclFacts -> String -> Bool
+unplaced facts n = isModuleMain facts n || isNullaryMemo facts n
+
+-- Membership: every Core value exactly once, except the unplaced ones, and
+-- nothing else.
+placementDefects : DeclFacts -> List String -> List String -> List String
+placementDefects facts values placed =
+  let valueSet = omFromNames values omEmpty
+  let placedSet = omFromNames placed omEmpty
+  map
+      (n => "global init: `\{n}` is placed twice in the module order")
+      (repeatedNames placed omEmpty)
+    ++ map
+      (n =>
+        "global init: `\{n}` is placed in the module order but is not a Core value")
+      (filterList (n => not (omHasKey n valueSet)) placed)
+    ++ map
+      (n => "global init: Core value `\{n}` has no place in the module order")
+      (filterList
+        (n => not (omHasKey n placedSet) && not (unplaced facts n))
+        values)
+
+repeatedNames : List String -> OrdMap Unit -> List String
+repeatedNames [] _ = []
+repeatedNames (n :: ns) seen =
+  if omHasKey n seen then
+    n :: repeatedNames ns seen
+  else
+    repeatedNames ns (omInsert n () seen)
+
+-- Contiguity: each module has one row, and a row holds only its own module's
+-- values.
+contiguityDefects : DeclFacts -> List ModuleInit -> List String
+contiguityDefects facts order =
+  map
+      (m => "global init: module `\{m}` is not contiguous in the module order")
+      (repeatedNames (map (m => m.module) order) omEmpty)
+    ++ flatMap
+      (row =>
+        map
+          (n =>
+            "global init: `\{n}` is placed in module `\{row.module}` but declared in `\{originModule facts n}`")
+          (filterList (n => originModule facts n /= row.module) row.values))
+      order
+
+-- Dependency: a value that [v] may reach and that lies outside [v]'s may-reach
+-- component precedes [v].  Within a component the typechecker's rule I3 keeps
+-- every initialiser from reading a member, so any order there is safe.  Eager
+-- reach is not enough here: it follows an under-saturated application into its
+-- callee as if it ran.
+dependencyDefects : List CBind ->
+  List CImplEntry ->
+  List String ->
+  OrdMap Int ->
+  List String
+dependencyDefects binds impls placed ranks =
+  let graph = mayReachGraph binds impls placed
+  let g = components graph.nodes placed graph.adj
+  let latest = latestReached g ranks
+  filterMap
+    (v =>
+      let (rank, w) = lookup (-1, "") (owner g v) latest
+      if rank >= lookup 0 v ranks then
+        Some
+          "global init: `\{v}` may reach `\{w}`, which the module order places after it"
+      else
+        None)
+    placed
+
+data MayReachGraph = MayReachGraph {
+  nodes : List String,
+  adj : OrdMap (List String),
+}
+
+-- The graph of what [roots] may reach: one node per top-level bind, per impl
+-- entry and per method.  A method mention reaches the method's node, and the
+-- method's node every impl entry of that method, so a mention costs one edge.
+-- Impl entry and method node names hold a space, which no bind name can.  A
+-- component holding a reached node is reached whole, so the components of this
+-- subgraph are those of the whole program.
+mayReachGraph : List CBind -> List CImplEntry -> List String -> MayReachGraph
+mayReachGraph binds impls roots =
+  let bindIndex = fold (m b => omInsert (nameOf b) b m) omEmpty binds
+  let entries = mapWithIndex (i e => ("impl " ++ intToString i, e)) impls
+  let entryIndex = fold (m (key, e) => omInsert key e m) omEmpty entries
+  let methods =
+    fold
+      (m (key, CImplEntry method _ _ _) =>
+        let node = "method " ++ method
+        omInsert node (key :: lookup [] node m) m)
+      omEmpty
+      entries
+  let targets mentions = filterMap (mentionTarget bindIndex methods) mentions
+  let successors node = match omLookup node bindIndex
+    Some b => targets (bindMentions b)
+    None => match omLookup node entryIndex
+      Some e => targets (implMentions e)
+      None => lookup [] node methods
+  reachFrom successors roots omEmpty []
+
+reachFrom : (String -> List String) ->
+  List String ->
+  OrdMap (List String) ->
+  List String ->
+  MayReachGraph
+reachFrom _ [] adj seen = MayReachGraph { nodes = reverseL seen, adj = adj }
+reachFrom successors (n :: todo) adj seen =
+  if omHasKey n adj then
+    reachFrom successors todo adj seen
+  else
+    let out = successors n
+    reachFrom successors (out ++ todo) (omInsert n out adj) (n :: seen)
+
+-- A bare reference to a prelude function synthesized after mangling names its
+-- `core`-mangled definition, as `wasm_reach.canonKey` resolves it.
+mentionTarget : OrdMap a -> OrdMap (List String) -> Mention -> Option String
+mentionTarget bindSet _ (MentionName x) =
+  if omHasKey x bindSet then
+    Some x
+  else
+    let mangled = encodePair "core" x
+    if omHasKey mangled bindSet then Some mangled else None
+mentionTarget _ methods (MentionMethod m) =
+  let node = "method " ++ m
+  if omHasKey node methods then Some node else None
+
+-- For each component, the latest-placed value it may reach outside itself, as
+-- (rank, name), folded in the order Tarjan emits components (dependencies
+-- first).
+latestReached : Components -> OrdMap Int -> OrdMap (Int, String)
+latestReached g ranks =
+  let own c =
+    fold
+      (best n => later best (lookup (-1) n ranks, n))
+      (-1, "")
+      (lookup [] c g.members)
+  fold
+    (acc c =>
+      omInsert
+        c
+        (fold
+          (best d => later (later best (own d)) (lookup (-1, "") d acc))
+          (-1, "")
+          (lookup [] c g.dependencies))
+        acc)
+    omEmpty
+    g.ids
+
+later : (Int, String) -> (Int, String) -> (Int, String)
+later (r1, n1) (r2, n2) = if r2 > r1 then (r2, n2) else (r1, n1)
+
+-- Untyped programs carry no rule I3, so eager reach must stay acyclic and
+-- follow source order.
+untypedDefects : List CBind -> List String -> OrdMap Int -> List String
+untypedDefects binds placed ranks =
+  let reach = eagerReachMap binds
+  filterMap
+    (v =>
+      let rank = lookup 0 v ranks
+      match filterList (w => lookup (-1) w ranks >= rank) (lookup [] v reach)
+        w :: _ =>
+          Some
+            "global init: `\{v}` eagerly reaches `\{w}`, which source order does not initialise before it"
+        [] => None)
+    placed

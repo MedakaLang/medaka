@@ -31,7 +31,7 @@ import types.prelude_elab.{PreludeElab(..), preludeElabFor, readElabKey}
 import types.program_facts.{factsOfChecked}
 import types.publish.{CheckedProgram(..), TcReport(..)}
 import types.runtime_types.{BinderRow(..), binderRowIn}
-import types.tc_types.{DriveInputs(..)}
+import types.tc_types.{DriveInputs(..), DriveOutputs(..)}
 import types.typecheck.{defaultDriveInputs, elaborateModulesWithReport}
 import types.typecheck.{checkModulesChainReportFor}
 import types.prelude_elab.{seedPreludeElab, preludeElabOf}
@@ -55,8 +55,9 @@ userSrc = joinNl [
 userMods : List (String, List Decl)
 userMods = [("signs", desugarIn "signs" (parseLocated userSrc))]
 
--- One drive's checked program: the elaborated trees and the published tables.
-drive : Bool -> (String, String) -> Option CheckedProgram
+-- One drive's checked program, the elaborated trees and the published tables, and
+-- the drive's outputs.
+drive : Bool -> (String, String) -> Option (CheckedProgram, DriveOutputs)
 drive shipped (rsrc, csrc) =
   let inputs =
     if shipped then
@@ -65,7 +66,7 @@ drive shipped (rsrc, csrc) =
       }
     else
       defaultDriveInputs
-  let (_, report, _) =
+  let (_, report, outputs) =
     elaborateModulesWithReport
       inputs
       False
@@ -73,12 +74,13 @@ drive shipped (rsrc, csrc) =
       (desugaredPrelude rsrc)
       (desugaredPrelude csrc)
       userMods
-  report.trChecked
+  map (c => (c, outputs)) report.trChecked
 
 -- What the checked program prints.
-output : CheckedProgram -> String
-output c = match c.cpTrees
-  Some (core, mods) => evalModulesOutputFacts (factsOfChecked c) core mods
+output : (CheckedProgram, DriveOutputs) -> String
+output (c, outputs) = match c.cpTrees
+  Some (core, mods) =>
+    evalModulesOutputFacts (factsOfChecked outputs c) core mods
   None => "(no trees)"
 
 -- The suffix of every `<name>$<module>$<k>$lb` atom in [decls].  Deliberately not
@@ -142,7 +144,7 @@ test "drives continuing from the shipped trees agree with in-process ones" =
       drive False srcs,
       drive True srcs,
     )
-      (Some on1, Some off, Some on2) =>
+      (Some (on1, out1), Some (off, outOff), Some (on2, out2)) =>
         let k = pe.peEvCounter
         let userTrees = match on2.cpTrees
           Some (_, mods) => flatMap snd mods
@@ -166,7 +168,16 @@ test "drives continuing from the shipped trees agree with in-process ones" =
             (expectNotEqual 0 pe.peBinderBase),
           labelFail
             "on, off and on again print the same"
-            (expectEqual (output off, output off) (output on1, output on2)),
+            (expectEqual
+              (output (off, outOff), output (off, outOff))
+              (output (on1, out1), output (on2, out2))),
+          labelFail
+            "the prelude's order row comes first, from the shipped interface as in-process"
+            (expectAll [
+              expectEqual ["core", "signs"] (map fst outOff.doInitOrders),
+              expectEqual outOff.doInitOrders out1.doInitOrders,
+              expectEqual outOff.doInitOrders out2.doInitOrders,
+            ]),
           labelFail
             "the keyed drives took the shipped trees, the unkeyed one did not"
             (expectEqual

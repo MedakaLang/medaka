@@ -184,9 +184,13 @@ public export data Value (e : Effect) =
   | VClosureF (EvalEnv (Value e)) (List Pat) (EvalEnv (Value e) -> <e> Value e)
   | VPrim (Value e -> <e> Value e)
   | VMulti (List (Value e))
-  -- a deferred top-level nullary binding; forced + memoised on first lookup, so
-  -- point-free defs can reference impls/values installed later (any order)
+  -- a deferred expression, run each time it is forced and never memoised: a
+  -- module's `main` (never initialised, I4) and a nullary impl method, which is
+  -- evaluated at every occurrence as a function of its dictionary
   | VThunk (Unit -> <e> Value e)
+  -- the content of a top-level value's cell between installation and its
+  -- initialiser; a read of it is an internal error naming the value
+  | VUninit
   -- sentinel for `__fallthrough__ ()`: a guard chain fell through, so the
   -- enclosing clause "did not match" and dispatch should try the next one
   -- (stands in for the reference's Impl_no_match exception)
@@ -268,6 +272,7 @@ ppValue (VPrim _) = "<prim>"
 ppValue (VMulti vs) = "<dispatch/" ++ intToString (listLen vs) ++ ">"
 ppValue (VTypedImpl t _ _ _ inner) = "<impl@\{t}:\{ppValue inner}>"
 ppValue (VThunk _) = "<thunk>"
+ppValue VUninit = "<uninitialised>"
 ppValue (VDict key _ _) = "<dict:" ++ key ++ ">"
 ppValue VFallthrough = "<fallthrough>"
 
@@ -597,7 +602,7 @@ lookupRuntimeBindingFrames : List (EnvFrame (Value e)) ->
   <e> Value e
 lookupRuntimeBindingFrames [] name None =
   panic ("property runner: missing canonical runtime binding '" ++ name ++ "'")
-lookupRuntimeBindingFrames [] name (Some cell) = forceCell cell name
+lookupRuntimeBindingFrames [] name (Some cell) = readCell cell name
 lookupRuntimeBindingFrames (frame :: rest) name found =
   match lookupFrameCell frame name
     Some cell => lookupRuntimeBindingFrames rest name (Some cell)
@@ -616,7 +621,7 @@ lookupFramesOpt [] _ = None
 lookupFramesOpt ((IndexedFrame _ _) :: rest) name
   | name == evalFileTagName = lookupFramesOpt rest name
 lookupFramesOpt (frame :: rest) name = match lookupFrameCell frame name
-  Some cell => Some (forceCell cell name)
+  Some cell => Some (readCell cell name)
   None => lookupFramesOpt rest name
 
 lookupFrames : List (EnvFrame (Value e)) -> String -> <e> Value e
@@ -629,7 +634,7 @@ lookupFrames [] name =
   else
     panic ("unbound identifier: " ++ name)
 lookupFrames (frame :: rest) name = match lookupFrameCell frame name
-  Some cell => forceCell cell name
+  Some cell => readCell cell name
   None => lookupFrames rest name
 
 -- C5: resolve a method occurrence to the
@@ -659,8 +664,8 @@ lookupMethodFrames all frames0 name = go frames0
     go [] = lookupFrames all name
     go (frame :: rest) = match lookupFrameCell frame name
       Some cell =>
-        if isMethodBinding (forceCell cell name) then
-          forceCell cell name
+        if isMethodBinding (readCell cell name) then
+          readCell cell name
         else
           go rest
       None => go rest
@@ -677,32 +682,17 @@ anyTypedImpl [] = False
 anyTypedImpl ((VTypedImpl _ _ _ _ _) :: _) = True
 anyTypedImpl (_ :: rest) = anyTypedImpl rest
 
--- read a cell, forcing + memoising a deferred thunk on first access
--- P0-2(b): black-hole a lazy cell while it is being forced so a non-productive
--- self-reference (`xs = 1 :: xs`; top-level nullary bindings are LAZY and `::`
--- is STRICT, so forcing `xs` re-forces `xs`) is caught as a clean coded
--- E-CYCLIC-VALUE instead of self-forcing to a stack-overflow crash.  Before
--- running the thunk we overwrite the cell with a black-hole thunk that panics
--- if re-entered; on success we memoise the real value, clearing the mark.
-forceCell : Ref (Value e) -> String -> <e> Value e
-forceCell cell name = match !cell
-  VThunk f => forceMemo cell name f
+-- Read a top-level cell.  A value's cell is `VUninit` until its initialiser has
+-- run, so a read before that is an internal error rather than a silent value.
+readCell : Ref (Value e) -> String -> <e> Value e
+readCell cell name = match !cell
+  VUninit => uninitialisedRead name
   v => v
 
-forceMemo : Ref (Value e) -> String -> (Unit -> <e> Value e) -> <e> Value e
-forceMemo cell name f =
-  cell := VThunk (blackholeCell name)
-  let v = f ()
-  cell := v
-  v
-
--- The thunk a cell holds *while it is being forced*.  Re-entering the force of
--- the same cell runs this and raises E-CYCLIC-VALUE, naming the binding.
-blackholeCell : String -> Unit -> <e> Value e
-blackholeCell name _ =
-  runtimePanic
-    ECyclicValue
-    "`\{name}` refers to itself during its own initialization; a value cannot be defined in terms of itself"
+uninitialisedRead : String -> <e> Value e
+uninitialisedRead name =
+  panic
+    "internal error: top-level value `\{name}` was read before it was initialised"
 
 export
 force : Value e -> <e> Value e
@@ -735,7 +725,7 @@ lookupCells ((n, cell) :: rest) name =
 lookupAtAddr : EvalEnv (Value e) -> String -> Addr -> <e> Value e
 lookupAtAddr env name AGlobal = lookupEnv env name
 lookupAtAddr (EvalEnv _ frames) name (ALocal depth slot) =
-  forceCell
+  readCell
     (addrCell (frameCells (frameAtDepth frames depth name)) slot name)
     name
 
@@ -2054,17 +2044,80 @@ orClause : (List Pat, Expr, Loc) -> List (List Pat, Expr, Loc)
 orClause (pats, body, site) =
   map (ps => (ps, body, site)) (paramCandidates pats)
 
--- top-level variant: a nullary binding becomes a deferred VThunk (forced on
--- first lookup) so point-free defs can reference values/impls installed later
-topGroupValue : EvalEnv (Value e) -> List (List Pat, Expr, Loc) -> Value e
-topGroupValue env clauses = topClausesValue env (orClauses clauses)
+-- top-level variant: a nullary binding is a value, so its cell holds `VUninit`
+-- until `groupInits` runs it; `main` (I4) stays a deferred expression
+topGroupValue : EvalEnv (Value e) ->
+  String ->
+  List (List Pat, Expr, Loc) ->
+  Value e
+topGroupValue env name clauses = topClausesValue env name (orClauses clauses)
 
-topClausesValue : EvalEnv (Value e) -> List (List Pat, Expr, Loc) -> Value e
-topClausesValue env [(pats, body, site)]
-  | isNullary pats = VThunk (_ => eval env body)
+topClausesValue : EvalEnv (Value e) ->
+  String ->
+  List (List Pat, Expr, Loc) ->
+  Value e
+topClausesValue env name [(pats, body, site)]
+  | isNullary pats =
+    if name == "main" then VThunk (_ => eval env body) else VUninit
   | otherwise = VClosure env pats body site
-topClausesValue env clauses =
+topClausesValue env _ clauses =
   VMulti (map (clauseClosure env (groupSite clauses)) clauses)
+
+-- Run the initialiser of each of [names] in order into the value's cell, skipping
+-- a name [inits] lacks: the carried order lists values by source name.
+runInits : List (String, (Ref (Value e), Unit -> <e> Value e)) ->
+  List String ->
+  <e> Unit
+runInits inits names =
+  let index = omFromPairs (reverseL inits) omEmpty
+  each (runInit index) names
+
+runInit : OrdMap (Ref (Value e), Unit -> <e> Value e) -> String -> <e> Unit
+runInit index name = match omLookup name index
+  Some (cell, run) => cell := run ()
+  None => ()
+
+-- The initialisers of the value groups of [groups] (one clause, no parameters,
+-- not `main`), in source order, each writing into its cell of [cells].
+export
+groupInits : EvalEnv (Value e) ->
+  List (String, Ref (Value e)) ->
+  List (String, List (List Pat, Expr, Loc)) ->
+  List (String, (Ref (Value e), Unit -> <e> Value e))
+groupInits env cells groups = flatMap (groupInit env cells) groups
+
+groupInit : EvalEnv (Value e) ->
+  List (String, Ref (Value e)) ->
+  (String, List (List Pat, Expr, Loc)) ->
+  List (String, (Ref (Value e), Unit -> <e> Value e))
+groupInit env cells (name, clauses) = match orClauses clauses
+  [(pats, body, _)] =>
+    if isNullary pats && name /= "main" then
+      [(name, (findCell cells name, _ => eval env body))]
+    else
+      []
+  _ => []
+
+-- Initialise one scope's values: the prelude's (row `core`, always first) or module
+-- [mid]'s, whose row follows it even when it is itself named `core`.  Carried order
+-- when typed (no row is an internal error), source order when untyped.
+export
+initScope : ProgramFacts ->
+  Bool ->
+  String ->
+  List (String, (Ref (Value e), Unit -> <e> Value e)) ->
+  <e> Unit
+initScope facts isPrelude mid inits = match facts.pfInitOrders
+  None => runInits inits (map fst inits)
+  Some rows =>
+    match lookupAssoc mid (if isPrelude then rows else afterPrelude rows)
+      Some names => runInits inits names
+      None =>
+        panic "internal error: no initialisation order for module `\{mid}`"
+
+afterPrelude : List (String, List String) -> List (String, List String)
+afterPrelude (("core", _) :: rest) = rest
+afterPrelude rows = rows
 
 groupSite : List (List Pat, Expr, Loc) -> Loc
 groupSite ((_, _, site) :: _) = site
@@ -2533,22 +2586,12 @@ positionsByName iface mname (((_, i, m), p) :: rest)
   | otherwise = positionsByName iface mname rest
 
 -- A point-free (no-param) impl/default body: if the method is return-position
--- (no discriminating arg) defer it as a memoising VThunk; otherwise eta-expand so
--- the discriminating argument still reaches the body (Phase 121).
---
--- TYPECHECK-AUDIT C6: the nullary return-position thunk is nested in a
--- VTypedImpl's `inner` field inside a VMulti list (not in a Ref cell of its own),
--- so the cell-level forceCell/forceMemo memoisation never reaches it.  stripBody
--- (the only forcer of this thunk, line 608) calls `f ()` directly, so a bare
--- `VThunk (_ => eval env body)` re-evaluates the body — duplicating effects/cost
--- — on every EMethodAt occurrence at the resolved type.  The OCaml oracle
--- (eval.ml:1899-1903) evaluates the nullary return-position body EAGERLY ONCE at
--- binding time.  memoThunk closes the gap: it caches the first force through a
--- private Ref so subsequent forces (whatever path) return the same value without
--- re-running the body — identical VALUE, effects/work run once like the oracle.
+-- (no discriminating arg) defer it as a VThunk, evaluated at each occurrence as a
+-- function of its dictionary; otherwise eta-expand so the discriminating argument
+-- still reaches the body (Phase 121).
 implMethodValue : EvalEnv (Value e) -> List Int -> List Pat -> Expr -> Value e
 implMethodValue env positions [] body
-  | isEmptyL positions = memoThunk env body
+  | isEmptyL positions = VThunk (_ => eval env body)
   | otherwise =
     VClosure
       env
@@ -2556,30 +2599,6 @@ implMethodValue env positions [] body
       (EApp body (EVar "$eta"))
       noTrapLoc
 implMethodValue env _ pats body = VClosure env pats body noTrapLoc
-
--- A VThunk whose body evaluates at most once: the first force writes the result
--- into a private Ref, later forces read it back (no re-evaluation of `body`).
--- The Ref is built ONCE here (captured by the closure), not inside the lambda —
--- otherwise each force would mint a fresh empty cell and never see the cache.
-memoThunk : EvalEnv (Value e) -> Expr -> Value e
-memoThunk env body = memoThunkOf (Ref None) env body
-
-memoThunkOf : Ref (Option (Value e)) -> EvalEnv (Value e) -> Expr -> Value e
-memoThunkOf cell env body = VThunk (_ => forceMemoCell cell env body)
-
-forceMemoCell : Ref (Option (Value e)) ->
-  EvalEnv (Value e) ->
-  Expr ->
-  <e> Value e
-forceMemoCell cell env body = match !cell
-  Some v => v
-  None => storeMemo cell (eval env body)
-
-storeMemo : Ref (Option (Value e)) -> Value e -> <e> Value e
-storeMemo cell v = seqV (cell := Some v) v
-
-seqV : Unit -> Value e -> Value e
-seqV _ v = v
 
 -- one (methodName, (specificity-score, taggedValue)) per impl method / default;
 -- [dispositions] is the elaboration's table, `None` for an untyped program
@@ -2750,11 +2769,6 @@ implDeclNames _ = []
 defaultNamesOf : IfaceMethod -> List String
 defaultNamesOf (IfaceMethod n _ (Some _) _) = [n]
 defaultNamesOf (IfaceMethod _ _ None _) = []
-
--- DRIVER-COLLAPSE Phase 5: the flat single-frame evalProgram is DELETED.  Its
--- one-by-name-frame install (prelude+user merged) is subsumed by the 1-module
--- case of evalModulesWith (evalOneFacts); the shared helpers it used (cellResult,
--- installGroups, installConsts, coalesceImpls, …) are retained by evalModulesWith.
 
 export
 cellResult : (String, Ref (Value e)) -> (String, Value e)
@@ -4234,7 +4248,7 @@ installGroups env cells groups0 = go groups0
   where
     go [] = ()
     go ((n, clauses) :: rest) =
-      findCell cells n := topGroupValue env clauses
+      findCell cells n := topGroupValue env n clauses
       go rest
 
 export
@@ -4244,13 +4258,10 @@ lookupBinding name ((n, v) :: rest)
   | n == name = Some v
   | otherwise = lookupBinding name rest
 
--- Shared message + code for the "no `main`" abort — dedups the three former
--- bare `panic "program has no 'main' binding"` sites.  Each site routes through
--- runtimePanic (E-NO-MAIN), matching the compiled/driver path.  NB: kept a plain
--- String constant, NOT a nullary `= runtimePanic …` binding — a top-level value
--- binding is evaluated EAGERLY at native startup, so an aborting nullary would
--- fire on every `medaka` invocation.  The runtimePanic call therefore stays
--- inline at each (lazy) match arm.
+-- The message of the "no `main`" abort, which each site raises through
+-- runtimePanic (E-NO-MAIN).  A plain String constant, not a nullary
+-- `= runtimePanic …` binding: an initialiser runs at startup, so an aborting
+-- nullary would fire on every `medaka` invocation.
 export
 noMainMsg : String
 noMainMsg = "no `main` in this file; add `main = ...`"
@@ -4266,8 +4277,6 @@ evalMain prog =
 
 -- Run the program for its OUTPUT (forcing `main`, whose IO side-effects append
 -- to outputChunks) and return the captured stdout — diffs against === EVAL ===.
--- DRIVER-COLLAPSE Phase 5: the flat evalOutput is DELETED; evalOneOutputFacts (the
--- 1-module case of evalModulesWith) is the surviving OUTPUT entry point.
 
 -- Like evalOutput, but drops any prelude function the user program redefines
 -- (mirrors the reference's prelude_for shadow-drop) so a user `sum` doesn't
@@ -4308,10 +4317,8 @@ runMainForEffect binds = match lookupBinding "main" binds
 -- same-named functions across modules stay isolated (Phase 110), while ctors
 -- and impl methods coalesce GLOBALLY into one coherent VMulti per interface
 -- method.  Modules arrive dependency-first (loader order); a module's `import`s
--- resolve to the exporting module's cells.  The reference's explicit
--- deferred-thunk install ordering (Phase 125) is unnecessary here: VThunk
--- laziness defers every nullary binding to its first lookup, by which point all
--- modules' impls are installed.
+-- resolve to the exporting module's cells.  Every module is installed before any
+-- value is initialised, so an initialiser sees all modules' impls.
 --
 -- UNTYPED path (no typecheck / dict-pass / marker), like evalOutput — correct
 -- for programs without return-position dispatch (`pure`/`empty`) or
@@ -4448,63 +4455,9 @@ evalModulesWith : ProgramFacts ->
   List Decl ->
   List (String, List Decl) ->
   <e> List (String, Value e)
-evalModulesWith facts extraExterns preludeDecls0 modules0 =
-  -- #1292: rename CROSS-UNIT-COLLIDING constructors to `<mid>__<Ctor>` before
-  -- anything below reads them, so the program-global `ctorToTypeRef` seeded on the
-  -- next lines stops folding two modules' same-named constructors into ONE entry
-  -- (which tagged every value of the loser's type with the winner's type, and
-  -- dispatched it to the wrong impl -- silently, at exit 0).  A no-op returning its
-  -- input BYTE-IDENTICAL when no constructor name is declared by two units, which
-  -- is every program without the bug.  Idempotent, so a caller that had to rename
-  -- earlier (tools/test_cmd.mdk, whose `test`/prop bodies come out of this same
-  -- module list) costs nothing here.
-  let (preludeDecls, modules) =
-    mangleCtorCollisions facts.pfSibling preludeDecls0 modules0
-  let externs = externBindings () ++ extraExterns
-  let moduleDecls = flatMap snd modules
-  let allDecls = preludeDecls ++ moduleDecls
-  let dispositions = facts.pfDispositions
-  ctorToTypeRef := buildCtorToType allDecls
-  ffiExternNamesRef := externDeclNamesOfDecls allDecls
-  let disp = installDispatchTables dispositions allDecls
-  let ctors = collectCtors allDecls
-  let preludeGroups = groupsOf preludeDecls
-  -- S1-PRELUDE (a), #1497/#1492 — see `preludeShadowNames` for the full mechanism.
-  let shadowNames = preludeShadowNames moduleDecls
-  let preludeShared = groupsNotNamedIn shadowNames preludeGroups
-  let preludePrivate = groupsNamedIn shadowNames preludeGroups
-  let globalNames =
-    map fst boolSeeds
-      ++ map fst externs
-      ++ map fst ctors
-      ++ implMethodNames allDecls
-      ++ map fst preludeShared
-  let globalCells = map (n => (n, Ref VUnit)) globalNames
-  let globalFrame = indexedFrame globalCells
-  let runtimeFrame = indexedFrame (runtimeCellsOf externs)
-  let privateCells = map (fst >> (n => (n, Ref VUnit))) preludePrivate
-  let globalEnv =
-    EvalEnv facts (globalFramesWith privateCells globalFrame ++ [runtimeFrame])
-  let mods =
-    buildModInfos
-      facts
-      globalFrame
-      runtimeFrame
-      (coreImportExports privateCells globalCells preludeDecls)
-      facts.pfSibling
-      []
-      []
-      modules
-  let implEntries =
-    flatMap (declImplEntries dispositions globalEnv disp) preludeDecls
-      ++ flatMap (modImplEntries facts disp) mods
-  installFrameConsts globalFrame boolSeeds
-  installFrameConsts globalFrame externs
-  installFrameConsts globalFrame ctors
-  installFrameConsts globalFrame (coalesceImpls implEntries)
-  installGroups globalEnv globalCells preludeShared
-  installGroups globalEnv privateCells preludePrivate
-  installModGroups mods
+evalModulesWith facts extraExterns preludeDecls modules =
+  let (mods, _) =
+    buildRootModuleStateWith facts extraExterns preludeDecls modules
   rootLocals mods
 
 -- pass 1: allocate each module's local cells + build its env (imports resolved
@@ -4720,6 +4673,18 @@ modImplEntries : ProgramFacts ->
 modImplEntries facts disp (ModInfo _ decls _ _ menv) =
   flatMap (declImplEntries facts.pfDispositions menv disp) decls
 
+-- Initialise the prelude's values, then each module's, in arrival order.
+initProgramValues : ProgramFacts ->
+  List (String, (Ref (Value e), Unit -> <e> Value e)) ->
+  List (ModInfo (Value e)) ->
+  <e> Unit
+initProgramValues facts preludeInits mods =
+  initScope facts True "core" preludeInits
+  each
+    ((ModInfo mid _ grps cells menv) =>
+      initScope facts False mid (groupInits menv cells grps))
+    mods
+
 -- the root module is last in dependency order; its locals hold `main`
 rootLocals : List (ModInfo (Value e)) -> <e> List (String, Value e)
 rootLocals [] = []
@@ -4736,8 +4701,8 @@ rootLocals (_ :: rest) = rootLocals rest
 -- rootFullEnv path (prop runner + `test "…"` phase + repl).  Installs
 -- `externBindings () ++ extraExterns` so a per-driver capability policy
 -- (testCapableExterns) can override the frozen clock/GC constants without those
--- prims reaching the differential-oracle probes.  Kept in LOCKSTEP with
--- evalModulesWith — the two module drivers are deliberate parallel copies.
+-- prims reaching the differential-oracle probes.  Shares its state with
+-- evalModulesWith (`buildRootModuleStateWith`).
 export
 evalModulesRootEnvFacts : ProgramFacts ->
   List (String, Value e) ->
@@ -4761,14 +4726,22 @@ evalModulesRootEvalEnvFacts facts extraExterns preludeDecls modules =
     buildRootModuleStateWith facts extraExterns preludeDecls modules
   rootFullEvalEnv facts mods globalCells
 
--- [T-EVAL-LOCKSTEP] third driver, over [facts] as `evalModulesWith` is.
+-- Every module installed and initialised over [facts].
 buildRootModuleStateWith : ProgramFacts ->
   List (String, Value e) ->
   List Decl ->
   List (String, List Decl) ->
   <e> (List (ModInfo (Value e)), List (String, Ref (Value e)))
 buildRootModuleStateWith facts extraExterns preludeDecls0 modules0 =
-  -- same rename, same reason as evalModulesWith.
+  -- #1292: rename CROSS-UNIT-COLLIDING constructors to `<mid>__<Ctor>` before
+  -- anything below reads them, so the program-global `ctorToTypeRef` seeded on the
+  -- next lines stops folding two modules' same-named constructors into ONE entry
+  -- (which tagged every value of the loser's type with the winner's type, and
+  -- dispatched it to the wrong impl -- silently, at exit 0).  A no-op returning its
+  -- input BYTE-IDENTICAL when no constructor name is declared by two units, which
+  -- is every program without the bug.  Idempotent, so a caller that had to rename
+  -- earlier (tools/test_cmd.mdk, whose `test`/prop bodies come out of this same
+  -- module list) costs nothing here.
   let (preludeDecls, modules) =
     mangleCtorCollisions facts.pfSibling preludeDecls0 modules0
   let externs = externBindings () ++ extraExterns
@@ -4816,6 +4789,11 @@ buildRootModuleStateWith facts extraExterns preludeDecls0 modules0 =
   installGroups globalEnv globalCells preludeShared
   installGroups globalEnv privateCells preludePrivate
   installModGroups mods
+  initProgramValues
+    facts
+    (groupInits globalEnv globalCells preludeShared
+      ++ groupInits globalEnv privateCells preludePrivate)
+    mods
   (mods, globalCells)
 
 -- Flatten the root module's frame stack (locals first, then imports, then
@@ -4864,10 +4842,6 @@ groupsOf decls =
 -- parameterized over the value type (v := Value e), like ModInfo / EvalEnv
 public export data ModExports v =
   ModExports (List (String, Ref v)) (List (String, List String))
-
-export
-modExportCells : ModExports v -> List (String, Ref v)
-modExportCells (ModExports cells _) = cells
 
 -- type name -> the constructors a `T(..)` member of an import may bind, for one
 -- module's decls.  Same predicate as the scope layer (`frontend/visibility`
@@ -5493,28 +5467,31 @@ evalModulesOutputRunFacts facts preludeDecls modules =
   let _ = runMainForEffect binds
   readOutput ()
 
--- ── Phase 0 (DRIVER-COLLAPSE): 1-module eval wrappers over evalModulesWith ──
+-- ── 1-module eval wrappers over evalModulesWith ──
 -- evalOneFacts / evalOneOutputFacts / evalOneRootEnvFacts run a SINGLE program as
--- the degenerate 1-element module map [(rootId, prog)] through the multi-module
--- eval path.  The multi-module driver installs the prelude GLOBALLY and the one
--- module's funDefs as LOCALS over a per-module frame; for a single module with
--- zero imports the root frame is locals ∪ globals.  It uses separate prelude/module
--- install order — the binding/install/thunk-force hazard class (phases
--- 96/103/121/125/134).
+-- the 1-element module map [(rootId, prog)] through the multi-module eval path:
+-- the prelude is global and the one module's funDefs are locals, so for a module
+-- with zero imports the root frame is locals ∪ globals.
 export
 evalOneFacts : ProgramFacts ->
   List Decl ->
   (String, List Decl) ->
   <e> List (String, Value e)
-evalOneFacts facts preludeDecls (rootId, prog) =
-  evalModulesWith facts [] preludeDecls [(rootId, prog)]
+evalOneFacts facts preludeDecls (rootId, prog) = evalModulesWith (oneModuleFacts
+  facts
+  preludeDecls
+  rootId) [] preludeDecls [
+  (rootId, prog),
+]
 
 -- run a single program for OUTPUT: the 1-module driver already forces the root
 -- module's `main` for effects and returns captured stdout.
 export
 evalOneOutputFacts : ProgramFacts -> List Decl -> (String, List Decl) -> String
-evalOneOutputFacts facts preludeDecls (rootId, prog) =
-  evalModulesOutputFacts facts preludeDecls [(rootId, prog)]
+evalOneOutputFacts facts preludeDecls (rootId, prog) = evalModulesOutputFacts
+  (oneModuleFacts facts preludeDecls rootId)
+  preludeDecls
+  [(rootId, prog)]
 
 -- the root module's FULL frame (locals ∪ imports ∪ globals) over [extraExterns]:
 -- the prop runner needs prelude methods (eq/compare) visible, and repl installs a
@@ -5526,5 +5503,27 @@ evalOneRootEnvFacts : ProgramFacts ->
   List Decl ->
   (String, List Decl) ->
   <e> List (String, Value e)
-evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
-  evalModulesRootEnvFacts facts extraExterns preludeDecls [(rootId, prog)]
+evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) = evalModulesRootEnvFacts
+  (oneModuleFacts facts preludeDecls rootId)
+  extraExterns
+  preludeDecls
+  [(rootId, prog)]
+
+-- [facts] with the carried order keyed by the one module [rootId] this wrapper
+-- runs: the program holds every checked module's values, and the prelude's too
+-- when [preludeDecls] is empty (the prelude may itself be the program under test),
+-- so those rows join in carried order.
+export
+oneModuleFacts : ProgramFacts -> List Decl -> String -> ProgramFacts
+oneModuleFacts facts preludeDecls rootId = match facts.pfInitOrders
+  Some rows =>
+    let keyed =
+      if isEmptyL preludeDecls then
+        [("core", []), (rootId, flatMap snd rows)]
+      else
+        [
+          ("core", optionOr [] (lookupAssoc "core" rows)),
+          (rootId, flatMap snd (filterList (r => fst r /= "core") rows)),
+        ]
+    { facts | pfInitOrders = Some keyed }
+  None => facts

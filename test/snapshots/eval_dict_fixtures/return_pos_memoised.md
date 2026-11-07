@@ -1,14 +1,12 @@
 # META
-source_lines=27
+source_lines=25
 stages=EVAL
 # SOURCE
--- TYPECHECK-AUDIT C6: a point-free (nullary) RETURN-POSITION impl method
--- (`theUnit : a`, no discriminating argument) referenced twice at the same
--- concrete type.  The OCaml oracle evaluates the impl body once (eagerly, at
--- binding time); the self-hosted eval used to re-force the un-memoised inner
--- thunk on every occurrence via stripBody, duplicating the body's side effect
--- (`[eval]` printed per reference).  With the C6 memoisation the body runs once,
--- so both print `[eval] XX` — `[eval]` exactly once — byte-identical.
+-- A point-free (nullary) RETURN-POSITION impl method (`theUnit : a`, no
+-- discriminating argument) is evaluated at each occurrence as a function of its
+-- dictionary (I6 for impl methods), never memoised.  Referenced twice at the same
+-- concrete type, the body's effect (`[eval]`) runs twice, so the program prints
+-- `[eval] [eval] XX`.
 interface HasUnit a where
   theUnit : a
 
@@ -30,4 +28,4 @@ label _ =
 
 main = putStrLn (label (Box "ignored"))
 # EVAL
-[eval] XX
+[eval] [eval] XX

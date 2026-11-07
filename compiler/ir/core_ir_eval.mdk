@@ -114,6 +114,8 @@ import eval.eval.{
   moduleCoreExports,
   ffiExternNamesRef,
   externDeclNamesOfDecls,
+  oneModuleFacts,
+  initScope,
 }
 
 -- ── the evaluator ─────────────────────────────────────────────────────────
@@ -489,9 +491,9 @@ cClauseClosure : EvalEnv (Value e) -> CClause -> Value e
 cClauseClosure env (CClause pats body) = VClosureF env pats (e => ceval e body)
 
 -- ── program driver ─────────────────────────────────────────────────────────
--- Mirror of eval.mdk's evalProgram, but installs Core IR groups.  A nullary
--- top-level binding becomes a deferred VThunk (forced on first lookup) so
--- point-free defs can reference values installed later, in any order.
+-- Mirror of eval.mdk's single-program path, but installs Core IR groups.  A nullary
+-- top-level binding is a value: its cell is uninitialised until the initialisers
+-- run, in the carried order, after every cell is installed.
 -- Not exported: it installs no dispatch tables, so a caller would silently run
 -- without the method reqCounts.  `cevalMainOf`, `cevalOutputOf` and `cevalModules`
 -- are the ways in.
@@ -524,9 +526,10 @@ cevalProgram facts decls (CProgram groups ctorArs ctorToType implEntries _ _) =
     frame
     (coalesceImpls (flatMap (cImplEntryValues env) implEntries))
   cInstallTopGroups env cells groups
+  initScope (oneModuleFacts facts [] "") False "" (cInits env cells groups)
   map cellResult cells
--- impls (lazy closures) install BEFORE groups so a nullary group's eager body
--- can already see the dispatch tables — mirrors eval.mdk's evalProgram order.
+-- impls install BEFORE groups so a nullary group's initialiser can already see
+-- the dispatch tables.
 
 ctorBinding : (String, Int) -> (String, Value e)
 ctorBinding (name, arity) = (name, makeCtor name arity)
@@ -561,8 +564,8 @@ cImplBodyValue env (CImplDefault _ tag key _ positions pats body) =
   VTypedImpl tag key positions 0 (cImplMethodValue env positions pats body)
 
 -- A point-free (no-param) impl/default body: defer a return-position method as a
--- VThunk; otherwise eta-expand so the discriminating arg still reaches the body
--- (mirrors eval.mdk's implMethodValue / Phase 121).
+-- VThunk, evaluated at each occurrence; otherwise eta-expand so the discriminating
+-- arg still reaches the body (mirrors eval.mdk's implMethodValue / Phase 121).
 cImplMethodValue : EvalEnv (Value e) -> List Int -> List Pat -> CExpr -> Value e
 cImplMethodValue env positions [] body
   | isEmptyL positions = VThunk (_ => ceval env body)
@@ -590,14 +593,35 @@ cInstallTopGroups env cells binds0 = go binds0
   where
     go [] = ()
     go ((CBind n clauses _ _) :: rest) =
-      findCell cells n := cTopGroupValue env clauses
+      findCell cells n := cTopGroupValue env n clauses
       go rest
 
-cTopGroupValue : EvalEnv (Value e) -> List CClause -> Value e
-cTopGroupValue env [CClause pats body]
-  | isNullary pats = VThunk (_ => ceval env body)
+cTopGroupValue : EvalEnv (Value e) -> String -> List CClause -> Value e
+cTopGroupValue env name [CClause pats body]
+  | isNullary pats =
+    if name == "main" then VThunk (_ => ceval env body) else VUninit
   | otherwise = VClosureF env pats (e => ceval e body)
-cTopGroupValue env clauses = VMulti (map (cClauseClosure env) clauses)
+cTopGroupValue env _ clauses = VMulti (map (cClauseClosure env) clauses)
+
+-- A value group: one clause, no parameters, not `main` (never initialised, I4).
+cValueBody : CBind -> Option CExpr
+cValueBody (CBind n [CClause pats body] _ _)
+  | isNullary pats && n /= "main" = Some body
+cValueBody _ = None
+
+-- The initialisers of [binds]' values, each writing into its cell of [cells].
+cInits : EvalEnv (Value e) ->
+  List (String, Ref (Value e)) ->
+  List CBind ->
+  List (String, (Ref (Value e), Unit -> <e> Value e))
+cInits env cells binds =
+  filterMap
+    (b =>
+      map
+        (body =>
+          (cBindName b, (findCell cells (cBindName b), _ => ceval env body)))
+        (cValueBody b))
+    binds
 
 -- ── entry point (pure-value path, diffed via pp_value of `main`) ───────────
 cevalMain : ProgramFacts -> List Decl -> CProgram -> String
@@ -662,8 +686,8 @@ installMethodTables facts decls =
 -- functions across modules stay isolated (Phase 110); ctors and impl methods
 -- coalesce GLOBALLY into one coherent VMulti per interface method.  Modules arrive
 -- dependency-first (loader order); a module's `import`s resolve to the exporting
--- module's cells.  VThunk laziness defers every nullary binding to its first
--- lookup, so the reference's explicit deferred-thunk ordering is unnecessary here.
+-- module's cells.  Every module's cells are installed first, then each module's
+-- values are initialised in the carried order, the prelude first.
 --
 -- The only Core-IR-specific work vs evalModulesWith is the LOWERING: each module's
 -- groups lower to `CBind`s (installed via cInstallTopGroups's ceval-closures) and
@@ -749,6 +773,16 @@ cevalModules facts preludeDecls0 modules0 =
   cInstallTopGroups globalEnv globalCells preludeShared
   cInstallTopGroups globalEnv privateCells preludePrivate
   cInstallModGroups mods
+  initScope
+    facts
+    True
+    "core"
+    (cInits globalEnv globalCells preludeShared
+      ++ cInits globalEnv privateCells preludePrivate)
+  each
+    ((CModInfo mid _ cbinds _ cells menv) =>
+      initScope facts False mid (cInits menv cells cbinds))
+    mods
   cRootLocals mods
 
 -- pass 1: lower + allocate each module's local cells and build its env (imports

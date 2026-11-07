@@ -1,5 +1,5 @@
 # META
-source_lines=5530
+source_lines=5529
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -188,9 +188,13 @@ public export data Value (e : Effect) =
   | VClosureF (EvalEnv (Value e)) (List Pat) (EvalEnv (Value e) -> <e> Value e)
   | VPrim (Value e -> <e> Value e)
   | VMulti (List (Value e))
-  -- a deferred top-level nullary binding; forced + memoised on first lookup, so
-  -- point-free defs can reference impls/values installed later (any order)
+  -- a deferred expression, run each time it is forced and never memoised: a
+  -- module's `main` (never initialised, I4) and a nullary impl method, which is
+  -- evaluated at every occurrence as a function of its dictionary
   | VThunk (Unit -> <e> Value e)
+  -- the content of a top-level value's cell between installation and its
+  -- initialiser; a read of it is an internal error naming the value
+  | VUninit
   -- sentinel for `__fallthrough__ ()`: a guard chain fell through, so the
   -- enclosing clause "did not match" and dispatch should try the next one
   -- (stands in for the reference's Impl_no_match exception)
@@ -272,6 +276,7 @@ ppValue (VPrim _) = "<prim>"
 ppValue (VMulti vs) = "<dispatch/" ++ intToString (listLen vs) ++ ">"
 ppValue (VTypedImpl t _ _ _ inner) = "<impl@\{t}:\{ppValue inner}>"
 ppValue (VThunk _) = "<thunk>"
+ppValue VUninit = "<uninitialised>"
 ppValue (VDict key _ _) = "<dict:" ++ key ++ ">"
 ppValue VFallthrough = "<fallthrough>"
 
@@ -601,7 +606,7 @@ lookupRuntimeBindingFrames : List (EnvFrame (Value e)) ->
   <e> Value e
 lookupRuntimeBindingFrames [] name None =
   panic ("property runner: missing canonical runtime binding '" ++ name ++ "'")
-lookupRuntimeBindingFrames [] name (Some cell) = forceCell cell name
+lookupRuntimeBindingFrames [] name (Some cell) = readCell cell name
 lookupRuntimeBindingFrames (frame :: rest) name found =
   match lookupFrameCell frame name
     Some cell => lookupRuntimeBindingFrames rest name (Some cell)
@@ -620,7 +625,7 @@ lookupFramesOpt [] _ = None
 lookupFramesOpt ((IndexedFrame _ _) :: rest) name
   | name == evalFileTagName = lookupFramesOpt rest name
 lookupFramesOpt (frame :: rest) name = match lookupFrameCell frame name
-  Some cell => Some (forceCell cell name)
+  Some cell => Some (readCell cell name)
   None => lookupFramesOpt rest name
 
 lookupFrames : List (EnvFrame (Value e)) -> String -> <e> Value e
@@ -633,7 +638,7 @@ lookupFrames [] name =
   else
     panic ("unbound identifier: " ++ name)
 lookupFrames (frame :: rest) name = match lookupFrameCell frame name
-  Some cell => forceCell cell name
+  Some cell => readCell cell name
   None => lookupFrames rest name
 
 -- C5: resolve a method occurrence to the
@@ -663,8 +668,8 @@ lookupMethodFrames all frames0 name = go frames0
     go [] = lookupFrames all name
     go (frame :: rest) = match lookupFrameCell frame name
       Some cell =>
-        if isMethodBinding (forceCell cell name) then
-          forceCell cell name
+        if isMethodBinding (readCell cell name) then
+          readCell cell name
         else
           go rest
       None => go rest
@@ -681,32 +686,17 @@ anyTypedImpl [] = False
 anyTypedImpl ((VTypedImpl _ _ _ _ _) :: _) = True
 anyTypedImpl (_ :: rest) = anyTypedImpl rest
 
--- read a cell, forcing + memoising a deferred thunk on first access
--- P0-2(b): black-hole a lazy cell while it is being forced so a non-productive
--- self-reference (`xs = 1 :: xs`; top-level nullary bindings are LAZY and `::`
--- is STRICT, so forcing `xs` re-forces `xs`) is caught as a clean coded
--- E-CYCLIC-VALUE instead of self-forcing to a stack-overflow crash.  Before
--- running the thunk we overwrite the cell with a black-hole thunk that panics
--- if re-entered; on success we memoise the real value, clearing the mark.
-forceCell : Ref (Value e) -> String -> <e> Value e
-forceCell cell name = match !cell
-  VThunk f => forceMemo cell name f
+-- Read a top-level cell.  A value's cell is `VUninit` until its initialiser has
+-- run, so a read before that is an internal error rather than a silent value.
+readCell : Ref (Value e) -> String -> <e> Value e
+readCell cell name = match !cell
+  VUninit => uninitialisedRead name
   v => v
 
-forceMemo : Ref (Value e) -> String -> (Unit -> <e> Value e) -> <e> Value e
-forceMemo cell name f =
-  cell := VThunk (blackholeCell name)
-  let v = f ()
-  cell := v
-  v
-
--- The thunk a cell holds *while it is being forced*.  Re-entering the force of
--- the same cell runs this and raises E-CYCLIC-VALUE, naming the binding.
-blackholeCell : String -> Unit -> <e> Value e
-blackholeCell name _ =
-  runtimePanic
-    ECyclicValue
-    "`\{name}` refers to itself during its own initialization; a value cannot be defined in terms of itself"
+uninitialisedRead : String -> <e> Value e
+uninitialisedRead name =
+  panic
+    "internal error: top-level value `\{name}` was read before it was initialised"
 
 export
 force : Value e -> <e> Value e
@@ -739,7 +729,7 @@ lookupCells ((n, cell) :: rest) name =
 lookupAtAddr : EvalEnv (Value e) -> String -> Addr -> <e> Value e
 lookupAtAddr env name AGlobal = lookupEnv env name
 lookupAtAddr (EvalEnv _ frames) name (ALocal depth slot) =
-  forceCell
+  readCell
     (addrCell (frameCells (frameAtDepth frames depth name)) slot name)
     name
 
@@ -2058,17 +2048,80 @@ orClause : (List Pat, Expr, Loc) -> List (List Pat, Expr, Loc)
 orClause (pats, body, site) =
   map (ps => (ps, body, site)) (paramCandidates pats)
 
--- top-level variant: a nullary binding becomes a deferred VThunk (forced on
--- first lookup) so point-free defs can reference values/impls installed later
-topGroupValue : EvalEnv (Value e) -> List (List Pat, Expr, Loc) -> Value e
-topGroupValue env clauses = topClausesValue env (orClauses clauses)
+-- top-level variant: a nullary binding is a value, so its cell holds `VUninit`
+-- until `groupInits` runs it; `main` (I4) stays a deferred expression
+topGroupValue : EvalEnv (Value e) ->
+  String ->
+  List (List Pat, Expr, Loc) ->
+  Value e
+topGroupValue env name clauses = topClausesValue env name (orClauses clauses)
 
-topClausesValue : EvalEnv (Value e) -> List (List Pat, Expr, Loc) -> Value e
-topClausesValue env [(pats, body, site)]
-  | isNullary pats = VThunk (_ => eval env body)
+topClausesValue : EvalEnv (Value e) ->
+  String ->
+  List (List Pat, Expr, Loc) ->
+  Value e
+topClausesValue env name [(pats, body, site)]
+  | isNullary pats =
+    if name == "main" then VThunk (_ => eval env body) else VUninit
   | otherwise = VClosure env pats body site
-topClausesValue env clauses =
+topClausesValue env _ clauses =
   VMulti (map (clauseClosure env (groupSite clauses)) clauses)
+
+-- Run the initialiser of each of [names] in order into the value's cell, skipping
+-- a name [inits] lacks: the carried order lists values by source name.
+runInits : List (String, (Ref (Value e), Unit -> <e> Value e)) ->
+  List String ->
+  <e> Unit
+runInits inits names =
+  let index = omFromPairs (reverseL inits) omEmpty
+  each (runInit index) names
+
+runInit : OrdMap (Ref (Value e), Unit -> <e> Value e) -> String -> <e> Unit
+runInit index name = match omLookup name index
+  Some (cell, run) => cell := run ()
+  None => ()
+
+-- The initialisers of the value groups of [groups] (one clause, no parameters,
+-- not `main`), in source order, each writing into its cell of [cells].
+export
+groupInits : EvalEnv (Value e) ->
+  List (String, Ref (Value e)) ->
+  List (String, List (List Pat, Expr, Loc)) ->
+  List (String, (Ref (Value e), Unit -> <e> Value e))
+groupInits env cells groups = flatMap (groupInit env cells) groups
+
+groupInit : EvalEnv (Value e) ->
+  List (String, Ref (Value e)) ->
+  (String, List (List Pat, Expr, Loc)) ->
+  List (String, (Ref (Value e), Unit -> <e> Value e))
+groupInit env cells (name, clauses) = match orClauses clauses
+  [(pats, body, _)] =>
+    if isNullary pats && name /= "main" then
+      [(name, (findCell cells name, _ => eval env body))]
+    else
+      []
+  _ => []
+
+-- Initialise one scope's values: the prelude's (row `core`, always first) or module
+-- [mid]'s, whose row follows it even when it is itself named `core`.  Carried order
+-- when typed (no row is an internal error), source order when untyped.
+export
+initScope : ProgramFacts ->
+  Bool ->
+  String ->
+  List (String, (Ref (Value e), Unit -> <e> Value e)) ->
+  <e> Unit
+initScope facts isPrelude mid inits = match facts.pfInitOrders
+  None => runInits inits (map fst inits)
+  Some rows =>
+    match lookupAssoc mid (if isPrelude then rows else afterPrelude rows)
+      Some names => runInits inits names
+      None =>
+        panic "internal error: no initialisation order for module `\{mid}`"
+
+afterPrelude : List (String, List String) -> List (String, List String)
+afterPrelude (("core", _) :: rest) = rest
+afterPrelude rows = rows
 
 groupSite : List (List Pat, Expr, Loc) -> Loc
 groupSite ((_, _, site) :: _) = site
@@ -2537,22 +2590,12 @@ positionsByName iface mname (((_, i, m), p) :: rest)
   | otherwise = positionsByName iface mname rest
 
 -- A point-free (no-param) impl/default body: if the method is return-position
--- (no discriminating arg) defer it as a memoising VThunk; otherwise eta-expand so
--- the discriminating argument still reaches the body (Phase 121).
---
--- TYPECHECK-AUDIT C6: the nullary return-position thunk is nested in a
--- VTypedImpl's `inner` field inside a VMulti list (not in a Ref cell of its own),
--- so the cell-level forceCell/forceMemo memoisation never reaches it.  stripBody
--- (the only forcer of this thunk, line 608) calls `f ()` directly, so a bare
--- `VThunk (_ => eval env body)` re-evaluates the body — duplicating effects/cost
--- — on every EMethodAt occurrence at the resolved type.  The OCaml oracle
--- (eval.ml:1899-1903) evaluates the nullary return-position body EAGERLY ONCE at
--- binding time.  memoThunk closes the gap: it caches the first force through a
--- private Ref so subsequent forces (whatever path) return the same value without
--- re-running the body — identical VALUE, effects/work run once like the oracle.
+-- (no discriminating arg) defer it as a VThunk, evaluated at each occurrence as a
+-- function of its dictionary; otherwise eta-expand so the discriminating argument
+-- still reaches the body (Phase 121).
 implMethodValue : EvalEnv (Value e) -> List Int -> List Pat -> Expr -> Value e
 implMethodValue env positions [] body
-  | isEmptyL positions = memoThunk env body
+  | isEmptyL positions = VThunk (_ => eval env body)
   | otherwise =
     VClosure
       env
@@ -2560,30 +2603,6 @@ implMethodValue env positions [] body
       (EApp body (EVar "$eta"))
       noTrapLoc
 implMethodValue env _ pats body = VClosure env pats body noTrapLoc
-
--- A VThunk whose body evaluates at most once: the first force writes the result
--- into a private Ref, later forces read it back (no re-evaluation of `body`).
--- The Ref is built ONCE here (captured by the closure), not inside the lambda —
--- otherwise each force would mint a fresh empty cell and never see the cache.
-memoThunk : EvalEnv (Value e) -> Expr -> Value e
-memoThunk env body = memoThunkOf (Ref None) env body
-
-memoThunkOf : Ref (Option (Value e)) -> EvalEnv (Value e) -> Expr -> Value e
-memoThunkOf cell env body = VThunk (_ => forceMemoCell cell env body)
-
-forceMemoCell : Ref (Option (Value e)) ->
-  EvalEnv (Value e) ->
-  Expr ->
-  <e> Value e
-forceMemoCell cell env body = match !cell
-  Some v => v
-  None => storeMemo cell (eval env body)
-
-storeMemo : Ref (Option (Value e)) -> Value e -> <e> Value e
-storeMemo cell v = seqV (cell := Some v) v
-
-seqV : Unit -> Value e -> Value e
-seqV _ v = v
 
 -- one (methodName, (specificity-score, taggedValue)) per impl method / default;
 -- [dispositions] is the elaboration's table, `None` for an untyped program
@@ -2754,11 +2773,6 @@ implDeclNames _ = []
 defaultNamesOf : IfaceMethod -> List String
 defaultNamesOf (IfaceMethod n _ (Some _) _) = [n]
 defaultNamesOf (IfaceMethod _ _ None _) = []
-
--- DRIVER-COLLAPSE Phase 5: the flat single-frame evalProgram is DELETED.  Its
--- one-by-name-frame install (prelude+user merged) is subsumed by the 1-module
--- case of evalModulesWith (evalOneFacts); the shared helpers it used (cellResult,
--- installGroups, installConsts, coalesceImpls, …) are retained by evalModulesWith.
 
 export
 cellResult : (String, Ref (Value e)) -> (String, Value e)
@@ -4238,7 +4252,7 @@ installGroups env cells groups0 = go groups0
   where
     go [] = ()
     go ((n, clauses) :: rest) =
-      findCell cells n := topGroupValue env clauses
+      findCell cells n := topGroupValue env n clauses
       go rest
 
 export
@@ -4248,13 +4262,10 @@ lookupBinding name ((n, v) :: rest)
   | n == name = Some v
   | otherwise = lookupBinding name rest
 
--- Shared message + code for the "no `main`" abort — dedups the three former
--- bare `panic "program has no 'main' binding"` sites.  Each site routes through
--- runtimePanic (E-NO-MAIN), matching the compiled/driver path.  NB: kept a plain
--- String constant, NOT a nullary `= runtimePanic …` binding — a top-level value
--- binding is evaluated EAGERLY at native startup, so an aborting nullary would
--- fire on every `medaka` invocation.  The runtimePanic call therefore stays
--- inline at each (lazy) match arm.
+-- The message of the "no `main`" abort, which each site raises through
+-- runtimePanic (E-NO-MAIN).  A plain String constant, not a nullary
+-- `= runtimePanic …` binding: an initialiser runs at startup, so an aborting
+-- nullary would fire on every `medaka` invocation.
 export
 noMainMsg : String
 noMainMsg = "no `main` in this file; add `main = ...`"
@@ -4270,8 +4281,6 @@ evalMain prog =
 
 -- Run the program for its OUTPUT (forcing `main`, whose IO side-effects append
 -- to outputChunks) and return the captured stdout — diffs against === EVAL ===.
--- DRIVER-COLLAPSE Phase 5: the flat evalOutput is DELETED; evalOneOutputFacts (the
--- 1-module case of evalModulesWith) is the surviving OUTPUT entry point.
 
 -- Like evalOutput, but drops any prelude function the user program redefines
 -- (mirrors the reference's prelude_for shadow-drop) so a user `sum` doesn't
@@ -4312,10 +4321,8 @@ runMainForEffect binds = match lookupBinding "main" binds
 -- same-named functions across modules stay isolated (Phase 110), while ctors
 -- and impl methods coalesce GLOBALLY into one coherent VMulti per interface
 -- method.  Modules arrive dependency-first (loader order); a module's `import`s
--- resolve to the exporting module's cells.  The reference's explicit
--- deferred-thunk install ordering (Phase 125) is unnecessary here: VThunk
--- laziness defers every nullary binding to its first lookup, by which point all
--- modules' impls are installed.
+-- resolve to the exporting module's cells.  Every module is installed before any
+-- value is initialised, so an initialiser sees all modules' impls.
 --
 -- UNTYPED path (no typecheck / dict-pass / marker), like evalOutput — correct
 -- for programs without return-position dispatch (`pure`/`empty`) or
@@ -4452,63 +4459,9 @@ evalModulesWith : ProgramFacts ->
   List Decl ->
   List (String, List Decl) ->
   <e> List (String, Value e)
-evalModulesWith facts extraExterns preludeDecls0 modules0 =
-  -- #1292: rename CROSS-UNIT-COLLIDING constructors to `<mid>__<Ctor>` before
-  -- anything below reads them, so the program-global `ctorToTypeRef` seeded on the
-  -- next lines stops folding two modules' same-named constructors into ONE entry
-  -- (which tagged every value of the loser's type with the winner's type, and
-  -- dispatched it to the wrong impl -- silently, at exit 0).  A no-op returning its
-  -- input BYTE-IDENTICAL when no constructor name is declared by two units, which
-  -- is every program without the bug.  Idempotent, so a caller that had to rename
-  -- earlier (tools/test_cmd.mdk, whose `test`/prop bodies come out of this same
-  -- module list) costs nothing here.
-  let (preludeDecls, modules) =
-    mangleCtorCollisions facts.pfSibling preludeDecls0 modules0
-  let externs = externBindings () ++ extraExterns
-  let moduleDecls = flatMap snd modules
-  let allDecls = preludeDecls ++ moduleDecls
-  let dispositions = facts.pfDispositions
-  ctorToTypeRef := buildCtorToType allDecls
-  ffiExternNamesRef := externDeclNamesOfDecls allDecls
-  let disp = installDispatchTables dispositions allDecls
-  let ctors = collectCtors allDecls
-  let preludeGroups = groupsOf preludeDecls
-  -- S1-PRELUDE (a), #1497/#1492 — see `preludeShadowNames` for the full mechanism.
-  let shadowNames = preludeShadowNames moduleDecls
-  let preludeShared = groupsNotNamedIn shadowNames preludeGroups
-  let preludePrivate = groupsNamedIn shadowNames preludeGroups
-  let globalNames =
-    map fst boolSeeds
-      ++ map fst externs
-      ++ map fst ctors
-      ++ implMethodNames allDecls
-      ++ map fst preludeShared
-  let globalCells = map (n => (n, Ref VUnit)) globalNames
-  let globalFrame = indexedFrame globalCells
-  let runtimeFrame = indexedFrame (runtimeCellsOf externs)
-  let privateCells = map (fst >> (n => (n, Ref VUnit))) preludePrivate
-  let globalEnv =
-    EvalEnv facts (globalFramesWith privateCells globalFrame ++ [runtimeFrame])
-  let mods =
-    buildModInfos
-      facts
-      globalFrame
-      runtimeFrame
-      (coreImportExports privateCells globalCells preludeDecls)
-      facts.pfSibling
-      []
-      []
-      modules
-  let implEntries =
-    flatMap (declImplEntries dispositions globalEnv disp) preludeDecls
-      ++ flatMap (modImplEntries facts disp) mods
-  installFrameConsts globalFrame boolSeeds
-  installFrameConsts globalFrame externs
-  installFrameConsts globalFrame ctors
-  installFrameConsts globalFrame (coalesceImpls implEntries)
-  installGroups globalEnv globalCells preludeShared
-  installGroups globalEnv privateCells preludePrivate
-  installModGroups mods
+evalModulesWith facts extraExterns preludeDecls modules =
+  let (mods, _) =
+    buildRootModuleStateWith facts extraExterns preludeDecls modules
   rootLocals mods
 
 -- pass 1: allocate each module's local cells + build its env (imports resolved
@@ -4724,6 +4677,18 @@ modImplEntries : ProgramFacts ->
 modImplEntries facts disp (ModInfo _ decls _ _ menv) =
   flatMap (declImplEntries facts.pfDispositions menv disp) decls
 
+-- Initialise the prelude's values, then each module's, in arrival order.
+initProgramValues : ProgramFacts ->
+  List (String, (Ref (Value e), Unit -> <e> Value e)) ->
+  List (ModInfo (Value e)) ->
+  <e> Unit
+initProgramValues facts preludeInits mods =
+  initScope facts True "core" preludeInits
+  each
+    ((ModInfo mid _ grps cells menv) =>
+      initScope facts False mid (groupInits menv cells grps))
+    mods
+
 -- the root module is last in dependency order; its locals hold `main`
 rootLocals : List (ModInfo (Value e)) -> <e> List (String, Value e)
 rootLocals [] = []
@@ -4740,8 +4705,8 @@ rootLocals (_ :: rest) = rootLocals rest
 -- rootFullEnv path (prop runner + `test "…"` phase + repl).  Installs
 -- `externBindings () ++ extraExterns` so a per-driver capability policy
 -- (testCapableExterns) can override the frozen clock/GC constants without those
--- prims reaching the differential-oracle probes.  Kept in LOCKSTEP with
--- evalModulesWith — the two module drivers are deliberate parallel copies.
+-- prims reaching the differential-oracle probes.  Shares its state with
+-- evalModulesWith (`buildRootModuleStateWith`).
 export
 evalModulesRootEnvFacts : ProgramFacts ->
   List (String, Value e) ->
@@ -4765,14 +4730,22 @@ evalModulesRootEvalEnvFacts facts extraExterns preludeDecls modules =
     buildRootModuleStateWith facts extraExterns preludeDecls modules
   rootFullEvalEnv facts mods globalCells
 
--- [T-EVAL-LOCKSTEP] third driver, over [facts] as `evalModulesWith` is.
+-- Every module installed and initialised over [facts].
 buildRootModuleStateWith : ProgramFacts ->
   List (String, Value e) ->
   List Decl ->
   List (String, List Decl) ->
   <e> (List (ModInfo (Value e)), List (String, Ref (Value e)))
 buildRootModuleStateWith facts extraExterns preludeDecls0 modules0 =
-  -- same rename, same reason as evalModulesWith.
+  -- #1292: rename CROSS-UNIT-COLLIDING constructors to `<mid>__<Ctor>` before
+  -- anything below reads them, so the program-global `ctorToTypeRef` seeded on the
+  -- next lines stops folding two modules' same-named constructors into ONE entry
+  -- (which tagged every value of the loser's type with the winner's type, and
+  -- dispatched it to the wrong impl -- silently, at exit 0).  A no-op returning its
+  -- input BYTE-IDENTICAL when no constructor name is declared by two units, which
+  -- is every program without the bug.  Idempotent, so a caller that had to rename
+  -- earlier (tools/test_cmd.mdk, whose `test`/prop bodies come out of this same
+  -- module list) costs nothing here.
   let (preludeDecls, modules) =
     mangleCtorCollisions facts.pfSibling preludeDecls0 modules0
   let externs = externBindings () ++ extraExterns
@@ -4820,6 +4793,11 @@ buildRootModuleStateWith facts extraExterns preludeDecls0 modules0 =
   installGroups globalEnv globalCells preludeShared
   installGroups globalEnv privateCells preludePrivate
   installModGroups mods
+  initProgramValues
+    facts
+    (groupInits globalEnv globalCells preludeShared
+      ++ groupInits globalEnv privateCells preludePrivate)
+    mods
   (mods, globalCells)
 
 -- Flatten the root module's frame stack (locals first, then imports, then
@@ -4868,10 +4846,6 @@ groupsOf decls =
 -- parameterized over the value type (v := Value e), like ModInfo / EvalEnv
 public export data ModExports v =
   ModExports (List (String, Ref v)) (List (String, List String))
-
-export
-modExportCells : ModExports v -> List (String, Ref v)
-modExportCells (ModExports cells _) = cells
 
 -- type name -> the constructors a `T(..)` member of an import may bind, for one
 -- module's decls.  Same predicate as the scope layer (`frontend/visibility`
@@ -5497,28 +5471,31 @@ evalModulesOutputRunFacts facts preludeDecls modules =
   let _ = runMainForEffect binds
   readOutput ()
 
--- ── Phase 0 (DRIVER-COLLAPSE): 1-module eval wrappers over evalModulesWith ──
+-- ── 1-module eval wrappers over evalModulesWith ──
 -- evalOneFacts / evalOneOutputFacts / evalOneRootEnvFacts run a SINGLE program as
--- the degenerate 1-element module map [(rootId, prog)] through the multi-module
--- eval path.  The multi-module driver installs the prelude GLOBALLY and the one
--- module's funDefs as LOCALS over a per-module frame; for a single module with
--- zero imports the root frame is locals ∪ globals.  It uses separate prelude/module
--- install order — the binding/install/thunk-force hazard class (phases
--- 96/103/121/125/134).
+-- the 1-element module map [(rootId, prog)] through the multi-module eval path:
+-- the prelude is global and the one module's funDefs are locals, so for a module
+-- with zero imports the root frame is locals ∪ globals.
 export
 evalOneFacts : ProgramFacts ->
   List Decl ->
   (String, List Decl) ->
   <e> List (String, Value e)
-evalOneFacts facts preludeDecls (rootId, prog) =
-  evalModulesWith facts [] preludeDecls [(rootId, prog)]
+evalOneFacts facts preludeDecls (rootId, prog) = evalModulesWith (oneModuleFacts
+  facts
+  preludeDecls
+  rootId) [] preludeDecls [
+  (rootId, prog),
+]
 
 -- run a single program for OUTPUT: the 1-module driver already forces the root
 -- module's `main` for effects and returns captured stdout.
 export
 evalOneOutputFacts : ProgramFacts -> List Decl -> (String, List Decl) -> String
-evalOneOutputFacts facts preludeDecls (rootId, prog) =
-  evalModulesOutputFacts facts preludeDecls [(rootId, prog)]
+evalOneOutputFacts facts preludeDecls (rootId, prog) = evalModulesOutputFacts
+  (oneModuleFacts facts preludeDecls rootId)
+  preludeDecls
+  [(rootId, prog)]
 
 -- the root module's FULL frame (locals ∪ imports ∪ globals) over [extraExterns]:
 -- the prop runner needs prelude methods (eq/compare) visible, and repl installs a
@@ -5530,8 +5507,30 @@ evalOneRootEnvFacts : ProgramFacts ->
   List Decl ->
   (String, List Decl) ->
   <e> List (String, Value e)
-evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
-  evalModulesRootEnvFacts facts extraExterns preludeDecls [(rootId, prog)]
+evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) = evalModulesRootEnvFacts
+  (oneModuleFacts facts preludeDecls rootId)
+  extraExterns
+  preludeDecls
+  [(rootId, prog)]
+
+-- [facts] with the carried order keyed by the one module [rootId] this wrapper
+-- runs: the program holds every checked module's values, and the prelude's too
+-- when [preludeDecls] is empty (the prelude may itself be the program under test),
+-- so those rows join in carried order.
+export
+oneModuleFacts : ProgramFacts -> List Decl -> String -> ProgramFacts
+oneModuleFacts facts preludeDecls rootId = match facts.pfInitOrders
+  Some rows =>
+    let keyed =
+      if isEmptyL preludeDecls then
+        [("core", []), (rootId, flatMap snd rows)]
+      else
+        [
+          ("core", optionOr [] (lookupAssoc "core" rows)),
+          (rootId, flatMap snd (filterList (r => fst r /= "core") rows)),
+        ]
+    { facts | pfInitOrders = Some keyed }
+  None => facts
 # DESUGAR
 (DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
@@ -5552,7 +5551,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DUse false (UseGroup ("support" "opcount") ((mem "opBump" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "mangleCtorCollisions" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" true) (mem "DiagId" true) (mem "Severity" true) (mem "cjAllToJsonWith" false) (mem "flushRunEnvelope" false) (mem "runEnvelopeFields" false))))
-(DData Public "Value" ("e") ((variant "VInt" (ConPos (TyCon "Int"))) (variant "VFloat" (ConPos (TyCon "Float"))) (variant "VString" (ConPos (TyCon "String"))) (variant "VChar" (ConPos (TyCon "String"))) (variant "VBool" (ConPos (TyCon "Bool"))) (variant "VUnit" (ConPos)) (variant "VTuple" (ConPos (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VList" (ConPos (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VArray" (ConPos (TyApp (TyCon "Array") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VByteBlock" (ConPos (TyApp (TyCon "Array") (TyCon "Int")))) (variant "VU64" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "VI64" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "VCon" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VRecord" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VRef" (ConPos (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VClosure" (ConPos (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyCon "Loc"))) (variant "VClosureF" (ConPos (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VPrim" (ConPos (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VMulti" (ConPos (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VThunk" (ConPos (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VFallthrough" (ConPos)) (variant "VTypedImpl" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Int") (TyApp (TyCon "Value") (TyVar "e")))) (variant "VDict" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e")))))) ())
+(DData Public "Value" ("e") ((variant "VInt" (ConPos (TyCon "Int"))) (variant "VFloat" (ConPos (TyCon "Float"))) (variant "VString" (ConPos (TyCon "String"))) (variant "VChar" (ConPos (TyCon "String"))) (variant "VBool" (ConPos (TyCon "Bool"))) (variant "VUnit" (ConPos)) (variant "VTuple" (ConPos (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VList" (ConPos (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VArray" (ConPos (TyApp (TyCon "Array") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VByteBlock" (ConPos (TyApp (TyCon "Array") (TyCon "Int")))) (variant "VU64" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "VI64" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "VCon" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VRecord" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VRef" (ConPos (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VClosure" (ConPos (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyCon "Loc"))) (variant "VClosureF" (ConPos (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VPrim" (ConPos (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VMulti" (ConPos (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VThunk" (ConPos (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VUninit" (ConPos)) (variant "VFallthrough" (ConPos)) (variant "VTypedImpl" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Int") (TyApp (TyCon "Value") (TyVar "e")))) (variant "VDict" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e")))))) ())
 (DData Public "EvalEnv" ("v") ((variant "EvalEnv" (ConPos (TyCon "ProgramFacts") (TyApp (TyCon "List") (TyApp (TyCon "EnvFrame") (TyVar "v")))))) ())
 (DData Public "EnvFrame" ("v") ((variant "ScanFrame" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyVar "v")))))) (variant "IndexedFrame" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyVar "v")))) (TyApp (TyApp (TyCon "HM.HashMap") (TyCon "String")) (TyApp (TyCon "Ref") (TyVar "v")))))) ())
 (DTypeSig true "indexedFrame" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyVar "v")))) (TyApp (TyCon "EnvFrame") (TyVar "v"))))
@@ -5586,6 +5585,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "ppValue" ((PCon "VMulti" (PVar "vs"))) (EBinOp "++" (EBinOp "++" (ELit (LString "<dispatch/")) (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "vs")))) (ELit (LString ">"))))
 (DFunDef false "ppValue" ((PCon "VTypedImpl" (PVar "t") PWild PWild PWild (PVar "inner"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "<impl@")) (EApp (EVar "$core.display") (EVar "t"))) (ELit (LString ":"))) (EApp (EVar "$core.display") (EApp (EVar "ppValue") (EVar "inner")))) (ELit (LString ">"))))
 (DFunDef false "ppValue" ((PCon "VThunk" PWild)) (ELit (LString "<thunk>")))
+(DFunDef false "ppValue" ((PCon "VUninit")) (ELit (LString "<uninitialised>")))
 (DFunDef false "ppValue" ((PCon "VDict" (PVar "key") PWild PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "<dict:")) (EVar "key")) (ELit (LString ">"))))
 (DFunDef false "ppValue" ((PCon "VFallthrough")) (ELit (LString "<fallthrough>")))
 (DTypeSig false "ppField" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e"))) (TyCon "String")))
@@ -5698,21 +5698,21 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "lookupRuntimeBinding" ((PCon "EvalEnv" PWild (PVar "frames")) (PVar "name")) (EApp (EApp (EApp (EVar "lookupRuntimeBindingFrames") (EVar "frames")) (EVar "name")) (EVar "None")))
 (DTypeSig false "lookupRuntimeBindingFrames" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "EnvFrame") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e")))) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "lookupRuntimeBindingFrames" ((PList) (PVar "name") (PCon "None")) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "property runner: missing canonical runtime binding '")) (EVar "name")) (ELit (LString "'")))))
-(DFunDef false "lookupRuntimeBindingFrames" ((PList) (PVar "name") (PCon "Some" (PVar "cell"))) (EApp (EApp (EVar "forceCell") (EVar "cell")) (EVar "name")))
+(DFunDef false "lookupRuntimeBindingFrames" ((PList) (PVar "name") (PCon "Some" (PVar "cell"))) (EApp (EApp (EVar "readCell") (EVar "cell")) (EVar "name")))
 (DFunDef false "lookupRuntimeBindingFrames" ((PCons (PVar "frame") (PVar "rest")) (PVar "name") (PVar "found")) (EMatch (EApp (EApp (EVar "lookupFrameCell") (EVar "frame")) (EVar "name")) (arm (PCon "Some" (PVar "cell")) () (EApp (EApp (EApp (EVar "lookupRuntimeBindingFrames") (EVar "rest")) (EVar "name")) (EApp (EVar "Some") (EVar "cell")))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "lookupRuntimeBindingFrames") (EVar "rest")) (EVar "name")) (EVar "found")))))
 (DTypeSig false "lookupEnvOpt" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "lookupEnvOpt" ((PCon "EvalEnv" PWild (PVar "frames")) (PVar "name")) (EApp (EApp (EVar "lookupFramesOpt") (EVar "frames")) (EVar "name")))
 (DTypeSig false "lookupFramesOpt" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "EnvFrame") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "lookupFramesOpt" ((PList) PWild) (EVar "None"))
 (DFunDef false "lookupFramesOpt" ((PCons (PCon "IndexedFrame" PWild PWild) (PVar "rest")) (PVar "name")) (EIf (EBinOp "==" (EVar "name") (EVar "evalFileTagName")) (EApp (EApp (EVar "lookupFramesOpt") (EVar "rest")) (EVar "name")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
-(DFunDef false "lookupFramesOpt" ((PCons (PVar "frame") (PVar "rest")) (PVar "name")) (EMatch (EApp (EApp (EVar "lookupFrameCell") (EVar "frame")) (EVar "name")) (arm (PCon "Some" (PVar "cell")) () (EApp (EVar "Some") (EApp (EApp (EVar "forceCell") (EVar "cell")) (EVar "name")))) (arm (PCon "None") () (EApp (EApp (EVar "lookupFramesOpt") (EVar "rest")) (EVar "name")))))
+(DFunDef false "lookupFramesOpt" ((PCons (PVar "frame") (PVar "rest")) (PVar "name")) (EMatch (EApp (EApp (EVar "lookupFrameCell") (EVar "frame")) (EVar "name")) (arm (PCon "Some" (PVar "cell")) () (EApp (EVar "Some") (EApp (EApp (EVar "readCell") (EVar "cell")) (EVar "name")))) (arm (PCon "None") () (EApp (EApp (EVar "lookupFramesOpt") (EVar "rest")) (EVar "name")))))
 (DTypeSig false "lookupFrames" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "EnvFrame") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "lookupFrames" ((PList) (PVar "name")) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EUnOp "!" (EVar "ffiExternNamesRef"))) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "capability error: `")) (EVar "name")) (ELit (LString "` is a user-declared FFI extern and the interpreter cannot make a foreign C call; build a native binary with `medaka build`")))) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "unbound identifier: ")) (EVar "name")))))
-(DFunDef false "lookupFrames" ((PCons (PVar "frame") (PVar "rest")) (PVar "name")) (EMatch (EApp (EApp (EVar "lookupFrameCell") (EVar "frame")) (EVar "name")) (arm (PCon "Some" (PVar "cell")) () (EApp (EApp (EVar "forceCell") (EVar "cell")) (EVar "name"))) (arm (PCon "None") () (EApp (EApp (EVar "lookupFrames") (EVar "rest")) (EVar "name")))))
+(DFunDef false "lookupFrames" ((PCons (PVar "frame") (PVar "rest")) (PVar "name")) (EMatch (EApp (EApp (EVar "lookupFrameCell") (EVar "frame")) (EVar "name")) (arm (PCon "Some" (PVar "cell")) () (EApp (EApp (EVar "readCell") (EVar "cell")) (EVar "name"))) (arm (PCon "None") () (EApp (EApp (EVar "lookupFrames") (EVar "rest")) (EVar "name")))))
 (DTypeSig true "lookupMethod" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "lookupMethod" ((PCon "EvalEnv" PWild (PVar "frames")) (PVar "name")) (EApp (EApp (EApp (EVar "lookupMethodFrames") (EVar "frames")) (EVar "frames")) (EVar "name")))
 (DTypeSig false "lookupMethodFrames" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "EnvFrame") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "EnvFrame") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))
-(DFunDef false "lookupMethodFrames" ((PVar "all") (PVar "frames0") (PVar "name")) (ELetGroup ((lgb "go" (clause ((PList)) (EApp (EApp (EVar "lookupFrames") (EVar "all")) (EVar "name"))) (clause ((PCons (PVar "frame") (PVar "rest"))) (EMatch (EApp (EApp (EVar "lookupFrameCell") (EVar "frame")) (EVar "name")) (arm (PCon "Some" (PVar "cell")) () (EIf (EApp (EVar "isMethodBinding") (EApp (EApp (EVar "forceCell") (EVar "cell")) (EVar "name"))) (EApp (EApp (EVar "forceCell") (EVar "cell")) (EVar "name")) (EApp (EVar "go") (EVar "rest")))) (arm (PCon "None") () (EApp (EVar "go") (EVar "rest"))))))) (EApp (EVar "go") (EVar "frames0"))))
+(DFunDef false "lookupMethodFrames" ((PVar "all") (PVar "frames0") (PVar "name")) (ELetGroup ((lgb "go" (clause ((PList)) (EApp (EApp (EVar "lookupFrames") (EVar "all")) (EVar "name"))) (clause ((PCons (PVar "frame") (PVar "rest"))) (EMatch (EApp (EApp (EVar "lookupFrameCell") (EVar "frame")) (EVar "name")) (arm (PCon "Some" (PVar "cell")) () (EIf (EApp (EVar "isMethodBinding") (EApp (EApp (EVar "readCell") (EVar "cell")) (EVar "name"))) (EApp (EApp (EVar "readCell") (EVar "cell")) (EVar "name")) (EApp (EVar "go") (EVar "rest")))) (arm (PCon "None") () (EApp (EVar "go") (EVar "rest"))))))) (EApp (EVar "go") (EVar "frames0"))))
 (DTypeSig false "isMethodBinding" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyCon "Bool")))
 (DFunDef false "isMethodBinding" ((PCon "VTypedImpl" PWild PWild PWild PWild PWild)) (EVar "True"))
 (DFunDef false "isMethodBinding" ((PCon "VMulti" (PVar "vs"))) (EApp (EVar "anyTypedImpl") (EVar "vs")))
@@ -5721,12 +5721,10 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "anyTypedImpl" ((PList)) (EVar "False"))
 (DFunDef false "anyTypedImpl" ((PCons (PCon "VTypedImpl" PWild PWild PWild PWild PWild) PWild)) (EVar "True"))
 (DFunDef false "anyTypedImpl" ((PCons PWild (PVar "rest"))) (EApp (EVar "anyTypedImpl") (EVar "rest")))
-(DTypeSig false "forceCell" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
-(DFunDef false "forceCell" ((PVar "cell") (PVar "name")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "VThunk" (PVar "f")) () (EApp (EApp (EApp (EVar "forceMemo") (EVar "cell")) (EVar "name")) (EVar "f"))) (arm (PVar "v") () (EVar "v"))))
-(DTypeSig false "forceMemo" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))
-(DFunDef false "forceMemo" ((PVar "cell") (PVar "name") (PVar "f")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "cell")) (EApp (EVar "VThunk") (EApp (EVar "blackholeCell") (EVar "name"))))) (DoLet false false (PVar "v") (EApp (EVar "f") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "cell")) (EVar "v"))) (DoExpr (EVar "v"))))
-(DTypeSig false "blackholeCell" (TyFun (TyCon "String") (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
-(DFunDef false "blackholeCell" ((PVar "name") PWild) (EApp (EApp (EVar "runtimePanic") (EVar "ECyclicValue")) (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "$core.display") (EVar "name"))) (ELit (LString "` refers to itself during its own initialization; a value cannot be defined in terms of itself")))))
+(DTypeSig false "readCell" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
+(DFunDef false "readCell" ((PVar "cell") (PVar "name")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "VUninit") () (EApp (EVar "uninitialisedRead") (EVar "name"))) (arm (PVar "v") () (EVar "v"))))
+(DTypeSig false "uninitialisedRead" (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
+(DFunDef false "uninitialisedRead" ((PVar "name")) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "internal error: top-level value `")) (EApp (EVar "$core.display") (EVar "name"))) (ELit (LString "` was read before it was initialised")))))
 (DTypeSig true "force" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "force" ((PCon "VThunk" (PVar "f"))) (EApp (EVar "f") (ELit LUnit)))
 (DFunDef false "force" ((PVar "v")) (EVar "v"))
@@ -5738,7 +5736,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "lookupCells" ((PCons (PTuple (PVar "n") (PVar "cell")) (PVar "rest")) (PVar "name")) (EBlock (DoExpr (EApp (EVar "opBump") (ELit LUnit))) (DoExpr (EIf (EBinOp "==" (EVar "n") (EVar "name")) (EApp (EVar "Some") (EVar "cell")) (EApp (EApp (EVar "lookupCells") (EVar "rest")) (EVar "name"))))))
 (DTypeSig false "lookupAtAddr" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyCon "Addr") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "lookupAtAddr" ((PVar "env") (PVar "name") (PCon "AGlobal")) (EApp (EApp (EVar "lookupEnv") (EVar "env")) (EVar "name")))
-(DFunDef false "lookupAtAddr" ((PCon "EvalEnv" PWild (PVar "frames")) (PVar "name") (PCon "ALocal" (PVar "depth") (PVar "slot"))) (EApp (EApp (EVar "forceCell") (EApp (EApp (EApp (EVar "addrCell") (EApp (EVar "frameCells") (EApp (EApp (EApp (EVar "frameAtDepth") (EVar "frames")) (EVar "depth")) (EVar "name")))) (EVar "slot")) (EVar "name"))) (EVar "name")))
+(DFunDef false "lookupAtAddr" ((PCon "EvalEnv" PWild (PVar "frames")) (PVar "name") (PCon "ALocal" (PVar "depth") (PVar "slot"))) (EApp (EApp (EVar "readCell") (EApp (EApp (EApp (EVar "addrCell") (EApp (EVar "frameCells") (EApp (EApp (EApp (EVar "frameAtDepth") (EVar "frames")) (EVar "depth")) (EVar "name")))) (EVar "slot")) (EVar "name"))) (EVar "name")))
 (DTypeSig false "frameAtDepth" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "EnvFrame") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyCon "EnvFrame") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "frameAtDepth" ((PList) PWild (PVar "name")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "EVarAt: frame depth out of range for ")) (EVar "name"))))
 (DFunDef false "frameAtDepth" ((PCons (PVar "frame") (PVar "rest")) (PVar "depth") (PVar "name")) (EIf (EBinOp "<=" (EVar "depth") (ELit (LInt 0))) (EVar "frame") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "frameAtDepth") (EVar "rest")) (EBinOp "-" (EVar "depth") (ELit (LInt 1)))) (EVar "name")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -6232,11 +6230,24 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "orClauses" ((PVar "clauses")) (EApp (EApp (EVar "flatMap") (EVar "orClause")) (EVar "clauses")))
 (DTypeSig false "orClause" (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyCon "Loc")) (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyCon "Loc")))))
 (DFunDef false "orClause" ((PTuple (PVar "pats") (PVar "body") (PVar "site"))) (EApp (EApp (EVar "map") (ELam ((PVar "ps")) (ETuple (EVar "ps") (EVar "body") (EVar "site")))) (EApp (EVar "paramCandidates") (EVar "pats"))))
-(DTypeSig false "topGroupValue" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyCon "Loc"))) (TyApp (TyCon "Value") (TyVar "e")))))
-(DFunDef false "topGroupValue" ((PVar "env") (PVar "clauses")) (EApp (EApp (EVar "topClausesValue") (EVar "env")) (EApp (EVar "orClauses") (EVar "clauses"))))
-(DTypeSig false "topClausesValue" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyCon "Loc"))) (TyApp (TyCon "Value") (TyVar "e")))))
-(DFunDef false "topClausesValue" ((PVar "env") (PList (PTuple (PVar "pats") (PVar "body") (PVar "site")))) (EIf (EApp (EVar "isNullary") (EVar "pats")) (EApp (EVar "VThunk") (ELam (PWild) (EApp (EApp (EVar "eval") (EVar "env")) (EVar "body")))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "VClosure") (EVar "env")) (EVar "pats")) (EVar "body")) (EVar "site")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DFunDef false "topClausesValue" ((PVar "env") (PVar "clauses")) (EApp (EVar "VMulti") (EApp (EApp (EVar "map") (EApp (EApp (EVar "clauseClosure") (EVar "env")) (EApp (EVar "groupSite") (EVar "clauses")))) (EVar "clauses"))))
+(DTypeSig false "topGroupValue" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyCon "Loc"))) (TyApp (TyCon "Value") (TyVar "e"))))))
+(DFunDef false "topGroupValue" ((PVar "env") (PVar "name") (PVar "clauses")) (EApp (EApp (EApp (EVar "topClausesValue") (EVar "env")) (EVar "name")) (EApp (EVar "orClauses") (EVar "clauses"))))
+(DTypeSig false "topClausesValue" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyCon "Loc"))) (TyApp (TyCon "Value") (TyVar "e"))))))
+(DFunDef false "topClausesValue" ((PVar "env") (PVar "name") (PList (PTuple (PVar "pats") (PVar "body") (PVar "site")))) (EIf (EApp (EVar "isNullary") (EVar "pats")) (EIf (EBinOp "==" (EVar "name") (ELit (LString "main"))) (EApp (EVar "VThunk") (ELam (PWild) (EApp (EApp (EVar "eval") (EVar "env")) (EVar "body")))) (EVar "VUninit")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "VClosure") (EVar "env")) (EVar "pats")) (EVar "body")) (EVar "site")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "topClausesValue" ((PVar "env") PWild (PVar "clauses")) (EApp (EVar "VMulti") (EApp (EApp (EVar "map") (EApp (EApp (EVar "clauseClosure") (EVar "env")) (EApp (EVar "groupSite") (EVar "clauses")))) (EVar "clauses"))))
+(DTypeSig false "runInits" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyCon "Unit")))))
+(DFunDef false "runInits" ((PVar "inits") (PVar "names")) (EBlock (DoLet false false (PVar "index") (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "inits"))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "each") (EApp (EVar "runInit") (EVar "index"))) (EVar "names")))))
+(DTypeSig false "runInit" (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyCon "Unit")))))
+(DFunDef false "runInit" ((PVar "index") (PVar "name")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "index")) (arm (PCon "Some" (PTuple (PVar "cell") (PVar "run"))) () (EApp (EApp (EVar "setRef") (EVar "cell")) (EApp (EVar "run") (ELit LUnit)))) (arm (PCon "None") () (ELit LUnit))))
+(DTypeSig true "groupInits" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyCon "Loc"))))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))))))
+(DFunDef false "groupInits" ((PVar "env") (PVar "cells") (PVar "groups")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "groupInit") (EVar "env")) (EVar "cells"))) (EVar "groups")))
+(DTypeSig false "groupInit" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyCon "Loc")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))))))
+(DFunDef false "groupInit" ((PVar "env") (PVar "cells") (PTuple (PVar "name") (PVar "clauses"))) (EMatch (EApp (EVar "orClauses") (EVar "clauses")) (arm (PList (PTuple (PVar "pats") (PVar "body") PWild)) () (EIf (EBinOp "&&" (EApp (EVar "isNullary") (EVar "pats")) (EBinOp "/=" (EVar "name") (ELit (LString "main")))) (EListLit (ETuple (EVar "name") (ETuple (EApp (EApp (EVar "findCell") (EVar "cells")) (EVar "name")) (ELam (PWild) (EApp (EApp (EVar "eval") (EVar "env")) (EVar "body")))))) (EListLit))) (arm PWild () (EListLit))))
+(DTypeSig true "initScope" (TyFun (TyCon "ProgramFacts") (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))) (TyEffect () (Some "e") (TyCon "Unit")))))))
+(DFunDef false "initScope" ((PVar "facts") (PVar "isPrelude") (PVar "mid") (PVar "inits")) (EMatch (EFieldAccess (EVar "facts") "pfInitOrders") (arm (PCon "None") () (EApp (EApp (EVar "runInits") (EVar "inits")) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "inits")))) (arm (PCon "Some" (PVar "rows")) () (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "mid")) (EIf (EVar "isPrelude") (EVar "rows") (EApp (EVar "afterPrelude") (EVar "rows")))) (arm (PCon "Some" (PVar "names")) () (EApp (EApp (EVar "runInits") (EVar "inits")) (EVar "names"))) (arm (PCon "None") () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "internal error: no initialisation order for module `")) (EApp (EVar "$core.display") (EVar "mid"))) (ELit (LString "`")))))))))
+(DTypeSig false "afterPrelude" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "afterPrelude" ((PCons (PTuple (PLit (LString "core")) PWild) (PVar "rest"))) (EVar "rest"))
+(DFunDef false "afterPrelude" ((PVar "rows")) (EVar "rows"))
 (DTypeSig false "groupSite" (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyCon "Loc"))) (TyCon "Loc")))
 (DFunDef false "groupSite" ((PCons (PTuple PWild PWild (PVar "site")) PWild)) (EVar "site"))
 (DFunDef false "groupSite" ((PList)) (EVar "noTrapLoc"))
@@ -6419,18 +6430,8 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "positionsByName" (PWild PWild (PList)) (EListLit (ELit (LInt 0))))
 (DFunDef false "positionsByName" ((PVar "iface") (PVar "mname") (PCons (PTuple (PTuple PWild (PVar "i") (PVar "m")) (PVar "p")) (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "iface") (EVar "i")) (EBinOp "==" (EVar "mname") (EVar "m"))) (EVar "p") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "positionsByName") (EVar "iface")) (EVar "mname")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "implMethodValue" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Expr") (TyApp (TyCon "Value") (TyVar "e")))))))
-(DFunDef false "implMethodValue" ((PVar "env") (PVar "positions") (PList) (PVar "body")) (EIf (EApp (EVar "isEmptyL") (EVar "positions")) (EApp (EApp (EVar "memoThunk") (EVar "env")) (EVar "body")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "VClosure") (EVar "env")) (EListLit (EApp (EApp (EApp (EVar "PVar") (ELit (LString "$eta"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")))) (EApp (EApp (EVar "EApp") (EVar "body")) (EApp (EVar "EVar") (ELit (LString "$eta"))))) (EVar "noTrapLoc")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "implMethodValue" ((PVar "env") (PVar "positions") (PList) (PVar "body")) (EIf (EApp (EVar "isEmptyL") (EVar "positions")) (EApp (EVar "VThunk") (ELam (PWild) (EApp (EApp (EVar "eval") (EVar "env")) (EVar "body")))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "VClosure") (EVar "env")) (EListLit (EApp (EApp (EApp (EVar "PVar") (ELit (LString "$eta"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")))) (EApp (EApp (EVar "EApp") (EVar "body")) (EApp (EVar "EVar") (ELit (LString "$eta"))))) (EVar "noTrapLoc")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "implMethodValue" ((PVar "env") PWild (PVar "pats") (PVar "body")) (EApp (EApp (EApp (EApp (EVar "VClosure") (EVar "env")) (EVar "pats")) (EVar "body")) (EVar "noTrapLoc")))
-(DTypeSig false "memoThunk" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Expr") (TyApp (TyCon "Value") (TyVar "e")))))
-(DFunDef false "memoThunk" ((PVar "env") (PVar "body")) (EApp (EApp (EApp (EVar "memoThunkOf") (EApp (EVar "Ref") (EVar "None"))) (EVar "env")) (EVar "body")))
-(DTypeSig false "memoThunkOf" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Expr") (TyApp (TyCon "Value") (TyVar "e"))))))
-(DFunDef false "memoThunkOf" ((PVar "cell") (PVar "env") (PVar "body")) (EApp (EVar "VThunk") (ELam (PWild) (EApp (EApp (EApp (EVar "forceMemoCell") (EVar "cell")) (EVar "env")) (EVar "body")))))
-(DTypeSig false "forceMemoCell" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Expr") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))
-(DFunDef false "forceMemoCell" ((PVar "cell") (PVar "env") (PVar "body")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "Some" (PVar "v")) () (EVar "v")) (arm (PCon "None") () (EApp (EApp (EVar "storeMemo") (EVar "cell")) (EApp (EApp (EVar "eval") (EVar "env")) (EVar "body"))))))
-(DTypeSig false "storeMemo" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
-(DFunDef false "storeMemo" ((PVar "cell") (PVar "v")) (EApp (EApp (EVar "seqV") (EApp (EApp (EVar "setRef") (EVar "cell")) (EApp (EVar "Some") (EVar "v")))) (EVar "v")))
-(DTypeSig false "seqV" (TyFun (TyCon "Unit") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyApp (TyCon "Value") (TyVar "e")))))
-(DFunDef false "seqV" (PWild (PVar "v")) (EVar "v"))
 (DTypeSig false "declImplEntries" (TyFun (TyApp (TyCon "Option") (TyCon "DispositionTable")) (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "Int") (TyApp (TyCon "Value") (TyVar "e"))))))))))
 (DFunDef false "declImplEntries" ((PVar "dispositions") (PVar "env") (PVar "disp") (PVar "decl0")) (ELetGroup ((lgb "go" (clause ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "go") (EVar "d"))) (clause ((PRec "DImpl" ((rf "iface" (PVar "ifaceName")) (rf "implOrigin" (PVar "o")) (rf "tys" (PVar "typeArgs")) (rf "methods" None)) true)) (EApp (EApp (EVar "map") (EApp (EApp (EApp (EApp (EApp (EVar "implMethodEntry") (EVar "env")) (EVar "disp")) (EVar "o")) (EVar "ifaceName")) (EVar "typeArgs"))) (EApp (EApp (EVar "flatMap") (EVar "orMethod")) (EVar "methods")))) (clause ((PRec "DInterface" ((rf "name" (PVar "ifaceName")) (rf "ifaceOrigin" (PVar "o")) (rf "methods" None)) true)) (EMatch (EVar "dispositions") (arm (PCon "Some" (PVar "dt")) () (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EApp (EApp (EVar "inheritedDefaultEntries") (EVar "env")) (EVar "disp")) (EVar "dt")) (EVar "o")) (EVar "ifaceName"))) (EVar "methods"))) (arm (PCon "None") () (EListLit)))) (clause (PWild) (EListLit)))) (EApp (EVar "go") (EVar "decl0"))))
 (DTypeSig false "orMethod" (TyFun (TyCon "ImplMethod") (TyApp (TyCon "List") (TyCon "ImplMethod"))))
@@ -7014,7 +7015,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DTypeSig true "runtimeCellsOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))))))
 (DFunDef false "runtimeCellsOf" ((PVar "externs")) (EBlock (DoLet false false (PVar "cells") (EApp (EApp (EVar "map") (EBinOp ">>" (EVar "fst") (ELam ((PVar "n")) (ETuple (EVar "n") (EApp (EVar "Ref") (EVar "VUnit")))))) (EVar "externs"))) (DoExpr (EApp (EApp (EVar "installConsts") (EVar "cells")) (EVar "externs"))) (DoExpr (EVar "cells"))))
 (DTypeSig false "installGroups" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyCon "Loc"))))) (TyEffect () (Some "e") (TyCon "Unit"))))))
-(DFunDef false "installGroups" ((PVar "env") (PVar "cells") (PVar "groups0")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PTuple (PVar "n") (PVar "clauses")) (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EApp (EApp (EVar "findCell") (EVar "cells")) (EVar "n"))) (EApp (EApp (EVar "topGroupValue") (EVar "env")) (EVar "clauses")))) (DoExpr (EApp (EVar "go") (EVar "rest"))))))) (EApp (EVar "go") (EVar "groups0"))))
+(DFunDef false "installGroups" ((PVar "env") (PVar "cells") (PVar "groups0")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PTuple (PVar "n") (PVar "clauses")) (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EApp (EApp (EVar "findCell") (EVar "cells")) (EVar "n"))) (EApp (EApp (EApp (EVar "topGroupValue") (EVar "env")) (EVar "n")) (EVar "clauses")))) (DoExpr (EApp (EVar "go") (EVar "rest"))))))) (EApp (EVar "go") (EVar "groups0"))))
 (DTypeSig true "lookupBinding" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "lookupBinding" (PWild (PList)) (EVar "None"))
 (DFunDef false "lookupBinding" ((PVar "name") (PCons (PTuple (PVar "n") (PVar "v")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "n") (EVar "name")) (EApp (EVar "Some") (EVar "v")) (EIf (EVar "otherwise") (EApp (EApp (EVar "lookupBinding") (EVar "name")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -7051,7 +7052,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DTypeSig true "moduleCoreExports" (TyFun (TyApp (TyCon "ModExports") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "ModExports") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "moduleCoreExports" ((PCon "ModExports" (PVar "shared") (PVar "ctors")) (PVar "localCells") (PVar "decls")) (EIf (EApp (EVar "programIsCore") (EVar "decls")) (EApp (EApp (EVar "ModExports") (EBinOp "++" (EVar "localCells") (EVar "shared"))) (EBinOp "++" (EApp (EVar "ctorsByTypeOf") (EVar "decls")) (EVar "ctors"))) (EApp (EApp (EVar "ModExports") (EVar "shared")) (EVar "ctors"))))
 (DTypeSig true "evalModulesWith" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e"))))))))))
-(DFunDef false "evalModulesWith" ((PVar "facts") (PVar "extraExterns") (PVar "preludeDecls0") (PVar "modules0")) (EBlock (DoLet false false (PTuple (PVar "preludeDecls") (PVar "modules")) (EApp (EApp (EApp (EVar "mangleCtorCollisions") (EFieldAccess (EVar "facts") "pfSibling")) (EVar "preludeDecls0")) (EVar "modules0"))) (DoLet false false (PVar "externs") (EBinOp "++" (EApp (EVar "externBindings") (ELit LUnit)) (EVar "extraExterns"))) (DoLet false false (PVar "moduleDecls") (EApp (EApp (EVar "flatMap") (EVar "snd")) (EVar "modules"))) (DoLet false false (PVar "allDecls") (EBinOp "++" (EVar "preludeDecls") (EVar "moduleDecls"))) (DoLet false false (PVar "dispositions") (EFieldAccess (EVar "facts") "pfDispositions")) (DoExpr (EApp (EApp (EVar "setRef") (EVar "ctorToTypeRef")) (EApp (EVar "buildCtorToType") (EVar "allDecls")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "ffiExternNamesRef")) (EApp (EVar "externDeclNamesOfDecls") (EVar "allDecls")))) (DoLet false false (PVar "disp") (EApp (EApp (EVar "installDispatchTables") (EVar "dispositions")) (EVar "allDecls"))) (DoLet false false (PVar "ctors") (EApp (EVar "collectCtors") (EVar "allDecls"))) (DoLet false false (PVar "preludeGroups") (EApp (EVar "groupsOf") (EVar "preludeDecls"))) (DoLet false false (PVar "shadowNames") (EApp (EVar "preludeShadowNames") (EVar "moduleDecls"))) (DoLet false false (PVar "preludeShared") (EApp (EApp (EVar "groupsNotNamedIn") (EVar "shadowNames")) (EVar "preludeGroups"))) (DoLet false false (PVar "preludePrivate") (EApp (EApp (EVar "groupsNamedIn") (EVar "shadowNames")) (EVar "preludeGroups"))) (DoLet false false (PVar "globalNames") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "map") (EVar "fst")) (EVar "boolSeeds")) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "externs"))) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "ctors"))) (EApp (EVar "implMethodNames") (EVar "allDecls"))) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "preludeShared")))) (DoLet false false (PVar "globalCells") (EApp (EApp (EVar "map") (ELam ((PVar "n")) (ETuple (EVar "n") (EApp (EVar "Ref") (EVar "VUnit"))))) (EVar "globalNames"))) (DoLet false false (PVar "globalFrame") (EApp (EVar "indexedFrame") (EVar "globalCells"))) (DoLet false false (PVar "runtimeFrame") (EApp (EVar "indexedFrame") (EApp (EVar "runtimeCellsOf") (EVar "externs")))) (DoLet false false (PVar "privateCells") (EApp (EApp (EVar "map") (EBinOp ">>" (EVar "fst") (ELam ((PVar "n")) (ETuple (EVar "n") (EApp (EVar "Ref") (EVar "VUnit")))))) (EVar "preludePrivate"))) (DoLet false false (PVar "globalEnv") (EApp (EApp (EVar "EvalEnv") (EVar "facts")) (EBinOp "++" (EApp (EApp (EVar "globalFramesWith") (EVar "privateCells")) (EVar "globalFrame")) (EListLit (EVar "runtimeFrame"))))) (DoLet false false (PVar "mods") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "buildModInfos") (EVar "facts")) (EVar "globalFrame")) (EVar "runtimeFrame")) (EApp (EApp (EApp (EVar "coreImportExports") (EVar "privateCells")) (EVar "globalCells")) (EVar "preludeDecls"))) (EFieldAccess (EVar "facts") "pfSibling")) (EListLit)) (EListLit)) (EVar "modules"))) (DoLet false false (PVar "implEntries") (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "declImplEntries") (EVar "dispositions")) (EVar "globalEnv")) (EVar "disp"))) (EVar "preludeDecls")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "modImplEntries") (EVar "facts")) (EVar "disp"))) (EVar "mods")))) (DoExpr (EApp (EApp (EVar "installFrameConsts") (EVar "globalFrame")) (EVar "boolSeeds"))) (DoExpr (EApp (EApp (EVar "installFrameConsts") (EVar "globalFrame")) (EVar "externs"))) (DoExpr (EApp (EApp (EVar "installFrameConsts") (EVar "globalFrame")) (EVar "ctors"))) (DoExpr (EApp (EApp (EVar "installFrameConsts") (EVar "globalFrame")) (EApp (EVar "coalesceImpls") (EVar "implEntries")))) (DoExpr (EApp (EApp (EApp (EVar "installGroups") (EVar "globalEnv")) (EVar "globalCells")) (EVar "preludeShared"))) (DoExpr (EApp (EApp (EApp (EVar "installGroups") (EVar "globalEnv")) (EVar "privateCells")) (EVar "preludePrivate"))) (DoExpr (EApp (EVar "installModGroups") (EVar "mods"))) (DoExpr (EApp (EVar "rootLocals") (EVar "mods")))))
+(DFunDef false "evalModulesWith" ((PVar "facts") (PVar "extraExterns") (PVar "preludeDecls") (PVar "modules")) (EBlock (DoLet false false (PTuple (PVar "mods") PWild) (EApp (EApp (EApp (EApp (EVar "buildRootModuleStateWith") (EVar "facts")) (EVar "extraExterns")) (EVar "preludeDecls")) (EVar "modules"))) (DoExpr (EApp (EVar "rootLocals") (EVar "mods")))))
 (DTypeSig false "buildModInfos" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "EnvFrame") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "EnvFrame") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "ModExports") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyCon "SiblingPair")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "ModExports") (TyApp (TyCon "Value") (TyVar "e"))))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "ModExports") (TyApp (TyCon "Value") (TyVar "e"))))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyApp (TyCon "ModInfo") (TyApp (TyCon "Value") (TyVar "e")))))))))))))
 (DFunDef false "buildModInfos" ((PVar "facts") (PVar "globalFrame") (PVar "runtimeFrame") (PVar "coreExports") (PVar "sibling") (PVar "fulls") (PVar "exportsMap") (PVar "mods")) (EBlock (DoLet false true (PVar "go") (ELam ((PVar "fullsSoFar")) (ELam ((PVar "exportsSoFar")) (ELam ((PVar "pending")) (EMatch (EVar "pending") (arm (PList) () (EListLit)) (arm (PCons (PTuple (PVar "mid") (PVar "decls")) (PVar "rest")) () (EBlock (DoLet false false (PVar "grps") (EApp (EVar "groupsOf") (EVar "decls"))) (DoLet false false (PVar "modCtors") (EApp (EVar "collectCtors") (EVar "decls"))) (DoLet false false (PVar "localCells") (EApp (EApp (EVar "map") (ELam ((PVar "n")) (ETuple (EVar "n") (EApp (EVar "Ref") (EVar "VUnit"))))) (EBinOp "++" (EApp (EApp (EVar "map") (EVar "fst")) (EVar "grps")) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "modCtors"))))) (DoLet false false (PVar "importsByModule") (EApp (EApp (EApp (EApp (EVar "importsMapFor") (EVar "sibling")) (EVar "mid")) (EVar "fullsSoFar")) (EVar "exportsSoFar"))) (DoLet false false (PVar "imports") (EApp (EApp (EApp (EVar "importFrameOf") (EApp (EApp (EApp (EVar "moduleCoreExports") (EVar "coreExports")) (EVar "localCells")) (EVar "decls"))) (EVar "importsByModule")) (EVar "decls"))) (DoLet false false (PVar "fileTagFrame") (EApp (EVar "ScanFrame") (EListLit (ETuple (EVar "evalFileTagName") (EApp (EVar "Ref") (EApp (EVar "VString") (EApp (EVar "moduleFileOf") (EVar "mid")))))))) (DoLet false false (PVar "menv") (EApp (EApp (EVar "EvalEnv") (EVar "facts")) (EListLit (EApp (EVar "indexedFrame") (EVar "localCells")) (EApp (EVar "indexedFrame") (EVar "imports")) (EVar "globalFrame") (EVar "fileTagFrame") (EVar "runtimeFrame")))) (DoLet false false (PVar "exportsUnder") (ELam ((PVar "v")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "moduleExports") (EVar "v")) (EVar "coreExports")) (EVar "exportsSoFar")) (EVar "globalFrame")) (EVar "runtimeFrame")) (EVar "localCells")) (EVar "decls")))) (DoExpr (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EVar "ModInfo") (EVar "mid")) (EVar "decls")) (EVar "grps")) (EVar "localCells")) (EVar "menv")) (EApp (EApp (EApp (EVar "go") (EApp (EApp (EApp (EApp (EVar "withSubjectFull") (EVar "sibling")) (EVar "mid")) (EApp (EVar "exportsUnder") (EVar "FullView"))) (EVar "fullsSoFar"))) (EBinOp "::" (ETuple (EVar "mid") (EApp (EVar "exportsUnder") (EVar "ExportedView"))) (EVar "exportsSoFar"))) (EVar "rest"))))))))))) (DoExpr (EApp (EApp (EApp (EVar "go") (EVar "fulls")) (EVar "exportsMap")) (EVar "mods")))))
 (DTypeSig true "moduleExports" (TyFun (TyCon "ExportView") (TyFun (TyApp (TyCon "ModExports") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "ModExports") (TyApp (TyCon "Value") (TyVar "e"))))) (TyFun (TyApp (TyCon "EnvFrame") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "EnvFrame") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "ModExports") (TyApp (TyCon "Value") (TyVar "e")))))))))))
@@ -7083,6 +7084,8 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "installModGroups" ((PCons (PCon "ModInfo" PWild (PVar "decls") (PVar "grps") (PVar "cells") (PVar "menv")) (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EApp (EVar "installGroups") (EVar "menv")) (EVar "cells")) (EVar "grps"))) (DoLet false false PWild (EMatch (EVar "menv") (arm (PCon "EvalEnv" PWild (PCons (PVar "localFrame") PWild)) () (EApp (EApp (EVar "installFrameConsts") (EVar "localFrame")) (EApp (EVar "collectCtors") (EVar "decls")))) (arm PWild () (EApp (EVar "panic") (ELit (LString "module environment has no local frame")))))) (DoExpr (EApp (EVar "installModGroups") (EVar "rest")))))
 (DTypeSig false "modImplEntries" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))) (TyFun (TyApp (TyCon "ModInfo") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "Int") (TyApp (TyCon "Value") (TyVar "e")))))))))
 (DFunDef false "modImplEntries" ((PVar "facts") (PVar "disp") (PCon "ModInfo" PWild (PVar "decls") PWild PWild (PVar "menv"))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "declImplEntries") (EFieldAccess (EVar "facts") "pfDispositions")) (EVar "menv")) (EVar "disp"))) (EVar "decls")))
+(DTypeSig false "initProgramValues" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "ModInfo") (TyApp (TyCon "Value") (TyVar "e")))) (TyEffect () (Some "e") (TyCon "Unit"))))))
+(DFunDef false "initProgramValues" ((PVar "facts") (PVar "preludeInits") (PVar "mods")) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EVar "initScope") (EVar "facts")) (EVar "True")) (ELit (LString "core"))) (EVar "preludeInits"))) (DoExpr (EApp (EApp (EVar "each") (ELam ((PCon "ModInfo" (PVar "mid") PWild (PVar "grps") (PVar "cells") (PVar "menv"))) (EApp (EApp (EApp (EApp (EVar "initScope") (EVar "facts")) (EVar "False")) (EVar "mid")) (EApp (EApp (EApp (EVar "groupInits") (EVar "menv")) (EVar "cells")) (EVar "grps"))))) (EVar "mods")))))
 (DTypeSig false "rootLocals" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "ModInfo") (TyApp (TyCon "Value") (TyVar "e")))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "rootLocals" ((PList)) (EListLit))
 (DFunDef false "rootLocals" ((PList (PCon "ModInfo" PWild PWild PWild (PVar "cells") PWild))) (EApp (EApp (EVar "map") (EVar "cellResult")) (EVar "cells")))
@@ -7092,7 +7095,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DTypeSig true "evalModulesRootEvalEnvFacts" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect () (Some "e") (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e")))))))))
 (DFunDef false "evalModulesRootEvalEnvFacts" ((PVar "facts") (PVar "extraExterns") (PVar "preludeDecls") (PVar "modules")) (EBlock (DoLet false false (PTuple (PVar "mods") (PVar "globalCells")) (EApp (EApp (EApp (EApp (EVar "buildRootModuleStateWith") (EVar "facts")) (EVar "extraExterns")) (EVar "preludeDecls")) (EVar "modules"))) (DoExpr (EApp (EApp (EApp (EVar "rootFullEvalEnv") (EVar "facts")) (EVar "mods")) (EVar "globalCells")))))
 (DTypeSig false "buildRootModuleStateWith" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect () (Some "e") (TyTuple (TyApp (TyCon "List") (TyApp (TyCon "ModInfo") (TyApp (TyCon "Value") (TyVar "e")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))))))))))
-(DFunDef false "buildRootModuleStateWith" ((PVar "facts") (PVar "extraExterns") (PVar "preludeDecls0") (PVar "modules0")) (EBlock (DoLet false false (PTuple (PVar "preludeDecls") (PVar "modules")) (EApp (EApp (EApp (EVar "mangleCtorCollisions") (EFieldAccess (EVar "facts") "pfSibling")) (EVar "preludeDecls0")) (EVar "modules0"))) (DoLet false false (PVar "externs") (EBinOp "++" (EApp (EVar "externBindings") (ELit LUnit)) (EVar "extraExterns"))) (DoLet false false (PVar "moduleDecls") (EApp (EApp (EVar "flatMap") (EVar "snd")) (EVar "modules"))) (DoLet false false (PVar "allDecls") (EBinOp "++" (EVar "preludeDecls") (EVar "moduleDecls"))) (DoLet false false (PVar "dispositions") (EFieldAccess (EVar "facts") "pfDispositions")) (DoExpr (EApp (EApp (EVar "setRef") (EVar "ctorToTypeRef")) (EApp (EVar "buildCtorToType") (EVar "allDecls")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "ffiExternNamesRef")) (EApp (EVar "externDeclNamesOfDecls") (EVar "allDecls")))) (DoLet false false (PVar "disp") (EApp (EApp (EVar "installDispatchTables") (EVar "dispositions")) (EVar "allDecls"))) (DoLet false false (PVar "ctors") (EApp (EVar "collectCtors") (EVar "allDecls"))) (DoLet false false (PVar "preludeGroups") (EApp (EVar "groupsOf") (EVar "preludeDecls"))) (DoLet false false (PVar "shadowNames") (EApp (EVar "preludeShadowNames") (EVar "moduleDecls"))) (DoLet false false (PVar "preludeShared") (EApp (EApp (EVar "groupsNotNamedIn") (EVar "shadowNames")) (EVar "preludeGroups"))) (DoLet false false (PVar "preludePrivate") (EApp (EApp (EVar "groupsNamedIn") (EVar "shadowNames")) (EVar "preludeGroups"))) (DoLet false false (PVar "globalNames") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "map") (EVar "fst")) (EVar "boolSeeds")) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "externs"))) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "ctors"))) (EApp (EVar "implMethodNames") (EVar "allDecls"))) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "preludeShared")))) (DoLet false false (PVar "globalCells") (EApp (EApp (EVar "map") (ELam ((PVar "n")) (ETuple (EVar "n") (EApp (EVar "Ref") (EVar "VUnit"))))) (EVar "globalNames"))) (DoLet false false (PVar "globalFrame") (EApp (EVar "indexedFrame") (EVar "globalCells"))) (DoLet false false (PVar "runtimeFrame") (EApp (EVar "indexedFrame") (EApp (EVar "runtimeCellsOf") (EVar "externs")))) (DoLet false false (PVar "privateCells") (EApp (EApp (EVar "map") (EBinOp ">>" (EVar "fst") (ELam ((PVar "n")) (ETuple (EVar "n") (EApp (EVar "Ref") (EVar "VUnit")))))) (EVar "preludePrivate"))) (DoLet false false (PVar "globalEnv") (EApp (EApp (EVar "EvalEnv") (EVar "facts")) (EBinOp "++" (EApp (EApp (EVar "globalFramesWith") (EVar "privateCells")) (EVar "globalFrame")) (EListLit (EVar "runtimeFrame"))))) (DoLet false false (PVar "mods") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "buildModInfos") (EVar "facts")) (EVar "globalFrame")) (EVar "runtimeFrame")) (EApp (EApp (EApp (EVar "coreImportExports") (EVar "privateCells")) (EVar "globalCells")) (EVar "preludeDecls"))) (EFieldAccess (EVar "facts") "pfSibling")) (EListLit)) (EListLit)) (EVar "modules"))) (DoLet false false (PVar "implEntries") (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "declImplEntries") (EVar "dispositions")) (EVar "globalEnv")) (EVar "disp"))) (EVar "preludeDecls")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "modImplEntries") (EVar "facts")) (EVar "disp"))) (EVar "mods")))) (DoExpr (EApp (EApp (EVar "installFrameConsts") (EVar "globalFrame")) (EVar "boolSeeds"))) (DoExpr (EApp (EApp (EVar "installFrameConsts") (EVar "globalFrame")) (EVar "externs"))) (DoExpr (EApp (EApp (EVar "installFrameConsts") (EVar "globalFrame")) (EVar "ctors"))) (DoExpr (EApp (EApp (EVar "installFrameConsts") (EVar "globalFrame")) (EApp (EVar "coalesceImpls") (EVar "implEntries")))) (DoExpr (EApp (EApp (EApp (EVar "installGroups") (EVar "globalEnv")) (EVar "globalCells")) (EVar "preludeShared"))) (DoExpr (EApp (EApp (EApp (EVar "installGroups") (EVar "globalEnv")) (EVar "privateCells")) (EVar "preludePrivate"))) (DoExpr (EApp (EVar "installModGroups") (EVar "mods"))) (DoExpr (ETuple (EVar "mods") (EVar "globalCells")))))
+(DFunDef false "buildRootModuleStateWith" ((PVar "facts") (PVar "extraExterns") (PVar "preludeDecls0") (PVar "modules0")) (EBlock (DoLet false false (PTuple (PVar "preludeDecls") (PVar "modules")) (EApp (EApp (EApp (EVar "mangleCtorCollisions") (EFieldAccess (EVar "facts") "pfSibling")) (EVar "preludeDecls0")) (EVar "modules0"))) (DoLet false false (PVar "externs") (EBinOp "++" (EApp (EVar "externBindings") (ELit LUnit)) (EVar "extraExterns"))) (DoLet false false (PVar "moduleDecls") (EApp (EApp (EVar "flatMap") (EVar "snd")) (EVar "modules"))) (DoLet false false (PVar "allDecls") (EBinOp "++" (EVar "preludeDecls") (EVar "moduleDecls"))) (DoLet false false (PVar "dispositions") (EFieldAccess (EVar "facts") "pfDispositions")) (DoExpr (EApp (EApp (EVar "setRef") (EVar "ctorToTypeRef")) (EApp (EVar "buildCtorToType") (EVar "allDecls")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "ffiExternNamesRef")) (EApp (EVar "externDeclNamesOfDecls") (EVar "allDecls")))) (DoLet false false (PVar "disp") (EApp (EApp (EVar "installDispatchTables") (EVar "dispositions")) (EVar "allDecls"))) (DoLet false false (PVar "ctors") (EApp (EVar "collectCtors") (EVar "allDecls"))) (DoLet false false (PVar "preludeGroups") (EApp (EVar "groupsOf") (EVar "preludeDecls"))) (DoLet false false (PVar "shadowNames") (EApp (EVar "preludeShadowNames") (EVar "moduleDecls"))) (DoLet false false (PVar "preludeShared") (EApp (EApp (EVar "groupsNotNamedIn") (EVar "shadowNames")) (EVar "preludeGroups"))) (DoLet false false (PVar "preludePrivate") (EApp (EApp (EVar "groupsNamedIn") (EVar "shadowNames")) (EVar "preludeGroups"))) (DoLet false false (PVar "globalNames") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "map") (EVar "fst")) (EVar "boolSeeds")) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "externs"))) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "ctors"))) (EApp (EVar "implMethodNames") (EVar "allDecls"))) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "preludeShared")))) (DoLet false false (PVar "globalCells") (EApp (EApp (EVar "map") (ELam ((PVar "n")) (ETuple (EVar "n") (EApp (EVar "Ref") (EVar "VUnit"))))) (EVar "globalNames"))) (DoLet false false (PVar "globalFrame") (EApp (EVar "indexedFrame") (EVar "globalCells"))) (DoLet false false (PVar "runtimeFrame") (EApp (EVar "indexedFrame") (EApp (EVar "runtimeCellsOf") (EVar "externs")))) (DoLet false false (PVar "privateCells") (EApp (EApp (EVar "map") (EBinOp ">>" (EVar "fst") (ELam ((PVar "n")) (ETuple (EVar "n") (EApp (EVar "Ref") (EVar "VUnit")))))) (EVar "preludePrivate"))) (DoLet false false (PVar "globalEnv") (EApp (EApp (EVar "EvalEnv") (EVar "facts")) (EBinOp "++" (EApp (EApp (EVar "globalFramesWith") (EVar "privateCells")) (EVar "globalFrame")) (EListLit (EVar "runtimeFrame"))))) (DoLet false false (PVar "mods") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "buildModInfos") (EVar "facts")) (EVar "globalFrame")) (EVar "runtimeFrame")) (EApp (EApp (EApp (EVar "coreImportExports") (EVar "privateCells")) (EVar "globalCells")) (EVar "preludeDecls"))) (EFieldAccess (EVar "facts") "pfSibling")) (EListLit)) (EListLit)) (EVar "modules"))) (DoLet false false (PVar "implEntries") (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "declImplEntries") (EVar "dispositions")) (EVar "globalEnv")) (EVar "disp"))) (EVar "preludeDecls")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "modImplEntries") (EVar "facts")) (EVar "disp"))) (EVar "mods")))) (DoExpr (EApp (EApp (EVar "installFrameConsts") (EVar "globalFrame")) (EVar "boolSeeds"))) (DoExpr (EApp (EApp (EVar "installFrameConsts") (EVar "globalFrame")) (EVar "externs"))) (DoExpr (EApp (EApp (EVar "installFrameConsts") (EVar "globalFrame")) (EVar "ctors"))) (DoExpr (EApp (EApp (EVar "installFrameConsts") (EVar "globalFrame")) (EApp (EVar "coalesceImpls") (EVar "implEntries")))) (DoExpr (EApp (EApp (EApp (EVar "installGroups") (EVar "globalEnv")) (EVar "globalCells")) (EVar "preludeShared"))) (DoExpr (EApp (EApp (EApp (EVar "installGroups") (EVar "globalEnv")) (EVar "privateCells")) (EVar "preludePrivate"))) (DoExpr (EApp (EVar "installModGroups") (EVar "mods"))) (DoExpr (EApp (EApp (EApp (EVar "initProgramValues") (EVar "facts")) (EBinOp "++" (EApp (EApp (EApp (EVar "groupInits") (EVar "globalEnv")) (EVar "globalCells")) (EVar "preludeShared")) (EApp (EApp (EApp (EVar "groupInits") (EVar "globalEnv")) (EVar "privateCells")) (EVar "preludePrivate")))) (EVar "mods"))) (DoExpr (ETuple (EVar "mods") (EVar "globalCells")))))
 (DTypeSig false "rootFullEnv" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "ModInfo") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))))))))
 (DFunDef false "rootFullEnv" ((PVar "facts") (PVar "mods") (PVar "globalCells")) (EApp (EVar "flattenEnv") (EApp (EApp (EApp (EVar "rootFullEvalEnv") (EVar "facts")) (EVar "mods")) (EVar "globalCells"))))
 (DTypeSig false "rootFullEvalEnv" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "ModInfo") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))) (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e")))))))
@@ -7105,8 +7108,6 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "groupsOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyCon "Loc")))))))
 (DFunDef false "groupsOf" ((PVar "decls")) (EBlock (DoLet false false (PVar "defs") (EApp (EVar "funDefs") (EVar "decls"))) (DoExpr (EApp (EApp (EVar "map") (EApp (EVar "mkGroup") (EVar "defs"))) (EApp (EApp (EVar "funGroupNames") (EVar "defs")) (EVar "omEmpty"))))))
 (DData Public "ModExports" ("v") ((variant "ModExports" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyVar "v")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))) ())
-(DTypeSig true "modExportCells" (TyFun (TyApp (TyCon "ModExports") (TyVar "v")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyVar "v"))))))
-(DFunDef false "modExportCells" ((PCon "ModExports" (PVar "cells") PWild)) (EVar "cells"))
 (DTypeSig true "ctorsByTypeOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "ctorsByTypeOf" ((PVar "decls")) (EApp (EApp (EVar "ctorsByTypeUnder") (EVar "ExportedView")) (EVar "decls")))
 (DTypeSig false "ctorsByTypeUnder" (TyFun (TyCon "ExportView") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
@@ -7305,11 +7306,13 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DTypeSig true "evalModulesOutputRunFacts" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyCon "String"))))))
 (DFunDef false "evalModulesOutputRunFacts" ((PVar "facts") (PVar "preludeDecls") (PVar "modules")) (EBlock (DoExpr (EApp (EVar "resetOutput") (ELit LUnit))) (DoExpr (EApp (EVar "enableRunStdoutFlush") (ELit LUnit))) (DoLet false false (PVar "binds") (EApp (EApp (EApp (EApp (EVar "evalModulesWith") (EVar "facts")) (EApp (EVar "ioExternBindings") (ELit LUnit))) (EVar "preludeDecls")) (EVar "modules"))) (DoLet false false PWild (EApp (EVar "runMainForEffect") (EVar "binds"))) (DoExpr (EApp (EVar "readOutput") (ELit LUnit)))))
 (DTypeSig true "evalOneFacts" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))))))))
-(DFunDef false "evalOneFacts" ((PVar "facts") (PVar "preludeDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EApp (EApp (EApp (EApp (EVar "evalModulesWith") (EVar "facts")) (EListLit)) (EVar "preludeDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog")))))
+(DFunDef false "evalOneFacts" ((PVar "facts") (PVar "preludeDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EApp (EApp (EApp (EApp (EVar "evalModulesWith") (EApp (EApp (EApp (EVar "oneModuleFacts") (EVar "facts")) (EVar "preludeDecls")) (EVar "rootId"))) (EListLit)) (EVar "preludeDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog")))))
 (DTypeSig true "evalOneOutputFacts" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyCon "String")))))
-(DFunDef false "evalOneOutputFacts" ((PVar "facts") (PVar "preludeDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EApp (EApp (EApp (EVar "evalModulesOutputFacts") (EVar "facts")) (EVar "preludeDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog")))))
+(DFunDef false "evalOneOutputFacts" ((PVar "facts") (PVar "preludeDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EApp (EApp (EApp (EVar "evalModulesOutputFacts") (EApp (EApp (EApp (EVar "oneModuleFacts") (EVar "facts")) (EVar "preludeDecls")) (EVar "rootId"))) (EVar "preludeDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog")))))
 (DTypeSig true "evalOneRootEnvFacts" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e"))))))))))
-(DFunDef false "evalOneRootEnvFacts" ((PVar "facts") (PVar "extraExterns") (PVar "preludeDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EApp (EApp (EApp (EApp (EVar "evalModulesRootEnvFacts") (EVar "facts")) (EVar "extraExterns")) (EVar "preludeDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog")))))
+(DFunDef false "evalOneRootEnvFacts" ((PVar "facts") (PVar "extraExterns") (PVar "preludeDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EApp (EApp (EApp (EApp (EVar "evalModulesRootEnvFacts") (EApp (EApp (EApp (EVar "oneModuleFacts") (EVar "facts")) (EVar "preludeDecls")) (EVar "rootId"))) (EVar "extraExterns")) (EVar "preludeDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog")))))
+(DTypeSig true "oneModuleFacts" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyCon "ProgramFacts")))))
+(DFunDef false "oneModuleFacts" ((PVar "facts") (PVar "preludeDecls") (PVar "rootId")) (EMatch (EFieldAccess (EVar "facts") "pfInitOrders") (arm (PCon "Some" (PVar "rows")) () (EBlock (DoLet false false (PVar "keyed") (EIf (EApp (EVar "isEmptyL") (EVar "preludeDecls")) (EListLit (ETuple (ELit (LString "core")) (EListLit)) (ETuple (EVar "rootId") (EApp (EApp (EVar "flatMap") (EVar "snd")) (EVar "rows")))) (EListLit (ETuple (ELit (LString "core")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "lookupAssoc") (ELit (LString "core"))) (EVar "rows")))) (ETuple (EVar "rootId") (EApp (EApp (EVar "flatMap") (EVar "snd")) (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EBinOp "/=" (EApp (EVar "fst") (EVar "r")) (ELit (LString "core"))))) (EVar "rows"))))))) (DoExpr (ERecordUpdate (EVar "facts") ((fa "pfInitOrders" (EApp (EVar "Some") (EVar "keyed")))))))) (arm (PCon "None") () (EVar "facts"))))
 # MARK
 (DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("support" "diag_codes") ((mem "DiagCode" true))))
@@ -7330,7 +7333,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DUse false (UseGroup ("support" "opcount") ((mem "opBump" false))))
 (DUse false (UseGroup ("types" "private_mangle") ((mem "mangleCtorCollisions" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" true) (mem "DiagId" true) (mem "Severity" true) (mem "cjAllToJsonWith" false) (mem "flushRunEnvelope" false) (mem "runEnvelopeFields" false))))
-(DData Public "Value" ("e") ((variant "VInt" (ConPos (TyCon "Int"))) (variant "VFloat" (ConPos (TyCon "Float"))) (variant "VString" (ConPos (TyCon "String"))) (variant "VChar" (ConPos (TyCon "String"))) (variant "VBool" (ConPos (TyCon "Bool"))) (variant "VUnit" (ConPos)) (variant "VTuple" (ConPos (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VList" (ConPos (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VArray" (ConPos (TyApp (TyCon "Array") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VByteBlock" (ConPos (TyApp (TyCon "Array") (TyCon "Int")))) (variant "VU64" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "VI64" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "VCon" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VRecord" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VRef" (ConPos (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VClosure" (ConPos (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyCon "Loc"))) (variant "VClosureF" (ConPos (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VPrim" (ConPos (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VMulti" (ConPos (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VThunk" (ConPos (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VFallthrough" (ConPos)) (variant "VTypedImpl" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Int") (TyApp (TyCon "Value") (TyVar "e")))) (variant "VDict" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e")))))) ())
+(DData Public "Value" ("e") ((variant "VInt" (ConPos (TyCon "Int"))) (variant "VFloat" (ConPos (TyCon "Float"))) (variant "VString" (ConPos (TyCon "String"))) (variant "VChar" (ConPos (TyCon "String"))) (variant "VBool" (ConPos (TyCon "Bool"))) (variant "VUnit" (ConPos)) (variant "VTuple" (ConPos (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VList" (ConPos (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VArray" (ConPos (TyApp (TyCon "Array") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VByteBlock" (ConPos (TyApp (TyCon "Array") (TyCon "Int")))) (variant "VU64" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "VI64" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "VCon" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VRecord" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VRef" (ConPos (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VClosure" (ConPos (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyCon "Loc"))) (variant "VClosureF" (ConPos (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VPrim" (ConPos (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VMulti" (ConPos (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))) (variant "VThunk" (ConPos (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))) (variant "VUninit" (ConPos)) (variant "VFallthrough" (ConPos)) (variant "VTypedImpl" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Int") (TyApp (TyCon "Value") (TyVar "e")))) (variant "VDict" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e")))))) ())
 (DData Public "EvalEnv" ("v") ((variant "EvalEnv" (ConPos (TyCon "ProgramFacts") (TyApp (TyCon "List") (TyApp (TyCon "EnvFrame") (TyVar "v")))))) ())
 (DData Public "EnvFrame" ("v") ((variant "ScanFrame" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyVar "v")))))) (variant "IndexedFrame" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyVar "v")))) (TyApp (TyApp (TyCon "HM.HashMap") (TyCon "String")) (TyApp (TyCon "Ref") (TyVar "v")))))) ())
 (DTypeSig true "indexedFrame" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyVar "v")))) (TyApp (TyCon "EnvFrame") (TyVar "v"))))
@@ -7364,6 +7367,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "ppValue" ((PCon "VMulti" (PVar "vs"))) (EBinOp "++" (EBinOp "++" (ELit (LString "<dispatch/")) (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "vs")))) (ELit (LString ">"))))
 (DFunDef false "ppValue" ((PCon "VTypedImpl" (PVar "t") PWild PWild PWild (PVar "inner"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "<impl@")) (EApp (EVar "$core.display") (EVar "t"))) (ELit (LString ":"))) (EApp (EVar "$core.display") (EApp (EVar "ppValue") (EVar "inner")))) (ELit (LString ">"))))
 (DFunDef false "ppValue" ((PCon "VThunk" PWild)) (ELit (LString "<thunk>")))
+(DFunDef false "ppValue" ((PCon "VUninit")) (ELit (LString "<uninitialised>")))
 (DFunDef false "ppValue" ((PCon "VDict" (PVar "key") PWild PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "<dict:")) (EVar "key")) (ELit (LString ">"))))
 (DFunDef false "ppValue" ((PCon "VFallthrough")) (ELit (LString "<fallthrough>")))
 (DTypeSig false "ppField" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e"))) (TyCon "String")))
@@ -7476,21 +7480,21 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "lookupRuntimeBinding" ((PCon "EvalEnv" PWild (PVar "frames")) (PVar "name")) (EApp (EApp (EApp (EVar "lookupRuntimeBindingFrames") (EVar "frames")) (EVar "name")) (EVar "None")))
 (DTypeSig false "lookupRuntimeBindingFrames" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "EnvFrame") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e")))) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "lookupRuntimeBindingFrames" ((PList) (PVar "name") (PCon "None")) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "property runner: missing canonical runtime binding '")) (EVar "name")) (ELit (LString "'")))))
-(DFunDef false "lookupRuntimeBindingFrames" ((PList) (PVar "name") (PCon "Some" (PVar "cell"))) (EApp (EApp (EVar "forceCell") (EVar "cell")) (EVar "name")))
+(DFunDef false "lookupRuntimeBindingFrames" ((PList) (PVar "name") (PCon "Some" (PVar "cell"))) (EApp (EApp (EVar "readCell") (EVar "cell")) (EVar "name")))
 (DFunDef false "lookupRuntimeBindingFrames" ((PCons (PVar "frame") (PVar "rest")) (PVar "name") (PVar "found")) (EMatch (EApp (EApp (EVar "lookupFrameCell") (EVar "frame")) (EVar "name")) (arm (PCon "Some" (PVar "cell")) () (EApp (EApp (EApp (EVar "lookupRuntimeBindingFrames") (EVar "rest")) (EVar "name")) (EApp (EVar "Some") (EVar "cell")))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "lookupRuntimeBindingFrames") (EVar "rest")) (EVar "name")) (EVar "found")))))
 (DTypeSig false "lookupEnvOpt" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "lookupEnvOpt" ((PCon "EvalEnv" PWild (PVar "frames")) (PVar "name")) (EApp (EApp (EVar "lookupFramesOpt") (EVar "frames")) (EVar "name")))
 (DTypeSig false "lookupFramesOpt" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "EnvFrame") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "lookupFramesOpt" ((PList) PWild) (EVar "None"))
 (DFunDef false "lookupFramesOpt" ((PCons (PCon "IndexedFrame" PWild PWild) (PVar "rest")) (PVar "name")) (EIf (EBinOp "==" (EVar "name") (EVar "evalFileTagName")) (EApp (EApp (EVar "lookupFramesOpt") (EVar "rest")) (EVar "name")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
-(DFunDef false "lookupFramesOpt" ((PCons (PVar "frame") (PVar "rest")) (PVar "name")) (EMatch (EApp (EApp (EVar "lookupFrameCell") (EVar "frame")) (EVar "name")) (arm (PCon "Some" (PVar "cell")) () (EApp (EVar "Some") (EApp (EApp (EVar "forceCell") (EVar "cell")) (EVar "name")))) (arm (PCon "None") () (EApp (EApp (EVar "lookupFramesOpt") (EVar "rest")) (EVar "name")))))
+(DFunDef false "lookupFramesOpt" ((PCons (PVar "frame") (PVar "rest")) (PVar "name")) (EMatch (EApp (EApp (EVar "lookupFrameCell") (EVar "frame")) (EVar "name")) (arm (PCon "Some" (PVar "cell")) () (EApp (EVar "Some") (EApp (EApp (EVar "readCell") (EVar "cell")) (EVar "name")))) (arm (PCon "None") () (EApp (EApp (EVar "lookupFramesOpt") (EVar "rest")) (EVar "name")))))
 (DTypeSig false "lookupFrames" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "EnvFrame") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "lookupFrames" ((PList) (PVar "name")) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EUnOp "!" (EVar "ffiExternNamesRef"))) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "capability error: `")) (EVar "name")) (ELit (LString "` is a user-declared FFI extern and the interpreter cannot make a foreign C call; build a native binary with `medaka build`")))) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "unbound identifier: ")) (EVar "name")))))
-(DFunDef false "lookupFrames" ((PCons (PVar "frame") (PVar "rest")) (PVar "name")) (EMatch (EApp (EApp (EVar "lookupFrameCell") (EVar "frame")) (EVar "name")) (arm (PCon "Some" (PVar "cell")) () (EApp (EApp (EVar "forceCell") (EVar "cell")) (EVar "name"))) (arm (PCon "None") () (EApp (EApp (EVar "lookupFrames") (EVar "rest")) (EVar "name")))))
+(DFunDef false "lookupFrames" ((PCons (PVar "frame") (PVar "rest")) (PVar "name")) (EMatch (EApp (EApp (EVar "lookupFrameCell") (EVar "frame")) (EVar "name")) (arm (PCon "Some" (PVar "cell")) () (EApp (EApp (EVar "readCell") (EVar "cell")) (EVar "name"))) (arm (PCon "None") () (EApp (EApp (EVar "lookupFrames") (EVar "rest")) (EVar "name")))))
 (DTypeSig true "lookupMethod" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "lookupMethod" ((PCon "EvalEnv" PWild (PVar "frames")) (PVar "name")) (EApp (EApp (EApp (EVar "lookupMethodFrames") (EVar "frames")) (EVar "frames")) (EVar "name")))
 (DTypeSig false "lookupMethodFrames" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "EnvFrame") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "EnvFrame") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))
-(DFunDef false "lookupMethodFrames" ((PVar "all") (PVar "frames0") (PVar "name")) (ELetGroup ((lgb "go" (clause ((PList)) (EApp (EApp (EVar "lookupFrames") (EDictApp "all")) (EVar "name"))) (clause ((PCons (PVar "frame") (PVar "rest"))) (EMatch (EApp (EApp (EVar "lookupFrameCell") (EVar "frame")) (EVar "name")) (arm (PCon "Some" (PVar "cell")) () (EIf (EApp (EVar "isMethodBinding") (EApp (EApp (EVar "forceCell") (EVar "cell")) (EVar "name"))) (EApp (EApp (EVar "forceCell") (EVar "cell")) (EVar "name")) (EApp (EVar "go") (EVar "rest")))) (arm (PCon "None") () (EApp (EVar "go") (EVar "rest"))))))) (EApp (EVar "go") (EVar "frames0"))))
+(DFunDef false "lookupMethodFrames" ((PVar "all") (PVar "frames0") (PVar "name")) (ELetGroup ((lgb "go" (clause ((PList)) (EApp (EApp (EVar "lookupFrames") (EDictApp "all")) (EVar "name"))) (clause ((PCons (PVar "frame") (PVar "rest"))) (EMatch (EApp (EApp (EVar "lookupFrameCell") (EVar "frame")) (EVar "name")) (arm (PCon "Some" (PVar "cell")) () (EIf (EApp (EVar "isMethodBinding") (EApp (EApp (EVar "readCell") (EVar "cell")) (EVar "name"))) (EApp (EApp (EVar "readCell") (EVar "cell")) (EVar "name")) (EApp (EVar "go") (EVar "rest")))) (arm (PCon "None") () (EApp (EVar "go") (EVar "rest"))))))) (EApp (EVar "go") (EVar "frames0"))))
 (DTypeSig false "isMethodBinding" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyCon "Bool")))
 (DFunDef false "isMethodBinding" ((PCon "VTypedImpl" PWild PWild PWild PWild PWild)) (EVar "True"))
 (DFunDef false "isMethodBinding" ((PCon "VMulti" (PVar "vs"))) (EApp (EVar "anyTypedImpl") (EVar "vs")))
@@ -7499,12 +7503,10 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "anyTypedImpl" ((PList)) (EVar "False"))
 (DFunDef false "anyTypedImpl" ((PCons (PCon "VTypedImpl" PWild PWild PWild PWild PWild) PWild)) (EVar "True"))
 (DFunDef false "anyTypedImpl" ((PCons PWild (PVar "rest"))) (EApp (EVar "anyTypedImpl") (EVar "rest")))
-(DTypeSig false "forceCell" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
-(DFunDef false "forceCell" ((PVar "cell") (PVar "name")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "VThunk" (PVar "f")) () (EApp (EApp (EApp (EVar "forceMemo") (EVar "cell")) (EVar "name")) (EVar "f"))) (arm (PVar "v") () (EVar "v"))))
-(DTypeSig false "forceMemo" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))
-(DFunDef false "forceMemo" ((PVar "cell") (PVar "name") (PVar "f")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "cell")) (EApp (EVar "VThunk") (EApp (EVar "blackholeCell") (EVar "name"))))) (DoLet false false (PVar "v") (EApp (EVar "f") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "cell")) (EVar "v"))) (DoExpr (EVar "v"))))
-(DTypeSig false "blackholeCell" (TyFun (TyCon "String") (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
-(DFunDef false "blackholeCell" ((PVar "name") PWild) (EApp (EApp (EVar "runtimePanic") (EVar "ECyclicValue")) (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "$core.display") (EVar "name"))) (ELit (LString "` refers to itself during its own initialization; a value cannot be defined in terms of itself")))))
+(DTypeSig false "readCell" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
+(DFunDef false "readCell" ((PVar "cell") (PVar "name")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "VUninit") () (EApp (EVar "uninitialisedRead") (EVar "name"))) (arm (PVar "v") () (EVar "v"))))
+(DTypeSig false "uninitialisedRead" (TyFun (TyCon "String") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
+(DFunDef false "uninitialisedRead" ((PVar "name")) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "internal error: top-level value `")) (EApp (EVar "$core.display") (EVar "name"))) (ELit (LString "` was read before it was initialised")))))
 (DTypeSig true "force" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "force" ((PCon "VThunk" (PVar "f"))) (EApp (EVar "f") (ELit LUnit)))
 (DFunDef false "force" ((PVar "v")) (EVar "v"))
@@ -7516,7 +7518,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "lookupCells" ((PCons (PTuple (PVar "n") (PVar "cell")) (PVar "rest")) (PVar "name")) (EBlock (DoExpr (EApp (EVar "opBump") (ELit LUnit))) (DoExpr (EIf (EBinOp "==" (EVar "n") (EVar "name")) (EApp (EVar "Some") (EVar "cell")) (EApp (EApp (EVar "lookupCells") (EVar "rest")) (EVar "name"))))))
 (DTypeSig false "lookupAtAddr" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyCon "Addr") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "lookupAtAddr" ((PVar "env") (PVar "name") (PCon "AGlobal")) (EApp (EApp (EVar "lookupEnv") (EVar "env")) (EVar "name")))
-(DFunDef false "lookupAtAddr" ((PCon "EvalEnv" PWild (PVar "frames")) (PVar "name") (PCon "ALocal" (PVar "depth") (PVar "slot"))) (EApp (EApp (EVar "forceCell") (EApp (EApp (EApp (EVar "addrCell") (EApp (EVar "frameCells") (EApp (EApp (EApp (EVar "frameAtDepth") (EVar "frames")) (EVar "depth")) (EVar "name")))) (EVar "slot")) (EVar "name"))) (EVar "name")))
+(DFunDef false "lookupAtAddr" ((PCon "EvalEnv" PWild (PVar "frames")) (PVar "name") (PCon "ALocal" (PVar "depth") (PVar "slot"))) (EApp (EApp (EVar "readCell") (EApp (EApp (EApp (EVar "addrCell") (EApp (EVar "frameCells") (EApp (EApp (EApp (EVar "frameAtDepth") (EVar "frames")) (EVar "depth")) (EVar "name")))) (EVar "slot")) (EVar "name"))) (EVar "name")))
 (DTypeSig false "frameAtDepth" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "EnvFrame") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyCon "EnvFrame") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "frameAtDepth" ((PList) PWild (PVar "name")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "EVarAt: frame depth out of range for ")) (EVar "name"))))
 (DFunDef false "frameAtDepth" ((PCons (PVar "frame") (PVar "rest")) (PVar "depth") (PVar "name")) (EIf (EBinOp "<=" (EVar "depth") (ELit (LInt 0))) (EVar "frame") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "frameAtDepth") (EVar "rest")) (EBinOp "-" (EVar "depth") (ELit (LInt 1)))) (EVar "name")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -8010,11 +8012,24 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "orClauses" ((PVar "clauses")) (EApp (EApp (EDictApp "flatMap") (EVar "orClause")) (EVar "clauses")))
 (DTypeSig false "orClause" (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyCon "Loc")) (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyCon "Loc")))))
 (DFunDef false "orClause" ((PTuple (PVar "pats") (PVar "body") (PVar "site"))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "ps")) (ETuple (EVar "ps") (EVar "body") (EVar "site")))) (EApp (EVar "paramCandidates") (EVar "pats"))))
-(DTypeSig false "topGroupValue" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyCon "Loc"))) (TyApp (TyCon "Value") (TyVar "e")))))
-(DFunDef false "topGroupValue" ((PVar "env") (PVar "clauses")) (EApp (EApp (EVar "topClausesValue") (EVar "env")) (EApp (EVar "orClauses") (EVar "clauses"))))
-(DTypeSig false "topClausesValue" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyCon "Loc"))) (TyApp (TyCon "Value") (TyVar "e")))))
-(DFunDef false "topClausesValue" ((PVar "env") (PList (PTuple (PVar "pats") (PVar "body") (PVar "site")))) (EIf (EApp (EVar "isNullary") (EVar "pats")) (EApp (EVar "VThunk") (ELam (PWild) (EApp (EApp (EVar "eval") (EVar "env")) (EVar "body")))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "VClosure") (EVar "env")) (EVar "pats")) (EVar "body")) (EVar "site")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DFunDef false "topClausesValue" ((PVar "env") (PVar "clauses")) (EApp (EVar "VMulti") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "clauseClosure") (EVar "env")) (EApp (EVar "groupSite") (EVar "clauses")))) (EVar "clauses"))))
+(DTypeSig false "topGroupValue" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyCon "Loc"))) (TyApp (TyCon "Value") (TyVar "e"))))))
+(DFunDef false "topGroupValue" ((PVar "env") (PVar "name") (PVar "clauses")) (EApp (EApp (EApp (EVar "topClausesValue") (EVar "env")) (EVar "name")) (EApp (EVar "orClauses") (EVar "clauses"))))
+(DTypeSig false "topClausesValue" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyCon "Loc"))) (TyApp (TyCon "Value") (TyVar "e"))))))
+(DFunDef false "topClausesValue" ((PVar "env") (PVar "name") (PList (PTuple (PVar "pats") (PVar "body") (PVar "site")))) (EIf (EApp (EVar "isNullary") (EVar "pats")) (EIf (EBinOp "==" (EVar "name") (ELit (LString "main"))) (EApp (EVar "VThunk") (ELam (PWild) (EApp (EApp (EVar "eval") (EVar "env")) (EVar "body")))) (EVar "VUninit")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "VClosure") (EVar "env")) (EVar "pats")) (EVar "body")) (EVar "site")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "topClausesValue" ((PVar "env") PWild (PVar "clauses")) (EApp (EVar "VMulti") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "clauseClosure") (EVar "env")) (EApp (EVar "groupSite") (EVar "clauses")))) (EVar "clauses"))))
+(DTypeSig false "runInits" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect () (Some "e") (TyCon "Unit")))))
+(DFunDef false "runInits" ((PVar "inits") (PVar "names")) (EBlock (DoLet false false (PVar "index") (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "inits"))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "each") (EApp (EVar "runInit") (EMethodRef "index"))) (EVar "names")))))
+(DTypeSig false "runInit" (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))) (TyFun (TyCon "String") (TyEffect () (Some "e") (TyCon "Unit")))))
+(DFunDef false "runInit" ((PVar "index") (PVar "name")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EMethodRef "index")) (arm (PCon "Some" (PTuple (PVar "cell") (PVar "run"))) () (EApp (EApp (EVar "setRef") (EVar "cell")) (EApp (EVar "run") (ELit LUnit)))) (arm (PCon "None") () (ELit LUnit))))
+(DTypeSig true "groupInits" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyCon "Loc"))))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))))))
+(DFunDef false "groupInits" ((PVar "env") (PVar "cells") (PVar "groups")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "groupInit") (EVar "env")) (EVar "cells"))) (EVar "groups")))
+(DTypeSig false "groupInit" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyCon "Loc")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))))))
+(DFunDef false "groupInit" ((PVar "env") (PVar "cells") (PTuple (PVar "name") (PVar "clauses"))) (EMatch (EApp (EVar "orClauses") (EVar "clauses")) (arm (PList (PTuple (PVar "pats") (PVar "body") PWild)) () (EIf (EBinOp "&&" (EApp (EVar "isNullary") (EVar "pats")) (EBinOp "/=" (EVar "name") (ELit (LString "main")))) (EListLit (ETuple (EVar "name") (ETuple (EApp (EApp (EVar "findCell") (EVar "cells")) (EVar "name")) (ELam (PWild) (EApp (EApp (EVar "eval") (EVar "env")) (EVar "body")))))) (EListLit))) (arm PWild () (EListLit))))
+(DTypeSig true "initScope" (TyFun (TyCon "ProgramFacts") (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))) (TyEffect () (Some "e") (TyCon "Unit")))))))
+(DFunDef false "initScope" ((PVar "facts") (PVar "isPrelude") (PVar "mid") (PVar "inits")) (EMatch (EFieldAccess (EVar "facts") "pfInitOrders") (arm (PCon "None") () (EApp (EApp (EVar "runInits") (EVar "inits")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "inits")))) (arm (PCon "Some" (PVar "rows")) () (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "mid")) (EIf (EVar "isPrelude") (EVar "rows") (EApp (EVar "afterPrelude") (EVar "rows")))) (arm (PCon "Some" (PVar "names")) () (EApp (EApp (EVar "runInits") (EVar "inits")) (EVar "names"))) (arm (PCon "None") () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (ELit (LString "internal error: no initialisation order for module `")) (EApp (EVar "$core.display") (EVar "mid"))) (ELit (LString "`")))))))))
+(DTypeSig false "afterPrelude" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "afterPrelude" ((PCons (PTuple (PLit (LString "core")) PWild) (PVar "rest"))) (EVar "rest"))
+(DFunDef false "afterPrelude" ((PVar "rows")) (EVar "rows"))
 (DTypeSig false "groupSite" (TyFun (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyCon "Loc"))) (TyCon "Loc")))
 (DFunDef false "groupSite" ((PCons (PTuple PWild PWild (PVar "site")) PWild)) (EVar "site"))
 (DFunDef false "groupSite" ((PList)) (EVar "noTrapLoc"))
@@ -8197,18 +8212,8 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "positionsByName" (PWild PWild (PList)) (EListLit (ELit (LInt 0))))
 (DFunDef false "positionsByName" ((PVar "iface") (PVar "mname") (PCons (PTuple (PTuple PWild (PVar "i") (PVar "m")) (PVar "p")) (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "iface") (EVar "i")) (EBinOp "==" (EVar "mname") (EVar "m"))) (EVar "p") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "positionsByName") (EVar "iface")) (EVar "mname")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "implMethodValue" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "Expr") (TyApp (TyCon "Value") (TyVar "e")))))))
-(DFunDef false "implMethodValue" ((PVar "env") (PVar "positions") (PList) (PVar "body")) (EIf (EApp (EVar "isEmptyL") (EVar "positions")) (EApp (EApp (EVar "memoThunk") (EVar "env")) (EVar "body")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "VClosure") (EVar "env")) (EListLit (EApp (EApp (EApp (EVar "PVar") (ELit (LString "$eta"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")))) (EApp (EApp (EVar "EApp") (EVar "body")) (EApp (EVar "EVar") (ELit (LString "$eta"))))) (EVar "noTrapLoc")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "implMethodValue" ((PVar "env") (PVar "positions") (PList) (PVar "body")) (EIf (EApp (EVar "isEmptyL") (EVar "positions")) (EApp (EVar "VThunk") (ELam (PWild) (EApp (EApp (EVar "eval") (EVar "env")) (EVar "body")))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "VClosure") (EVar "env")) (EListLit (EApp (EApp (EApp (EVar "PVar") (ELit (LString "$eta"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")))) (EApp (EApp (EVar "EApp") (EVar "body")) (EApp (EVar "EVar") (ELit (LString "$eta"))))) (EVar "noTrapLoc")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "implMethodValue" ((PVar "env") PWild (PVar "pats") (PVar "body")) (EApp (EApp (EApp (EApp (EVar "VClosure") (EVar "env")) (EVar "pats")) (EVar "body")) (EVar "noTrapLoc")))
-(DTypeSig false "memoThunk" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Expr") (TyApp (TyCon "Value") (TyVar "e")))))
-(DFunDef false "memoThunk" ((PVar "env") (PVar "body")) (EApp (EApp (EApp (EVar "memoThunkOf") (EApp (EVar "Ref") (EVar "None"))) (EVar "env")) (EVar "body")))
-(DTypeSig false "memoThunkOf" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Expr") (TyApp (TyCon "Value") (TyVar "e"))))))
-(DFunDef false "memoThunkOf" ((PVar "cell") (PVar "env") (PVar "body")) (EApp (EVar "VThunk") (ELam (PWild) (EApp (EApp (EApp (EVar "forceMemoCell") (EVar "cell")) (EVar "env")) (EVar "body")))))
-(DTypeSig false "forceMemoCell" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Expr") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))
-(DFunDef false "forceMemoCell" ((PVar "cell") (PVar "env") (PVar "body")) (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "Some" (PVar "v")) () (EVar "v")) (arm (PCon "None") () (EApp (EApp (EVar "storeMemo") (EVar "cell")) (EApp (EApp (EVar "eval") (EVar "env")) (EVar "body"))))))
-(DTypeSig false "storeMemo" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
-(DFunDef false "storeMemo" ((PVar "cell") (PVar "v")) (EApp (EApp (EVar "seqV") (EApp (EApp (EVar "setRef") (EVar "cell")) (EApp (EVar "Some") (EVar "v")))) (EVar "v")))
-(DTypeSig false "seqV" (TyFun (TyCon "Unit") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyApp (TyCon "Value") (TyVar "e")))))
-(DFunDef false "seqV" (PWild (PVar "v")) (EVar "v"))
 (DTypeSig false "declImplEntries" (TyFun (TyApp (TyCon "Option") (TyCon "DispositionTable")) (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "Int") (TyApp (TyCon "Value") (TyVar "e"))))))))))
 (DFunDef false "declImplEntries" ((PVar "dispositions") (PVar "env") (PVar "disp") (PVar "decl0")) (ELetGroup ((lgb "go" (clause ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "go") (EVar "d"))) (clause ((PRec "DImpl" ((rf "iface" (PVar "ifaceName")) (rf "implOrigin" (PVar "o")) (rf "tys" (PVar "typeArgs")) (rf "methods" None)) true)) (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EApp (EApp (EVar "implMethodEntry") (EVar "env")) (EVar "disp")) (EVar "o")) (EVar "ifaceName")) (EVar "typeArgs"))) (EApp (EApp (EDictApp "flatMap") (EVar "orMethod")) (EVar "methods")))) (clause ((PRec "DInterface" ((rf "name" (PVar "ifaceName")) (rf "ifaceOrigin" (PVar "o")) (rf "methods" None)) true)) (EMatch (EVar "dispositions") (arm (PCon "Some" (PVar "dt")) () (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EApp (EApp (EVar "inheritedDefaultEntries") (EVar "env")) (EVar "disp")) (EVar "dt")) (EVar "o")) (EVar "ifaceName"))) (EVar "methods"))) (arm (PCon "None") () (EListLit)))) (clause (PWild) (EListLit)))) (EApp (EVar "go") (EVar "decl0"))))
 (DTypeSig false "orMethod" (TyFun (TyCon "ImplMethod") (TyApp (TyCon "List") (TyCon "ImplMethod"))))
@@ -8792,7 +8797,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DTypeSig true "runtimeCellsOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))))))
 (DFunDef false "runtimeCellsOf" ((PVar "externs")) (EBlock (DoLet false false (PVar "cells") (EApp (EApp (EMethodRef "map") (EBinOp ">>" (EVar "fst") (ELam ((PVar "n")) (ETuple (EVar "n") (EApp (EVar "Ref") (EVar "VUnit")))))) (EVar "externs"))) (DoExpr (EApp (EApp (EVar "installConsts") (EVar "cells")) (EVar "externs"))) (DoExpr (EVar "cells"))))
 (DTypeSig false "installGroups" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyCon "Loc"))))) (TyEffect () (Some "e") (TyCon "Unit"))))))
-(DFunDef false "installGroups" ((PVar "env") (PVar "cells") (PVar "groups0")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PTuple (PVar "n") (PVar "clauses")) (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EApp (EApp (EVar "findCell") (EVar "cells")) (EVar "n"))) (EApp (EApp (EVar "topGroupValue") (EVar "env")) (EVar "clauses")))) (DoExpr (EApp (EVar "go") (EVar "rest"))))))) (EApp (EVar "go") (EVar "groups0"))))
+(DFunDef false "installGroups" ((PVar "env") (PVar "cells") (PVar "groups0")) (ELetGroup ((lgb "go" (clause ((PList)) (ELit LUnit)) (clause ((PCons (PTuple (PVar "n") (PVar "clauses")) (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EApp (EApp (EVar "findCell") (EVar "cells")) (EVar "n"))) (EApp (EApp (EApp (EVar "topGroupValue") (EVar "env")) (EVar "n")) (EVar "clauses")))) (DoExpr (EApp (EVar "go") (EVar "rest"))))))) (EApp (EVar "go") (EVar "groups0"))))
 (DTypeSig true "lookupBinding" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyApp (TyCon "Option") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "lookupBinding" (PWild (PList)) (EVar "None"))
 (DFunDef false "lookupBinding" ((PVar "name") (PCons (PTuple (PVar "n") (PVar "v")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "n") (EVar "name")) (EApp (EVar "Some") (EVar "v")) (EIf (EVar "otherwise") (EApp (EApp (EVar "lookupBinding") (EVar "name")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -8829,7 +8834,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DTypeSig true "moduleCoreExports" (TyFun (TyApp (TyCon "ModExports") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "ModExports") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "moduleCoreExports" ((PCon "ModExports" (PVar "shared") (PVar "ctors")) (PVar "localCells") (PVar "decls")) (EIf (EApp (EVar "programIsCore") (EVar "decls")) (EApp (EApp (EVar "ModExports") (EBinOp "++" (EVar "localCells") (EVar "shared"))) (EBinOp "++" (EApp (EVar "ctorsByTypeOf") (EVar "decls")) (EVar "ctors"))) (EApp (EApp (EVar "ModExports") (EVar "shared")) (EVar "ctors"))))
 (DTypeSig true "evalModulesWith" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e"))))))))))
-(DFunDef false "evalModulesWith" ((PVar "facts") (PVar "extraExterns") (PVar "preludeDecls0") (PVar "modules0")) (EBlock (DoLet false false (PTuple (PVar "preludeDecls") (PVar "modules")) (EApp (EApp (EApp (EVar "mangleCtorCollisions") (EFieldAccess (EVar "facts") "pfSibling")) (EVar "preludeDecls0")) (EVar "modules0"))) (DoLet false false (PVar "externs") (EBinOp "++" (EApp (EVar "externBindings") (ELit LUnit)) (EVar "extraExterns"))) (DoLet false false (PVar "moduleDecls") (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EVar "modules"))) (DoLet false false (PVar "allDecls") (EBinOp "++" (EVar "preludeDecls") (EVar "moduleDecls"))) (DoLet false false (PVar "dispositions") (EFieldAccess (EVar "facts") "pfDispositions")) (DoExpr (EApp (EApp (EVar "setRef") (EVar "ctorToTypeRef")) (EApp (EVar "buildCtorToType") (EVar "allDecls")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "ffiExternNamesRef")) (EApp (EVar "externDeclNamesOfDecls") (EVar "allDecls")))) (DoLet false false (PVar "disp") (EApp (EApp (EVar "installDispatchTables") (EVar "dispositions")) (EVar "allDecls"))) (DoLet false false (PVar "ctors") (EApp (EVar "collectCtors") (EVar "allDecls"))) (DoLet false false (PVar "preludeGroups") (EApp (EVar "groupsOf") (EVar "preludeDecls"))) (DoLet false false (PVar "shadowNames") (EApp (EVar "preludeShadowNames") (EVar "moduleDecls"))) (DoLet false false (PVar "preludeShared") (EApp (EApp (EVar "groupsNotNamedIn") (EVar "shadowNames")) (EVar "preludeGroups"))) (DoLet false false (PVar "preludePrivate") (EApp (EApp (EVar "groupsNamedIn") (EVar "shadowNames")) (EVar "preludeGroups"))) (DoLet false false (PVar "globalNames") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "boolSeeds")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "externs"))) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "ctors"))) (EApp (EVar "implMethodNames") (EVar "allDecls"))) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "preludeShared")))) (DoLet false false (PVar "globalCells") (EApp (EApp (EMethodRef "map") (ELam ((PVar "n")) (ETuple (EVar "n") (EApp (EVar "Ref") (EVar "VUnit"))))) (EVar "globalNames"))) (DoLet false false (PVar "globalFrame") (EApp (EVar "indexedFrame") (EVar "globalCells"))) (DoLet false false (PVar "runtimeFrame") (EApp (EVar "indexedFrame") (EApp (EVar "runtimeCellsOf") (EVar "externs")))) (DoLet false false (PVar "privateCells") (EApp (EApp (EMethodRef "map") (EBinOp ">>" (EVar "fst") (ELam ((PVar "n")) (ETuple (EVar "n") (EApp (EVar "Ref") (EVar "VUnit")))))) (EVar "preludePrivate"))) (DoLet false false (PVar "globalEnv") (EApp (EApp (EVar "EvalEnv") (EVar "facts")) (EBinOp "++" (EApp (EApp (EVar "globalFramesWith") (EVar "privateCells")) (EVar "globalFrame")) (EListLit (EVar "runtimeFrame"))))) (DoLet false false (PVar "mods") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "buildModInfos") (EVar "facts")) (EVar "globalFrame")) (EVar "runtimeFrame")) (EApp (EApp (EApp (EVar "coreImportExports") (EVar "privateCells")) (EVar "globalCells")) (EVar "preludeDecls"))) (EFieldAccess (EVar "facts") "pfSibling")) (EListLit)) (EListLit)) (EVar "modules"))) (DoLet false false (PVar "implEntries") (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "declImplEntries") (EVar "dispositions")) (EVar "globalEnv")) (EVar "disp"))) (EVar "preludeDecls")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "modImplEntries") (EVar "facts")) (EVar "disp"))) (EVar "mods")))) (DoExpr (EApp (EApp (EVar "installFrameConsts") (EVar "globalFrame")) (EVar "boolSeeds"))) (DoExpr (EApp (EApp (EVar "installFrameConsts") (EVar "globalFrame")) (EVar "externs"))) (DoExpr (EApp (EApp (EVar "installFrameConsts") (EVar "globalFrame")) (EVar "ctors"))) (DoExpr (EApp (EApp (EVar "installFrameConsts") (EVar "globalFrame")) (EApp (EVar "coalesceImpls") (EVar "implEntries")))) (DoExpr (EApp (EApp (EApp (EVar "installGroups") (EVar "globalEnv")) (EVar "globalCells")) (EVar "preludeShared"))) (DoExpr (EApp (EApp (EApp (EVar "installGroups") (EVar "globalEnv")) (EVar "privateCells")) (EVar "preludePrivate"))) (DoExpr (EApp (EVar "installModGroups") (EVar "mods"))) (DoExpr (EApp (EVar "rootLocals") (EVar "mods")))))
+(DFunDef false "evalModulesWith" ((PVar "facts") (PVar "extraExterns") (PVar "preludeDecls") (PVar "modules")) (EBlock (DoLet false false (PTuple (PVar "mods") PWild) (EApp (EApp (EApp (EApp (EVar "buildRootModuleStateWith") (EVar "facts")) (EVar "extraExterns")) (EVar "preludeDecls")) (EVar "modules"))) (DoExpr (EApp (EVar "rootLocals") (EVar "mods")))))
 (DTypeSig false "buildModInfos" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "EnvFrame") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "EnvFrame") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "ModExports") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyCon "SiblingPair")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "ModExports") (TyApp (TyCon "Value") (TyVar "e"))))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "ModExports") (TyApp (TyCon "Value") (TyVar "e"))))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyApp (TyCon "ModInfo") (TyApp (TyCon "Value") (TyVar "e")))))))))))))
 (DFunDef false "buildModInfos" ((PVar "facts") (PVar "globalFrame") (PVar "runtimeFrame") (PVar "coreExports") (PVar "sibling") (PVar "fulls") (PVar "exportsMap") (PVar "mods")) (EBlock (DoLet false true (PVar "go") (ELam ((PVar "fullsSoFar")) (ELam ((PVar "exportsSoFar")) (ELam ((PVar "pending")) (EMatch (EVar "pending") (arm (PList) () (EListLit)) (arm (PCons (PTuple (PVar "mid") (PVar "decls")) (PVar "rest")) () (EBlock (DoLet false false (PVar "grps") (EApp (EVar "groupsOf") (EVar "decls"))) (DoLet false false (PVar "modCtors") (EApp (EVar "collectCtors") (EVar "decls"))) (DoLet false false (PVar "localCells") (EApp (EApp (EMethodRef "map") (ELam ((PVar "n")) (ETuple (EVar "n") (EApp (EVar "Ref") (EVar "VUnit"))))) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "grps")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "modCtors"))))) (DoLet false false (PVar "importsByModule") (EApp (EApp (EApp (EApp (EVar "importsMapFor") (EVar "sibling")) (EVar "mid")) (EVar "fullsSoFar")) (EVar "exportsSoFar"))) (DoLet false false (PVar "imports") (EApp (EApp (EApp (EVar "importFrameOf") (EApp (EApp (EApp (EVar "moduleCoreExports") (EVar "coreExports")) (EVar "localCells")) (EVar "decls"))) (EVar "importsByModule")) (EVar "decls"))) (DoLet false false (PVar "fileTagFrame") (EApp (EVar "ScanFrame") (EListLit (ETuple (EVar "evalFileTagName") (EApp (EVar "Ref") (EApp (EVar "VString") (EApp (EVar "moduleFileOf") (EVar "mid")))))))) (DoLet false false (PVar "menv") (EApp (EApp (EVar "EvalEnv") (EVar "facts")) (EListLit (EApp (EVar "indexedFrame") (EVar "localCells")) (EApp (EVar "indexedFrame") (EVar "imports")) (EVar "globalFrame") (EVar "fileTagFrame") (EVar "runtimeFrame")))) (DoLet false false (PVar "exportsUnder") (ELam ((PVar "v")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "moduleExports") (EVar "v")) (EVar "coreExports")) (EVar "exportsSoFar")) (EVar "globalFrame")) (EVar "runtimeFrame")) (EVar "localCells")) (EVar "decls")))) (DoExpr (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EVar "ModInfo") (EVar "mid")) (EVar "decls")) (EVar "grps")) (EVar "localCells")) (EVar "menv")) (EApp (EApp (EApp (EVar "go") (EApp (EApp (EApp (EApp (EVar "withSubjectFull") (EVar "sibling")) (EVar "mid")) (EApp (EVar "exportsUnder") (EVar "FullView"))) (EVar "fullsSoFar"))) (EBinOp "::" (ETuple (EVar "mid") (EApp (EVar "exportsUnder") (EVar "ExportedView"))) (EVar "exportsSoFar"))) (EVar "rest"))))))))))) (DoExpr (EApp (EApp (EApp (EVar "go") (EVar "fulls")) (EVar "exportsMap")) (EVar "mods")))))
 (DTypeSig true "moduleExports" (TyFun (TyCon "ExportView") (TyFun (TyApp (TyCon "ModExports") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "ModExports") (TyApp (TyCon "Value") (TyVar "e"))))) (TyFun (TyApp (TyCon "EnvFrame") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "EnvFrame") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "ModExports") (TyApp (TyCon "Value") (TyVar "e")))))))))))
@@ -8861,6 +8866,8 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "installModGroups" ((PCons (PCon "ModInfo" PWild (PVar "decls") (PVar "grps") (PVar "cells") (PVar "menv")) (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EApp (EVar "installGroups") (EVar "menv")) (EVar "cells")) (EVar "grps"))) (DoLet false false PWild (EMatch (EVar "menv") (arm (PCon "EvalEnv" PWild (PCons (PVar "localFrame") PWild)) () (EApp (EApp (EVar "installFrameConsts") (EVar "localFrame")) (EApp (EVar "collectCtors") (EVar "decls")))) (arm PWild () (EApp (EVar "panic") (ELit (LString "module environment has no local frame")))))) (DoExpr (EApp (EVar "installModGroups") (EVar "rest")))))
 (DTypeSig false "modImplEntries" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int")))) (TyFun (TyApp (TyCon "ModInfo") (TyApp (TyCon "Value") (TyVar "e"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "Int") (TyApp (TyCon "Value") (TyVar "e")))))))))
 (DFunDef false "modImplEntries" ((PVar "facts") (PVar "disp") (PCon "ModInfo" PWild (PVar "decls") PWild PWild (PVar "menv"))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "declImplEntries") (EFieldAccess (EVar "facts") "pfDispositions")) (EVar "menv")) (EVar "disp"))) (EVar "decls")))
+(DTypeSig false "initProgramValues" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "ModInfo") (TyApp (TyCon "Value") (TyVar "e")))) (TyEffect () (Some "e") (TyCon "Unit"))))))
+(DFunDef false "initProgramValues" ((PVar "facts") (PVar "preludeInits") (PVar "mods")) (EBlock (DoExpr (EApp (EApp (EApp (EApp (EVar "initScope") (EVar "facts")) (EVar "True")) (ELit (LString "core"))) (EVar "preludeInits"))) (DoExpr (EApp (EApp (EVar "each") (ELam ((PCon "ModInfo" (PVar "mid") PWild (PVar "grps") (PVar "cells") (PVar "menv"))) (EApp (EApp (EApp (EApp (EVar "initScope") (EVar "facts")) (EVar "False")) (EVar "mid")) (EApp (EApp (EApp (EVar "groupInits") (EVar "menv")) (EVar "cells")) (EVar "grps"))))) (EVar "mods")))))
 (DTypeSig false "rootLocals" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "ModInfo") (TyApp (TyCon "Value") (TyVar "e")))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "rootLocals" ((PList)) (EListLit))
 (DFunDef false "rootLocals" ((PList (PCon "ModInfo" PWild PWild PWild (PVar "cells") PWild))) (EApp (EApp (EMethodRef "map") (EVar "cellResult")) (EVar "cells")))
@@ -8870,7 +8877,7 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DTypeSig true "evalModulesRootEvalEnvFacts" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect () (Some "e") (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e")))))))))
 (DFunDef false "evalModulesRootEvalEnvFacts" ((PVar "facts") (PVar "extraExterns") (PVar "preludeDecls") (PVar "modules")) (EBlock (DoLet false false (PTuple (PVar "mods") (PVar "globalCells")) (EApp (EApp (EApp (EApp (EVar "buildRootModuleStateWith") (EVar "facts")) (EVar "extraExterns")) (EVar "preludeDecls")) (EVar "modules"))) (DoExpr (EApp (EApp (EApp (EVar "rootFullEvalEnv") (EVar "facts")) (EVar "mods")) (EVar "globalCells")))))
 (DTypeSig false "buildRootModuleStateWith" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect () (Some "e") (TyTuple (TyApp (TyCon "List") (TyApp (TyCon "ModInfo") (TyApp (TyCon "Value") (TyVar "e")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))))))))))
-(DFunDef false "buildRootModuleStateWith" ((PVar "facts") (PVar "extraExterns") (PVar "preludeDecls0") (PVar "modules0")) (EBlock (DoLet false false (PTuple (PVar "preludeDecls") (PVar "modules")) (EApp (EApp (EApp (EVar "mangleCtorCollisions") (EFieldAccess (EVar "facts") "pfSibling")) (EVar "preludeDecls0")) (EVar "modules0"))) (DoLet false false (PVar "externs") (EBinOp "++" (EApp (EVar "externBindings") (ELit LUnit)) (EVar "extraExterns"))) (DoLet false false (PVar "moduleDecls") (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EVar "modules"))) (DoLet false false (PVar "allDecls") (EBinOp "++" (EVar "preludeDecls") (EVar "moduleDecls"))) (DoLet false false (PVar "dispositions") (EFieldAccess (EVar "facts") "pfDispositions")) (DoExpr (EApp (EApp (EVar "setRef") (EVar "ctorToTypeRef")) (EApp (EVar "buildCtorToType") (EVar "allDecls")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "ffiExternNamesRef")) (EApp (EVar "externDeclNamesOfDecls") (EVar "allDecls")))) (DoLet false false (PVar "disp") (EApp (EApp (EVar "installDispatchTables") (EVar "dispositions")) (EVar "allDecls"))) (DoLet false false (PVar "ctors") (EApp (EVar "collectCtors") (EVar "allDecls"))) (DoLet false false (PVar "preludeGroups") (EApp (EVar "groupsOf") (EVar "preludeDecls"))) (DoLet false false (PVar "shadowNames") (EApp (EVar "preludeShadowNames") (EVar "moduleDecls"))) (DoLet false false (PVar "preludeShared") (EApp (EApp (EVar "groupsNotNamedIn") (EVar "shadowNames")) (EVar "preludeGroups"))) (DoLet false false (PVar "preludePrivate") (EApp (EApp (EVar "groupsNamedIn") (EVar "shadowNames")) (EVar "preludeGroups"))) (DoLet false false (PVar "globalNames") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "boolSeeds")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "externs"))) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "ctors"))) (EApp (EVar "implMethodNames") (EVar "allDecls"))) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "preludeShared")))) (DoLet false false (PVar "globalCells") (EApp (EApp (EMethodRef "map") (ELam ((PVar "n")) (ETuple (EVar "n") (EApp (EVar "Ref") (EVar "VUnit"))))) (EVar "globalNames"))) (DoLet false false (PVar "globalFrame") (EApp (EVar "indexedFrame") (EVar "globalCells"))) (DoLet false false (PVar "runtimeFrame") (EApp (EVar "indexedFrame") (EApp (EVar "runtimeCellsOf") (EVar "externs")))) (DoLet false false (PVar "privateCells") (EApp (EApp (EMethodRef "map") (EBinOp ">>" (EVar "fst") (ELam ((PVar "n")) (ETuple (EVar "n") (EApp (EVar "Ref") (EVar "VUnit")))))) (EVar "preludePrivate"))) (DoLet false false (PVar "globalEnv") (EApp (EApp (EVar "EvalEnv") (EVar "facts")) (EBinOp "++" (EApp (EApp (EVar "globalFramesWith") (EVar "privateCells")) (EVar "globalFrame")) (EListLit (EVar "runtimeFrame"))))) (DoLet false false (PVar "mods") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "buildModInfos") (EVar "facts")) (EVar "globalFrame")) (EVar "runtimeFrame")) (EApp (EApp (EApp (EVar "coreImportExports") (EVar "privateCells")) (EVar "globalCells")) (EVar "preludeDecls"))) (EFieldAccess (EVar "facts") "pfSibling")) (EListLit)) (EListLit)) (EVar "modules"))) (DoLet false false (PVar "implEntries") (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "declImplEntries") (EVar "dispositions")) (EVar "globalEnv")) (EVar "disp"))) (EVar "preludeDecls")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "modImplEntries") (EVar "facts")) (EVar "disp"))) (EVar "mods")))) (DoExpr (EApp (EApp (EVar "installFrameConsts") (EVar "globalFrame")) (EVar "boolSeeds"))) (DoExpr (EApp (EApp (EVar "installFrameConsts") (EVar "globalFrame")) (EVar "externs"))) (DoExpr (EApp (EApp (EVar "installFrameConsts") (EVar "globalFrame")) (EVar "ctors"))) (DoExpr (EApp (EApp (EVar "installFrameConsts") (EVar "globalFrame")) (EApp (EVar "coalesceImpls") (EVar "implEntries")))) (DoExpr (EApp (EApp (EApp (EVar "installGroups") (EVar "globalEnv")) (EVar "globalCells")) (EVar "preludeShared"))) (DoExpr (EApp (EApp (EApp (EVar "installGroups") (EVar "globalEnv")) (EVar "privateCells")) (EVar "preludePrivate"))) (DoExpr (EApp (EVar "installModGroups") (EVar "mods"))) (DoExpr (ETuple (EVar "mods") (EVar "globalCells")))))
+(DFunDef false "buildRootModuleStateWith" ((PVar "facts") (PVar "extraExterns") (PVar "preludeDecls0") (PVar "modules0")) (EBlock (DoLet false false (PTuple (PVar "preludeDecls") (PVar "modules")) (EApp (EApp (EApp (EVar "mangleCtorCollisions") (EFieldAccess (EVar "facts") "pfSibling")) (EVar "preludeDecls0")) (EVar "modules0"))) (DoLet false false (PVar "externs") (EBinOp "++" (EApp (EVar "externBindings") (ELit LUnit)) (EVar "extraExterns"))) (DoLet false false (PVar "moduleDecls") (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EVar "modules"))) (DoLet false false (PVar "allDecls") (EBinOp "++" (EVar "preludeDecls") (EVar "moduleDecls"))) (DoLet false false (PVar "dispositions") (EFieldAccess (EVar "facts") "pfDispositions")) (DoExpr (EApp (EApp (EVar "setRef") (EVar "ctorToTypeRef")) (EApp (EVar "buildCtorToType") (EVar "allDecls")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "ffiExternNamesRef")) (EApp (EVar "externDeclNamesOfDecls") (EVar "allDecls")))) (DoLet false false (PVar "disp") (EApp (EApp (EVar "installDispatchTables") (EVar "dispositions")) (EVar "allDecls"))) (DoLet false false (PVar "ctors") (EApp (EVar "collectCtors") (EVar "allDecls"))) (DoLet false false (PVar "preludeGroups") (EApp (EVar "groupsOf") (EVar "preludeDecls"))) (DoLet false false (PVar "shadowNames") (EApp (EVar "preludeShadowNames") (EVar "moduleDecls"))) (DoLet false false (PVar "preludeShared") (EApp (EApp (EVar "groupsNotNamedIn") (EVar "shadowNames")) (EVar "preludeGroups"))) (DoLet false false (PVar "preludePrivate") (EApp (EApp (EVar "groupsNamedIn") (EVar "shadowNames")) (EVar "preludeGroups"))) (DoLet false false (PVar "globalNames") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "boolSeeds")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "externs"))) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "ctors"))) (EApp (EVar "implMethodNames") (EVar "allDecls"))) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "preludeShared")))) (DoLet false false (PVar "globalCells") (EApp (EApp (EMethodRef "map") (ELam ((PVar "n")) (ETuple (EVar "n") (EApp (EVar "Ref") (EVar "VUnit"))))) (EVar "globalNames"))) (DoLet false false (PVar "globalFrame") (EApp (EVar "indexedFrame") (EVar "globalCells"))) (DoLet false false (PVar "runtimeFrame") (EApp (EVar "indexedFrame") (EApp (EVar "runtimeCellsOf") (EVar "externs")))) (DoLet false false (PVar "privateCells") (EApp (EApp (EMethodRef "map") (EBinOp ">>" (EVar "fst") (ELam ((PVar "n")) (ETuple (EVar "n") (EApp (EVar "Ref") (EVar "VUnit")))))) (EVar "preludePrivate"))) (DoLet false false (PVar "globalEnv") (EApp (EApp (EVar "EvalEnv") (EVar "facts")) (EBinOp "++" (EApp (EApp (EVar "globalFramesWith") (EVar "privateCells")) (EVar "globalFrame")) (EListLit (EVar "runtimeFrame"))))) (DoLet false false (PVar "mods") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "buildModInfos") (EVar "facts")) (EVar "globalFrame")) (EVar "runtimeFrame")) (EApp (EApp (EApp (EVar "coreImportExports") (EVar "privateCells")) (EVar "globalCells")) (EVar "preludeDecls"))) (EFieldAccess (EVar "facts") "pfSibling")) (EListLit)) (EListLit)) (EVar "modules"))) (DoLet false false (PVar "implEntries") (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "declImplEntries") (EVar "dispositions")) (EVar "globalEnv")) (EVar "disp"))) (EVar "preludeDecls")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "modImplEntries") (EVar "facts")) (EVar "disp"))) (EVar "mods")))) (DoExpr (EApp (EApp (EVar "installFrameConsts") (EVar "globalFrame")) (EVar "boolSeeds"))) (DoExpr (EApp (EApp (EVar "installFrameConsts") (EVar "globalFrame")) (EVar "externs"))) (DoExpr (EApp (EApp (EVar "installFrameConsts") (EVar "globalFrame")) (EVar "ctors"))) (DoExpr (EApp (EApp (EVar "installFrameConsts") (EVar "globalFrame")) (EApp (EVar "coalesceImpls") (EVar "implEntries")))) (DoExpr (EApp (EApp (EApp (EVar "installGroups") (EVar "globalEnv")) (EVar "globalCells")) (EVar "preludeShared"))) (DoExpr (EApp (EApp (EApp (EVar "installGroups") (EVar "globalEnv")) (EVar "privateCells")) (EVar "preludePrivate"))) (DoExpr (EApp (EVar "installModGroups") (EVar "mods"))) (DoExpr (EApp (EApp (EApp (EVar "initProgramValues") (EVar "facts")) (EBinOp "++" (EApp (EApp (EApp (EVar "groupInits") (EVar "globalEnv")) (EVar "globalCells")) (EVar "preludeShared")) (EApp (EApp (EApp (EVar "groupInits") (EVar "globalEnv")) (EVar "privateCells")) (EVar "preludePrivate")))) (EVar "mods"))) (DoExpr (ETuple (EVar "mods") (EVar "globalCells")))))
 (DTypeSig false "rootFullEnv" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "ModInfo") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))))))))
 (DFunDef false "rootFullEnv" ((PVar "facts") (PVar "mods") (PVar "globalCells")) (EApp (EVar "flattenEnv") (EApp (EApp (EApp (EVar "rootFullEvalEnv") (EVar "facts")) (EVar "mods")) (EVar "globalCells"))))
 (DTypeSig false "rootFullEvalEnv" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "ModInfo") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))) (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e")))))))
@@ -8883,8 +8890,6 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "groupsOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr") (TyCon "Loc")))))))
 (DFunDef false "groupsOf" ((PVar "decls")) (EBlock (DoLet false false (PVar "defs") (EApp (EVar "funDefs") (EVar "decls"))) (DoExpr (EApp (EApp (EMethodRef "map") (EApp (EVar "mkGroup") (EVar "defs"))) (EApp (EApp (EVar "funGroupNames") (EVar "defs")) (EVar "omEmpty"))))))
 (DData Public "ModExports" ("v") ((variant "ModExports" (ConPos (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyVar "v")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))) ())
-(DTypeSig true "modExportCells" (TyFun (TyApp (TyCon "ModExports") (TyVar "v")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyVar "v"))))))
-(DFunDef false "modExportCells" ((PCon "ModExports" (PVar "cells") PWild)) (EVar "cells"))
 (DTypeSig true "ctorsByTypeOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "ctorsByTypeOf" ((PVar "decls")) (EApp (EApp (EVar "ctorsByTypeUnder") (EVar "ExportedView")) (EVar "decls")))
 (DTypeSig false "ctorsByTypeUnder" (TyFun (TyCon "ExportView") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
@@ -9083,8 +9088,10 @@ evalOneRootEnvFacts facts extraExterns preludeDecls (rootId, prog) =
 (DTypeSig true "evalModulesOutputRunFacts" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyCon "String"))))))
 (DFunDef false "evalModulesOutputRunFacts" ((PVar "facts") (PVar "preludeDecls") (PVar "modules")) (EBlock (DoExpr (EApp (EVar "resetOutput") (ELit LUnit))) (DoExpr (EApp (EVar "enableRunStdoutFlush") (ELit LUnit))) (DoLet false false (PVar "binds") (EApp (EApp (EApp (EApp (EVar "evalModulesWith") (EVar "facts")) (EApp (EVar "ioExternBindings") (ELit LUnit))) (EVar "preludeDecls")) (EVar "modules"))) (DoLet false false PWild (EApp (EVar "runMainForEffect") (EVar "binds"))) (DoExpr (EApp (EVar "readOutput") (ELit LUnit)))))
 (DTypeSig true "evalOneFacts" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))))))))
-(DFunDef false "evalOneFacts" ((PVar "facts") (PVar "preludeDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EApp (EApp (EApp (EApp (EVar "evalModulesWith") (EVar "facts")) (EListLit)) (EVar "preludeDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog")))))
+(DFunDef false "evalOneFacts" ((PVar "facts") (PVar "preludeDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EApp (EApp (EApp (EApp (EVar "evalModulesWith") (EApp (EApp (EApp (EVar "oneModuleFacts") (EVar "facts")) (EVar "preludeDecls")) (EVar "rootId"))) (EListLit)) (EVar "preludeDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog")))))
 (DTypeSig true "evalOneOutputFacts" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyCon "String")))))
-(DFunDef false "evalOneOutputFacts" ((PVar "facts") (PVar "preludeDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EApp (EApp (EApp (EVar "evalModulesOutputFacts") (EVar "facts")) (EVar "preludeDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog")))))
+(DFunDef false "evalOneOutputFacts" ((PVar "facts") (PVar "preludeDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EApp (EApp (EApp (EVar "evalModulesOutputFacts") (EApp (EApp (EApp (EVar "oneModuleFacts") (EVar "facts")) (EVar "preludeDecls")) (EVar "rootId"))) (EVar "preludeDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog")))))
 (DTypeSig true "evalOneRootEnvFacts" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e"))))))))))
-(DFunDef false "evalOneRootEnvFacts" ((PVar "facts") (PVar "extraExterns") (PVar "preludeDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EApp (EApp (EApp (EApp (EVar "evalModulesRootEnvFacts") (EVar "facts")) (EVar "extraExterns")) (EVar "preludeDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog")))))
+(DFunDef false "evalOneRootEnvFacts" ((PVar "facts") (PVar "extraExterns") (PVar "preludeDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EApp (EApp (EApp (EApp (EVar "evalModulesRootEnvFacts") (EApp (EApp (EApp (EVar "oneModuleFacts") (EVar "facts")) (EVar "preludeDecls")) (EVar "rootId"))) (EVar "extraExterns")) (EVar "preludeDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog")))))
+(DTypeSig true "oneModuleFacts" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyCon "ProgramFacts")))))
+(DFunDef false "oneModuleFacts" ((PVar "facts") (PVar "preludeDecls") (PVar "rootId")) (EMatch (EFieldAccess (EVar "facts") "pfInitOrders") (arm (PCon "Some" (PVar "rows")) () (EBlock (DoLet false false (PVar "keyed") (EIf (EApp (EVar "isEmptyL") (EVar "preludeDecls")) (EListLit (ETuple (ELit (LString "core")) (EListLit)) (ETuple (EVar "rootId") (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EVar "rows")))) (EListLit (ETuple (ELit (LString "core")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "lookupAssoc") (ELit (LString "core"))) (EVar "rows")))) (ETuple (EVar "rootId") (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EBinOp "/=" (EApp (EVar "fst") (EVar "r")) (ELit (LString "core"))))) (EVar "rows"))))))) (DoExpr (ERecordUpdate (EVar "facts") ((fa "pfInitOrders" (EApp (EVar "Some") (EVar "keyed")))))))) (arm (PCon "None") () (EVar "facts"))))

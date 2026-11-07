@@ -1,5 +1,5 @@
 # META
-source_lines=734
+source_lines=847
 stages=DESUGAR,MARK
 # SOURCE
 -- BACKEND-NEUTRAL EMIT SUPPORT — helpers shared verbatim by BOTH the LLVM
@@ -22,8 +22,10 @@ import ir.core_ir.{
   CallMode(..),
   CallSite(..),
   CImplEntry(..),
+  CImplBody(..),
+  MethodEvidence(..),
 }
-import frontend.ast.{Lit(..), Loc(..), Pat}
+import frontend.ast.{Lit(..), Loc(..), Pat, Route(..)}
 import backend.trmc_analysis.{bindNames, bindName}
 import ir.core_walk.{patBinders}
 import support.util.{
@@ -152,6 +154,117 @@ eagerVarsBinds _ [] = []
 eagerVarsBinds b ((CBind _ [CClause [] rhs] _ _) :: rest) =
   eagerVars b rhs ++ eagerVarsBinds b rest
 eagerVarsBinds b (_ :: rest) = eagerVarsBinds b rest
+
+-- ── may-reach mentions ───────────────────────────────────────────────────────
+-- What a body may reach at some point, as `global_plan` orders initialisers by
+-- it: every free name it mentions, lambda bodies included, the top-level symbol
+-- a `RLocal` route calls, and every method it dispatches on (a method reaches
+-- each impl entry of that method).  Unlike `eagerVars` it follows no
+-- saturation: a closure's body counts, because a later initialiser may call the
+-- closure a value holds.  Local binders still shadow, so a local never forges an
+-- edge to a global of the same name.  The match is exhaustive over `CExpr`, so a
+-- new constructor cannot drop an edge silently.
+--
+-- A name and a method are two kinds of mention, not a success and a failure, so
+-- `Result` cannot stand in for it.
+-- lint-disable-next-line rule-clone-type
+public export data Mention = MentionName String | MentionMethod String
+
+-- The mentions of a top-level function's clauses, each with its parameters bound.
+export
+bindMentions : CBind -> List Mention
+bindMentions bind = bindMentionsIn omEmpty bind
+
+bindMentionsIn : OrdMap Unit -> CBind -> List Mention
+bindMentionsIn b (CBind _ clauses _ _) = flatMap (clauseMentions b) clauses
+
+-- The mentions of an impl entry's body, its parameters bound.
+export
+implMentions : CImplEntry -> List Mention
+implMentions (CImplEntry _ _ _ (CImplTagged _ _ _ _ _ pats body)) =
+  mayMentions (omFromNames (paramBound pats) omEmpty) body
+implMentions (CImplEntry _ _ _ (CImplDefault _ _ _ _ _ pats body)) =
+  mayMentions (omFromNames (paramBound pats) omEmpty) body
+
+clauseMentions : OrdMap Unit -> CClause -> List Mention
+clauseMentions b (CClause params body) =
+  mayMentions (omFromNames (paramBound params) b) body
+
+mayMentions : OrdMap Unit -> CExpr -> List Mention
+mayMentions _ (CLit _) = []
+mayMentions b (CVar x _) = nameMention b x
+mayMentions b (CApp f args _) = mayMentions b f ++ flatMap (mayMentions b) args
+mayMentions b (CLam pats body) =
+  mayMentions (omFromNames (paramBound pats) b) body
+mayMentions b (CLet recF pat e1 e2) =
+  let b2 = omFromNames (patBinders pat) b
+  mayMentions (if recF then b2 else b) e1 ++ mayMentions b2 e2
+mayMentions b (CLetGroup binds body) =
+  let b2 = omFromNames (bindNames binds) b
+  flatMap (bindMentionsIn b2) binds ++ mayMentions b2 body
+mayMentions b (CMatch scrut arms) =
+  mayMentions b scrut ++ flatMap (armMentions b) arms
+mayMentions b (CDecision scrut arms _) =
+  mayMentions b scrut ++ flatMap (armMentions b) arms
+mayMentions b (CIf c t f) =
+  mayMentions b c ++ mayMentions b t ++ mayMentions b f
+mayMentions b (CBinPrim _ l r _ _) = mayMentions b l ++ mayMentions b r
+mayMentions b (CUnOp _ x) = mayMentions b x
+mayMentions b (CTuple es) = flatMap (mayMentions b) es
+mayMentions b (CList es) = flatMap (mayMentions b) es
+mayMentions b (CRecord _ fields) = flatMap (fieldMentions b) fields
+mayMentions b (CFieldAccess x _ _ _) = mayMentions b x
+mayMentions b (CRecordUpdate _ base fields) =
+  mayMentions b base ++ flatMap (fieldMentions b) fields
+mayMentions b (CVariantUpdate _ base fields) =
+  mayMentions b base ++ flatMap (fieldMentions b) fields
+mayMentions b (CArray es) = flatMap (mayMentions b) es
+mayMentions b (CRangeList lo hi _) = mayMentions b lo ++ mayMentions b hi
+mayMentions b (CRangeArray lo hi _) = mayMentions b lo ++ mayMentions b hi
+mayMentions b (CBlock stmts) = stmtMentions b stmts
+mayMentions _ (CMethod name (MethodEvidence _ _ route prereqs context)) =
+  MentionMethod name :: flatMap routeMentions (route :: prereqs ++ context)
+mayMentions b (CDict name routes) =
+  nameMention b name ++ flatMap routeMentions routes
+
+nameMention : OrdMap Unit -> String -> List Mention
+nameMention b x = if omHasKey x b then [] else [MentionName x]
+
+-- A route names a top-level function only through `RLocal`, the shadowing
+-- standalone an emitter calls directly; nested routes can carry one.
+routeMentions : Route -> List Mention
+routeMentions RNone = []
+routeMentions (RKey _ reqs sups) = flatMap routeMentions (reqs ++ sups)
+routeMentions (RDict _) = []
+routeMentions (RDictFwd _) = []
+routeMentions (RLocal sym reqs) = MentionName sym :: flatMap routeMentions reqs
+routeMentions (RScalar _) = []
+routeMentions (RProj r _) = routeMentions r
+
+armMentions : OrdMap Unit -> CArm -> List Mention
+armMentions b (CArm pat guards body) =
+  guardMentions (omFromNames (patBinders pat) b) guards body
+armMentions b (CArmAlt pat guards _) =
+  guardMentions (omFromNames (patBinders pat) b) guards (CLit LUnit)
+
+guardMentions : OrdMap Unit -> List CGuard -> CExpr -> List Mention
+guardMentions b [] body = mayMentions b body
+guardMentions b ((CGBool c) :: rest) body =
+  mayMentions b c ++ guardMentions b rest body
+guardMentions b ((CGBind pat e) :: rest) body =
+  mayMentions b e ++ guardMentions (omFromNames (patBinders pat) b) rest body
+
+fieldMentions : OrdMap Unit -> CField -> List Mention
+fieldMentions b (CField _ _ e) = mayMentions b e
+
+stmtMentions : OrdMap Unit -> List CStmt -> List Mention
+stmtMentions _ [] = []
+stmtMentions b ((CSExpr e) :: rest) = mayMentions b e ++ stmtMentions b rest
+stmtMentions b ((CSLet recF pat e) :: rest) =
+  let b2 = omFromNames (patBinders pat) b
+  mayMentions (if recF then b2 else b) e ++ stmtMentions b2 rest
+stmtMentions b ((CSAssign x e) :: rest) =
+  nameMention b x ++ mayMentions b e ++ stmtMentions b rest
 
 -- ── eager-reachability closure (Stage B of #553) ─────────────────────────────
 -- The init-order topo sort needs, for each value global, the OTHER value globals
@@ -737,8 +850,8 @@ bindingOrigin : String -> Loc -> SymbolOrigin
 bindingOrigin name (Loc f 1 0 1 0) = SymbolOrigin name f 0 0
 bindingOrigin name (Loc f line col _ _) = SymbolOrigin name f line col
 # DESUGAR
-(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "CallMode" true) (mem "CallSite" true) (mem "CImplEntry" true))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Loc" true) (mem "Pat" false))))
+(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "CallMode" true) (mem "CallSite" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "MethodEvidence" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Loc" true) (mem "Pat" false) (mem "Route" true))))
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "bindNames" false) (mem "bindName" false))))
 (DUse false (UseGroup ("ir" "core_walk") ((mem "patBinders" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "startsWith" false) (mem "fallthroughName" false) (mem "dedup" false) (mem "filterList" false) (mem "anyList" false) (mem "allList" false))))
@@ -793,6 +906,64 @@ bindingOrigin name (Loc f line col _ _) = SymbolOrigin name f line col
 (DFunDef false "eagerVarsBinds" (PWild (PList)) (EListLit))
 (DFunDef false "eagerVarsBinds" ((PVar "b") (PCons (PCon "CBind" PWild (PList (PCon "CClause" (PList) (PVar "rhs"))) PWild PWild) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "rhs")) (EApp (EApp (EVar "eagerVarsBinds") (EVar "b")) (EVar "rest"))))
 (DFunDef false "eagerVarsBinds" ((PVar "b") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "eagerVarsBinds") (EVar "b")) (EVar "rest")))
+(DData Public "Mention" () ((variant "MentionName" (ConPos (TyCon "String"))) (variant "MentionMethod" (ConPos (TyCon "String")))) ())
+(DTypeSig true "bindMentions" (TyFun (TyCon "CBind") (TyApp (TyCon "List") (TyCon "Mention"))))
+(DFunDef false "bindMentions" ((PVar "bind")) (EApp (EApp (EVar "bindMentionsIn") (EVar "omEmpty")) (EVar "bind")))
+(DTypeSig false "bindMentionsIn" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CBind") (TyApp (TyCon "List") (TyCon "Mention")))))
+(DFunDef false "bindMentionsIn" ((PVar "b") (PCon "CBind" PWild (PVar "clauses") PWild PWild)) (EApp (EApp (EVar "flatMap") (EApp (EVar "clauseMentions") (EVar "b"))) (EVar "clauses")))
+(DTypeSig true "implMentions" (TyFun (TyCon "CImplEntry") (TyApp (TyCon "List") (TyCon "Mention"))))
+(DFunDef false "implMentions" ((PCon "CImplEntry" PWild PWild PWild (PCon "CImplTagged" PWild PWild PWild PWild PWild (PVar "pats") (PVar "body")))) (EApp (EApp (EVar "mayMentions") (EApp (EApp (EVar "omFromNames") (EApp (EVar "paramBound") (EVar "pats"))) (EVar "omEmpty"))) (EVar "body")))
+(DFunDef false "implMentions" ((PCon "CImplEntry" PWild PWild PWild (PCon "CImplDefault" PWild PWild PWild PWild PWild (PVar "pats") (PVar "body")))) (EApp (EApp (EVar "mayMentions") (EApp (EApp (EVar "omFromNames") (EApp (EVar "paramBound") (EVar "pats"))) (EVar "omEmpty"))) (EVar "body")))
+(DTypeSig false "clauseMentions" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CClause") (TyApp (TyCon "List") (TyCon "Mention")))))
+(DFunDef false "clauseMentions" ((PVar "b") (PCon "CClause" (PVar "params") (PVar "body"))) (EApp (EApp (EVar "mayMentions") (EApp (EApp (EVar "omFromNames") (EApp (EVar "paramBound") (EVar "params"))) (EVar "b"))) (EVar "body")))
+(DTypeSig false "mayMentions" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "Mention")))))
+(DFunDef false "mayMentions" (PWild (PCon "CLit" PWild)) (EListLit))
+(DFunDef false "mayMentions" ((PVar "b") (PCon "CVar" (PVar "x") PWild)) (EApp (EApp (EVar "nameMention") (EVar "b")) (EVar "x")))
+(DFunDef false "mayMentions" ((PVar "b") (PCon "CApp" (PVar "f") (PVar "args") PWild)) (EBinOp "++" (EApp (EApp (EVar "mayMentions") (EVar "b")) (EVar "f")) (EApp (EApp (EVar "flatMap") (EApp (EVar "mayMentions") (EVar "b"))) (EVar "args"))))
+(DFunDef false "mayMentions" ((PVar "b") (PCon "CLam" (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "mayMentions") (EApp (EApp (EVar "omFromNames") (EApp (EVar "paramBound") (EVar "pats"))) (EVar "b"))) (EVar "body")))
+(DFunDef false "mayMentions" ((PVar "b") (PCon "CLet" (PVar "recF") (PVar "pat") (PVar "e1") (PVar "e2"))) (EBlock (DoLet false false (PVar "b2") (EApp (EApp (EVar "omFromNames") (EApp (EVar "patBinders") (EVar "pat"))) (EVar "b"))) (DoExpr (EBinOp "++" (EApp (EApp (EVar "mayMentions") (EIf (EVar "recF") (EVar "b2") (EVar "b"))) (EVar "e1")) (EApp (EApp (EVar "mayMentions") (EVar "b2")) (EVar "e2"))))))
+(DFunDef false "mayMentions" ((PVar "b") (PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EBlock (DoLet false false (PVar "b2") (EApp (EApp (EVar "omFromNames") (EApp (EVar "bindNames") (EVar "binds"))) (EVar "b"))) (DoExpr (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EVar "bindMentionsIn") (EVar "b2"))) (EVar "binds")) (EApp (EApp (EVar "mayMentions") (EVar "b2")) (EVar "body"))))))
+(DFunDef false "mayMentions" ((PVar "b") (PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EBinOp "++" (EApp (EApp (EVar "mayMentions") (EVar "b")) (EVar "scrut")) (EApp (EApp (EVar "flatMap") (EApp (EVar "armMentions") (EVar "b"))) (EVar "arms"))))
+(DFunDef false "mayMentions" ((PVar "b") (PCon "CDecision" (PVar "scrut") (PVar "arms") PWild)) (EBinOp "++" (EApp (EApp (EVar "mayMentions") (EVar "b")) (EVar "scrut")) (EApp (EApp (EVar "flatMap") (EApp (EVar "armMentions") (EVar "b"))) (EVar "arms"))))
+(DFunDef false "mayMentions" ((PVar "b") (PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "mayMentions") (EVar "b")) (EVar "c")) (EApp (EApp (EVar "mayMentions") (EVar "b")) (EVar "t"))) (EApp (EApp (EVar "mayMentions") (EVar "b")) (EVar "f"))))
+(DFunDef false "mayMentions" ((PVar "b") (PCon "CBinPrim" PWild (PVar "l") (PVar "r") PWild PWild)) (EBinOp "++" (EApp (EApp (EVar "mayMentions") (EVar "b")) (EVar "l")) (EApp (EApp (EVar "mayMentions") (EVar "b")) (EVar "r"))))
+(DFunDef false "mayMentions" ((PVar "b") (PCon "CUnOp" PWild (PVar "x"))) (EApp (EApp (EVar "mayMentions") (EVar "b")) (EVar "x")))
+(DFunDef false "mayMentions" ((PVar "b") (PCon "CTuple" (PVar "es"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "mayMentions") (EVar "b"))) (EVar "es")))
+(DFunDef false "mayMentions" ((PVar "b") (PCon "CList" (PVar "es"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "mayMentions") (EVar "b"))) (EVar "es")))
+(DFunDef false "mayMentions" ((PVar "b") (PCon "CRecord" PWild (PVar "fields"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "fieldMentions") (EVar "b"))) (EVar "fields")))
+(DFunDef false "mayMentions" ((PVar "b") (PCon "CFieldAccess" (PVar "x") PWild PWild PWild)) (EApp (EApp (EVar "mayMentions") (EVar "b")) (EVar "x")))
+(DFunDef false "mayMentions" ((PVar "b") (PCon "CRecordUpdate" PWild (PVar "base") (PVar "fields"))) (EBinOp "++" (EApp (EApp (EVar "mayMentions") (EVar "b")) (EVar "base")) (EApp (EApp (EVar "flatMap") (EApp (EVar "fieldMentions") (EVar "b"))) (EVar "fields"))))
+(DFunDef false "mayMentions" ((PVar "b") (PCon "CVariantUpdate" PWild (PVar "base") (PVar "fields"))) (EBinOp "++" (EApp (EApp (EVar "mayMentions") (EVar "b")) (EVar "base")) (EApp (EApp (EVar "flatMap") (EApp (EVar "fieldMentions") (EVar "b"))) (EVar "fields"))))
+(DFunDef false "mayMentions" ((PVar "b") (PCon "CArray" (PVar "es"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "mayMentions") (EVar "b"))) (EVar "es")))
+(DFunDef false "mayMentions" ((PVar "b") (PCon "CRangeList" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EApp (EVar "mayMentions") (EVar "b")) (EVar "lo")) (EApp (EApp (EVar "mayMentions") (EVar "b")) (EVar "hi"))))
+(DFunDef false "mayMentions" ((PVar "b") (PCon "CRangeArray" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EApp (EVar "mayMentions") (EVar "b")) (EVar "lo")) (EApp (EApp (EVar "mayMentions") (EVar "b")) (EVar "hi"))))
+(DFunDef false "mayMentions" ((PVar "b") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EVar "stmtMentions") (EVar "b")) (EVar "stmts")))
+(DFunDef false "mayMentions" (PWild (PCon "CMethod" (PVar "name") (PCon "MethodEvidence" PWild PWild (PVar "route") (PVar "prereqs") (PVar "context")))) (EBinOp "::" (EApp (EVar "MentionMethod") (EVar "name")) (EApp (EApp (EVar "flatMap") (EVar "routeMentions")) (EBinOp "::" (EVar "route") (EBinOp "++" (EVar "prereqs") (EVar "context"))))))
+(DFunDef false "mayMentions" ((PVar "b") (PCon "CDict" (PVar "name") (PVar "routes"))) (EBinOp "++" (EApp (EApp (EVar "nameMention") (EVar "b")) (EVar "name")) (EApp (EApp (EVar "flatMap") (EVar "routeMentions")) (EVar "routes"))))
+(DTypeSig false "nameMention" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Mention")))))
+(DFunDef false "nameMention" ((PVar "b") (PVar "x")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "x")) (EVar "b")) (EListLit) (EListLit (EApp (EVar "MentionName") (EVar "x")))))
+(DTypeSig false "routeMentions" (TyFun (TyCon "Route") (TyApp (TyCon "List") (TyCon "Mention"))))
+(DFunDef false "routeMentions" ((PCon "RNone")) (EListLit))
+(DFunDef false "routeMentions" ((PCon "RKey" PWild (PVar "reqs") (PVar "sups"))) (EApp (EApp (EVar "flatMap") (EVar "routeMentions")) (EBinOp "++" (EVar "reqs") (EVar "sups"))))
+(DFunDef false "routeMentions" ((PCon "RDict" PWild)) (EListLit))
+(DFunDef false "routeMentions" ((PCon "RDictFwd" PWild)) (EListLit))
+(DFunDef false "routeMentions" ((PCon "RLocal" (PVar "sym") (PVar "reqs"))) (EBinOp "::" (EApp (EVar "MentionName") (EVar "sym")) (EApp (EApp (EVar "flatMap") (EVar "routeMentions")) (EVar "reqs"))))
+(DFunDef false "routeMentions" ((PCon "RScalar" PWild)) (EListLit))
+(DFunDef false "routeMentions" ((PCon "RProj" (PVar "r") PWild)) (EApp (EVar "routeMentions") (EVar "r")))
+(DTypeSig false "armMentions" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CArm") (TyApp (TyCon "List") (TyCon "Mention")))))
+(DFunDef false "armMentions" ((PVar "b") (PCon "CArm" (PVar "pat") (PVar "guards") (PVar "body"))) (EApp (EApp (EApp (EVar "guardMentions") (EApp (EApp (EVar "omFromNames") (EApp (EVar "patBinders") (EVar "pat"))) (EVar "b"))) (EVar "guards")) (EVar "body")))
+(DFunDef false "armMentions" ((PVar "b") (PCon "CArmAlt" (PVar "pat") (PVar "guards") PWild)) (EApp (EApp (EApp (EVar "guardMentions") (EApp (EApp (EVar "omFromNames") (EApp (EVar "patBinders") (EVar "pat"))) (EVar "b"))) (EVar "guards")) (EApp (EVar "CLit") (EVar "LUnit"))))
+(DTypeSig false "guardMentions" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CGuard")) (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "Mention"))))))
+(DFunDef false "guardMentions" ((PVar "b") (PList) (PVar "body")) (EApp (EApp (EVar "mayMentions") (EVar "b")) (EVar "body")))
+(DFunDef false "guardMentions" ((PVar "b") (PCons (PCon "CGBool" (PVar "c")) (PVar "rest")) (PVar "body")) (EBinOp "++" (EApp (EApp (EVar "mayMentions") (EVar "b")) (EVar "c")) (EApp (EApp (EApp (EVar "guardMentions") (EVar "b")) (EVar "rest")) (EVar "body"))))
+(DFunDef false "guardMentions" ((PVar "b") (PCons (PCon "CGBind" (PVar "pat") (PVar "e")) (PVar "rest")) (PVar "body")) (EBinOp "++" (EApp (EApp (EVar "mayMentions") (EVar "b")) (EVar "e")) (EApp (EApp (EApp (EVar "guardMentions") (EApp (EApp (EVar "omFromNames") (EApp (EVar "patBinders") (EVar "pat"))) (EVar "b"))) (EVar "rest")) (EVar "body"))))
+(DTypeSig false "fieldMentions" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CField") (TyApp (TyCon "List") (TyCon "Mention")))))
+(DFunDef false "fieldMentions" ((PVar "b") (PCon "CField" PWild PWild (PVar "e"))) (EApp (EApp (EVar "mayMentions") (EVar "b")) (EVar "e")))
+(DTypeSig false "stmtMentions" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyApp (TyCon "List") (TyCon "Mention")))))
+(DFunDef false "stmtMentions" (PWild (PList)) (EListLit))
+(DFunDef false "stmtMentions" ((PVar "b") (PCons (PCon "CSExpr" (PVar "e")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "mayMentions") (EVar "b")) (EVar "e")) (EApp (EApp (EVar "stmtMentions") (EVar "b")) (EVar "rest"))))
+(DFunDef false "stmtMentions" ((PVar "b") (PCons (PCon "CSLet" (PVar "recF") (PVar "pat") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PVar "b2") (EApp (EApp (EVar "omFromNames") (EApp (EVar "patBinders") (EVar "pat"))) (EVar "b"))) (DoExpr (EBinOp "++" (EApp (EApp (EVar "mayMentions") (EIf (EVar "recF") (EVar "b2") (EVar "b"))) (EVar "e")) (EApp (EApp (EVar "stmtMentions") (EVar "b2")) (EVar "rest"))))))
+(DFunDef false "stmtMentions" ((PVar "b") (PCons (PCon "CSAssign" (PVar "x") (PVar "e")) (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "nameMention") (EVar "b")) (EVar "x")) (EApp (EApp (EVar "mayMentions") (EVar "b")) (EVar "e"))) (EApp (EApp (EVar "stmtMentions") (EVar "b")) (EVar "rest"))))
 (DTypeSig false "bindEagerCallees" (TyFun (TyCon "CBind") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "bindEagerCallees" ((PCon "CBind" PWild (PVar "clauses") PWild PWild)) (EApp (EVar "dedup") (EApp (EVar "clauseEagerVars") (EVar "clauses"))))
 (DTypeSig false "clauseEagerVars" (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyApp (TyCon "List") (TyCon "String"))))
@@ -984,8 +1155,8 @@ bindingOrigin name (Loc f line col _ _) = SymbolOrigin name f line col
 (DFunDef false "bindingOrigin" ((PVar "name") (PCon "Loc" (PVar "f") (PLit (LInt 1)) (PLit (LInt 0)) (PLit (LInt 1)) (PLit (LInt 0)))) (EApp (EApp (EApp (EApp (EVar "SymbolOrigin") (EVar "name")) (EVar "f")) (ELit (LInt 0))) (ELit (LInt 0))))
 (DFunDef false "bindingOrigin" ((PVar "name") (PCon "Loc" (PVar "f") (PVar "line") (PVar "col") PWild PWild)) (EApp (EApp (EApp (EApp (EVar "SymbolOrigin") (EVar "name")) (EVar "f")) (EVar "line")) (EVar "col")))
 # MARK
-(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "CallMode" true) (mem "CallSite" true) (mem "CImplEntry" true))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Loc" true) (mem "Pat" false))))
+(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "CallMode" true) (mem "CallSite" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "MethodEvidence" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Loc" true) (mem "Pat" false) (mem "Route" true))))
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "bindNames" false) (mem "bindName" false))))
 (DUse false (UseGroup ("ir" "core_walk") ((mem "patBinders" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "startsWith" false) (mem "fallthroughName" false) (mem "dedup" false) (mem "filterList" false) (mem "anyList" false) (mem "allList" false))))
@@ -1040,6 +1211,64 @@ bindingOrigin name (Loc f line col _ _) = SymbolOrigin name f line col
 (DFunDef false "eagerVarsBinds" (PWild (PList)) (EListLit))
 (DFunDef false "eagerVarsBinds" ((PVar "b") (PCons (PCon "CBind" PWild (PList (PCon "CClause" (PList) (PVar "rhs"))) PWild PWild) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "rhs")) (EApp (EApp (EVar "eagerVarsBinds") (EVar "b")) (EVar "rest"))))
 (DFunDef false "eagerVarsBinds" ((PVar "b") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "eagerVarsBinds") (EVar "b")) (EVar "rest")))
+(DData Public "Mention" () ((variant "MentionName" (ConPos (TyCon "String"))) (variant "MentionMethod" (ConPos (TyCon "String")))) ())
+(DTypeSig true "bindMentions" (TyFun (TyCon "CBind") (TyApp (TyCon "List") (TyCon "Mention"))))
+(DFunDef false "bindMentions" ((PVar "bind")) (EApp (EApp (EVar "bindMentionsIn") (EVar "omEmpty")) (EVar "bind")))
+(DTypeSig false "bindMentionsIn" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CBind") (TyApp (TyCon "List") (TyCon "Mention")))))
+(DFunDef false "bindMentionsIn" ((PVar "b") (PCon "CBind" PWild (PVar "clauses") PWild PWild)) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "clauseMentions") (EVar "b"))) (EVar "clauses")))
+(DTypeSig true "implMentions" (TyFun (TyCon "CImplEntry") (TyApp (TyCon "List") (TyCon "Mention"))))
+(DFunDef false "implMentions" ((PCon "CImplEntry" PWild PWild PWild (PCon "CImplTagged" PWild PWild PWild PWild PWild (PVar "pats") (PVar "body")))) (EApp (EApp (EVar "mayMentions") (EApp (EApp (EVar "omFromNames") (EApp (EVar "paramBound") (EVar "pats"))) (EVar "omEmpty"))) (EVar "body")))
+(DFunDef false "implMentions" ((PCon "CImplEntry" PWild PWild PWild (PCon "CImplDefault" PWild PWild PWild PWild PWild (PVar "pats") (PVar "body")))) (EApp (EApp (EVar "mayMentions") (EApp (EApp (EVar "omFromNames") (EApp (EVar "paramBound") (EVar "pats"))) (EVar "omEmpty"))) (EVar "body")))
+(DTypeSig false "clauseMentions" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CClause") (TyApp (TyCon "List") (TyCon "Mention")))))
+(DFunDef false "clauseMentions" ((PVar "b") (PCon "CClause" (PVar "params") (PVar "body"))) (EApp (EApp (EVar "mayMentions") (EApp (EApp (EVar "omFromNames") (EApp (EVar "paramBound") (EVar "params"))) (EVar "b"))) (EVar "body")))
+(DTypeSig false "mayMentions" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "Mention")))))
+(DFunDef false "mayMentions" (PWild (PCon "CLit" PWild)) (EListLit))
+(DFunDef false "mayMentions" ((PVar "b") (PCon "CVar" (PVar "x") PWild)) (EApp (EApp (EVar "nameMention") (EVar "b")) (EVar "x")))
+(DFunDef false "mayMentions" ((PVar "b") (PCon "CApp" (PVar "f") (PVar "args") PWild)) (EBinOp "++" (EApp (EApp (EVar "mayMentions") (EVar "b")) (EVar "f")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "mayMentions") (EVar "b"))) (EVar "args"))))
+(DFunDef false "mayMentions" ((PVar "b") (PCon "CLam" (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "mayMentions") (EApp (EApp (EVar "omFromNames") (EApp (EVar "paramBound") (EVar "pats"))) (EVar "b"))) (EVar "body")))
+(DFunDef false "mayMentions" ((PVar "b") (PCon "CLet" (PVar "recF") (PVar "pat") (PVar "e1") (PVar "e2"))) (EBlock (DoLet false false (PVar "b2") (EApp (EApp (EVar "omFromNames") (EApp (EVar "patBinders") (EVar "pat"))) (EVar "b"))) (DoExpr (EBinOp "++" (EApp (EApp (EVar "mayMentions") (EIf (EVar "recF") (EVar "b2") (EVar "b"))) (EVar "e1")) (EApp (EApp (EVar "mayMentions") (EVar "b2")) (EVar "e2"))))))
+(DFunDef false "mayMentions" ((PVar "b") (PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EBlock (DoLet false false (PVar "b2") (EApp (EApp (EVar "omFromNames") (EApp (EVar "bindNames") (EVar "binds"))) (EVar "b"))) (DoExpr (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EVar "bindMentionsIn") (EVar "b2"))) (EVar "binds")) (EApp (EApp (EVar "mayMentions") (EVar "b2")) (EVar "body"))))))
+(DFunDef false "mayMentions" ((PVar "b") (PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EBinOp "++" (EApp (EApp (EVar "mayMentions") (EVar "b")) (EVar "scrut")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "armMentions") (EVar "b"))) (EVar "arms"))))
+(DFunDef false "mayMentions" ((PVar "b") (PCon "CDecision" (PVar "scrut") (PVar "arms") PWild)) (EBinOp "++" (EApp (EApp (EVar "mayMentions") (EVar "b")) (EVar "scrut")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "armMentions") (EVar "b"))) (EVar "arms"))))
+(DFunDef false "mayMentions" ((PVar "b") (PCon "CIf" (PVar "c") (PVar "t") (PVar "f"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "mayMentions") (EVar "b")) (EVar "c")) (EApp (EApp (EVar "mayMentions") (EVar "b")) (EVar "t"))) (EApp (EApp (EVar "mayMentions") (EVar "b")) (EVar "f"))))
+(DFunDef false "mayMentions" ((PVar "b") (PCon "CBinPrim" PWild (PVar "l") (PVar "r") PWild PWild)) (EBinOp "++" (EApp (EApp (EVar "mayMentions") (EVar "b")) (EVar "l")) (EApp (EApp (EVar "mayMentions") (EVar "b")) (EVar "r"))))
+(DFunDef false "mayMentions" ((PVar "b") (PCon "CUnOp" PWild (PVar "x"))) (EApp (EApp (EVar "mayMentions") (EVar "b")) (EVar "x")))
+(DFunDef false "mayMentions" ((PVar "b") (PCon "CTuple" (PVar "es"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "mayMentions") (EVar "b"))) (EVar "es")))
+(DFunDef false "mayMentions" ((PVar "b") (PCon "CList" (PVar "es"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "mayMentions") (EVar "b"))) (EVar "es")))
+(DFunDef false "mayMentions" ((PVar "b") (PCon "CRecord" PWild (PVar "fields"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "fieldMentions") (EVar "b"))) (EVar "fields")))
+(DFunDef false "mayMentions" ((PVar "b") (PCon "CFieldAccess" (PVar "x") PWild PWild PWild)) (EApp (EApp (EVar "mayMentions") (EVar "b")) (EVar "x")))
+(DFunDef false "mayMentions" ((PVar "b") (PCon "CRecordUpdate" PWild (PVar "base") (PVar "fields"))) (EBinOp "++" (EApp (EApp (EVar "mayMentions") (EVar "b")) (EVar "base")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "fieldMentions") (EVar "b"))) (EVar "fields"))))
+(DFunDef false "mayMentions" ((PVar "b") (PCon "CVariantUpdate" PWild (PVar "base") (PVar "fields"))) (EBinOp "++" (EApp (EApp (EVar "mayMentions") (EVar "b")) (EVar "base")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "fieldMentions") (EVar "b"))) (EVar "fields"))))
+(DFunDef false "mayMentions" ((PVar "b") (PCon "CArray" (PVar "es"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "mayMentions") (EVar "b"))) (EVar "es")))
+(DFunDef false "mayMentions" ((PVar "b") (PCon "CRangeList" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EApp (EVar "mayMentions") (EVar "b")) (EVar "lo")) (EApp (EApp (EVar "mayMentions") (EVar "b")) (EVar "hi"))))
+(DFunDef false "mayMentions" ((PVar "b") (PCon "CRangeArray" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EApp (EVar "mayMentions") (EVar "b")) (EVar "lo")) (EApp (EApp (EVar "mayMentions") (EVar "b")) (EVar "hi"))))
+(DFunDef false "mayMentions" ((PVar "b") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EVar "stmtMentions") (EVar "b")) (EVar "stmts")))
+(DFunDef false "mayMentions" (PWild (PCon "CMethod" (PVar "name") (PCon "MethodEvidence" PWild PWild (PVar "route") (PVar "prereqs") (PVar "context")))) (EBinOp "::" (EApp (EVar "MentionMethod") (EVar "name")) (EApp (EApp (EDictApp "flatMap") (EVar "routeMentions")) (EBinOp "::" (EVar "route") (EBinOp "++" (EVar "prereqs") (EVar "context"))))))
+(DFunDef false "mayMentions" ((PVar "b") (PCon "CDict" (PVar "name") (PVar "routes"))) (EBinOp "++" (EApp (EApp (EVar "nameMention") (EVar "b")) (EVar "name")) (EApp (EApp (EDictApp "flatMap") (EVar "routeMentions")) (EVar "routes"))))
+(DTypeSig false "nameMention" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Mention")))))
+(DFunDef false "nameMention" ((PVar "b") (PVar "x")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "x")) (EVar "b")) (EListLit) (EListLit (EApp (EVar "MentionName") (EVar "x")))))
+(DTypeSig false "routeMentions" (TyFun (TyCon "Route") (TyApp (TyCon "List") (TyCon "Mention"))))
+(DFunDef false "routeMentions" ((PCon "RNone")) (EListLit))
+(DFunDef false "routeMentions" ((PCon "RKey" PWild (PVar "reqs") (PVar "sups"))) (EApp (EApp (EDictApp "flatMap") (EVar "routeMentions")) (EBinOp "++" (EVar "reqs") (EVar "sups"))))
+(DFunDef false "routeMentions" ((PCon "RDict" PWild)) (EListLit))
+(DFunDef false "routeMentions" ((PCon "RDictFwd" PWild)) (EListLit))
+(DFunDef false "routeMentions" ((PCon "RLocal" (PVar "sym") (PVar "reqs"))) (EBinOp "::" (EApp (EVar "MentionName") (EVar "sym")) (EApp (EApp (EDictApp "flatMap") (EVar "routeMentions")) (EVar "reqs"))))
+(DFunDef false "routeMentions" ((PCon "RScalar" PWild)) (EListLit))
+(DFunDef false "routeMentions" ((PCon "RProj" (PVar "r") PWild)) (EApp (EVar "routeMentions") (EVar "r")))
+(DTypeSig false "armMentions" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CArm") (TyApp (TyCon "List") (TyCon "Mention")))))
+(DFunDef false "armMentions" ((PVar "b") (PCon "CArm" (PVar "pat") (PVar "guards") (PVar "body"))) (EApp (EApp (EApp (EVar "guardMentions") (EApp (EApp (EVar "omFromNames") (EApp (EVar "patBinders") (EVar "pat"))) (EVar "b"))) (EVar "guards")) (EVar "body")))
+(DFunDef false "armMentions" ((PVar "b") (PCon "CArmAlt" (PVar "pat") (PVar "guards") PWild)) (EApp (EApp (EApp (EVar "guardMentions") (EApp (EApp (EVar "omFromNames") (EApp (EVar "patBinders") (EVar "pat"))) (EVar "b"))) (EVar "guards")) (EApp (EVar "CLit") (EVar "LUnit"))))
+(DTypeSig false "guardMentions" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CGuard")) (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "Mention"))))))
+(DFunDef false "guardMentions" ((PVar "b") (PList) (PVar "body")) (EApp (EApp (EVar "mayMentions") (EVar "b")) (EVar "body")))
+(DFunDef false "guardMentions" ((PVar "b") (PCons (PCon "CGBool" (PVar "c")) (PVar "rest")) (PVar "body")) (EBinOp "++" (EApp (EApp (EVar "mayMentions") (EVar "b")) (EVar "c")) (EApp (EApp (EApp (EVar "guardMentions") (EVar "b")) (EVar "rest")) (EVar "body"))))
+(DFunDef false "guardMentions" ((PVar "b") (PCons (PCon "CGBind" (PVar "pat") (PVar "e")) (PVar "rest")) (PVar "body")) (EBinOp "++" (EApp (EApp (EVar "mayMentions") (EVar "b")) (EVar "e")) (EApp (EApp (EApp (EVar "guardMentions") (EApp (EApp (EVar "omFromNames") (EApp (EVar "patBinders") (EVar "pat"))) (EVar "b"))) (EVar "rest")) (EVar "body"))))
+(DTypeSig false "fieldMentions" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CField") (TyApp (TyCon "List") (TyCon "Mention")))))
+(DFunDef false "fieldMentions" ((PVar "b") (PCon "CField" PWild PWild (PVar "e"))) (EApp (EApp (EVar "mayMentions") (EVar "b")) (EVar "e")))
+(DTypeSig false "stmtMentions" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyApp (TyCon "List") (TyCon "Mention")))))
+(DFunDef false "stmtMentions" (PWild (PList)) (EListLit))
+(DFunDef false "stmtMentions" ((PVar "b") (PCons (PCon "CSExpr" (PVar "e")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "mayMentions") (EVar "b")) (EVar "e")) (EApp (EApp (EVar "stmtMentions") (EVar "b")) (EVar "rest"))))
+(DFunDef false "stmtMentions" ((PVar "b") (PCons (PCon "CSLet" (PVar "recF") (PVar "pat") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PVar "b2") (EApp (EApp (EVar "omFromNames") (EApp (EVar "patBinders") (EVar "pat"))) (EVar "b"))) (DoExpr (EBinOp "++" (EApp (EApp (EVar "mayMentions") (EIf (EVar "recF") (EVar "b2") (EVar "b"))) (EVar "e")) (EApp (EApp (EVar "stmtMentions") (EVar "b2")) (EVar "rest"))))))
+(DFunDef false "stmtMentions" ((PVar "b") (PCons (PCon "CSAssign" (PVar "x") (PVar "e")) (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "nameMention") (EVar "b")) (EVar "x")) (EApp (EApp (EVar "mayMentions") (EVar "b")) (EVar "e"))) (EApp (EApp (EVar "stmtMentions") (EVar "b")) (EVar "rest"))))
 (DTypeSig false "bindEagerCallees" (TyFun (TyCon "CBind") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "bindEagerCallees" ((PCon "CBind" PWild (PVar "clauses") PWild PWild)) (EApp (EVar "dedup") (EApp (EVar "clauseEagerVars") (EVar "clauses"))))
 (DTypeSig false "clauseEagerVars" (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyApp (TyCon "List") (TyCon "String"))))

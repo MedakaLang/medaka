@@ -1028,7 +1028,9 @@ public export data DriveArgs = DriveArgs {
 -- consumer that mints effect variables over `doInvocationView`'s schemes
 -- (`lastInvocationOps`) starts its own counter there, so its ids cannot collide with
 -- an id the drive's schemes hold.  `doServedModules` counts the modules the
--- drive served from recorded interfaces instead of checking.
+-- drive served from recorded interfaces instead of checking.  `doInitOrders` is
+-- `CrossRun.initOrdersRef` in drive order, the prelude's row first; a module a
+-- diagnostics drive served has no row, and an absent row is not an empty one.
 public export data DriveOutputs = DriveOutputs {
   doManifestRequests : List ManifestRequest,
   doManifests : List CapabilityManifest,
@@ -1044,6 +1046,7 @@ public export data DriveOutputs = DriveOutputs {
   doOrdIndex : OrdMap Int,
   doEffvarNext : Int,
   doServedModules : Int,
+  doInitOrders : List (String, List String),
 }
 
 -- The outputs of a program no drive checked.
@@ -1064,6 +1067,7 @@ emptyDriveOutputs _ = DriveOutputs {
   doOrdIndex = omEmpty,
   doEffvarNext = 0,
   doServedModules = 0,
+  doInitOrders = [],
 }
 
 export
@@ -1506,6 +1510,10 @@ public export data CrossRun = CrossRun {
   crossModuleMethodPredicateSlotsQualRef : Ref (List ((String, String), List MethodPredicateSlot)),
   coreSchemeObligationsRef : Ref (OrdMap (List VecObl)),  -- #673: core's OWN schemeObligationsRef, snapshotted after the core pass (see declaredCrossModuleObls)
   crossModuleSchemeOblsQualRef : Ref (List ((String, String), List VecObl)),  -- #1114/#845: every USER module's schemeObligationsRef, (mid, name)-attributed (see attributeModuleSchemeObls)
+  -- Each module's initialisation order (`tc_init.initOrder`), newest row first: the
+  -- prelude's under `core`, from the core pass or the prelude interface, then each
+  -- module's as its check ends or as a tree record replays it.
+  initOrdersRef : Ref (List (String, List String)),
 }
 
 -- self/mutually-recursive constrained-fn call sites.  At such a site the callee's
@@ -3318,6 +3326,18 @@ public export data ElabFacts = ElabFacts {
   efManifests : List CapabilityManifest,
   efBinders : BinderTypeTable,
   efEntryOutcome : EntryOutcome,
+  efInitOrders : List (String, List String),
+}
+
+-- The facts of a drive whose outputs are [outputs] and whose binder rows are
+-- [binders].
+export
+elabFactsOf : DriveOutputs -> BinderTypeTable -> ElabFacts
+elabFactsOf outputs binders = ElabFacts {
+  efManifests = outputs.doManifests,
+  efBinders = binders,
+  efEntryOutcome = outputs.doEntryOutcome,
+  efInitOrders = outputs.doInitOrders,
 }
 
 -- `ElabResult` is what a multi-module elaboration returns: the core decls, the

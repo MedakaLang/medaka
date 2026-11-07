@@ -81,7 +81,7 @@ import compiler_cli_test_support.{
 }
 import fs.{fixtureDirs, fixtureFiles, mkdirAll}
 import io.{runVerb}
-import list.{dropWhile, reverse, somes, sort}
+import list.{dropWhile, findMap, reverse, somes, sort}
 import path.{basename, dirname, stem}
 import probe_runner.{stderrTail}
 import string.{contains, endsWith, join, lines, split, startsWith, unlines}
@@ -263,7 +263,7 @@ rows = [
     prelude = [coreMod],
     shape = DirFixture "main_*.mdk" "main.eval.golden",
     batched = False,
-    fixtures = 16,
+    fixtures = 17,
   },
   Row {
     gate = "diff_compiler_core_ir_modules",
@@ -272,7 +272,7 @@ rows = [
     prelude = [coreMod],
     shape = DirFixture "main_*.mdk" "main.eval.golden",
     batched = False,
-    fixtures = 16,
+    fixtures = 17,
   },
   Row {
     gate = "diff_compiler_eval_typed_modules",
@@ -281,7 +281,7 @@ rows = [
     prelude = [runtimeMod, coreMod],
     shape = DirFixture "main.mdk" "main.eval.golden",
     batched = False,
-    fixtures = 30,
+    fixtures = 31,
   },
 ]
 
@@ -393,17 +393,37 @@ evalSection raw =
 
 -- # Grading a spawn
 
-{- | The (oracle, unit) pairs known to exit nonzero or panic today, each with
-   the reason. A pair listed here is REQUIRED to misbehave: one that runs
-   clean fails the gate and is removed in the same commit that fixed it, so
-   this roster drains itself instead of outliving its subject.
+{- | The (oracle, unit, needle) rows known to exit nonzero or panic today. A
+   row listed here is REQUIRED to misbehave, with `needle` on stderr: one that
+   runs clean fails the gate and is removed in the same commit that fixed it,
+   so this roster drains itself instead of outliving its subject.
 
    The unit is a fixture path for a per-fixture row and the corpus path for
    a batch row, whose one process carries the whole corpus's behavior.
 
-   The roster is empty: every row currently runs clean. -}
-expectedPanics : List (String, String)
-expectedPanics = []
+   The orphan-impl row: `check` admits the program, and the read of the
+   uninitialised `greeting` is an internal-error panic until the check-time rule
+   rejects the program. The two forward-read rows: an untyped run initialises in
+   source order, so a value that reads a later one panics on both untyped
+   drivers. -}
+expectedPanics : List (String, String, String)
+expectedPanics = [
+  (
+    "test/bin/eval_typed_modules_main",
+    "test/eval_typed_modules_fixtures/init_orphan_impl_read",
+    "`greeting` was read before it was initialised",
+  ),
+  (
+    evalModulesOracle,
+    "test/eval_modules_fixtures/init_forward_read",
+    "`y` was read before it was initialised",
+  ),
+  (
+    coreIrModulesOracle,
+    "test/eval_modules_fixtures/init_forward_read",
+    "`y` was read before it was initialised",
+  ),
+]
 
 {- | Fixtures that ship no `=== EVAL ===` golden, so this gate spawns them
    but has no value to hold them to. Each is still graded on its exit code
@@ -435,13 +455,24 @@ noEvalGolden = [
 processFailurePinned : String -> String -> Int -> String -> Option String
 processFailurePinned oracle unit code err =
   let clean = code == 0 && not (contains "E-PANIC" err)
-  let pinned = elem (oracle, unit) expectedPanics
-  if clean && pinned then
-    Some "\{unit}: runs clean now — drop it from `expectedPanics` in this file"
-  else if clean || pinned then
-    None
-  else
-    Some "\{unit}: \{oracle} exited \{intToString code}\{stderrTail err}"
+  match findMap (pinnedNeedle oracle unit) expectedPanics
+    Some needle =>
+      if clean then
+        Some
+          "\{unit}: runs clean now — drop it from `expectedPanics` in this file"
+      else if contains needle err then
+        None
+      else
+        Some "\{unit}: the panic does not say \{needle}\{stderrTail err}"
+    None =>
+      if clean then
+        None
+      else
+        Some "\{unit}: \{oracle} exited \{intToString code}\{stderrTail err}"
+
+pinnedNeedle : String -> String -> (String, String, String) -> Option String
+pinnedNeedle oracle unit (o, u, needle) =
+  if o == oracle && u == unit then Some needle else None
 
 -- # Grading a row
 

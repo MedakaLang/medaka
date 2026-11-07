@@ -32,10 +32,14 @@ import types.tc_init.{
   InitNode(..),
   InitNodeKind(..),
   InitPosition(..),
+  MayReach(..),
   checkInitRules,
   initGraphOf,
   initInputsAt,
   initOrder,
+  initRulesAndOrder,
+  mayReach,
+  orderOver,
 }
 import types.tc_mark.{markSetsOf}
 import types.tc_module.{checkModuleFullDiags}
@@ -749,6 +753,58 @@ v = 1
     expectEqual (Some ValueNode) (kindOf g "v"),
     expectTrue (omHasKey "pick" g.igraphNotInitialised),
     expectEqual ["v"] (initOrder g),
+  ]
+
+-- The order over every node of [g], the components computed over the whole graph.
+wholeOrder : InitGraph -> List String
+wholeOrder g = orderOver (mayReach g).mrComp g.igraphNodes g
+
+-- `cyclic` holds a value cycle, so the rules compute the components and the order shares
+-- them; `plain` holds none, so both compute them over the values' reach.  In each, a
+-- function no value reaches mentions a value.
+test "the order over the values' reach is the order over the whole graph" =
+  let cyclic =
+    """
+    a = b + 1
+
+    unreached n = c
+
+    c = 2
+
+    b = helper 3
+
+    helper n = n
+
+    d = e
+
+    e = d
+
+    main = a
+    """
+  let plain = """
+    x = f 1
+
+    f n = y
+
+    y = 2
+
+    z = 3
+
+    g n = z
+    """
+  let cyclicG = graphOne cyclic
+  let plainG = graphOne plain
+  expectAll [
+    expectEqual ["c", "b", "a", "d", "e"] (wholeOrder cyclicG),
+    expectEqual (wholeOrder cyclicG) (initOrder cyclicG),
+    expectEqual
+      (wholeOrder cyclicG)
+      (snd (initRulesAndOrder (inputsOf [("m", cyclic)] []) cyclicG)),
+    expectEqual ["y", "x", "z"] (wholeOrder plainG),
+    expectEqual (wholeOrder plainG) (initOrder plainG),
+    expectEqual
+      (wholeOrder plainG)
+      (snd (initRulesAndOrder (inputsOf [("m", plain)] []) plainG)),
   ]
 
 -- ── purity (I2) ──────────────────────────────────────────────────────────────

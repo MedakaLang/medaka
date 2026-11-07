@@ -1,5 +1,5 @@
 # META
-source_lines=3442
+source_lines=3481
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_module: the per-module check in one order: declarations, top-level groups, test and prop
@@ -89,7 +89,7 @@ import types.tc_occurrence.{
   argDispatchIndicesById, binopDispatchMethod, unopMethod
 }
 import types.tc_init.{
-  InitViolation(..), checkInitRules, initGraphOf, initInputsAt
+  InitViolation(..), initGraphOf, initInputsAt, initOrder, initRulesAndOrder
 }
 import types.tc_solve.{
   determineByUniqueInstance, dropGoalsSince, goalsMark, improveByUniqueImpl,
@@ -2151,14 +2151,18 @@ checkModuleFull : ModuleCtx ->
   List Decl ->
   (ModuleBindings, List Decl, ModuleCtx)
 checkModuleFull prev seedVars accData prog =
-  checkModuleFullImpl
-    prev.mcGraph
-    (checkRunResidue prev)
+  let seed = plainModuleSeed seedVars
+  withPreludeOrder
     ""
-    (plainModuleSeed seedVars)
-    accData
-    prog
-    prog
+    seed
+    (checkModuleFullImpl
+      prev.mcGraph
+      (checkRunResidue prev)
+      ""
+      seed
+      accData
+      prog
+      prog)
 
 -- E5: like checkModuleFull but takes [implDecls] (core + every EARLIER module — NOT this
 -- module: foldModules only grows the accumulator for LATER modules, so a module is never in
@@ -3205,13 +3209,17 @@ checkModuleFullDiags gctx mid seedVars accData accAll prog =
       ordHere
       binopDispatchMethod
       unopMethod
+  let (violations, order) =
+    initRulesAndOrder initInputs (initGraphOf initInputs)
   each
     (v => match v
       ImpureValue name row loc =>
         pushTypeErrorAt mctx TToplevelEffect loc (topLevelEffectMsg name row)
       CyclicValue name path loc =>
         pushTypeErrorAt mctx TCyclicValue loc (cyclicValueMsg name path))
-    (checkInitRules initInputs (initGraphOf initInputs))
+    violations
+  gctx.crossRun.initOrdersRef :=
+    (mid, order) :: gctx.crossRun.initOrdersRef.value
   (
     schemes,
     marked,
@@ -3395,14 +3403,45 @@ elabModuleStamp : ModuleCtx ->
 elabModuleStamp prev mid seedVars accData implDecls prog =
   -- Stampers execute after graph inference via `drainStampQueue`, not here.
   -- See `StampCtx` and `moduleStampOrder` for the replay mechanism.
-  checkModuleFullImpl
-    prev.mcGraph
-    (checkRunResidue prev)
+  let seed = plainModuleSeed seedVars
+  withPreludeOrder
     mid
-    (plainModuleSeed seedVars)
-    accData
-    implDecls
-    prog
+    seed
+    (checkModuleFullImpl
+      prev.mcGraph
+      (checkRunResidue prev)
+      mid
+      seed
+      accData
+      implDecls
+      prog)
+
+-- The core pass's result, with the prelude's initialisation order recorded under its
+-- mangle id `core`, projected as `checkModuleFullDiags` projects a module's.  The core
+-- pass runs neither rule (I2, I3) on the prelude.  [mid] is the pass's module id; a
+-- module that is not the prelude records nothing here.
+withPreludeOrder : String ->
+  ModuleSeed ->
+  (ModuleBindings, List Decl, ModuleCtx) ->
+  (ModuleBindings, List Decl, ModuleCtx)
+withPreludeOrder mid seed (bindings, marked, mctx) =
+  let envs = mctx.mcGraph.declEnvsRef.value
+  let cross = mctx.mcGraph.crossRun
+  if isPreludeMid mid then
+    let inputs =
+      initInputsAt
+        "core"
+        seed
+        bindings
+        marked
+        mctx
+        envs
+        (declEnvsOrdOf "core" envs)
+        binopDispatchMethod
+        unopMethod
+    cross.initOrdersRef :=
+      ("core", initOrder (initGraphOf inputs)) :: cross.initOrdersRef.value
+  (bindings, marked, mctx)
 
 -- #2705: the drain at the core pass's freeze (`checkCoreMemoized`), at a recording
 -- module's end and at a keyed drive's graph end (`diagsServe`).  Nothing is
@@ -3464,7 +3503,7 @@ stampTailDecl top d = stampDeclWith top d
 (DUse false (UseGroup ("types" "tc_mono") ((mem "containsI" false) (mem "dedupI" false) (mem "findTvarInMonos" false) (mem "monoArgUnboundIds" false) (mem "monoScheme" false) (mem "monoUnboundIds" false) (mem "schemeMono" false) (mem "tconBuiltin" false) (mem "tconUnresolved" false) (mem "tyVarNames" false) (mem "unquantifiedAuthIds" false))))
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "dedup" false) (mem "dedupBy" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "listLen" false) (mem "orElseOpt" false) (mem "reverseL" false))))
 (DUse false (UseGroup ("types" "tc_occurrence") ((mem "argDispatchIndicesById" false) (mem "binopDispatchMethod" false) (mem "unopMethod" false))))
-(DUse false (UseGroup ("types" "tc_init") ((mem "InitViolation" true) (mem "checkInitRules" false) (mem "initGraphOf" false) (mem "initInputsAt" false))))
+(DUse false (UseGroup ("types" "tc_init") ((mem "InitViolation" true) (mem "initGraphOf" false) (mem "initInputsAt" false) (mem "initOrder" false) (mem "initRulesAndOrder" false))))
 (DUse false (UseGroup ("types" "tc_solve") ((mem "determineByUniqueInstance" false) (mem "dropGoalsSince" false) (mem "goalsMark" false) (mem "improveByUniqueImpl" false) (mem "outerRigidIds" false) (mem "refileDeterminedRows" false) (mem "uOblArgs" false))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "authvarId" false) (mem "authVars" false))))
 (DUse false (UseGroup ("types" "tc_effects") ((mem "beginEffectSummaryScope" false) (mem "borrowedEffectCells" false) (mem "checkEffectEscape" false) (mem "checkUndeterminedRetEffVars" false) (mem "finishEffectSummaryScopeKeeping" false) (mem "flushPendingEscapes" false) (mem "freshEffectSummary" false) (mem "memberEffectRoots" false) (mem "reportEffectSummaryFailures" false))))
@@ -3630,7 +3669,7 @@ stampTailDecl top d = stampDeclWith top d
 (DTypeSig false "ifaceMonoName" (TyFun (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "Mono"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono")))))
 (DFunDef false "ifaceMonoName" ((PTuple (PVar "ir") (PVar "monos"))) (EApp (EApp (EVar "map") (ELam ((PVar "mono")) (ETuple (EFieldAccess (EVar "ir") "irName") (EVar "mono")))) (EVar "monos")))
 (DTypeSig true "checkModuleFull" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyCon "ModuleBindings") (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "ModuleCtx")))))))
-(DFunDef false "checkModuleFull" ((PVar "prev") (PVar "seedVars") (PVar "accData") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkModuleFullImpl") (EFieldAccess (EVar "prev") "mcGraph")) (EApp (EVar "checkRunResidue") (EVar "prev"))) (ELit (LString ""))) (EApp (EVar "plainModuleSeed") (EVar "seedVars"))) (EVar "accData")) (EVar "prog")) (EVar "prog")))
+(DFunDef false "checkModuleFull" ((PVar "prev") (PVar "seedVars") (PVar "accData") (PVar "prog")) (EBlock (DoLet false false (PVar "seed") (EApp (EVar "plainModuleSeed") (EVar "seedVars"))) (DoExpr (EApp (EApp (EApp (EVar "withPreludeOrder") (ELit (LString ""))) (EVar "seed")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkModuleFullImpl") (EFieldAccess (EVar "prev") "mcGraph")) (EApp (EVar "checkRunResidue") (EVar "prev"))) (ELit (LString ""))) (EVar "seed")) (EVar "accData")) (EVar "prog")) (EVar "prog"))))))
 (DTypeSig false "checkModuleFullImpl" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "CheckRunSeed") (TyFun (TyCon "String") (TyFun (TyCon "ModuleSeed") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyCon "ModuleBindings") (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "ModuleCtx"))))))))))
 (DFunDef false "checkModuleFullImpl" ((PVar "gctx") (PVar "runSeed") (PVar "mid") (PVar "seedVars") (PVar "_accData") (PVar "implDecls") (PVar "prog")) (EBlock (DoLet false false (PTuple (PVar "schemes") (PVar "marked") (PVar "mctx")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkBodyImpl") (EVar "gctx")) (EVar "runSeed")) (EVar "seedVars")) (EVar "mid")) (EVar "implDecls")) (EVar "prog"))) (DoExpr (EApp (EApp (EApp (EVar "enqueueStampCtx") (EVar "mctx")) (EVar "mid")) (EVar "implDecls"))) (DoExpr (ETuple (EVar "schemes") (EVar "marked") (EVar "mctx")))))
 (DTypeSig false "appendUniverseAccums" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit")))))
@@ -3708,7 +3747,7 @@ stampTailDecl top d = stampDeclWith top d
 (DTypeSig false "definerRowsOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "definerRowsOf" ((PVar "rows")) (EApp (EApp (EVar "map") (ELam ((PVar "e")) (ETuple (EApp (EVar "fst") (EVar "e")) (EApp (EVar "fst") (EApp (EVar "snd") (EVar "e")))))) (EVar "rows")))
 (DTypeSig true "checkModuleFullDiags" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyFun (TyCon "ModuleSeed") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyCon "ModuleBindings") (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyCon "ModuleCtx")))))))))
-(DFunDef false "checkModuleFullDiags" ((PVar "gctx") (PVar "mid") (PVar "seedVars") (PVar "accData") (PVar "accAll") (PVar "prog")) (EBlock (DoLet false false (PVar "declEnvsHere") (EFieldAccess (EFieldAccess (EVar "gctx") "declEnvsRef") "value")) (DoLet false false (PVar "runSeed") (EApp (EVar "seedCheckRun") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "prog") (EApp (EApp (EApp (EVar "importedCtorTypeDeclsFirstWins") (EVar "prog")) (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "declEnvsHere"))) (EFieldAccess (EVar "declEnvsHere") "deModules"))) (EApp (EApp (EApp (EApp (EVar "oracleImportDecls") (EVar "gctx")) (EVar "prog")) (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "declEnvsHere"))) (EFieldAccess (EVar "declEnvsHere") "deModules"))) (EVar "accData")))) (DoLet false false (PTuple (PVar "schemes") (PVar "marked") (PVar "mctx")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkModuleFullImpl") (EVar "gctx")) (EVar "runSeed")) (EVar "mid")) (EVar "seedVars")) (EVar "accData")) (EVar "accAll")) (EVar "prog"))) (DoLet false false (PVar "ceHere") (EFieldAccess (EVar "declEnvsHere") "deIfaces")) (DoLet false false (PVar "ordHere") (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "declEnvsHere"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runFinalChecks") (EVar "mctx")) (EVar "prog")) (EVar "ceHere")) (EVar "ceHere")) (EFieldAccess (EVar "declEnvsHere") "deImpls")) (EFieldAccess (EVar "declEnvsHere") "deImpls")) (EVar "ordHere"))) (DoLet false false (PVar "initInputs") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "initInputsAt") (EVar "mid")) (EVar "seedVars")) (EVar "schemes")) (EVar "marked")) (EVar "mctx")) (EVar "declEnvsHere")) (EVar "ordHere")) (EVar "binopDispatchMethod")) (EVar "unopMethod"))) (DoExpr (EApp (EApp (EVar "each") (ELam ((PVar "v")) (EMatch (EVar "v") (arm (PCon "ImpureValue" (PVar "name") (PVar "row") (PVar "loc")) () (EApp (EApp (EApp (EApp (EVar "pushTypeErrorAt") (EVar "mctx")) (EVar "TToplevelEffect")) (EVar "loc")) (EApp (EApp (EVar "topLevelEffectMsg") (EVar "name")) (EVar "row")))) (arm (PCon "CyclicValue" (PVar "name") (PVar "path") (PVar "loc")) () (EApp (EApp (EApp (EApp (EVar "pushTypeErrorAt") (EVar "mctx")) (EVar "TCyclicValue")) (EVar "loc")) (EApp (EApp (EVar "cyclicValueMsg") (EVar "name")) (EVar "path"))))))) (EApp (EApp (EVar "checkInitRules") (EVar "initInputs")) (EApp (EVar "initGraphOf") (EVar "initInputs"))))) (DoExpr (ETuple (EVar "schemes") (EVar "marked") (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "typeErrors") "items") "value")) (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "matchWarnings") "value")) (EVar "mctx")))))
+(DFunDef false "checkModuleFullDiags" ((PVar "gctx") (PVar "mid") (PVar "seedVars") (PVar "accData") (PVar "accAll") (PVar "prog")) (EBlock (DoLet false false (PVar "declEnvsHere") (EFieldAccess (EFieldAccess (EVar "gctx") "declEnvsRef") "value")) (DoLet false false (PVar "runSeed") (EApp (EVar "seedCheckRun") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "prog") (EApp (EApp (EApp (EVar "importedCtorTypeDeclsFirstWins") (EVar "prog")) (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "declEnvsHere"))) (EFieldAccess (EVar "declEnvsHere") "deModules"))) (EApp (EApp (EApp (EApp (EVar "oracleImportDecls") (EVar "gctx")) (EVar "prog")) (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "declEnvsHere"))) (EFieldAccess (EVar "declEnvsHere") "deModules"))) (EVar "accData")))) (DoLet false false (PTuple (PVar "schemes") (PVar "marked") (PVar "mctx")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkModuleFullImpl") (EVar "gctx")) (EVar "runSeed")) (EVar "mid")) (EVar "seedVars")) (EVar "accData")) (EVar "accAll")) (EVar "prog"))) (DoLet false false (PVar "ceHere") (EFieldAccess (EVar "declEnvsHere") "deIfaces")) (DoLet false false (PVar "ordHere") (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "declEnvsHere"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runFinalChecks") (EVar "mctx")) (EVar "prog")) (EVar "ceHere")) (EVar "ceHere")) (EFieldAccess (EVar "declEnvsHere") "deImpls")) (EFieldAccess (EVar "declEnvsHere") "deImpls")) (EVar "ordHere"))) (DoLet false false (PVar "initInputs") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "initInputsAt") (EVar "mid")) (EVar "seedVars")) (EVar "schemes")) (EVar "marked")) (EVar "mctx")) (EVar "declEnvsHere")) (EVar "ordHere")) (EVar "binopDispatchMethod")) (EVar "unopMethod"))) (DoLet false false (PTuple (PVar "violations") (PVar "order")) (EApp (EApp (EVar "initRulesAndOrder") (EVar "initInputs")) (EApp (EVar "initGraphOf") (EVar "initInputs")))) (DoExpr (EApp (EApp (EVar "each") (ELam ((PVar "v")) (EMatch (EVar "v") (arm (PCon "ImpureValue" (PVar "name") (PVar "row") (PVar "loc")) () (EApp (EApp (EApp (EApp (EVar "pushTypeErrorAt") (EVar "mctx")) (EVar "TToplevelEffect")) (EVar "loc")) (EApp (EApp (EVar "topLevelEffectMsg") (EVar "name")) (EVar "row")))) (arm (PCon "CyclicValue" (PVar "name") (PVar "path") (PVar "loc")) () (EApp (EApp (EApp (EApp (EVar "pushTypeErrorAt") (EVar "mctx")) (EVar "TCyclicValue")) (EVar "loc")) (EApp (EApp (EVar "cyclicValueMsg") (EVar "name")) (EVar "path"))))))) (EVar "violations"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "gctx") "crossRun") "initOrdersRef")) (EBinOp "::" (ETuple (EVar "mid") (EVar "order")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "crossRun") "initOrdersRef") "value")))) (DoExpr (ETuple (EVar "schemes") (EVar "marked") (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "typeErrors") "items") "value")) (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "matchWarnings") "value")) (EVar "mctx")))))
 (DTypeSig false "selfNameRows" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))))))
 (DFunDef false "selfNameRows" ((PVar "prog") (PVar "old")) (EBlock (DoLet false false (PVar "own") (EApp (EApp (EVar "namesToSet") (EApp (EVar "declTopFnNames") (EVar "prog"))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EApp (EApp (EVar "omHasKey") (EApp (EVar "fst") (EVar "e"))) (EVar "own")))) (EVar "old")))))
 (DTypeSig false "attributeModuleEntries" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))) (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyVar "a")))))))
@@ -3728,7 +3767,9 @@ stampTailDecl top d = stampDeclWith top d
 (DFunDef false "ifaceMethodSlotKeys" ((PCons (PRec "DInterface" ((rf "name" None) (rf "methods" None) (rf "ifaceOrigin" None)) true) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "map") (EApp (EVar "methodSlotKey") (ERecordCreate "IfaceRef" ((fa "irName" (EVar "name")) (fa "irOrigin" (EVar "ifaceOrigin")))))) (EApp (EVar "ifaceMethodNames") (EVar "methods"))) (EApp (EVar "ifaceMethodSlotKeys") (EVar "rest"))))
 (DFunDef false "ifaceMethodSlotKeys" ((PCons PWild (PVar "rest"))) (EApp (EVar "ifaceMethodSlotKeys") (EVar "rest")))
 (DTypeSig true "elabModuleStamp" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyCon "ModuleBindings") (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "ModuleCtx")))))))))
-(DFunDef false "elabModuleStamp" ((PVar "prev") (PVar "mid") (PVar "seedVars") (PVar "accData") (PVar "implDecls") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkModuleFullImpl") (EFieldAccess (EVar "prev") "mcGraph")) (EApp (EVar "checkRunResidue") (EVar "prev"))) (EVar "mid")) (EApp (EVar "plainModuleSeed") (EVar "seedVars"))) (EVar "accData")) (EVar "implDecls")) (EVar "prog")))
+(DFunDef false "elabModuleStamp" ((PVar "prev") (PVar "mid") (PVar "seedVars") (PVar "accData") (PVar "implDecls") (PVar "prog")) (EBlock (DoLet false false (PVar "seed") (EApp (EVar "plainModuleSeed") (EVar "seedVars"))) (DoExpr (EApp (EApp (EApp (EVar "withPreludeOrder") (EVar "mid")) (EVar "seed")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkModuleFullImpl") (EFieldAccess (EVar "prev") "mcGraph")) (EApp (EVar "checkRunResidue") (EVar "prev"))) (EVar "mid")) (EVar "seed")) (EVar "accData")) (EVar "implDecls")) (EVar "prog"))))))
+(DTypeSig false "withPreludeOrder" (TyFun (TyCon "String") (TyFun (TyCon "ModuleSeed") (TyFun (TyTuple (TyCon "ModuleBindings") (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "ModuleCtx")) (TyTuple (TyCon "ModuleBindings") (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "ModuleCtx"))))))
+(DFunDef false "withPreludeOrder" ((PVar "mid") (PVar "seed") (PTuple (PVar "bindings") (PVar "marked") (PVar "mctx"))) (EBlock (DoLet false false (PVar "envs") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "declEnvsRef") "value")) (DoLet false false (PVar "cross") (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "crossRun")) (DoExpr (EIf (EApp (EVar "isPreludeMid") (EVar "mid")) (EBlock (DoLet false false (PVar "inputs") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "initInputsAt") (ELit (LString "core"))) (EVar "seed")) (EVar "bindings")) (EVar "marked")) (EVar "mctx")) (EVar "envs")) (EApp (EApp (EVar "declEnvsOrdOf") (ELit (LString "core"))) (EVar "envs"))) (EVar "binopDispatchMethod")) (EVar "unopMethod"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "cross") "initOrdersRef")) (EBinOp "::" (ETuple (ELit (LString "core")) (EApp (EVar "initOrder") (EApp (EVar "initGraphOf") (EVar "inputs")))) (EFieldAccess (EFieldAccess (EVar "cross") "initOrdersRef") "value"))))) (ELit LUnit))) (DoExpr (ETuple (EVar "bindings") (EVar "marked") (EVar "mctx")))))
 (DTypeSig true "checkGraphFinish" (TyFun (TyCon "ModuleCtx") (TyApp (TyCon "List") (TyCon "DrainFinding"))))
 (DFunDef false "checkGraphFinish" ((PVar "mctx")) (EBlock (DoLet false false (PVar "savedSticky") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "typeErrorsSticky") "value")) (DoLet false false (PVar "savedStickyDiags") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "typeErrorsStickyDiags") "value")) (DoLet false false (PVar "holes") (EApp (EVar "drainStampQueue") (EVar "mctx"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "typeErrorsSticky")) (EVar "savedSticky"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "typeErrorsStickyDiags")) (EVar "savedStickyDiags"))) (DoExpr (EVar "holes"))))
 (DTypeSig false "stampGroupClauses" (TyFun (TyCon "ModuleMarking") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))))))))
@@ -3760,7 +3801,7 @@ stampTailDecl top d = stampDeclWith top d
 (DUse false (UseGroup ("types" "tc_mono") ((mem "containsI" false) (mem "dedupI" false) (mem "findTvarInMonos" false) (mem "monoArgUnboundIds" false) (mem "monoScheme" false) (mem "monoUnboundIds" false) (mem "schemeMono" false) (mem "tconBuiltin" false) (mem "tconUnresolved" false) (mem "tyVarNames" false) (mem "unquantifiedAuthIds" false))))
 (DUse false (UseGroup ("support" "util") ((mem "anyList" false) (mem "dedup" false) (mem "dedupBy" false) (mem "filterList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "listLen" false) (mem "orElseOpt" false) (mem "reverseL" false))))
 (DUse false (UseGroup ("types" "tc_occurrence") ((mem "argDispatchIndicesById" false) (mem "binopDispatchMethod" false) (mem "unopMethod" false))))
-(DUse false (UseGroup ("types" "tc_init") ((mem "InitViolation" true) (mem "checkInitRules" false) (mem "initGraphOf" false) (mem "initInputsAt" false))))
+(DUse false (UseGroup ("types" "tc_init") ((mem "InitViolation" true) (mem "initGraphOf" false) (mem "initInputsAt" false) (mem "initOrder" false) (mem "initRulesAndOrder" false))))
 (DUse false (UseGroup ("types" "tc_solve") ((mem "determineByUniqueInstance" false) (mem "dropGoalsSince" false) (mem "goalsMark" false) (mem "improveByUniqueImpl" false) (mem "outerRigidIds" false) (mem "refileDeterminedRows" false) (mem "uOblArgs" false))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "authvarId" false) (mem "authVars" false))))
 (DUse false (UseGroup ("types" "tc_effects") ((mem "beginEffectSummaryScope" false) (mem "borrowedEffectCells" false) (mem "checkEffectEscape" false) (mem "checkUndeterminedRetEffVars" false) (mem "finishEffectSummaryScopeKeeping" false) (mem "flushPendingEscapes" false) (mem "freshEffectSummary" false) (mem "memberEffectRoots" false) (mem "reportEffectSummaryFailures" false))))
@@ -3926,7 +3967,7 @@ stampTailDecl top d = stampDeclWith top d
 (DTypeSig false "ifaceMonoName" (TyFun (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "Mono"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono")))))
 (DFunDef false "ifaceMonoName" ((PTuple (PVar "ir") (PVar "monos"))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "mono")) (ETuple (EFieldAccess (EVar "ir") "irName") (EVar "mono")))) (EVar "monos")))
 (DTypeSig true "checkModuleFull" (TyFun (TyCon "ModuleCtx") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyCon "ModuleBindings") (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "ModuleCtx")))))))
-(DFunDef false "checkModuleFull" ((PVar "prev") (PVar "seedVars") (PVar "accData") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkModuleFullImpl") (EFieldAccess (EVar "prev") "mcGraph")) (EApp (EVar "checkRunResidue") (EVar "prev"))) (ELit (LString ""))) (EApp (EVar "plainModuleSeed") (EVar "seedVars"))) (EVar "accData")) (EVar "prog")) (EVar "prog")))
+(DFunDef false "checkModuleFull" ((PVar "prev") (PVar "seedVars") (PVar "accData") (PVar "prog")) (EBlock (DoLet false false (PVar "seed") (EApp (EVar "plainModuleSeed") (EVar "seedVars"))) (DoExpr (EApp (EApp (EApp (EVar "withPreludeOrder") (ELit (LString ""))) (EVar "seed")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkModuleFullImpl") (EFieldAccess (EVar "prev") "mcGraph")) (EApp (EVar "checkRunResidue") (EVar "prev"))) (ELit (LString ""))) (EVar "seed")) (EVar "accData")) (EVar "prog")) (EVar "prog"))))))
 (DTypeSig false "checkModuleFullImpl" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "CheckRunSeed") (TyFun (TyCon "String") (TyFun (TyCon "ModuleSeed") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyCon "ModuleBindings") (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "ModuleCtx"))))))))))
 (DFunDef false "checkModuleFullImpl" ((PVar "gctx") (PVar "runSeed") (PVar "mid") (PVar "seedVars") (PVar "_accData") (PVar "implDecls") (PVar "prog")) (EBlock (DoLet false false (PTuple (PVar "schemes") (PVar "marked") (PVar "mctx")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkBodyImpl") (EVar "gctx")) (EVar "runSeed")) (EVar "seedVars")) (EVar "mid")) (EVar "implDecls")) (EVar "prog"))) (DoExpr (EApp (EApp (EApp (EVar "enqueueStampCtx") (EVar "mctx")) (EVar "mid")) (EVar "implDecls"))) (DoExpr (ETuple (EVar "schemes") (EVar "marked") (EVar "mctx")))))
 (DTypeSig false "appendUniverseAccums" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit")))))
@@ -4004,7 +4045,7 @@ stampTailDecl top d = stampDeclWith top d
 (DTypeSig false "definerRowsOf" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "String")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "definerRowsOf" ((PVar "rows")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "e")) (ETuple (EApp (EVar "fst") (EVar "e")) (EApp (EVar "fst") (EApp (EVar "snd") (EVar "e")))))) (EVar "rows")))
 (DTypeSig true "checkModuleFullDiags" (TyFun (TyCon "GraphCtx") (TyFun (TyCon "String") (TyFun (TyCon "ModuleSeed") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyCon "ModuleBindings") (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyCon "ModuleCtx")))))))))
-(DFunDef false "checkModuleFullDiags" ((PVar "gctx") (PVar "mid") (PVar "seedVars") (PVar "accData") (PVar "accAll") (PVar "prog")) (EBlock (DoLet false false (PVar "declEnvsHere") (EFieldAccess (EFieldAccess (EVar "gctx") "declEnvsRef") "value")) (DoLet false false (PVar "runSeed") (EApp (EVar "seedCheckRun") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "prog") (EApp (EApp (EApp (EVar "importedCtorTypeDeclsFirstWins") (EVar "prog")) (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "declEnvsHere"))) (EFieldAccess (EVar "declEnvsHere") "deModules"))) (EApp (EApp (EApp (EApp (EVar "oracleImportDecls") (EVar "gctx")) (EVar "prog")) (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "declEnvsHere"))) (EFieldAccess (EVar "declEnvsHere") "deModules"))) (EVar "accData")))) (DoLet false false (PTuple (PVar "schemes") (PVar "marked") (PVar "mctx")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkModuleFullImpl") (EVar "gctx")) (EVar "runSeed")) (EVar "mid")) (EVar "seedVars")) (EVar "accData")) (EVar "accAll")) (EVar "prog"))) (DoLet false false (PVar "ceHere") (EFieldAccess (EVar "declEnvsHere") "deIfaces")) (DoLet false false (PVar "ordHere") (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "declEnvsHere"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runFinalChecks") (EVar "mctx")) (EVar "prog")) (EVar "ceHere")) (EVar "ceHere")) (EFieldAccess (EVar "declEnvsHere") "deImpls")) (EFieldAccess (EVar "declEnvsHere") "deImpls")) (EVar "ordHere"))) (DoLet false false (PVar "initInputs") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "initInputsAt") (EVar "mid")) (EVar "seedVars")) (EVar "schemes")) (EVar "marked")) (EVar "mctx")) (EVar "declEnvsHere")) (EVar "ordHere")) (EVar "binopDispatchMethod")) (EVar "unopMethod"))) (DoExpr (EApp (EApp (EVar "each") (ELam ((PVar "v")) (EMatch (EVar "v") (arm (PCon "ImpureValue" (PVar "name") (PVar "row") (PVar "loc")) () (EApp (EApp (EApp (EApp (EVar "pushTypeErrorAt") (EVar "mctx")) (EVar "TToplevelEffect")) (EVar "loc")) (EApp (EApp (EVar "topLevelEffectMsg") (EVar "name")) (EVar "row")))) (arm (PCon "CyclicValue" (PVar "name") (PVar "path") (PVar "loc")) () (EApp (EApp (EApp (EApp (EVar "pushTypeErrorAt") (EVar "mctx")) (EVar "TCyclicValue")) (EVar "loc")) (EApp (EApp (EVar "cyclicValueMsg") (EVar "name")) (EVar "path"))))))) (EApp (EApp (EVar "checkInitRules") (EVar "initInputs")) (EApp (EVar "initGraphOf") (EVar "initInputs"))))) (DoExpr (ETuple (EVar "schemes") (EVar "marked") (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "typeErrors") "items") "value")) (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "matchWarnings") "value")) (EVar "mctx")))))
+(DFunDef false "checkModuleFullDiags" ((PVar "gctx") (PVar "mid") (PVar "seedVars") (PVar "accData") (PVar "accAll") (PVar "prog")) (EBlock (DoLet false false (PVar "declEnvsHere") (EFieldAccess (EFieldAccess (EVar "gctx") "declEnvsRef") "value")) (DoLet false false (PVar "runSeed") (EApp (EVar "seedCheckRun") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "prog") (EApp (EApp (EApp (EVar "importedCtorTypeDeclsFirstWins") (EVar "prog")) (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "declEnvsHere"))) (EFieldAccess (EVar "declEnvsHere") "deModules"))) (EApp (EApp (EApp (EApp (EVar "oracleImportDecls") (EVar "gctx")) (EVar "prog")) (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "declEnvsHere"))) (EFieldAccess (EVar "declEnvsHere") "deModules"))) (EVar "accData")))) (DoLet false false (PTuple (PVar "schemes") (PVar "marked") (PVar "mctx")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkModuleFullImpl") (EVar "gctx")) (EVar "runSeed")) (EVar "mid")) (EVar "seedVars")) (EVar "accData")) (EVar "accAll")) (EVar "prog"))) (DoLet false false (PVar "ceHere") (EFieldAccess (EVar "declEnvsHere") "deIfaces")) (DoLet false false (PVar "ordHere") (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "declEnvsHere"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runFinalChecks") (EVar "mctx")) (EVar "prog")) (EVar "ceHere")) (EVar "ceHere")) (EFieldAccess (EVar "declEnvsHere") "deImpls")) (EFieldAccess (EVar "declEnvsHere") "deImpls")) (EVar "ordHere"))) (DoLet false false (PVar "initInputs") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "initInputsAt") (EVar "mid")) (EVar "seedVars")) (EVar "schemes")) (EVar "marked")) (EVar "mctx")) (EVar "declEnvsHere")) (EVar "ordHere")) (EVar "binopDispatchMethod")) (EVar "unopMethod"))) (DoLet false false (PTuple (PVar "violations") (PVar "order")) (EApp (EApp (EVar "initRulesAndOrder") (EVar "initInputs")) (EApp (EVar "initGraphOf") (EVar "initInputs")))) (DoExpr (EApp (EApp (EVar "each") (ELam ((PVar "v")) (EMatch (EVar "v") (arm (PCon "ImpureValue" (PVar "name") (PVar "row") (PVar "loc")) () (EApp (EApp (EApp (EApp (EVar "pushTypeErrorAt") (EVar "mctx")) (EVar "TToplevelEffect")) (EVar "loc")) (EApp (EApp (EVar "topLevelEffectMsg") (EVar "name")) (EVar "row")))) (arm (PCon "CyclicValue" (PVar "name") (PVar "path") (PVar "loc")) () (EApp (EApp (EApp (EApp (EVar "pushTypeErrorAt") (EVar "mctx")) (EVar "TCyclicValue")) (EVar "loc")) (EApp (EApp (EVar "cyclicValueMsg") (EVar "name")) (EVar "path"))))))) (EVar "violations"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "gctx") "crossRun") "initOrdersRef")) (EBinOp "::" (ETuple (EVar "mid") (EVar "order")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "gctx") "crossRun") "initOrdersRef") "value")))) (DoExpr (ETuple (EVar "schemes") (EVar "marked") (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "typeErrors") "items") "value")) (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcCells") "matchWarnings") "value")) (EVar "mctx")))))
 (DTypeSig false "selfNameRows" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))))))
 (DFunDef false "selfNameRows" ((PVar "prog") (PVar "old")) (EBlock (DoLet false false (PVar "own") (EApp (EApp (EVar "namesToSet") (EApp (EVar "declTopFnNames") (EVar "prog"))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EApp (EApp (EVar "omHasKey") (EApp (EVar "fst") (EVar "e"))) (EVar "own")))) (EVar "old")))))
 (DTypeSig false "attributeModuleEntries" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))) (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyVar "a")))))))
@@ -4024,7 +4065,9 @@ stampTailDecl top d = stampDeclWith top d
 (DFunDef false "ifaceMethodSlotKeys" ((PCons (PRec "DInterface" ((rf "name" None) (rf "methods" None) (rf "ifaceOrigin" None)) true) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EApp (EVar "methodSlotKey") (ERecordCreate "IfaceRef" ((fa "irName" (EVar "name")) (fa "irOrigin" (EVar "ifaceOrigin")))))) (EApp (EVar "ifaceMethodNames") (EVar "methods"))) (EApp (EVar "ifaceMethodSlotKeys") (EVar "rest"))))
 (DFunDef false "ifaceMethodSlotKeys" ((PCons PWild (PVar "rest"))) (EApp (EVar "ifaceMethodSlotKeys") (EVar "rest")))
 (DTypeSig true "elabModuleStamp" (TyFun (TyCon "ModuleCtx") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyCon "ModuleBindings") (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "ModuleCtx")))))))))
-(DFunDef false "elabModuleStamp" ((PVar "prev") (PVar "mid") (PVar "seedVars") (PVar "accData") (PVar "implDecls") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkModuleFullImpl") (EFieldAccess (EVar "prev") "mcGraph")) (EApp (EVar "checkRunResidue") (EVar "prev"))) (EVar "mid")) (EApp (EVar "plainModuleSeed") (EVar "seedVars"))) (EVar "accData")) (EVar "implDecls")) (EVar "prog")))
+(DFunDef false "elabModuleStamp" ((PVar "prev") (PVar "mid") (PVar "seedVars") (PVar "accData") (PVar "implDecls") (PVar "prog")) (EBlock (DoLet false false (PVar "seed") (EApp (EVar "plainModuleSeed") (EVar "seedVars"))) (DoExpr (EApp (EApp (EApp (EVar "withPreludeOrder") (EVar "mid")) (EVar "seed")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkModuleFullImpl") (EFieldAccess (EVar "prev") "mcGraph")) (EApp (EVar "checkRunResidue") (EVar "prev"))) (EVar "mid")) (EVar "seed")) (EVar "accData")) (EVar "implDecls")) (EVar "prog"))))))
+(DTypeSig false "withPreludeOrder" (TyFun (TyCon "String") (TyFun (TyCon "ModuleSeed") (TyFun (TyTuple (TyCon "ModuleBindings") (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "ModuleCtx")) (TyTuple (TyCon "ModuleBindings") (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "ModuleCtx"))))))
+(DFunDef false "withPreludeOrder" ((PVar "mid") (PVar "seed") (PTuple (PVar "bindings") (PVar "marked") (PVar "mctx"))) (EBlock (DoLet false false (PVar "envs") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "declEnvsRef") "value")) (DoLet false false (PVar "cross") (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "crossRun")) (DoExpr (EIf (EApp (EVar "isPreludeMid") (EVar "mid")) (EBlock (DoLet false false (PVar "inputs") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "initInputsAt") (ELit (LString "core"))) (EVar "seed")) (EVar "bindings")) (EVar "marked")) (EVar "mctx")) (EVar "envs")) (EApp (EApp (EVar "declEnvsOrdOf") (ELit (LString "core"))) (EVar "envs"))) (EVar "binopDispatchMethod")) (EVar "unopMethod"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "cross") "initOrdersRef")) (EBinOp "::" (ETuple (ELit (LString "core")) (EApp (EVar "initOrder") (EApp (EVar "initGraphOf") (EVar "inputs")))) (EFieldAccess (EFieldAccess (EVar "cross") "initOrdersRef") "value"))))) (ELit LUnit))) (DoExpr (ETuple (EVar "bindings") (EVar "marked") (EVar "mctx")))))
 (DTypeSig true "checkGraphFinish" (TyFun (TyCon "ModuleCtx") (TyApp (TyCon "List") (TyCon "DrainFinding"))))
 (DFunDef false "checkGraphFinish" ((PVar "mctx")) (EBlock (DoLet false false (PVar "savedSticky") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "typeErrorsSticky") "value")) (DoLet false false (PVar "savedStickyDiags") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "typeErrorsStickyDiags") "value")) (DoLet false false (PVar "holes") (EApp (EVar "drainStampQueue") (EVar "mctx"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "typeErrorsSticky")) (EVar "savedSticky"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "mctx") "mcGraph") "typeErrorsStickyDiags")) (EVar "savedStickyDiags"))) (DoExpr (EVar "holes"))))
 (DTypeSig false "stampGroupClauses" (TyFun (TyCon "ModuleMarking") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))))))))

@@ -1312,6 +1312,7 @@ emitDeclFacts facts decls symbols =
   let words = omKeys (omFromNames (map ifaceWordOfKey (omKeys reqs)) omEmpty)
   DeclFacts {
     factSymbolOrigins = symbols,
+    factInitOrder = map (lowerInitOrders symbols) facts.pfInitOrders,
     factRequires = map (k => (k, optionOr 0 (omLookup k reqs))) (omKeys reqs),
     factSupers = map (w => (w, ifaceSuperCount w table)) words,
     factBinders = [],
@@ -1320,6 +1321,34 @@ emitDeclFacts facts decls symbols =
     factExterns = omEmpty,
     factManifests = facts.pfManifests,
   }
+
+-- The carried initialisation order in Core names: each module's source names
+-- through the Core functions' origins (`ModuleOrigin mid src`), keeping only the
+-- names Core holds a bind for, since source DCE drops values before lowering.
+-- A typechecked program always lowers with origins, so a carried order without
+-- them is an internal error, never an empty order.
+lowerInitOrders : Option CoreSymbolOrigins ->
+  List (String, List String) ->
+  List (String, List String)
+lowerInitOrders None _ =
+  panic "internal error: a carried initialisation order without symbol origins"
+lowerInitOrders (Some symbols) orders =
+  let functions = symbols.functions
+  let byOrigin =
+    fold
+      (acc name => match omLookup name functions
+        Some (origin@(ModuleOrigin _ _)) => omInsert (originKey origin) name acc
+        _ => acc)
+      omEmpty
+      (omKeys functions)
+  map
+    ((mid, names) => (
+      mid,
+      filterMap
+        (src => omLookup (originKey (ModuleOrigin mid src)) byOrigin)
+        names,
+    ))
+    orders
 
 entryFact : ProgramFacts -> Option EntryFact
 entryFact facts =

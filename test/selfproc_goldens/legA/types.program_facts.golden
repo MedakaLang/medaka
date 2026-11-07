@@ -1,5 +1,5 @@
 emptyFacts : ProgramFacts
-factsOfChecked : CheckedProgram -> ProgramFacts
+factsOfChecked : DriveOutputs -> CheckedProgram -> ProgramFacts
 factsOfElab : ElabResult -> ProgramFacts
 factsOfElabSources : (DriveOutputs -> List (String, List Decl) -> List (String, (List (String, String), (List String, String)))) -> DriveOutputs -> ElabResult -> List EvEntry -> ProgramFacts
 factsOfElabWith : List EvEntry -> ElabResult -> ProgramFacts

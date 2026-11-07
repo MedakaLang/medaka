@@ -1705,10 +1705,10 @@ test "a malformed file is refused" = match preludeInterface ()
         expectEqual
           (Some (
             "header/medaka-interface.1",
-            "5: format version 5, this compiler reads 4",
+            "6: format version 6, this compiler reads 5",
           ))
           (failureOf
-            "(medaka-interface 5 (sources ()) (compiler c) (sections 0))\n"),
+            "(medaka-interface 6 (sources ()) (compiler c) (sections 0))\n"),
       ),
       (
         "truncated in the header",
@@ -1779,7 +1779,7 @@ test "a malformed file is refused" = match preludeInterface ()
       (
         "too few fields",
         expectEqual
-          (Some ("file/0/section.2", "interface: expected 20 field(s)"))
+          (Some ("file/0/section.2", "interface: expected 21 field(s)"))
           (failureOf (withSection "x")),
       ),
     ]
@@ -1863,14 +1863,18 @@ test "a missing or malformed owning declaration basis refuses the interface" =
             "\n"
             (map renderSExp [
               header,
-              SList [section, joins, SList (tag :: take 19 fields ++ basis)],
+              SList [
+                section,
+                joins,
+                SList (tag :: take 19 fields ++ basis ++ drop 20 fields),
+              ],
             ])
         _ => good
       expectEach [
         (
           "missing basis",
           expectEqual
-            (Some ("file/0/section.2", "interface: expected 20 field(s)"))
+            (Some ("file/0/section.2", "interface: expected 21 field(s)"))
             (failureOf (alter [])),
         ),
         (

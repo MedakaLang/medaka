@@ -8,6 +8,7 @@ keysMatch : InterfaceKey -> InterfaceKey -> Option String
 mapSlots : (a -> a) -> List (b, List a) -> List (b, List a)
 preludeCacheHit : (Int, Int) -> List Atom -> Option PreludeInterface
 preludeCacheRef : Ref (Option PreludeCacheEntry)
+preludeOrderOf : CrossRun -> List String
 seedPreludeInterface : (Int, Int) -> List (List (List Atom), PreludeInterface) -> Unit
 standaloneRows : Map String Unit -> List (String, Scheme) -> Map String Scheme
 thawInterface : GraphCtx -> PreludeInterface -> (ModuleBindings, List (String, PubScheme), CrossRun, GraphRunSeed)

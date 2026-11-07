@@ -90,7 +90,7 @@ import backend.emit_plan.{
 
 import backend.trmc_analysis.{ctorTailIsCons, dispMembersOf, dispRootOf}
 import backend.wasm_preamble.{jsImportField}
-import backend.global_plan.{validateGlobalInit}
+import backend.global_plan.{ModuleInit(..), validateGlobalInit}
 import ir.core_walk.{implName}
 
 val : String -> CExpr -> CBind
@@ -845,7 +845,7 @@ reachProgram =
     []
     [implOf "m" (ref "g"), implOf "k" (CLit (LInt 3))]
     []
-    noDeclFacts
+    { noDeclFacts | factInitOrder = Some [("", ["g", "dead"])] }
 
 implMethods : CProgram -> List String
 implMethods (CProgram _ _ _ impls _ _) = map implName impls
@@ -887,6 +887,11 @@ test "wasm reach keeps a dispatch-only impl and its lazy global, drops the rest"
       "reached value order"
       (expectEqual ["g"] plan.globalInit.valueOrder),
     labelFail "reached eager order" (expectEqual [] plan.globalInit.eagerOrder),
+    labelFail
+      "the carried order keeps only the reached values"
+      (expectEqual
+        [ModuleInit { module = "", values = ["g"] }]
+        plan.globalInit.moduleOrder),
     labelFail
       "reached Core validates"
       (expectEqual

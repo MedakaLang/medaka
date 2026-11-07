@@ -1,0 +1,18 @@
+-- A value reached through a local impl (I1): `total` dispatches to `impl Sized Box`,
+-- whose method reads `limit`, so `limit` is initialised before `total` although it
+-- is written after it.  Expected on every engine: `42`.
+interface Sized a where
+  size : a -> Int
+
+data Box = Box
+
+impl Sized Box where
+  size _ = limit * 2
+
+total : Int
+total = size Box
+
+limit : Int
+limit = 21
+
+main = total

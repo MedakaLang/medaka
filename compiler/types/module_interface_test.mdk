@@ -624,7 +624,7 @@ treeDrive seed chainKey runtime core mods =
           map (n => renderSExp (ranked mids ordinals grants n)) nodes
         (
           take (length served) rendered ++ sort (drop (length served) rendered),
-          evalModulesOutputFacts (factsOfChecked c) coreTrees modTrees,
+          evalModulesOutputFacts (factsOfChecked outputs c) coreTrees modTrees,
           outputs.doServedModules,
         )
       None => (["no trees"], "", outputs.doServedModules)
@@ -1015,6 +1015,49 @@ test "an interface a diagnostics drive recorded is a miss for a tree drive and a
     ),
     ("a tree drive over the same graph serves nothing", expectEqual 0 miss),
     ("a second tree drive serves what the first recorded", expectEqual 2 hit),
+  ]
+
+-- A chain whose leaf and middle hold values the middle and the entry read.
+orderChain : List (String, String)
+orderChain = [
+  ("oc_leaf", "export\nseed = 2\nexport\nboxed = [seed, seed]\n"),
+  ("oc_mid", "import oc_leaf.{boxed}\nexport\npair = (boxed, boxed)\n"),
+  ("oc_entry", "import oc_mid.{pair}\nentry = [pair]\n"),
+]
+
+-- The modules a keyed tree drive over [orderChain] served and its order rows.
+orderDrive : Int -> String -> (Int, List (String, List String))
+orderDrive seed chainKey =
+  let (_, _, outputs) =
+    elaborateModulesChainReport
+      defaultDriveInputs
+      False
+      (seed, seed + 1)
+      chainKey
+      (stepKeys orderChain)
+      []
+      (desugar (parse ""))
+      (map (m => (fst m, desugar (parseLocated (snd m)))) orderChain)
+  (outputs.doServedModules, outputs.doInitOrders)
+
+test "a tree drive that serves a module still yields its init order row" =
+  let (coldServed, cold) = orderDrive 4711 "oc-k"
+  let (warmServed, warm) = orderDrive 4711 "oc-k"
+  expectEach [
+    ("the first drive serves nothing", expectEqual 0 coldServed),
+    ("the second serves the leaf and the middle", expectEqual 2 warmServed),
+    (
+      "the cold drive's rows, in drive order",
+      expectEqual
+        [
+          ("core", []),
+          ("oc_leaf", ["seed", "boxed"]),
+          ("oc_mid", ["pair"]),
+          ("oc_entry", ["entry"]),
+        ]
+        cold,
+    ),
+    ("the serving drive's rows are the cold drive's", expectEqual cold warm),
   ]
 
 -- ── one module id checked again in a lineage ─────────────────────────────────

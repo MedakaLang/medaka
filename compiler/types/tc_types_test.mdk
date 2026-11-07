@@ -35,6 +35,7 @@ sampleFacts = ElabFacts {
   efManifests = [],
   efBinders = emptyBinderTypes,
   efEntryOutcome = noEntryOutcome,
+  efInitOrders = [],
 }
 
 sampleDiag : TcDiag

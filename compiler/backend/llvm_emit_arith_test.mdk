@@ -79,6 +79,7 @@ arithProgram tag =
     []
     DeclFacts {
       factSymbolOrigins = None,
+      factInitOrder = None,
       factMethodResults = [],
       factRequires = [],
       factSupers = [],

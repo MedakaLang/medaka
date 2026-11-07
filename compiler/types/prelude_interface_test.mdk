@@ -89,6 +89,7 @@ primedCtx _ =
   g.graphRun.tyvarCounter := 41
   g.graphRun.effvarCounter := 5
   g.graphRun.anyExistentialsRef := True
+  g.crossRun.initOrdersRef := [("core", ["base", "total"])]
   g
 
 thawed : PubScheme -> Scheme
@@ -131,6 +132,7 @@ renderInterface pi =
       "effvar \{pi.piEffvarNext}",
       "standalone \{omKeys pi.piStandaloneNames}",
       renderSExp (invocationViewSExp pi.piInvocationView),
+      "initOrder \{pi.piInitOrder}",
     ]
 
 renderDispatch : ((IfaceRef, String), Int) -> String

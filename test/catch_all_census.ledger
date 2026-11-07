@@ -34,8 +34,8 @@ directIfaceSchemeRows	Decl	1/14
 doChainIsDeferred	Expr	3/43
 exprLoc	Expr	2/43
 extensionBase	Expr	1/43
-fileBodyLoc	Expr	1/43
 fileValueShape	Expr	3/43
+firstSpan	Expr	1/43
 grantExprInner	Expr	6/43
 grantSpine	Expr	2/43
 graphAliasRow	Decl	1/14

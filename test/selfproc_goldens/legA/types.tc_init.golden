@@ -1,0 +1,85 @@
+addClause : String -> List Pat -> Expr -> Loc -> List RawNode -> List RawNode
+addSteps : String -> List String -> Map String (List String) -> Map String (List String)
+adjacency : InitGraph -> Map String (List String)
+appShape : InitWalk -> WalkCtx -> Map String Unit -> Expr -> Int -> AppShape
+bareSpelling : String -> String
+bindPat : Pat -> Map String Unit -> Map String Unit
+bindPats : List Pat -> Map String Unit -> Map String Unit
+bindingNode : String -> List (List Pat, Expr) -> Option Loc -> RawNode
+calleeIfacesOf : ModuleCtx -> Map String (List String)
+checkInitRules : InitInputs -> InitGraph -> List InitViolation
+classify : InitInputs -> RawNode -> RawNode
+closureFrom : Map String (List String) -> List String -> Map String Unit -> List String -> List String
+componentCtx : WalkCtx -> WalkCtx
+componentDeps : Map String Int -> List InitNode -> Map Int (Map Int Unit) -> Map Int (Map Int Unit)
+componentIndex : List (List String) -> Int -> Map String Int -> Map String Int
+componentMembers : Map String Int -> List InitNode -> Map Int (List InitNode) -> Map Int (List InitNode)
+constrainedOf : ModuleCtx -> Map String Unit
+cycleViolation : Option MayReach -> Map String Unit -> Map String String -> InitNode -> List InitViolation
+declaredIn : String -> TyConOrigin -> Bool
+declaresImpl : List Decl -> Bool
+dictRef : InitWalk -> WalkCtx -> Map String Unit -> String -> List InitMention -> List InitMention
+directLambda : Expr -> Option (List Pat, Expr)
+dispatchClosureOf : DeclEnvs -> Int -> Map String (List String)
+dispatchKey : InitWalk -> InitEdgeKind -> InitPosition -> String -> List InitMention -> List InitMention
+dispatchTo : InitWalk -> InitEdgeKind -> InitPosition -> List String -> List InitMention -> List InitMention
+evalCtx : WalkCtx -> WalkCtx
+firstOrder : List InitNode -> Int
+foreignRef : InitWalk -> InitPosition -> String -> List InitMention -> List InitMention
+headDeclaredIn : String -> Ty -> Bool
+initGraphOf : InitInputs -> InitGraph
+initInputsAt : String -> ModuleSeed -> ModuleBindings -> List Decl -> ModuleCtx -> DeclEnvs -> Int -> (String -> Option String) -> (String -> Option String) -> InitInputs
+initOrder : InitGraph -> List String
+initRulesAndOrder : InitInputs -> InitGraph -> (List InitViolation, List String)
+initialisedValues : InitGraph -> List InitNode
+isCtorName : String -> Bool
+isDeferSpelling : String -> Bool
+isGuarded : WalkCtx -> Bool
+isPreludeDefer : InitWalk -> Map String Unit -> String -> Bool
+kahn : InitGraph -> Map Int (List InitNode) -> Map Int (List Int) -> Map Int Int -> Map Int Int -> List String -> List String
+lambdaCtx : WalkCtx -> WalkCtx
+localDefaults : List Decl -> Map String (List (List Pat, Expr)) -> Map String (List (List Pat, Expr))
+localMethodNames : List Decl -> Map String Unit -> Map String Unit
+mayReach : InitGraph -> MayReach
+mayReachOver : Map String (List String) -> List InitNode -> MayReach
+mention : String -> InitEdgeKind -> InitPosition -> InitMention
+methodIfacesOf : MethodEnv -> Map String (List String)
+methodKeys : InitWalk -> String -> Option (List String)
+methodRef : InitWalk -> WalkCtx -> Map String Unit -> String -> String -> List InitMention -> List InitMention
+namePos : WalkCtx -> InitPosition
+nameRef : InitWalk -> WalkCtx -> Map String Unit -> String -> List InitMention -> List InitMention
+nameShape : InitWalk -> WalkCtx -> Map String Unit -> String -> Int -> AppShape
+operatorRef : InitWalk -> WalkCtx -> Option String -> List InitMention -> List InitMention
+orderOf : Option MayReach -> List InitNode -> InitGraph -> List String
+orderOver : Map String Int -> List InitNode -> InitGraph -> List String
+pathBack : MayReach -> Option Int -> String -> List String -> List String
+purityViolation : InitInputs -> InitNode -> List InitViolation
+rawNodes : String -> List Decl -> List RawNode
+rawNodesGo : String -> Int -> List Decl -> List RawNode -> List RawNode
+reachClosure : Map String (List String) -> List String -> Map String Unit -> Map String Unit
+reachedFrom : Map String (List String) -> List InitNode -> List InitNode -> List InitNode
+readsAtInit : Map String Unit -> InitMention -> Bool
+refKey : IfaceRef -> String
+rulesOver : InitInputs -> InitGraph -> List InitNode -> Map String Unit -> Option MayReach -> List InitViolation
+searchBack : MayReach -> Option Int -> String -> List String -> Map String (Option String) -> List String
+sectionOp : InitWalk -> WalkCtx -> Map String Unit -> String -> List InitMention -> List InitMention
+spine : Expr -> List Expr -> (Expr, List Expr)
+sugarMethodRef : InitWalk -> WalkCtx -> String -> List InitMention -> List InitMention
+toEvery : InitWalk -> InitEdgeKind -> InitPosition -> List InitMention -> List InitMention
+toImpls : InitEdgeKind -> InitPosition -> List String -> List InitMention -> List InitMention
+tyConstraintKeys : Ty -> List String -> List String
+unwindPath : Map String (Option String) -> String -> List String -> List String
+valueNamesOf : InitGraph -> Map String Unit
+valueReach : InitGraph -> Map String Unit -> List InitNode -> Option MayReach
+walk : InitWalk -> WalkCtx -> Map String Unit -> Expr -> List InitMention -> List InitMention
+walkAll : InitWalk -> WalkCtx -> Map String Unit -> List Expr -> List InitMention -> List InitMention
+walkApp : InitWalk -> WalkCtx -> Map String Unit -> Expr -> List InitMention -> List InitMention
+walkArms : InitWalk -> WalkCtx -> Map String Unit -> List Arm -> List InitMention -> List InitMention
+walkBodies : InitWalk -> List (List Pat, Expr) -> List InitMention -> List InitMention
+walkDeferArg : InitWalk -> Map String Unit -> Expr -> List InitMention -> List InitMention
+walkFields : InitWalk -> WalkCtx -> Map String Unit -> List FieldAssign -> List InitMention -> List InitMention
+walkGuarded : InitWalk -> WalkCtx -> Map String Unit -> List Guard -> Expr -> List InitMention -> List InitMention
+walkLetBinds : InitWalk -> WalkCtx -> Map String Unit -> List LetBind -> List InitMention -> List InitMention
+walkNodes : InitWalk -> Map String (List (List Pat, Expr)) -> Int -> List RawNode -> List InitNode -> List InitNode
+walkSection : InitWalk -> WalkCtx -> Map String Unit -> Section -> List InitMention -> List InitMention
+walkStmts : InitWalk -> WalkCtx -> Map String Unit -> List DoStmt -> List InitMention -> List InitMention

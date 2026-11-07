@@ -222,6 +222,21 @@ test "a body's location is its own, else its first located child's, else none" =
     expectEqual None (map startOf (fileBodyLoc (EApp (EVar "f") (EVar "x")))),
   ]
 
+test "a body whose first location is the unlocated parse's placeholder has no location" =
+  let placeholder = Loc "" 1 0 1 0
+  expectAll [
+    expectEqual None (map startOf (fileBodyLoc (ELoc placeholder (EVar "x")))),
+    expectEqual
+      None
+      (map
+        startOf
+        (fileBodyLoc
+          (EApp (ELoc placeholder (EVar "f")) (ELoc placeholder (EVar "x"))))),
+    expectEqual
+      None
+      (fileValueKey "m" (EApp (ELoc placeholder (EVar "f")) (EVar "x"))),
+  ]
+
 test "a file-bound site names its module's length and id, then the span" = expectAll
   [
     expectEqual "1:a:m.mdk:3:1:3:9" (fileBoundSite "a" here),
@@ -261,6 +276,14 @@ test "an open row, an unlocated body and a wide row record no bound" =
     (EffRow [narrowRead] (Some (Ref (EUnbound 830 0))))
   recordFileBound m (EVar "x") (EffRow [narrowRead] None)
   recordFileBound m (ELoc here (EVar "x")) (EffRow [topRead] None)
+  expectEqual [] (boundKeys m)
+
+test "a body carrying only the placeholder span records no bound" =
+  let m = scoped ()
+  recordFileBound
+    m
+    (ELoc (Loc "" 1 0 1 0) (EVar "x"))
+    (EffRow [narrowRead] None)
   expectEqual [] (boundKeys m)
 
 test "a clause's bound is recorded at the arrow its arity reaches" =
