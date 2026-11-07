@@ -1,8 +1,8 @@
 # META
-source_lines=253
+source_lines=279
 stages=DESUGAR,MARK
 # SOURCE
-import frontend.ast.{Pat(..), Route(..)}
+import frontend.ast.{Lit(..), Pat(..), Route(..)}
 import support.ordmap.{
   OrdMap, omEmpty, omFromNames, omHasKey, omInsert, omKeys, omLookup
 }
@@ -30,6 +30,9 @@ import ir.core_walk.{rewriteProgramScoped}
 --   head to all its parameters in order (`fromInt x = intToFloat x`).  The head
 --   must read no parameter and no given dictionary, so it means the same at every
 --   call site that does not rebind its name.
+--
+-- `propagateLiteralGlobals` then replaces each read of such a value by the
+-- literal.
 --
 -- A call site is a saturated application of a top-level name that no enclosing
 -- binder rebinds, or of a method whose evidence selects one instance statically
@@ -60,6 +63,29 @@ export
 inlineTrivialCalls : List String -> CProgram -> CProgram
 inlineTrivialCalls noInline prog =
   rewriteProgramScoped (unfoldSite (unfoldingTable noInline prog)) prog
+
+-- Replace every read of a top-level literal value by the literal, as GHC's
+-- simplifier does for a binding whose unfolding is a literal.  A read is a
+-- variable no enclosing binder rebinds.  The binding stays: another half or
+-- module may still name it.  A string is not replaced, since each read would
+-- carry its own copy of the bytes.
+export
+propagateLiteralGlobals : List String -> CProgram -> CProgram
+propagateLiteralGlobals noInline prog =
+  rewriteProgramScoped (readSite (unfoldingTable noInline prog)) prog
+
+readSite : OrdMap Unfolding -> OrdMap Unit -> CExpr -> CExpr
+readSite table scope (e@(CVar name _)) =
+  if omHasKey name scope then
+    e
+  else match omLookup (targetKey (TopLevel name)) table
+    Some (Literal (lit@(CLit l))) if scalarLit l => lit
+    _ => e
+readSite _ _ e = e
+
+scalarLit : Lit -> Bool
+scalarLit (LString _) = False
+scalarLit _ = True
 
 unfoldSite : OrdMap Unfolding -> OrdMap Unit -> CExpr -> CExpr
 unfoldSite table scope (e@(CApp head args site)) = match siteTarget scope head
@@ -256,7 +282,7 @@ keepResolved key resolved acc = match omLookup key resolved
   Some u => omInsert key u acc
   None => acc
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Pat" true) (mem "Route" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "Route" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omKeys" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("support" "util") ((mem "lenKey" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "CImplBody" true) (mem "CImplEntry" true) (mem "CProgram" true) (mem "CallSite" false) (mem "MethodEvidence" true) (mem "leadingDictParams" false))))
@@ -268,6 +294,14 @@ keepResolved key resolved acc = match omLookup key resolved
 (DFunDef false "targetKey" ((PCon "ImplEntry" (PVar "method") (PVar "word"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "e")) (EApp (EVar "display") (EApp (EVar "lenKey") (EVar "method")))) (ELit (LString ""))) (EApp (EVar "display") (EVar "word"))) (ELit (LString ""))))
 (DTypeSig true "inlineTrivialCalls" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CProgram") (TyCon "CProgram"))))
 (DFunDef false "inlineTrivialCalls" ((PVar "noInline") (PVar "prog")) (EApp (EApp (EVar "rewriteProgramScoped") (EApp (EVar "unfoldSite") (EApp (EApp (EVar "unfoldingTable") (EVar "noInline")) (EVar "prog")))) (EVar "prog")))
+(DTypeSig true "propagateLiteralGlobals" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CProgram") (TyCon "CProgram"))))
+(DFunDef false "propagateLiteralGlobals" ((PVar "noInline") (PVar "prog")) (EApp (EApp (EVar "rewriteProgramScoped") (EApp (EVar "readSite") (EApp (EApp (EVar "unfoldingTable") (EVar "noInline")) (EVar "prog")))) (EVar "prog")))
+(DTypeSig false "readSite" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unfolding")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CExpr") (TyCon "CExpr")))))
+(DFunDef false "readSite" ((PVar "table") (PVar "scope") (PAs "e" (PCon "CVar" (PVar "name") PWild))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "scope")) (EVar "e") (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "targetKey") (EApp (EVar "TopLevel") (EVar "name")))) (EVar "table")) (arm (PCon "Some" (PCon "Literal" (PAs "lit" (PCon "CLit" (PVar "l"))))) ((GBool (EApp (EVar "scalarLit") (EVar "l")))) (EVar "lit")) (arm PWild () (EVar "e")))))
+(DFunDef false "readSite" (PWild PWild (PVar "e")) (EVar "e"))
+(DTypeSig false "scalarLit" (TyFun (TyCon "Lit") (TyCon "Bool")))
+(DFunDef false "scalarLit" ((PCon "LString" PWild)) (EVar "False"))
+(DFunDef false "scalarLit" (PWild) (EVar "True"))
 (DTypeSig false "unfoldSite" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unfolding")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CExpr") (TyCon "CExpr")))))
 (DFunDef false "unfoldSite" ((PVar "table") (PVar "scope") (PAs "e" (PCon "CApp" (PVar "head") (PVar "args") (PVar "site")))) (EMatch (EApp (EApp (EVar "siteTarget") (EVar "scope")) (EVar "head")) (arm (PCon "Some" (PVar "target")) () (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "targetKey") (EVar "target"))) (EVar "table")) (arm (PCon "Some" (PVar "u")) ((GBool (EApp (EVar "not") (EApp (EApp (EVar "captured") (EVar "scope")) (EVar "u"))))) (EApp (EApp (EVar "optionOr") (EVar "e")) (EApp (EApp (EApp (EVar "unfoldAt") (EVar "u")) (EVar "args")) (EVar "site")))) (arm PWild () (EVar "e")))) (arm (PCon "None") () (EVar "e"))))
 (DFunDef false "unfoldSite" (PWild PWild (PVar "e")) (EVar "e"))
@@ -347,7 +381,7 @@ keepResolved key resolved acc = match omLookup key resolved
 (DTypeSig false "keepResolved" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unfolding")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unfolding")) (TyApp (TyCon "OrdMap") (TyCon "Unfolding"))))))
 (DFunDef false "keepResolved" ((PVar "key") (PVar "resolved") (PVar "acc")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "key")) (EVar "resolved")) (arm (PCon "Some" (PCon "Forward" PWild (PVar "head"))) ((GBool (EBinOp "==" (EApp (EApp (EVar "map") (EVar "targetKey")) (EApp (EVar "headTarget") (EVar "head"))) (EApp (EVar "Some") (EVar "key"))))) (EVar "acc")) (arm (PCon "Some" (PVar "u")) () (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (EVar "u")) (EVar "acc"))) (arm (PCon "None") () (EVar "acc"))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Pat" true) (mem "Route" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "Route" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omFromNames" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omKeys" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("support" "util") ((mem "lenKey" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "CImplBody" true) (mem "CImplEntry" true) (mem "CProgram" true) (mem "CallSite" false) (mem "MethodEvidence" true) (mem "leadingDictParams" false))))
@@ -359,6 +393,14 @@ keepResolved key resolved acc = match omLookup key resolved
 (DFunDef false "targetKey" ((PCon "ImplEntry" (PVar "method") (PVar "word"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "e")) (EApp (EMethodRef "display") (EApp (EVar "lenKey") (EVar "method")))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "word"))) (ELit (LString ""))))
 (DTypeSig true "inlineTrivialCalls" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CProgram") (TyCon "CProgram"))))
 (DFunDef false "inlineTrivialCalls" ((PVar "noInline") (PVar "prog")) (EApp (EApp (EVar "rewriteProgramScoped") (EApp (EVar "unfoldSite") (EApp (EApp (EVar "unfoldingTable") (EVar "noInline")) (EVar "prog")))) (EVar "prog")))
+(DTypeSig true "propagateLiteralGlobals" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CProgram") (TyCon "CProgram"))))
+(DFunDef false "propagateLiteralGlobals" ((PVar "noInline") (PVar "prog")) (EApp (EApp (EVar "rewriteProgramScoped") (EApp (EVar "readSite") (EApp (EApp (EVar "unfoldingTable") (EVar "noInline")) (EVar "prog")))) (EVar "prog")))
+(DTypeSig false "readSite" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unfolding")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CExpr") (TyCon "CExpr")))))
+(DFunDef false "readSite" ((PVar "table") (PVar "scope") (PAs "e" (PCon "CVar" (PVar "name") PWild))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "name")) (EVar "scope")) (EVar "e") (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "targetKey") (EApp (EVar "TopLevel") (EVar "name")))) (EVar "table")) (arm (PCon "Some" (PCon "Literal" (PAs "lit" (PCon "CLit" (PVar "l"))))) ((GBool (EApp (EVar "scalarLit") (EVar "l")))) (EVar "lit")) (arm PWild () (EVar "e")))))
+(DFunDef false "readSite" (PWild PWild (PVar "e")) (EVar "e"))
+(DTypeSig false "scalarLit" (TyFun (TyCon "Lit") (TyCon "Bool")))
+(DFunDef false "scalarLit" ((PCon "LString" PWild)) (EVar "False"))
+(DFunDef false "scalarLit" (PWild) (EVar "True"))
 (DTypeSig false "unfoldSite" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unfolding")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CExpr") (TyCon "CExpr")))))
 (DFunDef false "unfoldSite" ((PVar "table") (PVar "scope") (PAs "e" (PCon "CApp" (PVar "head") (PVar "args") (PVar "site")))) (EMatch (EApp (EApp (EVar "siteTarget") (EVar "scope")) (EVar "head")) (arm (PCon "Some" (PVar "target")) () (EMatch (EApp (EApp (EVar "omLookup") (EApp (EVar "targetKey") (EVar "target"))) (EVar "table")) (arm (PCon "Some" (PVar "u")) ((GBool (EApp (EVar "not") (EApp (EApp (EVar "captured") (EVar "scope")) (EVar "u"))))) (EApp (EApp (EVar "optionOr") (EVar "e")) (EApp (EApp (EApp (EVar "unfoldAt") (EVar "u")) (EVar "args")) (EVar "site")))) (arm PWild () (EVar "e")))) (arm (PCon "None") () (EVar "e"))))
 (DFunDef false "unfoldSite" (PWild PWild (PVar "e")) (EVar "e"))

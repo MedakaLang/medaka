@@ -17,7 +17,7 @@ import types.symbol_origins.{
 
 import ir.extern_lower.{lowerExterns}
 import ir.core_walk.{patBinders}
-import ir.core_opt_unfold.{inlineTrivialCalls}
+import ir.core_opt_unfold.{inlineTrivialCalls, propagateLiteralGlobals}
 import ir.core_pass.{
   CorePass(..), PassConfig(..), PassRun(..), PassFault(..), defaultPassConfig,
   runPasses
@@ -1524,6 +1524,8 @@ emitPasses =
       -- modes, tail marks and binder stamps all see their output
       namedPass "inline-trivial-calls" (c p =>
         inlineTrivialCalls c.pcNoInline p),
+      namedPass "propagate-literal-globals" (c p =>
+        propagateLiteralGlobals c.pcNoInline p),
     ]
     ++ finishPasses
     ++ [namedPass "lower-externs" (c p => lowerExterns c.pcFacts c.pcDecls p)]
