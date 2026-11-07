@@ -327,7 +327,7 @@ recordTopFunBinderType gctx schemes signed n bid arity =
 -- followed -- rather than only a negative one.
 --
 -- Cite fixtures that exist, and check what actually consumes them.  The gate
--- for this arm is `test/diff_compiler_fmt_test.mdk`'s `typecheckErrorFailures`,
+-- for this arm is `test/diff_compiler_fmt_test.mdk`'s typecheck-error fixture test,
 -- which walks its fixture directory RECURSIVELY via `fixtureFiles` -- so a
 -- directory-nested fixture IS discovered and consumed.  No gate catches a wrong
 -- citation here: `make docs-links` and `make agent-doc-symbols` do not scan
@@ -336,7 +336,7 @@ recordTopFunBinderType gctx schemes signed n bid arity =
 -- that gets relayed into the next unit's design as an established fact.  The
 -- real controls, both verified to reject on this binary:
 --   * MULTI-MODULE: `test/analyze_project_fixtures/1557_a35c_cycle_masked_by_samespelled/`
---     (consumed by `test/diff_compiler_fmt_test.mdk`'s `analyzeProjectFixtureFailures`)
+--     (consumed by `test/diff_compiler_fmt_test.mdk`'s analyze-project fixture sweep)
 --     -- its edge must resolve BY IDENTITY for the fixture to pass at all, so
 --     an abstention that swallowed a real edge reds it.
 --   * FLAT: `test/dict_fixtures/s3-w1-cyclic-superinterface-rejected.mdk` (no imports)
@@ -606,7 +606,7 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
   -- the full visible universe (shadows / key table /
   -- completeness / obligations): Flat = whole flattened program; Module = imported
   -- data + impl universe + this module.
-  -- Every consumer of `fullUniverse` is a `Flat _ =>` arm (buildDefinerShadows,
+  -- Every consumer of the full universe is a `Flat _ =>` arm (buildDefinerShadows,
   -- checkImplObligations, checkCallObligations).  Impl-completeness takes no decl list: it
   -- reads `classEnvHere`, which carries this universe on the Flat arm.  Medaka is STRICT, so
   -- binding `accData ++ implDecls ++ prog0` on the Module arm would allocate an O(|accData|)
@@ -640,7 +640,7 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
   checkLetRecDecls mctx prog
   -- On the Module path, grow the persistent universe accumulators by THIS module's decls
   -- BEFORE the shadow/key reads below consult them — so they see the same universe
-  -- `fullUniverse` (which appended prog0) did.  Flat is untouched and rebuilds over its whole
+  -- the whole-program append of prog0 did.  Flat is untouched and rebuilds over its whole
   -- `prog` (already O(N)).  `appendUniverseAccums` grows no impl universe: the impl
   -- population is `IE`, bound below as `moduleImplUniv`.
   -- #1499 clause (b) / S1-PRELUDE (a): `mid` is BOUND here now — `appendUniverseAccums`
@@ -702,7 +702,7 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
   -- #1354 unit A (#1353): that test is not scoped to what this module can name, so the
   -- intersection alone implements only S1's LEFT operand.  `nameableIfaceShadows` supplies
   -- the RIGHT one — the interface must be nameable in THIS module.  Applied to the RESULT,
-  -- never inside either filter (the result is single-digit; `fnSet` is every fn name in
+  -- never inside either filter (the result is single-digit; the fn-name set is every fn name in
   -- the graph), and fail-open when the graph index is absent.  See `nameableIfaceShadows`.
   -- The Flat arms are untouched: a single file is one module and its own interfaces are
   -- nameable in it.
@@ -767,7 +767,7 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
   -- no-impl receiver routes to the standalone instead of mis-dispatching:
   --   * IMPORTER shadow (`importerShadows`): a name imported from a sibling that is also an
   --     interface method (box importing map's `toList`).  Its scheme must be REBOUND to the
-  --     interface-method scheme (`shadowMethodSchemes`) so the call site types polymorphically;
+  --     interface-method scheme (the shadow-method scheme layer) so the call site types polymorphically;
   --     RLocal then redirects the no-impl receiver back.
   --   * DEFINER shadow (`definerShadows`): a name THIS module defines as a top-level funDef that
   --     ALSO names an interface method (map-as-root's own `toList` / `isEmpty`).  The MARK pass
@@ -795,7 +795,7 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
   mctx.mcCells.funPredicateSlotsRef :=
     gctx.crossRun.crossModuleFunPredicateSlotsRef.value
   -- The declared-prefix sidecar rides the IDS table — every
-  -- whole-table replacement of `funConstraintsRef` owes one of these.
+  -- whole-table replacement of `funPredicateSlotsRef` owes one of these.
   mctx.mcCells.funConstraintDeclaredRef :=
     gctx.crossRun.crossModuleFunConstraintDeclaredRef.value
   -- A module alias (`import m as A`) has no `currentImportDefinersRef` row for
@@ -1023,7 +1023,7 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
   --
   -- Four sibling loops rather than four arms inside one walk: each has its own
   -- exemption discipline (the crossable rule exempts a catalog-name
-  -- redeclaration, the label and binding rules hold one to its `bind` clauses
+  -- redeclaration, the label and binding rules hold one to its bind clauses
   -- only, the shadow rule IS that exemption's admission test, and the
   -- catalog-row rule fires ONLY on a catalog name), and folding them together
   -- would force one `if` to speak for four notions of "this declaration is not
@@ -1146,7 +1146,7 @@ checkBodyImpl gctx runSeed moduleSeed mid implDecls prog0 =
       ++ gctx.crossRun.crossModuleMethodPredicateSlotsQualRef.value
   -- #1114 (#845, DICT-SEMANTICS §4.2 D6(a)): snapshot THIS module's scheme contexts
   -- alongside the three arity tables above.  The arity tables carry only what
-  -- `funConstraintsRef` holds, whose INFERRED half is gated on `dictEligibleSetRef`
+  -- `funPredicateSlotsRef` holds, whose INFERRED half is gated on `dictEligibleSetRef`
   -- and is therefore EMPTY on the check path (see that ref's comment) — so an
   -- UNSIGNATURED constrained export was invisible to every importer at check time
   -- while `run`/`build` threaded its dict anyway.  `schemeObligationsRef` is the
@@ -2043,7 +2043,7 @@ alignScopedSchemes _ _ = panic "scope/member scheme arity mismatch"
 -- resolves from the signature alone).  [peel] is Some(placeholder) for a signed
 -- member, None otherwise; the placeholder already holds the sig instantiation
 -- (preunifySigsEx unified it), and its shared tyvars accumulate unifications
--- across clauses exactly as the oracle's `sig_t` does.  Purely additive: the
+-- across clauses exactly as the oracle's sig_t does.  Purely additive: the
 -- per-clause `unify v arrow` below imposes the same equalities anyway.
 inferMembers : TcEnv ->
   List (String, Ty) ->
@@ -2211,7 +2211,7 @@ appendUniverseAccums gctx mid prog =
   -- definer/importer kind partition — and a standalone reaching M only as an implicit
   -- prelude export is NEITHER kind, so it creates no shadow in M.
   -- This ref's ONE reader is the `importerShadows` binding in `checkBodyImpl`
-  -- (`standaloneShadowsFromSet`'s `fnSet`), i.e. exactly that left operand; folding the
+  -- (`standaloneShadowsFromSet`'s fn-name set), i.e. exactly that left operand; folding the
   -- prelude's own funDefs in admitted every prelude standalone as an IMPORTER shadow —
   -- the reading S1-PRELUDE names and REJECTS by consequence — so a user interface method
   -- colliding with `isEven`/`count` fell back to the prelude function at any receiver head
@@ -2323,8 +2323,8 @@ importedMethodBindingNames gctx prog aliases =
 -- serves the DICT-ARITY tables on the emit path and this one serves the CHECK-time
 -- obligation channel:
 --   * it has a `UseWild` arm.  `aliasConstraintEntries` needs none — on the emit path a
---     wildcard-imported name keeps its own spelling and `funConstraintsRef` is re-seeded
---     from the bare `crossModuleFunConstraintsRef` accumulator, which already covers it.
+--     wildcard-imported name keeps its own spelling and `funPredicateSlotsRef` is re-seeded
+--     from the bare `crossModuleFunPredicateSlotsRef` accumulator, which already covers it.
 --     The check path has no such bare re-seed (that ref is the emit path's), so without
 --     this arm `import m.*` would be the one spelling that still dropped the obligation.
 --   * it emits the UNALIASED member of a `UseGroup` too (`useMemberLocal`, not
@@ -2332,7 +2332,7 @@ importedMethodBindingNames gctx prog aliases =
 --     exactly what #845 pins.
 --
 -- Kept SEPARATE from `aliasConstraintEntries` rather than generalizing it. Adding a
--- `UseWild` arm there would change what `funConstraintsRef` holds on the emit path, i.e.
+-- `UseWild` arm there would change what `funPredicateSlotsRef` holds on the emit path, i.e.
 -- dict-passing arity — a different judgment, with a different blast radius, reached from
 -- here only by the coincidence that both read the same qual-table shape.
 importedSchemeOblEntries : List Decl ->
@@ -2442,7 +2442,7 @@ moduleRefNameSet decls = namesToSet (flatMap declRefNames decls) omEmpty
 -- this costs only the cross-module arity DISAMBIGUATION, and only when two modules
 -- export same-named constrained fns of differing dict arity.
 -- ── import-scoped constructor overlay ─────────────────────────────────────────
--- The `data`/`newtype` decls (from the surrounding universe `pool`) whose
+-- The `data`/`newtype` decls (from the surrounding universe pool) whose
 -- CONSTRUCTORS this module binds by name, read from its own DUse decls.  They
 -- OVERLAY the whole-universe ctor tables (the typecheck scheme table, the
 -- record-info table AND the exhaust oracle) so a bare ctor / record name resolves
@@ -2461,7 +2461,7 @@ moduleRefNameSet decls = namesToSet (flatMap declRefNames decls) omEmpty
 -- Rule (b) is a CONSTRUCTOR-name test, not a "not a type name" test, and the
 -- difference is observable.  A member spelled like a TYPE contributes nothing only when
 -- no decl of `mid` happens to have a constructor of that spelling; if one does, the
--- member matches by rule (b) and that SIBLING decl is overlaid.  Measured: `pmod` with
+-- member matches by rule (b) and that SIBLING decl is overlaid.  Measured: pmod with
 -- `data Wrap = T Int`, `import pmod.{T, pf}`, and a local `data Loc = T String` —
 -- pinned as `test/llvm_fixtures_modules/ctor_scope_type_only_sibling_decl/`.
 --
@@ -2506,7 +2506,7 @@ moduleRefNameSet decls = namesToSet (flatMap declRefNames decls) omEmpty
 -- a ctor occurrence meant, in both the spurious-warning and the lost-warning direction.
 --
 -- The WORK is NOT import-count bounded, and saying it is has already shipped a
--- regression.  `pool` is the WHOLE accumulated universe and it is SCANNED — so the cost
+-- regression.  The pool is the WHOLE accumulated universe and it is SCANNED — so the cost
 -- is O(members x |pool|) per module, i.e. O(modules x universe) across a run, the same
 -- shape `main` has paid since #674 for its `(..)` members.  What keeps that acceptable
 -- is entirely the CONSTANT, and the constant has exactly two load-bearing parts, both
@@ -2514,10 +2514,10 @@ moduleRefNameSet decls = namesToSet (flatMap declRefNames decls) omEmpty
 --   * ONE traversal per member, not three (see `findOverlayDecl`/`overlayScan`); and
 --   * ZERO allocation per visited decl (see `overlayNote` — name tests before the
 --     identity mint).
--- Break either and the perf gate's `modules` shape goes superlinear: measured at
+-- Break either and the perf gate's modules shape goes superlinear: measured at
 -- typecheck TIME r2=3.24 (hard threshold 3.0) with net allocation 306/744/2013 MB
 -- against 242/491/1010 for the single-walk form.  A cheaper bound is
--- available if it is ever needed — index `pool` by owning module id, which would make
+-- available if it is ever needed — index the pool by owning module id, which would make
 -- the owned passes O(log n) — but it does not exist today, so do not cite one.
 --
 -- The pool is not a materialised accumulator (which would carry no record of which module
@@ -2739,7 +2739,7 @@ wildOverlayDecls cur xs0 mid = go xs0
 -- match — a RE-EXPORTED type's decl names the ORIGINAL module, not the re-exporter
 -- this import path names.  The (b) spellings are new, so they get no fallback: an
 -- unscoped guess there would be the load-order coin flip this unit is removing.
--- (The fallback is not a second pass over `pool` — `overlayScan` collects it in the
+-- (The fallback is not a second pass over the pool — `overlayScan` collects it in the
 -- same walk as the two identity-scoped candidates; see `findOverlayDecl`.)
 memberOverlayDecl : Int ->
   List DeclEnvModule ->
@@ -2770,10 +2770,10 @@ memberOverlayDecl cur rows mid (UseMember n ctors _ _) =
 -- where `C` is a constructor and not a type name of `m` keeps its constructor meaning.
 --
 -- The three passes share one traversal, and that is a measured perf contract.
--- `pool` is the WHOLE accumulated universe and this runs once per UseGroup member of
+-- The pool is the WHOLE accumulated universe and this runs once per UseGroup member of
 -- every module, so each independent pass over it is an O(modules x universe) term.
 -- Three passes (type-owned, then ctor-owned, then the bare fallback) would put the
--- perf gate's `modules` shape at typecheck TIME r2=3.24 — over the hard 3.0
+-- perf gate's modules shape at typecheck TIME r2=3.24 — over the hard 3.0
 -- threshold.  `overlayScan` collects all
 -- three candidates in a SINGLE walk (their predicates are independent, so first-wins
 -- per candidate is unchanged) and stops the instant the DECIDING candidate is found,
@@ -2798,7 +2798,7 @@ findOverlayDecl mid n ctors cur rows =
 --   ownedType — first decl DECLARED BY `mid` whose TYPE name is `n`   (the `(..)` rule)
 --   ownedCtor — first decl DECLARED BY `mid` with a CONSTRUCTOR named `n`  (rule (b))
 --   bareType  — first decl of ANY owner whose TYPE name is `n`  (the `(..)` fallback,
---               `dataDeclForType`'s old job: a RE-EXPORTED type's decl names the
+--               a by-name lookup: a RE-EXPORTED type's decl names the
 --               ORIGINAL module, so no identity-scoped pass can ever match it)
 --
 -- Each is recorded independently and FIRST-wins, which is exactly what three separate
@@ -2875,8 +2875,8 @@ overlayScanOne _ _ acc _ = acc
 -- This runs once per pool decl, i.e. over the whole universe per member per module, so
 -- minting unconditionally is O(modules x universe) ALLOCATION — `compiler/AGENTS.md`'s
 -- named exception ("when the KEY PROJECTION allocates"), and it re-created the #154
--- quadratic that `modules` was promoted out of `KNOWN_SUPERLINEAR` for.  Measured on
--- the gate's own `modules` shape (N=100/200/400, K=8, one worktree, one emitter,
+-- quadratic that the modules shape was promoted out of `KNOWN_SUPERLINEAR` for.  Measured on
+-- the gate's own modules shape (N=100/200/400, K=8, one worktree, one emitter,
 -- interleaved): mint-first 306/744/2013 MB net (r2=2.71) vs name-first 242/491/1010 MB
 -- (r2=2.06), which is `main`'s figure to 0.1 MB.  A name test matches at most the
 -- handful of pool decls sharing that spelling, so the mint is O(1) per member.
@@ -3103,7 +3103,7 @@ checkModuleFullDiags gctx mid seedVars accData accAll prog =
   -- P0-9: THIS module's own decls (`prog`) come FIRST so its constructors win
   -- the oracle's first-wins bare-name tables.  Another loaded module (in accData)
   -- can define a same-named ctor at a different arity (`map`'s arity-5 `Bin` vs
-  -- `set`'s arity-4 `Bin`); with accData first, the type-aware `check_match` reads
+  -- `set`'s arity-4 `Bin`); with accData first, the type-aware exhaustiveness check reads
   -- the WRONG arity/type for this module's own `Bin` in a match and false-warns
   -- W-NONEXHAUSTIVE.  buildOracle is duplicate-tolerant, and accData still
   -- supplies prelude Option/Result ctors (this module never redefines them).
@@ -3223,7 +3223,7 @@ checkModuleFullDiags gctx mid seedVars accData accAll prog =
 -- ── the other half of `selfDeclArities`, and it is NOT optional ──────────────
 -- `selfDeclArities` is a per-module VIEW; the ref it is written to is ALSO the ref the
 -- cross-module accumulator is snapshotted FROM at the end of the same body
--- (`crossModuleFunConstraintsRef` ← `ModuleCtx.funConstraintsRef`).  Without this restore the
+-- (`crossModuleFunPredicateSlotsRef` ← `ModuleCtx.funPredicateSlotsRef`).  Without this restore the
 -- view becomes a graph-wide LOSS: the rows masked while checking module `mid` never reach
 -- the modules processed after it.
 --
@@ -3246,7 +3246,7 @@ selfNameRows prog old =
 -- the source-exact `(mid, name)` key every cross-module fn table is read under.
 --
 -- Used for all three of the fn-side qual snapshots: the constraint ARITIES
--- (`funConstraintsRef`), the slot-parallel IFACES (`funConstraintIfacesRef`) and the
+-- (`funPredicateSlotsRef`), the slot-parallel IFACES and the
 -- per-entry DECLARED-PREFIX scalar.  The payload is polymorphic (`a`) because the sidecar's
 -- SCALAR payload does not fit a `List X` signature.
 attributeModuleEntries : String ->

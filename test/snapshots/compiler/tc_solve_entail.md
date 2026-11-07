@@ -1,5 +1,5 @@
 # META
-source_lines=2407
+source_lines=2406
 stages=DESUGAR,MARK
 # SOURCE
 -- tc_solve_entail: entailment as routes: the judgment `P ⊢ π ⇝ e` at a site (`entail` and its
@@ -470,7 +470,7 @@ binopBuiltinHead method tag =
 -- dict var / not a constraint var, grounds to Some tag) keeps the existing RKey path.
 --
 -- Roadmap #18a RESIDUAL — `++`/`append` does NOT take the IN-IMPL element-dict route.
--- `binopDictVarOf` sends `append` to `enclDictVarOf` even when inImpl, so an operand
+-- The binop dict-var lookup sends `append` to `enclDictVarOf` even when inImpl, so an operand
 -- that is an impl's abstract `requires` tyvar stays RNone (the structural builtin)
 -- instead of routing the impl's threaded element dict.
 --
@@ -766,14 +766,14 @@ rowRouteKey (ImplRow _ _ ir tys _ _ _) =
 -- consulted by the MATCH (entryHeadMatches) and by ⊑ (entryCovers), both O(head
 -- size) per bucket entry — a constant factor on an unchanged O(bucket) scan.
 -- The projection is `headTyconMono`, so the GOAL side of this table carries the
--- same `HeadKey` the IMPL side (`keyEntryOf` via `headTyconTy`) does, and the two
+-- same `HeadKey` the IMPL side (`keyEntryOfRow` via `headTyconTy`) does, and the two
 -- compare as identities instead of as spellings.
 export
 goalHeadCon : List Mono -> Option HeadKey
 goalHeadCon (g :: _) = headTyconMono g
 goalHeadCon [] = None
 
--- §3 `inst` = `min⊑(match(IE, π))`: pick the entry strictly more specific than (or
+-- §3 inst = `min⊑(match(IE, π))`: pick the entry strictly more specific than (or
 -- equal to) every OTHER matching entry.
 --
 -- What reaches the `None` ARM, since the prose here was wrong about it until
@@ -793,7 +793,7 @@ goalHeadCon [] = None
 -- program's meaning — swap two `impl` blocks and the answer changes, at exit 0 on every
 -- engine (#1154, #1162).  So the arm also REPORTS, under the goal-site half of §6 C1: at
 -- most one ⊑-minimal matching instance, quantified over the goals
--- `inst` decides rather than over ground goals.
+-- inst decides rather than over ground goals.
 --
 -- The winner is still `Some e`, deliberately.  `recordTypeError` arms
 -- `typeErrorsSticky`, so `check` reports and `run`/`build` abort — the program is
@@ -960,9 +960,9 @@ entryCovers : KeyEntry -> KeyEntry -> Bool
 entryCovers (KeyEntry _ _ _ _ _ candTys _ _) (KeyEntry _ _ _ _ _ otherTys _ _) =
   tyHeadEqV candTys otherTys || tyStrictlyMoreSpecificV candTys otherTys
 
--- ENTRY POINT 1 of 3 — the INTERFACE-keyed row selector (§3 `inst` =
+-- ENTRY POINT 1 of 3 — the INTERFACE-keyed row selector (§3 inst =
 -- min⊑(match)), read by the checker leg and by BOTH halves of the router leg.
--- Replaces `selectImplEntryByIface` for those three sites.
+-- It serves those three sites.
 --
 -- 🆕 it returns the row, not A KEY OR A string, and that is an interface
 -- Obligation to the next bite.  The row carries `InstRef` — the instance identity
@@ -1180,11 +1180,11 @@ repeatedBindings ((k, v) :: rest) seen = match lookupAssoc k seen
 
 -- THE LADDER'S SELECTOR-REACHABILITY PROPERTY, inscribed so the next refactor
 -- cannot violate it silently.  Every impl-row SELECTOR call reachable from `entail`
--- lies in an `inst` arm (`entailInst`) or in an element-route helper called from one.
+-- lies in an inst arm (`entailInst`) or in an element-route helper called from one.
 -- No selector call may be reachable from `entailAssum`, `entailAssumVar` or
 -- `entailAssumRoute` — verified at this pin by enumerating the assum chain
 -- (`activeDictVarOfEncl`/`activeDictVarOf`/`enclDictVarOf`/`opDictVarOf`/
--- `activeDictPredOf`/`ifaceOfMethodName`): every one is a module-record registry lookup and
+-- `activeDictPredOf`): every one is a module-record registry lookup and
 -- none reaches a selector.
 --
 -- `entailFallback` has two reaching paths, and neither is a violation, but they are why
@@ -1200,15 +1200,15 @@ repeatedBindings ((k, v) :: rest) seen = match lookupAssoc k seen
 -- `committedSuperRoute` the same way: it answers a goal over variables alone by the
 -- candidates the checker's super judgment counted (`stableGoalReach`).
 --
--- Why it matters.  DICT-SEMANTICS §3 pins the precedence: `assum` strictly precedes
--- `inst`, which strictly precedes `fallback`.  Letting a later rung answer a goal an
+-- Why it matters.  DICT-SEMANTICS §3 pins the precedence: assum strictly precedes
+-- inst, which strictly precedes fallback.  Letting a later rung answer a goal an
 -- earlier rung could have answered re-routes a dict cell from a CALLER-SUPPLIED
 -- PARAMETER to a STATICALLY SELECTED impl — the wrong value, at exit 0, with no
--- diagnostic.  A selector call sitting on an `assum` or `fallback` arm is precisely how
+-- diagnostic.  A selector call sitting on an assum or fallback arm is precisely how
 -- that happens, which is why this is a placement rule and not a tidiness point.
 --
 -- IT IS A reachability property, not A COUNT — and the count form is false on A
--- CORRECT TREE.  There are legitimately TWO selector calls per `inst` arm: one for the
+-- CORRECT TREE.  There are legitimately TWO selector calls per inst arm: one for the
 -- primary route word, one inside the element-route helper.  At `EKArg` and `EKOp` those
 -- two deliberately ask about DIFFERENT methods — the element helper is keyed on the
 -- `innerDefaultMethod`-reduced name when the head's impl does not itself define the
@@ -1220,7 +1220,7 @@ repeatedBindings ((k, v) :: rest) seen = match lookupAssoc k seen
 -- LEGITIMATE selector call outside this ladder — it is the obligation channel's evidence
 -- check, not a routing decision — and is out of scope here.  An audit that greps the
 -- selector names without excluding it reports a false violation.
--- THE `inst` arm projects through `headTyconMono`, THE DISPATCH-KEY PROJECTION,
+-- THE inst arm projects through `headTyconMono`, THE DISPATCH-KEY PROJECTION,
 -- not through the name-only `headTyconNameMono`, as `goalHeadCon` does: `entail` is
 -- a ROUTING decision (its result is stamped straight into a site's route ref by
 -- `resolveArgStamp`), so it owes the goal-side dispatch key, and the name-only
@@ -1236,7 +1236,7 @@ repeatedBindings ((k, v) :: rest) seen = match lookupAssoc k seen
 -- unstamped.
 --
 -- The name is projected INSIDE the arm, not with `map headKeyName` over the
--- `Option` — same reason `headTyconNameTy`/`headTyconNameMono` exist at all
+-- `Option` — same reason `headTyconNameMono` exists at all
 -- (`compiler/AGENTS.md`): Medaka is strict, so the combinator spelling would
 -- allocate a second `Option` on every entailment to throw it away.
 export
@@ -1307,7 +1307,7 @@ entailDetermined sx name encl useScope (EKArg fullMono omitted) = match (
   _ => None
 entailDetermined _sx _ _ _ _ = None
 
--- `inst` for a nested/top goal whose lead position is a variable, when every variable
+-- inst for a nested/top goal whose lead position is a variable, when every variable
 -- of the vector is one a closed binder declared (DICT-SEMANTICS §6.1 points 2-3, §3
 -- W3-inst).  Such a goal is closed: its variables are rigid in the matcher, so an
 -- instance reduces it when some position is constructed, and it selects min⊑ of the
@@ -1371,8 +1371,8 @@ noteNumericEntailment sx (EKPredicateOp _ _ predicate) scope selected route prer
     prereqs
 noteNumericEntailment _sx _ _ _ _ _ = ()
 
--- #412: `assum`, both halves.  DICT-SEMANTICS §3 pins the precedence — `assum`/`super`
--- takes precedence over `inst`; a predicate already in scope is USED, and `inst` fires only
+-- #412: assum, both halves.  DICT-SEMANTICS §3 pins the precedence — assum/super
+-- takes precedence over inst; a predicate already in scope is USED, and inst fires only
 -- when no assumption matches (GHC's rule) — which is what makes :160's "sub-evidence is
 -- never pre-baked at the instance declaration" realisable.  The tyvar-keyed registry runs
 -- first and unchanged; the predicate-keyed one (registerPredGiven) then answers the
@@ -1654,8 +1654,8 @@ entailInst sx name m encl useScope _ (EKPredicateOp _ _ predicate) =
 
 -- A dictionary's super segment at the goal vector [goals]: one route per DIRECT
 -- super of [iface], in declaration order, each solved at that same goal by the whole
--- ladder (DICT-SEMANTICS §2: supers are resolved per construction goal, `assum`
--- before `inst`).  [walk] is the walk that reached [goals], before [goals] itself was
+-- ladder (DICT-SEMANTICS §2: supers are resolved per construction goal, assum
+-- before inst).  [walk] is the walk that reached [goals], before [goals] itself was
 -- entered: a super goal is entered beside it, not below it, and the declared super graph
 -- is acyclic (W1), so it cannot recur on its own.
 export
@@ -1854,8 +1854,7 @@ undeterminedRowRoute sx scope ifaceRef (m :: rest) row =
 -- (implDictRoutesIn) routes through here too, no longer through a blind twin.  [encl]
 -- threads the enclosing method so nested element dicts forward its own
 -- `$dict_<encl>_<slot>` params (encl == "" recovers the global routing).
--- (#1154 folded away the depth-0 wrapper `argImplRequiresRoutesRec`: two names for one
--- body, one caller each.  Seed `reqWalkStart` at an entry point instead.)
+-- (There is no depth-0 wrapper: seed `reqWalkStart` at an entry point.)
 --
 -- Termination is the shared `requires` measure (`reqWalkEnter`, DICT §3 W2), the same
 -- one every solving walk uses: a step to a strictly smaller goal is free, so a ground
@@ -2250,7 +2249,7 @@ bucketArgsMatch mctx xs0 args = go xs0
 -- head bucket, so `Foo (List Int)` could inherit `List a`'s `Show a` requirement (a false
 -- reject/accept).  A non-overlapping receiver head has exactly one match, which
 -- pickMostSpecificEntry returns unchanged.
--- Headless impls are in the candidate scan: `keyEntryOf` registers a bare-TyVar head
+-- Headless impls are in the candidate scan: `keyEntryOfRow` registers a bare-TyVar head
 -- under `noneHeadTag` and the scan (`ieCandidatesForIface`/`…ForMethod`) unions it into
 -- every goal-head lookup, so a HEADLESS winner can be returned directly.  That does not
 -- change which impl's requires get discharged — the union goes through the same min⊑
@@ -2323,7 +2322,7 @@ concreteReqMatchByIface : SiteCtx ->
   IfaceRef ->
   List Mono ->
   Option (List (String, Mono), List Require)
--- Use `bodyImplEnvRef`, not `shadowKeyTableRef`: the latter is a topological PREFIX,
+-- Use `bodyImplEnvRef`, not the prefix key table: the latter is a topological PREFIX,
 -- so an impl in a later module contributes no `requires` and the goal reads as
 -- unroutable. The checker and the two element-dict route sites read this one registry;
 -- repointing this function alone produces an S0.

@@ -227,7 +227,7 @@ import types.solver_contract.{GoalOrigin(..)}
 -- this MATERIALISES a filtered list, and it runs twice per module (the arm's
 -- own reload and `appendDataUniverse`'s).  That is the allocation term
 -- `declEnvRowVisible`'s "ZERO ALLOCATION … MEASURED perf contract" note forbids
--- for its sibling — and `diff_compiler_perf_scaling.sh`'s `gen_modules` shape
+-- for its sibling — and the module generator in `diff_compiler_perf_scaling.sh`
 -- declares no type aliases at all, so the gate is BLIND to it (derive, don't
 -- trust: `grep -n 'type ' test/diff_compiler_perf_scaling.sh`).
 -- It is immaterial at this size and that was MEASURED, not assumed — but by PR
@@ -515,8 +515,7 @@ tyTabKey o n = tabKeyOf NsType o n
 -- ── the INTERFACE-namespace table key ────────────────────────
 -- `tyTabKey`'s peer for the `NsIface` namespace, and the ONE place a key in that
 -- namespace is minted — on both the write side and the read side.
--- `ifaceParamKindsRef` was one of the two tables named here and is RETIRED; the
--- other was `universeIfaceRequiredRef`, RETIRED in turn.  The
+-- No other per-interface table uses this key any more.  The
 -- surviving consumer is stage K's `CE` alone — `ceRowKey`/`ceLookupAt`, and through
 -- it `ceRequiredAt` (impl completeness), `ceSlotKindsAt` (graded impl heads) and
 -- `ifaceDfsCycleOneSuper`'s superinterface edge.
@@ -589,7 +588,7 @@ emptyDeclEnvAcc = DeclEnvAcc {
 -- `demKindEntries` is the SAME discipline for the THIRD projection A-3.2b slice 2
 -- needed (see `kindPublicDataDecl`): a memo of the row's kind-public entries, not a
 -- filtered population.  It is entries rather than decls because the read side wants
--- `(TabKey, List Kind)` pairs and `inferParamKinds` is pure — computing it here runs
+-- `(TabKey, List Kind)` pairs and the kind inference is pure — computing it here runs
 -- it once per decl for the whole run instead of once per (decl, reading module).
 -- They are the entries against no imported head: a reader that sees an imported
 -- head with a constructor parameter recomputes them (`declEnvRowKindEntries`).
@@ -726,15 +725,11 @@ ordOfIndex mid index = match omLookup mid index
   Some k => k
   None => 0 - 1
 
--- 🪦 RETIRED 2026-08-12 (A-3.6 bite C-0): `declEnvsVisible` / `declEnvsUpTo` /
--- `declEnvsUpToGo` — the whole-ROW accessor path ("the graph as [mid] may see it").
--- A-3.1 shipped them speculatively and `export`ed `declEnvsVisible` only to keep
--- `rule-dead-code` off the unreached block; A-3.2a, A-3.2b, A-3.4 and A-3.5c each
--- then built their own visibility path and NONE of them used it.  Zero tree-wide
--- callers at deletion time (`grep -rn 'declEnvsVisible\|declEnvsUpTo' --include=*.mdk .`
--- → definitions and comments only).  It was also one of the direct call sites of
--- `declEnvVisibleAt`, so removing it makes that predicate's reader set entirely LIVE
--- before A-3.6 reasons about it — which is the point of retiring it first.
+-- There is deliberately no whole-ROW accessor ("the graph as [mid] may see it"):
+-- A-3.2a, A-3.2b, A-3.4 and A-3.5c each build their own visibility path, so a
+-- general one would be dead code kept alive only by an `export`.  Its absence also
+-- keeps the reader set of `declEnvVisibleAt` entirely LIVE, which any reasoning
+-- about that predicate relies on.
 -- Do NOT re-add: the live shape is a predicate applied at the READ
 -- (`declEnvVisibleTo` / `declEnvRowVisible` below), not a pre-filtered row list.
 
@@ -784,10 +779,10 @@ declEnvVisibleTo cur entryOrd entryIsPublic =
 --
 -- ZERO ALLOCATION: both arms return a list the envelope already holds
 -- (`demDecls` / the `demPubDecls` memo).  That is a MEASURED perf contract, not
--- style — see `importedCtorTypeDecls`, whose walk over this result runs once per
+-- style — see `importedCtorEntry`, whose walk over this result runs once per
 -- ctor-naming import member of every module, i.e. O(modules x universe).
 -- Materialising a filtered pool here would convert that TIME term into an
--- ALLOCATION term of the same order, which is what the perf gate's `modules` shape
+-- ALLOCATION term of the same order, which is what the perf gate's modules shape
 -- grades.
 export
 declEnvRowVisible : Int -> DeclEnvModule -> List Decl
@@ -855,7 +850,7 @@ declEnvDirectImports edges mid = optionOr [] (omLookup mid edges)
 -- ═══ THE `IE` REGISTRY — IE-BLOCK-BEGIN ════════════════════════════
 -- the two banner lines bounding this block are read by A GATE.  Check 4
 -- of `test/registry_keying_ratchet.sh` (which runs inside
--- `test/typecheck_compiler_source.sh`, inside the required `soundness` job)
+-- `test/typecheck_compiler_source.sh`, inside the required soundness job)
 -- extracts exactly the text between them and FAILS if the extraction is EMPTY —
 -- so renaming or deleting either banner is loud, never a green that examined
 -- nothing.  Do not reword them without editing that check.
@@ -878,7 +873,7 @@ declEnvDirectImports edges mid = optionOr [] (omLookup mid edges)
 -- namespace belongs to B-2 (#1113).  NO `IE` key component may be A METHOD NAME:
 -- a `(method, tag)`-keyed default registry here would rebuild #1265 in the new
 -- substrate, since that pair is exactly the key #1265 is the first-match over.
--- A method name enters an `IE` row only as PAYLOAD (`ieMethods`).
+-- A method name enters an `IE` row only as PAYLOAD (the row's method list).
 --
 -- `IE` is read, and it decides acceptance: "the registry exists" and "the registry
 -- answers" are the two halves the arc's progress metric separates.
@@ -887,7 +882,7 @@ declEnvDirectImports edges mid = optionOr [] (omLookup mid edges)
 -- for Y` on the multi-module path — is a projection of `IE` at the reader's
 -- ordinal, through the ONE accessor `ieUniverseAt`; no separate accumulator holds it.
 --
--- what is still not read: `ieInst`/`InstRef` and `ieMethods`, both payload for
+-- what is still not read: the row's `InstRef` and method list, both payload for
 -- A-3.7 (coherence) and B-2. The standalone decl-list helpers still build their own
 -- `buildImplUniverse` over its whole program — that shim retires at E-4, not here.
 
@@ -975,7 +970,7 @@ ieSnapStep (r :: rest) (snaps, univ) =
 -- being defined via the other because `implDeclsWithReqs` runs per module on the
 -- hot Module path and `check` is GC-bound — deriving it from this 4-tuple form
 -- would allocate a method-name list per impl on every compile.  The agreement is
--- not left to the comment: A-3.4 PR1's `ieShadowCompare` measured it per module
+-- not left to the comment: A-3.4 PR1's shadow comparison measured it per module
 -- slice, and PR2 measured it again at the whole-prefix level over the compiler's
 -- own graph and 193 multi-module fixture projects before flipping the reader.  Both
 -- instruments are now deleted, so the standing defence is the flip itself: a
@@ -1108,14 +1103,14 @@ ieFileRow (r@(ImplRow _ _ ir _ _ _ _)) env =
 
 -- The HEAD-keyed, interface-BLIND index: every row filed under its receiver head's
 -- bucket, or the headless bucket for a fully-general `impl C a`.  This is
--- `KeyBuckets`' OWN partition (`bucketKeyEntriesFrom` → `headBucketRender`) over
+-- `KeyBuckets`' OWN partition over
 -- `IE`'s rows, and the key is minted by the SAME `headBucketKey` both tables now
 -- share, so the two cannot drift in keying — only in population, which is the
 -- whole point: `KeyBuckets` reaches its reader as a TOPOLOGICAL PREFIX
--- (`universeKeyBucketsRef` / `stampKeyTable`), while this is GRAPH-GLOBAL.
+-- (a stamped per-prefix table), while this is GRAPH-GLOBAL.
 --
 -- why an index at all, measured: the method-keyed selection leg (then
--- `matchedEntry` → `matchingEntries` → `candidateBucket`, all three deleted by
+-- three selector functions, all deleted by
 -- B-2.1-d) is *the checker's
 -- hottest selector*, and answering it graph-globally by SCANNING `ieRows` cost
 -- `check-self` 21.5 s -> 25.1 s (+17%) — an O(rows) scan per goal, the exact
@@ -1127,7 +1122,7 @@ ieFileRow (r@(ImplRow _ _ ir _ _ _ _)) env =
 -- `seq` across modules in ordinal order; `buildFlatImplEnv` folds one forward list),
 -- and `mregAppendK` APPENDS — so every bucket is in graph-global forward
 -- declaration order.  That is `mergeByDeclIdx`'s documented ascending precondition,
--- which `universeKeyBucketsRef` VIOLATED (`bucketKeyEntriesFrom` restarts at 0 per
+-- which the former per-prefix key-bucket table VIOLATED (it restarted numbering at 0 per
 -- module, so its indices duplicated and each module's slice was prepended) until ARCH
 -- B-2.1-d deleted it, and it is
 -- the property RUN-B-007's declaration-index ruling rests on.  A prepend +
@@ -1142,8 +1137,8 @@ ieFileRowByHead (r@(ImplRow _ _ _ tys _ _ _)) env = ImplEnv { env |
   ieByHead = mregAppendK (headBucketKey (univReceiverTag tys)) r env.ieByHead,
 }
 
--- THE `IE` HEAD-bucket read accessor — the successor of `bucketOfHead`, the
--- `KeyBuckets` lookup B-2.1-d deleted.  Goal side and impl side project through the SAME `headBucketKey`,
+-- THE `IE` HEAD-bucket read accessor — the successor of the
+-- `KeyBuckets` head lookup B-2.1-d deleted.  Goal side and impl side project through the SAME `headBucketKey`,
 -- so a lookup cannot silently miss the bucket its rows were filed under (which is
 -- what `dispHeadTab`'s derivation is about).  Returns the rows ASCENDING by
 -- `instRefSeq` — see `ieFileRowByHead`; a consumer feeding `mergeByDeclIdx` depends
@@ -1195,20 +1190,20 @@ ieInsertRowAt ifk (r@(ImplRow _ _ _ tys _ _ _)) env = match univReceiverTag tys
 -- The snapshots this SELECTS from are built by `insertUnivImpl` — the SAME writer
 -- `growImplUniverse` (and so the retired accumulator) uses — so the two cannot drift
 -- in key minting, and the equality reduces to population and order (§9.5's algebra +
--- `DL`) — which A-3.4 PR1's `ieShadowCompare` measured per module slice, and which
+-- `DL`) — which A-3.4 PR1's shadow comparison measured per module slice, and which
 -- PR2 re-measured at the whole-prefix level, at the read site, before flipping onto
 -- this function.
 --
 -- it selects, it does not rebuild, and that is A MEASURED REQUIREMENT.  The first
 -- cut folded the visible prefix on every read — once per module — and put back the
 -- exact O(modules x impls) quadratic #154 PR-C removed, reddening
--- `diff_compiler_perf_scaling.sh`'s `modules` shape at r2=3.35 against a documented
+-- `diff_compiler_perf_scaling.sh`'s modules shape at r2=3.35 against a documented
 -- FLAT ~2.0.  See `ieUnivSnaps`.  A future reader "simplifying" this back into a fold
 -- over `ieRows` re-introduces that; the gate will catch it, but the comment is cheaper.
 --
 -- the production callers (A-3.4 PR2) ARE `checkBodyImpl`'s Module arm — the
 -- end-of-body obligation universe and #1549's `residualUnivRef`, which share ONE
--- binding (`moduleImplUniv`). Everything an obligation check on the multi-module path
+-- binding. Everything an obligation check on the multi-module path
 -- knows about which impls exist comes through here. Add a caller only if it genuinely
 -- needs the same ordinal-filtered answer — and never open-code the filter to get it.
 export
@@ -1267,7 +1262,7 @@ ieSnapAt cur ((o, u) :: rest) acc
 -- perf: this is O(rows) per call and its caller runs per (impl x super).  Bind it
 -- ONCE per whole-module check and thread the list; calling it in `superRowExists`
 -- would be O(user impls x supers x all impls) — the same class as A-3.4 PR2's first
--- cut, which `diff_compiler_perf_scaling.sh` caught at r2=3.35 on the `modules` shape
+-- cut, which `diff_compiler_perf_scaling.sh` caught at r2=3.35 on the modules shape
 -- (see `ieUnivSnaps`).  `checkSuperImpls` is the one binding site; keep it that way.
 export
 ieRowsVisibleAt : Int -> ImplEnv -> List ImplRow
@@ -1568,7 +1563,7 @@ ceRowsOwnedBy : Int -> ClassEnv -> List CeRow
 ceRowsOwnedBy cur env = filterList (r => ceRowOrd r == cur) env.ceRows
 
 -- Slot [i]'s declared kind signature for interface [key], at the reading
--- module's ordinal.  `ceRowParamKinds` is POSITIONAL with `ceTyparams` and
+-- module's ordinal.  `ceRowParamKinds` is POSITIONAL with the interface's type parameters and
 -- holds each parameter's resolved slot kinds (`ifaceParamKindsDecl`).  An
 -- out-of-range slot ABSTAINS
 -- (`None`), which is the pre-existing miss policy: `checkGradedImplTys`' own
@@ -1581,8 +1576,8 @@ ceSlotKindsAt key cur i env = do
   nthKindList i (ceRowParamKinds r)
 
 -- Interface [key]'s REQUIRED-method names at the reading module's
--- ordinal — the relocation target of `universeIfaceRequiredRef`'s registry lookup
--- and of the retired bare first-match scan.
+-- ordinal — the one source of required-method names for impl completeness; no
+-- registry lookup or bare first-match scan stands beside it.
 --
 -- it must go through `ceLookupAt`, NOT `regLookupK … env.ceByKey`.  A second
 -- open-coded path to `ceByKey` would bypass `declEnvVisibleAt` and silently widen
@@ -1593,7 +1588,7 @@ ceSlotKindsAt key cur i env = do
 -- states the rule.
 --
 -- MISS POLICY, and it is the unit's primary hazard: `None` means "no interface of
--- that IDENTITY is visible here", and `implCompletenessMsgsOf`'s `None` arm is `[]`
+-- that IDENTITY is visible here", and `implCompletenessMsgsOfMap`'s `None` arm is `[]`
 -- — i.e. a miss produces NO diagnostic, a silent accept.  That is a severity
 -- INCREASE relative to a wrong-but-loud answer, so the population equality this
 -- lookup rests on is what the unit owes evidence for, not the key (which does not
@@ -2582,9 +2577,7 @@ kindsEq _ _ = False
 -- KType, and disagreeing slot kinds across two methods of one interface would
 -- elaborate the same index to a row in one and a tyvar in the other.
 --
--- The table is retired, not the inference.  `registerIfaceParamKinds`/
--- `registerIfaceParamKindsGo` and the `ifaceParamKindsRef`/`universeIfaceParamKinds`
--- pair they wrote into are GONE.  The inference above (`ifaceParamKindsOf`) has one
+-- No table stores the inference's result.  The inference above (`ifaceParamKindsOf`) has one
 -- consumer, the evidence `checkDeclaredKinds` gives the author of an interface
 -- whose parameter needed an annotation (`checkIfaceHeadKinds`).  The per-method
 -- scope comes from the declared kinds (`declGradedScope`), and stage K's `CE` from
@@ -2595,13 +2588,11 @@ anyKRow [] = False
 anyKRow (KRow :: _) = True
 anyKRow (_ :: rest) = anyKRow rest
 
--- ── `insertIfaceParamKinds`/`ifaceSlotKey` STOOD HERE ──────────
--- The table they wrote is retired (see the note above `anyKRow`); the KEY SHAPE
--- they minted survives in stage K's `CE` — `ceRowKey` is `regKeyOfTab (ifaceTabKey
--- o name)` and the slot is supplied POSITIONALLY by `ceRowParamKinds`, which is
--- the same (identity, slot) pair without a composite key to mint.  The history
--- below is kept because it is the derivation behind `declGradedScope` carrying
--- its scope as an argument, and that is still live.
+-- ── the slot key shape ──────────
+-- Stage K's `CE` keys a slot as an (identity, slot) pair: `ceRowKey` is
+-- `regKeyOfTab (ifaceTabKey o name)` and the slot is supplied POSITIONALLY by
+-- `ceRowParamKinds`, so there is no composite key to mint.  The derivation
+-- below is why `declGradedScope` carries its scope as an argument.
 --
 -- ONE key shape: the interface's IDENTITY plus the slot ORDINAL
 -- (`regKeyTabAt (ifaceTabKey o iface) i`).  It was the bare string
@@ -2817,9 +2808,9 @@ constraintSlotDispatchVar typarams (Constraint { constraintArgs = args }) =
 
 -- the shared retest, and it is spelling-KEYED THROUGH `dispHeadTab` ON PURPOSE —
 -- it must be the same projection the bucketing applies, never A STRONGER ONE.
--- Every head comparison in this file bottoms out here (`headTabEq`,
--- `ieImplExistsForHeadGo`, `ieCountHeadByIfaceGo`, `ieCountHeadByMethodGo`), and the
--- buckets they scan are filed by `headBucketRender` / `ieFileRowByHead` =
+-- Every head comparison in this file bottoms out here (`headTabEq`
+-- and `ieImplExistsForHeadGo`), and the
+-- buckets they scan are filed by `ieFileRowByHead` =
 -- `regKeyRender (regKeyOfTab (dispHeadTab …))`.  So a retest that compared `HeadKey`s
 -- STRUCTURALLY (`hd == Some hk`, which `deriving Eq` makes an IDENTITY comparison)
 -- would be strictly stronger than the bucket it is scanning, and would answer False
@@ -2844,10 +2835,8 @@ constraintSlotDispatchVar typarams (Constraint { constraintArgs = args }) =
 -- goal side is neither SUPPLIED nor CANONICAL until the follow-on semantics
 -- unit — which is why this site belongs IN that ledger and not outside it.
 -- Corpus: `test/shadow_fixtures/i11_importer_extern_receiver`.
--- ARCH B-2.1-d: this derivation used to live on `implExistsForHeadGo`, the prefix-table
--- existence scan, and was cited from here, from `headTabOf` and from
--- `ieImplExistsForHeadGo`.  That whole read side is deleted; the RULE is unchanged and
--- now lives on the primitive every surviving retest shares.
+-- This derivation lives on the primitive every retest shares; `headTabOf` and
+-- `ieImplExistsForHeadGo` cite it from here.
 --
 -- `None` is a headless (fully-general) entry, which lives in the headless
 -- bucket and so cannot be reached from a `Some hk` head lookup at all; False
@@ -2858,7 +2847,7 @@ headTabIs (Some hk) goal = dispHeadTab hk == goal
 headTabIs None _ = False
 
 -- `headTabIs` widened to a goal that may itself be HEADLESS, for the counting
--- scans (`ieCountHeadByIfaceGo`, `ieCountHeadByMethodGo`) whose goal is an
+-- scans whose goal is an
 -- `Option HeadKey` rather than the bare `HeadKey` an existence test has.
 -- Same rule, same reason: both sides go through `dispHeadTab`, so the retest is
 -- exactly the partition the entries were filed under and never a stronger one
@@ -2870,7 +2859,7 @@ headTabIs None _ = False
 -- `"__none__" == "__none__"` those entries were filed under.  The mixed arms are
 -- False, which is likewise what a name-vs-`noneHeadTag` compare answered — minus
 -- the forgery, since a head that SPELLS `__none__` can no longer reach the
--- headless bucket at all (`headBucketRender`).
+-- headless bucket at all (`headBucketKey`).
 headTabEq : Option HeadKey -> Option TabKey -> Bool
 headTabEq hd (Some goal) = headTabIs hd goal
 headTabEq None None = True
@@ -2916,7 +2905,7 @@ ieImplExistsForHeadOf mctx env name hk admitted =
 -- standalone's answer at exit 0), because the impl side and the goal side are measured
 -- to disagree on ORIGIN per provenance.  `univReceiverTag tys` is the same head
 -- projection `ieFileRowByHead` files each row under, so the two sides of `headTabIs`
--- are the partition, exactly as `ieCountHeadByIfaceGo` owes it.
+-- are the partition, exactly as every head retest owes it.
 -- The last field lists supplied methods only. An admitted interface's defaults
 -- answer too, through the same predicate used by instance selection.
 --
@@ -2954,7 +2943,7 @@ ieImplExistsForHeadGo gctx xs0 name goal admitted = go xs0
 -- admit no row.
 --
 -- `ieRowIfaceMatches` (`sameTyConHead` over `irName`/`irOrigin`), NOT a bare `irName`
--- compare and NOT `ieCountHeadByIfaceGo`'s deliberately spelling-only test: this is a
+-- compare and NOT a deliberately spelling-only test: this is a
 -- LOOKUP where a false HIT is silent wrongness (an impl of an unnameable declaration
 -- answering `True` — the #1664 defect) and a false MISS costs only the fall-through to
 -- the standalone.  It is the one standing comparator for IfaceRef-vs-IfaceRef identity in
@@ -2965,11 +2954,11 @@ ieRowAdmittedBy ir (Some ifaces) = anyList (ieRowIfaceMatches ir) ifaces
 
 -- Only the population moved; the discipline `B-2.1-g` established stays intact:
 --   • Key strength is unchanged.  Both sides still project through `dispHeadTab`
---     (`headTabEq`), i.e. the head tycon spelling, exactly as `tag2 == tag`
---     compared two `headTyconNameTy`/`headTyconNameMono` names.  A structural
+--     (`headTabEq`), i.e. the head tycon spelling, as a head-tycon name
+--     compare always did.  A structural
 --     `HeadKey` compare here would re-open #1111 — see `headTabIs`'s note.
 --   • The `requires`-only filter is kept (`implRowHasReqs`).  `ImplBuckets` was
---     built by `implEntryOf`, whose `match reqs [] => []` arm drops every impl with
+--     built by the entry builder, whose `match reqs [] => []` arm drops every impl with
 --     no context, so the predecessor could only ever answer True for a
 --     `requires`-carrying impl.  Dropping that filter is a SECOND, independent
 --     semantic change (it would stop reducing to `compare` for context-free impls
@@ -2994,7 +2983,7 @@ ieDefinesReqMethodAtGo xs0 method goal = go xs0
         && contains method ms = True
       | otherwise = go rest
 
--- `implEntryOf`'s `match reqs [] => []` arm, as a predicate over an `IE` row.
+-- Whether an impl carries a context: the `match reqs [] => []` test, as a predicate over an `IE` row.
 implRowHasReqs : List Require -> Bool
 implRowHasReqs [] = False
 implRowHasReqs _ = True
@@ -3002,7 +2991,7 @@ implRowHasReqs _ = True
 -- the names of an interface's REQUIRED methods (those whose merged IfaceMethod
 -- carries NO default body).  This is called once per interface at
 -- `CeRow` construction (`classEnvRowsOf`) rather than once per impl-check, and it is
--- the same pure computation the retired `insertIfaceRequired` writer stored.
+-- a pure computation, so nothing stores it.
 requiredMethodNames : List IfaceMethod -> List String
 requiredMethodNames [] = []
 requiredMethodNames ((IfaceMethod n _ None _) :: rest) =
@@ -3019,7 +3008,7 @@ ceRowIfaceName : CeRow -> String
 ceRowIfaceName r = match ceRowIface r
   IfaceRef { irName = n, ... } => n
 
--- The `done`/`path` identity, rendered once.  `regKeyRender` is `RegKey`'s own
+-- The visited-set identity, rendered once.  `regKeyRender` is `RegKey`'s own
 -- collision-free renderer, so two same-spelled interfaces in unrelated modules
 -- get DIFFERENT set members — which is the whole point of the re-key.
 export
@@ -3050,8 +3039,8 @@ keyEntryIdx (KeyEntry _ _ _ _ _ _ _ i) = i
 -- empty identity block cannot be produced by any head at all, because every head
 -- contributes exactly one `TabKey`.
 --
--- what that bought, recorded here because the selector it retired is gone (ARCH
--- B-2.1-d deleted `candidateBucket`, which carried this derivation).  A goal-head
+-- what that bought, recorded here because the selector that carried this derivation no longer exists
+-- (ARCH B-2.1-d deleted it).  A goal-head
 -- bucket could once EQUAL the headless bucket, so the head-plus-headless union had to
 -- carry an explicit `tag == noneHeadTag` guard against merging the headless bucket with
 -- ITSELF and silently doubling every candidate.  That was live, not defensive:
@@ -3081,7 +3070,7 @@ headBucketKey (Some hk) = regKeyOfTab (dispHeadTab hk)
 headlessBucketKey : RegKey
 headlessBucketKey = regKeyNTab []
 
--- the canonical impl key.  B-2.2-e: no longer a mirror of eval.mdk's `implKeyOf`
+-- the canonical impl key.  B-2.2-e: no longer a mirror of eval.mdk's impl key
 -- — it IS that function (`route_key.implRouteKeyWord`), reached from both sides of
 -- the seam.  B-2.2-b1: this spelling passes `OriginUnresolved`, i.e. the BARE
 -- interface name, and it is the mint for exactly ONE thing: `KeyEntry`'s 4th field,
@@ -3117,14 +3106,14 @@ implKeyTc iface tys = implRouteKeyWord OriginUnresolved iface tys None
 -- graph-global declaration order.
 --
 -- it did not always hold, and the history is what stops it being reintroduced.
--- `universeKeyBucketsRef` violated it: `appendUniverseAccums` re-entered
--- `bucketKeyEntries` once per module with a NON-EMPTY accumulator, so the numbering
+-- The former per-prefix key-bucket table violated it: `appendUniverseAccums` re-entered
+-- the entry numbering once per module with a NON-EMPTY accumulator, so the numbering
 -- RESTARTED AT 0 within one table (indices duplicated) and each module's slice was
 -- prepended, never reversed (descending).  ARCH B-2.1-b2 moved the selectors off that
--- table and B-2.1-d deleted it, along with `candidateBucket` — the head-plus-headless
+-- table and B-2.1-d deleted it, along with the head-plus-headless
 -- union that was this function's third caller.  So no `KeyBuckets` value reaches this
 -- function at all any more.  Re-adding a cumulative, non-`omEmpty`-seeded accumulator
--- (see `bucketKeyEntriesFrom`) is the one edit that would break the precondition again.
+-- (one that restarts numbering per module) is the one edit that would break the precondition again.
 --
 -- On an unsorted operand this still terminates and is still deterministic; it is only
 -- the "= declaration order" claim that would fail.
@@ -3150,9 +3139,9 @@ mergeByDeclIdx (x :: xs) (y :: ys)
 -- ascending by construction, so the tie-break at a no-unique-minimum goal is
 -- graph-global declaration order.
 --
--- The `KeyEntry` projection from a row matches the deleted `keyEntryOf` field-for-field:
--- same `headTyconTy` head projection, same `implKeyTc` key, same `tys` as `itys`,
--- with `instRefSeq` where `bucketKeyEntriesFrom` stamped a per-table ordinal.
+-- The `KeyEntry` projection from a row matches the predecessor's per-table builder field-for-field:
+-- same `headTyconTy` head projection, same `implKeyTc` key, same head types,
+-- with `instRefSeq` where that builder stamped a per-table ordinal.
 -- Rows with no head type (`tys = []`) are unselectable on both substrates.
 keyEntryOfRow : ImplRow -> List KeyEntry
 keyEntryOfRow (ImplRow _ inst ir tys reqs ms _) = match tys
@@ -3179,7 +3168,7 @@ ieRowHeadMatches [] _ = False
 
 -- The iface-keyed candidate scan: every row of [rows] whose interface is [iface]
 -- and whose head pattern matches [goals], as `KeyEntry`s, ORDER PRESERVED.  The
--- peer of the deleted `matchingEntriesByIfaceGo`, one substrate over — same
+-- scan runs on the `IE` rows — same
 -- `ifn == iface` filter (NOT method-name membership, so a specific impl inheriting
 -- a method via a DEFAULT is still seen) and the same `entryHeadMatches`.
 -- `keyEntryOfRow r` is a ONE-element list on this arm (the guard proved `tys`
@@ -3229,12 +3218,12 @@ ieRowHeadMatches [] _ = False
 -- (`tyConBuiltin` builds a `Ty`; `tconBuiltin` / `tconTupleHead` / `headKeyOfCon
 -- OriginBuiltin` build type heads).  Corroborated on the binary: every interface row
 -- of the origin-agreement corpus reads `mod:…`, the prelude's `Eq`/`Ord`/`Debug`
--- included, and none read `builtin` in the retired origin-agreement corpus.
+-- included, and none read builtin.
 --
 -- The rule is factored into `ieRowIfaceMatches` rather than inlined so the SELECTION
 -- family has exactly ONE seam a supply bite has to reason about — and so it cannot be
--- confused with `ieCountHeadByIfaceGo`'s deliberately spelling-only test, which is a
--- different question and stays where it is.
+-- confused with a deliberately spelling-only test, which is a
+-- different question.
 export
 ieRowIfaceMatches : IfaceRef -> IfaceRef -> Bool
 ieRowIfaceMatches ir iface =
@@ -3250,8 +3239,7 @@ ieEntriesForIface ((r@(ImplRow _ _ ir tys _ _ _)) :: rest) iface goals
     keyEntryOfRow r ++ ieEntriesForIface rest iface goals
   | otherwise = ieEntriesForIface rest iface goals
 
--- The METHOD-keyed candidate scan — the successor of `matchingEntriesGo` (deleted by
--- B-2.1-d).  Same
+-- The METHOD-keyed candidate scan.  Same
 -- method-name membership test, same head match, same order.
 --
 -- ── #1182: the candidate key now has an interface component ──────────────────
@@ -3270,7 +3258,7 @@ ieEntriesForIface ((r@(ImplRow _ _ ir tys _ _ _)) :: rest) iface goals
 -- The admitted declaration is the SAME one `ieImplExistsForHeadGo` already tests
 -- for the EXISTENCE read (`ieRowAdmittedBy`, `methodAdmissionHere`), through the same
 -- comparator — `ieRowIfaceMatches` (`sameTyConHead` over `irName`/`irOrigin`), NOT a
--- bare `irName` compare and NOT `ieCountHeadByIfaceGo`'s deliberately spelling-only
+-- bare `irName` compare and NOT a deliberately spelling-only
 -- test.  Selection is this shape's SECOND consumer; the existence read was its first.
 --
 -- `None` (this module's scope decides nothing for [name]) falls back to the
@@ -3341,10 +3329,9 @@ ieRowInheritsDefault gctx r name =
 
 -- The head-plus-headless union, on `IE`: the goal head's own bucket merged with the
 -- headless one, since a fully-general `impl C a` matches every goal but heads at
--- none.  Its `KeyBuckets` predecessor was `candidateBucket`, deleted by
--- B-2.1-d; the two properties below were derived against it and still hold here.
+-- none.  The two properties below carry over from its `KeyBuckets` predecessor.
 --
--- FILTER-THEN-MERGE, where `candidateBucket` merged-then-filtered, and the two
+-- FILTER-THEN-MERGE, where the predecessor merged-then-filtered, and the two
 -- are the same list: `mergeByDeclIdx` is a stable merge on an index, and dropping
 -- elements cannot reorder the ones that remain or change which side wins a tie
 -- (ties keep the LEFT operand, and the left operand is the head bucket on both
@@ -3399,7 +3386,7 @@ ieRowWithSeq ((r@(ImplRow _ inst _ _ _ _ _)) :: rest) s
   | instRefSeq inst == s = Some r
   | otherwise = ieRowWithSeq rest s
 
--- The three `KeyEntry` fields the deleted `selectImplEntryByIface` handed the
+-- The three `KeyEntry` fields the iface-keyed selector hands the
 -- router and the element-route legs — head pattern, FULL head vector, and the
 -- impl's OWN `requires` ([] for a no-requires specific impl).  Kept as one
 -- projection so the three consumers cannot drift in what they read off a row.
@@ -3452,7 +3439,7 @@ insertUnivImpl univ (iface, tys, reqs) =
 -- identity-carrying `IfaceRef` `methodEntryHere` already held, instead of stripping it
 -- via `ifaceRefBare iface.irName`, so every call site of `ifaceRefBare` is its
 -- definition or a reader that holds only a spelling.
--- `ifaceForInferredId`'s `pendingDictApps` fallback mints none: it returns the
+-- `ifaceForInferredId`'s pending-dictionary fallback mints none: it returns the
 -- callee slot's `pdaIfaces` entry, declaration included.
 --
 -- **and the leg still may not be deleted — measured, not inferred from the
@@ -3560,7 +3547,7 @@ insertUnivImplAt ifk tys reqs (ImplUniverse conc hl) = match univReceiverTag tys
 -- behaviour goldens moved) and again here on this tree, where leaving just TWO goal
 -- producers identity-less made `medaka check` of a file containing only
 -- `main = println 1` exit 1 with 9 rejects.  The reasoning that produced the wrong
--- prediction generalised from a GATE-shaped sibling (`ifaceRegistered`, `Unit`-valued)
+-- prediction generalised from a GATE-shaped sibling (a registered-interface gate, `Unit`-valued)
 -- while describing a payload-shaped table; `.claude/workstreams/TYPECHECK.md` trap 11
 -- now carries the rule.
 --
@@ -3590,8 +3577,8 @@ oblIfaceKey ir = tabKeyOf NsIface ir.irOrigin ir.irName
 -- driver has no loader-derived module id and an invented one would be made
 -- permanent by `stampTyHead`'s immunity rule.
 --
--- The `ImplUniverse`/obligation channel (`insertUnivImpl` / `univConcreteBucket`
--- / `oblKeyParts`) has already moved to identity keys (#1446).
+-- The `ImplUniverse`/obligation channel (`insertUnivImpl` / `univConcreteBucket`)
+-- has already moved to identity keys (#1446).
 --
 -- The rigid arm (`headKeyName (HkRigid n) = n`) is keyed deliberately too: a
 -- rigid may legally be spelled `__tupleN__` (`Mono.TRigid`'s naming rule)
@@ -3601,7 +3588,7 @@ oblIfaceKey ir = tabKeyOf NsIface ir.irOrigin ir.irName
 -- spelling, not only for keys built from one: a retest that compares heads
 -- without going through it silently strengthens from spelling-equality to
 -- identity-equality and reroutes calls whose receiver came from an
--- unstamped extern signature (the `implExistsForHeadGo` S0). Enrolment rule: if a site's answer would change
+-- unstamped extern signature (the `ieImplExistsForHeadGo` S0). Enrolment rule: if a site's answer would change
 -- when the head half becomes an identity, it goes through this function.
 -- See `compiler/TYPECHECK-TARGET-ARCHITECTURE.md` § "9.4 Data shape, key,
 -- and identity" for the full derivation.
@@ -3733,7 +3720,7 @@ ifaceMethodNames ((IfaceMethod n _ _ _) :: rest) = n :: ifaceMethodNames rest
 -- newtype's constructor is module-private, so it never leaks), exported interfaces
 -- (their method-to-interface-parameter maps feed obligation checking, so a numeric
 -- literal's `Num` obligation finds `Num`'s entry), exported type aliases, and
--- `export impl` (so `checkImplObligations` sees core's `impl Num Int`; without it a
+-- `export impl` (so the impl-obligation check sees core's `impl Num Int`; without it a
 -- legitimately Int-typed literal's obligation finds no impl head and is rejected).
 -- `DAttrib` is not unwrapped, so an attributed decl does not publish here.
 -- `registerAllData` and `buildOracle` read only `DData`, so the interface and impl
@@ -3915,7 +3902,7 @@ importTableMid path =
 -- halves, or neither.
 --
 -- No `pub` filter: a private interface's methods are carried too (F3), unlike
--- resolve's `expIfaceMethodsDirect`.  Under a wildcard import `usePathBindsName` is
+-- resolve's direct interface-method export table.  Under a wildcard import `usePathBindsName` is
 -- True for every name, so such a declaration can be admitted beside the one the
 -- module names.  The same absence lets `usePathWitnesses` drop a separate
 -- declaring-module witness: `import dep.{mth}` where `dep` declares the interface is
@@ -4128,7 +4115,7 @@ variantNamed n ((Variant cn _) :: rest) = cn == n || variantNamed n rest
 -- then a fresh recursive walk per `export import`.  Nothing shares a subresult, so a
 -- re-export CHAIN costs O(depth * modules) per importer and a branching re-export DAG
 -- costs Fibonacci-many walks (round-3 breaker, F4).  A fuel bound of 64 capped the depth
--- and not the work: `test/diff_compiler_perf_scaling.sh`'s `modules` shape — 400 modules
+-- and not the work: `test/diff_compiler_perf_scaling.sh`'s modules shape — 400 modules
 -- in one `export import` chain — went from 1.69 s to 2.49 s of typecheck at N=400, with
 -- the ADDED term growing 3.2x per doubling of N against ~2x for everything else, and CI's
 -- `gates (types)` failed it twice deterministically as SUPERLINEAR (TIME).  A comment

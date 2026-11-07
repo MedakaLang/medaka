@@ -1,5 +1,5 @@
 # META
-source_lines=3657
+source_lines=3653
 stages=DESUGAR,MARK
 # SOURCE
 -- Typechecker data declarations and state records: every `data` and `type`
@@ -7,7 +7,7 @@ stages=DESUGAR,MARK
 -- cells, no inference.
 --
 -- Closure rule: this module may not import `types.typecheck`, nor any later
--- `tc_infer_*`, `tc_solve` or `tc_driver` module.  Everything here sits below them.
+-- `tc_infer_*` or `tc_solve` module.  Everything here sits below them.
 
 import frontend.ast.{
   BinderId(..),
@@ -129,7 +129,7 @@ public export data ObligationSite = ObligationSite {
 -- global Ref (like the reference's record table) so field access / create /
 -- update / patterns can look records up without threading an env field.
 -- `RecordInfo params result fields fieldIndex`.  `fields` keeps DECLARATION ORDER
--- (record construction / exhaustiveness / owner rendering read it); `fieldIndex`
+-- (record construction / exhaustiveness / owner rendering read it); fieldIndex
 -- is a name→raw-Mono OrdMap built ONCE at registration so the hot per-access read
 -- paths (field access + record update) do an O(log N) lookup instead of an O(N)
 -- `lookupAssoc` scan, and instantiate ONLY the accessed field rather than rebuilding
@@ -166,8 +166,8 @@ public export data Kind = KType | KRow | KAuth EffLabel Bool | KArrow Kind Kind
 -- the only consumer is `unifyN`'s `TApp`/`TApp` ARM, and the ONLY thing a
 -- non-`PCo` verdict buys is that an effect row sitting inside that argument
 -- must be EQUAL rather than merely compatible.  It is deliberately NOT a
--- general subtyping engine: Medaka has no variance annotations
--- (`decided_medaka_does_not_need_variance_annotations`), so this table
+-- general subtyping engine: Medaka has no variance annotations,
+-- so this table
 -- exists to CLOSE a laundering hole, not to open a subtyping one.
 -- `PPhantom` is "no occurrence yet", the bottom the variance fixpoint starts
 -- from (`declEnvPolarityEntriesFix`); it never leaves the fixpoint, which
@@ -248,12 +248,9 @@ public export data PendingEntry =
   | PendingEntry String (Ref Route) Mono String SiteKind (Option Loc) ScopeId EvId
 
 -- ── #2547 unit 2 (ARCH M1): one deferred-goal channel ─────────────────────────
--- The route-stamped site goals used to live on five per-kind lists (`pendingSites`,
--- `pendingArgStamps`, `pendingRLocalSites`, `pendingBinopSites`/`pendingUnopSites`,
--- `pendingArithSites`), each drained by its own stamper at module end.  They are
--- ONE list of `Obligation` now, tagged by `GoalKind`; each stamper still receives
--- exactly its kind's entries, in the order the per-kind list held them (newest
--- first — the cons order is preserved by filtering), so no route moves.
+-- The route-stamped site goals live on ONE list of `Obligation`, tagged by `GoalKind`;
+-- each stamper receives exactly its kind's entries, newest first (the cons order is
+-- preserved by filtering), so no route depends on the tagging.
 --
 -- `oDest` is ABSTRACT on purpose: today every goal's evidence destination is the
 -- `Ref Route` cell the stampers write (`EvRoute`); #2548 drains this channel once at
@@ -261,7 +258,7 @@ public export data PendingEntry =
 -- place.  With the abstraction here, that drain is written once.
 --
 -- The dictionary-application, method-dict and record-dict channels are on it too
--- (`EvRoutes` destinations; the `let`/SCC brackets that windowed `dictApps` now mark
+-- (`EvRoutes` destinations; the `let`/SCC brackets that windowed the dictionary-application list now mark
 -- this channel).  Not on it: the numeric-literal channel (#991 ask 3: defaulting
 -- machinery, stays bespoke) and the two obligation-CHECK channels `obls`/`implObls`
 -- (`UObligation`, windowed per group).  `PendingEntry` and the three dictionary
@@ -345,11 +342,10 @@ public export data Obligation = Obligation {
 -- driver entry, `graphPreamble` (under `driveGraphK`, with `checkModulesPreambleK`
 -- its two-component projection), and `deAllDecls` supplies the whole-graph decl list
 -- that entry previously concatenated inline, so a mis-built envelope is LOUD
--- (`populateEffectDomains` would miss a module's `effect` decls) rather than
+-- (effect-domain population would miss a module's `effect` decls) rather than
 -- silent.  Not live in this unit: the filter.  The row accessor this paragraph
--- used to track is gone — `declEnvsVisible`/`declEnvsUpTo`/`declEnvsUpToGo` were
--- RETIRED 2026-08-12 (bite C-0, see their tombstone further down) with zero callers,
--- ever: A-3.2a read `deAllDecls` unfiltered, and A-3.2b/A-3.4/A-3.5c each built their
+-- used to track does not exist — the whole-row accessors would have had zero callers,
+-- ever (see the note in `types/tc_env.mdk`): A-3.2a read `deAllDecls` unfiltered, and A-3.2b/A-3.4/A-3.5c each built their
 -- own read-side path (`declEnvRowVisible`, `ieSnapAt`, `ceLookupAt`) instead.  The
 -- filter itself IS live now, through those readers — but never through a pre-filtered
 -- row list.  (This paragraph originally named "A-3.2/A-3.3/A-3.4's table reads" as the
@@ -409,7 +405,7 @@ public export data DeclEnvs = DeclEnvs {
 -- (`preludePreambleFor`) and resumes here with the user modules.
 --
 -- what may be a field here: a table whose prelude contribution is a pure function
--- of `coreDecls` -- of the DECLS, and of nothing else a process carries.  Two
+-- of coreDecls -- of the DECLS, and of nothing else a process carries.  Two
 -- disqualifications, and the second is the one that is easy to miss:
 --   * it may not hold a `Decl`.  `Decl` carries mutable `Ref`s, and the tree is
 --     re-stamped (`stampGraphTyOrigins`) into FRESH decls on every analyze, so a
@@ -447,7 +443,7 @@ public export data DeclEnvAcc = DeclEnvAcc {
 -- A-2.3 a `TabKey` is identity-bearing and `tabKeyEq` never equates `TkIdent` with
 -- `TkBare`, so two modules' same-named types cannot share a key: the only
 -- duplicate key is ONE declaration seen twice, whose two values are equal because
--- `inferParamKinds` is pure over the same inputs.  It goes live the moment a BARE
+-- the kind inference is pure over the same inputs.  It goes live the moment a BARE
 -- key can enter the same list — the flat-path population, drained by #1115 (E-1) —
 -- at which point first-match means "last registered wins" again and the
 -- #1069/#1070/#1090 family returns.  It costs a fold direction.  (INFERRED, argued
@@ -474,8 +470,8 @@ public export data DeclEnvAcc = DeclEnvAcc {
 -- and `DAttrib` unwraps and recurses, mirroring `registerData` (#1228/#1586 — see
 -- the note on `declEnvKindEntries`, including which reader actually reaches it).
 -- ── #2158: The bare-name accumulator, a third one in *THIS* FOLD ─────────
--- `nacc`/`nm` is `kacc`/`km`'s membership-set shadow: the `tabKeyName` of every
--- key `kacc` holds, as an `OrdMap Unit`, stamped under the same module id at the
+-- nacc/nm is kacc/km's membership-set shadow: the `tabKeyName` of every
+-- key kacc holds, as an `OrdMap Unit`, stamped under the same module id at the
 -- same point in the walk.  `noImplHintFor` asks a bare-name MEMBERSHIP question
 -- of `dataParamKindsRef` and nothing else does, so answering it needs a set, not
 -- the list.
@@ -484,18 +480,18 @@ public export data DeclEnvAcc = DeclEnvAcc {
 -- measured, not stylistic.  #2158 first shipped as a per-module REBUILD in
 -- `declEnvSeedDataUniverse` (`omFromNames (map … dataParamKindsRef.value)`), and
 -- that list is `deKindsBefore[mid]`, whose length grows with the module ordinal —
--- an O(M² log M) term paid unconditionally on every compile.  `stage_ir_scaling`'s
+-- an O(M² log M) term paid unconditionally on every compile.  stage_ir_scaling's
 -- `modules:typecheck` row went 2.219 → 2.500 (ceiling 2.45) on that one line.  The
 -- accumulator below pays O(entries log entries) for the WHOLE graph instead, and
 -- the read is one `omLookup`.
 --
 -- NOT `declEnvPolarityChain`'s SEPARATE-WALK SHAPE, and that is the
 -- discriminator to check before adding a fourth: the polarity chain needs its own
--- walk because `declEnvRowPolarityEntries` READS `pacc` while building it.  This
--- accumulator is WRITE-ONLY — insert and forget, exactly like `oacc` — so it
--- composes into the existing fold with no new read edge.  It also shares `kents`
+-- walk because `declEnvRowPolarityEntries` READS pacc while building it.  This
+-- accumulator is WRITE-ONLY — insert and forget, exactly like oacc — so it
+-- composes into the existing fold with no new read edge.  It also shares kents
 -- with the kind half rather than re-deriving the projection, which is what keeps
--- the two provably the same rows: the name set is `kacc`'s key set by
+-- the two provably the same rows: the name set is kacc's key set by
 -- construction, not by a parallel definition that could drift.
 -- The chain's state: the three write-only accumulators (`ds*Acc` -- "everything
 -- strictly before the next row") and the three per-module seed tables stamped from
@@ -524,7 +520,7 @@ public export data DataTypeDecl = DataTypeDecl {
 -- reader: `aliasUniverseAt` is the whole-graph replacement for the retired
 -- `CrossRun.universeAliasTable`, and it must answer "which aliases can a reader
 -- at ordinal k see" without walking every module's decls again (the per-module ×
--- per-decl shape `importedCtorTypeDecls` already pays once).
+-- per-decl shape `importedCtorEntry` already pays once).
 --
 -- they are the predicate's arguments, not a second copy of its body.  Both
 -- are consumed by `aliasUniverseAt` through `declEnvVisibleTo` itself; nothing
@@ -554,14 +550,14 @@ public export data AliasDecl = AliasDecl {
   adAttrib : Bool,
 }
 
--- `deFieldOwnerIdents` is the NEW identity-keyed table: `universeFieldOwners`
--- (`GraphCtx.crossRun`) is bare-String-keyed only and has no identity companion today
+-- `deFieldOwnerIdents` is the identity-keyed field-owner table: the bare-String-keyed
+-- owner table (`deOwnersBefore`) has no identity companion today
 -- (unlike the ctor/record tables, which A-2.11/A-2.12 (#1319 units 1/2)
 -- already gave one).  Mirrors `deCtorIdents`/`deRecordIdents`'s shape: field
 -- name -> every (owning ctor Ident, owning ctor name) that declares it, in
 -- declaration order.
 --
--- `universeFieldOwners`'s `addFieldOwners` is ALREADY a multimap, so two
+-- The bare owner table's `addFieldOwners` is ALREADY a multimap, so two
 -- DIFFERENT ctor names sharing a field are NOT the case this table adds
 -- anything for — the bare table shows both rows already.  What only THIS
 -- table can state is the case where the owning ctor name repeats: two
@@ -569,7 +565,7 @@ public export data AliasDecl = AliasDecl {
 -- the SAME bare string "Pt" twice to the bare table's owner list, which a
 -- reader cannot tell apart from one declaration counted twice.
 -- `deFieldOwnerIdents` keeps the two as distinct `Ident`s (different
--- `TyConOrigin`) — see `distinctIdentsIn2` and the doctests below.
+-- `TyConOrigin`) — see the doctests below.
 public export data DataEnv = DataEnv {
   deTypes : List (TabKey, DataTypeDecl),
   deCtorIdents : OrdMap (List (Ident, String, Variant)),
@@ -580,7 +576,7 @@ public export data DataEnv = DataEnv {
 }
 
 -- The INSTANCE IDENTITY this tree does not otherwise have.  `cohClassify`'s ledger
--- records the gap verbatim — `bucketKeyEntriesFrom` restarts its numbering at 0 per
+-- records the gap verbatim — the former per-prefix key builder restarted its numbering at 0 per
 -- module, so two distinct impls in different modules share an index.  Minted in
 -- exactly ONE place (`implRowsOf`, from the declaring module's id + ordinal + a
 -- sequence number within the whole-graph build), so two impls can never share one.
@@ -618,19 +614,19 @@ public export data InstRef = InstRef String Int Int
 --
 -- The LLVM emitter resolves a record field label to a positional index from a table
 -- it builds by scanning the lowered program for construction sites —
--- `scanExprRecords` collects `(name, labels)` from `CRecord` nodes only, never from
--- the `DData` declaration (`compiler/backend/llvm_emit.mdk:10178-10193`,
--- `findFieldIdx`/`findRecordByLabel` at `:10148-10163`).  So a record whose
+-- that scan collects `(name, labels)` from `CRecord` nodes only, never from
+-- the `DData` declaration (`compiler/backend/llvm_emit.mdk`'s record-label table
+-- and its field-index lookup).  So a record whose
 -- CONSTRUCTION is dead-code-eliminated from an entry's closure while a FIELD ACCESS
 -- on it survives panics: `llvm: CFieldAccess: unknown field '<label>'`.
 --
 -- MEASURED on this branch, with the named-record spelling:
 --   ./medaka build compiler/entries/wasm_emit_typed_main.mdk   -> exit 1,
 --   runtime error [E-PANIC]: llvm: CFieldAccess: unknown field 'ieOrd'
--- reproduced in CI on the `wasm` job, which cascaded `gates (backend)` into a
+-- reproduced in CI on the wasm job, which cascaded `gates (backend)` into a
 -- phantom-skipped `diff_compiler_tmc_parity`. Before driver collapse that entry
 -- reached the retired single-program elaborator and therefore `checkBodyImpl`,
--- (`ieShadowCompare` at the time this was measured, `ieUniverseAt` since A-3.4 PR2;
+-- (`ieUniverseAt` since A-3.4 PR2;
 -- either way `checkBodyImpl` mentions `ImplRow`'s fields and the entry's closure
 -- therefore contains the field ACCESS) — but it never reaches `buildDeclEnvs`, hence never
 -- `implRowsOf`, the only `ImplRow` construction site.  A positional constructor is
@@ -639,7 +635,7 @@ public export data InstRef = InstRef String Int Int
 -- `ImplEnv` below KEEPS its named fields, and that is not an inconsistency: its
 -- construction site `emptyImplEnv` is reachable from `emptyDeclEnvs` ←
 -- `initialGraphCtx`, which the `interners` initializer builds — which is why the panic
--- named `ieOrd` and not `ieRows`.  A later editor who makes `emptyImplEnv`
+-- named ieOrd and not `ieRows`.  A later editor who makes `emptyImplEnv`
 -- unreachable re-arms the same trap on `ImplEnv`.
 --
 -- Fields, in order: the declaring module's ordinal (A-3.1's `demOrd` — the scope);
@@ -662,7 +658,7 @@ public export data ImplRow =
 -- `KeyBuckets`' partition, minted through the SAME `headBucketKey` (see
 -- `ieFileRowByHead`).  Derive the set rather than trusting a count here — this
 -- sentence said "the three buckets" while there were four, which is how
--- `stampKeyTable`'s "five stampers" comment came to be wrong about seven.
+-- a "five stampers" comment elsewhere came to be wrong about seven.
 public export data ImplEnv = ImplEnv {
   ieRows : List ImplRow,  -- whole-graph, build order; the snapshot fold reads this
   ieConcrete : MultiRegistry ImplRow,
@@ -677,7 +673,7 @@ public export data ImplEnv = ImplEnv {
   -- prefix on EVERY read, i.e. once per module: O(modules x impls) where the
   -- accumulator it replaced was O(impls) TOTAL.  That is exactly the
   -- "rescan the accumulated universe once per module" quadratic #154 PR-C removed
-  -- and `diff_compiler_perf_scaling.sh` promoted the `modules` shape OUT of its
+  -- and `diff_compiler_perf_scaling.sh` promoted the modules shape OUT of its
   -- ledger for — and it put it straight back: net alloc 730 MB -> 2191 MB -> 7345 MB,
   -- r1=3.00 r2=3.35, ** SUPERLINEAR (ALLOC) ** against a 3.0 ceiling and a
   -- documented FLAT ~2.0 expectation.
@@ -722,8 +718,8 @@ public export data ImplAcc = ImplAcc {
 -- identity.  Elaboration to Scheme/Mono/RecordInfo stays where it is today."*
 -- Re-confirmed against this tree before writing a line of this block: every
 -- LIVE CE-side table already stores raw `Ty` —  the list below is a dated
--- snapshot, not a live inventory: `universeIfaceParamKinds` was retired by A-3.5c
--- and `universeIfaceRequiredRef` by A-3.5a (both #1557).  It is kept unedited
+-- snapshot, not a live inventory: universeIfaceParamKinds was retired by A-3.5c
+-- and universeIfaceRequiredRef by A-3.5a (both #1557).  It is kept unedited
 -- because the CLAIM it supports — no CE-side table stores an elaborated
 -- `Scheme`/`Mono`/`RecordInfo` — is what mattered and is still true of the
 -- survivors; derive the live set from `CrossRun` rather than reading it here.
@@ -755,23 +751,23 @@ public export data ImplAcc = ImplAcc {
 -- filter at the read (`nameableIfaceShadows`), so a copy here would be a
 -- second, differently-shaped answer to a question that already has one live
 -- decision point.  `universeMethodDispatchIdxByIdRef` is #1351's (OPEN S0; its
--- bare-name predecessor `universeMethodDispatchIdxRef` was retired at L5), and
+-- bare-name predecessor universeMethodDispatchIdxRef was retired at L5), and
 -- `TYPECHECK-TARGET-ARCHITECTURE.md` §9 independently routes it to `IE`/
 -- RLocal-site channels, not `CE`.
 --
--- ✅ `universeIfaceParamKinds` COORDINATION — DISCHARGED, which is
+-- ✅ universeIfaceParamKinds COORDINATION — DISCHARGED, which is
 -- the PR this paragraph was addressed to.  A-3.3 wrote: *"its eventual retirement is
--- this unit's (`CE`'s) to route, on whatever PR first gives `ceParamKinds` a live
+-- this unit's (`CE`'s) to route, on whatever PR first gives `ceRowParamKinds` a live
 -- reader, not A-3.2b's to fold in by accident of which function happens to marshal it
--- today."*  A-3.5c is that PR.  `ceParamKinds` has a production reader
--- (`ceSlotKindsAt` ← `checkGradedImplTys`), and BOTH the `universeIfaceParamKinds`
--- CrossRun cell and the `ifaceParamKindsRef` ModuleCtx ref it marshalled are DELETED,
--- along with their writer — so `loadDataUniverse`/`storeDataUniverse` marshal one
+-- today."*  A-3.5c is that PR.  `ceRowParamKinds` has a production reader
+-- (`ceSlotKindsAt` ← `checkGradedImplTys`), and BOTH the universeIfaceParamKinds
+-- CrossRun cell and the ifaceParamKindsRef ModuleCtx ref it marshalled are DELETED,
+-- along with their writer — so `loadDataUniverse`/storeDataUniverse marshal one
 -- fewer table than before this unit.  Do not write the count here: this line said
 -- *"THREE tables (recordByName, fieldOwners, dataParamKinds)"* and #1512 slices 2+3
 -- retired two of those three the same day.  DERIVE the survivors from the two bodies,
 -- whose own header (`loadDataUniverse`) states the same rule.  A-3.2b's residual slice 1
--- took `aliasTable` out just before this unit took `ifaceParamKinds`, and
+-- took `aliasTable` out just before this unit took ifaceParamKinds, and
 -- the `DataEnv`-by-CO-LOCATION confusion the original note was guarding against no
 -- longer has a table to attach to.  A-3.2b's slices retire the remaining rows under
 -- `DataEnv`'s own name.
@@ -805,7 +801,7 @@ public export data ImplAcc = ImplAcc {
 -- outright.  `ceMethodOf`'s `(IfaceMethod n ty _)` pattern discards exactly
 -- that third position.  `name`/`typarams`/`supers`/`ifaceOrigin` are untouched
 -- by the same arm (only `methods` is record-updated).  So CE's projection over
--- the raw `demDecls` and over the prePass-rewritten `modules2a`/`modules2`
+-- the raw `demDecls` and over the prePass-rewritten module lists
 -- agree by construction — the rewrite touches nothing CE reads.
 --
 -- positional, not a named record — the SAME measured emitter constraint
@@ -813,7 +809,7 @@ public export data ImplAcc = ImplAcc {
 -- site (`buildDeclEnvs` → `buildClassEnv`) is reachable from every driver
 -- entry exactly as `implRowsOf`'s is, while a named-record spelling's field
 -- ACCESS can still be linked into an entry whose construction was DCE'd (the
--- `ieOrd`/`wasm_emit_typed_main.mdk` panic `ImplRow`'s comment reproduces).  A
+-- ieOrd/`wasm_emit_typed_main.mdk` panic `ImplRow`'s comment reproduces).  A
 -- positional constructor is destructured by pattern match and consults no
 -- label table, so it cannot hit this.  `ClassEnv` below KEEPS named fields,
 -- for the identical reason `ImplEnv` does: its construction site
@@ -821,17 +817,17 @@ public export data ImplAcc = ImplAcc {
 -- which the `interners` initializer builds.
 --
 -- Fields, in order: this interface's identity key (`ifaceTabKey` lifted
--- through `regKeyOfTab`, the same mint `oblIfaceKeys`/`ifaceSlotKey` use);
+-- through `regKeyOfTab`, the same mint `oblIfaceKeys` uses);
 -- the declaring module's ordinal (A-3.1's `demOrd`, the scope); the interface
 -- reference (spelling + identity); its declared type parameters, by name and
 -- position; its methods as `(name, raw Ty, graded scope)` triples — the scope
 -- is `declGradedScope typarams methods`, computed ONCE per interface exactly
 -- as `methodRowsInto` already does, not re-derived
 -- per method; its raw `Super` list, unelaborated; its per-typaram kind
--- signature, POSITIONAL with `ceTyparams` — each parameter's resolved slot
+-- signature, POSITIONAL with its declared type parameters — each parameter's resolved slot
 -- kinds (`ifaceParamKindsDecl`); and, its REQUIRED-method
 -- names — `requiredMethodNames methods`, the SAME pure computation the retired
--- `universeIfaceRequiredRef` writer (`insertIfaceRequired`) stored under the
+-- required-names writer stored under the
 -- SAME `regKeyOfTab (ifaceTabKey ifaceOrigin name)` key, so relocating
 -- impl-completeness onto this row is a population/lifetime move on the Module
 -- arm and not a re-key (the historical single-program arm was on a
@@ -1091,9 +1087,9 @@ manifestDriverFor inputs None = inputs.diExecutedMainDriver
 -- ONLY mutators are its own five ops.  wPush/wRestore are the sole writers, so
 -- the invariant cannot drift; wMark/wWindow replace the `N0 = …N.value` snapshot +
 -- prefix-take bracket over the first `…N.value - N0` items that every channel repeats.
--- `pendingCallObligations`/`pendingCallObligationsN` are ported onto this — see
+-- The call-obligation lists are ported onto this — see
 -- `compiler/types/typecheck.mdk`'s `obls` field below.  #841 ported
--- `pendingImplObligations` onto it too (the `implObls` field); the dictionary
+-- the impl-obligation list onto it too (the `implObls` field); the dictionary
 -- application channel lives on `GraphRun.goals` since #2547 unit 2.
 public export data Windowed a = Windowed { items : Ref (List a), n : Ref Int }
 
@@ -1104,7 +1100,7 @@ public export data Windowed a = Windowed { items : Ref (List a), n : Ref Int }
 -- parallel lists again.  `qualConstraintFor` used to return `(List Int, List String)`
 -- built from two INDEPENDENT table lookups each defaulting to `[]` — a hit on the ids
 -- table with a miss on the ifaces table produced a length mismatch BY CONSTRUCTION, not
--- by corruption, which the downstream zips then silently truncated away.  `pairSlots`
+-- by corruption, which the downstream zips then silently truncated away.  `CSlot` construction
 -- is now the single place an id list meets an iface list, and the mismatch policy lives
 -- there, once.
 public export data CSlot = CSlot { csIface : IfaceRef, csId : Int }
@@ -1241,18 +1237,18 @@ public export data MethodRowTestObservation = MethodRowTestObservation {
 } deriving (Eq, Debug)
 
 -- B-2.2-f (#1113): how many of a constrained callee's slots were PRESENT BEFORE
--- `expandSupersPairs`' transitive super expansion APPENDED any.
+-- the transitive super expansion APPENDED any.
 -- That wording is the correction, and the direction of the old one matters.  This
 -- comment used to say "DECLARED by its own `=>` context", which is FALSE on a live
 -- path: `setFunConstraintEntry`'s second caller mints slots from INFERRED constraint
 -- ids, with no `=>` context anywhere, and those are recorded as `CDPLen` too.  The
 -- BEHAVIOUR is right — the operative property is "not appended by
--- `expandSupersPairs`", and an inferred slot is not appended — but a reader taking the
+-- the super expansion", and an inferred slot is not appended — but a reader taking the
 -- old definition literally would conclude the inferred path OVER-records and "fix" it
 -- by lowering the count, withholding identity from real slots.  Do not.
 -- Carried per ENTRY, beside the ids table (never inside `CSlot`) — the
 -- recursive-call arm (`realizeRecDictApps` -> `recRoutes` -> `resolveRecMono`) reads
--- `funConstraintsRef` as a bare `List Int` and constructs no `CSlot` at all, so a
+-- `funPredicateSlotsRef` as a bare `List Int` and constructs no `CSlot` at all, so a
 -- per-slot field could not serve it.
 --
 -- two-valued on purpose.  Absence is NOT `0` and NOT `Option Int`:
@@ -1409,7 +1405,7 @@ public export data PendingDictApp = PendingDictApp {
 -- stable quantifier positions needed to instantiate it at an occurrence.  Positions
 -- survive the separate fresh-id scheme builds used by discovery and elaboration;
 -- dictionary cardinality is the number of MethodPredicateSlot records, never the
--- number of bound ids inside a predicate.  `pendingMethodDicts` carries the resulting
+-- number of bound ids inside a predicate.  The pending method-dict list carries the resulting
 -- instantiated PredicateSlots until `resolveMethodDicts` routes them after inference.
 --
 -- Every row is keyed by `methodSlotKey`: the declaring interface's identity plus the
@@ -1450,7 +1446,7 @@ public export data CrossRun = CrossRun {
   -- indexed by spelling (`SpellingPop`).  Grown only by `appendDataUniverse`, at
   -- the end of each module's arm in ordinal order, so module k reads exactly the
   -- public rows of the modules before it.  The floor (`spFloor`) is the bare-keyed
-  -- last-write view: the ctor floor is the base of every Module-arm `dataEnv`
+  -- last-write view: the ctor floor is the base of every Module-arm dataEnv
   -- (`withCtors`), the record floor seeds `recordByNameRef` (`loadDataUniverse`).
   universeCtorPop : Ref (SpellingPop Scheme),
   universeRecordPop : Ref (SpellingPop RecordInfo),
@@ -1460,43 +1456,43 @@ public export data CrossRun = CrossRun {
   -- Do not re-add a cross-run copy beside stage k (design law L1): that is two
   -- answers to one question, and the copy is always the one whose population depends on
   -- marshalling order.  Retired cell -> what answers it now:
-  --   `universeRegisteredIfacesRef` (#1569) -- NOTHING.  Its only reader
-  --      `ifaceRegistered` was deleted by #1539, leaving it and its `ModuleCtx` sibling
+  --   universeRegisteredIfacesRef (#1569) -- NOTHING.  Its only reader
+  --      ifaceRegistered was deleted by #1539, leaving it and its `ModuleCtx` sibling
   --      write-only.  It was deliberately bare-name while it lived (the
   --      reasoning is kept in `builtinClassPresent`'s header).  Do not re-add either
   --      half without a reader.
-  --   `universeFieldOwners` (A-3.2b slice 3, #1512) -- `declEnvsRef.deOwnersBefore`,
+  --   universeFieldOwners (A-3.2b slice 3, #1512) -- `declEnvsRef.deOwnersBefore`,
   --      one `omLookup` by loader module id over `declEnvSeedChain`'s prefix chain.
-  --   `universeDataParamKinds` (A-3.2b slice 2, #1512) -- `declEnvsRef.deKindsBefore`,
+  --   universeDataParamKinds (A-3.2b slice 2, #1512) -- `declEnvsRef.deKindsBefore`,
   --      filled by `kindPublicDataDecl`, a PEER of `publicDataDecl` that also admits
   --      `VisAbstract` and public `DNewtype`, because no other pass publishes those
   --      decls' kinds (#804/#1028).  Do not re-add a separate pass beside this cell.
-  --   `universeIfaceRequiredRef` (A-3.5a, #1557) -- stage K's `CE` already holds that
+  --   universeIfaceRequiredRef (A-3.5a, #1557) -- stage K's `CE` already holds that
   --      value under that key (`ceRowRequired`); its one reader
   --      `implCompletenessMsgsOfMap` now calls `ceRequiredAt`, and the retired arm's
-  --      separate bare-name scan `ifaceRequiredMethods` went with it, so there is now
+  --      separate bare-name scan ifaceRequiredMethods went with it, so there is now
   --      ONE impl-completeness checker for both modes.  It was never in the
-  --      `loadDataUniverse`/`storeDataUniverse` ladder, so unlike A-3.5c its retirement
+  --      `loadDataUniverse`/storeDataUniverse ladder, so unlike A-3.5c its retirement
   --      cannot desynchronize that marshalling pair.
-  --   `universeIfaceParamKinds` (A-3.5c, #1557) -- `declEnvsRef.deIfaces`, projected at
+  --   universeIfaceParamKinds (A-3.5c, #1557) -- `declEnvsRef.deIfaces`, projected at
   --      the reader's ordinal by `ceSlotKindsAt`.  #822's iface half of the kind
-  --      universe; its `ModuleCtx` half `ifaceParamKindsRef` and its writer went too.
-  --   `universeAliasTable` (A-3.2b residual, #1512) -- `declEnvsRef.deData.deAliases`,
+  --      universe; its `ModuleCtx` half ifaceParamKindsRef and its writer went too.
+  --   universeAliasTable (A-3.2b residual, #1512) -- `declEnvsRef.deData.deAliases`,
   --      projected by `aliasUniverseAt`.  A copy would silently carry
   --      `rejectCyclicAliases`' per-module deletions.
-  --   `universeDataDecls` (A-3.2b, #1512 / #1319 unit 4) -- #674's positional overlay
+  --   universeDataDecls (A-3.2b, #1512 / #1319 unit 4) -- #674's positional overlay
   --      pool; both consumers now read `DeclEnvs.deModules` at the reader's own ordinal,
   --      the envelope already holding the whole graph keyed by loader module id.
-  --   `obUnivConcreteRef`/`obUnivHeadlessRef`/`obUnivIfaceTagsRef` (A-3.4 PR2, #1112) --
+  --   obUnivConcreteRef/obUnivHeadlessRef/obUnivIfaceTagsRef (A-3.4 PR2, #1112) --
   --      stage K's `IE` (`declEnvsRef.deImpls`, projected by `ieUniverseAt`) is the
   --      single answer to "what impls exist" on the Module path.  Not merely unread.
   -- Six more cells were FOLDED rather than projected, because their payload is
   -- elaborated and stage K is syntactic.  Each namespace had a bare-keyed floor
   -- plus an identity companion plus a collided list; each is now one population.
-  --   `universeDataEnv`, `universeCtorIdentsRef`, `universeCtorCollidedRef` --
+  --   universeDataEnv, universeCtorIdentsRef, universeCtorCollidedRef --
   --      `universeCtorPop`'s `spFloor` (read through `withCtors`), `spRows`,
   --      `spCollided`.
-  --   `universeRecordByName`, `universeRecordIdentsRef`, `universeRecordCollidedRef`
+  --   universeRecordByName, universeRecordIdentsRef, universeRecordCollidedRef
   --      -- `universeRecordPop`'s same three projections.
   builtinClassesRef : Ref BuiltinClasses,  -- #1446 P1 + #1539 / DICT §8 I7: the four operator/literal classes' identities AND presence, read off the PRELUDE's own DInterface decls — see seedBuiltinClasses
   -- B-4 (#1318): one cross-run row per function, one carrier element per dictionary
@@ -1678,10 +1674,10 @@ public export data AssumAnswer =
   | LegacyProjected EvidenceBinderId (List Int)
 
 -- #2547 unit 3: ONE stored given — the predicate a dict parameter discharges, and the
--- parameter's name.  The two per-module tables this replaces (`activeDictPreds`, keyed
--- `(slot, dname)`, and `implReqPredicateSlots`, keyed `(dname, slot)`) held the same pair
+-- parameter's name.  The two per-module tables this replaces (activeDictPreds, keyed
+-- `(slot, dname)`, and implReqPredicateSlots, keyed `(dname, slot)`) held the same pair
 -- in opposite orders and were scanned by two helpers whose match tests were identical
--- term for term (`implReqPick` vs `firstPredForEnclAt`).
+-- term for term (implReqPick vs `firstPredForEnclAt`).
 --
 -- The predicate identity is `PredicateSlot` — `psIface : IfaceRef` already carries
 -- `irOrigin` beside `irName`, and `predicateRequestMatchesSlot` already discriminates on
@@ -1801,7 +1797,7 @@ public export data GraphRun = GraphRun {
   -- arg stamps, RLocal sites, binop/unop sites, arithmetic sites) — see `Obligation`.
   goals : Ref (List Obligation),
   -- #991 ask 3, RULED: the numeric-literal channel STAYS BESPOKE — it is
-  -- Float-DEFAULTING machinery (`setNumlitFloats`), not obligation checking, so it is
+  -- Float-DEFAULTING machinery (setNumlitFloats), not obligation checking, so it is
   -- deliberately NOT ported onto `UObligation` like `implObls` was.
   numlitRefs : Ref (List (Mono, Ref (Option Float), Int, Ref Route)),
   -- the numlit channel's length, maintained by `pushNumlit` beside every write, so a
@@ -1921,7 +1917,7 @@ public export data GivenScope =
   -- It reads GMIdWitnessed givens ONLY.  Widening it to the signature-channel givens
   -- as well — which looks free, because `enclDictVarOf` runs ahead of it in
   -- `activeDictVarOfEncl` applying a term-for-term identical test — loses
-  -- `impl_requires_nonfunctor_sibling` the same way an undifferentiated merge does:
+  -- impl_requires_nonfunctor_sibling the same way an undifferentiated merge does:
   -- `registerFunPredGiven` also registers each slot's TRANSITIVE SUPERS, which
   -- `enclDictVarOf` never sees, so this rung would answer a super where today the answer
   -- comes from `activeDictPredOf` one rung later, off a different first match.
@@ -2150,7 +2146,7 @@ public export data ReqWalk =
 -- path, met G again and did not finish clean.  Only a subtree that raised no error
 -- (`erredDuring`) and, on the route walk, met no cut (`wmCuts`) is recorded.
 --
--- A solving walk (`residualPredsOf`, `implGoalResiduals`, `superContextLeaves`)
+-- A solving walk (`residualPredsOf`, `implGoalResiduals`, superContextLeaves)
 -- records the residuals below a goal (`wmSolved`).  Each such walk is run by one
 -- function whose other arguments are fixed for the walk, so the goal and the fuel are
 -- the whole key.  It also records only a subtree whose residuals hold no type or effect
@@ -2232,11 +2228,11 @@ public export data SigVars = SigVars {
 -- the literal prefix instead of collapsing to ⊤.  Intraprocedural ONLY —
 -- accumulated as infer descends ELet/ELetGroup/block lets (PVar / single-clause
 -- zero-arg only, mirroring α's own binding rule); read at the fill site via α's
--- initial `lets`.  A literal laundered through a helper stays ⊤ (spec §5
+-- initial lets.  A literal laundered through a helper stays ⊤ (spec §5
 -- non-goal).  Sound: only turns over-rejections into acceptances.
 -- #837 incr2 (Axis A): the 4th field is a name→is-local channel — a FAITHFUL
 -- lexical-scope carrier for "does this name currently denote a body-local
--- binding?", replacing the reset-at-body-entry `bodyLocalSchemesRef` proxy.  It
+-- binding?", replacing the reset-at-body-entry bodyLocalSchemesRef proxy.  It
 -- is immutable and restored on inference return, so an out-of-scope local is
 -- simply ABSENT — no stale entries, no lifetime management (the exact wish the
 -- old `(name, schemeIds)` key worked around).  Only `extendLocalVar[s]` set it;
@@ -2533,7 +2529,7 @@ public export data CtorFieldConflict =
 -- a supply route for them that is neither invented nor user-writable.
 --
 -- the key is this enum, not a name, and that is the whole point.  The obvious route
--- — re-value `registeredIfacesRef` (`OrdMap Unit` → `OrdMap TyConOrigin`) and have the
+-- — re-value registeredIfacesRef (`OrdMap Unit` → `OrdMap TyConOrigin`) and have the
 -- operators read the origin they already gate on — was considered and REJECTED: that
 -- table was written by the per-method registrar for every interface, prelude
 -- or user, so a user `interface Num` would both satisfy the gate and SUPPLY the origin.
@@ -2670,7 +2666,7 @@ public export data ArmedGuard = ArmedGuard {
 -- rp = return-position methods, dn = constrained-fn dict names, an = arg-position
 -- methods, sm = the P0-18 mangle definer-shadow map (mangledSymbol ↦ bareMethod).
 -- #2189: rp/dn/an are OrdMap-backed SETS, not `List String` scanned by
--- `contains` — the same treatment `bound` already gets below, and for the same
+-- `contains` — the same treatment bound already gets below, and for the same
 -- reason: they grow with the program while the rewrite visits every EVar.
 -- `sm` is the one that stays a LIST, and that is measured rather than assumed.  While
 -- the definer-shadow map was empty off the emit path an assoc probe cost nothing, and
@@ -2773,7 +2769,7 @@ public export data CohImpl = CohImpl IfaceRef (List Mono) String (Option Loc)
 -- and returns it (None on a head-mismatch OR an inconsistent re-bind).  The Bool
 -- frontends are `isSome ∘ matchOneSided`; matchTyMono returns the subst itself.
 -- Enforcing consistency HERE is what makes matchTyMono a genuine SUBSTITUTION
--- (DICT-SEMANTICS §3 `inst`): the old `xs ++ ys` combine accepted an inconsistent
+-- (DICT-SEMANTICS §3 inst): the old `xs ++ ys` combine accepted an inconsistent
 -- non-linear-head match (e.g. `Get (Box a) a` vs `Get (Box Int) Bool`) and so
 -- could false-match and select the wrong impl's requires.  cohOverlap is NOT a
 -- frontend of this core — it is two-sided unification (both sides' vars bind), the
@@ -2790,10 +2786,10 @@ public export data MStep k g s = MVar k | MKids (List (g, s)) | MOk | MFail
 -- ("An implementation MAY additionally warn at declaration time on (a)-violations as
 -- an early diagnostic, but acceptance is per-goal").  So the (a) sweep is demoted.
 --
--- BUT `cohAnonConflict`'s old `otherwise` arm WAS NOT (a).  It is STRICTLY
+-- BUT cohAnonConflict's old `otherwise` arm WAS NOT (a).  It is STRICTLY
 -- STRONGER, and the extra strength is exactly the class C1 requires rejecting — so
 -- demoting the whole arm would have widened acceptance past the spec, silently.
--- §11's C1 row states the strength ("`cohAnonConflict` … falls through only on
+-- §11's C1 row states the strength ("cohAnonConflict … falls through only on
 -- `cohStrictlyMoreSpecific` … so mutually-subsuming heads reach its `otherwise` arm
 -- and are rejected — closing, in the implementation, the ladder hole §6.1.2's
 -- records"), and §6.1.2 states why it matters: two **α-equal** heads are mutually ⊑,
@@ -2847,7 +2843,7 @@ public export data CohScan =
 -- Which sweep is running, threaded as a value instead of inferred from
 -- the shape of the module ids.  `cohSoftInScope` used to answer "am I the per-module
 -- sweep?" by testing `mid1 == "" && mid2 == ""`, which was only ever a PROXY: the
--- per-module input was built by `cohImplsOf`, which stamped `""` because it had no
+-- per-module input was built by a helper that stamped `""` because it had no
 -- module id to stamp.  The proxy is correct exactly while that holds and silently
 -- wrong the moment the per-module sweep is fed rows that carry a real id — which is
 -- what pointing it at `IE` does.  See `cohSoftInScope` for the failure it prevents.
@@ -2884,7 +2880,7 @@ public export data CohSweep = CohSweepOwn | CohSweepGlobal
 -- With the index the union is a stable merge on declaration order, which is the
 -- tie-break `compiler/types/typecheck.mdk` already documents AND the one that gate can see.
 -- A-2.2b (#1111): the second field is the entry's PROJECTED HEAD, not its head
--- tycon NAME.  `keyEntryOf` already computed a `HeadKey` (A-2.2) and threw it
+-- tycon NAME.  `keyEntryOfRow` already computed a `HeadKey` (A-2.2) and threw it
 -- away by projecting it to a bare name; keeping it is what lets this registry
 -- be keyed by the head's IDENTITY instead of its spelling, so two same-named
 -- types declared in two modules no longer share a bucket.
@@ -2912,10 +2908,10 @@ public export data Undetermined = KeepNone | CountImpls IfaceRef | CommitSuper
 -- ladder that both the genuine return-position method resolver (`resolveSite`, EKReturn)
 -- and the nested/top constrained-call router (`routeOfD`, EKNestedTop) route through.
 -- Returns `(primary route, element-dict route list)`.  Genuine sites carry their element
--- routes in the SEPARATE `implRef` (primary is `RKey key []`), so `snd` is non-empty and
--- the adapter stamps it into `implRef`; nested/top PACK their `requires` into the primary
+-- routes in the SEPARATE implRef (primary is `RKey key []`), so `snd` is non-empty and
+-- the adapter stamps it into implRef; nested/top PACK their `requires` into the primary
 -- RKey (byte-identical to the pre-S3b `routeOfD`) and leave `snd` empty.
---   * assum: EKNestedTop uses `activeDictVarForEncl`; EKReturn uses the enclDictVarOf-
+--   * assum: EKNestedTop uses activeDictVarForEncl; EKReturn uses the enclDictVarOf-
 --     preferring `activeDictVarOfEncl`.  EKReturn routes RDictFwd when the method is
 --     return-position (name∈rpNames), else RDict; EKNestedTop routes RDict.
 --   * inst: EKReturn selects one row for its canonical key and element routes;
@@ -2935,11 +2931,11 @@ public export data EntailKind =
   -- `requires` walk that reached this goal (`ReqWalk`, the shared measure; `reqWalkStart`
   -- at a seed site).  See `argImplRequiresRoutesForRow`.
   -- #1154 (F-3a): the predicate's goal args PAST arg 0.  Arg 0 stays in `entail`'s
-  -- own [m] (it keys `assum` and supplies the head tag), so this field holds only the
+  -- own [m] (it keys assum and supplies the head tag), so this field holds only the
   -- TAIL — storing the whole vector would duplicate arg 0 and let the two copies
   -- drift.  `[]` at every caller with no vector to offer, which reproduces the
   -- pre-#1154 singleton exactly.  Same pattern as EKReturn/EKArg carrying the
-  -- `fullMono` only THEY need.
+  -- fullMono only THEY need.
   | EKNestedTop IfaceRef Undetermined ReqWalk (List Mono)
   -- Arg-position stamp (resolveArgStamp).  assum =
   -- activeDictVarOfEncl → RDict (never RDictFwd; arg-position); inst = same canonical
@@ -2983,8 +2979,8 @@ public export data MethodGrantUse =
 -- the two buckets `insertUnivImplAt` writes (the three
 -- `CrossRun` refs this line used to name): concrete-head impls keyed "iface|tag" and
 -- HEADLESS-receiver impls keyed by iface (matched against ANY receiver). Standalone
--- builds one from its whole `prog` via `buildImplUniverse` (O(N) once — the same cost
--- as the old `implDeclsWithReqs`+`implHeadsOf` it replaces); the Module path passes the
+-- builds one from its whole prog via `buildImplUniverse` (O(N) once — the same cost
+-- as the old `implDeclsWithReqs`+implHeadsOf it replaces); the Module path passes the
 -- No longer a persistent accumulator.  This block's header used
 -- to read "PERSISTENT accumulator (grown one module at a time in
 -- appendUniverseAccums)"; those three `CrossRun` refs are deleted.  The Module path
@@ -3223,7 +3219,7 @@ public export data ModuleSeed = ModuleSeed {
 -- unkeyed call neither hits nor stores, so a one-shot `run`/`build` pays exactly
 -- what it paid before -- no key is hashed and no source is concatenated.
 --
--- what a hit may carry: every field must be a pure function of `coreDecls`.  Not
+-- what a hit may carry: every field must be a pure function of coreDecls.  Not
 -- "holds no `Ref`" -- that is weaker, and the weaker reading is what let an
 -- effect-domain READ into an earlier draft of this record.  Two consequences:
 --   * no `Decl` and no `Ref`.  The tree is re-stamped into FRESH decls on every
@@ -3249,8 +3245,8 @@ public export data PreludePreamble = PreludePreamble {
   ppMarkFacts : PreludeMarkFacts,
 }
 
--- `preludeKey`: the desugar-cache generation pair identifying `runtimeDecls` /
--- `coreDecls` (see the core pass's cache key above); `None` = unkeyed, no cache.
+-- preludeKey: the desugar-cache generation pair identifying `runtimeDecls` /
+-- coreDecls (see the core pass's cache key above); `None` = unkeyed, no cache.
 -- What a graph drive is asked to PRODUCE.  It is one driver either way
 -- (`driveGraphK`): the same preamble, the same per-module worker, the same
 -- graph-end drain.  The selection names the three points where the two output
@@ -3373,8 +3369,8 @@ public export data ElabResult = ElabResult {
 -- are filtered to `SHADOW-SEMANTICS.md` S1's `nameable in M` (§1.0; ruling #1375) using the
 -- module's own decls, which are exactly what this function already has in hand.
 --
--- This is the RUN/BUILD half of the fix; `checkBodyImpl`'s `definerShadows`/
--- `importerShadows` are the CHECK half.  Neither is sufficient alone — the mark pass
+-- This is the RUN/BUILD half of the fix; `checkBodyImpl`'s definerShadows/
+-- importerShadows are the CHECK half.  Neither is sufficient alone — the mark pass
 -- rewrites the occurrence before typecheck ever consults `standaloneValuesRef`, so
 -- filtering only there leaves `check` right and the binary wrong (the S7 divergence #1375
 -- warns a mark-pass-only fix introduces, with the arms swapped).
@@ -3396,8 +3392,8 @@ public export data ElabResult = ElabResult {
 -- identifier: $dict_…`) — the Phase-134 shape.
 --
 -- [rpNames] **IS** FILTERED, by the same predicate as everything else here — read the
--- `otherwise` arm below, which is four `filterList`s and one bare `dictNames`.  The split
--- that makes the per-module filter possible is at `markSharedNames`.  This paragraph read
+-- `otherwise` arm below, which is four `filterList`s and one bare dictNames.  The split
+-- that makes the per-module filter possible is at markSharedNames.  This paragraph read
 -- *"[rpNames] is not filtered either"* until 2026-08-08: introduced and falsified by the
 -- same PR, and then missed by the very commit whose job was retiring that claim at its
 -- sibling site.  It was the THIRD copy of the sentence.  Nothing in this tree links a claim
@@ -3420,9 +3416,9 @@ public export data MarkCtx = MarkCtx {
 -- each conjunct used to rebuild its own answer inside that filter: `declTopFnNames prog`
 -- allocated the module's entire top-level name list per row (`funDefs` +21.7M Ir on
 -- `check compiler/driver/medaka_cli.mdk`, and its share of a +63.4M `GC_malloc_kind`),
--- `declsBindBareLocal` re-walked its import decls per row (+12.9M), and
+-- declsBindBareLocal re-walked its import decls per row (+12.9M), and
 -- `mangledName "core" bare` built a fresh String through `sanitizeId` per row
--- (`mangledName` +2.1M, `safeChar` +2.0M, part of `string_slice` +14.2M).  The prefix is
+-- (`mangledName` +2.1M, `safeChar` +2.0M, part of string_slice +14.2M).  The prefix is
 -- `mangledName`'s own answer for the empty name, so the comparison below is the same
 -- one, guarded by a `startsWith` that spends no allocation on a symbol that cannot match.
 public export data SpellCtx = SpellCtx {
@@ -3432,7 +3428,7 @@ public export data SpellCtx = SpellCtx {
 }
 
 -- The bare LOCAL names a module's import forms bind, as a set — the same answer
--- `importFormBindsBare` gives per name, taken over the module's decls once.  `blAll`
+-- importFormBindsBare gives per name, taken over the module's decls once.  `blAll`
 -- is the one case a finite set cannot carry: a WILDCARD form whose dependency the graph
 -- cannot speak for answers True for every name, so it admits all of them.  A member list
 -- stays finite in that case (its locals are what it spells), which is why the fail-open
@@ -3558,7 +3554,7 @@ public export data GraphPreamble = GraphPreamble {
 }
 
 -- The prelude-only half of `markSetsOf`'s inputs.  Every field is a pure value
--- of `coreDecls` alone, holding only `String`/`Int`/`IfaceRef` rows -- see
+-- of coreDecls alone, holding only `String`/`Int`/`IfaceRef` rows -- see
 -- `PreludePreamble` for why nothing decl-shaped may live here.
 public export data PreludeMarkFacts = PreludeMarkFacts {
   pmfReturnPos : List String,
@@ -3573,7 +3569,7 @@ public export data PreludeMarkFacts = PreludeMarkFacts {
 -- declaration-level EXCEPT the promoted set — the unsignatured functions that infer
 -- a constraint and so gain a leading dict parameter — which only inference can
 -- supply.  A whole-tree pre-pass therefore had to be re-run once per layer of a
--- promoted call chain (`elabPromotionFixpoint`, retired).  Instead `checkBodyImpl`
+-- promoted call chain (the old fixpoint pass).  Instead `checkBodyImpl`
 -- marks each binding group as the schedule reaches it, after its callees have
 -- generalized: a callee promoted in an earlier group (or module — the loader orders
 -- modules dependency-first) is already in the set when its caller's group is marked,
@@ -3620,13 +3616,13 @@ public export data PassMethod = PassMethod String Route (List Route)
 -- nearest dependency), accData (`++ publicDataDecls prog`) and accAll (`++ prog`,
 -- the cumulative impl-body universe).  Each driver supplies:
 --   * worker  : prev mid seed accData accAll prog -> (schemes, extra, mctx) — runs
---               the per-module pass; MUST surface `schemes` (pubV needs it for the
---               next depEnv) plus its driver-specific payload `extra`.  [prev] is the
+--               the per-module pass; MUST surface schemes (pubV needs it for the
+--               next depEnv) plus its driver-specific payload extra.  [prev] is the
 --               record current before the module; [mctx] the one it was checked in,
 --               which the next module starts from and the fold returns last.
 --   * collect : place mid extra restResult -> result — a foldr combiner, where
 --               restResult is the fold over the REMAINING modules (`base` for []).
---               `place` is `LastModule` only for the terminal (entry) module — the one
+--               place is `LastModule` only for the terminal (entry) module — the one
 --               place checkModulesEntryFull keeps the module's OWN schemes/warns
 --               rather than the recursion's.
 --   * serve   : the drive's serve policy (`ModuleServe`), `None` for a drive that
@@ -3651,7 +3647,7 @@ public export data ModulePlace = LastModule | NotLastModule
 
 -- What `foldModules` and `workModules` take unchanged for every module: the
 -- accumulator policy, the per-module worker, the combiner `collect` applies to the
--- payloads, the base seed rows, and the prelude's export bindings (`coreV`).
+-- payloads, the base seed rows, and the prelude's export bindings (coreV).
 public export data FoldPlan e acc = FoldPlan {
   fpAccumulate : Accumulate,
   fpWorker : ModuleCtx -> String -> ModuleSeed -> List Decl -> List Decl -> List Decl -> (ModuleBindings, e, ModuleCtx),
