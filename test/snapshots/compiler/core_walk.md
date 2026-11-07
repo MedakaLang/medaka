@@ -1,5 +1,5 @@
 # META
-source_lines=339
+source_lines=318
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/ir/core_walk.mdk — exhaustive traversal of Core IR: a bottom-up
@@ -83,14 +83,15 @@ patBinders : Pat -> List String
 patBinders p = patBindings p
 
 rewriteImpl : (CExpr -> CExpr) -> CImplEntry -> CImplEntry
-rewriteImpl f (CImplEntry n s d (CImplTagged tag key iface sym ps pats body)) =
-  CImplEntry n s d (CImplTagged tag key iface sym ps pats (rewriteExpr f body))
-rewriteImpl f (CImplEntry n s d (CImplDefault ifaceId tag key sym ps pats body)) =
-  CImplEntry
-    n
-    s
-    d
-    (CImplDefault ifaceId tag key sym ps pats (rewriteExpr f body))
+rewriteImpl f = mapImplBody (_ body => rewriteExpr f body)
+
+-- Rebuild an impl entry with [g] applied to its body; [g] also sees the entry's
+-- parameter patterns.
+mapImplBody : (List Pat -> CExpr -> CExpr) -> CImplEntry -> CImplEntry
+mapImplBody g (CImplEntry n s d (CImplTagged tag key iface sym ps pats body)) =
+  CImplEntry n s d (CImplTagged tag key iface sym ps pats (g pats body))
+mapImplBody g (CImplEntry n s d (CImplDefault ifaceId tag key sym ps pats body)) =
+  CImplEntry n s d (CImplDefault ifaceId tag key sym ps pats (g pats body))
 
 -- One-level rebuild: [g] on each immediate sub-expression.
 mapChildren : (CExpr -> CExpr) -> CExpr -> CExpr
@@ -208,6 +209,8 @@ stmtExpr (CSAssign _ e) = e
 fieldExpr : CField -> CExpr
 fieldExpr (CField _ _ e) = e
 
+-- The scope extended with every name the patterns bind.
+export
 bindPats : List Pat -> OrdMap Unit -> OrdMap Unit
 bindPats pats scope = omFromNames (flatMap patBinders pats) scope
 
@@ -223,32 +226,8 @@ scopedClause f s (CClause pats body) =
   CClause pats (rewriteExprScoped f (bindPats pats s) body)
 
 scopedImpl : (OrdMap Unit -> CExpr -> CExpr) -> CImplEntry -> CImplEntry
-scopedImpl f (CImplEntry n s d (CImplTagged tag key iface sym ps pats body)) =
-  CImplEntry
-    n
-    s
-    d
-    (CImplTagged
-      tag
-      key
-      iface
-      sym
-      ps
-      pats
-      (rewriteExprScoped f (bindPats pats omEmpty) body))
-scopedImpl f (CImplEntry n s d (CImplDefault ifaceId tag key sym ps pats body)) =
-  CImplEntry
-    n
-    s
-    d
-    (CImplDefault
-      ifaceId
-      tag
-      key
-      sym
-      ps
-      pats
-      (rewriteExprScoped f (bindPats pats omEmpty) body))
+scopedImpl f =
+  mapImplBody (pats body => rewriteExprScoped f (bindPats pats omEmpty) body)
 
 -- One-level rebuild with the scope each sub-expression sees.
 mapChildrenScoped : (OrdMap Unit -> CExpr -> CExpr) ->
@@ -358,8 +337,10 @@ scopedStmts f s ((CSLet isRec pat e) :: rest) =
 (DTypeSig true "patBinders" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "patBinders" ((PVar "p")) (EApp (EVar "patBindings") (EVar "p")))
 (DTypeSig false "rewriteImpl" (TyFun (TyFun (TyCon "CExpr") (TyCon "CExpr")) (TyFun (TyCon "CImplEntry") (TyCon "CImplEntry"))))
-(DFunDef false "rewriteImpl" ((PVar "f") (PCon "CImplEntry" (PVar "n") (PVar "s") (PVar "d") (PCon "CImplTagged" (PVar "tag") (PVar "key") (PVar "iface") (PVar "sym") (PVar "ps") (PVar "pats") (PVar "body")))) (EApp (EApp (EApp (EApp (EVar "CImplEntry") (EVar "n")) (EVar "s")) (EVar "d")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplTagged") (EVar "tag")) (EVar "key")) (EVar "iface")) (EVar "sym")) (EVar "ps")) (EVar "pats")) (EApp (EApp (EVar "rewriteExpr") (EVar "f")) (EVar "body")))))
-(DFunDef false "rewriteImpl" ((PVar "f") (PCon "CImplEntry" (PVar "n") (PVar "s") (PVar "d") (PCon "CImplDefault" (PVar "ifaceId") (PVar "tag") (PVar "key") (PVar "sym") (PVar "ps") (PVar "pats") (PVar "body")))) (EApp (EApp (EApp (EApp (EVar "CImplEntry") (EVar "n")) (EVar "s")) (EVar "d")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplDefault") (EVar "ifaceId")) (EVar "tag")) (EVar "key")) (EVar "sym")) (EVar "ps")) (EVar "pats")) (EApp (EApp (EVar "rewriteExpr") (EVar "f")) (EVar "body")))))
+(DFunDef false "rewriteImpl" ((PVar "f")) (EApp (EVar "mapImplBody") (ELam (PWild (PVar "body")) (EApp (EApp (EVar "rewriteExpr") (EVar "f")) (EVar "body")))))
+(DTypeSig false "mapImplBody" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "CExpr") (TyCon "CExpr"))) (TyFun (TyCon "CImplEntry") (TyCon "CImplEntry"))))
+(DFunDef false "mapImplBody" ((PVar "g") (PCon "CImplEntry" (PVar "n") (PVar "s") (PVar "d") (PCon "CImplTagged" (PVar "tag") (PVar "key") (PVar "iface") (PVar "sym") (PVar "ps") (PVar "pats") (PVar "body")))) (EApp (EApp (EApp (EApp (EVar "CImplEntry") (EVar "n")) (EVar "s")) (EVar "d")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplTagged") (EVar "tag")) (EVar "key")) (EVar "iface")) (EVar "sym")) (EVar "ps")) (EVar "pats")) (EApp (EApp (EVar "g") (EVar "pats")) (EVar "body")))))
+(DFunDef false "mapImplBody" ((PVar "g") (PCon "CImplEntry" (PVar "n") (PVar "s") (PVar "d") (PCon "CImplDefault" (PVar "ifaceId") (PVar "tag") (PVar "key") (PVar "sym") (PVar "ps") (PVar "pats") (PVar "body")))) (EApp (EApp (EApp (EApp (EVar "CImplEntry") (EVar "n")) (EVar "s")) (EVar "d")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplDefault") (EVar "ifaceId")) (EVar "tag")) (EVar "key")) (EVar "sym")) (EVar "ps")) (EVar "pats")) (EApp (EApp (EVar "g") (EVar "pats")) (EVar "body")))))
 (DTypeSig false "mapChildren" (TyFun (TyFun (TyCon "CExpr") (TyCon "CExpr")) (TyFun (TyCon "CExpr") (TyCon "CExpr"))))
 (DFunDef false "mapChildren" (PWild (PCon "CLit" (PVar "l"))) (EApp (EVar "CLit") (EVar "l")))
 (DFunDef false "mapChildren" (PWild (PCon "CVar" (PVar "x") (PVar "addr"))) (EApp (EApp (EVar "CVar") (EVar "x")) (EVar "addr")))
@@ -446,15 +427,14 @@ scopedStmts f s ((CSLet isRec pat e) :: rest) =
 (DFunDef false "stmtExpr" ((PCon "CSAssign" PWild (PVar "e"))) (EVar "e"))
 (DTypeSig false "fieldExpr" (TyFun (TyCon "CField") (TyCon "CExpr")))
 (DFunDef false "fieldExpr" ((PCon "CField" PWild PWild (PVar "e"))) (EVar "e"))
-(DTypeSig false "bindPats" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
+(DTypeSig true "bindPats" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
 (DFunDef false "bindPats" ((PVar "pats") (PVar "scope")) (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "flatMap") (EVar "patBinders")) (EVar "pats"))) (EVar "scope")))
 (DTypeSig false "scopedBind" (TyFun (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CExpr") (TyCon "CExpr"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CBind") (TyCon "CBind")))))
 (DFunDef false "scopedBind" ((PVar "f") (PVar "s") (PCon "CBind" (PVar "n") (PVar "clauses") (PVar "site") (PVar "bid"))) (EApp (EApp (EApp (EApp (EVar "CBind") (EVar "n")) (EApp (EApp (EVar "map") (EApp (EApp (EVar "scopedClause") (EVar "f")) (EVar "s"))) (EVar "clauses"))) (EVar "site")) (EVar "bid")))
 (DTypeSig false "scopedClause" (TyFun (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CExpr") (TyCon "CExpr"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CClause") (TyCon "CClause")))))
 (DFunDef false "scopedClause" ((PVar "f") (PVar "s") (PCon "CClause" (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "CClause") (EVar "pats")) (EApp (EApp (EApp (EVar "rewriteExprScoped") (EVar "f")) (EApp (EApp (EVar "bindPats") (EVar "pats")) (EVar "s"))) (EVar "body"))))
 (DTypeSig false "scopedImpl" (TyFun (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CExpr") (TyCon "CExpr"))) (TyFun (TyCon "CImplEntry") (TyCon "CImplEntry"))))
-(DFunDef false "scopedImpl" ((PVar "f") (PCon "CImplEntry" (PVar "n") (PVar "s") (PVar "d") (PCon "CImplTagged" (PVar "tag") (PVar "key") (PVar "iface") (PVar "sym") (PVar "ps") (PVar "pats") (PVar "body")))) (EApp (EApp (EApp (EApp (EVar "CImplEntry") (EVar "n")) (EVar "s")) (EVar "d")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplTagged") (EVar "tag")) (EVar "key")) (EVar "iface")) (EVar "sym")) (EVar "ps")) (EVar "pats")) (EApp (EApp (EApp (EVar "rewriteExprScoped") (EVar "f")) (EApp (EApp (EVar "bindPats") (EVar "pats")) (EVar "omEmpty"))) (EVar "body")))))
-(DFunDef false "scopedImpl" ((PVar "f") (PCon "CImplEntry" (PVar "n") (PVar "s") (PVar "d") (PCon "CImplDefault" (PVar "ifaceId") (PVar "tag") (PVar "key") (PVar "sym") (PVar "ps") (PVar "pats") (PVar "body")))) (EApp (EApp (EApp (EApp (EVar "CImplEntry") (EVar "n")) (EVar "s")) (EVar "d")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplDefault") (EVar "ifaceId")) (EVar "tag")) (EVar "key")) (EVar "sym")) (EVar "ps")) (EVar "pats")) (EApp (EApp (EApp (EVar "rewriteExprScoped") (EVar "f")) (EApp (EApp (EVar "bindPats") (EVar "pats")) (EVar "omEmpty"))) (EVar "body")))))
+(DFunDef false "scopedImpl" ((PVar "f")) (EApp (EVar "mapImplBody") (ELam ((PVar "pats") (PVar "body")) (EApp (EApp (EApp (EVar "rewriteExprScoped") (EVar "f")) (EApp (EApp (EVar "bindPats") (EVar "pats")) (EVar "omEmpty"))) (EVar "body")))))
 (DTypeSig false "mapChildrenScoped" (TyFun (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CExpr") (TyCon "CExpr"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CExpr") (TyCon "CExpr")))))
 (DFunDef false "mapChildrenScoped" (PWild PWild (PCon "CLit" (PVar "l"))) (EApp (EVar "CLit") (EVar "l")))
 (DFunDef false "mapChildrenScoped" (PWild PWild (PCon "CVar" (PVar "x") (PVar "addr"))) (EApp (EApp (EVar "CVar") (EVar "x")) (EVar "addr")))
@@ -508,8 +488,10 @@ scopedStmts f s ((CSLet isRec pat e) :: rest) =
 (DTypeSig true "patBinders" (TyFun (TyCon "Pat") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "patBinders" ((PVar "p")) (EApp (EVar "patBindings") (EVar "p")))
 (DTypeSig false "rewriteImpl" (TyFun (TyFun (TyCon "CExpr") (TyCon "CExpr")) (TyFun (TyCon "CImplEntry") (TyCon "CImplEntry"))))
-(DFunDef false "rewriteImpl" ((PVar "f") (PCon "CImplEntry" (PVar "n") (PVar "s") (PVar "d") (PCon "CImplTagged" (PVar "tag") (PVar "key") (PVar "iface") (PVar "sym") (PVar "ps") (PVar "pats") (PVar "body")))) (EApp (EApp (EApp (EApp (EVar "CImplEntry") (EVar "n")) (EVar "s")) (EVar "d")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplTagged") (EVar "tag")) (EVar "key")) (EVar "iface")) (EVar "sym")) (EVar "ps")) (EVar "pats")) (EApp (EApp (EVar "rewriteExpr") (EVar "f")) (EVar "body")))))
-(DFunDef false "rewriteImpl" ((PVar "f") (PCon "CImplEntry" (PVar "n") (PVar "s") (PVar "d") (PCon "CImplDefault" (PVar "ifaceId") (PVar "tag") (PVar "key") (PVar "sym") (PVar "ps") (PVar "pats") (PVar "body")))) (EApp (EApp (EApp (EApp (EVar "CImplEntry") (EVar "n")) (EVar "s")) (EVar "d")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplDefault") (EVar "ifaceId")) (EVar "tag")) (EVar "key")) (EVar "sym")) (EVar "ps")) (EVar "pats")) (EApp (EApp (EVar "rewriteExpr") (EVar "f")) (EVar "body")))))
+(DFunDef false "rewriteImpl" ((PVar "f")) (EApp (EVar "mapImplBody") (ELam (PWild (PVar "body")) (EApp (EApp (EVar "rewriteExpr") (EVar "f")) (EVar "body")))))
+(DTypeSig false "mapImplBody" (TyFun (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "CExpr") (TyCon "CExpr"))) (TyFun (TyCon "CImplEntry") (TyCon "CImplEntry"))))
+(DFunDef false "mapImplBody" ((PVar "g") (PCon "CImplEntry" (PVar "n") (PVar "s") (PVar "d") (PCon "CImplTagged" (PVar "tag") (PVar "key") (PVar "iface") (PVar "sym") (PVar "ps") (PVar "pats") (PVar "body")))) (EApp (EApp (EApp (EApp (EVar "CImplEntry") (EVar "n")) (EVar "s")) (EVar "d")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplTagged") (EVar "tag")) (EVar "key")) (EVar "iface")) (EVar "sym")) (EVar "ps")) (EVar "pats")) (EApp (EApp (EVar "g") (EVar "pats")) (EVar "body")))))
+(DFunDef false "mapImplBody" ((PVar "g") (PCon "CImplEntry" (PVar "n") (PVar "s") (PVar "d") (PCon "CImplDefault" (PVar "ifaceId") (PVar "tag") (PVar "key") (PVar "sym") (PVar "ps") (PVar "pats") (PVar "body")))) (EApp (EApp (EApp (EApp (EVar "CImplEntry") (EVar "n")) (EVar "s")) (EVar "d")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplDefault") (EVar "ifaceId")) (EVar "tag")) (EVar "key")) (EVar "sym")) (EVar "ps")) (EVar "pats")) (EApp (EApp (EVar "g") (EVar "pats")) (EVar "body")))))
 (DTypeSig false "mapChildren" (TyFun (TyFun (TyCon "CExpr") (TyCon "CExpr")) (TyFun (TyCon "CExpr") (TyCon "CExpr"))))
 (DFunDef false "mapChildren" (PWild (PCon "CLit" (PVar "l"))) (EApp (EVar "CLit") (EVar "l")))
 (DFunDef false "mapChildren" (PWild (PCon "CVar" (PVar "x") (PVar "addr"))) (EApp (EApp (EVar "CVar") (EVar "x")) (EVar "addr")))
@@ -596,15 +578,14 @@ scopedStmts f s ((CSLet isRec pat e) :: rest) =
 (DFunDef false "stmtExpr" ((PCon "CSAssign" PWild (PVar "e"))) (EVar "e"))
 (DTypeSig false "fieldExpr" (TyFun (TyCon "CField") (TyCon "CExpr")))
 (DFunDef false "fieldExpr" ((PCon "CField" PWild PWild (PVar "e"))) (EVar "e"))
-(DTypeSig false "bindPats" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
+(DTypeSig true "bindPats" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
 (DFunDef false "bindPats" ((PVar "pats") (PVar "scope")) (EApp (EApp (EVar "omFromNames") (EApp (EApp (EDictApp "flatMap") (EVar "patBinders")) (EVar "pats"))) (EVar "scope")))
 (DTypeSig false "scopedBind" (TyFun (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CExpr") (TyCon "CExpr"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CBind") (TyCon "CBind")))))
 (DFunDef false "scopedBind" ((PVar "f") (PVar "s") (PCon "CBind" (PVar "n") (PVar "clauses") (PVar "site") (PVar "bid"))) (EApp (EApp (EApp (EApp (EVar "CBind") (EVar "n")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "scopedClause") (EVar "f")) (EVar "s"))) (EVar "clauses"))) (EVar "site")) (EVar "bid")))
 (DTypeSig false "scopedClause" (TyFun (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CExpr") (TyCon "CExpr"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CClause") (TyCon "CClause")))))
 (DFunDef false "scopedClause" ((PVar "f") (PVar "s") (PCon "CClause" (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "CClause") (EVar "pats")) (EApp (EApp (EApp (EVar "rewriteExprScoped") (EVar "f")) (EApp (EApp (EVar "bindPats") (EVar "pats")) (EVar "s"))) (EVar "body"))))
 (DTypeSig false "scopedImpl" (TyFun (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CExpr") (TyCon "CExpr"))) (TyFun (TyCon "CImplEntry") (TyCon "CImplEntry"))))
-(DFunDef false "scopedImpl" ((PVar "f") (PCon "CImplEntry" (PVar "n") (PVar "s") (PVar "d") (PCon "CImplTagged" (PVar "tag") (PVar "key") (PVar "iface") (PVar "sym") (PVar "ps") (PVar "pats") (PVar "body")))) (EApp (EApp (EApp (EApp (EVar "CImplEntry") (EVar "n")) (EVar "s")) (EVar "d")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplTagged") (EVar "tag")) (EVar "key")) (EVar "iface")) (EVar "sym")) (EVar "ps")) (EVar "pats")) (EApp (EApp (EApp (EVar "rewriteExprScoped") (EVar "f")) (EApp (EApp (EVar "bindPats") (EVar "pats")) (EVar "omEmpty"))) (EVar "body")))))
-(DFunDef false "scopedImpl" ((PVar "f") (PCon "CImplEntry" (PVar "n") (PVar "s") (PVar "d") (PCon "CImplDefault" (PVar "ifaceId") (PVar "tag") (PVar "key") (PVar "sym") (PVar "ps") (PVar "pats") (PVar "body")))) (EApp (EApp (EApp (EApp (EVar "CImplEntry") (EVar "n")) (EVar "s")) (EVar "d")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplDefault") (EVar "ifaceId")) (EVar "tag")) (EVar "key")) (EVar "sym")) (EVar "ps")) (EVar "pats")) (EApp (EApp (EApp (EVar "rewriteExprScoped") (EVar "f")) (EApp (EApp (EVar "bindPats") (EVar "pats")) (EVar "omEmpty"))) (EVar "body")))))
+(DFunDef false "scopedImpl" ((PVar "f")) (EApp (EVar "mapImplBody") (ELam ((PVar "pats") (PVar "body")) (EApp (EApp (EApp (EVar "rewriteExprScoped") (EVar "f")) (EApp (EApp (EVar "bindPats") (EVar "pats")) (EVar "omEmpty"))) (EVar "body")))))
 (DTypeSig false "mapChildrenScoped" (TyFun (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CExpr") (TyCon "CExpr"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CExpr") (TyCon "CExpr")))))
 (DFunDef false "mapChildrenScoped" (PWild PWild (PCon "CLit" (PVar "l"))) (EApp (EVar "CLit") (EVar "l")))
 (DFunDef false "mapChildrenScoped" (PWild PWild (PCon "CVar" (PVar "x") (PVar "addr"))) (EApp (EApp (EVar "CVar") (EVar "x")) (EVar "addr")))

@@ -79,14 +79,15 @@ patBinders : Pat -> List String
 patBinders p = patBindings p
 
 rewriteImpl : (CExpr -> CExpr) -> CImplEntry -> CImplEntry
-rewriteImpl f (CImplEntry n s d (CImplTagged tag key iface sym ps pats body)) =
-  CImplEntry n s d (CImplTagged tag key iface sym ps pats (rewriteExpr f body))
-rewriteImpl f (CImplEntry n s d (CImplDefault ifaceId tag key sym ps pats body)) =
-  CImplEntry
-    n
-    s
-    d
-    (CImplDefault ifaceId tag key sym ps pats (rewriteExpr f body))
+rewriteImpl f = mapImplBody (_ body => rewriteExpr f body)
+
+-- Rebuild an impl entry with [g] applied to its body; [g] also sees the entry's
+-- parameter patterns.
+mapImplBody : (List Pat -> CExpr -> CExpr) -> CImplEntry -> CImplEntry
+mapImplBody g (CImplEntry n s d (CImplTagged tag key iface sym ps pats body)) =
+  CImplEntry n s d (CImplTagged tag key iface sym ps pats (g pats body))
+mapImplBody g (CImplEntry n s d (CImplDefault ifaceId tag key sym ps pats body)) =
+  CImplEntry n s d (CImplDefault ifaceId tag key sym ps pats (g pats body))
 
 -- One-level rebuild: [g] on each immediate sub-expression.
 mapChildren : (CExpr -> CExpr) -> CExpr -> CExpr
@@ -204,6 +205,8 @@ stmtExpr (CSAssign _ e) = e
 fieldExpr : CField -> CExpr
 fieldExpr (CField _ _ e) = e
 
+-- The scope extended with every name the patterns bind.
+export
 bindPats : List Pat -> OrdMap Unit -> OrdMap Unit
 bindPats pats scope = omFromNames (flatMap patBinders pats) scope
 
@@ -219,32 +222,8 @@ scopedClause f s (CClause pats body) =
   CClause pats (rewriteExprScoped f (bindPats pats s) body)
 
 scopedImpl : (OrdMap Unit -> CExpr -> CExpr) -> CImplEntry -> CImplEntry
-scopedImpl f (CImplEntry n s d (CImplTagged tag key iface sym ps pats body)) =
-  CImplEntry
-    n
-    s
-    d
-    (CImplTagged
-      tag
-      key
-      iface
-      sym
-      ps
-      pats
-      (rewriteExprScoped f (bindPats pats omEmpty) body))
-scopedImpl f (CImplEntry n s d (CImplDefault ifaceId tag key sym ps pats body)) =
-  CImplEntry
-    n
-    s
-    d
-    (CImplDefault
-      ifaceId
-      tag
-      key
-      sym
-      ps
-      pats
-      (rewriteExprScoped f (bindPats pats omEmpty) body))
+scopedImpl f =
+  mapImplBody (pats body => rewriteExprScoped f (bindPats pats omEmpty) body)
 
 -- One-level rebuild with the scope each sub-expression sees.
 mapChildrenScoped : (OrdMap Unit -> CExpr -> CExpr) ->

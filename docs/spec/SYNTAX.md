@@ -1535,8 +1535,12 @@ included, carries LLVM's `noinline`, so a check that reads its machine code
 (the PDS constant-time gates disassemble their crypto helpers) has a
 definition to read. It applies to functions defined with parameters. A
 top-level binding to a lambda (`f = x => …`) compiles to a global holding a
-closure, whose body it does not mark, and on any other declaration (`data`,
-`impl`, …) it does nothing. Other engines ignore it.
+closure, whose body it does not mark, and on a declaration that is no
+function (`data`, `impl`, …) it does nothing. Other engines emit no `noinline`
+attribute, but the Core IR passes `inline-trivial-calls` and
+`propagate-literal-globals` honour it for every engine: a call to a marked
+function is kept, and a marked zero-parameter literal value is not propagated
+into its uses.
 
 ## Refs
 

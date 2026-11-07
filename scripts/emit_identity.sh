@@ -8,8 +8,10 @@
 # Each tree is an absolute path to a worktree with a built compiler: `medaka_emitter` at
 # its root for --llvm (make -C <tree> medaka), test/bin/wasm_emit_modules_main for --wat
 # (sh test/wasm/build_wasm_oracle.sh --modules-only). Every input file is taken from
-# <head-tree>; each arm emits it with its OWN emitter, runtime.mdk, core.mdk, compiler/
-# and stdlib/, so the arms differ only in the compiler that emits.
+# <head-tree>; each arm emits it with its OWN emitter, runtime.mdk, core.mdk and stdlib/,
+# so the arms differ only in the compiler that emits. The root list puts the head tree's
+# compiler/ before the arm's own for every entry, so a compiler module an entry imports
+# resolves from the head tree on both arms.
 #
 # Corpus dirs are relative to <head-tree> (an absolute one is used as is); default test/engine_fixtures test/dict_fixtures
 # (test/wasm/fixtures_modules for --wat). Every *.mdk directly in a corpus dir is an entry;
@@ -100,7 +102,8 @@ done
 
 # One emit: <bin> <arm-tree> <entry> <out-prefix> <head-tree> <ext>. Roots mirror
 # build_cmd.mdk's emitArgsBase: the entry's own dir, the head tree's compiler/ (for
-# --self), then compiler/ and stdlib/ of the emitting arm.
+# every entry, not only --self; both arms resolve a compiler import from the head),
+# then compiler/ and stdlib/ of the emitting arm.
 cat > "$OUT/emit_one.sh" <<'EOS'
 #!/bin/sh
 bin="$1"; tree="$2"; entry="$3"; pre="$4"; head="$5"; ext="$6"

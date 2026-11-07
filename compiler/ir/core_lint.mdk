@@ -12,7 +12,6 @@
 -- program does not declare before `lower-externs`.
 -- A variable's `Addr` is not read: a clause parameter carries `AGlobal`.
 
-import frontend.ast.{Pat}
 import ir.core_ir.{
   CArm(..),
   CBind(..),
@@ -29,7 +28,7 @@ import ir.core_ir.{
   DeclFacts(..),
   siteSentinelName,
 }
-import ir.core_walk.{bindNames, foldExpr, implName, patBinders}
+import ir.core_walk.{bindNames, bindPats, foldExpr, implName}
 import list.{reverse}
 import types.runtime_abi_data.{runtimeAbiRows}
 import support.ordmap.{OrdMap, omEmpty, omFromNames, omHasKey, omKeys}
@@ -68,22 +67,19 @@ lintBind globals (CBind name clauses _ _) =
 
 lintClause : OrdMap Unit -> String -> CClause -> List String
 lintClause globals where_ (CClause pats body) =
-  lintBody globals (bindAll pats omEmpty) where_ body
+  lintBody globals (bindPats pats omEmpty) where_ body
 
 lintImpl : OrdMap Unit -> CImplEntry -> List String
 lintImpl globals (CImplEntry name _ _ (CImplTagged _ _ _ _ _ pats body)) =
-  lintBody globals (bindAll pats omEmpty) ("impl " ++ name) body
+  lintBody globals (bindPats pats omEmpty) ("impl " ++ name) body
 lintImpl globals (CImplEntry name _ _ (CImplDefault _ _ _ _ _ pats body)) =
-  lintBody globals (bindAll pats omEmpty) ("impl " ++ name) body
+  lintBody globals (bindPats pats omEmpty) ("impl " ++ name) body
 
 lintBody : OrdMap Unit -> OrdMap Unit -> String -> CExpr -> List String
 lintBody globals scope where_ body =
   map
     (f => "\{where_}: \{f}")
     (scopeFaults globals scope body ++ shapeFaults body)
-
-bindAll : List Pat -> OrdMap Unit -> OrdMap Unit
-bindAll pats scope = omFromNames (flatMap patBinders pats) scope
 
 -- ── spine and decision shape: node-local, so one fold ───────────────────────
 shapeFaults : CExpr -> List String
@@ -124,9 +120,9 @@ scopeFaults globals scope (CVar x _) =
     ["unbound variable \{x}"]
 scopeFaults _ _ (CLit _) = []
 scopeFaults g s (CApp h args _) = flatMap (scopeFaults g s) (h :: args)
-scopeFaults g s (CLam pats body) = scopeFaults g (bindAll pats s) body
+scopeFaults g s (CLam pats body) = scopeFaults g (bindPats pats s) body
 scopeFaults g s (CLet isRec pat rhs body) =
-  let inner = bindAll [pat] s
+  let inner = bindPats [pat] s
   scopeFaults g (if isRec then inner else s) rhs ++ scopeFaults g inner body
 scopeFaults g s (CLetGroup binds body) =
   let inner = omFromNames (bindNames binds) s
@@ -158,15 +154,15 @@ fieldFaults g s (CField _ _ e) = scopeFaults g s e
 
 groupClauseFaults : OrdMap Unit -> OrdMap Unit -> CBind -> List String
 groupClauseFaults g s (CBind _ clauses _ _) =
-  flatMap ((CClause pats body) => scopeFaults g (bindAll pats s) body) clauses
+  flatMap ((CClause pats body) => scopeFaults g (bindPats pats s) body) clauses
 
 -- A guard's pattern binds for the guards after it and for the body.
 armFaults : OrdMap Unit -> OrdMap Unit -> CArm -> List String
 armFaults g s (CArm pat guards body) =
-  let (faults, inner) = guardFaults g (bindAll [pat] s) guards
+  let (faults, inner) = guardFaults g (bindPats [pat] s) guards
   faults ++ scopeFaults g inner body
 armFaults g s (CArmAlt pat guards _) =
-  fst (guardFaults g (bindAll [pat] s) guards)
+  fst (guardFaults g (bindPats [pat] s) guards)
 
 guardFaults : OrdMap Unit ->
   OrdMap Unit ->
@@ -177,7 +173,7 @@ guardFaults g s ((CGBool e) :: rest) =
   let (more, out) = guardFaults g s rest
   (scopeFaults g s e ++ more, out)
 guardFaults g s ((CGBind p e) :: rest) =
-  let (more, out) = guardFaults g (bindAll [p] s) rest
+  let (more, out) = guardFaults g (bindPats [p] s) rest
   (scopeFaults g s e ++ more, out)
 
 blockFaults : OrdMap Unit -> OrdMap Unit -> List CStmt -> List String
@@ -186,5 +182,5 @@ blockFaults g s ((CSExpr e) :: rest) = scopeFaults g s e ++ blockFaults g s rest
 blockFaults g s ((CSAssign _ e) :: rest) =
   scopeFaults g s e ++ blockFaults g s rest
 blockFaults g s ((CSLet isRec pat e) :: rest) =
-  let inner = bindAll [pat] s
+  let inner = bindPats [pat] s
   scopeFaults g (if isRec then inner else s) e ++ blockFaults g inner rest
