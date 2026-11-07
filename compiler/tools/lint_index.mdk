@@ -69,7 +69,7 @@ import support.sexp_value.{
 import support.util.{
   joinWith, listLen, filterList, anyList, allList, startsWith
 }
-import string.{trimAscii}
+import string.{trimAscii, split}
 import hash_map.{HashMap, new, setInPlace, has, findWithDefault, entries}
 import list.{sortBy, reverse}
 import path.{basename}
@@ -651,6 +651,7 @@ data IndexScope = IndexScope {
   ixsRows : List IndexRow,
   ixsNames : List String,
   ixsModules : List String,
+  ixsWords : Ref (Option (HashMap String Unit)),
   ixsDigest : String,
 }
 
@@ -671,6 +672,7 @@ emptyScope = IndexScope {
   ixsRows = [],
   ixsNames = [],
   ixsModules = [],
+  ixsWords = Ref None,
   ixsDigest = "",
 }
 
@@ -723,8 +725,36 @@ mkScope digest rows =
     ixsRows = rows,
     ixsNames = sortedUnique (map rowName signed),
     ixsModules = sortedUnique (map rowModule signed),
+    ixsWords = Ref None,
     ixsDigest = if digest == "" then rowsDigest rows else digest,
   }
+
+-- The bare words a scope declares besides its row names: every record field
+-- of a constructor row and every dot-separated segment of a module id.  Built
+-- on the first `QWord` question, so a run that asks none pays nothing.
+scopeWords : IndexScope -> HashMap String Unit
+scopeWords s = match !s.ixsWords
+  Some words => words
+  None =>
+    let words = new ()
+    wordsInto "" s.ixsRows words
+    s.ixsWords := Some words
+    words
+
+-- A scope's rows come grouped by module, so a module id is split once per run
+-- of its rows rather than once per row.
+wordsInto : String -> List IndexRow -> HashMap String Unit -> Unit
+wordsInto _ [] _ = ()
+wordsInto prev (r :: rest) words =
+  wordSetAll r.ixrFields words
+  if r.ixrModule == prev then () else wordSetAll (split "." r.ixrModule) words
+  wordsInto r.ixrModule rest words
+
+wordSetAll : List String -> HashMap String Unit -> Unit
+wordSetAll [] _ = ()
+wordSetAll (w :: rest) words =
+  setInPlace w () words
+  wordSetAll rest words
 
 isExportedSigValue : IndexRow -> Bool
 isExportedSigValue r = r.ixrKind == RkValue && r.ixrExported && rowHasSig r
@@ -770,7 +800,8 @@ scopeDigestOf ix scope =
 
 -- ── questions and their answers ─────────────────────────────────────────────
 
--- Every question a rule can ask, in the project scope or the stdlib's: the rows named `name` in `ns`; every row of a scope; whether any
+-- Every question a rule can ask, in the project scope or the stdlib's: the rows named `name` in `ns`; every row of a scope; whether a word is a
+-- record field or module segment (`QWord`); whether any
 -- row of either scope is in a module; whether a stdlib module exports a signed
 -- value; whether a module the file imports with `*` is a file of the project
 -- (`QLocalMod`, answered from the states `withLocalModStates` was given).  Each
@@ -781,6 +812,7 @@ data Query =
   | QKnows String
   | QValueModule String
   | QLocalMod String
+  | QWord String
 
 -- What the index returns for a `Query`.  The two constructors are two kinds of
 -- reply, not failure and success.
@@ -802,6 +834,10 @@ answerOf ix (QValueModule modId) =
   let std = scopeOf ix StdlibScope
   AYes (elem modId std.ixsModules)
 answerOf ix (QLocalMod modId) = AYes (localModState ix modId == Some True)
+answerOf ix (QWord word) =
+  let proj = scopeOf ix ProjectScope
+  let std = scopeOf ix StdlibScope
+  AYes (has word (scopeWords proj) || has word (scopeWords std))
 
 -- Whether `modId` is a file of the project, where the file's states say; `None`
 -- for a module they do not cover.
@@ -834,6 +870,7 @@ queryKey (QScope scope) = "a\{scopeTag scope}"
 queryKey (QKnows modId) = "k:\{modId}"
 queryKey (QValueModule modId) = "m:\{modId}"
 queryKey (QLocalMod modId) = "l:\{modId}"
+queryKey (QWord word) = "w:\{word}"
 
 scopeTag : Scope -> String
 scopeTag ProjectScope = "p"
@@ -863,6 +900,8 @@ readQuery key =
     Some (QValueModule (stringSlice 2 n key))
   else if tag == "l" && n >= 2 && stringSlice 1 2 key == ":" then
     Some (QLocalMod (stringSlice 2 n key))
+  else if tag == "w" && n >= 2 && stringSlice 1 2 key == ":" then
+    Some (QWord (stringSlice 2 n key))
   else
     None
 
@@ -887,6 +926,7 @@ scopesOf (QScope _) = []
 scopesOf (QKnows _) = [ProjectScope, StdlibScope]
 scopesOf (QValueModule _) = [StdlibScope]
 scopesOf (QLocalMod _) = []
+scopesOf (QWord _) = [ProjectScope, StdlibScope]
 
 -- The one way any accessor reads the index: answers `q`, and on a recording
 -- index logs the question with the digest of its answer.
@@ -1034,6 +1074,12 @@ stdlibHasValueModule ix modId = yesAsked ix (QValueModule modId)
 export
 indexKnowsModule : ProjectIndex -> String -> Bool
 indexKnowsModule ix modId = yesAsked ix (QKnows modId)
+
+-- Whether `word` is a record field of some constructor row or a segment of
+-- some module id, in either scope.
+export
+indexKnowsWord : ProjectIndex -> String -> Bool
+indexKnowsWord ix word = yesAsked ix (QWord word)
 
 -- The same index told which modules a file imports with `*` are files of the
 -- project (`True`) and which are not.  A module the states do not name answers

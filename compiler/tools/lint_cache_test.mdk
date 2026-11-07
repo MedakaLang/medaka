@@ -41,6 +41,7 @@ import tools.lint_index.{
   rowsIn,
   rowsNamed,
   projectRows,
+  indexKnowsWord,
 }
 import tools.lint.{
   StdlibIndex,
@@ -637,6 +638,11 @@ askNamed : Ns -> String -> StdlibIndex -> String
 askNamed ns name idx =
   "\{name}=\{rowsText (rowsNamed (projectIndexOf idx) ns name)}"
 
+-- Whether `word` is a record field or a module segment anywhere.
+askWord : String -> StdlibIndex -> String
+askWord word idx =
+  "\{word}=\{if indexKnowsWord (projectIndexOf idx) word then "t" else "f"}"
+
 -- Every row of the project: an enumerating question.
 askAll : StdlibIndex -> String
 askAll idx = "rows=\{intToString (listLen (projectRows (projectIndexOf idx)))}"
@@ -973,6 +979,57 @@ test "deleting a file A asked nothing about keeps A warm" = withScratchDir
         cBase
         [Edit cPath None]
         dir))
+
+-- ── the word key ────────────────────────────────────────────────────────────
+-- A rule that asks whether a word is a record field keys its finding on that
+-- answer: renaming the field re-lints A, a field A did not ask about does not.
+
+bWithField : String -> String
+bWithField field = bBase ++ "\npublic export data P = P { \{field} : Int }\n"
+
+test "an asked word that stops being a record field re-lints A" = withScratchDir
+  (dir =>
+    relintsA
+      (askCase
+        recorded
+        [askWord "px"]
+        (bWithField "px")
+        cBase
+        [Edit bPath (Some (bWithField "qx"))]
+        dir))
+
+test "an asked word that becomes a record field re-lints A" = withScratchDir
+  (dir =>
+    relintsA
+      (askCase
+        recorded
+        [askWord "qx"]
+        (bWithField "px")
+        cBase
+        [Edit bPath (Some (bWithField "qx"))]
+        dir))
+
+test "a record field A did not ask about keeps A warm" = withScratchDir (dir =>
+  keepsAWarm
+    (askCase
+      recorded
+      [askWord "px"]
+      (bWithField "px")
+      cBase
+      [Edit cPath (Some (cBase ++ "\npublic export data Q = Q { zz : Int }\n"))]
+      dir))
+
+test "without recording, a renamed asked field is served stale" = withScratchDir
+  (dir =>
+    isFail
+      (relintsA
+        (askCase
+          unrecorded
+          [askWord "px"]
+          (bWithField "px")
+          cBase
+          [Edit bPath (Some (bWithField "qx"))]
+          dir)))
 
 -- ── the wildcard-import existence key ───────────────────────────────────────
 -- A file that imports `m.*` is linted differently according to whether `m` is a

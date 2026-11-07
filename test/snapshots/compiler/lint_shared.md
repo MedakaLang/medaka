@@ -1,5 +1,5 @@
 # META
-source_lines=1178
+source_lines=1182
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint_shared.mdk — helpers used by more than one lint module:
@@ -1136,6 +1136,10 @@ ruleNamePassthroughArm : String
 ruleNamePassthroughArm = "rule-passthrough-arm"
 
 export
+ruleNameCommentStaleBacktick : String
+ruleNameCommentStaleBacktick = "rule-comment-stale-backtick"
+
+export
 ruleNameCommentHistory : String
 ruleNameCommentHistory = "rule-comment-history"
 
@@ -1553,6 +1557,8 @@ isCodeText l = not (trim l == "" || startsWith "--" (trim l))
 (DFunDef false "ruleNameThreadedInvariant" () (ELit (LString "rule-threaded-invariant")))
 (DTypeSig true "ruleNamePassthroughArm" (TyCon "String"))
 (DFunDef false "ruleNamePassthroughArm" () (ELit (LString "rule-passthrough-arm")))
+(DTypeSig true "ruleNameCommentStaleBacktick" (TyCon "String"))
+(DFunDef false "ruleNameCommentStaleBacktick" () (ELit (LString "rule-comment-stale-backtick")))
 (DTypeSig true "ruleNameCommentHistory" (TyCon "String"))
 (DFunDef false "ruleNameCommentHistory" () (ELit (LString "rule-comment-history")))
 (DTypeSig true "ruleNameCommentRuling" (TyCon "String"))
@@ -1948,6 +1954,8 @@ isCodeText l = not (trim l == "" || startsWith "--" (trim l))
 (DFunDef false "ruleNameThreadedInvariant" () (ELit (LString "rule-threaded-invariant")))
 (DTypeSig true "ruleNamePassthroughArm" (TyCon "String"))
 (DFunDef false "ruleNamePassthroughArm" () (ELit (LString "rule-passthrough-arm")))
+(DTypeSig true "ruleNameCommentStaleBacktick" (TyCon "String"))
+(DFunDef false "ruleNameCommentStaleBacktick" () (ELit (LString "rule-comment-stale-backtick")))
 (DTypeSig true "ruleNameCommentHistory" (TyCon "String"))
 (DFunDef false "ruleNameCommentHistory" () (ELit (LString "rule-comment-history")))
 (DTypeSig true "ruleNameCommentRuling" (TyCon "String"))

@@ -1132,6 +1132,10 @@ ruleNamePassthroughArm : String
 ruleNamePassthroughArm = "rule-passthrough-arm"
 
 export
+ruleNameCommentStaleBacktick : String
+ruleNameCommentStaleBacktick = "rule-comment-stale-backtick"
+
+export
 ruleNameCommentHistory : String
 ruleNameCommentHistory = "rule-comment-history"
 

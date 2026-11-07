@@ -53,13 +53,14 @@ import tools.lint_rule_internal_walker_wildcard as WalkerWildcard
 import tools.lint_rule_internal_threaded_invariant as ThreadedInvariant
 import tools.lint_rule_internal_passthrough_arm as PassthroughArm
 import tools.lint_rule_internal_comment_register as CommentRegister
+import tools.lint_rule_internal_stale_backtick as StaleBacktick
 
 -- ── the registry ─────────────────────────────────────────────────────────────
 -- The list position is the output order of findings.  Each entry is the `rule`
 -- binding of one `lint_rule_*` module.
 export
 allRules : List Rule
-allRules = perFileRules ++ CommentRegister.rules
+allRules = perFileRules ++ CommentRegister.rules ++ [StaleBacktick.rule]
 
 perFileRules : List Rule
 perFileRules = [

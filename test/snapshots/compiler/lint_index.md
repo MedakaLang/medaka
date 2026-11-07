@@ -1,5 +1,5 @@
 # META
-source_lines=1057
+source_lines=1103
 stages=DESUGAR,MARK
 # SOURCE
 -- The declaration index lint rules query about modules other than the one they
@@ -73,7 +73,7 @@ import support.sexp_value.{
 import support.util.{
   joinWith, listLen, filterList, anyList, allList, startsWith
 }
-import string.{trimAscii}
+import string.{trimAscii, split}
 import hash_map.{HashMap, new, setInPlace, has, findWithDefault, entries}
 import list.{sortBy, reverse}
 import path.{basename}
@@ -655,6 +655,7 @@ data IndexScope = IndexScope {
   ixsRows : List IndexRow,
   ixsNames : List String,
   ixsModules : List String,
+  ixsWords : Ref (Option (HashMap String Unit)),
   ixsDigest : String,
 }
 
@@ -675,6 +676,7 @@ emptyScope = IndexScope {
   ixsRows = [],
   ixsNames = [],
   ixsModules = [],
+  ixsWords = Ref None,
   ixsDigest = "",
 }
 
@@ -727,8 +729,36 @@ mkScope digest rows =
     ixsRows = rows,
     ixsNames = sortedUnique (map rowName signed),
     ixsModules = sortedUnique (map rowModule signed),
+    ixsWords = Ref None,
     ixsDigest = if digest == "" then rowsDigest rows else digest,
   }
+
+-- The bare words a scope declares besides its row names: every record field
+-- of a constructor row and every dot-separated segment of a module id.  Built
+-- on the first `QWord` question, so a run that asks none pays nothing.
+scopeWords : IndexScope -> HashMap String Unit
+scopeWords s = match !s.ixsWords
+  Some words => words
+  None =>
+    let words = new ()
+    wordsInto "" s.ixsRows words
+    s.ixsWords := Some words
+    words
+
+-- A scope's rows come grouped by module, so a module id is split once per run
+-- of its rows rather than once per row.
+wordsInto : String -> List IndexRow -> HashMap String Unit -> Unit
+wordsInto _ [] _ = ()
+wordsInto prev (r :: rest) words =
+  wordSetAll r.ixrFields words
+  if r.ixrModule == prev then () else wordSetAll (split "." r.ixrModule) words
+  wordsInto r.ixrModule rest words
+
+wordSetAll : List String -> HashMap String Unit -> Unit
+wordSetAll [] _ = ()
+wordSetAll (w :: rest) words =
+  setInPlace w () words
+  wordSetAll rest words
 
 isExportedSigValue : IndexRow -> Bool
 isExportedSigValue r = r.ixrKind == RkValue && r.ixrExported && rowHasSig r
@@ -774,7 +804,8 @@ scopeDigestOf ix scope =
 
 -- ── questions and their answers ─────────────────────────────────────────────
 
--- Every question a rule can ask, in the project scope or the stdlib's: the rows named `name` in `ns`; every row of a scope; whether any
+-- Every question a rule can ask, in the project scope or the stdlib's: the rows named `name` in `ns`; every row of a scope; whether a word is a
+-- record field or module segment (`QWord`); whether any
 -- row of either scope is in a module; whether a stdlib module exports a signed
 -- value; whether a module the file imports with `*` is a file of the project
 -- (`QLocalMod`, answered from the states `withLocalModStates` was given).  Each
@@ -785,6 +816,7 @@ data Query =
   | QKnows String
   | QValueModule String
   | QLocalMod String
+  | QWord String
 
 -- What the index returns for a `Query`.  The two constructors are two kinds of
 -- reply, not failure and success.
@@ -806,6 +838,10 @@ answerOf ix (QValueModule modId) =
   let std = scopeOf ix StdlibScope
   AYes (elem modId std.ixsModules)
 answerOf ix (QLocalMod modId) = AYes (localModState ix modId == Some True)
+answerOf ix (QWord word) =
+  let proj = scopeOf ix ProjectScope
+  let std = scopeOf ix StdlibScope
+  AYes (has word (scopeWords proj) || has word (scopeWords std))
 
 -- Whether `modId` is a file of the project, where the file's states say; `None`
 -- for a module they do not cover.
@@ -838,6 +874,7 @@ queryKey (QScope scope) = "a\{scopeTag scope}"
 queryKey (QKnows modId) = "k:\{modId}"
 queryKey (QValueModule modId) = "m:\{modId}"
 queryKey (QLocalMod modId) = "l:\{modId}"
+queryKey (QWord word) = "w:\{word}"
 
 scopeTag : Scope -> String
 scopeTag ProjectScope = "p"
@@ -867,6 +904,8 @@ readQuery key =
     Some (QValueModule (stringSlice 2 n key))
   else if tag == "l" && n >= 2 && stringSlice 1 2 key == ":" then
     Some (QLocalMod (stringSlice 2 n key))
+  else if tag == "w" && n >= 2 && stringSlice 1 2 key == ":" then
+    Some (QWord (stringSlice 2 n key))
   else
     None
 
@@ -891,6 +930,7 @@ scopesOf (QScope _) = []
 scopesOf (QKnows _) = [ProjectScope, StdlibScope]
 scopesOf (QValueModule _) = [StdlibScope]
 scopesOf (QLocalMod _) = []
+scopesOf (QWord _) = [ProjectScope, StdlibScope]
 
 -- The one way any accessor reads the index: answers `q`, and on a recording
 -- index logs the question with the digest of its answer.
@@ -1039,6 +1079,12 @@ export
 indexKnowsModule : ProjectIndex -> String -> Bool
 indexKnowsModule ix modId = yesAsked ix (QKnows modId)
 
+-- Whether `word` is a record field of some constructor row or a segment of
+-- some module id, in either scope.
+export
+indexKnowsWord : ProjectIndex -> String -> Bool
+indexKnowsWord ix word = yesAsked ix (QWord word)
+
 -- The same index told which modules a file imports with `*` are files of the
 -- project (`True`) and which are not.  A module the states do not name answers
 -- `?`, which no recorded answer equals.
@@ -1065,7 +1111,7 @@ localModOfKey key = match readQuery key
 (DUse false (UseGroup ("frontend" "ast_codec") ((mem "sexpTy" false) (mem "readTy" false))))
 (DUse false (UseGroup ("support" "sexp_value") ((mem "SExp" true) (mem "SexpCursor" false) (mem "renderSExp" false) (mem "atomText" false) (mem "cursorOf" false) (mem "cursorFailed" false) (mem "cursorAtEnd" false) (mem "cursorOpen" false) (mem "cursorClose" false) (mem "cursorInt" false) (mem "cursorAtom" false) (mem "cursorChar" false) (mem "cursorList" false) (mem "cursorPeek" false) (mem "cursorAdvance" false) (mem "cursorFail" false) (mem "cursorSkipText" false) (mem "isCloseByte" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "listLen" false) (mem "filterList" false) (mem "anyList" false) (mem "allList" false) (mem "startsWith" false))))
-(DUse false (UseGroup ("string") ((mem "trimAscii" false))))
+(DUse false (UseGroup ("string") ((mem "trimAscii" false) (mem "split" false))))
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "setInPlace" false) (mem "has" false) (mem "findWithDefault" false) (mem "entries" false))))
 (DUse false (UseGroup ("list") ((mem "sortBy" false) (mem "reverse" false))))
 (DUse false (UseGroup ("path") ((mem "basename" false))))
@@ -1217,10 +1263,10 @@ localModOfKey key = match readQuery key
 (DFunDef false "makeStagingDir" ((PVar "dir")) (EMatch (EApp (EApp (EVar "runVerb") (ELit (LString "mktemp"))) (EListLit (ELit (LString "-d")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "dir"))) (ELit (LString "/.staging_XXXXXX"))))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "out") PWild)) () (EBlock (DoLet false false (PVar "made") (EApp (EVar "trimAscii") (EVar "out"))) (DoExpr (EIf (EBinOp "==" (EVar "made") (ELit (LString ""))) (EApp (EVar "Err") (ELit (LString "mktemp -d printed no path"))) (EApp (EVar "Ok") (EVar "made")))))) (arm (PCon "Ok" (PTuple (PVar "code") PWild (PVar "err"))) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "mktemp -d exited ")) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ": "))) (EApp (EVar "$core.display") (EVar "err"))) (ELit (LString "")))))))
 (DTypeSig true "stageAndRename" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))))
 (DFunDef false "stageAndRename" ((PVar "tmp") (PVar "dest") (PVar "text")) (EBlock (DoLet false false (PVar "staged") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "tmp"))) (ELit (LString "/shard.sx")))) (DoExpr (EMatch (EApp (EApp (EVar "writeFile") (EVar "staged")) (EVar "text")) (arm (PCon "Err" PWild) () (ELit LUnit)) (arm (PCon "Ok" PWild) () (EMatch (EApp (EApp (EVar "rename") (EVar "staged")) (EVar "dest")) (arm (PCon "Err" PWild) () (EApp (EApp (EVar "bestEffort") (ELit (LString "removing the staged file after a failed rename; the shard is simply not written"))) (EApp (EVar "removeFile") (EVar "staged")))) (arm (PCon "Ok" PWild) () (ELit LUnit))))))))
-(DData Private "IndexScope" () ((variant "IndexScope" (ConNamed (field "ixsByName" (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "IndexRow")))) (field "ixsRows" (TyApp (TyCon "List") (TyCon "IndexRow"))) (field "ixsNames" (TyApp (TyCon "List") (TyCon "String"))) (field "ixsModules" (TyApp (TyCon "List") (TyCon "String"))) (field "ixsDigest" (TyCon "String"))))) ())
+(DData Private "IndexScope" () ((variant "IndexScope" (ConNamed (field "ixsByName" (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "IndexRow")))) (field "ixsRows" (TyApp (TyCon "List") (TyCon "IndexRow"))) (field "ixsNames" (TyApp (TyCon "List") (TyCon "String"))) (field "ixsModules" (TyApp (TyCon "List") (TyCon "String"))) (field "ixsWords" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit"))))) (field "ixsDigest" (TyCon "String"))))) ())
 (DData Abstract "ProjectIndex" () ((variant "ProjectIndex" (ConPos (TyCon "IndexScope") (TyCon "IndexScope") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Bool"))) (TyApp (TyCon "Option") (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "String")))))) ())
 (DTypeSig false "emptyScope" (TyCon "IndexScope"))
-(DFunDef false "emptyScope" () (ERecordCreate "IndexScope" ((fa "ixsByName" (EApp (EVar "new") (ELit LUnit))) (fa "ixsRows" (EListLit)) (fa "ixsNames" (EListLit)) (fa "ixsModules" (EListLit)) (fa "ixsDigest" (ELit (LString ""))))))
+(DFunDef false "emptyScope" () (ERecordCreate "IndexScope" ((fa "ixsByName" (EApp (EVar "new") (ELit LUnit))) (fa "ixsRows" (EListLit)) (fa "ixsNames" (EListLit)) (fa "ixsModules" (EListLit)) (fa "ixsWords" (EApp (EVar "Ref") (EVar "None"))) (fa "ixsDigest" (ELit (LString ""))))))
 (DTypeSig true "emptyProjectIndex" (TyCon "ProjectIndex"))
 (DFunDef false "emptyProjectIndex" () (EApp (EApp (EApp (EApp (EVar "ProjectIndex") (EVar "emptyScope")) (EVar "emptyScope")) (EListLit)) (EVar "None")))
 (DTypeSig true "mkProjectIndexWith" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "IndexRow")) (TyFun (TyApp (TyCon "List") (TyCon "IndexRow")) (TyCon "ProjectIndex"))))))
@@ -1230,7 +1276,15 @@ localModOfKey key = match readQuery key
 (DTypeSig true "indexFingerprint" (TyFun (TyCon "ProjectIndex") (TyCon "String")))
 (DFunDef false "indexFingerprint" ((PVar "ix")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "asked") (EVar "ix")) (EApp (EVar "QScope") (EVar "StdlibScope")))) (DoLet false false PWild (EApp (EApp (EVar "asked") (EVar "ix")) (EApp (EVar "QScope") (EVar "ProjectScope")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EApp (EApp (EVar "scopeDigestOf") (EVar "ix")) (EVar "StdlibScope")))) (ELit (LString "/"))) (EApp (EVar "$core.display") (EApp (EApp (EVar "scopeDigestOf") (EVar "ix")) (EVar "ProjectScope")))) (ELit (LString ""))))))
 (DTypeSig false "mkScope" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "IndexRow")) (TyCon "IndexScope"))))
-(DFunDef false "mkScope" ((PVar "digest") (PVar "rows")) (EBlock (DoLet false false (PVar "m") (EApp (EVar "new") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "groupInto") (EApp (EVar "reverse") (EVar "rows"))) (EVar "m"))) (DoLet false false (PVar "signed") (EApp (EApp (EVar "filterList") (EVar "isExportedSigValue")) (EVar "rows"))) (DoExpr (ERecordCreate "IndexScope" ((fa "ixsByName" (EVar "m")) (fa "ixsRows" (EVar "rows")) (fa "ixsNames" (EApp (EVar "sortedUnique") (EApp (EApp (EVar "map") (EVar "rowName")) (EVar "signed")))) (fa "ixsModules" (EApp (EVar "sortedUnique") (EApp (EApp (EVar "map") (EVar "rowModule")) (EVar "signed")))) (fa "ixsDigest" (EIf (EBinOp "==" (EVar "digest") (ELit (LString ""))) (EApp (EVar "rowsDigest") (EVar "rows")) (EVar "digest"))))))))
+(DFunDef false "mkScope" ((PVar "digest") (PVar "rows")) (EBlock (DoLet false false (PVar "m") (EApp (EVar "new") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "groupInto") (EApp (EVar "reverse") (EVar "rows"))) (EVar "m"))) (DoLet false false (PVar "signed") (EApp (EApp (EVar "filterList") (EVar "isExportedSigValue")) (EVar "rows"))) (DoExpr (ERecordCreate "IndexScope" ((fa "ixsByName" (EVar "m")) (fa "ixsRows" (EVar "rows")) (fa "ixsNames" (EApp (EVar "sortedUnique") (EApp (EApp (EVar "map") (EVar "rowName")) (EVar "signed")))) (fa "ixsModules" (EApp (EVar "sortedUnique") (EApp (EApp (EVar "map") (EVar "rowModule")) (EVar "signed")))) (fa "ixsWords" (EApp (EVar "Ref") (EVar "None"))) (fa "ixsDigest" (EIf (EBinOp "==" (EVar "digest") (ELit (LString ""))) (EApp (EVar "rowsDigest") (EVar "rows")) (EVar "digest"))))))))
+(DTypeSig false "scopeWords" (TyFun (TyCon "IndexScope") (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit"))))
+(DFunDef false "scopeWords" ((PVar "s")) (EMatch (EUnOp "!" (EFieldAccess (EVar "s") "ixsWords")) (arm (PCon "Some" (PVar "words")) () (EVar "words")) (arm (PCon "None") () (EBlock (DoLet false false (PVar "words") (EApp (EVar "new") (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EVar "wordsInto") (ELit (LString ""))) (EFieldAccess (EVar "s") "ixsRows")) (EVar "words"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "s") "ixsWords")) (EApp (EVar "Some") (EVar "words")))) (DoExpr (EVar "words"))))))
+(DTypeSig false "wordsInto" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "IndexRow")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyCon "Unit")))))
+(DFunDef false "wordsInto" (PWild (PList) PWild) (ELit LUnit))
+(DFunDef false "wordsInto" ((PVar "prev") (PCons (PVar "r") (PVar "rest")) (PVar "words")) (EBlock (DoExpr (EApp (EApp (EVar "wordSetAll") (EFieldAccess (EVar "r") "ixrFields")) (EVar "words"))) (DoExpr (EIf (EBinOp "==" (EFieldAccess (EVar "r") "ixrModule") (EVar "prev")) (ELit LUnit) (EApp (EApp (EVar "wordSetAll") (EApp (EApp (EVar "split") (ELit (LString "."))) (EFieldAccess (EVar "r") "ixrModule"))) (EVar "words")))) (DoExpr (EApp (EApp (EApp (EVar "wordsInto") (EFieldAccess (EVar "r") "ixrModule")) (EVar "rest")) (EVar "words")))))
+(DTypeSig false "wordSetAll" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyCon "Unit"))))
+(DFunDef false "wordSetAll" ((PList) PWild) (ELit LUnit))
+(DFunDef false "wordSetAll" ((PCons (PVar "w") (PVar "rest")) (PVar "words")) (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EVar "w")) (ELit LUnit)) (EVar "words"))) (DoExpr (EApp (EApp (EVar "wordSetAll") (EVar "rest")) (EVar "words")))))
 (DTypeSig false "isExportedSigValue" (TyFun (TyCon "IndexRow") (TyCon "Bool")))
 (DFunDef false "isExportedSigValue" ((PVar "r")) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "r") "ixrKind") (EVar "RkValue")) (EFieldAccess (EVar "r") "ixrExported")) (EApp (EVar "rowHasSig") (EVar "r"))))
 (DTypeSig false "rowName" (TyFun (TyCon "IndexRow") (TyCon "String")))
@@ -1255,7 +1309,7 @@ localModOfKey key = match readQuery key
 (DFunDef false "scopeOf" ((PCon "ProjectIndex" (PVar "std") PWild PWild PWild) (PCon "StdlibScope")) (EVar "std"))
 (DTypeSig false "scopeDigestOf" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "Scope") (TyCon "String"))))
 (DFunDef false "scopeDigestOf" ((PVar "ix") (PVar "scope")) (EBlock (DoLet false false (PVar "s") (EApp (EApp (EVar "scopeOf") (EVar "ix")) (EVar "scope"))) (DoExpr (EFieldAccess (EVar "s") "ixsDigest"))))
-(DData Private "Query" () ((variant "QNamed" (ConPos (TyCon "Scope") (TyCon "Ns") (TyCon "String"))) (variant "QScope" (ConPos (TyCon "Scope"))) (variant "QKnows" (ConPos (TyCon "String"))) (variant "QValueModule" (ConPos (TyCon "String"))) (variant "QLocalMod" (ConPos (TyCon "String")))) ())
+(DData Private "Query" () ((variant "QNamed" (ConPos (TyCon "Scope") (TyCon "Ns") (TyCon "String"))) (variant "QScope" (ConPos (TyCon "Scope"))) (variant "QKnows" (ConPos (TyCon "String"))) (variant "QValueModule" (ConPos (TyCon "String"))) (variant "QLocalMod" (ConPos (TyCon "String"))) (variant "QWord" (ConPos (TyCon "String")))) ())
 (DData Private "Reply" () ((variant "ARows" (ConPos (TyApp (TyCon "List") (TyCon "IndexRow")))) (variant "AYes" (ConPos (TyCon "Bool")))) ())
 (DTypeSig false "answerOf" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "Query") (TyCon "Reply"))))
 (DFunDef false "answerOf" ((PVar "ix") (PCon "QNamed" (PVar "scope") (PVar "ns") (PVar "name"))) (EApp (EVar "ARows") (EApp (EApp (EApp (EVar "scopeNamed") (EApp (EApp (EVar "scopeOf") (EVar "ix")) (EVar "scope"))) (EVar "ns")) (EVar "name"))))
@@ -1263,6 +1317,7 @@ localModOfKey key = match readQuery key
 (DFunDef false "answerOf" ((PVar "ix") (PCon "QKnows" (PVar "modId"))) (EBlock (DoLet false false (PVar "inModule") (ELam ((PVar "r")) (EBinOp "==" (EFieldAccess (EVar "r") "ixrModule") (EVar "modId")))) (DoLet false false (PVar "proj") (EApp (EApp (EVar "scopeOf") (EVar "ix")) (EVar "ProjectScope"))) (DoLet false false (PVar "std") (EApp (EApp (EVar "scopeOf") (EVar "ix")) (EVar "StdlibScope"))) (DoExpr (EApp (EVar "AYes") (EBinOp "||" (EApp (EApp (EVar "anyList") (EVar "inModule")) (EFieldAccess (EVar "proj") "ixsRows")) (EApp (EApp (EVar "anyList") (EVar "inModule")) (EFieldAccess (EVar "std") "ixsRows")))))))
 (DFunDef false "answerOf" ((PVar "ix") (PCon "QValueModule" (PVar "modId"))) (EBlock (DoLet false false (PVar "std") (EApp (EApp (EVar "scopeOf") (EVar "ix")) (EVar "StdlibScope"))) (DoExpr (EApp (EVar "AYes") (EApp (EApp (EVar "elem") (EVar "modId")) (EFieldAccess (EVar "std") "ixsModules"))))))
 (DFunDef false "answerOf" ((PVar "ix") (PCon "QLocalMod" (PVar "modId"))) (EApp (EVar "AYes") (EBinOp "==" (EApp (EApp (EVar "localModState") (EVar "ix")) (EVar "modId")) (EApp (EVar "Some") (EVar "True")))))
+(DFunDef false "answerOf" ((PVar "ix") (PCon "QWord" (PVar "word"))) (EBlock (DoLet false false (PVar "proj") (EApp (EApp (EVar "scopeOf") (EVar "ix")) (EVar "ProjectScope"))) (DoLet false false (PVar "std") (EApp (EApp (EVar "scopeOf") (EVar "ix")) (EVar "StdlibScope"))) (DoExpr (EApp (EVar "AYes") (EBinOp "||" (EApp (EApp (EVar "has") (EVar "word")) (EApp (EVar "scopeWords") (EVar "proj"))) (EApp (EApp (EVar "has") (EVar "word")) (EApp (EVar "scopeWords") (EVar "std"))))))))
 (DTypeSig false "localModState" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Bool")))))
 (DFunDef false "localModState" ((PCon "ProjectIndex" PWild PWild (PVar "states") PWild) (PVar "modId")) (EApp (EApp (EVar "lookupState") (EVar "modId")) (EVar "states")))
 (DTypeSig false "lookupState" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Bool"))) (TyApp (TyCon "Option") (TyCon "Bool")))))
@@ -1279,6 +1334,7 @@ localModOfKey key = match readQuery key
 (DFunDef false "queryKey" ((PCon "QKnows" (PVar "modId"))) (EBinOp "++" (EBinOp "++" (ELit (LString "k:")) (EApp (EVar "$core.display") (EVar "modId"))) (ELit (LString ""))))
 (DFunDef false "queryKey" ((PCon "QValueModule" (PVar "modId"))) (EBinOp "++" (EBinOp "++" (ELit (LString "m:")) (EApp (EVar "$core.display") (EVar "modId"))) (ELit (LString ""))))
 (DFunDef false "queryKey" ((PCon "QLocalMod" (PVar "modId"))) (EBinOp "++" (EBinOp "++" (ELit (LString "l:")) (EApp (EVar "$core.display") (EVar "modId"))) (ELit (LString ""))))
+(DFunDef false "queryKey" ((PCon "QWord" (PVar "word"))) (EBinOp "++" (EBinOp "++" (ELit (LString "w:")) (EApp (EVar "$core.display") (EVar "word"))) (ELit (LString ""))))
 (DTypeSig false "scopeTag" (TyFun (TyCon "Scope") (TyCon "String")))
 (DFunDef false "scopeTag" ((PCon "ProjectScope")) (ELit (LString "p")))
 (DFunDef false "scopeTag" ((PCon "StdlibScope")) (ELit (LString "s")))
@@ -1286,7 +1342,7 @@ localModOfKey key = match readQuery key
 (DFunDef false "nsTag" ((PCon "NsValue")) (ELit (LString "v")))
 (DFunDef false "nsTag" ((PCon "NsType")) (ELit (LString "t")))
 (DTypeSig false "readQuery" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Query"))))
-(DFunDef false "readQuery" ((PVar "key")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "key"))) (DoLet false false (PVar "tag") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "key"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "tag") (ELit (LString "n"))) (EBinOp ">=" (EVar "n") (ELit (LInt 4)))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 3))) (ELit (LInt 4))) (EVar "key")) (ELit (LString ":")))) (EMatch (ETuple (EApp (EVar "scopeOfTag") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (ELit (LInt 2))) (EVar "key"))) (EApp (EVar "nsOfTag") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 2))) (ELit (LInt 3))) (EVar "key")))) (arm (PTuple (PCon "Some" (PVar "scope")) (PCon "Some" (PVar "ns"))) () (EApp (EVar "Some") (EApp (EApp (EApp (EVar "QNamed") (EVar "scope")) (EVar "ns")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 4))) (EVar "n")) (EVar "key"))))) (arm PWild () (EVar "None"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "tag") (ELit (LString "a"))) (EBinOp "==" (EVar "n") (ELit (LInt 2)))) (EApp (EApp (EVar "map") (EVar "QScope")) (EApp (EVar "scopeOfTag") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (ELit (LInt 2))) (EVar "key")))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "tag") (ELit (LString "k"))) (EBinOp ">=" (EVar "n") (ELit (LInt 2)))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (ELit (LInt 2))) (EVar "key")) (ELit (LString ":")))) (EApp (EVar "Some") (EApp (EVar "QKnows") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 2))) (EVar "n")) (EVar "key")))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "tag") (ELit (LString "m"))) (EBinOp ">=" (EVar "n") (ELit (LInt 2)))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (ELit (LInt 2))) (EVar "key")) (ELit (LString ":")))) (EApp (EVar "Some") (EApp (EVar "QValueModule") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 2))) (EVar "n")) (EVar "key")))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "tag") (ELit (LString "l"))) (EBinOp ">=" (EVar "n") (ELit (LInt 2)))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (ELit (LInt 2))) (EVar "key")) (ELit (LString ":")))) (EApp (EVar "Some") (EApp (EVar "QLocalMod") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 2))) (EVar "n")) (EVar "key")))) (EVar "None")))))))))
+(DFunDef false "readQuery" ((PVar "key")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "key"))) (DoLet false false (PVar "tag") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "key"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "tag") (ELit (LString "n"))) (EBinOp ">=" (EVar "n") (ELit (LInt 4)))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 3))) (ELit (LInt 4))) (EVar "key")) (ELit (LString ":")))) (EMatch (ETuple (EApp (EVar "scopeOfTag") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (ELit (LInt 2))) (EVar "key"))) (EApp (EVar "nsOfTag") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 2))) (ELit (LInt 3))) (EVar "key")))) (arm (PTuple (PCon "Some" (PVar "scope")) (PCon "Some" (PVar "ns"))) () (EApp (EVar "Some") (EApp (EApp (EApp (EVar "QNamed") (EVar "scope")) (EVar "ns")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 4))) (EVar "n")) (EVar "key"))))) (arm PWild () (EVar "None"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "tag") (ELit (LString "a"))) (EBinOp "==" (EVar "n") (ELit (LInt 2)))) (EApp (EApp (EVar "map") (EVar "QScope")) (EApp (EVar "scopeOfTag") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (ELit (LInt 2))) (EVar "key")))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "tag") (ELit (LString "k"))) (EBinOp ">=" (EVar "n") (ELit (LInt 2)))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (ELit (LInt 2))) (EVar "key")) (ELit (LString ":")))) (EApp (EVar "Some") (EApp (EVar "QKnows") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 2))) (EVar "n")) (EVar "key")))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "tag") (ELit (LString "m"))) (EBinOp ">=" (EVar "n") (ELit (LInt 2)))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (ELit (LInt 2))) (EVar "key")) (ELit (LString ":")))) (EApp (EVar "Some") (EApp (EVar "QValueModule") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 2))) (EVar "n")) (EVar "key")))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "tag") (ELit (LString "l"))) (EBinOp ">=" (EVar "n") (ELit (LInt 2)))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (ELit (LInt 2))) (EVar "key")) (ELit (LString ":")))) (EApp (EVar "Some") (EApp (EVar "QLocalMod") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 2))) (EVar "n")) (EVar "key")))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "tag") (ELit (LString "w"))) (EBinOp ">=" (EVar "n") (ELit (LInt 2)))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (ELit (LInt 2))) (EVar "key")) (ELit (LString ":")))) (EApp (EVar "Some") (EApp (EVar "QWord") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 2))) (EVar "n")) (EVar "key")))) (EVar "None"))))))))))
 (DTypeSig false "scopeOfTag" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Scope"))))
 (DFunDef false "scopeOfTag" ((PVar "t")) (EIf (EBinOp "==" (EVar "t") (ELit (LString "p"))) (EApp (EVar "Some") (EVar "ProjectScope")) (EIf (EBinOp "==" (EVar "t") (ELit (LString "s"))) (EApp (EVar "Some") (EVar "StdlibScope")) (EVar "None"))))
 (DTypeSig false "nsOfTag" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Ns"))))
@@ -1297,6 +1353,7 @@ localModOfKey key = match readQuery key
 (DFunDef false "scopesOf" ((PCon "QKnows" PWild)) (EListLit (EVar "ProjectScope") (EVar "StdlibScope")))
 (DFunDef false "scopesOf" ((PCon "QValueModule" PWild)) (EListLit (EVar "StdlibScope")))
 (DFunDef false "scopesOf" ((PCon "QLocalMod" PWild)) (EListLit))
+(DFunDef false "scopesOf" ((PCon "QWord" PWild)) (EListLit (EVar "ProjectScope") (EVar "StdlibScope")))
 (DTypeSig false "asked" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "Query") (TyCon "Reply"))))
 (DFunDef false "asked" ((PVar "ix") (PVar "q")) (EBlock (DoLet false false (PVar "a") (EApp (EApp (EVar "answerOf") (EVar "ix")) (EVar "q"))) (DoLet false false PWild (EMatch (EVar "ix") (arm (PCon "ProjectIndex" PWild PWild PWild (PCon "Some" (PVar "log"))) () (EApp (EApp (EApp (EApp (EVar "logAnswer") (EVar "log")) (EVar "ix")) (EVar "q")) (EVar "a"))) (arm (PCon "ProjectIndex" PWild PWild PWild (PCon "None")) () (ELit LUnit)))) (DoExpr (EVar "a"))))
 (DTypeSig false "logAnswer" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "String")) (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "Query") (TyFun (TyCon "Reply") (TyCon "Unit"))))))
@@ -1343,6 +1400,8 @@ localModOfKey key = match readQuery key
 (DFunDef false "stdlibHasValueModule" ((PVar "ix") (PVar "modId")) (EApp (EApp (EVar "yesAsked") (EVar "ix")) (EApp (EVar "QValueModule") (EVar "modId"))))
 (DTypeSig true "indexKnowsModule" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "indexKnowsModule" ((PVar "ix") (PVar "modId")) (EApp (EApp (EVar "yesAsked") (EVar "ix")) (EApp (EVar "QKnows") (EVar "modId"))))
+(DTypeSig true "indexKnowsWord" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "indexKnowsWord" ((PVar "ix") (PVar "word")) (EApp (EApp (EVar "yesAsked") (EVar "ix")) (EApp (EVar "QWord") (EVar "word"))))
 (DTypeSig true "withLocalModStates" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Bool"))) (TyFun (TyCon "ProjectIndex") (TyCon "ProjectIndex"))))
 (DFunDef false "withLocalModStates" ((PVar "states") (PCon "ProjectIndex" (PVar "std") (PVar "proj") PWild (PVar "log"))) (EApp (EApp (EApp (EApp (EVar "ProjectIndex") (EVar "std")) (EVar "proj")) (EVar "states")) (EVar "log")))
 (DTypeSig true "localModAsked" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "String") (TyCon "Bool"))))
@@ -1355,7 +1414,7 @@ localModOfKey key = match readQuery key
 (DUse false (UseGroup ("frontend" "ast_codec") ((mem "sexpTy" false) (mem "readTy" false))))
 (DUse false (UseGroup ("support" "sexp_value") ((mem "SExp" true) (mem "SexpCursor" false) (mem "renderSExp" false) (mem "atomText" false) (mem "cursorOf" false) (mem "cursorFailed" false) (mem "cursorAtEnd" false) (mem "cursorOpen" false) (mem "cursorClose" false) (mem "cursorInt" false) (mem "cursorAtom" false) (mem "cursorChar" false) (mem "cursorList" false) (mem "cursorPeek" false) (mem "cursorAdvance" false) (mem "cursorFail" false) (mem "cursorSkipText" false) (mem "isCloseByte" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "listLen" false) (mem "filterList" false) (mem "anyList" false) (mem "allList" false) (mem "startsWith" false))))
-(DUse false (UseGroup ("string") ((mem "trimAscii" false))))
+(DUse false (UseGroup ("string") ((mem "trimAscii" false) (mem "split" false))))
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "setInPlace" false) (mem "has" false) (mem "findWithDefault" false) (mem "entries" false))))
 (DUse false (UseGroup ("list") ((mem "sortBy" false) (mem "reverse" false))))
 (DUse false (UseGroup ("path") ((mem "basename" false))))
@@ -1507,10 +1566,10 @@ localModOfKey key = match readQuery key
 (DFunDef false "makeStagingDir" ((PVar "dir")) (EMatch (EApp (EApp (EVar "runVerb") (ELit (LString "mktemp"))) (EListLit (ELit (LString "-d")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "dir"))) (ELit (LString "/.staging_XXXXXX"))))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "out") PWild)) () (EBlock (DoLet false false (PVar "made") (EApp (EVar "trimAscii") (EVar "out"))) (DoExpr (EIf (EBinOp "==" (EVar "made") (ELit (LString ""))) (EApp (EVar "Err") (ELit (LString "mktemp -d printed no path"))) (EApp (EVar "Ok") (EVar "made")))))) (arm (PCon "Ok" (PTuple (PVar "code") PWild (PVar "err"))) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "mktemp -d exited ")) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ": "))) (EApp (EVar "$core.display") (EVar "err"))) (ELit (LString "")))))))
 (DTypeSig true "stageAndRename" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))))
 (DFunDef false "stageAndRename" ((PVar "tmp") (PVar "dest") (PVar "text")) (EBlock (DoLet false false (PVar "staged") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "tmp"))) (ELit (LString "/shard.sx")))) (DoExpr (EMatch (EApp (EApp (EVar "writeFile") (EVar "staged")) (EVar "text")) (arm (PCon "Err" PWild) () (ELit LUnit)) (arm (PCon "Ok" PWild) () (EMatch (EApp (EApp (EVar "rename") (EVar "staged")) (EVar "dest")) (arm (PCon "Err" PWild) () (EApp (EApp (EVar "bestEffort") (ELit (LString "removing the staged file after a failed rename; the shard is simply not written"))) (EApp (EVar "removeFile") (EVar "staged")))) (arm (PCon "Ok" PWild) () (ELit LUnit))))))))
-(DData Private "IndexScope" () ((variant "IndexScope" (ConNamed (field "ixsByName" (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "IndexRow")))) (field "ixsRows" (TyApp (TyCon "List") (TyCon "IndexRow"))) (field "ixsNames" (TyApp (TyCon "List") (TyCon "String"))) (field "ixsModules" (TyApp (TyCon "List") (TyCon "String"))) (field "ixsDigest" (TyCon "String"))))) ())
+(DData Private "IndexScope" () ((variant "IndexScope" (ConNamed (field "ixsByName" (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "IndexRow")))) (field "ixsRows" (TyApp (TyCon "List") (TyCon "IndexRow"))) (field "ixsNames" (TyApp (TyCon "List") (TyCon "String"))) (field "ixsModules" (TyApp (TyCon "List") (TyCon "String"))) (field "ixsWords" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit"))))) (field "ixsDigest" (TyCon "String"))))) ())
 (DData Abstract "ProjectIndex" () ((variant "ProjectIndex" (ConPos (TyCon "IndexScope") (TyCon "IndexScope") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Bool"))) (TyApp (TyCon "Option") (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "String")))))) ())
 (DTypeSig false "emptyScope" (TyCon "IndexScope"))
-(DFunDef false "emptyScope" () (ERecordCreate "IndexScope" ((fa "ixsByName" (EApp (EVar "new") (ELit LUnit))) (fa "ixsRows" (EListLit)) (fa "ixsNames" (EListLit)) (fa "ixsModules" (EListLit)) (fa "ixsDigest" (ELit (LString ""))))))
+(DFunDef false "emptyScope" () (ERecordCreate "IndexScope" ((fa "ixsByName" (EApp (EVar "new") (ELit LUnit))) (fa "ixsRows" (EListLit)) (fa "ixsNames" (EListLit)) (fa "ixsModules" (EListLit)) (fa "ixsWords" (EApp (EVar "Ref") (EVar "None"))) (fa "ixsDigest" (ELit (LString ""))))))
 (DTypeSig true "emptyProjectIndex" (TyCon "ProjectIndex"))
 (DFunDef false "emptyProjectIndex" () (EApp (EApp (EApp (EApp (EVar "ProjectIndex") (EVar "emptyScope")) (EVar "emptyScope")) (EListLit)) (EVar "None")))
 (DTypeSig true "mkProjectIndexWith" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "IndexRow")) (TyFun (TyApp (TyCon "List") (TyCon "IndexRow")) (TyCon "ProjectIndex"))))))
@@ -1520,7 +1579,15 @@ localModOfKey key = match readQuery key
 (DTypeSig true "indexFingerprint" (TyFun (TyCon "ProjectIndex") (TyCon "String")))
 (DFunDef false "indexFingerprint" ((PVar "ix")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "asked") (EVar "ix")) (EApp (EVar "QScope") (EVar "StdlibScope")))) (DoLet false false PWild (EApp (EApp (EVar "asked") (EVar "ix")) (EApp (EVar "QScope") (EVar "ProjectScope")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EApp (EApp (EVar "scopeDigestOf") (EVar "ix")) (EVar "StdlibScope")))) (ELit (LString "/"))) (EApp (EVar "$core.display") (EApp (EApp (EVar "scopeDigestOf") (EVar "ix")) (EVar "ProjectScope")))) (ELit (LString ""))))))
 (DTypeSig false "mkScope" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "IndexRow")) (TyCon "IndexScope"))))
-(DFunDef false "mkScope" ((PVar "digest") (PVar "rows")) (EBlock (DoLet false false (PVar "m") (EApp (EVar "new") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "groupInto") (EApp (EVar "reverse") (EVar "rows"))) (EVar "m"))) (DoLet false false (PVar "signed") (EApp (EApp (EVar "filterList") (EVar "isExportedSigValue")) (EVar "rows"))) (DoExpr (ERecordCreate "IndexScope" ((fa "ixsByName" (EVar "m")) (fa "ixsRows" (EVar "rows")) (fa "ixsNames" (EApp (EVar "sortedUnique") (EApp (EApp (EMethodRef "map") (EVar "rowName")) (EVar "signed")))) (fa "ixsModules" (EApp (EVar "sortedUnique") (EApp (EApp (EMethodRef "map") (EVar "rowModule")) (EVar "signed")))) (fa "ixsDigest" (EIf (EBinOp "==" (EVar "digest") (ELit (LString ""))) (EApp (EVar "rowsDigest") (EVar "rows")) (EVar "digest"))))))))
+(DFunDef false "mkScope" ((PVar "digest") (PVar "rows")) (EBlock (DoLet false false (PVar "m") (EApp (EVar "new") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "groupInto") (EApp (EVar "reverse") (EVar "rows"))) (EVar "m"))) (DoLet false false (PVar "signed") (EApp (EApp (EVar "filterList") (EVar "isExportedSigValue")) (EVar "rows"))) (DoExpr (ERecordCreate "IndexScope" ((fa "ixsByName" (EVar "m")) (fa "ixsRows" (EVar "rows")) (fa "ixsNames" (EApp (EVar "sortedUnique") (EApp (EApp (EMethodRef "map") (EVar "rowName")) (EVar "signed")))) (fa "ixsModules" (EApp (EVar "sortedUnique") (EApp (EApp (EMethodRef "map") (EVar "rowModule")) (EVar "signed")))) (fa "ixsWords" (EApp (EVar "Ref") (EVar "None"))) (fa "ixsDigest" (EIf (EBinOp "==" (EVar "digest") (ELit (LString ""))) (EApp (EVar "rowsDigest") (EVar "rows")) (EVar "digest"))))))))
+(DTypeSig false "scopeWords" (TyFun (TyCon "IndexScope") (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit"))))
+(DFunDef false "scopeWords" ((PVar "s")) (EMatch (EUnOp "!" (EFieldAccess (EVar "s") "ixsWords")) (arm (PCon "Some" (PVar "words")) () (EVar "words")) (arm (PCon "None") () (EBlock (DoLet false false (PVar "words") (EApp (EVar "new") (ELit LUnit))) (DoExpr (EApp (EApp (EApp (EVar "wordsInto") (ELit (LString ""))) (EFieldAccess (EVar "s") "ixsRows")) (EVar "words"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "s") "ixsWords")) (EApp (EVar "Some") (EVar "words")))) (DoExpr (EVar "words"))))))
+(DTypeSig false "wordsInto" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "IndexRow")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyCon "Unit")))))
+(DFunDef false "wordsInto" (PWild (PList) PWild) (ELit LUnit))
+(DFunDef false "wordsInto" ((PVar "prev") (PCons (PVar "r") (PVar "rest")) (PVar "words")) (EBlock (DoExpr (EApp (EApp (EVar "wordSetAll") (EFieldAccess (EVar "r") "ixrFields")) (EVar "words"))) (DoExpr (EIf (EBinOp "==" (EFieldAccess (EVar "r") "ixrModule") (EVar "prev")) (ELit LUnit) (EApp (EApp (EVar "wordSetAll") (EApp (EApp (EVar "split") (ELit (LString "."))) (EFieldAccess (EVar "r") "ixrModule"))) (EVar "words")))) (DoExpr (EApp (EApp (EApp (EVar "wordsInto") (EFieldAccess (EVar "r") "ixrModule")) (EVar "rest")) (EVar "words")))))
+(DTypeSig false "wordSetAll" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyCon "Unit"))))
+(DFunDef false "wordSetAll" ((PList) PWild) (ELit LUnit))
+(DFunDef false "wordSetAll" ((PCons (PVar "w") (PVar "rest")) (PVar "words")) (EBlock (DoExpr (EApp (EApp (EApp (EVar "setInPlace") (EVar "w")) (ELit LUnit)) (EVar "words"))) (DoExpr (EApp (EApp (EVar "wordSetAll") (EVar "rest")) (EVar "words")))))
 (DTypeSig false "isExportedSigValue" (TyFun (TyCon "IndexRow") (TyCon "Bool")))
 (DFunDef false "isExportedSigValue" ((PVar "r")) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "r") "ixrKind") (EVar "RkValue")) (EFieldAccess (EVar "r") "ixrExported")) (EApp (EVar "rowHasSig") (EVar "r"))))
 (DTypeSig false "rowName" (TyFun (TyCon "IndexRow") (TyCon "String")))
@@ -1545,7 +1612,7 @@ localModOfKey key = match readQuery key
 (DFunDef false "scopeOf" ((PCon "ProjectIndex" (PVar "std") PWild PWild PWild) (PCon "StdlibScope")) (EVar "std"))
 (DTypeSig false "scopeDigestOf" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "Scope") (TyCon "String"))))
 (DFunDef false "scopeDigestOf" ((PVar "ix") (PVar "scope")) (EBlock (DoLet false false (PVar "s") (EApp (EApp (EVar "scopeOf") (EVar "ix")) (EVar "scope"))) (DoExpr (EFieldAccess (EVar "s") "ixsDigest"))))
-(DData Private "Query" () ((variant "QNamed" (ConPos (TyCon "Scope") (TyCon "Ns") (TyCon "String"))) (variant "QScope" (ConPos (TyCon "Scope"))) (variant "QKnows" (ConPos (TyCon "String"))) (variant "QValueModule" (ConPos (TyCon "String"))) (variant "QLocalMod" (ConPos (TyCon "String")))) ())
+(DData Private "Query" () ((variant "QNamed" (ConPos (TyCon "Scope") (TyCon "Ns") (TyCon "String"))) (variant "QScope" (ConPos (TyCon "Scope"))) (variant "QKnows" (ConPos (TyCon "String"))) (variant "QValueModule" (ConPos (TyCon "String"))) (variant "QLocalMod" (ConPos (TyCon "String"))) (variant "QWord" (ConPos (TyCon "String")))) ())
 (DData Private "Reply" () ((variant "ARows" (ConPos (TyApp (TyCon "List") (TyCon "IndexRow")))) (variant "AYes" (ConPos (TyCon "Bool")))) ())
 (DTypeSig false "answerOf" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "Query") (TyCon "Reply"))))
 (DFunDef false "answerOf" ((PVar "ix") (PCon "QNamed" (PVar "scope") (PVar "ns") (PVar "name"))) (EApp (EVar "ARows") (EApp (EApp (EApp (EVar "scopeNamed") (EApp (EApp (EVar "scopeOf") (EVar "ix")) (EVar "scope"))) (EVar "ns")) (EVar "name"))))
@@ -1553,6 +1620,7 @@ localModOfKey key = match readQuery key
 (DFunDef false "answerOf" ((PVar "ix") (PCon "QKnows" (PVar "modId"))) (EBlock (DoLet false false (PVar "inModule") (ELam ((PVar "r")) (EBinOp "==" (EFieldAccess (EVar "r") "ixrModule") (EVar "modId")))) (DoLet false false (PVar "proj") (EApp (EApp (EVar "scopeOf") (EVar "ix")) (EVar "ProjectScope"))) (DoLet false false (PVar "std") (EApp (EApp (EVar "scopeOf") (EVar "ix")) (EVar "StdlibScope"))) (DoExpr (EApp (EVar "AYes") (EBinOp "||" (EApp (EApp (EVar "anyList") (EVar "inModule")) (EFieldAccess (EVar "proj") "ixsRows")) (EApp (EApp (EVar "anyList") (EVar "inModule")) (EFieldAccess (EVar "std") "ixsRows")))))))
 (DFunDef false "answerOf" ((PVar "ix") (PCon "QValueModule" (PVar "modId"))) (EBlock (DoLet false false (PVar "std") (EApp (EApp (EVar "scopeOf") (EVar "ix")) (EVar "StdlibScope"))) (DoExpr (EApp (EVar "AYes") (EApp (EApp (EDictApp "elem") (EVar "modId")) (EFieldAccess (EVar "std") "ixsModules"))))))
 (DFunDef false "answerOf" ((PVar "ix") (PCon "QLocalMod" (PVar "modId"))) (EApp (EVar "AYes") (EBinOp "==" (EApp (EApp (EVar "localModState") (EVar "ix")) (EVar "modId")) (EApp (EVar "Some") (EVar "True")))))
+(DFunDef false "answerOf" ((PVar "ix") (PCon "QWord" (PVar "word"))) (EBlock (DoLet false false (PVar "proj") (EApp (EApp (EVar "scopeOf") (EVar "ix")) (EVar "ProjectScope"))) (DoLet false false (PVar "std") (EApp (EApp (EVar "scopeOf") (EVar "ix")) (EVar "StdlibScope"))) (DoExpr (EApp (EVar "AYes") (EBinOp "||" (EApp (EApp (EVar "has") (EVar "word")) (EApp (EVar "scopeWords") (EVar "proj"))) (EApp (EApp (EVar "has") (EVar "word")) (EApp (EVar "scopeWords") (EVar "std"))))))))
 (DTypeSig false "localModState" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Bool")))))
 (DFunDef false "localModState" ((PCon "ProjectIndex" PWild PWild (PVar "states") PWild) (PVar "modId")) (EApp (EApp (EVar "lookupState") (EVar "modId")) (EVar "states")))
 (DTypeSig false "lookupState" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Bool"))) (TyApp (TyCon "Option") (TyCon "Bool")))))
@@ -1569,6 +1637,7 @@ localModOfKey key = match readQuery key
 (DFunDef false "queryKey" ((PCon "QKnows" (PVar "modId"))) (EBinOp "++" (EBinOp "++" (ELit (LString "k:")) (EApp (EVar "$core.display") (EVar "modId"))) (ELit (LString ""))))
 (DFunDef false "queryKey" ((PCon "QValueModule" (PVar "modId"))) (EBinOp "++" (EBinOp "++" (ELit (LString "m:")) (EApp (EVar "$core.display") (EVar "modId"))) (ELit (LString ""))))
 (DFunDef false "queryKey" ((PCon "QLocalMod" (PVar "modId"))) (EBinOp "++" (EBinOp "++" (ELit (LString "l:")) (EApp (EVar "$core.display") (EVar "modId"))) (ELit (LString ""))))
+(DFunDef false "queryKey" ((PCon "QWord" (PVar "word"))) (EBinOp "++" (EBinOp "++" (ELit (LString "w:")) (EApp (EVar "$core.display") (EVar "word"))) (ELit (LString ""))))
 (DTypeSig false "scopeTag" (TyFun (TyCon "Scope") (TyCon "String")))
 (DFunDef false "scopeTag" ((PCon "ProjectScope")) (ELit (LString "p")))
 (DFunDef false "scopeTag" ((PCon "StdlibScope")) (ELit (LString "s")))
@@ -1576,7 +1645,7 @@ localModOfKey key = match readQuery key
 (DFunDef false "nsTag" ((PCon "NsValue")) (ELit (LString "v")))
 (DFunDef false "nsTag" ((PCon "NsType")) (ELit (LString "t")))
 (DTypeSig false "readQuery" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Query"))))
-(DFunDef false "readQuery" ((PVar "key")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "key"))) (DoLet false false (PVar "tag") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "key"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "tag") (ELit (LString "n"))) (EBinOp ">=" (EVar "n") (ELit (LInt 4)))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 3))) (ELit (LInt 4))) (EVar "key")) (ELit (LString ":")))) (EMatch (ETuple (EApp (EVar "scopeOfTag") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (ELit (LInt 2))) (EVar "key"))) (EApp (EVar "nsOfTag") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 2))) (ELit (LInt 3))) (EVar "key")))) (arm (PTuple (PCon "Some" (PVar "scope")) (PCon "Some" (PVar "ns"))) () (EApp (EVar "Some") (EApp (EApp (EApp (EVar "QNamed") (EVar "scope")) (EVar "ns")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 4))) (EVar "n")) (EVar "key"))))) (arm PWild () (EVar "None"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "tag") (ELit (LString "a"))) (EBinOp "==" (EVar "n") (ELit (LInt 2)))) (EApp (EApp (EMethodRef "map") (EVar "QScope")) (EApp (EVar "scopeOfTag") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (ELit (LInt 2))) (EVar "key")))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "tag") (ELit (LString "k"))) (EBinOp ">=" (EVar "n") (ELit (LInt 2)))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (ELit (LInt 2))) (EVar "key")) (ELit (LString ":")))) (EApp (EVar "Some") (EApp (EVar "QKnows") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 2))) (EVar "n")) (EVar "key")))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "tag") (ELit (LString "m"))) (EBinOp ">=" (EVar "n") (ELit (LInt 2)))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (ELit (LInt 2))) (EVar "key")) (ELit (LString ":")))) (EApp (EVar "Some") (EApp (EVar "QValueModule") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 2))) (EVar "n")) (EVar "key")))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "tag") (ELit (LString "l"))) (EBinOp ">=" (EVar "n") (ELit (LInt 2)))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (ELit (LInt 2))) (EVar "key")) (ELit (LString ":")))) (EApp (EVar "Some") (EApp (EVar "QLocalMod") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 2))) (EVar "n")) (EVar "key")))) (EVar "None")))))))))
+(DFunDef false "readQuery" ((PVar "key")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "key"))) (DoLet false false (PVar "tag") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "key"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "tag") (ELit (LString "n"))) (EBinOp ">=" (EVar "n") (ELit (LInt 4)))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 3))) (ELit (LInt 4))) (EVar "key")) (ELit (LString ":")))) (EMatch (ETuple (EApp (EVar "scopeOfTag") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (ELit (LInt 2))) (EVar "key"))) (EApp (EVar "nsOfTag") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 2))) (ELit (LInt 3))) (EVar "key")))) (arm (PTuple (PCon "Some" (PVar "scope")) (PCon "Some" (PVar "ns"))) () (EApp (EVar "Some") (EApp (EApp (EApp (EVar "QNamed") (EVar "scope")) (EVar "ns")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 4))) (EVar "n")) (EVar "key"))))) (arm PWild () (EVar "None"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "tag") (ELit (LString "a"))) (EBinOp "==" (EVar "n") (ELit (LInt 2)))) (EApp (EApp (EMethodRef "map") (EVar "QScope")) (EApp (EVar "scopeOfTag") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (ELit (LInt 2))) (EVar "key")))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "tag") (ELit (LString "k"))) (EBinOp ">=" (EVar "n") (ELit (LInt 2)))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (ELit (LInt 2))) (EVar "key")) (ELit (LString ":")))) (EApp (EVar "Some") (EApp (EVar "QKnows") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 2))) (EVar "n")) (EVar "key")))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "tag") (ELit (LString "m"))) (EBinOp ">=" (EVar "n") (ELit (LInt 2)))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (ELit (LInt 2))) (EVar "key")) (ELit (LString ":")))) (EApp (EVar "Some") (EApp (EVar "QValueModule") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 2))) (EVar "n")) (EVar "key")))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "tag") (ELit (LString "l"))) (EBinOp ">=" (EVar "n") (ELit (LInt 2)))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (ELit (LInt 2))) (EVar "key")) (ELit (LString ":")))) (EApp (EVar "Some") (EApp (EVar "QLocalMod") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 2))) (EVar "n")) (EVar "key")))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "tag") (ELit (LString "w"))) (EBinOp ">=" (EVar "n") (ELit (LInt 2)))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (ELit (LInt 2))) (EVar "key")) (ELit (LString ":")))) (EApp (EVar "Some") (EApp (EVar "QWord") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 2))) (EVar "n")) (EVar "key")))) (EVar "None"))))))))))
 (DTypeSig false "scopeOfTag" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Scope"))))
 (DFunDef false "scopeOfTag" ((PVar "t")) (EIf (EBinOp "==" (EVar "t") (ELit (LString "p"))) (EApp (EVar "Some") (EVar "ProjectScope")) (EIf (EBinOp "==" (EVar "t") (ELit (LString "s"))) (EApp (EVar "Some") (EVar "StdlibScope")) (EVar "None"))))
 (DTypeSig false "nsOfTag" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Ns"))))
@@ -1587,6 +1656,7 @@ localModOfKey key = match readQuery key
 (DFunDef false "scopesOf" ((PCon "QKnows" PWild)) (EListLit (EVar "ProjectScope") (EVar "StdlibScope")))
 (DFunDef false "scopesOf" ((PCon "QValueModule" PWild)) (EListLit (EVar "StdlibScope")))
 (DFunDef false "scopesOf" ((PCon "QLocalMod" PWild)) (EListLit))
+(DFunDef false "scopesOf" ((PCon "QWord" PWild)) (EListLit (EVar "ProjectScope") (EVar "StdlibScope")))
 (DTypeSig false "asked" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "Query") (TyCon "Reply"))))
 (DFunDef false "asked" ((PVar "ix") (PVar "q")) (EBlock (DoLet false false (PVar "a") (EApp (EApp (EVar "answerOf") (EVar "ix")) (EVar "q"))) (DoLet false false PWild (EMatch (EVar "ix") (arm (PCon "ProjectIndex" PWild PWild PWild (PCon "Some" (PVar "log"))) () (EApp (EApp (EApp (EApp (EVar "logAnswer") (EVar "log")) (EVar "ix")) (EVar "q")) (EVar "a"))) (arm (PCon "ProjectIndex" PWild PWild PWild (PCon "None")) () (ELit LUnit)))) (DoExpr (EVar "a"))))
 (DTypeSig false "logAnswer" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "String")) (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "Query") (TyFun (TyCon "Reply") (TyCon "Unit"))))))
@@ -1633,6 +1703,8 @@ localModOfKey key = match readQuery key
 (DFunDef false "stdlibHasValueModule" ((PVar "ix") (PVar "modId")) (EApp (EApp (EVar "yesAsked") (EVar "ix")) (EApp (EVar "QValueModule") (EVar "modId"))))
 (DTypeSig true "indexKnowsModule" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "indexKnowsModule" ((PVar "ix") (PVar "modId")) (EApp (EApp (EVar "yesAsked") (EVar "ix")) (EApp (EVar "QKnows") (EVar "modId"))))
+(DTypeSig true "indexKnowsWord" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "indexKnowsWord" ((PVar "ix") (PVar "word")) (EApp (EApp (EVar "yesAsked") (EVar "ix")) (EApp (EVar "QWord") (EVar "word"))))
 (DTypeSig true "withLocalModStates" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Bool"))) (TyFun (TyCon "ProjectIndex") (TyCon "ProjectIndex"))))
 (DFunDef false "withLocalModStates" ((PVar "states") (PCon "ProjectIndex" (PVar "std") (PVar "proj") PWild (PVar "log"))) (EApp (EApp (EApp (EApp (EVar "ProjectIndex") (EVar "std")) (EVar "proj")) (EVar "states")) (EVar "log")))
 (DTypeSig true "localModAsked" (TyFun (TyCon "ProjectIndex") (TyFun (TyCon "String") (TyCon "Bool"))))

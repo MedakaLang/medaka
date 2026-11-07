@@ -1,0 +1,37 @@
+-- Fixture for rule-comment-stale-backtick: hits name nothing the stdlib or this file declares.
+-- expect-at-line 7 rule-comment-stale-backtick
+-- expect-at-line 11 rule-comment-stale-backtick
+-- expect-at-line 13 rule-comment-stale-backtick x2
+-- expect-at-line 17 rule-comment-stale-backtick
+
+-- see `retiredHelperName` for the cache key.
+a : Int
+a = 1
+{- a block whose second line
+   names `goneAwayFunction` here. -}
+
+-- both `oldPassName` and `otherRetiredName` are gone.
+b : Int
+b = 2
+
+-- a local of another file, `remoteLocal`, is a finding too.
+
+-- Non-hits follow, one class per line.
+-- a stdlib value: `foldRight`; a keyword: `requires`, `defer`.
+-- a name this file declares, `localThing`, and a local of its code, `stepCount`.
+-- a stdlib module stem, `hash_map`; a stdlib record field, `mtime`.
+-- file names and paths: `lint.mdk`, `compiler/tools/lint.mdk`.
+-- a gate name, `diff_compiler_fmt`; shell words and flags: `grep`, `timeout`, `--internal`.
+-- a commit hash, `eb92cdff`; a hex digest, `a2617467236f`.
+-- an environment variable, `MEDAKA_STRICT`; a capitalised name, `Option`.
+-- short placeholders: `acc`, `xs`, `k1`.
+-- mangled and runtime names: `core__map`, `mdk_alloc`, `secp256k1_fe_mul`.
+-- SQL, LLVM and C words: `sqlite3`, `musttail`, `getelementptr`, `void`.
+-- an odd-backtick line pairs nothing: `staleInOddLine` and a stray ` here.
+localThing : Int -> Int
+localThing n =
+  let stepCount = n + 1
+  stepCount
+
+s : String
+s = "`staleInString` is a string, not a comment"

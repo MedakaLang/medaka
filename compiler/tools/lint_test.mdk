@@ -163,6 +163,7 @@ test "the edit rules ask for the index only on a wildcard import" = expectEach [
         "rule-let-underscore-unit",
         "rule-discarded-result",
         "rule-walker-wildcard",
+        "rule-comment-stale-backtick",
       ]),
   ),
   ("reimpl active", expectTrue (stdlibIndexNeeded [] [])),

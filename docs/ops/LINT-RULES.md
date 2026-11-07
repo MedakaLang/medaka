@@ -61,6 +61,7 @@ Every rule `medaka lint` knows. `universal` rules are meaningful in any Medaka p
 | [`rule-comment-dead-path`](#rule-comment-dead-path) | internal | style | baselined | not-fixable | file |
 | [`rule-comment-shout`](#rule-comment-shout) | internal | style | baselined | not-fixable | file |
 | [`rule-comment-provenance-id`](#rule-comment-provenance-id) | internal | style | gated | not-fixable | file |
+| [`rule-comment-stale-backtick`](#rule-comment-stale-backtick) | internal | style | gated | not-fixable | file |
 
 ## rule-match-on-param
 
@@ -851,4 +852,17 @@ Before:
   -- #2400 F3: unlocated diagnostics keep the placeholder
 After:
   -- unlocated diagnostics keep the placeholder
+```
+
+## rule-comment-stale-backtick
+
+a backticked identifier in a comment names nothing the project or the stdlib declares, and occurs in no code line of the file (#4319)
+
+A comment that names a function or value in backticks goes stale when the name is renamed or deleted, and no other gate notices. The rule reads each backticked lowercase identifier in a prose comment and accepts it when it is a declaration in the project or stdlib index, a record field or a module-name segment there, a Medaka keyword, or a whole word on some code line of the same file. A name spelled like no Medaka declaration is skipped: three characters or fewer, a mangled `__` name, a C-runtime, C-library or gate-name prefix, a hex hash, or a word of SQL, LLVM IR, WebAssembly, C or the shell. Anything else names a thing that is gone, or a local of another file: point the comment at the live top-level name, restate the constraint without it, or delete the comment.
+
+```
+Before:
+  -- see `oldHelper` for the cache key
+After:
+  -- see `cacheKey` for the cache key
 ```

@@ -527,7 +527,8 @@ CACHE="$CACHE_SAVE"
 # the active `--only`/`--disable` set never reads it — but a `--cache` POPULATE
 # run persists the FULL rule roster regardless of which rules are
 # active, so populating with every index-reading rule disabled (`rule-stdlib-reimpl`,
-# `rule-let-underscore-unit`, `rule-discarded-result`, `rule-walker-wildcard`) must not poison the
+# `rule-let-underscore-unit`, `rule-discarded-result`, `rule-walker-wildcard`,
+# `rule-comment-stale-backtick`) must not poison the
 # entry with a degraded (empty) stdlib index: a LATER default-rules `--cache`
 # read of the same entry must still see the finding.
 # corpus/stdlib-reimpl.mdk (copied in from test/lint_rule_fixtures above) reimplements
@@ -538,7 +539,7 @@ CACHE="$CACHE_SAVE"
 rm -rf "$CACHE" "$XDG_CACHE_HOME" corpus8
 mkdir corpus8
 cp corpus/stdlib-reimpl.mdk corpus8/
-DISABLE8=rule-stdlib-reimpl,rule-let-underscore-unit,rule-discarded-result,rule-walker-wildcard
+DISABLE8=rule-stdlib-reimpl,rule-let-underscore-unit,rule-discarded-result,rule-walker-wildcard,rule-comment-stale-backtick
 "$MEDAKA" lint --disable "$DISABLE8" --cache corpus8 > "$WORK/warm8_populate.txt" 2>&1
 printf '%s\n' "$?" >> "$WORK/warm8_populate.txt"
 if grep -q 'rule-stdlib-reimpl' "$WORK/warm8_populate.txt"; then

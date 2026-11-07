@@ -111,6 +111,7 @@ fixtureNames = [
   "comment-provenance-id",
   "comment-ruling",
   "comment-shout",
+  "comment-stale-backtick",
   "comment-tombstone",
   "complement-predicate",
   "concat-to-interp",
@@ -484,6 +485,9 @@ test "rule-comment-history fixture" = fixtureHolds "comment-history"
 test "rule-comment-ruling fixture" = fixtureHolds "comment-ruling"
 
 test "rule-comment-shout fixture" = fixtureHolds "comment-shout"
+
+test "rule-comment-stale-backtick fixture" =
+  fixtureHolds "comment-stale-backtick"
 
 test "rule-comment-tombstone fixture" = fixtureHolds "comment-tombstone"
 

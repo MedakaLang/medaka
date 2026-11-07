@@ -1,7 +1,7 @@
 -- #602 pin: two top-level bodies that are structurally
 -- identical within one file.  The cross-file group needs >=2 distinct
 -- files, so a same-file pair like parser.mdk's
--- `parseBracketBlock`/`indentedBody` is invisible to it.  Both
+-- `frontend.parser.parseBracketBlock`/`frontend.parser.indentedBody` is invisible to it.  Both
 -- bindings below must be flagged by rule-duplicate-body with the "in this
 -- same file" message.  The body shape is deliberately UNIQUE to this file, so
 -- the finding can only have come from the in-file tier.

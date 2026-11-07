@@ -2,7 +2,7 @@
 -- `stepA` is one function written as two pattern clauses. NEITHER clause alone
 -- reaches dupComplexityThreshold, so while the floor was judged per clause this
 -- pair was invisible however exactly it duplicated dup_multiclause_b.mdk's
--- `stepB`. Judged on the function, the two clauses together clear the floor and
+-- `dup_multiclause_b.stepB`. Judged on the function, the two clauses together clear the floor and
 -- both sides fire. Exported so only rule-duplicate-body has anything to say.
 export
 stepA : Int -> Int -> String

@@ -16,6 +16,7 @@ import test.{
   Expectation,
   expectEqual,
   expectTrue,
+  expectFalse,
   expectNotEqual,
   expectEach,
   fail,
@@ -33,7 +34,7 @@ import tools.lint_index.{
   RowKind(..), Ns(..), SigSlot(..), rowSig, rowsOfDecls, rowsDigest,
   encodeRowShard, decodeRowShard, rowContentHash, rowShardPath, rowsNamed,
   rowsIn, stdlibRowsNamed, stdlibRows, projectRows, ProjectIndex, Query(..),
-  Scope(..), mkProjectIndexWith, projectRowsNamed
+  Scope(..), mkProjectIndexWith, projectRowsNamed, indexKnowsWord
 }
 import tools.lint.{
   StdlibIndex,
@@ -254,6 +255,16 @@ test "ambiguity is kept: every module's candidate is returned" =
     ),
     ("one module", expectEqual 1 (listLen (rowsIn idx "b" NsValue "f"))),
     ("absent name", expectEqual 0 (listLen (rowsNamed idx NsValue "nope"))),
+  ]
+
+test "a word is known as a record field or a module segment, in either scope" =
+  let idx = mkProjectIndex (parseRows "data.hash_map" intId) (rowsOf "tools.m")
+  expectEach [
+    ("a project record field", expectTrue (indexKnowsWord idx "px")),
+    ("a stdlib module segment", expectTrue (indexKnowsWord idx "hash_map")),
+    ("a project module segment", expectTrue (indexKnowsWord idx "tools")),
+    ("a value name is not a word", expectFalse (indexKnowsWord idx "twice")),
+    ("an absent word", expectFalse (indexKnowsWord idx "nope")),
   ]
 
 test "the project and stdlib scopes are kept apart" =
