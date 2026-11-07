@@ -1,4 +1,4 @@
-import frontend.ast.{Pat(..), Route(..)}
+import frontend.ast.{Lit(..), Pat(..), Route(..)}
 import support.ordmap.{
   OrdMap, omEmpty, omFromNames, omHasKey, omInsert, omKeys, omLookup
 }
@@ -26,6 +26,9 @@ import ir.core_walk.{rewriteProgramScoped}
 --   head to all its parameters in order (`fromInt x = intToFloat x`).  The head
 --   must read no parameter and no given dictionary, so it means the same at every
 --   call site that does not rebind its name.
+--
+-- `propagateLiteralGlobals` then replaces each read of such a value by the
+-- literal.
 --
 -- A call site is a saturated application of a top-level name that no enclosing
 -- binder rebinds, or of a method whose evidence selects one instance statically
@@ -56,6 +59,29 @@ export
 inlineTrivialCalls : List String -> CProgram -> CProgram
 inlineTrivialCalls noInline prog =
   rewriteProgramScoped (unfoldSite (unfoldingTable noInline prog)) prog
+
+-- Replace every read of a top-level literal value by the literal, as GHC's
+-- simplifier does for a binding whose unfolding is a literal.  A read is a
+-- variable no enclosing binder rebinds.  The binding stays: another half or
+-- module may still name it.  A string is not replaced, since each read would
+-- carry its own copy of the bytes.
+export
+propagateLiteralGlobals : List String -> CProgram -> CProgram
+propagateLiteralGlobals noInline prog =
+  rewriteProgramScoped (readSite (unfoldingTable noInline prog)) prog
+
+readSite : OrdMap Unfolding -> OrdMap Unit -> CExpr -> CExpr
+readSite table scope (e@(CVar name _)) =
+  if omHasKey name scope then
+    e
+  else match omLookup (targetKey (TopLevel name)) table
+    Some (Literal (lit@(CLit l))) if scalarLit l => lit
+    _ => e
+readSite _ _ e = e
+
+scalarLit : Lit -> Bool
+scalarLit (LString _) = False
+scalarLit _ = True
 
 unfoldSite : OrdMap Unfolding -> OrdMap Unit -> CExpr -> CExpr
 unfoldSite table scope (e@(CApp head args site)) = match siteTarget scope head

@@ -7,7 +7,7 @@ import ir.core_ir.{CBind(..), CClause(..), CProgram(..)}
 import ir.core_ir_lower.{lowerTypedProgramWith, noInlineFnNames}
 import ir.core_ir_eval.{cevalMainOf}
 import ir.core_ir_sexp.{cexprSexp, defaultSexpMode}
-import ir.core_opt_unfold.{inlineTrivialCalls}
+import ir.core_opt_unfold.{inlineTrivialCalls, propagateLiteralGlobals}
 import ir.core_walk.{bindName}
 -- Sibling test module for `compiler/ir/core_opt_unfold.mdk` ([P-TEST-SIBLING]).
 --
@@ -316,3 +316,83 @@ main = unBox (useMk 3)
     labelFail "interpreter before" (expectEqual "3" outBefore),
     labelFail "interpreter after" (expectEqual "3" outAfter),
   ]
+
+-- ── propagateLiteralGlobals ────────────────────────────────────────────────
+
+-- Both passes in the slot's order: the first turns `fromInt@Int 3` into `3`.
+propagateAll : CProgram -> CProgram
+propagateAll p = propagateLiteralGlobals [] (inlineAll p)
+
+test "a read of an Int literal global becomes the literal" =
+  expectCase
+    "(CVar \"k\" AGlobal)"
+    "(CLit (LInt 3))"
+    "3"
+    (passCase propagateAll "f" """
+k : Int
+k = 3
+f : Int
+f = k
+main = f
+""")
+
+test "a read of a U64 literal global in U64 arithmetic becomes the literal" =
+  expectCase
+    "(CBinPrim \"+\" (CVar \"m\" AGlobal) (CVar \"x\" AGlobal) \"U64\")"
+    "(CBinPrim \"+\" (CLit (LInt 7)) (CVar \"x\" AGlobal) \"U64\")"
+    "9"
+    (passCase
+      propagateAll
+      "f"
+      """
+m : U64
+m = 7
+f : U64 -> U64
+f x = m + x
+main = f 2
+""")
+
+test "a read whose name a local binder rebinds is left alone" =
+  expectCase
+    "(CVar \"k\" AGlobal)"
+    "(CVar \"k\" AGlobal)"
+    "5"
+    (passCase
+      propagateAll
+      "f"
+      """
+k : Int
+k = 3
+f : Int -> Int
+f k = k
+main = f 5
+""")
+
+test "a read at the top level of another global becomes the literal" =
+  expectCase
+    "(CVar \"k\" AGlobal)"
+    "(CLit (LInt 3))"
+    "3"
+    (passCase propagateAll "j" """
+k : Int
+k = 3
+j : Int
+j = k
+main = j
+""")
+
+test "a literal global that is fromInt at Int is read as its literal" =
+  expectCase
+    "(CVar \"k\" AGlobal)"
+    "(CLit (LInt 3))"
+    "3"
+    (passCase
+      propagateAll
+      "g"
+      """
+k : Int
+k = fromInt 3
+g : Int
+g = k
+main = g
+""")
