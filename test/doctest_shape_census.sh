@@ -14,7 +14,7 @@
 # worklist of the unit-test-shaped ones to migrate later; this script derives
 # that worklist instead of hand-surveying it, the same way this crusade's
 # other census scripts derive their counts (test/fmt_clean_census.sh,
-# test/comment_register_census.sh).
+# test/arch_census.sh).
 #
 # CLASSIFICATION (three cheaply-greppable tells, any one is sufficient to
 # call a doctest unit-test-shaped; #2290's own named tells):

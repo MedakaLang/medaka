@@ -64,8 +64,8 @@ thing to test.
 ### 2. Comment register — does each comment state a constraint the code cannot show?
 
 Source: **`[T-COMMENT-REGISTER]`** in `AGENTS.md` (the norms) and
-**`make comment-census`** (`test/comment_register_census.sh`, #2281) for the
-current derived per-class counts; the rubric's "Comments and documentation"
+**`make comment-census`** (the `rule-comment-*` lint rules, #2281, #4504) for
+the current derived per-class counts; the rubric's "Comments and documentation"
 table for the classes. An issue number is fine only when it points at a live
 constraint or an open issue (`until #1115 lands`); a provenance tag recording
 which work item introduced the code is a finding (R4).

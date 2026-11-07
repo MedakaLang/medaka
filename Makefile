@@ -861,15 +861,25 @@ diag-census: medaka
 ##           Always exits 0: a census, not a gate.
 first-hour-census: medaka
 	sh test/first_hour_census.sh
-## comment-census — report the seven comment-register classes (#2281) by
-##           line over compiler/*.mdk + stdlib/*.mdk: history narration,
-##           reviewer-addressed ruling vocabulary, tombstones, emoji shouts,
-##           draft narration, dead deictic citations, and falsified-by-
-##           refactor candidates. Derived, not hand-maintained — see
-##           test/comment_register_census.sh's header. Pure text/regex, no
-##           built ./medaka needed. Always exits 0: a census, not a gate.
-comment-census:
-	sh test/comment_register_census.sh
+## comment-census — report the comment-register lint rules (#2281, #4504):
+##           one row per `rule-comment-*` rule with the comment lines it
+##           flags and the files they are in, over $(COMMENT_CENSUS_ROOTS).
+##           The rule list comes from `./medaka lint --list-rules`. Needs a
+##           built ./medaka. A census, not a gate: the enforcing check is each
+##           rule's per-file row in test/lint_baseline.toml.
+COMMENT_CENSUS_ROOTS = compiler stdlib pds sqlite gzip parsec
+comment-census: medaka
+	@rules="$$(./medaka lint --list-rules --names | grep '^rule-comment-' | paste -sd, -)"; \
+	[ -n "$$rules" ] || { echo "comment-census: ./medaka lists no rule-comment-* rule" >&2; exit 1; }; \
+	out="$$(mktemp)"; \
+	./medaka lint --internal --only="$$rules" $(COMMENT_CENSUS_ROOTS) >"$$out" || { cat "$$out"; rm -f "$$out"; exit 1; }; \
+	awk -v rules="$$rules" ' \
+	  /^warning: / { split($$2, loc, ":"); r = $$3; gsub(/\[|\]/, "", r); n[r]++; \
+	    if (!((r, loc[1]) in seen)) { seen[r, loc[1]] = 1; files[r]++ } } \
+	  END { printf "%-24s %7s %6s\n", "rule", "lines", "files"; \
+	    k = split(rules, rs, ","); \
+	    for (i = 1; i <= k; i++) printf "%-24s %7d %6d\n", rs[i], n[rs[i]], files[rs[i]] }' "$$out"; \
+	rm -f "$$out"
 
 ## bytes-census — report the per-file `Array Int` type-position count
 ##           tree-wide (epic #3134). Derived, not hand-maintained — see

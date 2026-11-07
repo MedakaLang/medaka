@@ -70,14 +70,15 @@ carried the OLD golden. This was a SILENT version of the exact "bless in the sam
 the check exists to prevent. Fixed: an unstaged snapshot diff now fails check 4 outright,
 unconditionally, before the suite runs.
 
-## [H-REGISTER-UNSTAGED] comment-register check 6b reads the disk, not the index
+## [H-REGISTER-UNSTAGED] the lint count ratchet reads the disk, not the index
 
-Check 6b runs the comment-register census over each staged file as it sits on disk. A partially
-staged file is judged on its unstaged edits: a clean staged blob can be rejected, and a violating
-staged blob can pass. The check cannot see the index, so the mitigation is procedural: `git add`
-every edit before committing. The CI twin, `test/diff_compiler_comment_shout_diff_test.mdk`
-(assertion 1, baselineCheck), runs the same ratchet over a clean checkout of the commit, so a locally wrong
-verdict cannot reach main. Documented, not changed (#3039).
+Check 2 lints each staged file as it sits on disk, and the comment-register counts are lint
+rules (`rule-comment-*`, #4504), so a partially staged file is judged on its unstaged edits: a
+clean staged blob can be rejected, and a violating staged blob can pass. The mitigation is
+procedural: `git add` every edit before committing. The CI twin,
+`test/diff_compiler_lint_baseline.sh`, runs the same ratchet over a clean checkout of the
+commit, so a locally wrong verdict cannot reach main (#3039). Check 6 (shout diff) is not
+affected: it lints the staged blob read from the index.
 
 ## [H-DEFER] why the defer flag is sound despite skipping check 4
 
@@ -225,7 +226,7 @@ grep (see `printer.mdk`'s `escStringLit` note). The escaper now emits `\0` and `
 
 *Full `AGENTS.md` text as of 2026-10-03, moved here verbatim when AGENTS.md was slimmed; AGENTS.md keeps the rule and the command.*
 
-`.githooks/pre-commit`: fmt+lint+baselined-lint+shout-diff+comment-register-baseline always,
+`.githooks/pre-commit`: fmt+lint+baselined-lint+shout-diff always,
 snapshot+lextok if staged,
 over staged `.mdk` (`test/` fixtures excluded). Re-install: `cp .githooks/pre-commit
 "$(git rev-parse --git-common-dir)/hooks/pre-commit"`.
@@ -258,18 +259,19 @@ over staged `.mdk` (`test/` fixtures excluded). Re-install: `cp .githooks/pre-co
   clean of yet (`rule-stdlib-reimpl`), scoped to `$LINT_ROOTS` (`compiler stdlib sqlite`).
   A count may only fall; regenerate via `sh test/diff_compiler_lint_baseline.sh --write`,
   never by hand. See `.githooks/pre-commit` check 2b.
-- **[H-EMOJI-SHOUT] Shout diff** — rejects a commit that ADDS a new shout line to a staged
-  `.mdk` (diff-scoped, added lines only): a 🚨/⚠️/🔒 sigil line anywhere, or the sigil-free
-  shout register (3+ consecutive ALL-CAPS words) on a comment-scope line, so stripping the
-  sigil off a shout is not a drain. ⚠️ Rewriting an existing sigil-bearing line makes it an
-  ADDED line — drop the sigil in the same edit or the check reds. See `.githooks/pre-commit`
-  check 6 and `[T-COMMENT-REGISTER]`.
-- **[H-COMMENT-REGISTER] Comment-register baseline** — a per-(file, class) COUNT ratchet over
-  the 8 baselined comment-register classes, scoped to tracked `compiler/`/`stdlib/` `.mdk`.
-  A count may only fall; a nonzero count with no row fails closed. Regenerate via `sh
-  test/comment_register_census.sh --write test/comment_register_baseline.toml`, never by
-  hand. See `.githooks/pre-commit` check 6b; CI twin is
-  `test/diff_compiler_comment_shout_diff_test.mdk`'s first assertion (baselineCheck).
+- **[H-EMOJI-SHOUT] Shout diff** — rejects a commit that adds a shout comment line to a staged
+  `.mdk`: the HEAD and staged blobs are linted with `rule-comment-emoji` (a 🚨/⚠️/🔒 sigil) and
+  `rule-comment-shout` (3+ consecutive ALL-CAPS words), and a (rule, line text) pair found more
+  often staged than at HEAD fails, so stripping the sigil off a shout is not a drain. Rewriting
+  an existing sigil-bearing line makes a new pair: drop the sigil in the same edit or the
+  check reds. A line moved unchanged within its file passes. A sigil outside a comment is not
+  checked (#4504). See `.githooks/pre-commit` check 6 and `[T-COMMENT-REGISTER]`; CI twin
+  `test/diff_compiler_comment_shout_diff_test.mdk`.
+- **[H-COMMENT-REGISTER] Comment-register baseline** — the eight comment-register classes are
+  the Baselined internal lint rules `rule-comment-*` (#4504), so their per-file counts are rows
+  in `test/lint_baseline.toml` under [H-LINT-BASELINE]: a count may only fall, and a nonzero
+  count with no row fails closed. Regenerate via `sh test/diff_compiler_lint_baseline.sh
+  --write`, never by hand. Report: `make comment-census`.
 
 Bypass: `git commit --no-verify`. Unbuilt `medaka`: hook warns and allows.
 

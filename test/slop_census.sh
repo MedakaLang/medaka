@@ -21,8 +21,8 @@
 # rerun, read MISSING).
 #
 # BUILD-GATED BY DEFAULT: some registry rows need a built ./medaka
-# (fmt-clean-census, cli-conformance-census, the rule-stdlib-reimpl lint
-# row). The default invocation (`make slop-census` / `sh test/slop_census.sh`
+# (comment-register-census, fmt-clean-census, cli-conformance-census, the
+# rule-stdlib-reimpl lint row). The default invocation (`make slop-census` / `sh test/slop_census.sh`
 # with no flags) does NOT build or invoke ./medaka — those rows are SKIPPED
 # with a reason. Pass SLOP_CENSUS_FULL=1 to also run them (this will invoke
 # the already-built ./medaka at $ROOT/medaka; it does not build it for you —
@@ -54,7 +54,7 @@ MEDAKA="$ROOT/medaka"
 # needs_build=1) FULL is set. It is NOT re-derived — it's the documented
 # invocation from each owner script's own header / this slice's packet §4.
 registry='
-comment-register-census|test/comment_register_census.sh|0|sh test/comment_register_census.sh
+comment-register-census|compiler/tools/lint_rule_internal_comment_register.mdk|1|make -s -o medaka comment-census
 arch-census|test/arch_census.sh|0|sh test/arch_census.sh
 fmt-clean-census|test/fmt_clean_census.sh|1|sh test/fmt_clean_census.sh
 cli-conformance-census|test/cli_conformance_census.sh|1|sh test/cli_conformance_census.sh

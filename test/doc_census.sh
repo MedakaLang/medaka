@@ -3,8 +3,7 @@
 # reporting tool, run via `make doc-census` (registry row `doc-disposition
 # (#2300)` in test/slop_census.sh). It asserts nothing; exits 0 on a healthy
 # run, and refuses (exit 1) only if the doc corpus comes back empty — same
-# fail-closed shape as test/comment_register_census.sh and
-# test/arch_census.sh.
+# fail-closed shape as test/arch_census.sh.
 #
 # WHY THIS EXISTS (#2300 part 1, docs-that-are-checked sprint): the doc
 # corpus this repo already gates (test/check_doc_links.sh's link-rot check,

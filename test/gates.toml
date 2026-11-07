@@ -2274,8 +2274,8 @@ corpus = []
 toolchain = []
 link = "production"
 
-# Epic #3134 (Bytes) — the per-file Array Int position ratchet, modelled on
-# comment_register_census's --check/--write shape. Only files with a row in
+# Epic #3134 (Bytes) — the per-file Array Int position ratchet, a census
+# script with --check/--write modes. Only files with a row in
 # test/bytes_census_baseline.toml are constrained; see test/bytes_census.sh's
 # header for why a file with no baseline row is deliberately unconstrained.
 [[gate]]

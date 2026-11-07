@@ -117,9 +117,9 @@ Wall time for the whole tree is the fourth arm: three runs of
 - `medaka fmt --write` and `medaka lint --internal` on every touched file, then `make medaka`.
 - A new `.mdk`: `sh test/snapshot_bless.sh --new`; a moved one: `--bless <path>`; then
   `make snapshot-check`. Stage `test/snapshots/` last.
-- `sh test/comment_register_census.sh --write test/comment_register_baseline.toml` if comment
-  counts moved; `medaka test test/arch_boundaries_test.mdk` for the module-shape goldens
-  (`test/arch_goldens/`).
+- `medaka test test/arch_boundaries_test.mdk` for the module-shape goldens
+  (`test/arch_goldens/`). Comment counts are the `rule-comment-*` rows of
+  `test/lint_baseline.toml`, moved by step 5's `--write`.
 - `MEDAKA_STRICT=1 medaka test compiler/tools`.
 
 Before pushing, drain the whole tree the way the hook and the CI twin do: `lint --internal` over

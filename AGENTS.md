@@ -259,13 +259,13 @@ Reinstall: `cp .githooks/pre-commit "$(git rev-parse --git-common-dir)/hooks/pre
   **[H-SNAPSHOT-UNSTAGED]** It reads the working tree. **[H-DEFER]**
   `PRECOMMIT_SNAPSHOT_DEFER=1 git commit` skips the snapshot check only.
   🚨 **[H-DEFER-VS-GUARD]** Bless and stage goldens LAST.
-- **[H-REGISTER-UNSTAGED]** Check 6b reads the working tree: `git add` every edit before committing. CI twin `test/diff_compiler_comment_shout_diff_test.mdk` is authoritative.
+- **[H-REGISTER-UNSTAGED]** Lint (check 2) reads the working tree: `git add` every edit before committing. CI twin `test/diff_compiler_lint_baseline.sh` is authoritative.
 - **[H-LEXTOK]** Stale `.lextok.golden` → `sh test/capture_goldens.sh --frozen lextok`.
-- **[H-LINT-BASELINE]** / **[H-COMMENT-REGISTER]** Per-file count ratchets that may only fall.
-  Regenerate with `sh test/diff_compiler_lint_baseline.sh --write` /
-  `sh test/comment_register_census.sh --write test/comment_register_baseline.toml`, never by hand.
-- **[H-EMOJI-SHOUT]** A commit may not ADD a 🚨/⚠️/🔒 line, or a run of 3+ ALL-CAPS words in a
-  comment, to `.mdk`. Rewriting a sigil line counts as adding one, so drop the sigil.
+- **[H-LINT-BASELINE]** / **[H-COMMENT-REGISTER]** Per-file count ratchets that may only fall;
+  the comment register is the `rule-comment-*` rules. Regenerate with
+  `sh test/diff_compiler_lint_baseline.sh --write`, never by hand.
+- **[H-EMOJI-SHOUT]** A commit may not ADD a 🚨/⚠️/🔒 line, or a run of 3+ ALL-CAPS words, to a
+  `.mdk` comment (check 6 lints HEAD vs staged). Rewriting a sigil line counts as adding one.
 
 ### Debugging
 

@@ -237,13 +237,12 @@ literal-character form to a 219-byte file produced 235 bytes, not 223.
   file but the WRONG one (e.g. a superseded regenerator, a retired sibling)
   is caught by neither gate. A stale-but-live-path relocation pointer is
   caught only by a human, enforced by review, not by a gate.
-  `make comment-census` (`test/comment_register_census.sh`, #2281) derives a
-  current on-demand report of these registers. The report itself asserts
-  nothing, but the same script's `--check` mode IS gated: eight of the classes
-  carry a per-(file, class) count baseline that may only fall
-  (`test/comment_register_baseline.toml`, `[H-COMMENT-REGISTER]`), enforced by
-  `.githooks/pre-commit` check 6b and by
-  `test/diff_compiler_comment_shout_diff_test.mdk` in CI.
+  `make comment-census` (#2281, #4504) derives a current on-demand report of
+  these registers from the `rule-comment-*` lint rules. The report itself
+  asserts nothing, but the rules are Baselined: each file's count per rule may
+  only fall (`test/lint_baseline.toml`, `[H-COMMENT-REGISTER]`), enforced by
+  `.githooks/pre-commit` check 2 and by `test/diff_compiler_lint_baseline.sh`
+  in CI.
 
 ## [T-STDLIB-IMPORT] — full rule text
 

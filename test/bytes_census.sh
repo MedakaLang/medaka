@@ -1,7 +1,7 @@
 #!/bin/sh
 # test/bytes_census.sh — derived `Array Int` type-position census, plus the
-# baseline ratchet built on the same scanner. Modelled EXACTLY on
-# test/comment_register_census.sh's three-mode shape (#2281's pattern, reused
+# baseline ratchet built on the same scanner: a report mode plus --write and
+# --check (#2281's pattern, reused
 # here for the Bytes epic, #3134). The DEFAULT (no-flag) mode is a reporting
 # tool, run via `make bytes-census`: it asserts nothing and exits 0 on a
 # healthy run, refusing (exit 1) only if the file corpus comes back empty.
@@ -26,16 +26,14 @@
 # never gets a row — its own `Array Int` positions (the ctor payload, the two
 # conversions to/from `Array Int`) are the epic's permanent bridge, not debt.
 #
-# SCOPE: every git-tracked `*.mdk` file, tree-wide — unlike
-# test/comment_register_census.sh (compiler/+stdlib/+pds/ only), this counts
+# SCOPE: every git-tracked `*.mdk` file, tree-wide: this counts
 # `pds/` and `gzip/` too, since neither sits under `$LINT_ROOTS`
 # (.githooks/pre-commit) and no lint rule can see them.
 #
 # Counts occurrences of the literal two-word type-position text "Array Int"
 # per file (`grep -o`), the same precision `git grep -o "Array Int"` gives at
 # the tree-wide level. This is a TEXT match, not a parse: it can land inside
-# a string literal or a comment, same tradeoff test/comment_register_census.sh
-# documents for its own regexes. Acceptable for an opt-in per-file ratchet
+# a string literal or a comment. Acceptable for an opt-in per-file ratchet
 # that a human decided to enroll a specific file into; too loose to ever
 # become a tree-wide assertion, which is why this script only gates the files
 # a baseline row explicitly names.
@@ -55,7 +53,7 @@
 # --write <path> <file> [<file> ...]: (re)generate the baseline at <path>
 # with exactly one row per NAMED file (its current `Array Int` count),
 # whatever that count is — this does NOT scan the whole corpus for nonzero
-# counts the way test/comment_register_census.sh's --write does, because
+# counts the way a whole-tree baseline would, because
 # most of the tree's `Array Int` occurrences are legitimate (limbs, FFI) and
 # must stay UNRATCHETED. Only a human naming a file here opts it into the
 # ratchet. Sanctioned way to move a baselined count or enroll a new file;
@@ -74,8 +72,8 @@
 # <file> args, if any are passed), fail if the file's CURRENT count exceeds
 # the row's pinned count. A file that appears in <file> args but has NO row
 # in <baseline> is skipped entirely — unconstrained, per this script's
-# design (see header) — never defaulted to a base of 0 the way
-# test/comment_register_census.sh's classes are, since a bare `Array Int`
+# design (see header) — never defaulted to a base of 0 the way a
+# Baselined lint rule's count is, since a bare `Array Int`
 # count is not naturally zero almost everywhere the way a comment-register
 # hit is.
 

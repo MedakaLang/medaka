@@ -9,7 +9,7 @@
 # docs/ops/CLI-CONFORMANCE.md's "Splitting `medaka_cli.mdk` (3,646 lines)"
 # — and those counts rot the moment the file they describe changes again.
 # Same failure shape as `test/fmt_clean_census.sh` (#1794) and
-# `test/comment_register_census.sh` (#2281): a hand-maintained encoding of a
+# `make comment-census` (#2281): a hand-maintained encoding of a
 # fact this repo can derive on demand. This script derives it instead — run
 # it, read the answer, never hand-type it into prose.
 #
@@ -22,8 +22,8 @@
 # EXCLUDING test/ fixtures (same exclusion as fmt_clean_census.sh — a
 # corpus fixture's size is not this script's business).
 #
-# WHY ON-DEMAND, NOT A CI GATE: same rationale as fmt_clean_census.sh and
-# comment_register_census.sh — gating this tree-wide, with no threshold,
+# WHY ON-DEMAND, NOT A CI GATE: same rationale as fmt_clean_census.sh —
+# gating this tree-wide, with no threshold,
 # would have nothing to assert against. A developer/agent convenience, not
 # a merge gate.
 #
@@ -51,7 +51,7 @@ files="$(git -C "$ROOT" ls-files -- 'compiler/*.mdk' 'stdlib/*.mdk' | grep -v '^
 # fmt_clean_census.sh's pattern verbatim, for any future test/ nesting under
 # compiler/ or stdlib/. compiler/entries/*.mdk is INCLUDED — the
 # `architecture` skill names entries/ as a directory this census should
-# show, and comment_register_census.sh's corpus already includes it.)
+# show.)
 
 if [ -z "$files" ]; then
   echo "arch_census: matched ZERO .mdk files under compiler/ or stdlib/ — harness bug, refusing to report" >&2
