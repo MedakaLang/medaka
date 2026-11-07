@@ -1,17 +1,70 @@
-import backend.global_plan.{GlobalInitPlan(..), planGlobals, validateGlobalInit}
+import backend.global_plan.{
+  GlobalInitPlan(..),
+  ModuleInit(..),
+  planGlobals,
+  validateGlobalInit,
+  validateUntypedInit,
+}
 import backend.emit_support.{eagerReachMap, lazyGlobalNames}
 import frontend.parser.{parse}
-import frontend.desugar.{desugar}
+import frontend.desugar.{desugar, desugarIn}
 import types.annotate.{annotateProgram}
-import types.program_facts.{emptyFacts}
+import types.program_facts.{
+  emptyFacts,
+  factsOfElabSources,
+  factsWithEvidence,
+  withSymbolOrigins,
+}
+import types.symbol_origins.{CoreSymbolOrigins(..), SymbolOrigin(..)}
+import types.typecheck.{
+  checkedFfiExternTypeNamesModules,
+  driveInputsFor,
+  elaborateModulesWithReport,
+}
+import types.private_mangle.{mangleUnitsEv}
 import ir.core_ir_lower.{lowerProgramEmitWith}
-import ir.core_ir.{CProgram(..), CBind(..), CClause(..)}
+import ir.core_ir.{CProgram(..), CBind(..), CClause(..), DeclFacts}
 import ir.constructor_facts.{planConstructors}
-import test.{Expectation, expectEach, expectEqual}
+import support.ordmap.{omInsert}
+import support.util.{endsWith}
+import ir.core_walk.{bindName}
+import test_process.{underRoot}
+import test.{Expectation, expectEach, expectEqual, expectNotEqual, fail}
 
 program : String -> CProgram
 program src =
   lowerProgramEmitWith emptyFacts (annotateProgram (desugar (parse src)))
+
+-- [cp] as a typechecked program carrying [rows] as its initialisation order.
+carrying : List (String, List String) -> CProgram -> CProgram
+carrying rows (CProgram binds cs ts impls ms facts) =
+  CProgram binds cs ts impls ms { facts | factInitOrder = Some rows }
+
+-- [cp] with each named function given [origin] as its symbol origin.
+originsAt : List (String, SymbolOrigin) -> CProgram -> CProgram
+originsAt rows (CProgram binds cs ts impls ms facts) =
+  CProgram binds cs ts impls ms (withOrigins rows facts)
+
+withOrigins : List (String, SymbolOrigin) -> DeclFacts -> DeclFacts
+withOrigins rows facts = match facts.factSymbolOrigins
+  None => facts
+  Some symbols =>
+    let functions =
+      fold (m (n, origin) => omInsert n origin m) symbols.functions rows
+    { facts |
+      factSymbolOrigins = Some CoreSymbolOrigins {
+        functions = functions,
+        constructors = symbols.constructors,
+      },
+    }
+
+-- [cp]'s module-order verdict, with the plan built as an emitter builds it.
+verdict : CProgram -> List String
+verdict cp = validateGlobalInit cp (lazyOf cp) (candidate cp)
+
+-- [cp]'s verdict under the arms an untyped program will be held to.
+untypedVerdict : CProgram -> List String
+untypedVerdict cp = validateUntypedInit cp (candidate cp)
 
 candidate : CProgram -> GlobalInitPlan
 candidate cp =
@@ -23,9 +76,11 @@ lazyOf cp =
   let (CProgram binds _ _ _ _ _) = cp
   lazyGlobalNames (planConstructors cp).arities binds
 
+-- The programs carry their dependency order, as a typechecked program would, so
+-- only the value order and its lazy partition are under test.
 checkOrder : String -> List String -> List String -> Expectation
 checkOrder src values eager =
-  let cp = program src
+  let cp = carrying [("", values)] (program src)
   let result = candidate cp
   expectEach [
     ("value order", expectEqual values result.valueOrder),
@@ -128,6 +183,7 @@ test "membership, SCC, dependency and priority corruptions have named defects" =
   let bad values eager = validateGlobalInit cp [] GlobalInitPlan {
     valueOrder = values,
     eagerOrder = eager,
+    moduleOrder = (candidate cp).moduleOrder,
   }
   expectEach [
     (
@@ -179,10 +235,10 @@ test "membership, SCC, dependency and priority corruptions have named defects" =
   ]
 
 test "valid cycles are lazy but cannot be removed from the partition" =
-  let cp = program """
+  let cp = carrying [("", ["x"])] (program """
     x = x + 1
     main = x
-    """
+    """)
   let order = candidate cp
   expectEach [
     ("valid lazy", expectEqual [] (validateGlobalInit cp ["x"] order)),
@@ -259,7 +315,11 @@ test "candidate order cannot split or reverse a lazy SCC" =
     validateGlobalInit
       cp
       ["x", "y"]
-      GlobalInitPlan { valueOrder = names, eagerOrder = ["z"] }
+      GlobalInitPlan {
+        valueOrder = names,
+        eagerOrder = ["z"],
+        moduleOrder = (candidate cp).moduleOrder,
+      }
   expectEach [
     (
       "split",
@@ -299,3 +359,296 @@ test "a value global is eager only when its initializer is safe to speculate" =
       expectEqual [] (validateGlobalInit cp (lazyOf cp) order),
     ),
   ]
+
+test "membership: every Core value has one place and a nullary-memo CAF needs none" =
+  let src = """
+    a = 1
+    b = 2
+    memo = 3
+    main = a
+    """
+  let memo = originsAt [("memo", GeneratedOrigin "nullary-memo" ["T", "m"])]
+  let cp = memo (program src)
+  let typed = carrying [("", ["a", "b"])] cp
+  let listed names = validateGlobalInit typed (lazyOf typed) { candidate typed |
+    moduleOrder = [ModuleInit { module = "", values = names }],
+  }
+  expectEach [
+    ("placed", expectEqual [] (verdict (carrying [("", ["a", "b"])] cp))),
+    (
+      "a nullary-memo origin is exempt",
+      expectEqual
+        [ModuleInit { module = "", values = ["a", "b"] }]
+        (candidate cp).moduleOrder,
+    ),
+    (
+      "the same bind with a source origin needs a place",
+      expectEqual
+        ["global init: Core value `memo` has no place in the module order"]
+        (verdict (carrying [("", ["a", "b"])] (program src))),
+    ),
+    (
+      "unplaced",
+      expectEqual
+        ["global init: Core value `b` has no place in the module order"]
+        (verdict (carrying [("", ["a"])] cp)),
+    ),
+    (
+      "twice",
+      expectEqual
+        ["global init: `a` is placed twice in the module order"]
+        (verdict (carrying [("", ["a", "b", "a"])] cp)),
+    ),
+    (
+      "not a Core value",
+      expectEqual
+        [
+          "global init: `main` is placed in the module order but is not a Core value",
+        ]
+        (listed ["a", "b", "main"]),
+    ),
+  ]
+
+test "contiguity: one row per module, holding only that module's values" =
+  let cp =
+    originsAt
+      [
+        ("a", ModuleOrigin "m1" "a"),
+        ("b", ModuleOrigin "m2" "b"),
+        ("c", ModuleOrigin "m2" "c"),
+      ]
+      (program """
+    a = 1
+    b = 2
+    c = 3
+    main = a
+    """)
+  expectEach [
+    (
+      "contiguous",
+      expectEqual [] (verdict (carrying [("m1", ["a"]), ("m2", ["b", "c"])] cp)),
+    ),
+    (
+      "split",
+      expectEqual
+        ["global init: module `m2` is not contiguous in the module order"]
+        (verdict (carrying [("m2", ["b"]), ("m1", ["a"]), ("m2", ["c"])] cp)),
+    ),
+    (
+      "foreign",
+      expectEqual
+        ["global init: `b` is placed in module `m1` but declared in `m2`"]
+        (verdict (carrying [("m1", ["a", "b"]), ("m2", ["c"])] cp)),
+    ),
+  ]
+
+test "dependency: what a value may reach precedes it, lambda bodies included" =
+  let cp = program """
+    a = (c, 1)
+    b = 5
+    c = 40
+    main = a
+    """
+  let closure = program """
+    d = n => c + n
+    c = 1
+    main = d 1
+    """
+  expectEach [
+    (
+      "a correct non-source order",
+      expectEqual [] (verdict (carrying [("", ["c", "a", "b"])] cp)),
+    ),
+    (
+      "a later dependency",
+      expectEqual
+        [
+          "global init: `a` may reach `c`, which the module order places after it",
+        ]
+        (verdict (carrying [("", ["a", "b", "c"])] cp)),
+    ),
+    (
+      "a closure's body",
+      expectEqual
+        [
+          "global init: `d` may reach `c`, which the module order places after it",
+        ]
+        (verdict (carrying [("", ["d", "c"])] closure)),
+    ),
+  ]
+
+test "an under-saturated application shares its callee's component, not its reads" =
+  let cp =
+    program
+      """
+    data P = P (Int -> Int)
+    runP p n = match p
+      P f => f n
+    binLevel lvl k n = runP parseUnary (lvl + k + n)
+    parsePipe = P (binLevel 1 2)
+    parseUnary = P (n => if n > 10 then n else runP parsePipe (n + 1))
+    main = runP parsePipe 0
+    """
+  expectEach [
+    (
+      "carried, one may-reach component in source order",
+      expectEqual [] (verdict (carrying [("", ["parsePipe", "parseUnary"])] cp)),
+    ),
+    (
+      "untyped, eager reach follows the partial call",
+      expectEqual
+        [
+          "global init: `parsePipe` eagerly reaches `parseUnary`, which source order does not initialise before it",
+        ]
+        (untypedVerdict cp),
+    ),
+    ("untyped, not refused at emit yet", expectEqual [] (verdict cp)),
+  ]
+
+test "untyped: source order grouped by module, refused on an eager cycle" =
+  let ordered = program """
+    b = 1
+    a = b + 1
+    main = a
+    """
+  let cyclic = program """
+    x = x + 1
+    main = x
+    """
+  expectEach [
+    (
+      "source order",
+      expectEqual
+        [ModuleInit { module = "", values = ["b", "a"] }]
+        (candidate ordered).moduleOrder,
+    ),
+    ("accepted", expectEqual [] (untypedVerdict ordered)),
+    (
+      "self cycle",
+      expectEqual
+        [
+          "global init: `x` eagerly reaches `x`, which source order does not initialise before it",
+        ]
+        (untypedVerdict cyclic),
+    ),
+    ("self cycle, not refused at emit yet", expectEqual [] (verdict cyclic)),
+  ]
+
+-- [modules], elaborated prelude-free and lowered as an emitting build lowers them.
+typedProgram : List (String, String) -> <IO, FileRead> Result String CProgram
+typedProgram modules = do
+  rsrc <- readFile (underRoot "stdlib/runtime.mdk")
+  let (elab, _, outputs) =
+    elaborateModulesWithReport
+      (driveInputsFor None False [])
+      False
+      None
+      (desugar (parse rsrc))
+      []
+      (map ((m, src) => (m, desugarIn m (parse src))) modules)
+  let facts =
+    factsOfElabSources
+      checkedFfiExternTypeNamesModules
+      outputs
+      elab
+      elab.erEvidence
+  let (coreD, mangled, evTable, origins) =
+    mangleUnitsEv elab.erEvidence elab.erCore elab.erModules
+  Ok
+    (lowerProgramEmitWith
+      (withSymbolOrigins origins (factsWithEvidence evTable facts))
+      (coreD ++ flatMap snd mangled))
+
+-- The Core name of the source value [src], whatever its module's mangle id.
+coreNamed : String -> CProgram -> String
+coreNamed src (CProgram binds _ _ _ _ _) =
+  match filter (n => endsWith ("__" ++ src) n) (map bindName binds)
+    n :: _ => n
+    [] => src
+
+-- The impl that `x`'s initialiser dispatches to is an orphan in `b`, which
+-- imports `a`, so it reads a value initialised after `x`.  `check` admits it;
+-- the dependency arm refuses it at emit.
+test "an orphan impl in a later module is refused at emit" =
+  let program = typedProgram [
+    (
+      "a",
+      """
+    export interface Desc a where
+      desc : a -> String
+
+    public export data T = MkT
+
+    export
+    x : String
+    x = desc MkT
+    """,
+    ),
+    (
+      "b",
+      """
+    import a.{Desc(..), T(..)}
+
+    export
+    greeting : String
+    greeting = "hi from b"
+
+    impl Desc T where
+      desc _ = greeting
+    """,
+    ),
+    ("main", """
+    import a.{x}
+    import b
+
+    main = x
+    """),
+  ]
+  match program
+    Err e => fail e
+    Ok cp =>
+      let x = coreNamed "x" cp
+      let greeting = coreNamed "greeting" cp
+      expectEqual
+        [
+          "global init: `\{x}` may reach `\{greeting}`, which the module order places after it",
+        ]
+        (verdict cp)
+
+-- An imported module's `main` is never initialised (spec rule I4), so the
+-- carried order leaves it out; the exemption reads its origin, not its name.
+test "membership: an imported module's unread main needs no place" =
+  let program = typedProgram [
+    (
+      "a",
+      """
+    export
+    f : Unit -> <IO> Unit
+    f () = println "f ran"
+
+    main = f ()
+    """,
+    ),
+    ("main", """
+    import a.{f as g}
+
+    main = g ()
+    """),
+  ]
+  match program
+    Err e => fail e
+    Ok cp =>
+      let amain = coreNamed "main" cp
+      let renamed = originsAt [(amain, ModuleOrigin "a" "other")] cp
+      expectEach [
+        ("the imported main reaches Core", expectNotEqual "main" amain),
+        ("exempt by its origin", expectEqual [] (verdict cp)),
+        (
+          "the same bind with another origin needs a place",
+          expectEqual
+            [
+              "global init: Core value `\{amain}` has no place in the module order",
+            ]
+            (verdict renamed),
+        ),
+      ]

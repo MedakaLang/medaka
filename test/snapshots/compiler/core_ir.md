@@ -1,8 +1,8 @@
 # META
-source_lines=710
+source_lines=746
 stages=DESUGAR,MARK
 # SOURCE
-import types.symbol_origins.{CoreSymbolOrigins}
+import types.symbol_origins.{CoreSymbolOrigins, SymbolOrigin(..)}
 import types.capability_manifest.{CapabilityManifest}
 -- Core IR — STAGE2-DESIGN §2.1.  A serializable, backend-neutral intermediate
 -- representation lowered from the elaborated (desugared + typed + dict-routed)
@@ -66,7 +66,7 @@ import frontend.ast.{
   noDeclLoc,
   noBinderId,
 }
-import support.ordmap.{OrdMap, omEmpty}
+import support.ordmap.{OrdMap, omEmpty, omLookup}
 import ir.extern_types.{ExternDeclFact}
 import types.runtime_types.{BinderRow(..), RuntimeType(..)}
 import support.util.{reverseL, startsWith}
@@ -459,8 +459,13 @@ public export data EntryFact = EntryFact {
   entryMainIsFloat : Bool,
 }
 
+-- `factInitOrder` is the typechecker's per-module initialisation order
+-- (`ProgramFacts.pfInitOrders`) in lowered Core names: one row per module, in
+-- drive order, each listing the module's value binds Core holds.  `None` means
+-- the program was not typechecked, so no order was carried.
 public export data DeclFacts = DeclFacts {
   factSymbolOrigins : Option CoreSymbolOrigins,
+  factInitOrder : Option (List (String, List String)),
   factManifests : List CapabilityManifest,
   factRequires : List (String, Int),
   factSupers : List (String, Int),
@@ -474,6 +479,7 @@ export
 noDeclFacts : DeclFacts
 noDeclFacts = DeclFacts {
   factSymbolOrigins = None,
+  factInitOrder = None,
   factRequires = [],
   factSupers = [],
   factBinders = [],
@@ -482,6 +488,35 @@ noDeclFacts = DeclFacts {
   factExterns = omEmpty,
   factManifests = [],
 }
+
+-- Whether lowering synthesized the Core function [name] as a nullary-memo CAF
+-- (`GeneratedOrigin "nullary-memo"`), by its origin row, never its name.
+export
+isNullaryMemo : DeclFacts -> String -> Bool
+isNullaryMemo facts name = match originOf facts name
+  Some (GeneratedOrigin "nullary-memo" _) => True
+  _ => False
+
+-- Whether the Core function [name] is the source `main` of some module, by its
+-- origin row: a `main` in any module is never initialised (spec rule I4).
+export
+isModuleMain : DeclFacts -> String -> Bool
+isModuleMain facts name = match originOf facts name
+  Some (ModuleOrigin _ "main") => True
+  _ => False
+
+-- The module whose source declares the Core function [name]: the id of its
+-- `ModuleOrigin`, and `""` for every other origin and for a function with none.
+export
+originModule : DeclFacts -> String -> String
+originModule facts name = match originOf facts name
+  Some (ModuleOrigin mid _) => mid
+  _ => ""
+
+originOf : DeclFacts -> String -> Option SymbolOrigin
+originOf facts name = match facts.factSymbolOrigins
+  Some symbols => omLookup name symbols.functions
+  None => None
 
 -- ── binder walk ──────────────────────────────────────────────────────────────
 -- One traversal of every binder in a program, in a fixed order, with the id each
@@ -558,6 +593,7 @@ withBinderRows rows (CProgram groups ctorArs ctorTypes impls mctx facts) = CProg
   mctx
   DeclFacts {
     factSymbolOrigins = facts.factSymbolOrigins,
+    factInitOrder = facts.factInitOrder,
     factRequires = facts.factRequires,
     factSupers = facts.factSupers,
     factBinders = rows,
@@ -714,10 +750,10 @@ mapStmtBinders f (CSLet recF pat e) =
 mapStmtBinders f (CSAssign x e) = CSAssign x (mapExprBinders f e)
 # DESUGAR
 (DUse false (UseAlias ("core") "$core"))
-(DUse false (UseGroup ("types" "symbol_origins") ((mem "CoreSymbolOrigins" false))))
+(DUse false (UseGroup ("types" "symbol_origins") ((mem "CoreSymbolOrigins" false) (mem "SymbolOrigin" true))))
 (DUse false (UseGroup ("types" "capability_manifest") ((mem "CapabilityManifest" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Loc" false) (mem "Pat" true) (mem "RecPatField" true) (mem "Addr" false) (mem "Route" true) (mem "BinderId" true) (mem "noDeclLoc" false) (mem "noBinderId" false))))
-(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("ir" "extern_types") ((mem "ExternDeclFact" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "RuntimeType" true))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "startsWith" false))))
@@ -782,9 +818,17 @@ mapStmtBinders f (CSAssign x e) = CSAssign x (mapExprBinders f e)
 (DImpl true "Eq" ((TyCon "MethodResultFact")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PRec "MethodResultFact" ((rf "iface" (PVar "__a0")) (rf "method" (PVar "__a1")) (rf "returnsHead" (PVar "__a2")) (rf "callbackPositions" (PVar "__a3")) (rf "valueArity" (PVar "__a4"))) false) (PRec "MethodResultFact" ((rf "iface" (PVar "__b0")) (rf "method" (PVar "__b1")) (rf "returnsHead" (PVar "__b2")) (rf "callbackPositions" (PVar "__b3")) (rf "valueArity" (PVar "__b4"))) false)) () (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "$core.eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "$core.eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EVar "$core.eq") (EVar "__a2")) (EVar "__b2"))) (EApp (EApp (EVar "$core.eq") (EVar "__a3")) (EVar "__b3"))) (EApp (EApp (EVar "$core.eq") (EVar "__a4")) (EVar "__b4"))))))))
 (DImpl true "Debug" ((TyCon "MethodResultFact")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PRec "MethodResultFact" ((rf "iface" (PVar "__a0")) (rf "method" (PVar "__a1")) (rf "returnsHead" (PVar "__a2")) (rf "callbackPositions" (PVar "__a3")) (rf "valueArity" (PVar "__a4"))) false) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "MethodResultFact {")) (ELit (LString " iface = "))) (EApp (EVar "$core.debug") (EVar "__a0"))) (ELit (LString ", method = "))) (EApp (EVar "$core.debug") (EVar "__a1"))) (ELit (LString ", returnsHead = "))) (EApp (EVar "$core.debug") (EVar "__a2"))) (ELit (LString ", callbackPositions = "))) (EApp (EVar "$core.debug") (EVar "__a3"))) (ELit (LString ", valueArity = "))) (EApp (EVar "$core.debug") (EVar "__a4"))) (ELit (LString " }"))))))))
 (DData Public "EntryFact" () ((variant "EntryFact" (ConNamed (field "entryMainIsUnit" (TyCon "Bool")) (field "entryMainIsFloat" (TyCon "Bool"))))) ())
-(DData Public "DeclFacts" () ((variant "DeclFacts" (ConNamed (field "factSymbolOrigins" (TyApp (TyCon "Option") (TyCon "CoreSymbolOrigins"))) (field "factManifests" (TyApp (TyCon "List") (TyCon "CapabilityManifest"))) (field "factRequires" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))) (field "factSupers" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))) (field "factBinders" (TyApp (TyCon "List") (TyCon "BinderRow"))) (field "factMethodResults" (TyApp (TyCon "List") (TyCon "MethodResultFact"))) (field "factEntryOutcome" (TyApp (TyCon "Option") (TyCon "EntryFact"))) (field "factExterns" (TyApp (TyCon "OrdMap") (TyCon "ExternDeclFact")))))) ())
+(DData Public "DeclFacts" () ((variant "DeclFacts" (ConNamed (field "factSymbolOrigins" (TyApp (TyCon "Option") (TyCon "CoreSymbolOrigins"))) (field "factInitOrder" (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (field "factManifests" (TyApp (TyCon "List") (TyCon "CapabilityManifest"))) (field "factRequires" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))) (field "factSupers" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))) (field "factBinders" (TyApp (TyCon "List") (TyCon "BinderRow"))) (field "factMethodResults" (TyApp (TyCon "List") (TyCon "MethodResultFact"))) (field "factEntryOutcome" (TyApp (TyCon "Option") (TyCon "EntryFact"))) (field "factExterns" (TyApp (TyCon "OrdMap") (TyCon "ExternDeclFact")))))) ())
 (DTypeSig true "noDeclFacts" (TyCon "DeclFacts"))
-(DFunDef false "noDeclFacts" () (ERecordCreate "DeclFacts" ((fa "factSymbolOrigins" (EVar "None")) (fa "factRequires" (EListLit)) (fa "factSupers" (EListLit)) (fa "factBinders" (EListLit)) (fa "factMethodResults" (EListLit)) (fa "factEntryOutcome" (EVar "None")) (fa "factExterns" (EVar "omEmpty")) (fa "factManifests" (EListLit)))))
+(DFunDef false "noDeclFacts" () (ERecordCreate "DeclFacts" ((fa "factSymbolOrigins" (EVar "None")) (fa "factInitOrder" (EVar "None")) (fa "factRequires" (EListLit)) (fa "factSupers" (EListLit)) (fa "factBinders" (EListLit)) (fa "factMethodResults" (EListLit)) (fa "factEntryOutcome" (EVar "None")) (fa "factExterns" (EVar "omEmpty")) (fa "factManifests" (EListLit)))))
+(DTypeSig true "isNullaryMemo" (TyFun (TyCon "DeclFacts") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "isNullaryMemo" ((PVar "facts") (PVar "name")) (EMatch (EApp (EApp (EVar "originOf") (EVar "facts")) (EVar "name")) (arm (PCon "Some" (PCon "GeneratedOrigin" (PLit (LString "nullary-memo")) PWild)) () (EVar "True")) (arm PWild () (EVar "False"))))
+(DTypeSig true "isModuleMain" (TyFun (TyCon "DeclFacts") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "isModuleMain" ((PVar "facts") (PVar "name")) (EMatch (EApp (EApp (EVar "originOf") (EVar "facts")) (EVar "name")) (arm (PCon "Some" (PCon "ModuleOrigin" PWild (PLit (LString "main")))) () (EVar "True")) (arm PWild () (EVar "False"))))
+(DTypeSig true "originModule" (TyFun (TyCon "DeclFacts") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "originModule" ((PVar "facts") (PVar "name")) (EMatch (EApp (EApp (EVar "originOf") (EVar "facts")) (EVar "name")) (arm (PCon "Some" (PCon "ModuleOrigin" (PVar "mid") PWild)) () (EVar "mid")) (arm PWild () (ELit (LString "")))))
+(DTypeSig false "originOf" (TyFun (TyCon "DeclFacts") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "SymbolOrigin")))))
+(DFunDef false "originOf" ((PVar "facts") (PVar "name")) (EMatch (EFieldAccess (EVar "facts") "factSymbolOrigins") (arm (PCon "Some" (PVar "symbols")) () (EApp (EApp (EVar "omLookup") (EVar "name")) (EFieldAccess (EVar "symbols") "functions"))) (arm (PCon "None") () (EVar "None"))))
 (DTypeAlias true "BinderVisit" () (TyFun (TyCon "BinderSite") (TyFun (TyCon "String") (TyFun (TyCon "BinderId") (TyCon "BinderId")))))
 (DData Public "BinderSite" () ((variant "PatternBinder" (ConPos (TyApp (TyCon "Option") (TyCon "CExpr")))) (variant "FunctionBinder" (ConPos (TyApp (TyCon "List") (TyCon "CClause"))))) ())
 (DData Private "BinderPass" () ((variant "PatternPass" (ConPos)) (variant "FunctionPass" (ConPos))) ())
@@ -810,7 +854,7 @@ mapStmtBinders f (CSAssign x e) = CSAssign x (mapExprBinders f e)
 (DFunDef false "mapProgramPass" ((PVar "pass") (PVar "f") (PCon "CProgram" (PVar "binds") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") (PVar "mctx") (PVar "facts"))) (EBlock (DoLet false false (PVar "w") (EApp (EApp (EVar "BinderWalk") (EVar "pass")) (EVar "f"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EApp (EApp (EVar "map") (EApp (EVar "mapBindBinders") (EVar "w"))) (EVar "binds"))) (EVar "ctorArs")) (EVar "ctorTypes")) (EApp (EApp (EVar "map") (EApp (EVar "mapEntryBinders") (EVar "w"))) (EVar "impls"))) (EVar "mctx")) (EVar "facts")))))
 (DData Private "BinderWalk" () ((variant "BinderWalk" (ConPos (TyCon "BinderPass") (TyCon "BinderVisit")))) ())
 (DTypeSig true "withBinderRows" (TyFun (TyApp (TyCon "List") (TyCon "BinderRow")) (TyFun (TyCon "CProgram") (TyCon "CProgram"))))
-(DFunDef false "withBinderRows" ((PVar "rows") (PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") (PVar "mctx") (PVar "facts"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls")) (EVar "mctx")) (ERecordCreate "DeclFacts" ((fa "factSymbolOrigins" (EFieldAccess (EVar "facts") "factSymbolOrigins")) (fa "factRequires" (EFieldAccess (EVar "facts") "factRequires")) (fa "factSupers" (EFieldAccess (EVar "facts") "factSupers")) (fa "factBinders" (EVar "rows")) (fa "factMethodResults" (EFieldAccess (EVar "facts") "factMethodResults")) (fa "factEntryOutcome" (EFieldAccess (EVar "facts") "factEntryOutcome")) (fa "factExterns" (EFieldAccess (EVar "facts") "factExterns")) (fa "factManifests" (EFieldAccess (EVar "facts") "factManifests"))))))
+(DFunDef false "withBinderRows" ((PVar "rows") (PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") (PVar "mctx") (PVar "facts"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls")) (EVar "mctx")) (ERecordCreate "DeclFacts" ((fa "factSymbolOrigins" (EFieldAccess (EVar "facts") "factSymbolOrigins")) (fa "factInitOrder" (EFieldAccess (EVar "facts") "factInitOrder")) (fa "factRequires" (EFieldAccess (EVar "facts") "factRequires")) (fa "factSupers" (EFieldAccess (EVar "facts") "factSupers")) (fa "factBinders" (EVar "rows")) (fa "factMethodResults" (EFieldAccess (EVar "facts") "factMethodResults")) (fa "factEntryOutcome" (EFieldAccess (EVar "facts") "factEntryOutcome")) (fa "factExterns" (EFieldAccess (EVar "facts") "factExterns")) (fa "factManifests" (EFieldAccess (EVar "facts") "factManifests"))))))
 (DTypeSig true "programBinderIds" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "BinderId"))))
 (DFunDef false "programBinderIds" ((PVar "prog")) (EBlock (DoLet false false (PVar "seen") (EApp (EVar "Ref") (EListLit))) (DoLet false false PWild (EApp (EApp (EVar "mapProgramBinders") (ELam (PWild PWild (PVar "bid")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "seen")) (EBinOp "::" (EVar "bid") (EUnOp "!" (EVar "seen"))))) (DoExpr (EVar "bid"))))) (EVar "prog"))) (DoExpr (EApp (EVar "reverseL") (EUnOp "!" (EVar "seen"))))))
 (DTypeSig false "mapEntryBinders" (TyFun (TyCon "BinderWalk") (TyFun (TyCon "CImplEntry") (TyCon "CImplEntry"))))
@@ -874,10 +918,10 @@ mapStmtBinders f (CSAssign x e) = CSAssign x (mapExprBinders f e)
 (DFunDef false "mapStmtBinders" ((PVar "f") (PCon "CSAssign" (PVar "x") (PVar "e"))) (EApp (EApp (EVar "CSAssign") (EVar "x")) (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "e"))))
 # MARK
 (DUse false (UseAlias ("core") "$core"))
-(DUse false (UseGroup ("types" "symbol_origins") ((mem "CoreSymbolOrigins" false))))
+(DUse false (UseGroup ("types" "symbol_origins") ((mem "CoreSymbolOrigins" false) (mem "SymbolOrigin" true))))
 (DUse false (UseGroup ("types" "capability_manifest") ((mem "CapabilityManifest" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Loc" false) (mem "Pat" true) (mem "RecPatField" true) (mem "Addr" false) (mem "Route" true) (mem "BinderId" true) (mem "noDeclLoc" false) (mem "noBinderId" false))))
-(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("ir" "extern_types") ((mem "ExternDeclFact" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "RuntimeType" true))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "startsWith" false))))
@@ -942,9 +986,17 @@ mapStmtBinders f (CSAssign x e) = CSAssign x (mapExprBinders f e)
 (DImpl true "Eq" ((TyCon "MethodResultFact")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PRec "MethodResultFact" ((rf "iface" (PVar "__a0")) (rf "method" (PVar "__a1")) (rf "returnsHead" (PVar "__a2")) (rf "callbackPositions" (PVar "__a3")) (rf "valueArity" (PVar "__a4"))) false) (PRec "MethodResultFact" ((rf "iface" (PVar "__b0")) (rf "method" (PVar "__b1")) (rf "returnsHead" (PVar "__b2")) (rf "callbackPositions" (PVar "__b3")) (rf "valueArity" (PVar "__b4"))) false)) () (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "$core.eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "$core.eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EVar "$core.eq") (EVar "__a2")) (EVar "__b2"))) (EApp (EApp (EVar "$core.eq") (EVar "__a3")) (EVar "__b3"))) (EApp (EApp (EVar "$core.eq") (EVar "__a4")) (EVar "__b4"))))))))
 (DImpl true "Debug" ((TyCon "MethodResultFact")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PRec "MethodResultFact" ((rf "iface" (PVar "__a0")) (rf "method" (PVar "__a1")) (rf "returnsHead" (PVar "__a2")) (rf "callbackPositions" (PVar "__a3")) (rf "valueArity" (PVar "__a4"))) false) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "MethodResultFact {")) (ELit (LString " iface = "))) (EApp (EVar "$core.debug") (EVar "__a0"))) (ELit (LString ", method = "))) (EApp (EVar "$core.debug") (EVar "__a1"))) (ELit (LString ", returnsHead = "))) (EApp (EVar "$core.debug") (EVar "__a2"))) (ELit (LString ", callbackPositions = "))) (EApp (EVar "$core.debug") (EVar "__a3"))) (ELit (LString ", valueArity = "))) (EApp (EVar "$core.debug") (EVar "__a4"))) (ELit (LString " }"))))))))
 (DData Public "EntryFact" () ((variant "EntryFact" (ConNamed (field "entryMainIsUnit" (TyCon "Bool")) (field "entryMainIsFloat" (TyCon "Bool"))))) ())
-(DData Public "DeclFacts" () ((variant "DeclFacts" (ConNamed (field "factSymbolOrigins" (TyApp (TyCon "Option") (TyCon "CoreSymbolOrigins"))) (field "factManifests" (TyApp (TyCon "List") (TyCon "CapabilityManifest"))) (field "factRequires" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))) (field "factSupers" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))) (field "factBinders" (TyApp (TyCon "List") (TyCon "BinderRow"))) (field "factMethodResults" (TyApp (TyCon "List") (TyCon "MethodResultFact"))) (field "factEntryOutcome" (TyApp (TyCon "Option") (TyCon "EntryFact"))) (field "factExterns" (TyApp (TyCon "OrdMap") (TyCon "ExternDeclFact")))))) ())
+(DData Public "DeclFacts" () ((variant "DeclFacts" (ConNamed (field "factSymbolOrigins" (TyApp (TyCon "Option") (TyCon "CoreSymbolOrigins"))) (field "factInitOrder" (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (field "factManifests" (TyApp (TyCon "List") (TyCon "CapabilityManifest"))) (field "factRequires" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))) (field "factSupers" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))) (field "factBinders" (TyApp (TyCon "List") (TyCon "BinderRow"))) (field "factMethodResults" (TyApp (TyCon "List") (TyCon "MethodResultFact"))) (field "factEntryOutcome" (TyApp (TyCon "Option") (TyCon "EntryFact"))) (field "factExterns" (TyApp (TyCon "OrdMap") (TyCon "ExternDeclFact")))))) ())
 (DTypeSig true "noDeclFacts" (TyCon "DeclFacts"))
-(DFunDef false "noDeclFacts" () (ERecordCreate "DeclFacts" ((fa "factSymbolOrigins" (EVar "None")) (fa "factRequires" (EListLit)) (fa "factSupers" (EListLit)) (fa "factBinders" (EListLit)) (fa "factMethodResults" (EListLit)) (fa "factEntryOutcome" (EVar "None")) (fa "factExterns" (EVar "omEmpty")) (fa "factManifests" (EListLit)))))
+(DFunDef false "noDeclFacts" () (ERecordCreate "DeclFacts" ((fa "factSymbolOrigins" (EVar "None")) (fa "factInitOrder" (EVar "None")) (fa "factRequires" (EListLit)) (fa "factSupers" (EListLit)) (fa "factBinders" (EListLit)) (fa "factMethodResults" (EListLit)) (fa "factEntryOutcome" (EVar "None")) (fa "factExterns" (EVar "omEmpty")) (fa "factManifests" (EListLit)))))
+(DTypeSig true "isNullaryMemo" (TyFun (TyCon "DeclFacts") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "isNullaryMemo" ((PVar "facts") (PVar "name")) (EMatch (EApp (EApp (EVar "originOf") (EVar "facts")) (EVar "name")) (arm (PCon "Some" (PCon "GeneratedOrigin" (PLit (LString "nullary-memo")) PWild)) () (EVar "True")) (arm PWild () (EVar "False"))))
+(DTypeSig true "isModuleMain" (TyFun (TyCon "DeclFacts") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "isModuleMain" ((PVar "facts") (PVar "name")) (EMatch (EApp (EApp (EVar "originOf") (EVar "facts")) (EVar "name")) (arm (PCon "Some" (PCon "ModuleOrigin" PWild (PLit (LString "main")))) () (EVar "True")) (arm PWild () (EVar "False"))))
+(DTypeSig true "originModule" (TyFun (TyCon "DeclFacts") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "originModule" ((PVar "facts") (PVar "name")) (EMatch (EApp (EApp (EVar "originOf") (EVar "facts")) (EVar "name")) (arm (PCon "Some" (PCon "ModuleOrigin" (PVar "mid") PWild)) () (EVar "mid")) (arm PWild () (ELit (LString "")))))
+(DTypeSig false "originOf" (TyFun (TyCon "DeclFacts") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "SymbolOrigin")))))
+(DFunDef false "originOf" ((PVar "facts") (PVar "name")) (EMatch (EFieldAccess (EVar "facts") "factSymbolOrigins") (arm (PCon "Some" (PVar "symbols")) () (EApp (EApp (EVar "omLookup") (EVar "name")) (EFieldAccess (EVar "symbols") "functions"))) (arm (PCon "None") () (EVar "None"))))
 (DTypeAlias true "BinderVisit" () (TyFun (TyCon "BinderSite") (TyFun (TyCon "String") (TyFun (TyCon "BinderId") (TyCon "BinderId")))))
 (DData Public "BinderSite" () ((variant "PatternBinder" (ConPos (TyApp (TyCon "Option") (TyCon "CExpr")))) (variant "FunctionBinder" (ConPos (TyApp (TyCon "List") (TyCon "CClause"))))) ())
 (DData Private "BinderPass" () ((variant "PatternPass" (ConPos)) (variant "FunctionPass" (ConPos))) ())
@@ -970,7 +1022,7 @@ mapStmtBinders f (CSAssign x e) = CSAssign x (mapExprBinders f e)
 (DFunDef false "mapProgramPass" ((PVar "pass") (PVar "f") (PCon "CProgram" (PVar "binds") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") (PVar "mctx") (PVar "facts"))) (EBlock (DoLet false false (PVar "w") (EApp (EApp (EVar "BinderWalk") (EVar "pass")) (EVar "f"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EApp (EApp (EMethodRef "map") (EApp (EVar "mapBindBinders") (EVar "w"))) (EVar "binds"))) (EVar "ctorArs")) (EVar "ctorTypes")) (EApp (EApp (EMethodRef "map") (EApp (EVar "mapEntryBinders") (EVar "w"))) (EVar "impls"))) (EVar "mctx")) (EVar "facts")))))
 (DData Private "BinderWalk" () ((variant "BinderWalk" (ConPos (TyCon "BinderPass") (TyCon "BinderVisit")))) ())
 (DTypeSig true "withBinderRows" (TyFun (TyApp (TyCon "List") (TyCon "BinderRow")) (TyFun (TyCon "CProgram") (TyCon "CProgram"))))
-(DFunDef false "withBinderRows" ((PVar "rows") (PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") (PVar "mctx") (PVar "facts"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls")) (EVar "mctx")) (ERecordCreate "DeclFacts" ((fa "factSymbolOrigins" (EFieldAccess (EVar "facts") "factSymbolOrigins")) (fa "factRequires" (EFieldAccess (EVar "facts") "factRequires")) (fa "factSupers" (EFieldAccess (EVar "facts") "factSupers")) (fa "factBinders" (EVar "rows")) (fa "factMethodResults" (EFieldAccess (EVar "facts") "factMethodResults")) (fa "factEntryOutcome" (EFieldAccess (EVar "facts") "factEntryOutcome")) (fa "factExterns" (EFieldAccess (EVar "facts") "factExterns")) (fa "factManifests" (EFieldAccess (EVar "facts") "factManifests"))))))
+(DFunDef false "withBinderRows" ((PVar "rows") (PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") (PVar "mctx") (PVar "facts"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls")) (EVar "mctx")) (ERecordCreate "DeclFacts" ((fa "factSymbolOrigins" (EFieldAccess (EVar "facts") "factSymbolOrigins")) (fa "factInitOrder" (EFieldAccess (EVar "facts") "factInitOrder")) (fa "factRequires" (EFieldAccess (EVar "facts") "factRequires")) (fa "factSupers" (EFieldAccess (EVar "facts") "factSupers")) (fa "factBinders" (EVar "rows")) (fa "factMethodResults" (EFieldAccess (EVar "facts") "factMethodResults")) (fa "factEntryOutcome" (EFieldAccess (EVar "facts") "factEntryOutcome")) (fa "factExterns" (EFieldAccess (EVar "facts") "factExterns")) (fa "factManifests" (EFieldAccess (EVar "facts") "factManifests"))))))
 (DTypeSig true "programBinderIds" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "BinderId"))))
 (DFunDef false "programBinderIds" ((PVar "prog")) (EBlock (DoLet false false (PVar "seen") (EApp (EVar "Ref") (EListLit))) (DoLet false false PWild (EApp (EApp (EVar "mapProgramBinders") (ELam (PWild PWild (PVar "bid")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "seen")) (EBinOp "::" (EVar "bid") (EUnOp "!" (EVar "seen"))))) (DoExpr (EVar "bid"))))) (EVar "prog"))) (DoExpr (EApp (EVar "reverseL") (EUnOp "!" (EVar "seen"))))))
 (DTypeSig false "mapEntryBinders" (TyFun (TyCon "BinderWalk") (TyFun (TyCon "CImplEntry") (TyCon "CImplEntry"))))

@@ -687,7 +687,7 @@ typedLowered preludeSrc src =
     "calls",
     grantWholeDomain (desugar (parse src)),
   )
-  lowerProgramEmitWith facts decls
+  lowerProgramEmitWith { facts | pfInitOrders = None } decls
 
 -- [prog] with every application whose head is the variable [name] re-stamped
 -- [mode], in top-level bindings.
@@ -1394,6 +1394,7 @@ evidenceProg body =
     []
     DeclFacts {
       factSymbolOrigins = None,
+      factInitOrder = None,
       factMethodResults = [],
       factRequires = [("K", 0), ("S", 0)],
       factSupers = [("K", 0), ("S", 1)],
@@ -1756,6 +1757,7 @@ dropBinderTable (CProgram groups ctors ctorTypes impls mctx facts) = CProgram
   mctx
   DeclFacts {
     factSymbolOrigins = None,
+    factInitOrder = None,
     factMethodResults = facts.factMethodResults,
     factRequires = facts.factRequires,
     factSupers = facts.factSupers,
@@ -1774,6 +1776,7 @@ restampBinder name ty (CProgram groups ctors ctorTypes impls mctx facts) = CProg
   mctx
   DeclFacts {
     factSymbolOrigins = None,
+    factInitOrder = None,
     factMethodResults = facts.factMethodResults,
     factRequires = facts.factRequires,
     factSupers = facts.factSupers,
@@ -1865,6 +1868,7 @@ intLetProg ty =
     []
     DeclFacts {
       factSymbolOrigins = None,
+      factInitOrder = None,
       factMethodResults = [],
       factRequires = [],
       factSupers = [],
@@ -1966,6 +1970,7 @@ editRows edit (CProgram groups ctors ctorTypes impls mctx facts) = CProgram
   mctx
   DeclFacts {
     factSymbolOrigins = None,
+    factInitOrder = None,
     factMethodResults = facts.factMethodResults,
     factRequires = facts.factRequires,
     factSupers = facts.factSupers,
@@ -2219,7 +2224,11 @@ duplicateGlobal (CProgram binds cs ts impls ms facts) =
 corruptGlobalPlan : String -> EmitPlan -> EmitPlan
 corruptGlobalPlan victim plan =
   let order values eager = { plan |
-    globalInit = GlobalInitPlan { valueOrder = values, eagerOrder = eager },
+    globalInit = GlobalInitPlan {
+      valueOrder = values,
+      eagerOrder = eager,
+      moduleOrder = plan.globalInit.moduleOrder,
+    },
   }
   match victim
     "global-missing" => order ["c", "a"] ["c", "a"]

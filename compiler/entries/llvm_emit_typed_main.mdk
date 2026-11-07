@@ -102,6 +102,7 @@ emitGapIsolation () =
       []
       DeclFacts {
         factSymbolOrigins = None,
+        factInitOrder = None,
         factMethodResults = [],
         factRequires = [],
         factSupers = [],

@@ -1,5 +1,5 @@
 # META
-source_lines=4123
+source_lines=4152
 stages=DESUGAR,MARK
 # SOURCE
 import support.symbol_encoding.{encodePair}
@@ -1305,6 +1305,7 @@ emitDeclFacts facts decls symbols =
   let words = omKeys (omFromNames (map ifaceWordOfKey (omKeys reqs)) omEmpty)
   DeclFacts {
     factSymbolOrigins = symbols,
+    factInitOrder = map (lowerInitOrders symbols) facts.pfInitOrders,
     factRequires = map (k => (k, optionOr 0 (omLookup k reqs))) (omKeys reqs),
     factSupers = map (w => (w, ifaceSuperCount w table)) words,
     factBinders = [],
@@ -1313,6 +1314,34 @@ emitDeclFacts facts decls symbols =
     factExterns = omEmpty,
     factManifests = facts.pfManifests,
   }
+
+-- The carried initialisation order in Core names: each module's source names
+-- through the Core functions' origins (`ModuleOrigin mid src`), keeping only the
+-- names Core holds a bind for, since source DCE drops values before lowering.
+-- A typechecked program always lowers with origins, so a carried order without
+-- them is an internal error, never an empty order.
+lowerInitOrders : Option CoreSymbolOrigins ->
+  List (String, List String) ->
+  List (String, List String)
+lowerInitOrders None _ =
+  panic "internal error: a carried initialisation order without symbol origins"
+lowerInitOrders (Some symbols) orders =
+  let functions = symbols.functions
+  let byOrigin =
+    fold
+      (acc name => match omLookup name functions
+        Some (origin@(ModuleOrigin _ _)) => omInsert (originKey origin) name acc
+        _ => acc)
+      omEmpty
+      (omKeys functions)
+  map
+    ((mid, names) => (
+      mid,
+      filterMap
+        (src => omLookup (originKey (ModuleOrigin mid src)) byOrigin)
+        names,
+    ))
+    orders
 
 entryFact : ProgramFacts -> Option EntryFact
 entryFact facts =
@@ -4561,7 +4590,10 @@ nodeTag _ = "?"
 (DTypeSig true "lowerProgramEmitConfigured" (TyFun (TyCon "PassConfig") (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "PassRun"))))))
 (DFunDef false "lowerProgramEmitConfigured" ((PVar "config") (PVar "facts") (PVar "pins") (PVar "prog")) (EBlock (DoLet false false (PVar "sited") (EApp (EApp (EVar "siteTrapCalls") (EVar "facts")) (EVar "prog"))) (DoLet false false (PVar "dispositions") (EFieldAccess (EVar "facts") "pfDispositions")) (DoLet false false (PVar "lowering") (EMatch (EVar "dispositions") (arm (PCon "Some" PWild) () (EVar "TypedLowering")) (arm (PCon "None") () (EVar "UntypedLowering")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "runPasses") (EVar "config")) (ERecordCreate "PassCtx" ((fa "pcFacts" (EVar "facts")) (fa "pcDecls" (EVar "prog")) (fa "pcSited" (EVar "sited")) (fa "pcLowering" (EVar "lowering")) (fa "pcFieldOrders" (EApp (EVar "declaredRecordFieldOrders") (EVar "prog")))))) (EVar "emitPasses")) (EApp (EApp (EApp (EApp (EVar "lowerProgramWith") (EVar "facts")) (EVar "dispositions")) (EVar "pins")) (EVar "sited"))))))
 (DTypeSig false "emitDeclFacts" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "Option") (TyCon "CoreSymbolOrigins")) (TyCon "DeclFacts")))))
-(DFunDef false "emitDeclFacts" ((PVar "facts") (PVar "decls") (PVar "symbols")) (EBlock (DoLet false false (PVar "reqs") (EApp (EVar "instanceReqCounts") (EVar "decls"))) (DoLet false false (PVar "table") (EApp (EApp (EVar "optionOr") (EVar "emptyDispositionTable")) (EFieldAccess (EVar "facts") "pfDispositions"))) (DoLet false false (PVar "words") (EApp (EVar "omKeys") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "map") (EVar "ifaceWordOfKey")) (EApp (EVar "omKeys") (EVar "reqs")))) (EVar "omEmpty")))) (DoExpr (ERecordCreate "DeclFacts" ((fa "factSymbolOrigins" (EVar "symbols")) (fa "factRequires" (EApp (EApp (EVar "map") (ELam ((PVar "k")) (ETuple (EVar "k") (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (EVar "k")) (EVar "reqs")))))) (EApp (EVar "omKeys") (EVar "reqs")))) (fa "factSupers" (EApp (EApp (EVar "map") (ELam ((PVar "w")) (ETuple (EVar "w") (EApp (EApp (EVar "ifaceSuperCount") (EVar "w")) (EVar "table"))))) (EVar "words"))) (fa "factBinders" (EListLit)) (fa "factMethodResults" (EApp (EVar "methodResultFacts") (EVar "decls"))) (fa "factEntryOutcome" (EApp (EVar "entryFact") (EVar "facts"))) (fa "factExterns" (EVar "omEmpty")) (fa "factManifests" (EFieldAccess (EVar "facts") "pfManifests")))))))
+(DFunDef false "emitDeclFacts" ((PVar "facts") (PVar "decls") (PVar "symbols")) (EBlock (DoLet false false (PVar "reqs") (EApp (EVar "instanceReqCounts") (EVar "decls"))) (DoLet false false (PVar "table") (EApp (EApp (EVar "optionOr") (EVar "emptyDispositionTable")) (EFieldAccess (EVar "facts") "pfDispositions"))) (DoLet false false (PVar "words") (EApp (EVar "omKeys") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "map") (EVar "ifaceWordOfKey")) (EApp (EVar "omKeys") (EVar "reqs")))) (EVar "omEmpty")))) (DoExpr (ERecordCreate "DeclFacts" ((fa "factSymbolOrigins" (EVar "symbols")) (fa "factInitOrder" (EApp (EApp (EVar "map") (EApp (EVar "lowerInitOrders") (EVar "symbols"))) (EFieldAccess (EVar "facts") "pfInitOrders"))) (fa "factRequires" (EApp (EApp (EVar "map") (ELam ((PVar "k")) (ETuple (EVar "k") (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (EVar "k")) (EVar "reqs")))))) (EApp (EVar "omKeys") (EVar "reqs")))) (fa "factSupers" (EApp (EApp (EVar "map") (ELam ((PVar "w")) (ETuple (EVar "w") (EApp (EApp (EVar "ifaceSuperCount") (EVar "w")) (EVar "table"))))) (EVar "words"))) (fa "factBinders" (EListLit)) (fa "factMethodResults" (EApp (EVar "methodResultFacts") (EVar "decls"))) (fa "factEntryOutcome" (EApp (EVar "entryFact") (EVar "facts"))) (fa "factExterns" (EVar "omEmpty")) (fa "factManifests" (EFieldAccess (EVar "facts") "pfManifests")))))))
+(DTypeSig false "lowerInitOrders" (TyFun (TyApp (TyCon "Option") (TyCon "CoreSymbolOrigins")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
+(DFunDef false "lowerInitOrders" ((PCon "None") PWild) (EApp (EVar "panic") (ELit (LString "internal error: a carried initialisation order without symbol origins"))))
+(DFunDef false "lowerInitOrders" ((PCon "Some" (PVar "symbols")) (PVar "orders")) (EBlock (DoLet false false (PVar "functions") (EFieldAccess (EVar "symbols") "functions")) (DoLet false false (PVar "byOrigin") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "name")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "functions")) (arm (PCon "Some" (PAs "origin" (PCon "ModuleOrigin" PWild PWild))) () (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "originKey") (EVar "origin"))) (EVar "name")) (EVar "acc"))) (arm PWild () (EVar "acc"))))) (EVar "omEmpty")) (EApp (EVar "omKeys") (EVar "functions")))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "mid") (PVar "names"))) (ETuple (EVar "mid") (EApp (EApp (EVar "filterMap") (ELam ((PVar "src")) (EApp (EApp (EVar "omLookup") (EApp (EVar "originKey") (EApp (EApp (EVar "ModuleOrigin") (EVar "mid")) (EVar "src")))) (EVar "byOrigin")))) (EVar "names"))))) (EVar "orders")))))
 (DTypeSig false "entryFact" (TyFun (TyCon "ProgramFacts") (TyApp (TyCon "Option") (TyCon "EntryFact"))))
 (DFunDef false "entryFact" ((PVar "facts")) (EApp (EApp (EVar "map") (ELam ((PVar "outcome")) (ERecordCreate "EntryFact" ((fa "entryMainIsUnit" (EFieldAccess (EVar "outcome") "eoMainIsUnit")) (fa "entryMainIsFloat" (EFieldAccess (EVar "outcome") "eoMainIsFloat")))))) (EFieldAccess (EVar "facts") "pfEntryOutcome")))
 (DTypeSig false "withDeclFacts" (TyFun (TyCon "DeclFacts") (TyFun (TyCon "CProgram") (TyCon "CProgram"))))
@@ -5902,7 +5934,10 @@ nodeTag _ = "?"
 (DTypeSig true "lowerProgramEmitConfigured" (TyFun (TyCon "PassConfig") (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "PassRun"))))))
 (DFunDef false "lowerProgramEmitConfigured" ((PVar "config") (PVar "facts") (PVar "pins") (PVar "prog")) (EBlock (DoLet false false (PVar "sited") (EApp (EApp (EVar "siteTrapCalls") (EVar "facts")) (EVar "prog"))) (DoLet false false (PVar "dispositions") (EFieldAccess (EVar "facts") "pfDispositions")) (DoLet false false (PVar "lowering") (EMatch (EVar "dispositions") (arm (PCon "Some" PWild) () (EVar "TypedLowering")) (arm (PCon "None") () (EVar "UntypedLowering")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "runPasses") (EVar "config")) (ERecordCreate "PassCtx" ((fa "pcFacts" (EVar "facts")) (fa "pcDecls" (EVar "prog")) (fa "pcSited" (EVar "sited")) (fa "pcLowering" (EVar "lowering")) (fa "pcFieldOrders" (EApp (EVar "declaredRecordFieldOrders") (EVar "prog")))))) (EVar "emitPasses")) (EApp (EApp (EApp (EApp (EVar "lowerProgramWith") (EVar "facts")) (EVar "dispositions")) (EVar "pins")) (EVar "sited"))))))
 (DTypeSig false "emitDeclFacts" (TyFun (TyCon "ProgramFacts") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "Option") (TyCon "CoreSymbolOrigins")) (TyCon "DeclFacts")))))
-(DFunDef false "emitDeclFacts" ((PVar "facts") (PVar "decls") (PVar "symbols")) (EBlock (DoLet false false (PVar "reqs") (EApp (EVar "instanceReqCounts") (EVar "decls"))) (DoLet false false (PVar "table") (EApp (EApp (EVar "optionOr") (EVar "emptyDispositionTable")) (EFieldAccess (EVar "facts") "pfDispositions"))) (DoLet false false (PVar "words") (EApp (EVar "omKeys") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EMethodRef "map") (EVar "ifaceWordOfKey")) (EApp (EVar "omKeys") (EVar "reqs")))) (EVar "omEmpty")))) (DoExpr (ERecordCreate "DeclFacts" ((fa "factSymbolOrigins" (EVar "symbols")) (fa "factRequires" (EApp (EApp (EMethodRef "map") (ELam ((PVar "k")) (ETuple (EVar "k") (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (EVar "k")) (EVar "reqs")))))) (EApp (EVar "omKeys") (EVar "reqs")))) (fa "factSupers" (EApp (EApp (EMethodRef "map") (ELam ((PVar "w")) (ETuple (EVar "w") (EApp (EApp (EVar "ifaceSuperCount") (EVar "w")) (EVar "table"))))) (EVar "words"))) (fa "factBinders" (EListLit)) (fa "factMethodResults" (EApp (EVar "methodResultFacts") (EVar "decls"))) (fa "factEntryOutcome" (EApp (EVar "entryFact") (EVar "facts"))) (fa "factExterns" (EVar "omEmpty")) (fa "factManifests" (EFieldAccess (EVar "facts") "pfManifests")))))))
+(DFunDef false "emitDeclFacts" ((PVar "facts") (PVar "decls") (PVar "symbols")) (EBlock (DoLet false false (PVar "reqs") (EApp (EVar "instanceReqCounts") (EVar "decls"))) (DoLet false false (PVar "table") (EApp (EApp (EVar "optionOr") (EVar "emptyDispositionTable")) (EFieldAccess (EVar "facts") "pfDispositions"))) (DoLet false false (PVar "words") (EApp (EVar "omKeys") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EMethodRef "map") (EVar "ifaceWordOfKey")) (EApp (EVar "omKeys") (EVar "reqs")))) (EVar "omEmpty")))) (DoExpr (ERecordCreate "DeclFacts" ((fa "factSymbolOrigins" (EVar "symbols")) (fa "factInitOrder" (EApp (EApp (EMethodRef "map") (EApp (EVar "lowerInitOrders") (EVar "symbols"))) (EFieldAccess (EVar "facts") "pfInitOrders"))) (fa "factRequires" (EApp (EApp (EMethodRef "map") (ELam ((PVar "k")) (ETuple (EVar "k") (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (EVar "k")) (EVar "reqs")))))) (EApp (EVar "omKeys") (EVar "reqs")))) (fa "factSupers" (EApp (EApp (EMethodRef "map") (ELam ((PVar "w")) (ETuple (EVar "w") (EApp (EApp (EVar "ifaceSuperCount") (EVar "w")) (EVar "table"))))) (EVar "words"))) (fa "factBinders" (EListLit)) (fa "factMethodResults" (EApp (EVar "methodResultFacts") (EVar "decls"))) (fa "factEntryOutcome" (EApp (EVar "entryFact") (EVar "facts"))) (fa "factExterns" (EVar "omEmpty")) (fa "factManifests" (EFieldAccess (EVar "facts") "pfManifests")))))))
+(DTypeSig false "lowerInitOrders" (TyFun (TyApp (TyCon "Option") (TyCon "CoreSymbolOrigins")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
+(DFunDef false "lowerInitOrders" ((PCon "None") PWild) (EApp (EVar "panic") (ELit (LString "internal error: a carried initialisation order without symbol origins"))))
+(DFunDef false "lowerInitOrders" ((PCon "Some" (PVar "symbols")) (PVar "orders")) (EBlock (DoLet false false (PVar "functions") (EFieldAccess (EVar "symbols") "functions")) (DoLet false false (PVar "byOrigin") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "name")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "functions")) (arm (PCon "Some" (PAs "origin" (PCon "ModuleOrigin" PWild PWild))) () (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "originKey") (EVar "origin"))) (EVar "name")) (EVar "acc"))) (arm PWild () (EVar "acc"))))) (EVar "omEmpty")) (EApp (EVar "omKeys") (EVar "functions")))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "mid") (PVar "names"))) (ETuple (EVar "mid") (EApp (EApp (EMethodRef "filterMap") (ELam ((PVar "src")) (EApp (EApp (EVar "omLookup") (EApp (EVar "originKey") (EApp (EApp (EVar "ModuleOrigin") (EVar "mid")) (EVar "src")))) (EVar "byOrigin")))) (EVar "names"))))) (EVar "orders")))))
 (DTypeSig false "entryFact" (TyFun (TyCon "ProgramFacts") (TyApp (TyCon "Option") (TyCon "EntryFact"))))
 (DFunDef false "entryFact" ((PVar "facts")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "outcome")) (ERecordCreate "EntryFact" ((fa "entryMainIsUnit" (EFieldAccess (EVar "outcome") "eoMainIsUnit")) (fa "entryMainIsFloat" (EFieldAccess (EVar "outcome") "eoMainIsFloat")))))) (EFieldAccess (EVar "facts") "pfEntryOutcome")))
 (DTypeSig false "withDeclFacts" (TyFun (TyCon "DeclFacts") (TyFun (TyCon "CProgram") (TyCon "CProgram"))))

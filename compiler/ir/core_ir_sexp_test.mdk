@@ -362,6 +362,7 @@ test "two occurrences of one binder id stay one binder" =
       []
       DeclFacts {
         factSymbolOrigins = None,
+        factInitOrder = None,
         factMethodResults = [
           MethodResultFact {
             iface = "left::I",
@@ -529,6 +530,7 @@ roundTripFields = [
   "(CRecordUpdate ",
   "(LFloat ",
   "(binder-types",
+  "(init-order",
   "(LInt 4611686018427387903)",
   "(LInt -4611686018427387904)",
 ]

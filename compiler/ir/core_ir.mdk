@@ -1,4 +1,4 @@
-import types.symbol_origins.{CoreSymbolOrigins}
+import types.symbol_origins.{CoreSymbolOrigins, SymbolOrigin(..)}
 import types.capability_manifest.{CapabilityManifest}
 -- Core IR — STAGE2-DESIGN §2.1.  A serializable, backend-neutral intermediate
 -- representation lowered from the elaborated (desugared + typed + dict-routed)
@@ -62,7 +62,7 @@ import frontend.ast.{
   noDeclLoc,
   noBinderId,
 }
-import support.ordmap.{OrdMap, omEmpty}
+import support.ordmap.{OrdMap, omEmpty, omLookup}
 import ir.extern_types.{ExternDeclFact}
 import types.runtime_types.{BinderRow(..), RuntimeType(..)}
 import support.util.{reverseL, startsWith}
@@ -455,8 +455,13 @@ public export data EntryFact = EntryFact {
   entryMainIsFloat : Bool,
 }
 
+-- `factInitOrder` is the typechecker's per-module initialisation order
+-- (`ProgramFacts.pfInitOrders`) in lowered Core names: one row per module, in
+-- drive order, each listing the module's value binds Core holds.  `None` means
+-- the program was not typechecked, so no order was carried.
 public export data DeclFacts = DeclFacts {
   factSymbolOrigins : Option CoreSymbolOrigins,
+  factInitOrder : Option (List (String, List String)),
   factManifests : List CapabilityManifest,
   factRequires : List (String, Int),
   factSupers : List (String, Int),
@@ -470,6 +475,7 @@ export
 noDeclFacts : DeclFacts
 noDeclFacts = DeclFacts {
   factSymbolOrigins = None,
+  factInitOrder = None,
   factRequires = [],
   factSupers = [],
   factBinders = [],
@@ -478,6 +484,35 @@ noDeclFacts = DeclFacts {
   factExterns = omEmpty,
   factManifests = [],
 }
+
+-- Whether lowering synthesized the Core function [name] as a nullary-memo CAF
+-- (`GeneratedOrigin "nullary-memo"`), by its origin row, never its name.
+export
+isNullaryMemo : DeclFacts -> String -> Bool
+isNullaryMemo facts name = match originOf facts name
+  Some (GeneratedOrigin "nullary-memo" _) => True
+  _ => False
+
+-- Whether the Core function [name] is the source `main` of some module, by its
+-- origin row: a `main` in any module is never initialised (spec rule I4).
+export
+isModuleMain : DeclFacts -> String -> Bool
+isModuleMain facts name = match originOf facts name
+  Some (ModuleOrigin _ "main") => True
+  _ => False
+
+-- The module whose source declares the Core function [name]: the id of its
+-- `ModuleOrigin`, and `""` for every other origin and for a function with none.
+export
+originModule : DeclFacts -> String -> String
+originModule facts name = match originOf facts name
+  Some (ModuleOrigin mid _) => mid
+  _ => ""
+
+originOf : DeclFacts -> String -> Option SymbolOrigin
+originOf facts name = match facts.factSymbolOrigins
+  Some symbols => omLookup name symbols.functions
+  None => None
 
 -- ── binder walk ──────────────────────────────────────────────────────────────
 -- One traversal of every binder in a program, in a fixed order, with the id each
@@ -554,6 +589,7 @@ withBinderRows rows (CProgram groups ctorArs ctorTypes impls mctx facts) = CProg
   mctx
   DeclFacts {
     factSymbolOrigins = facts.factSymbolOrigins,
+    factInitOrder = facts.factInitOrder,
     factRequires = facts.factRequires,
     factSupers = facts.factSupers,
     factBinders = rows,
