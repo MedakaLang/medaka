@@ -11,7 +11,7 @@ import tools.test_pins_io.{PinContext, loadPinContext}
 
 fixtureRoot : String -> <Exec, FileWrite> Result String String
 fixtureRoot tag = do
-  base <- scratchDir
+  base <- scratchDir ()
   let root = joinPath base ("test_pins_" ++ tag)
   map (() => root) (mkdirAll root)
 
@@ -33,10 +33,10 @@ contextIssue ctx = match ctx.contextPins
   _ => None
 
 test "nearest pin project wins over its enclosing project" =
-  nearestProjectExpectation
+  nearestProjectExpectation ()
 
-nearestProjectExpectation : <Exec, FileRead, FileWrite, IO> Expectation
-nearestProjectExpectation = match fixtureRoot "nearest"
+nearestProjectExpectation : Unit -> <Exec, FileRead, FileWrite, IO> Expectation
+nearestProjectExpectation () = match fixtureRoot "nearest"
   Err err => fail err
   Ok root => match writeTree root [
     ("medaka.toml", "[package]\nname = \"outer\"\n"),
@@ -52,10 +52,11 @@ nearestProjectExpectation = match fixtureRoot "nearest"
       Ok ctx =>
         expectEqual (Some 2, "main.mdk") (contextIssue ctx, ctx.contextFile)
 
-test "a standalone file falls back to its own directory" = standaloneExpectation
+test "a standalone file falls back to its own directory" =
+  standaloneExpectation ()
 
-standaloneExpectation : <Exec, FileRead, FileWrite, IO> Expectation
-standaloneExpectation = match fixtureRoot "standalone"
+standaloneExpectation : Unit -> <Exec, FileRead, FileWrite, IO> Expectation
+standaloneExpectation () = match fixtureRoot "standalone"
   Err err => fail err
   Ok root => match writeTree root [
     ("medaka-test-pins.toml", propLedger "main.mdk" 3),
@@ -68,10 +69,10 @@ standaloneExpectation = match fixtureRoot "standalone"
         expectEqual (Some 3, "main.mdk") (contextIssue ctx, ctx.contextFile)
 
 test "an absent ledger is explicitly an empty context" =
-  missingLedgerExpectation
+  missingLedgerExpectation ()
 
-missingLedgerExpectation : <Exec, FileRead, FileWrite, IO> Expectation
-missingLedgerExpectation = match fixtureRoot "missing"
+missingLedgerExpectation : Unit -> <Exec, FileRead, FileWrite, IO> Expectation
+missingLedgerExpectation () = match fixtureRoot "missing"
   Err err => fail err
   Ok root => match writeTree root [("main.mdk", "main = 1\n")]
     Err err => fail err
@@ -79,10 +80,10 @@ missingLedgerExpectation = match fixtureRoot "missing"
       Err err => fail err
       Ok ctx => expectEqual [] ctx.contextPins
 
-test "a malformed existing ledger is loud" = badLedgerExpectation
+test "a malformed existing ledger is loud" = badLedgerExpectation ()
 
-badLedgerExpectation : <Exec, FileRead, FileWrite, IO> Expectation
-badLedgerExpectation = match fixtureRoot "bad"
+badLedgerExpectation : Unit -> <Exec, FileRead, FileWrite, IO> Expectation
+badLedgerExpectation () = match fixtureRoot "bad"
   Err err => fail err
   Ok root => match writeTree root [
     ("main.mdk", "main = 1\n"),
@@ -94,10 +95,10 @@ badLedgerExpectation = match fixtureRoot "bad"
       Ok _ => False)
 
 test "a ledger symlink outside the selected project is refused" =
-  ledgerEscapeExpectation
+  ledgerEscapeExpectation ()
 
-ledgerEscapeExpectation : <Exec, FileRead, FileWrite, IO> Expectation
-ledgerEscapeExpectation = match fixtureRoot "ledger_escape"
+ledgerEscapeExpectation : Unit -> <Exec, FileRead, FileWrite, IO> Expectation
+ledgerEscapeExpectation () = match fixtureRoot "ledger_escape"
   Err err => fail err
   Ok root =>
     let outside = joinPath root "outside"
@@ -122,10 +123,11 @@ ledgerEscapeExpectation = match fixtureRoot "ledger_escape"
               Err _ => True
               Ok _ => False)
 
-test "an unreadable existing ledger is loud" = unreadableLedgerExpectation
+test "an unreadable existing ledger is loud" = unreadableLedgerExpectation ()
 
-unreadableLedgerExpectation : <Exec, FileRead, FileWrite, IO> Expectation
-unreadableLedgerExpectation = match fixtureRoot "unreadable"
+unreadableLedgerExpectation : Unit ->
+  <Exec, FileRead, FileWrite, IO> Expectation
+unreadableLedgerExpectation () = match fixtureRoot "unreadable"
   Err err => fail err
   Ok root => match writeTree root [("main.mdk", "main = 1\n")]
     Err err => fail err
@@ -136,10 +138,10 @@ unreadableLedgerExpectation = match fixtureRoot "unreadable"
         Ok _ => False)
 
 test "a dangling ledger symlink is loud rather than absent" =
-  brokenLedgerExpectation
+  brokenLedgerExpectation ()
 
-brokenLedgerExpectation : <Exec, FileRead, FileWrite, IO> Expectation
-brokenLedgerExpectation = match fixtureRoot "broken_ledger"
+brokenLedgerExpectation : Unit -> <Exec, FileRead, FileWrite, IO> Expectation
+brokenLedgerExpectation () = match fixtureRoot "broken_ledger"
   Err err => fail err
   Ok root => match writeTree root [
     ("medaka.toml", "[package]\nname = \"p\"\n"),
@@ -161,10 +163,10 @@ brokenLedgerExpectation = match fixtureRoot "broken_ledger"
             Ok _ => False)
 
 test "a project-relative selector handles nested targets and normalized paths" =
-  multiDirectoryExpectation
+  multiDirectoryExpectation ()
 
-multiDirectoryExpectation : <Exec, FileRead, FileWrite, IO> Expectation
-multiDirectoryExpectation = match fixtureRoot "multidir"
+multiDirectoryExpectation : Unit -> <Exec, FileRead, FileWrite, IO> Expectation
+multiDirectoryExpectation () = match fixtureRoot "multidir"
   Err err => fail err
   Ok root => match writeTree root [
     ("medaka.toml", "[package]\nname = \"p\"\n"),
@@ -180,10 +182,10 @@ multiDirectoryExpectation = match fixtureRoot "multidir"
           (contextIssue ctx, ctx.contextFile)
 
 test "a stale referenced row fails even when it is not for the selected file" =
-  stalePathExpectation
+  stalePathExpectation ()
 
-stalePathExpectation : <Exec, FileRead, FileWrite, IO> Expectation
-stalePathExpectation = match fixtureRoot "stale"
+stalePathExpectation : Unit -> <Exec, FileRead, FileWrite, IO> Expectation
+stalePathExpectation () = match fixtureRoot "stale"
   Err err => fail err
   Ok root => match writeTree root [
     ("medaka.toml", "[package]\nname = \"p\"\n"),
@@ -195,10 +197,12 @@ stalePathExpectation = match fixtureRoot "stale"
       Err _ => True
       Ok _ => False)
 
-test "a referenced .mdk directory is refused" = referencedDirectoryExpectation
+test "a referenced .mdk directory is refused" =
+  referencedDirectoryExpectation ()
 
-referencedDirectoryExpectation : <Exec, FileRead, FileWrite, IO> Expectation
-referencedDirectoryExpectation = match fixtureRoot "directory"
+referencedDirectoryExpectation : Unit ->
+  <Exec, FileRead, FileWrite, IO> Expectation
+referencedDirectoryExpectation () = match fixtureRoot "directory"
   Err err => fail err
   Ok root => match writeTree root [
     ("medaka.toml", "[package]\nname = \"p\"\n"),
@@ -213,10 +217,10 @@ referencedDirectoryExpectation = match fixtureRoot "directory"
         Ok _ => False)
 
 test "a referenced source path whose symlink escapes the project is refused" =
-  escapedAliasExpectation
+  escapedAliasExpectation ()
 
-escapedAliasExpectation : <Exec, FileRead, FileWrite, IO> Expectation
-escapedAliasExpectation = match fixtureRoot "alias"
+escapedAliasExpectation : Unit -> <Exec, FileRead, FileWrite, IO> Expectation
+escapedAliasExpectation () = match fixtureRoot "alias"
   Err err => fail err
   Ok root =>
     let outside = joinPath root "outside"
@@ -239,10 +243,10 @@ escapedAliasExpectation = match fixtureRoot "alias"
               Ok _ => False)
 
 test "a referenced source symlink inside the project is refused as an alias" =
-  internalAliasExpectation
+  internalAliasExpectation ()
 
-internalAliasExpectation : <Exec, FileRead, FileWrite, IO> Expectation
-internalAliasExpectation = match fixtureRoot "internal_alias"
+internalAliasExpectation : Unit -> <Exec, FileRead, FileWrite, IO> Expectation
+internalAliasExpectation () = match fixtureRoot "internal_alias"
   Err err => fail err
   Ok root => match writeTree root [
     ("medaka.toml", "[package]\nname = \"p\"\n"),

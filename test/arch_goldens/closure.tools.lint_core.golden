@@ -17,6 +17,7 @@ frontend.lex_scan
 frontend.lex_token
 frontend.lexer
 frontend.marker
+frontend.name_scope
 frontend.parse_cache
 frontend.parse_diagnostic
 frontend.parse_engine
@@ -100,6 +101,7 @@ types.tc_grants
 types.tc_groups
 types.tc_infer
 types.tc_infer_records
+types.tc_init
 types.tc_mark
 types.tc_module
 types.tc_mono

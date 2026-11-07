@@ -402,8 +402,8 @@ depthRouteControls value =
       "public-depth: \{intToString controls}/2 adjacent controls; \{intToString hostile}/1 hostile route"
   (controls, hostile)
 
-runLimits : <IO> Unit
-runLimits =
+runLimits : Unit -> <IO> Unit
+runLimits () =
   let root = mstRootCid mstEmpty
   let rootBytes = mstRootBytes mstEmpty
   let tooManyCar = repeatRows (maxCarBlocks + 1) (root, rootBytes) []
@@ -494,8 +494,8 @@ inboundHost = "perf.example"
 inboundHandle : String
 inboundHandle = "perfroute.example"
 
-inboundToken : String
-inboundToken =
+inboundToken : Unit -> <Mint "access"> String
+inboundToken () =
   mintAccessToken
     testKey
     perfDid
@@ -517,7 +517,7 @@ inboundRequest bodyBytes =
   -- fixture.
   let bytes = MB.freeze (fillA (MB.make bodyBytes) 0)
   encodeUtf8
-      "POST /xrpc/com.atproto.repo.uploadBlob HTTP/1.1\r\nHost: \{inboundHost}\r\nAuthorization: Bearer \{inboundToken}\r\nContent-Type: application/octet-stream\r\nContent-Length: \{intToString (B.length bytes)}\r\n\r\n"
+      "POST /xrpc/com.atproto.repo.uploadBlob HTTP/1.1\r\nHost: \{inboundHost}\r\nAuthorization: Bearer \{inboundToken ()}\r\nContent-Type: application/octet-stream\r\nContent-Length: \{intToString (B.length bytes)}\r\n\r\n"
     ++ bytes
 
 fillA : MutBytes -> Int -> MutBytes
@@ -543,7 +543,7 @@ mustInboundStore _ =
   let base = storeFromRepo repo
   let next = storeWithServerSecret testKey base
   storeSessionOpen
-    (sessionFingerprint inboundToken)
+    (sessionFingerprint (inboundToken ()))
     (sessionFingerprint "performance_resource: no refresh token in this probe")
     (inboundInstant + 3600)
     next
@@ -600,7 +600,7 @@ main = match args ()
   ["rehydrate", nText] => match toInt nText
     Some n => runRehydrate n
     None => panic "performance_resource: invalid rehydrate size"
-  ["limits"] => runLimits
+  ["limits"] => runLimits ()
   ["inbound-alloc", nText, bodyText] => match (toInt nText, toInt bodyText)
     (Some n, Some bodyBytes) => runInboundAlloc n bodyBytes
     _ => panic "performance_resource: invalid inbound-alloc args"

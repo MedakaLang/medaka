@@ -42,8 +42,8 @@
 -- difference: it runs on both selections, because half (b) of it decides which
 -- declaration a bare method name binds to, so skipping it on one selection would make
 -- that selection typecheck a different program
--- (`test/run_check_agreement_fixtures/reject_1812_alias_import_order.mdk` and its
--- permuted accepting twin).
+-- (`test/run_check_agreement_fixtures/accept_1812_alias_import_order.mdk` and
+-- `accept_1812_alias_first_then_explicit.mdk`, both accepted, printing 99).
 --
 -- Single-file consumers are one-module projections of the same graph driver. There
 -- is no second stamper order; `checkOne*` and `elaborateOne`
@@ -82,6 +82,7 @@ import frontend.ast.{
   qualifiedLocal,
   TabKey(..),
   lookupTab,
+  programIsCore,
 }
 import types.repr.{
   Tyvar(..),
@@ -204,7 +205,6 @@ import frontend.visibility.{
 }
 import types.value_main.{inMainBinding}
 import frontend.resolve.{
-  programIsCore,
   -- #1280: the extern-signature half of the identity supply — see `externSchemes`.
   stampTyOrigins,
   runtimeExternTyOriginScope,
@@ -360,10 +360,12 @@ import types.tc_diag_text.{
   stickyDiagsInPushOrder,
 }
 import types.tc_scope.{
+  aliasMethodNames,
   aliasRowSpelling,
   importFormRows,
   memberAliasCands,
   moduleAliasKeys,
+  seedExplicitOverWild,
   useKeyCands,
 }
 import types.tc_unify.{
@@ -942,11 +944,11 @@ unitCarriesMangledFunDefs _mid [] = False
 unitCarriesMangledFunDefs mid ((n, _) :: rest) =
   if isMangledFor mid n then True else unitCarriesMangledFunDefs mid rest
 
--- The first row for a name wins, unless a second import supplies a different
--- declaration of the same name: then the occurrence is the ambiguity the
--- resolver reports as R-AMBIGUOUS-OCCURRENCE (`ambiguousSet`, keyed by
--- declaration through `importValueDecls`, whichever module each import names;
--- a local definition, which it exempts, shadows the seed here anyway).
+-- The first row for a name wins, unless a second import on the same rung
+-- supplies a different declaration of the same name: then the occurrence is the
+-- ambiguity the resolver reports as R-AMBIGUOUS-OCCURRENCE (the scope's
+-- `Ambiguous` binding, `frontend/name_scope.mdk`; a local definition shadows the
+-- seed here anyway).
 -- Choosing either supplier would type the use against a definition the program
 -- never named, and the cascade would change with the order the imports were
 -- written.
@@ -1203,9 +1205,9 @@ admittedIn : GraphCtx -> String -> List (String, String)
 admittedIn gctx mid =
   optionOr [] (omLookup mid gctx.graphAdmittedMethodsRef.value)
 
--- The method names `deAliasMethodImports` admits WITHOUT a binding the resolver
--- counted: every method of an alias-imported module.  `importSeed` reads this so
--- such a row never makes a bare name look supplied twice.
+-- Every method of an alias-imported module, the names `deAliasMethodImports` admits.
+-- The seed never sees that synthetic import (`explicitOverWild`), so `importSeed` reads
+-- this only to leave a written import of one of those methods without a supplier.
 synthesizedAdmissions : List (String, List String) ->
   List Decl ->
   List (String, String)
@@ -1242,8 +1244,8 @@ methodsPerMidGo : List (String, List String) ->
   List (String, List String)
 methodsPerMidGo _ [] = []
 methodsPerMidGo acc ((mid, decls) :: rest) =
-  let entry =
-    (mid, dedup (declMethodNames decls ++ reexportedMethodNames acc decls))
+  let names = declMethodNames decls ++ reexportedMethodNames acc decls
+  let entry = (mid, aliasMethodNames decls names)
   entry :: methodsPerMidGo (entry :: acc) rest
 
 -- method names a module re-exports via `export import src.{…}` (`DUse True`), taken
@@ -1384,7 +1386,7 @@ declMethodNamesOf _ = []
 -- site, which is what #95 measured for six years.
 -- Each row a use-path BINDS carries the declaration it denotes
 -- (`importSupplierKey`), the same identity the resolver's value ambiguity check
--- keys on (`importValueDecls`), so `moduleImportSeed` can refuse to pick a winner
+-- keys on (`frontend/name_scope.mdk`), so `moduleImportSeed` can refuse to pick a winner
 -- by import order for a name the resolver has already rejected, and still
 -- accept one declaration reached through two imports. A row the form admits
 -- without binding its name (a bare method row admitted for dispatch, a mangled
@@ -1622,11 +1624,8 @@ moduleSeedFor prev baseSeed coreV mid prog depEnv =
   moduleImportSeed
     prev
     baseSeed
-    (importSeed
-      prev.mcGraph
-      mid
-      coreV
-      (admittedIn prev.mcGraph mid)
+    (seedExplicitOverWild
+      (importSeed prev.mcGraph mid coreV (admittedIn prev.mcGraph mid))
       prog
       depEnv)
 
@@ -2637,10 +2636,10 @@ driveGraphK sel (DriveArgs inputs valueMain executes preludeKey keyed runtimeDec
   -- alias of one is a second SPELLING, not a second binding.  A member alias and a
   -- module alias both keep their spelling through inference and are resolved at the
   -- end of the tree arm (`resolveAliasMethodSpellings`).  See
-  -- `renameAliasedMethods`.  BOTH selections rename: that rewrite makes
-  -- `import m as A` bind `m`'s methods under their ORIGIN name as well, which decides
-  -- WHICH declaration a bare occurrence of that name resolves to — a binding change,
-  -- not a spelling one, so a selection that skips it typechecks a different program.
+  -- `renameAliasedMethods`.  BOTH selections rename, so both check one tree: the
+  -- rewrite adds `import m.{…m's methods…}` beside `import m as A`, which binds no
+  -- bare name (`writtenImportsOf`, docs/spec/SHADOW-SEMANTICS.md L2) and only gives
+  -- the origin name the restore writes an import downstream.
   -- Only the RESTORE (`resolveAliasMethodSpellings`) is tree-arm-only: it rewrites
   -- occurrences in trees the diags arm does not emit.
   let (admitted, modulesAliased) = renameAliasedMethods coreDecls0 modulesIn

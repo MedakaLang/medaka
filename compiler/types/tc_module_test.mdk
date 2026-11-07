@@ -41,10 +41,10 @@ import types.tc_decls.{buildDeclEnvs, declEnvModulesFrom}
 import types.tc_env.{declEnvModule, emptyDeclEnvAcc}
 import types.tc_mono.{tconBuiltin}
 import types.tc_state.{checkRunResidue, plainModuleSeed}
-import types.tc_test_support.{codesOf, declsOf, fresh, routeTag, sizeable}
-import types.tc_types.{
-  DrainFinding(..), GraphCtx, ModuleCtx, PreludeMarkFacts(..)
+import types.tc_test_support.{
+  codesOf, declsOf, fresh, noPreludeFacts, routeTag, sizeable
 }
+import types.tc_types.{DrainFinding(..), GraphCtx, ModuleCtx}
 import types.tc_module.{
   checkBodyImpl, checkModuleFull, checkModuleFullDiags, elabModuleStamp,
   externSchemesGo, settleClosedBody
@@ -60,16 +60,6 @@ public export data Checked = Checked {
   chErrors : List String,
   chWarnings : List String,
 } deriving (Eq, Debug)
-
--- The mark sets of a graph with no prelude facts: the driver preamble a module check reads.
-noPreludeFacts : PreludeMarkFacts
-noPreludeFacts = PreludeMarkFacts {
-  pmfReturnPos = [],
-  pmfMethodConstraints = [],
-  pmfArgDispatch = [],
-  pmfArgDispatchById = [],
-  pmfConstrainedNames = [],
-}
 
 -- A graph record over the modules [mods] (id, source), in order after an empty prelude, with
 -- the declaration envelope and the mark sets a driver's preamble installs.

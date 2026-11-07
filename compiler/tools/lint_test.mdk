@@ -180,7 +180,7 @@ test "the edit rules ask for the index only on a wildcard import" = expectEach [
 
 -- ── 1. the per-file-only gap, pinned ────────────────────────────────────────
 test "the old per-file-only triple builder never carries a duplicate-body finding" =
-  match buildStdlibIndexResult
+  match buildStdlibIndexResult ()
     Err _ => fail "could not build stdlib index"
     Ok idx =>
       let triples =
@@ -189,7 +189,7 @@ test "the old per-file-only triple builder never carries a duplicate-body findin
 
 -- ── 2. the JSON path's own internals surface it ─────────────────────────────
 test "the JSON path's own internals surface the duplicate-body finding" =
-  match buildStdlibIndexResult
+  match buildStdlibIndexResult ()
     Err _ => fail "could not build stdlib index"
     Ok idx =>
       let quads =
@@ -201,7 +201,7 @@ test "the JSON path's own internals surface the duplicate-body finding" =
 
 -- ── 3. renderer parity: JSON internals == MCP internals ─────────────────────
 test "the MCP path's own internals produce the SAME finding set as JSON" =
-  match buildStdlibIndexResult
+  match buildStdlibIndexResult ()
     Err _ => fail "could not build stdlib index"
     Ok idx =>
       let jsonQuads =
@@ -483,7 +483,7 @@ test "--explain names a known rule and rejects an unknown one" = expectEach [
 -- one whose verb resolves to the `test` import and leaves the four whose verb is
 -- captured by another binding untouched.
 test "the test-verb rules report in every fixture" =
-  match buildStdlibIndexResult
+  match buildStdlibIndexResult ()
     Err _ => fail "could not build stdlib index"
     Ok idx =>
       let triples =
@@ -499,7 +499,7 @@ test "--fix rewrites a verb that resolves to the test import" =
     "test/lint_fix_fixtures/test_verb_resolves_to_import.fixed"
 
 test "a test whose label is isEven is still checked for parity tests" =
-  match buildStdlibIndexResult
+  match buildStdlibIndexResult ()
     Err _ => fail "could not build stdlib index"
     Ok idx =>
       let path = "test/lint_fix_fixtures/rem_parity_excl_kinds.mdk"
@@ -618,7 +618,7 @@ test "the internal-rule list is exactly the internal-scope registry rows" =
 -- With activation off the test-verb rules (scope Internal) are silent on
 -- fixtures that trip them; the `--internal` run above reports them.
 test "an internal rule is silent on a manifest-less project" =
-  match buildStdlibIndexResult
+  match buildStdlibIndexResult ()
     Err _ => fail "could not build stdlib index"
     Ok idx =>
       let triples =
@@ -630,7 +630,7 @@ test "an internal rule is silent on a manifest-less project" =
 -- (scope Internal) is silent under a manifest without `[lint] internal = true`
 -- and fires under one that has it.
 mcpDirectiveReasonFires : String -> <IO> Result String Bool
-mcpDirectiveReasonFires path = match buildStdlibIndexResult
+mcpDirectiveReasonFires path = match buildStdlibIndexResult ()
   Err _ => Err "could not build stdlib index"
   Ok idx =>
     let quads = lintPathsToDiagQuads idx [] ["rule-directive-reason"] [] [path]
@@ -956,7 +956,7 @@ lengthOfFilter : String
 lengthOfFilter = "import hex.*\n\nhits xs = length (filter even xs)\n"
 
 test "a wildcard import of the stdlib module hex does not withhold the count fix" =
-  match buildStdlibIndexResult
+  match buildStdlibIndexResult ()
     Err _ => fail "could not build stdlib index"
     Ok idx =>
       expectEqual
@@ -971,7 +971,7 @@ test "a wildcard import of the stdlib module hex does not withhold the count fix
           lengthOfFilter)
 
 test "a wildcard import of a project module named like a stdlib module withholds the fix" =
-  match buildStdlibIndexResult
+  match buildStdlibIndexResult ()
     Err _ => fail "could not build stdlib index"
     Ok idx =>
       expectEqual

@@ -419,8 +419,8 @@ keepModules [] = []
 keepModules (p :: ps) =
   if isModule p then p :: keepModules ps else keepModules ps
 
-stdlibRels : <IO, FileRead> Result String (List String)
-stdlibRels =
+stdlibRels : Unit -> <IO, FileRead> Result String (List String)
+stdlibRels () =
   map
     (paths => L.sort (keepModules (map relToStdlib paths)))
     (walkDir (underRoot "stdlib"))
@@ -432,8 +432,14 @@ stdlibArg rel = "stdlib/\{rel}"
 shellArgs : String -> List String -> <IO> List String
 shellArgs scratch rels =
   [
-      "-c", "cd \"$1\" && shift && exec \"$@\"", "medaka", medakaRoot,
-      medakaBin, "doc", "--out", scratch
+      "-c",
+      "cd \"$1\" && shift && exec \"$@\"",
+      "medaka",
+      medakaRoot (),
+      medakaBin (),
+      "doc",
+      "--out",
+      scratch,
     ]
     ++ map stdlibArg rels
 
@@ -455,7 +461,7 @@ generatedEntries scratch ids =
   fileEntries scratch (namesOf ids) ++ visibilityEntries scratch ids
 
 docReference : String -> <Exec, IO, FileRead> Expectation
-docReference scratch = match stdlibRels
+docReference scratch = match stdlibRels ()
   Err e => fail "could not list stdlib/: \{e}"
   Ok [] => fail "no stdlib modules found, refusing to pass on 0 checked"
   Ok rels => generated scratch rels

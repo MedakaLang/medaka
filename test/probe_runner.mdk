@@ -47,7 +47,7 @@ import test_process.{boundedVerb, medakaRoot}
 {- | One retired probe gate, as data.
 
    `probe` and every path in `corpus` and `prelude` are spelled
-   repo-relative and resolved against `medakaRoot` at spawn time, so a gate
+   repo-relative and resolved against `medakaRoot ()` at spawn time, so a gate
    run from any directory addresses the tree under test rather than the one
    it was started in.
 
@@ -91,7 +91,7 @@ public export data Row = Row {
    directory's own level: a corpus with fixture subdirectories belongs to a
    different shape, not to a row here. -}
 entriesOf : Row -> <FileRead, IO> Result String (List String)
-entriesOf r = corpusEntries (map (p => "\{medakaRoot}/\{p}") r.corpus) []
+entriesOf r = corpusEntries (map (p => "\{medakaRoot ()}/\{p}") r.corpus) []
 
 corpusEntries : List String ->
   List String ->
@@ -206,7 +206,7 @@ diffNote expected actual = expectationMessage (expectEqualLines expected actual)
 data Outcome = Outcome { gate : String, graded : Int, failures : List String }
 
 argsFor : Row -> String -> <IO> List String
-argsFor r path = map (p => "\{medakaRoot}/\{p}") r.prelude ++ [path]
+argsFor r path = map (p => "\{medakaRoot ()}/\{p}") r.prelude ++ [path]
 
 -- One fixture's spawn, graded against its golden. `spawned` is what the batch
 -- returned for it; an unstartable spawn is a failure of its own row.
@@ -239,7 +239,8 @@ fixtureFailures r (path :: paths) [] =
 rowSpawns : String -> Row -> <FileRead, IO> List (String, List String)
 rowSpawns _ r = match entriesOf r
   Err _ => []
-  Ok paths => map (path => ("\{medakaRoot}/\{r.probe}", argsFor r path)) paths
+  Ok paths =>
+    map (path => ("\{medakaRoot ()}/\{r.probe}", argsFor r path)) paths
 
 gradeRow : Row ->
   List (Result String (Int, String, String)) ->
@@ -272,7 +273,7 @@ rowFailure o = match o.failures
 {- | Grades every row: spawns its probe once per fixture, grades the spawn,
    and compares what it printed against that fixture's golden.
 
-   `testJobs` rows go at a time, all of a group's fixture spawns running side
+   `testJobs ()` rows go at a time, all of a group's fixture spawns running side
    by side, and each group is graded in row order before the next one spawns,
    so under `MEDAKA_TEST_JOBS=1` the spawns come in exactly the order a loop
    over the rows makes them.
@@ -345,12 +346,13 @@ scaffoldIn : String ->
   Int ->
   <Exec, FileRead, FileWrite, IO> List String
 scaffoldIn scratch probe name golden files =
-  let bin = "\{medakaRoot}/\{probe}"
+  let bin = "\{medakaRoot ()}/\{probe}"
   match spawnIn scratch bin name
     Err e => ["\{name}: could not spawn \{probe}: \{e}"]
     Ok (code, _, err) => match processFailure probe name code err
       Some m => [m]
-      None => treeFailures files "\{scratch}/\{name}" "\{medakaRoot}/\{golden}"
+      None =>
+        treeFailures files "\{scratch}/\{name}" "\{medakaRoot ()}/\{golden}"
 
 treeFailures : Int -> String -> String -> <FileRead, IO> List String
 treeFailures files got want = match treeFiles want
@@ -461,12 +463,12 @@ errorPathsIn : String ->
   Int ->
   <Exec, FileRead, FileWrite, IO> List String
 errorPathsIn scratch probe checks =
-  let bin = "\{medakaRoot}/\{probe}"
+  let bin = "\{medakaRoot ()}/\{probe}"
   let good = "\{scratch}/good.mdk"
   let undisp = "\{scratch}/undisp.mdk"
   let nope = "\{scratch}/NOPE.mdk"
-  let runtime = "\{medakaRoot}/stdlib/runtime.mdk"
-  let core = "\{medakaRoot}/stdlib/core.mdk"
+  let runtime = "\{medakaRoot ()}/stdlib/runtime.mdk"
+  let core = "\{medakaRoot ()}/stdlib/core.mdk"
   match writeFile good goodSrc
     Err e => ["could not write \{good}: \{e}"]
     Ok () => match writeFile undisp undispSrc

@@ -453,7 +453,7 @@ main : <Env, FileRead, IO, Sign "commit"> Unit
 main = runMain (args ())
 
 runMain : List String -> <Env, FileRead, IO, Sign "commit"> Unit
-runMain ["--final-review"] = runFinalReview
+runMain ["--final-review"] = runFinalReview ()
 runMain [corpusPath] = runRead (readLines corpusPath)
 runMain [corpusPath, "--representative"] =
   runRepresentativeRead (readLines corpusPath)
@@ -492,8 +492,8 @@ runRepresentativeRows [meta, t0, t1, _, _, _, initLine, op1, c1, createOrder, cr
 runRepresentativeRows _ =
   panic "repo_vectors: unexpected representative corpus shape"
 
-runFinalReview : <IO> Unit
-runFinalReview =
+runFinalReview : Unit -> <IO> Unit
+runFinalReview () =
   let actualData = cidForDagCbor (fromU8Array [|0|])
   let expectedData = cidForDagCbor (fromU8Array [|1|])
   let rev = mustTid "3ke6kg3wk222b"

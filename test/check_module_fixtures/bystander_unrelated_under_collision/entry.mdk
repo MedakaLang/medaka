@@ -40,10 +40,10 @@ import dupa.{da}  -- ONLY the function; never dupa's Dup or Shared
 import dupz.{dz}  -- ONLY the function; never dupz's Dup or Shared
 
 w : Widget <Stdout> Int
-w = w
+w = panic "scheme probe"
 
 wrapped : Widget (<Stdout> Unit) Int
-wrapped = wrapped
+wrapped = panic "scheme probe"
 
 g : Gauge2
 g = 7

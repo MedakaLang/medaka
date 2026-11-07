@@ -1,9 +1,5 @@
--- S-1, REJECT direction: the standalone's own constraints were never recorded as CALL
--- obligations, so `size "hi"` (=> `Num String`, which has no impl) was silently
--- ACCEPTED by `check`.  Root cause: for a SIGNATURED binding, schemeObligationsRef's
--- ids (from generalization) and funConstraintsRef's ids (from the signature) are
--- DIFFERENT ID SPACES, so the obligation lookup silently found nothing.  Must REJECT
--- with a located `No impl of Num for String`.
+-- L3 (F-R4): an interface method and a top-level function of one name in one module is a
+-- located duplicate-declaration error at the second declaration.
 data Box = Box Int
 
 interface Sz a where

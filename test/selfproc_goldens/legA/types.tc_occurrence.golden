@@ -11,6 +11,7 @@ argDispatchOfMethodById : IfaceRef -> List String -> IfaceMethod -> List ((Iface
 arithDispatchMethod : String -> Option String
 bareVectorLeads : List Mono -> List (List Mono) -> List Mono
 bindingDeclaredAt : TcEnv -> String -> MethodTrackedInstantiation -> Option CDeclared
+binopDispatchMethod : String -> Option String
 binopMethod : String -> Option String
 calleeIsGeneralized : ModuleCtx -> String -> Option (List CSlot) -> List (Int, Mono) -> Bool
 constraintsHaveMethodLevel : List String -> List Constraint -> Bool

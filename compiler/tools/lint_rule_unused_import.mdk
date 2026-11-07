@@ -1,6 +1,8 @@
 -- lint rule rule-unused-import: an `import m.{…}` member that nothing in the file uses. Drop the name from the list.
 
-import frontend.ast.{Decl(..), Loc(..), UseMember(..), UsePath(..)}
+import frontend.ast.{
+  Decl(..), Loc(..), UseMember(..), UsePath(..), useMemberLoc
+}
 import frontend.parser.{Positions(..)}
 import driver.diagnostics.{Severity(..)}
 import frontend.lex_scan.{scanRaw}
@@ -74,7 +76,7 @@ ruleUnusedImport _ _ facts _ prog =
 groupFindings : FileScopes -> List Int -> Decl -> List Finding
 groupFindings fs dead (DUse False (UseGroup path members) groupLoc) =
   let flags = map (memberDead fs dead) members
-  let locs = map memberLoc members
+  let locs = map useMemberLoc members
   let everyDead = all (f => f) flags
   flatMap
     (m => memberFinding path groupLoc locs everyDead (fst m))
@@ -102,9 +104,6 @@ doctestBody line =
   let t = trim line
   let inner = trim (optionOr t (stripPrefix "{-" t))
   toList (stripPrefix "-- > " t) ++ toList (stripPrefix "> " inner)
-
-memberLoc : UseMember -> Loc
-memberLoc (UseMember _ _ loc _) = loc
 
 -- A `T(..)` member is never dead: it may be used through a constructor, which
 -- the scope model does not tie to `T`.

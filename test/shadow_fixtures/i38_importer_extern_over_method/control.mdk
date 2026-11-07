@@ -1,0 +1,3 @@
+-- L2 rung 3: the control; an imported function `plus` from the same module answers 42
+import moda.{plus}
+main = println (plus 20 22)

@@ -1,0 +1,57 @@
+-- Sibling test module for `compiler/tools/refindex.mdk` ([P-TEST-SIBLING]).
+--
+-- Where a module's imports land in its scope (`processImports`), the binding
+-- go-to-definition and find-references read: an explicit import answers over a
+-- wildcard of the same name whichever is written first
+-- (docs/spec/SHADOW-SEMANTICS.md L2, L3).
+
+import test.{expectEach, expectEqual}
+import frontend.parser.{parse}
+import hash_map.{new as hmNew, get as hmGet}
+import tools.refindex.{
+  ImportScope(..),
+  addExport,
+  mkKey,
+  newCtx,
+  nsVal,
+  processImports,
+  sep,
+}
+
+-- The origin key the value `foo` has in a scope built from [src]'s imports,
+-- where modules `a` and `b` each export their own `foo`.
+importedFoo : String -> Option String
+importedFoo src =
+  let ctx = newCtx []
+  addExport ctx "a" nsVal "foo" (mkKey "a" nsVal "foo")
+  addExport ctx "b" nsVal "foo" (mkKey "b" nsVal "foo")
+  let env = hmNew ()
+  let sc = ImportScope {
+    impCtx = ctx,
+    impMe = "main",
+    impEnv = env,
+    impAlias = hmNew (),
+    impTrack = False,
+  }
+  processImports sc (parse src)
+  hmGet "\{nsVal}\{sep}foo" env
+
+test "an explicit import binds over a wildcard of the same name, in either order" = expectEach
+  [
+    (
+      "explicit first",
+      expectEqual
+        (Some (mkKey "a" nsVal "foo"))
+        (importedFoo "import a.{foo}\nimport b.*\n"),
+    ),
+    (
+      "wildcard first",
+      expectEqual
+        (Some (mkKey "a" nsVal "foo"))
+        (importedFoo "import b.*\nimport a.{foo}\n"),
+    ),
+    (
+      "a wildcard alone",
+      expectEqual (Some (mkKey "b" nsVal "foo")) (importedFoo "import b.*\n"),
+    ),
+  ]

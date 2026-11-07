@@ -319,6 +319,7 @@ import frontend.ast.{
   intMinLiteralHelp,
   intMinLiteralMsg,
   isI64Head,
+  isPreludeSpelling,
   isU64Head,
   letBindName,
   orElseLoc,
@@ -473,8 +474,8 @@ infer _env _ = panic "typecheck: unsupported expression"
 doChainIsDeferred : Expr -> Bool
 doChainIsDeferred (EApp f _) = doChainIsDeferred f
 doChainIsDeferred (ELoc _ e) = doChainIsDeferred e
-doChainIsDeferred (EDoOrigin _ (EVar "deferThen")) = True
-doChainIsDeferred (EDoOrigin _ (EVarId "deferThen" _)) = True
+doChainIsDeferred (EDoOrigin _ (EVar x)) = isPreludeSpelling "deferThen" x
+doChainIsDeferred (EDoOrigin _ (EVarId x _)) = isPreludeSpelling "deferThen" x
 doChainIsDeferred _ = False
 
 inferArrayLit : TcEnv -> List Expr -> Mono
@@ -728,7 +729,7 @@ exemptInPlaceIndexMutHeads = ["Array", "Vector"]
 isExemptInPlaceSetIndex : Mono -> Expr -> Bool
 isExemptInPlaceSetIndex t e = match headTyconNameMono t
   Some hd =>
-    stmtCalleeName e == Some "setIndex"
+    any (isPreludeSpelling "setIndex") (stmtCalleeName e)
       && contains hd exemptInPlaceIndexMutHeads
   None => False
 
@@ -2317,26 +2318,27 @@ isDoLoweredAndThenCallee _ = False
 
 isDoLoweredAndThenCalleeExpr : Expr -> Bool
 isDoLoweredAndThenCalleeExpr (ELoc _ e) = isDoLoweredAndThenCalleeExpr e
-isDoLoweredAndThenCalleeExpr (EDoOrigin _ (EVar "andThen")) = True
--- `defer` blocks (#824) lower through the same `callAndThen` with `deferThen`
--- as the bind method, so they get the same tailored reframing.
-isDoLoweredAndThenCalleeExpr (EDoOrigin _ (EVar "deferThen")) = True
+-- `lowerDo` spells the callee through the prelude alias, which inference keeps
+-- until it is done.  `defer` blocks (#824) lower through the same `callAndThen`
+-- with `deferThen` as the bind method, so they get the same tailored reframing.
+isDoLoweredAndThenCalleeExpr (EDoOrigin _ (EVar x)) = isDoBindMethod x
 -- `resolve` rewrites every surviving `EVar` to `EVarId name id` (a stable
 -- per-binding identity) — by the time `inferApp` runs, the callee `lowerDo`
--- tagged is `EVarId "andThen" _`, not the raw `EVar` it started as. Debugged
+-- tagged is an `EVarId`, not the raw `EVar` it started as. Debugged
 -- with `medaka check` + a one-off shape dump: the untagged-`EVar` arm above
 -- never actually fires post-resolve; keep it anyway as the honest pre-resolve
--- shape (harmless — `EDoOrigin _ (EVar "andThen")` just never matches here).
-isDoLoweredAndThenCalleeExpr (EDoOrigin _ (EVarId "andThen" _)) = True
-isDoLoweredAndThenCalleeExpr (EDoOrigin _ (EVarId "deferThen" _)) = True
+-- shape (harmless — it just never matches here).
+isDoLoweredAndThenCalleeExpr (EDoOrigin _ (EVarId x _)) = isDoBindMethod x
 -- #2705: the mark pass runs on every driver before inference, and `andThen` /
 -- `deferThen` are interface methods, so `lowerDo`'s callee reaches `inferApp` as
 -- the marked occurrence shape; the wrapper is the same.
-isDoLoweredAndThenCalleeExpr (EDoOrigin _ (EMethodAt "andThen" _ _)) = True
-isDoLoweredAndThenCalleeExpr (EDoOrigin _ (EMethodAt "deferThen" _ _)) = True
-isDoLoweredAndThenCalleeExpr (EDoOrigin _ (EDictAt "andThen" _)) = True
-isDoLoweredAndThenCalleeExpr (EDoOrigin _ (EDictAt "deferThen" _)) = True
+isDoLoweredAndThenCalleeExpr (EDoOrigin _ (EMethodAt x _ _)) = isDoBindMethod x
+isDoLoweredAndThenCalleeExpr (EDoOrigin _ (EDictAt x _)) = isDoBindMethod x
 isDoLoweredAndThenCalleeExpr _ = False
+
+isDoBindMethod : String -> Bool
+isDoBindMethod x =
+  isPreludeSpelling "andThen" x || isPreludeSpelling "deferThen" x
 
 -- the elements of a tuple-literal argument (through the transparent ELoc wrapper).
 tupleArgElems : Expr -> Option (List Expr)

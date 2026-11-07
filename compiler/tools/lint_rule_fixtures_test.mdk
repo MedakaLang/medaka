@@ -144,8 +144,8 @@ fixtureNames = [
   "when-unless",
 ]
 
-fixtureDir : <Env "MEDAKA_ROOT"> String
-fixtureDir = underRoot "test/lint_rule_fixtures"
+fixtureDir : Unit -> <Env "MEDAKA_ROOT"> String
+fixtureDir () = underRoot "test/lint_rule_fixtures"
 
 markerPrefix : String
 markerPrefix = "-- expect-next-line "
@@ -264,7 +264,7 @@ unknownMarkers src =
 
 -- The flagged lines equal the annotated lines.
 flaggedMatchesMarked : String -> <IO, Env "MEDAKA_ROOT", FileRead> Expectation
-flaggedMatchesMarked name = match readOr "\{fixtureDir}/\{name}.mdk"
+flaggedMatchesMarked name = match readOr "\{fixtureDir ()}/\{name}.mdk"
   Err e => fail e
   Ok src =>
     let rule = "rule-\{name}"
@@ -280,10 +280,10 @@ flaggedMatchesMarked name = match readOr "\{fixtureDir}/\{name}.mdk"
 -- is clean of the rule.
 fixMatchesFixed : String -> <IO, Env "MEDAKA_ROOT", FileRead> Expectation
 fixMatchesFixed name =
-  let fixedPath = "\{fixtureDir}/\{name}.fixed"
+  let fixedPath = "\{fixtureDir ()}/\{name}.fixed"
   if not (fileExists fixedPath) then
     pass
-  else match (readOr "\{fixtureDir}/\{name}.mdk", readOr fixedPath)
+  else match (readOr "\{fixtureDir ()}/\{name}.mdk", readOr fixedPath)
     (Ok src, Ok expected) => match indexForRules ["rule-\{name}"]
       Err e => fail e
       Ok idx => fixOutcome idx "rule-\{name}" src expected
@@ -326,9 +326,9 @@ plainFixOutcome idx rule src = match ruleCeiling rule
 -- Every fixture file in the directory has a roster row, and the reverse; and
 -- the roster names exactly the registered rules, so a rule added without a
 -- fixture fails here.
-rosterIsClosed : <Env "MEDAKA_ROOT", FileRead> Expectation
-rosterIsClosed = match listDir fixtureDir
-  Err _ => fail "cannot list \{fixtureDir}"
+rosterIsClosed : Unit -> <Env "MEDAKA_ROOT", FileRead> Expectation
+rosterIsClosed () = match listDir (fixtureDir ())
+  Err _ => fail "cannot list \{fixtureDir ()}"
   Ok entries => expectAll [
     labelFail
       "fixture files vs roster"
@@ -350,7 +350,7 @@ fixtureHolds name = expectAll [
 ]
 
 hasPositive : String -> <Env "MEDAKA_ROOT", FileRead> Expectation
-hasPositive name = match readOr "\{fixtureDir}/\{name}.mdk"
+hasPositive name = match readOr "\{fixtureDir ()}/\{name}.mdk"
   Err e => fail e
   Ok src => expectFalse (isEmpty (expectedLines "rule-\{name}" src))
 
@@ -399,7 +399,7 @@ test "rule-list-as-set fixture" = fixtureHolds "list-as-set"
 
 -- A `*_test.mdk` file's loops run over fixed test data.
 test "rule-list-as-set skips a test file" =
-  match readOr "\{fixtureDir}/list-as-set.mdk"
+  match readOr "\{fixtureDir ()}/list-as-set.mdk"
     Err e => fail e
     Ok src =>
       match (lintLinesAt
@@ -441,7 +441,7 @@ test "rule-stdlib-reimpl fixture" = fixtureHolds "stdlib-reimpl"
 test "rule-test-bool-helper fixture" = fixtureHolds "test-bool-helper"
 
 test "rule-test-bool-helper ignores a non-test file" = match (
-  readOr "\{fixtureDir}/test-bool-helper.mdk",
+  readOr "\{fixtureDir ()}/test-bool-helper.mdk",
   indexForRules ["rule-test-bool-helper"],
 )
   (Ok src, Ok idx) =>
@@ -472,7 +472,7 @@ test "rule-when-unless fixture" = fixtureHolds "when-unless"
 
 -- The same declarations still fire under a `_test.mdk` path.
 test "rule-prelude-shadow fires under a test path" =
-  match readOr "\{fixtureDir}/prelude-shadow.mdk"
+  match readOr "\{fixtureDir ()}/prelude-shadow.mdk"
     Err e => fail e
     Ok src =>
       match (lintLinesAt
@@ -534,7 +534,7 @@ test "rule-dead-code is silent on a private helper the subject uses" =
       "rule-dead-code"
       "export tick : Int -> Int\ntick n = step n\n\nstep : Int -> Int\nstep n = n + 1\n")
 
-test "every fixture file is on the roster" = rosterIsClosed
+test "every fixture file is on the roster" = rosterIsClosed ()
 
 markedRule : Marker -> String
 markedRule m = m.rule

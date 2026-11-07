@@ -50,6 +50,7 @@ containerArgMsg : Option String -> String -> String
 contraRowMsg : List Atom -> List Atom -> List Atom -> String
 countTypeArguments : Int -> String
 cyclicSuperIfaceMsg : List String -> String
+cyclicValueMsg : String -> List String -> String
 declareRemedy : String -> String -> String
 defaultEffectLaunderMsg : String -> List Atom -> String
 defaultSubject : String -> String -> String
@@ -169,6 +170,7 @@ stickyDiagsInPushOrder : List (String, TcDiag) -> List (String, TcDiag)
 superContextNoImplMsg : String -> Bool -> String -> String -> String -> String
 superContextUndeclaredMsg : String -> Bool -> String -> String -> String -> String
 tcDiagGoalKey : (String, TcDiag) -> String
+topLevelEffectMsg : String -> String -> String
 tyOfMsg : Option TabKey -> String
 tyVarNoun : List String -> String
 typeAsAuthorityMsg : String -> String -> String

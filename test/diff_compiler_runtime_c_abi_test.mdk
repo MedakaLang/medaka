@@ -117,7 +117,7 @@ compile dir input =
       "-emit-llvm",
       "-O0",
       "-I",
-      medakaRoot ++ "/runtime",
+      medakaRoot () ++ "/runtime",
       c,
       "-o",
       ll,
@@ -158,14 +158,14 @@ mutated dir change rows source =
 prepare : String ->
   <Exec, IO, FileRead, FileWrite> Result String (String, String, String)
 prepare dir = do
-  (code, out, err) <- boundedVerb medakaBin [
+  (code, out, err) <- boundedVerb (medakaBin ()) [
     "run",
-    medakaRoot ++ "/compiler/entries/runtime_c_abi_main.mdk",
+    medakaRoot () ++ "/compiler/entries/runtime_c_abi_main.mdk",
   ]
   if code /= 0 || err /= "" then
     Err ("descriptor probe failed: " ++ out ++ err)
   else do
-    source <- readFile (medakaRoot ++ "/runtime/medaka_rt.c")
+    source <- readFile (medakaRoot () ++ "/runtime/medaka_rt.c")
     ir <- compile dir CompileInput { label = "runtime", source = source }
     Ok (out, source, ir)
 
@@ -173,7 +173,7 @@ runGate : String -> <Exec, IO, FileRead, FileWrite> Expectation
 runGate dir = match prepare dir
   Err e => fail e
   Ok (out, source, ir) =>
-    match readFile (medakaRoot ++ "/runtime/medaka_process.c")
+    match readFile (medakaRoot () ++ "/runtime/medaka_process.c")
       Err e => fail e
       Ok processSource => match compile dir CompileInput {
         label = "process",

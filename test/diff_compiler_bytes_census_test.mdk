@@ -87,12 +87,12 @@ rowCheck (file, baseText) = match toInt baseText
       else
         fail "\{file}: baselined but file no longer exists"
 
-check : <IO, FileRead> Expectation
-check = match readFile (underRoot "test/bytes_census_baseline.toml")
+check : Unit -> <IO, FileRead> Expectation
+check () = match readFile (underRoot "test/bytes_census_baseline.toml")
   Err e => fail "could not read test/bytes_census_baseline.toml: \{e}"
   Ok text =>
     let rows = filter hasCount (entryRows (lines text) "" "")
     expectAll (expectAtLeast 59 (length rows) :: map rowCheck rows)
 
 test "diff_compiler_bytes_census: Array Int counts of enrolled files have not risen" =
-  check
+  check ()

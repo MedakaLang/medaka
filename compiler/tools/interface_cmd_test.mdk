@@ -33,14 +33,14 @@ import types.interface_sexp.{
 }
 import types.prelude_interface.{PreludeInterface(..), InterfaceKey(..)}
 
-corePath : String
-corePath = underRoot "stdlib/core.mdk"
+corePath : Unit -> <Env {"MEDAKA_ROOT"}> String
+corePath () = underRoot "stdlib/core.mdk"
 
 rowLines : List String -> List String
 rowLines = filter (S.startsWith "  row ")
 
 test "show lists every published row of every section" =
-  match buildInterfaceFile corePath []
+  match buildInterfaceFile (corePath ()) []
     Err e => fail e
     Ok file =>
       let published =
@@ -285,7 +285,7 @@ under root env verb =
       "MEDAKA_STAGE_COUNTS=",
     ]
     ++ env
-    ++ [medakaBin]
+    ++ [medakaBin ()]
     ++ verb
 
 -- One case: its label, its `env` arguments, and what the run must give.
@@ -399,7 +399,7 @@ writeArgv : String -> <Env "MEDAKA_ROOT", Env "MEDAKA"> List String
 writeArgv dir = [
   "MEDAKA_STRICT=",
   "MEDAKA_NO_INTERFACE=",
-  medakaBin,
+  medakaBin (),
   "interface",
   "write",
   "\{dir}/core.mdk",
@@ -411,7 +411,7 @@ verifyOut : String -> <Exec, Env "MEDAKA_ROOT", Env "MEDAKA"> String
 verifyOut dir = match runCommandBatch "env" 1 [
   [
     "MEDAKA_STRICT=",
-    medakaBin,
+    medakaBin (),
     "interface",
     "verify",
     "\{dir}/core.mdk",

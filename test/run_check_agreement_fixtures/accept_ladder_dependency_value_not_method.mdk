@@ -1,0 +1,8 @@
+-- `lib.ladder_hh_m` calls the standalone `h` it imports from `lib.ladder_hh_d`.
+-- This module imports `Hh`, whose method is also spelled `h`, but that does not
+-- change what `ladder_hh_m`'s bare `h` denotes (docs/spec/SHADOW-SEMANTICS.md L2,
+-- L5): `useM 1` is `1`, and no impl of `Hh` is needed.
+import lib.ladder_hh_x.{Hh}
+import lib.ladder_hh_m.{useM}
+
+main = println (useM 1)

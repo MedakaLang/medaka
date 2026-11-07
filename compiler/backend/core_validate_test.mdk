@@ -668,17 +668,17 @@ test "(j) ordinals out of declared position are refused" = expectEach [
 
 -- ── call modes ───────────────────────────────────────────────────────────────
 
--- #2078's program: `mk n = add n` names a user `add` that shares its spelling
--- with an interface method, so the reference lowers as a method occurrence
--- routed to the user's binding, and the eta pass gives `mk` that binding's two
--- parameters.  Typechecked against a two-method prelude, as a build would.
+-- #2078's program shape: `mk n = add n` names the interface method `add`, so
+-- the reference lowers as a method occurrence and the eta pass gives `mk` the
+-- method's two parameters, one more than its source clause binds.
+-- Typechecked against a two-method prelude, as a build would.
 i2078Prelude : String
 i2078Prelude =
   "interface Num a where\n  fromInt : Int -> a\n  add : a -> a -> a\nimpl Num Int where\n  fromInt n = n\n  add a b = a"
 
 i2078Src : String
 i2078Src =
-  "add : Int -> Int -> Int\nadd a b = a\nmk : Int -> Int -> Int\nmk n = add n\napply1 : (Int -> Int) -> Int -> Int\napply1 f x = f x\nmain = apply1 (mk 1) 2"
+  "mk : Int -> Int -> Int\nmk n = add n\napply1 : (Int -> Int) -> Int -> Int\napply1 f x = f x\nmain = apply1 (mk 1) 2"
 
 typedLowered : String -> String -> CProgram
 typedLowered preludeSrc src =

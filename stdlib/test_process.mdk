@@ -2,8 +2,8 @@
 
    A test whose subject is a whole program (a compiler verb, a script, any
    binary) spawns it and grades what came back. `expectSpawnOk`,
-   `expectSpawnFails` and `expectSpawnOkLine` grade a spawn. `medakaRoot`,
-   `underRoot` and `medakaBin` locate the tree and the binary under test.
+   `expectSpawnFails` and `expectSpawnOkLine` grade a spawn. `medakaRoot ()`,
+   `underRoot` and `medakaBin ()` locate the tree and the binary under test.
    `boundedVerb` puts a time limit on one spawn, and `withScratchDir` runs a
    test body in a directory of its own and removes it afterwards.
 
@@ -44,22 +44,22 @@ import test.{Expectation(..), expectAll}
    Files are located through this rather than through the working
    directory, which a test does not control. -}
 export
-medakaRoot : <Env "MEDAKA_ROOT"> String
-medakaRoot = getEnvOr "MEDAKA_ROOT" "."
+medakaRoot : Unit -> <Env "MEDAKA_ROOT"> String
+medakaRoot () = getEnvOr "MEDAKA_ROOT" "."
 
 -- | The path `rel`, relative to the tree root, resolved under `medakaRoot`.
 export
 underRoot : String -> <Env "MEDAKA_ROOT"> String
-underRoot rel = "\{medakaRoot}/\{rel}"
+underRoot rel = "\{medakaRoot ()}/\{rel}"
 
 {- | The Medaka binary to spawn: `MEDAKA`, or the binary named medaka in
-   `medakaRoot` when it is unset.
+   `medakaRoot ()` when it is unset.
 
    The default is a path, so an unset `MEDAKA` never resolves to another
    build on `PATH`. -}
 export
-medakaBin : <Env "MEDAKA_ROOT", Env "MEDAKA"> String
-medakaBin = getEnvOr "MEDAKA" "\{medakaRoot}/medaka"
+medakaBin : Unit -> <Env "MEDAKA_ROOT", Env "MEDAKA"> String
+medakaBin () = getEnvOr "MEDAKA" "\{medakaRoot ()}/medaka"
 
 -- # Spawning
 
@@ -114,26 +114,23 @@ boundedVerbSeconds secs cmd args =
 
 {- | A fresh, empty directory for a test that has to write files.
 
-   `scratchDir` is a value, so it is evaluated once per process: every use in
-   one test file, and so every `test` block of that file, is handed the SAME
-   directory. A block that removes it takes the next block's workspace with
-   it, and a block that leaves files behind leaks them into the next. Two
-   concurrent runs of the same test do not collide, because each process makes
-   its own. The caller owns the directory and removes it. Prefer
-   `withScratchDir`, which gives each call its own directory and removes it.
+   Each call makes a new directory, so a caller that wants one directory for
+   several uses binds `scratchDir ()` once and shares the result. Two
+   concurrent runs of the same test do not collide. The caller owns the
+   directory and removes it. Prefer `withScratchDir`, which removes it.
 
-   > map (startsWith "/") scratchDir
+   > map (startsWith "/") (scratchDir ())
    Ok True -}
 export
-scratchDir : <Exec "mktemp*"> Result String String
-scratchDir = match runVerb "mktemp" ["-d"]
+scratchDir : Unit -> <Exec "mktemp*"> Result String String
+scratchDir () = match runVerb "mktemp" ["-d"]
   Err e => Err e
   Ok (0, out, _) => Ok (trim out)
   Ok (code, _, err) => Err "mktemp -d exited \{intToString code}: \{err}"
 
 {- | Runs `body` with a fresh, empty directory of its own, then removes it.
 
-   Unlike `scratchDir`, each call makes a new directory, so the `test` blocks
+   Unlike `scratchDir ()`, each call makes a new directory, so the `test` blocks
    of one file cannot see each other's files and none can delete another's
    workspace. Removal is graded: a directory that cannot be removed fails the
    test rather than being left behind, and a failing `body` still has its
@@ -405,7 +402,7 @@ testAssertionCount : String ->
   List String ->
   <Exec, Env "MEDAKA_ROOT", Env "MEDAKA"> Result String Int
 testAssertionCount path extraArgs =
-  let bin = medakaBin
+  let bin = medakaBin ()
   let args = assertionCountArgs path extraArgs
   gradeAssertionCount bin path args (runVerb bin args)
 
@@ -423,9 +420,9 @@ export
 testAssertionCounts : List (String, List String) ->
   <Exec, Env "MEDAKA_ROOT", Env "MEDAKA", Env "MEDAKA_TEST_JOBS"> List (Result String Int)
 testAssertionCounts rows =
-  let bin = medakaBin
+  let bin = medakaBin ()
   let argvs = map ((path, extraArgs) => assertionCountArgs path extraArgs) rows
-  let spawned = runCommandBatch bin testJobs argvs
+  let spawned = runCommandBatch bin (testJobs ()) argvs
   zipWith3
     ((path, _) args run =>
       gradeAssertionCount bin path args (mapErr (e => "\{bin}: \{e}") run))
@@ -440,18 +437,18 @@ testAssertionCounts rows =
    processors available to the process (nproc, else getconf), or 4 when
    that cannot be read.
 
-   > testJobs > 0
+   > testJobs () > 0
    True -}
 export
-testJobs : <Exec, Env "MEDAKA_TEST_JOBS"> Int
-testJobs = match getEnv "MEDAKA_TEST_JOBS" |> flatMap toInt
+testJobs : Unit -> <Exec, Env "MEDAKA_TEST_JOBS"> Int
+testJobs () = match getEnv "MEDAKA_TEST_JOBS" |> flatMap toInt
   Some n if n > 0 => n
-  _ => onlineProcessors
+  _ => onlineProcessors ()
 
 -- The processors this process may run on (`nproc` honours affinity masks and
 -- cgroup quotas), else the online count, else 4.
-onlineProcessors : <Exec> Int
-onlineProcessors =
+onlineProcessors : Unit -> <Exec> Int
+onlineProcessors () =
   findMap
       ((cmd, args) => cpuCountFrom cmd args)
       [("nproc", []), ("getconf", ["_NPROCESSORS_ONLN"])]

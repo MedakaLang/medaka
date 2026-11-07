@@ -1,0 +1,6 @@
+-- `accept_ladder_wild_then_explicit` with the two imports swapped: the
+-- explicit import still answers for `foo` (docs/spec/SHADOW-SEMANTICS.md L2, L3).
+import lib.ladder_a.{foo}
+import lib.ladder_b.*
+
+main = println (foo + 10, bar)

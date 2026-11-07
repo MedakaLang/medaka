@@ -42,8 +42,8 @@ import frontend.ast.{
   UseMember(..),
   useMemberOrigin,
   useMemberLocal,
-  useMemberAlias,
   qualifiedLocal,
+  programIsCore,
   Decl(..),
   ExternDecl(..),
   DataVis(..),
@@ -112,6 +112,7 @@ import frontend.visibility.{
   declExportsCtors,
   subjectOf,
   isSubjectIn,
+  explicitOverWild,
 }
 import list.{drop, findMap}
 import eval.u64_halves as H
@@ -4417,6 +4418,23 @@ coreImportExports : List (String, Ref (Value e)) ->
 coreImportExports privateCells globalCells preludeDecls =
   ModExports (privateCells ++ globalCells) (ctorsByTypeOf preludeDecls)
 
+-- The prelude surface one module's `import core` binds.  A module that carries
+-- the prelude among its own declarations (`programIsCore`: a flat program, the
+-- prelude and its user spliced into one unit) holds core's cells as its own
+-- [localCells], ahead of the shared [coreExports]; desugar's reserved
+-- `import core as $core` reaches the prelude through them.  Any other module
+-- binds the shared surface.
+export
+moduleCoreExports : ModExports (Value e) ->
+  List (String, Ref (Value e)) ->
+  List Decl ->
+  ModExports (Value e)
+moduleCoreExports (ModExports shared ctors) localCells decls =
+  if programIsCore decls then
+    ModExports (localCells ++ shared) (ctorsByTypeOf decls ++ ctors)
+  else
+    ModExports shared ctors
+
 -- B2 (RUN-EFFECTS): evalModulesWith with EXTRA extern bindings installed alongside
 -- externBindings — the seam `medaka run` uses to install real-I/O prims
 -- (ioExternBindings) without them ever reaching the differential-oracle
@@ -4526,7 +4544,11 @@ buildModInfos facts globalFrame runtimeFrame coreExports sibling fulls exportsMa
       -- test sibling.
       -- lint-disable-next-line rule-list-as-set
       let importsByModule = importsMapFor sibling mid fullsSoFar exportsSoFar
-      let imports = importFrameOf coreExports importsByModule decls
+      let imports =
+        importFrameOf
+          (moduleCoreExports coreExports localCells decls)
+          importsByModule
+          decls
       -- #1542: tag this module's env with its own file, LAST in the frame list so
       -- an ordinary name lookup (which resolves in localCells/imports/globalCells
       -- almost always) never reaches it — only the once-per-call lookup in
@@ -4870,14 +4892,16 @@ ctorNamesOfDecl _ = []
 
 -- value names a DUse binds, resolved to the exporting module's exported cells
 -- names resolving to a ctor/global are
--- omitted (reached via the global frame instead).
+-- omitted (reached via the global frame instead).  The frame is read first
+-- match, so a wildcard's cell for a name an explicit import binds is left out
+-- (`explicitOverWild`), not merely ordered after it.
 export
 importFrameOf : ModExports (Value e) ->
   List (String, ModExports (Value e)) ->
   List Decl ->
   List (String, Ref (Value e))
 importFrameOf coreExports exportsMap decls =
-  flatMap (useImports coreExports exportsMap) decls
+  explicitOverWild fst (_ => True) (useImports coreExports exportsMap) decls
 
 useImports : ModExports (Value e) ->
   List (String, ModExports (Value e)) ->
@@ -4892,21 +4916,17 @@ useImports coreExports exportsMap (DUse _ path _) =
 useImports _ _ _ = []
 
 -- `core` is not in `exportsMap` — the prelude is installed straight into the GLOBAL
--- frame, which is why an unaliased core reference needs no import frame entry at all.
--- An ALIAS is the exception: `C.isEven` and a member rename's `even2` are spellings the
--- global frame does not hold, so they get a frame entry pointing at the very same cell.
--- Only the renamed members of a `UseGroup` are bound; a plain member would enter the
--- global cell under its own name and shadow itself.  `resolve.coreAliasNames` decides
--- the same two forms at the scope layer, and the engine may not bind a spelling that
--- layer refuses.
+-- frame, which is why a core reference through no import needs no frame entry.  An
+-- ALIAS needs one: `C.isEven` and a member rename's `even2` are spellings the global
+-- frame does not hold.  A plain member or dotted name gets one too, pointing at the
+-- global frame's own cell: it is an explicit import, so a wildcard's cell of that name
+-- is left out of the frame (`explicitOverWild`).  A core wildcard binds nothing here;
+-- the global frame already holds every one of its names.  `resolve.coreAliasNames`
+-- decides the alias forms at the scope layer, and the engine may not bind a spelling
+-- that layer refuses.
 coreAliasCells : UsePath -> ModExports (Value e) -> List (String, Ref (Value e))
-coreAliasCells (p@(UseAlias _ _)) me = resolveMembers p me
-coreAliasCells (UseGroup quals ms) me =
-  resolveMembers (UseGroup quals (filterList memberIsRenamed ms)) me
-coreAliasCells _ _ = []
-
-memberIsRenamed : UseMember -> Bool
-memberIsRenamed m = isSome (useMemberAlias m)
+coreAliasCells (UseWild _) _ = []
+coreAliasCells p me = resolveMembers p me
 
 -- cells re-exported by a `pub import`.
 --

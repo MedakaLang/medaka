@@ -3,9 +3,11 @@
 -- prints a pass/fail label of its own.
 
 import frontend.ast.{
-  Decl(..), Expr, PropParam(..), Ty(..), TyConOrigin(..), Variant(..),
-  Field(..), ConPayload(..), Pat(..), mapTyFull
+  Decl(..), Expr(..), PropParam(..), Ty(..), TyConOrigin(..), Variant(..),
+  Field(..), ConPayload(..), Pat(..), mapTyFull, preludeQualified,
+  qualifiedLocal
 }
+import frontend.desugar.{mapExpr}
 import tools.target_parse.{targetDesugared}
 import driver.build_cmd.{
   ppBuildReport, makeTempDir, scratchProbeManifest, cleanupTempDir,
@@ -16,7 +18,7 @@ import driver.loader.{entrySearchRoots}
 import support.path.{joinPath, baseOf, dirOf}
 import support.ordmap.{OrdMap, omEmpty, omHasKey, omInsert, omKeys, omLookup}
 import support.util.{joinNl, joinWith, splitNl, listLen, reverseL}
-import string.{toInt}
+import string.{stripPrefix, toInt}
 import tools.probe_transcript.{
   runUnderSeed, Chunk(..), Section(..), chunksOf, decodeValue, endTag,
   firstNonEmptyLine, mintNonce, freshProbeNonce, noncedPrefix, probeNameNonce,
@@ -2211,9 +2213,18 @@ runName nonce i = "\{generatedPrefix nonce}run_\{intToString i}"
 
 fnLines : String -> Int -> List PropParam -> Expr -> List String
 fnLines nonce i ps body = [
-  "\{fnName nonce i} \{joinWith " " (map paramName ps)} = \{exprToString body}",
+  "\{fnName nonce i} \{joinWith " " (map paramName ps)} = \{exprToString (mapExpr (probeCoreRef nonce) body)}",
   "",
 ]
+
+-- The body is desugared, so it reaches the prelude's names through desugar's
+-- reserved alias, which source text cannot spell; the probe imports core under
+-- its own alias instead.
+probeCoreRef : String -> Expr -> Expr
+probeCoreRef nonce (e@(EVar n)) = match stripPrefix (preludeQualified "") n
+  Some bare => EVar (qualifiedLocal (coreAlias nonce) bare)
+  None => e
+probeCoreRef _ e = e
 
 paramName : PropParam -> String
 paramName (PropParam n _ _) = n

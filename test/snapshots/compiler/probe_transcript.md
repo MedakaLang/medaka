@@ -1,5 +1,5 @@
 # META
-source_lines=410
+source_lines=465
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/probe_transcript.mdk — the sentinel-delimited stdout format
@@ -53,14 +53,15 @@ stages=DESUGAR,MARK
 -- target output and quoted operands from being mistaken for result fields.
 --
 -- ── the target's own `main` ─────────────────────────────────────────────────
--- Both probes append a synthesized `main` to the target's VERBATIM source, so
--- a target that defines its own would be a duplicate definition.
--- `renameUserMain` renames the target's top-level `main` definition heads
--- instead: the `main` identifier tokens the lexer places at column 0, which
--- are exactly the clause and signature heads of a top-level binding. The
--- rename is located by tokens, never by printing, so every other byte of the
--- target still reaches the backend unchanged, and a `main` inside a comment,
--- a string or a nested binding is left alone.
+-- Both probes append a synthesized `main` to the target's VERBATIM source, so a target
+-- that defines its own would be a duplicate definition.  `renameUserMain` renames the
+-- target's top-level `main` definition heads instead: the `main` identifier tokens the
+-- lexer places at column 0, which are exactly the clause and signature heads of a
+-- top-level binding.  It also turns the renamed binding into a unit function, because a
+-- top-level value other than `main` must have an empty effect row.  The rename is
+-- located by tokens, never by printing, so every other byte of the target still reaches
+-- the backend unchanged, and a `main` inside a comment, a string or a nested binding is
+-- left alone.
 
 import frontend.lexer.{
   Token(..),
@@ -368,21 +369,29 @@ firstNonEmptyLine (l :: rest)
   | trimAscii l == "" = firstNonEmptyLine rest
   | otherwise = trimAscii l
 
--- What a target's own top-level `main` is renamed to inside a probe.  Nothing
--- in a probe references it, so dead-code elimination drops it.
+-- What a target's own top-level `main` is renamed to inside a probe.  It is
+-- a unit function, not a value: a top-level value other than `main` must have
+-- an empty effect row, and the target's `main` may perform effects.  Nothing
+-- in a probe calls it, so dead-code elimination drops it.
 export
 userMainName : String
 userMainName = "__probe_user_main__"
 
--- `src` with every top-level `main` definition head renamed to
--- `userMainName`; `src` itself when it defines no top-level `main`.
+-- `src` with its top-level `main` turned into the unit function
+-- `userMainName`: a clause head `main ...` becomes `userMainName () ...`, and
+-- `main : T` becomes `userMainName : Unit -> T` with the `Unit ->` right after
+-- the colon wherever the signature's lines break.  `src` itself when it
+-- defines no top-level `main`.
 export
 renameUserMain : String -> String
 renameUserMain src =
+  let starts = lineStartsOf src
   let (toks, spans) = probeTokens src
-  match mainHeadLines (lineStartsOf src) toks spans
+  match mainHeads starts toks spans
     [] => blankShebang src
-    heads => blankShebang (joinNl (renameHeads 1 heads (splitNl src)))
+    heads =>
+      blankShebang
+        (joinNl (applyEdits 1 (flatMap headEdits heads) (splitNl src)))
 
 -- A `#!` line is only valid at offset 0 of a file, and a probe puts its own
 -- lines in front of the target, so the line is emptied (its newline and every
@@ -394,25 +403,72 @@ blankShebang src
     [] => src
   | otherwise = src
 
--- The 1-based lines, ascending, on which a `main` identifier token starts at
--- column 0.
-mainHeadLines : Array Int -> List Token -> List (Int, Int) -> List Int
-mainHeadLines starts ((TIdent "main") :: toks) ((off, _) :: spans) =
-  match offsetToLineColFast starts off
-    (line, 0) => line :: mainHeadLines starts toks spans
-    _ => mainHeadLines starts toks spans
-mainHeadLines starts (_ :: toks) (_ :: spans) = mainHeadLines starts toks spans
-mainHeadLines _ _ _ = []
+-- A column-0 `main` head, by its 1-based line.
+data MainHead =
+  | DefHead Int
+  -- The line and column of the signature's `:`.
+  | SigHead Int Int Int
 
-renameHeads : Int -> List Int -> List String -> List String
-renameHeads _ [] lines = lines
-renameHeads _ _ [] = []
-renameHeads n (h :: hs) (l :: ls)
-  | n == h =
-    userMainName ++ stringSlice 4 (stringLength l) l
-      :: renameHeads (n + 1) hs ls
-  | otherwise = l :: renameHeads (n + 1) (h :: hs) ls
+-- One line's rewrite: the column-0 `main` renamed, followed by a suffix; or
+-- ` Unit ->` inserted after the colon at a column.
+data HeadEdit = RenameMain Int String | UnitArg Int Int
+
+editLine : HeadEdit -> Int
+editLine (RenameMain line _) = line
+editLine (UnitArg line _) = line
+
+-- On a line holding both, the insertion comes first, so its column still
+-- counts from the original `main`.
+headEdits : MainHead -> List HeadEdit
+headEdits (DefHead line) = [RenameMain line " ()"]
+headEdits (SigHead line colonLine col) =
+  [UnitArg colonLine col, RenameMain line ""]
+
+-- The heads, ascending, of every `main` identifier token that starts at
+-- column 0.
+mainHeads : Array Int -> List Token -> List (Int, Int) -> List MainHead
+mainHeads starts ((TIdent "main") :: toks) ((off, _) :: spans) =
+  match offsetToLineColFast starts off
+    (line, 0) =>
+      classifyHead starts line toks spans :: mainHeads starts toks spans
+    _ => mainHeads starts toks spans
+mainHeads starts (_ :: toks) (_ :: spans) = mainHeads starts toks spans
+mainHeads _ _ _ = []
+
+-- The head on `line`, from the first token after its `main` that is not
+-- layout: a colon starts a signature, anything else a clause.
+classifyHead : Array Int -> Int -> List Token -> List (Int, Int) -> MainHead
+classifyHead starts line xs0 xs1 = go xs0 xs1
+  where
+    go (TColon :: _) ((off, _) :: _) = match offsetToLineColFast starts off
+      (colonLine, col) => SigHead line colonLine col
+    go (tok :: toks) (_ :: spans)
+      | isLayout tok = go toks spans
+      | otherwise = DefHead line
+    go _ _ = DefHead line
+
+isLayout : Token -> Bool
+isLayout TNewline = True
+isLayout TIndent = True
+isLayout TDedent = True
+isLayout _ = False
+
+-- [lines] numbered from [n]; each line takes the edits on it in list order.
+applyEdits : Int -> List HeadEdit -> List String -> List String
+applyEdits _ [] lines = lines
+applyEdits _ _ [] = []
+applyEdits n edits (l :: ls) =
+  let edited =
+    fold (acc e => if editLine e == n then applyEdit e acc else acc) l edits
+  edited :: applyEdits (n + 1) (filter (e => editLine e > n) edits) ls
+
+applyEdit : HeadEdit -> String -> String
+applyEdit (RenameMain _ suffix) l =
+  "\{userMainName}\{suffix}\{stringSlice (stringLength "main") (stringLength l) l}"
+applyEdit (UnitArg _ col) l =
+  "\{stringSlice 0 (col + 1) l} Unit ->\{stringSlice (col + 1) (stringLength l) l}"
 # DESUGAR
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "tokenizeWithOffsetPairs" false) (mem "lineStartsOf" false) (mem "offsetToLineColFast" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "reverseL" false) (mem "splitNl" false) (mem "startsWith" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omInsert" false))))
@@ -421,7 +477,7 @@ renameHeads n (h :: hs) (l :: ls)
 (DTypeSig true "testSeedRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Int"))))
 (DFunDef false "testSeedRef" () (EApp (EVar "Ref") (EVar "None")))
 (DTypeSig true "seedEnvArgs" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "seedEnvArgs" (PWild) (EMatch (EUnOp "!" (EVar "testSeedRef")) (arm (PCon "Some" (PVar "n")) () (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "MEDAKA_SEED=")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ""))))) (arm (PCon "None") () (EListLit))))
+(DFunDef false "seedEnvArgs" (PWild) (EMatch (EUnOp "!" (EVar "testSeedRef")) (arm (PCon "Some" (PVar "n")) () (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "MEDAKA_SEED=")) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ""))))) (arm (PCon "None") () (EListLit))))
 (DTypeSig true "runUnderSeed" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "Int") (TyCon "String") (TyCon "String"))))))
 (DFunDef false "runUnderSeed" ((PVar "assignmentsAndCommand")) (EApp (EApp (EVar "runCommand") (ELit (LString "env"))) (EBinOp "++" (EApp (EVar "seedEnvArgs") (ELit LUnit)) (EVar "assignmentsAndCommand"))))
 (DTypeSig true "sentTagOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
@@ -429,13 +485,13 @@ renameHeads n (h :: hs) (l :: ls)
 (DTypeSig true "sentinelLine" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "sentinelLine" ((PVar "prefix") (PVar "tag")) (EBinOp "++" (EVar "prefix") (EVar "tag")))
 (DTypeSig true "noncedPrefix" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
-(DFunDef false "noncedPrefix" ((PVar "base") (PVar "nonce")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "base"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "nonce"))) (ELit (LString "@@ "))))
+(DFunDef false "noncedPrefix" ((PVar "base") (PVar "nonce")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "base"))) (ELit (LString ""))) (EApp (EVar "$core.display") (EVar "nonce"))) (ELit (LString "@@ "))))
 (DTypeSig true "probeNameNonce" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "probeNameNonce" ((PVar "nonce")) (EApp (EApp (EApp (EVar "replaceAll") (ELit (LString "-"))) (ELit (LString "_"))) (EVar "nonce")))
 (DTypeSig true "runtimeAlias" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "runtimeAlias" ((PVar "nonce")) (EBinOp "++" (EBinOp "++" (ELit (LString "NpRuntime_")) (EApp (EVar "display") (EApp (EVar "probeNameNonce") (EVar "nonce")))) (ELit (LString ""))))
+(DFunDef false "runtimeAlias" ((PVar "nonce")) (EBinOp "++" (EBinOp "++" (ELit (LString "NpRuntime_")) (EApp (EVar "$core.display") (EApp (EVar "probeNameNonce") (EVar "nonce")))) (ELit (LString ""))))
 (DTypeSig true "startTag" (TyFun (TyCon "Int") (TyCon "String")))
-(DFunDef false "startTag" ((PVar "i")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ".start"))))
+(DFunDef false "startTag" ((PVar "i")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ".start"))))
 (DTypeSig true "runtimeDependencyPrefix" (TyCon "String"))
 (DFunDef false "runtimeDependencyPrefix" () (ELit (LString "np_runtime_dep_")))
 (DTypeSig true "runtimeDependencyName" (TyFun (TyCon "String") (TyCon "String")))
@@ -447,15 +503,15 @@ renameHeads n (h :: hs) (l :: ls)
 (DTypeSig false "probeTokens" (TyFun (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "Token")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))))
 (DFunDef false "probeTokens" ((PVar "src")) (EMatch (EUnOp "!" (EVar "tokensRef")) (arm (PCon "Some" (PTuple (PVar "key") (PVar "toks"))) ((GBool (EBinOp "==" (EVar "key") (EVar "src")))) (EVar "toks")) (arm PWild () (EBlock (DoLet false false (PVar "toks") (EApp (EVar "tokenizeWithOffsetPairs") (EVar "src"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "tokensRef")) (EApp (EVar "Some") (ETuple (EVar "src") (EVar "toks"))))) (DoExpr (EVar "toks"))))))
 (DTypeSig false "nonceBytes" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyCon "String"))))
-(DFunDef false "nonceBytes" ((PVar "bytes") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "bytes"))) (ELit (LString "")) (EBlock (DoLet false false (PVar "byte") (EApp (EApp (EVar "index") (EVar "bytes")) (EVar "i"))) (DoLet false false (PVar "padding") (EIf (EBinOp "<" (EVar "byte") (ELit (LInt 10))) (ELit (LString "00")) (EIf (EBinOp "<" (EVar "byte") (ELit (LInt 100))) (ELit (LString "0")) (ELit (LString ""))))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "padding") (EApp (EVar "intToString") (EVar "byte"))) (EApp (EApp (EVar "nonceBytes") (EVar "bytes")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))))))
+(DFunDef false "nonceBytes" ((PVar "bytes") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "bytes"))) (ELit (LString "")) (EBlock (DoLet false false (PVar "byte") (EApp (EApp (EVar "$core.index") (EVar "bytes")) (EVar "i"))) (DoLet false false (PVar "padding") (EIf (EBinOp "<" (EVar "byte") (ELit (LInt 10))) (ELit (LString "00")) (EIf (EBinOp "<" (EVar "byte") (ELit (LInt 100))) (ELit (LString "0")) (ELit (LString ""))))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "padding") (EApp (EVar "intToString") (EVar "byte"))) (EApp (EApp (EVar "nonceBytes") (EVar "bytes")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))))))
 (DTypeSig true "freshProbeNonce" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyCon "String")))))
-(DFunDef false "freshProbeNonce" ((PVar "nonce") (PVar "prefixes") (PVar "source")) (EBlock (DoLet false false (PTuple (PVar "tokens") PWild) (EApp (EVar "probeTokens") (EVar "source"))) (DoLet false false (PVar "occupied") (EApp (EApp (EApp (EApp (EVar "occupiedNonceTokens") (EVar "nonce")) (EVar "prefixes")) (EVar "tokens")) (EVar "omEmpty"))) (DoLet false false (PVar "index") (EApp (EApp (EVar "freeNonceIndex") (EVar "occupied")) (ELit (LInt 0)))) (DoExpr (EIf (EBinOp "==" (EVar "index") (ELit (LInt 0))) (EVar "nonce") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "nonce"))) (ELit (LString "_"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "index")))) (ELit (LString "")))))))
+(DFunDef false "freshProbeNonce" ((PVar "nonce") (PVar "prefixes") (PVar "source")) (EBlock (DoLet false false (PTuple (PVar "tokens") PWild) (EApp (EVar "probeTokens") (EVar "source"))) (DoLet false false (PVar "occupied") (EApp (EApp (EApp (EApp (EVar "occupiedNonceTokens") (EVar "nonce")) (EVar "prefixes")) (EVar "tokens")) (EVar "omEmpty"))) (DoLet false false (PVar "index") (EApp (EApp (EVar "freeNonceIndex") (EVar "occupied")) (ELit (LInt 0)))) (DoExpr (EIf (EBinOp "==" (EVar "index") (ELit (LInt 0))) (EVar "nonce") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "nonce"))) (ELit (LString "_"))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EVar "index")))) (ELit (LString "")))))))
 (DTypeSig false "occupiedNonceTokens" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))))
 (DFunDef false "occupiedNonceTokens" ((PVar "nonce") (PVar "prefixes") (PVar "xs0") (PVar "occupied0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "occupied")) (EVar "occupied")) (clause ((PCons (PCon "TIdent" (PVar "name")) (PVar "rest")) (PVar "occupied")) (EApp (EApp (EVar "go") (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "occupiedNonceName") (EVar "nonce")) (EVar "prefixes")) (EVar "name")) (EVar "occupied")))) (clause ((PCons (PCon "TUpper" (PVar "name")) (PVar "rest")) (PVar "occupied")) (EApp (EApp (EVar "go") (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "occupiedNonceName") (EVar "nonce")) (EVar "prefixes")) (EVar "name")) (EVar "occupied")))) (clause ((PCons PWild (PVar "rest")) (PVar "occupied")) (EApp (EApp (EVar "go") (EVar "rest")) (EVar "occupied"))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "occupied0"))))
 (DTypeSig false "occupiedNonceName" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))))
 (DFunDef false "occupiedNonceName" ((PVar "nonce") (PVar "xs0") (PVar "name") (PVar "occupied0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "occupied")) (EVar "occupied")) (clause ((PCons (PVar "prefix") (PVar "rest")) (PVar "occupied")) (EBlock (DoLet false false (PVar "stem") (EBinOp "++" (EVar "prefix") (EVar "nonce"))) (DoExpr (EIf (EApp (EApp (EVar "startsWith") (EVar "stem")) (EVar "name")) (EBlock (DoLet false false (PVar "tail") (EApp (EApp (EApp (EVar "stringSlice") (EApp (EVar "stringLength") (EVar "stem"))) (EApp (EVar "stringLength") (EVar "name"))) (EVar "name"))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "tail") (ELit (LString ""))) (EApp (EApp (EVar "startsWith") (ELit (LString "_"))) (EVar "tail"))) (EBlock (DoLet false false (PVar "used") (EApp (EApp (EApp (EVar "omInsert") (ELit (LString "0"))) (ELit LUnit)) (EVar "occupied"))) (DoLet false false (PVar "chars") (EApp (EVar "stringToChars") (EVar "tail"))) (DoLet false false (PVar "end") (EApp (EApp (EVar "nonceSuffixEnd") (EVar "chars")) (ELit (LInt 1)))) (DoLet false false (PVar "digits") (EIf (EBinOp ">" (EVar "end") (ELit (LInt 20))) (ELit (LString "")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (EVar "end")) (EVar "tail")))) (DoLet false false (PVar "next") (EMatch (EApp (EVar "toInt") (EVar "digits")) (arm (PCon "Some" (PVar "index")) () (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "intToString") (EVar "index"))) (ELit LUnit)) (EVar "used"))) (arm (PCon "None") () (EVar "used")))) (DoExpr (EApp (EApp (EVar "go") (EVar "rest")) (EVar "next")))) (EApp (EApp (EVar "go") (EVar "rest")) (EVar "occupied"))))) (EApp (EApp (EVar "go") (EVar "rest")) (EVar "occupied")))))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "occupied0"))))
 (DTypeSig false "nonceSuffixEnd" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "Int"))))
-(DFunDef false "nonceSuffixEnd" ((PVar "chars") (PVar "i")) (EIf (EBinOp "||" (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "chars"))) (EBinOp ">" (EVar "i") (ELit (LInt 20)))) (EVar "i") (EBlock (DoLet false false (PVar "char") (EApp (EApp (EVar "index") (EVar "chars")) (EVar "i"))) (DoExpr (EIf (EBinOp "&&" (EBinOp ">=" (EVar "char") (ELit (LChar "0"))) (EBinOp "<=" (EVar "char") (ELit (LChar "9")))) (EApp (EApp (EVar "nonceSuffixEnd") (EVar "chars")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "i"))))))
+(DFunDef false "nonceSuffixEnd" ((PVar "chars") (PVar "i")) (EIf (EBinOp "||" (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "chars"))) (EBinOp ">" (EVar "i") (ELit (LInt 20)))) (EVar "i") (EBlock (DoLet false false (PVar "char") (EApp (EApp (EVar "$core.index") (EVar "chars")) (EVar "i"))) (DoExpr (EIf (EBinOp "&&" (EBinOp ">=" (EVar "char") (ELit (LChar "0"))) (EBinOp "<=" (EVar "char") (ELit (LChar "9")))) (EApp (EApp (EVar "nonceSuffixEnd") (EVar "chars")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "i"))))))
 (DTypeSig false "freeNonceIndex" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "freeNonceIndex" ((PVar "occupied") (PVar "index")) (EIf (EApp (EApp (EVar "omHasKey") (EApp (EVar "intToString") (EVar "index"))) (EVar "occupied")) (EApp (EApp (EVar "freeNonceIndex") (EVar "occupied")) (EBinOp "+" (EVar "index") (ELit (LInt 1)))) (EVar "index")))
 (DTypeSig true "endTag" (TyCon "String"))
@@ -476,7 +532,7 @@ renameHeads n (h :: hs) (l :: ls)
 (DTypeSig true "valuePrintExpr" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "valuePrintExpr" ((PVar "expr")) (EApp (EApp (EApp (EVar "valuePrintExprWith") (ELit (LString "putStrLn"))) (ELit (LString "debugStringLit"))) (EVar "expr")))
 (DTypeSig true "valuePrintExprWith" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
-(DFunDef false "valuePrintExprWith" ((PVar "printer") (PVar "encoder") (PVar "expr")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "printer"))) (ELit (LString " ("))) (EApp (EVar "display") (EVar "encoder"))) (ELit (LString " ("))) (EApp (EVar "display") (EVar "expr"))) (ELit (LString "))"))))
+(DFunDef false "valuePrintExprWith" ((PVar "printer") (PVar "encoder") (PVar "expr")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "printer"))) (ELit (LString " ("))) (EApp (EVar "$core.display") (EVar "encoder"))) (ELit (LString " ("))) (EApp (EVar "$core.display") (EVar "expr"))) (ELit (LString "))"))))
 (DTypeSig true "decodeValue" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "decodeValue" ((PList)) (EApp (EVar "Some") (ELit (LString ""))))
 (DFunDef false "decodeValue" ((PCons (PVar "l") (PList))) (EApp (EVar "unquoteLit") (EVar "l")))
@@ -502,18 +558,37 @@ renameHeads n (h :: hs) (l :: ls)
 (DTypeSig true "userMainName" (TyCon "String"))
 (DFunDef false "userMainName" () (ELit (LString "__probe_user_main__")))
 (DTypeSig true "renameUserMain" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "renameUserMain" ((PVar "src")) (EBlock (DoLet false false (PTuple (PVar "toks") (PVar "spans")) (EApp (EVar "probeTokens") (EVar "src"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "mainHeadLines") (EApp (EVar "lineStartsOf") (EVar "src"))) (EVar "toks")) (EVar "spans")) (arm (PList) () (EApp (EVar "blankShebang") (EVar "src"))) (arm (PVar "heads") () (EApp (EVar "blankShebang") (EApp (EVar "joinNl") (EApp (EApp (EApp (EVar "renameHeads") (ELit (LInt 1))) (EVar "heads")) (EApp (EVar "splitNl") (EVar "src"))))))))))
+(DFunDef false "renameUserMain" ((PVar "src")) (EBlock (DoLet false false (PVar "starts") (EApp (EVar "lineStartsOf") (EVar "src"))) (DoLet false false (PTuple (PVar "toks") (PVar "spans")) (EApp (EVar "probeTokens") (EVar "src"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "mainHeads") (EVar "starts")) (EVar "toks")) (EVar "spans")) (arm (PList) () (EApp (EVar "blankShebang") (EVar "src"))) (arm (PVar "heads") () (EApp (EVar "blankShebang") (EApp (EVar "joinNl") (EApp (EApp (EApp (EVar "applyEdits") (ELit (LInt 1))) (EApp (EApp (EVar "flatMap") (EVar "headEdits")) (EVar "heads"))) (EApp (EVar "splitNl") (EVar "src"))))))))))
 (DTypeSig false "blankShebang" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "blankShebang" ((PVar "src")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "#!"))) (EVar "src")) (EMatch (EApp (EVar "splitNl") (EVar "src")) (arm (PCons PWild (PVar "rest")) () (EApp (EVar "joinNl") (EBinOp "::" (ELit (LString "")) (EVar "rest")))) (arm (PList) () (EVar "src"))) (EIf (EVar "otherwise") (EVar "src") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "mainHeadLines" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyApp (TyCon "List") (TyCon "Int"))))))
-(DFunDef false "mainHeadLines" ((PVar "starts") (PCons (PCon "TIdent" (PLit (LString "main"))) (PVar "toks")) (PCons (PTuple (PVar "off") PWild) (PVar "spans"))) (EMatch (EApp (EApp (EVar "offsetToLineColFast") (EVar "starts")) (EVar "off")) (arm (PTuple (PVar "line") (PLit (LInt 0))) () (EBinOp "::" (EVar "line") (EApp (EApp (EApp (EVar "mainHeadLines") (EVar "starts")) (EVar "toks")) (EVar "spans")))) (arm PWild () (EApp (EApp (EApp (EVar "mainHeadLines") (EVar "starts")) (EVar "toks")) (EVar "spans")))))
-(DFunDef false "mainHeadLines" ((PVar "starts") (PCons PWild (PVar "toks")) (PCons PWild (PVar "spans"))) (EApp (EApp (EApp (EVar "mainHeadLines") (EVar "starts")) (EVar "toks")) (EVar "spans")))
-(DFunDef false "mainHeadLines" (PWild PWild PWild) (EListLit))
-(DTypeSig false "renameHeads" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "renameHeads" (PWild (PList) (PVar "lines")) (EVar "lines"))
-(DFunDef false "renameHeads" (PWild PWild (PList)) (EListLit))
-(DFunDef false "renameHeads" ((PVar "n") (PCons (PVar "h") (PVar "hs")) (PCons (PVar "l") (PVar "ls"))) (EIf (EBinOp "==" (EVar "n") (EVar "h")) (EBinOp "::" (EBinOp "++" (EVar "userMainName") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 4))) (EApp (EVar "stringLength") (EVar "l"))) (EVar "l"))) (EApp (EApp (EApp (EVar "renameHeads") (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EVar "hs")) (EVar "ls"))) (EIf (EVar "otherwise") (EBinOp "::" (EVar "l") (EApp (EApp (EApp (EVar "renameHeads") (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EBinOp "::" (EVar "h") (EVar "hs"))) (EVar "ls"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DData Private "MainHead" () ((variant "DefHead" (ConPos (TyCon "Int"))) (variant "SigHead" (ConPos (TyCon "Int") (TyCon "Int") (TyCon "Int")))) ())
+(DData Private "HeadEdit" () ((variant "RenameMain" (ConPos (TyCon "Int") (TyCon "String"))) (variant "UnitArg" (ConPos (TyCon "Int") (TyCon "Int")))) ())
+(DTypeSig false "editLine" (TyFun (TyCon "HeadEdit") (TyCon "Int")))
+(DFunDef false "editLine" ((PCon "RenameMain" (PVar "line") PWild)) (EVar "line"))
+(DFunDef false "editLine" ((PCon "UnitArg" (PVar "line") PWild)) (EVar "line"))
+(DTypeSig false "headEdits" (TyFun (TyCon "MainHead") (TyApp (TyCon "List") (TyCon "HeadEdit"))))
+(DFunDef false "headEdits" ((PCon "DefHead" (PVar "line"))) (EListLit (EApp (EApp (EVar "RenameMain") (EVar "line")) (ELit (LString " ()")))))
+(DFunDef false "headEdits" ((PCon "SigHead" (PVar "line") (PVar "colonLine") (PVar "col"))) (EListLit (EApp (EApp (EVar "UnitArg") (EVar "colonLine")) (EVar "col")) (EApp (EApp (EVar "RenameMain") (EVar "line")) (ELit (LString "")))))
+(DTypeSig false "mainHeads" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyApp (TyCon "List") (TyCon "MainHead"))))))
+(DFunDef false "mainHeads" ((PVar "starts") (PCons (PCon "TIdent" (PLit (LString "main"))) (PVar "toks")) (PCons (PTuple (PVar "off") PWild) (PVar "spans"))) (EMatch (EApp (EApp (EVar "offsetToLineColFast") (EVar "starts")) (EVar "off")) (arm (PTuple (PVar "line") (PLit (LInt 0))) () (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "classifyHead") (EVar "starts")) (EVar "line")) (EVar "toks")) (EVar "spans")) (EApp (EApp (EApp (EVar "mainHeads") (EVar "starts")) (EVar "toks")) (EVar "spans")))) (arm PWild () (EApp (EApp (EApp (EVar "mainHeads") (EVar "starts")) (EVar "toks")) (EVar "spans")))))
+(DFunDef false "mainHeads" ((PVar "starts") (PCons PWild (PVar "toks")) (PCons PWild (PVar "spans"))) (EApp (EApp (EApp (EVar "mainHeads") (EVar "starts")) (EVar "toks")) (EVar "spans")))
+(DFunDef false "mainHeads" (PWild PWild PWild) (EListLit))
+(DTypeSig false "classifyHead" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyCon "MainHead"))))))
+(DFunDef false "classifyHead" ((PVar "starts") (PVar "line") (PVar "xs0") (PVar "xs1")) (ELetGroup ((lgb "go" (clause ((PCons (PCon "TColon") PWild) (PCons (PTuple (PVar "off") PWild) PWild)) (EMatch (EApp (EApp (EVar "offsetToLineColFast") (EVar "starts")) (EVar "off")) (arm (PTuple (PVar "colonLine") (PVar "col")) () (EApp (EApp (EApp (EVar "SigHead") (EVar "line")) (EVar "colonLine")) (EVar "col"))))) (clause ((PCons (PVar "tok") (PVar "toks")) (PCons PWild (PVar "spans"))) (EIf (EApp (EVar "isLayout") (EVar "tok")) (EApp (EApp (EVar "go") (EVar "toks")) (EVar "spans")) (EIf (EVar "otherwise") (EApp (EVar "DefHead") (EVar "line")) (EApp (EVar "__fallthrough__") (ELit LUnit))))) (clause (PWild PWild) (EApp (EVar "DefHead") (EVar "line"))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "xs1"))))
+(DTypeSig false "isLayout" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isLayout" ((PCon "TNewline")) (EVar "True"))
+(DFunDef false "isLayout" ((PCon "TIndent")) (EVar "True"))
+(DFunDef false "isLayout" ((PCon "TDedent")) (EVar "True"))
+(DFunDef false "isLayout" (PWild) (EVar "False"))
+(DTypeSig false "applyEdits" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "HeadEdit")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "applyEdits" (PWild (PList) (PVar "lines")) (EVar "lines"))
+(DFunDef false "applyEdits" (PWild PWild (PList)) (EListLit))
+(DFunDef false "applyEdits" ((PVar "n") (PVar "edits") (PCons (PVar "l") (PVar "ls"))) (EBlock (DoLet false false (PVar "edited") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "e")) (EIf (EBinOp "==" (EApp (EVar "editLine") (EVar "e")) (EVar "n")) (EApp (EApp (EVar "applyEdit") (EVar "e")) (EVar "acc")) (EVar "acc")))) (EVar "l")) (EVar "edits"))) (DoExpr (EBinOp "::" (EVar "edited") (EApp (EApp (EApp (EVar "applyEdits") (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EApp (EApp (EVar "filter") (ELam ((PVar "e")) (EBinOp ">" (EApp (EVar "editLine") (EVar "e")) (EVar "n")))) (EVar "edits"))) (EVar "ls"))))))
+(DTypeSig false "applyEdit" (TyFun (TyCon "HeadEdit") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "applyEdit" ((PCon "RenameMain" PWild (PVar "suffix")) (PVar "l")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "userMainName"))) (ELit (LString ""))) (EApp (EVar "$core.display") (EVar "suffix"))) (ELit (LString ""))) (EApp (EVar "$core.display") (EApp (EApp (EApp (EVar "stringSlice") (EApp (EVar "stringLength") (ELit (LString "main")))) (EApp (EVar "stringLength") (EVar "l"))) (EVar "l")))) (ELit (LString ""))))
+(DFunDef false "applyEdit" ((PCon "UnitArg" PWild (PVar "col")) (PVar "l")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "+" (EVar "col") (ELit (LInt 1)))) (EVar "l")))) (ELit (LString " Unit ->"))) (EApp (EVar "$core.display") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "col") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "l"))) (EVar "l")))) (ELit (LString ""))))
 # MARK
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "tokenizeWithOffsetPairs" false) (mem "lineStartsOf" false) (mem "offsetToLineColFast" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "reverseL" false) (mem "splitNl" false) (mem "startsWith" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omInsert" false))))
@@ -522,7 +597,7 @@ renameHeads n (h :: hs) (l :: ls)
 (DTypeSig true "testSeedRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Int"))))
 (DFunDef false "testSeedRef" () (EApp (EVar "Ref") (EVar "None")))
 (DTypeSig true "seedEnvArgs" (TyFun (TyCon "Unit") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "seedEnvArgs" (PWild) (EMatch (EUnOp "!" (EVar "testSeedRef")) (arm (PCon "Some" (PVar "n")) () (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "MEDAKA_SEED=")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ""))))) (arm (PCon "None") () (EListLit))))
+(DFunDef false "seedEnvArgs" (PWild) (EMatch (EUnOp "!" (EVar "testSeedRef")) (arm (PCon "Some" (PVar "n")) () (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "MEDAKA_SEED=")) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ""))))) (arm (PCon "None") () (EListLit))))
 (DTypeSig true "runUnderSeed" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "Int") (TyCon "String") (TyCon "String"))))))
 (DFunDef false "runUnderSeed" ((PVar "assignmentsAndCommand")) (EApp (EApp (EVar "runCommand") (ELit (LString "env"))) (EBinOp "++" (EApp (EVar "seedEnvArgs") (ELit LUnit)) (EVar "assignmentsAndCommand"))))
 (DTypeSig true "sentTagOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
@@ -530,13 +605,13 @@ renameHeads n (h :: hs) (l :: ls)
 (DTypeSig true "sentinelLine" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "sentinelLine" ((PVar "prefix") (PVar "tag")) (EBinOp "++" (EVar "prefix") (EVar "tag")))
 (DTypeSig true "noncedPrefix" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
-(DFunDef false "noncedPrefix" ((PVar "base") (PVar "nonce")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "base"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "nonce"))) (ELit (LString "@@ "))))
+(DFunDef false "noncedPrefix" ((PVar "base") (PVar "nonce")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "base"))) (ELit (LString ""))) (EApp (EVar "$core.display") (EVar "nonce"))) (ELit (LString "@@ "))))
 (DTypeSig true "probeNameNonce" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "probeNameNonce" ((PVar "nonce")) (EApp (EApp (EApp (EVar "replaceAll") (ELit (LString "-"))) (ELit (LString "_"))) (EVar "nonce")))
 (DTypeSig true "runtimeAlias" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "runtimeAlias" ((PVar "nonce")) (EBinOp "++" (EBinOp "++" (ELit (LString "NpRuntime_")) (EApp (EMethodRef "display") (EApp (EVar "probeNameNonce") (EVar "nonce")))) (ELit (LString ""))))
+(DFunDef false "runtimeAlias" ((PVar "nonce")) (EBinOp "++" (EBinOp "++" (ELit (LString "NpRuntime_")) (EApp (EVar "$core.display") (EApp (EVar "probeNameNonce") (EVar "nonce")))) (ELit (LString ""))))
 (DTypeSig true "startTag" (TyFun (TyCon "Int") (TyCon "String")))
-(DFunDef false "startTag" ((PVar "i")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ".start"))))
+(DFunDef false "startTag" ((PVar "i")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ".start"))))
 (DTypeSig true "runtimeDependencyPrefix" (TyCon "String"))
 (DFunDef false "runtimeDependencyPrefix" () (ELit (LString "np_runtime_dep_")))
 (DTypeSig true "runtimeDependencyName" (TyFun (TyCon "String") (TyCon "String")))
@@ -548,15 +623,15 @@ renameHeads n (h :: hs) (l :: ls)
 (DTypeSig false "probeTokens" (TyFun (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "Token")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))))
 (DFunDef false "probeTokens" ((PVar "src")) (EMatch (EUnOp "!" (EVar "tokensRef")) (arm (PCon "Some" (PTuple (PVar "key") (PVar "toks"))) ((GBool (EBinOp "==" (EVar "key") (EVar "src")))) (EVar "toks")) (arm PWild () (EBlock (DoLet false false (PVar "toks") (EApp (EVar "tokenizeWithOffsetPairs") (EVar "src"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "tokensRef")) (EApp (EVar "Some") (ETuple (EVar "src") (EVar "toks"))))) (DoExpr (EVar "toks"))))))
 (DTypeSig false "nonceBytes" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyCon "String"))))
-(DFunDef false "nonceBytes" ((PVar "bytes") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "bytes"))) (ELit (LString "")) (EBlock (DoLet false false (PVar "byte") (EApp (EApp (EMethodRef "index") (EVar "bytes")) (EVar "i"))) (DoLet false false (PVar "padding") (EIf (EBinOp "<" (EVar "byte") (ELit (LInt 10))) (ELit (LString "00")) (EIf (EBinOp "<" (EVar "byte") (ELit (LInt 100))) (ELit (LString "0")) (ELit (LString ""))))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "padding") (EApp (EVar "intToString") (EVar "byte"))) (EApp (EApp (EVar "nonceBytes") (EVar "bytes")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))))))
+(DFunDef false "nonceBytes" ((PVar "bytes") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "bytes"))) (ELit (LString "")) (EBlock (DoLet false false (PVar "byte") (EApp (EApp (EVar "$core.index") (EVar "bytes")) (EVar "i"))) (DoLet false false (PVar "padding") (EIf (EBinOp "<" (EVar "byte") (ELit (LInt 10))) (ELit (LString "00")) (EIf (EBinOp "<" (EVar "byte") (ELit (LInt 100))) (ELit (LString "0")) (ELit (LString ""))))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "padding") (EApp (EVar "intToString") (EVar "byte"))) (EApp (EApp (EVar "nonceBytes") (EVar "bytes")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))))))
 (DTypeSig true "freshProbeNonce" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyCon "String")))))
-(DFunDef false "freshProbeNonce" ((PVar "nonce") (PVar "prefixes") (PVar "source")) (EBlock (DoLet false false (PTuple (PVar "tokens") PWild) (EApp (EVar "probeTokens") (EVar "source"))) (DoLet false false (PVar "occupied") (EApp (EApp (EApp (EApp (EVar "occupiedNonceTokens") (EVar "nonce")) (EVar "prefixes")) (EVar "tokens")) (EVar "omEmpty"))) (DoLet false false (PVar "index") (EApp (EApp (EVar "freeNonceIndex") (EVar "occupied")) (ELit (LInt 0)))) (DoExpr (EIf (EBinOp "==" (EMethodRef "index") (ELit (LInt 0))) (EVar "nonce") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "nonce"))) (ELit (LString "_"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EMethodRef "index")))) (ELit (LString "")))))))
+(DFunDef false "freshProbeNonce" ((PVar "nonce") (PVar "prefixes") (PVar "source")) (EBlock (DoLet false false (PTuple (PVar "tokens") PWild) (EApp (EVar "probeTokens") (EVar "source"))) (DoLet false false (PVar "occupied") (EApp (EApp (EApp (EApp (EVar "occupiedNonceTokens") (EVar "nonce")) (EVar "prefixes")) (EVar "tokens")) (EVar "omEmpty"))) (DoLet false false (PVar "index") (EApp (EApp (EVar "freeNonceIndex") (EVar "occupied")) (ELit (LInt 0)))) (DoExpr (EIf (EBinOp "==" (EMethodRef "index") (ELit (LInt 0))) (EVar "nonce") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "nonce"))) (ELit (LString "_"))) (EApp (EVar "$core.display") (EApp (EVar "intToString") (EMethodRef "index")))) (ELit (LString "")))))))
 (DTypeSig false "occupiedNonceTokens" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))))
 (DFunDef false "occupiedNonceTokens" ((PVar "nonce") (PVar "prefixes") (PVar "xs0") (PVar "occupied0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "occupied")) (EVar "occupied")) (clause ((PCons (PCon "TIdent" (PVar "name")) (PVar "rest")) (PVar "occupied")) (EApp (EApp (EVar "go") (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "occupiedNonceName") (EVar "nonce")) (EVar "prefixes")) (EVar "name")) (EVar "occupied")))) (clause ((PCons (PCon "TUpper" (PVar "name")) (PVar "rest")) (PVar "occupied")) (EApp (EApp (EVar "go") (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "occupiedNonceName") (EVar "nonce")) (EVar "prefixes")) (EVar "name")) (EVar "occupied")))) (clause ((PCons PWild (PVar "rest")) (PVar "occupied")) (EApp (EApp (EVar "go") (EVar "rest")) (EVar "occupied"))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "occupied0"))))
 (DTypeSig false "occupiedNonceName" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))))
 (DFunDef false "occupiedNonceName" ((PVar "nonce") (PVar "xs0") (PVar "name") (PVar "occupied0")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "occupied")) (EVar "occupied")) (clause ((PCons (PVar "prefix") (PVar "rest")) (PVar "occupied")) (EBlock (DoLet false false (PVar "stem") (EBinOp "++" (EVar "prefix") (EVar "nonce"))) (DoExpr (EIf (EApp (EApp (EVar "startsWith") (EVar "stem")) (EVar "name")) (EBlock (DoLet false false (PVar "tail") (EApp (EApp (EApp (EVar "stringSlice") (EApp (EVar "stringLength") (EVar "stem"))) (EApp (EVar "stringLength") (EVar "name"))) (EVar "name"))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "tail") (ELit (LString ""))) (EApp (EApp (EVar "startsWith") (ELit (LString "_"))) (EVar "tail"))) (EBlock (DoLet false false (PVar "used") (EApp (EApp (EApp (EVar "omInsert") (ELit (LString "0"))) (ELit LUnit)) (EVar "occupied"))) (DoLet false false (PVar "chars") (EApp (EVar "stringToChars") (EVar "tail"))) (DoLet false false (PVar "end") (EApp (EApp (EVar "nonceSuffixEnd") (EVar "chars")) (ELit (LInt 1)))) (DoLet false false (PVar "digits") (EIf (EBinOp ">" (EVar "end") (ELit (LInt 20))) (ELit (LString "")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (EVar "end")) (EVar "tail")))) (DoLet false false (PVar "next") (EMatch (EApp (EVar "toInt") (EVar "digits")) (arm (PCon "Some" (PVar "index")) () (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "intToString") (EMethodRef "index"))) (ELit LUnit)) (EVar "used"))) (arm (PCon "None") () (EVar "used")))) (DoExpr (EApp (EApp (EVar "go") (EVar "rest")) (EVar "next")))) (EApp (EApp (EVar "go") (EVar "rest")) (EVar "occupied"))))) (EApp (EApp (EVar "go") (EVar "rest")) (EVar "occupied")))))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "occupied0"))))
 (DTypeSig false "nonceSuffixEnd" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "Int"))))
-(DFunDef false "nonceSuffixEnd" ((PVar "chars") (PVar "i")) (EIf (EBinOp "||" (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "chars"))) (EBinOp ">" (EVar "i") (ELit (LInt 20)))) (EVar "i") (EBlock (DoLet false false (PVar "char") (EApp (EApp (EMethodRef "index") (EVar "chars")) (EVar "i"))) (DoExpr (EIf (EBinOp "&&" (EBinOp ">=" (EVar "char") (ELit (LChar "0"))) (EBinOp "<=" (EVar "char") (ELit (LChar "9")))) (EApp (EApp (EVar "nonceSuffixEnd") (EVar "chars")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "i"))))))
+(DFunDef false "nonceSuffixEnd" ((PVar "chars") (PVar "i")) (EIf (EBinOp "||" (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "chars"))) (EBinOp ">" (EVar "i") (ELit (LInt 20)))) (EVar "i") (EBlock (DoLet false false (PVar "char") (EApp (EApp (EVar "$core.index") (EVar "chars")) (EVar "i"))) (DoExpr (EIf (EBinOp "&&" (EBinOp ">=" (EVar "char") (ELit (LChar "0"))) (EBinOp "<=" (EVar "char") (ELit (LChar "9")))) (EApp (EApp (EVar "nonceSuffixEnd") (EVar "chars")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "i"))))))
 (DTypeSig false "freeNonceIndex" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "freeNonceIndex" ((PVar "occupied") (PVar "index")) (EIf (EApp (EApp (EVar "omHasKey") (EApp (EVar "intToString") (EMethodRef "index"))) (EVar "occupied")) (EApp (EApp (EVar "freeNonceIndex") (EVar "occupied")) (EBinOp "+" (EMethodRef "index") (ELit (LInt 1)))) (EMethodRef "index")))
 (DTypeSig true "endTag" (TyCon "String"))
@@ -577,7 +652,7 @@ renameHeads n (h :: hs) (l :: ls)
 (DTypeSig true "valuePrintExpr" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "valuePrintExpr" ((PVar "expr")) (EApp (EApp (EApp (EVar "valuePrintExprWith") (ELit (LString "putStrLn"))) (ELit (LString "debugStringLit"))) (EVar "expr")))
 (DTypeSig true "valuePrintExprWith" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
-(DFunDef false "valuePrintExprWith" ((PVar "printer") (PVar "encoder") (PVar "expr")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "printer"))) (ELit (LString " ("))) (EApp (EMethodRef "display") (EVar "encoder"))) (ELit (LString " ("))) (EApp (EMethodRef "display") (EVar "expr"))) (ELit (LString "))"))))
+(DFunDef false "valuePrintExprWith" ((PVar "printer") (PVar "encoder") (PVar "expr")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "printer"))) (ELit (LString " ("))) (EApp (EVar "$core.display") (EVar "encoder"))) (ELit (LString " ("))) (EApp (EVar "$core.display") (EVar "expr"))) (ELit (LString "))"))))
 (DTypeSig true "decodeValue" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "decodeValue" ((PList)) (EApp (EVar "Some") (ELit (LString ""))))
 (DFunDef false "decodeValue" ((PCons (PVar "l") (PList))) (EApp (EVar "unquoteLit") (EVar "l")))
@@ -603,14 +678,32 @@ renameHeads n (h :: hs) (l :: ls)
 (DTypeSig true "userMainName" (TyCon "String"))
 (DFunDef false "userMainName" () (ELit (LString "__probe_user_main__")))
 (DTypeSig true "renameUserMain" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "renameUserMain" ((PVar "src")) (EBlock (DoLet false false (PTuple (PVar "toks") (PVar "spans")) (EApp (EVar "probeTokens") (EVar "src"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "mainHeadLines") (EApp (EVar "lineStartsOf") (EVar "src"))) (EVar "toks")) (EVar "spans")) (arm (PList) () (EApp (EVar "blankShebang") (EVar "src"))) (arm (PVar "heads") () (EApp (EVar "blankShebang") (EApp (EVar "joinNl") (EApp (EApp (EApp (EVar "renameHeads") (ELit (LInt 1))) (EVar "heads")) (EApp (EVar "splitNl") (EVar "src"))))))))))
+(DFunDef false "renameUserMain" ((PVar "src")) (EBlock (DoLet false false (PVar "starts") (EApp (EVar "lineStartsOf") (EVar "src"))) (DoLet false false (PTuple (PVar "toks") (PVar "spans")) (EApp (EVar "probeTokens") (EVar "src"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "mainHeads") (EVar "starts")) (EVar "toks")) (EVar "spans")) (arm (PList) () (EApp (EVar "blankShebang") (EVar "src"))) (arm (PVar "heads") () (EApp (EVar "blankShebang") (EApp (EVar "joinNl") (EApp (EApp (EApp (EVar "applyEdits") (ELit (LInt 1))) (EApp (EApp (EDictApp "flatMap") (EVar "headEdits")) (EVar "heads"))) (EApp (EVar "splitNl") (EVar "src"))))))))))
 (DTypeSig false "blankShebang" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "blankShebang" ((PVar "src")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "#!"))) (EVar "src")) (EMatch (EApp (EVar "splitNl") (EVar "src")) (arm (PCons PWild (PVar "rest")) () (EApp (EVar "joinNl") (EBinOp "::" (ELit (LString "")) (EVar "rest")))) (arm (PList) () (EVar "src"))) (EIf (EVar "otherwise") (EVar "src") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "mainHeadLines" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyApp (TyCon "List") (TyCon "Int"))))))
-(DFunDef false "mainHeadLines" ((PVar "starts") (PCons (PCon "TIdent" (PLit (LString "main"))) (PVar "toks")) (PCons (PTuple (PVar "off") PWild) (PVar "spans"))) (EMatch (EApp (EApp (EVar "offsetToLineColFast") (EVar "starts")) (EVar "off")) (arm (PTuple (PVar "line") (PLit (LInt 0))) () (EBinOp "::" (EVar "line") (EApp (EApp (EApp (EVar "mainHeadLines") (EVar "starts")) (EVar "toks")) (EVar "spans")))) (arm PWild () (EApp (EApp (EApp (EVar "mainHeadLines") (EVar "starts")) (EVar "toks")) (EVar "spans")))))
-(DFunDef false "mainHeadLines" ((PVar "starts") (PCons PWild (PVar "toks")) (PCons PWild (PVar "spans"))) (EApp (EApp (EApp (EVar "mainHeadLines") (EVar "starts")) (EVar "toks")) (EVar "spans")))
-(DFunDef false "mainHeadLines" (PWild PWild PWild) (EListLit))
-(DTypeSig false "renameHeads" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "renameHeads" (PWild (PList) (PVar "lines")) (EVar "lines"))
-(DFunDef false "renameHeads" (PWild PWild (PList)) (EListLit))
-(DFunDef false "renameHeads" ((PVar "n") (PCons (PVar "h") (PVar "hs")) (PCons (PVar "l") (PVar "ls"))) (EIf (EBinOp "==" (EVar "n") (EVar "h")) (EBinOp "::" (EBinOp "++" (EVar "userMainName") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 4))) (EApp (EVar "stringLength") (EVar "l"))) (EVar "l"))) (EApp (EApp (EApp (EVar "renameHeads") (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EVar "hs")) (EVar "ls"))) (EIf (EVar "otherwise") (EBinOp "::" (EVar "l") (EApp (EApp (EApp (EVar "renameHeads") (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EBinOp "::" (EVar "h") (EVar "hs"))) (EVar "ls"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DData Private "MainHead" () ((variant "DefHead" (ConPos (TyCon "Int"))) (variant "SigHead" (ConPos (TyCon "Int") (TyCon "Int") (TyCon "Int")))) ())
+(DData Private "HeadEdit" () ((variant "RenameMain" (ConPos (TyCon "Int") (TyCon "String"))) (variant "UnitArg" (ConPos (TyCon "Int") (TyCon "Int")))) ())
+(DTypeSig false "editLine" (TyFun (TyCon "HeadEdit") (TyCon "Int")))
+(DFunDef false "editLine" ((PCon "RenameMain" (PVar "line") PWild)) (EVar "line"))
+(DFunDef false "editLine" ((PCon "UnitArg" (PVar "line") PWild)) (EVar "line"))
+(DTypeSig false "headEdits" (TyFun (TyCon "MainHead") (TyApp (TyCon "List") (TyCon "HeadEdit"))))
+(DFunDef false "headEdits" ((PCon "DefHead" (PVar "line"))) (EListLit (EApp (EApp (EVar "RenameMain") (EVar "line")) (ELit (LString " ()")))))
+(DFunDef false "headEdits" ((PCon "SigHead" (PVar "line") (PVar "colonLine") (PVar "col"))) (EListLit (EApp (EApp (EVar "UnitArg") (EVar "colonLine")) (EVar "col")) (EApp (EApp (EVar "RenameMain") (EVar "line")) (ELit (LString "")))))
+(DTypeSig false "mainHeads" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyApp (TyCon "List") (TyCon "MainHead"))))))
+(DFunDef false "mainHeads" ((PVar "starts") (PCons (PCon "TIdent" (PLit (LString "main"))) (PVar "toks")) (PCons (PTuple (PVar "off") PWild) (PVar "spans"))) (EMatch (EApp (EApp (EVar "offsetToLineColFast") (EVar "starts")) (EVar "off")) (arm (PTuple (PVar "line") (PLit (LInt 0))) () (EBinOp "::" (EApp (EApp (EApp (EApp (EVar "classifyHead") (EVar "starts")) (EVar "line")) (EVar "toks")) (EVar "spans")) (EApp (EApp (EApp (EVar "mainHeads") (EVar "starts")) (EVar "toks")) (EVar "spans")))) (arm PWild () (EApp (EApp (EApp (EVar "mainHeads") (EVar "starts")) (EVar "toks")) (EVar "spans")))))
+(DFunDef false "mainHeads" ((PVar "starts") (PCons PWild (PVar "toks")) (PCons PWild (PVar "spans"))) (EApp (EApp (EApp (EVar "mainHeads") (EVar "starts")) (EVar "toks")) (EVar "spans")))
+(DFunDef false "mainHeads" (PWild PWild PWild) (EListLit))
+(DTypeSig false "classifyHead" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyCon "MainHead"))))))
+(DFunDef false "classifyHead" ((PVar "starts") (PVar "line") (PVar "xs0") (PVar "xs1")) (ELetGroup ((lgb "go" (clause ((PCons (PCon "TColon") PWild) (PCons (PTuple (PVar "off") PWild) PWild)) (EMatch (EApp (EApp (EVar "offsetToLineColFast") (EVar "starts")) (EVar "off")) (arm (PTuple (PVar "colonLine") (PVar "col")) () (EApp (EApp (EApp (EVar "SigHead") (EVar "line")) (EVar "colonLine")) (EVar "col"))))) (clause ((PCons (PVar "tok") (PVar "toks")) (PCons PWild (PVar "spans"))) (EIf (EApp (EVar "isLayout") (EVar "tok")) (EApp (EApp (EVar "go") (EVar "toks")) (EVar "spans")) (EIf (EVar "otherwise") (EApp (EVar "DefHead") (EVar "line")) (EApp (EVar "__fallthrough__") (ELit LUnit))))) (clause (PWild PWild) (EApp (EVar "DefHead") (EVar "line"))))) (EApp (EApp (EVar "go") (EVar "xs0")) (EVar "xs1"))))
+(DTypeSig false "isLayout" (TyFun (TyCon "Token") (TyCon "Bool")))
+(DFunDef false "isLayout" ((PCon "TNewline")) (EVar "True"))
+(DFunDef false "isLayout" ((PCon "TIndent")) (EVar "True"))
+(DFunDef false "isLayout" ((PCon "TDedent")) (EVar "True"))
+(DFunDef false "isLayout" (PWild) (EVar "False"))
+(DTypeSig false "applyEdits" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "HeadEdit")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "applyEdits" (PWild (PList) (PVar "lines")) (EVar "lines"))
+(DFunDef false "applyEdits" (PWild PWild (PList)) (EListLit))
+(DFunDef false "applyEdits" ((PVar "n") (PVar "edits") (PCons (PVar "l") (PVar "ls"))) (EBlock (DoLet false false (PVar "edited") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "e")) (EIf (EBinOp "==" (EApp (EVar "editLine") (EVar "e")) (EVar "n")) (EApp (EApp (EVar "applyEdit") (EVar "e")) (EVar "acc")) (EVar "acc")))) (EVar "l")) (EVar "edits"))) (DoExpr (EBinOp "::" (EVar "edited") (EApp (EApp (EApp (EVar "applyEdits") (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "e")) (EBinOp ">" (EApp (EVar "editLine") (EVar "e")) (EVar "n")))) (EVar "edits"))) (EVar "ls"))))))
+(DTypeSig false "applyEdit" (TyFun (TyCon "HeadEdit") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "applyEdit" ((PCon "RenameMain" PWild (PVar "suffix")) (PVar "l")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EVar "userMainName"))) (ELit (LString ""))) (EApp (EVar "$core.display") (EVar "suffix"))) (ELit (LString ""))) (EApp (EVar "$core.display") (EApp (EApp (EApp (EVar "stringSlice") (EApp (EVar "stringLength") (ELit (LString "main")))) (EApp (EVar "stringLength") (EVar "l"))) (EVar "l")))) (ELit (LString ""))))
+(DFunDef false "applyEdit" ((PCon "UnitArg" PWild (PVar "col")) (PVar "l")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "$core.display") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "+" (EVar "col") (ELit (LInt 1)))) (EVar "l")))) (ELit (LString " Unit ->"))) (EApp (EVar "$core.display") (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "col") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "l"))) (EVar "l")))) (ELit (LString ""))))

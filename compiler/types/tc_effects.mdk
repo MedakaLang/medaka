@@ -998,7 +998,7 @@ argumentAuthority _env top None xt = typeAuthority top xt
 
 -- Record, for a report of a bound this argument fails (`boundFailureMsg`),
 -- the authority variables it extends on the right, and those it would reach
--- through an interpolated part were `display` the prelude's.
+-- through a written `display` call were `display` the prelude's.
 noteArgumentShape : TcEnv -> Param -> Bool -> Authority -> Expr -> Mono -> Unit
 noteArgumentShape env top prelude q e xt =
   let lets = envAlphaLets env
@@ -1042,8 +1042,9 @@ leftmostPart (e@(EBinOp op a b _))
   | otherwise = e
 leftmostPart e = e
 
--- The operands of the `display` applications a concatenation's parts are,
--- the parts an interpolation converts.
+-- The operands of the written `display` applications a concatenation's parts
+-- are.  An interpolated part applies the prelude's through the prelude alias,
+-- which no binder hides, so it is not one of them.
 displayOperands : Expr -> List Expr
 displayOperands (ELoc _ e) = displayOperands e
 displayOperands (EBinOp op a b _)
@@ -1066,9 +1067,9 @@ isEmptyStringLit (ELoc _ e) = isEmptyStringLit e
 isEmptyStringLit (ELit (LString s)) = s == ""
 isEmptyStringLit _ = False
 
--- Whether `display` in [env] is the prelude `Display` method, the one an
--- interpolated part applies: no local binder, no standalone this module
--- defines or imports, and the method's interface is the prelude's.
+-- Whether a written `display` in [env] is the prelude `Display` method: no
+-- local binder, no standalone this module defines or imports, and the
+-- method's interface is the prelude's.
 displayIsPrelude : TcEnv -> Bool
 displayIsPrelude env =
   not (lookupLocalFlag env "display")

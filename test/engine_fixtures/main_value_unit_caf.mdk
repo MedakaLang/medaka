@@ -1,5 +1,5 @@
--- A Unit `main` that names an unannotated Unit binding prints only what that
--- binding prints; no engine auto-prints the Unit result (#3758).
-go = println "x"
+-- A Unit `main` that calls an unannotated Unit function prints only what that
+-- function prints; no engine auto-prints the Unit result (#3758).
+go () = println "x"
 
-main = go
+main = go ()

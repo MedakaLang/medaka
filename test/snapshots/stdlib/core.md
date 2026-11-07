@@ -1,5 +1,5 @@
 # META
-source_lines=2509
+source_lines=2519
 stages=DESUGAR,MARK
 # SOURCE
 {- | The prelude: the types, interfaces, and functions every Medaka program
@@ -679,6 +679,10 @@ export impl Display (a, b, c, d, e) requires Display a, Display b, Display c, Di
    `Leaf (-1)` is unambiguous on sight — matching the classic `showsPrec`
    convention of parenthesizing negative numeric literals in argument
    position. -}
+
+{- | Parenthesizes a rendered field unless it is a single token. Exported for
+   the code the compiler generates for `deriving (Debug, Display)`. -}
+export
 derivedShowWrap : String -> String
 -- Callers: the `Debug`/`Display` impls for `Option` and `Result` above, and the
 -- generated `deriving` code (desugar.mdk's `showFieldPart`). Every wasm program
@@ -777,6 +781,10 @@ export impl Hashable (Result e a) requires Hashable e, Hashable a where
 -- on the low 63 bits of its inputs.  The accumulator is carried as that `Int`
 -- rather than a `U64`, which would be a heap cell per step; the step itself is
 -- one `U64` expression, computed unboxed.
+
+{- | One step of the hash fold, `acc * 33 + h`. Exported for the code the
+   compiler generates for `deriving (Hashable)`. -}
+export
 derivedHashStep : Int -> Int -> Int
 derivedHashStep acc h = u64TruncateToInt (u64Truncate acc * 33 + u64Truncate h)
 
@@ -1606,10 +1614,12 @@ sliceLastIndex hi = if hi == intMinBound then hi else hi - 1
 
 -- The half-open end of `a.[lo..=hi]` (desugar.mdk).  `hi + 1` has no `Int` when
 -- `hi` is `intMaxBound`, and no container reaches that index, so the end stays
--- `intMaxBound` and the slice refuses as out of range.  Called only from the
--- code desugar generates, which the dead-code rule cannot see.
+-- `intMaxBound` and the slice refuses as out of range.
+
+{- | The exclusive end of an inclusive slice `a.[lo..=hi]`. Exported for the
+   code the compiler generates for that slice. -}
+export
 sliceInclusiveEnd : Int -> Int
--- lint-disable-next-line rule-dead-code
 sliceInclusiveEnd hi = if hi == intMaxBound then hi else hi + 1
 
 -- Cons-chain walk for `Slice (List a)`: keep heads whose running index is in
@@ -2621,7 +2631,7 @@ export extern data LaunchTicket (p : Authority Exec)
 (DImpl true "Display" ((TyTuple (TyVar "a") (TyVar "b") (TyVar "c"))) ((req "Display" ((TyVar "a"))) (req "Display" ((TyVar "b"))) (req "Display" ((TyVar "c")))) ((im "display" ((PTuple (PVar "a") (PVar "b") (PVar "c"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "display") (EVar "a"))) (ELit (LString ", "))) (EApp (EVar "display") (EVar "b"))) (ELit (LString ", "))) (EApp (EVar "display") (EVar "c"))) (ELit (LString ")"))))))
 (DImpl true "Display" ((TyTuple (TyVar "a") (TyVar "b") (TyVar "c") (TyVar "d"))) ((req "Display" ((TyVar "a"))) (req "Display" ((TyVar "b"))) (req "Display" ((TyVar "c"))) (req "Display" ((TyVar "d")))) ((im "display" ((PTuple (PVar "a") (PVar "b") (PVar "c") (PVar "d"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "display") (EVar "a"))) (ELit (LString ", "))) (EApp (EVar "display") (EVar "b"))) (ELit (LString ", "))) (EApp (EVar "display") (EVar "c"))) (ELit (LString ", "))) (EApp (EVar "display") (EVar "d"))) (ELit (LString ")"))))))
 (DImpl true "Display" ((TyTuple (TyVar "a") (TyVar "b") (TyVar "c") (TyVar "d") (TyVar "e"))) ((req "Display" ((TyVar "a"))) (req "Display" ((TyVar "b"))) (req "Display" ((TyVar "c"))) (req "Display" ((TyVar "d"))) (req "Display" ((TyVar "e")))) ((im "display" ((PTuple (PVar "a") (PVar "b") (PVar "c") (PVar "d") (PVar "e"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "display") (EVar "a"))) (ELit (LString ", "))) (EApp (EVar "display") (EVar "b"))) (ELit (LString ", "))) (EApp (EVar "display") (EVar "c"))) (ELit (LString ", "))) (EApp (EVar "display") (EVar "d"))) (ELit (LString ", "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString ")"))))))
-(DTypeSig false "derivedShowWrap" (TyFun (TyCon "String") (TyCon "String")))
+(DTypeSig true "derivedShowWrap" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "derivedShowWrap" ((PVar "s")) (EIf (EApp (EVar "derivedArgNeedsParens") (EVar "s")) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EVar "s")) (ELit (LString ")"))) (EVar "s")))
 (DTypeSig false "derivedArgNeedsParens" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "derivedArgNeedsParens" ((PVar "s")) (EIf (EBinOp "==" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 0))) (EVar "False") (EBlock (DoLet false false (PVar "chars") (EApp (EVar "stringToChars") (EVar "s"))) (DoLet false false (PVar "c") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "chars"))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "c") (ELit (LChar "\""))) (EBinOp "==" (EVar "c") (ELit (LChar "'")))) (EVar "False") (EBinOp "||" (EBinOp "==" (EVar "c") (ELit (LChar "-"))) (EApp (EApp (EApp (EApp (EVar "derivedHasTopLevelSpace") (EVar "chars")) (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "s"))) (ELit (LInt 0)))))))))
@@ -2637,7 +2647,7 @@ export extern data LaunchTicket (p : Authority Exec)
 (DImpl true "Hashable" ((TyCon "Ordering")) () ((im "hash" ((PCon "Lt")) (ELit (LInt 0))) (im "hash" ((PCon "Eq")) (ELit (LInt 1))) (im "hash" ((PCon "Gt")) (ELit (LInt 2)))))
 (DImpl true "Hashable" ((TyApp (TyCon "Option") (TyVar "a"))) ((req "Hashable" ((TyVar "a")))) ((im "hash" ((PCon "None")) (ELit (LInt 1))) (im "hash" ((PCon "Some" (PVar "x"))) (EApp (EVar "hash") (EVar "x")))))
 (DImpl true "Hashable" ((TyApp (TyApp (TyCon "Result") (TyVar "e")) (TyVar "a"))) ((req "Hashable" ((TyVar "e"))) (req "Hashable" ((TyVar "a")))) ((im "hash" ((PCon "Ok" (PVar "x"))) (EApp (EVar "hash") (EVar "x"))) (im "hash" ((PCon "Err" (PVar "e"))) (EApp (EApp (EVar "derivedHashStep") (ELit (LInt 1))) (EApp (EVar "hash") (EVar "e"))))))
-(DTypeSig false "derivedHashStep" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
+(DTypeSig true "derivedHashStep" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "derivedHashStep" ((PVar "acc") (PVar "h")) (EApp (EVar "u64TruncateToInt") (EBinOp "+" (EBinOp "*" (EApp (EVar "u64Truncate") (EVar "acc")) (ELit (LInt 33))) (EApp (EVar "u64Truncate") (EVar "h")))))
 (DTypeSig false "hashListItems" (TyConstrained ((cstr "Hashable" (TyVar "a"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Int")))))
 (DFunDef false "hashListItems" ((PVar "acc") (PList)) (EVar "acc"))
@@ -2765,7 +2775,7 @@ export extern data LaunchTicket (p : Authority Exec)
 (DImpl true "Slice" ((TyApp (TyCon "List") (TyVar "a"))) () ((im "slice" ((PVar "xs") (PVar "lo") (PVar "hi")) (EIf (EBinOp "||" (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (EBinOp "<" (EVar "hi") (EVar "lo"))) (EApp (EApp (EVar "sliceError") (EVar "lo")) (EApp (EVar "sliceLastIndex") (EVar "hi"))) (EApp (EApp (EApp (EApp (EVar "sliceListGo") (EVar "xs")) (ELit (LInt 0))) (EVar "lo")) (EVar "hi"))))))
 (DTypeSig false "sliceLastIndex" (TyFun (TyCon "Int") (TyCon "Int")))
 (DFunDef false "sliceLastIndex" ((PVar "hi")) (EIf (EBinOp "==" (EVar "hi") (EVar "intMinBound")) (EVar "hi") (EBinOp "-" (EVar "hi") (ELit (LInt 1)))))
-(DTypeSig false "sliceInclusiveEnd" (TyFun (TyCon "Int") (TyCon "Int")))
+(DTypeSig true "sliceInclusiveEnd" (TyFun (TyCon "Int") (TyCon "Int")))
 (DFunDef false "sliceInclusiveEnd" ((PVar "hi")) (EIf (EBinOp "==" (EVar "hi") (EVar "intMaxBound")) (EVar "hi") (EBinOp "+" (EVar "hi") (ELit (LInt 1)))))
 (DTypeSig false "sliceListGo" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyVar "a")))))))
 (DFunDef false "sliceListGo" ((PList) (PVar "i") (PVar "lo") (PVar "hi")) (EIf (EBinOp ">=" (EVar "i") (EVar "hi")) (EListLit) (EIf (EVar "otherwise") (EApp (EApp (EVar "sliceError") (EVar "lo")) (EApp (EVar "sliceLastIndex") (EVar "hi"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -3079,7 +3089,7 @@ export extern data LaunchTicket (p : Authority Exec)
 (DImpl true "Display" ((TyTuple (TyVar "a") (TyVar "b") (TyVar "c"))) ((req "Display" ((TyVar "a"))) (req "Display" ((TyVar "b"))) (req "Display" ((TyVar "c")))) ((im "display" ((PTuple (PVar "a") (PVar "b") (PVar "c"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EMethodRef "display") (EVar "a"))) (ELit (LString ", "))) (EApp (EMethodRef "display") (EVar "b"))) (ELit (LString ", "))) (EApp (EMethodRef "display") (EVar "c"))) (ELit (LString ")"))))))
 (DImpl true "Display" ((TyTuple (TyVar "a") (TyVar "b") (TyVar "c") (TyVar "d"))) ((req "Display" ((TyVar "a"))) (req "Display" ((TyVar "b"))) (req "Display" ((TyVar "c"))) (req "Display" ((TyVar "d")))) ((im "display" ((PTuple (PVar "a") (PVar "b") (PVar "c") (PVar "d"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EMethodRef "display") (EVar "a"))) (ELit (LString ", "))) (EApp (EMethodRef "display") (EVar "b"))) (ELit (LString ", "))) (EApp (EMethodRef "display") (EVar "c"))) (ELit (LString ", "))) (EApp (EMethodRef "display") (EVar "d"))) (ELit (LString ")"))))))
 (DImpl true "Display" ((TyTuple (TyVar "a") (TyVar "b") (TyVar "c") (TyVar "d") (TyVar "e"))) ((req "Display" ((TyVar "a"))) (req "Display" ((TyVar "b"))) (req "Display" ((TyVar "c"))) (req "Display" ((TyVar "d"))) (req "Display" ((TyVar "e")))) ((im "display" ((PTuple (PVar "a") (PVar "b") (PVar "c") (PVar "d") (PVar "e"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EMethodRef "display") (EVar "a"))) (ELit (LString ", "))) (EApp (EMethodRef "display") (EVar "b"))) (ELit (LString ", "))) (EApp (EMethodRef "display") (EVar "c"))) (ELit (LString ", "))) (EApp (EMethodRef "display") (EVar "d"))) (ELit (LString ", "))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ")"))))))
-(DTypeSig false "derivedShowWrap" (TyFun (TyCon "String") (TyCon "String")))
+(DTypeSig true "derivedShowWrap" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "derivedShowWrap" ((PVar "s")) (EIf (EApp (EVar "derivedArgNeedsParens") (EVar "s")) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EVar "s")) (ELit (LString ")"))) (EVar "s")))
 (DTypeSig false "derivedArgNeedsParens" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "derivedArgNeedsParens" ((PVar "s")) (EIf (EBinOp "==" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 0))) (EVar "False") (EBlock (DoLet false false (PVar "chars") (EApp (EVar "stringToChars") (EVar "s"))) (DoLet false false (PVar "c") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "chars"))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "c") (ELit (LChar "\""))) (EBinOp "==" (EVar "c") (ELit (LChar "'")))) (EVar "False") (EBinOp "||" (EBinOp "==" (EVar "c") (ELit (LChar "-"))) (EApp (EApp (EApp (EApp (EVar "derivedHasTopLevelSpace") (EVar "chars")) (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "s"))) (ELit (LInt 0)))))))))
@@ -3095,7 +3105,7 @@ export extern data LaunchTicket (p : Authority Exec)
 (DImpl true "Hashable" ((TyCon "Ordering")) () ((im "hash" ((PCon "Lt")) (ELit (LInt 0))) (im "hash" ((PCon "Eq")) (ELit (LInt 1))) (im "hash" ((PCon "Gt")) (ELit (LInt 2)))))
 (DImpl true "Hashable" ((TyApp (TyCon "Option") (TyVar "a"))) ((req "Hashable" ((TyVar "a")))) ((im "hash" ((PCon "None")) (ELit (LInt 1))) (im "hash" ((PCon "Some" (PVar "x"))) (EApp (EMethodRef "hash") (EVar "x")))))
 (DImpl true "Hashable" ((TyApp (TyApp (TyCon "Result") (TyVar "e")) (TyVar "a"))) ((req "Hashable" ((TyVar "e"))) (req "Hashable" ((TyVar "a")))) ((im "hash" ((PCon "Ok" (PVar "x"))) (EApp (EMethodRef "hash") (EVar "x"))) (im "hash" ((PCon "Err" (PVar "e"))) (EApp (EApp (EVar "derivedHashStep") (ELit (LInt 1))) (EApp (EMethodRef "hash") (EVar "e"))))))
-(DTypeSig false "derivedHashStep" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
+(DTypeSig true "derivedHashStep" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "derivedHashStep" ((PVar "acc") (PVar "h")) (EApp (EVar "u64TruncateToInt") (EBinOp "+" (EBinOp "*" (EApp (EVar "u64Truncate") (EVar "acc")) (ELit (LInt 33))) (EApp (EVar "u64Truncate") (EVar "h")))))
 (DTypeSig false "hashListItems" (TyConstrained ((cstr "Hashable" (TyVar "a"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Int")))))
 (DFunDef false "hashListItems" ((PVar "acc") (PList)) (EVar "acc"))
@@ -3223,7 +3233,7 @@ export extern data LaunchTicket (p : Authority Exec)
 (DImpl true "Slice" ((TyApp (TyCon "List") (TyVar "a"))) () ((im "slice" ((PVar "xs") (PVar "lo") (PVar "hi")) (EIf (EBinOp "||" (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (EBinOp "<" (EVar "hi") (EVar "lo"))) (EApp (EApp (EVar "sliceError") (EVar "lo")) (EApp (EVar "sliceLastIndex") (EVar "hi"))) (EApp (EApp (EApp (EApp (EVar "sliceListGo") (EVar "xs")) (ELit (LInt 0))) (EVar "lo")) (EVar "hi"))))))
 (DTypeSig false "sliceLastIndex" (TyFun (TyCon "Int") (TyCon "Int")))
 (DFunDef false "sliceLastIndex" ((PVar "hi")) (EIf (EBinOp "==" (EVar "hi") (EVar "intMinBound")) (EVar "hi") (EBinOp "-" (EVar "hi") (ELit (LInt 1)))))
-(DTypeSig false "sliceInclusiveEnd" (TyFun (TyCon "Int") (TyCon "Int")))
+(DTypeSig true "sliceInclusiveEnd" (TyFun (TyCon "Int") (TyCon "Int")))
 (DFunDef false "sliceInclusiveEnd" ((PVar "hi")) (EIf (EBinOp "==" (EVar "hi") (EVar "intMaxBound")) (EVar "hi") (EBinOp "+" (EVar "hi") (ELit (LInt 1)))))
 (DTypeSig false "sliceListGo" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyVar "a")))))))
 (DFunDef false "sliceListGo" ((PList) (PVar "i") (PVar "lo") (PVar "hi")) (EIf (EBinOp ">=" (EVar "i") (EVar "hi")) (EListLit) (EIf (EVar "otherwise") (EApp (EApp (EVar "sliceError") (EVar "lo")) (EApp (EVar "sliceLastIndex") (EVar "hi"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))

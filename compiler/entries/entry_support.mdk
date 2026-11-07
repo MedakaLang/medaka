@@ -272,6 +272,19 @@ export
 desugarPair : (String, List Decl) -> (String, List Decl)
 desugarPair (mid, p) = (mid, desugarIn mid p)
 
+-- [entry]'s module graph parsed with real spans, as `medaka run` loads it.  An
+-- interpreter oracle needs them: the import frame tells a synthesized alias
+-- method import from a written one by its location (`writtenImportsOf`), and
+-- the plain loader's placeholder spans make every import share one.
+export
+loadModulesLocated : String ->
+  List String ->
+  <IO> Result String (List (String, List Decl))
+loadModulesLocated entry roots =
+  match loadProgramFilesLocatedE (_ => None) entry roots
+    Err e => Err (loadErrorMessage e)
+    Ok mods => Ok (map dropPathTriple mods)
+
 -- The loader is the LOCATED one (`parseLocatedResult`, real spans + each
 -- module's path), not `loadProgram`: this driver renders the build's type
 -- diagnostics itself, and placeholder 1:0 spans with no path render them as
@@ -979,14 +992,14 @@ withSiteFile : String -> Loc -> Loc
 withSiteFile path (Loc "" sl sc el ec) = Loc path sl sc el ec
 withSiteFile _ l = l
 
--- The pass configuration the two real emit entries run with, read once per
--- process: `MEDAKA_CORE_LINT` (`1` on, `0` off; unset is on, unlike
+-- The pass configuration the two real emit entries run with. Each entry calls
+-- this once per process, since it reads the environment: `MEDAKA_CORE_LINT` (`1` on, `0` off; unset is on, unlike
 -- `defaultPassConfig`, which library callers use unlinted) and `MEDAKA_DUMP_CORE_AFTER`
 -- (comma-separated names of `emitPasses`, `input`, or `all`).  A value outside
 -- those is a usage error naming the valid ones.
 export
-passConfigOfEnv : <IO> PassConfig
-passConfigOfEnv =
+passConfigOfEnv : Unit -> <IO> PassConfig
+passConfigOfEnv () =
   let lintOn =
     switchOrFail
       "MEDAKA_CORE_LINT"

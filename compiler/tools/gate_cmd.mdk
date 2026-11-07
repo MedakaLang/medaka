@@ -282,7 +282,7 @@ reverseSels (s :: ss) acc = reverseSels ss (s :: acc)
 registryPath : Option String -> <IO> String
 registryPath (Some p) = p
 registryPath None =
-  let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
+  let root = envOr "MEDAKA_ROOT" (defaultMedakaRoot ())
   joinPath (joinPath root "test") "gates.toml"
 
 -- Every way `list` can end, as one value: the text to print, or the message to
@@ -1042,7 +1042,7 @@ selectFor path tokens sels src = match parseRegistry src
 
 runEnvFor : RunArgs -> <IO> RunEnv
 runEnvFor a =
-  let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
+  let root = envOr "MEDAKA_ROOT" (defaultMedakaRoot ())
   RunEnv {
     root = root,
     medaka = envOr "MEDAKA" "\{root}/medaka",
@@ -2661,7 +2661,7 @@ verifyCmdBody argv = match parseVerifyArgs argv
         Ok gates => match parseShards src
           Err m => emit (Err "medaka gate verify: \{m}")
           Ok shs =>
-            let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
+            let root = envOr "MEDAKA_ROOT" (defaultMedakaRoot ())
             emit (verifyOutput root gates shs)
 
 -- ── `gate explain <path>` ────────────────────────────────────────────────────
@@ -3305,7 +3305,7 @@ reachPaths a = match a.pathsFrom
 
 reachRoot : Option String -> <IO> String
 reachRoot (Some p) = p
-reachRoot None = envOr "MEDAKA_ROOT" defaultMedakaRoot
+reachRoot None = envOr "MEDAKA_ROOT" (defaultMedakaRoot ())
 
 reachCmdBody : List String -> <IO> Unit
 reachCmdBody argv = match parseReachArgs argv
@@ -3614,7 +3614,7 @@ ciCmdBody argv = match parseCiArgs argv CiArgs {
 }
   Err m => emit (Err m)
   Ok a =>
-    let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
+    let root = envOr "MEDAKA_ROOT" (defaultMedakaRoot ())
     let regPath = registryPath a.registry
     let wfPath = ciWorkflowPath a.workflow root
     match readFile regPath
@@ -3703,7 +3703,7 @@ balCmdBody argv = match parseBalArgs argv BalArgs {
 }
   Err m => emit (Err m)
   Ok a =>
-    let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
+    let root = envOr "MEDAKA_ROOT" (defaultMedakaRoot ())
     let regPath = registryPath a.registry
     let basePath = balBaselinePath a.baseline root
     match readFile regPath
@@ -3771,7 +3771,7 @@ budgetCmdBody : List String -> <IO> Unit
 budgetCmdBody argv = match parseBudgetArgs argv
   Err m => emit (Err m)
   Ok a =>
-    let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
+    let root = envOr "MEDAKA_ROOT" (defaultMedakaRoot ())
     let regPath = registryPath a.registry
     let basePath = balBaselinePath a.baseline root
     match readFile regPath

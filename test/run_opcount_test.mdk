@@ -61,7 +61,7 @@ runWith pre file =
   boundedVerbSeconds
     300
     "env"
-    (pre ++ ["MEDAKA_STRICT=1", medakaBin, "run", file])
+    (pre ++ ["MEDAKA_STRICT=1", medakaBin (), "run", file])
 
 -- The op field of the `[perf] eval` row: the last tab-separated column.
 opsOf : String -> Option Int

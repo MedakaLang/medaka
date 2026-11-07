@@ -22,3 +22,20 @@ absolute `--root` and a fresh external `--out` directory. See the
 [combined authority report](../../../docs/findings/mcp-runtime-authority/REPORT.md)
 for replay requirements, measured blockers and the separate protected-host
 qualification. Exit 77 means unavailable or blocked, not successful containment.
+
+The descriptor-first route census is a conservative inventory, not evidence of
+compatibility or enforcement. After building the checkout, replay it with an
+absolute checkout path and an external output file:
+
+```sh
+python3 /absolute/checkout/scripts/mcp_bench/prototypes/stdio_descriptor_census.py --root /absolute/checkout --out /tmp/stdio-descriptor-census.json
+```
+
+The JSON pins Git-visible files except the descriptor report and summary (excluded to avoid self-referential receipt drift), and relevant runtime sources, records lexical
+candidates and exclusions, and maps numbered policy classes to runtime routes.
+Dynamic and indirect uses remain unknown. The previous broad-seal rejection in
+[STDIO.md](../../../docs/findings/mcp-runtime-authority/STDIO.md) remains valid.
+
+The registered `test/process_authority_test.mdk` replay also checks the descriptor
+experiment's separate 77 blocker, mutation effects, non-Linux refusal, and an
+empty, duplicate, missing and substituted matrix rejection, plus historic census receipt integrity and candidate source pins. Later tree changes are outside that historic survey. See `docs/findings/mcp-runtime-stdio-descriptor/REPORT.md`.

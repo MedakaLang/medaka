@@ -108,7 +108,7 @@ appearsBefore first second text = match (
 dirRun : String -> String -> <Exec, IO> Result String (Int, String, String)
 dirRun jobs dir = runVerb "env" [
   "MEDAKA_TEST_JOBS=\{jobs}",
-  medakaBin,
+  medakaBin (),
   "test",
   dir,
   "--engines",
@@ -206,8 +206,8 @@ test "a directory run divides a set knob across its concurrent children" = withS
   (dir => match dirWithKnobProbe dir
     Err e => fail e
     Ok () => match (
-      runVerb "env" ["MEDAKA_TEST_JOBS=4", medakaBin, "test", dir],
-      runVerb "env" ["MEDAKA_TEST_JOBS=3", medakaBin, "test", dir],
+      runVerb "env" ["MEDAKA_TEST_JOBS=4", medakaBin (), "test", dir],
+      runVerb "env" ["MEDAKA_TEST_JOBS=3", medakaBin (), "test", dir],
     )
       (Ok (c4, _, _), Ok (c3, _, _)) => expectAll [
         expectEqual 0 c4,
@@ -225,9 +225,9 @@ test "a directory run reads an invalid knob as unset" = withScratchDir
   (dir => match writeFile (probeFile dir "p") positiveKnobProbeSource
     Err e => fail e
     Ok () => match (
-      runVerb "env" ["MEDAKA_TEST_JOBS=0", medakaBin, "test", dir],
-      runVerb "env" ["MEDAKA_TEST_JOBS=-3", medakaBin, "test", dir],
-      runVerb "env" ["MEDAKA_TEST_JOBS=x", medakaBin, "test", dir],
+      runVerb "env" ["MEDAKA_TEST_JOBS=0", medakaBin (), "test", dir],
+      runVerb "env" ["MEDAKA_TEST_JOBS=-3", medakaBin (), "test", dir],
+      runVerb "env" ["MEDAKA_TEST_JOBS=x", medakaBin (), "test", dir],
     )
       (Ok (c0, _, _), Ok (cn, _, _), Ok (cx, _, _)) => expectAll [
         expectEqual 0 c0,
@@ -251,7 +251,7 @@ unsetKnobRun dir (Some cores) =
     (knobProbeSourceFor (max 1 (cores / min cores 2))))
     Err e => fail e
     Ok () =>
-      match runVerb "env" ["-u", "MEDAKA_TEST_JOBS", medakaBin, "test", dir]
+      match runVerb "env" ["-u", "MEDAKA_TEST_JOBS", medakaBin (), "test", dir]
         Ok (c, _, _) => expectEqual 0 c
         _ => fail "could not spawn medaka test"
 
@@ -271,7 +271,8 @@ illTypedDoctestFiles dir = do
     "import lib.{one}\n\n-- Doc.\n--\n-- > debug []\n-- []\n-- > two + 1\n-- 3\nexport two = one + 1\n"
 
 evalDoctests : String -> <Exec, IO> Result String (Int, String, String)
-evalDoctests target = runVerb medakaBin ["test", "--engines", "eval", target]
+evalDoctests target =
+  runVerb (medakaBin ()) ["test", "--engines", "eval", target]
 
 test "an ill-typed doctest example fails alone under the interpreter" = withScratchDir
   (dir => match illTypedDoctestFiles dir
@@ -352,7 +353,7 @@ test "core.mdk is beside runtime.mdk under any spelling of their directory" = wi
 test "medaka test runs a target against the core.mdk beside runtime.mdk" = withScratchDir
   (dir => match writeFile "\{dir}/target.mdk" "main = 1\n"
     Err e => fail e
-    Ok _ => match runVerb medakaBin ["test", "\{dir}/target.mdk"]
+    Ok _ => match runVerb (medakaBin ()) ["test", "\{dir}/target.mdk"]
       Ok (code, out, _) => expectAll [
         expectEqual 0 code,
         expectTrue (contains "(no doctests found)" out),
@@ -376,7 +377,7 @@ seededTestEnv : List String ->
   List String ->
   <Exec, IO> Result String (Int, String, String)
 seededTestEnv env seed args =
-  runVerb "env" (env ++ seedAssignment seed ++ [medakaBin, "test"] ++ args)
+  runVerb "env" (env ++ seedAssignment seed ++ [medakaBin (), "test"] ++ args)
 
 seedAssignment : Option Int -> List String
 seedAssignment (Some n) = ["MEDAKA_SEED=\{intToString n}"]
@@ -475,7 +476,7 @@ withFixtures files body = withScratchDir (dir => match writeFiles dir files
 runDraw : Int -> String -> <Exec, IO> String
 runDraw n mainPath = match runVerb "env" [
   "MEDAKA_SEED=\{intToString n}",
-  medakaBin,
+  medakaBin (),
   "run",
   mainPath,
 ]
@@ -580,7 +581,7 @@ test "a malformed MEDAKA_SEED is a usage error" =
     [("ok_test.mdk", passTestSrc)]
     (dir => withSpawn (runVerb "env" [
       "MEDAKA_SEED=abc",
-      medakaBin,
+      medakaBin (),
       "test",
       "\{dir}/ok_test.mdk",
     ]) ((code, out, err) => expectAll [
@@ -709,7 +710,7 @@ test "a panicking medaka run prints no seed line, seeded" =
     [("panic.mdk", panicMainSrc)]
     (dir => withSpawn (runVerb "env" [
       "MEDAKA_SEED=7",
-      medakaBin,
+      medakaBin (),
       "run",
       "\{dir}/panic.mdk",
     ]) ((code, out, err) =>
@@ -868,7 +869,7 @@ test "an allocation failure is reported as out of memory with exit 1, built and 
           (["MEDAKA_SEED=7"]
             ++ heapCap
             ++ [
-              medakaBin,
+              medakaBin (),
               "run",
               "\{dir}/oom.mdk",
             ])) ((code, out, err) => expectAll [
@@ -882,7 +883,7 @@ test "an allocation failure is reported as out of memory with exit 1, built and 
               err),
           expectEqual [] (seedLines (lines "\{out}\n\{err}")),
         ])),
-      labelFail "build" (match runVerb medakaBin [
+      labelFail "build" (match runVerb (medakaBin ()) [
         "build",
         "\{dir}/oom.mdk",
         "-o",
@@ -918,7 +919,7 @@ test "medaka run of the evaluator-panic and stack-overflow programs prints no se
               name
               (withSpawn (runVerb "env" [
                 "MEDAKA_SEED=7",
-                medakaBin,
+                medakaBin (),
                 "run",
                 "\{dir}/\{name}",
               ]) ((code, out, err) => expectAll [
@@ -977,7 +978,7 @@ test "the runtime fills the abort template as the envelope serializer renders th
   ]
   withFixtures
     [("esc.mdk", escSrc tmpl)]
-    (dir => match runVerb medakaBin [
+    (dir => match runVerb (medakaBin ()) [
       "build",
       "--allow-internal",
       "\{dir}/esc.mdk",
@@ -997,7 +998,7 @@ test "the runtime fills the abort template as the envelope serializer renders th
 siblingFixtureRun : String ->
   String ->
   <Exec, IO> Result String (Int, String, String)
-siblingFixtureRun engine file = runVerb medakaBin [
+siblingFixtureRun engine file = runVerb (medakaBin ()) [
   "test",
   "--engines",
   engine,
@@ -1041,7 +1042,7 @@ test "a test sibling's private names resolve under medaka test on both engines" 
 test "a forged real-target variable grants nothing to an unrelated entry" = withScratchDir
   (dir => match runVerb "env" [
     "MEDAKA_SIBLING_TARGET=\{underRoot "test/sibling_view_fixtures/counter_test.mdk"}",
-    medakaBin,
+    medakaBin (),
     "build",
     underRoot "test/sibling_view_fixtures/other.mdk",
     "-o",
@@ -1061,7 +1062,7 @@ test "a forged real-target variable grants nothing to an unrelated entry" = with
 test "a forged real-target variable does not reach the emitter child of a plain build" = withScratchDir
   (dir => match runVerb "env" [
     "MEDAKA_SIBLING_TARGET=\{underRoot "test/sibling_view_fixtures/ambp_test.mdk"}",
-    medakaBin,
+    medakaBin (),
     "build",
     underRoot "test/sibling_view_fixtures/ambp_other.mdk",
     "-o",
@@ -1099,7 +1100,7 @@ siblingCases = [
 
 siblingVerb : String -> String -> <Exec, IO> Result String (Int, String, String)
 siblingVerb verb file =
-  runVerb medakaBin [verb, underRoot "test/sibling_view_fixtures/\{file}"]
+  runVerb (medakaBin ()) [verb, underRoot "test/sibling_view_fixtures/\{file}"]
 
 -- What a verb gave, as an expectation under [label]: it exited 0, and for
 -- `expectPrints` printed [expected].
@@ -1130,7 +1131,7 @@ expectRefuses _ _ (Err e) = fail e
 siblingBuild : String ->
   String ->
   <Exec, IO> Result String (Int, String, String)
-siblingBuild file out = runVerb medakaBin [
+siblingBuild file out = runVerb (medakaBin ()) [
   "build",
   underRoot "test/sibling_view_fixtures/\{file}",
   "-o",
@@ -1161,7 +1162,7 @@ test "a test sibling's rows pass under medaka test eval and native" =
   expectAll
     (map
       (c => match c
-        (subject, _) => match runVerb medakaBin [
+        (subject, _) => match runVerb (medakaBin ()) [
           "test",
           "--engines",
           "eval,native",
@@ -1238,7 +1239,7 @@ test "a user name shadows core only for user code, under both engines" = withScr
     Ok () =>
       expectAll
         (flatMap
-          (engine => match runVerb medakaBin [
+          (engine => match runVerb (medakaBin ()) [
             "test",
             "--engines",
             engine,
@@ -1291,7 +1292,7 @@ underStaleRootEnv env root strict args =
       else
         ["MEDAKA_STRICT=\{strict}"])
       ++ env
-      ++ ["MEDAKA_ROOT=\{root}", "MEDAKA_SEED=7", medakaBin]
+      ++ ["MEDAKA_ROOT=\{root}", "MEDAKA_SEED=7", medakaBin ()]
       ++ args)
 
 withStaleRoot : List (String, String) ->

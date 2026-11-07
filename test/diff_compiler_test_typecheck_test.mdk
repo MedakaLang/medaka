@@ -136,11 +136,11 @@ spawnTest : String ->
   <Exec, IO> Result String (Int, String, String)
 spawnTest cwd args =
   if cwd == "" then
-    boundedVerb medakaBin args
+    boundedVerb (medakaBin ()) args
   else
     boundedVerb
       "sh"
-      (["-c", "cd \"$1\" && shift && exec \"$@\"", "medaka", cwd, medakaBin]
+      (["-c", "cd \"$1\" && shift && exec \"$@\"", "medaka", cwd, medakaBin ()]
         ++ args)
 
 -- One `medaka test` run on target: the exit code must equal wantCode, and the
@@ -182,7 +182,7 @@ expectAbsent unwanted text =
 -- output must contain none of the unwanted needles.
 refuteCase : String -> Int -> List String -> <Exec, IO> Expectation
 refuteCase target wantCode unwanted =
-  match boundedVerb medakaBin ["test", target]
+  match boundedVerb (medakaBin ()) ["test", target]
     Err e => fail "could not spawn medaka test on \{target}: \{e}"
     Ok (code, out, err) =>
       if code /= wantCode then
@@ -215,9 +215,9 @@ gateCase target engineArgs wantCode needles unwanted =
 -- `medaka test` and `medaka check` must reach the same verdict on target, and when
 -- both reject, every `error: ` line `check` printed must appear in `test`'s output.
 agreeCase : String -> <Exec, IO> Expectation
-agreeCase target = match boundedVerb medakaBin ["check", target]
+agreeCase target = match boundedVerb (medakaBin ()) ["check", target]
   Err e => fail "could not spawn medaka check on \{target}: \{e}"
-  Ok (ccode, cout, cerr) => match boundedVerb medakaBin ["test", target]
+  Ok (ccode, cout, cerr) => match boundedVerb (medakaBin ()) ["test", target]
     Err e => fail "could not spawn medaka test on \{target}: \{e}"
     Ok (tcode, tout, terr) =>
       if ccode /= 0 /= (tcode /= 0) then
@@ -233,14 +233,15 @@ agreeCase target = match boundedVerb medakaBin ["check", target]
 -- Cell a's counterpart: `medaka check` must reject the same file, or the matrix
 -- compares `test` against nothing.
 control : String -> <Exec, IO> Expectation
-control dir = match boundedVerb medakaBin ["check", "\{dir}/a_nodoc_broken.mdk"]
-  Err e => fail "could not spawn medaka check on the control fixture: \{e}"
-  Ok (code, _, _) =>
-    if code == 0 then
-      fail
-        "control: `medaka check` exited 0 on the ill-typed fixture — the matrix proves nothing"
-    else
-      pass
+control dir =
+  match boundedVerb (medakaBin ()) ["check", "\{dir}/a_nodoc_broken.mdk"]
+    Err e => fail "could not spawn medaka check on the control fixture: \{e}"
+    Ok (code, _, _) =>
+      if code == 0 then
+        fail
+          "control: `medaka check` exited 0 on the ill-typed fixture — the matrix proves nothing"
+      else
+        pass
 
 test "medaka test type-checks its target: cells a-h" = inTree
   fixtures

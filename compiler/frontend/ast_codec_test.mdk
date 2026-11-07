@@ -318,13 +318,15 @@ cornerSamples =
 
 -- Constructors no source text yields: annotate, the marker and resolve build
 -- them after the trees this test reaches, the wide-literal lowering builds
--- `LI64`, and `LBool`, `EInfix` and `DoAssign` have no surface syntax left.
+-- `LI64`, and `LBool`, `EInfix` and `DoAssign` have no surface syntax left. The
+-- corpora elaborate no program to an `RLocal` route, yet the codec and the
+-- Core lowering still handle one, so the evidence row below builds it.
 handSample : Sample
 handSample = Sample {
   smLabel = "hand-built",
   smDecls =
     [DFunDef False "hand" [] handBody (Loc "m.mdk" 3 4 3 9) (BinderId "m" 7)],
-  smEvidence = [],
+  smEvidence = [EvEntry (EvId "" 2) (EvOne (RLocal "s" [RNone]))],
 }
 
 handBody : Expr

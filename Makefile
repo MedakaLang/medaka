@@ -212,6 +212,7 @@ inlang-support-sexp-value-test:
 	./medaka test compiler/support/source_index_test.mdk
 	./medaka test compiler/tools/lsp_positions_test.mdk
 	./medaka test compiler/tools/lsp_diagnostics_test.mdk
+	./medaka test compiler/tools/refindex_test.mdk
 	./medaka test compiler/tools/source_snapshot_test.mdk
 	./medaka test compiler/tools/snapshot_syntax_test.mdk
 	./medaka test compiler/tools/syntax_cache_test.mdk
@@ -679,10 +680,21 @@ inlang-frontend-ast-codec-test:
 inlang-frontend-ast-walk-test:
 	./medaka test compiler/frontend/ast_walk_test.mdk
 
+## compiler/frontend/desugar_test.mdk is a `*_test.mdk` sibling, outside every
+## entry's import closure ([W-MODULE-BLIND]): it pins, on both engines, that each
+## name the sugar generates denotes the prelude's declaration.
+inlang-frontend-desugar-test:
+	./medaka test --engines eval,native compiler/frontend/desugar_test.mdk
+
 ## compiler/frontend/visibility_test.mdk is a `*_test.mdk` sibling, outside every
 ## entry's import closure ([W-MODULE-BLIND]): it pins the producer's facets.
 inlang-frontend-visibility-test:
 	./medaka test compiler/frontend/visibility_test.mdk
+
+## compiler/frontend/name_scope_test.mdk is a `*_test.mdk` sibling, outside every
+## entry's import closure ([W-MODULE-BLIND]): it pins the bare-name ladder's answers.
+inlang-frontend-name-scope-test:
+	./medaka test --engines eval,native compiler/frontend/name_scope_test.mdk
 
 ## compiler/driver/loader_test.mdk is a `*_test.mdk` sibling, outside every
 ## entry's import closure ([W-MODULE-BLIND]): it pins the test-sibling relation.

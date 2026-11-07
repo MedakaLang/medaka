@@ -67,11 +67,11 @@ row = Row {
 
 -- # Mutations
 
-mutationTest : MutationTest
-mutationTest = MutationTest {
+mutationTest : Unit -> <Env "MEDAKA_ROOT"> MutationTest
+mutationTest () = MutationTest {
   gate = gate,
   driver = driver,
-  args = ["\{medakaRoot}/\{corpusFile}"],
+  args = ["\{medakaRoot ()}/\{corpusFile}"],
   mutations = [
     -- A document naming the wrong server must not satisfy the did:web cell.
     Mutation {
@@ -99,8 +99,8 @@ mutationTest = MutationTest {
       name = "proxy-no-credential",
       file = driver,
       anchor =
-        "proxyAuthField = \"Authorization: Bearer \\{proxyAccessToken}\\r\\n\"",
-      mutant = "proxyAuthField = \"\"",
+        "proxyAuthField () = \"Authorization: Bearer \\{proxyAccessToken ()}\\r\\n\"",
+      mutant = "proxyAuthField () = \"\"",
       witness =
         "CELL proxy-admitted-timeline FAIL decision=refused status=401 error=AuthenticationRequired",
     },
@@ -120,4 +120,4 @@ mutationTest = MutationTest {
 test "read routes: 81 hand-authored cells, native == Wasm" = expectRow row
 
 test "read routes: each of 4 mutations turns the gate red with its own witness" =
-  expectMutations mutationTest
+  expectMutations (mutationTest ())

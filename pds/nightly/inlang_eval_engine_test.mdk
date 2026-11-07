@@ -25,23 +25,32 @@ import test_process.{
 
 -- Every suite in `interpreterSuites` spawned once under the eval engine, in
 -- one batch, each with its executed-assertion count or an error naming the
--- file and the arm. Top-level nullary bindings are memoized, so the `test`
+-- file and the arm. `evalResults` memoizes it in a once-cell, so the `test`
 -- blocks below share this one batch.
-evalResults : <Exec, IO> List (String, (Int, Result String Int))
-evalResults =
-  let paths =
-    map ((name, _) => underRoot "pds/test/\{name}.mdk") interpreterSuites
-  zipWith3
-    ((name, floor) path counted =>
-      (name, (floor, mapErr (e => "\{path} (eval): \{e}") counted)))
-    interpreterSuites
-    paths
-    (testAssertionCounts (map (path => (path, ["--engines", "eval"])) paths))
+evalResultsCell : Ref (Option (List (String, (Int, Result String Int))))
+evalResultsCell = Ref None
+
+evalResults : Unit -> <Exec, IO> List (String, (Int, Result String Int))
+evalResults () = match !evalResultsCell
+  Some v => v
+  None =>
+    let v =
+      let paths =
+        map ((name, _) => underRoot "pds/test/\{name}.mdk") interpreterSuites
+      zipWith3
+        ((name, floor) path counted =>
+          (name, (floor, mapErr (e => "\{path} (eval): \{e}") counted)))
+        interpreterSuites
+        paths
+        (testAssertionCounts
+          (map (path => (path, ["--engines", "eval"])) paths))
+    evalResultsCell := Some v
+    v
 
 -- Grades one suite's floor. A spawn that failed outright reports its own
 -- text, so a broken assertion inside a suite is never read as a short count.
 floorExpectation : String -> <Exec, IO> Expectation
-floorExpectation name = match lookup name evalResults
+floorExpectation name = match lookup name (evalResults ())
   None => Fail "pds/test/\{name}.mdk has no `evalResults` entry" "" ""
   Some (floor, counted) => expectFloor "pds/test/\{name}.mdk" floor counted
 
@@ -97,11 +106,12 @@ test "pds/test/route_policy_test.mdk executed >= 4 assertions" =
 -- applied while its row reads as covered. The scan reads this file's own
 -- source, as the merge-path gate does.
 
-ownSourceLines : <IO> Result String (List String)
-ownSourceLines = readLines (underRoot "pds/nightly/inlang_eval_engine_test.mdk")
+ownSourceLines : Unit -> <IO> Result String (List String)
+ownSourceLines () =
+  readLines (underRoot "pds/nightly/inlang_eval_engine_test.mdk")
 
-uncheckedRows : <IO> Result String (List String)
-uncheckedRows =
+uncheckedRows : Unit -> <IO> Result String (List String)
+uncheckedRows () =
   map
     (ls =>
       ungradedRosterRows
@@ -109,10 +119,10 @@ uncheckedRows =
         "floorExpectation \""
         (map fst interpreterSuites)
         ls)
-    ownSourceLines
+    (ownSourceLines ())
 
 test "every `interpreterSuites` row has a matching `test` block" =
-  match uncheckedRows
+  match uncheckedRows ()
     Err e => Fail e "no unchecked rows" "read failed"
     Ok [] => Pass "no unchecked rows" "no unchecked rows"
     Ok extras =>
@@ -121,14 +131,14 @@ test "every `interpreterSuites` row has a matching `test` block" =
         "no unchecked rows"
         "\{debug extras}"
 
-disagreeingBlocks : <IO> Result String (List String)
-disagreeingBlocks =
+disagreeingBlocks : Unit -> <IO> Result String (List String)
+disagreeingBlocks () =
   map
     (ls => disagreeingFloorBlocks "pds/test/" "floorExpectation \"" ls)
-    ownSourceLines
+    (ownSourceLines ())
 
 test "every floor assertion grades the suite its own title names" =
-  match disagreeingBlocks
+  match disagreeingBlocks ()
     Err e => Fail e "no title/argument disagreements" "read failed"
     Ok [] =>
       Pass "no title/argument disagreements" "no title/argument disagreements"

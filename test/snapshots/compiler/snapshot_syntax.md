@@ -101,6 +101,7 @@ export
 snapshotSyntaxSnapshot : PreparedSyntax -> Option SourceSnapshot
 snapshotSyntaxSnapshot (PreparedSyntax snapshot _ _) = snapshot
 # DESUGAR
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false))))
 (DUse false (UseGroup ("frontend" "parse_recovery") ((mem "RecoveryLimits" false) (mem "defaultRecoveryLimits" false) (mem "budgetResult" false))))
 (DUse false (UseGroup ("frontend" "syntax_source") ((mem "SyntaxSource" false) (mem "SyntaxAdmission" true) (mem "publishSyntax" false) (mem "publishSyntaxWithCheckedDecls" false) (mem "syntaxIndex" false) (mem "syntaxRecovered" false))))
@@ -110,7 +111,7 @@ snapshotSyntaxSnapshot (PreparedSyntax snapshot _ _) = snapshot
 (DData Abstract "SnapshotSyntax" () ((variant "SnapshotSyntax" (ConPos (TyCon "SnapshotId") (TyApp (TyCon "Option") (TyCon "Int")) (TyCon "RecoveredSource")))) ())
 (DData Abstract "PreparedSyntax" () ((variant "PreparedSyntax" (ConPos (TyApp (TyCon "Option") (TyCon "SourceSnapshot")) (TyCon "SnapshotSyntax") (TyApp (TyCon "Option") (TyCon "SyntaxSource"))))) ())
 (DData Public "ParseOptions" () ((variant "ParseOptions" (ConPos (TyCon "RecoveryLimits")))) ())
-(DImpl true "Eq" ((TyCon "ParseOptions")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "ParseOptions" (PVar "__a0")) (PCon "ParseOptions" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")))))))
+(DImpl true "Eq" ((TyCon "ParseOptions")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "ParseOptions" (PVar "__a0")) (PCon "ParseOptions" (PVar "__b0"))) () (EApp (EApp (EVar "$core.eq") (EVar "__a0")) (EVar "__b0")))))))
 (DTypeSig true "defaultParseOptions" (TyCon "ParseOptions"))
 (DFunDef false "defaultParseOptions" () (EApp (EVar "ParseOptions") (EVar "defaultRecoveryLimits")))
 (DTypeSig true "parseSnapshotSyntax" (TyFun (TyCon "SourceRevision") (TyCon "PreparedSyntax")))
@@ -134,6 +135,7 @@ snapshotSyntaxSnapshot (PreparedSyntax snapshot _ _) = snapshot
 (DTypeSig true "snapshotSyntaxSnapshot" (TyFun (TyCon "PreparedSyntax") (TyApp (TyCon "Option") (TyCon "SourceSnapshot"))))
 (DFunDef false "snapshotSyntaxSnapshot" ((PCon "PreparedSyntax" (PVar "snapshot") PWild PWild)) (EVar "snapshot"))
 # MARK
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false))))
 (DUse false (UseGroup ("frontend" "parse_recovery") ((mem "RecoveryLimits" false) (mem "defaultRecoveryLimits" false) (mem "budgetResult" false))))
 (DUse false (UseGroup ("frontend" "syntax_source") ((mem "SyntaxSource" false) (mem "SyntaxAdmission" true) (mem "publishSyntax" false) (mem "publishSyntaxWithCheckedDecls" false) (mem "syntaxIndex" false) (mem "syntaxRecovered" false))))
@@ -143,7 +145,7 @@ snapshotSyntaxSnapshot (PreparedSyntax snapshot _ _) = snapshot
 (DData Abstract "SnapshotSyntax" () ((variant "SnapshotSyntax" (ConPos (TyCon "SnapshotId") (TyApp (TyCon "Option") (TyCon "Int")) (TyCon "RecoveredSource")))) ())
 (DData Abstract "PreparedSyntax" () ((variant "PreparedSyntax" (ConPos (TyApp (TyCon "Option") (TyCon "SourceSnapshot")) (TyCon "SnapshotSyntax") (TyApp (TyCon "Option") (TyCon "SyntaxSource"))))) ())
 (DData Public "ParseOptions" () ((variant "ParseOptions" (ConPos (TyCon "RecoveryLimits")))) ())
-(DImpl true "Eq" ((TyCon "ParseOptions")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "ParseOptions" (PVar "__a0")) (PCon "ParseOptions" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")))))))
+(DImpl true "Eq" ((TyCon "ParseOptions")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "ParseOptions" (PVar "__a0")) (PCon "ParseOptions" (PVar "__b0"))) () (EApp (EApp (EVar "$core.eq") (EVar "__a0")) (EVar "__b0")))))))
 (DTypeSig true "defaultParseOptions" (TyCon "ParseOptions"))
 (DFunDef false "defaultParseOptions" () (EApp (EVar "ParseOptions") (EVar "defaultRecoveryLimits")))
 (DTypeSig true "parseSnapshotSyntax" (TyFun (TyCon "SourceRevision") (TyCon "PreparedSyntax")))

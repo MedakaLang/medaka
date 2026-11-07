@@ -1,0 +1,7 @@
+-- A wildcard import binds `length` to a standalone value at rung 4, over the
+-- prelude's `Foldable.length` at rung 5 (docs/spec/SHADOW-SEMANTICS.md L2).  The
+-- bare name is that value in every position it is written in (L5): applied,
+-- piped and passed as an argument.
+import lib.ladder_len.*
+
+main = println (length [1, 2, 3], [1, 2, 3] |> length, map length [[1, 2, 3]])

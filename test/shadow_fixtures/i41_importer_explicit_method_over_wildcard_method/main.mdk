@@ -1,0 +1,5 @@
+-- L2 rung 3 over rung 4: `import szmod.{sz}` binds `Sz`'s method; the
+-- wildcard's `Tz` method of the same name is not it, so 1001
+import tzmod.*
+import szmod.{sz}
+main = println (sz 1)

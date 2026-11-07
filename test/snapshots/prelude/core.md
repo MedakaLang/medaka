@@ -1,5 +1,5 @@
 # META
-source_lines=2509
+source_lines=2519
 stages=TYPES
 diagnostics=TYPES
 # SOURCE
@@ -680,6 +680,10 @@ export impl Display (a, b, c, d, e) requires Display a, Display b, Display c, Di
    `Leaf (-1)` is unambiguous on sight — matching the classic `showsPrec`
    convention of parenthesizing negative numeric literals in argument
    position. -}
+
+{- | Parenthesizes a rendered field unless it is a single token. Exported for
+   the code the compiler generates for `deriving (Debug, Display)`. -}
+export
 derivedShowWrap : String -> String
 -- Callers: the `Debug`/`Display` impls for `Option` and `Result` above, and the
 -- generated `deriving` code (desugar.mdk's `showFieldPart`). Every wasm program
@@ -778,6 +782,10 @@ export impl Hashable (Result e a) requires Hashable e, Hashable a where
 -- on the low 63 bits of its inputs.  The accumulator is carried as that `Int`
 -- rather than a `U64`, which would be a heap cell per step; the step itself is
 -- one `U64` expression, computed unboxed.
+
+{- | One step of the hash fold, `acc * 33 + h`. Exported for the code the
+   compiler generates for `deriving (Hashable)`. -}
+export
 derivedHashStep : Int -> Int -> Int
 derivedHashStep acc h = u64TruncateToInt (u64Truncate acc * 33 + u64Truncate h)
 
@@ -1607,10 +1615,12 @@ sliceLastIndex hi = if hi == intMinBound then hi else hi - 1
 
 -- The half-open end of `a.[lo..=hi]` (desugar.mdk).  `hi + 1` has no `Int` when
 -- `hi` is `intMaxBound`, and no container reaches that index, so the end stays
--- `intMaxBound` and the slice refuses as out of range.  Called only from the
--- code desugar generates, which the dead-code rule cannot see.
+-- `intMaxBound` and the slice refuses as out of range.
+
+{- | The exclusive end of an inclusive slice `a.[lo..=hi]`. Exported for the
+   code the compiler generates for that slice. -}
+export
 sliceInclusiveEnd : Int -> Int
--- lint-disable-next-line rule-dead-code
 sliceInclusiveEnd hi = if hi == intMaxBound then hi else hi + 1
 
 -- Cons-chain walk for `Slice (List a)`: keep heads whose running index is in

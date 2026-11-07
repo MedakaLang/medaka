@@ -61,7 +61,7 @@ buildIr : String ->
   <Exec, FileRead, FileWrite, IO> Result String Int
 buildIr dir stem source = do
   _ <- writeFile "\{dir}/\{stem}.mdk" source
-  (code, out, err) <- boundedInTree 600 medakaBin [
+  (code, out, err) <- boundedInTree 600 (medakaBin ()) [
     "build",
     "--keep-ir",
     "\{dir}/\{stem}.mdk",

@@ -17,6 +17,7 @@ checkUndeterminedRetEffVarsDecl	Decl	3/14
 classEnvDeclFact	Decl	2/14
 constrainedSigName	Decl	2/14
 constrainedSigPredicateSlots	Decl	2/14
+coreImportLocals	Decl	2/14
 deAliasMethodImports	Decl	1/14
 declBodyVarsOf	Decl	1/14
 declCtorIdentsOf	Decl	3/14
@@ -52,7 +53,6 @@ inferExpected	Expr	2/43
 inferOneIfaceDefaults	Decl	2/14
 interfaceRow	Decl	2/14
 isAliasDecl	Decl	2/14
-isAliasMethodImport	Decl	2/14
 isDirectInterfaceDecl	Decl	1/14
 isDisplayHead	Expr	6/43
 isDoLoweredAndThenCallee	Expr	1/43

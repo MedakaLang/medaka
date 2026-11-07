@@ -1,0 +1,14 @@
+-- L3 (F-R4): an interface method and a top-level function of one name in one module is a
+-- located duplicate-declaration error, in value position as in application position (L1).
+interface Sizeable a where
+  size : a -> Int
+
+data Box = Box Int
+
+impl Sizeable Box where
+  size (Box n) = n
+
+size : Int -> Int
+size n = n + 1
+
+main = println (map size [1, 2, 3])

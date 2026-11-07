@@ -100,7 +100,13 @@ import driver.loader.{
   loadProgramFilesLocatedCached,
   moduleIdOfPath,
 }
-import frontend.visibility.{useModId, viewFor, isSubjectIn, ExportView(..)}
+import frontend.visibility.{
+  explicitOverWild,
+  useModId,
+  viewFor,
+  isSubjectIn,
+  ExportView(..),
+}
 import driver.diagnostics.{siblingPairsOf}
 import support.util.{zipL, startsWith, endsWith, splitOnChar}
 import support.path.{joinPath}
@@ -1357,12 +1363,10 @@ eachMember one ctors xs0 = go xs0
 
 -- run `act` in every namespace.
 forEachNs : (String -> Unit) -> Unit
-forEachNs act =
-  act nsVal
-  act nsTy
-  act nsCtor
-  act nsIface
-  act nsMethod
+forEachNs act = forEachUnit namespaces act
+
+namespaces : List String
+namespaces = [nsVal, nsTy, nsCtor, nsIface, nsMethod]
 
 -- re-export the origin name `o` from `srcMod` under local `l` in `mid`, in every
 -- namespace `srcMod` actually exports it under.
@@ -1403,47 +1407,71 @@ data ImportScope = ImportScope {
   impTrack : Bool,
 }
 
+-- One import's rows `(namespace, local, origin key)`, bound in source order under
+-- `explicitOverWild`: a wildcard's row for a name an explicit import binds in that
+-- namespace is left out, so the explicit binding is the one `impEnv` keeps.
 processImports : ImportScope -> List Decl -> Unit
-processImports _ [] = ()
-processImports sc ((DUse _ path _) :: rest) =
-  importPath sc path
-  processImports sc rest
-processImports sc ((DAttrib _ inner) :: rest) =
-  processImports sc (inner :: rest)
-processImports sc (_ :: rest) = processImports sc rest
+processImports sc decls =
+  bindImportRows
+    sc
+    (explicitOverWild importRowKey (_ => True) (importRows sc) decls)
+  importAliases sc decls
 
-importPath : ImportScope -> UsePath -> Unit
-importPath sc (UseName ns) = splitUseName ns (importOne sc)
-importPath sc (UseGroup srcPath members) =
-  importMembers sc (joinDotL srcPath) members
-importPath sc (UseWild srcPath) = importWild sc (joinDotL srcPath)
-importPath sc (UseAlias srcPath alias) =
+bindImportRows : ImportScope -> List (String, String, String) -> Unit
+bindImportRows sc rows =
+  forEachUnit rows ((ns, l, originKey) => bindImported sc ns l originKey)
+
+importRowKey : (String, String, String) -> String
+importRowKey (ns, l, _) = ns ++ sep ++ l
+
+importAliases : ImportScope -> List Decl -> Unit
+importAliases _ [] = ()
+importAliases sc ((DUse _ (UseAlias srcPath alias) _) :: rest) =
   hmSetC sc.impCtx sc.impAlias alias (joinDotL srcPath)
+  importAliases sc rest
+importAliases sc ((DAttrib _ inner) :: rest) = importAliases sc (inner :: rest)
+importAliases sc (_ :: rest) = importAliases sc rest
 
-importMembers : ImportScope -> String -> List UseMember -> Unit
-importMembers sc srcMod members =
-  eachMember (importOne sc srcMod) (importTyCtors sc srcMod) members
+importRows : ImportScope -> Decl -> List (String, String, String)
+importRows sc (DUse _ path _) = importPathRows sc path
+importRows sc (DAttrib _ inner) = importRows sc inner
+importRows _ _ = []
+
+importPathRows : ImportScope -> UsePath -> List (String, String, String)
+importPathRows sc (UseName ns) = match splitLastL ns
+  Some (pre, nm) => importOneRows sc (joinDotL pre) nm nm
+  None => []
+importPathRows sc (UseGroup srcPath members) =
+  flatMap (importMemberRows sc (joinDotL srcPath)) members
+importPathRows sc (UseWild srcPath) = importWildRows sc (joinDotL srcPath)
+importPathRows _ (UseAlias _ _) = []
+
+-- `import m.{T(..)}`: the constructors of `T` that `srcMod` exports enter scope
+-- under their own names, after the member itself.
+importMemberRows : ImportScope ->
+  String ->
+  UseMember ->
+  List (String, String, String)
+importMemberRows sc srcMod m =
+  let o = useMemberOrigin m
+  let ctors = match m
+    UseMember _ True _ _ =>
+      flatMap
+        (c => importNsRows sc srcMod c c nsCtor)
+        (tyCtorsOf sc.impCtx sc.impMe srcMod o)
+    _ => []
+  importOneRows sc srcMod o (useMemberLocal m) ++ ctors
 
 whenAll : UseMember -> (Unit -> Unit) -> Unit
 whenAll (UseMember _ True _ _) f = f ()
 whenAll _ _ = ()
 
--- `import m.{T(..)}`: the constructors of `T` that `srcMod` exports enter scope
--- under their own names.
 tyCtorsOf : Ctx -> String -> String -> String -> List String
 tyCtorsOf ctx me srcMod o = match originFor ctx me srcMod nsTy o
   Some tyKey => match hmGetC ctx ctx.tyCtors tyKey
     Some cs => cs
     None => []
   None => []
-
-importTyCtors : ImportScope -> String -> String -> Unit
-importTyCtors sc srcMod o = forEachUnit (tyCtorsOf
-  sc.impCtx
-  sc.impMe
-  srcMod
-  o) (c =>
-  importNs sc srcMod c c nsCtor)
 
 reExportTyCtors : Ctx -> String -> String -> String -> Unit
 reExportTyCtors ctx mid srcMod o = forEachUnit (tyCtorsOf
@@ -1459,13 +1487,22 @@ forEachUnit (x :: xs) f =
   f x
   forEachUnit xs f
 
-importOne : ImportScope -> String -> String -> String -> Unit
-importOne sc srcMod o l = forEachNs (importNs sc srcMod o l)
+importOneRows : ImportScope ->
+  String ->
+  String ->
+  String ->
+  List (String, String, String)
+importOneRows sc srcMod o l = flatMap (importNsRows sc srcMod o l) namespaces
 
-importNs : ImportScope -> String -> String -> String -> String -> Unit
-importNs sc srcMod o l ns = match originFor sc.impCtx sc.impMe srcMod ns o
-  Some originKey => bindImported sc ns l originKey
-  None => ()
+importNsRows : ImportScope ->
+  String ->
+  String ->
+  String ->
+  String ->
+  List (String, String, String)
+importNsRows sc srcMod o l ns = match originFor sc.impCtx sc.impMe srcMod ns o
+  Some originKey => [(ns, l, originKey)]
+  None => []
 
 -- bring `<ns> <l>` into scope as `originKey`.
 bindImported : ImportScope -> String -> String -> String -> Unit
@@ -1473,22 +1510,17 @@ bindImported sc ns l originKey =
   hmSetC sc.impCtx sc.impEnv (ns ++ sep ++ l) originKey
   if sc.impTrack then addPrivate sc.impCtx sc.impMe ns l originKey
 
-importWild : ImportScope -> String -> Unit
-importWild sc srcMod =
-  match hmGetC sc.impCtx sc.impCtx.modExp srcMod
-    Some entries => importWildGo sc entries
-    None => ()
-  match viewFor sc.impCtx.sibs sc.impMe srcMod
+importWildRows : ImportScope -> String -> List (String, String, String)
+importWildRows sc srcMod =
+  let exported = match hmGetC sc.impCtx sc.impCtx.modExp srcMod
+    Some entries => entries
+    None => []
+  let private = match viewFor sc.impCtx.sibs sc.impMe srcMod
     FullView => match hmGetC sc.impCtx sc.impCtx.modPriv srcMod
-      Some entries => importWildGo sc entries
-      None => ()
-    ExportedView => ()
-
-importWildGo : ImportScope -> List (String, String, String) -> Unit
-importWildGo _ [] = ()
-importWildGo sc ((ns, name, originKey) :: rest) =
-  bindImported sc ns name originKey
-  importWildGo sc rest
+      Some entries => entries
+      None => []
+    ExportedView => []
+  exported ++ private
 
 -- Last parse per prelude slot, keyed by the FULL source string (never a path), so
 -- an edited prelude re-parses.  The cached value is a function of `src` alone
@@ -1595,8 +1627,8 @@ consIf True x xs = x :: xs
 seedUseEnvPrelude : ImportScope -> Unit
 seedUseEnvPrelude sc =
   let own = { sc | impTrack = False }
-  importWild own "core"
-  importWild own "runtime"
+  bindImportRows own (importWildRows own "core")
+  bindImportRows own (importWildRows own "runtime")
 
 -- ── the per-module driver ────────────────────────────────────────────────────
 indexModule : Ctx -> String -> String -> String -> Unit

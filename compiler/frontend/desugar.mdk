@@ -39,6 +39,9 @@ import frontend.ast.{
   UseMember(..),
   UsePath(..),
   qualifiedLocal,
+  preludeAlias,
+  preludeQualified,
+  programIsCore,
   tyConUnresolved,
   dImplUnresolved,
   requireUnresolved,
@@ -68,6 +71,8 @@ import support.util.{
   lookupAssoc,
 }
 import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup, omHasKey}
+import frontend.ast_walk.{DeclBody(..), childExprs, declBodies}
+import string.{startsWith, stripPrefix}
 
 -- ── Bottom-up traversal engine (mirror of map_expr / map_decl) ────────────
 -- `mapExpr f e` rewrites every subexpression of `e` with `f`, post-order: the
@@ -236,6 +241,16 @@ mapProg f prog = map (mapDecl f) prog
 callBin : String -> Expr -> Expr -> Expr
 callBin fn a b = EApp (EApp (EVar fn) a) b
 
+-- A reference to the prelude's declaration of a name the sugar expands to.  It
+-- reaches the prelude through the reserved alias `scopePreludeRefs` binds, so
+-- a user binding of the same bare name cannot capture it.
+preludeRef : String -> Expr
+preludeRef n = EVar (preludeQualified n)
+
+-- `f a b` where `f` is the prelude's declaration (`preludeRef`).
+callPrelude : String -> Expr -> Expr -> Expr
+callPrelude fn a b = EApp (EApp (preludeRef fn) a) b
+
 -- binary operator, not yet resolved: `a <op> b`
 binOp : String -> Expr -> Expr -> Expr
 binOp op a b = EBinOp op a b unminted
@@ -271,7 +286,7 @@ rewriteSugar (EStringInterp parts) = interpToCore parts
 -- is a type error at the call site.
 rewriteSugar (EBinOp ":=" lhs rhs _) = callBin "setRef" lhs rhs
 -- `a[i]` / `a.[i]` (read position) → `index a i` (Index interface dispatch).
-rewriteSugar (EIndex a i) = callBin "index" a i
+rewriteSugar (EIndex a i) = callPrelude "index" a i
 -- `a.[lo..hi]` / `a.[lo..=hi]` (slice) → `slice a lo hi'` (Slice interface
 -- dispatch, #670), half-open: the inclusive `..=` form normalizes here to
 -- `slice a lo (sliceInclusiveEnd hi)` (the prelude's `hi + 1`, which stops at
@@ -283,8 +298,8 @@ rewriteSugar (EIndex a i) = callBin "index" a i
 -- fault).  Pure surface sugar: no dedicated typecheck/eval/lower arm survives
 -- (they become dead — a stray post-desugar ESlice is a loud guard).
 rewriteSugar (ESlice a lo hi incl) =
-  let hiEx = if incl then EApp (EVar "sliceInclusiveEnd") hi else hi
-  EApp (EApp (EApp (EVar "slice") a) lo) hiEx
+  let hiEx = if incl then EApp (preludeRef "sliceInclusiveEnd") hi else hi
+  EApp (EApp (EApp (preludeRef "slice") a) lo) hiEx
 rewriteSugar (lam@(ELam ps body)) =
   if any patHasAnnot ps then eraseLamAnnots ps body else lam
 rewriteSugar (m@(EMatch e arms)) =
@@ -303,7 +318,7 @@ rewriteAssignIndex (EBinOp ":=" lhs v r) =
 rewriteAssignIndex e = e
 
 assignIndexLhs : Expr -> Expr -> Expr -> EvId -> Expr
-assignIndexLhs (EIndex a i) _ v _ = EApp (callBin "setIndex" a i) v
+assignIndexLhs (EIndex a i) _ v _ = EApp (callPrelude "setIndex" a i) v
 assignIndexLhs _ lhs v r = EBinOp ":=" lhs v r
 
 -- guard arms → nested if/match, terminated by `__fallthrough__ ()` (fold_right)
@@ -533,7 +548,7 @@ interpToCore parts = concatStrings (map interpPartToExpr parts)
 
 interpPartToExpr : InterpPart -> Expr
 interpPartToExpr (InterpStr s) = ELit (LString s)
-interpPartToExpr (InterpExpr e) = EApp (EVar "display") e
+interpPartToExpr (InterpExpr e) = EApp (preludeRef "display") e
 
 concatStrings : List Expr -> Expr
 concatStrings [] = ELit (LString "")
@@ -601,7 +616,10 @@ exprLoc _ = None
 lowerDo : Bool -> List DoStmt -> Expr
 lowerDo _ [DoExpr e] = e
 lowerDo d [DoBind pat e] =
-  callAndThen d e (doCont pat (EApp (EVar (pureMethodName d)) (ELit LUnit)))
+  callAndThen
+    d
+    e
+    (doCont pat (EApp (preludeRef (pureMethodName d)) (ELit LUnit)))
 lowerDo d ((DoExpr e) :: rest) = callAndThen d e (ELam [PWild] (lowerDo d rest))
 lowerDo d ((DoBind pat e) :: rest) =
   callAndThen d e (doCont pat (lowerDo d rest))
@@ -686,8 +704,8 @@ outerLocs e acc =
 -- general container/List/Array message, which is safe, just less precise.
 callAndThen : Bool -> Expr -> Expr -> Expr
 callAndThen d e cont = locatedAt (exprSpanLoc e) (match exprLoc e
-  Some l => EApp (EApp (EDoOrigin l (EVar (bindMethodName d))) e) cont
-  None => callBin (bindMethodName d) e cont)
+  Some l => EApp (EApp (EDoOrigin l (preludeRef (bindMethodName d))) e) cont
+  None => callPrelude (bindMethodName d) e cont)
 
 -- bind continuation: a variable or wildcard binds directly; any other pattern
 -- goes through a one-arm match so the exhaustiveness check judges the user's
@@ -1036,7 +1054,7 @@ showFieldPart callName _ v = [ELit (LString " "), wrappedFieldCall callName v]
 
 wrappedFieldCall : String -> String -> Expr
 wrappedFieldCall callName v =
-  EApp (EVar "derivedShowWrap") (EApp (EVar callName) (EVar v))
+  EApp (preludeRef "derivedShowWrap") (EApp (preludeRef callName) (EVar v))
 
 -- ` f0 = <call> a0, f1 = <call> a1, …` inside the record braces.
 showNamedParts : String -> Int -> List Field -> List String -> List Expr
@@ -1047,9 +1065,9 @@ showNamedParts callName i ((Field fn _) :: fs) (v :: vs) =
 
 showNamedPart : String -> Int -> String -> String -> List Expr
 showNamedPart callName 0 fn v =
-  [ELit (LString " \{fn} = "), EApp (EVar callName) (EVar v)]
+  [ELit (LString " \{fn} = "), EApp (preludeRef callName) (EVar v)]
 showNamedPart callName _ fn v =
-  [ELit (LString ", \{fn} = "), EApp (EVar callName) (EVar v)]
+  [ELit (LString ", \{fn} = "), EApp (preludeRef callName) (EVar v)]
 
 -- Eq: same-constructor arms compare fields pairwise; a cross-constructor
 -- wildcard arm (only with ≥2 variants) returns False.
@@ -1084,7 +1102,7 @@ zipEqCalls : List String -> List String -> List Expr
 zipEqCalls [] _ = []
 zipEqCalls _ [] = []
 zipEqCalls (a :: arest) (b :: brest) =
-  callBin "eq" (EVar a) (EVar b) :: zipEqCalls arest brest
+  callPrelude "eq" (EVar a) (EVar b) :: zipEqCalls arest brest
 
 andAll : List Expr -> Expr
 andAll [] = EVar "True"
@@ -1143,8 +1161,8 @@ zipExprPairs (a :: arest) (b :: brest) =
 -- non-Eq result.
 lexCompareExprs : List (Expr, Expr) -> Expr
 lexCompareExprs [] = EVar "Eq"
-lexCompareExprs [(ea, eb)] = callBin "compare" ea eb
-lexCompareExprs ((ea, eb) :: rest) = EMatch (callBin "compare" ea eb) [
+lexCompareExprs [(ea, eb)] = callPrelude "compare" ea eb
+lexCompareExprs ((ea, eb) :: rest) = EMatch (callPrelude "compare" ea eb) [
   Arm (PCon "Eq" []) [] (lexCompareExprs rest),
   Arm (PVar "__c" (Loc "" 0 0 0 0) noBinderId) [] (EVar "__c"),
 ]
@@ -1181,7 +1199,9 @@ hashFold : Expr -> List String -> Expr
 hashFold acc [] = acc
 hashFold acc (v :: vs) =
   hashFold
-    (EApp (EApp (EVar "derivedHashStep") acc) (EApp (EVar "hash") (EVar v)))
+    (EApp
+      (EApp (preludeRef "derivedHashStep") acc)
+      (EApp (preludeRef "hash") (EVar v)))
     vs
 
 -- Generic: one arm per constructor → RCon name [to_rep a0, …]
@@ -1218,7 +1238,7 @@ genericRFields ((Field fn _) :: fs) (v :: vs) =
     :: genericRFields fs vs
 
 toRep : String -> Expr
-toRep x = EApp (EVar "to_rep") (EVar x)
+toRep x = EApp (preludeRef "to_rep") (EVar x)
 
 -- ── Pass: merge_iface_defaults (coalesce split interface-method entries) ──
 -- The parser splits an interface method with both a signature line (`f : T`,
@@ -1359,11 +1379,11 @@ lowerContainerLiterals prog = mapProg rewriteContainerLit prog
 rewriteContainerLit : Expr -> Expr
 rewriteContainerLit (EMapLit name kvs) =
   EHeadAnnot
-    (EApp (EVar "fromEntries") (EListLit (map kvToTuple kvs)))
+    (EApp (preludeRef "fromEntries") (EListLit (map kvToTuple kvs)))
     (pinType name [TyVar "_k", TyVar "_v"])
 rewriteContainerLit (ESetLit name items) =
   EHeadAnnot
-    (EApp (EVar "fromEntries") (EListLit items))
+    (EApp (preludeRef "fromEntries") (EListLit items))
     (pinType name [TyVar "_a"])
 rewriteContainerLit e = e
 
@@ -1439,9 +1459,9 @@ qualifiedAt _ _ e = e
 -- ── The pass pipeline ─────────────────────────────────────────────────────
 -- Pass order: qualifyAliasRefs → mergeIfaceDefaults → expandDecl →
 -- desugarRecordPuns → lowerContainerLiterals → rewriteDo → rewriteAssignIndex →
--- rewriteSugar → stampBinderIds. The last step mints every binder's id, with
--- `""` as the module half; `desugarIn` is the same pipeline for a caller that
--- knows the module.
+-- rewriteSugar → scopePreludeRefs → stampBinderIds. The last step mints every
+-- binder's id, with `""` as the module half; `desugarIn` is the same pipeline
+-- for a caller that knows the module.
 export
 desugar : List Decl -> List Decl
 desugar prog = desugarIn "" prog
@@ -1458,7 +1478,37 @@ desugarIn mid prog =
     |> mapProg rewriteDo
     |> mapProg rewriteAssignIndex
     |> mapProg rewriteSugar
+    |> scopePreludeRefs (programIsCore prog)
     |> stampBinderIds mid
+
+-- ── Pass: scope the generated prelude references ──────────────────────────
+-- A program that uses a `preludeRef` gets the `import core as $core` that binds
+-- it, placed first.  The prelude cannot import itself; there each reference
+-- names its own top-level declaration, so it is spelled bare.
+scopePreludeRefs : Bool -> List Decl -> List Decl
+scopePreludeRefs True prog = mapProg barePreludeRef prog
+scopePreludeRefs False prog =
+  if any declHasPreludeRef prog then preludeAliasDecl :: prog else prog
+
+preludeAliasDecl : Decl
+preludeAliasDecl =
+  DUse False (UseAlias ["core"] preludeAlias) (Loc "<desugar:core>" 1 1 1 1)
+
+barePreludeRef : Expr -> Expr
+barePreludeRef (e@(EVar n)) = match stripPrefix preludePrefix n
+  Some bare => EVar bare
+  None => e
+barePreludeRef e = e
+
+declHasPreludeRef : Decl -> Bool
+declHasPreludeRef d = any ((DeclBody _ e) => hasPreludeRef e) (declBodies d)
+
+hasPreludeRef : Expr -> Bool
+hasPreludeRef (EVar n) = startsWith preludePrefix n
+hasPreludeRef e = any hasPreludeRef (childExprs e)
+
+preludePrefix : String
+preludePrefix = preludeQualified ""
 
 -- ── Pass: binder ids ──────────────────────────────────────────────────────
 -- Every binder node gets a fresh `BinderId` (`frontend/ast.mdk`), whatever id it

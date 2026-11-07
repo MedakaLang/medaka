@@ -134,9 +134,12 @@ test "phase 134 dict-arity no collision render 99" =
 
 -- ── Phase 112: standalone vs method per receiver type ────────────────────────
 -- Ported from: test_eval_standalone_vs_method
--- boxmod.mdk: Box k v with standalone toList/isEmpty (not Foldable)
+-- boxmod.mdk: Box k v with standalone toList/isEmpty (not Foldable).
+-- The explicit import binds the bare names to the standalones (SHADOW-SEMANTICS L2
+-- rung 3); the Foldable methods are reached through the alias `C` (L8).
 
 import boxmod.{Box, toList, isEmpty}
+import core as C
 
 b112 : Box Int Int
 b112 = Box 1 2
@@ -148,10 +151,10 @@ beResult : Bool
 beResult = isEmpty b112
 
 oeResult : Bool
-oeResult = isEmpty [1, 2, 3]
+oeResult = C.isEmpty [1, 2, 3]
 
 olResult : List Int
-olResult = toList (Some 7)
+olResult = C.toList (Some 7)
 
 test "standalone toList divergent pair type" = match pairsResult
   [(k, v)] => expectAll [expectEqual 1 k, expectEqual 2 v]

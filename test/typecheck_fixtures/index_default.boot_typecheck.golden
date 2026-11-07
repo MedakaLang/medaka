@@ -1,4 +1,4 @@
-TYPE ERROR: unbound variable `index`
-TYPE ERROR: unbound variable `index`
-TYPE ERROR: unbound variable `index`
-TYPE ERROR: unbound variable `index`
+TYPE ERROR: unbound variable `$core.index`
+TYPE ERROR: unbound variable `$core.index`
+TYPE ERROR: unbound variable `$core.index`
+TYPE ERROR: unbound variable `$core.index`

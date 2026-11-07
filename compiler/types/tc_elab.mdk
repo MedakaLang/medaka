@@ -88,8 +88,7 @@ import types.tc_grants.{
   narrowFileAtom,
 }
 import types.tc_occurrence.{
-  arithDispatchMethod,
-  binopMethod,
+  binopDispatchMethod,
   isGrantOnlyEv,
   mintMethodCellRaw,
   unopMethod,
@@ -1422,11 +1421,6 @@ binopMethodApp mctx pe op l r route =
         l)
       r
   if op == "/=" then EApp (EVar "not") call else call
-
-binopDispatchMethod : String -> Option String
-binopDispatchMethod op = match arithDispatchMethod op
-  Some method => Some method
-  None => binopMethod op
 
 -- The EUnOp analogue of binopMethodApp: one operand, no `/=`-style postfix
 -- (unopMethod only ever routes `-`).  Reuses binopRouteSplit (a generic

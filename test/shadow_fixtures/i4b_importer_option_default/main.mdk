@@ -1,6 +1,6 @@
+-- L2 rung 4 over rung 5: `import bytes.*` binds `length : Bytes -> Int`, which beats the
+-- prelude method; `length (Some 7)` is a located type mismatch
 import bytes.*
--- S2 reaches Foldable's default: Some folds once, None zero times.
--- Bytes has no Foldable impl, so its standalone counts six UTF-8 bytes.
 o : Option Int
 o = Some 7
 main =

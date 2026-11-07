@@ -4,8 +4,8 @@ Assertions for a test that runs a program.
 
 A test whose subject is a whole program (a compiler verb, a script, any
 binary) spawns it and grades what came back. `expectSpawnOk`,
-`expectSpawnFails` and `expectSpawnOkLine` grade a spawn. `medakaRoot`,
-`underRoot` and `medakaBin` locate the tree and the binary under test.
+`expectSpawnFails` and `expectSpawnOkLine` grade a spawn. `medakaRoot ()`,
+`underRoot` and `medakaBin ()` locate the tree and the binary under test.
 `boundedVerb` puts a time limit on one spawn, and `withScratchDir` runs a
 test body in a directory of its own and removes it afterwards.
 
@@ -25,7 +25,7 @@ support, so a file using them runs under `medaka test --native`.
 ### `medakaRoot`
 
 ```
-medakaRoot : <Env "MEDAKA_ROOT"> String
+medakaRoot : Unit -> <Env "MEDAKA_ROOT"> String
 ```
 
 The root of the Medaka tree under test: `MEDAKA_ROOT`, or `"."` when
@@ -46,11 +46,11 @@ The path `rel`, relative to the tree root, resolved under `medakaRoot`.
 ### `medakaBin`
 
 ```
-medakaBin : <Env "MEDAKA_ROOT", Env "MEDAKA"> String
+medakaBin : Unit -> <Env "MEDAKA_ROOT", Env "MEDAKA"> String
 ```
 
 The Medaka binary to spawn: `MEDAKA`, or the binary named medaka in
-`medakaRoot` when it is unset.
+`medakaRoot ()` when it is unset.
 
 The default is a path, so an unset `MEDAKA` never resolves to another
 build on `PATH`.
@@ -110,21 +110,18 @@ Ok (127, "", True)
 ### `scratchDir`
 
 ```
-scratchDir : <Exec "mktemp*"> Result String String
+scratchDir : Unit -> <Exec "mktemp*"> Result String String
 ```
 
 A fresh, empty directory for a test that has to write files.
 
-`scratchDir` is a value, so it is evaluated once per process: every use in
-one test file, and so every `test` block of that file, is handed the SAME
-directory. A block that removes it takes the next block's workspace with
-it, and a block that leaves files behind leaks them into the next. Two
-concurrent runs of the same test do not collide, because each process makes
-its own. The caller owns the directory and removes it. Prefer
-`withScratchDir`, which gives each call its own directory and removes it.
+Each call makes a new directory, so a caller that wants one directory for
+several uses binds `scratchDir ()` once and shares the result. Two
+concurrent runs of the same test do not collide. The caller owns the
+directory and removes it. Prefer `withScratchDir`, which removes it.
 
 ```medaka
-> map (startsWith "/") scratchDir
+> map (startsWith "/") (scratchDir ())
 Ok True
 ```
 
@@ -137,7 +134,7 @@ withScratchDir body
 
 Runs `body` with a fresh, empty directory of its own, then removes it.
 
-Unlike `scratchDir`, each call makes a new directory, so the `test` blocks
+Unlike `scratchDir ()`, each call makes a new directory, so the `test` blocks
 of one file cannot see each other's files and none can delete another's
 workspace. Removal is graded: a directory that cannot be removed fails the
 test rather than being left behind, and a failing `body` still has its
@@ -339,7 +336,7 @@ True
 ### `testJobs`
 
 ```
-testJobs : <Exec, Env "MEDAKA_TEST_JOBS"> Int
+testJobs : Unit -> <Exec, Env "MEDAKA_TEST_JOBS"> Int
 ```
 
 How many `medaka test` runs start at once, in `testAssertionCounts` and
@@ -350,7 +347,7 @@ processors available to the process (nproc, else getconf), or 4 when
 that cannot be read.
 
 ```medaka
-> testJobs > 0
+> testJobs () > 0
 True
 ```
 

@@ -208,8 +208,8 @@ import io.{readLines}
 logPath : String
 logPath = "expenses.log"
 
-writeLog : <IO> Result String Unit
-writeLog =
+writeLog : Unit -> <IO> Result String Unit
+writeLog () =
   writeFile logPath "2026-08-01,Cafe Fish,4.50\n2026-08-02,Landlord,1200.0\n"
 
 countEntries : String -> <IO> Int
@@ -217,7 +217,7 @@ countEntries path = match readLines path
   Ok ls => length ls
   Err _ => 0
 
-main = match writeLog
+main = match writeLog ()
   Err e => println "could not write the log: \{e}"
   Ok () =>
     println "wrote \{logPath}"

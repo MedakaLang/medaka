@@ -1,5 +1,5 @@
 # META
-source_lines=346
+source_lines=348
 stages=DESUGAR,MARK
 # SOURCE
 -- Scoped effect collection. A capture observes performed rows without solving
@@ -15,7 +15,7 @@ import types.effect_authority.{
 import types.repr.{Mono(..), normalize}
 import frontend.ast.{
   Expr(..), Lit(..), Pat(..), Arm(..), LetBind(..), FunClause(..), DoStmt(..),
-  TyConOrigin(..), patBoundNames, sameTyConHead
+  TyConOrigin(..), patBoundNames, sameTyConHead, preludeQualified
 }
 import support.util.{reverseL, mapOption}
 
@@ -148,10 +148,11 @@ alphaSyntax top env lets (EApp f x)
 alphaSyntax _ _ _ (ELit _ | ELam _ _ | EUnOp _ _ _ | EInfix _ _ _ | EFieldAccess _ _ _ | ETuple _ | EListLit _ | EArrayLit _ | ERangeList _ _ _ | ERangeArray _ _ _ | ESlice _ _ _ _ | ESection _ | EIndex _ _ | EDo _ _ | EStringInterp _ | EGuards _ | ERecordCreate _ _ | ERecordUpdate _ _ _ | EVariantUpdate _ _ _ | EMapLit _ _ | ESetLit _ _ | EAsPat _ _ | EOrPat _ | EMethodRef _ | EDictApp _ | EMethodAt _ _ _ | ENumLit _ _ _ | EWideLit _ _ _ _ | EApp _ _ | EBinOp _ _ _ _) =
   None
 
--- `display e`, which string interpolation lowers each part to, is `e` itself
--- when `display` is the prelude method and `e` is a `String`: the prelude's
--- `Display String` is the identity. A local, top-level or imported definition
--- of `display` denotes some other function, so under one the part is top.
+-- `display e` is `e` itself when `display` is the prelude method and `e` is a
+-- `String`: the prelude's `Display String` is the identity. String
+-- interpolation lowers each part to the prelude's, spelled through the
+-- prelude alias. A written `display` that a local, top-level or imported
+-- definition shadows denotes some other function, so under one it is top.
 displayHead : AlphaEnv -> List (String, AlphaBinder) -> Expr -> Bool
 displayHead env lets x0 = go x0
   where
@@ -163,7 +164,8 @@ displayHead env lets x0 = go x0
 
 preludeDisplay : AlphaEnv -> List (String, AlphaBinder) -> String -> Bool
 preludeDisplay env lets x =
-  x == "display" && env.aeDisplayIsPrelude && isNone (letInScope x lets)
+  x == preludeQualified "display"
+    || x == "display" && env.aeDisplayIsPrelude && isNone (letInScope x lets)
 
 -- The names a `display` operand is read through: only a qualified `String`
 -- keeps its qualifier, since a qualified value of another type displays as a
@@ -349,11 +351,12 @@ collectBinds ((LetBind n clauses _ _) :: rest) acc = match clauses
   [FunClause [] rhs] => collectBinds rest ((n, ALet rhs) :: acc)
   _ => collectBinds rest acc
 # DESUGAR
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "EffRow" true) (mem "Effvar" false) (mem "collectRows" false))))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true) (mem "canonParam" false) (mem "productPrimaryLift" false) (mem "domainKey" false))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "authJoin" false) (mem "authTop" false) (mem "authExtend" false) (mem "authAppend" false) (mem "authWidenValue" false) (mem "authDomainTop" false) (mem "authRetag" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Mono" true) (mem "normalize" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Expr" true) (mem "Lit" true) (mem "Pat" true) (mem "Arm" true) (mem "LetBind" true) (mem "FunClause" true) (mem "DoStmt" true) (mem "TyConOrigin" true) (mem "patBoundNames" false) (mem "sameTyConHead" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Expr" true) (mem "Lit" true) (mem "Pat" true) (mem "Arm" true) (mem "LetBind" true) (mem "FunClause" true) (mem "DoStmt" true) (mem "TyConOrigin" true) (mem "patBoundNames" false) (mem "sameTyConHead" false) (mem "preludeQualified" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "mapOption" false))))
 (DTypeSig true "recordEffect" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "EffRow"))) (TyFun (TyCon "EffRow") (TyCon "Unit"))))
 (DFunDef false "recordEffect" (PWild (PCon "EffRow" (PList) (PCon "None"))) (ELit LUnit))
@@ -394,9 +397,9 @@ collectBinds ((LetBind n clauses _ _) :: rest) acc = match clauses
 (DTypeSig false "displayHead" (TyFun (TyCon "AlphaEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "AlphaBinder"))) (TyFun (TyCon "Expr") (TyCon "Bool")))))
 (DFunDef false "displayHead" ((PVar "env") (PVar "lets") (PVar "x0")) (ELetGroup ((lgb "go" (clause ((PCon "ELoc" PWild (PVar "f"))) (EApp (EVar "go") (EVar "f"))) (clause ((PCon "EVar" (PVar "x"))) (EApp (EApp (EApp (EVar "preludeDisplay") (EVar "env")) (EVar "lets")) (EVar "x"))) (clause ((PCon "EVarId" (PVar "x") PWild)) (EApp (EApp (EApp (EVar "preludeDisplay") (EVar "env")) (EVar "lets")) (EVar "x"))) (clause ((PCon "EMethodAt" (PVar "x") (PVar "seed") PWild)) (EBinOp "&&" (EBinOp "==" (EVar "seed") (ELit (LString ""))) (EApp (EApp (EApp (EVar "preludeDisplay") (EVar "env")) (EVar "lets")) (EVar "x")))) (clause (PWild) (EVar "False")))) (EApp (EVar "go") (EVar "x0"))))
 (DTypeSig false "preludeDisplay" (TyFun (TyCon "AlphaEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "AlphaBinder"))) (TyFun (TyCon "String") (TyCon "Bool")))))
-(DFunDef false "preludeDisplay" ((PVar "env") (PVar "lets") (PVar "x")) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "x") (ELit (LString "display"))) (EFieldAccess (EVar "env") "aeDisplayIsPrelude")) (EApp (EVar "isNone") (EApp (EApp (EVar "letInScope") (EVar "x")) (EVar "lets")))))
+(DFunDef false "preludeDisplay" ((PVar "env") (PVar "lets") (PVar "x")) (EBinOp "||" (EBinOp "==" (EVar "x") (EApp (EVar "preludeQualified") (ELit (LString "display")))) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "x") (ELit (LString "display"))) (EFieldAccess (EVar "env") "aeDisplayIsPrelude")) (EApp (EVar "isNone") (EApp (EApp (EVar "letInScope") (EVar "x")) (EVar "lets"))))))
 (DTypeSig false "stringNames" (TyFun (TyCon "AlphaEnv") (TyCon "AlphaEnv")))
-(DFunDef false "stringNames" ((PVar "env")) (ERecordUpdate (EVar "env") ((fa "aeVarType" (ELam ((PVar "x")) (EApp (EApp (EVar "andThen") (EApp (EFieldAccess (EVar "env") "aeVarType") (EVar "x"))) (ELam ((PVar "ty")) (EIf (EApp (EVar "qualifiedString") (EVar "ty")) (EApp (EVar "Some") (EVar "ty")) (EVar "None")))))))))
+(DFunDef false "stringNames" ((PVar "env")) (ERecordUpdate (EVar "env") ((fa "aeVarType" (ELam ((PVar "x")) (EApp (EApp (EVar "$core.andThen") (EApp (EFieldAccess (EVar "env") "aeVarType") (EVar "x"))) (ELam ((PVar "ty")) (EIf (EApp (EVar "qualifiedString") (EVar "ty")) (EApp (EVar "Some") (EVar "ty")) (EVar "None")))))))))
 (DTypeSig false "qualifiedString" (TyFun (TyCon "Mono") (TyCon "Bool")))
 (DFunDef false "qualifiedString" ((PVar "ty")) (EMatch (EApp (EVar "normalize") (EVar "ty")) (arm (PCon "TQual" (PVar "inner") PWild) () (EMatch (EApp (EVar "normalize") (EVar "inner")) (arm (PCon "TCon" (PVar "n") (PVar "o")) () (EApp (EApp (EApp (EApp (EVar "sameTyConHead") (EVar "n")) (EVar "o")) (ELit (LString "String"))) (EVar "OriginBuiltin"))) (arm PWild () (EVar "False")))) (arm PWild () (EVar "False"))))
 (DTypeSig false "blockAuthority" (TyFun (TyCon "Param") (TyFun (TyCon "AlphaEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "AlphaBinder"))) (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyApp (TyCon "Option") (TyCon "Authority")))))))
@@ -437,7 +440,7 @@ collectBinds ((LetBind n clauses _ _) :: rest) acc = match clauses
 (DTypeSig false "varAuthority" (TyFun (TyCon "Param") (TyFun (TyCon "AlphaEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "AlphaBinder"))) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Authority")))))))
 (DFunDef false "varAuthority" ((PVar "top") (PVar "env") (PVar "lets") (PVar "x")) (EMatch (EApp (EApp (EVar "letInScope") (EVar "x")) (EVar "lets")) (arm (PCon "Some" (PTuple (PCon "ALet" (PVar "rhs")) (PVar "older"))) () (EApp (EApp (EApp (EApp (EVar "alphaSyntax") (EVar "top")) (EVar "env")) (EVar "older")) (EVar "rhs"))) (arm (PCon "Some" (PTuple (PCon "AOpaque") PWild)) () (EVar "None")) (arm (PCon "Some" (PTuple (PCon "AParam") PWild)) () (EApp (EApp (EApp (EVar "typedAuthority") (EVar "top")) (EVar "env")) (EVar "x"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "typedAuthority") (EVar "top")) (EVar "env")) (EVar "x")))))
 (DTypeSig false "typedAuthority" (TyFun (TyCon "Param") (TyFun (TyCon "AlphaEnv") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Authority"))))))
-(DFunDef false "typedAuthority" ((PVar "top") (PVar "env") (PVar "x")) (EApp (EApp (EVar "andThen") (EApp (EFieldAccess (EVar "env") "aeVarType") (EVar "x"))) (ELam ((PVar "ty")) (EMatch (EApp (EVar "normalize") (EVar "ty")) (arm (PCon "TQual" PWild (PVar "q")) () (EApp (EVar "Some") (EApp (EApp (EVar "qualifierIn") (EVar "top")) (EVar "q")))) (arm PWild () (EVar "None"))))))
+(DFunDef false "typedAuthority" ((PVar "top") (PVar "env") (PVar "x")) (EApp (EApp (EVar "$core.andThen") (EApp (EFieldAccess (EVar "env") "aeVarType") (EVar "x"))) (ELam ((PVar "ty")) (EMatch (EApp (EVar "normalize") (EVar "ty")) (arm (PCon "TQual" PWild (PVar "q")) () (EApp (EVar "Some") (EApp (EApp (EVar "qualifierIn") (EVar "top")) (EVar "q")))) (arm PWild () (EVar "None"))))))
 (DTypeSig false "letInScope" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "AlphaBinder"))) (TyApp (TyCon "Option") (TyTuple (TyCon "AlphaBinder") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "AlphaBinder"))))))))
 (DFunDef false "letInScope" (PWild (PList)) (EVar "None"))
 (DFunDef false "letInScope" ((PVar "x") (PCons (PTuple (PVar "n") (PVar "e")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "n") (EVar "x")) (EApp (EVar "Some") (ETuple (EVar "e") (EVar "rest"))) (EApp (EApp (EVar "letInScope") (EVar "x")) (EVar "rest"))))
@@ -449,11 +452,12 @@ collectBinds ((LetBind n clauses _ _) :: rest) acc = match clauses
 (DFunDef false "collectBinds" ((PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "collectBinds" ((PCons (PCon "LetBind" (PVar "n") (PVar "clauses") PWild PWild) (PVar "rest")) (PVar "acc")) (EMatch (EVar "clauses") (arm (PList (PCon "FunClause" (PList) (PVar "rhs"))) () (EApp (EApp (EVar "collectBinds") (EVar "rest")) (EBinOp "::" (ETuple (EVar "n") (EApp (EVar "ALet") (EVar "rhs"))) (EVar "acc")))) (arm PWild () (EApp (EApp (EVar "collectBinds") (EVar "rest")) (EVar "acc")))))
 # MARK
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "EffRow" true) (mem "Effvar" false) (mem "collectRows" false))))
 (DUse false (UseGroup ("types" "effect_domain") ((mem "Param" true) (mem "canonParam" false) (mem "productPrimaryLift" false) (mem "domainKey" false))))
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "authJoin" false) (mem "authTop" false) (mem "authExtend" false) (mem "authAppend" false) (mem "authWidenValue" false) (mem "authDomainTop" false) (mem "authRetag" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Mono" true) (mem "normalize" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Expr" true) (mem "Lit" true) (mem "Pat" true) (mem "Arm" true) (mem "LetBind" true) (mem "FunClause" true) (mem "DoStmt" true) (mem "TyConOrigin" true) (mem "patBoundNames" false) (mem "sameTyConHead" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Expr" true) (mem "Lit" true) (mem "Pat" true) (mem "Arm" true) (mem "LetBind" true) (mem "FunClause" true) (mem "DoStmt" true) (mem "TyConOrigin" true) (mem "patBoundNames" false) (mem "sameTyConHead" false) (mem "preludeQualified" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "mapOption" false))))
 (DTypeSig true "recordEffect" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "EffRow"))) (TyFun (TyCon "EffRow") (TyCon "Unit"))))
 (DFunDef false "recordEffect" (PWild (PCon "EffRow" (PList) (PCon "None"))) (ELit LUnit))
@@ -494,9 +498,9 @@ collectBinds ((LetBind n clauses _ _) :: rest) acc = match clauses
 (DTypeSig false "displayHead" (TyFun (TyCon "AlphaEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "AlphaBinder"))) (TyFun (TyCon "Expr") (TyCon "Bool")))))
 (DFunDef false "displayHead" ((PVar "env") (PVar "lets") (PVar "x0")) (ELetGroup ((lgb "go" (clause ((PCon "ELoc" PWild (PVar "f"))) (EApp (EVar "go") (EVar "f"))) (clause ((PCon "EVar" (PVar "x"))) (EApp (EApp (EApp (EVar "preludeDisplay") (EVar "env")) (EVar "lets")) (EVar "x"))) (clause ((PCon "EVarId" (PVar "x") PWild)) (EApp (EApp (EApp (EVar "preludeDisplay") (EVar "env")) (EVar "lets")) (EVar "x"))) (clause ((PCon "EMethodAt" (PVar "x") (PVar "seed") PWild)) (EBinOp "&&" (EBinOp "==" (EVar "seed") (ELit (LString ""))) (EApp (EApp (EApp (EVar "preludeDisplay") (EVar "env")) (EVar "lets")) (EVar "x")))) (clause (PWild) (EVar "False")))) (EApp (EVar "go") (EVar "x0"))))
 (DTypeSig false "preludeDisplay" (TyFun (TyCon "AlphaEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "AlphaBinder"))) (TyFun (TyCon "String") (TyCon "Bool")))))
-(DFunDef false "preludeDisplay" ((PVar "env") (PVar "lets") (PVar "x")) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "x") (ELit (LString "display"))) (EFieldAccess (EVar "env") "aeDisplayIsPrelude")) (EApp (EVar "isNone") (EApp (EApp (EVar "letInScope") (EVar "x")) (EVar "lets")))))
+(DFunDef false "preludeDisplay" ((PVar "env") (PVar "lets") (PVar "x")) (EBinOp "||" (EBinOp "==" (EVar "x") (EApp (EVar "preludeQualified") (ELit (LString "display")))) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "x") (ELit (LString "display"))) (EFieldAccess (EVar "env") "aeDisplayIsPrelude")) (EApp (EVar "isNone") (EApp (EApp (EVar "letInScope") (EVar "x")) (EVar "lets"))))))
 (DTypeSig false "stringNames" (TyFun (TyCon "AlphaEnv") (TyCon "AlphaEnv")))
-(DFunDef false "stringNames" ((PVar "env")) (ERecordUpdate (EVar "env") ((fa "aeVarType" (ELam ((PVar "x")) (EApp (EApp (EMethodRef "andThen") (EApp (EFieldAccess (EVar "env") "aeVarType") (EVar "x"))) (ELam ((PVar "ty")) (EIf (EApp (EVar "qualifiedString") (EVar "ty")) (EApp (EVar "Some") (EVar "ty")) (EVar "None")))))))))
+(DFunDef false "stringNames" ((PVar "env")) (ERecordUpdate (EVar "env") ((fa "aeVarType" (ELam ((PVar "x")) (EApp (EApp (EVar "$core.andThen") (EApp (EFieldAccess (EVar "env") "aeVarType") (EVar "x"))) (ELam ((PVar "ty")) (EIf (EApp (EVar "qualifiedString") (EVar "ty")) (EApp (EVar "Some") (EVar "ty")) (EVar "None")))))))))
 (DTypeSig false "qualifiedString" (TyFun (TyCon "Mono") (TyCon "Bool")))
 (DFunDef false "qualifiedString" ((PVar "ty")) (EMatch (EApp (EVar "normalize") (EVar "ty")) (arm (PCon "TQual" (PVar "inner") PWild) () (EMatch (EApp (EVar "normalize") (EVar "inner")) (arm (PCon "TCon" (PVar "n") (PVar "o")) () (EApp (EApp (EApp (EApp (EVar "sameTyConHead") (EVar "n")) (EVar "o")) (ELit (LString "String"))) (EVar "OriginBuiltin"))) (arm PWild () (EVar "False")))) (arm PWild () (EVar "False"))))
 (DTypeSig false "blockAuthority" (TyFun (TyCon "Param") (TyFun (TyCon "AlphaEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "AlphaBinder"))) (TyFun (TyApp (TyCon "List") (TyCon "DoStmt")) (TyApp (TyCon "Option") (TyCon "Authority")))))))
@@ -537,7 +541,7 @@ collectBinds ((LetBind n clauses _ _) :: rest) acc = match clauses
 (DTypeSig false "varAuthority" (TyFun (TyCon "Param") (TyFun (TyCon "AlphaEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "AlphaBinder"))) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Authority")))))))
 (DFunDef false "varAuthority" ((PVar "top") (PVar "env") (PVar "lets") (PVar "x")) (EMatch (EApp (EApp (EVar "letInScope") (EVar "x")) (EVar "lets")) (arm (PCon "Some" (PTuple (PCon "ALet" (PVar "rhs")) (PVar "older"))) () (EApp (EApp (EApp (EApp (EVar "alphaSyntax") (EVar "top")) (EVar "env")) (EVar "older")) (EVar "rhs"))) (arm (PCon "Some" (PTuple (PCon "AOpaque") PWild)) () (EVar "None")) (arm (PCon "Some" (PTuple (PCon "AParam") PWild)) () (EApp (EApp (EApp (EVar "typedAuthority") (EVar "top")) (EVar "env")) (EVar "x"))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "typedAuthority") (EVar "top")) (EVar "env")) (EVar "x")))))
 (DTypeSig false "typedAuthority" (TyFun (TyCon "Param") (TyFun (TyCon "AlphaEnv") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Authority"))))))
-(DFunDef false "typedAuthority" ((PVar "top") (PVar "env") (PVar "x")) (EApp (EApp (EMethodRef "andThen") (EApp (EFieldAccess (EVar "env") "aeVarType") (EVar "x"))) (ELam ((PVar "ty")) (EMatch (EApp (EVar "normalize") (EVar "ty")) (arm (PCon "TQual" PWild (PVar "q")) () (EApp (EVar "Some") (EApp (EApp (EVar "qualifierIn") (EVar "top")) (EVar "q")))) (arm PWild () (EVar "None"))))))
+(DFunDef false "typedAuthority" ((PVar "top") (PVar "env") (PVar "x")) (EApp (EApp (EVar "$core.andThen") (EApp (EFieldAccess (EVar "env") "aeVarType") (EVar "x"))) (ELam ((PVar "ty")) (EMatch (EApp (EVar "normalize") (EVar "ty")) (arm (PCon "TQual" PWild (PVar "q")) () (EApp (EVar "Some") (EApp (EApp (EVar "qualifierIn") (EVar "top")) (EVar "q")))) (arm PWild () (EVar "None"))))))
 (DTypeSig false "letInScope" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "AlphaBinder"))) (TyApp (TyCon "Option") (TyTuple (TyCon "AlphaBinder") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "AlphaBinder"))))))))
 (DFunDef false "letInScope" (PWild (PList)) (EVar "None"))
 (DFunDef false "letInScope" ((PVar "x") (PCons (PTuple (PVar "n") (PVar "e")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "n") (EVar "x")) (EApp (EVar "Some") (ETuple (EVar "e") (EVar "rest"))) (EApp (EApp (EVar "letInScope") (EVar "x")) (EVar "rest"))))

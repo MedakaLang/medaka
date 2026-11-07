@@ -1,5 +1,0 @@
-interface Ifc c where
-  render : c -> String
-impl Ifc Int where
-  render n = "HIJACKED"
-main = println "\{7}"

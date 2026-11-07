@@ -82,8 +82,8 @@ failureOf rsrc csrc path = match readFile path
       else
         Some "\{stem path}: expected \{debug expected} but got \{debug got}"
 
-check : <FileRead> Expectation
-check = match readFile "stdlib/runtime.mdk"
+check : Unit -> <FileRead> Expectation
+check () = match readFile "stdlib/runtime.mdk"
   Err e => fail "could not read stdlib/runtime.mdk: \{e}"
   Ok rsrc => match readFile "stdlib/core.mdk"
     Err e => fail "could not read stdlib/core.mdk: \{e}"
@@ -97,7 +97,7 @@ check = match readFile "stdlib/runtime.mdk"
       ]
 
 test "diagnostics: analyze output matches each fixture's .analyze.golden" =
-  check
+  check ()
 
 -- ── published schemes at graph end ─────────────────────────────────────────
 
@@ -175,8 +175,11 @@ cellsWhere keep rows =
     ((entry, _, cs) => map (c => "\{entry}: \{debug c}") (filter keep cs))
     rows
 
-corpusCheck : <IO> Expectation
-corpusCheck = match (readFile "stdlib/runtime.mdk", readFile "stdlib/core.mdk")
+corpusCheck : Unit -> <IO> Expectation
+corpusCheck () = match (
+  readFile "stdlib/runtime.mdk",
+  readFile "stdlib/core.mdk",
+)
   (Ok rsrc, Ok csrc) => match (
     entriesIn "stdlib" ["stdlib"] (_ => True),
     entriesIn agreementDir [agreementDir, "stdlib"] isAccept,
@@ -198,7 +201,8 @@ corpusCheck = match (readFile "stdlib/runtime.mdk", readFile "stdlib/core.mdk")
     (_, Err e) => fail e
   _ => fail "could not read the prelude pair"
 
-test "graph end: the stdlib and ACCEPT corpus publishes no Link" = corpusCheck
+test "graph end: the stdlib and ACCEPT corpus publishes no Link" =
+  corpusCheck ()
 
 -- A binding the value restriction leaves ungeneralized, and a second module
 -- that imports and names it.

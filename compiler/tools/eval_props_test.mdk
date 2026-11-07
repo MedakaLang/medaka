@@ -107,7 +107,7 @@ withFixture source inspect = match makeTempDir ()
 runReport : String -> <Exec, IO> Result String (Int, Json)
 runReport target = do
   (code, stdout, stderr) <- boundedVerbSeconds 120 "env" [
-    medakaBin,
+    medakaBin (),
     "test",
     "--json",
     "--engines",
@@ -126,7 +126,7 @@ runReport target = do
 runReversedReport : String -> <Exec, IO> Result String (Int, Json)
 runReversedReport target = do
   (code, stdout, stderr) <- boundedVerbSeconds 120 "env" [
-    medakaBin,
+    medakaBin (),
     "test",
     "--json",
     "--engines",

@@ -1,6 +1,5 @@
--- SHADOW-SEMANTICS cell D1: definer shadow, receiver has NO impl of the shadowed
--- interface (an impl for another type exists) → RLocal standalone.
--- Expected: run/build print 4; check accepts.
+-- L3 (F-R4): an interface method and a top-level function of one name in one module is a
+-- located duplicate-declaration error, with or without impls, receivers or signatures
 interface Sizeable a where
   size : a -> Int
 

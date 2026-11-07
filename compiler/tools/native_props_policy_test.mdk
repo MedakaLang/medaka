@@ -30,7 +30,7 @@ withFixture source inspect = match makeTempDir ()
 
 runReport : String -> <Exec, IO> Result String (Int, Json)
 runReport target = do
-  (code, out, err) <- boundedVerbSeconds 120 medakaBin [
+  (code, out, err) <- boundedVerbSeconds 120 (medakaBin ()) [
     "test", "--json", "--engines", "eval,native", "--seed", "1", "--cases",
     "20", target
   ]

@@ -411,7 +411,7 @@ sourceStalenessVerdict _ =
   if baked == "" then
     None
   else
-    let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
+    let root = envOr "MEDAKA_ROOT" (defaultMedakaRoot ())
     let compilerDir = joinPath root "compiler"
     if not (fileExists compilerDir) then
       None
@@ -747,7 +747,9 @@ unknownSubcommand sub =
 -- under the stdlib root every verb resolves `stdlib/` against, read at each call.
 cliStdlibExportsEnv : List String -> <IO> List (String, List String)
 cliStdlibExportsEnv names =
-  cliStdlibExports (envOr "MEDAKA_ROOT" defaultMedakaRoot ++ "/stdlib") names
+  cliStdlibExports
+    (envOr "MEDAKA_ROOT" (defaultMedakaRoot ()) ++ "/stdlib")
+    names
 
 -- Reads <MEDAKA_ROOT>/stdlib/{runtime,core}.mdk + the target, runs
 -- check.runCheck, prints schemes/diagnostics.  Mirrors check_main.mdk; exit 0
@@ -813,7 +815,7 @@ runCheckCmd argv =
     [target] =>
       perfArm perfT0
       carryTargetProfile (lastValue "--target" a) target
-      let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
+      let root = envOr "MEDAKA_ROOT" (defaultMedakaRoot ())
       let stdlibDir = root ++ "/stdlib"
       let roots = entrySearchRoots (dirOf target) ++ [stdlibDir]
       match readPreludeSources stdlibDir
@@ -2433,7 +2435,7 @@ runBuildModes a = match flagValue "--emit-rt-obj" a
   -- runtime.  A CI gate points MEDAKA_RT_OBJ at the result to skip the redundant
   -- per-build recompile of the identical runtime.
   Some objPath =>
-    let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
+    let root = envOr "MEDAKA_ROOT" (defaultMedakaRoot ())
     let cc = envOr "CC" "clang"
     match emitRtObj cc root objPath
       Ok rep => println (ppBuildReport rep)
@@ -2446,7 +2448,7 @@ runBuildModes a = match flagValue "--emit-rt-obj" a
     -- mode.  A CI gate points MEDAKA_PRELUDE_OBJ at the result to skip
     -- re-optimising the identical prelude on every subsequent build.
     Some objPath =>
-      let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
+      let root = envOr "MEDAKA_ROOT" (defaultMedakaRoot ())
       let cc = envOr "CC" "clang"
       let medaka = envOr "MEDAKA" "./medaka"
       match emitPreludeObj cc root medaka objPath
@@ -2482,7 +2484,7 @@ runBuildPlainCmd a =
       else
         let target = buildTargetOrDie a input
         perfArm perfT0
-        let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
+        let root = envOr "MEDAKA_ROOT" (defaultMedakaRoot ())
         let medaka = envOr "MEDAKA" "medaka"
         let cc = envOr "CC" "clang"
         let inputAbs = input
@@ -2541,7 +2543,7 @@ runBuildJsonEntry a = match parseBuildArgs a
       println (cjBuildFailedJson "" msg)
       stageExit 1
     Ok target =>
-      let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
+      let root = envOr "MEDAKA_ROOT" (defaultMedakaRoot ())
       let stdlibDir = root ++ "/stdlib"
       let allowInternal = flag "--allow-internal" a
       runBuildJsonCmd a allowInternal root stdlibDir input outOpt target
@@ -2905,7 +2907,7 @@ runRunCmd argv =
       let stdinText = if isStdin then orExit (readStdinProgram ()) else ""
       perfArm perfT0
       carryTargetProfile (runTargetFlag argv) target
-      let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
+      let root = envOr "MEDAKA_ROOT" (defaultMedakaRoot ())
       let stdlibDir = root ++ "/stdlib"
       let roots = entrySearchRoots (dirOf target) ++ [stdlibDir]
       let allowInternal = runFlagGiven "--allow-internal" argv
@@ -3363,7 +3365,7 @@ runTestJsonCmd engines cases filterOpt target =
   pendingEnvelopeExtras := match !testSeedRef
     Some n => [("seed", JInt n)]
     None => []
-  let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
+  let root = envOr "MEDAKA_ROOT" (defaultMedakaRoot ())
   let stdlibDir = root ++ "/stdlib"
   let r = do
     prelude <- readPreludeSources stdlibDir
@@ -3431,7 +3433,7 @@ runTestManyTargets engines cases filterOpt seedOpt targets =
   match files
     [] => dieMsg "medaka test: no .mdk files found"
     _ =>
-      let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
+      let root = envOr "MEDAKA_ROOT" (defaultMedakaRoot ())
       let rtPath = root ++ "/stdlib/runtime.mdk"
       let corePath = root ++ "/stdlib/core.mdk"
       let stdlibDir = root ++ "/stdlib"
@@ -3517,7 +3519,7 @@ runDocTargets (_ :: _ :: _) =
   dieMsg "usage: medaka doc <file.mdk> (doc takes exactly one file)"
 runDocTargets (target :: _) =
   carryTargetProfile None target
-  let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
+  let root = envOr "MEDAKA_ROOT" (defaultMedakaRoot ())
   let stdlibDir = root ++ "/stdlib"
   let roots = entrySearchRoots (dirOf target) ++ [stdlibDir]
   let r = do
@@ -3539,7 +3541,7 @@ runDocLibraryTargets _ [] =
   dieMsg "usage: medaka doc --out DIR <file.mdk> [<file.mdk> ...]"
 runDocLibraryTargets outDir targets =
   carryTargetProfile None (optionOr "." (head targets))
-  let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
+  let root = envOr "MEDAKA_ROOT" (defaultMedakaRoot ())
   let stdlibDir = root ++ "/stdlib"
   let r = do
     prelude <- readPreludeSources stdlibDir
@@ -3744,7 +3746,7 @@ runCheckPolicyArgs (PolicyArgs (Some target) allow fn) =
 analyzeTarget : String -> String -> <IO> Result String EntryAnalysis
 analyzeTarget target fn =
   carryTargetProfile None target
-  let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
+  let root = envOr "MEDAKA_ROOT" (defaultMedakaRoot ())
   let stdlibDir = root ++ "/stdlib"
   let roots = entrySearchRoots (dirOf target) ++ [stdlibDir]
   -- An unreadable prelude or target is not an analysis result: exit here.
@@ -4519,7 +4521,7 @@ runSnapshotCmd argv0 =
   let a = requireArgs snapshotArgSpec argv0
   let root = match flagValue "--root" a
     Some r => r
-    None => envOr "MEDAKA_ROOT" defaultMedakaRoot
+    None => envOr "MEDAKA_ROOT" (defaultMedakaRoot ())
   let sel = snapshotStages a
   let targets = a.positionals
   assertBlessIsScoped (flag "--bless" a) targets
@@ -4616,7 +4618,7 @@ replUsageLine = stringConcat [
 runReplCmd : List String -> <IO> Unit
 runReplCmd [] =
   carryTargetProfile None (canonicalizePath "." ++ "/repl")
-  let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
+  let root = envOr "MEDAKA_ROOT" (defaultMedakaRoot ())
   let r = do
     prelude <- readPreludeSources (root ++ "/stdlib")
     -- S-1/#2234 (F-converge): content-keyed prelude memo, same as every other
@@ -4687,7 +4689,7 @@ runLspCmd (bad :: _) =
 
 runLspServerFromEnv : Unit -> <IO> Unit
 runLspServerFromEnv _ =
-  let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
+  let root = envOr "MEDAKA_ROOT" (defaultMedakaRoot ())
   let r = do
     prelude <- readPreludeSources (root ++ "/stdlib")
     let _ = loadCheckPrelude prelude
@@ -4740,7 +4742,7 @@ runMcpCmd (bad :: _) =
 
 runMcpServerFromEnv : Unit -> <IO> Unit
 runMcpServerFromEnv _ =
-  let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
+  let root = envOr "MEDAKA_ROOT" (defaultMedakaRoot ())
   let stdlibDir = root ++ "/stdlib"
   let r = do
     prelude <- readPreludeSources stdlibDir

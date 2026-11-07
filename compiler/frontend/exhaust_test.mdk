@@ -50,8 +50,8 @@ failureOf path = match readFile path
       else
         Some "\{stem path}: expected \{debug expected} but got \{debug got}"
 
-check : <FileRead> Expectation
-check = match fixtureFiles "test/exhaust_fixtures"
+check : Unit -> <FileRead> Expectation
+check () = match fixtureFiles "test/exhaust_fixtures"
   Err e => fail "could not list test/exhaust_fixtures: \{e}"
   Ok files =>
     let srcs = sort (filter (endsWith ".mdk") files)
@@ -60,7 +60,7 @@ check = match fixtureFiles "test/exhaust_fixtures"
       expectNoFindings "exhaust fixtures" (Ok (filterMap failureOf srcs)),
     ]
 
-test "exhaust: guard warnings match each fixture's .expected" = check
+test "exhaust: guard warnings match each fixture's .expected" = check ()
 
 -- ── or-patterns, read natively ────────────────────────────────────────────
 

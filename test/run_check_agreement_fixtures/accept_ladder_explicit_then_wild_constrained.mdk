@@ -1,0 +1,5 @@
+-- `accept_ladder_wild_then_explicit_constrained` with the two imports swapped.
+import lib.ladder_a.{foo}
+import lib.ladder_b2.*
+
+main = println (foo, bar)

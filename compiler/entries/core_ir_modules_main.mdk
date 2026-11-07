@@ -18,12 +18,11 @@ import frontend.ast.{Decl}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import types.annotate.{annotateProgram}
-import driver.loader.{loadProgram}
 import ir.core_ir_eval.{cevalModulesOutputFacts}
 import types.program_facts.{emptyFacts}
 import eval.eval.{ffiExternNamesRef}
 import support.util.{isEmptyL, isNonEmptyL}
-import entries.entry_support.{rootsOrDefault}
+import entries.entry_support.{rootsOrDefault, loadModulesLocated}
 
 export
 oracleMain : Unit -> <IO> Unit
@@ -49,7 +48,7 @@ annotatePair (mid, p) = (mid, annotateProgram (desugar p))
 run : String -> String -> List String -> <IO> Unit
 run coreP entry roots = match readFile coreP
   Err e => ePutStrLn e
-  Ok csrc => match loadProgram entry roots
+  Ok csrc => match loadModulesLocated entry roots
     Err e => ePutStrLn e
     Ok mods =>
       putStr
@@ -65,9 +64,9 @@ run coreP entry roots = match readFile coreP
 runFfiResetControl : String -> String -> String -> List String -> <IO> Unit
 runFfiResetControl coreP externEntry pureEntry roots = match readFile coreP
   Err e => ePutStrLn e
-  Ok csrc => match loadProgram externEntry roots
+  Ok csrc => match loadModulesLocated externEntry roots
     Err e => ePutStrLn e
-    Ok externMods => match loadProgram pureEntry roots
+    Ok externMods => match loadModulesLocated pureEntry roots
       Err e => ePutStrLn e
       Ok pureMods =>
         let coreDecls = annotateProgram (desugar (parse csrc))

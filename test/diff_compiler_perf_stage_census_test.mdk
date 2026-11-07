@@ -62,8 +62,8 @@ readRepo rel = match readFile (underRoot rel)
   Err e => Err "could not read \{rel}: \{e}"
   Ok t => Ok t
 
-loadAll : <IO, FileRead> Result String Inputs
-loadAll = do
+loadAll : Unit -> <IO, FileRead> Result String Inputs
+loadAll () = do
   a <- readRepo mainRel
   b <- readRepo modulesRel
   p <- readRepo perfRel
@@ -77,7 +77,7 @@ loadAll = do
   }
 
 withInputs : (Inputs -> Expectation) -> <IO, FileRead> Expectation
-withInputs k = match loadAll
+withInputs k = match loadAll ()
   Err e => fail e
   Ok i => k i
 

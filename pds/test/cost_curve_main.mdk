@@ -104,7 +104,7 @@ loadStore dir =
     Err message => panic "cost_curve: corpus blobs unreadable: \{message}"
   let next = storeWithServerSecret testKey withBlobs
   storeSessionOpen
-    (sessionFingerprint benchToken)
+    (sessionFingerprint (benchToken ()))
     (sessionFingerprint "cost_curve: no refresh token in this probe")
     (benchInstant + 3600)
     next
@@ -118,8 +118,8 @@ benchContext : RequestContext
 benchContext =
   RequestContext { nowSeconds = benchInstant, nonce = testNonce, login = None }
 
-benchToken : String
-benchToken =
+benchToken : Unit -> <Mint "access"> String
+benchToken () =
   mintAccessToken
     testKey
     corpusDid
@@ -138,11 +138,11 @@ procedureRequest : String -> String -> <Mint "access"> Bytes
 procedureRequest nsid body =
   let bytes = encodeUtf8 body
   encodeUtf8
-      "POST /xrpc/\{nsid} HTTP/1.1\r\nHost: \{hostText}\r\nAuthorization: Bearer \{benchToken}\r\nContent-Type: application/json\r\nContent-Length: \{intToString (B.length bytes)}\r\n\r\n"
+      "POST /xrpc/\{nsid} HTTP/1.1\r\nHost: \{hostText}\r\nAuthorization: Bearer \{benchToken ()}\r\nContent-Type: application/json\r\nContent-Length: \{intToString (B.length bytes)}\r\n\r\n"
     ++ bytes
 
-createRequest : Bytes
-createRequest =
+createRequest : Unit -> <Mint "access"> Bytes
+createRequest () =
   procedureRequest
     "com.atproto.repo.createRecord"
     (stringify
@@ -289,7 +289,8 @@ runCommitEvent dir reps =
   let server = match pdsServer (mustAccount ()) serverLinksEmpty "cost-curve"
     Ok value => value
     Err message => panic "cost_curve: server setup failed: \{message}"
-  let (written, response) = handleBytes server benchContext store createRequest
+  let (written, response) =
+    handleBytes server benchContext store (createRequest ())
   let after =
     optionOrPanic "cost_curve: the write left no repository" (storeRepo written)
   let start = monotonicSec ()

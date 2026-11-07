@@ -130,7 +130,6 @@ import frontend.ast.{
   UseMember(..),
   useMemberOrigin,
   useMemberLocal,
-  useMemberAlias,
   qualifiedLocal,
   Variant(..),
   DataVis(..),
@@ -156,6 +155,8 @@ import frontend.visibility.{
   valueDeclsOf,
   valueDeclOf,
   typeOfCtor,
+  explicitImportNames,
+  withoutShadowedWild,
 }
 import u64 as U64
 import list.{last, zip}
@@ -660,6 +661,7 @@ renameKeyCollides collided (n, _) = omHasKey n collided
 -- decls' own are every public interface's methods, where resolve passes only the
 -- bound ones (`keepBoundMethods`), so a re-export carries those as resolve's
 -- surface would once it has them.
+export
 unitSurfaces : List (String, List Decl) -> List (String, ModuleExports)
 unitSurfaces units = surfacesGo (coreExportsOf units) omEmpty units
 
@@ -708,8 +710,7 @@ surfaceMethods (mid, exp) =
 
 -- The functions a unit defines under a name its own decls export.  This reads
 -- the module's direct value exports, not its surface, so a private standalone
--- beside a public interface method of the same name is not offered
--- (`test/llvm_fixtures_modules/method_private_standalone_visibility`).  It keeps
+-- beside a public interface method of the same name is not offered.  It keeps
 -- core to what core marks exported, too: core's surface is every binding (#2640).
 unitFnSyms : (String -> ExportView) ->
   (String, List Decl) ->
@@ -1134,11 +1135,21 @@ buildUnitRenameMap entryMid mid exportsPerUnit externName externExports decls =
   let localEntries =
     map (n => (n, mangledName mid n)) localFns
       ++ externDeclEntries (externName mid) decls
-  let importEntries = importRenameEntries mid exportsPerUnit decls
+  let importedNames d =
+    map
+      fst
+      (declImportEntries exportsPerUnit d
+        ++ externImportEntries externExports d)
+  let explicit = explicitImportNames importedNames decls
+  let importEntries = importRenameEntries explicit exportsPerUnit decls
   let entries =
     localEntries
       ++ importEntries
-      ++ flatMap (externImportEntries externExports) decls
+      ++ withoutShadowedWild
+        explicit
+        fst
+        (externImportEntries externExports)
+        decls
   if mid == entryMid then
     filterList (e => not (isEntryMainKey entryMid mid (fst e))) entries
   else
@@ -1312,12 +1323,14 @@ isEntryMainKey entryMid mid n = mid == entryMid && n == "main"
 -- explicit sibling imports first (they shadow the implicit prelude), prelude last.
 -- The prelude half is filtered by the unit's own interface-method names — see
 -- `notIfaceMethodKey` above for why, and why the explicit half is NOT filtered.
-importRenameEntries : String ->
+-- A wildcard's entry for a name in [explicit] (the names the unit's explicit
+-- imports bind) is left out: the explicit import is what the name denotes.
+importRenameEntries : OrdMap Unit ->
   List (String, List (String, String)) ->
   List Decl ->
   List (String, String)
-importRenameEntries _ exportsPerUnit decls =
-  flatMap (declImportEntries exportsPerUnit) decls
+importRenameEntries explicit exportsPerUnit decls =
+  withoutShadowedWild explicit fst (declImportEntries exportsPerUnit) decls
     ++ filterList
       (notIfaceMethodKey (omFromNames (unitIfaceMethodNames decls) omEmpty))
       (coreImportEntries exportsPerUnit)
@@ -1396,11 +1409,12 @@ usePathEntries exportsPerUnit path =
       UseAlias _ a => flatMap (aliasEntryPair a) exports
 
 -- The implicit prelude's BARE spellings are already entered for every unit by
--- `coreImportEntries`, so the only prelude rows an explicit `import core …` owes are the
--- ones that introduce a name the bare pass cannot know: the alias-qualified `C.<name>`
--- and a member RENAME's new local.  Everything else stays `[]`, which is what this arm
--- returned for all four spellings before.  The name set is the same `exportsPerUnit`
--- row `coreImportEntries` reads, deliberately: resolve decides what a prelude alias may
+-- `coreImportEntries`.  An explicit `import core …` still owes a row for each name it
+-- binds: the alias-qualified `C.<name>` and a member rename's new local are spellings
+-- the bare pass cannot know, and a plain member or dotted name is an explicit import,
+-- so its row keeps a wildcard's entry of that name out (`explicitImportNames`).  A
+-- core wildcard owes nothing.  The name set is the same `exportsPerUnit` row
+-- `coreImportEntries` reads, deliberately: resolve decides what a prelude import may
 -- name, and an entry here for a name resolve refuses is never reachable from emitted
 -- code.  Widening THIS row is therefore not the #2640 question; `withPreludeDefs` is.
 corePathEntries : List (String, List (String, String)) ->
@@ -1410,13 +1424,9 @@ corePathEntries exportsPerUnit path = match lookupExports "core" exportsPerUnit
   None => []
   Some exports => match path
     UseAlias _ a => flatMap (aliasEntryPair a) exports
-    UseGroup _ members => flatMap (coreRenamedEntry exports) members
-    _ => []
-
-coreRenamedEntry : List (String, String) -> UseMember -> List (String, String)
-coreRenamedEntry exports m = match useMemberAlias m
-  None => []
-  Some local => originEntryAs exports (useMemberOrigin m) local
+    UseGroup _ members => flatMap (memberEntry exports) members
+    UseName ns => originEntry exports (lastOfPM ns)
+    UseWild _ => []
 
 -- a UseGroup member → entry if its ORIGIN names an exported fn of the origin module;
 -- the entry is keyed by the member's LOCAL name (its alias, if it has one).

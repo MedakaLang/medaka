@@ -1,3 +1,4 @@
 TYPE ERROR: `load` reaches path where only p is admitted, an authority the caller chooses; perform the operation on the named argument, or widen the declared row to the label bare
 TYPE ERROR: `fetch` reaches path where only p is admitted, an authority the caller chooses; perform the operation on the named argument, or widen the declared row to the label bare
 TYPE ERROR: `openUnder` reaches the whole domain where only p is admitted, an authority the caller chooses; an extension of it is the whole domain, so declare `p` pattern-ranging, `(p : String @FileRead*)` or `(p : Authority FileRead*)`
+TYPE ERROR: top-level value `comp` evaluates itself while it is initialised, through `comp -> impl Loader X -> comp`; a top-level value is initialised once, in dependency order, so it cannot depend on itself. Make it a function, `comp () = ...`, or move the recursive reference under a `defer` block or a lambda that initialisation does not call

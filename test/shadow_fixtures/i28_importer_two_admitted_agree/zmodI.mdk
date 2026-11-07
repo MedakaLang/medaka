@@ -1,8 +1,0 @@
-export interface IZ b where
-  mth : Int -> b -> Int
-
-impl IZ String where
-  mth n s = 7
-
-export zf : Int -> Int
-zf n = n

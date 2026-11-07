@@ -147,6 +147,7 @@ keepFresh key (n :: rest) seen =
     let (kept, seen2) = keepFresh key rest (omInsert k True seen)
     (n :: kept, seen2)
 # DESUGAR
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Super" true))))
 (DUse false (UseGroup ("list") ((mem "reverse" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" false))))
@@ -164,7 +165,7 @@ keepFresh key (n :: rest) seen =
 (DFunDef false "lookupPos" ((PVar "name") (PCons (PVar "n") (PVar "ns")) (PCons (PVar "v") (PVar "vs"))) (EIf (EBinOp "==" (EVar "n") (EVar "name")) (EApp (EVar "Some") (EVar "v")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "lookupPos") (EVar "name")) (EVar "ns")) (EVar "vs")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "mapAll" (TyFun (TyFun (TyVar "a") (TyApp (TyCon "Option") (TyVar "b"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyVar "b"))))))
 (DFunDef false "mapAll" (PWild (PList)) (EApp (EVar "Some") (EListLit)))
-(DFunDef false "mapAll" ((PVar "f") (PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EVar "andThen") (EApp (EVar "f") (EVar "x"))) (ELam ((PVar "y")) (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "y") (EVar "_s")))) (EApp (EApp (EVar "mapAll") (EVar "f")) (EVar "xs"))))))
+(DFunDef false "mapAll" ((PVar "f") (PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EVar "$core.andThen") (EApp (EVar "f") (EVar "x"))) (ELam ((PVar "y")) (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "y") (EVar "_s")))) (EApp (EApp (EVar "mapAll") (EVar "f")) (EVar "xs"))))))
 (DTypeSig false "seedNodesFrom" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "IfaceRef") (TyVar "p"))) (TyApp (TyCon "List") (TyApp (TyCon "SuperNode") (TyVar "p"))))))
 (DFunDef false "seedNodesFrom" (PWild (PList)) (EListLit))
 (DFunDef false "seedNodesFrom" ((PVar "i") (PCons (PTuple (PVar "iface") (PVar "payload")) (PVar "rest"))) (EBinOp "::" (ERecordCreate "SuperNode" ((fa "superPath" (EListLit (EVar "i"))) (fa "superIface" (EVar "iface")) (fa "superPayload" (EVar "payload")))) (EApp (EApp (EVar "seedNodesFrom") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))
@@ -179,6 +180,7 @@ keepFresh key (n :: rest) seen =
 (DFunDef false "keepFresh" (PWild (PList) (PVar "seen")) (ETuple (EListLit) (EVar "seen")))
 (DFunDef false "keepFresh" ((PVar "key") (PCons (PVar "n") (PVar "rest")) (PVar "seen")) (EBlock (DoLet false false (PVar "k") (EApp (EApp (EVar "key") (EFieldAccess (EVar "n") "superIface")) (EFieldAccess (EVar "n") "superPayload"))) (DoExpr (EIf (EApp (EApp (EVar "omHasKey") (EVar "k")) (EVar "seen")) (EApp (EApp (EApp (EVar "keepFresh") (EVar "key")) (EVar "rest")) (EVar "seen")) (EBlock (DoLet false false (PTuple (PVar "kept") (PVar "seen2")) (EApp (EApp (EApp (EVar "keepFresh") (EVar "key")) (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "k")) (EVar "True")) (EVar "seen")))) (DoExpr (ETuple (EBinOp "::" (EVar "n") (EVar "kept")) (EVar "seen2"))))))))
 # MARK
+(DUse false (UseAlias ("core") "$core"))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Super" true))))
 (DUse false (UseGroup ("list") ((mem "reverse" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" false))))
@@ -196,7 +198,7 @@ keepFresh key (n :: rest) seen =
 (DFunDef false "lookupPos" ((PVar "name") (PCons (PVar "n") (PVar "ns")) (PCons (PVar "v") (PVar "vs"))) (EIf (EBinOp "==" (EVar "n") (EVar "name")) (EApp (EVar "Some") (EVar "v")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "lookupPos") (EVar "name")) (EVar "ns")) (EVar "vs")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "mapAll" (TyFun (TyFun (TyVar "a") (TyApp (TyCon "Option") (TyVar "b"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyVar "b"))))))
 (DFunDef false "mapAll" (PWild (PList)) (EApp (EVar "Some") (EListLit)))
-(DFunDef false "mapAll" ((PVar "f") (PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "f") (EVar "x"))) (ELam ((PVar "y")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "y") (EVar "_s")))) (EApp (EApp (EVar "mapAll") (EVar "f")) (EVar "xs"))))))
+(DFunDef false "mapAll" ((PVar "f") (PCons (PVar "x") (PVar "xs"))) (EApp (EApp (EVar "$core.andThen") (EApp (EVar "f") (EVar "x"))) (ELam ((PVar "y")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "y") (EVar "_s")))) (EApp (EApp (EVar "mapAll") (EVar "f")) (EVar "xs"))))))
 (DTypeSig false "seedNodesFrom" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "IfaceRef") (TyVar "p"))) (TyApp (TyCon "List") (TyApp (TyCon "SuperNode") (TyVar "p"))))))
 (DFunDef false "seedNodesFrom" (PWild (PList)) (EListLit))
 (DFunDef false "seedNodesFrom" ((PVar "i") (PCons (PTuple (PVar "iface") (PVar "payload")) (PVar "rest"))) (EBinOp "::" (ERecordCreate "SuperNode" ((fa "superPath" (EListLit (EVar "i"))) (fa "superIface" (EVar "iface")) (fa "superPayload" (EVar "payload")))) (EApp (EApp (EVar "seedNodesFrom") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))

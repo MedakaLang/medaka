@@ -173,8 +173,8 @@ write path text rev repo =
    to — a head file naming this repository, over a blocks directory that also
    holds `fixtureRepo`'s, is exactly what a crash between the last block write
    and the head `rename` leaves behind. -}
-olderRepo : Repo
-olderRepo =
+olderRepo : Unit -> <Sign "commit"> Repo
+olderRepo () =
   let base =
     mustRepo
       (repoInitFromKeyBytes
@@ -187,9 +187,9 @@ olderRepo =
 
 -- | The repository the `save` route persists: three records at fixed revisions,
 -- so every byte of the result is deterministic.
-fixtureRepo : Repo
-fixtureRepo =
-  write "app.bsky.actor.profile/self" "third" "3lba2s5ykxs2d" olderRepo
+fixtureRepo : Unit -> <Sign "commit"> Repo
+fixtureRepo () =
+  write "app.bsky.actor.profile/self" "third" "3lba2s5ykxs2d" (olderRepo ())
 
 mustCar : Repo -> Bytes
 mustCar repo =
@@ -223,7 +223,7 @@ blocksOf repo =
 
 runSave : String -> <FileRead, FileWrite, IO, Sign "commit"> Unit
 runSave dir =
-  let repo = fixtureRepo
+  let repo = fixtureRepo ()
   match (persistSave
     (dataDirAt dir)
     (repoCommitCid (repoLatestCommit repo))
@@ -238,7 +238,7 @@ runSave dir =
    them. The summary is the one a rewound head must reproduce exactly. -}
 runCrashSaveOld : String -> <FileRead, FileWrite, IO, Sign "commit"> Unit
 runCrashSaveOld dir =
-  let repo = olderRepo
+  let repo = olderRepo ()
   match (persistSave
     (dataDirAt dir)
     (repoCommitCid (repoLatestCommit repo))
@@ -426,8 +426,8 @@ fixtureCredentialSalt =
     "store_persistence: malformed hex"
     (decode "000102030405060708090a0b0c0d0e0f")
 
-fixtureCredential : CredentialRecord
-fixtureCredential =
+fixtureCredential : Unit -> <Kdf> CredentialRecord
+fixtureCredential () =
   match (makeCredential
     fixtureCredentialSalt
     100000
@@ -438,7 +438,7 @@ fixtureCredential =
 
 runCredentialSave : String -> <FileWrite, IO, Kdf> Unit
 runCredentialSave dir =
-  match persistCredential (dataDirAt dir) fixtureCredential
+  match persistCredential (dataDirAt dir) (fixtureCredential ())
     Err message => panic "store_persistence: credential save failed: \{message}"
     Ok () => println "CREDENTIAL SAVE: PASS"
 
@@ -632,7 +632,7 @@ runEventRecover : String ->
   (Repo -> String -> Option String) ->
   <FileRead, FileWrite, IO, Sign "commit"> Unit
 runEventRecover dir anchorFor =
-  let repo = fixtureRepo
+  let repo = fixtureRepo ()
   let () =
     match (persistSave
       (dataDirAt dir)
@@ -697,8 +697,8 @@ putBlobs ((cid, mimeType, bytes) :: rest) store =
    starts tracing, so what the trace holds is this transition alone. -}
 runTransition : String -> <FileRead, FileWrite, IO, Sign "commit"> Unit
 runTransition dir =
-  let before = storeFromRepo olderRepo
-  let after = putBlobs blobFixtures (storeWithRepo fixtureRepo before)
+  let before = storeFromRepo (olderRepo ())
+  let after = putBlobs blobFixtures (storeWithRepo (fixtureRepo ()) before)
   match (persistTransition
     (dataDirAt dir)
     accountDid
@@ -757,7 +757,7 @@ churnSeed dir index0 limit store0 = go index0 store0
 
 runBlobChurnSeed : String -> <FileRead, FileWrite, IO, Sign "commit"> Unit
 runBlobChurnSeed dir =
-  match churnSeed dir 1 (churnCount - 1) (storeFromRepo olderRepo)
+  match churnSeed dir 1 (churnCount - 1) (storeFromRepo (olderRepo ()))
     Err message => panic "store_persistence: churn seed failed: \{message}"
     Ok _ =>
       let () = println "BLOB-CHURN-SEED count \{intToString (churnCount - 1)}"
@@ -779,7 +779,8 @@ reportChurnAdd (cid, mimeType, bytes) =
    here to show is gone. -}
 runBlobChurnAdd : String -> <FileRead, FileWrite, IO, Sign "commit"> Unit
 runBlobChurnAdd dir =
-  let before = putBlobs (churnRows 1 (churnCount - 1)) (storeFromRepo olderRepo)
+  let before =
+    putBlobs (churnRows 1 (churnCount - 1)) (storeFromRepo (olderRepo ()))
   let row = churnRow churnCount
   let after = putBlobs [row] before
   match (persistTransition
@@ -824,7 +825,7 @@ blockChurnRepo index repo =
 
 runBlockChurnSeed : String -> <FileRead, FileWrite, IO, Sign "commit"> Unit
 runBlockChurnSeed dir =
-  let repo = blockChurnRepo 1 olderRepo
+  let repo = blockChurnRepo 1 (olderRepo ())
   match (persistSave
     (dataDirAt dir)
     (repoCommitCid (repoLatestCommit repo))
@@ -845,7 +846,7 @@ runBlockChurnSeed dir =
    to show is gone. -}
 runBlockChurnAdd : String -> <FileRead, FileWrite, IO, Sign "commit"> Unit
 runBlockChurnAdd dir =
-  let prior = blockChurnRepo 1 olderRepo
+  let prior = blockChurnRepo 1 (olderRepo ())
   let next = blockChurnWrite (blockChurnCount + 1) prior
   let before = storeFromRepo prior
   let after = storeWithRepo next before
@@ -881,7 +882,7 @@ retypeRow mimeType = (blobCid retypeBytes, mimeType, retypeBytes)
 
 runBlobRetypeSeed : String -> <FileRead, FileWrite, IO, Sign "commit"> Unit
 runBlobRetypeSeed dir =
-  let before = storeFromRepo olderRepo
+  let before = storeFromRepo (olderRepo ())
   let after = putBlobs [retypeRow retypeFirstType] before
   match (persistTransition
     (dataDirAt dir)
@@ -904,7 +905,8 @@ runBlobRetypeSeed dir =
    would be the whole-account walk these routes exist to show is gone. -}
 runBlobRetypeAdd : String -> <FileRead, FileWrite, IO, Sign "commit"> Unit
 runBlobRetypeAdd dir =
-  let before = putBlobs [retypeRow retypeFirstType] (storeFromRepo olderRepo)
+  let before =
+    putBlobs [retypeRow retypeFirstType] (storeFromRepo (olderRepo ()))
   let after = putBlobs [retypeRow retypeSecondType] before
   match (persistTransition
     (dataDirAt dir)
@@ -1068,7 +1070,7 @@ plantAndSweep dir =
 persistFixtureTree : String ->
   <FileRead, FileWrite, Sign "commit"> Result String Unit
 persistFixtureTree dir =
-  let repo = fixtureRepo
+  let repo = fixtureRepo ()
   do
     () <- mkdirAllDurably dir
     () <- persistSave
@@ -1195,7 +1197,7 @@ strayCase root label plant =
         straySurvey label dir
 
 blockShardPath : String -> <Sign "commit"> String
-blockShardPath dir = "\{dir}/blocks/\{shardName (repoRootCid fixtureRepo)}"
+blockShardPath dir = "\{dir}/blocks/\{shardName (repoRootCid (fixtureRepo ()))}"
 
 blobShardPath : String -> String
 blobShardPath dir = "\{blobDir (dataDirAt dir)}/\{shardName firstBlobCid}"
@@ -1206,7 +1208,7 @@ blobShardPath dir = "\{blobDir (dataDirAt dir)}/\{shardName firstBlobCid}"
 plantBlobLeafCid : String ->
   <FileRead, FileWrite, Sign "commit"> Result String String
 plantBlobLeafCid dir =
-  let name = cidName (repoRootCid fixtureRepo)
+  let name = cidName (repoRootCid (fixtureRepo ()))
   do
     planted <- plantDir "\{blobShardPath dir}/\{name}"
     _ <- plantFile "\{blobShardPath dir}/\{name}\{mimeSuffixText}"
@@ -1343,7 +1345,7 @@ runGenesisGuard dir = match reload dir
    comparison would otherwise be grading the reload as well. -}
 runGenesisInit : String -> <FileRead, FileWrite, IO, Sign "commit"> Unit
 runGenesisInit dir =
-  let repo = fixtureRepo
+  let repo = fixtureRepo ()
   match (persistSave
     (dataDirAt dir)
     (repoCommitCid (repoLatestCommit repo))

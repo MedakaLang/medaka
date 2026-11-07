@@ -373,8 +373,11 @@ missingHelperIsRuntimeResult = match missingHelperPlan
 test "a missing selected helper binding is a runtime result" =
   missingHelperIsRuntimeResult
 
-runtimeShadowResults : ((Int, Int, Int), (Int, Int, Int))
-runtimeShadowResults =
+-- The row is the effect row of the `Value` this reads: `lookupEnv`
+-- runs the row of its value type. A written arrow row does not unify
+-- with it, so the signature is left to inference.
+-- lint-disable-next-line rule-missing-signature
+runtimeShadowResults () =
   let canonical = runtimeCellsOf [
     ("randomState", VInt 19),
     ("restoreRandomState", VInt 23),
@@ -416,11 +419,11 @@ test "canonical runtime lookup ignores method-frame shadows for every RNG primit
   [
     (
       "ordinary lookup retains the method frame",
-      expectEqual (7, 11, 13) (fst runtimeShadowResults),
+      expectEqual (7, 11, 13) (fst (runtimeShadowResults ())),
     ),
     (
       "runtime lookup reaches canonical primitives",
-      expectEqual (19, 23, 29) (snd runtimeShadowResults),
+      expectEqual (19, 23, 29) (snd (runtimeShadowResults ())),
     ),
   ]
 

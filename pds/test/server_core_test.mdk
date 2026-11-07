@@ -422,8 +422,8 @@ test "a WebSocket version of 13 and an overlong space is refused 426" = expectEa
     ),
   ]
 
-liveToken : String
-liveToken =
+liveToken : Unit -> <Mint "access"> String
+liveToken () =
   mintAccessToken
     testKey
     "did:plc:medakaservertest"
@@ -432,10 +432,10 @@ liveToken =
     1699999000
     1700003600
 
-sessionStore : Store
-sessionStore =
+sessionStore : Unit -> <Mint "access"> Store
+sessionStore () =
   storeSessionOpen
-    (sessionFingerprint liveToken)
+    (sessionFingerprint (liveToken ()))
     (sessionFingerprint "server_core_test-refresh")
     1700090000
     (storeWithServerSecret testKey storeEmpty)
@@ -460,11 +460,16 @@ proxyOutcome (ProxyAdmitted admission) =
 proxiedWith : Bytes -> <Mint "access"> String
 proxiedWith header =
   let request = getWith "/xrpc/app.bsky.feed.getTimeline" [
-    headerLine "authorization" (encodeUtf8 "Bearer \{liveToken}"),
+    headerLine "authorization" (encodeUtf8 "Bearer \{liveToken ()}"),
     headerLine "atproto-proxy" header,
   ]
   proxyOutcome
-    (classifyProxy seamServer testContext appviewTable sessionStore request)
+    (classifyProxy
+      seamServer
+      testContext
+      appviewTable
+      (sessionStore ())
+      request)
 
 test "an atproto-proxy service fragment ending in 0xFF is refused 400" =
   let service = encodeUtf8 "did:web:api.bsky.app#bsky_appview"

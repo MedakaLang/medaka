@@ -68,9 +68,9 @@ queryTimeoutSeconds : Int
 queryTimeoutSeconds = 120
 
 -- Every demo this file runs, built together in ONE batch by
--- `test.oracle_support.buildBatch`. A top-level nullary is evaluated once per
--- process, so the batch runs once. No row writes to a binary after its build,
--- and no row's cleanup list names one.
+-- `test.oracle_support.buildBatch`. `sharedBuilds` memoizes it in a
+-- once-cell, so the batch runs once per process. No row writes to a binary
+-- after its build, and no row's cleanup list names one.
 sharedDemos : List String
 sharedDemos = [
   "sqlite/main.mdk",
@@ -81,30 +81,38 @@ sharedDemos = [
   "sqlite/rowid_roundtrip_demo.mdk",
 ]
 
-sharedBuilds : <Exec, IO> List (String, Result String String)
-sharedBuilds = buildBatch (map (entry => (entry, entry, [])) sharedDemos)
+sharedBuildsCell : Ref (Option (List (String, Result String String)))
+sharedBuildsCell = Ref None
 
-sharedBin : String -> <Exec, IO> Result String String
-sharedBin = buildFor sharedBuilds
+sharedBuilds : Unit -> <Exec, IO> List (String, Result String String)
+sharedBuilds () = match !sharedBuildsCell
+  Some v => v
+  None =>
+    let v = buildBatch (map (entry => (entry, entry, [])) sharedDemos)
+    sharedBuildsCell := Some v
+    v
+
+sharedBin : Unit -> <Exec, IO> (String -> <Exec, IO> Result String String)
+sharedBin () = buildFor (sharedBuilds ())
 
 -- Every row reads its database with the same `sqlite/main.mdk` build.
-readerBin : <Exec, IO> Result String String
-readerBin = sharedBin "sqlite/main.mdk"
+readerBin : Unit -> <Exec, IO> Result String String
+readerBin () = sharedBin () "sqlite/main.mdk"
 
-writerDemoBin : <Exec, IO> Result String String
-writerDemoBin = sharedBin "sqlite/writer_demo.mdk"
+writerDemoBin : Unit -> <Exec, IO> Result String String
+writerDemoBin () = sharedBin () "sqlite/writer_demo.mdk"
 
-writerApiDemoBin : <Exec, IO> Result String String
-writerApiDemoBin = sharedBin "sqlite/writer_api_demo.mdk"
+writerApiDemoBin : Unit -> <Exec, IO> Result String String
+writerApiDemoBin () = sharedBin () "sqlite/writer_api_demo.mdk"
 
-multipageWriteDemoBin : <Exec, IO> Result String String
-multipageWriteDemoBin = sharedBin "sqlite/multipage_write_demo.mdk"
+multipageWriteDemoBin : Unit -> <Exec, IO> Result String String
+multipageWriteDemoBin () = sharedBin () "sqlite/multipage_write_demo.mdk"
 
-multitableWriteDemoBin : <Exec, IO> Result String String
-multitableWriteDemoBin = sharedBin "sqlite/multitable_write_demo.mdk"
+multitableWriteDemoBin : Unit -> <Exec, IO> Result String String
+multitableWriteDemoBin () = sharedBin () "sqlite/multitable_write_demo.mdk"
 
-rowidRoundtripDemoBin : <Exec, IO> Result String String
-rowidRoundtripDemoBin = sharedBin "sqlite/rowid_roundtrip_demo.mdk"
+rowidRoundtripDemoBin : Unit -> <Exec, IO> Result String String
+rowidRoundtripDemoBin () = sharedBin () "sqlite/rowid_roundtrip_demo.mdk"
 
 sqlite3Query : String -> String -> <Exec, IO> Result String String
 sqlite3Query db sql = spawnOut queryTimeoutSeconds "sqlite3" [db, sql]
@@ -210,8 +218,8 @@ writerExpectedLines = [
   "44|Gus|-9223372036854775808",
 ]
 
-writerResult : <Exec, IO> Result String WriterRun
-writerResult = do
+writerResult : Unit -> <Exec, IO> Result String WriterRun
+writerResult () = do
   prefix <- rowScratch "writer"
   let db = "\{prefix}.db"
   let out = runWriter db
@@ -219,8 +227,8 @@ writerResult = do
 
 runWriter : String -> <Exec, IO> Result String WriterRun
 runWriter db = do
-  writer <- writerDemoBin
-  reader <- readerBin
+  writer <- writerDemoBin ()
+  reader <- readerBin ()
   _ <- spawnOut queryTimeoutSeconds writer [db]
   ic <- sqlite3Query db "PRAGMA integrity_check;"
   schema <- sqlite3Lines db "SELECT type, name, rootpage FROM sqlite_master;"
@@ -234,14 +242,14 @@ runWriter db = do
   }
 
 test "writer: literal gates match the hand-derived expected values" =
-  match writerResult
+  match writerResult ()
     Err e => Fail e (join "\n" writerExpectedLines) "the row did not run"
     Ok r =>
       expectEqualLines
         (join "\n" writerExpectedLines)
         (join "\n" (writerReport r))
 
-test "writer: report matches sqlite/test/writer.golden" = match writerResult
+test "writer: report matches sqlite/test/writer.golden" = match writerResult ()
   Err e => Fail e "the committed golden" "the row did not run"
   Ok r => match readFile (underRoot "sqlite/test/writer.golden")
     Err e =>
@@ -395,8 +403,8 @@ writerApiExpectedLines = [
   "5|",
 ]
 
-writerApiResult : <Exec, IO> Result String WriterApiRun
-writerApiResult = do
+writerApiResult : Unit -> <Exec, IO> Result String WriterApiRun
+writerApiResult () = do
   prefix <- rowScratch "writer-api"
   let dbUsers = "\{prefix}-users.db"
   let dbKv = "\{prefix}-kv.db"
@@ -411,8 +419,8 @@ runWriterApi : String ->
   String ->
   <Exec, IO> Result String WriterApiRun
 runWriterApi dbUsers dbKv dbBlob dbReals = do
-  writer <- writerApiDemoBin
-  reader <- readerBin
+  writer <- writerApiDemoBin ()
+  reader <- readerBin ()
   users <- runApiSchema
     writer
     reader
@@ -453,7 +461,7 @@ runWriterApi dbUsers dbKv dbBlob dbReals = do
   }
 
 test "writer_api: literal gates match the hand-derived expected values" =
-  match writerApiResult
+  match writerApiResult ()
     Err e => Fail e (join "\n" writerApiExpectedLines) "the row did not run"
     Ok r =>
       expectEqualLines
@@ -461,7 +469,7 @@ test "writer_api: literal gates match the hand-derived expected values" =
         (join "\n" (writerApiReport r))
 
 test "writer_api: report matches sqlite/test/writer_api.golden" =
-  match writerApiResult
+  match writerApiResult ()
     Err e => Fail e "the committed golden" "the row did not run"
     Ok r => match readFile (underRoot "sqlite/test/writer_api.golden")
       Err e =>
@@ -556,17 +564,25 @@ multipageExpectedLines = [
   "700|item_700",
 ]
 
-multipageResult : <Exec, IO> Result String MultipageRun
-multipageResult = do
-  prefix <- rowScratch "multipage-write"
-  let db = "\{prefix}.db"
-  let out = runMultipage db
-  finishScratch [db] out
+multipageResultCell : Ref (Option (Result String MultipageRun))
+multipageResultCell = Ref None
+
+multipageResult : Unit -> <Exec, IO> Result String MultipageRun
+multipageResult () = match !multipageResultCell
+  Some v => v
+  None =>
+    let v = do
+      prefix <- rowScratch "multipage-write"
+      let db = "\{prefix}.db"
+      let out = runMultipage db
+      finishScratch [db] out
+    multipageResultCell := Some v
+    v
 
 runMultipage : String -> <Exec, IO> Result String MultipageRun
 runMultipage db = do
-  writer <- multipageWriteDemoBin
-  reader <- readerBin
+  writer <- multipageWriteDemoBin ()
+  reader <- readerBin ()
   _ <- spawnOut queryTimeoutSeconds writer [intToString bigTableN, db]
   ic <- sqlite3Query db "PRAGMA integrity_check;"
   schema <- sqlite3Lines db "SELECT type, name, rootpage FROM sqlite_master;"
@@ -592,7 +608,7 @@ runMultipage db = do
   }
 
 test "multipage_write: literal gates match the hand-derived expected values" =
-  match multipageResult
+  match multipageResult ()
     Err e => Fail e (join "\n" multipageExpectedLines) "the row did not run"
     Ok r =>
       expectEqualLines
@@ -600,7 +616,7 @@ test "multipage_write: literal gates match the hand-derived expected values" =
         (join "\n" (multipageReport r))
 
 test "multipage_write: report matches sqlite/test/multipage_write.golden" =
-  match multipageResult
+  match multipageResult ()
     Err e => Fail e "the committed golden" "the row did not run"
     Ok r => match readFile (underRoot "sqlite/test/multipage_write.golden")
       Err e =>
@@ -614,7 +630,7 @@ test "multipage_write: report matches sqlite/test/multipage_write.golden" =
           (join "\n" (multipageReport r))
 
 test "multipage_write: 700 rows put the root page on an interior page (0x05) over >=3 leaves" =
-  match multipageResult
+  match multipageResult ()
     Err e => Fail e "root page type 5, >=3 leaves" "the row did not run"
     Ok r =>
       let rootType = rootPageDecimal r.mpHexes
@@ -630,7 +646,7 @@ test "multipage_write: 700 rows put the root page on an interior page (0x05) ove
           "root page type \{rootType}, \{intToString leaves} leaves"
 
 test "multipage_write: sqlite3 SELECT matches all 700 intended rows, not just first/last 3" =
-  match multipageResult
+  match multipageResult ()
     Err e => Fail e "700 matching rows" "the row did not run"
     Ok r =>
       expectEqualLines
@@ -638,7 +654,7 @@ test "multipage_write: sqlite3 SELECT matches all 700 intended rows, not just fi
         (join "\n" r.mpSelectAll)
 
 test "multipage_write: Medaka reader round-trips all 700 rows through the interior root" =
-  match multipageResult
+  match multipageResult ()
     Err e => Fail e "700 matching rows" "the row did not run"
     Ok r =>
       expectEqualLines
@@ -724,17 +740,25 @@ multitableExpectedLines = [
   "700|item_700",
 ]
 
-multitableResult : <Exec, IO> Result String MultitableRun
-multitableResult = do
-  prefix <- rowScratch "multitable-write"
-  let db = "\{prefix}.db"
-  let out = runMultitable db
-  finishScratch [db] out
+multitableResultCell : Ref (Option (Result String MultitableRun))
+multitableResultCell = Ref None
+
+multitableResult : Unit -> <Exec, IO> Result String MultitableRun
+multitableResult () = match !multitableResultCell
+  Some v => v
+  None =>
+    let v = do
+      prefix <- rowScratch "multitable-write"
+      let db = "\{prefix}.db"
+      let out = runMultitable db
+      finishScratch [db] out
+    multitableResultCell := Some v
+    v
 
 runMultitable : String -> <Exec, IO> Result String MultitableRun
 runMultitable db = do
-  writer <- multitableWriteDemoBin
-  reader <- readerBin
+  writer <- multitableWriteDemoBin ()
+  reader <- readerBin ()
   _ <- spawnOut queryTimeoutSeconds writer [intToString bigTableN, db]
   ic <- sqlite3Query db "PRAGMA integrity_check;"
   schema <- sqlite3Lines
@@ -783,7 +807,7 @@ runMultitable db = do
   }
 
 test "multitable_write: literal gates match the hand-derived expected values" =
-  match multitableResult
+  match multitableResult ()
     Err e => Fail e (join "\n" multitableExpectedLines) "the row did not run"
     Ok r =>
       expectEqualLines
@@ -791,7 +815,7 @@ test "multitable_write: literal gates match the hand-derived expected values" =
         (join "\n" (multitableReport r))
 
 test "multitable_write: report matches sqlite/test/multitable_write.golden" =
-  match multitableResult
+  match multitableResult ()
     Err e => Fail e "the committed golden" "the row did not run"
     Ok r => match readFile (underRoot "sqlite/test/multitable_write.golden")
       Err e =>
@@ -805,7 +829,7 @@ test "multitable_write: report matches sqlite/test/multitable_write.golden" =
           (join "\n" (multitableReport r))
 
 test "multitable_write: 3 tables with distinct rootpages, >=1 interior + >=5 leaves" =
-  match multitableResult
+  match multitableResult ()
     Err e =>
       Fail
         e
@@ -828,23 +852,25 @@ test "multitable_write: 3 tables with distinct rootpages, >=1 interior + >=5 lea
           "\{r.mtTableCount} tables, \{r.mtDistinctRootpages} distinct rootpages, \{intToString interior} interior, \{intToString leaves} leaves"
 
 test "multitable_write: sqlite3 SELECT matches all 700 intended `big` rows, not just first/last 2" =
-  match multitableResult
+  match multitableResult ()
     Err e => Fail e "700 matching rows" "the row did not run"
     Ok r =>
       expectEqualLines (join "\n" (itemRows bigTableN)) (join "\n" r.mtBigAll)
 
 test "multitable_write: Medaka reader round-trips users" =
-  match multitableResult
+  match multitableResult ()
     Err e => Fail e "1|alice\n2|bob\n3|carol" "the row did not run"
     Ok r =>
       expectEqualLines "1|alice\n2|bob\n3|carol" (join "\n" r.mtUsersReaderRows)
 
-test "multitable_write: Medaka reader round-trips kv" = match multitableResult
-  Err e => Fail e "one|1\ntwo|2\nthree|3" "the row did not run"
-  Ok r => expectEqualLines "one|1\ntwo|2\nthree|3" (join "\n" r.mtKvReaderRows)
+test "multitable_write: Medaka reader round-trips kv" =
+  match multitableResult ()
+    Err e => Fail e "one|1\ntwo|2\nthree|3" "the row did not run"
+    Ok r =>
+      expectEqualLines "one|1\ntwo|2\nthree|3" (join "\n" r.mtKvReaderRows)
 
 test "multitable_write: Medaka reader round-trips all 700 `big` rows through the interior root" =
-  match multitableResult
+  match multitableResult ()
     Err e => Fail e "700 matching rows" "the row did not run"
     Ok r =>
       expectEqualLines
@@ -911,18 +937,26 @@ rowidExpectedLines = [
   "9|9|carol",
 ]
 
-rowidResult : <Exec, IO> Result String RowidRun
-rowidResult = do
-  prefix <- rowScratch "rowid-roundtrip"
-  let src = "\{prefix}-src.db"
-  let dst = "\{prefix}-dst.db"
-  let out = runRowid src dst
-  finishScratch [src, dst] out
+rowidResultCell : Ref (Option (Result String RowidRun))
+rowidResultCell = Ref None
+
+rowidResult : Unit -> <Exec, IO> Result String RowidRun
+rowidResult () = match !rowidResultCell
+  Some v => v
+  None =>
+    let v = do
+      prefix <- rowScratch "rowid-roundtrip"
+      let src = "\{prefix}-src.db"
+      let dst = "\{prefix}-dst.db"
+      let out = runRowid src dst
+      finishScratch [src, dst] out
+    rowidResultCell := Some v
+    v
 
 runRowid : String -> String -> <Exec, IO> Result String RowidRun
 runRowid src dst = do
-  probe <- rowidRoundtripDemoBin
-  reader <- readerBin
+  probe <- rowidRoundtripDemoBin ()
+  reader <- readerBin ()
   _ <- seedDb src [SeedSql rowidSeedSql]
   srcKvRowids <- sqlite3Lines src "SELECT rowid FROM kv ORDER BY rowid;"
   srcUsersRowids <- sqlite3Lines src "SELECT rowid FROM users ORDER BY rowid;"
@@ -949,7 +983,7 @@ runRowid src dst = do
   }
 
 test "rowid_roundtrip: literal gates match the hand-derived expected values" =
-  match rowidResult
+  match rowidResult ()
     Err e => Fail e (join "\n" rowidExpectedLines) "the row did not run"
     Ok r =>
       expectEqualLines
@@ -957,7 +991,7 @@ test "rowid_roundtrip: literal gates match the hand-derived expected values" =
         (join "\n" (rowidReport r))
 
 test "rowid_roundtrip: report matches sqlite/test/rowid_roundtrip.golden" =
-  match rowidResult
+  match rowidResult ()
     Err e => Fail e "the committed golden" "the row did not run"
     Ok r => match readFile (underRoot "sqlite/test/rowid_roundtrip.golden")
       Err e =>
@@ -969,11 +1003,11 @@ test "rowid_roundtrip: report matches sqlite/test/rowid_roundtrip.golden" =
         expectEqualLines (join "\n" (outLines text)) (join "\n" (rowidReport r))
 
 test "rowid_roundtrip: non-IPK rowid gap survives rewrite (1,3,4), not renumbered to 1,2,3" =
-  match rowidResult
+  match rowidResult ()
     Err e => Fail e "1,3,4," "the row did not run"
     Ok r => expectEqual "1,3,4," r.rrDstKvRowids
 
-test "rowid_roundtrip: IPK rowids preserved (1,5,9)" = match rowidResult
+test "rowid_roundtrip: IPK rowids preserved (1,5,9)" = match rowidResult ()
   Err e => Fail e "1,5,9," "the row did not run"
   Ok r => expectEqual "1,5,9," r.rrDstUsersRowids
 
@@ -981,11 +1015,11 @@ test "rowid_roundtrip: IPK rowids preserved (1,5,9)" = match rowidResult
 -- it prints a different column shape (`k|v`, `id|name` — no `rowid`) than
 -- the report's `rowid,k,v` sqlite3 lines, exactly as the retired script's
 -- separate Gate 5 did.
-test "rowid_roundtrip: Medaka reader round-trips kv" = match rowidResult
+test "rowid_roundtrip: Medaka reader round-trips kv" = match rowidResult ()
   Err e => Fail e "a|10\nb|30\nc|40" "the row did not run"
   Ok r => expectEqualLines "a|10\nb|30\nc|40" (join "\n" r.rrReaderKvRows)
 
-test "rowid_roundtrip: Medaka reader round-trips users" = match rowidResult
+test "rowid_roundtrip: Medaka reader round-trips users" = match rowidResult ()
   Err e => Fail e "1|alice\n5|bob\n9|carol" "the row did not run"
   Ok r =>
     expectEqualLines "1|alice\n5|bob\n9|carol" (join "\n" r.rrReaderUsersRows)

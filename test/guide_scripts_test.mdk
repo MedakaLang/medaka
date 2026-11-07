@@ -79,9 +79,9 @@ clean r = match r
   Ok (code, out, err) =>
     Err "exit \{intToString code}, stdout \{debug out}, stderr \{debug err}"
 
-fixture name = "\{medakaRoot}/\{dirRel}/\{name}"
+fixture name = "\{medakaRoot ()}/\{dirRel}/\{name}"
 
-withBinAndFile name k = match absOf medakaBin
+withBinAndFile name k = match absOf (medakaBin ())
   Err e => fail e
   Ok bin => match absOf (fixture "\{name}.mdk")
     Err e => fail e
@@ -104,7 +104,7 @@ rejected name body needle = withBinAndFile
     Ok (0, out, _) => fail "\{name} was accepted: stdout \{debug out}"
     Ok (_, _, err) => expectTextContainsAll [needle] err)
 
-pageText _ = match readFile "\{medakaRoot}/\{pageRel}"
+pageText _ = match readFile "\{medakaRoot ()}/\{pageRel}"
   Err e => Err "cannot read \{pageRel}: \{e}"
   Ok text => Ok (replaceAll "\\|" "|" text)
 
@@ -577,10 +577,10 @@ test "the page covers each first-round-trip topic" = match pageText ()
 
 -- Every file under test/guide_scripts is named above, and every name exists.
 test "test/guide_scripts holds exactly the programs this test names" =
-  match walkFiles "\{medakaRoot}/\{dirRel}"
+  match walkFiles "\{medakaRoot ()}/\{dirRel}"
     Err e => fail e
     Ok files =>
-      let prefix = "\{medakaRoot}/\{dirRel}/"
+      let prefix = "\{medakaRoot ()}/\{dirRel}/"
       let stems =
         sort
           (filterMap

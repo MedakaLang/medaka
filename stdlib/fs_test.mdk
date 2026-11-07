@@ -17,7 +17,7 @@ import test_process.{scratchDir, withScratchDir}
 -- `readFile` refuses a file that is not UTF-8 rather than decoding it lossily,
 -- and its error names the path and the raw route.
 test "readFile of a file that is not UTF-8 is an Err naming readFileBytes" =
-  match scratchDir
+  match scratchDir ()
     Err e => fail "no scratch directory: \{e}"
     Ok dir =>
       let path = joinPath dir "not-utf8.bin"

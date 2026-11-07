@@ -49,8 +49,8 @@ import test_process.{medakaBin, spawnTimeoutSeconds, testJobs, underRoot}
 
 -- # The subject
 
-serveSource : <IO> String
-serveSource = underRoot "pds/serve.mdk"
+serveSource : Unit -> <IO> String
+serveSource () = underRoot "pds/serve.mdk"
 
 -- # Spawning
 
@@ -66,18 +66,19 @@ boundedArgv bin args =
 
 -- The two `medaka manifest` runs this suite grades, keyed by their extra
 -- arguments. Both run side by side, once, in one batch.
-manifestRuns : <Exec, IO> List (List String, Result String (Int, String, String))
-manifestRuns =
-  let bin = medakaBin
-  let src = serveSource
+manifestRuns : Unit ->
+  <Exec, IO> List (List String, Result String (Int, String, String))
+manifestRuns () =
+  let bin = medakaBin ()
+  let src = serveSource ()
   let extras = [[], ["--fn", "serve"]]
   let argvs = map (extra => boundedArgv bin (["manifest", src] ++ extra)) extras
-  zip extras (runCommandBatch "perl" testJobs argvs)
+  zip extras (runCommandBatch "perl" (testJobs ()) argvs)
 
 -- | What `medaka manifest pds/serve.mdk` prints on stdout with `extra`
 -- arguments, or why it printed nothing.
 manifestOf : List String -> <Exec, IO> Result String String
-manifestOf extra = match lookup extra manifestRuns
+manifestOf extra = match lookup extra (manifestRuns ())
   None => Err "no medaka manifest run with \{unwords extra}"
   Some (Err e) => Err "could not run medaka manifest: \{e}"
   Some (Ok (0, out, _)) => Ok out
@@ -160,13 +161,13 @@ netEntry "localhost" = "Net=127.0.0.1"
 netEntry address = "Net=\{address}"
 
 -- | The unit as it is on disk, one element per line.
-unitLines : <FileRead, IO> Result String (List String)
-unitLines = map lines (readFile (underRoot "pds/pds.service"))
+unitLines : Unit -> <FileRead, IO> Result String (List String)
+unitLines () = map lines (readFile (underRoot "pds/pds.service"))
 
 -- | The policy of the unit on disk with `rewrite` applied to its lines.
 policyOf : (List String -> List String) ->
   <FileRead, IO> Result String (List String)
-policyOf rewrite = match unitLines
+policyOf rewrite = match unitLines ()
   Err e => Err "could not read pds/pds.service: \{e}"
   Ok ls => unitPolicy (rewrite ls)
 
@@ -190,47 +191,49 @@ test "the unit's sandbox derives the expected policy" =
 -- checks and the policy it checks it under. A row whose policy cannot be read
 -- is still spawned, with an empty `--allow`, and its verdict is that read
 -- error (see `verdictGraded`), so the spawn's own result is never graded.
-policyRuns : <FileRead, IO> List (String, (String, Result String (List String)))
-policyRuns = [
-  ("serve", ("serve", servePolicy)),
-  ("mutation: ReadWritePaths narrowed", ("serve", narrowedReadWritePolicy)),
-  ("mutation: IPAddressAllow", ("serve", narrowedNetPolicy)),
-  ("runKeygen", ("runKeygen", everyReadPolicy)),
+policyRuns : Unit ->
+  <FileRead, IO> List (String, (String, Result String (List String)))
+policyRuns () = [
+  ("serve", ("serve", servePolicy ())),
+  ("mutation: ReadWritePaths narrowed", ("serve", narrowedReadWritePolicy ())),
+  ("mutation: IPAddressAllow", ("serve", narrowedNetPolicy ())),
+  ("runKeygen", ("runKeygen", everyReadPolicy ())),
 ]
 
 -- The unit's own policy, and the three variants the controls grade.
-servePolicy : <FileRead, IO> Result String (List String)
-servePolicy = policyOf identity
+servePolicy : Unit -> <FileRead, IO> Result String (List String)
+servePolicy () = policyOf identity
 
-narrowedReadWritePolicy : <FileRead, IO> Result String (List String)
-narrowedReadWritePolicy =
+narrowedReadWritePolicy : Unit -> <FileRead, IO> Result String (List String)
+narrowedReadWritePolicy () =
   policyOf
     (replacing
       "ReadWritePaths=/opt/pds/data"
       "ReadWritePaths=/opt/pds/data/blocks")
 
-narrowedNetPolicy : <FileRead, IO> Result String (List String)
-narrowedNetPolicy =
+narrowedNetPolicy : Unit -> <FileRead, IO> Result String (List String)
+narrowedNetPolicy () =
   policyOf (replacing "IPAddressAllow=localhost" "IPAddressAllow=10.0.0.1")
 
-everyReadPolicy : <FileRead, IO> Result String (List String)
-everyReadPolicy = everyReadAllowed servePolicy
+everyReadPolicy : Unit -> <FileRead, IO> Result String (List String)
+everyReadPolicy () = everyReadAllowed (servePolicy ())
 
 {- | The verdict of every `policyRuns` row, in order, each as `verdictOf`
-   would report it. The checks run side by side, at most `testJobs` at once. -}
-policyVerdicts : <Exec, FileRead, IO> List (String, Result String (Int, String))
-policyVerdicts =
-  let bin = medakaBin
-  let src = serveSource
+   would report it. The checks run side by side, at most `testJobs ()` at once. -}
+policyVerdicts : Unit ->
+  <Exec, FileRead, IO> List (String, Result String (Int, String))
+policyVerdicts () =
+  let bin = medakaBin ()
+  let src = serveSource ()
   let argvs =
     map
       ((_, (entry, policy)) =>
         boundedArgv bin (checkPolicyArgs src entry policy))
-      policyRuns
+      (policyRuns ())
   zipWith
     ((name, (_, policy)) run => (name, verdictGraded policy run))
-    policyRuns
-    (runCommandBatch "perl" testJobs argvs)
+    (policyRuns ())
+    (runCommandBatch "perl" (testJobs ()) argvs)
 
 -- The `check-policy` arguments for `entry` under `policy`.
 checkPolicyArgs : String -> String -> Result String (List String) -> List String
@@ -264,7 +267,7 @@ verdictGraded (Ok _) (Ok (code, out, err)) =
 
 -- | The verdict of the `policyRuns` row named `name`.
 verdictNamed : String -> <Exec, FileRead, IO> Result String (Int, String)
-verdictNamed name = match lookup name policyVerdicts
+verdictNamed name = match lookup name (policyVerdicts ())
   Some verdict => verdict
   None => Err "no check-policy run named \{name}"
 

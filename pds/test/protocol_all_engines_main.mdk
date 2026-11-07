@@ -233,8 +233,8 @@ unknownRequest =
   encodeUtf8
     "GET /xrpc/com.example.query.unknown HTTP/1.1\r\nHost: pds.example\r\n\r\n"
 
-checkFixedQuery : <IO> Unit
-checkFixedQuery =
+checkFixedQuery : Unit -> <IO> Unit
+checkFixedQuery () =
   let (next, response) = handleBytes server testContext seededStore fixedQuery
   if storeSize next == 1
     && seedPreserved next
@@ -243,8 +243,8 @@ checkFixedQuery =
   else
     panic "protocol_all_engines: fixed-query mismatch"
 
-checkChunkedUpdate : <IO> Unit
-checkChunkedUpdate =
+checkChunkedUpdate : Unit -> <IO> Unit
+checkChunkedUpdate () =
   let expectedBody = encodeUtf8 "abc"
   let (next, response) = handleBytes server testContext seededStore chunkedPut
   if storeSize next == 2
@@ -255,8 +255,8 @@ checkChunkedUpdate =
   else
     panic "protocol_all_engines: chunked-update state mismatch"
 
-checkMalformed : <IO> Unit
-checkMalformed =
+checkMalformed : Unit -> <IO> Unit
+checkMalformed () =
   let (next, response) =
     handleBytes server testContext seededStore malformedRequest
   if storeSize next == 1
@@ -283,30 +283,30 @@ malformedIsUnchanged request =
         "InvalidRequest"
         "Malformed HTTP request"
 
-checkLowercaseVersion : <IO> Unit
-checkLowercaseVersion =
+checkLowercaseVersion : Unit -> <IO> Unit
+checkLowercaseVersion () =
   if malformedIsUnchanged lowercaseVersionRequest then
     println
       "CELL malformed-lowercase-version PASS status=400 state=unchanged no-dispatch"
   else
     panic "protocol_all_engines: lowercase HTTP version reached dispatch"
 
-checkInvalidHost : <IO> Unit
-checkInvalidHost =
+checkInvalidHost : Unit -> <IO> Unit
+checkInvalidHost () =
   if malformedIsUnchanged invalidHostRequest then
     println "CELL malformed-host PASS status=400 state=unchanged no-dispatch"
   else
     panic "protocol_all_engines: invalid Host reached dispatch"
 
-checkInvalidTarget : <IO> Unit
-checkInvalidTarget =
+checkInvalidTarget : Unit -> <IO> Unit
+checkInvalidTarget () =
   if malformedIsUnchanged invalidTargetRequest then
     println "CELL malformed-target PASS status=400 state=unchanged no-dispatch"
   else
     panic "protocol_all_engines: invalid request target reached dispatch"
 
-checkRawText : <IO> Unit
-checkRawText =
+checkRawText : Unit -> <IO> Unit
+checkRawText () =
   let (next, response) =
     handleBytes server testContext seededStore rawTextRequest
   if storeSize next == 1
@@ -316,8 +316,8 @@ checkRawText =
   else
     panic "protocol_all_engines: raw-text mismatch"
 
-checkRawJson : <IO> Unit
-checkRawJson =
+checkRawJson : Unit -> <IO> Unit
+checkRawJson () =
   let (next, response) =
     handleBytes server testContext seededStore rawJsonRequest
   if storeSize next == 1
@@ -328,8 +328,8 @@ checkRawJson =
   else
     panic "protocol_all_engines: raw-json mismatch"
 
-checkRawOpaque : <IO> Unit
-checkRawOpaque =
+checkRawOpaque : Unit -> <IO> Unit
+checkRawOpaque () =
   let (next, response) =
     handleBytes server testContext seededStore rawOpaqueRequest
   if storeSize next == 1
@@ -340,8 +340,8 @@ checkRawOpaque =
   else
     panic "protocol_all_engines: raw-opaque mismatch"
 
-checkProcedureParams : <IO> Unit
-checkProcedureParams =
+checkProcedureParams : Unit -> <IO> Unit
+checkProcedureParams () =
   let (next, response) =
     handleBytes server testContext seededStore procedureParamsRequest
   if storeSize next == 1
@@ -352,8 +352,8 @@ checkProcedureParams =
   else
     panic "protocol_all_engines: procedure parameter mismatch"
 
-checkUppercaseAuthority : <IO> Unit
-checkUppercaseAuthority =
+checkUppercaseAuthority : Unit -> <IO> Unit
+checkUppercaseAuthority () =
   let (next, response) =
     handleBytes server testContext seededStore uppercaseAuthorityRequest
   if storeSize next == 1
@@ -364,8 +364,8 @@ checkUppercaseAuthority =
   else
     panic "protocol_all_engines: uppercase-authority lookup mismatch"
 
-checkAuthorityDuplicateIdentity : <IO> Unit
-checkAuthorityDuplicateIdentity =
+checkAuthorityDuplicateIdentity : Unit -> <IO> Unit
+checkAuthorityDuplicateIdentity () =
   let lower =
     mustEndpoint (queryEndpoint "com.example.identity.echo" PublicRoute)
   let upperAuthority =
@@ -381,8 +381,8 @@ checkAuthorityDuplicateIdentity =
         "CELL authority-duplicate-identity PASS folded-authority=true method-case=distinct"
     _ => panic "protocol_all_engines: NSID duplicate identity mismatch"
 
-checkEmptyRegPort : <IO> Unit
-checkEmptyRegPort =
+checkEmptyRegPort : Unit -> <IO> Unit
+checkEmptyRegPort () =
   let (next, response) =
     handleBytes server testContext seededStore emptyRegPortRequest
   if response == expectedTextResponse 200 "OK" "fixed"
@@ -392,8 +392,8 @@ checkEmptyRegPort =
   else
     panic "protocol_all_engines: empty reg-name port mismatch"
 
-checkEmptyIpPort : <IO> Unit
-checkEmptyIpPort =
+checkEmptyIpPort : Unit -> <IO> Unit
+checkEmptyIpPort () =
   let (next, response) =
     handleBytes server testContext seededStore emptyIpPortRequest
   if seedPreserved next
@@ -403,8 +403,8 @@ checkEmptyIpPort =
   else
     panic "protocol_all_engines: empty IP-literal port mismatch"
 
-checkUnknown : <IO> Unit
-checkUnknown =
+checkUnknown : Unit -> <IO> Unit
+checkUnknown () =
   let (next, response) =
     handleBytes server testContext seededStore unknownRequest
   if storeSize next == 1
@@ -419,8 +419,8 @@ checkUnknown =
   else
     panic "protocol_all_engines: unknown route mismatch"
 
-checkResource : <IO> Unit
-checkResource =
+checkResource : Unit -> <IO> Unit
+checkResource () =
   let (next, response) =
     handleBytes server testContext seededStore resourceRequest
   if storeSize next == 1
@@ -442,8 +442,8 @@ clientFixedResponse =
   encodeUtf8
     "HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\ncontent-length: 5\r\n\r\nhello"
 
-checkClientFixedLength : <IO> Unit
-checkClientFixedLength = match HC.parseResponse clientFixedResponse
+checkClientFixedLength : Unit -> <IO> Unit
+checkClientFixedLength () = match HC.parseResponse clientFixedResponse
   Err message =>
     panic "protocol_all_engines: client fixed-length parse failed: \{message}"
   Ok response =>
@@ -463,8 +463,8 @@ clientChunkedResponse =
   encodeUtf8
     "HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n3;ext=1\r\nfoo\r\n3\r\nbar\r\n0\r\nx-trailer: done\r\n\r\n"
 
-checkClientChunked : <IO> Unit
-checkClientChunked = match HC.parseResponse clientChunkedResponse
+checkClientChunked : Unit -> <IO> Unit
+checkClientChunked () = match HC.parseResponse clientChunkedResponse
   Err message =>
     panic "protocol_all_engines: client chunked parse failed: \{message}"
   Ok response =>
@@ -492,8 +492,8 @@ clientStatusLineOverLimit =
       ++ repeat (maxHttpClientStatusLineBytes + 1) "a"
       ++ "\r\n\r\n")
 
-checkClientStatusLineLimit : <IO> Unit
-checkClientStatusLineLimit =
+checkClientStatusLineLimit : Unit -> <IO> Unit
+checkClientStatusLineLimit () =
   expectResourceExcess
     "client status-line ceiling"
     clientStatusLineOverLimit
@@ -514,8 +514,8 @@ clientHeaderBytesOverLimit =
       ++ repeat headerCount ("x-big: " ++ repeat perHeaderBytes "a" ++ "\r\n")
       ++ "content-length: 0\r\n\r\n")
 
-checkClientHeaderBytesLimit : <IO> Unit
-checkClientHeaderBytesLimit =
+checkClientHeaderBytesLimit : Unit -> <IO> Unit
+checkClientHeaderBytesLimit () =
   expectResourceExcess
     "client header-bytes ceiling"
     clientHeaderBytesOverLimit
@@ -528,8 +528,8 @@ clientHeaderFieldsOverLimit =
       ++ repeat (maxHttpClientHeaderFields + 1) "x-h: 1\r\n"
       ++ "content-length: 0\r\n\r\n")
 
-checkClientHeaderFieldsLimit : <IO> Unit
-checkClientHeaderFieldsLimit =
+checkClientHeaderFieldsLimit : Unit -> <IO> Unit
+checkClientHeaderFieldsLimit () =
   expectResourceExcess
     "client header-fields ceiling"
     clientHeaderFieldsOverLimit
@@ -542,8 +542,8 @@ clientChunkSizeOverLimit : Bytes
 clientChunkSizeOverLimit =
   encodeUtf8 "HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n200000\r\n"
 
-checkClientChunkSizeLimit : <IO> Unit
-checkClientChunkSizeLimit =
+checkClientChunkSizeLimit : Unit -> <IO> Unit
+checkClientChunkSizeLimit () =
   expectResourceExcess
     "client chunk-size ceiling"
     clientChunkSizeOverLimit
@@ -565,8 +565,8 @@ clientBodyBytesOverLimit =
   encodeUtf8
     "HTTP/1.1 200 OK\r\ncontent-length: \{intToString (maxHttpClientBodyBytes + 1)}\r\n\r\n"
 
-checkClientBodyBytesLimit : <IO> Unit
-checkClientBodyBytesLimit =
+checkClientBodyBytesLimit : Unit -> <IO> Unit
+checkClientBodyBytesLimit () =
   expectResourceExcess
     "client body-bytes ceiling"
     clientBodyBytesOverLimit
@@ -575,8 +575,8 @@ checkClientBodyBytesLimit =
 clientMalformedStatusLine : Bytes
 clientMalformedStatusLine = encodeUtf8 "HTTP/1.1 20 OK\r\n\r\n"
 
-checkClientMalformedStatusLine : <IO> Unit
-checkClientMalformedStatusLine =
+checkClientMalformedStatusLine : Unit -> <IO> Unit
+checkClientMalformedStatusLine () =
   match HC.parseResponseClassified clientMalformedStatusLine
     Ok _ =>
       panic
@@ -591,8 +591,8 @@ clientMalformedHeader : Bytes
 clientMalformedHeader =
   encodeUtf8 "HTTP/1.1 200 OK\r\nbadheader\r\ncontent-length: 0\r\n\r\n"
 
-checkClientMalformedHeader : <IO> Unit
-checkClientMalformedHeader =
+checkClientMalformedHeader : Unit -> <IO> Unit
+checkClientMalformedHeader () =
   match HC.parseResponseClassified clientMalformedHeader
     Ok _ =>
       panic "protocol_all_engines: malformed client header unexpectedly parsed"
@@ -604,29 +604,29 @@ checkClientMalformedHeader =
 
 main : <IO> Unit
 main =
-  let () = checkFixedQuery
-  let () = checkChunkedUpdate
-  let () = checkMalformed
-  let () = checkLowercaseVersion
-  let () = checkInvalidHost
-  let () = checkInvalidTarget
-  let () = checkRawText
-  let () = checkRawJson
-  let () = checkRawOpaque
-  let () = checkProcedureParams
-  let () = checkUppercaseAuthority
-  let () = checkAuthorityDuplicateIdentity
-  let () = checkEmptyRegPort
-  let () = checkEmptyIpPort
-  let () = checkUnknown
-  let () = checkResource
-  let () = checkClientFixedLength
-  let () = checkClientChunked
-  let () = checkClientStatusLineLimit
-  let () = checkClientHeaderBytesLimit
-  let () = checkClientHeaderFieldsLimit
-  let () = checkClientChunkSizeLimit
-  let () = checkClientBodyBytesLimit
-  let () = checkClientMalformedStatusLine
-  let () = checkClientMalformedHeader
+  let () = checkFixedQuery ()
+  let () = checkChunkedUpdate ()
+  let () = checkMalformed ()
+  let () = checkLowercaseVersion ()
+  let () = checkInvalidHost ()
+  let () = checkInvalidTarget ()
+  let () = checkRawText ()
+  let () = checkRawJson ()
+  let () = checkRawOpaque ()
+  let () = checkProcedureParams ()
+  let () = checkUppercaseAuthority ()
+  let () = checkAuthorityDuplicateIdentity ()
+  let () = checkEmptyRegPort ()
+  let () = checkEmptyIpPort ()
+  let () = checkUnknown ()
+  let () = checkResource ()
+  let () = checkClientFixedLength ()
+  let () = checkClientChunked ()
+  let () = checkClientStatusLineLimit ()
+  let () = checkClientHeaderBytesLimit ()
+  let () = checkClientHeaderFieldsLimit ()
+  let () = checkClientChunkSizeLimit ()
+  let () = checkClientBodyBytesLimit ()
+  let () = checkClientMalformedStatusLine ()
+  let () = checkClientMalformedHeader ()
   println "TOTAL: PASS"

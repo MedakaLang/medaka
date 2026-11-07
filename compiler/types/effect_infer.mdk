@@ -11,7 +11,7 @@ import types.effect_authority.{
 import types.repr.{Mono(..), normalize}
 import frontend.ast.{
   Expr(..), Lit(..), Pat(..), Arm(..), LetBind(..), FunClause(..), DoStmt(..),
-  TyConOrigin(..), patBoundNames, sameTyConHead
+  TyConOrigin(..), patBoundNames, sameTyConHead, preludeQualified
 }
 import support.util.{reverseL, mapOption}
 
@@ -144,10 +144,11 @@ alphaSyntax top env lets (EApp f x)
 alphaSyntax _ _ _ (ELit _ | ELam _ _ | EUnOp _ _ _ | EInfix _ _ _ | EFieldAccess _ _ _ | ETuple _ | EListLit _ | EArrayLit _ | ERangeList _ _ _ | ERangeArray _ _ _ | ESlice _ _ _ _ | ESection _ | EIndex _ _ | EDo _ _ | EStringInterp _ | EGuards _ | ERecordCreate _ _ | ERecordUpdate _ _ _ | EVariantUpdate _ _ _ | EMapLit _ _ | ESetLit _ _ | EAsPat _ _ | EOrPat _ | EMethodRef _ | EDictApp _ | EMethodAt _ _ _ | ENumLit _ _ _ | EWideLit _ _ _ _ | EApp _ _ | EBinOp _ _ _ _) =
   None
 
--- `display e`, which string interpolation lowers each part to, is `e` itself
--- when `display` is the prelude method and `e` is a `String`: the prelude's
--- `Display String` is the identity. A local, top-level or imported definition
--- of `display` denotes some other function, so under one the part is top.
+-- `display e` is `e` itself when `display` is the prelude method and `e` is a
+-- `String`: the prelude's `Display String` is the identity. String
+-- interpolation lowers each part to the prelude's, spelled through the
+-- prelude alias. A written `display` that a local, top-level or imported
+-- definition shadows denotes some other function, so under one it is top.
 displayHead : AlphaEnv -> List (String, AlphaBinder) -> Expr -> Bool
 displayHead env lets x0 = go x0
   where
@@ -159,7 +160,8 @@ displayHead env lets x0 = go x0
 
 preludeDisplay : AlphaEnv -> List (String, AlphaBinder) -> String -> Bool
 preludeDisplay env lets x =
-  x == "display" && env.aeDisplayIsPrelude && isNone (letInScope x lets)
+  x == preludeQualified "display"
+    || x == "display" && env.aeDisplayIsPrelude && isNone (letInScope x lets)
 
 -- The names a `display` operand is read through: only a qualified `String`
 -- keeps its qualifier, since a qualified value of another type displays as a

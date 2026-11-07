@@ -1,0 +1,5 @@
+-- L3: import order never decides; with the wildcard written first the
+-- prelude's `clamp` still answers 5
+import clampmod.*
+import core.{clamp}
+main = println (clamp 0 10 5)
