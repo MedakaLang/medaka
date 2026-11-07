@@ -684,3 +684,19 @@ caller-controlled content opens and attack the untested acquisition, alias,
 release and error-retention paths. Compiler/runtime admission remains unproved;
 reuse the existing Async, Deadline and CancelToken ownership. Protected-manager
 and delegated-cgroup prerequisites for owned-tree deployment remain open.
+
+### Experimental lease handoff
+
+The [stdio lease findings](../findings/mcp-runtime-stdio-lease/REPORT.md) retain
+fixed-site owner provenance evidence and a blocked compiled byte-transport
+experiment. A possible future private `stdio_lease` module would own admission,
+exclusive endpoint identities and bounded byte operations. Its proposed surface
+is `acquire(stdin, stdout, stderr) -> Result Lease Error`,
+`read(Lease, buffer, Deadline, CancelToken) -> Result (Lease, bytes) (Lease, Error)`,
+`write(Lease, bytes, Deadline, CancelToken) -> Result (Lease, committed) (Lease, committed, Error)`,
+and `release(Lease) -> Result Unit (Lease, Error)`. Operations have descriptor
+I/O effects; the lease remains owned on errors and committed write prefixes are
+never replayed. It must not import caller content helpers, resolver/NSS, legacy
+stdio or process launch routes. These signatures and ownership rules are a
+proposal only: admission/history, transport, cancellation, output and resolver
+exclusion remain unproved and the module is unaccepted.
