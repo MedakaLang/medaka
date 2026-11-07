@@ -1,0 +1,108 @@
+{
+  "schema": 1,
+  "source_pins": {
+    "runtime/medaka_rt.c": "58f181d69091a7722bc845329035f9389cd02767c9db4aab3dc0402e7b4558bd",
+    "runtime/medaka_process.c": "63f394aabd70597d8a343620b80da1731ad91d382061fec541f07647b1558242",
+    "runtime/medaka_runtime.h": "ba247ac2ee795ab257abcb51662d14a4633aa792f6060e395b120e87488f16ed",
+    "runtime/medaka_process.h": "26c92d0355c48a996d20f7d43549100561b55fa50ed05a096b2d84316f1e2c09",
+    "runtime/medaka_abi.h": "c0e087ec753d0108e2faf05f625e1aafc97c459cabf589529f6133560922e35b",
+    "scripts/mcp_bench/prototypes/stdio_lease_fixture.c": "718ae92ae2d7d79a9a264c8db8a64f2990558608456d08d88b92264976861600",
+    "scripts/mcp_bench/prototypes/stdio_lease_probe.py": "a124fb7e6aa4d66a61df80fc0cea06d4fce60086cfaf4b9f68ed8a12c766b9fd",
+    "scripts/mcp_bench/prototypes/stdio_descriptor_census.py": "a462ef03e8026cb80873da3a3885fe9f620cc6299fae3b87647ac5217dc5959d",
+    "scripts/mcp_bench/prototypes/stdio_lease_cases/legacy_read.mdk": "69be3f31c63621884395553167019b810e39ad5bffbf0a7c62aaa60f714752b7"
+  },
+  "patches": {
+    "stdio_lease_runtime.c": {
+      "source": "617b3a667bd114a0d6db5cbec329e725991e57f480c122e34e7051fd383abc95",
+      "patch": "5507d9594e34a2c0702af9efcdb93fda70f269bf804552a6678099503573d1f0"
+    },
+    "stdio_lease_process.c": {
+      "source": "edbf6be3a35185c0e046ea20dbb56ae5757cc535192c466d9cdd8367fa2c9a0b",
+      "patch": "7164f760f587db460b81a4f98d4405b12d00e43069126bd948b0d7be5ed3d944"
+    }
+  },
+  "qualification": {
+    "name": "qualification",
+    "status": "BLOCKED",
+    "exit_code": 77,
+    "qualified": false,
+    "production_boundary_qualified": false,
+    "compiled_entry_qualified": false,
+    "scope": "Owner-provenance regression plus compiled public legacy-reader exclusion and disabling controls only.",
+    "blocker": "No authorized byte-preserving lease transport door for the public-only compiled target; readExactly loses partial and non-UTF-8 input.",
+    "next_action": "Explicitly authorize a private scratch lease-transport ABI and its compiled target invocation before resuming the remaining coupled proof.",
+    "unexecuted_requirements": [
+      "endpoint directions/types/flags/shared identities/distinct stderr rejection matrix",
+      "pathname swaps, fd replacement/reuse, same-checked-fd use and open/stat failure controls",
+      "no destructive open before validation under injected failures",
+      "prior/in-flight buffered output and resolver admission/history synchronization",
+      "release/reacquisition and error-retained ownership",
+      "resolver/NSS pre-libc exclusion, HOSTALIASES error paths and disabling controls",
+      "legacy/raw/buffered/automatic/abort/stash/flush output including #4865 actual primitive",
+      "legacy launch interlocks and disabling controls",
+      "fresh-stdio child parent-fd reopen with identity/dumpability controls",
+      "compiled lease byte transport with acknowledged staggered producer/consumer overlap",
+      "scheduler-safe backpressure with status/control progress",
+      "Deadline/CancelToken termination and committed write prefixes without replay",
+      "directory-fsync compatibility policy (owner-only disposition remains rejection)",
+      "supervisor toolchain selection under a complete enforced lease"
+    ]
+  },
+  "census": {
+    "inventory": {
+      "raw_snapshot_sha256": "220860c255e3397825795122d8ff7c27406a7e3495410e9749239383a5e8255a",
+      "receipt_exclusions": [
+        "docs/findings/mcp-runtime-stdio-lease/REPORT.md",
+        "docs/findings/mcp-runtime-stdio-lease/summary.json"
+      ],
+      "carrier_count": 11768,
+      "carrier_pins_sha256": "eacbd743f901516a486db1f73d07c00c8a03de90d3f75cb9c6a86a5b439a9cb5",
+      "candidate_counts": {
+        "C1": 3152,
+        "C2": 28,
+        "C3": 324,
+        "C4": 3553,
+        "C5": 36690,
+        "C6": 987,
+        "C7": 1551
+      },
+      "lexical_unknowns": 46269,
+      "supplemental_classifications": [
+        {
+          "class": "C5",
+          "classification": "observed compiled Unit entry; no normal output in these cases",
+          "line": 1,
+          "path": "scripts/mcp_bench/prototypes/stdio_lease_cases/legacy_read.mdk",
+          "reason": "uninspected token; could be a call, declaration, comment, string, or unrelated identifier",
+          "token": "main",
+          "evidence": "/var/tmp/medaka-scratch/sprints/mcp-runtime-enablement/mcp-runtime-03c-stdio/lease-receipt-final/results.json"
+        },
+        {
+          "class": "C4",
+          "classification": "observed compiled legacy-reader exclusion/control",
+          "line": 2,
+          "path": "scripts/mcp_bench/prototypes/stdio_lease_cases/legacy_read.mdk",
+          "reason": "uninspected token; could be a call, declaration, comment, string, or unrelated identifier",
+          "token": "readExactly",
+          "evidence": "/var/tmp/medaka-scratch/sprints/mcp-runtime-enablement/mcp-runtime-03c-stdio/lease-receipt-final/results.json"
+        },
+        {
+          "class": "C4",
+          "classification": "observed compiled legacy-reader exclusion/control",
+          "line": 3,
+          "path": "scripts/mcp_bench/prototypes/stdio_lease_cases/legacy_read.mdk",
+          "reason": "uninspected token; could be a call, declaration, comment, string, or unrelated identifier",
+          "token": "readExactly",
+          "evidence": "/var/tmp/medaka-scratch/sprints/mcp-runtime-enablement/mcp-runtime-03c-stdio/lease-receipt-final/results.json"
+        }
+      ],
+      "unknowns": [
+        "Uninspected lexical hits, including comments and strings, require semantic inspection; unknown dynamic uses have no defensible count.",
+        "Indirect calls, imported aliases, generated programs, dynamic paths and external native code are not resolved by lexical scanning.",
+        "Every native main may print automatically or flush on abort, including programs without a matching token.",
+        "No count proves compatibility or route enforcement; resolver/NSS and descriptor history require executable controls."
+      ]
+    },
+    "inventory_sha256": "901a701011ace7cd310234b038b7cdee1eb384d03fa28c874d5e3f201e05d0e3"
+  }
+}
